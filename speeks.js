@@ -19,7 +19,55 @@ const EBAY_ALERTS_URL = 'https://script.google.com/macros/s/AKfycbxap-4Jgdn5-ntk
 const STORE_COMMENT_URL = 'https://script.google.com/macros/s/AKfycbzoqWLZz07niO-dVqDpQS7I-bDvUgLjHT4CYGiqb--yAQYQPkFCUi9EXoi5Wsz-V0Ne/exec';
 const CHECKLIST_URL = 'https://script.google.com/macros/s/AKfycbxr4ZEoSKeF4BZ1H2-tcmc6Gy30-le5Gdm3CSdee6XxOhZFes3-5SF_PNcWR4OLEGN2hQ/exec';
 
-// --- 2. GLOBAL HELPERS & UTILITIES ---
+// --- 2. NAV COMPACT MODE ---
+(function () {
+    let naturalNavWidth = 0;
+
+    function measureNaturalWidth() {
+        const navBar = document.querySelector('.top-nav .nav-bar');
+        if (!navBar) return 0;
+        // Force nav-bar to its natural size so we can read the true content width
+        navBar.style.flexShrink = '0';
+        navBar.style.width = 'max-content';
+        const w = navBar.getBoundingClientRect().width;
+        navBar.style.flexShrink = '';
+        navBar.style.width = '';
+        return w;
+    }
+
+    function checkNavCompact() {
+        const topNav = document.querySelector('.top-nav');
+        const navLeft = document.querySelector('.nav-left');
+        const navRight = document.querySelector('.nav-right');
+        if (!topNav || !navLeft || !navRight) return;
+        if (navLeft.getBoundingClientRect().width === 0) return; // nav still hidden
+
+        // Capture natural width once, after the nav is actually visible
+        if (!naturalNavWidth) naturalNavWidth = measureNaturalWidth();
+        if (!naturalNavWidth) return;
+
+        // slot = total space between nav-left's right edge and nav-right's left edge.
+        // Both are flex-shrink:0 so this value only depends on viewport width — no feedback loop.
+        const slot = navRight.getBoundingClientRect().left - navLeft.getBoundingClientRect().right;
+        topNav.classList.toggle('nav-compact', slot < naturalNavWidth + 70);
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        const topNav = document.querySelector('.top-nav');
+        if (!topNav) return;
+
+        new ResizeObserver(checkNavCompact).observe(topNav);
+
+        // The nav is hidden behind auth; measure as soon as is-authenticated is applied to body
+        new MutationObserver(function () {
+            if (document.body.classList.contains('is-authenticated')) checkNavCompact();
+        }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+        checkNavCompact(); // no-op if not yet auth'd, harmless
+    });
+})();
+
+// --- 3. GLOBAL HELPERS & UTILITIES ---
 function parseNum(val) {
     if (!val && val !== 0) return 0;
     if (typeof val === 'number') return val;

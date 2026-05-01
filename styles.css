@@ -1376,6 +1376,10 @@ select.bs-hidden-select:focus {
     .page-header { flex-direction: column; align-items: flex-start; gap: 15px; }
 }
 
+/* Nav compact: triggered by JS class when tabs collide with right actions */
+.top-nav.nav-compact .nav-link span { display: none; }
+.top-nav.nav-compact .nav-link { padding: 0 10px; font-size: 22px; }
+
 @media (max-width: 768px) {
     body { flex-direction: column; }
     
@@ -1808,10 +1812,10 @@ select.bs-hidden-select:focus {
 
 .top-nav {
     position: fixed;
-    top: 0; left: 0; 
+    top: 0; left: 0;
     right: -15px !important;
     padding: 15px 45px 15px 30px !important;
-    min-height: 60px; 
+    min-height: 60px;
     height: auto;
     background: var(--slate-charcoal);
     color: white;
@@ -1822,7 +1826,7 @@ select.bs-hidden-select:focus {
     box-shadow: 0 4px 15px rgba(139, 139, 139, 0.1);
     gap: 20px;
     border-bottom: var(--sage-professional) solid 10px;
-    flex-wrap: wrap; 
+    flex-wrap: nowrap;
 }
 
 .nav-left {
@@ -1830,6 +1834,7 @@ select.bs-hidden-select:focus {
     flex-direction: column;
     gap: 8px;
     max-width: 350px;
+    flex-shrink: 0;
 }
 
 .nav-right {
@@ -1837,7 +1842,8 @@ select.bs-hidden-select:focus {
     align-items: center;
     gap: 20px;
     margin-left: auto;
-    border-right: none !important; 
+    border-right: none !important;
+    flex-shrink: 0;
 }
 
 .mission-statement {
@@ -1901,6 +1907,9 @@ select.bs-hidden-select:focus {
     gap: 10px;
     padding: 0;
     margin: 0;
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
 }
 
 .top-nav .nav-link {
