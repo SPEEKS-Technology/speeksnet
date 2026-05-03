@@ -715,6 +715,16 @@ html {
 
 .modal-header h3 { font-size: 16px; font-weight: 800; color: var(--slate-charcoal); }
 
+.ann-modal-header { flex-direction: column; align-items: stretch; gap: 0; }
+.ann-header-row { display: flex; justify-content: space-between; align-items: center; }
+.ann-mission {
+    margin: 8px 0 0 0;
+    font-size: 12px;
+    color: #64748b;
+    font-style: italic;
+    line-height: 1.45;
+}
+
 .modal-close-btn { 
     background: transparent; 
     border: none; 

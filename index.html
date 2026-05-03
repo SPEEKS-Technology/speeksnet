@@ -17,14 +17,11 @@
 <header class="top-nav">
   <div class="nav-left">
     <div class="brand-area">
-      <img src="images/speeks_logo.png" alt="SPEEKS Logo" class="brand-logo">
+      <img src="images/speeksnet_logo.png" alt="SPEEKS Logo" class="brand-logo">
       <div class="sidebar-footer">
         <span class="version-tag">v1.0.0-pre</span>
      </div>
     </div>
-    <p class="mission-statement">
-      To become the #1 trusted source for electronics buy back, resale and recycle in all communities that we serve!
-    </p>
   </div>
   
   <nav class="nav-bar">
@@ -256,15 +253,18 @@
 </div>
 
 <div class="modal-menu notif-menu" id="notifDropdown">
-    <div class="modal-header">
-        <h3>Announcements</h3>
-        <div class="align-center gap-15">
-            <div class="notif-tabs">
-                <button id="tab-recent" class="tab-btn active" onclick="switchAnnTab('recent')">Recent</button>
-                <button id="tab-archive" class="tab-btn" onclick="switchAnnTab('archive')">Archived</button>
+    <div class="modal-header ann-modal-header">
+        <div class="ann-header-row">
+            <h3>SPEEKS Announcements Hub</h3>
+            <div class="align-center gap-15">
+                <div class="notif-tabs">
+                    <button id="tab-recent" class="tab-btn active" onclick="switchAnnTab('recent')">Recent</button>
+                    <button id="tab-archive" class="tab-btn" onclick="switchAnnTab('archive')">Archived</button>
+                </div>
+                <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
             </div>
-            <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
         </div>
+        <p class="ann-mission">Mission Statement: To become the #1 trusted source for electronics buy back, resale and recycle in all communities that we serve!</p>
     </div>
     <div id="ann-container" class="notif-content">
         <div class="status-message">Syncing Data...</div>
