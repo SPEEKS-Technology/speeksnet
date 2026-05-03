@@ -961,7 +961,7 @@ function groupKPIs(data) {
         else if (n.match(/net sales|cogs|gross profit/)) cats["Net Sales & Margins"].push(m);
         else if (n.match(/draft order|pos|online|non ebay/)) cats["Sales Channels"].push(m);
         else if (n.includes("shipping")) cats["Shipping Costs"].push(m);
-        else if (n.match(/defect rate|late shipment|case w\/no resolution|tracking uploaded/)) cats["eBay Performance"].push(m);
+        else if (n.match(/defect rate|late shipment|case with no resolution|case w\/no resolution|tracking uploaded/)) cats["eBay Performance"].push(m);
         else if (n.match(/paymore|google/)) cats["Rankings & Reviews"].push(m);
         else if (n.match(/recycled|confiscation/)) cats["Recycled & Confiscated"].push(m);
         else cats["Other Metrics"].push(m);
@@ -1240,6 +1240,7 @@ function checkRule(r, v) {
     if (r === 'margin') return n < 51; 
     if (r === 'conversion') return n < 85; 
     if (r === 'nodeals') return n > 7;
+    if (r === 'variance') return n < 0; // NEW: Negative variance turns red
     if (r === 'time') {
         const timeVal = String(v).includes(':') ? parseInt(v.split(':')[0]) + (parseInt(v.split(':')[1])/60) : n;
         return timeVal > 13;
@@ -3762,6 +3763,55 @@ async function fetchAndRenderEmployeeKPIs() {
         }
         if (periodLabel) periodLabel.innerText = pTxt;
 
+        // --- NEW: ROBUST VARIANCE FETCH ---
+        let formattedMyVar = '-';
+        let formattedStoreVar = '-';
+        
+        let vData = typeof liveVarianceDataCache !== 'undefined' ? liveVarianceDataCache : null;
+        
+        // If cache isn't ready yet, force an immediate fetch so we don't load a blank widget
+        if (!vData || Object.keys(vData).length === 0) {
+            try {
+                const vRes = await fetch(`${VARIANCE_API_URL}?v=${Date.now()}`);
+                vData = await vRes.json();
+                if (typeof liveVarianceDataCache !== 'undefined') liveVarianceDataCache = vData;
+            } catch(e) {
+                console.log("Fallback variance fetch failed.");
+            }
+        }
+
+        if (vData && vData[store]) {
+            const sVar = vData[store];
+            
+            // Safe formatting helper to convert decimal to percentage string
+            const safeFormatVar = (val) => {
+                let n = parseFloat(String(val).replace(/[^0-9.-]/g, ''));
+                if (isNaN(n)) return '-';
+                return Math.abs(n) < 0.001 ? '0.00%' : `${n < 0 ? '-' : '+'}${Math.abs(n).toFixed(2)}%`;
+            };
+
+            formattedStoreVar = safeFormatVar(sVar.total);
+            
+            const sessionName = String(userName).trim().toLowerCase();
+            const sessionFirstName = sessionName.split(' ')[0];
+            
+            if (sVar.employees) {
+                const empVarMatch = sVar.employees.find(e => {
+                    const dbName = String(e.name).trim().toLowerCase();
+                    if (dbName === sessionName) return true; 
+                    const dbFirstName = dbName.split(' ')[0];
+                    if (dbFirstName.length > 2 && sessionFirstName.length > 2) {
+                        return dbFirstName.startsWith(sessionFirstName) || sessionFirstName.startsWith(dbFirstName);
+                    }
+                    return false;
+                });
+                
+                if (empVarMatch) {
+                    formattedMyVar = safeFormatVar(empVarMatch.val);
+                }
+            }
+        }
+
         if (Object.keys(myData).length === 0) {
             container.innerHTML = '<div class="status-message">No KPI data found for your user this week.</div>';
             return;
@@ -3785,21 +3835,27 @@ async function fetchAndRenderEmployeeKPIs() {
             }
 
             return `
-            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 4px; border: 1px dashed #e2e8f0; border-radius: 6px; background: #fdfdfd;">
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 6px; border: 1px dashed #e2e8f0; border-radius: 6px; background: #fdfdfd; height: 100%;">
                 <span style="font-size: 9px; font-weight: 900; color: var(--slate-charcoal); text-transform: uppercase; line-height: 1;">${title}</span>
                 ${centerHtml}
                 <span style="font-size: 8px; font-weight: 700; color: #a0aab2; text-transform: uppercase;">${prefixLabel} <strong>${displayStoreVal}</strong></span>
             </div>`;
         };
 
+        // Split into two grid rows to stretch the bottom 3 boxes evenly
         container.innerHTML = `
-            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; height: 100%;">
-                ${buildStatGridItem('Buying Value', myData.buyVal, sAvg.buyVal, null, false, 'Store Total:', false)}
-                ${buildStatGridItem('Margin', myData.buyMargin, sAvg.buyMargin, 'margin', true, 'Store Avg:', true)}
-                ${buildStatGridItem('Conversion', myData.conversion, sAvg.conversion, 'conversion', true, 'Store Avg:', true)}
-                ${buildStatGridItem('No Deals', myData.noDeals, sAvg.noDeals, 'nodeals', false, 'Store Total:', true)}
-                ${buildStatGridItem('Trans. Time', myData.time, sAvg.time, 'time', false, 'Store Avg:', true)}
-                ${buildStatGridItem('Listed Dev.', myData.listed, sAvg.listed, null, false, 'Store Total:', false)}
+            <div style="display: flex; flex-direction: column; gap: 6px; height: 100%;">
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; flex: 1;">
+                    ${buildStatGridItem('Buying Value', myData.buyVal, sAvg.buyVal, null, false, 'Store Total:', false)}
+                    ${buildStatGridItem('Margin', myData.buyMargin, sAvg.buyMargin, 'margin', true, 'Store Avg:', true)}
+                    ${buildStatGridItem('Conversion', myData.conversion, sAvg.conversion, 'conversion', true, 'Store Avg:', true)}
+                    ${buildStatGridItem('Variance', formattedMyVar, formattedStoreVar, 'variance', false, 'Store Total:', true)}
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; flex: 1;">
+                    ${buildStatGridItem('No Deals', myData.noDeals, sAvg.noDeals, 'nodeals', false, 'Store Total:', true)}
+                    ${buildStatGridItem('Trans. Time', myData.time, sAvg.time, 'time', false, 'Store Avg:', true)}
+                    ${buildStatGridItem('Listed Dev.', myData.listed, sAvg.listed, null, false, 'Store Total:', false)}
+                </div>
             </div>
         `;
     } catch (e) {

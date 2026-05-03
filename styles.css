@@ -1652,8 +1652,28 @@ select.bs-hidden-select:focus {
 .hotbar-container { display: flex; flex-grow: 1; align-items: center; background: #ffffff; border: 1px solid var(--gen-border); border-left: 4px solid var(--slate-charcoal); border-radius: 8px; padding: 6px 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02); }
 .hotbar-label { font-weight: 800; font-size: 0.85em; color: var(--slate-charcoal); text-transform: uppercase; letter-spacing: 1px; padding: 0 15px 0 8px; white-space: nowrap; }
 .hotbar-links { display: flex; width: 100%; gap: 8px; }
-.hotbar-btn { flex: 1; text-align: center; padding: 8px 10px; background: #ffffff; color: var(--slate-charcoal); text-decoration: none; border-radius: 6px; font-size: 0.85em; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--gen-border); transition: all 0.2s ease; }
-.hotbar-btn:hover { border-color: var(--sage-professional); color: var(--sage-professional); box-shadow: 0 4px 8px rgba(90, 141, 59, 0.08); transform: translateY(-2px); }
+.hotbar-btn { 
+    flex: 1; 
+    text-align: center; 
+    padding: 8px 10px; 
+    background-color: #ffffff !important; 
+    color: var(--slate-charcoal) !important; 
+    text-decoration: none; 
+    border-radius: 6px; 
+    font-size: 0.85em; 
+    font-weight: 600; 
+    white-space: nowrap; 
+    overflow: hidden; 
+    text-overflow: ellipsis; 
+    border: 1px solid var(--gen-border); 
+    transition: all 0.2s ease; 
+}
+.hotbar-btn:hover { 
+    border-color: var(--sage-professional) !important; 
+    color: var(--sage-professional) !important; 
+    box-shadow: 0 4px 8px rgba(90, 141, 59, 0.08); 
+    transform: translateY(-2px); 
+}
 
 /* =========================================================
    QUICK MESSAGES MODULE
