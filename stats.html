@@ -76,11 +76,13 @@
         <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
       </div>
     </div>
-  <div class="checklist-pull-tab dynamic-module-flex role-manager role-district-manager" onclick="toggleChecklistPanel(event); loadChecklist();">
-    <span>TASKS</span>
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="cl-pull-icon"><polyline points="6 9 12 15 18 9"></polyline></svg>
-</div>
 </header>
+
+<button class="cl-nav-toggle dynamic-module-flex role-manager role-district-manager" onclick="toggleChecklistPanel(event); loadChecklist();" title="Checklist">
+    <span style="font-size: 14px; line-height: 1;">📋</span>
+    <span>Checklist</span>
+    <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+</button>
 
 <div id="globalOverlay" class="overlay"></div>
 
@@ -346,11 +348,6 @@
 </div>
 
 <div id="checklistSidePanel" class="checklist-side-panel dynamic-module-flex role-manager role-district-manager">
-    
-    <div class="checklist-pull-tab" onclick="toggleChecklistPanel(event); loadChecklist();">
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="cl-pull-icon"><polyline points="15 18 9 12 15 6"></polyline></svg>
-        <span>TASKS</span>
-    </div>
 
     <div class="cl-panel-header">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">

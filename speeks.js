@@ -5537,12 +5537,12 @@ function clearChecklistTab() {
 
 // --- BULLETPROOF TOGGLE & CLICK-AWAY LOGIC ---
 window.toggleChecklistPanel = function(event) {
-    if (event) {
-        event.stopPropagation();
-    }
-    
+    if (event) event.stopPropagation();
     const panel = document.getElementById('checklistSidePanel');
-    if (panel) panel.classList.toggle('open');
+    if (!panel) return;
+    const isOpen = panel.classList.toggle('open');
+    const toggle = document.querySelector('.cl-nav-toggle');
+    if (toggle) toggle.classList.toggle('panel-active', isOpen);
 };
 
 // Closes the panel if you click outside of it
