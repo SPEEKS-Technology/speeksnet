@@ -3086,6 +3086,9 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 }
 
 .cl-add-btn { padding: 6px 12px; font-size: 11px; border-radius: 6px; }
+.cl-footer-row { display: flex; justify-content: flex-end; padding: 6px 0 2px; }
+.cl-clear-btn { background: transparent; border: 1px solid #cbd5e1; color: #94a3b8; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; cursor: pointer; transition: 0.2s; white-space: nowrap; }
+.cl-clear-btn:hover { border-color: var(--red-alert); color: var(--red-alert); }
 
 /* Checklist Items */
 .cl-item {

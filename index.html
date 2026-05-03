@@ -1006,12 +1006,16 @@
             <button id="cl-tab-quarterly" class="tab-btn" style="display: none;" onclick="switchChecklistTab('quarterly')">Quarterly</button>
         </div>
     </div>
-    
+
     <div class="cl-panel-body">
         <div id="checklistContent" class="cl-scroll-area">
             <div class="status-message">Syncing Data...</div>
         </div>
-        
+
+        <div class="cl-footer-row">
+            <button class="cl-clear-btn" onclick="clearChecklistTab()" title="Uncheck all items on this tab">Reset</button>
+        </div>
+
         <div class="cl-input-area">
             <input type="text" id="newChecklistTask" placeholder="Add a personal task...">
             <button class="btn-primary cl-add-btn" onclick="addChecklistItem()">Add</button>

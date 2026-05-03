@@ -5515,6 +5515,26 @@ async function deleteChecklistItem(id) {
     }).catch(e => console.log('Checklist deletion skipped'));
 }
 
+function clearChecklistTab() {
+    const items = checklistDataCache[currentChecklistTab] || [];
+    const checkedItems = items.filter(i => i.checked);
+    if (checkedItems.length === 0) return;
+
+    const userName = sessionStorage.getItem('speeksUserName');
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+
+    items.forEach(i => i.checked = false);
+    renderChecklist();
+
+    checkedItems.forEach(item => {
+        fetch(CHECKLIST_URL, {
+            method: 'POST', mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'toggle', id: item.id, checked: false, user: userName, store: store })
+        }).catch(e => console.log('Checklist clear sync skipped'));
+    });
+}
+
 // --- BULLETPROOF TOGGLE & CLICK-AWAY LOGIC ---
 window.toggleChecklistPanel = function(event) {
     if (event) {
