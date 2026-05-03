@@ -1,0 +1,19 @@
+name: Enforce PR Source Branch
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  check-source-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify PR comes from pre-release
+        run: |
+          if [[ "${{ github.head_ref }}" != "pre-release" ]]; then
+            echo "Error: You can only merge into main from the pre-release branch."
+            exit 1
+          else
+            echo "Success: PR is coming from pre-release."
+          fi
