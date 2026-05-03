@@ -1844,7 +1844,7 @@ select.bs-hidden-select:focus {
     position: fixed;
     top: 0; left: 0;
     right: 0;
-    padding: 15px 45px 15px 30px !important;
+    padding: 10px 45px 10px 30px !important;
     min-height: 60px;
     height: auto;
     background: var(--slate-charcoal);
@@ -2977,7 +2977,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 /* Checklist tab — fixed below the header, left edge of the panel */
 .cl-nav-toggle {
     position: fixed;
-    top: 98px;
+    top: 82px;
     right: 0;
     background: var(--sage-professional);
     color: rgba(255,255,255,0.9);
@@ -3034,10 +3034,10 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 /* Drop-down checklist panel — hangs flush from the right of the header */
 .checklist-side-panel {
     position: fixed;
-    top: 98px;                        /* header (~88px content) + green border (10px) */
+    top: 88px;                        /* header (78px box) + green border (10px) */
     right: 0;                         /* flush with right edge of viewport */
     width: 370px;
-    height: calc(100vh - 98px);       /* always full height below the header */
+    height: calc(100vh - 88px);       /* always full height below the header */
     background: white;
     border-radius: 0 0 0 14px;        /* only bottom-left rounded; right is flush */
     box-shadow: -6px 0 30px rgba(0,0,0,0.14);
@@ -3148,16 +3148,25 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     font-family: 'Inter', sans-serif;
     font-size: 10px;
     font-weight: 500;
-    color: var(--gen-text); /* Uses your professional grey color */
+    color: var(--gen-text);
     letter-spacing: 1px;
     text-transform: uppercase;
     opacity: 0.6;
-    transition: opacity 0.3s ease;
+    transition: opacity 0.3s ease, color 0.3s ease;
 }
 
 .version-tag:hover {
     opacity: 1;
-    color: var(--sage-professional); /* Subtle glow on hover using your brand green */
+    color: var(--sage-professional);
+}
+
+.top-nav .version-tag { color: rgba(255,255,255,0.45); }
+.top-nav .version-tag:hover { color: var(--sage-professional); opacity: 1; }
+
+.version-signout-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
 
 /* Ensure the version hides correctly when you collapse the sidebar */
