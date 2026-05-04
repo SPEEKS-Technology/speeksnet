@@ -176,7 +176,7 @@ function toggleModal(modalId, badgeId = null) {
                             method: 'POST', mode: 'no-cors',
                             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                             body: JSON.stringify({ type: 'mark_read', user: userName, rowIds: unreadIds })
-                        }).catch(e => console.log('Read sync skipped'));
+                        }).catch(() => {});
                     }, 2500);
                     
                     unreadEls.forEach(el => el.removeAttribute('data-unread-id'));
@@ -434,7 +434,7 @@ window.toggleReaction = function(id, emoji) {
         method: 'POST', mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload)
-    }).catch(e => console.log('Reaction sync skipped'));
+    }).catch(() => {});
 };
 
 window.toggleReactionPicker = function(id) {
@@ -594,8 +594,11 @@ async function loadHotkeys() {
 }
 
 function filterKB() {
-    const filter = document.getElementById("kbSearch").value.toUpperCase();
-    const rows = document.getElementById("kbBody").getElementsByTagName("tr");
+    const searchEl = document.getElementById("kbSearch");
+    const kbBody = document.getElementById("kbBody");
+    if (!searchEl || !kbBody) return;
+    const filter = searchEl.value.toUpperCase();
+    const rows = kbBody.getElementsByTagName("tr");
     
     for (let i = 0; i < rows.length; i++) {
         const textContent = rows[i].textContent || rows[i].innerText;
@@ -3378,7 +3381,6 @@ async function saveGoalsData() {
                         if (task && !task.checked) targetTaskId = task.id;
                     }
                 } catch (e) {
-                    console.log("Silent checklist fetch failed.");
                 }
             }
 
@@ -3388,7 +3390,7 @@ async function saveGoalsData() {
                     method: 'POST', mode: 'no-cors',
                     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                     body: JSON.stringify({ action: 'toggle', id: targetTaskId, checked: true, user: userName, store: store })
-                }).catch(e => console.log('Checklist auto-complete failed', e));
+                }).catch(() => {});
             }
             // =========================================================
 
@@ -3777,9 +3779,7 @@ async function fetchAndRenderEmployeeKPIs() {
                 const vRes = await fetch(`${VARIANCE_API_URL}?v=${Date.now()}`);
                 vData = await vRes.json();
                 if (typeof liveVarianceDataCache !== 'undefined') liveVarianceDataCache = vData;
-            } catch(e) {
-                console.log("Fallback variance fetch failed.");
-            }
+            } catch(e) { /* fallback variance unavailable */ }
         }
 
         if (vData && vData[store]) {
@@ -4046,7 +4046,7 @@ function initDashboardData() {
 
 // --- INIT LISTENERS ---
 document.addEventListener("DOMContentLoaded", () => {
-    setTimeout(() => document.body.classList.remove('preload'), 50);
+    setTimeout(() => document.body.classList.remove('preload'), 150);
 
     if (localStorage.getItem('speeksSidebar') === 'collapsed') { 
         document.querySelector('.sidebar')?.classList.add('collapsed'); 
@@ -5168,10 +5168,7 @@ async function fetchAndDisplayStoreComment() {
     const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
     const sessionKey = `speeksCommentSeen_${todayStr}`;
 
-    console.log("Checking for store comments. Target Store:", userStore, "| Target Date:", todayStr);
-
     if (sessionStorage.getItem(sessionKey)) {
-        console.log("User already dismissed the message today. Aborting.");
         return;
     }
 
@@ -5225,9 +5222,7 @@ async function fetchAndDisplayStoreComment() {
                 todayComments.forEach(msg => {
                     const authorName = msg.author || 'Executive Team';
                     
-                    let emoji = '📣';
-                    if (authorName.toLowerCase().includes('ethan'));
-                    else if (authorName.toLowerCase().includes('paul'));
+                    const emoji = '📣';
                     
                     messagesHtml += `
                         <div style="display: flex; align-items: flex-start; gap: 8px; line-height: 1.4;">
@@ -5238,9 +5233,7 @@ async function fetchAndDisplayStoreComment() {
                 });
 
                 textEl.innerHTML = messagesHtml;
-                
-                console.log("Injecting multi-message bubble into the UI...");
-                
+
                 setTimeout(() => {
                     bubble.style.display = 'flex';
                     bubble.animate([
@@ -5434,17 +5427,6 @@ async function fetchChampions() {
 let currentChecklistTab = 'daily';
 let checklistDataCache = { daily: [], weekly: [], monthly: [], quarterly: [] };
 
-// Add this near your other UI toggles
-function toggleChecklistPanel() {
-    const panel = document.getElementById('checklistSidePanel');
-    const tab = document.querySelector('.checklist-pull-tab');
-    
-    panel.classList.toggle('open');
-    tab.classList.toggle('open');
-    
-    // Notice we do NOT call closeAllModals() or lockAndBlurScreen() here!
-}
-
 function switchChecklistTab(tab) {
     currentChecklistTab = tab;
     document.getElementById('cl-tab-daily').classList.toggle('active', tab === 'daily');
@@ -5530,7 +5512,7 @@ async function toggleChecklistState(id, isChecked) {
         method: 'POST', mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ action: 'toggle', id: id, checked: isChecked, user: userName, store: store }) // <--- Added store here
-    }).catch(e => console.log('Checklist sync skipped'));
+    }).catch(() => {});
 }
 
 async function addChecklistItem() {
@@ -5583,7 +5565,7 @@ async function deleteChecklistItem(id) {
         method: 'POST', mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ action: 'delete', id: id, user: userName, store: store }) // <--- Added store here
-    }).catch(e => console.log('Checklist deletion skipped'));
+    }).catch(() => {});
 }
 
 function clearChecklistTab() {
@@ -5602,7 +5584,7 @@ function clearChecklistTab() {
             method: 'POST', mode: 'no-cors',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
             body: JSON.stringify({ action: 'toggle', id: item.id, checked: false, user: userName, store: store })
-        }).catch(e => console.log('Checklist clear sync skipped'));
+        }).catch(() => {});
     });
 }
 

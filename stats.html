@@ -50,10 +50,10 @@
         </div>
       </div>
 
-      <div id="dailyMessageBubble" style="display: none; background: linear-gradient(135deg, var(--sage-professional), #4a7530); color: white; padding: 6px 16px; border-radius: 20px; align-items: center; gap: 8px; font-size: 13px; box-shadow: 0 4px 10px rgba(90, 141, 59, 0.3); max-width: 500px; z-index: 1000;">
-            <span id="dailyMessageBubbleIcon" style="font-size: 16px;">📣</span>
-            <span id="dailyMessageBubbleText" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
-            <button onclick="closeDailyCommentBubble()" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; margin-left: 5px; flex-shrink: 0; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.4)'" onmouseout="this.style.background='rgba(255,255,255,0.2)'" title="Dismiss">
+      <div id="dailyMessageBubble">
+            <span id="dailyMessageBubbleIcon">📣</span>
+            <span id="dailyMessageBubbleText"></span>
+            <button onclick="closeDailyCommentBubble()" class="daily-bubble-close" title="Dismiss">
                 <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
             </button>
         </div>
@@ -68,7 +68,7 @@
       <div class="greeting-stack">
         <h2 id="userGreeting">Welcome!</h2>
         <div class="version-signout-row">
-            <span class="version-tag">v1.0.0-pre</span>
+            <span class="version-tag">v1.0.0</span>
             <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
         </div>
       </div>
@@ -104,13 +104,13 @@
                     <p class="tutorial-welcome-msg">Welcome to your personal tour for the all new SPEEKSNET. This tutorial will show you around all of the new features. Let's begin!</p>
                 </div>
             </div>
-            <div class="tutorial-slide"><img src="tutorial/1.png" alt="Tutorial Step 1" class="tutorial-img"></div>
-            <div class="tutorial-slide"><img src="tutorial/2.png" alt="Tutorial Step 2" class="tutorial-img"></div>
-            <div class="tutorial-slide"><img src="tutorial/3.png" alt="Tutorial Step 3" class="tutorial-img"></div>
-            <div class="tutorial-slide"><img src="tutorial/4.png" alt="Tutorial Step 4" class="tutorial-img"></div>
-            <div class="tutorial-slide"><img src="tutorial/5.png" alt="Tutorial Step 5" class="tutorial-img"></div>
-            <div class="tutorial-slide"><img src="tutorial/6.png" alt="Tutorial Step 6" class="tutorial-img"></div>
-            <div class="tutorial-slide"><img src="tutorial/7.png" alt="Tutorial Step 7" class="tutorial-img"></div>
+            <div class="tutorial-slide"><img src="tutorial/1.png" alt="Tutorial Step 1" class="tutorial-img" loading="lazy"></div>
+            <div class="tutorial-slide"><img src="tutorial/2.png" alt="Tutorial Step 2" class="tutorial-img" loading="lazy"></div>
+            <div class="tutorial-slide"><img src="tutorial/3.png" alt="Tutorial Step 3" class="tutorial-img" loading="lazy"></div>
+            <div class="tutorial-slide"><img src="tutorial/4.png" alt="Tutorial Step 4" class="tutorial-img" loading="lazy"></div>
+            <div class="tutorial-slide"><img src="tutorial/5.png" alt="Tutorial Step 5" class="tutorial-img" loading="lazy"></div>
+            <div class="tutorial-slide"><img src="tutorial/6.png" alt="Tutorial Step 6" class="tutorial-img" loading="lazy"></div>
+            <div class="tutorial-slide"><img src="tutorial/7.png" alt="Tutorial Step 7" class="tutorial-img" loading="lazy"></div>
         </div>
         <div class="tutorial-footer">
             <button class="tutorial-btn tut-prev" id="tutorialPrev" onclick="tutorialNav(-1)" disabled>← Back</button>
