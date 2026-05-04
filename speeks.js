@@ -18,8 +18,57 @@ const SCORECARD_URL = 'https://script.google.com/macros/s/AKfycbwvelWpXnlXCJZQGa
 const EBAY_ALERTS_URL = 'https://script.google.com/macros/s/AKfycbxap-4Jgdn5-ntkv_X-vFZLTWlTB29_bDLdwcFxhWd2su3ZQJ0ZS7UpUgZAK08lOIV6/exec';
 const STORE_COMMENT_URL = 'https://script.google.com/macros/s/AKfycbzoqWLZz07niO-dVqDpQS7I-bDvUgLjHT4CYGiqb--yAQYQPkFCUi9EXoi5Wsz-V0Ne/exec';
 const CHECKLIST_URL = 'https://script.google.com/macros/s/AKfycbxr4ZEoSKeF4BZ1H2-tcmc6Gy30-le5Gdm3CSdee6XxOhZFes3-5SF_PNcWR4OLEGN2hQ/exec';
+const TUTORIAL_URL = 'https://script.google.com/macros/s/AKfycbySrXu6IW3S39GKiEsXkJwd4s75aO0uG-BTTg_swxEx3BMG_W7qqZBwHKnuEm_k_Agh/exec';
 
-// --- 2. GLOBAL HELPERS & UTILITIES ---
+// --- 2. NAV COMPACT MODE ---
+(function () {
+    let naturalNavWidth = 0;
+
+    function measureNaturalWidth() {
+        const navBar = document.querySelector('.top-nav .nav-bar');
+        if (!navBar) return 0;
+        // Force nav-bar to its natural size so we can read the true content width
+        navBar.style.flexShrink = '0';
+        navBar.style.width = 'max-content';
+        const w = navBar.getBoundingClientRect().width;
+        navBar.style.flexShrink = '';
+        navBar.style.width = '';
+        return w;
+    }
+
+    function checkNavCompact() {
+        const topNav = document.querySelector('.top-nav');
+        const navLeft = document.querySelector('.nav-left');
+        const navRight = document.querySelector('.nav-right');
+        if (!topNav || !navLeft || !navRight) return;
+        if (navLeft.getBoundingClientRect().width === 0) return; // nav still hidden
+
+        // Capture natural width once, after the nav is actually visible
+        if (!naturalNavWidth) naturalNavWidth = measureNaturalWidth();
+        if (!naturalNavWidth) return;
+
+        // slot = total space between nav-left's right edge and nav-right's left edge.
+        // Both are flex-shrink:0 so this value only depends on viewport width — no feedback loop.
+        const slot = navRight.getBoundingClientRect().left - navLeft.getBoundingClientRect().right;
+        topNav.classList.toggle('nav-compact', slot < naturalNavWidth + 70);
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        const topNav = document.querySelector('.top-nav');
+        if (!topNav) return;
+
+        new ResizeObserver(checkNavCompact).observe(topNav);
+
+        // The nav is hidden behind auth; measure as soon as is-authenticated is applied to body
+        new MutationObserver(function () {
+            if (document.body.classList.contains('is-authenticated')) checkNavCompact();
+        }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+        checkNavCompact(); // no-op if not yet auth'd, harmless
+    });
+})();
+
+// --- 3. GLOBAL HELPERS & UTILITIES ---
 function parseNum(val) {
     if (!val && val !== 0) return 0;
     if (typeof val === 'number') return val;
@@ -127,7 +176,7 @@ function toggleModal(modalId, badgeId = null) {
                             method: 'POST', mode: 'no-cors',
                             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                             body: JSON.stringify({ type: 'mark_read', user: userName, rowIds: unreadIds })
-                        }).catch(e => console.log('Read sync skipped'));
+                        }).catch(() => {});
                     }, 2500);
                     
                     unreadEls.forEach(el => el.removeAttribute('data-unread-id'));
@@ -385,7 +434,7 @@ window.toggleReaction = function(id, emoji) {
         method: 'POST', mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload)
-    }).catch(e => console.log('Reaction sync skipped'));
+    }).catch(() => {});
 };
 
 window.toggleReactionPicker = function(id) {
@@ -545,8 +594,11 @@ async function loadHotkeys() {
 }
 
 function filterKB() {
-    const filter = document.getElementById("kbSearch").value.toUpperCase();
-    const rows = document.getElementById("kbBody").getElementsByTagName("tr");
+    const searchEl = document.getElementById("kbSearch");
+    const kbBody = document.getElementById("kbBody");
+    if (!searchEl || !kbBody) return;
+    const filter = searchEl.value.toUpperCase();
+    const rows = kbBody.getElementsByTagName("tr");
     
     for (let i = 0; i < rows.length; i++) {
         const textContent = rows[i].textContent || rows[i].innerText;
@@ -832,10 +884,11 @@ async function checkPIN() {
             document.body.style.position = '';
             document.body.style.top = '';
             document.body.classList.add('is-authenticated');
-            
-            closeAllModals(); 
+
+            closeAllModals();
             applyRoleBasedUI();
-            
+            checkAndShowTutorial(matched.name);
+
             if (typeof initDashboardData === 'function') initDashboardData();
         } else {
             err.innerText = "Incorrect PIN. Please try again."; 
@@ -913,7 +966,7 @@ function groupKPIs(data) {
         else if (n.match(/net sales|cogs|gross profit/)) cats["Net Sales & Margins"].push(m);
         else if (n.match(/draft order|pos|online|non ebay/)) cats["Sales Channels"].push(m);
         else if (n.includes("shipping")) cats["Shipping Costs"].push(m);
-        else if (n.match(/defect rate|late shipment|case w\/no resolution|tracking uploaded/)) cats["eBay Performance"].push(m);
+        else if (n.match(/defect rate|late shipment|case with no resolution|case w\/no resolution|tracking uploaded/)) cats["eBay Performance"].push(m);
         else if (n.match(/paymore|google/)) cats["Rankings & Reviews"].push(m);
         else if (n.match(/recycled|confiscation/)) cats["Recycled & Confiscated"].push(m);
         else cats["Other Metrics"].push(m);
@@ -1192,6 +1245,7 @@ function checkRule(r, v) {
     if (r === 'margin') return n < 51; 
     if (r === 'conversion') return n < 85; 
     if (r === 'nodeals') return n > 7;
+    if (r === 'variance') return n < 0; // NEW: Negative variance turns red
     if (r === 'time') {
         const timeVal = String(v).includes(':') ? parseInt(v.split(':')[0]) + (parseInt(v.split(':')[1])/60) : n;
         return timeVal > 13;
@@ -3327,7 +3381,6 @@ async function saveGoalsData() {
                         if (task && !task.checked) targetTaskId = task.id;
                     }
                 } catch (e) {
-                    console.log("Silent checklist fetch failed.");
                 }
             }
 
@@ -3337,7 +3390,7 @@ async function saveGoalsData() {
                     method: 'POST', mode: 'no-cors',
                     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                     body: JSON.stringify({ action: 'toggle', id: targetTaskId, checked: true, user: userName, store: store })
-                }).catch(e => console.log('Checklist auto-complete failed', e));
+                }).catch(() => {});
             }
             // =========================================================
 
@@ -3714,6 +3767,53 @@ async function fetchAndRenderEmployeeKPIs() {
         }
         if (periodLabel) periodLabel.innerText = pTxt;
 
+        // --- NEW: ROBUST VARIANCE FETCH ---
+        let formattedMyVar = '-';
+        let formattedStoreVar = '-';
+        
+        let vData = typeof liveVarianceDataCache !== 'undefined' ? liveVarianceDataCache : null;
+        
+        // If cache isn't ready yet, force an immediate fetch so we don't load a blank widget
+        if (!vData || Object.keys(vData).length === 0) {
+            try {
+                const vRes = await fetch(`${VARIANCE_API_URL}?v=${Date.now()}`);
+                vData = await vRes.json();
+                if (typeof liveVarianceDataCache !== 'undefined') liveVarianceDataCache = vData;
+            } catch(e) { /* fallback variance unavailable */ }
+        }
+
+        if (vData && vData[store]) {
+            const sVar = vData[store];
+            
+            // Safe formatting helper to convert decimal to percentage string
+            const safeFormatVar = (val) => {
+                let n = parseFloat(String(val).replace(/[^0-9.-]/g, ''));
+                if (isNaN(n)) return '-';
+                return Math.abs(n) < 0.001 ? '0.00%' : `${n < 0 ? '-' : '+'}${Math.abs(n).toFixed(2)}%`;
+            };
+
+            formattedStoreVar = safeFormatVar(sVar.total);
+            
+            const sessionName = String(userName).trim().toLowerCase();
+            const sessionFirstName = sessionName.split(' ')[0];
+            
+            if (sVar.employees) {
+                const empVarMatch = sVar.employees.find(e => {
+                    const dbName = String(e.name).trim().toLowerCase();
+                    if (dbName === sessionName) return true; 
+                    const dbFirstName = dbName.split(' ')[0];
+                    if (dbFirstName.length > 2 && sessionFirstName.length > 2) {
+                        return dbFirstName.startsWith(sessionFirstName) || sessionFirstName.startsWith(dbFirstName);
+                    }
+                    return false;
+                });
+                
+                if (empVarMatch) {
+                    formattedMyVar = safeFormatVar(empVarMatch.val);
+                }
+            }
+        }
+
         if (Object.keys(myData).length === 0) {
             container.innerHTML = '<div class="status-message">No KPI data found for your user this week.</div>';
             return;
@@ -3737,21 +3837,27 @@ async function fetchAndRenderEmployeeKPIs() {
             }
 
             return `
-            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 4px; border: 1px dashed #e2e8f0; border-radius: 6px; background: #fdfdfd;">
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 6px; border: 1px dashed #e2e8f0; border-radius: 6px; background: #fdfdfd; height: 100%;">
                 <span style="font-size: 9px; font-weight: 900; color: var(--slate-charcoal); text-transform: uppercase; line-height: 1;">${title}</span>
                 ${centerHtml}
                 <span style="font-size: 8px; font-weight: 700; color: #a0aab2; text-transform: uppercase;">${prefixLabel} <strong>${displayStoreVal}</strong></span>
             </div>`;
         };
 
+        // Split into two grid rows to stretch the bottom 3 boxes evenly
         container.innerHTML = `
-            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; height: 100%;">
-                ${buildStatGridItem('Buying Value', myData.buyVal, sAvg.buyVal, null, false, 'Store Total:', false)}
-                ${buildStatGridItem('Margin', myData.buyMargin, sAvg.buyMargin, 'margin', true, 'Store Avg:', true)}
-                ${buildStatGridItem('Conversion', myData.conversion, sAvg.conversion, 'conversion', true, 'Store Avg:', true)}
-                ${buildStatGridItem('No Deals', myData.noDeals, sAvg.noDeals, 'nodeals', false, 'Store Total:', true)}
-                ${buildStatGridItem('Trans. Time', myData.time, sAvg.time, 'time', false, 'Store Avg:', true)}
-                ${buildStatGridItem('Listed Dev.', myData.listed, sAvg.listed, null, false, 'Store Total:', false)}
+            <div style="display: flex; flex-direction: column; gap: 6px; height: 100%;">
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; flex: 1;">
+                    ${buildStatGridItem('Buying Value', myData.buyVal, sAvg.buyVal, null, false, 'Store Total:', false)}
+                    ${buildStatGridItem('Margin', myData.buyMargin, sAvg.buyMargin, 'margin', true, 'Store Avg:', true)}
+                    ${buildStatGridItem('Conversion', myData.conversion, sAvg.conversion, 'conversion', true, 'Store Avg:', true)}
+                    ${buildStatGridItem('Variance', formattedMyVar, formattedStoreVar, 'variance', false, 'Store Total:', true)}
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; flex: 1;">
+                    ${buildStatGridItem('No Deals', myData.noDeals, sAvg.noDeals, 'nodeals', false, 'Store Total:', true)}
+                    ${buildStatGridItem('Trans. Time', myData.time, sAvg.time, 'time', false, 'Store Avg:', true)}
+                    ${buildStatGridItem('Listed Dev.', myData.listed, sAvg.listed, null, false, 'Store Total:', false)}
+                </div>
             </div>
         `;
     } catch (e) {
@@ -3760,7 +3866,76 @@ async function fetchAndRenderEmployeeKPIs() {
 }
 
 // ============================================================================
-// 22. MODULE: ROLE-BASED UI & INITIALIZATION
+// 22. MODULE: FIRST-LOGIN TUTORIAL
+// ============================================================================
+
+let _tutorialSlide = 0;
+const _TUTORIAL_TOTAL = 8;
+
+async function checkAndShowTutorial(userName) {
+    const key = 'speeksTutorial_' + userName.trim().toLowerCase().replace(/\s+/g, '_');
+    if (localStorage.getItem(key) === 'done') return;
+
+    if (TUTORIAL_URL) {
+        try {
+            const res = await fetch(`${TUTORIAL_URL}?user=${encodeURIComponent(userName)}&v=${Date.now()}`);
+            const data = await res.json();
+            if (data.completed) { localStorage.setItem(key, 'done'); return; }
+        } catch (e) { /* network error — still show tutorial, server will re-check next login */ }
+    }
+
+    _tutorialSlide = 0;
+    _updateTutorialUI();
+    const overlay = document.getElementById('tutorialOverlay');
+    if (overlay) overlay.classList.add('active');
+    document.body.classList.add('no-scroll');
+}
+
+function tutorialNav(dir) {
+    const next = _tutorialSlide + dir;
+    if (next < 0) return;
+    if (next >= _TUTORIAL_TOTAL) { _completeTutorial(); return; }
+    _tutorialSlide = next;
+    _updateTutorialUI();
+}
+
+function _updateTutorialUI() {
+    document.querySelectorAll('.tutorial-slide').forEach((s, i) => s.classList.toggle('active', i === _tutorialSlide));
+    document.querySelectorAll('.tut-dot').forEach((d, i) => d.classList.toggle('active', i === _tutorialSlide));
+
+    const prev = document.getElementById('tutorialPrev');
+    const next = document.getElementById('tutorialNext');
+    const counter = document.getElementById('tutorialCounter');
+    const isLast = _tutorialSlide === _TUTORIAL_TOTAL - 1;
+
+    if (prev) prev.disabled = _tutorialSlide === 0;
+    if (counter) counter.textContent = `${_tutorialSlide + 1} of ${_TUTORIAL_TOTAL}`;
+    if (next) {
+        next.textContent = isLast ? 'Get Started! 🚀' : 'Next →';
+        next.classList.toggle('tut-finish', isLast);
+    }
+}
+
+async function _completeTutorial() {
+    const overlay = document.getElementById('tutorialOverlay');
+    if (overlay) overlay.classList.remove('active');
+    document.body.classList.remove('no-scroll');
+
+    const userName = sessionStorage.getItem('speeksUserName') || '';
+    const key = 'speeksTutorial_' + userName.trim().toLowerCase().replace(/\s+/g, '_');
+    localStorage.setItem(key, 'done');
+
+    if (userName && TUTORIAL_URL) {
+        fetch(TUTORIAL_URL, {
+            method: 'POST', mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'complete', user: userName })
+        }).catch(() => {});
+    }
+}
+
+// ============================================================================
+// 23. MODULE: ROLE-BASED UI & INITIALIZATION
 // ============================================================================
 
 function applyRoleBasedUI() {
@@ -3871,7 +4046,7 @@ function initDashboardData() {
 
 // --- INIT LISTENERS ---
 document.addEventListener("DOMContentLoaded", () => {
-    setTimeout(() => document.body.classList.remove('preload'), 50);
+    setTimeout(() => document.body.classList.remove('preload'), 150);
 
     if (localStorage.getItem('speeksSidebar') === 'collapsed') { 
         document.querySelector('.sidebar')?.classList.add('collapsed'); 
@@ -4993,10 +5168,7 @@ async function fetchAndDisplayStoreComment() {
     const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
     const sessionKey = `speeksCommentSeen_${todayStr}`;
 
-    console.log("Checking for store comments. Target Store:", userStore, "| Target Date:", todayStr);
-
     if (sessionStorage.getItem(sessionKey)) {
-        console.log("User already dismissed the message today. Aborting.");
         return;
     }
 
@@ -5050,9 +5222,7 @@ async function fetchAndDisplayStoreComment() {
                 todayComments.forEach(msg => {
                     const authorName = msg.author || 'Executive Team';
                     
-                    let emoji = '📣';
-                    if (authorName.toLowerCase().includes('ethan'));
-                    else if (authorName.toLowerCase().includes('paul'));
+                    const emoji = '📣';
                     
                     messagesHtml += `
                         <div style="display: flex; align-items: flex-start; gap: 8px; line-height: 1.4;">
@@ -5063,9 +5233,7 @@ async function fetchAndDisplayStoreComment() {
                 });
 
                 textEl.innerHTML = messagesHtml;
-                
-                console.log("Injecting multi-message bubble into the UI...");
-                
+
                 setTimeout(() => {
                     bubble.style.display = 'flex';
                     bubble.animate([
@@ -5259,17 +5427,6 @@ async function fetchChampions() {
 let currentChecklistTab = 'daily';
 let checklistDataCache = { daily: [], weekly: [], monthly: [], quarterly: [] };
 
-// Add this near your other UI toggles
-function toggleChecklistPanel() {
-    const panel = document.getElementById('checklistSidePanel');
-    const tab = document.querySelector('.checklist-pull-tab');
-    
-    panel.classList.toggle('open');
-    tab.classList.toggle('open');
-    
-    // Notice we do NOT call closeAllModals() or lockAndBlurScreen() here!
-}
-
 function switchChecklistTab(tab) {
     currentChecklistTab = tab;
     document.getElementById('cl-tab-daily').classList.toggle('active', tab === 'daily');
@@ -5355,7 +5512,7 @@ async function toggleChecklistState(id, isChecked) {
         method: 'POST', mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ action: 'toggle', id: id, checked: isChecked, user: userName, store: store }) // <--- Added store here
-    }).catch(e => console.log('Checklist sync skipped'));
+    }).catch(() => {});
 }
 
 async function addChecklistItem() {
@@ -5408,17 +5565,37 @@ async function deleteChecklistItem(id) {
         method: 'POST', mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ action: 'delete', id: id, user: userName, store: store }) // <--- Added store here
-    }).catch(e => console.log('Checklist deletion skipped'));
+    }).catch(() => {});
+}
+
+function clearChecklistTab() {
+    const items = checklistDataCache[currentChecklistTab] || [];
+    const checkedItems = items.filter(i => i.checked);
+    if (checkedItems.length === 0) return;
+
+    const userName = sessionStorage.getItem('speeksUserName');
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+
+    items.forEach(i => i.checked = false);
+    renderChecklist();
+
+    checkedItems.forEach(item => {
+        fetch(CHECKLIST_URL, {
+            method: 'POST', mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'toggle', id: item.id, checked: false, user: userName, store: store })
+        }).catch(() => {});
+    });
 }
 
 // --- BULLETPROOF TOGGLE & CLICK-AWAY LOGIC ---
 window.toggleChecklistPanel = function(event) {
-    if (event) {
-        event.stopPropagation();
-    }
-    
+    if (event) event.stopPropagation();
     const panel = document.getElementById('checklistSidePanel');
-    if (panel) panel.classList.toggle('open');
+    if (!panel) return;
+    const isOpen = panel.classList.toggle('open');
+    const toggle = document.querySelector('.cl-nav-toggle');
+    if (toggle) toggle.classList.toggle('panel-active', isOpen);
 };
 
 // Closes the panel if you click outside of it

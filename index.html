@@ -17,14 +17,8 @@
 <header class="top-nav">
   <div class="nav-left">
     <div class="brand-area">
-      <img src="images/speeks_logo.png" alt="SPEEKS Logo" class="brand-logo">
-      <div class="sidebar-footer">
-        <span class="version-tag">v0.9.0</span>
-     </div>
+      <img src="images/speeksnet_logo.png" alt="SPEEKS Logo" class="brand-logo">
     </div>
-    <p class="mission-statement">
-      To become the #1 trusted source for electronics buy back, resale and recycle in all communities that we serve!
-    </p>
   </div>
   
   <nav class="nav-bar">
@@ -60,10 +54,10 @@
         </div>
       </div>
 
-    <div id="dailyMessageBubble" style="display: none; background: linear-gradient(135deg, var(--sage-professional), #4a7530); color: white; padding: 6px 16px; border-radius: 20px; align-items: center; gap: 8px; font-size: 13px; box-shadow: 0 4px 10px rgba(90, 141, 59, 0.3); max-width: 500px; z-index: 1000;">
-            <span id="dailyMessageBubbleIcon" style="font-size: 16px;">📣</span>
-            <span id="dailyMessageBubbleText" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
-            <button onclick="closeDailyCommentBubble()" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; margin-left: 5px; flex-shrink: 0; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.4)'" onmouseout="this.style.background='rgba(255,255,255,0.2)'" title="Dismiss">
+    <div id="dailyMessageBubble">
+            <span id="dailyMessageBubbleIcon">📣</span>
+            <span id="dailyMessageBubbleText"></span>
+            <button onclick="closeDailyCommentBubble()" class="daily-bubble-close" title="Dismiss">
                 <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
             </button>
         </div>
@@ -77,14 +71,58 @@
     </div>
     <div class="greeting-stack">
         <h2 id="userGreeting">Welcome!</h2>
-        <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
+        <div class="version-signout-row">
+            <span class="version-tag">v1.0.0</span>
+            <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
+        </div>
       </div>
     </div>
-<div class="checklist-pull-tab dynamic-module-flex role-manager role-district-manager" onclick="toggleChecklistPanel(event); loadChecklist();">
-    <span>TASKS</span>
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="cl-pull-icon"><polyline points="6 9 12 15 18 9"></polyline></svg>
-</div>
 </header>
+
+<button class="cl-nav-toggle dynamic-module-flex role-manager role-district-manager" onclick="toggleChecklistPanel(event); loadChecklist();" title="Checklist">
+    <span style="font-size: 14px; line-height: 1;">📋</span>
+    <span>Checklist</span>
+    <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+</button>
+
+<!-- ===== FIRST-LOGIN TUTORIAL ===== -->
+<div id="tutorialOverlay" class="tutorial-overlay">
+    <div class="tutorial-modal">
+        <div class="tutorial-header">
+            <h2>Welcome to SPEEKSNET!</h2>
+            <div class="tutorial-dots">
+                <span class="tut-dot active"></span>
+                <span class="tut-dot"></span>
+                <span class="tut-dot"></span>
+                <span class="tut-dot"></span>
+                <span class="tut-dot"></span>
+                <span class="tut-dot"></span>
+                <span class="tut-dot"></span>
+                <span class="tut-dot"></span>
+            </div>
+        </div>
+        <div class="tutorial-slides-wrap">
+            <div class="tutorial-slide active">
+                <div class="tutorial-welcome-card">
+                    <div class="tutorial-welcome-icon">🎉</div>
+                    <p class="tutorial-welcome-msg">Welcome to your personal tour for the all new SPEEKSNET. This tutorial will show you around all of the new features. Let's begin!</p>
+                </div>
+            </div>
+            <div class="tutorial-slide"><img src="tutorial/1.png" alt="Tutorial Step 1" class="tutorial-img" loading="lazy"></div>
+            <div class="tutorial-slide"><img src="tutorial/2.png" alt="Tutorial Step 2" class="tutorial-img" loading="lazy"></div>
+            <div class="tutorial-slide"><img src="tutorial/3.png" alt="Tutorial Step 3" class="tutorial-img" loading="lazy"></div>
+            <div class="tutorial-slide"><img src="tutorial/4.png" alt="Tutorial Step 4" class="tutorial-img" loading="lazy"></div>
+            <div class="tutorial-slide"><img src="tutorial/5.png" alt="Tutorial Step 5" class="tutorial-img" loading="lazy"></div>
+            <div class="tutorial-slide"><img src="tutorial/6.png" alt="Tutorial Step 6" class="tutorial-img" loading="lazy"></div>
+            <div class="tutorial-slide"><img src="tutorial/7.png" alt="Tutorial Step 7" class="tutorial-img" loading="lazy"></div>
+        </div>
+        <div class="tutorial-footer">
+            <button class="tutorial-btn tut-prev" id="tutorialPrev" onclick="tutorialNav(-1)" disabled>← Back</button>
+            <span class="tutorial-counter" id="tutorialCounter">1 of 8</span>
+            <button class="tutorial-btn tut-next" id="tutorialNext" onclick="tutorialNav(1)">Next →</button>
+        </div>
+    </div>
+</div>
 
 <div class="modal-menu manage-menu" id="manageUsersDropdown">
     <div class="modal-header">
@@ -254,15 +292,18 @@
 </div>
 
 <div class="modal-menu notif-menu" id="notifDropdown">
-    <div class="modal-header">
-        <h3>Announcements</h3>
-        <div class="align-center gap-15">
-            <div class="notif-tabs">
-                <button id="tab-recent" class="tab-btn active" onclick="switchAnnTab('recent')">Recent</button>
-                <button id="tab-archive" class="tab-btn" onclick="switchAnnTab('archive')">Archived</button>
+    <div class="modal-header ann-modal-header">
+        <div class="ann-header-row">
+            <h3>SPEEKS Announcements Hub</h3>
+            <div class="align-center gap-15">
+                <div class="notif-tabs">
+                    <button id="tab-recent" class="tab-btn active" onclick="switchAnnTab('recent')">Recent</button>
+                    <button id="tab-archive" class="tab-btn" onclick="switchAnnTab('archive')">Archived</button>
+                </div>
+                <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
             </div>
-            <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
         </div>
+        <p class="ann-mission">Mission Statement: To become the #1 trusted source for electronics buy back, resale and recycle in all communities that we serve!</p>
     </div>
     <div id="ann-container" class="notif-content">
         <div class="status-message">Syncing Data...</div>
@@ -290,150 +331,150 @@
       
     <div class="dynamic-module-flex role-ceo hotbar-wrapper">
         <div class="hotbar-container">
-          <span class="hotbar-label">CEO</span>
+          <span class="hotbar-label">👑 CEO</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">Sales Summary</a> 
-            <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn">Store Passwords</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn">TOM Folder</a> 
-            <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn">PayMore Google Drive</a> 
-            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn">SPEEKSNET Google Drive</a>  
+            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">📊 Sales Summary</a> 
+            <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn">🔑 Store Passwords</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn">📁 TOM Folder</a> 
+            <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn">☁️ PayMore Google Drive</a> 
+            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn">☁️ SPEEKSNET Google Drive</a>  
         </div>
         </div>
       </div>
 
       <div class="dynamic-module-flex role-district-manager hotbar-wrapper">
         <div class="hotbar-container">
-          <span class="hotbar-label">DM</span>
+          <span class="hotbar-label">🗺️ DM</span>
           <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn">Store Manager Folder</a>
-            <a href="https://docs.google.com/spreadsheets/d/1NkIdw8dlvwXmQ6kdpo73zqRwnPd4kIAkgJ7yAG2XCt4/edit?usp=sharing" target="_blank" class="hotbar-btn">Listing Goals</a>  
-            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">Sales Summary</a>  
-            <a href="https://docs.google.com/spreadsheets/d/1oHOnA6wDwaLQ-EP4-CiDTkKpAdP2V7y8mOay416HDME/edit" target="_blank" class="hotbar-btn">Weekly Metrics</a>
-            <a href="https://docs.google.com/spreadsheets/d/1e4mW-pcwUMJjl2Pjry6PT180P8M8nkYL5Z4GcspQmEA/edit" target="_blank" class="hotbar-btn">Monthly KPIs</a>
-            <a href="https://drive.google.com/drive/folders/12Fjxp44sY6T-o6OlrG6n_YtrHow4bE2f?usp=sharing" target="_blank" class="hotbar-btn">Variance</a>
-            <a href="https://docs.google.com/spreadsheets/d/1agChyBxxwJqP-3CXo10C36-95Y_dVKXTA4GboeCaRRs/edit" target="_blank" class="hotbar-btn">Scorecard</a>
-            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn">SPEEKSNET Google Drive</a>
-            <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn">PayMore Google Drive</a> 
+            <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn">📁 Store Manager Folder</a>
+            <a href="https://docs.google.com/spreadsheets/d/1NkIdw8dlvwXmQ6kdpo73zqRwnPd4kIAkgJ7yAG2XCt4/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Listing Goals</a>  
+            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">📊 Sales Summary</a>  
+            <a href="https://docs.google.com/spreadsheets/d/1oHOnA6wDwaLQ-EP4-CiDTkKpAdP2V7y8mOay416HDME/edit" target="_blank" class="hotbar-btn">📈 Weekly Metrics</a>
+            <a href="https://docs.google.com/spreadsheets/d/1e4mW-pcwUMJjl2Pjry6PT180P8M8nkYL5Z4GcspQmEA/edit" target="_blank" class="hotbar-btn">📉 Monthly KPIs</a>
+            <a href="https://drive.google.com/drive/folders/12Fjxp44sY6T-o6OlrG6n_YtrHow4bE2f?usp=sharing" target="_blank" class="hotbar-btn">⚖️ Variance</a>
+            <a href="https://docs.google.com/spreadsheets/d/1agChyBxxwJqP-3CXo10C36-95Y_dVKXTA4GboeCaRRs/edit" target="_blank" class="hotbar-btn">📋 Scorecard</a>
+            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn">☁️ SPEEKSNET Google Drive</a>
+            <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn">☁️ PayMore Google Drive</a> 
           </div>
         </div>
       </div>
 
       <div class="dynamic-module-flex role-tom hotbar-wrapper">
         <div class="hotbar-container">
-          <span class="hotbar-label">TOM</span>
+          <span class="hotbar-label">🛠️ TOM</span>
           <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn">TOM Folder</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">B2B Records</a>   
-            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn">SPEEKSNET Google Drive</a>  
+            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn">📁 TOM Folder</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>   
+            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn">☁️ SPEEKSNET Google Drive</a>  
         </div>
         </div>
       </div>
 
       <div class="dynamic-module-flex role-tom hotbar-wrapper">
         <div class="hotbar-container">
-          <span class="hotbar-label">PORTALS</span>
+          <span class="hotbar-label">🌐 PORTALS</span>
           <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/1dd1nkndo_Pqt3kztaHcpYWL-NgOWIP-E?usp=drive_link" target="_blank" class="hotbar-btn">OVL Portal</a>  
-            <a href="https://drive.google.com/drive/folders/1Xv6ICOpEXNMeWk4QJBfS7CR6tIFRuElk?usp=drive_link" target="_blank" class="hotbar-btn">LEE Portal</a>
-            <a href="https://drive.google.com/drive/folders/1xGGzefFbX7rzBnusmCUEk2GnHxJaJqhC?usp=drive_link" target="_blank" class="hotbar-btn">WSP Portal</a>
-            <a href="https://drive.google.com/drive/folders/1Y5MiKRorTD1mg-lLY4SccYCqw2fZUrND?usp=drive_link" target="_blank" class="hotbar-btn">MPL Portal</a>
-            <a href="https://drive.google.com/drive/folders/1LnAuBH9t7MwtrB9egWK5PFJWQqPcZ-tL?usp=drive_link" target="_blank" class="hotbar-btn">BAL Portal</a>
+            <a href="https://drive.google.com/drive/folders/1dd1nkndo_Pqt3kztaHcpYWL-NgOWIP-E?usp=drive_link" target="_blank" class="hotbar-btn">🟣 OVL Portal</a>  
+            <a href="https://drive.google.com/drive/folders/1Xv6ICOpEXNMeWk4QJBfS7CR6tIFRuElk?usp=drive_link" target="_blank" class="hotbar-btn">🔵 LEE Portal</a>
+            <a href="https://drive.google.com/drive/folders/1xGGzefFbX7rzBnusmCUEk2GnHxJaJqhC?usp=drive_link" target="_blank" class="hotbar-btn">🟢 WSP Portal</a>
+            <a href="https://drive.google.com/drive/folders/1Y5MiKRorTD1mg-lLY4SccYCqw2fZUrND?usp=drive_link" target="_blank" class="hotbar-btn">🟠 MPL Portal</a>
+            <a href="https://drive.google.com/drive/folders/1LnAuBH9t7MwtrB9egWK5PFJWQqPcZ-tL?usp=drive_link" target="_blank" class="hotbar-btn">🔴 BAL Portal</a>
           </div>
         </div>
       </div>
 
       <div class="dynamic-module-flex role-district-manager hotbar-wrapper">
         <div class="hotbar-container">
-          <span class="hotbar-label">Resources</span>
+          <span class="hotbar-label">📚 Resources</span>
           <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">Training</a>
-            <a href="https://drive.google.com/drive/folders/1AnteR_Igyezdpi0Tp48QmsVmUg5QcQ9q?usp=sharing" target="_blank" class="hotbar-btn">Customer Call Back</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">🎓 Training</a>
+            <a href="https://drive.google.com/drive/folders/1AnteR_Igyezdpi0Tp48QmsVmUg5QcQ9q?usp=sharing" target="_blank" class="hotbar-btn">📞 Customer Call Back</a>
           </div>
         </div>
       </div>
 
       <div class="dynamic-module-flex role-manager hotbar-wrapper">
         <div class="hotbar-container">
-          <span class="hotbar-label">MGR</span>
+          <span class="hotbar-label">💼 MGR</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1pubURplK66yC6oXmpz7P-r8zN07DWmDiLxrtTg0rmdk/edit?usp=sharing" target="_blank" class="hotbar-btn">Daily Listing Goals</a>  
-            <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn">Aging Inventory</a>
-            <a href="https://docs.google.com/spreadsheets/d/1zw-jcqpAnMY6PNofERbUz4pUHA3qnlnZx6O6C_XSmLY/edit?usp=sharing" target="_blank" class="hotbar-btn">Insurance Cases</a>
-            <a href="https://docs.google.com/spreadsheets/d/1ar3tabN-bUqkjWqgy25MCHzSup2jhiaAKaGxLwZTeJ8/edit?usp=sharing" target="_blank" class="hotbar-btn">Location Visits</a>
+            <a href="https://docs.google.com/spreadsheets/d/1pubURplK66yC6oXmpz7P-r8zN07DWmDiLxrtTg0rmdk/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Daily Listing Goals</a>  
+            <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn">⏳ Aging Inventory</a>
+            <a href="https://docs.google.com/spreadsheets/d/1zw-jcqpAnMY6PNofERbUz4pUHA3qnlnZx6O6C_XSmLY/edit?usp=sharing" target="_blank" class="hotbar-btn">🛡️ Insurance Cases</a>
+            <a href="https://docs.google.com/spreadsheets/d/1ar3tabN-bUqkjWqgy25MCHzSup2jhiaAKaGxLwZTeJ8/edit?usp=sharing" target="_blank" class="hotbar-btn">🚗 Location Visits</a>
           </div>
         </div>
       </div>
 
       <div class="dynamic-module-flex store-lee hotbar-wrapper">
         <div class="hotbar-container">
-          <span class="hotbar-label">LEE</span>
+          <span class="hotbar-label">🔵 LEE</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1BWWMPddxjoTTZL9ZRfgiH6-EiE5vaOczi-x_41Skaxk/edit?usp=sharing" target="_blank" class="hotbar-btn">Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/130-aH4s8pNeggrqVSXSJ0R0JDnWkskXUfhNPxSAlPRg/edit?usp=sharing" target="_blank" class="hotbar-btn">Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/1qExWuMZKBD3DCm_i9m5kNnN4WhouHeJuA3gYWXLihrA/edit?usp=sharing" target="_blank" class="hotbar-btn">Employee Purchases</a>
-            <a href="https://docs.google.com/spreadsheets/d/1D9epYOeJ1OZADUniM4MovvUqaiPfoyKAnedCcbEeFbM/edit?usp=sharing" target="_blank" class="hotbar-btn">PC Inventory</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">Training</a>
-            <a href="https://drive.google.com/drive/folders/1AnteR_Igyezdpi0Tp48QmsVmUg5QcQ9q?usp=sharing" target="_blank" class="hotbar-btn">Customer Call Back</a>
+            <a href="https://docs.google.com/spreadsheets/d/1BWWMPddxjoTTZL9ZRfgiH6-EiE5vaOczi-x_41Skaxk/edit?usp=sharing" target="_blank" class="hotbar-btn">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/130-aH4s8pNeggrqVSXSJ0R0JDnWkskXUfhNPxSAlPRg/edit?usp=sharing" target="_blank" class="hotbar-btn">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/1qExWuMZKBD3DCm_i9m5kNnN4WhouHeJuA3gYWXLihrA/edit?usp=sharing" target="_blank" class="hotbar-btn">🛍️ Employee Purchases</a>
+            <a href="https://docs.google.com/spreadsheets/d/1D9epYOeJ1OZADUniM4MovvUqaiPfoyKAnedCcbEeFbM/edit?usp=sharing" target="_blank" class="hotbar-btn">💻 PC Inventory</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">🎓 Training</a>
+            <a href="https://drive.google.com/drive/folders/1AnteR_Igyezdpi0Tp48QmsVmUg5QcQ9q?usp=sharing" target="_blank" class="hotbar-btn">📞 Customer Call Back</a>
           </div>
         </div>
       </div>
 
       <div class="dynamic-module-flex store-ovl hotbar-wrapper">
         <div class="hotbar-container">
-          <span class="hotbar-label">OVL</span>
+          <span class="hotbar-label">🟣 OVL</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1Ze3z9iyDZZaXsOEjOekEEsrO7OqDpVeH6Bhk4t67K2I/edit" target="_blank" class="hotbar-btn">Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1r2UfB926QvaSDuO7_mqOE8z4u6IWjgbIqg_N6rfFV9c/edit" target="_blank" class="hotbar-btn">Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/1DhNRld28CSUKG-4B-dHU4o8gyREKtqLo2J2rI2IdT8M/edit" target="_blank" class="hotbar-btn">Employee Purchases</a>
-            <a href="https://docs.google.com/spreadsheets/d/1RKMryoJ7BZgB5DjSUaTjCSvJQW8_OAkmnwXfBznlSX0/edit" target="_blank" class="hotbar-btn">PC Inventory</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">Training</a>
-            <a href="https://drive.google.com/drive/folders/1AnteR_Igyezdpi0Tp48QmsVmUg5QcQ9q?usp=sharing" target="_blank" class="hotbar-btn">Customer Call Back</a>
+            <a href="https://docs.google.com/spreadsheets/d/1Ze3z9iyDZZaXsOEjOekEEsrO7OqDpVeH6Bhk4t67K2I/edit" target="_blank" class="hotbar-btn">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/1r2UfB926QvaSDuO7_mqOE8z4u6IWjgbIqg_N6rfFV9c/edit" target="_blank" class="hotbar-btn">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/1DhNRld28CSUKG-4B-dHU4o8gyREKtqLo2J2rI2IdT8M/edit" target="_blank" class="hotbar-btn">🛍️ Employee Purchases</a>
+            <a href="https://docs.google.com/spreadsheets/d/1RKMryoJ7BZgB5DjSUaTjCSvJQW8_OAkmnwXfBznlSX0/edit" target="_blank" class="hotbar-btn">💻 PC Inventory</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">🎓 Training</a>
+            <a href="https://drive.google.com/drive/folders/1AnteR_Igyezdpi0Tp48QmsVmUg5QcQ9q?usp=sharing" target="_blank" class="hotbar-btn">📞 Customer Call Back</a>
           </div>
         </div>
       </div>
 
       <div class="dynamic-module-flex store-wsp hotbar-wrapper">
         <div class="hotbar-container">
-          <span class="hotbar-label">WSP</span>
+          <span class="hotbar-label">🟢 WSP</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/14AYsHQ0R1IEXqgKqrGEuyURHGi3fFKrAglgu0dVFJPE/edit" target="_blank" class="hotbar-btn">Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1V0TQ1cJXqUzt0mRnrjvPt_TLzlE8vE7MpxxIMQ9X2yE/edit" target="_blank" class="hotbar-btn">Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/1tp5E1yQhx0j776N-1WMhTzXA_ltvPOPiltsYo65fyc0/edit" target="_blank" class="hotbar-btn">Employee Purchases</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">Training</a>
-            <a href="https://drive.google.com/drive/folders/1AnteR_Igyezdpi0Tp48QmsVmUg5QcQ9q?usp=sharing" target="_blank" class="hotbar-btn">Customer Call Back</a>
+            <a href="https://docs.google.com/spreadsheets/d/14AYsHQ0R1IEXqgKqrGEuyURHGi3fFKrAglgu0dVFJPE/edit" target="_blank" class="hotbar-btn">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/1V0TQ1cJXqUzt0mRnrjvPt_TLzlE8vE7MpxxIMQ9X2yE/edit" target="_blank" class="hotbar-btn">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/1tp5E1yQhx0j776N-1WMhTzXA_ltvPOPiltsYo65fyc0/edit" target="_blank" class="hotbar-btn">🛍️ Employee Purchases</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">🎓 Training</a>
+            <a href="https://drive.google.com/drive/folders/1AnteR_Igyezdpi0Tp48QmsVmUg5QcQ9q?usp=sharing" target="_blank" class="hotbar-btn">📞 Customer Call Back</a>
           </div>
         </div>
       </div>
 
       <div class="dynamic-module-flex store-mpl hotbar-wrapper">
         <div class="hotbar-container">
-          <span class="hotbar-label">MPL</span>
+          <span class="hotbar-label">🟠 MPL</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/18VeWgGjoIfKRlJUtj0PTU1-uJJavKaPu3W2o_A4vyFs/edit" target="_blank" class="hotbar-btn">Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1xVJ_JJD-wZUbzFfer4fF50CH6RkZ-sqzxe4bYRGqDtE/edit" target="_blank" class="hotbar-btn">Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/10DiGbDO0tyHitLpltOiTix2TowoeMNzsp0a3MjOtTSY/edit" target="_blank" class="hotbar-btn">Employee Purchases</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">Training</a>
-            <a href="https://drive.google.com/drive/folders/1AnteR_Igyezdpi0Tp48QmsVmUg5QcQ9q?usp=sharing" target="_blank" class="hotbar-btn">Customer Call Back</a>
+            <a href="https://docs.google.com/spreadsheets/d/18VeWgGjoIfKRlJUtj0PTU1-uJJavKaPu3W2o_A4vyFs/edit" target="_blank" class="hotbar-btn">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/1xVJ_JJD-wZUbzFfer4fF50CH6RkZ-sqzxe4bYRGqDtE/edit" target="_blank" class="hotbar-btn">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/10DiGbDO0tyHitLpltOiTix2TowoeMNzsp0a3MjOtTSY/edit" target="_blank" class="hotbar-btn">🛍️ Employee Purchases</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">🎓 Training</a>
+            <a href="https://drive.google.com/drive/folders/1AnteR_Igyezdpi0Tp48QmsVmUg5QcQ9q?usp=sharing" target="_blank" class="hotbar-btn">📞 Customer Call Back</a>
           </div>
         </div>
       </div>
 
       <div class="dynamic-module-flex store-bal hotbar-wrapper">
         <div class="hotbar-container">
-          <span class="hotbar-label">BAL</span>
+          <span class="hotbar-label">🔴 BAL</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1SuXAQc66OzKOfXkPcp7pCCsccWFB4RbHG2N6YGt3wf0/edit" target="_blank" class="hotbar-btn">Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/192c0M5Mxe9oy5PR6JQelD_DPh4ebvJpCnK26kYGpnbk/edit" target="_blank" class="hotbar-btn">Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/1RHnw3rK9kvNvmQznMFr6qkg82j0GpWEwUhDOIPDGfts/edit" target="_blank" class="hotbar-btn">Employee Purchases</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">Training</a>
-            <a href="https://drive.google.com/drive/folders/1AnteR_Igyezdpi0Tp48QmsVmUg5QcQ9q?usp=sharing" target="_blank" class="hotbar-btn">Customer Call Back</a>
+            <a href="https://docs.google.com/spreadsheets/d/1SuXAQc66OzKOfXkPcp7pCCsccWFB4RbHG2N6YGt3wf0/edit" target="_blank" class="hotbar-btn">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/192c0M5Mxe9oy5PR6JQelD_DPh4ebvJpCnK26kYGpnbk/edit" target="_blank" class="hotbar-btn">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/1RHnw3rK9kvNvmQznMFr6qkg82j0GpWEwUhDOIPDGfts/edit" target="_blank" class="hotbar-btn">🛍️ Employee Purchases</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">🎓 Training</a>
+            <a href="https://drive.google.com/drive/folders/1AnteR_Igyezdpi0Tp48QmsVmUg5QcQ9q?usp=sharing" target="_blank" class="hotbar-btn">📞 Customer Call Back</a>
           </div>
         </div>
       </div>
@@ -934,6 +975,8 @@
                       <option value="OVL">OVL</option>
                       <option value="LEE">LEE</option>
                       <option value="WSP">WSP</option>
+                      <option value="MPL">MPL</option>
+                      <option value="BAL">BAL</option>
                   </select>
                   <span class="vw-vs-text">vs</span>
                   <select id="vw-compare" class="kpi-select" onchange="renderVariance()">
@@ -941,6 +984,8 @@
                       <option value="OVL">OVL</option>
                       <option value="LEE">LEE</option>
                       <option value="WSP">WSP</option>
+                      <option value="MPL">MPL</option>
+                      <option value="BAL">BAL</option>
                   </select>
               </div>
           </div>
@@ -952,8 +997,7 @@
           <div class="vw-footer">
               <a href="https://drive.google.com/drive/folders/12Fjxp44sY6T-o6OlrG6n_YtrHow4bE2f?usp=sharing" target="_blank" class="quick-link-pill vw-footer-btn">📁 Variance Replies</a>
           </div>
-      </div>
-  </div>  
+      </div>  
   
 <div id="scorecardModalOverlay" onclick="closeScorecardModal()"></div>
 <div class="modal-menu manage-menu" id="scorecardSubmitModal">
@@ -984,11 +1028,6 @@
 </div>
 
 <div id="checklistSidePanel" class="checklist-side-panel dynamic-module-flex role-manager role-district-manager">
-    
-    <div class="checklist-pull-tab" onclick="toggleChecklistPanel(event); loadChecklist();">
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="cl-pull-icon"><polyline points="15 18 9 12 15 6"></polyline></svg>
-        <span>TASKS</span>
-    </div>
 
     <div class="cl-panel-header">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
@@ -1003,12 +1042,16 @@
             <button id="cl-tab-quarterly" class="tab-btn" style="display: none;" onclick="switchChecklistTab('quarterly')">Quarterly</button>
         </div>
     </div>
-    
+
     <div class="cl-panel-body">
         <div id="checklistContent" class="cl-scroll-area">
             <div class="status-message">Syncing Data...</div>
         </div>
-        
+
+        <div class="cl-footer-row">
+            <button class="cl-clear-btn" onclick="clearChecklistTab()" title="Uncheck all items on this tab">Reset</button>
+        </div>
+
         <div class="cl-input-area">
             <input type="text" id="newChecklistTask" placeholder="Add a personal task...">
             <button class="btn-primary cl-add-btn" onclick="addChecklistItem()">Add</button>

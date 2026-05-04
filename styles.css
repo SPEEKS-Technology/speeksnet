@@ -682,7 +682,8 @@ html {
     display: none; 
     opacity: 0; 
     transition: opacity 0.15s ease; 
-    backdrop-filter: blur(4px); 
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
 }
 
 .overlay.show { display: block !important; opacity: 1; }
@@ -714,6 +715,16 @@ html {
 }
 
 .modal-header h3 { font-size: 16px; font-weight: 800; color: var(--slate-charcoal); }
+
+.ann-modal-header { flex-direction: column; align-items: stretch; gap: 0; }
+.ann-header-row { display: flex; justify-content: space-between; align-items: center; }
+.ann-mission {
+    margin: 8px 0 0 0;
+    font-size: 12px;
+    color: #64748b;
+    font-style: italic;
+    line-height: 1.45;
+}
 
 .modal-close-btn { 
     background: transparent; 
@@ -1376,6 +1387,10 @@ select.bs-hidden-select:focus {
     .page-header { flex-direction: column; align-items: flex-start; gap: 15px; }
 }
 
+/* Nav compact: triggered by JS class when tabs collide with right actions */
+.top-nav.nav-compact .nav-link span { display: none; }
+.top-nav.nav-compact .nav-link { padding: 0 10px; font-size: 22px; }
+
 @media (max-width: 768px) {
     body { flex-direction: column; }
     
@@ -1648,8 +1663,28 @@ select.bs-hidden-select:focus {
 .hotbar-container { display: flex; flex-grow: 1; align-items: center; background: #ffffff; border: 1px solid var(--gen-border); border-left: 4px solid var(--slate-charcoal); border-radius: 8px; padding: 6px 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02); }
 .hotbar-label { font-weight: 800; font-size: 0.85em; color: var(--slate-charcoal); text-transform: uppercase; letter-spacing: 1px; padding: 0 15px 0 8px; white-space: nowrap; }
 .hotbar-links { display: flex; width: 100%; gap: 8px; }
-.hotbar-btn { flex: 1; text-align: center; padding: 8px 10px; background: #ffffff; color: var(--slate-charcoal); text-decoration: none; border-radius: 6px; font-size: 0.85em; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--gen-border); transition: all 0.2s ease; }
-.hotbar-btn:hover { border-color: var(--sage-professional); color: var(--sage-professional); box-shadow: 0 4px 8px rgba(90, 141, 59, 0.08); transform: translateY(-2px); }
+.hotbar-btn { 
+    flex: 1; 
+    text-align: center; 
+    padding: 8px 10px; 
+    background-color: #ffffff !important; 
+    color: var(--slate-charcoal) !important; 
+    text-decoration: none; 
+    border-radius: 6px; 
+    font-size: 0.85em; 
+    font-weight: 600; 
+    white-space: nowrap; 
+    overflow: hidden; 
+    text-overflow: ellipsis; 
+    border: 1px solid var(--gen-border); 
+    transition: all 0.2s ease; 
+}
+.hotbar-btn:hover { 
+    border-color: var(--sage-professional) !important; 
+    color: var(--sage-professional) !important; 
+    box-shadow: 0 4px 8px rgba(90, 141, 59, 0.08); 
+    transform: translateY(-2px); 
+}
 
 /* =========================================================
    QUICK MESSAGES MODULE
@@ -1808,10 +1843,10 @@ select.bs-hidden-select:focus {
 
 .top-nav {
     position: fixed;
-    top: 0; left: 0; 
-    right: -15px !important;
-    padding: 15px 45px 15px 30px !important;
-    min-height: 60px; 
+    top: 0; left: 0;
+    right: 0;
+    padding: 10px 45px 10px 30px !important;
+    min-height: 60px;
     height: auto;
     background: var(--slate-charcoal);
     color: white;
@@ -1822,7 +1857,7 @@ select.bs-hidden-select:focus {
     box-shadow: 0 4px 15px rgba(139, 139, 139, 0.1);
     gap: 20px;
     border-bottom: var(--sage-professional) solid 10px;
-    flex-wrap: wrap; 
+    flex-wrap: nowrap;
 }
 
 .nav-left {
@@ -1830,6 +1865,7 @@ select.bs-hidden-select:focus {
     flex-direction: column;
     gap: 8px;
     max-width: 350px;
+    flex-shrink: 0;
 }
 
 .nav-right {
@@ -1837,16 +1873,8 @@ select.bs-hidden-select:focus {
     align-items: center;
     gap: 20px;
     margin-left: auto;
-    border-right: none !important; 
-}
-
-.mission-statement {
-    font-size: 11px;
-    font-weight: 200;
-    font-style: italic;
-    color: #888;
-    margin: 0;
-    line-height: 1.3;
+    border-right: none !important;
+    flex-shrink: 0;
 }
 
 .user-profile-nav {
@@ -1901,6 +1929,9 @@ select.bs-hidden-select:focus {
     gap: 10px;
     padding: 0;
     margin: 0;
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
 }
 
 .top-nav .nav-link {
@@ -2012,6 +2043,39 @@ select.bs-hidden-select:focus {
     color: white;
     box-shadow: 0 2px 8px rgba(239, 68, 68, 0.2);
 }
+
+/* Daily store-comment bubble (shown/hidden via JS: bubble.style.display = 'flex') */
+#dailyMessageBubble {
+    display: none;
+    background: linear-gradient(135deg, var(--sage-professional), #4a7530);
+    color: white;
+    padding: 6px 16px;
+    border-radius: 20px;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    box-shadow: 0 4px 10px rgba(90, 141, 59, 0.3);
+    max-width: 500px;
+    z-index: 1000;
+}
+#dailyMessageBubbleIcon { font-size: 16px; }
+#dailyMessageBubbleText { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.daily-bubble-close {
+    background: rgba(255,255,255,0.2);
+    border: none;
+    color: white;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    margin-left: 5px;
+    flex-shrink: 0;
+    transition: background 0.2s;
+}
+.daily-bubble-close:hover { background: rgba(255,255,255,0.4); }
 
 .metrics-card {
     width: 33%;
@@ -2169,7 +2233,6 @@ select.bs-hidden-select:focus {
 .scorecard-widget-body { height: stretch; }
 
 .top-nav {
-    width: 100vw !important; 
     border-right: none !important;
 }
 
@@ -2227,8 +2290,7 @@ select.bs-hidden-select:focus {
 }
 
 .top-nav {
-    right: -15px !important; 
-    padding-right: 45px !important; 
+    right: 0;
 }
 
 .district-split-row {
@@ -2937,68 +2999,94 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 /* =========================================================
    MANAGER CHECKLIST - SLIDING PANEL & TAB
    ========================================================= */
-.checklist-side-panel {
+/* Checklist tab — fixed below the header, left edge of the panel */
+.cl-nav-toggle {
     position: fixed;
-    top: 90px; 
-    /* Hide the panel exactly by its width + borders so only the tab shows */
-    right: -382px; 
-    width: 380px;
-    max-width: 90vw;
-    height: calc(100vh - 110px);
-    background: white;
-    border-radius: 16px 0 0 16px;
-    box-shadow: -4px 0 25px rgba(0,0,0,0.1);
-    z-index: 9999; 
-    display: flex;
-    flex-direction: column;
-    transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    border: 1px solid #e2e8f0;
-    border-right: none;
-    /* CRITICAL: Allows the tab to stick out the left side! */
-    overflow: visible; 
-}
-
-.checklist-side-panel.open {
-    right: 0; 
-}
-
-.checklist-pull-tab {
-    position: absolute;
-    /* Adjust this 'top' value to perfectly center it between the nav and hotbars */
-    top: 17px; 
-    
-    /* Anchors it flush against the LEFT border of the side panel */
-    right: 100%; 
-    
-    background: var(--slate-charcoal); 
-    color: white;
-    
-    /* SKINNER PADDING: Reduced the top/bottom padding from 10px to 6px */
-    padding: 6px 14px; 
-    
-    /* Squared on the right so it fuses to the panel border */
-    border-radius: 8px 0 0 8px; 
-    
+    top: 82px;
+    right: 0;
+    background: var(--sage-professional);
+    color: rgba(255,255,255,0.9);
+    padding: 9px 14px 9px 16px;
+    border-radius: 8px 0 0 8px;
     cursor: pointer;
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 10px; /* Reduced by 1px to fit the skinnier tab */
+    gap: 8px;
+    font-size: 11px;
     font-weight: 800;
-    letter-spacing: 0.5px;
-    box-shadow: -4px 4px 10px rgba(0, 0, 0, 0.1); 
-    z-index: 9999;
+    letter-spacing: 0.6px;
+    white-space: nowrap;
+    z-index: 98;
+    border: none;
+    box-shadow: -4px 4px 16px rgba(90,141,59,0.25);
+    transition: background 0.2s, color 0.2s;
+}
+.cl-nav-toggle:hover {
+    background: var(--sage-professional); /* no color change — glow/wiggle only */
+    color: white;
+}
+.cl-nav-toggle:hover span:first-child {
+    display: inline-block;
+    animation: cl-wiggle 0.5s ease forwards;
+}
+.cl-nav-toggle:hover span:nth-child(2) {
+    text-shadow: 0 0 6px rgba(255,255,255,0.3), 0 0 8px rgba(255,255,255,0.4);
+}
+.cl-nav-toggle:hover .cl-toggle-chevron {
+    filter: drop-shadow(0 0 4px rgba(255,255,255,0.95));
+}
+.cl-nav-toggle.panel-active {
+    background: #3a6023;
+    color: white;
+    box-shadow: -4px 4px 16px rgba(90,141,59,0.35);
+}
+.cl-toggle-chevron {
+    transition: transform 0.3s ease;
+    flex-shrink: 0;
+}
+.cl-nav-toggle.panel-active .cl-toggle-chevron {
+    transform: rotate(180deg);
+}
+@keyframes cl-wiggle {
+    0%   { transform: rotate(0deg); }
+    20%  { transform: rotate(-18deg); }
+    45%  { transform: rotate(16deg); }
+    65%  { transform: rotate(-10deg); }
+    82%  { transform: rotate(7deg); }
+    100% { transform: rotate(0deg); }
 }
 
-/* Rotates the arrow so it points right (>) when the panel is open */
-.checklist-side-panel.open .cl-pull-icon { transform: rotate(180deg); }
+/* Drop-down checklist panel — hangs flush from the right of the header */
+.checklist-side-panel {
+    position: fixed;
+    top: 88px;                        /* header (78px box) + green border (10px) */
+    right: 0;                         /* flush with right edge of viewport */
+    width: 370px;
+    height: calc(100vh - 88px);       /* always full height below the header */
+    background: white;
+    border-radius: 0 0 0 14px;        /* only bottom-left rounded; right is flush */
+    box-shadow: -6px 0 30px rgba(0,0,0,0.14);
+    z-index: 99;                      /* slides from behind the header (z-index 100) */
+    display: flex;
+    flex-direction: column;
+    transform: translateY(calc(-100% - 12px)); /* hidden fully above; 12px clears the green border */
+    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow: hidden;
+    border: 1px solid #e2e8f0;
+    border-top: none;
+    border-right: none;               /* no right border — viewport edge is the boundary */
+}
+
+.checklist-side-panel.open {
+    transform: translateY(0);
+}
 
 /* Internal Drawer Styling */
 .cl-panel-header {
     padding: 20px;
     border-bottom: 1px solid #e2e8f0;
     background: #fcfcfc;
-    border-radius: 16px 0 0 0;
+    border-radius: 0;
 }
 
 .cl-panel-header h3 {
@@ -3020,7 +3108,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     padding: 15px;
     background: #f9fafb;
     overflow: hidden;
-    border-radius: 0 0 0 16px;
+    border-radius: 0 0 0 14px;
 }
 
 .cl-scroll-area {
@@ -3057,6 +3145,9 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 }
 
 .cl-add-btn { padding: 6px 12px; font-size: 11px; border-radius: 6px; }
+.cl-footer-row { display: flex; justify-content: flex-end; padding: 6px 0 2px; }
+.cl-clear-btn { background: transparent; border: 1px solid #cbd5e1; color: #94a3b8; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; cursor: pointer; transition: 0.2s; white-space: nowrap; }
+.cl-clear-btn:hover { border-color: var(--red-alert); color: var(--red-alert); }
 
 /* Checklist Items */
 .cl-item {
@@ -3082,22 +3173,234 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     font-family: 'Inter', sans-serif;
     font-size: 10px;
     font-weight: 500;
-    color: var(--gen-text); /* Uses your professional grey color */
+    color: var(--gen-text);
     letter-spacing: 1px;
     text-transform: uppercase;
     opacity: 0.6;
-    transition: opacity 0.3s ease;
+    transition: opacity 0.3s ease, color 0.3s ease;
 }
 
 .version-tag:hover {
     opacity: 1;
-    color: var(--sage-professional); /* Subtle glow on hover using your brand green */
+    color: var(--sage-professional);
+}
+
+.top-nav .version-tag { color: rgba(255,255,255,0.45); }
+.top-nav .version-tag:hover { color: var(--sage-professional); opacity: 1; }
+
+.version-signout-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
 
 /* Ensure the version hides correctly when you collapse the sidebar */
 .sidebar.collapsed .version-tag {
     opacity: 0;
     pointer-events: none;
+}
+
+/* =========================================================
+   FIRST-LOGIN TUTORIAL MODAL
+   ========================================================= */
+.tutorial-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(10, 15, 20, 0.75);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+.tutorial-overlay.active {
+    opacity: 1;
+    visibility: visible;
+}
+
+.tutorial-modal {
+    background: white;
+    border-radius: 20px;
+    width: 88vw;
+    max-width: 920px;
+    height: 86vh;
+    max-height: 720px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.4);
+    animation: tut-pop-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes tut-pop-in {
+    from { transform: scale(0.92); opacity: 0; }
+    to   { transform: scale(1);    opacity: 1; }
+}
+
+.tutorial-header {
+    padding: 22px 32px 16px;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+    background: var(--slate-charcoal);
+}
+
+.tutorial-header h2 {
+    font-size: 20px;
+    font-weight: 900;
+    color: white;
+    margin: 0;
+    letter-spacing: 0.5px;
+}
+
+.tutorial-dots {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+}
+
+.tut-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.25);
+    transition: background 0.25s ease, transform 0.25s ease;
+    flex-shrink: 0;
+}
+
+.tut-dot.active {
+    background: var(--sage-professional);
+    transform: scale(1.3);
+}
+
+.tutorial-slides-wrap {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background: #f8fafc;
+}
+
+.tutorial-slide {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 28px;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+}
+
+.tutorial-slide.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.tutorial-welcome-card {
+    text-align: center;
+    max-width: 520px;
+    padding: 20px;
+}
+
+.tutorial-welcome-icon {
+    font-size: 72px;
+    margin-bottom: 28px;
+    animation: tut-bounce 2s ease infinite;
+}
+
+@keyframes tut-bounce {
+    0%, 100% { transform: translateY(0); }
+    50%       { transform: translateY(-10px); }
+}
+
+.tutorial-welcome-msg {
+    font-size: 19px;
+    line-height: 1.75;
+    color: var(--slate-charcoal);
+    font-weight: 400;
+    margin: 0;
+}
+
+.tutorial-img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: 12px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.12);
+}
+
+.tutorial-footer {
+    padding: 14px 32px;
+    border-top: 1px solid #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    background: white;
+}
+
+.tutorial-counter {
+    font-size: 13px;
+    font-weight: 700;
+    color: #94a3b8;
+    letter-spacing: 0.5px;
+}
+
+.tutorial-btn {
+    padding: 9px 22px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 800;
+    cursor: pointer;
+    border: 2px solid var(--sage-professional);
+    transition: all 0.2s ease;
+    letter-spacing: 0.3px;
+}
+
+.tut-prev {
+    background: transparent;
+    color: var(--sage-professional);
+}
+
+.tut-prev:hover:not(:disabled) {
+    background: var(--sage-professional);
+    color: white;
+}
+
+.tut-prev:disabled {
+    opacity: 0.25;
+    cursor: not-allowed;
+    border-color: #cbd5e1;
+    color: #cbd5e1;
+}
+
+.tut-next {
+    background: var(--sage-professional);
+    color: white;
+}
+
+.tut-next:hover {
+    background: #3d6b26;
+    box-shadow: 0 4px 14px rgba(90,141,59,0.35);
+    transform: translateY(-1px);
+}
+
+.tut-next.tut-finish {
+    background: linear-gradient(135deg, var(--sage-professional), #4d8030);
+    box-shadow: 0 4px 20px rgba(90,141,59,0.45);
+    animation: tut-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes tut-pulse {
+    0%, 100% { box-shadow: 0 4px 20px rgba(90,141,59,0.45); }
+    50%       { box-shadow: 0 6px 32px rgba(90,141,59,0.7); }
 }
 
 /* --- ISOLATED DISTRICT COMMAND CENTER STYLES --- */
