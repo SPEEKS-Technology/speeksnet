@@ -449,6 +449,52 @@ document.addEventListener('click', (e) => {
     }
 });
 
+// --- REACTION LIVE POLLING ---
+let _reactionPollInterval = null;
+
+async function pollReactions() {
+    try {
+        const response = await fetch(`${CMS_URL}?v=${Date.now()}`);
+        const data = await response.json();
+        if (!data.announcements) return;
+
+        const currentUser = sessionStorage.getItem('speeksUserName');
+        const cleanUser = currentUser ? String(currentUser).trim().toLowerCase() : null;
+        const availableEmojis = ['👍', '🎉', '👀', '🔥', '🫡', '💵'];
+
+        data.announcements.forEach(item => {
+            const annId = item.rowId;
+            if (!document.getElementById(`reactions_${annId}`)) return;
+
+            const rData = item.reactions || {};
+            availableEmojis.forEach((emoji, eIdx) => {
+                const btn = document.getElementById(`btn_${annId}_${eIdx}`);
+                if (!btn || btn.hasAttribute('disabled')) return;
+
+                const usersList = Array.isArray(rData[emoji]) ? rData[emoji] : [];
+                const count = usersList.length;
+                const hasReacted = cleanUser ? usersList.some(u => String(u).trim().toLowerCase() === cleanUser) : false;
+
+                const countSpan = btn.querySelector('.count');
+                if (countSpan) countSpan.innerText = count;
+                btn.style.display = count > 0 ? 'flex' : 'none';
+                btn.classList.toggle('reacted', hasReacted);
+
+                if (usersList.length > 0) {
+                    btn.setAttribute('title', `Reacted by: ${usersList.join(', ')}`);
+                } else {
+                    btn.removeAttribute('title');
+                }
+            });
+        });
+    } catch (e) {}
+}
+
+function startReactionPolling() {
+    if (_reactionPollInterval) clearInterval(_reactionPollInterval);
+    _reactionPollInterval = setInterval(pollReactions, 15000);
+}
+
 // --- 5. MODULE: USER MANAGEMENT ---
 let globalUsersData = [];
 
@@ -4021,8 +4067,9 @@ function initDashboardData() {
         if (typeof initChecklists === 'function') initChecklists(); 
         
         // Re-sync announcements immediately after login so it knows who you are!
-        setTimeout(loadCMS, 50); 
-        
+        setTimeout(loadCMS, 50);
+        setTimeout(startReactionPolling, 3000);
+
         setTimeout(fetchHubData, 100); 
         setTimeout(fetchVarianceData, 300); 
         setTimeout(fetchWeeklyKPIs, 500); 
