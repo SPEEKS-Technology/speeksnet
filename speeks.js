@@ -1296,18 +1296,19 @@ async function fetchWeeklyKPIs() {
         let sAvg = {};
         let emps = [];
         let fIdx = -1;
-        let sIdx = d.findLastIndex(r => String(r[0]).trim().toLowerCase() === "store" || String(r[0]).trim().toLowerCase() === "store total");
-        
+        const _kpiStoreLabels = ["store", "store total", "ovl", "lee", "wsp", "mpl", "bal"];
+        let sIdx = d.findLastIndex(r => _kpiStoreLabels.includes(String(r[0]).trim().toLowerCase()));
+
         if (sIdx !== -1) {
-            let st = d[sIdx]; 
+            let st = d[sIdx];
             sAvg = { buyVal: st[2], buyMargin: st[5], customers: st[6], conversion: st[8], time: formatTime(st[12]), noDeals: st[14], listed: st[20] };
-            
+
             for (let i = Math.max(0, sIdx - 6); i <= Math.min(d.length - 1, sIdx + 6); i++) {
                 if (i === sIdx) continue;
                 let n = String(d[i][0]).trim();
                 let lN = n.toLowerCase();
-                
-                if (n && !["name", "employee", "store", "store total", "ovl", "lee", "wsp", "mpl", "bal"].includes(lN) && !lN.includes("average") && !lN.includes("week")) {
+
+                if (n && !_kpiStoreLabels.includes(lN) && !lN.includes("average") && !lN.includes("week")) {
                     if (String(d[i][2]).trim() !== "" || String(d[i][20]).trim() !== "") {
                         if (fIdx === -1) fIdx = i; 
                         emps.push({ name: n, buyVal: d[i][2], buyMargin: d[i][5], customers: d[i][6], conversion: d[i][8], time: formatTime(d[i][12]), noDeals: d[i][14], listed: d[i][20] });
@@ -3017,28 +3018,21 @@ async function fetchLiveGoalsData() {
     if (goalsTargetStore === 'ALL' || goalsTargetStore === 'CORP') goalsTargetStore = 'OVL'; 
 
     try {
-        const d = await fetch(`${WEEKLY_KPI_URL}?store=${goalsTargetStore}&time=4-Week&v=${Date.now()}`).then(r => r.json());
-        let emps = [];
-        let sIdx = d.findLastIndex(r => String(r[0]).trim().toLowerCase() === "store" || String(r[0]).trim().toLowerCase() === "store total");
-        
-        if (sIdx !== -1) {
-            for (let i = Math.max(0, sIdx - 6); i <= Math.min(d.length - 1, sIdx + 6); i++) {
-                if (i === sIdx) continue;
-                let n = String(d[i][0]).trim(), lN = n.toLowerCase();
-                if (n && !["name", "employee", "store", "store total", "ovl", "lee", "wsp", "mpl", "bal"].includes(lN) && !lN.includes("average") && !lN.includes("week")) {
-                    if (String(d[i][2]).trim() !== "" || String(d[i][20]).trim() !== "") emps.push(n);
-                }
-            }
+        // Build roster from auth cache — works for all stores immediately, no extra API call
+        const _authRaw = localStorage.getItem('speeksAuthCache');
+        if (_authRaw) {
+            const _authData = JSON.parse(_authRaw);
+            const _excluded = ['ceo', 'district manager'];
+            const _emps = (_authData.users || [])
+                .filter(u => u.store === goalsTargetStore && !_excluded.includes((u.role || '').toLowerCase()))
+                .map(u => u.name)
+                .filter(Boolean);
+            goalsRoster = _emps.length ? _emps : ['No Employees Found'];
         }
-        goalsRoster = emps.length ? [...new Set(emps)] : ['No Employees Found'];
 
-        try {
-            const res = await fetch(`${GOALS_API_URL}?store=${goalsTargetStore}&v=${Date.now()}`);
-            liveGoalsData = await res.json();
-        } catch (dbError) {
-            liveGoalsData = []; 
-        }
-        
+        liveGoalsData = await fetch(`${GOALS_API_URL}?store=${goalsTargetStore}&v=${Date.now()}`).then(r => r.json()).catch(() => []);
+        if (!Array.isArray(liveGoalsData)) liveGoalsData = [];
+
         renderGoalsScoreboard('daily');
     } catch (e) {
         list.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; text-align: center; padding: 20px 0;">Error loading roster.</div>';
