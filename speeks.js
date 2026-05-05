@@ -1423,8 +1423,23 @@ async function fetchWeeklyKPIs() {
 async function fetchHubData() {
     try {
         const response = await fetch(`${HUB_URL}?v=${Date.now()}`);
-        hubDataCache = await response.json();
-        
+        const freshData = await response.json();
+
+        // Track per-store last-updated timestamps based on actual data changes
+        const _bsStores = ['ovl', 'lee', 'wsp', 'mpl', 'bal'];
+        const _bsFields = s => [`${s}BuyVal`,`${s}BuyProj`,`${s}BuyMargin`,`${s}Pct`,`${s}Goal`,`${s}TrackGP`,`${s}GP`,`${s}Rev`,`${s}SellMargin`];
+        const _bsPrev = JSON.parse(localStorage.getItem('bsPrevHubCache') || '{}');
+        const _bsTs = JSON.parse(localStorage.getItem('bsStoreTimestamps') || '{}');
+        const _bsNow = new Date();
+        const _bsLabel = _bsNow.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) + ' ' + _bsNow.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        _bsStores.forEach(s => {
+            if (_bsFields(s).some(f => freshData[f] !== _bsPrev[f])) _bsTs[s] = _bsLabel;
+        });
+        localStorage.setItem('bsStoreTimestamps', JSON.stringify(_bsTs));
+        localStorage.setItem('bsPrevHubCache', JSON.stringify(freshData));
+
+        hubDataCache = freshData;
+
         if (document.getElementById('bs-buy-val')) renderBuyingSales();
         
         // Render Live Data globally (Fixes CEO Rings)
@@ -1499,7 +1514,8 @@ function renderBuyingSales() {
 
     const bsDateEl = document.getElementById('bs-last-updated');
     if (bsDateEl) {
-        bsDateEl.innerText = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+        const _bsTs = JSON.parse(localStorage.getItem('bsStoreTimestamps') || '{}');
+        bsDateEl.innerText = _bsTs[store] || '—';
     }
 }
 

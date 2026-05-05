@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\" -Recurse -Directory | Select-Object -First 30 | ForEach-Object { $_.FullName })"
+    ]
+  }
+}
