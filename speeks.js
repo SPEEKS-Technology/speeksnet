@@ -158,32 +158,6 @@ function toggleModal(modalId, badgeId = null) {
         dropdown.classList.add('show');
         lockAndBlurScreen();
         
-        if (badgeId === 'notifBadge') {
-            const badge = document.getElementById(badgeId);
-            const userName = sessionStorage.getItem('speeksUserName'); 
-            
-            if (badge && badge.classList.contains('active') && userName) {
-                badge.classList.remove('active');
-                badge.style.display = 'none';
-                
-                localStorage.removeItem('speeksUnreadAnnouncements_' + userName);
-                
-                const unreadEls = document.querySelectorAll('.notif-item[data-unread-id]');
-                const unreadIds = Array.from(unreadEls).map(el => parseInt(el.getAttribute('data-unread-id')));
-                
-                if (unreadIds.length > 0) {
-                    setTimeout(() => {
-                        fetch(CMS_URL, {
-                            method: 'POST', mode: 'no-cors',
-                            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                            body: JSON.stringify({ type: 'mark_read', user: userName, rowIds: unreadIds })
-                        }).catch(() => {});
-                    }, 2500);
-                    
-                    unreadEls.forEach(el => el.removeAttribute('data-unread-id'));
-                }
-            }
-        }
     }
 }
 
@@ -202,6 +176,8 @@ async function loadCMS() {
             
             const currentUser = sessionStorage.getItem('speeksUserName');
             const cleanUser = currentUser ? String(currentUser).trim().toLowerCase() : null;
+            const userRole = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
+            const isPrivileged = userRole === 'ceo' || userRole === 'district manager';
 
             if (data.announcements && data.announcements.length > 0) {
                 const sortedAnns = [...data.announcements].reverse();
@@ -216,19 +192,26 @@ async function loadCMS() {
                         const annDate = new Date(item.date);
                         if (!isNaN(annDate.getTime())) {
                             displayDate = annDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-                            const diffHours = (now - annDate) / (1000 * 60 * 60);
+                        }
+                    }
 
-                            if (diffHours > 48) {
-                                isArchived = true;
-                            } else {
-                                if (cleanUser) {
-                                    const isUnread = !item.readBy || !item.readBy.some(u => String(u).trim().toLowerCase() === cleanUser);
-                                    if (isUnread) {
-                                        showBadge = true;
-                                        unreadHtmlAttr = `data-unread-id="${item.rowId}"`; 
-                                    }
-                                }
-                            }
+                    if (cleanUser) {
+                        const localReadKey = 'speeksLocalRead_' + cleanUser;
+                        const localRead = new Set(JSON.parse(localStorage.getItem(localReadKey) || '[]'));
+                        const inReadBy = !!(item.readBy && item.readBy.some(u => String(u).trim().toLowerCase() === cleanUser));
+                        if (inReadBy && localRead.has(item.rowId)) {
+                            localRead.delete(item.rowId);
+                            localStorage.setItem(localReadKey, JSON.stringify([...localRead]));
+                        }
+                        isArchived = inReadBy || localRead.has(item.rowId);
+                        if (!isArchived) {
+                            showBadge = true;
+                            unreadHtmlAttr = `data-ann-id="${item.rowId}"`;
+                        }
+                    } else if (item.date) {
+                        const annDate = new Date(item.date);
+                        if (!isNaN(annDate.getTime())) {
+                            isArchived = (now - annDate) / (1000 * 60 * 60) > 48;
                         }
                     }
 
@@ -254,36 +237,60 @@ async function loadCMS() {
 
                         let displayStyle = count > 0 ? 'flex' : 'none';
                         let activeClass = hasReacted ? 'reacted' : '';
-                        let disabledAttr = isArchived ? 'disabled style="cursor: default;"' : `onclick="toggleReaction('${annId}', '${emoji}')"`;
                         let tooltipText = usersList.length > 0 ? `title="Reacted by: ${usersList.join(', ')}"` : '';
-                        
-                        reactionsHtml += `<button class="reaction-btn ${activeClass}" id="btn_${annId}_${eIdx}" data-emoji="${emoji}" style="display: ${displayStyle};" ${disabledAttr} ${tooltipText}><span style="pointer-events: none;">${emoji}</span> <span class="count" style="pointer-events: none;">${count}</span></button>`;
+
+                        reactionsHtml += `<button class="reaction-btn ${activeClass}" id="btn_${annId}_${eIdx}" data-emoji="${emoji}" style="display: ${displayStyle};" onclick="toggleReaction('${annId}', '${emoji}')" ${tooltipText}><span style="pointer-events: none;">${emoji}</span> <span class="count" style="pointer-events: none;">${count}</span></button>`;
                     });
 
-                    if (!isArchived) {
-                        reactionsHtml += `
-                            <div class="reaction-picker-wrapper" style="position: relative;">
-                                <button class="add-reaction-btn" onclick="toggleReactionPicker('${annId}')">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 14s1.5 2 4 2 4-2 4-2"></path><line x1="9" y1="9" x2="9.01" y2="9"></line><line x1="15" y1="9" x2="15.01" y2="9"></line></svg>
-                                    <span style="font-size: 14px; margin-left: -4px;">+</span>
-                                </button>
-                                <div class="reaction-picker-popover" id="picker_${annId}">
-                                    ${availableEmojis.map(emoji => `<button type="button" onclick="toggleReaction('${annId}', '${emoji}'); toggleReactionPicker('${annId}')">${emoji}</button>`).join('')}
-                                </div>
+                    reactionsHtml += `
+                        <div class="reaction-picker-wrapper" style="position: relative;">
+                            <button class="add-reaction-btn" onclick="toggleReactionPicker('${annId}')">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 14s1.5 2 4 2 4-2 4-2"></path><line x1="9" y1="9" x2="9.01" y2="9"></line><line x1="15" y1="9" x2="15.01" y2="9"></line></svg>
+                                <span style="font-size: 14px; margin-left: -4px;">+</span>
+                            </button>
+                            <div class="reaction-picker-popover" id="picker_${annId}">
+                                ${availableEmojis.map(emoji => `<button type="button" onclick="toggleReaction('${annId}', '${emoji}'); toggleReactionPicker('${annId}')">${emoji}</button>`).join('')}
                             </div>
-                        `;
-                    }
+                        </div>
+                    `;
                     reactionsHtml += `</div>`;
 
+                    const markReadBtn = (!isArchived && cleanUser) ? `
+                        <button class="mark-read-btn" onclick="markAnnouncementRead(${annId})">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                            Mark as Read
+                        </button>` : '';
+
+                    const readBy = item.readBy || [];
+                    const readReceiptHtml = isPrivileged ? `
+                        <div class="read-receipt" id="receipt_${annId}">
+                            <button class="read-receipt-btn" onclick="toggleReadReceipt('${annId}')">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                                ${readBy.length} read
+                            </button>
+                            <div class="read-receipt-popover" id="receipt-popover_${annId}">
+                                <div class="rr-title">Read by</div>
+                                ${readBy.length === 0
+                                    ? '<div class="rr-empty">No reads yet</div>'
+                                    : readBy.map(u => `<div class="rr-name">${u}</div>`).join('')}
+                            </div>
+                        </div>` : '';
+
                     const html = `
-                        <div class="notif-item" ${unreadHtmlAttr}>
+                        <div class="notif-item"${unreadHtmlAttr ? ` ${unreadHtmlAttr}` : ''}>
                             <div class="ann-header">
                                 <span class="ann-author">${item.author || 'Announcement'}</span>
-                                ${displayDate ? `<small class="ann-date">${displayDate}</small>` : ''}
+                                <div class="ann-header-right">
+                                    ${readReceiptHtml}
+                                    ${displayDate ? `<small class="ann-date">${displayDate}</small>` : ''}
+                                </div>
                             </div>
                             <hr />
                             <div class="ann-text">${item.text || ''}</div>
-                            ${reactionsHtml}
+                            <div class="ann-card-footer">
+                                ${reactionsHtml}
+                                ${markReadBtn}
+                            </div>
                         </div>`;
 
                     if (isArchived) {
@@ -337,6 +344,25 @@ async function loadCMS() {
     } catch (e) { 
         console.error("CMS Sync Failed", e); 
     }
+}
+
+function markAnnouncementRead(rowId) {
+    const userName = sessionStorage.getItem('speeksUserName');
+    if (!userName) return;
+
+    const cleanUser = String(userName).trim().toLowerCase();
+    const localReadKey = 'speeksLocalRead_' + cleanUser;
+    const localRead = new Set(JSON.parse(localStorage.getItem(localReadKey) || '[]'));
+    localRead.add(rowId);
+    localStorage.setItem(localReadKey, JSON.stringify([...localRead]));
+
+    fetch(CMS_URL, {
+        method: 'POST', mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ type: 'mark_read', user: userName, rowIds: [rowId] })
+    }).catch(() => {});
+
+    loadCMS();
 }
 
 function toggleNotifs() { toggleModal('notifDropdown', 'notifBadge'); }
@@ -447,6 +473,20 @@ window.toggleReactionPicker = function(id) {
 document.addEventListener('click', (e) => {
     if (!e.target.closest('.reaction-picker-wrapper')) {
         document.querySelectorAll('.reaction-picker-popover.show').forEach(p => p.classList.remove('show'));
+    }
+});
+
+window.toggleReadReceipt = function(id) {
+    const popover = document.getElementById('receipt-popover_' + id);
+    if (!popover) return;
+    const isOpen = popover.classList.contains('show');
+    document.querySelectorAll('.read-receipt-popover.show').forEach(p => p.classList.remove('show'));
+    if (!isOpen) popover.classList.add('show');
+};
+
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.read-receipt')) {
+        document.querySelectorAll('.read-receipt-popover.show').forEach(p => p.classList.remove('show'));
     }
 });
 
