@@ -5417,14 +5417,17 @@ async function fetchAndDisplayStoreComment() {
 async function fetchChampions() {
     const listerBody = document.getElementById('lister-champions-body');
     const buyerBody = document.getElementById('buyer-champions-body');
+    const grBody = document.getElementById('google-review-champions-body');
     const lDate = document.getElementById('lister-champions-date');
     const bDate = document.getElementById('buyer-champions-date');
+    const grDate = document.getElementById('google-review-champions-date');
     if (!listerBody || !buyerBody) return;
 
     try {
         const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
         let allListers = [];
         let allBuyers = [];
+        let allGoogleReviews = [];
 
         // 1. Calculate "Week Of" based on the previous Monday
         const now = new Date();
@@ -5436,6 +5439,7 @@ async function fetchChampions() {
         
         if (lDate) lDate.innerText = weekText;
         if (bDate) bDate.innerText = weekText;
+        if (grDate) grDate.innerText = weekText;
 
         // 2. User Directory matching (Gets Full Names)
         let authCache = {};
@@ -5462,9 +5466,13 @@ async function fetchChampions() {
                     let n = String(d[i][0]).trim();
                     let lN = n.toLowerCase();
                     if (n && !["name", "employee", "store", "store total", "ovl", "lee", "wsp", "mpl", "bal"].includes(lN) && !lN.includes("average") && !lN.includes("week")) {
-                        let listed = parseNum(d[i][20]); 
+                        let listed = parseNum(d[i][20]);
                         if (listed > 0) {
                             allListers.push({ name: getFullName(n), store: stores[storeIdx], listed: listed });
+                        }
+                        let reviews = parseNum(d[i][29]); // Column AD
+                        if (reviews > 0) {
+                            allGoogleReviews.push({ name: getFullName(n), store: stores[storeIdx], reviews: reviews });
                         }
                     }
                 }
@@ -5523,8 +5531,9 @@ async function fetchChampions() {
             dataArray.forEach(emp => {
                 if (!merged[emp.name]) merged[emp.name] = { ...emp };
                 else {
-                    if (type === 'lister') merged[emp.name].listed += emp.listed; 
+                    if (type === 'lister') merged[emp.name].listed += emp.listed;
                     if (type === 'buyer') merged[emp.name].score = Math.max(merged[emp.name].score, emp.score);
+                    if (type === 'review') merged[emp.name].reviews += emp.reviews;
                 }
             });
             
@@ -5548,18 +5557,19 @@ async function fetchChampions() {
                 const emp = podium.data;
                 const isFirst = podium.place === 1;
                 
-                // Only render the inner score/items text block if it is the Lister podium
+                // Only render the inner score/items text block if it is the Lister or Review podium
                 let blockContent = '';
-                if (type === 'lister') {
+                if (type === 'lister' || type === 'review') {
+                    const val = type === 'lister' ? emp.listed : emp.reviews;
                     blockContent = `
                         <div style="z-index: 2; display: flex; flex-direction: column; align-items: center;">
-                            <span style="font-size: ${isFirst ? '32px' : '26px'}; font-weight: 900; color: var(--slate-charcoal); line-height: 1;">${emp.listed}</span>
+                            <span style="font-size: ${isFirst ? '32px' : '26px'}; font-weight: 900; color: var(--slate-charcoal); line-height: 1;">${val}</span>
                             <span style="font-size: 9px; font-weight: 900; color: #64748b; text-transform: uppercase; margin-top: 4px;">${labelText}</span>
                         </div>`;
                 }
 
                 html += `
-                <div style="display: flex; flex-direction: column; align-items: center; width: 130px; margin: 0 5px;">
+                <div style="display: flex; flex-direction: column; align-items: center; width: 130px;">
                     <div style="margin-bottom: 12px; text-align: center; display: flex; flex-direction: column; align-items: center; z-index: 2;">
                         <div style="font-size: ${isFirst ? '46px' : '34px'}; line-height: 1; margin-bottom: 8px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));">${podium.medal}</div>
                         <div style="font-size: ${isFirst ? '14px' : '12px'}; font-weight: 900; color: var(--slate-charcoal); line-height: 1.2; text-align: center;">${emp.name}</div>
@@ -5578,10 +5588,12 @@ async function fetchChampions() {
         };
 
         listerBody.innerHTML = buildPodiumHtml(allListers, 'listed', 'Items', 'lister');
+        if (grBody) grBody.innerHTML = buildPodiumHtml(allGoogleReviews, 'reviews', 'Reviews', 'review');
         buyerBody.innerHTML = buildPodiumHtml(allBuyers, 'score', 'Score', 'buyer');
 
     } catch (e) {
         listerBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
+        if (grBody) grBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
         buyerBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
     }
 }
