@@ -19,6 +19,7 @@ const EBAY_ALERTS_URL = 'https://script.google.com/macros/s/AKfycbxap-4Jgdn5-ntk
 const STORE_COMMENT_URL = 'https://script.google.com/macros/s/AKfycbzoqWLZz07niO-dVqDpQS7I-bDvUgLjHT4CYGiqb--yAQYQPkFCUi9EXoi5Wsz-V0Ne/exec';
 const CHECKLIST_URL = 'https://script.google.com/macros/s/AKfycbxr4ZEoSKeF4BZ1H2-tcmc6Gy30-le5Gdm3CSdee6XxOhZFes3-5SF_PNcWR4OLEGN2hQ/exec';
 const TUTORIAL_URL = 'https://script.google.com/macros/s/AKfycbySrXu6IW3S39GKiEsXkJwd4s75aO0uG-BTTg_swxEx3BMG_W7qqZBwHKnuEm_k_Agh/exec';
+const PATCH_NOTES_URL = 'https://script.google.com/macros/s/AKfycbzzk6beS7HWINw8GtQZ12FpezgFhBXj_1GgV1Fs342bc05Y6x9-tJGgr_MMl13rIfP3/exec';
 
 // --- 2. NAV COMPACT MODE ---
 (function () {
@@ -5816,7 +5817,367 @@ window.selectRole = function(clickedBtn, emp, role) {
 
     // 3. Make the newly clicked button active
     clickedBtn.classList.add('active');
-    
+
     // 4. Lock this role out for everyone else
     updateRoleLocks();
 };
+
+// --- PATCH NOTES ---
+function parsePatchDate(d) {
+    if (!d) return new Date(0);
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(d)) {
+        const p = d.split('/');
+        return new Date(p[2], p[0] - 1, p[1]);
+    }
+    const fallback = new Date(d);
+    return isNaN(fallback) ? new Date(0) : fallback;
+}
+
+function formatPatchDate(d) {
+    const date = parsePatchDate(d);
+    if (!date || isNaN(date.getTime()) || date.getTime() === 0) return d;
+    return date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }).toUpperCase();
+}
+
+function formatPatchSummary(text) {
+    if (!text) return '';
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+    if (!lines.length) return text;
+    let html = '', inList = false;
+    lines.forEach(l => {
+        if (/^[-•]/.test(l)) {
+            if (!inList) { html += '<ul class="pn-bullet-list">'; inList = true; }
+            html += `<li>${l.replace(/^[-•]\s*/, '')}</li>`;
+        } else {
+            if (inList) { html += '</ul>'; inList = false; }
+            html += `<span class="pn-item-line">${l}</span>`;
+        }
+    });
+    if (inList) html += '</ul>';
+    return html;
+}
+
+function buildPatchGroups(entries) {
+    const groups = {};
+    entries.forEach(e => {
+        const key = e.title + '|' + e.date;
+        if (!groups[key]) groups[key] = { title: e.title, date: e.date, items: [] };
+        groups[key].items.push(e);
+    });
+    return Object.values(groups).sort((a, b) => parsePatchDate(b.date) - parsePatchDate(a.date));
+}
+
+function buildPatchCardHTML(group, isLatest) {
+    const versionLabel = 'v' + group.title.replace(/^v/i, '');
+    const catOrder = ['New Features', 'Improvements', 'Bug Fixes'];
+    const catIcons = { 'New Features': '✨', 'Improvements': '🚀', 'Bug Fixes': '🔧' };
+    const sections = catOrder.map(cat => {
+        const items = group.items.filter(i => i.category === cat);
+        if (!items.length) return '';
+        return `
+            <div class="pn-section">
+                <h4 class="pn-section-title">${catIcons[cat]} ${cat.toUpperCase()}</h4>
+                ${items.map(item => `
+                    <div class="pn-item">
+                        <div class="pn-item-text">${formatPatchSummary(item.summary)}</div>
+                    </div>`).join('')}
+            </div>`;
+    }).join('');
+    return `
+        <div class="pn-release-card">
+            <div class="pn-release-card-header">
+                <div class="pn-header-left">
+                    <span class="pn-version">${versionLabel}</span>
+                    ${isLatest ? '<span class="pn-latest-badge">Latest</span>' : ''}
+                </div>
+                <span class="pn-date">${formatPatchDate(group.date)}</span>
+            </div>
+            <div class="pn-release-card-body">${sections}</div>
+        </div>`;
+}
+
+async function loadPatchNotes() {
+    const latestEl   = document.getElementById('patchNotesLatest');
+    const archivedEl = document.getElementById('patchNotesArchived');
+    if (latestEl)   latestEl.innerHTML   = '<div class="pn-loading">Loading patch notes...</div>';
+    if (archivedEl) archivedEl.innerHTML = '<div class="pn-loading">Loading...</div>';
+
+    try {
+        const response = await fetch(`${PATCH_NOTES_URL}?v=${Date.now()}`);
+        const data = await response.json();
+        renderPatchNotes(data);
+    } catch (e) {
+        if (latestEl) latestEl.innerHTML = '<div class="pn-loading">Failed to load patch notes.</div>';
+    }
+}
+
+function renderPatchNotes(data) {
+    const latestEl   = document.getElementById('patchNotesLatest');
+    const archivedEl = document.getElementById('patchNotesArchived');
+    if (!latestEl) return;
+
+    const { entries } = data;
+    if (!entries || !entries.length) {
+        latestEl.innerHTML = '<div class="pn-loading">No patch notes available.</div>';
+        if (archivedEl) archivedEl.innerHTML = '<div class="pn-loading">No archived patch notes.</div>';
+        return;
+    }
+
+    const sorted = buildPatchGroups(entries);
+    latestEl.innerHTML   = sorted.length > 0 ? buildPatchCardHTML(sorted[0], true) : '<div class="pn-loading">No patch notes available.</div>';
+    if (archivedEl) {
+        archivedEl.innerHTML = sorted.length > 1
+            ? sorted.slice(1).map(g => buildPatchCardHTML(g, false)).join('')
+            : '<div class="pn-loading">No archived patch notes yet.</div>';
+    }
+}
+
+function switchPatchViewTab(tab) {
+    const isLatest = tab === 'latest';
+    const latestEl   = document.getElementById('patchNotesLatest');
+    const archivedEl = document.getElementById('patchNotesArchived');
+    if (latestEl)   latestEl.style.display   = isLatest ? '' : 'none';
+    if (archivedEl) archivedEl.style.display = isLatest ? 'none' : '';
+    document.getElementById('pnvTab-latest').classList.toggle('active',   isLatest);
+    document.getElementById('pnvTab-archived').classList.toggle('active', !isLatest);
+}
+
+function togglePatchNotes() {
+    const modal = document.getElementById('patchNotesModal');
+    if (!modal) return;
+    const isOpen = modal.classList.contains('show');
+    closeAllModals();
+    if (!isOpen) {
+        modal.classList.add('show');
+        lockAndBlurScreen();
+        switchPatchViewTab('latest');
+        loadPatchNotes();
+    }
+}
+
+// --- PATCH NOTES MANAGE ---
+function switchPNManageTab(tab) {
+    const isAdd = tab === 'add';
+    document.getElementById('pnManageAdd').style.display  = isAdd  ? '' : 'none';
+    document.getElementById('pnManageEdit').style.display = isAdd  ? 'none' : '';
+    document.getElementById('pnmTab-add').classList.toggle('active',  isAdd);
+    document.getElementById('pnmTab-edit').classList.toggle('active', !isAdd);
+    if (!isAdd) loadPatchNotesEditor();
+}
+
+function togglePatchNotesManage() {
+    const modal = document.getElementById('patchNotesManageModal');
+    if (!modal) return;
+    const isOpen = modal.classList.contains('show');
+    closeAllModals();
+    if (!isOpen) {
+        modal.classList.add('show');
+        lockAndBlurScreen();
+        switchPNManageTab('add');
+        const list = document.getElementById('pnItemsList');
+        if (list) { list.innerHTML = ''; addPatchItem(); }
+    }
+}
+
+function addPatchItem() {
+    const list = document.getElementById('pnItemsList');
+    if (!list) return;
+    const row = document.createElement('div');
+    row.className = 'pn-item-row';
+    row.innerHTML = `
+        <div class="pn-item-row-top">
+            <select class="form-input-lg pn-item-category">
+                <option value="">— Select a category —</option>
+                <option value="New Features">✨ New Features</option>
+                <option value="Improvements">🚀 Improvements</option>
+                <option value="Bug Fixes">🔧 Bug Fixes</option>
+            </select>
+            <button class="pn-remove-btn" onclick="removePatchItem(this)" title="Remove">✖</button>
+        </div>
+        <textarea class="form-input-lg pn-textarea pn-item-summary" placeholder="Describe what changed... (start lines with - for bullet points)"></textarea>`;
+    list.appendChild(row);
+}
+
+function removePatchItem(btn) {
+    const list = document.getElementById('pnItemsList');
+    if (list && list.querySelectorAll('.pn-item-row').length > 1) btn.closest('.pn-item-row').remove();
+}
+
+async function savePatchEntry() {
+    const title   = document.getElementById('pnEntryTitle').value.trim();
+    const dateRaw = document.getElementById('pnEntryDate').value;
+    const status  = document.getElementById('pnEntrySaveStatus');
+    const btn     = document.getElementById('pnSaveEntryBtn');
+
+    if (!title || !dateRaw) { status.textContent = 'Version title and date are required.'; status.className = 'pn-save-status pn-save-error'; return; }
+
+    const rows = document.querySelectorAll('.pn-item-row');
+    const items = [];
+    let allValid = true;
+    rows.forEach(row => {
+        const category = row.querySelector('.pn-item-category').value;
+        const summary  = row.querySelector('.pn-item-summary').value.trim();
+        if (!category || !summary) { allValid = false; return; }
+        items.push({ category, summary });
+    });
+
+    if (!allValid || !items.length) { status.textContent = 'Each item needs a category and summary.'; status.className = 'pn-save-status pn-save-error'; return; }
+
+    const [y, m, d] = dateRaw.split('-');
+    const date = `${m}/${d}/${y}`;
+
+    btn.disabled = true;
+    status.textContent = 'Saving...';
+    status.className = 'pn-save-status';
+
+    try {
+        await fetch(PATCH_NOTES_URL, {
+            method: 'POST', mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'addEntries', title, date, items })
+        });
+        status.textContent = `${items.length} item${items.length !== 1 ? 's' : ''} saved!`;
+        status.className = 'pn-save-status pn-save-ok';
+        document.getElementById('pnEntryTitle').value = '';
+        document.getElementById('pnEntryDate').value  = '';
+        document.getElementById('pnItemsList').innerHTML = '';
+        addPatchItem();
+    } catch (e) {
+        status.textContent = 'Save failed.';
+        status.className = 'pn-save-status pn-save-error';
+    }
+    btn.disabled = false;
+    setTimeout(() => { status.textContent = ''; }, 4000);
+}
+
+// --- PATCH NOTES EDITOR ---
+async function loadPatchNotesEditor() {
+    const list = document.getElementById('pnEditList');
+    if (!list) return;
+    list.innerHTML = '<div class="pn-loading">Loading...</div>';
+    try {
+        const response = await fetch(`${PATCH_NOTES_URL}?v=${Date.now()}`);
+        const data = await response.json();
+        renderPatchNotesEditor(data);
+    } catch (e) {
+        list.innerHTML = '<div class="pn-loading">Failed to load.</div>';
+    }
+}
+
+function renderPatchNotesEditor(data) {
+    const list = document.getElementById('pnEditList');
+    if (!list) return;
+    const { entries } = data;
+    if (!entries || !entries.length) { list.innerHTML = '<div class="pn-loading">No patch notes to edit.</div>'; return; }
+
+    const sorted = buildPatchGroups(entries);
+    const catBadge = { 'New Features': 'pn-badge-new', 'Improvements': 'pn-badge-improved', 'Bug Fixes': 'pn-badge-fixed' };
+
+    list.innerHTML = sorted.map(group => {
+        const vLabel = 'v' + group.title.replace(/^v/i, '');
+        return `
+            <div class="pne-group">
+                <div class="pne-group-header">
+                    <span class="pne-group-title">${vLabel}</span>
+                    <span class="pne-group-date">${formatPatchDate(group.date)}</span>
+                </div>
+                ${group.items.map(item => `
+                    <div class="pne-item" id="pne-item-${item.rowNum}"
+                         data-rownum="${item.rowNum}"
+                         data-category="${item.category}"
+                         data-summary="${item.summary.replace(/"/g, '&quot;').replace(/\n/g, '&#10;')}"
+                         data-title="${group.title}"
+                         data-date="${group.date}">
+                        <div class="pne-item-view">
+                            <span class="pn-badge ${catBadge[item.category] || ''}">${item.category}</span>
+                            <span class="pne-item-summary">${item.summary.replace(/\n/g, ' ')}</span>
+                            <div class="pne-item-actions">
+                                <button class="pne-btn" onclick="startEditPatchItem(${item.rowNum})">Edit</button>
+                                <button class="pne-btn pne-btn-delete" onclick="promptDeletePatchItem(${item.rowNum})">Delete</button>
+                            </div>
+                        </div>
+                    </div>`).join('')}
+            </div>`;
+    }).join('');
+}
+
+function startEditPatchItem(rowNum) {
+    const el = document.getElementById(`pne-item-${rowNum}`);
+    if (!el) return;
+    const { category, summary } = el.dataset;
+    const decodedSummary = summary.replace(/&#10;/g, '\n');
+    const viewDiv = el.querySelector('.pne-item-view');
+    if (viewDiv) viewDiv.style.display = 'none';
+
+    const editDiv = document.createElement('div');
+    editDiv.className = 'pne-item-edit';
+    editDiv.innerHTML = `
+        <select class="form-input-lg pne-edit-cat">
+            <option value="New Features" ${category === 'New Features' ? 'selected' : ''}>✨ New Features</option>
+            <option value="Improvements" ${category === 'Improvements' ? 'selected' : ''}>🚀 Improvements</option>
+            <option value="Bug Fixes"    ${category === 'Bug Fixes'    ? 'selected' : ''}>🔧 Bug Fixes</option>
+        </select>
+        <textarea class="form-input-lg pn-textarea pne-edit-sum">${decodedSummary}</textarea>
+        <div class="pne-edit-actions">
+            <button class="btn-primary" onclick="saveEditPatchItem(${rowNum})">Save Changes</button>
+            <button class="pne-btn" onclick="cancelEditPatchItem(${rowNum})">Cancel</button>
+        </div>`;
+    el.appendChild(editDiv);
+}
+
+function cancelEditPatchItem(rowNum) {
+    const el = document.getElementById(`pne-item-${rowNum}`);
+    if (!el) return;
+    const viewDiv = el.querySelector('.pne-item-view');
+    const editDiv = el.querySelector('.pne-item-edit');
+    if (viewDiv) viewDiv.style.display = '';
+    if (editDiv) editDiv.remove();
+}
+
+async function saveEditPatchItem(rowNum) {
+    const el       = document.getElementById(`pne-item-${rowNum}`);
+    if (!el) return;
+    const category = el.querySelector('.pne-edit-cat').value;
+    const summary  = el.querySelector('.pne-edit-sum').value.trim();
+    const { title, date } = el.dataset;
+    if (!category || !summary) return;
+
+    const saveBtn = el.querySelector('.btn-primary');
+    if (saveBtn) saveBtn.textContent = 'Saving...';
+    if (saveBtn) saveBtn.disabled = true;
+
+    try {
+        await fetch(PATCH_NOTES_URL, {
+            method: 'POST', mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'editEntry', rowNum, title, date, category, summary })
+        });
+        loadPatchNotesEditor();
+    } catch (e) {
+        if (saveBtn) { saveBtn.textContent = 'Save Changes'; saveBtn.disabled = false; }
+    }
+}
+
+function promptDeletePatchItem(rowNum) {
+    const el = document.getElementById(`pne-item-${rowNum}`);
+    if (!el) return;
+    const actions = el.querySelector('.pne-item-actions');
+    if (!actions) return;
+    actions.innerHTML = `
+        <span class="pne-confirm-label">Delete this item?</span>
+        <button class="pne-btn pne-btn-confirm-delete" onclick="confirmDeletePatchItem(${rowNum})">Yes, Delete</button>
+        <button class="pne-btn" onclick="loadPatchNotesEditor()">Cancel</button>`;
+}
+
+async function confirmDeletePatchItem(rowNum) {
+    const btn = document.querySelector(`#pne-item-${rowNum} .pne-btn-confirm-delete`);
+    if (btn) { btn.textContent = 'Deleting...'; btn.disabled = true; }
+    try {
+        await fetch(PATCH_NOTES_URL, {
+            method: 'POST', mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'deleteEntry', rowNum })
+        });
+    } catch (e) { /* no-cors always throws, reload regardless */ }
+    loadPatchNotesEditor();
+}
