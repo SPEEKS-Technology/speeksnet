@@ -5958,8 +5958,9 @@ function togglePatchNotes() {
 // --- PATCH NOTES MANAGE ---
 function switchPNManageTab(tab) {
     const isAdd = tab === 'add';
-    document.getElementById('pnManageAdd').style.display  = isAdd  ? '' : 'none';
-    document.getElementById('pnManageEdit').style.display = isAdd  ? 'none' : '';
+    document.getElementById('pnManageAdd').style.display   = isAdd  ? '' : 'none';
+    document.getElementById('pnManageEdit').style.display  = isAdd  ? 'none' : '';
+    document.getElementById('pnActionsBar').style.display  = isAdd  ? '' : 'none';
     document.getElementById('pnmTab-add').classList.toggle('active',  isAdd);
     document.getElementById('pnmTab-edit').classList.toggle('active', !isAdd);
     if (!isAdd) loadPatchNotesEditor();

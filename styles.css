@@ -3525,7 +3525,6 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 }
 
 #patchNotesModal {
-    width: 700px;
     max-height: 82vh;
     display: flex;
     flex-direction: column;
@@ -3537,7 +3536,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .pn-modal-body {
     overflow-y: auto;
     background: #eef2f7;
-    flex: 1;
+    height: 85vh;
     padding: 20px;
     display: flex;
     flex-direction: column;
@@ -3663,7 +3662,6 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding-top: 4px;
 }
 .pn-add-item-btn {
     background: transparent;

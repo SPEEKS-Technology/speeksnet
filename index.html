@@ -1069,7 +1069,7 @@
 <button class="pn-fab" onclick="togglePatchNotes()" title="Patch Notes">📋</button>
 
 <!-- PATCH NOTES VIEW MODAL -->
-<div class="modal-menu" id="patchNotesModal">
+<div class="modal-menu manage-menu" id="patchNotesModal">
     <div class="modal-header">
         <h3>📋 Patch Notes</h3>
         <div class="notif-tabs">
@@ -1112,18 +1112,19 @@
             </div>
         </div>
         <div id="pnItemsList"></div>
-        <div class="pn-actions-bar">
-            <button class="pn-add-item-btn" onclick="addPatchItem()">+ Add Item</button>
-            <div style="display:flex;align-items:center;gap:12px;">
-                <button class="btn-primary" onclick="savePatchEntry()" id="pnSaveEntryBtn">Save All</button>
-                <span class="pn-save-status" id="pnEntrySaveStatus"></span>
-            </div>
-        </div>
     </div>
 
     <!-- EDIT PREVIOUS TAB -->
     <div class="manage-content" id="pnManageEdit" style="display:none;">
         <div id="pnEditList"><div class="pn-loading">Loading patch notes...</div></div>
+    </div>
+
+    <div class="manage-footer pn-actions-bar" id="pnActionsBar">
+        <button class="pn-add-item-btn" onclick="addPatchItem()">+ Add Item</button>
+        <div style="display:flex;align-items:center;gap:12px;">
+            <button class="btn-primary" onclick="savePatchEntry()" id="pnSaveEntryBtn">SAVE ALL</button>
+            <span class="pn-save-status" id="pnEntrySaveStatus"></span>
+        </div>
     </div>
 </div>
 
