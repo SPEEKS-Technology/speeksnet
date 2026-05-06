@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\" -Recurse -Directory | Select-Object -First 30 | ForEach-Object { $_.FullName })",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\\(sign|login|auth|pin\\)' -and -not \\($_.PSPath -match 'node_modules'\\) } | Select-Object FullName)",
+      "PowerShell(head -20)"
+    ]
+  }
+}

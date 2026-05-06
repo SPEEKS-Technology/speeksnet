@@ -449,6 +449,52 @@ document.addEventListener('click', (e) => {
     }
 });
 
+// --- REACTION LIVE POLLING ---
+let _reactionPollInterval = null;
+
+async function pollReactions() {
+    try {
+        const response = await fetch(`${CMS_URL}?v=${Date.now()}`);
+        const data = await response.json();
+        if (!data.announcements) return;
+
+        const currentUser = sessionStorage.getItem('speeksUserName');
+        const cleanUser = currentUser ? String(currentUser).trim().toLowerCase() : null;
+        const availableEmojis = ['👍', '🎉', '👀', '🔥', '🫡', '💵'];
+
+        data.announcements.forEach(item => {
+            const annId = item.rowId;
+            if (!document.getElementById(`reactions_${annId}`)) return;
+
+            const rData = item.reactions || {};
+            availableEmojis.forEach((emoji, eIdx) => {
+                const btn = document.getElementById(`btn_${annId}_${eIdx}`);
+                if (!btn || btn.hasAttribute('disabled')) return;
+
+                const usersList = Array.isArray(rData[emoji]) ? rData[emoji] : [];
+                const count = usersList.length;
+                const hasReacted = cleanUser ? usersList.some(u => String(u).trim().toLowerCase() === cleanUser) : false;
+
+                const countSpan = btn.querySelector('.count');
+                if (countSpan) countSpan.innerText = count;
+                btn.style.display = count > 0 ? 'flex' : 'none';
+                btn.classList.toggle('reacted', hasReacted);
+
+                if (usersList.length > 0) {
+                    btn.setAttribute('title', `Reacted by: ${usersList.join(', ')}`);
+                } else {
+                    btn.removeAttribute('title');
+                }
+            });
+        });
+    } catch (e) {}
+}
+
+function startReactionPolling() {
+    if (_reactionPollInterval) clearInterval(_reactionPollInterval);
+    _reactionPollInterval = setInterval(pollReactions, 15000);
+}
+
 // --- 5. MODULE: USER MANAGEMENT ---
 let globalUsersData = [];
 
@@ -845,15 +891,40 @@ function startAuthFetch() {
         .catch(() => null); 
 }
 
+let _pinAutoTimer = null;
+
+function handlePINAutoTrigger() {
+    const input = document.getElementById('pinInput');
+    const btn = document.getElementById('unlockBtn');
+
+    if (_pinAutoTimer) {
+        clearTimeout(_pinAutoTimer);
+        _pinAutoTimer = null;
+        btn.classList.remove('loading');
+    }
+
+    if (input.value.length === 4) {
+        input.classList.add('pin-filled');
+        btn.classList.add('loading');
+        _pinAutoTimer = setTimeout(() => {
+            _pinAutoTimer = null;
+            checkPIN();
+        }, 900);
+    } else {
+        input.classList.remove('pin-filled');
+    }
+}
+
 async function checkPIN() {
     const pin = document.getElementById('pinInput').value;
     const err = document.getElementById('pinError');
     const btn = document.getElementById('unlockBtn');
-          
+
     if (!pin) return;
-    
-    btn.innerText = "Verifying..."; 
-    btn.style.opacity = "0.7"; 
+
+    if (_pinAutoTimer) { clearTimeout(_pinAutoTimer); _pinAutoTimer = null; }
+
+    btn.classList.add('loading');
     err.style.display = 'none';
 
     try {
@@ -899,9 +970,9 @@ async function checkPIN() {
         console.error(e);
         err.innerText = "Connection Error."; 
         err.style.display = 'block'; 
-    } finally { 
-        btn.innerText = "Unlock Portal"; 
-        btn.style.opacity = "1"; 
+    } finally {
+        btn.classList.remove('loading');
+        document.getElementById('pinInput').classList.remove('pin-filled');
     }
 }
 
@@ -1296,18 +1367,19 @@ async function fetchWeeklyKPIs() {
         let sAvg = {};
         let emps = [];
         let fIdx = -1;
+        const _kpiStoreLabels = ["store", "store total", "ovl", "lee", "wsp", "mpl", "bal"];
         let sIdx = d.findLastIndex(r => String(r[0]).trim().toLowerCase() === "store" || String(r[0]).trim().toLowerCase() === "store total");
-        
+
         if (sIdx !== -1) {
-            let st = d[sIdx]; 
+            let st = d[sIdx];
             sAvg = { buyVal: st[2], buyMargin: st[5], customers: st[6], conversion: st[8], time: formatTime(st[12]), noDeals: st[14], listed: st[20] };
-            
+
             for (let i = Math.max(0, sIdx - 6); i <= Math.min(d.length - 1, sIdx + 6); i++) {
                 if (i === sIdx) continue;
                 let n = String(d[i][0]).trim();
                 let lN = n.toLowerCase();
-                
-                if (n && !["name", "employee", "store", "store total", "ovl", "lee", "wsp", "mpl", "bal"].includes(lN) && !lN.includes("average") && !lN.includes("week")) {
+
+                if (n && !_kpiStoreLabels.includes(lN) && !lN.includes("average") && !lN.includes("week")) {
                     if (String(d[i][2]).trim() !== "" || String(d[i][20]).trim() !== "") {
                         if (fIdx === -1) fIdx = i; 
                         emps.push({ name: n, buyVal: d[i][2], buyMargin: d[i][5], customers: d[i][6], conversion: d[i][8], time: formatTime(d[i][12]), noDeals: d[i][14], listed: d[i][20] });
@@ -1423,8 +1495,24 @@ async function fetchWeeklyKPIs() {
 async function fetchHubData() {
     try {
         const response = await fetch(`${HUB_URL}?v=${Date.now()}`);
-        hubDataCache = await response.json();
-        
+        const freshData = await response.json();
+
+        // Track per-store last-updated timestamps based on actual data changes
+        const _bsStores = ['ovl', 'lee', 'wsp', 'mpl', 'bal'];
+        const _bsFields = s => [`${s}BuyVal`,`${s}BuyProj`,`${s}BuyMargin`,`${s}Pct`,`${s}Goal`,`${s}TrackGP`,`${s}GP`,`${s}Rev`,`${s}SellMargin`];
+        const _bsPrev = JSON.parse(localStorage.getItem('bsPrevHubCache') || '{}');
+        const _bsTs = JSON.parse(localStorage.getItem('bsStoreTimestamps') || '{}');
+        _bsStores.forEach(s => { if (_bsTs[s]) _bsTs[s] = _bsTs[s].replace(/\s+\d{1,2}:\d{2}\s*(AM|PM)/i, ''); });
+        const _bsNow = new Date();
+        const _bsLabel = _bsNow.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+        _bsStores.forEach(s => {
+            if (_bsFields(s).some(f => freshData[f] !== _bsPrev[f])) _bsTs[s] = _bsLabel;
+        });
+        localStorage.setItem('bsStoreTimestamps', JSON.stringify(_bsTs));
+        localStorage.setItem('bsPrevHubCache', JSON.stringify(freshData));
+
+        hubDataCache = freshData;
+
         if (document.getElementById('bs-buy-val')) renderBuyingSales();
         
         // Render Live Data globally (Fixes CEO Rings)
@@ -1496,6 +1584,12 @@ function renderBuyingSales() {
         smb.innerText = sellMarginNum.toFixed(1) + '%';
         smb.className = sellMarginNum >= 55.0 ? 'delta-badge delta-pos' : 'delta-badge delta-neg';
     });
+
+    const bsDateEl = document.getElementById('bs-last-updated');
+    if (bsDateEl) {
+        const _bsTs = JSON.parse(localStorage.getItem('bsStoreTimestamps') || '{}');
+        bsDateEl.innerText = _bsTs[store] || '—';
+    }
 }
 
 function renderLiveData(d) {
@@ -1506,8 +1600,8 @@ function renderLiveData(d) {
         { base: 'ovl', api: 'ovl' },
         { base: 'lee', api: 'lee' },
         { base: 'wsp', api: 'wsp' },
-        { base: 'mpl', api: 'MPL' },
-        { base: 'bal', api: 'BAL' }
+        { base: 'mpl', api: 'mpl' },
+        { base: 'bal', api: 'bal' }
     ].forEach(store => {
         // --- Core Math ---
         let p = Math.round(d[`${store.api}Pct`] || 0);
@@ -1589,6 +1683,11 @@ function renderLiveData(d) {
         const n = new Date(); 
         const formattedTime = `${n.getHours() % 12 || 12}:${String(n.getMinutes()).padStart(2,'0')} ${n.getHours() >= 12 ? 'PM' : 'AM'}`;
         document.getElementById('lastSyncedText').innerText = `Last Synced: ${formattedTime}`;
+    }
+
+    const ceoBsDateEl = document.getElementById('ceo-bs-last-updated');
+    if (ceoBsDateEl) {
+        ceoBsDateEl.innerText = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
     }
 }
 
@@ -1885,7 +1984,7 @@ function populateAlertsModal() {
             <div class="alert-manage-row" data-store="${storeName}" style="background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 15px;">
                 <div style="font-weight: 900; color: var(--slate-charcoal); font-size: 14px; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 5px;">${storeName}</div>
                 
-                <div style="font-size: 11px; font-weight: 800; color: #888; text-transform: uppercase; margin-bottom: 6px;">Return Rates</div>
+                <div style="font-size: 11px; font-weight: 800; color: #888; text-transform: uppercase; margin-bottom: 6px;">eBay Performance Metrics</div>
                 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px;">
                     <input type="text" class="a-ch" placeholder="Cur. High" title="Current High" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${sData.currentHigh || ''}">
                     <input type="text" class="a-cvh" placeholder="Cur. Very High" title="Current Very High" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${sData.currentVeryHigh || ''}">
@@ -1893,7 +1992,7 @@ function populateAlertsModal() {
                     <input type="text" class="a-pvh" placeholder="Proj. Very High" title="Projected Very High" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${sData.projectedVeryHigh || ''}">
                 </div>
 
-                <div style="font-size: 11px; font-weight: 800; color: #888; text-transform: uppercase; margin-bottom: 6px;">Service Metrics (%)</div>
+                <div style="font-size: 11px; font-weight: 800; color: #888; text-transform: uppercase; margin-bottom: 6px;">eBay Top Rated Metrics</div>
                 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">
                     <input type="text" class="a-dr" placeholder="Defect Rate" title="Transaction Defect Rate" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${fmtInput(sData.defectRate)}">
                     <input type="text" class="a-ls" placeholder="Late Shipment" title="Late Shipment Rate" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${fmtInput(sData.lateShipment)}">
@@ -2137,7 +2236,7 @@ function injectGlobalAuth() {
                         <h2>Welcome Back</h2>
                         <p id="authSubtitle">Please enter your 4-digit PIN to securely access the hub.</p>
                         <div id="pinInputContainer" class="pin-container">
-                            <input type="password" id="pinInput" maxlength="4" placeholder="••••" onkeypress="if(event.key === 'Enter') checkPIN()">
+                            <input type="password" id="pinInput" maxlength="4" placeholder="••••" onkeypress="if(event.key === 'Enter') checkPIN()" oninput="handlePINAutoTrigger()">
                             <button id="unlockBtn" class="btn-primary auth-btn" onclick="checkPIN()">Unlock Portal</button>
                             <div id="pinError" class="pin-error">Incorrect PIN. Please try again.</div>
                         </div>
@@ -2450,7 +2549,7 @@ async function fetchAlertsData() {
         <div style="display: flex; flex-direction: column; gap: 15px; width: 100%;">
             
             <div>
-                <div style="font-size: 10px; font-weight: 800; color: var(--slate-charcoal); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">Return Rates</div>
+                <div style="font-size: 10px; font-weight: 800; color: var(--slate-charcoal); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">eBay Performance Metrics</div>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                     ${buildMiniAlertCard('Current High', storeData.currentHigh, 'high', false)}
                     ${buildMiniAlertCard('Current Very High', storeData.currentVeryHigh, 'very-high', false)}
@@ -2462,7 +2561,7 @@ async function fetchAlertsData() {
             <div style="height: 1px; background: #e2e8f0; width: 100%;"></div>
             
             <div>
-                <div style="font-size: 10px; font-weight: 800; color: var(--slate-charcoal); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">Service Metrics</div>
+                <div style="font-size: 10px; font-weight: 800; color: var(--slate-charcoal); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">eBay Top Rated Metrics</div>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                     ${buildMiniAlertCard('Defect Rate', storeData.defectRate, getSeverity('defectRate', storeData.defectRate), true)}
                     ${buildMiniAlertCard('Late Shipment', storeData.lateShipment, getSeverity('lateShipment', storeData.lateShipment), true)}
@@ -2879,7 +2978,7 @@ async function fetchMasterDistrictDashboard() {
 
                     <div style="flex-grow: 1; display: flex; flex-direction: column;">
                         
-                        <div class="master-section-title">Service Metrics</div>
+                        <div class="master-section-title">eBay Top Rated Metrics</div>
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 15px;">
                             ${buildMiniAlertCard('Defect Rate', sAlerts.defectRate, getSev('defectRate', sAlerts.defectRate), true)}
                             ${buildMiniAlertCard('Late Shipment', sAlerts.lateShipment, getSev('lateShipment', sAlerts.lateShipment), true)}
@@ -2887,7 +2986,7 @@ async function fetchMasterDistrictDashboard() {
                             ${buildMiniAlertCard('Tracking', sAlerts.tracking, getSev('tracking', sAlerts.tracking), true)}
                         </div>
 
-                        <div class="master-section-title">Action Needed - eBay Performance</div>
+                        <div class="master-section-title">eBay Performance Metrics</div>
                         <div style="display: flex; flex-direction: column; gap: 6px; flex-grow: 1;">
                             ${issues.map(b => {
                                 let bg = b.type === 'red' ? '#fee2e2' : (b.type === 'yellow' ? '#fef3c7' : '#d1fae5');
@@ -2945,13 +3044,18 @@ async function fetchMasterDistrictDashboard() {
 // ============================================================================
 // 20. MODULE: LISTING GOALS ENGINE
 // ============================================================================
-let goalsRoster = []; 
+let goalsRoster = [];
 let liveGoalsData = [];
 let allDistrictGoalsData = [];
 let editingYesterday = false;
 let goalsTargetStore = 'OVL';
 let currentAppDate = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
 let currentDmGoalView = 'daily';
+
+function normalizeGoalDate(s) {
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? String(s).trim() : d.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+}
 
 function toggleEditDate(isYest) {
     editingYesterday = isYest;
@@ -2990,28 +3094,21 @@ async function fetchLiveGoalsData() {
     if (goalsTargetStore === 'ALL' || goalsTargetStore === 'CORP') goalsTargetStore = 'OVL'; 
 
     try {
-        const d = await fetch(`${WEEKLY_KPI_URL}?store=${goalsTargetStore}&time=4-Week&v=${Date.now()}`).then(r => r.json());
-        let emps = [];
-        let sIdx = d.findLastIndex(r => String(r[0]).trim().toLowerCase() === "store" || String(r[0]).trim().toLowerCase() === "store total");
-        
-        if (sIdx !== -1) {
-            for (let i = Math.max(0, sIdx - 6); i <= Math.min(d.length - 1, sIdx + 6); i++) {
-                if (i === sIdx) continue;
-                let n = String(d[i][0]).trim(), lN = n.toLowerCase();
-                if (n && !["name", "employee", "store", "store total", "ovl", "lee", "wsp", "mpl", "bal"].includes(lN) && !lN.includes("average") && !lN.includes("week")) {
-                    if (String(d[i][2]).trim() !== "" || String(d[i][20]).trim() !== "") emps.push(n);
-                }
-            }
+        // Build roster from auth cache — works for all stores immediately, no extra API call
+        const _authRaw = localStorage.getItem('speeksAuthCache');
+        if (_authRaw) {
+            const _authData = JSON.parse(_authRaw);
+            const _excluded = ['ceo', 'district manager'];
+            const _emps = (_authData.users || [])
+                .filter(u => u.store === goalsTargetStore && !_excluded.includes((u.role || '').toLowerCase()))
+                .map(u => u.name)
+                .filter(Boolean);
+            goalsRoster = _emps.length ? _emps : ['No Employees Found'];
         }
-        goalsRoster = emps.length ? [...new Set(emps)] : ['No Employees Found'];
 
-        try {
-            const res = await fetch(`${GOALS_API_URL}?store=${goalsTargetStore}&v=${Date.now()}`);
-            liveGoalsData = await res.json();
-        } catch (dbError) {
-            liveGoalsData = []; 
-        }
-        
+        liveGoalsData = await fetch(`${GOALS_API_URL}?store=${goalsTargetStore}&v=${Date.now()}`).then(r => r.json()).catch(() => []);
+        if (!Array.isArray(liveGoalsData)) liveGoalsData = [];
+
         renderGoalsScoreboard('daily');
     } catch (e) {
         list.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; text-align: center; padding: 20px 0;">Error loading roster.</div>';
@@ -3044,16 +3141,26 @@ function renderGoalsScoreboard(viewType = 'daily') {
     }
 
     goalsRoster.forEach(emp => {
-        let empGoal = 0; 
-        let empResult = 0; 
+        let empGoal = 0;
+        let empResult = 0;
         let empRole = '-';
         let dailyStats = {};
-        
-        const empRecords = liveGoalsData.filter(r => r.employee === emp);
+
+        const rosterName = String(emp).trim().toLowerCase();
+        const rosterFirst = rosterName.split(' ')[0];
+        const empRecords = liveGoalsData.filter(r => {
+            const dbName = String(r.employee).trim().toLowerCase();
+            if (dbName === rosterName) return true;
+            const dbFirst = dbName.split(' ')[0];
+            if (dbFirst.length > 2 && rosterFirst.length > 2) {
+                if (dbFirst.startsWith(rosterFirst) || rosterFirst.startsWith(dbFirst)) return true;
+            }
+            return false;
+        });
         const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
         empRecords.forEach(record => {
-            const isToday = record.date === todayStr;
+            const isToday = normalizeGoalDate(record.date) === todayStr;
             const recDate = new Date(record.date);
             const isThisWeek = recDate >= startOfWeek;
 
@@ -3188,7 +3295,7 @@ function buildGoalsEditForm() {
     const targetDateStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
     
     let html = '';
-    const availableRoles = goalsRoster.length <= 3 ? ['B1', 'B2', 'L1'] : ['B1', 'B2', 'L1', 'L2'];
+    const availableRoles = goalsRoster.length <= 2 ? ['B1', 'B2', 'L1'] : ['B1', 'B2', 'L1', 'L2'];
 
     // Inject the Toggle into the Header title space dynamically
     const titleEl = document.getElementById('goals-input-title');
@@ -3252,7 +3359,7 @@ function buildGoalsEditForm() {
     }
     
     let html = '';
-    const availableRoles = goalsRoster.length <= 3 ? ['B1', 'B2', 'L1'] : ['B1', 'B2', 'L1', 'L2'];
+    const availableRoles = goalsRoster.length <= 2 ? ['B1', 'B2', 'L1'] : ['B1', 'B2', 'L1', 'L2'];
 
     // Inject the Toggle into the Header title space dynamically
     const titleEl = document.getElementById('goals-input-title');
@@ -3271,8 +3378,14 @@ function buildGoalsEditForm() {
     }
 
     goalsRoster.forEach((emp, idx) => {
-        const targetRecord = liveGoalsData.find(r => r.employee === emp && r.date === targetDateStr) || { role: '', goal: '', result: '' };
-        
+        const empNameNorm = String(emp).trim().toLowerCase();
+        const targetRecord = liveGoalsData.find(r => {
+            const dbName = String(r.employee).trim().toLowerCase();
+            const nameMatch = dbName === empNameNorm || dbName.split(' ')[0].startsWith(empNameNorm.split(' ')[0]) || empNameNorm.split(' ')[0].startsWith(dbName.split(' ')[0]);
+            const dateMatch = normalizeGoalDate(r.date) === targetDateStr;
+            return nameMatch && dateMatch;
+        }) || { role: '', goal: '', result: '' };
+
         let rolesHtml = '';
         availableRoles.forEach(r => {
             const isActive = targetRecord.role === r ? 'active' : '';
@@ -3626,7 +3739,7 @@ async function fetchAndRenderEmployeeGoals() {
             const resVal = parseInt(r.result) || 0;
 
             if (r.date === todayStr) {
-                todayGoal += g;
+                todayGoal = g;
                 if (r.role && r.role !== '-') todayRole = r.role;
             }
             
@@ -3639,6 +3752,14 @@ async function fetchAndRenderEmployeeGoals() {
 
         const roleTranslations = { 'B1': 'Buyer 1', 'B2': 'Buyer 2', 'L1': 'Lister 1', 'L2': 'Lister 2' };
         const displayRole = roleTranslations[todayRole] || todayRole;
+
+        const roleDescriptions = {
+            'B1': 'You\'re the lead buyer — first up for every customer who walks through the door. When someone comes in, that\'s your call.',
+            'B2': 'You\'re the second buyer in rotation. Hang back and jump in the moment a second customer arrives.',
+            'L1': 'Dedicated listing only — no buying, no shipping, no exceptions. Your entire focus today is getting items listed and nothing else.',
+            'L2': 'You\'re a primary lister throughout the day, but also serve as the emergency buyer when 4 or more separate customers are in the store at once.'
+        };
+        const roleDesc = roleDescriptions[todayRole] || '';
 
         const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
         const currentDayIdx = (now.getDay() + 6) % 7;
@@ -3670,6 +3791,8 @@ async function fetchAndRenderEmployeeGoals() {
                     <span class="emp-goal-value">${displayRole || '-'}</span>
                 </div>
             </div>
+
+            ${roleDesc ? `<div class="emp-role-description">${roleDesc}</div>` : ''}
 
             <div class="emp-week-section">
                 <span class="emp-goal-label">THIS WEEK'S BREAKDOWN</span>
@@ -4000,8 +4123,9 @@ function initDashboardData() {
         if (typeof initChecklists === 'function') initChecklists(); 
         
         // Re-sync announcements immediately after login so it knows who you are!
-        setTimeout(loadCMS, 50); 
-        
+        setTimeout(loadCMS, 50);
+        setTimeout(startReactionPolling, 3000);
+
         setTimeout(fetchHubData, 100); 
         setTimeout(fetchVarianceData, 300); 
         setTimeout(fetchWeeklyKPIs, 500); 
@@ -4795,7 +4919,7 @@ function populateAlertsModal() {
             <div class="alert-manage-row" data-store="${storeName}" style="background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 15px;">
                 <div style="font-weight: 900; color: var(--slate-charcoal); font-size: 14px; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 5px;">${storeName}</div>
                 
-                <div style="font-size: 11px; font-weight: 800; color: #888; text-transform: uppercase; margin-bottom: 6px;">Return Rates</div>
+                <div style="font-size: 11px; font-weight: 800; color: #888; text-transform: uppercase; margin-bottom: 6px;">eBay Performance Metrics</div>
                 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px;">
                     <input type="text" class="a-ch" placeholder="Current High" title="Current High" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${sData.currentHigh || ''}">
                     <input type="text" class="a-cvh" placeholder="Current Very High" title="Current Very High" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${sData.currentVeryHigh || ''}">
@@ -4803,7 +4927,7 @@ function populateAlertsModal() {
                     <input type="text" class="a-pvh" placeholder="Projected Very High" title="Projected Very High" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${sData.projectedVeryHigh || ''}">
                 </div>
 
-                <div style="font-size: 11px; font-weight: 800; color: #888; text-transform: uppercase; margin-bottom: 6px;">Service Metrics (%)</div>
+                <div style="font-size: 11px; font-weight: 800; color: #888; text-transform: uppercase; margin-bottom: 6px;">eBay Top Rated Metrics</div>
                 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">
                     <input type="text" class="a-dr" placeholder="Defect Rate" title="Transaction Defect Rate" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${fmtInput(sData.defectRate)}">
                     <input type="text" class="a-ls" placeholder="Late Shipment" title="Late Shipment Rate" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${fmtInput(sData.lateShipment)}">

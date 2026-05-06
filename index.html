@@ -348,6 +348,7 @@
           <span class="hotbar-label">🗺️ DM</span>
           <div class="hotbar-links">
             <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn">📁 Store Manager Folder</a>
+            <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn">🔑 Store Passwords</a>
             <a href="https://docs.google.com/spreadsheets/d/1NkIdw8dlvwXmQ6kdpo73zqRwnPd4kIAkgJ7yAG2XCt4/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Listing Goals</a>  
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">📊 Sales Summary</a>  
             <a href="https://docs.google.com/spreadsheets/d/1oHOnA6wDwaLQ-EP4-CiDTkKpAdP2V7y8mOay416HDME/edit" target="_blank" class="hotbar-btn">📈 Weekly Metrics</a>
@@ -399,7 +400,7 @@
         <div class="hotbar-container">
           <span class="hotbar-label">💼 MGR</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1pubURplK66yC6oXmpz7P-r8zN07DWmDiLxrtTg0rmdk/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Daily Listing Goals</a>  
+            <a href="https://docs.google.com/spreadsheets/d/1NkIdw8dlvwXmQ6kdpo73zqRwnPd4kIAkgJ7yAG2XCt4/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Daily Listing Goals</a>  
             <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn">⏳ Aging Inventory</a>
             <a href="https://docs.google.com/spreadsheets/d/1zw-jcqpAnMY6PNofERbUz4pUHA3qnlnZx6O6C_XSmLY/edit?usp=sharing" target="_blank" class="hotbar-btn">🛡️ Insurance Cases</a>
             <a href="https://docs.google.com/spreadsheets/d/1ar3tabN-bUqkjWqgy25MCHzSup2jhiaAKaGxLwZTeJ8/edit?usp=sharing" target="_blank" class="hotbar-btn">🚗 Location Visits</a>
@@ -502,7 +503,7 @@
       
       <div class="card district-master-panel employee-widget-card dynamic-module-block role-manager role-employee buying-sales-module">
           <div class="district-kpi-header">
-              <span class="district-kpi-title">Buying & Sales</span>
+              <span class="district-kpi-title">Buying & Sales <span id="bs-last-updated" class="widget-date-display"></span></span>
               <select id="bsStoreSelect" class="bs-hidden-select" onchange="renderBuyingSales()">
                   <option value="OVL">OVL</option>
                   <option value="LEE">LEE</option>
@@ -704,7 +705,7 @@
 <div class="card master-card dynamic-module-block role-ceo mb-30" style="height: auto; min-height: 0; padding: 0; overflow: hidden;">
     <div class="master-card-header" style="margin: 0; border-radius: 0;">
         <div class="align-center gap-8">
-            <span class="master-card-title">District Buying & Sales Progress</span>
+            <span class="master-card-title">District Buying & Sales Progress <span id="ceo-bs-last-updated" class="widget-date-display"></span></span>
         </div>
     </div>
     
@@ -921,6 +922,8 @@
                       <option value="OVL">OVL</option>
                       <option value="LEE">LEE</option>
                       <option value="WSP">WSP</option>
+                      <option value="MPL">MPL</option>
+                      <option value="BAL">BAL</option>
                   </select>
               </div>
           </div>

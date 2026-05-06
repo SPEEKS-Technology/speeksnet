@@ -935,14 +935,46 @@ html {
     border-radius: 12px; 
 }
 
-.pin-error { 
-    color: var(--red-alert); 
-    font-size: 13px; 
-    font-weight: 700; 
-    margin-top: 10px; 
-    text-align: center; 
-    display: none; 
-    animation: shake 0.4s ease-in-out; 
+.pin-error {
+    color: var(--red-alert);
+    font-size: 13px;
+    font-weight: 700;
+    margin-top: 10px;
+    text-align: center;
+    display: none;
+    animation: shake 0.4s ease-in-out;
+}
+
+.pin-container input.pin-filled {
+    border-color: var(--sage-professional);
+    background: white;
+    box-shadow: 0 0 0 4px rgba(90, 141, 59, 0.15);
+    transition: box-shadow 0.25s ease, border-color 0.25s ease;
+}
+
+@keyframes auth-btn-spin {
+    to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+.auth-btn.loading {
+    pointer-events: none;
+    opacity: 0.88;
+    color: transparent !important;
+    position: relative;
+}
+
+.auth-btn.loading::after {
+    content: '';
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    border: 2.5px solid rgba(255, 255, 255, 0.35);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: auth-btn-spin 0.65s linear infinite;
 }
 
 @keyframes shake { 
@@ -2211,6 +2243,18 @@ select.bs-hidden-select:focus {
 .emp-goal-col-right { text-align: right; }
 .emp-goal-label { font-size: 11px; font-weight: 900; color: #888; letter-spacing: 0.5px; text-transform: uppercase; }
 .emp-goal-value { font-size: 36px; font-weight: 900; color: var(--slate-charcoal); line-height: 1; }
+.emp-role-description {
+    background: #f6f8f5;
+    border-left: 3px solid var(--sage-professional);
+    border-radius: 0 8px 8px 0;
+    padding: 11px 14px;
+    margin-bottom: 20px;
+    font-size: 13px;
+    color: #555;
+    font-weight: 500;
+    line-height: 1.55;
+}
+
 .emp-week-section { display: flex; flex-direction: column; gap: 8px; border-top: 2px solid #f4f7f9; padding-top: 20px; }
 
 .emp-pill-container { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 5px; width: 100%; }
