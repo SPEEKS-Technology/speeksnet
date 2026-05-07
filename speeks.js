@@ -2405,31 +2405,26 @@ async function fetchScorecardData() {
 
         // REMOVED the code that overrides the "Store Scorecard" title here!
 
-        const latestScore = parseFloat(storeData.score) || 0; 
+        const latestScore = parseFloat(storeData.score) || 0;
+        const displayScore = latestScore * 2;
         const rawDate = storeData.date || 'Recent';
 
         let displayDate = rawDate;
         const parsedDate = new Date(rawDate);
         if (!isNaN(parsedDate.getTime())) {
-            const day = parsedDate.getUTCDay(); 
-            const diffToMonday = day === 0 ? -6 : 1 - day; 
+            const day = parsedDate.getUTCDay();
+            const diffToMonday = day === 0 ? -6 : 1 - day;
             const mondayDate = new Date(parsedDate);
             mondayDate.setUTCDate(parsedDate.getUTCDate() + diffToMonday);
             displayDate = "Week of " + mondayDate.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric' });
         }
 
-        const isTenPointScale = latestScore > 5;
         let scoreColor = 'var(--red-alert)';
-        if (isTenPointScale) {
-            if (latestScore > 8) scoreColor = 'var(--sage-professional)';  
-            else if (latestScore >= 6) scoreColor = 'var(--idea-gold)';
-        } else {
-            if (latestScore >= 4) scoreColor = 'var(--sage-professional)';
-            else if (latestScore >= 3) scoreColor = 'var(--idea-gold)';
-        }
+        if (displayScore > 8) scoreColor = 'var(--sage-professional)';
+        else if (displayScore >= 6) scoreColor = 'var(--idea-gold)';
 
-        const pulse = (isTenPointScale ? latestScore < 6 : latestScore < 3) 
-            ? `<div class="notif-dot active" style="display:block; position:absolute; top:-2px; right:-14px; width:12px; height:12px;"></div>` 
+        const pulse = displayScore < 6
+            ? `<div class="notif-dot active" style="display:block; position:absolute; top:-2px; right:-14px; width:12px; height:12px;"></div>`
             : '';
 
         let breakdownHtml = '';
@@ -2468,7 +2463,7 @@ async function fetchScorecardData() {
                 </div>
                 <div style="position: relative; display: inline-block;">
                     <div class="scorecard-val" style="color: ${scoreColor}; font-size: 36px; text-shadow: 0 4px 15px ${scoreColor}30; line-height: 1;">
-                        ${latestScore.toFixed(1)}
+                        ${displayScore.toFixed(1)}
                     </div>
                     ${pulse}
                 </div>
@@ -2807,7 +2802,7 @@ async function fetchMasterDistrictDashboard() {
 
             // 1. SCORECARD & HEADER
             const sScore = scoreData.data?.find(s => s.store.toUpperCase() === store) || {};
-            const scoreNum = parseFloat(sScore.score) || 0;
+            const scoreNum = (parseFloat(sScore.score) || 0) * 2;
             let sColor = scoreNum > 8 ? '#065f46' : (scoreNum >= 6 ? '#92400e' : '#991b1b');
             let sBg = scoreNum > 8 ? '#d1fae5' : (scoreNum >= 6 ? '#fef3c7' : '#fee2e2');
 
