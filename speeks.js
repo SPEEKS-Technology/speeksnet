@@ -1628,6 +1628,8 @@ function renderBuyingSales() {
         smb.className = sellMarginNum >= 55.0 ? 'delta-badge delta-pos' : 'delta-badge delta-neg';
     });
 
+    document.querySelectorAll('#bs-rev').forEach(el => el.innerText = `$${Math.round(rev).toLocaleString()}`);
+
     const bsDateEl = document.getElementById('bs-last-updated');
     if (bsDateEl) {
         const _bsTs = JSON.parse(localStorage.getItem('bsStoreTimestamps') || '{}');
@@ -1676,6 +1678,7 @@ function renderLiveData(d) {
         // 2. Update CEO Rings (Sales)
         if(document.getElementById(`ceo-${store.base}-pct`)) document.getElementById(`ceo-${store.base}-pct`).innerText = p + '%';
         if(document.getElementById(`ceo-${store.base}-goal`)) document.getElementById(`ceo-${store.base}-goal`).innerText = goalTxt;
+        if(document.getElementById(`ceo-${store.base}-rev`)) document.getElementById(`ceo-${store.base}-rev`).innerText = `$${Math.round(rev).toLocaleString()}`;
         if(document.getElementById(`ceo-${store.base}-t-gp`)) document.getElementById(`ceo-${store.base}-t-gp`).innerText = tGpTxt;
         if(document.getElementById(`ceo-${store.base}-sell-margin`)) {
             let el = document.getElementById(`ceo-${store.base}-sell-margin`);
@@ -3010,6 +3013,7 @@ async function fetchMasterDistrictDashboard() {
                         <div class="master-section-title">Buying & Selling Snapshot</div>
                         <div class="master-stat-box">
                             <div class="master-stat-row"><span class="master-stat-label">Sales vs Goal</span><span class="master-stat-val" style="color: ${pctColor}; background: ${pctBg};">${salesPct}%</span></div>
+                            <div class="master-stat-row"><span class="master-stat-label">Revenue</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${Math.round(rev).toLocaleString()}</span></div>
                             <div class="master-stat-row"><span class="master-stat-label">GP Tracking</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${gpTrack.toLocaleString()}</span></div>
                             <div class="master-stat-row dashed"><span class="master-stat-label">Sell Margin</span><span class="master-stat-val" style="color: ${sellMarginColor}; background: ${sellMarginBg};">${sellMarginNum > 0 ? sellMargin + '%' : '-'}</span></div>
                             <div class="master-stat-row"><span class="master-stat-label">Buy Tracking</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${buyProj.toLocaleString()}</span></div>

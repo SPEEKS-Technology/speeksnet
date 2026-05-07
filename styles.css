@@ -1178,7 +1178,11 @@ select.bs-hidden-select:focus {
 .widget-date-display:not(:empty)::before {
     content: '-';
     margin-right: 8px;
-    color: #94a3b8 !important; 
+    color: #94a3b8 !important;
+}
+
+.widget-date-display.no-dash::before {
+    content: none;
 }
 
 .master-card-header .widget-date-display,

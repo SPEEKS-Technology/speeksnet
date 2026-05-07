@@ -553,6 +553,7 @@
       <div class="card district-master-panel employee-widget-card dynamic-module-block role-manager role-employee buying-sales-module">
           <div class="district-kpi-header">
               <span class="district-kpi-title">Buying & Sales <span id="bs-last-updated" class="widget-date-display"></span></span>
+              <span class="widget-date-display no-dash">Goal: <span id="bs-goal"></span></span>
               <select id="bsStoreSelect" class="bs-hidden-select" onchange="renderBuyingSales()">
                   <option value="OVL">OVL</option>
                   <option value="LEE">LEE</option>
@@ -595,8 +596,8 @@
                   
                   <div class="bs-stats-stack">
                       <div class="bs-stat-row">
-                          <span class="bs-stat-label">Goal</span>
-                          <span class="bs-stat-val" id="bs-goal">--</span>
+                          <span class="bs-stat-label">Rev (MTD)</span>
+                          <span class="bs-stat-val" id="bs-rev">--</span>
                       </div>
                       <div class="bs-stat-row">
                           <span class="bs-stat-label">GP Tracking</span>
@@ -783,6 +784,7 @@
                 </div>
             </div>
             <div class="ceo-ring-stats">
+                <div class="ceo-stat-row"><span>Revenue:</span> <span id="ceo-ovl-rev" style="color: var(--sage-professional);">--</span></div>
                 <div class="ceo-stat-row"><span>GP Tracking:</span> <span id="ceo-ovl-t-gp" style="color: var(--sage-professional);">--</span></div>
                 <div class="ceo-stat-row"><span>Margin:</span> <span id="ceo-ovl-sell-margin" class="ceo-badge">--</span></div>
             </div>
@@ -810,6 +812,7 @@
                 </div>
             </div>
             <div class="ceo-ring-stats">
+                <div class="ceo-stat-row"><span>Revenue:</span> <span id="ceo-lee-rev" style="color: var(--sage-professional);">--</span></div>
                 <div class="ceo-stat-row"><span>GP Tracking:</span> <span id="ceo-lee-t-gp" style="color: var(--sage-professional);">--</span></div>
                 <div class="ceo-stat-row"><span>Margin:</span> <span id="ceo-lee-sell-margin" class="ceo-badge">--</span></div>
             </div>
@@ -837,6 +840,7 @@
                 </div>
             </div>
             <div class="ceo-ring-stats">
+                <div class="ceo-stat-row"><span>Revenue:</span> <span id="ceo-wsp-rev" style="color: var(--sage-professional);">--</span></div>
                 <div class="ceo-stat-row"><span>GP Tracking:</span> <span id="ceo-wsp-t-gp" style="color: var(--sage-professional);">--</span></div>
                 <div class="ceo-stat-row"><span>Margin:</span> <span id="ceo-wsp-sell-margin" class="ceo-badge">--</span></div>
             </div>
@@ -864,6 +868,7 @@
                 </div>
             </div>
             <div class="ceo-ring-stats">
+                <div class="ceo-stat-row"><span>Revenue:</span> <span id="ceo-mpl-rev" style="color: var(--sage-professional);">--</span></div>
                 <div class="ceo-stat-row"><span>GP Tracking:</span> <span id="ceo-mpl-t-gp" style="color: var(--sage-professional);">--</span></div>
                 <div class="ceo-stat-row"><span>Margin:</span> <span id="ceo-mpl-sell-margin" class="ceo-badge">--</span></div>
             </div>
@@ -891,6 +896,7 @@
                 </div>
             </div>
             <div class="ceo-ring-stats">
+                <div class="ceo-stat-row"><span>Revenue:</span> <span id="ceo-bal-rev" style="color: var(--sage-professional);">--</span></div>
                 <div class="ceo-stat-row"><span>GP Tracking:</span> <span id="ceo-bal-t-gp" style="color: var(--sage-professional);">--</span></div>
                 <div class="ceo-stat-row"><span>Margin:</span> <span id="ceo-bal-sell-margin" class="ceo-badge">--</span></div>
             </div>
