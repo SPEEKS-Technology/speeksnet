@@ -1555,6 +1555,8 @@ async function fetchHubData() {
         hubDataCache = freshData;
 
         if (document.getElementById('bs-buy-val')) renderBuyingSales();
+        renderMonthlyGoalsBanner();
+        renderDistrictGoals();
         
         // Render Live Data globally (Fixes CEO Rings)
         renderLiveData(hubDataCache);
@@ -4173,8 +4175,11 @@ function initDashboardData() {
     checkInstantNotifCache();
 
     const runInit = () => {
-        if (typeof initChecklists === 'function') initChecklists(); 
-        
+        if (typeof initChecklists === 'function') initChecklists();
+        renderMonthlyGoalsBanner();
+        renderDistrictGoals();
+        syncGoalsFromSheet();
+
         // Re-sync announcements immediately after login so it knows who you are!
         setTimeout(loadCMS, 50);
         setTimeout(startReactionPolling, 3000);
@@ -4288,16 +4293,29 @@ customTooltip.className = 'speeks-tooltip';
 document.body.appendChild(customTooltip);
 
 document.addEventListener('mouseover', function(e) {
+    const goalMini = e.target.closest('.dg-goal-mini');
+    if (goalMini) {
+        const title = goalMini.dataset.goalTitle;
+        const desc = goalMini.dataset.goalDesc;
+        if (title) {
+            customTooltip.innerHTML = `
+                <strong style="display:block; margin-bottom: 6px; color: var(--sage-professional); font-size: 13px;">${title}</strong>
+                ${desc ? `<span style="font-size: 12px; color: var(--slate-charcoal); line-height: 1.5;">${desc}</span>` : ''}`;
+            customTooltip.classList.add('show');
+            return;
+        }
+    }
+
     const card = e.target.closest('.doc-card');
-    
+
     if (card) {
         const titleEl = card.querySelector('.doc-title');
         const descEl = card.querySelector('.doc-desc');
-        
+
         if (titleEl && descEl) {
             const isTitleCut = titleEl.scrollWidth > titleEl.clientWidth;
             const isDescCut = descEl.scrollHeight > descEl.clientHeight;
-            
+
             if (isTitleCut || isDescCut) {
                 customTooltip.innerHTML = `
                     <strong style="display:block; margin-bottom: 6px; color: var(--sage-professional); font-size: 14px; white-space: nowrap;">
@@ -4329,7 +4347,7 @@ document.addEventListener('mousemove', function(e) {
 });
 
 document.addEventListener('mouseout', function(e) {
-    if (e.target.closest('.doc-card')) {
+    if (e.target.closest('.doc-card') || e.target.closest('.dg-goal-mini')) {
         customTooltip.classList.remove('show');
     }
 });
@@ -4915,6 +4933,205 @@ async function publishAnnouncement() {
         btn.style.opacity = "1";
         btn.style.pointerEvents = "auto";
     }
+}
+
+// ============================================================================
+// 24. MODULE: MONTHLY TEAM GOALS
+// ============================================================================
+
+function _mgbKey(store, date) {
+    const d = date || new Date();
+    return `monthlyGoals_${(store || 'NONE').toUpperCase()}_${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function getMonthlyGoals(store) {
+    try { const r = localStorage.getItem(_mgbKey(store)); return r ? JSON.parse(r) : null; } catch { return null; }
+}
+
+function putMonthlyGoals(store, data) {
+    localStorage.setItem(_mgbKey(store), JSON.stringify(data));
+}
+
+const MONTHLY_GOALS_URL = 'https://script.google.com/macros/s/AKfycbyytrXgeMLoFMqxKBqW2SfLoXk-8SnoKQoKVmhgPkW84ffuj5sgMumekFdZN1CsJcpMJQ/exec';
+
+function _mgbYearMonth(date) {
+    const d = date || new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+async function syncGoalsFromSheet() {
+    if (!MONTHLY_GOALS_URL) return;
+    try {
+        const ym  = _mgbYearMonth();
+        const res = await fetch(`${MONTHLY_GOALS_URL}?action=getAll&yearMonth=${ym}&t=${Date.now()}`);
+        const map = await res.json();
+        ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'].forEach(store => {
+            if (map[store]) putMonthlyGoals(store, map[store]);
+        });
+        renderMonthlyGoalsBanner();
+        renderDistrictGoals();
+    } catch (err) {
+        console.warn('Goals sync failed:', err);
+    }
+}
+
+async function _postGoalsToSheet(store, payload) {
+    if (!MONTHLY_GOALS_URL) return;
+    try {
+        await fetch(MONTHLY_GOALS_URL, {
+            method:   'POST',
+            headers:  { 'Content-Type': 'text/plain' },
+            body:     JSON.stringify({ store, yearMonth: _mgbYearMonth(), ...payload }),
+            redirect: 'follow',
+        });
+    } catch (err) {
+        console.warn('Goals post failed:', err);
+    }
+}
+
+
+
+
+function _mgbMonthLabel(date) {
+    return (date || new Date()).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+// --- Banner ---
+
+let _mgbExpanded = false;
+
+function renderMonthlyGoalsBanner() {
+    const store = sessionStorage.getItem('speeksUserStore') || '';
+    const labelEl = document.getElementById('mgbMonthLabel');
+    if (!labelEl) return;
+
+    const label = _mgbMonthLabel() + ' Goals';
+    ['mgbMonthLabel', 'mgbMonthLabelFull'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = label; });
+    ['mgbStoreTag',   'mgbStoreTagFull'  ].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = store; });
+
+    const data  = getMonthlyGoals(store);
+    const goals = data?.goals || [];
+
+    const snippetEl = document.getElementById('mgbSnippet');
+    const listEl    = document.getElementById('mgbGoalsList');
+    const footerEl  = document.getElementById('mgbFooter');
+
+    if (!goals.length) {
+        if (snippetEl) snippetEl.textContent = 'No goals set for this month yet.';
+        if (listEl)    listEl.innerHTML = '<div class="status-message" style="padding: 20px 0;">No goals have been set yet.</div>';
+        if (footerEl)  footerEl.textContent = '';
+        return;
+    }
+
+    if (snippetEl) {
+        const snip = goals.slice(0, 3).map(g => escapeHtml(g.title)).join(' · ');
+        snippetEl.textContent = goals.length > 3 ? `${snip} +${goals.length - 3} more` : snip;
+    }
+
+    let html = '';
+    goals.forEach(g => {
+        html += `
+        <div class="mgb-goal-item">
+            <span class="mgb-goal-title">${escapeHtml(g.title)}</span>
+            ${g.description ? `<span class="mgb-goal-desc">${escapeHtml(g.description)}</span>` : ''}
+        </div>`;
+    });
+
+    if (listEl)   listEl.innerHTML = html;
+    if (footerEl) footerEl.textContent = '';
+}
+
+function toggleGoalsBanner() {
+    _mgbExpanded = !_mgbExpanded;
+    const c = document.getElementById('mgbCollapsed');
+    const e = document.getElementById('mgbExpanded');
+    if (c) c.style.display = _mgbExpanded ? 'none' : 'flex';
+    if (e) e.style.display = _mgbExpanded ? 'block' : 'none';
+}
+
+// --- Edit Modal ---
+
+function openEditGoalsModal() {
+    const store = sessionStorage.getItem('speeksUserStore') || '';
+    const goals = getMonthlyGoals(store)?.goals || [];
+    const list  = document.getElementById('editGoalsList');
+    if (!list) return;
+    list.innerHTML = '';
+    if (goals.length === 0) { addGoalRow(); } else { goals.forEach(g => addGoalRow(g)); }
+    _updateAddGoalBtn();
+    toggleModal('editMonthlyGoalsModal');
+}
+
+function addGoalRow(existing) {
+    const list = document.getElementById('editGoalsList');
+    if (!list || list.children.length >= 6) return;
+    const row = document.createElement('div');
+    row.className = 'edit-goal-row';
+    row.innerHTML = `
+        <div class="edit-goal-inner">
+            <input type="text" class="form-input-lg edit-goal-title" style="margin:0; font-size:13px;" placeholder="Goal title  (e.g. Hit $45K Revenue)" value="${escapeHtml(existing?.title || '')}">
+            <input type="text" class="form-input-lg edit-goal-desc" style="margin:0; font-size:12px;" placeholder="Description (optional)" value="${escapeHtml(existing?.description || '')}">
+        </div>
+        <button class="edit-goal-remove-btn" onclick="this.closest('.edit-goal-row').remove(); _updateAddGoalBtn();" title="Remove">✕</button>`;
+    list.appendChild(row);
+    _updateAddGoalBtn();
+}
+
+function _updateAddGoalBtn() {
+    const list = document.getElementById('editGoalsList');
+    const btn  = document.getElementById('addGoalRowBtn');
+    if (btn) btn.style.display = (list?.children.length ?? 0) >= 6 ? 'none' : '';
+}
+
+function saveMonthlyGoals() {
+    const store    = sessionStorage.getItem('speeksUserStore') || '';
+    const userName = sessionStorage.getItem('speeksUserName')  || 'Manager';
+    const goals    = [];
+    document.querySelectorAll('#editGoalsList .edit-goal-row').forEach(row => {
+        const title       = row.querySelector('.edit-goal-title')?.value.trim();
+        const description = row.querySelector('.edit-goal-desc')?.value.trim();
+        if (!title) return;
+        goals.push({ title, description });
+    });
+    const payload = {
+        goals,
+        setBy:     userName,
+        updatedAt: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+    };
+    putMonthlyGoals(store, payload);
+    closeAllModals();
+    renderMonthlyGoalsBanner();
+    renderDistrictGoals();
+    _postGoalsToSheet(store, payload);
+}
+
+// --- District Overview ---
+
+function renderDistrictGoals() {
+    const container = document.getElementById('districtGoalsGrid');
+    if (!container) return;
+    const monthEl = document.getElementById('districtGoalsMonth');
+    if (monthEl) monthEl.textContent = _mgbMonthLabel();
+    const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    const emojis = { OVL: '🟣', LEE: '🔵', WSP: '🟢', MPL: '🟠', BAL: '🔴' };
+    let html = '';
+    stores.forEach(store => {
+        const data  = getMonthlyGoals(store);
+        const goals = data?.goals || [];
+        let inner   = '';
+        if (!goals.length) {
+            inner = '<div class="dg-no-goals">No goals set</div>';
+        } else {
+            goals.forEach(g => {
+                inner += `
+                <div class="dg-goal-mini" data-goal-title="${escapeHtml(g.title)}" data-goal-desc="${escapeHtml(g.description || '')}">
+                    <div class="dg-goal-mini-label">${escapeHtml(g.title)}</div>
+                </div>`;
+            });
+        }
+        html += `<div class="dg-store-card"><div class="dg-store-header">${emojis[store]} ${store}</div>${inner}</div>`;
+    });
+    container.innerHTML = html;
 }
 
 // --- MODAL: MANAGE ALERTS ---

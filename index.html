@@ -213,6 +213,22 @@
     </div>
 </div>
 
+<!-- ===== EDIT MONTHLY GOALS MODAL ===== -->
+<div class="modal-menu manage-menu" id="editMonthlyGoalsModal">
+    <div class="modal-header">
+        <h3>🎯 Set Monthly Team Goals</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div class="manage-content">
+        <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Set up to 6 goals for your team this month. Give each goal a title and an optional description.</p>
+        <div id="editGoalsList" class="edit-goals-list"></div>
+        <button class="btn-secondary" id="addGoalRowBtn" onclick="addGoalRow()" style="margin-top: 6px; padding: 8px 16px; font-size: 12px;">+ Add Goal</button>
+    </div>
+    <div class="manage-footer flex-end">
+        <button class="btn-primary" onclick="saveMonthlyGoals()" id="saveMonthlyGoalsBtn">Save Goals</button>
+    </div>
+</div>
+
 <div class="modal-menu manage-menu" id="manageAlertsDropdown">
     <div class="modal-header">
         <h3>Performance Metrics</h3>
@@ -482,6 +498,38 @@
       </div>
   </div>
 
+  <!-- ===== MONTHLY TEAM GOALS BANNER ===== -->
+  <div id="monthlyGoalsBanner" class="monthly-goals-banner dynamic-module-flex role-manager role-employee">
+    <div class="mgb-collapsed" id="mgbCollapsed" onclick="toggleGoalsBanner()">
+      <div class="mgb-header-left">
+        <span class="mgb-icon">🎯</span>
+        <span class="mgb-month-label" id="mgbMonthLabel">Team Goals</span>
+        <span class="mgb-store-tag" id="mgbStoreTag"></span>
+        <span class="mgb-snippet" id="mgbSnippet">No goals set yet.</span>
+      </div>
+      <div class="mgb-header-right">
+        <button class="mgb-expand-btn" onclick="event.stopPropagation(); toggleGoalsBanner()">&#9660; View Goals</button>
+      </div>
+    </div>
+    <div id="mgbExpanded" style="display:none;">
+      <div class="mgb-expanded-header">
+        <div class="mgb-header-left">
+          <span class="mgb-icon">🎯</span>
+          <span class="mgb-month-label" id="mgbMonthLabelFull">Team Goals</span>
+          <span class="mgb-store-tag" id="mgbStoreTagFull"></span>
+        </div>
+        <div class="mgb-header-right">
+          <button class="mini-action-btn dynamic-module-block role-manager" onclick="openEditGoalsModal()">Edit Goals ✏️</button>
+          <button class="mgb-expand-btn" onclick="toggleGoalsBanner()">&#9650; Collapse</button>
+        </div>
+      </div>
+      <div id="mgbGoalsList" class="mgb-goals-list">
+        <div class="status-message" style="padding: 20px 0;">Loading goals...</div>
+      </div>
+      <div class="mgb-footer" id="mgbFooter"></div>
+    </div>
+  </div>
+
   <div id="top-alerts-row" class="top-alerts-row dynamic-module-flex role-manager">
     <div class="card district-master-panel employee-widget-card">
         <div class="district-kpi-header">
@@ -651,6 +699,15 @@
           <div class="status-message">Syncing Data...</div>
       </div>
 
+      <div class="card district-master-panel district-kpi-panel" style="margin-bottom: 30px;">
+          <div class="district-kpi-header">
+              <span class="district-kpi-title">Monthly Team Goals <span class="widget-date-display" id="districtGoalsMonth"></span></span>
+          </div>
+          <div id="districtGoalsGrid" class="district-goals-grid">
+              <div class="status-message">Syncing Data...</div>
+          </div>
+      </div>
+
       <div class="district-split-row">
           
           <div class="flex-col-gap-30">
@@ -698,8 +755,9 @@
                   </div>
               </div>
           </div>
-          
+
       </div>
+
 
   </div>
 

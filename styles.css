@@ -3831,3 +3831,258 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .pn-save-status { font-size: 12px; font-weight: 600; }
 .pn-save-ok    { color: var(--sage-professional); }
 .pn-save-error { color: var(--red-alert); }
+
+/* =========================================================
+   MONTHLY TEAM GOALS BANNER
+   ========================================================= */
+.monthly-goals-banner {
+    width: 100%;
+    background: white;
+    border: 1px solid var(--gen-border);
+    border-left: 4px solid var(--sage-professional);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+    margin-top: 16px;
+    margin-bottom: 20px;
+    flex-direction: column !important;
+}
+
+.mgb-collapsed {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    cursor: pointer;
+    transition: background 0.15s;
+    gap: 12px;
+}
+.mgb-collapsed:hover { background: #f8fafc; }
+
+.mgb-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.mgb-header-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+.mgb-icon { font-size: 16px; line-height: 1; }
+
+.mgb-month-label {
+    font-weight: 800;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--slate-charcoal);
+    white-space: nowrap;
+}
+
+.mgb-store-tag {
+    background: var(--slate-charcoal);
+    color: white;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+.mgb-snippet {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--slate-charcoal);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.mgb-expand-btn {
+    background: none;
+    border: 1px solid var(--gen-border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--slate-charcoal);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+}
+.mgb-expand-btn:hover { background: #f1f5f9; }
+
+.mgb-expanded-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: #f8fafc;
+    border-bottom: 1px solid var(--gen-border);
+    gap: 12px;
+}
+
+.mgb-goals-list {
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.mgb-goal-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 16px 10px 12px;
+    background: #f8fafc;
+    border-radius: 8px;
+    border-left: 3px solid var(--sage-professional);
+}
+
+.mgb-goal-title {
+    font-size: 14px;
+    font-weight: 900;
+    color: var(--slate-charcoal);
+    letter-spacing: 0.1px;
+}
+
+.mgb-goal-desc {
+    font-size: 12px;
+    color: #64748b;
+    line-height: 1.4;
+    padding-left: 2px;
+}
+
+.mgb-footer:empty { display: none; }
+
+.mgb-footer {
+    padding: 8px 20px;
+    font-size: 11px;
+    color: #94a3b8;
+    border-top: 1px solid var(--gen-border);
+    background: #fafafa;
+}
+
+/* =========================================================
+   EDIT GOALS FORM
+   ========================================================= */
+.edit-goals-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 4px;
+}
+
+.edit-goal-row {
+    display: grid;
+    grid-template-columns: 1fr 28px;
+    gap: 8px;
+    align-items: start;
+}
+
+.edit-goal-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.edit-goal-remove-btn {
+    background: none;
+    border: none;
+    color: var(--red-alert);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 10px 4px 4px;
+    line-height: 1;
+}
+.edit-goal-remove-btn:hover { opacity: 0.7; }
+
+/* =========================================================
+   DISTRICT MONTHLY GOALS GRID
+   ========================================================= */
+.district-goals-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    overflow: hidden;
+}
+
+.dg-store-card {
+    padding: 14px 16px;
+    border-right: 1px solid var(--gen-border);
+}
+.dg-store-card:last-child { border-right: none; }
+
+.dg-store-header {
+    font-size: 12px;
+    font-weight: 900;
+    text-transform: uppercase;
+    color: var(--text-dark);
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid var(--gen-border);
+    letter-spacing: 0.5px;
+}
+
+.dg-goal-mini { margin-bottom: 9px; cursor: default; }
+
+.dg-goal-mini-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #475569;
+    margin-bottom: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dg-progress-mini {
+    height: 5px;
+    background: #f0f0f0;
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 2px;
+}
+
+.dg-progress-mini-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.8s ease-out;
+}
+
+.dg-values-mini { font-size: 10px; color: #64748b; }
+
+.dg-set-by {
+    font-size: 10px;
+    color: #94a3b8;
+    margin-top: 6px;
+    font-style: italic;
+}
+
+.dg-no-goals {
+    font-size: 11px;
+    color: #94a3b8;
+    font-style: italic;
+    padding: 8px 0;
+}
+
+@media (max-width: 900px) {
+    .district-goals-grid { grid-template-columns: repeat(3, 1fr); }
+    .dg-store-card:nth-child(3) { border-right: none; }
+    .dg-store-card:nth-child(4) { border-top: 1px solid var(--gen-border); }
+    .dg-store-card:nth-child(5) { border-top: 1px solid var(--gen-border); border-right: none; }
+}
+
+@media (max-width: 600px) {
+    .mgb-snippet { display: none; }
+    .edit-goal-row { grid-template-columns: 1fr 100px 28px; }
+    .district-goals-grid { grid-template-columns: 1fr 1fr; }
+    .dg-store-card:nth-child(2n) { border-right: none; }
+    .dg-store-card:nth-child(n+3) { border-top: 1px solid var(--gen-border); }
+}
