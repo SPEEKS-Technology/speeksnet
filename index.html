@@ -229,6 +229,38 @@
     </div>
 </div>
 
+<!-- ===== EDIT COMPANY PROJECTS MODAL ===== -->
+<div class="modal-menu manage-menu" id="editCompanyProjectsModal">
+    <div class="modal-header">
+        <h3>🏢 Company Initiatives</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div class="manage-content">
+        <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Set up to 8 company-wide initiatives or projects. All stores will see these.</p>
+        <div id="editCompanyProjectsList" class="edit-goals-list"></div>
+        <button class="btn-secondary" id="addCompanyProjectRowBtn" onclick="addCompanyProjectRow()" style="margin-top: 6px; padding: 8px 16px; font-size: 12px;">+ Add Initiative</button>
+    </div>
+    <div class="manage-footer flex-end">
+        <button class="btn-primary" onclick="saveCompanyProjects()">Save Initiatives</button>
+    </div>
+</div>
+
+<!-- ===== EDIT STORE INITIATIVES MODAL ===== -->
+<div class="modal-menu manage-menu" id="editStoreInitiativesModal">
+    <div class="modal-header">
+        <h3 id="editStoreInitiativesTitle">🧪 Store Initiatives</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div class="manage-content">
+        <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Set up to 6 ongoing initiatives or experiments for your store. These persist until you remove them.</p>
+        <div id="editStoreInitiativesList" class="edit-goals-list"></div>
+        <button class="btn-secondary" id="addStoreInitiativeRowBtn" onclick="addStoreInitiativeRow()" style="margin-top: 6px; padding: 8px 16px; font-size: 12px;">+ Add Initiative</button>
+    </div>
+    <div class="manage-footer flex-end">
+        <button class="btn-primary" onclick="saveStoreInitiatives()">Save Initiatives</button>
+    </div>
+</div>
+
 <div class="modal-menu manage-menu" id="manageAlertsDropdown">
     <div class="modal-header">
         <h3>Performance Metrics</h3>
@@ -498,6 +530,36 @@
       </div>
   </div>
 
+  <!-- ===== INITIATIVES BANNER ===== -->
+  <div id="companyProjectsBanner" class="company-projects-banner dynamic-module-flex role-manager role-employee role-training">
+    <div class="cpb-collapsed" id="cpbCollapsed" onclick="toggleCompanyProjectsBanner()">
+      <div class="mgb-header-left">
+        <span class="mgb-icon">🏢</span>
+        <span class="mgb-month-label">Initiatives</span>
+        <span class="mgb-snippet" id="cpbSnippet">No initiatives set yet.</span>
+      </div>
+      <div class="mgb-header-right">
+        <button class="mgb-expand-btn" onclick="event.stopPropagation(); toggleCompanyProjectsBanner()">&#9660; View</button>
+      </div>
+    </div>
+    <div id="cpbExpanded" style="display:none;">
+      <div class="cpb-expanded-header">
+        <div class="mgb-header-left">
+          <span class="mgb-icon">🏢</span>
+          <span class="mgb-month-label">Initiatives</span>
+        </div>
+        <div class="mgb-header-right">
+          <button class="mini-action-btn dynamic-module-block role-ceo" onclick="openEditCompanyProjectsModal()">Edit Company ✏️</button>
+          <button class="mini-action-btn dynamic-module-block role-manager" onclick="openEditStoreInitiativesModal()">Edit Store ✏️</button>
+          <button class="mgb-expand-btn" onclick="toggleCompanyProjectsBanner()">&#9650; Collapse</button>
+        </div>
+      </div>
+      <div id="cpbProjectsList" class="cpb-projects-list">
+        <div class="status-message" style="padding: 20px 0;">No initiatives have been set yet.</div>
+      </div>
+    </div>
+  </div>
+
   <!-- ===== MONTHLY TEAM GOALS BANNER ===== -->
   <div id="monthlyGoalsBanner" class="monthly-goals-banner dynamic-module-flex role-manager role-employee">
     <div class="mgb-collapsed" id="mgbCollapsed" onclick="toggleGoalsBanner()">
@@ -704,6 +766,7 @@
           <div class="district-kpi-header">
               <span class="district-kpi-title">Monthly Team Goals <span class="widget-date-display" id="districtGoalsMonth"></span></span>
           </div>
+          <div id="districtCompanyProjects"></div>
           <div id="districtGoalsGrid" class="district-goals-grid">
               <div class="status-message">Syncing Data...</div>
           </div>

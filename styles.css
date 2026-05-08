@@ -3975,6 +3975,195 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 }
 
 /* =========================================================
+   COMPANY PROJECTS BANNER
+   ========================================================= */
+.company-projects-banner {
+    width: 100%;
+    background: white;
+    border: 1px solid var(--gen-border);
+    border-left: 4px solid #3b82f6;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+    margin-top: 16px;
+    margin-bottom: 0;
+    flex-direction: column !important;
+}
+
+.cpb-collapsed {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    cursor: pointer;
+    transition: background 0.15s;
+    gap: 12px;
+}
+.cpb-collapsed:hover { background: #f8fafc; }
+
+.cpb-badge {
+    background: #3b82f6;
+    color: white;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+.cpb-expanded-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: #f0f7ff;
+    border-bottom: 1px solid #dbeafe;
+    gap: 12px;
+}
+
+.cpb-projects-list {
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.cpb-section-label {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #94a3b8;
+    margin-bottom: 8px;
+}
+
+.cpb-section-label--spaced {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--gen-border);
+}
+
+.cpb-initiative-item {
+    border-left-color: var(--idea-gold);
+    background: #fffbeb;
+}
+
+.cpb-project-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 16px 10px 12px;
+    background: #f0f7ff;
+    border-radius: 8px;
+    border-left: 3px solid #3b82f6;
+}
+
+/* =========================================================
+   STORE INITIATIVES (inside monthly goals banner)
+   ========================================================= */
+.si-divider {
+    margin: 0 20px;
+    border: none;
+    border-top: 1px solid var(--gen-border);
+}
+
+.si-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 20px 6px;
+    gap: 10px;
+}
+
+.si-section-title {
+    font-weight: 800;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #94a3b8;
+}
+
+.si-items-list {
+    padding: 0 20px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.si-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 16px 10px 12px;
+    background: #fffbeb;
+    border-radius: 8px;
+    border-left: 3px solid var(--idea-gold);
+}
+
+/* =========================================================
+   DISTRICT: COMPANY PROJECTS & INITIATIVES GRID
+   ========================================================= */
+.district-cp-section {
+    padding: 14px 20px 16px;
+    border-bottom: 1px solid var(--gen-border);
+}
+
+.district-cp-header {
+    font-weight: 900;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #64748b;
+}
+
+.district-cp-items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.district-initiatives-panel {
+    margin-top: 20px;
+}
+
+.district-initiatives-label {
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #94a3b8;
+    padding: 0 0 10px;
+}
+
+.district-cp-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+.dg-edit-btn {
+    font-size: 10px;
+    font-weight: 800;
+    background: #f4f7f9;
+    padding: 3px 8px;
+    border-radius: 6px;
+    color: var(--slate-charcoal);
+    border: 1px solid #ddd;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.dg-edit-btn:hover {
+    background: white;
+    border-color: var(--sage-professional);
+    color: var(--sage-professional);
+    box-shadow: 0 2px 6px rgba(90, 141, 59, 0.1);
+}
+
+/* =========================================================
    EDIT GOALS FORM
    ========================================================= */
 .edit-goals-list {
@@ -4067,6 +4256,24 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     color: #94a3b8;
     margin-top: 6px;
     font-style: italic;
+}
+
+.dg-initiatives-divider {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #64748b;
+    border-top: 1px solid var(--gen-border);
+    margin: 10px 0 8px;
+    padding-top: 8px;
+}
+
+.dg-initiative-mini .dg-goal-mini-label {
+    color: #475569;
 }
 
 .dg-no-goals {

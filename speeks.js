@@ -4183,6 +4183,11 @@ function initDashboardData() {
         renderMonthlyGoalsBanner();
         renderDistrictGoals();
         syncGoalsFromSheet();
+        renderCompanyProjectsBanner();
+        renderStoreInitiatives();
+        renderDistrictCompanyProjects();
+        renderDistrictInitiativesGrid();
+        syncInitiativesFromSheet();
 
         // Re-sync announcements immediately after login so it knows who you are!
         setTimeout(loadCMS, 50);
@@ -5120,22 +5125,335 @@ function renderDistrictGoals() {
     const emojis = { OVL: '🟣', LEE: '🔵', WSP: '🟢', MPL: '🟠', BAL: '🔴' };
     let html = '';
     stores.forEach(store => {
-        const data  = getMonthlyGoals(store);
-        const goals = data?.goals || [];
-        let inner   = '';
-        if (!goals.length) {
-            inner = '<div class="dg-no-goals">No goals set</div>';
-        } else {
-            goals.forEach(g => {
-                inner += `
-                <div class="dg-goal-mini" data-goal-title="${escapeHtml(g.title)}" data-goal-desc="${escapeHtml(g.description || '')}">
-                    <div class="dg-goal-mini-label">${escapeHtml(g.title)}</div>
+        const data        = getMonthlyGoals(store);
+        const goals       = data?.goals || [];
+        const initiatives = getStoreInitiatives(store)?.initiatives || [];
+
+        const goalsHtml = goals.length
+            ? goals.map(g => `<div class="dg-goal-mini" data-goal-title="${escapeHtml(g.title)}" data-goal-desc="${escapeHtml(g.description || '')}"><div class="dg-goal-mini-label">${escapeHtml(g.title)}</div></div>`).join('')
+            : '<div class="dg-no-goals">No goals set</div>';
+
+        const initiativeItems = initiatives.length
+            ? initiatives.map(i => `<div class="dg-goal-mini dg-initiative-mini" data-goal-title="${escapeHtml(i.title)}" data-goal-desc="${escapeHtml(i.description || '')}"><div class="dg-goal-mini-label">${escapeHtml(i.title)}</div></div>`).join('')
+            : '<div class="dg-no-goals">No initiatives set</div>';
+
+        const initiativesHtml = `<div class="dg-initiatives-divider">Initiatives <button class="dg-edit-btn" onclick="openEditStoreInitiativesModal('${store}')">Edit ✏️</button></div>${initiativeItems}`;
+
+        html += `<div class="dg-store-card"><div class="dg-store-header">${emojis[store]} ${store}</div>${goalsHtml}${initiativesHtml}</div>`;
+    });
+    container.innerHTML = html;
+}
+
+// ============================================================================
+// 25. MODULE: COMPANY INITIATIVES & STORE PROJECTS
+// ============================================================================
+
+// --- Storage helpers ---
+
+function getCompanyProjects() {
+    try { const r = localStorage.getItem('companyProjects'); return r ? JSON.parse(r) : null; } catch { return null; }
+}
+
+function putCompanyProjects(data) {
+    localStorage.setItem('companyProjects', JSON.stringify(data));
+}
+
+function getStoreInitiatives(store) {
+    try { const r = localStorage.getItem(`storeInitiatives_${(store || '').toUpperCase()}`); return r ? JSON.parse(r) : null; } catch { return null; }
+}
+
+function putStoreInitiatives(store, data) {
+    localStorage.setItem(`storeInitiatives_${(store || '').toUpperCase()}`, JSON.stringify(data));
+}
+
+// --- Company Projects Banner ---
+
+let _cpbExpanded = false;
+
+function renderCompanyProjectsBanner() {
+    const store       = sessionStorage.getItem('speeksUserStore') || '';
+    const snippetEl   = document.getElementById('cpbSnippet');
+    const listEl      = document.getElementById('cpbProjectsList');
+    const projects    = getCompanyProjects()?.projects || [];
+    const initiatives = getStoreInitiatives(store)?.initiatives || [];
+    const allItems    = [...projects, ...initiatives];
+
+    if (!allItems.length) {
+        if (snippetEl) snippetEl.textContent = 'No initiatives set yet.';
+        if (listEl)    listEl.innerHTML = '<div class="status-message" style="padding: 20px 0;">No initiatives have been set yet.</div>';
+        return;
+    }
+
+    if (snippetEl) {
+        const snip = allItems.slice(0, 3).map(i => escapeHtml(i.title)).join(' · ');
+        snippetEl.textContent = allItems.length > 3 ? `${snip} +${allItems.length - 3} more` : snip;
+    }
+
+    if (listEl) {
+        let html = '';
+
+        if (projects.length) {
+            html += '<div class="cpb-section-label">Company</div>';
+            projects.forEach(p => {
+                html += `<div class="cpb-project-item">
+                    <span class="mgb-goal-title">${escapeHtml(p.title)}</span>
+                    ${p.description ? `<span class="mgb-goal-desc">${escapeHtml(p.description)}</span>` : ''}
                 </div>`;
             });
         }
+
+        if (initiatives.length) {
+            html += `<div class="cpb-section-label${projects.length ? ' cpb-section-label--spaced' : ''}">${escapeHtml(store)}</div>`;
+            initiatives.forEach(i => {
+                html += `<div class="cpb-project-item cpb-initiative-item">
+                    <span class="mgb-goal-title">${escapeHtml(i.title)}</span>
+                    ${i.description ? `<span class="mgb-goal-desc">${escapeHtml(i.description)}</span>` : ''}
+                </div>`;
+            });
+        }
+
+        listEl.innerHTML = html;
+    }
+}
+
+function toggleCompanyProjectsBanner() {
+    _cpbExpanded = !_cpbExpanded;
+    const c = document.getElementById('cpbCollapsed');
+    const e = document.getElementById('cpbExpanded');
+    if (c) c.style.display = _cpbExpanded ? 'none' : 'flex';
+    if (e) e.style.display = _cpbExpanded ? 'block' : 'none';
+}
+
+// --- Edit Company Projects Modal ---
+
+function openEditCompanyProjectsModal() {
+    const projects = getCompanyProjects()?.projects || [];
+    const list = document.getElementById('editCompanyProjectsList');
+    if (!list) return;
+    list.innerHTML = '';
+    if (projects.length === 0) { addCompanyProjectRow(); } else { projects.forEach(p => addCompanyProjectRow(p)); }
+    _updateAddCompanyProjectBtn();
+    toggleModal('editCompanyProjectsModal');
+}
+
+function addCompanyProjectRow(existing) {
+    const list = document.getElementById('editCompanyProjectsList');
+    if (!list || list.children.length >= 8) return;
+    const row = document.createElement('div');
+    row.className = 'edit-goal-row';
+    row.innerHTML = `
+        <div class="edit-goal-inner">
+            <input type="text" class="form-input-lg edit-cp-title" style="margin:0; font-size:13px;" placeholder="Initiative title (e.g. Launch Loyalty Program)" value="${escapeHtml(existing?.title || '')}">
+            <input type="text" class="form-input-lg edit-cp-desc" style="margin:0; font-size:12px;" placeholder="Description (optional)" value="${escapeHtml(existing?.description || '')}">
+        </div>
+        <button class="edit-goal-remove-btn" onclick="this.closest('.edit-goal-row').remove(); _updateAddCompanyProjectBtn();" title="Remove">✕</button>`;
+    list.appendChild(row);
+    _updateAddCompanyProjectBtn();
+}
+
+function _updateAddCompanyProjectBtn() {
+    const list = document.getElementById('editCompanyProjectsList');
+    const btn  = document.getElementById('addCompanyProjectRowBtn');
+    if (btn) btn.style.display = (list?.children.length ?? 0) >= 8 ? 'none' : '';
+}
+
+function saveCompanyProjects() {
+    const userName = sessionStorage.getItem('speeksUserName') || 'CEO';
+    const projects = [];
+    document.querySelectorAll('#editCompanyProjectsList .edit-goal-row').forEach(row => {
+        const title       = row.querySelector('.edit-cp-title')?.value.trim();
+        const description = row.querySelector('.edit-cp-desc')?.value.trim();
+        if (!title) return;
+        projects.push({ title, description });
+    });
+    const payload = {
+        projects,
+        setBy:     userName,
+        updatedAt: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+    };
+    putCompanyProjects(payload);
+    closeAllModals();
+    renderCompanyProjectsBanner();
+    renderDistrictCompanyProjects();
+    _postCompanyProjectsToSheet(payload);
+}
+
+async function _postCompanyProjectsToSheet(payload) {
+    if (!MONTHLY_GOALS_URL) return;
+    try {
+        await fetch(MONTHLY_GOALS_URL, {
+            method:  'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body:    JSON.stringify({ action: 'setCompanyProjects', ...payload }),
+            redirect: 'follow',
+        });
+    } catch (err) {
+        console.warn('Company projects post failed:', err);
+    }
+}
+
+// --- Store Initiatives ---
+
+function renderStoreInitiatives() {
+    const store      = sessionStorage.getItem('speeksUserStore') || '';
+    const listEl     = document.getElementById('siItemsList');
+    if (!listEl) return;
+
+    const data        = getStoreInitiatives(store);
+    const initiatives = data?.initiatives || [];
+
+    if (!initiatives.length) {
+        listEl.innerHTML = '<div class="status-message" style="padding: 8px 0; font-size: 12px;">No store initiatives set.</div>';
+        return;
+    }
+
+    let html = '';
+    initiatives.forEach(item => {
+        html += `
+        <div class="si-item">
+            <span class="mgb-goal-title">${escapeHtml(item.title)}</span>
+            ${item.description ? `<span class="mgb-goal-desc">${escapeHtml(item.description)}</span>` : ''}
+        </div>`;
+    });
+    listEl.innerHTML = html;
+}
+
+let _editingInitiativesForStore = null;
+
+function openEditStoreInitiativesModal(storeOverride) {
+    _editingInitiativesForStore = storeOverride || sessionStorage.getItem('speeksUserStore') || '';
+    const initiatives = getStoreInitiatives(_editingInitiativesForStore)?.initiatives || [];
+    const list        = document.getElementById('editStoreInitiativesList');
+    const titleEl     = document.getElementById('editStoreInitiativesTitle');
+    if (titleEl) titleEl.textContent = `${_editingInitiativesForStore} Initiatives`;
+    if (!list) return;
+    list.innerHTML = '';
+    if (initiatives.length === 0) { addStoreInitiativeRow(); } else { initiatives.forEach(i => addStoreInitiativeRow(i)); }
+    _updateAddStoreInitiativeBtn();
+    toggleModal('editStoreInitiativesModal');
+}
+
+function addStoreInitiativeRow(existing) {
+    const list = document.getElementById('editStoreInitiativesList');
+    if (!list || list.children.length >= 6) return;
+    const row = document.createElement('div');
+    row.className = 'edit-goal-row';
+    row.innerHTML = `
+        <div class="edit-goal-inner">
+            <input type="text" class="form-input-lg edit-si-title" style="margin:0; font-size:13px;" placeholder="Initiative title (e.g. Test new shelf layout)" value="${escapeHtml(existing?.title || '')}">
+            <input type="text" class="form-input-lg edit-si-desc" style="margin:0; font-size:12px;" placeholder="Description (optional)" value="${escapeHtml(existing?.description || '')}">
+        </div>
+        <button class="edit-goal-remove-btn" onclick="this.closest('.edit-goal-row').remove(); _updateAddStoreInitiativeBtn();" title="Remove">✕</button>`;
+    list.appendChild(row);
+    _updateAddStoreInitiativeBtn();
+}
+
+function _updateAddStoreInitiativeBtn() {
+    const list = document.getElementById('editStoreInitiativesList');
+    const btn  = document.getElementById('addStoreInitiativeRowBtn');
+    if (btn) btn.style.display = (list?.children.length ?? 0) >= 6 ? 'none' : '';
+}
+
+function saveStoreInitiatives() {
+    const store       = _editingInitiativesForStore || sessionStorage.getItem('speeksUserStore') || '';
+    const userName    = sessionStorage.getItem('speeksUserName') || 'Manager';
+    const initiatives = [];
+    document.querySelectorAll('#editStoreInitiativesList .edit-goal-row').forEach(row => {
+        const title       = row.querySelector('.edit-si-title')?.value.trim();
+        const description = row.querySelector('.edit-si-desc')?.value.trim();
+        if (!title) return;
+        initiatives.push({ title, description });
+    });
+    const payload = {
+        initiatives,
+        setBy:     userName,
+        updatedAt: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+    };
+    putStoreInitiatives(store, payload);
+    closeAllModals();
+    renderStoreInitiatives();
+    renderDistrictGoals();
+    _postStoreInitiativesToSheet(store, payload);
+}
+
+async function _postStoreInitiativesToSheet(store, payload) {
+    if (!MONTHLY_GOALS_URL) return;
+    try {
+        await fetch(MONTHLY_GOALS_URL, {
+            method:  'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body:    JSON.stringify({ action: 'setStoreInitiatives', store, ...payload }),
+            redirect: 'follow',
+        });
+    } catch (err) {
+        console.warn('Store initiatives post failed:', err);
+    }
+}
+
+// --- District Views ---
+
+function renderDistrictCompanyProjects() {
+    const container = document.getElementById('districtCompanyProjects');
+    if (!container) return;
+    const data     = getCompanyProjects();
+    const projects = data?.projects || [];
+
+    const itemsHtml = projects.length
+        ? projects.map(p => `<div class="dg-goal-mini" data-goal-title="${escapeHtml(p.title)}" data-goal-desc="${escapeHtml(p.description || '')}"><div class="dg-goal-mini-label">${escapeHtml(p.title)}</div></div>`).join('')
+        : '<div class="dg-no-goals">No company initiatives set</div>';
+
+    container.innerHTML = `
+        <div class="district-cp-section">
+            <div class="district-cp-header-row">
+                <span class="district-cp-header">Company Initiatives</span>
+                <button class="dg-edit-btn" onclick="openEditCompanyProjectsModal()">Edit ✏️</button>
+            </div>
+            <div class="district-cp-items">${itemsHtml}</div>
+        </div>`;
+}
+
+function renderDistrictInitiativesGrid() {
+    const panel     = document.getElementById('districtInitiativesPanel');
+    const container = document.getElementById('districtInitiativesGrid');
+    if (!container) return;
+
+    const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    const emojis = { OVL: '🟣', LEE: '🔵', WSP: '🟢', MPL: '🟠', BAL: '🔴' };
+    let hasAny = false;
+    let html   = '';
+
+    stores.forEach(store => {
+        const data  = getStoreInitiatives(store);
+        const items = data?.initiatives || [];
+        if (items.length) hasAny = true;
+        const inner = items.length
+            ? items.map(i => `<div class="dg-goal-mini" data-goal-title="${escapeHtml(i.title)}" data-goal-desc="${escapeHtml(i.description || '')}"><div class="dg-goal-mini-label">${escapeHtml(i.title)}</div></div>`).join('')
+            : '<div class="dg-no-goals">No initiatives set</div>';
         html += `<div class="dg-store-card"><div class="dg-store-header">${emojis[store]} ${store}</div>${inner}</div>`;
     });
+
     container.innerHTML = html;
+    if (panel) panel.style.display = hasAny ? 'block' : 'none';
+}
+
+// --- Sync from Sheet ---
+
+async function syncInitiativesFromSheet() {
+    if (!MONTHLY_GOALS_URL) return;
+    try {
+        const res  = await fetch(`${MONTHLY_GOALS_URL}?action=getAllInitiatives&t=${Date.now()}`);
+        const data = await res.json();
+        if (data.company) putCompanyProjects(data.company);
+        ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'].forEach(store => {
+            if (data[store]) putStoreInitiatives(store, data[store]);
+        });
+        renderCompanyProjectsBanner();
+        renderStoreInitiatives();
+        renderDistrictCompanyProjects();
+        renderDistrictInitiativesGrid();
+    } catch (err) {
+        console.warn('Initiatives sync failed:', err);
+    }
 }
 
 // --- MODAL: MANAGE ALERTS ---
