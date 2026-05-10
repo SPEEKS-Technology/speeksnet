@@ -371,21 +371,32 @@ function toggleIdeaModal() { toggleModal('ideaModal'); }
 
 function switchAnnTab(tab) {
     const isRecent = tab === 'recent';
-    
+    const isArchive = tab === 'archive';
+    const isPatchNotes = tab === 'patchnotes';
+
     const annC = document.getElementById('ann-container');
     if (annC) {
         annC.style.display = isRecent ? 'block' : 'none';
-        annC.classList.remove('hidden'); // Fixes the !important CSS override
+        annC.classList.remove('hidden');
     }
-    
+
     const archC = document.getElementById('archive-container');
     if (archC) {
-        archC.style.display = isRecent ? 'none' : 'block';
-        archC.classList.remove('hidden'); // Fixes the !important CSS override
+        archC.style.display = isArchive ? 'block' : 'none';
+        archC.classList.remove('hidden');
     }
-    
+
+    const pnC = document.getElementById('pn-container');
+    if (pnC) {
+        pnC.style.display = isPatchNotes ? 'block' : 'none';
+        pnC.classList.remove('hidden');
+        if (isPatchNotes) loadPatchNotes();
+    }
+
     document.getElementById('tab-recent').classList.toggle('active', isRecent);
-    document.getElementById('tab-archive').classList.toggle('active', !isRecent);
+    document.getElementById('tab-archive').classList.toggle('active', isArchive);
+    const pnTab = document.getElementById('tab-patchnotes');
+    if (pnTab) pnTab.classList.toggle('active', isPatchNotes);
 }
 
 // DEV TOOLS DROPDOWN GLOBAL TOGGLE
@@ -5937,61 +5948,41 @@ function buildPatchCardHTML(group, isLatest) {
 }
 
 async function loadPatchNotes() {
-    const latestEl   = document.getElementById('patchNotesLatest');
-    const archivedEl = document.getElementById('patchNotesArchived');
-    if (latestEl)   latestEl.innerHTML   = '<div class="pn-loading">Loading patch notes...</div>';
-    if (archivedEl) archivedEl.innerHTML = '<div class="pn-loading">Loading...</div>';
+    const listEl = document.getElementById('patchNotesList');
+    if (listEl) listEl.innerHTML = '<div class="pn-loading">Loading patch notes...</div>';
 
     try {
         const response = await fetch(`${PATCH_NOTES_URL}?v=${Date.now()}`);
         const data = await response.json();
         renderPatchNotes(data);
     } catch (e) {
-        if (latestEl) latestEl.innerHTML = '<div class="pn-loading">Failed to load patch notes.</div>';
+        if (listEl) listEl.innerHTML = '<div class="pn-loading">Failed to load patch notes.</div>';
     }
 }
 
 function renderPatchNotes(data) {
-    const latestEl   = document.getElementById('patchNotesLatest');
-    const archivedEl = document.getElementById('patchNotesArchived');
-    if (!latestEl) return;
+    const listEl = document.getElementById('patchNotesList');
+    if (!listEl) return;
 
     const { entries } = data;
     if (!entries || !entries.length) {
-        latestEl.innerHTML = '<div class="pn-loading">No patch notes available.</div>';
-        if (archivedEl) archivedEl.innerHTML = '<div class="pn-loading">No archived patch notes.</div>';
+        listEl.innerHTML = '<div class="pn-loading">No patch notes available.</div>';
         return;
     }
 
     const sorted = buildPatchGroups(entries);
-    latestEl.innerHTML   = sorted.length > 0 ? buildPatchCardHTML(sorted[0], true) : '<div class="pn-loading">No patch notes available.</div>';
-    if (archivedEl) {
-        archivedEl.innerHTML = sorted.length > 1
-            ? sorted.slice(1).map(g => buildPatchCardHTML(g, false)).join('')
-            : '<div class="pn-loading">No archived patch notes yet.</div>';
-    }
-}
-
-function switchPatchViewTab(tab) {
-    const isLatest = tab === 'latest';
-    const latestEl   = document.getElementById('patchNotesLatest');
-    const archivedEl = document.getElementById('patchNotesArchived');
-    if (latestEl)   latestEl.style.display   = isLatest ? '' : 'none';
-    if (archivedEl) archivedEl.style.display = isLatest ? 'none' : '';
-    document.getElementById('pnvTab-latest').classList.toggle('active',   isLatest);
-    document.getElementById('pnvTab-archived').classList.toggle('active', !isLatest);
+    listEl.innerHTML = sorted.map((g, i) => buildPatchCardHTML(g, i === 0)).join('');
 }
 
 function togglePatchNotes() {
-    const modal = document.getElementById('patchNotesModal');
+    const modal = document.getElementById('notifDropdown');
     if (!modal) return;
     const isOpen = modal.classList.contains('show');
     closeAllModals();
     if (!isOpen) {
         modal.classList.add('show');
         lockAndBlurScreen();
-        switchPatchViewTab('latest');
-        loadPatchNotes();
+        switchAnnTab('patchnotes');
     }
 }
 

@@ -300,6 +300,7 @@
                 <div class="notif-tabs">
                     <button id="tab-recent" class="tab-btn active" onclick="switchAnnTab('recent')">Recent</button>
                     <button id="tab-archive" class="tab-btn" onclick="switchAnnTab('archive')">Archived</button>
+                    <button id="tab-patchnotes" class="tab-btn" onclick="switchAnnTab('patchnotes')">📋 Patch Notes</button>
                 </div>
                 <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
             </div>
@@ -311,6 +312,11 @@
     </div>
     <div id="archive-container" class="notif-content hidden">
         <div class="status-message">Syncing Data...</div>
+    </div>
+    <div id="pn-container" class="notif-content hidden">
+        <div id="patchNotesList" class="pn-modal-body">
+            <div class="pn-loading">Loading patch notes...</div>
+        </div>
     </div>
 </div>
 
@@ -1064,27 +1070,6 @@
 </div>
 
 </main>
-
-<!-- PATCH NOTES FAB -->
-<button class="pn-fab" onclick="togglePatchNotes()" title="Patch Notes">📋</button>
-
-<!-- PATCH NOTES VIEW MODAL -->
-<div class="modal-menu manage-menu" id="patchNotesModal">
-    <div class="modal-header">
-        <h3>📋 Patch Notes</h3>
-        <div class="notif-tabs">
-            <button id="pnvTab-latest" class="tab-btn active" onclick="switchPatchViewTab('latest')">Latest</button>
-            <button id="pnvTab-archived" class="tab-btn" onclick="switchPatchViewTab('archived')">Archived</button>
-        </div>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
-    </div>
-    <div class="pn-modal-body" id="patchNotesLatest">
-        <div class="pn-loading">Loading patch notes...</div>
-    </div>
-    <div class="pn-modal-body" id="patchNotesArchived" style="display:none;">
-        <div class="pn-loading">Loading...</div>
-    </div>
-</div>
 
 <!-- PATCH NOTES MANAGE MODAL (SPEEKS Tool) -->
 <div class="modal-menu manage-menu" id="patchNotesManageModal">
