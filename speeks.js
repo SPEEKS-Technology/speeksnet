@@ -5078,7 +5078,10 @@ function _resetToCurrentMonth() {
     _selectedGoalDate = null;
     _closePrevMonths();
     const editBtn = document.getElementById('giEditGoalsBtn');
-    if (editBtn) editBtn.style.display = '';
+    if (editBtn) {
+        const isManager = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().replace(/\s+/g, '-') === 'manager';
+        editBtn.style.setProperty('display', isManager ? 'block' : 'none', 'important');
+    }
     renderMonthlyGoalsBanner();
 }
 
@@ -5127,15 +5130,16 @@ window.selectGoalMonth = async function(ym) {
     if (dropdown) dropdown.classList.remove('open');
 
     const nowYm = _mgbYearMonth();
+    const isManager = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().replace(/\s+/g, '-') === 'manager';
     if (ym === nowYm) {
         _selectedGoalDate = null;
         if (btn) btn.classList.remove('active');
-        if (editBtn) editBtn.style.display = '';
+        if (editBtn) editBtn.style.setProperty('display', isManager ? 'block' : 'none', 'important');
         renderMonthlyGoalsBanner();
         return;
     }
 
-    if (editBtn) editBtn.style.display = 'none';
+    if (editBtn) editBtn.style.setProperty('display', 'none', 'important');
 
     const [year, month] = ym.split('-').map(Number);
     _selectedGoalDate = new Date(year, month - 1, 1);
