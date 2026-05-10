@@ -5932,7 +5932,7 @@ function buildPatchGroups(entries) {
 }
 
 function buildPatchCardHTML(group, isLatest) {
-    const versionLabel = 'v' + group.title.replace(/^v/i, '');
+    const versionLabel = group.title;
     const catOrder = ['New Features', 'Improvements', 'Bug Fixes'];
     const catIcons = { 'New Features': '✨', 'Improvements': '🚀', 'Bug Fixes': '🔧' };
     const sections = catOrder.map(cat => {
@@ -6119,7 +6119,7 @@ function renderPatchNotesEditor(data) {
     const catBadge = { 'New Features': 'pn-badge-new', 'Improvements': 'pn-badge-improved', 'Bug Fixes': 'pn-badge-fixed' };
 
     list.innerHTML = sorted.map(group => {
-        const vLabel = 'v' + group.title.replace(/^v/i, '');
+        const vLabel = group.title;
         return `
             <div class="pne-group">
                 <div class="pne-group-header">
