@@ -52,6 +52,7 @@
             <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleManageDocs()">Manage Policies</a>
             <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleManageHotkeys()">System Hotkeys</a>
             <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="togglePatchNotesManage()">Patch Notes</a>
+            <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleManageAwards()">Monthly Awards</a>
         </div>
       </div>
 
@@ -1076,6 +1077,68 @@
         <div style="display:flex;align-items:center;gap:12px;">
             <button class="btn-primary" onclick="savePatchEntry()" id="pnSaveEntryBtn">SAVE ALL</button>
             <span class="pn-save-status" id="pnEntrySaveStatus"></span>
+        </div>
+    </div>
+</div>
+
+<!-- ===== MANAGE MONTHLY AWARDS MODAL ===== -->
+<div class="modal-menu manage-menu" id="manageAwardsDropdown">
+    <div class="modal-header">
+        <h3>Monthly Awards</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+
+    <div class="manage-content" id="awardsTabEdit">
+        <div class="awards-form-month-row">
+            <div style="flex:1;">
+                <label class="form-label-caps">Month</label>
+                <input type="text" id="awardsMonthInput" class="form-input-lg" placeholder="e.g. May 2026">
+            </div>
+            <div style="flex:2;">
+                <label class="form-label-caps">Award Video URL (Google Drive share link)</label>
+                <input type="text" id="awardsVideoInput" class="form-input-lg" placeholder="https://drive.google.com/file/d/.../view?usp=sharing">
+            </div>
+        </div>
+
+        <div class="awards-form-grid">
+            <div class="awards-form-award-block">
+                <div class="awards-form-award-title">🥇 The Beyond The Benchmark Award</div>
+                <label class="form-label-caps">Winning Store</label>
+                <select id="award1Store" class="form-input-lg">
+                    <option value="">— Select Store —</option>
+                    <option value="OVL">🟣 OVL</option><option value="LEE">🔵 LEE</option><option value="WSP">🟢 WSP</option><option value="MPL">🟠 MPL</option><option value="BAL">🔴 BAL</option>
+                </select>
+            </div>
+            <div class="awards-form-award-block">
+                <div class="awards-form-award-title">🥈 The Scroll Stopper Award</div>
+                <label class="form-label-caps">Winning Store</label>
+                <select id="award2Store" class="form-input-lg">
+                    <option value="">— Select Store —</option>
+                    <option value="OVL">🟣 OVL</option><option value="LEE">🔵 LEE</option><option value="WSP">🟢 WSP</option><option value="MPL">🟠 MPL</option><option value="BAL">🔴 BAL</option>
+                </select>
+            </div>
+            <div class="awards-form-award-block">
+                <div class="awards-form-award-title">🥉 The Brand Beacon Award</div>
+                <label class="form-label-caps">Winning Store</label>
+                <select id="award3Store" class="form-input-lg">
+                    <option value="">— Select Store —</option>
+                    <option value="OVL">🟣 OVL</option><option value="LEE">🔵 LEE</option><option value="WSP">🟢 WSP</option><option value="MPL">🟠 MPL</option><option value="BAL">🔴 BAL</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <div class="manage-content" id="awardsTabHistory" style="display:none;">
+        <div id="awardsHistoryList" class="awards-history-list">
+            <div class="status-message">Loading history...</div>
+        </div>
+    </div>
+
+    <div class="manage-footer" id="awardsEditFooter">
+        <span id="awardsSaveStatus" class="pn-save-status"></span>
+        <div style="display:flex;gap:10px;align-items:center;">
+            <button class="btn-ghost" onclick="clearAwardsForm()">↺ New Month</button>
+            <button class="btn-primary" id="saveAwardsBtn" onclick="saveAwards()">Save Awards</button>
         </div>
     </div>
 </div>

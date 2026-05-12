@@ -2129,7 +2129,263 @@ async function saveManageRecords() {
     }
 }
 
-// --- 15. MODULE: QUICK MESSAGES ---
+// --- 15. MODULE: MONTHLY AWARDS ---
+let awardsCache = null;
+let currentAwardVideoUrl = null;
+
+const STORE_EMOJI_MAP = { OVL: '🟣', LEE: '🔵', WSP: '🟢', MPL: '🟠', BAL: '🔴' };
+const AWARD_NAMES = ['The Beyond The Benchmark Award', 'The Scroll Stopper Award', 'The Brand Beacon Award'];
+const AWARD_EMOJIS = ['🎯', '👀', '💡'];
+const AWARD_DISPLAY_LINES = [['The Beyond The', 'Benchmark Award'], ['The Scroll', 'Stopper Award'], ['The Brand', 'Beacon Award']];
+
+function toVideoEmbed(url) {
+    if (!url) return null;
+    // Google Drive file link
+    const driveFile = url.match(/drive\.google\.com\/file\/d\/([A-Za-z0-9_-]+)/);
+    if (driveFile) return { type: 'iframe', src: `https://drive.google.com/file/d/${driveFile[1]}/preview` };
+    const driveOpen = url.match(/drive\.google\.com\/open\?id=([A-Za-z0-9_-]+)/);
+    if (driveOpen) return { type: 'iframe', src: `https://drive.google.com/file/d/${driveOpen[1]}/preview` };
+    // Direct video file (MP4, WebM, etc.)
+    if (/\.(mp4|webm|ogg)(\?|$)/i.test(url)) return { type: 'video', src: url };
+    // YouTube fallback
+    const yt = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+    if (yt) return { type: 'iframe', src: `https://www.youtube.com/embed/${yt[1]}` };
+    return null;
+}
+
+function buildVideoHtml(url) {
+    const v = toVideoEmbed(url);
+    if (!v) return '';
+    if (v.type === 'video') return `<video controls src="${v.src}" style="width:100%;height:100%;display:block;"></video>`;
+    return `<iframe src="${v.src}" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen loading="lazy" style="width:100%;height:100%;display:block;"></iframe>`;
+}
+
+async function fetchAwardsData() {
+    try {
+        const res = await fetch(`${RECORDS_URL}?type=awards&v=${Date.now()}`);
+        const raw = await res.json();
+        // Deduplicate by month — later rows win (most recent save for a month)
+        const byMonth = new Map();
+        raw.forEach(a => byMonth.set(a.month, a));
+        awardsCache = Array.from(byMonth.values());
+        renderAwards();
+        renderAwardVideos();
+    } catch (e) {}
+}
+
+function renderAwards() {
+    const container = document.getElementById('awards-cards-container');
+    const monthLabel = document.getElementById('awards-month-label');
+    if (!container) return;
+
+    if (!awardsCache || awardsCache.length === 0) {
+        container.innerHTML = '<div class="status-message">No awards data yet.</div>';
+        return;
+    }
+
+    const latest = awardsCache[awardsCache.length - 1];
+    if (monthLabel) monthLabel.textContent = latest.month || '';
+
+    const winners = [latest.winner1, latest.winner2, latest.winner3];
+    const hasAny = winners.some(w => w);
+    if (!hasAny) {
+        container.innerHTML = '<div class="status-message">No award winners set for this month yet.</div>';
+        return;
+    }
+
+    container.innerHTML = AWARD_NAMES.map((name, i) => {
+        const store = winners[i];
+        const [line1, line2] = AWARD_DISPLAY_LINES[i];
+        return `
+        <div class="award-card-trophy-wrap">
+            <div class="award-card">
+                <div class="award-card-header">
+                    <div class="award-card-medal">${AWARD_EMOJIS[i]}</div>
+                    <div class="award-card-name">${escapeHtml(line1)}<br>${escapeHtml(line2)}</div>
+                </div>
+                <div class="award-card-body">
+                    <div class="award-card-winner">${store ? `${STORE_EMOJI_MAP[store] || ''} ${store}` : '<span style="color:#94a3b8;">—</span>'}</div>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+}
+
+function renderAwardVideos() {
+    const btn = document.getElementById('awards-video-btn');
+    const latest = (awardsCache || []).slice(-1)[0];
+    currentAwardVideoUrl = (latest && latest.videoUrl) ? latest.videoUrl : null;
+    if (btn) btn.style.display = currentAwardVideoUrl ? '' : 'none';
+}
+
+function openAwardVideo() {
+    if (!currentAwardVideoUrl) return;
+    const overlay = document.getElementById('awardVideoOverlay');
+    const content = document.getElementById('awardVideoContent');
+    if (!overlay || !content) return;
+    content.innerHTML = buildVideoHtml(currentAwardVideoUrl);
+    overlay.style.display = 'flex';
+}
+
+function closeAwardVideo() {
+    const overlay = document.getElementById('awardVideoOverlay');
+    const content = document.getElementById('awardVideoContent');
+    if (overlay) overlay.style.display = 'none';
+    if (content) content.innerHTML = '';
+}
+
+function toggleManageAwards() {
+    const dropdown = document.getElementById('manageAwardsDropdown');
+    if (!dropdown) return;
+
+    const isOpen = dropdown.classList.contains('show');
+    closeAllModals();
+
+    if (!isOpen) {
+        dropdown.classList.add('show');
+        lockAndBlurScreen();
+
+        const editTabBtn = document.getElementById('awards-tab-edit');
+        if (editTabBtn) editTabBtn.style.display = '';
+        const editFooter = document.getElementById('awardsEditFooter');
+        if (editFooter) editFooter.style.display = '';
+
+        switchAwardsTab('edit');
+
+        if (!awardsCache) {
+            fetchAwardsData().then(prefillAwardsForm);
+        } else {
+            prefillAwardsForm();
+        }
+    }
+}
+
+function prefillAwardsForm() {
+    const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+    if (awardsCache && awardsCache.length > 0) {
+        const latest = awardsCache[awardsCache.length - 1];
+        setVal('awardsMonthInput', latest.month);
+        setVal('awardsVideoInput', latest.videoUrl);
+        setVal('award1Store', latest.winner1);
+        setVal('award2Store', latest.winner2);
+        setVal('award3Store', latest.winner3);
+    } else {
+        setVal('awardsMonthInput', new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }));
+    }
+}
+
+function toggleAwardsHistory() {
+    const dropdown = document.getElementById('manageAwardsDropdown');
+    if (!dropdown) return;
+
+    const isOpen = dropdown.classList.contains('show');
+    closeAllModals();
+
+    if (!isOpen) {
+        dropdown.classList.add('show');
+        lockAndBlurScreen();
+
+        const editTabBtn = document.getElementById('awards-tab-edit');
+        if (editTabBtn) editTabBtn.style.display = 'none';
+        const editFooter = document.getElementById('awardsEditFooter');
+        if (editFooter) editFooter.style.display = 'none';
+
+        if (!awardsCache) {
+            fetchAwardsData().then(() => switchAwardsTab('history'));
+        } else {
+            switchAwardsTab('history');
+        }
+    }
+}
+
+function switchAwardsTab(tab) {
+    document.getElementById('awardsTabEdit').style.display = tab === 'edit' ? '' : 'none';
+    document.getElementById('awardsTabHistory').style.display = tab === 'history' ? '' : 'none';
+    document.getElementById('awards-tab-edit')?.classList.toggle('active', tab === 'edit');
+    document.getElementById('awards-tab-history')?.classList.toggle('active', tab === 'history');
+    if (tab === 'history') renderAwardsHistory();
+}
+
+function renderAwardsHistory() {
+    const list = document.getElementById('awardsHistoryList');
+    if (!list) return;
+
+    if (!awardsCache || awardsCache.length === 0) {
+        list.innerHTML = '<div class="status-message">No history yet.</div>';
+        return;
+    }
+
+    const winnerKeys = ['winner1', 'winner2', 'winner3'];
+
+    list.innerHTML = [...awardsCache].reverse().map(a => `
+        <div class="awards-history-entry">
+            <div class="awards-history-month">${escapeHtml(a.month)}</div>
+            ${AWARD_NAMES.map((name, i) => {
+                const store = a[winnerKeys[i]];
+                return `<div class="awards-history-row">
+                    <span class="awards-history-medal">${AWARD_EMOJIS[i]}</span>
+                    <span class="awards-history-awardname">${escapeHtml(name)}</span>
+                    <span class="awards-history-winner">${store ? `${STORE_EMOJI_MAP[store] || ''} ${store}` : '—'}</span>
+                </div>`;
+            }).join('')}
+            ${a.videoUrl ? `<div class="awards-history-video-link"><a href="${escapeHtml(a.videoUrl)}" target="_blank">🎬 Watch Video</a></div>` : ''}
+        </div>`).join('');
+}
+
+function clearAwardsForm() {
+    ['awardsMonthInput', 'awardsVideoInput', 'award1Store', 'award2Store', 'award3Store'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    const status = document.getElementById('awardsSaveStatus');
+    if (status) status.textContent = '';
+}
+
+async function saveAwards() {
+    const btn = document.getElementById('saveAwardsBtn');
+    const status = document.getElementById('awardsSaveStatus');
+    const getVal = id => (document.getElementById(id)?.value || '').trim();
+
+    const month = getVal('awardsMonthInput');
+    if (!month) { alert('Please enter the month (e.g. May 2026).'); return; }
+
+    btn.textContent = 'Saving...';
+    btn.disabled = true;
+
+    const payload = {
+        type: 'awards',
+        month,
+        winner1: getVal('award1Store'),
+        winner2: getVal('award2Store'),
+        winner3: getVal('award3Store'),
+        videoUrl: getVal('awardsVideoInput'),
+    };
+
+    try {
+        await fetch(RECORDS_URL, {
+            method: 'POST', mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify(payload)
+        });
+
+        if (!awardsCache) awardsCache = [];
+        const idx = awardsCache.findIndex(a => a.month === month);
+        if (idx >= 0) awardsCache[idx] = { ...payload };
+        else awardsCache.push({ ...payload });
+
+        renderAwards();
+        renderAwardVideos();
+        closeAllModals();
+    } catch (e) {
+        if (status) status.textContent = '✗ Error saving.';
+    } finally {
+        btn.textContent = 'Save Awards';
+        btn.disabled = false;
+    }
+}
+
+// --- 16. MODULE: QUICK MESSAGES ---
 let quickMsgCache = null;
 let currentQMTab = 'common';
 
@@ -4299,6 +4555,7 @@ function initDashboardData() {
 
         setTimeout(fetchKPIData, 700); 
         setTimeout(fetchRecordsData, 800);
+        setTimeout(fetchAwardsData, 900);
         setTimeout(fetchChampions, 850);
         setTimeout(fetchDmGoalsData, 1000);
         setTimeout(fetchAndRenderEmployeeGoals, 1100);
