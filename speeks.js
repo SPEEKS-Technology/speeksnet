@@ -4535,7 +4535,8 @@ function renderKpiChart(allData, metric) {
         }
 
         // 2. Catch literal zeros. This forces closed stores/employees to be completely blank instead of flatlining at 0.
-        if (strVal === "0" || strVal === "0%" || strVal === "0.00%" || strVal === "0.0%" || strVal === "0:00") {
+        // Exception: nodeals — 0 is a valid meaningful result (employee had no bad deals that week).
+        if (metric !== 'nodeals' && (strVal === "0" || strVal === "0%" || strVal === "0.00%" || strVal === "0.0%" || strVal === "0:00")) {
             return null;
         }
 
@@ -4562,8 +4563,8 @@ function renderKpiChart(allData, metric) {
         }
         
         let p = parseNum(v);
-        if (p === 0) return null; // Final failsafe for any parsed zero
-        
+        if (p === 0 && metric !== 'nodeals') return null; // Final failsafe — zero means no data except for no-deals
+
         return (isPct && p <= 1.5 && p >= -1.5) ? p * 100 : p;
     };
 
@@ -4698,8 +4699,8 @@ function renderKpiChart(allData, metric) {
             yMin = Math.max(0, Math.floor(mn) - 1);
             yMax = Math.ceil(mx) + 1;
         } else {
-            yMin = 0; 
-            yMax = Math.ceil(mx * 1.2);
+            yMin = 0;
+            yMax = Math.max(1, Math.ceil(mx * 1.2));
         }
     }
 
