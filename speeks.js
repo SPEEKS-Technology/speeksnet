@@ -2438,15 +2438,18 @@ async function fetchScorecardData() {
         const displayScore = latestScore * 2;
         const rawDate = storeData.date || 'Recent';
 
+        const formatWeekOf = (d) => {
+            const p = new Date(d);
+            if (isNaN(p.getTime())) return String(d);
+            const diff = p.getUTCDay() === 0 ? -6 : 1 - p.getUTCDay();
+            const mon = new Date(p);
+            mon.setUTCDate(p.getUTCDate() + diff);
+            return "Week of " + mon.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric' });
+        };
+
         let displayDate = rawDate;
         const parsedDate = new Date(rawDate);
-        if (!isNaN(parsedDate.getTime())) {
-            const day = parsedDate.getUTCDay();
-            const diffToMonday = day === 0 ? -6 : 1 - day;
-            const mondayDate = new Date(parsedDate);
-            mondayDate.setUTCDate(parsedDate.getUTCDate() + diffToMonday);
-            displayDate = "Week of " + mondayDate.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric' });
-        }
+        if (!isNaN(parsedDate.getTime())) displayDate = formatWeekOf(rawDate);
         let scoreColor = 'var(--red-alert)';
         if (displayScore > 8) scoreColor = 'var(--sage-professional)';
         else if (displayScore >= 6) scoreColor = 'var(--idea-gold)';
@@ -2482,10 +2485,12 @@ async function fetchScorecardData() {
                 if (bAvgNum >= 8) { bBg = '#d1fae5'; bColor = '#059669'; }
                 else if (bAvgNum >= 6) { bBg = '#fef3c7'; bColor = '#d97706'; }
                 else { bBg = '#fee2e2'; bColor = '#dc2626'; }
+                const bDateStr = bucket.sectionDate ? formatWeekOf(bucket.sectionDate) : '';
                 breakdownHtml += `<div style="margin-bottom: 12px;">
-                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-                        <span style="font-size: 9px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">${bucket.name}</span>
-                        <span style="font-size: 10px; font-weight: 900; background: ${bBg}; color: ${bColor}; padding: 2px 7px; border-radius: 6px;">${bAvgNum.toFixed(1)}</span>
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; min-width: 0;">
+                        <span style="font-size: 9px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;">${bucket.name}</span>
+                        <span style="font-size: 10px; font-weight: 900; background: ${bBg}; color: ${bColor}; padding: 2px 7px; border-radius: 6px; flex-shrink: 0;">${bAvgNum.toFixed(1)}</span>
+                        ${bDateStr ? `<span style="font-size: 9px; color: #94a3b8; font-style: italic; white-space: nowrap; flex-shrink: 0;">${bDateStr}</span>` : ''}
                     </div>
                     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;">
                         ${bucket.categories.map(renderCategoryCard).join('')}
@@ -5903,20 +5908,25 @@ const SCORECARD_BUCKETS = [
 function openScorecardModal() {
     // 1. Let your native portal handle the animations and overlays!
     toggleModal('scorecardSubmitModal');
-    
+
     // 2. Auto-fill today's date
     const dateInput = document.getElementById('dm-score-date');
     if (dateInput) dateInput.valueAsDate = new Date();
-    
-    // 3. Generate the inputs grouped by bucket
+
+    // 3. Generate the inputs grouped by bucket, each with a section toggle
     const container = document.getElementById('dm-category-inputs');
     if (container) {
         let html = '';
         let catIndex = 0;
         SCORECARD_BUCKETS.forEach((bucket, bIdx) => {
-            html += `<div style="grid-column: 1 / -1; margin-top: ${bIdx > 0 ? '8px' : '0'}; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0;">
+            html += `<div style="grid-column: 1 / -1; margin-top: ${bIdx > 0 ? '8px' : '0'}; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between;">
                 <span style="font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">${bucket.label}</span>
-            </div>`;
+                <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 10px; color: #94a3b8; font-weight: 700;">
+                    <input type="checkbox" id="section-toggle-${bIdx}" checked onchange="toggleScorecardSection(${bIdx})" style="cursor: pointer; width: 13px; height: 13px;">
+                    Update
+                </label>
+            </div>
+            <div id="section-inputs-${bIdx}" style="display: contents;">`;
             for (let i = 0; i < bucket.count; i++) {
                 const cat = SCORECARD_CATEGORIES[catIndex];
                 html += `<div style="display: flex; flex-direction: column;">
@@ -5933,9 +5943,16 @@ function openScorecardModal() {
                 </div>`;
                 catIndex++;
             }
+            html += `</div>`;
         });
         container.innerHTML = html;
     }
+}
+
+function toggleScorecardSection(bIdx) {
+    const enabled = document.getElementById(`section-toggle-${bIdx}`).checked;
+    const wrapper = document.getElementById(`section-inputs-${bIdx}`);
+    if (wrapper) wrapper.style.display = enabled ? 'contents' : 'none';
 }
 
 // We don't even need a custom close function anymore!
@@ -5949,43 +5966,66 @@ function submitNewScorecard() {
     const store = document.getElementById('dm-store-select').value;
     const date = document.getElementById('dm-score-date').value;
     const btn = document.getElementById('submitScorecardBtn');
-    
-    // Gather all the scores from the dropdowns
-    let scores = [];
-    let isComplete = true;
-    for (let i = 0; i < SCORECARD_CATEGORIES.length; i++) {
-        let val = document.getElementById(`score-input-${i}`).value;
-        if (val === "") isComplete = false;
-        scores.push(val);
-    }
 
-    if (!isComplete) {
-        alert("Please fill out all categories before submitting.");
+    // Determine which sections are enabled
+    const enabledSections = SCORECARD_BUCKETS.map((b, i) => {
+        const toggle = document.getElementById(`section-toggle-${i}`);
+        return toggle ? toggle.checked : true;
+    });
+
+    const isPartial = !enabledSections.every(e => e);
+
+    if (!enabledSections.some(e => e)) {
+        alert("Please enable at least one section to update.");
         return;
     }
+
+    // Gather scores per section — blanks are allowed (Apps Script carries previous value forward)
+    let catIndex = 0;
+    let sectionData = [];
+
+    SCORECARD_BUCKETS.forEach((bucket, bIdx) => {
+        const enabled = enabledSections[bIdx];
+        const scores = [];
+        for (let i = 0; i < bucket.count; i++) {
+            const val = document.getElementById(`score-input-${catIndex}`).value;
+            scores.push(val === '' ? null : parseFloat(val));
+            catIndex++;
+        }
+        if (enabled) sectionData.push({ bucketIndex: bIdx, scores: scores });
+    });
 
     btn.innerText = "Saving...";
     btn.style.opacity = "0.7";
     btn.disabled = true;
 
-    const payload = {
-        action: 'submit_scorecard',
-        store: store,
-        date: date,
-        scores: scores
-    };
+    let payload;
+    if (isPartial) {
+        payload = {
+            action: 'submit_scorecard',
+            store: store,
+            date: date,
+            partial: true,
+            sections: sectionData
+        };
+    } else {
+        payload = {
+            action: 'submit_scorecard',
+            store: store,
+            date: date,
+            scores: sectionData.flatMap(s => s.scores)
+        };
+    }
 
-    // Fire the data to Apps Script!
     fetch(SCORECARD_URL, {
-        method: 'POST', 
+        method: 'POST',
         mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload)
     }).then(() => {
         btn.innerText = "Saved Successfully!";
         btn.style.background = "var(--sage-professional)";
-        
-        // Refresh the widget if they are looking at it, then close modal
+
         setTimeout(() => {
             if (typeof fetchScorecardData === 'function') fetchScorecardData();
             closeScorecardModal();
