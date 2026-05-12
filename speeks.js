@@ -375,11 +375,12 @@ function markAnnouncementRead(rowId) {
             card.remove();
             const container = document.getElementById('ann-container');
             if (container && !container.querySelector('.notif-item[data-ann-id]')) {
-                container.innerHTML = '<div style="padding: 20px; color:#999; text-align:center;">No recent announcements</div>';
                 const badge = document.getElementById('notifBadge');
                 if (badge) { badge.style.display = 'none'; badge.classList.remove('active'); }
                 localStorage.removeItem('speeksUnreadAnnouncements_' + cleanUser);
             }
+            // Reload both tabs so the item appears in Archive immediately
+            loadCMS();
         }, { once: true });
     }
 }
@@ -532,6 +533,10 @@ async function pollReactions() {
         const currentUser = sessionStorage.getItem('speeksUserName');
         const cleanUser = currentUser ? String(currentUser).trim().toLowerCase() : null;
         const availableEmojis = ['👍', '🎉', '👀', '🔥', '🫡', '💵'];
+
+        // If any announcement isn't rendered yet, a new one was posted — reload the full list
+        const hasNew = data.announcements.some(item => !document.getElementById(`reactions_${item.rowId}`));
+        if (hasNew) { loadCMS(); return; }
 
         data.announcements.forEach(item => {
             const annId = item.rowId;
