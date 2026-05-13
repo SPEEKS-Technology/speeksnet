@@ -26,7 +26,7 @@
   <div class="nav-right">
     <div class="user-profile-nav">
 
-      <div class="dev-dropdown-container dynamic-module-flex role-district-manager role-ceo role-tom" id="devDropdown">
+      <div class="dev-dropdown-container dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" id="devDropdown">
         <button class="dev-workspace-btn" id="devWorkspaceBtn" onclick="window.toggleDevDropdown(event)">
           <svg class="lock-icon text-gold" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
@@ -39,9 +39,9 @@
         </button>
 
         <div class="dev-dropdown-menu">
-          <a class="dev-dropdown-link dynamic-module-block role-district-manager role-ceo role-tom" onclick="toggleManageAnnouncements()">Announcements</a>
+          <a class="dev-dropdown-link dynamic-module-block role-district-manager role-ceo role-tom role-owner-manager" onclick="toggleManageAnnouncements()">Announcements</a>
           <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleSendCommentModal()">Send Store Comment</a>
-          <a class="dev-dropdown-link dynamic-module-block role-district-manager role-ceo" onclick="toggleManageUsers()">User Permissions</a>
+          <a class="dev-dropdown-link dynamic-module-block role-district-manager role-ceo role-owner-manager" onclick="toggleManageUsers()">User Permissions</a>
           <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleManageAlerts()">Performance Metrics</a>
           <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleManageRecords()">Company Records</a>
           <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="openScorecardModal()">Submit Scorecard</a>
@@ -76,12 +76,12 @@
 </header>
 
 <div class="nav-panel-tabs">
-    <button class="gi-nav-toggle dynamic-module-flex role-manager role-employee role-training" onclick="toggleGoalsPanel()" title="Goals &amp; Initiatives">
+    <button class="gi-nav-toggle dynamic-module-flex role-manager role-owner-manager role-employee role-training" onclick="toggleGoalsPanel()" title="Goals &amp; Initiatives">
         <span style="font-size: 14px; line-height: 1;">🎯</span>
         <span>Goals &amp; Initiatives</span>
         <svg class="gi-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
-    <button class="cl-nav-toggle dynamic-module-flex role-manager role-district-manager" onclick="toggleChecklistPanel(event); loadChecklist();" title="Checklist">
+    <button class="cl-nav-toggle dynamic-module-flex role-manager role-owner-manager role-district-manager" onclick="toggleChecklistPanel(event); loadChecklist();" title="Checklist">
         <span style="font-size: 14px; line-height: 1;">📋</span>
         <span>Checklist</span>
         <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
@@ -162,7 +162,7 @@
                 <button id="qm-tab-common" class="tab-btn active" onclick="switchQMTab('common')">Common</button>
                 <button id="qm-tab-nodeals" class="tab-btn" onclick="switchQMTab('nodeals')">No Deals</button>
                 <button id="qm-tab-reviews" class="tab-btn" onclick="switchQMTab('reviews')">Reviews</button>
-                <button id="qm-tab-networking" class="tab-btn dynamic-module-block role-district-manager role-manager" onclick="switchQMTab('networking')">Networking</button>
+                <button id="qm-tab-networking" class="tab-btn dynamic-module-block role-district-manager role-manager role-owner-manager" onclick="switchQMTab('networking')">Networking</button>
             </div>
             <button class="modal-close-btn" onclick="closeAllModals(); document.getElementById('quickMsgDropdown').classList.remove('show');">✖</button>
         </div>
@@ -415,7 +415,7 @@
     </div>
 </div>
 
-<div id="goalsSidePanel" class="goals-side-panel dynamic-module-flex role-manager role-employee role-training">
+<div id="goalsSidePanel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee role-training">
     <div class="gi-panel-header">
         <div class="gi-panel-header-row">
             <div style="display: flex; align-items: center; gap: 10px;">
@@ -450,7 +450,7 @@
                         <div id="giPrevMonthsList" class="gi-months-dropdown"></div>
                     </div>
                 </div>
-                <button id="giEditGoalsBtn" class="mini-action-btn dynamic-module-block role-manager" onclick="openEditGoalsModal()">Edit Goals ✏️</button>
+                <button id="giEditGoalsBtn" class="mini-action-btn dynamic-module-block role-manager role-owner-manager" onclick="openEditGoalsModal()">Edit Goals ✏️</button>
             </div>
             <div id="giGoalsList" class="gi-items-list">
                 <div class="status-message">Loading...</div>
@@ -459,7 +459,7 @@
     </div>
 </div>
 
-<div id="checklistSidePanel" class="checklist-side-panel dynamic-module-flex role-manager role-district-manager">
+<div id="checklistSidePanel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-district-manager">
 
     <div class="cl-panel-header">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
