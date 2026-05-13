@@ -1,18 +1,4 @@
-// =============================================================================
-// SPEEKS WEEKLY REPORT — Google Apps Script
-// =============================================================================
-// SETUP (one-time):
-//   1. Go to script.google.com and create a new project.
-//   2. Paste the entire contents of this file into the editor.
-//   3. Run createWeeklyTrigger() once (click the function name → Run).
-//   4. Authorize when Google prompts you.
-//   5. The report will now email automatically every Monday at 8 AM.
-//
-// To test the full last-week report: run sendWeeklyReport() manually.
-// To test with May 11–12 only:       run sendTestReport() manually.
-// =============================================================================
-
-var REPORT_EMAIL = 'ethan.kushnir@speekstechnology.com';
+var REPORT_EMAILS = ['ethan.kushnir@speekstechnology.com', 'paul.kushnir@pikinvestments.com'];
 var STORES       = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 
 // Update these to match your actual store locations
@@ -32,11 +18,13 @@ var STORE_COLORS = {
   BAL: '#dc2626'
 };
 
+// Scorecard section names in display order — used as fallback if bucket.label is empty
+var BUCKET_LABEL_DEFAULTS = ['In-Store Operations', 'Media and Markets', 'Store Reviews'];
+
 // Same endpoints Speeksnet uses
 var HUB_URL          = 'https://script.google.com/macros/s/AKfycbw3Ms5nc2bhbrjVW-da3xbZ3vKhyBx2TpeR-eSd1L05ZhV-h2Yh0yLmIV_E7TWDmwM69A/exec';
 var GOALS_API_URL    = 'https://script.google.com/macros/s/AKfycbw_eV-2Nxizf85J8atBJ6Muyq0aOAjZAsSLwlx9abPjNKJub_RlzrMBKkQuTbcRTbF2/exec';
 var SCORECARD_URL    = 'https://script.google.com/macros/s/AKfycbwvelWpXnlXCJZQGagZX5llMCN1k6CjronBpIcenNVDTjUdPISjF0mYhHYy2ry0Vdg0_Q/exec';
-var WEEKLY_KPI_URL   = 'https://script.google.com/macros/s/AKfycbyVBos-uJuhaqfLMBqoz9byNkvUG06igl4RX2_cs8hH15rbp7K4uFFEN-wpQgS2ChAU/exec';
 
 // =============================================================================
 // TRIGGER SETUP — run this function once
@@ -48,9 +36,9 @@ function createWeeklyTrigger() {
   ScriptApp.newTrigger('sendWeeklyReport')
     .timeBased()
     .onWeekDay(ScriptApp.WeekDay.MONDAY)
-    .atHour(8)
+    .atHour(7)
     .create();
-  Logger.log('Trigger created: sendWeeklyReport every Monday at 8 AM.');
+  Logger.log('Trigger created: sendWeeklyReport every Monday at 7 AM Central.');
 }
 
 // =============================================================================
@@ -61,16 +49,6 @@ function sendWeeklyReport() {
   runReport(week);
 }
 
-// TEST: sends report covering only May 11–12, 2026
-function sendTestReport() {
-  var week = {
-    start:    new Date(2026, 4, 11), // May 11 (months 0-indexed)
-    end:      new Date(2026, 4, 12), // May 12
-    startStr: '2026-05-11',
-    endStr:   '2026-05-12'
-  };
-  runReport(week);
-}
 
 function runReport(week) {
   var weekLabel = fmtDate(week.start, 'short') + ' - ' + fmtDate(week.end, 'short-year');
@@ -89,42 +67,22 @@ function runReport(week) {
     });
   });
 
-  // Fetch weekly KPI per store and find the "store total" row
-  var weeklyKpi = {};
+  var weeklyBuySell = getWeeklyBuyAndSell(hubData, week);
   STORES.forEach(function(store) {
-    var d = fetchJSON(WEEKLY_KPI_URL + '?store=' + store + '&time=4-Week');
-    if (!Array.isArray(d)) { weeklyKpi[store] = null; return; }
-    var idx = -1;
-    for (var i = d.length - 1; i >= 0; i--) {
-      var lbl = String(d[i][0] || '').trim().toLowerCase();
-      if (lbl === 'store' || lbl === 'store total') { idx = i; break; }
-    }
-    var row = idx !== -1 ? d[idx] : null;
-    weeklyKpi[store] = row;
-    // Log ALL non-empty values with their index so we can identify sell columns
-    if (row) {
-      var cols = [];
-      for (var j = 0; j < row.length; j++) {
-        if (row[j] !== null && row[j] !== undefined && row[j] !== '') {
-          cols.push('[' + j + ']=' + row[j]);
-        }
-      }
-      Logger.log(store + ' weekly total row: ' + cols.join(', '));
-    } else {
-      Logger.log(store + ' weekly total row: NOT FOUND');
-    }
+    var wbs = weeklyBuySell[store];
+    Logger.log(store + ' weekly buy: ' + (wbs ? wbs.buy : 'n/a') + '  sell: ' + (wbs ? wbs.sell : 'n/a'));
   });
 
-  var result = buildEmail(weekLabel, week, hubData, scorecardRes, goalsData, weeklyKpi);
+  var result = buildEmail(weekLabel, week, hubData, scorecardRes, goalsData, weeklyBuySell);
 
   GmailApp.sendEmail(
-    REPORT_EMAIL,
+    REPORT_EMAILS.join(','),
     'Speeks Weekly Report - ' + weekLabel,
     'Your email client does not support HTML email. Please view in Gmail or Outlook.',
     { htmlBody: result.html, name: 'Speeks Reports' }
   );
 
-  Logger.log('Report sent to ' + REPORT_EMAIL);
+  Logger.log('Report sent to ' + REPORT_EMAILS.join(', '));
 }
 
 // =============================================================================
@@ -218,33 +176,69 @@ function getStoreScore(scorecardRes, store) {
 // Filters goals records to only those within the week range using string comparison
 // so timezone issues can't cause off-by-one date errors.
 function getWeeklyGoals(goalsArr, week) {
-  var totalGoal = 0, totalResult = 0;
-  var employeeMap = {};
-
+  // Deduplicate: last row in sheet wins per employee per day (mirrors frontend logic)
+  var empDayMap = {};
   goalsArr.forEach(function(r) {
     var d = parseGoalDate(r.date);
     if (!d) return;
     var dStr = toYMD(d);
     if (dStr < week.startStr || dStr > week.endStr) return;
-
-    var g   = parseInt(r.goal)   || 0;
-    var res = parseInt(r.result) || 0;
-    totalGoal   += g;
-    totalResult += res;
-
     var emp = String(r.employee || 'Unknown').trim();
-    if (!employeeMap[emp]) employeeMap[emp] = { goal: 0, result: 0 };
-    employeeMap[emp].goal   += g;
-    employeeMap[emp].result += res;
+    if (!empDayMap[emp]) empDayMap[emp] = {};
+    empDayMap[emp][dStr] = r;
+  });
+
+  var totalGoal = 0, totalResult = 0;
+  var employeeMap = {};
+  Object.keys(empDayMap).forEach(function(emp) {
+    Object.keys(empDayMap[emp]).forEach(function(dStr) {
+      var r   = empDayMap[emp][dStr];
+      var g   = parseInt(r.goal)   || 0;
+      var res = parseInt(r.result) || 0;
+      totalGoal   += g;
+      totalResult += res;
+      if (!employeeMap[emp]) employeeMap[emp] = { goal: 0, result: 0 };
+      employeeMap[emp].goal   += g;
+      employeeMap[emp].result += res;
+    });
   });
 
   return { totalGoal: totalGoal, totalResult: totalResult, employees: employeeMap };
 }
 
+// Sums buy/sell and computes weekly-specific margins from Hub daily arrays.
+// Hub must expose wkBuy, wkSell, wkGP, wkBuyMarginPct as 31-element arrays (index 0 = day 1).
+// wkBuyMarginPct values are decimals (e.g. 0.55 = 55%).
+function getWeeklyBuyAndSell(hubData, week) {
+  var startDay = parseInt(week.startStr.split('-')[2]);
+  var endDay   = parseInt(week.endStr.split('-')[2]);
+  var out = {};
+  STORES.forEach(function(store) {
+    var buyArr     = (hubData && hubData.wkBuy          ? hubData.wkBuy[store]          : null) || [];
+    var sellArr    = (hubData && hubData.wkSell         ? hubData.wkSell[store]         : null) || [];
+    var gpArr      = (hubData && hubData.wkGP           ? hubData.wkGP[store]           : null) || [];
+    var buyMargArr = (hubData && hubData.wkBuyMarginPct ? hubData.wkBuyMarginPct[store] : null) || [];
+    var buy = 0, sell = 0, gp = 0, buyCost = 0;
+    var hasBuyMarginData = buyMargArr.length > 0;
+    for (var d = startDay; d <= endDay; d++) {
+      var bv = buyArr[d - 1] || 0;
+      var bm = buyMargArr[d - 1] || 0; // decimal margin, e.g. 0.55
+      buy     += bv;
+      sell    += sellArr[d - 1] || 0;
+      gp      += gpArr[d - 1]   || 0;
+      buyCost += bv * (1 - bm);
+    }
+    var wSellMargin = (sell > 0 && gpArr.length > 0) ? (gp / sell) * 100 : null;
+    var wBuyMargin  = (buy > 0 && hasBuyMarginData)  ? ((buy - buyCost) / buy) * 100 : null;
+    out[store] = { buy: buy, sell: sell, sellMargin: wSellMargin, buyMargin: wBuyMargin };
+  });
+  return out;
+}
+
 // =============================================================================
 // EMAIL BUILDER
 // =============================================================================
-function buildEmail(weekLabel, week, hubData, scorecardRes, goalsData, weeklyKpi) {
+function buildEmail(weekLabel, week, hubData, scorecardRes, goalsData, weeklyBuySell) {
   var storeSections = '';
 
   STORES.forEach(function(store) {
@@ -263,18 +257,13 @@ function buildEmail(weekLabel, week, hubData, scorecardRes, goalsData, weeklyKpi
     var goal    = hubData ? parseNum(hubData[s + 'Goal'])    : 0;
     var trackGP = hubData ? parseNum(hubData[s + 'TrackGP']) : 0;
 
-    // ── Weekly data from Weekly KPI ────────────────────────────────────────
-    // Confirmed: [2]=buyVal, [5]=buyMargin.
-    // Sell indices are logged — update WEEKLY_SELL_IDX / WEEKLY_SELL_MARGIN_IDX
-    // once you verify from the Apps Script execution log which index is correct.
-    var WEEKLY_SELL_IDX        = -1; // TODO: set once confirmed from logs
-    var WEEKLY_SELL_MARGIN_IDX = -1; // TODO: set once confirmed from logs
-
-    var wRow        = weeklyKpi[store];
-    var wBuyVal     = wRow ? parseNum(wRow[2]) : 0;
-    var wBuyMargin  = wRow ? normalizePct(wRow[5]) : 0;
-    var wSellVal    = (wRow && WEEKLY_SELL_IDX >= 0)        ? parseNum(wRow[WEEKLY_SELL_IDX])        : null;
-    var wSellMargin = (wRow && WEEKLY_SELL_MARGIN_IDX >= 0) ? normalizePct(wRow[WEEKLY_SELL_MARGIN_IDX]) : null;
+    // ── Weekly buy/sell from Hub daily arrays (exact date range) ──────────
+    var wbs         = (weeklyBuySell || {})[store] || { buy: 0, sell: 0, sellMargin: null, buyMargin: null };
+    var wBuyVal     = wbs.buy;
+    var wSellVal    = wbs.sell;
+    // Use weekly-specific margins when Hub provides them; fall back to MTD otherwise
+    var wBuyMargin  = wbs.buyMargin  !== null ? wbs.buyMargin  : buyMargin;
+    var wSellMargin = wbs.sellMargin !== null ? wbs.sellMargin : sellMargin;
 
     // Scorecard
     var storeScore = getStoreScore(scorecardRes, store);
@@ -297,15 +286,19 @@ function buildEmail(weekLabel, week, hubData, scorecardRes, goalsData, weeklyKpi
     // Scorecard bucket breakdown rows
     var bucketHtml = '';
     if (storeScore && Array.isArray(storeScore.buckets)) {
-      storeScore.buckets.forEach(function(bucket) {
+      storeScore.buckets.forEach(function(bucket, bIdx) {
         if (!Array.isArray(bucket.categories) || bucket.categories.length === 0) return;
+        var bLabel    = (bucket.label && String(bucket.label).trim()) || BUCKET_LABEL_DEFAULTS[bIdx] || ('Section ' + (bIdx + 1));
         var bAvg      = (parseFloat(bucket.avg || 0) * 2).toFixed(1);
         var bAvgColor = parseFloat(bAvg) >= 8 ? '#059669' : parseFloat(bAvg) >= 6 ? '#d97706' : '#dc2626';
-        bucketHtml += td2(
-          '<span style="font-size:11px;font-weight:800;color:#1e293b;">' + escHtml(bucket.label) + '</span>',
-          '<span style="font-size:11px;font-weight:900;color:' + bAvgColor + ';">' + bAvg + '/10</span>',
-          'background:#f8fafc;'
-        );
+        bucketHtml += [
+          '<tr>',
+          '<td colspan="2" style="padding:6px 14px;background-color:#f1f5f9;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;">',
+          '<span style="font-size:10px;font-weight:800;color:#1e293b;text-transform:uppercase;letter-spacing:0.5px;">' + escHtml(bLabel) + '</span>',
+          '<span style="font-size:11px;font-weight:900;color:' + bAvgColor + ';margin-left:10px;">' + bAvg + '/10</span>',
+          '</td>',
+          '</tr>'
+        ].join('');
         bucket.categories.forEach(function(cat) {
           var cs    = (parseFloat(cat.score || 0) * 2).toFixed(1);
           var csCol = parseFloat(cs) >= 8 ? '#059669' : parseFloat(cs) >= 6 ? '#d97706' : '#dc2626';
@@ -356,9 +349,9 @@ function buildEmail(weekLabel, week, hubData, scorecardRes, goalsData, weeklyKpi
 
       // ── This Week row ──────────────────────────────────────────────────────
       '<tr><td style="padding:0;border-bottom:1px solid #e2e8f0;">',
-      '<table width="100%" cellpadding="0" cellspacing="0">',
-      '<tr><td colspan="4" style="padding:5px 14px 3px;background-color:#1e293b;">',
-      '<span style="font-size:9px;font-weight:800;color:rgba(255,255,255,0.7);text-transform:uppercase;letter-spacing:1px;">This Week</span>',
+      '<table width="100%" cellpadding="0" cellspacing="0" style="table-layout:fixed;">',
+      '<tr><td colspan="4" style="padding:5px 14px 3px;background-color:#f8fafc;">',
+      '<span style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;">This Week</span>',
       '</td></tr>',
       '<tr>',
       metricCell('Bought',
@@ -366,9 +359,9 @@ function buildEmail(weekLabel, week, hubData, scorecardRes, goalsData, weeklyKpi
         wBuyVal > 0 ? 'Margin: ' + wBuyMargin.toFixed(1) + '%' : 'No data',
         wBuyMargin >= 51 ? '#059669' : '#dc2626', true),
       metricCell('Sold',
-        wSellVal !== null ? '$' + Math.round(wSellVal).toLocaleString() : 'Check logs',
-        wSellVal !== null ? 'Margin: ' + (wSellMargin || 0).toFixed(1) + '%' : 'Index TBD',
-        '#94a3b8', true),
+        wSellVal > 0 ? '$' + Math.round(wSellVal).toLocaleString() : '—',
+        wSellVal > 0 ? 'GP Margin: ' + wSellMargin.toFixed(1) + '%' : 'No data',
+        wSellMargin >= 40 ? '#059669' : wSellMargin >= 30 ? '#d97706' : '#dc2626', true),
       metricCell('Listings (Week)', goals.totalResult + '/' + goals.totalGoal,
         goalPct + '% of goal', goalsColor, true),
       metricCell('% to Goal (MTD)', pct + '%',
@@ -377,7 +370,7 @@ function buildEmail(weekLabel, week, hubData, scorecardRes, goalsData, weeklyKpi
 
       // ── MTD row ────────────────────────────────────────────────────────────
       '<tr><td style="padding:0;border-bottom:1px solid #e2e8f0;">',
-      '<table width="100%" cellpadding="0" cellspacing="0">',
+      '<table width="100%" cellpadding="0" cellspacing="0" style="table-layout:fixed;">',
       '<tr><td colspan="4" style="padding:5px 14px 3px;background-color:#f8fafc;">',
       '<span style="font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;">Month to Date</span>',
       '</td></tr>',
@@ -385,14 +378,14 @@ function buildEmail(weekLabel, week, hubData, scorecardRes, goalsData, weeklyKpi
       metricCell('Buy Value',    '$' + Math.round(buyVal).toLocaleString(), 'Margin: ' + buyMargin.toFixed(1) + '%',      buyMarginColor,  true),
       metricCell('Sell Revenue', '$' + Math.round(rev).toLocaleString(),    'GP Margin: ' + sellMargin.toFixed(1) + '%', sellMarginColor, true),
       metricCell('Tracked GP',   '$' + Math.round(trackGP).toLocaleString(), 'of $' + Math.round(goal).toLocaleString() + ' goal', '#475569', true),
-      metricCell('Gross Profit', '$' + Math.round(gp).toLocaleString(),     sellMargin.toFixed(1) + '% margin', sellMarginColor, false),
+      metricCell('Gross Profit', '$' + Math.round(gp).toLocaleString(),     '', '#475569', false),
       '</tr></table></td></tr>',
 
 
       sectionHeader('Scorecard Breakdown'),
       '<tr><td style="background-color:#ffffff;"><table width="100%" cellpadding="0" cellspacing="0">' + bucketHtml + '</table></td></tr>',
 
-      sectionHeader('Listing Goals — ' + week.startStr + ' to ' + week.endStr),
+      sectionHeader('Listing Goals'),
       '<tr><td style="background-color:#ffffff;"><table width="100%" cellpadding="0" cellspacing="0">' + empRows + '</table></td></tr>',
 
       '</table>'
@@ -419,9 +412,8 @@ function buildEmail(weekLabel, week, hubData, scorecardRes, goalsData, weeklyKpi
     var goalPct = goals.totalGoal > 0 ? Math.round((goals.totalResult / goals.totalGoal) * 100) : 0;
     var goalCol = goalPct >= 100 ? '#059669' : goalPct >= 80 ? '#d97706' : '#dc2626';
 
-    var wRow      = weeklyKpi[store];
-    var wBuyVal   = wRow ? parseNum(wRow[2]) : 0;
-    var wBuyDisp  = wBuyVal > 0 ? '$' + Math.round(wBuyVal).toLocaleString() : '—';
+    var wbs2     = (weeklyBuySell || {})[store] || { buy: 0, sell: 0 };
+    var wBuyDisp = wbs2.buy > 0 ? '$' + Math.round(wbs2.buy).toLocaleString() : '—';
 
     summaryRows += [
       '<tr>',
@@ -469,6 +461,7 @@ function buildEmail(weekLabel, week, hubData, scorecardRes, goalsData, weeklyKpi
     '<th style="padding:8px 12px;text-align:center;font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Score</th>',
     '<th style="padding:8px 12px;text-align:center;font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">% to Goal</th>',
     '<th style="padding:8px 12px;text-align:center;font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Wk Buy</th>',
+    '<th style="padding:8px 12px;text-align:center;font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Wk Sell</th>',
     '<th style="padding:8px 12px;text-align:center;font-size:9px;font-weight:800;color:#94a3b8;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Listings</th>',
     '</tr>',
     summaryRows,
@@ -504,7 +497,7 @@ function escHtml(str) {
 function metricCell(label, value, sub, subColor, borderRight) {
   var border = borderRight ? 'border-right:1px solid #e2e8f0;' : '';
   return [
-    '<td style="' + border + 'padding:12px 8px;text-align:center;width:25%;background-color:#f8fafc;">',
+    '<td style="' + border + 'padding:12px 8px;text-align:center;vertical-align:top;width:25%;background-color:#f8fafc;">',
     '<div style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:4px;">' + escHtml(label) + '</div>',
     '<div style="font-size:15px;font-weight:900;color:#1e293b;">' + escHtml(value) + '</div>',
     '<div style="font-size:10px;font-weight:700;color:' + subColor + ';margin-top:2px;">' + escHtml(sub) + '</div>',
