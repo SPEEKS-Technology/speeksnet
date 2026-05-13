@@ -6537,13 +6537,18 @@ async function fetchAndDisplayStoreComment() {
                 let messagesHtml = '';
                 todayComments.forEach(msg => {
                     const authorName = msg.author || 'Executive Team';
-                    
                     const emoji = '📣';
-                    
+
+                    const cStore = String(msg.store || '').trim().toUpperCase();
+                    const isAllStores = (cStore === 'ALL' || cStore === 'CORP');
+                    const scopeBadge = isAllStores
+                        ? `<span style="display:inline-block;font-size:10px;font-weight:600;background:rgba(255,255,255,0.12);color:#fde68a;border:1px solid rgba(253,230,138,0.35);border-radius:4px;padding:1px 5px;margin-left:5px;vertical-align:middle;letter-spacing:0.3px;">Company</span>`
+                        : `<span style="display:inline-block;font-size:10px;font-weight:600;background:rgba(255,255,255,0.08);color:#a7f3d0;border:1px solid rgba(167,243,208,0.3);border-radius:4px;padding:1px 5px;margin-left:5px;vertical-align:middle;letter-spacing:0.3px;">${cStore}</span>`;
+
                     messagesHtml += `
                         <div style="display: flex; align-items: flex-start; gap: 8px; line-height: 1.4;">
                             <span style="font-size: 15px; flex-shrink: 0; margin-top: -2px;">${emoji}</span>
-                            <span><strong style="color: #fef3c7;">${authorName}:</strong> <span style="opacity: 0.95;">${msg.message}</span></span>
+                            <span><strong style="color: #fef3c7;">${authorName}:</strong>${scopeBadge} <span style="opacity: 0.95;">${msg.message}</span></span>
                         </div>
                     `;
                 });
