@@ -3553,13 +3553,14 @@ function renderGoalsScoreboard(viewType = 'daily') {
             } else if (viewType === 'weekly' && isThisWeek) {
                 const rG = parseInt(record.goal) || 0;
                 const rR = parseInt(record.result) || 0;
-                empGoal += rG;
-                empResult += rR;
-                
-                const dayIdx = (recDate.getDay() + 6) % 7; 
-                dailyStats[daysOfWeek[dayIdx]] = { goal: rG, result: rR };
+                const dayKey = daysOfWeek[(recDate.getDay() + 6) % 7];
+                dailyStats[dayKey] = { goal: rG, result: rR }; // last row in sheet wins per day
             }
         });
+
+        if (viewType === 'weekly') {
+            Object.values(dailyStats).forEach(d => { empGoal += d.goal; empResult += d.result; });
+        }
 
         totalG += empGoal;
         totalR += empResult;
