@@ -2598,9 +2598,8 @@ function handleSignOut() {
     sessionStorage.removeItem('speeksUserRole');
     sessionStorage.removeItem('speeksUserStore');
     
-    // Remove the comment tracker for today so it pops up again when testing
-    const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-    sessionStorage.removeItem(`speeksCommentSeen_${todayStr}`);
+    // Remove the comment tracker so it pops up again on next login
+    sessionStorage.removeItem('speeksSeenCommentKeys');
     
     location.reload(); 
 }
@@ -4595,6 +4594,7 @@ function initDashboardData() {
         
         // --- ADD THE COMMENT POPUP CHECK HERE TOO ---
         setTimeout(fetchAndDisplayStoreComment, 1500);
+        startStoreCommentPolling();
         // --------------------------------------------
 
         setTimeout(showChecklistToast, 3000);
@@ -6402,6 +6402,25 @@ function submitNewScorecard() {
 
 // --- STORE COMMENTS LOGIC ---
 
+// Per-comment fingerprint tracking so new comments always show even after closing a previous one
+function _getSeenCommentKeys() {
+    try { return new Set(JSON.parse(sessionStorage.getItem('speeksSeenCommentKeys') || '[]')); }
+    catch(e) { return new Set(); }
+}
+function _saveSeenCommentKeys(keys) {
+    sessionStorage.setItem('speeksSeenCommentKeys', JSON.stringify([...keys]));
+}
+function _commentKey(c) {
+    return `${String(c.store||'').trim()}|${String(c.date||'').trim()}|${String(c.author||'').trim()}|${String(c.message||'').trim()}`.slice(0, 120);
+}
+
+let _storeCommentPollingStarted = false;
+function startStoreCommentPolling() {
+    if (_storeCommentPollingStarted) return;
+    _storeCommentPollingStarted = true;
+    setInterval(fetchAndDisplayStoreComment, 30 * 1000);
+}
+
 // Opens the modal normally from the Speeks Tools menu (Fully Unlocked)
 function toggleSendCommentModal() {
     openCEOStoreComment(null); 
@@ -6479,10 +6498,8 @@ async function submitStoreComment() {
     }
 }
 
-// Helper to close the bubble and mark it as seen
+// Helper to close the bubble (comments already marked seen when bubble was shown)
 window.closeDailyCommentBubble = function() {
-    const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-    sessionStorage.setItem(`speeksCommentSeen_${todayStr}`, 'true');
     const bubble = document.getElementById('dailyMessageBubble');
     if (bubble) bubble.style.display = 'none';
 };
@@ -6490,21 +6507,16 @@ window.closeDailyCommentBubble = function() {
 async function fetchAndDisplayStoreComment() {
     const userStore = String(sessionStorage.getItem('speeksUserStore') || 'OVL').trim().toUpperCase();
     const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-    const sessionKey = `speeksCommentSeen_${todayStr}`;
-
-    if (sessionStorage.getItem(sessionKey)) {
-        return;
-    }
 
     try {
         const res = await fetch(`${STORE_COMMENT_URL}?v=${Date.now()}`);
         const comments = await res.json();
-        
+
         const todayComments = comments.filter(c => {
             const cStore = String(c.store || '').trim().toUpperCase();
             let rawDateStr = String(c.date || '').trim();
             let parsedDateStr = "";
-            
+
             try {
                 const parsed = new Date(c.date);
                 if (!isNaN(parsed.getTime())) {
@@ -6518,7 +6530,16 @@ async function fetchAndDisplayStoreComment() {
             return isToday && isForMe;
         }).reverse(); // Newest first
 
-        if (todayComments.length > 0) {
+        // Only show comments the user hasn't seen yet in this session
+        const seenKeys = _getSeenCommentKeys();
+        const newComments = todayComments.filter(c => !seenKeys.has(_commentKey(c)));
+        if (newComments.length === 0) return;
+
+        // Mark all today's comments seen now so repeat polls don't re-show the same ones
+        todayComments.forEach(c => seenKeys.add(_commentKey(c)));
+        _saveSeenCommentKeys(seenKeys);
+
+        if (newComments.length > 0) {
             const bubble = document.getElementById('dailyMessageBubble');
             const textEl = document.getElementById('dailyMessageBubbleText');
             const iconEl = document.getElementById('dailyMessageBubbleIcon');
@@ -6541,9 +6562,9 @@ async function fetchAndDisplayStoreComment() {
                 const closeBtn = bubble.querySelector('button');
                 if (closeBtn) closeBtn.style.marginTop = '4px';
 
-                // Build the HTML for ALL messages today
+                // Build the HTML for new (unseen) messages only
                 let messagesHtml = '';
-                todayComments.forEach(msg => {
+                newComments.forEach(msg => {
                     const authorName = msg.author || 'Executive Team';
                     const emoji = '📣';
 
