@@ -601,15 +601,18 @@ function startReactionPolling() {
 }
 
 // --- 4B. MODULE: INFO TICKER ---
+const _TICKER_PPS = 40; // pixels per second — constant speed used for both intro and loop
 const _TICKER_DEFAULTS = [
     { icon: '⭐', text: 'Ask every customer for a Google Review — every one counts', _type: 'static' },
     { icon: '📋', text: 'Use the Margin Guide for every offer', _type: 'static' },
     { icon: '📦', text: 'Listing efficiency is key — process fast, list faster', _type: 'static' },
     { icon: '💬', text: 'Use PayMore and SPEEKS Discord for buying & listing help', _type: 'static' },
 ];
-let _tickerItems = [..._TICKER_DEFAULTS];
+let _tickerItems = [];
 let _tickerReady = false;
-let _tickerFirstBuild = true;
+let _tickerShown = false;
+let _tickerIntroActive = false;
+let _tickerFetchDone = false;
 let _tickerRebuildTimeout = null;
 
 function _syncLayout() {
@@ -630,8 +633,7 @@ function initTicker() {
     const ticker = document.getElementById('infoTicker');
     if (!ticker) return;
     _tickerReady = true;
-    _rebuildTicker();
-    requestAnimationFrame(_syncLayout); // defer until after reflow so ticker.offsetHeight is correct
+    requestAnimationFrame(_syncLayout);
     const nav = document.querySelector('.top-nav');
     if (nav && window.ResizeObserver) {
         new ResizeObserver(_syncLayout).observe(nav);
@@ -641,23 +643,61 @@ function initTicker() {
 }
 
 function _rebuildTicker() {
-    if (_tickerFirstBuild) {
-        _tickerFirstBuild = false;
-        _applyTickerContent();
-        return;
-    }
+    if (_tickerIntroActive) return; // silently accumulate data, intro handles the final apply
     if (_tickerRebuildTimeout) clearTimeout(_tickerRebuildTimeout);
     _tickerRebuildTimeout = setTimeout(() => {
         _tickerRebuildTimeout = null;
-        const track = document.getElementById('tickerTrack');
-        if (!track) return;
-        track.style.transition = 'opacity 0.15s ease';
-        track.style.opacity = '0';
-        setTimeout(() => {
-            _applyTickerContent();
-            track.style.opacity = '1';
-        }, 150);
-    }, 250);
+        if (!_tickerShown) {
+            if (!_tickerFetchDone) return; // AppScript fetch not resolved yet — wait
+            _showTickerFirstTime();
+        } else {
+            const track = document.getElementById('tickerTrack');
+            if (!track) return;
+            track.style.transition = 'opacity 0.15s ease';
+            track.style.opacity = '0';
+            setTimeout(() => {
+                _applyTickerContent();
+                track.style.opacity = '1';
+            }, 150);
+        }
+    }, _tickerShown ? 250 : 800);
+}
+
+function _showTickerFirstTime() {
+    _tickerShown = true;
+    _tickerIntroActive = true;
+    const track = document.getElementById('tickerTrack');
+    if (!track) { _tickerIntroActive = false; return; }
+    if (_tickerItems.length === 0) _tickerItems = [..._TICKER_DEFAULTS];
+    const sep = '<span class="ticker-sep">◆</span>';
+    const html = _tickerItems.map(item =>
+        `<span class="ticker-item"><span class="t-icon">${item.icon}</span>${escapeHtml(item.text)}</span>${sep}`
+    ).join('');
+    track.innerHTML = html + html;
+    track.style.animation = 'none';
+    void track.offsetHeight;
+    const introDurationMs = Math.round(window.innerWidth / _TICKER_PPS * 1000);
+    const introSnapshot = JSON.stringify(_tickerItems);
+    track.style.animation = `ticker-intro ${introDurationMs}ms linear forwards`;
+    track.addEventListener('animationend', () => {
+        _tickerIntroActive = false;
+        if (JSON.stringify(_tickerItems) !== introSnapshot) {
+            // Data changed during intro — fade and rebuild once
+            track.style.transition = 'opacity 0.25s ease';
+            track.style.opacity = '0';
+            setTimeout(() => {
+                track.style.transition = '';
+                _applyTickerContent();
+                track.style.opacity = '1';
+            }, 250);
+        } else {
+            // Nothing changed — switch seamlessly to the loop at the same fixed speed
+            track.style.animation = 'none';
+            void track.offsetHeight;
+            const cw = track.scrollWidth / 2;
+            track.style.animation = `ticker-scroll ${(cw / _TICKER_PPS).toFixed(1)}s linear infinite`;
+        }
+    }, { once: true });
 }
 
 function _applyTickerContent() {
@@ -670,7 +710,8 @@ function _applyTickerContent() {
     track.innerHTML = html + html;
     track.style.animation = 'none';
     void track.offsetHeight;
-    track.style.animation = '';
+    const cw = track.scrollWidth / 2;
+    track.style.animation = `ticker-scroll ${(cw / _TICKER_PPS).toFixed(1)}s linear infinite`;
 }
 
 function feedAnnouncementsToTicker(announcements) {
@@ -734,16 +775,20 @@ function feedChampionsToTicker(allBuyers, allListers, allGoogleReviews) {
 }
 
 async function loadTickerItems() {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 8000);
     try {
-        const res = await fetch(`${TICKER_URL}?v=${Date.now()}`);
+        const res = await fetch(`${TICKER_URL}?v=${Date.now()}`, { signal: controller.signal });
         const data = await res.json();
         if (data.items && data.items.length > 0) {
             _tickerItems = _tickerItems.filter(i => i._type !== 'static');
             const staticItems = data.items.map(item => ({ icon: item.icon || '📌', text: item.text, _type: 'static' }));
             _tickerItems = [...staticItems, ..._tickerItems];
-            _rebuildTicker();
         }
-    } catch (e) { /* silently keep defaults */ }
+    } catch (e) { console.warn('[Ticker] AppScript fetch failed — check deployment access settings:', e); }
+    clearTimeout(tid);
+    _tickerFetchDone = true;
+    _rebuildTicker(); // now safe — AppScript content is in _tickerItems
 }
 
 const TICKER_EMOJIS = [
