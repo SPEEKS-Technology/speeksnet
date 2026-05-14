@@ -661,15 +661,64 @@ html {
     background: white; 
 }
 
-.manage-footer button { 
-    padding: 10px 20px; 
-    border-radius: 8px; 
-    font-weight: 600; 
-    font-size: 14px; 
-    cursor: pointer; 
-    border: none; 
+.manage-footer button {
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    border: none;
     transition: 0.2s;
 }
+
+.ticker-manage-row { grid-template-columns: auto 1fr 40px; }
+
+.t-icon-wrap { position: relative; flex-shrink: 0; }
+
+.t-icon-btn {
+    width: 52px;
+    height: 38px;
+    font-size: 20px;
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    background: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: 0.2s;
+}
+.t-icon-btn:hover { border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(90,141,59,0.1); }
+
+.emoji-picker-panel {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+    padding: 10px;
+    z-index: 500;
+    width: 236px;
+    display: none;
+}
+.emoji-picker-panel.show { display: block; }
+
+.emoji-picker-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+
+.emoji-option {
+    font-size: 18px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background 0.1s;
+    user-select: none;
+}
+.emoji-option:hover { background: #f3f4f6; }
 
 /* =========================================================
    OVERLAYS, MODALS & NOTIFICATIONS
@@ -1815,7 +1864,7 @@ select.bs-hidden-select:focus {
         padding: 25px 15px !important;
         height: auto;
         gap: 20px;
-        border-bottom: 5px solid var(--sage-professional);
+        border-bottom: none;
         box-sizing: border-box;
     }
     
@@ -2287,8 +2336,60 @@ select.bs-hidden-select:focus {
     justify-content: start;
     box-shadow: 0 4px 15px rgba(139, 139, 139, 0.1);
     gap: 20px;
-    border-bottom: var(--sage-professional) solid 10px;
     flex-wrap: nowrap;
+}
+
+/* INFO TICKER */
+.info-ticker {
+    position: fixed;
+    top: 72px;
+    left: 0;
+    right: 0;
+    height: 32px;
+    background: var(--sage-professional);
+    z-index: 99;
+    display: none;
+    align-items: center;
+    overflow: hidden;
+    user-select: none;
+    border-bottom: 2px solid #1a1c1e;
+}
+body.is-authenticated .info-ticker { display: flex; }
+
+.ticker-track {
+    display: flex;
+    align-items: center;
+    white-space: nowrap;
+    animation: ticker-scroll 55s linear infinite;
+    will-change: transform;
+}
+
+
+@keyframes ticker-scroll {
+    0%   { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+}
+
+.ticker-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0 30px;
+    font-size: 12px;
+    font-weight: 700;
+    color: rgba(255,255,255,0.95);
+    letter-spacing: 0.2px;
+    white-space: nowrap;
+}
+.ticker-item .t-icon { font-size: 13px; line-height: 1; flex-shrink: 0; }
+.ticker-sep {
+    color: rgba(255,255,255,0.3);
+    font-size: 9px;
+    flex-shrink: 0;
+}
+
+@media (max-width: 768px) {
+    .info-ticker { position: relative; top: 0; }
 }
 
 .nav-left {
@@ -2438,8 +2539,8 @@ select.bs-hidden-select:focus {
 
 .main-content {
     flex-grow: 1;
-    margin-left: 0; 
-    padding: 140px 50px 50px 50px; 
+    margin-left: 0;
+    padding: 170px 50px 50px 50px;
     transition: padding 0.3s ease;
 }
 
@@ -2480,17 +2581,17 @@ select.bs-hidden-select:focus {
     display: none;
     background: linear-gradient(135deg, var(--sage-professional), #4a7530);
     color: white;
-    padding: 6px 16px;
+    padding: 6px 14px 6px 16px;
     border-radius: 20px;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     font-size: 13px;
     box-shadow: 0 4px 10px rgba(90, 141, 59, 0.3);
-    max-width: 500px;
+    max-width: min(500px, calc(100vw - 80px));
     z-index: 1000;
 }
-#dailyMessageBubbleIcon { font-size: 16px; }
-#dailyMessageBubbleText { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#dailyMessageBubbleIcon { font-size: 16px; flex-shrink: 0; margin-top: 2px; }
+#dailyMessageBubbleText { white-space: normal; overflow-y: auto; max-height: 220px; }
 .daily-bubble-close {
     background: rgba(255,255,255,0.2);
     border: none;
@@ -3474,14 +3575,14 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 /* Shared tab wrapper — fixed to the right edge, below the header */
 .nav-panel-tabs {
     position: fixed;
-    top: 82px;
+    top: var(--panel-top, 104px);
     right: 0;
     display: flex;
     align-items: flex-start;
     gap: 0;
-    z-index: 98;
+    z-index: 100;
     box-shadow: -4px 6px 20px rgba(90,141,59,0.22);
-    border-radius: 8px 0 0 8px;
+    border-radius: 0 0 0 8px;
 }
 
 /* Shared styles for both panel tabs */
@@ -3504,9 +3605,9 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     transition: background 0.2s, color 0.2s;
 }
 
-/* Left tab gets the visible rounded corner; right tab is flush */
+/* Left tab: straight top, rounded bottom-left. Right tab: flush. */
 .gi-nav-toggle {
-    border-radius: 8px 0 0 8px;
+    border-radius: 0 0 0 8px;
     border-right: 1px solid rgba(255,255,255,0.18);
 }
 .cl-nav-toggle {
@@ -3515,7 +3616,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     border-radius: 0;
 }
 .nav-panel-tabs.gi-tab-hidden .cl-nav-toggle {
-    border-radius: 8px 0 0 8px;
+    border-radius: 0 0 0 8px;
 }
 
 /* Shared hover / active states */
@@ -3548,18 +3649,19 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 /* Drop-down checklist panel — hangs flush from the right of the header */
 .checklist-side-panel {
     position: fixed;
-    top: 88px;                        /* header (78px box) + green border (10px) */
+    top: var(--panel-top, 104px);     /* set by _syncLayout via CSS custom property */
     right: 0;                         /* flush with right edge of viewport */
     width: 420px;                     /* matches goals panel width */
-    height: calc(100vh - 88px);       /* always full height below the header */
+    height: calc(100vh - var(--panel-top, 104px)); /* always full height below the header+ticker */
     background: white;
     border-radius: 0 0 0 14px;        /* only bottom-left rounded; right is flush */
     box-shadow: -6px 0 30px rgba(0,0,0,0.14);
-    z-index: 99;                      /* slides from behind the header (z-index 100) */
+    z-index: 101;                     /* above tabs (100) when open */
     display: flex;
     flex-direction: column;
-    transform: translateY(calc(-100% - 12px)); /* hidden fully above; 12px clears the green border */
-    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    clip-path: inset(0 0 100% 0);
+    transition: clip-path 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: none;
     overflow: hidden;
     border: 1px solid #e2e8f0;
     border-top: none;
@@ -3567,7 +3669,8 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 }
 
 .checklist-side-panel.open {
-    transform: translateY(0);
+    clip-path: inset(0);
+    pointer-events: auto;
 }
 
 /* --- Checklist nudge: progress chip --- */
@@ -3635,24 +3738,25 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
    ========================================================= */
 .goals-side-panel {
     position: fixed;
-    top: 88px;
+    top: var(--panel-top, 104px);     /* set by _syncLayout via CSS custom property */
     right: 0;
     width: 420px;
-    height: calc(100vh - 88px);
+    height: calc(100vh - var(--panel-top, 104px));
     background: white;
     border-radius: 0 0 0 14px;
     box-shadow: -6px 0 30px rgba(0,0,0,0.14);
-    z-index: 99;
+    z-index: 101;                     /* above tabs (100) when open */
     display: flex;
     flex-direction: column;
-    transform: translateY(calc(-100% - 12px));
-    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    clip-path: inset(0 0 100% 0);
+    transition: clip-path 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: none;
     overflow: hidden;
     border: 1px solid #e2e8f0;
     border-top: none;
     border-right: none;
 }
-.goals-side-panel.open { transform: translateY(0); }
+.goals-side-panel.open { clip-path: inset(0); pointer-events: auto; }
 
 .gi-panel-header { padding: 18px 20px; border-bottom: 1px solid #e2e8f0; background: #fcfcfc; flex-shrink: 0; }
 .gi-panel-header-row { display: flex; align-items: center; justify-content: space-between; }

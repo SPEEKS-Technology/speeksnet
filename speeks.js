@@ -44,6 +44,7 @@ const STORE_COMMENT_URL = 'https://script.google.com/macros/s/AKfycbzoqWLZz07niO
 const CHECKLIST_URL = 'https://script.google.com/macros/s/AKfycbxr4ZEoSKeF4BZ1H2-tcmc6Gy30-le5Gdm3CSdee6XxOhZFes3-5SF_PNcWR4OLEGN2hQ/exec';
 const TUTORIAL_URL = 'https://script.google.com/macros/s/AKfycbySrXu6IW3S39GKiEsXkJwd4s75aO0uG-BTTg_swxEx3BMG_W7qqZBwHKnuEm_k_Agh/exec';
 const PATCH_NOTES_URL = 'https://script.google.com/macros/s/AKfycbzzk6beS7HWINw8GtQZ12FpezgFhBXj_1GgV1Fs342bc05Y6x9-tJGgr_MMl13rIfP3/exec';
+const TICKER_URL = 'https://script.google.com/macros/s/AKfycbyfvqCn2Vwwp1xGzKiXM9cFkicXosI3ErIp83Qu4GduhS6CRoldVSnDI267j54C72qyVw/exec';
 
 // --- 2. NAV COMPACT MODE ---
 (function () {
@@ -334,6 +335,7 @@ async function loadCMS() {
 
                 recentHtml = recentCount === 0 ? '<div style="padding: 20px; color:#999; text-align:center;">No recent announcements</div>' : recentHtml;
                 archiveHtml = archiveCount === 0 ? '<div style="padding: 20px; color:#999; text-align:center;">No archived announcements</div>' : archiveHtml;
+                feedAnnouncementsToTicker(sortedAnns.filter((_, i) => i < 2));
             } else {
                 recentHtml = archiveHtml = '<div style="padding: 20px; color:#999; text-align:center;">No announcements</div>';
             }
@@ -596,6 +598,253 @@ async function pollReactions() {
 function startReactionPolling() {
     if (_reactionPollInterval) clearInterval(_reactionPollInterval);
     _reactionPollInterval = setInterval(pollReactions, 15000);
+}
+
+// --- 4B. MODULE: INFO TICKER ---
+const _TICKER_DEFAULTS = [
+    { icon: '⭐', text: 'Ask every customer for a Google Review — every one counts', _type: 'static' },
+    { icon: '📋', text: 'Use the Margin Guide for every offer', _type: 'static' },
+    { icon: '📦', text: 'Listing efficiency is key — process fast, list faster', _type: 'static' },
+    { icon: '💬', text: 'Use PayMore and SPEEKS Discord for buying & listing help', _type: 'static' },
+];
+let _tickerItems = [..._TICKER_DEFAULTS];
+let _tickerReady = false;
+let _tickerFirstBuild = true;
+let _tickerRebuildTimeout = null;
+
+function _syncLayout() {
+    const nav = document.querySelector('.top-nav');
+    const ticker = document.getElementById('infoTicker');
+    const tabs = document.querySelector('.nav-panel-tabs');
+    if (!nav) return;
+    const navH = Math.round(nav.getBoundingClientRect().height);
+    const tickerH = document.body.classList.contains('is-authenticated') ? 32 : 0;
+    const totalTop = navH + tickerH;
+    if (ticker) ticker.style.top = navH + 'px';
+    if (tabs) tabs.style.top = totalTop + 'px';
+    document.documentElement.style.setProperty('--panel-top', totalTop + 'px');
+}
+
+function initTicker() {
+    if (_tickerReady) return;
+    const ticker = document.getElementById('infoTicker');
+    if (!ticker) return;
+    _tickerReady = true;
+    _rebuildTicker();
+    requestAnimationFrame(_syncLayout); // defer until after reflow so ticker.offsetHeight is correct
+    const nav = document.querySelector('.top-nav');
+    if (nav && window.ResizeObserver) {
+        new ResizeObserver(_syncLayout).observe(nav);
+    }
+    window.addEventListener('resize', _syncLayout);
+    loadTickerItems();
+}
+
+function _rebuildTicker() {
+    if (_tickerFirstBuild) {
+        _tickerFirstBuild = false;
+        _applyTickerContent();
+        return;
+    }
+    if (_tickerRebuildTimeout) clearTimeout(_tickerRebuildTimeout);
+    _tickerRebuildTimeout = setTimeout(() => {
+        _tickerRebuildTimeout = null;
+        const track = document.getElementById('tickerTrack');
+        if (!track) return;
+        track.style.transition = 'opacity 0.15s ease';
+        track.style.opacity = '0';
+        setTimeout(() => {
+            _applyTickerContent();
+            track.style.opacity = '1';
+        }, 150);
+    }, 250);
+}
+
+function _applyTickerContent() {
+    const track = document.getElementById('tickerTrack');
+    if (!track) return;
+    const sep = '<span class="ticker-sep">◆</span>';
+    const html = _tickerItems.map(item =>
+        `<span class="ticker-item"><span class="t-icon">${item.icon}</span>${escapeHtml(item.text)}</span>${sep}`
+    ).join('');
+    track.innerHTML = html + html;
+    track.style.animation = 'none';
+    void track.offsetHeight;
+    track.style.animation = '';
+}
+
+function feedAnnouncementsToTicker(announcements) {
+    if (!_tickerReady || !announcements || !announcements.length) return;
+    const isHighPriority = announcements.some(a => a.text && (a.text.includes('HIGH PRIORITY') || a.text.includes('🚨')));
+    _tickerItems = _tickerItems.filter(i => i._type !== 'announcement');
+    _tickerItems.unshift({
+        icon: isHighPriority ? '🚨' : '📣',
+        text: isHighPriority ? 'High Priority Announcement — check the bell!' : 'New Announcement posted — check the bell!',
+        _type: 'announcement'
+    });
+    _rebuildTicker();
+}
+
+function feedLeaderboardToTicker(leaderboardData) {
+    if (!_tickerReady || !leaderboardData || !leaderboardData.activeStores) return;
+    const stores = leaderboardData.activeStores;
+    const getLeader = (data) => {
+        const scores = stores.map(s => {
+            const arr = (data[s] || []).filter(v => v !== null && v !== undefined);
+            return { store: s, val: arr.length ? arr[arr.length - 1] : 0 };
+        }).sort((a, b) => b.val - a.val);
+        return scores.length && scores[0].val ? scores[0].store : null;
+    };
+    const gpLeader = getLeader(leaderboardData.gp || {});
+    const revLeader = getLeader(leaderboardData.revenue || {});
+    if (!gpLeader && !revLeader) return;
+    _tickerItems = _tickerItems.filter(i => i._type !== 'leaderboard');
+    let text;
+    if (gpLeader && revLeader && gpLeader !== revLeader) {
+        text = `Monthly GP Leader: ${gpLeader}  ·  Revenue Leader: ${revLeader}`;
+    } else {
+        text = `${gpLeader || revLeader} is leading district GP & Revenue this month`;
+    }
+    _tickerItems.push({ icon: '🏆', text, _type: 'leaderboard' });
+    _rebuildTicker();
+}
+
+function feedChampionsToTicker(allBuyers, allListers, allGoogleReviews) {
+    if (!_tickerReady) return;
+    const getTop = (arr, key) => {
+        if (!arr.length) return null;
+        const merged = {};
+        arr.forEach(e => {
+            if (!merged[e.name]) merged[e.name] = { ...e };
+            else merged[e.name][key] = Math.max(merged[e.name][key], e[key]);
+        });
+        return Object.values(merged).sort((a, b) => b[key] - a[key])[0] || null;
+    };
+    const topBuyer = getTop(allBuyers, 'score');
+    const topLister = getTop(allListers, 'listed');
+    const topReviewer = getTop(allGoogleReviews, 'reviews');
+    if (!topBuyer && !topLister && !topReviewer) return;
+    _tickerItems = _tickerItems.filter(i => i._type !== 'champions');
+    const parts = [];
+    if (topBuyer) parts.push(`Buying: ${topBuyer.name} (${topBuyer.store})`);
+    if (topLister) parts.push(`Listing: ${topLister.name} (${topLister.store})`);
+    if (topReviewer) parts.push(`Reviews: ${topReviewer.name} (${topReviewer.store})`);
+    _tickerItems.push({ icon: '🥇', text: 'Weekly Champions — ' + parts.join('  ·  '), _type: 'champions' });
+    _rebuildTicker();
+}
+
+async function loadTickerItems() {
+    try {
+        const res = await fetch(`${TICKER_URL}?v=${Date.now()}`);
+        const data = await res.json();
+        if (data.items && data.items.length > 0) {
+            _tickerItems = _tickerItems.filter(i => i._type !== 'static');
+            const staticItems = data.items.map(item => ({ icon: item.icon || '📌', text: item.text, _type: 'static' }));
+            _tickerItems = [...staticItems, ..._tickerItems];
+            _rebuildTicker();
+        }
+    } catch (e) { /* silently keep defaults */ }
+}
+
+const TICKER_EMOJIS = [
+    '⭐','🌟','🏆','🥇','🎯','🔥','💡','📣',
+    '📋','📦','💬','📊','📈','📉','🔔','📌',
+    '✅','❌','⚠️','ℹ️','🚨','💰','💳','🛒',
+    '📱','💻','🖥️','📷','🎮','🔧','⚡','🔑',
+    '📝','🗓️','⏰','🚀','💪','👍','🤝','💼',
+    '🎖️','🏅','🎁','🎉','👀','📢','🔍','💎',
+    '🌐','🛍️','🧩','🏠','🎵','🎬','📚','🎪'
+];
+
+let _tickerPickerListenerAdded = false;
+
+async function toggleManageTicker() {
+    const dropdown = document.getElementById('manageTickerDropdown');
+    if (!dropdown) return;
+    const isOpen = dropdown.classList.contains('show');
+    closeAllModals();
+    if (!isOpen) {
+        dropdown.classList.add('show');
+        lockAndBlurScreen();
+        if (!_tickerPickerListenerAdded) {
+            _tickerPickerListenerAdded = true;
+            document.addEventListener('click', function(e) {
+                if (!e.target.closest('.t-icon-wrap')) {
+                    document.querySelectorAll('.emoji-picker-panel.show').forEach(p => p.classList.remove('show'));
+                }
+            });
+        }
+        const list = document.getElementById('manageTickerList');
+        list.innerHTML = '<div class="status-message">Loading...</div>';
+        try {
+            const res = await fetch(`${TICKER_URL}?v=${Date.now()}`);
+            const data = await res.json();
+            list.innerHTML = '';
+            const items = data.items || [];
+            if (items.length === 0) { addTickerRow(); } else { items.forEach(addTickerRow); }
+        } catch (e) {
+            list.innerHTML = '<div style="color:var(--red-alert); padding:20px; text-align:center;">Failed to load ticker items.</div>';
+        }
+    }
+}
+
+function addTickerRow(item = { icon: '📌', text: '' }) {
+    const row = document.createElement('div');
+    row.className = 'manage-row ticker-manage-row';
+    const icon = item.icon || '📌';
+    const text = item.text || '';
+    const emojiGrid = TICKER_EMOJIS.map(e =>
+        `<span class="emoji-option" data-emoji="${e}" onclick="selectTickerEmoji(this)">${e}</span>`
+    ).join('');
+    row.innerHTML = `
+        <div class="t-icon-wrap">
+            <button type="button" class="t-icon-btn" onclick="toggleEmojiPicker(this)" title="Pick emoji">${icon}</button>
+            <input type="hidden" class="t-icon" value="${escapeHtml(icon)}">
+            <div class="emoji-picker-panel"><div class="emoji-picker-grid">${emojiGrid}</div></div>
+        </div>
+        <input type="text" class="t-text" placeholder="Ticker message..." value="${escapeHtml(text)}">
+        <button class="del-btn" onclick="this.closest('.manage-row').remove()" title="Remove">✖</button>
+    `;
+    document.getElementById('manageTickerList').appendChild(row);
+}
+
+function toggleEmojiPicker(btn) {
+    const panel = btn.parentElement.querySelector('.emoji-picker-panel');
+    const isOpen = panel.classList.contains('show');
+    document.querySelectorAll('.emoji-picker-panel.show').forEach(p => p.classList.remove('show'));
+    if (!isOpen) panel.classList.add('show');
+}
+
+function selectTickerEmoji(span) {
+    const emoji = span.dataset.emoji;
+    const wrap = span.closest('.t-icon-wrap');
+    wrap.querySelector('.t-icon-btn').textContent = emoji;
+    wrap.querySelector('.t-icon').value = emoji;
+    wrap.querySelector('.emoji-picker-panel').classList.remove('show');
+}
+
+async function saveTickerItems() {
+    const btn = document.getElementById('saveTickerBtn');
+    const items = [];
+    document.querySelectorAll('#manageTickerList .manage-row').forEach(row => {
+        const text = row.querySelector('.t-text').value.trim();
+        if (text) items.push({ icon: row.querySelector('.t-icon').value.trim() || '📌', text });
+    });
+    btn.textContent = 'Saving...';
+    btn.style.opacity = '0.7';
+    try {
+        await fetch(TICKER_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ items }) });
+        _tickerItems = _tickerItems.filter(i => i._type !== 'static');
+        const newStatic = items.map(item => ({ icon: item.icon, text: item.text, _type: 'static' }));
+        _tickerItems = newStatic.length ? [...newStatic, ..._tickerItems] : [..._TICKER_DEFAULTS, ..._tickerItems];
+        _rebuildTicker();
+        closeAllModals();
+    } catch (e) {
+        alert('Failed to save ticker items.');
+    } finally {
+        btn.textContent = 'Save Changes';
+        btn.style.opacity = '1';
+    }
 }
 
 // --- 5. MODULE: USER MANAGEMENT ---
@@ -1064,12 +1313,13 @@ async function checkPIN() {
             checkAndShowTutorial(matched.name);
 
             if (typeof initDashboardData === 'function') initDashboardData();
+            initTicker();
         } else {
-            err.innerText = "Incorrect PIN. Please try again."; 
-            err.style.display = 'block'; 
-            document.getElementById('pinInput').value = ''; 
+            err.innerText = "Incorrect PIN. Please try again.";
+            err.style.display = 'block';
+            document.getElementById('pinInput').value = '';
         }
-    } catch (e) { 
+    } catch (e) {
         console.error(e);
         err.innerText = "Connection Error."; 
         err.style.display = 'block'; 
@@ -1624,13 +1874,12 @@ async function fetchHubData() {
         renderLiveData(hubDataCache);
         
         // Let the Hub power the Leaderboard automatically!
-        if (document.getElementById('lb-wrapper')) {
-            if (hubDataCache.leaderboard) {
-                cachedLeaderboardData = hubDataCache.leaderboard;
-                drawLeaderboard();
-            } else {
-                document.getElementById('lb-wrapper').innerHTML = '<div class="status-message" style="color:var(--red-alert);">Please Deploy "New Version" of Hub App Script!</div>';
-            }
+        if (hubDataCache.leaderboard) {
+            cachedLeaderboardData = hubDataCache.leaderboard;
+            feedLeaderboardToTicker(cachedLeaderboardData);
+            if (document.getElementById('lb-wrapper')) drawLeaderboard();
+        } else if (document.getElementById('lb-wrapper')) {
+            document.getElementById('lb-wrapper').innerHTML = '<div class="status-message" style="color:var(--red-alert);">Please Deploy "New Version" of Hub App Script!</div>';
         }
     } catch(e) {
         console.error("Hub Sync Failed", e);
@@ -4671,15 +4920,16 @@ document.addEventListener("DOMContentLoaded", () => {
         document.getElementById('docSearch').addEventListener('keyup', filterDocs); 
     }
 
-    if (sessionStorage.getItem('speeksUnlocked') === 'true') { 
+    if (sessionStorage.getItem('speeksUnlocked') === 'true') {
         document.body.classList.add('is-authenticated');
         const authOverlay = document.getElementById('authOverlay');
-        if (authOverlay) authOverlay.style.display = 'none'; 
+        if (authOverlay) authOverlay.style.display = 'none';
         document.body.style.overflow = '';
-        
-        closeAllModals(); 
-        applyRoleBasedUI(); 
-        initDashboardData(); 
+
+        closeAllModals();
+        applyRoleBasedUI();
+        initDashboardData();
+        initTicker();
     } else {
         if (!window.location.href.includes('index.html') && document.getElementById('authOverlay')) {
             window.location.href = "index.html"; 
@@ -6569,22 +6819,11 @@ async function fetchAndDisplayStoreComment() {
             const iconEl = document.getElementById('dailyMessageBubbleIcon');
             
             if (bubble && textEl && iconEl) {
-                // Hide the single main icon since we will put specific icons on each message line
                 iconEl.style.display = 'none';
-                
-                // Reformat the text container to allow stacking and text-wrapping
-                textEl.style.whiteSpace = 'normal';
                 textEl.style.display = 'flex';
                 textEl.style.flexDirection = 'column';
-                textEl.style.gap = '8px'; // Space between multiple messages
-                textEl.style.padding = '4px 0';
-                textEl.style.maxHeight = '150px'; // Prevent it from taking over the screen if there are 10 messages
-                textEl.style.overflowY = 'auto'; // Add a scrollbar inside the bubble if needed
-                
-                // Align the bubble items to the top so the "X" button stays neatly at the top right
-                bubble.style.alignItems = 'flex-start';
-                const closeBtn = bubble.querySelector('button');
-                if (closeBtn) closeBtn.style.marginTop = '4px';
+                textEl.style.gap = '8px';
+                textEl.style.padding = '2px 0';
 
                 // Build the HTML for new (unseen) messages only
                 let messagesHtml = '';
@@ -6630,8 +6869,6 @@ async function fetchChampions() {
     const lDate = document.getElementById('lister-champions-date');
     const bDate = document.getElementById('buyer-champions-date');
     const grDate = document.getElementById('google-review-champions-date');
-    if (!listerBody || !buyerBody) return;
-
     try {
         const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
         let allListers = [];
@@ -6796,14 +7033,16 @@ async function fetchChampions() {
             return html;
         };
 
-        listerBody.innerHTML = buildPodiumHtml(allListers, 'listed', 'Items', 'lister');
+        feedChampionsToTicker(allBuyers, allListers, allGoogleReviews);
+
+        if (listerBody) listerBody.innerHTML = buildPodiumHtml(allListers, 'listed', 'Items', 'lister');
         if (grBody) grBody.innerHTML = buildPodiumHtml(allGoogleReviews, 'reviews', 'Reviews', 'review');
-        buyerBody.innerHTML = buildPodiumHtml(allBuyers, 'score', 'Score', 'buyer');
+        if (buyerBody) buyerBody.innerHTML = buildPodiumHtml(allBuyers, 'score', 'Score', 'buyer');
 
     } catch (e) {
-        listerBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
+        if (listerBody) listerBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
         if (grBody) grBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
-        buyerBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
+        if (buyerBody) buyerBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
     }
 }
 

@@ -11,7 +11,10 @@
       "PowerShell($line = \\(Get-Content \"C:\\\\Users\\\\User\\\\.claude\\\\projects\\\\c--Users-User-Documents-GitHub-speeksnet\\\\50b192d4-b58f-455f-961e-aeaf487c0e4d.jsonl\" -TotalCount 119\\)[-1]; $idx = $line.IndexOf\\('getDashboardData'\\); if \\($idx -ge 0\\) { $line.Substring\\([Math]::Max\\(0,$idx-50\\), [Math]::Min\\(3000,$line.Length-$idx+50\\)\\) })",
       "PowerShell($content = Get-Content \"C:\\\\Users\\\\User\\\\.claude\\\\projects\\\\c--Users-User-Documents-GitHub-speeksnet\\\\50b192d4-b58f-455f-961e-aeaf487c0e4d.jsonl\" -Raw; $idx = $content.IndexOf\\('getDashboardData'\\); $content.Substring\\($idx, [Math]::Min\\(4000, $content.Length - $idx\\)\\))",
       "PowerShell($content = Get-Content \"C:\\\\Users\\\\User\\\\.claude\\\\projects\\\\c--Users-User-Documents-GitHub-speeksnet\\\\50b192d4-b58f-455f-961e-aeaf487c0e4d.jsonl\" -Raw; $idx = $content.IndexOf\\('mplBuyMargin'\\); $content.Substring\\($idx, [Math]::Min\\(2000, $content.Length - $idx\\)\\))",
-      "PowerShell($env:PATH = $env:PATH + \";C:\\\\Program Files\\\\Git\\\\bin;C:\\\\Program Files\\\\Git\\\\cmd\"; cd \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\"; git log --oneline -20)"
+      "PowerShell($env:PATH = $env:PATH + \";C:\\\\Program Files\\\\Git\\\\bin;C:\\\\Program Files\\\\Git\\\\cmd\"; cd \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\"; git log --oneline -20)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\" -Depth 2 | Where-Object { -not $_.FullName.Contains\\('.git'\\) } | Select-Object FullName)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\" -Recurse -Directory | Select-Object -First 30 | ForEach-Object { $_.FullName })",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\" -Recurse -File | Select-Object Name, @{N='FullPath';E={$_.FullName}} | ForEach-Object { \"$\\($_.FullPath\\)\" } | Sort-Object)"
     ]
   }
 }
