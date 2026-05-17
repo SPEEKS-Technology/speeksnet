@@ -5848,6 +5848,10 @@ window.toggleGoalsPanel = function(event) {
     const toggle = document.querySelector('.gi-nav-toggle');
     if (toggle) toggle.classList.toggle('panel-active', isOpen);
     if (!isOpen) _closePrevMonths();
+    if (isOpen) {
+        document.getElementById('checklistSidePanel')?.classList.remove('open');
+        document.querySelector('.cl-nav-toggle')?.classList.remove('panel-active');
+    }
 };
 
 // --- Edit Modal ---
@@ -7249,6 +7253,11 @@ window.toggleChecklistPanel = function(event) {
     if (toggle) {
         toggle.classList.toggle('panel-active', isOpen);
         if (isOpen) toggle.classList.remove('cl-needs-attention');
+    }
+    if (isOpen) {
+        document.getElementById('goalsSidePanel')?.classList.remove('open');
+        document.querySelector('.gi-nav-toggle')?.classList.remove('panel-active');
+        _resetToCurrentMonth?.();
     }
 };
 

@@ -3652,27 +3652,30 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 /* Drop-down checklist panel — hangs flush from the right of the header */
 .checklist-side-panel {
     position: fixed;
-    top: var(--panel-top, 104px);     /* set by _syncLayout via CSS custom property */
-    right: 0;                         /* flush with right edge of viewport */
-    width: 420px;                     /* matches goals panel width */
-    height: calc(100vh - var(--panel-top, 104px)); /* always full height below the header+ticker */
+    top: var(--panel-top, 104px);
+    right: 0;
+    width: 420px;
+    height: calc(100vh - var(--panel-top, 104px));
     background: white;
-    border-radius: 0 0 0 14px;        /* only bottom-left rounded; right is flush */
-    box-shadow: -6px 0 30px rgba(0,0,0,0.14);
-    z-index: 101;                     /* above tabs (100) when open */
+    border-radius: 0 0 0 14px;
+    box-shadow: -8px 0 32px rgba(0,0,0,0.12);
+    z-index: 101;
     display: flex;
     flex-direction: column;
-    clip-path: inset(0 0 100% 0);
-    transition: clip-path 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    transform: translateX(105%);
+    opacity: 0;
+    transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+                opacity 0.3s ease;
     pointer-events: none;
     overflow: hidden;
     border: 1px solid #e2e8f0;
     border-top: none;
-    border-right: none;               /* no right border — viewport edge is the boundary */
+    border-right: none;
 }
 
 .checklist-side-panel.open {
-    clip-path: inset(0);
+    transform: translateX(0);
+    opacity: 1;
     pointer-events: auto;
 }
 
@@ -3702,25 +3705,27 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
    ========================================================= */
 .goals-side-panel {
     position: fixed;
-    top: var(--panel-top, 104px);     /* set by _syncLayout via CSS custom property */
+    top: var(--panel-top, 104px);
     right: 0;
     width: 420px;
     height: calc(100vh - var(--panel-top, 104px));
     background: white;
     border-radius: 0 0 0 14px;
-    box-shadow: -6px 0 30px rgba(0,0,0,0.14);
-    z-index: 101;                     /* above tabs (100) when open */
+    box-shadow: -8px 0 32px rgba(0,0,0,0.12);
+    z-index: 101;
     display: flex;
     flex-direction: column;
-    clip-path: inset(0 0 100% 0);
-    transition: clip-path 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    transform: translateX(105%);
+    opacity: 0;
+    transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+                opacity 0.3s ease;
     pointer-events: none;
     overflow: hidden;
     border: 1px solid #e2e8f0;
     border-top: none;
     border-right: none;
 }
-.goals-side-panel.open { clip-path: inset(0); pointer-events: auto; }
+.goals-side-panel.open { transform: translateX(0); opacity: 1; pointer-events: auto; }
 
 .gi-panel-header { padding: 18px 20px; border-bottom: 1px solid #e2e8f0; background: #fcfcfc; flex-shrink: 0; }
 .gi-panel-header-row { display: flex; align-items: center; justify-content: space-between; }
