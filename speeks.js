@@ -2,6 +2,30 @@
    SPEEKSNET | UNIVERSAL APP JAVASCRIPT
    ========================================================= */
 
+(function () {
+  const img = new Image();
+  img.src = 'favicon.svg';
+  img.onload = function () {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    function applyFavicon() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, 64, 64);
+      ctx.globalCompositeOperation = 'source-in';
+      ctx.fillStyle = mq.matches ? '#FAFAFA' : '#0A0A0A';
+      ctx.fillRect(0, 0, 64, 64);
+      let link = document.querySelector('link[rel="icon"]');
+      if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
+      link.type = 'image/png';
+      link.href = canvas.toDataURL('image/png');
+    }
+    applyFavicon();
+    mq.addEventListener('change', applyFavicon);
+  };
+})();
+
 // --- 1. API URLS ---
 const CMS_URL = 'https://script.google.com/macros/s/AKfycbxZviJiiQKcQYyp3SK4tcNBHrHXkID7cmwwuONStVPE9DHCSAMappqAs9dBns7ufECI/exec';
 const HOTKEYS_URL = 'https://script.google.com/macros/s/AKfycbyLburcVWM8xAKwDt2RHAQhZBLb_rJjb2__EzhoAKx1KgkNFi-BchVetgaTKvwCwqZiRw/exec';
@@ -20,6 +44,7 @@ const STORE_COMMENT_URL = 'https://script.google.com/macros/s/AKfycbzoqWLZz07niO
 const CHECKLIST_URL = 'https://script.google.com/macros/s/AKfycbxr4ZEoSKeF4BZ1H2-tcmc6Gy30-le5Gdm3CSdee6XxOhZFes3-5SF_PNcWR4OLEGN2hQ/exec';
 const TUTORIAL_URL = 'https://script.google.com/macros/s/AKfycbySrXu6IW3S39GKiEsXkJwd4s75aO0uG-BTTg_swxEx3BMG_W7qqZBwHKnuEm_k_Agh/exec';
 const PATCH_NOTES_URL = 'https://script.google.com/macros/s/AKfycbzzk6beS7HWINw8GtQZ12FpezgFhBXj_1GgV1Fs342bc05Y6x9-tJGgr_MMl13rIfP3/exec';
+const TICKER_URL = 'https://script.google.com/macros/s/AKfycbyfvqCn2Vwwp1xGzKiXM9cFkicXosI3ErIp83Qu4GduhS6CRoldVSnDI267j54C72qyVw/exec';
 
 // --- 2. NAV COMPACT MODE ---
 (function () {
@@ -66,6 +91,9 @@ const PATCH_NOTES_URL = 'https://script.google.com/macros/s/AKfycbzzk6beS7HWINw8
         }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
         checkNavCompact(); // no-op if not yet auth'd, harmless
+
+        // Pre-fetch ticker data during login screen so it's ready the moment the user logs in.
+        loadTickerItems();
     });
 })();
 
@@ -105,7 +133,7 @@ function formatSmartValue(val, name) {
     return new Intl.NumberFormat('en-US').format(num);
 }
 
-// --- 3. GLOBAL UI, MODALS & TABS ---
+// --- 4. GLOBAL UI, MODALS & TABS ---
 let savedScrollPosition = 0;
 
 function toggleSidebar() {
@@ -185,6 +213,7 @@ async function loadCMS() {
 
                 sortedAnns.forEach((item, index) => {
                     let displayDate = "";
+                    let displayTime = "";
                     let isArchived = false;
                     let unreadHtmlAttr = "";
 
@@ -192,6 +221,11 @@ async function loadCMS() {
                         const annDate = new Date(item.date);
                         if (!isNaN(annDate.getTime())) {
                             displayDate = annDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+                            const h = annDate.getHours(), min = annDate.getMinutes();
+                            if (h !== 0 || min !== 0) {
+                                const ampm = h >= 12 ? 'pm' : 'am';
+                                displayTime = `${h % 12 || 12}:${String(min).padStart(2, '0')}${ampm}`;
+                            }
                         }
                     }
 
@@ -282,7 +316,7 @@ async function loadCMS() {
                                 <span class="ann-author">${item.author || 'Announcement'}</span>
                                 <div class="ann-header-right">
                                     ${readReceiptHtml}
-                                    ${displayDate ? `<small class="ann-date">${displayDate}</small>` : ''}
+                                    ${displayDate ? `<small class="ann-date">${displayDate}${displayTime ? ` · ${displayTime}` : ''}</small>` : ''}
                                 </div>
                             </div>
                             <hr />
@@ -304,6 +338,7 @@ async function loadCMS() {
 
                 recentHtml = recentCount === 0 ? '<div style="padding: 20px; color:#999; text-align:center;">No recent announcements</div>' : recentHtml;
                 archiveHtml = archiveCount === 0 ? '<div style="padding: 20px; color:#999; text-align:center;">No archived announcements</div>' : archiveHtml;
+                feedAnnouncementsToTicker(sortedAnns.slice(0, 2));
             } else {
                 recentHtml = archiveHtml = '<div style="padding: 20px; color:#999; text-align:center;">No announcements</div>';
             }
@@ -316,13 +351,17 @@ async function loadCMS() {
             if (badge) {
                 if (showBadge) {
                     if (currentUser) localStorage.setItem('speeksUnreadAnnouncements_' + currentUser, 'true');
-                    badge.style.display = 'block'; 
-                    badge.classList.add('active'); 
+                    badge.style.display = 'block';
+                    badge.classList.add('active');
                 } else {
                     if (currentUser) localStorage.removeItem('speeksUnreadAnnouncements_' + currentUser);
-                    badge.style.display = 'none';
-                    badge.classList.remove('active');
+                    updateMainBadge(); // keep dot alive if patch notes are also unseen
                 }
+            }
+            const recentBadge = document.getElementById('recentBadge');
+            if (recentBadge) {
+                recentBadge.style.display = showBadge ? 'block' : 'none';
+                recentBadge.classList.toggle('active', showBadge);
             }
         }
 
@@ -369,11 +408,11 @@ function markAnnouncementRead(rowId) {
             card.remove();
             const container = document.getElementById('ann-container');
             if (container && !container.querySelector('.notif-item[data-ann-id]')) {
-                container.innerHTML = '<div style="padding: 20px; color:#999; text-align:center;">No recent announcements</div>';
-                const badge = document.getElementById('notifBadge');
-                if (badge) { badge.style.display = 'none'; badge.classList.remove('active'); }
                 localStorage.removeItem('speeksUnreadAnnouncements_' + cleanUser);
+                updateMainBadge(); // keep dot alive if patch notes are also unseen
             }
+            // Reload both tabs so the item appears in Archive immediately
+            loadCMS();
         }, { once: true });
     }
 }
@@ -527,6 +566,10 @@ async function pollReactions() {
         const cleanUser = currentUser ? String(currentUser).trim().toLowerCase() : null;
         const availableEmojis = ['👍', '🎉', '👀', '🔥', '🫡', '💵'];
 
+        // If any announcement isn't rendered yet, a new one was posted — reload the full list
+        const hasNew = data.announcements.some(item => !document.getElementById(`reactions_${item.rowId}`));
+        if (hasNew) { loadCMS(); return; }
+
         data.announcements.forEach(item => {
             const annId = item.rowId;
             if (!document.getElementById(`reactions_${annId}`)) return;
@@ -558,6 +601,256 @@ async function pollReactions() {
 function startReactionPolling() {
     if (_reactionPollInterval) clearInterval(_reactionPollInterval);
     _reactionPollInterval = setInterval(pollReactions, 15000);
+}
+
+// --- 4B. MODULE: INFO TICKER ---
+const _TICKER_PPS = 40;
+const _TICKER_DEFAULTS = [
+    { icon: '⭐', text: 'Ask every customer for a Google Review — every one counts', _type: 'static' },
+    { icon: '📋', text: 'Use the Margin Guide for every offer', _type: 'static' },
+    { icon: '📦', text: 'Listing efficiency is key — process fast, list faster', _type: 'static' },
+    { icon: '💬', text: 'Use PayMore and SPEEKS Discord for buying & listing help', _type: 'static' },
+];
+
+let _tickerItems          = [];
+let _tickerReady          = false;
+let _tickerShown          = false;
+let _tickerFetchDone      = false;
+let _tickerRebuildTimeout = null;
+
+function _syncLayout() {
+    const nav = document.querySelector('.top-nav');
+    const ticker = document.getElementById('infoTicker');
+    if (!nav) return;
+    const navH = Math.round(nav.getBoundingClientRect().height);
+    const tickerH = document.body.classList.contains('is-authenticated') ? 32 : 0;
+    const totalTop = navH + tickerH;
+    if (ticker) ticker.style.top = navH + 'px';
+    document.documentElement.style.setProperty('--panel-top', totalTop + 'px');
+}
+
+function initTicker() {
+    if (_tickerReady) return;
+    const ticker = document.getElementById('infoTicker');
+    if (!ticker) return;
+    _tickerReady = true;
+    requestAnimationFrame(_syncLayout);
+    const nav = document.querySelector('.top-nav');
+    if (nav && window.ResizeObserver) new ResizeObserver(_syncLayout).observe(nav);
+    window.addEventListener('resize', _syncLayout);
+    // Data may already be fetched (pre-loaded at page load); trigger display now.
+    _rebuildTicker();
+}
+
+function _rebuildTicker() {
+    // Don't attempt to render before the user is authenticated and the ticker DOM is live.
+    if (!_tickerReady) return;
+    // Once scrolling, never restart — feed updates land in _tickerItems for the next page load.
+    if (_tickerShown) return;
+    if (_tickerRebuildTimeout) clearTimeout(_tickerRebuildTimeout);
+    _tickerRebuildTimeout = setTimeout(() => {
+        _tickerRebuildTimeout = null;
+        if (!_tickerFetchDone) return;
+        _showTickerFirstTime();
+    }, 800);
+}
+
+function _showTickerFirstTime() {
+    _tickerShown = true;
+    if (_tickerItems.length === 0) _tickerItems = [..._TICKER_DEFAULTS];
+    _applyTickerContent();
+}
+
+function _applyTickerContent() {
+    const track = document.getElementById('tickerTrack');
+    if (!track) return;
+    const sep  = '<span class="ticker-sep">◆</span>';
+    const html = _tickerItems.map(item =>
+        `<span class="ticker-item"><span class="t-icon">${item.icon}</span>${escapeHtml(item.text)}</span>${sep}`
+    ).join('');
+    track.innerHTML = html + html;
+    track.style.animation = 'none';
+    void track.offsetHeight;
+    const cw = track.scrollWidth / 2;
+    track.style.animation = `ticker-scroll ${(cw / _TICKER_PPS).toFixed(1)}s linear infinite`;
+}
+
+function feedAnnouncementsToTicker(announcements) {
+    if (!_tickerReady || !announcements || !announcements.length) return;
+    const isHighPriority = announcements.some(a => a.text && (a.text.includes('HIGH PRIORITY') || a.text.includes('🚨')));
+    _tickerItems = _tickerItems.filter(i => i._type !== 'announcement');
+    _tickerItems.unshift({
+        icon: isHighPriority ? '🚨' : '📣',
+        text: isHighPriority ? 'High Priority Announcement — check the bell!' : 'New Announcement posted — check the bell!',
+        _type: 'announcement'
+    });
+    _rebuildTicker();
+}
+
+function feedLeaderboardToTicker(leaderboardData) {
+    if (!_tickerReady || !leaderboardData || !leaderboardData.activeStores) return;
+    const stores = leaderboardData.activeStores;
+    const getLeader = (data) => {
+        const scores = stores.map(s => {
+            const arr = (data[s] || []).filter(v => v !== null && v !== undefined);
+            return { store: s, val: arr.length ? arr[arr.length - 1] : 0 };
+        }).sort((a, b) => b.val - a.val);
+        return scores.length && scores[0].val ? scores[0].store : null;
+    };
+    const gpLeader = getLeader(leaderboardData.gp || {});
+    const revLeader = getLeader(leaderboardData.revenue || {});
+    if (!gpLeader && !revLeader) return;
+    _tickerItems = _tickerItems.filter(i => i._type !== 'leaderboard');
+    let text;
+    if (gpLeader && revLeader && gpLeader !== revLeader) {
+        text = `Monthly GP Leader: ${gpLeader}  ·  Revenue Leader: ${revLeader}`;
+    } else {
+        text = `${gpLeader || revLeader} is leading district GP & Revenue this month`;
+    }
+    _tickerItems.push({ icon: '🏆', text, _type: 'leaderboard' });
+    _rebuildTicker();
+}
+
+function feedChampionsToTicker(allBuyers, allListers, allGoogleReviews) {
+    if (!_tickerReady) return;
+    const getTop = (arr, key) => {
+        if (!arr.length) return null;
+        const merged = {};
+        arr.forEach(e => {
+            if (!merged[e.name]) merged[e.name] = { ...e };
+            else merged[e.name][key] = Math.max(merged[e.name][key], e[key]);
+        });
+        return Object.values(merged).sort((a, b) => b[key] - a[key])[0] || null;
+    };
+    const topBuyer = getTop(allBuyers, 'score');
+    const topLister = getTop(allListers, 'listed');
+    const topReviewer = getTop(allGoogleReviews, 'reviews');
+    if (!topBuyer && !topLister && !topReviewer) return;
+    _tickerItems = _tickerItems.filter(i => i._type !== 'champions');
+    const parts = [];
+    if (topBuyer) parts.push(`Buying: ${topBuyer.name} (${topBuyer.store})`);
+    if (topLister) parts.push(`Listing: ${topLister.name} (${topLister.store})`);
+    if (topReviewer) parts.push(`Reviews: ${topReviewer.name} (${topReviewer.store})`);
+    _tickerItems.push({ icon: '🥇', text: 'Weekly Champions — ' + parts.join('  ·  '), _type: 'champions' });
+    _rebuildTicker();
+}
+
+async function loadTickerItems() {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 8000);
+    try {
+        const res = await fetch(`${TICKER_URL}?v=${Date.now()}`, { signal: controller.signal });
+        const data = await res.json();
+        if (data.items && data.items.length > 0) {
+            _tickerItems = _tickerItems.filter(i => i._type !== 'static');
+            const staticItems = data.items.map(item => ({ icon: item.icon || '📌', text: item.text, _type: 'static' }));
+            _tickerItems = [...staticItems, ..._tickerItems];
+        }
+    } catch (e) { console.warn('[Ticker] AppScript fetch failed — check deployment access settings:', e); }
+    clearTimeout(tid);
+    _tickerFetchDone = true;
+    _rebuildTicker();
+}
+
+const TICKER_EMOJIS = [
+    '⭐','🌟','🏆','🥇','🎯','🔥','💡','📣',
+    '📋','📦','💬','📊','📈','📉','🔔','📌',
+    '✅','❌','⚠️','ℹ️','🚨','💰','💳','🛒',
+    '📱','💻','🖥️','📷','🎮','🔧','⚡','🔑',
+    '📝','🗓️','⏰','🚀','💪','👍','🤝','💼',
+    '🎖️','🏅','🎁','🎉','👀','📢','🔍','💎',
+    '🌐','🛍️','🧩','🏠','🎵','🎬','📚','🎪'
+];
+
+let _tickerPickerListenerAdded = false;
+
+async function toggleManageTicker() {
+    const dropdown = document.getElementById('manageTickerDropdown');
+    if (!dropdown) return;
+    const isOpen = dropdown.classList.contains('show');
+    closeAllModals();
+    if (!isOpen) {
+        dropdown.classList.add('show');
+        lockAndBlurScreen();
+        if (!_tickerPickerListenerAdded) {
+            _tickerPickerListenerAdded = true;
+            document.addEventListener('click', function(e) {
+                if (!e.target.closest('.t-icon-wrap')) {
+                    document.querySelectorAll('.emoji-picker-panel.show').forEach(p => p.classList.remove('show'));
+                }
+            });
+        }
+        const list = document.getElementById('manageTickerList');
+        list.innerHTML = '<div class="status-message">Loading...</div>';
+        try {
+            const res = await fetch(`${TICKER_URL}?v=${Date.now()}`);
+            const data = await res.json();
+            list.innerHTML = '';
+            const items = data.items || [];
+            if (items.length === 0) { addTickerRow(); } else { items.forEach(addTickerRow); }
+        } catch (e) {
+            list.innerHTML = '<div style="color:var(--red-alert); padding:20px; text-align:center;">Failed to load ticker items.</div>';
+        }
+    }
+}
+
+function addTickerRow(item = { icon: '📌', text: '' }) {
+    const row = document.createElement('div');
+    row.className = 'manage-row ticker-manage-row';
+    const icon = item.icon || '📌';
+    const text = item.text || '';
+    const emojiGrid = TICKER_EMOJIS.map(e =>
+        `<span class="emoji-option" data-emoji="${e}" onclick="selectTickerEmoji(this)">${e}</span>`
+    ).join('');
+    row.innerHTML = `
+        <div class="t-icon-wrap">
+            <button type="button" class="t-icon-btn" onclick="toggleEmojiPicker(this)" title="Pick emoji">${icon}</button>
+            <input type="hidden" class="t-icon" value="${escapeHtml(icon)}">
+            <div class="emoji-picker-panel"><div class="emoji-picker-grid">${emojiGrid}</div></div>
+        </div>
+        <input type="text" class="t-text" placeholder="Ticker message..." value="${escapeHtml(text)}">
+        <button class="del-btn" onclick="this.closest('.manage-row').remove()" title="Remove">✖</button>
+    `;
+    document.getElementById('manageTickerList').appendChild(row);
+}
+
+function toggleEmojiPicker(btn) {
+    const panel = btn.parentElement.querySelector('.emoji-picker-panel');
+    const isOpen = panel.classList.contains('show');
+    document.querySelectorAll('.emoji-picker-panel.show').forEach(p => p.classList.remove('show'));
+    if (!isOpen) panel.classList.add('show');
+}
+
+function selectTickerEmoji(span) {
+    const emoji = span.dataset.emoji;
+    const wrap = span.closest('.t-icon-wrap');
+    wrap.querySelector('.t-icon-btn').textContent = emoji;
+    wrap.querySelector('.t-icon').value = emoji;
+    wrap.querySelector('.emoji-picker-panel').classList.remove('show');
+}
+
+async function saveTickerItems() {
+    const btn = document.getElementById('saveTickerBtn');
+    const items = [];
+    document.querySelectorAll('#manageTickerList .manage-row').forEach(row => {
+        const text = row.querySelector('.t-text').value.trim();
+        if (text) items.push({ icon: row.querySelector('.t-icon').value.trim() || '📌', text });
+    });
+    btn.textContent = 'Saving...';
+    btn.style.opacity = '0.7';
+    try {
+        await fetch(TICKER_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ items }) });
+        _tickerItems = _tickerItems.filter(i => i._type !== 'static');
+        const newStatic = items.map(item => ({ icon: item.icon, text: item.text, _type: 'static' }));
+        _tickerItems = newStatic.length ? [...newStatic, ..._tickerItems] : [..._TICKER_DEFAULTS, ..._tickerItems];
+        _rebuildTicker();
+        closeAllModals();
+    } catch (e) {
+        alert('Failed to save ticker items.');
+    } finally {
+        btn.textContent = 'Save Changes';
+        btn.style.opacity = '1';
+    }
 }
 
 // --- 5. MODULE: USER MANAGEMENT ---
@@ -616,7 +909,7 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
     row.className = 'user-manage-row';
 
     const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL', 'CORP'];
-    const roles = ['CEO', 'District Manager', 'Manager', 'Employee', 'Training', 'TOM'];
+    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM'];
 
     const storeOptions = stores.map(s => `<option value="${s}" ${(user.store || '').toUpperCase() === s ? 'selected' : ''}>${s}</option>`).join('');
     const roleOptions = roles.map(r => `<option value="${r}" ${(user.role || '').toLowerCase() === r.toLowerCase() ? 'selected' : ''}>${r}</option>`).join('');
@@ -1026,12 +1319,13 @@ async function checkPIN() {
             checkAndShowTutorial(matched.name);
 
             if (typeof initDashboardData === 'function') initDashboardData();
+            initTicker();
         } else {
-            err.innerText = "Incorrect PIN. Please try again."; 
-            err.style.display = 'block'; 
-            document.getElementById('pinInput').value = ''; 
+            err.innerText = "Incorrect PIN. Please try again.";
+            err.style.display = 'block';
+            document.getElementById('pinInput').value = '';
         }
-    } catch (e) { 
+    } catch (e) {
         console.error(e);
         err.innerText = "Connection Error."; 
         err.style.display = 'block'; 
@@ -1240,7 +1534,9 @@ function renderKPIDashboard() {
 }
 
 // --- 10. MODULE: LIVE VARIANCE REPORTS ---
-function formatVariancePct(num) { 
+let _varianceSyncListener = null;
+let _weeklyGridResizeListener = null;
+function formatVariancePct(num) {
     return Math.abs(num) < 0.001 ? '0.00%' : `${num < 0 ? '-' : '+'}${Math.abs(num).toFixed(2)}%`; 
 }
 
@@ -1337,8 +1633,10 @@ function renderVariance() {
             };
             
             syncHeights();
-            
+
             // If the user resizes their window, re-sync the heights!
+            if (_varianceSyncListener) window.removeEventListener('resize', _varianceSyncListener);
+            _varianceSyncListener = syncHeights;
             window.addEventListener('resize', syncHeights);
         }
     }, 50); // 50ms delay gives the browser time to paint the HTML before we measure it
@@ -1501,6 +1799,8 @@ async function fetchWeeklyKPIs() {
             else nV.style.gridTemplateColumns = '1fr';
         };
         applyGridColumns();
+        if (_weeklyGridResizeListener) window.removeEventListener('resize', _weeklyGridResizeListener);
+        _weeklyGridResizeListener = applyGridColumns;
         window.addEventListener('resize', applyGridColumns);
 
         // HTML Column Builder Helper
@@ -1579,18 +1879,19 @@ async function fetchHubData() {
         hubDataCache = freshData;
 
         if (document.getElementById('bs-buy-val')) renderBuyingSales();
+        renderMonthlyGoalsBanner();
+        renderDistrictGoals();
         
         // Render Live Data globally (Fixes CEO Rings)
         renderLiveData(hubDataCache);
         
         // Let the Hub power the Leaderboard automatically!
-        if (document.getElementById('lb-wrapper')) {
-            if (hubDataCache.leaderboard) {
-                cachedLeaderboardData = hubDataCache.leaderboard;
-                drawLeaderboard();
-            } else {
-                document.getElementById('lb-wrapper').innerHTML = '<div class="status-message" style="color:var(--red-alert);">Please Deploy "New Version" of Hub App Script!</div>';
-            }
+        if (hubDataCache.leaderboard) {
+            cachedLeaderboardData = hubDataCache.leaderboard;
+            feedLeaderboardToTicker(cachedLeaderboardData);
+            if (document.getElementById('lb-wrapper')) drawLeaderboard();
+        } else if (document.getElementById('lb-wrapper')) {
+            document.getElementById('lb-wrapper').innerHTML = '<div class="status-message" style="color:var(--red-alert);">Please Deploy "New Version" of Hub App Script!</div>';
         }
     } catch(e) {
         console.error("Hub Sync Failed", e);
@@ -1650,6 +1951,8 @@ function renderBuyingSales() {
         smb.className = sellMarginNum >= 55.0 ? 'delta-badge delta-pos' : 'delta-badge delta-neg';
     });
 
+    document.querySelectorAll('#bs-rev').forEach(el => el.innerText = `$${Math.round(rev).toLocaleString()}`);
+
     const bsDateEl = document.getElementById('bs-last-updated');
     if (bsDateEl) {
         const _bsTs = JSON.parse(localStorage.getItem('bsStoreTimestamps') || '{}');
@@ -1698,6 +2001,7 @@ function renderLiveData(d) {
         // 2. Update CEO Rings (Sales)
         if(document.getElementById(`ceo-${store.base}-pct`)) document.getElementById(`ceo-${store.base}-pct`).innerText = p + '%';
         if(document.getElementById(`ceo-${store.base}-goal`)) document.getElementById(`ceo-${store.base}-goal`).innerText = goalTxt;
+        if(document.getElementById(`ceo-${store.base}-rev`)) document.getElementById(`ceo-${store.base}-rev`).innerText = `$${Math.round(rev).toLocaleString()}`;
         if(document.getElementById(`ceo-${store.base}-t-gp`)) document.getElementById(`ceo-${store.base}-t-gp`).innerText = tGpTxt;
         if(document.getElementById(`ceo-${store.base}-sell-margin`)) {
             let el = document.getElementById(`ceo-${store.base}-sell-margin`);
@@ -1764,6 +2068,7 @@ let cachedLeaderboardData = null;
 let currentTimeframe = '4-Week'; 
 let currentChartMode = 'averages';
 let kpiChartCache = JSON.parse(localStorage.getItem('speeksKpiChartCache')) || { '4-Week': null, 'Monthly': null };
+let _latestPatchKey = null; // title|date of the most recent patch notes group
 
 function switchPageTab(tab) {
     ['trends', 'records'].forEach(t => { 
@@ -2109,7 +2414,265 @@ async function saveManageRecords() {
     }
 }
 
-// --- 15. MODULE: QUICK MESSAGES ---
+// --- 15. MODULE: MONTHLY AWARDS ---
+let awardsCache = null;
+let currentAwardVideoUrl = null;
+
+const STORE_EMOJI_MAP = { OVL: '🟣', LEE: '🔵', WSP: '🟢', MPL: '🟠', BAL: '🔴' };
+const AWARD_NAMES = ['The Beyond The Benchmark Award', 'The Scroll Stopper Award', 'The Brand Beacon Award'];
+const AWARD_EMOJIS = ['🎯', '👀', '💡'];
+const AWARD_DISPLAY_LINES = [['The Beyond The', 'Benchmark Award'], ['The Scroll', 'Stopper Award'], ['The Brand', 'Beacon Award']];
+const AWARD_DESCRIPTIONS = ['Best Store Performance Relative to Monthly Goal', 'Funniest Post/Video', 'Best Brand Encapsulation Post/Video'];
+
+function toVideoEmbed(url) {
+    if (!url) return null;
+    // Google Drive file link
+    const driveFile = url.match(/drive\.google\.com\/file\/d\/([A-Za-z0-9_-]+)/);
+    if (driveFile) return { type: 'iframe', src: `https://drive.google.com/file/d/${driveFile[1]}/preview` };
+    const driveOpen = url.match(/drive\.google\.com\/open\?id=([A-Za-z0-9_-]+)/);
+    if (driveOpen) return { type: 'iframe', src: `https://drive.google.com/file/d/${driveOpen[1]}/preview` };
+    // Direct video file (MP4, WebM, etc.)
+    if (/\.(mp4|webm|ogg)(\?|$)/i.test(url)) return { type: 'video', src: url };
+    // YouTube fallback
+    const yt = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+    if (yt) return { type: 'iframe', src: `https://www.youtube.com/embed/${yt[1]}` };
+    return null;
+}
+
+function buildVideoHtml(url) {
+    const v = toVideoEmbed(url);
+    if (!v) return '';
+    if (v.type === 'video') return `<video controls src="${v.src}" style="width:100%;height:100%;display:block;"></video>`;
+    return `<iframe src="${v.src}" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen loading="lazy" style="width:100%;height:100%;display:block;"></iframe>`;
+}
+
+async function fetchAwardsData() {
+    try {
+        const res = await fetch(`${RECORDS_URL}?type=awards&v=${Date.now()}`);
+        const raw = await res.json();
+        // Deduplicate by month — later rows win (most recent save for a month)
+        const byMonth = new Map();
+        raw.forEach(a => byMonth.set(a.month, a));
+        awardsCache = Array.from(byMonth.values());
+        renderAwards();
+        renderAwardVideos();
+    } catch (e) {}
+}
+
+function renderAwards() {
+    const container = document.getElementById('awards-cards-container');
+    const monthLabel = document.getElementById('awards-month-label');
+    if (!container) return;
+
+    if (!awardsCache || awardsCache.length === 0) {
+        container.innerHTML = '<div class="status-message">No awards data yet.</div>';
+        return;
+    }
+
+    const latest = awardsCache[awardsCache.length - 1];
+    if (monthLabel) monthLabel.textContent = latest.month || '';
+
+    const winners = [latest.winner1, latest.winner2, latest.winner3];
+    const hasAny = winners.some(w => w);
+    if (!hasAny) {
+        container.innerHTML = '<div class="status-message">No award winners set for this month yet.</div>';
+        return;
+    }
+
+    container.innerHTML = AWARD_NAMES.map((name, i) => {
+        const store = winners[i];
+        const [line1, line2] = AWARD_DISPLAY_LINES[i];
+        return `
+        <div class="award-card-trophy-wrap">
+            <button class="award-info-btn" data-desc="${escapeHtml(AWARD_DESCRIPTIONS[i])}">i</button>
+            <div class="award-card">
+                <div class="award-card-header">
+                    <div class="award-card-name">${escapeHtml(line1)}<br>${escapeHtml(line2)}</div>
+                </div>
+                <div class="award-card-sep"><span>◆</span></div>
+                <div class="award-card-body">
+                    <div class="award-card-winner">${store ? escapeHtml(store) : '<span style="opacity:0.45;">—</span>'}</div>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+}
+
+function renderAwardVideos() {
+    const btn = document.getElementById('awards-video-btn');
+    const latest = (awardsCache || []).slice(-1)[0];
+    currentAwardVideoUrl = (latest && latest.videoUrl) ? latest.videoUrl : null;
+    if (btn) btn.style.display = currentAwardVideoUrl ? '' : 'none';
+}
+
+function openAwardVideo() {
+    if (!currentAwardVideoUrl) return;
+    const overlay = document.getElementById('awardVideoOverlay');
+    const content = document.getElementById('awardVideoContent');
+    if (!overlay || !content) return;
+    content.innerHTML = buildVideoHtml(currentAwardVideoUrl);
+    overlay.style.display = 'flex';
+}
+
+function closeAwardVideo() {
+    const overlay = document.getElementById('awardVideoOverlay');
+    const content = document.getElementById('awardVideoContent');
+    if (overlay) overlay.style.display = 'none';
+    if (content) content.innerHTML = '';
+}
+
+function toggleManageAwards() {
+    const dropdown = document.getElementById('manageAwardsDropdown');
+    if (!dropdown) return;
+
+    const isOpen = dropdown.classList.contains('show');
+    closeAllModals();
+
+    if (!isOpen) {
+        dropdown.classList.add('show');
+        lockAndBlurScreen();
+
+        const editTabBtn = document.getElementById('awards-tab-edit');
+        if (editTabBtn) editTabBtn.style.display = '';
+        const editFooter = document.getElementById('awardsEditFooter');
+        if (editFooter) editFooter.style.display = '';
+
+        switchAwardsTab('edit');
+
+        if (!awardsCache) {
+            fetchAwardsData().then(prefillAwardsForm);
+        } else {
+            prefillAwardsForm();
+        }
+    }
+}
+
+function prefillAwardsForm() {
+    const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+    if (awardsCache && awardsCache.length > 0) {
+        const latest = awardsCache[awardsCache.length - 1];
+        setVal('awardsMonthInput', latest.month);
+        setVal('awardsVideoInput', latest.videoUrl);
+        setVal('award1Store', latest.winner1);
+        setVal('award2Store', latest.winner2);
+        setVal('award3Store', latest.winner3);
+    } else {
+        setVal('awardsMonthInput', new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }));
+    }
+}
+
+function toggleAwardsHistory() {
+    const dropdown = document.getElementById('manageAwardsDropdown');
+    if (!dropdown) return;
+
+    const isOpen = dropdown.classList.contains('show');
+    closeAllModals();
+
+    if (!isOpen) {
+        dropdown.classList.add('show');
+        lockAndBlurScreen();
+
+        const editTabBtn = document.getElementById('awards-tab-edit');
+        if (editTabBtn) editTabBtn.style.display = 'none';
+        const editFooter = document.getElementById('awardsEditFooter');
+        if (editFooter) editFooter.style.display = 'none';
+
+        if (!awardsCache) {
+            fetchAwardsData().then(() => switchAwardsTab('history'));
+        } else {
+            switchAwardsTab('history');
+        }
+    }
+}
+
+function switchAwardsTab(tab) {
+    document.getElementById('awardsTabEdit').style.display = tab === 'edit' ? '' : 'none';
+    document.getElementById('awardsTabHistory').style.display = tab === 'history' ? '' : 'none';
+    document.getElementById('awards-tab-edit')?.classList.toggle('active', tab === 'edit');
+    document.getElementById('awards-tab-history')?.classList.toggle('active', tab === 'history');
+    if (tab === 'history') renderAwardsHistory();
+}
+
+function renderAwardsHistory() {
+    const list = document.getElementById('awardsHistoryList');
+    if (!list) return;
+
+    if (!awardsCache || awardsCache.length === 0) {
+        list.innerHTML = '<div class="status-message">No history yet.</div>';
+        return;
+    }
+
+    const winnerKeys = ['winner1', 'winner2', 'winner3'];
+
+    list.innerHTML = [...awardsCache].reverse().map(a => `
+        <div class="awards-history-entry">
+            <div class="awards-history-month">${escapeHtml(a.month)}</div>
+            ${AWARD_NAMES.map((name, i) => {
+                const store = a[winnerKeys[i]];
+                return `<div class="awards-history-row">
+                    <span class="awards-history-medal">${AWARD_EMOJIS[i]}</span>
+                    <span class="awards-history-awardname">${escapeHtml(name)}</span>
+                    <span class="awards-history-winner">${store ? `${STORE_EMOJI_MAP[store] || ''} ${store}` : '—'}</span>
+                </div>`;
+            }).join('')}
+            ${a.videoUrl ? `<div class="awards-history-video-link"><a href="${escapeHtml(a.videoUrl)}" target="_blank">🎬 Watch Video</a></div>` : ''}
+        </div>`).join('');
+}
+
+function clearAwardsForm() {
+    ['awardsMonthInput', 'awardsVideoInput', 'award1Store', 'award2Store', 'award3Store'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    const status = document.getElementById('awardsSaveStatus');
+    if (status) status.textContent = '';
+}
+
+async function saveAwards() {
+    const btn = document.getElementById('saveAwardsBtn');
+    const status = document.getElementById('awardsSaveStatus');
+    const getVal = id => (document.getElementById(id)?.value || '').trim();
+
+    const month = getVal('awardsMonthInput');
+    if (!month) { alert('Please enter the month (e.g. May 2026).'); return; }
+
+    btn.textContent = 'Saving...';
+    btn.disabled = true;
+
+    const payload = {
+        type: 'awards',
+        month,
+        winner1: getVal('award1Store'),
+        winner2: getVal('award2Store'),
+        winner3: getVal('award3Store'),
+        videoUrl: getVal('awardsVideoInput'),
+    };
+
+    try {
+        await fetch(RECORDS_URL, {
+            method: 'POST', mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify(payload)
+        });
+
+        if (!awardsCache) awardsCache = [];
+        const idx = awardsCache.findIndex(a => a.month === month);
+        if (idx >= 0) awardsCache[idx] = { ...payload };
+        else awardsCache.push({ ...payload });
+
+        renderAwards();
+        renderAwardVideos();
+        closeAllModals();
+    } catch (e) {
+        if (status) status.textContent = '✗ Error saving.';
+    } finally {
+        btn.textContent = 'Save Awards';
+        btn.disabled = false;
+    }
+}
+
+// --- 16. MODULE: QUICK MESSAGES ---
 let quickMsgCache = null;
 let currentQMTab = 'common';
 
@@ -2320,9 +2883,8 @@ function handleSignOut() {
     sessionStorage.removeItem('speeksUserRole');
     sessionStorage.removeItem('speeksUserStore');
     
-    // Remove the comment tracker for today so it pops up again when testing
-    const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-    sessionStorage.removeItem(`speeksCommentSeen_${todayStr}`);
+    // Remove the comment tracker so it pops up again on next login
+    sessionStorage.removeItem('speeksSeenCommentKeys');
     
     location.reload(); 
 }
@@ -2433,49 +2995,92 @@ async function fetchScorecardData() {
         const displayScore = latestScore * 2;
         const rawDate = storeData.date || 'Recent';
 
+        const formatWeekOf = (d) => {
+            const p = new Date(d);
+            if (isNaN(p.getTime())) return String(d);
+            const diff = p.getUTCDay() === 0 ? -6 : 1 - p.getUTCDay();
+            const mon = new Date(p);
+            mon.setUTCDate(p.getUTCDate() + diff);
+            return "Week of " + mon.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric' });
+        };
+
         let displayDate = rawDate;
         const parsedDate = new Date(rawDate);
-        if (!isNaN(parsedDate.getTime())) {
-            const day = parsedDate.getUTCDay();
-            const diffToMonday = day === 0 ? -6 : 1 - day;
-            const mondayDate = new Date(parsedDate);
-            mondayDate.setUTCDate(parsedDate.getUTCDate() + diffToMonday);
-            displayDate = "Week of " + mondayDate.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric' });
-        }
-
+        if (!isNaN(parsedDate.getTime())) displayDate = formatWeekOf(rawDate);
         let scoreColor = 'var(--red-alert)';
         if (displayScore > 8) scoreColor = 'var(--sage-professional)';
         else if (displayScore >= 6) scoreColor = 'var(--idea-gold)';
 
-        const pulse = displayScore < 6
+        const isRecent = (dateStr) => {
+            if (!dateStr) return false;
+            const d = new Date(dateStr);
+            if (isNaN(d.getTime())) return false;
+            return Date.now() - d.getTime() < 48 * 60 * 60 * 1000;
+        };
+
+        const recentBucketIndices = [];
+        if (storeData.buckets) {
+            storeData.buckets.forEach((b, i) => {
+                if (b.categories && b.categories.length > 0 && isRecent(b.sectionDate)) {
+                    recentBucketIndices.push(i);
+                }
+            });
+        }
+        const showOverallDot = recentBucketIndices.length > 1;
+        const singleRecentBucketIdx = recentBucketIndices.length === 1 ? recentBucketIndices[0] : -1;
+
+        const pulse = (displayScore < 6 || showOverallDot)
             ? `<div class="notif-dot active" style="display:block; position:absolute; top:-2px; right:-14px; width:12px; height:12px;"></div>`
             : '';
 
+        const renderCategoryCard = (cat) => {
+            let originalVal = parseFloat(cat.score);
+            let displayVal = cat.score;
+            let bg = '#f1f5f9', color = '#64748b';
+            if (!isNaN(originalVal)) {
+                let sVal = originalVal * 2;
+                displayVal = sVal;
+                if (sVal >= 8) { bg = '#d1fae5'; color = '#059669'; }
+                else if (sVal >= 6) { bg = '#fef3c7'; color = '#d97706'; }
+                else { bg = '#fee2e2'; color = '#dc2626'; }
+            }
+            return `<div style="display: flex; justify-content: space-between; align-items: center; background: #fff; border: 1px solid #e2e8f0; padding: 8px; border-radius: 8px; gap: 6px;">
+                <span style="font-size: 9px; font-weight: 800; color: var(--slate-charcoal); text-transform: uppercase; line-height: 1.3;">${cat.name}</span>
+                <span style="font-size: 11px; font-weight: 900; background: ${bg}; color: ${color}; padding: 2px 6px; border-radius: 6px; flex-shrink: 0;">${displayVal}</span>
+            </div>`;
+        };
+
         let breakdownHtml = '';
-        if (storeData.breakdown && storeData.breakdown.length > 0) {
-            breakdownHtml = `<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-height: 280px; overflow-y: auto; padding-right: 4px; margin-top: 15px; border-top: 1px solid #f0f0f0; padding-top: 15px;" class="kpi-scroll-area">`;
-            
-            storeData.breakdown.forEach(cat => {
-                let originalVal = parseFloat(cat.score);
-                let displayVal = cat.score;
-                let bg = '#f1f5f9', color = '#64748b';
-                
-                if (!isNaN(originalVal)) {
-                    let sVal = originalVal * 2;
-                    displayVal = sVal; 
-                    
-                    if (sVal >= 8) { bg = '#d1fae5'; color = '#059669'; } 
-                    else if (sVal >= 6) { bg = '#fef3c7'; color = '#d97706'; } 
-                    else { bg = '#fee2e2'; color = '#dc2626'; } 
-                }
-                
-                breakdownHtml += `
-                <div style="display: flex; justify-content: space-between; align-items: center; background: #fff; border: 1px solid #e2e8f0; padding: 8px; border-radius: 8px; gap: 6px;">
-                    <span style="font-size: 9px; font-weight: 800; color: var(--slate-charcoal); text-transform: uppercase; line-height: 1.3;">${cat.name}</span>
-                    <span style="font-size: 11px; font-weight: 900; background: ${bg}; color: ${color}; padding: 2px 6px; border-radius: 6px; flex-shrink: 0;">${displayVal}</span>
+        if (storeData.buckets && storeData.buckets.some(b => b.categories && b.categories.length > 0)) {
+            breakdownHtml = `<div style="max-height: 340px; overflow-y: auto; padding-right: 4px; margin-top: 15px; border-top: 1px solid #f0f0f0; padding-top: 15px;" class="kpi-scroll-area">`;
+            storeData.buckets.forEach((bucket, bIdx) => {
+                if (!bucket.categories || bucket.categories.length === 0) return;
+                let bAvgNum = bucket.avg * 2;
+                let bBg = '#f1f5f9', bColor = '#64748b';
+                if (bAvgNum >= 8) { bBg = '#d1fae5'; bColor = '#059669'; }
+                else if (bAvgNum >= 6) { bBg = '#fef3c7'; bColor = '#d97706'; }
+                else { bBg = '#fee2e2'; bColor = '#dc2626'; }
+                const bDateStr = bucket.sectionDate ? formatWeekOf(bucket.sectionDate) : '';
+                const sectionPulse = (!showOverallDot && bIdx === singleRecentBucketIdx)
+                    ? `<div class="notif-dot active" style="position:relative; top:auto; right:auto; width:9px; height:9px; border:1px solid white; flex-shrink:0;"></div>`
+                    : '';
+                breakdownHtml += `<div style="margin-bottom: 12px;">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; min-width: 0;">
+                        <span style="font-size: 9px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;">${bucket.name}</span>
+                        <span style="font-size: 10px; font-weight: 900; background: ${bBg}; color: ${bColor}; padding: 2px 7px; border-radius: 6px; flex-shrink: 0;">${bAvgNum.toFixed(1)}</span>
+                        ${bDateStr ? `<span style="font-size: 9px; color: #94a3b8; font-style: italic; white-space: nowrap; flex-shrink: 0;">${bDateStr}</span>` : ''}
+                        ${sectionPulse}
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;">
+                        ${bucket.categories.map(renderCategoryCard).join('')}
+                    </div>
                 </div>`;
             });
             breakdownHtml += `</div>`;
+        } else if (storeData.breakdown && storeData.breakdown.length > 0) {
+            breakdownHtml = `<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-height: 280px; overflow-y: auto; padding-right: 4px; margin-top: 15px; border-top: 1px solid #f0f0f0; padding-top: 15px;" class="kpi-scroll-area">
+                ${storeData.breakdown.map(renderCategoryCard).join('')}
+            </div>`;
         }
 
         container.innerHTML = `
@@ -3015,6 +3620,7 @@ async function fetchMasterDistrictDashboard() {
                         <div class="master-section-title">Buying & Selling Snapshot</div>
                         <div class="master-stat-box">
                             <div class="master-stat-row"><span class="master-stat-label">Sales vs Goal</span><span class="master-stat-val" style="color: ${pctColor}; background: ${pctBg};">${salesPct}%</span></div>
+                            <div class="master-stat-row"><span class="master-stat-label">Revenue</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${Math.round(rev).toLocaleString()}</span></div>
                             <div class="master-stat-row"><span class="master-stat-label">GP Tracking</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${gpTrack.toLocaleString()}</span></div>
                             <div class="master-stat-row dashed"><span class="master-stat-label">Sell Margin</span><span class="master-stat-val" style="color: ${sellMarginColor}; background: ${sellMarginBg};">${sellMarginNum > 0 ? sellMargin + '%' : '-'}</span></div>
                             <div class="master-stat-row"><span class="master-stat-label">Buy Tracking</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${buyProj.toLocaleString()}</span></div>
@@ -3231,13 +3837,14 @@ function renderGoalsScoreboard(viewType = 'daily') {
             } else if (viewType === 'weekly' && isThisWeek) {
                 const rG = parseInt(record.goal) || 0;
                 const rR = parseInt(record.result) || 0;
-                empGoal += rG;
-                empResult += rR;
-                
-                const dayIdx = (recDate.getDay() + 6) % 7; 
-                dailyStats[daysOfWeek[dayIdx]] = { goal: rG, result: rR };
+                const dayKey = daysOfWeek[(recDate.getDay() + 6) % 7];
+                dailyStats[dayKey] = { goal: rG, result: rR }; // last row in sheet wins per day
             }
         });
+
+        if (viewType === 'weekly') {
+            Object.values(dailyStats).forEach(d => { empGoal += d.goal; empResult += d.result; });
+        }
 
         totalG += empGoal;
         totalR += empResult;
@@ -3634,16 +4241,20 @@ function renderCompactDmGoals() {
         let tGoal = 0, tResult = 0;
         let activeEmps = new Set();
 
+        const storeDedup = {};
         storeData.forEach(r => {
             const recDate = new Date(r.date);
             const isToday = r.date === todayStr;
             const isThisWeek = recDate >= startOfWeek;
 
             if ((currentDmGoalView === 'daily' && isToday) || (currentDmGoalView === 'weekly' && isThisWeek)) {
-                tGoal += parseInt(r.goal) || 0;
-                tResult += parseInt(r.result) || 0;
+                storeDedup[`${r.employee}|${r.date}`] = r; // last row in sheet wins per employee per day
                 activeEmps.add(r.employee);
             }
+        });
+        Object.values(storeDedup).forEach(r => {
+            tGoal += parseInt(r.goal) || 0;
+            tResult += parseInt(r.result) || 0;
         });
 
         const progress = tGoal > 0 ? Math.min(100, Math.round((tResult / tGoal) * 100)) : 0;
@@ -3676,21 +4287,24 @@ function renderCompactDmGoals() {
             let eG = 0, eR = 0;
             let dailyStats = {}; 
 
+            const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
             empRecords.forEach(r => {
                 const recDate = new Date(r.date);
                 if ((currentDmGoalView === 'daily' && r.date === todayStr) || (currentDmGoalView === 'weekly' && recDate >= startOfWeek)) {
                     const rG = parseInt(r.goal) || 0;
                     const rR = parseInt(r.result) || 0;
-                    eG += rG;
-                    eR += rR;
-                    
                     if (currentDmGoalView === 'weekly') {
-                        const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-                        const dayIdx = (recDate.getDay() + 6) % 7; 
-                        dailyStats[daysOfWeek[dayIdx]] = { goal: rG, result: rR };
+                        const dayIdx = (recDate.getDay() + 6) % 7;
+                        dailyStats[daysOfWeek[dayIdx]] = { goal: rG, result: rR }; // last row wins per day
+                    } else {
+                        eG = rG; // daily: last record wins
+                        eR = rR;
                     }
                 }
             });
+            if (currentDmGoalView === 'weekly') {
+                Object.values(dailyStats).forEach(d => { eG += d.goal; eR += d.result; });
+            }
 
             const rClass = eG > 0 || eR > 0 ? (eR >= eG ? 'delta-pos' : 'delta-neg') : 'delta-neutral';
 
@@ -4129,7 +4743,7 @@ function applyRoleBasedUI() {
     const greetingEl = document.getElementById('userGreeting');
     if (greetingEl) greetingEl.innerText = `Welcome ${userName}!`;
 
-    const userRoleClass = `role-${userRole.toLowerCase().replace(/\s+/g, '-')}`; 
+    const userRoleClass = `role-${userRole.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-')}`;
     const userStoreClass = `store-${userStore.toLowerCase()}`;
 
     document.querySelectorAll('.dynamic-module-flex, .dynamic-module-block, .dynamic-module').forEach(module => {
@@ -4137,7 +4751,9 @@ function applyRoleBasedUI() {
         const requiredRoles = classes.filter(c => c.startsWith('role-'));
         const requiredStores = classes.filter(c => c.startsWith('store-'));
 
-        const passesRole = requiredRoles.length === 0 || requiredRoles.includes(userRoleClass);
+        const passesRole = requiredRoles.length === 0 ||
+            requiredRoles.includes(userRoleClass) ||
+            (userRoleClass === 'role-assistant-manager' && requiredRoles.includes('role-employee'));
         const passesStore = requiredStores.length === 0 || requiredStores.includes(userStoreClass);
 
         if (passesRole && passesStore) {
@@ -4148,7 +4764,7 @@ function applyRoleBasedUI() {
         }
     });
 
-    if (userRole === 'employee') {
+    if (userRole === 'employee' || userRole === 'assistant manager') {
         document.querySelectorAll('.manager-only').forEach(el => el.style.setProperty('display', 'none', 'important'));
     }
 
@@ -4160,19 +4776,66 @@ function applyRoleBasedUI() {
             }
         });
     }
+
 }
 
 function checkInstantNotifCache() {
     const currentUser = sessionStorage.getItem('speeksUserName');
-    if (!currentUser) return; // Don't fire if they aren't logged in yet
-    
-    if (localStorage.getItem('speeksUnreadAnnouncements_' + currentUser) === 'true') {
+    if (!currentUser) return;
+
+    const hasAnns   = localStorage.getItem('speeksUnreadAnnouncements_' + currentUser) === 'true';
+    const hasPatch  = localStorage.getItem('speeksUnseenPatchNotes_'     + currentUser) === 'true';
+    if (hasAnns || hasPatch) {
         const badge = document.getElementById('notifBadge');
-        if (badge) {
-            badge.style.display = 'block';
-            badge.classList.add('active');
-        }
+        if (badge) { badge.style.display = 'block'; badge.classList.add('active'); }
     }
+}
+
+// Shows/hides the main bell badge based on BOTH unread announcements AND unseen patch notes
+function updateMainBadge() {
+    const currentUser = sessionStorage.getItem('speeksUserName');
+    const cleanUser   = currentUser ? String(currentUser).trim().toLowerCase() : null;
+    const hasAnns  = cleanUser && localStorage.getItem('speeksUnreadAnnouncements_' + cleanUser) === 'true';
+    const hasPatch = cleanUser && localStorage.getItem('speeksUnseenPatchNotes_'     + cleanUser) === 'true';
+    const show = hasAnns || hasPatch;
+    const badge = document.getElementById('notifBadge');
+    if (badge) { badge.style.display = show ? 'block' : 'none'; badge.classList.toggle('active', show); }
+}
+
+// Called after fetching patch notes — shows/hides the tab dot and main badge
+function checkPatchNotesBadge() {
+    if (!_latestPatchKey) return;
+    const currentUser = sessionStorage.getItem('speeksUserName');
+    const cleanUser   = currentUser ? String(currentUser).trim().toLowerCase() : null;
+    const seen  = cleanUser ? localStorage.getItem('speeksPatchNotesSeen_' + cleanUser) : null;
+    const isNew = seen !== _latestPatchKey;
+
+    if (cleanUser) {
+        if (isNew) localStorage.setItem('speeksUnseenPatchNotes_' + cleanUser, 'true');
+        else        localStorage.removeItem('speeksUnseenPatchNotes_' + cleanUser);
+    }
+    const pnBadge = document.getElementById('patchNotesBadge');
+    if (pnBadge) { pnBadge.style.display = isNew ? 'block' : 'none'; pnBadge.classList.toggle('active', isNew); }
+
+    if (isNew) {
+        const mainBadge = document.getElementById('notifBadge');
+        if (mainBadge) { mainBadge.style.display = 'block'; mainBadge.classList.add('active'); }
+    } else {
+        updateMainBadge();
+    }
+}
+
+// Lightweight background fetch — just checks if there's a new patch notes version
+async function checkForNewPatchNotes() {
+    try {
+        const data = await fetch(`${PATCH_NOTES_URL}?v=${Date.now()}`).then(r => r.json());
+        if (!data.entries || !data.entries.length) return;
+        const groups = buildPatchGroups(data.entries);
+        if (groups.length > 0) {
+            _latestPatchKey = groups[0].title + '|' + groups[0].date;
+            checkPatchNotesBadge();
+        }
+    } catch (e) {}
 }
 
 function initDashboardData() { 
@@ -4180,32 +4843,45 @@ function initDashboardData() {
     checkInstantNotifCache();
 
     const runInit = () => {
-        if (typeof initChecklists === 'function') initChecklists(); 
-        
+        if (typeof initChecklists === 'function') initChecklists();
+        renderMonthlyGoalsBanner();
+        renderDistrictGoals();
+        syncGoalsFromSheet();
+        renderCompanyProjectsBanner();
+        renderStoreInitiatives();
+        renderDistrictCompanyProjects();
+        renderDistrictInitiativesGrid();
+        syncInitiativesFromSheet();
+
         // Re-sync announcements immediately after login so it knows who you are!
         setTimeout(loadCMS, 50);
+        setTimeout(checkForNewPatchNotes, 800); // background check for new patch notes
         setTimeout(startReactionPolling, 3000);
 
         setTimeout(fetchHubData, 100); 
         setTimeout(fetchVarianceData, 300); 
         setTimeout(fetchWeeklyKPIs, 500); 
         
-        // --- ADD THESE MISSING DASHBOARD WIDGETS ---
         setTimeout(fetchScorecardData, 600);
         setTimeout(fetchAlertsData, 650);
         setTimeout(fetchMasterDistrictDashboard, 680);
-        // -------------------------------------------
-
-        setTimeout(fetchKPIData, 700); 
+        setTimeout(fetchKPIData, 700);
+        setTimeout(fetchDistrictMonthlyKPIs, 750);
         setTimeout(fetchRecordsData, 800);
         setTimeout(fetchChampions, 850);
+        setTimeout(fetchAwardsData, 900);
         setTimeout(fetchDmGoalsData, 1000);
         setTimeout(fetchAndRenderEmployeeGoals, 1100);
         setTimeout(fetchAndRenderEmployeeKPIs, 1200);
-        
-        // --- ADD THE COMMENT POPUP CHECK HERE TOO ---
         setTimeout(fetchAndDisplayStoreComment, 1500);
-        // --------------------------------------------
+        startStoreCommentPolling();
+
+
+        // Pre-load checklist in background so chip + glow appear without opening the panel
+        const _clRole = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
+        if (_clRole === 'manager' || _clRole === 'district manager') {
+            setTimeout(loadChecklist, 1200);
+        }
 
         if (typeof preloadAllStores === 'function') setTimeout(preloadAllStores, 4000); 
         if (typeof initListingGoals === 'function') setTimeout(initListingGoals, 200);
@@ -4249,15 +4925,17 @@ document.addEventListener("DOMContentLoaded", () => {
         document.getElementById('docSearch').addEventListener('keyup', filterDocs); 
     }
 
-    if (sessionStorage.getItem('speeksUnlocked') === 'true') { 
+    if (sessionStorage.getItem('speeksUnlocked') === 'true') {
         document.body.classList.add('is-authenticated');
         const authOverlay = document.getElementById('authOverlay');
-        if (authOverlay) authOverlay.style.display = 'none'; 
+        if (authOverlay) authOverlay.style.display = 'none';
         document.body.style.overflow = '';
-        
-        closeAllModals(); 
-        applyRoleBasedUI(); 
-        initDashboardData(); 
+
+        closeAllModals();
+        applyRoleBasedUI();
+        initDashboardData();
+        initTicker();
+        if (document.getElementById('mainKpiChart')) syncAllData();
     } else {
         if (!window.location.href.includes('index.html') && document.getElementById('authOverlay')) {
             window.location.href = "index.html"; 
@@ -4279,12 +4957,6 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
     
-    if (document.getElementById('mainKpiChart') && typeof syncAllData === 'function') syncAllData();
-
-    if (typeof fetchScorecardData === 'function') fetchScorecardData();
-    if (typeof fetchAlertsData === 'function') fetchAlertsData();
-    if (typeof fetchMasterDistrictDashboard === 'function') fetchMasterDistrictDashboard();
-    if (typeof fetchDistrictMonthlyKPIs === 'function') fetchDistrictMonthlyKPIs();
 });
 
 // ============================================================================
@@ -4295,16 +4967,49 @@ customTooltip.className = 'speeks-tooltip';
 document.body.appendChild(customTooltip);
 
 document.addEventListener('mouseover', function(e) {
+    const goalMini = e.target.closest('.dg-goal-mini');
+    if (goalMini) {
+        const title = goalMini.dataset.goalTitle;
+        const desc = goalMini.dataset.goalDesc;
+        if (title) {
+            customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
+            customTooltip.innerHTML = `
+                <strong style="display:block; margin-bottom: 6px; color: var(--sage-professional); font-size: 13px;">${title}</strong>
+                ${desc ? `<span style="font-size: 12px; color: var(--slate-charcoal); line-height: 1.5;">${desc}</span>` : ''}`;
+            customTooltip.classList.add('show');
+            return;
+        }
+    }
+
+    const panelItem = e.target.closest('.cpb-project-item, .mgb-goal-item');
+    if (panelItem) {
+        const titleEl = panelItem.querySelector('.mgb-goal-title');
+        const descEl  = panelItem.querySelector('.mgb-goal-desc');
+        const isTitleCut = titleEl && titleEl.scrollWidth > titleEl.clientWidth;
+        const isDescCut  = descEl  && descEl.scrollHeight > descEl.clientHeight;
+        if (isTitleCut || isDescCut) {
+            const color = panelItem.classList.contains('cpb-initiative-item') ? '#f59e0b'
+                        : panelItem.classList.contains('mgb-goal-item')       ? '#5a8d3b'
+                        : '#3b82f6';
+            customTooltip.style.setProperty('--tip-color', color);
+            customTooltip.innerHTML = `
+                <strong style="display:block; margin-bottom: 6px; font-size: 13px; color: var(--slate-charcoal);">${titleEl ? titleEl.innerText.trim() : ''}</strong>
+                ${descEl ? `<span style="font-size: 12px; color: #64748b; line-height: 1.4;">${descEl.innerText.trim()}</span>` : ''}`;
+            customTooltip.classList.add('show');
+            return;
+        }
+    }
+
     const card = e.target.closest('.doc-card');
-    
+
     if (card) {
         const titleEl = card.querySelector('.doc-title');
         const descEl = card.querySelector('.doc-desc');
-        
+
         if (titleEl && descEl) {
             const isTitleCut = titleEl.scrollWidth > titleEl.clientWidth;
             const isDescCut = descEl.scrollHeight > descEl.clientHeight;
-            
+
             if (isTitleCut || isDescCut) {
                 customTooltip.innerHTML = `
                     <strong style="display:block; margin-bottom: 6px; color: var(--sage-professional); font-size: 14px; white-space: nowrap;">
@@ -4336,7 +5041,7 @@ document.addEventListener('mousemove', function(e) {
 });
 
 document.addEventListener('mouseout', function(e) {
-    if (e.target.closest('.doc-card')) {
+    if (e.target.closest('.doc-card') || e.target.closest('.dg-goal-mini')) {
         customTooltip.classList.remove('show');
     }
 });
@@ -4389,10 +5094,6 @@ document.addEventListener('click', async (e) => {
                 setTimeout(() => {
                     if (typeof initDashboardData === 'function') initDashboardData();
                     if (document.getElementById('mainKpiChart') && typeof syncAllData === 'function') syncAllData();
-                    if (typeof fetchScorecardData === 'function') fetchScorecardData();
-                    if (typeof fetchAlertsData === 'function') fetchAlertsData();
-                    if (typeof fetchMasterDistrictDashboard === 'function') fetchMasterDistrictDashboard();
-                    if (typeof fetchDistrictMonthlyKPIs === 'function') fetchDistrictMonthlyKPIs();
                     if (document.getElementById('pane-records') && typeof fetchRecordsData === 'function') fetchRecordsData();
                     if (document.getElementById('listing-champions-body') && typeof fetchChampions === 'function') fetchChampions();
                 }, 100);
@@ -4452,7 +5153,8 @@ function renderKpiChart(allData, metric) {
         }
 
         // 2. Catch literal zeros. This forces closed stores/employees to be completely blank instead of flatlining at 0.
-        if (strVal === "0" || strVal === "0%" || strVal === "0.00%" || strVal === "0.0%" || strVal === "0:00") {
+        // Exception: nodeals — 0 is a valid meaningful result (employee had no bad deals that week).
+        if (metric !== 'nodeals' && (strVal === "0" || strVal === "0%" || strVal === "0.00%" || strVal === "0.0%" || strVal === "0:00")) {
             return null;
         }
 
@@ -4479,8 +5181,8 @@ function renderKpiChart(allData, metric) {
         }
         
         let p = parseNum(v);
-        if (p === 0) return null; // Final failsafe for any parsed zero
-        
+        if (p === 0 && metric !== 'nodeals') return null; // Final failsafe — zero means no data except for no-deals
+
         return (isPct && p <= 1.5 && p >= -1.5) ? p * 100 : p;
     };
 
@@ -4524,7 +5226,6 @@ function renderKpiChart(allData, metric) {
                     if (String(d[r][monthCol] || '').trim() === lbl) { rowIdx = r; break; }
                 }
                 if (rowIdx === -1) { sData.push(null); return; }
-            
                 let row = d[rowIdx];
                 let v = (metric === 'time' && currentTimeframe === '4-Week') ? row[5] : row[sCol];
                 let parsed = parseChartVal(v);
@@ -4584,18 +5285,18 @@ function renderKpiChart(allData, metric) {
                 const empColors = ['#a855f7', '#3b82f6', '#22c55e', '#f97316', '#ef4444', '#14b8a6', '#eab308', '#ec4899'];
                 
                 empCols.forEach((emp, eIdx) => {
-                   let sData = [];
-                   lbls.forEach((lbl) => {
-                       let rowIdx = -1;
-                       for (let r = sr + 2; r < d.length; r++) {
-                           if (!Array.isArray(d[r])) continue;
-                           if (String(d[r][monthCol] || '').trim() === lbl) { rowIdx = r; break; }
-                       }
-                       if (rowIdx === -1) { sData.push(null); return; }
-                       let parsed = parseChartVal(d[rowIdx][emp.idx]);
-                       sData.push(parsed);
-                       if (parsed !== null) nums.push(parsed);
-                   });
+                    let sData = [];
+                    lbls.forEach((lbl) => {
+                        let rowIdx = -1;
+                        for (let r = sr + 2; r < d.length; r++) {
+                            if (!Array.isArray(d[r])) continue;
+                            if (String(d[r][monthCol] || '').trim() === lbl) { rowIdx = r; break; }
+                        }
+                        if (rowIdx === -1) { sData.push(null); return; }
+                        let parsed = parseChartVal(d[rowIdx][emp.idx]);
+                        sData.push(parsed);
+                        if (parsed !== null) nums.push(parsed);
+                    });
                     
                     if (sData.some(val => val !== null)) {
                         let color = empColors[eIdx % empColors.length];
@@ -4616,8 +5317,8 @@ function renderKpiChart(allData, metric) {
             yMin = Math.max(0, Math.floor(mn) - 1);
             yMax = Math.ceil(mx) + 1;
         } else {
-            yMin = 0; 
-            yMax = Math.ceil(mx * 1.2);
+            yMin = 0;
+            yMax = Math.max(1, Math.ceil(mx * 1.2));
         }
     }
 
@@ -4898,7 +5599,7 @@ async function publishAnnouncement() {
 
     const payload = {
         text: compiledMessage,
-        date: new Date().toLocaleDateString('en-US'), 
+        date: new Date().toISOString(),
         author: sessionStorage.getItem('speeksUserName') || 'Executive Team'
     };
 
@@ -4921,6 +5622,661 @@ async function publishAnnouncement() {
         btn.innerHTML = "<span>Publish to All Stores</span> 🚀";
         btn.style.opacity = "1";
         btn.style.pointerEvents = "auto";
+    }
+}
+
+// ============================================================================
+// 24. MODULE: MONTHLY TEAM GOALS
+// ============================================================================
+
+function _mgbKey(store, date) {
+    const d = date || new Date();
+    return `monthlyGoals_${(store || 'NONE').toUpperCase()}_${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function getMonthlyGoals(store) {
+    try { const r = localStorage.getItem(_mgbKey(store)); return r ? JSON.parse(r) : null; } catch { return null; }
+}
+
+function putMonthlyGoals(store, data) {
+    localStorage.setItem(_mgbKey(store), JSON.stringify(data));
+}
+
+const MONTHLY_GOALS_URL = 'https://script.google.com/macros/s/AKfycbyytrXgeMLoFMqxKBqW2SfLoXk-8SnoKQoKVmhgPkW84ffuj5sgMumekFdZN1CsJcpMJQ/exec';
+
+function _mgbYearMonth(date) {
+    const d = date || new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+async function syncGoalsFromSheet() {
+    if (!MONTHLY_GOALS_URL) return;
+    try {
+        const ym  = _mgbYearMonth();
+        const res = await fetch(`${MONTHLY_GOALS_URL}?action=getAll&yearMonth=${ym}&t=${Date.now()}`);
+        const map = await res.json();
+        ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'].forEach(store => {
+            if (map[store]) putMonthlyGoals(store, map[store]);
+        });
+        renderMonthlyGoalsBanner();
+        renderDistrictGoals();
+    } catch (err) {
+        console.warn('Goals sync failed:', err);
+    }
+}
+
+async function _postGoalsToSheet(store, payload) {
+    if (!MONTHLY_GOALS_URL) return;
+    try {
+        await fetch(MONTHLY_GOALS_URL, {
+            method:   'POST',
+            headers:  { 'Content-Type': 'text/plain' },
+            body:     JSON.stringify({ store, yearMonth: _mgbYearMonth(), ...payload }),
+            redirect: 'follow',
+        });
+    } catch (err) {
+        console.warn('Goals post failed:', err);
+    }
+}
+
+
+
+
+function _mgbMonthLabel(date) {
+    return (date || new Date()).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+// --- Banner ---
+
+let _mgbExpanded = false;
+
+const _storeColors = { OVL: '#7c3aed', LEE: '#2563eb', WSP: '#5a8d3b', MPL: '#ea580c', BAL: '#dc2626' };
+
+function renderMonthlyGoalsBanner() {
+    if (_selectedGoalDate) return; // viewing a past month — don't override
+    const store = sessionStorage.getItem('speeksUserStore') || '';
+    const labelEl = document.getElementById('giGoalsLabel');
+    if (labelEl) labelEl.textContent = _mgbMonthLabel() + ' Goals';
+
+    const data  = getMonthlyGoals(store);
+    const goals = data?.goals || [];
+    const listEl = document.getElementById('giGoalsList');
+
+    if (!goals.length) {
+        if (listEl) listEl.innerHTML = '<div class="status-message" style="padding: 8px 0;">No goals have been set for this month yet.</div>';
+        return;
+    }
+
+    let html = '';
+    goals.forEach(g => {
+        html += `<div class="mgb-goal-item">
+            <span class="mgb-goal-title">${escapeHtml(g.title)}</span>
+            ${g.description ? `<span class="mgb-goal-desc">${escapeHtml(g.description)}</span>` : ''}
+        </div>`;
+    });
+    if (listEl) listEl.innerHTML = html;
+}
+
+function toggleGoalsBanner() { toggleGoalsPanel(); }
+
+// --- Previous Months Dropdown ---
+
+let _selectedGoalDate = null; // null = current month
+
+function _closePrevMonths() {
+    const dropdown = document.getElementById('giPrevMonthsList');
+    const btn      = document.getElementById('giPrevToggleBtn');
+    if (dropdown) dropdown.classList.remove('open');
+    // keep btn.active if a past month is selected
+    if (btn) btn.classList.toggle('active', !!_selectedGoalDate);
+}
+
+function _resetToCurrentMonth() {
+    _selectedGoalDate = null;
+    _closePrevMonths();
+    const editBtn = document.getElementById('giEditGoalsBtn');
+    if (editBtn) {
+        const isManager = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().replace(/\s+/g, '-') === 'manager';
+        editBtn.style.setProperty('display', isManager ? 'block' : 'none', 'important');
+    }
+    renderMonthlyGoalsBanner();
+}
+
+function _buildMonthDropdown(dropdown) {
+    const now  = new Date();
+    const nowYm = _mgbYearMonth();
+    const selYm = _selectedGoalDate ? _mgbYearMonth(_selectedGoalDate) : nowYm;
+    const months = [now];
+    for (let i = 1; i <= 3; i++) months.push(new Date(now.getFullYear(), now.getMonth() - i, 1));
+    dropdown.innerHTML = months.map((d, idx) => {
+        const ym       = _mgbYearMonth(d);
+        const label    = _mgbMonthLabel(d);
+        const selected = ym === selYm ? ' selected' : '';
+        const tag      = idx === 0 ? '<span class="gi-month-current-tag">Current</span>' : '';
+        return `<div class="gi-month-option${selected}" onclick="selectGoalMonth('${ym}')">${label}${tag}</div>`;
+    }).join('');
+}
+
+window.togglePrevMonths = function(e) {
+    if (e) e.stopPropagation();
+    const dropdown = document.getElementById('giPrevMonthsList');
+    const btn      = document.getElementById('giPrevToggleBtn');
+    if (!dropdown || !btn) return;
+    const opening = !dropdown.classList.contains('open');
+    dropdown.classList.toggle('open', opening);
+    btn.classList.toggle('active', opening || !!_selectedGoalDate);
+    if (opening) {
+        _buildMonthDropdown(dropdown);
+        setTimeout(() => {
+            document.addEventListener('click', function _giClickAway(ev) {
+                const wrap = document.querySelector('.gi-prev-wrapper');
+                if (wrap && wrap.contains(ev.target)) return;
+                document.getElementById('giPrevMonthsList')?.classList.remove('open');
+                const b = document.getElementById('giPrevToggleBtn');
+                if (b) b.classList.toggle('active', !!_selectedGoalDate);
+                document.removeEventListener('click', _giClickAway);
+            });
+        }, 0);
+    }
+};
+
+window.selectGoalMonth = async function(ym) {
+    const dropdown  = document.getElementById('giPrevMonthsList');
+    const btn       = document.getElementById('giPrevToggleBtn');
+    const editBtn   = document.getElementById('giEditGoalsBtn');
+    if (dropdown) dropdown.classList.remove('open');
+
+    const nowYm = _mgbYearMonth();
+    const isManager = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().replace(/\s+/g, '-') === 'manager';
+    if (ym === nowYm) {
+        _selectedGoalDate = null;
+        if (btn) btn.classList.remove('active');
+        if (editBtn) editBtn.style.setProperty('display', isManager ? 'block' : 'none', 'important');
+        renderMonthlyGoalsBanner();
+        return;
+    }
+
+    if (editBtn) editBtn.style.setProperty('display', 'none', 'important');
+
+    const [year, month] = ym.split('-').map(Number);
+    _selectedGoalDate = new Date(year, month - 1, 1);
+    if (btn) btn.classList.add('active');
+
+    const labelEl = document.getElementById('giGoalsLabel');
+    if (labelEl) labelEl.textContent = _mgbMonthLabel(_selectedGoalDate) + ' Goals';
+
+    const listEl = document.getElementById('giGoalsList');
+    if (!listEl) return;
+    listEl.innerHTML = '<div class="status-message">Loading...</div>';
+
+    const store    = sessionStorage.getItem('speeksUserStore') || '';
+    const cacheKey = _mgbKey(store, _selectedGoalDate);
+    let goals = null;
+    try { const raw = localStorage.getItem(cacheKey); if (raw) goals = JSON.parse(raw)?.goals ?? []; } catch {}
+
+    if (goals === null) {
+        try {
+            const res   = await fetch(`${MONTHLY_GOALS_URL}?action=getAll&yearMonth=${ym}&t=${Date.now()}`);
+            const map   = await res.json();
+            const entry = map[(store || '').toUpperCase()];
+            if (entry) { localStorage.setItem(cacheKey, JSON.stringify(entry)); goals = entry.goals || []; }
+            else goals = [];
+        } catch { goals = null; }
+    }
+
+    if (!goals?.length) {
+        listEl.innerHTML = `<div class="status-message" style="padding:8px 0;">${goals === null ? 'Could not load.' : 'No goals recorded for this month.'}</div>`;
+        return;
+    }
+    listEl.innerHTML = goals.map(g => `<div class="mgb-goal-item">
+        <span class="mgb-goal-title">${escapeHtml(g.title)}</span>
+        ${g.description ? `<span class="mgb-goal-desc">${escapeHtml(g.description)}</span>` : ''}
+    </div>`).join('');
+};
+
+window.toggleGoalsPanel = function(event) {
+    if (event) event.stopPropagation();
+    const panel = document.getElementById('goalsSidePanel');
+    if (!panel) return;
+    const isOpen = panel.classList.toggle('open');
+    const toggle = document.querySelector('.gi-nav-toggle');
+    if (toggle) toggle.classList.toggle('panel-active', isOpen);
+    if (!isOpen) _closePrevMonths();
+    if (isOpen) {
+        document.getElementById('checklistSidePanel')?.classList.remove('open');
+        document.querySelector('.cl-nav-toggle')?.classList.remove('panel-active');
+    }
+};
+
+// --- Edit Modal ---
+
+function openEditGoalsModal() {
+    const store = sessionStorage.getItem('speeksUserStore') || '';
+    const goals = getMonthlyGoals(store)?.goals || [];
+    const list  = document.getElementById('editGoalsList');
+    if (!list) return;
+    list.innerHTML = '';
+    if (goals.length === 0) { addGoalRow(); } else { goals.forEach(g => addGoalRow(g)); }
+    _updateAddGoalBtn();
+    toggleModal('editMonthlyGoalsModal');
+}
+
+function addGoalRow(existing) {
+    const list = document.getElementById('editGoalsList');
+    if (!list || list.children.length >= 6) return;
+    const row = document.createElement('div');
+    row.className = 'edit-goal-row';
+    row.innerHTML = `
+        <div class="edit-goal-inner">
+            <input type="text" class="form-input-lg edit-goal-title" style="margin:0; font-size:13px;" placeholder="Goal title  (e.g. Hit $45K Revenue)" value="${escapeHtml(existing?.title || '')}">
+            <input type="text" class="form-input-lg edit-goal-desc" style="margin:0; font-size:12px;" placeholder="Description (optional)" value="${escapeHtml(existing?.description || '')}">
+        </div>
+        <button class="edit-goal-remove-btn" onclick="this.closest('.edit-goal-row').remove(); _updateAddGoalBtn();" title="Remove">✕</button>`;
+    list.appendChild(row);
+    _updateAddGoalBtn();
+}
+
+function _updateAddGoalBtn() {
+    const list = document.getElementById('editGoalsList');
+    const btn  = document.getElementById('addGoalRowBtn');
+    if (btn) btn.style.display = (list?.children.length ?? 0) >= 6 ? 'none' : '';
+}
+
+function saveMonthlyGoals() {
+    const store    = sessionStorage.getItem('speeksUserStore') || '';
+    const userName = sessionStorage.getItem('speeksUserName')  || 'Manager';
+    const goals    = [];
+    document.querySelectorAll('#editGoalsList .edit-goal-row').forEach(row => {
+        const title       = row.querySelector('.edit-goal-title')?.value.trim();
+        const description = row.querySelector('.edit-goal-desc')?.value.trim();
+        if (!title) return;
+        goals.push({ title, description });
+    });
+    const payload = {
+        goals,
+        setBy:     userName,
+        updatedAt: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+    };
+    putMonthlyGoals(store, payload);
+    closeAllModals();
+    renderMonthlyGoalsBanner();
+    renderDistrictGoals();
+    _postGoalsToSheet(store, payload);
+}
+
+// --- District Overview ---
+
+function renderDistrictGoals() {
+    const container = document.getElementById('districtGoalsGrid');
+    if (!container) return;
+    const monthEl = document.getElementById('districtGoalsMonth');
+    if (monthEl) monthEl.textContent = _mgbMonthLabel();
+    const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    const emojis = { OVL: '🟣', LEE: '🔵', WSP: '🟢', MPL: '🟠', BAL: '🔴' };
+
+    let goalsRow = '';
+    let initiativesRow = '';
+
+    stores.forEach(store => {
+        const data        = getMonthlyGoals(store);
+        const goals       = data?.goals || [];
+        const initiatives = getStoreInitiatives(store)?.initiatives || [];
+
+        const goalsContent = goals.length
+            ? goals.map(g => `<div class="dg-goal-mini" data-goal-title="${escapeHtml(g.title)}" data-goal-desc="${escapeHtml(g.description || '')}"><div class="dg-goal-mini-label">${escapeHtml(g.title)}</div></div>`).join('')
+            : '<div class="dg-no-goals">No goals set</div>';
+
+        const initiativeItems = initiatives.length
+            ? initiatives.map(i => {
+                const badge = i.status === 'upcoming'
+                    ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
+                    : '<span class="si-status-badge si-status-badge--current">Current</span>';
+                return `<div class="dg-goal-mini dg-initiative-mini" data-goal-title="${escapeHtml(i.title)}" data-goal-desc="${escapeHtml(i.description || '')}"><div class="dg-goal-mini-label">${escapeHtml(i.title)}</div>${badge}</div>`;
+            }).join('')
+            : '<div class="dg-no-goals">No initiatives set</div>';
+
+        goalsRow += `<div class="dg-goals-col">
+            <div class="dg-store-header">${emojis[store]} ${store}</div>
+            ${goalsContent}
+        </div>`;
+
+        initiativesRow += `<div class="dg-initiatives-col">
+            <div class="dg-initiatives-divider">Initiatives &amp; Projects <button class="dg-edit-btn" onclick="openEditStoreInitiativesModal('${store}')">Edit ✏️</button></div>
+            ${initiativeItems}
+        </div>`;
+    });
+
+    container.innerHTML = goalsRow + initiativesRow;
+}
+
+// ============================================================================
+// 25. MODULE: COMPANY INITIATIVES & STORE PROJECTS
+// ============================================================================
+
+// --- Storage helpers ---
+
+function getCompanyProjects() {
+    try { const r = localStorage.getItem('companyProjects'); return r ? JSON.parse(r) : null; } catch { return null; }
+}
+
+function putCompanyProjects(data) {
+    localStorage.setItem('companyProjects', JSON.stringify(data));
+}
+
+function getStoreInitiatives(store) {
+    try { const r = localStorage.getItem(`storeInitiatives_${(store || '').toUpperCase()}`); return r ? JSON.parse(r) : null; } catch { return null; }
+}
+
+function putStoreInitiatives(store, data) {
+    localStorage.setItem(`storeInitiatives_${(store || '').toUpperCase()}`, JSON.stringify(data));
+}
+
+// --- Company Projects Banner ---
+
+let _cpbExpanded = false;
+
+function renderCompanyProjectsBanner() {
+    const store       = sessionStorage.getItem('speeksUserStore') || '';
+    const listEl      = document.getElementById('giInitiativesList');
+    const projects    = getCompanyProjects()?.projects || [];
+    const initiatives = getStoreInitiatives(store)?.initiatives || [];
+    const allItems    = [...projects, ...initiatives];
+
+    if (!allItems.length) {
+        if (listEl) listEl.innerHTML = '<div class="status-message" style="padding: 8px 0;">No initiatives have been set yet.</div>';
+        return;
+    }
+
+    if (listEl) {
+        let html = '';
+        if (projects.length) {
+            html += '<div class="cpb-section-label">Company</div>';
+            projects.forEach(p => {
+                const badge = p.status === 'upcoming'
+                    ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
+                    : '<span class="si-status-badge si-status-badge--current">Current</span>';
+                html += `<div class="cpb-project-item">
+                    <div class="cpb-item-title-row"><span class="mgb-goal-title">${escapeHtml(p.title)}</span>${badge}</div>
+                    ${p.description ? `<span class="mgb-goal-desc">${escapeHtml(p.description)}</span>` : ''}
+                </div>`;
+            });
+        }
+        if (initiatives.length) {
+            html += `<div class="cpb-section-label${projects.length ? ' cpb-section-label--spaced' : ''}">${escapeHtml(store)}</div>`;
+            initiatives.forEach(i => {
+                const badge = i.status === 'upcoming'
+                    ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
+                    : '<span class="si-status-badge si-status-badge--current">Current</span>';
+                html += `<div class="cpb-project-item cpb-initiative-item">
+                    <div class="cpb-item-title-row"><span class="mgb-goal-title">${escapeHtml(i.title)}</span>${badge}</div>
+                    ${i.description ? `<span class="mgb-goal-desc">${escapeHtml(i.description)}</span>` : ''}
+                </div>`;
+            });
+        }
+        listEl.innerHTML = html;
+    }
+}
+
+function toggleCompanyProjectsBanner() { toggleGoalsPanel(); }
+
+// --- Edit Company Projects Modal ---
+
+function openEditCompanyProjectsModal() {
+    const projects = getCompanyProjects()?.projects || [];
+    const list = document.getElementById('editCompanyProjectsList');
+    if (!list) return;
+    list.innerHTML = '';
+    if (projects.length === 0) { addCompanyProjectRow(); } else { projects.forEach(p => addCompanyProjectRow(p)); }
+    _updateAddCompanyProjectBtn();
+    toggleModal('editCompanyProjectsModal');
+}
+
+window.toggleSiStatus = function(btn) {
+    btn.closest('.si-status-toggle')?.querySelectorAll('.si-status-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+};
+
+function _siStatusToggleHtml(status) {
+    const cur = (!status || status === 'current') ? 'active' : '';
+    const upc = status === 'upcoming' ? 'active' : '';
+    return `<div class="si-status-toggle">
+        <button type="button" class="si-status-btn ${cur}" data-val="current" onclick="toggleSiStatus(this)">Current</button>
+        <button type="button" class="si-status-btn ${upc}" data-val="upcoming" onclick="toggleSiStatus(this)">Upcoming</button>
+    </div>`;
+}
+
+function addCompanyProjectRow(existing) {
+    const list = document.getElementById('editCompanyProjectsList');
+    if (!list || list.children.length >= 8) return;
+    const row = document.createElement('div');
+    row.className = 'edit-goal-row';
+    row.innerHTML = `
+        <div class="edit-goal-inner">
+            <input type="text" class="form-input-lg edit-cp-title" style="margin:0; font-size:13px;" placeholder="Initiative title (e.g. Launch Loyalty Program)" value="${escapeHtml(existing?.title || '')}">
+            <input type="text" class="form-input-lg edit-cp-desc" style="margin:0; font-size:12px;" placeholder="Description (optional)" value="${escapeHtml(existing?.description || '')}">
+            ${_siStatusToggleHtml(existing?.status)}
+        </div>
+        <button class="edit-goal-remove-btn" onclick="this.closest('.edit-goal-row').remove(); _updateAddCompanyProjectBtn();" title="Remove">✕</button>`;
+    list.appendChild(row);
+    _updateAddCompanyProjectBtn();
+}
+
+function _updateAddCompanyProjectBtn() {
+    const list = document.getElementById('editCompanyProjectsList');
+    const btn  = document.getElementById('addCompanyProjectRowBtn');
+    if (btn) btn.style.display = (list?.children.length ?? 0) >= 8 ? 'none' : '';
+}
+
+function saveCompanyProjects() {
+    const userName = sessionStorage.getItem('speeksUserName') || 'CEO';
+    const projects = [];
+    document.querySelectorAll('#editCompanyProjectsList .edit-goal-row').forEach(row => {
+        const title       = row.querySelector('.edit-cp-title')?.value.trim();
+        const description = row.querySelector('.edit-cp-desc')?.value.trim();
+        const status      = row.querySelector('.si-status-btn.active')?.dataset.val || 'current';
+        if (!title) return;
+        projects.push({ title, description, status });
+    });
+    const payload = {
+        projects,
+        setBy:     userName,
+        updatedAt: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+    };
+    putCompanyProjects(payload);
+    closeAllModals();
+    renderCompanyProjectsBanner();
+    renderDistrictCompanyProjects();
+    _postCompanyProjectsToSheet(payload);
+}
+
+async function _postCompanyProjectsToSheet(payload) {
+    if (!MONTHLY_GOALS_URL) return;
+    try {
+        await fetch(MONTHLY_GOALS_URL, {
+            method:  'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body:    JSON.stringify({ action: 'setCompanyProjects', ...payload }),
+            redirect: 'follow',
+        });
+    } catch (err) {
+        console.warn('Company projects post failed:', err);
+    }
+}
+
+// --- Store Initiatives ---
+
+function renderStoreInitiatives() {
+    renderCompanyProjectsBanner();
+}
+
+let _editingInitiativesForStore = null;
+
+function openEditStoreInitiativesModal(storeOverride) {
+    _editingInitiativesForStore = storeOverride || sessionStorage.getItem('speeksUserStore') || '';
+    const initiatives = getStoreInitiatives(_editingInitiativesForStore)?.initiatives || [];
+    const list        = document.getElementById('editStoreInitiativesList');
+    const titleEl     = document.getElementById('editStoreInitiativesTitle');
+    if (titleEl) titleEl.textContent = `${_editingInitiativesForStore} Initiatives`;
+    if (!list) return;
+    list.innerHTML = '';
+    if (initiatives.length === 0) { addStoreInitiativeRow(); } else { initiatives.forEach(i => addStoreInitiativeRow(i)); }
+    _updateAddStoreInitiativeBtn();
+    toggleModal('editStoreInitiativesModal');
+}
+
+function addStoreInitiativeRow(existing) {
+    const list = document.getElementById('editStoreInitiativesList');
+    if (!list || list.children.length >= 6) return;
+    const row = document.createElement('div');
+    row.className = 'edit-goal-row';
+    row.innerHTML = `
+        <div class="edit-goal-inner">
+            <input type="text" class="form-input-lg edit-si-title" style="margin:0; font-size:13px;" placeholder="Initiative title (e.g. Test new shelf layout)" value="${escapeHtml(existing?.title || '')}">
+            <input type="text" class="form-input-lg edit-si-desc" style="margin:0; font-size:12px;" placeholder="Description (optional)" value="${escapeHtml(existing?.description || '')}">
+            ${_siStatusToggleHtml(existing?.status)}
+        </div>
+        <button class="edit-goal-remove-btn" onclick="this.closest('.edit-goal-row').remove(); _updateAddStoreInitiativeBtn();" title="Remove">✕</button>`;
+    list.appendChild(row);
+    _updateAddStoreInitiativeBtn();
+}
+
+function _updateAddStoreInitiativeBtn() {
+    const list = document.getElementById('editStoreInitiativesList');
+    const btn  = document.getElementById('addStoreInitiativeRowBtn');
+    if (btn) btn.style.display = (list?.children.length ?? 0) >= 6 ? 'none' : '';
+}
+
+function saveStoreInitiatives() {
+    const store       = _editingInitiativesForStore || sessionStorage.getItem('speeksUserStore') || '';
+    const userName    = sessionStorage.getItem('speeksUserName') || 'Manager';
+    const initiatives = [];
+    document.querySelectorAll('#editStoreInitiativesList .edit-goal-row').forEach(row => {
+        const title       = row.querySelector('.edit-si-title')?.value.trim();
+        const description = row.querySelector('.edit-si-desc')?.value.trim();
+        const status      = row.querySelector('.si-status-btn.active')?.dataset.val || 'current';
+        if (!title) return;
+        initiatives.push({ title, description, status });
+    });
+    const payload = {
+        initiatives,
+        setBy:     userName,
+        updatedAt: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+    };
+    putStoreInitiatives(store, payload);
+    closeAllModals();
+    renderStoreInitiatives();
+    renderDistrictGoals();
+    _postStoreInitiativesToSheet(store, payload);
+}
+
+async function _postStoreInitiativesToSheet(store, payload) {
+    if (!MONTHLY_GOALS_URL) return;
+    try {
+        await fetch(MONTHLY_GOALS_URL, {
+            method:  'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body:    JSON.stringify({ action: 'setStoreInitiatives', store, ...payload }),
+            redirect: 'follow',
+        });
+    } catch (err) {
+        console.warn('Store initiatives post failed:', err);
+    }
+}
+
+// --- District Views ---
+
+function renderDistrictCompanyProjects() {
+    const container = document.getElementById('districtCompanyProjects');
+    if (!container) return;
+    const data     = getCompanyProjects();
+    const projects = data?.projects || [];
+
+    const itemsHtml = projects.length
+        ? projects.map(p => {
+            const badge = p.status === 'upcoming'
+                ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
+                : '<span class="si-status-badge si-status-badge--current">Current</span>';
+            return `<div class="dg-goal-mini" data-goal-title="${escapeHtml(p.title)}" data-goal-desc="${escapeHtml(p.description || '')}"><div class="dg-goal-mini-label">${escapeHtml(p.title)}</div>${badge}</div>`;
+        }).join('')
+        : '<div class="dg-no-goals">No company initiatives set</div>';
+
+    container.innerHTML = `
+        <div class="district-cp-section">
+            <div class="district-cp-header-row">
+                <span class="district-cp-header">Company Initiatives &amp; Projects</span>
+                <button class="dg-edit-btn" onclick="openEditCompanyProjectsModal()">Edit ✏️</button>
+            </div>
+            <div class="district-cp-items">${itemsHtml}</div>
+        </div>`;
+}
+
+function renderDistrictInitiativesGrid() {
+    const panel     = document.getElementById('districtInitiativesPanel');
+    const container = document.getElementById('districtInitiativesGrid');
+    if (!container) return;
+
+    const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    const emojis = { OVL: '🟣', LEE: '🔵', WSP: '🟢', MPL: '🟠', BAL: '🔴' };
+    let hasAny = false;
+    let html   = '';
+
+    stores.forEach(store => {
+        const data  = getStoreInitiatives(store);
+        const items = data?.initiatives || [];
+        if (items.length) hasAny = true;
+        const inner = items.length
+            ? items.map(i => {
+                const badge = i.status === 'upcoming'
+                    ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
+                    : '<span class="si-status-badge si-status-badge--current">Current</span>';
+                return `<div class="dg-goal-mini" data-goal-title="${escapeHtml(i.title)}" data-goal-desc="${escapeHtml(i.description || '')}"><div class="dg-goal-mini-label">${escapeHtml(i.title)}</div>${badge}</div>`;
+            }).join('')
+            : '<div class="dg-no-goals">No initiatives set</div>';
+        html += `<div class="dg-store-card"><div class="dg-store-header">${emojis[store]} ${store}</div>${inner}</div>`;
+    });
+
+    container.innerHTML = html;
+    if (panel) panel.style.display = hasAny ? 'block' : 'none';
+}
+
+// --- Sync from Sheet ---
+
+async function syncInitiativesFromSheet() {
+    if (!MONTHLY_GOALS_URL) return;
+    try {
+        const res  = await fetch(`${MONTHLY_GOALS_URL}?action=getAllInitiatives&t=${Date.now()}`);
+        const data = await res.json();
+        if (data.company) {
+            // Preserve local status values the sheet may not return yet
+            const localCompany = getCompanyProjects();
+            if (localCompany?.projects && data.company.projects) {
+                const localByTitle = {};
+                localCompany.projects.forEach(p => { localByTitle[p.title] = p.status; });
+                data.company.projects = data.company.projects.map(p => ({
+                    ...p, status: p.status || localByTitle[p.title] || 'current'
+                }));
+            }
+            putCompanyProjects(data.company);
+        }
+        ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'].forEach(store => {
+            if (data[store]) {
+                const local = getStoreInitiatives(store);
+                if (local?.initiatives && data[store].initiatives) {
+                    const localByTitle = {};
+                    local.initiatives.forEach(i => { localByTitle[i.title] = i.status; });
+                    data[store].initiatives = data[store].initiatives.map(i => ({
+                        ...i, status: i.status || localByTitle[i.title] || 'current'
+                    }));
+                }
+                putStoreInitiatives(store, data[store]);
+            }
+        });
+        renderCompanyProjectsBanner();
+        renderStoreInitiatives();
+        renderDistrictCompanyProjects();
+        renderDistrictInitiativesGrid();
+    } catch (err) {
+        console.warn('Initiatives sync failed:', err);
     }
 }
 
@@ -5164,43 +6520,73 @@ async function saveManageHotkeys() {
 
 // --- DM SCORECARD SUBMISSION LOGIC ---
 const SCORECARD_CATEGORIES = [
-    "Front of House Cleanliness", 
-    "Back of House Cleanliness", 
-    "Recycle Organization", 
-    "Retail Displays", 
-    "Overall Organization", 
-    "Online Store Pictures", 
-    "Staff Goals Readiness", 
-    "5 Facebook Listings", 
-    "2 Social Media Posts"
+    "Front of House Cleanliness",
+    "Back of House Cleanliness",
+    "Recycle Organization",
+    "Retail Displays",
+    "Overall Organization",
+    "Online Store Pictures",
+    "Staff Goals Readiness",
+    "5 Facebook Listings",
+    "2 Social Media Posts",
+    "Store Listing Review",
+    "Store Buying Review"
+];
+
+const SCORECARD_BUCKETS = [
+    { label: "In-Store Operations", count: 7 },
+    { label: "Media and Markets", count: 2 },
+    { label: "Store Reviews", count: 2 }
 ];
 
 function openScorecardModal() {
     // 1. Let your native portal handle the animations and overlays!
     toggleModal('scorecardSubmitModal');
-    
+
     // 2. Auto-fill today's date
     const dateInput = document.getElementById('dm-score-date');
     if (dateInput) dateInput.valueAsDate = new Date();
-    
-    // 3. Generate the inputs
+
+    // 3. Generate the inputs grouped by bucket, each with a section toggle
     const container = document.getElementById('dm-category-inputs');
     if (container) {
-        container.innerHTML = SCORECARD_CATEGORIES.map((cat, i) => `
-            <div style="display: flex; flex-direction: column;">
-                <label class="form-label-caps">${cat}</label>
-                <select id="score-input-${i}" class="form-input-lg" style="margin-top: 0; padding: 10px; font-size: 14px;">
-                    <option value="">--</option>
-                    <option value="5">5</option>
-                    <option value="4">4</option>
-                    <option value="3">3</option>
-                    <option value="2">2</option>
-                    <option value="1">1</option>
-                    <option value="0">0</option>
-                </select>
+        let html = '';
+        let catIndex = 0;
+        SCORECARD_BUCKETS.forEach((bucket, bIdx) => {
+            html += `<div style="grid-column: 1 / -1; margin-top: ${bIdx > 0 ? '8px' : '0'}; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between;">
+                <span style="font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">${bucket.label}</span>
+                <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 10px; color: #94a3b8; font-weight: 700;">
+                    <input type="checkbox" id="section-toggle-${bIdx}" checked onchange="toggleScorecardSection(${bIdx})" style="cursor: pointer; width: 13px; height: 13px;">
+                    Update
+                </label>
             </div>
-        `).join('');
+            <div id="section-inputs-${bIdx}" style="display: contents;">`;
+            for (let i = 0; i < bucket.count; i++) {
+                const cat = SCORECARD_CATEGORIES[catIndex];
+                html += `<div style="display: flex; flex-direction: column;">
+                    <label class="form-label-caps">${cat}</label>
+                    <select id="score-input-${catIndex}" class="form-input-lg" style="margin-top: 0; padding: 10px; font-size: 14px;">
+                        <option value="">--</option>
+                        <option value="5">5</option>
+                        <option value="4">4</option>
+                        <option value="3">3</option>
+                        <option value="2">2</option>
+                        <option value="1">1</option>
+                        <option value="0">0</option>
+                    </select>
+                </div>`;
+                catIndex++;
+            }
+            html += `</div>`;
+        });
+        container.innerHTML = html;
     }
+}
+
+function toggleScorecardSection(bIdx) {
+    const enabled = document.getElementById(`section-toggle-${bIdx}`).checked;
+    const wrapper = document.getElementById(`section-inputs-${bIdx}`);
+    if (wrapper) wrapper.style.display = enabled ? 'contents' : 'none';
 }
 
 // We don't even need a custom close function anymore!
@@ -5214,43 +6600,66 @@ function submitNewScorecard() {
     const store = document.getElementById('dm-store-select').value;
     const date = document.getElementById('dm-score-date').value;
     const btn = document.getElementById('submitScorecardBtn');
-    
-    // Gather all the scores from the dropdowns
-    let scores = [];
-    let isComplete = true;
-    for (let i = 0; i < SCORECARD_CATEGORIES.length; i++) {
-        let val = document.getElementById(`score-input-${i}`).value;
-        if (val === "") isComplete = false;
-        scores.push(val);
-    }
 
-    if (!isComplete) {
-        alert("Please fill out all categories before submitting.");
+    // Determine which sections are enabled
+    const enabledSections = SCORECARD_BUCKETS.map((b, i) => {
+        const toggle = document.getElementById(`section-toggle-${i}`);
+        return toggle ? toggle.checked : true;
+    });
+
+    const isPartial = !enabledSections.every(e => e);
+
+    if (!enabledSections.some(e => e)) {
+        alert("Please enable at least one section to update.");
         return;
     }
+
+    // Gather scores per section — blanks are allowed (Apps Script carries previous value forward)
+    let catIndex = 0;
+    let sectionData = [];
+
+    SCORECARD_BUCKETS.forEach((bucket, bIdx) => {
+        const enabled = enabledSections[bIdx];
+        const scores = [];
+        for (let i = 0; i < bucket.count; i++) {
+            const val = document.getElementById(`score-input-${catIndex}`).value;
+            scores.push(val === '' ? null : parseFloat(val));
+            catIndex++;
+        }
+        if (enabled) sectionData.push({ bucketIndex: bIdx, scores: scores });
+    });
 
     btn.innerText = "Saving...";
     btn.style.opacity = "0.7";
     btn.disabled = true;
 
-    const payload = {
-        action: 'submit_scorecard',
-        store: store,
-        date: date,
-        scores: scores
-    };
+    let payload;
+    if (isPartial) {
+        payload = {
+            action: 'submit_scorecard',
+            store: store,
+            date: date,
+            partial: true,
+            sections: sectionData
+        };
+    } else {
+        payload = {
+            action: 'submit_scorecard',
+            store: store,
+            date: date,
+            scores: sectionData.flatMap(s => s.scores)
+        };
+    }
 
-    // Fire the data to Apps Script!
     fetch(SCORECARD_URL, {
-        method: 'POST', 
+        method: 'POST',
         mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload)
     }).then(() => {
         btn.innerText = "Saved Successfully!";
         btn.style.background = "var(--sage-professional)";
-        
-        // Refresh the widget if they are looking at it, then close modal
+
         setTimeout(() => {
             if (typeof fetchScorecardData === 'function') fetchScorecardData();
             closeScorecardModal();
@@ -5266,6 +6675,25 @@ function submitNewScorecard() {
 }
 
 // --- STORE COMMENTS LOGIC ---
+
+// Per-comment fingerprint tracking so new comments always show even after closing a previous one
+function _getSeenCommentKeys() {
+    try { return new Set(JSON.parse(sessionStorage.getItem('speeksSeenCommentKeys') || '[]')); }
+    catch(e) { return new Set(); }
+}
+function _saveSeenCommentKeys(keys) {
+    sessionStorage.setItem('speeksSeenCommentKeys', JSON.stringify([...keys]));
+}
+function _commentKey(c) {
+    return `${String(c.store||'').trim()}|${String(c.date||'').trim()}|${String(c.author||'').trim()}|${String(c.message||'').trim()}`.slice(0, 120);
+}
+
+let _storeCommentPollingStarted = false;
+function startStoreCommentPolling() {
+    if (_storeCommentPollingStarted) return;
+    _storeCommentPollingStarted = true;
+    setInterval(fetchAndDisplayStoreComment, 30 * 1000);
+}
 
 // Opens the modal normally from the Speeks Tools menu (Fully Unlocked)
 function toggleSendCommentModal() {
@@ -5344,10 +6772,8 @@ async function submitStoreComment() {
     }
 }
 
-// Helper to close the bubble and mark it as seen
+// Helper to close the bubble (comments already marked seen when bubble was shown)
 window.closeDailyCommentBubble = function() {
-    const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-    sessionStorage.setItem(`speeksCommentSeen_${todayStr}`, 'true');
     const bubble = document.getElementById('dailyMessageBubble');
     if (bubble) bubble.style.display = 'none';
 };
@@ -5355,21 +6781,16 @@ window.closeDailyCommentBubble = function() {
 async function fetchAndDisplayStoreComment() {
     const userStore = String(sessionStorage.getItem('speeksUserStore') || 'OVL').trim().toUpperCase();
     const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-    const sessionKey = `speeksCommentSeen_${todayStr}`;
-
-    if (sessionStorage.getItem(sessionKey)) {
-        return;
-    }
 
     try {
         const res = await fetch(`${STORE_COMMENT_URL}?v=${Date.now()}`);
         const comments = await res.json();
-        
+
         const todayComments = comments.filter(c => {
             const cStore = String(c.store || '').trim().toUpperCase();
             let rawDateStr = String(c.date || '').trim();
             let parsedDateStr = "";
-            
+
             try {
                 const parsed = new Date(c.date);
                 if (!isNaN(parsed.getTime())) {
@@ -5383,40 +6804,43 @@ async function fetchAndDisplayStoreComment() {
             return isToday && isForMe;
         }).reverse(); // Newest first
 
-        if (todayComments.length > 0) {
+        // Only show comments the user hasn't seen yet in this session
+        const seenKeys = _getSeenCommentKeys();
+        const newComments = todayComments.filter(c => !seenKeys.has(_commentKey(c)));
+        if (newComments.length === 0) return;
+
+        // Mark all today's comments seen now so repeat polls don't re-show the same ones
+        todayComments.forEach(c => seenKeys.add(_commentKey(c)));
+        _saveSeenCommentKeys(seenKeys);
+
+        if (newComments.length > 0) {
             const bubble = document.getElementById('dailyMessageBubble');
             const textEl = document.getElementById('dailyMessageBubbleText');
             const iconEl = document.getElementById('dailyMessageBubbleIcon');
             
             if (bubble && textEl && iconEl) {
-                // Hide the single main icon since we will put specific icons on each message line
                 iconEl.style.display = 'none';
-                
-                // Reformat the text container to allow stacking and text-wrapping
-                textEl.style.whiteSpace = 'normal';
                 textEl.style.display = 'flex';
                 textEl.style.flexDirection = 'column';
-                textEl.style.gap = '8px'; // Space between multiple messages
-                textEl.style.padding = '4px 0';
-                textEl.style.maxHeight = '150px'; // Prevent it from taking over the screen if there are 10 messages
-                textEl.style.overflowY = 'auto'; // Add a scrollbar inside the bubble if needed
-                
-                // Align the bubble items to the top so the "X" button stays neatly at the top right
-                bubble.style.alignItems = 'flex-start';
-                const closeBtn = bubble.querySelector('button');
-                if (closeBtn) closeBtn.style.marginTop = '4px';
+                textEl.style.gap = '8px';
+                textEl.style.padding = '2px 0';
 
-                // Build the HTML for ALL messages today
+                // Build the HTML for new (unseen) messages only
                 let messagesHtml = '';
-                todayComments.forEach(msg => {
+                newComments.forEach(msg => {
                     const authorName = msg.author || 'Executive Team';
-                    
                     const emoji = '📣';
-                    
+
+                    const cStore = String(msg.store || '').trim().toUpperCase();
+                    const isAllStores = (cStore === 'ALL' || cStore === 'CORP');
+                    const scopeBadge = isAllStores
+                        ? `<span style="display:inline-block;font-size:10px;font-weight:600;background:rgba(255,255,255,0.12);color:#fde68a;border:1px solid rgba(253,230,138,0.35);border-radius:4px;padding:1px 5px;margin-left:5px;vertical-align:middle;letter-spacing:0.3px;">Company</span>`
+                        : `<span style="display:inline-block;font-size:10px;font-weight:600;background:rgba(255,255,255,0.08);color:#a7f3d0;border:1px solid rgba(167,243,208,0.3);border-radius:4px;padding:1px 5px;margin-left:5px;vertical-align:middle;letter-spacing:0.3px;">${cStore}</span>`;
+
                     messagesHtml += `
                         <div style="display: flex; align-items: flex-start; gap: 8px; line-height: 1.4;">
                             <span style="font-size: 15px; flex-shrink: 0; margin-top: -2px;">${emoji}</span>
-                            <span><strong style="color: #fef3c7;">${authorName}:</strong> <span style="opacity: 0.95;">${msg.message}</span></span>
+                            <span><strong style="color: #fef3c7;">${authorName}:</strong>${scopeBadge} <span style="opacity: 0.95;">${msg.message}</span></span>
                         </div>
                     `;
                 });
@@ -5441,14 +6865,15 @@ async function fetchAndDisplayStoreComment() {
 async function fetchChampions() {
     const listerBody = document.getElementById('lister-champions-body');
     const buyerBody = document.getElementById('buyer-champions-body');
+    const grBody = document.getElementById('google-review-champions-body');
     const lDate = document.getElementById('lister-champions-date');
     const bDate = document.getElementById('buyer-champions-date');
-    if (!listerBody || !buyerBody) return;
-
+    const grDate = document.getElementById('google-review-champions-date');
     try {
         const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
         let allListers = [];
         let allBuyers = [];
+        let allGoogleReviews = [];
 
         // 1. Calculate "Week Of" based on the previous Monday
         const now = new Date();
@@ -5460,6 +6885,7 @@ async function fetchChampions() {
         
         if (lDate) lDate.innerText = weekText;
         if (bDate) bDate.innerText = weekText;
+        if (grDate) grDate.innerText = weekText;
 
         // 2. User Directory matching (Gets Full Names)
         let authCache = {};
@@ -5486,9 +6912,13 @@ async function fetchChampions() {
                     let n = String(d[i][0]).trim();
                     let lN = n.toLowerCase();
                     if (n && !["name", "employee", "store", "store total", "ovl", "lee", "wsp", "mpl", "bal"].includes(lN) && !lN.includes("average") && !lN.includes("week")) {
-                        let listed = parseNum(d[i][20]); 
+                        let listed = parseNum(d[i][20]);
                         if (listed > 0) {
                             allListers.push({ name: getFullName(n), store: stores[storeIdx], listed: listed });
+                        }
+                        let reviews = parseNum(d[i][29]); // Column AD
+                        if (reviews > 0) {
+                            allGoogleReviews.push({ name: getFullName(n), store: stores[storeIdx], reviews: reviews });
                         }
                     }
                 }
@@ -5547,8 +6977,9 @@ async function fetchChampions() {
             dataArray.forEach(emp => {
                 if (!merged[emp.name]) merged[emp.name] = { ...emp };
                 else {
-                    if (type === 'lister') merged[emp.name].listed += emp.listed; 
+                    if (type === 'lister') merged[emp.name].listed += emp.listed;
                     if (type === 'buyer') merged[emp.name].score = Math.max(merged[emp.name].score, emp.score);
+                    if (type === 'review') merged[emp.name].reviews += emp.reviews;
                 }
             });
             
@@ -5572,18 +7003,19 @@ async function fetchChampions() {
                 const emp = podium.data;
                 const isFirst = podium.place === 1;
                 
-                // Only render the inner score/items text block if it is the Lister podium
+                // Only render the inner score/items text block if it is the Lister or Review podium
                 let blockContent = '';
-                if (type === 'lister') {
+                if (type === 'lister' || type === 'review') {
+                    const val = type === 'lister' ? emp.listed : emp.reviews;
                     blockContent = `
                         <div style="z-index: 2; display: flex; flex-direction: column; align-items: center;">
-                            <span style="font-size: ${isFirst ? '32px' : '26px'}; font-weight: 900; color: var(--slate-charcoal); line-height: 1;">${emp.listed}</span>
+                            <span style="font-size: ${isFirst ? '32px' : '26px'}; font-weight: 900; color: var(--slate-charcoal); line-height: 1;">${val}</span>
                             <span style="font-size: 9px; font-weight: 900; color: #64748b; text-transform: uppercase; margin-top: 4px;">${labelText}</span>
                         </div>`;
                 }
 
                 html += `
-                <div style="display: flex; flex-direction: column; align-items: center; width: 130px; margin: 0 5px;">
+                <div style="display: flex; flex-direction: column; align-items: center; width: 130px;">
                     <div style="margin-bottom: 12px; text-align: center; display: flex; flex-direction: column; align-items: center; z-index: 2;">
                         <div style="font-size: ${isFirst ? '46px' : '34px'}; line-height: 1; margin-bottom: 8px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));">${podium.medal}</div>
                         <div style="font-size: ${isFirst ? '14px' : '12px'}; font-weight: 900; color: var(--slate-charcoal); line-height: 1.2; text-align: center;">${emp.name}</div>
@@ -5601,12 +7033,16 @@ async function fetchChampions() {
             return html;
         };
 
-        listerBody.innerHTML = buildPodiumHtml(allListers, 'listed', 'Items', 'lister');
-        buyerBody.innerHTML = buildPodiumHtml(allBuyers, 'score', 'Score', 'buyer');
+        feedChampionsToTicker(allBuyers, allListers, allGoogleReviews);
+
+        if (listerBody) listerBody.innerHTML = buildPodiumHtml(allListers, 'listed', 'Items', 'lister');
+        if (grBody) grBody.innerHTML = buildPodiumHtml(allGoogleReviews, 'reviews', 'Reviews', 'review');
+        if (buyerBody) buyerBody.innerHTML = buildPodiumHtml(allBuyers, 'score', 'Score', 'buyer');
 
     } catch (e) {
-        listerBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
-        buyerBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
+        if (listerBody) listerBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
+        if (grBody) grBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
+        if (buyerBody) buyerBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
     }
 }
 
@@ -5615,6 +7051,30 @@ async function fetchChampions() {
 // ============================================================================
 let currentChecklistTab = 'daily';
 let checklistDataCache = { daily: [], weekly: [], monthly: [], quarterly: [] };
+
+// For assistant managers, returns the store's primary manager name so both share the same checklist data.
+// All other roles return their own name, preserving existing behavior.
+function getChecklistUser() {
+    const role = sessionStorage.getItem('speeksUserRole') || '';
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+    const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
+
+    if (role !== 'assistant manager') return userName;
+
+    try {
+        const authCache = JSON.parse(localStorage.getItem('speeksAuthCache')) || {};
+        const users = authCache.users || [];
+        for (const targetRole of ['owner (manager)', 'manager']) {
+            const mgr = users.find(u =>
+                u.store && u.store.toUpperCase() === store &&
+                u.role && u.role.toLowerCase() === targetRole
+            );
+            if (mgr) return mgr.name;
+        }
+    } catch (e) {}
+
+    return userName;
+}
 
 function switchChecklistTab(tab) {
     currentChecklistTab = tab;
@@ -5631,17 +7091,26 @@ function switchChecklistTab(tab) {
 
 async function loadChecklist() {
     const container = document.getElementById('checklistContent');
-    const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    const userName = getChecklistUser();
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
 
-    // NEW LOGIC: Only show the Quarterly tab if the user is CORP
+    const role = sessionStorage.getItem('speeksUserRole') || '';
+    const isAssistantManager = role === 'assistant manager';
+
+    // Assistant managers only see Daily
+    const weeklyTab = document.getElementById('cl-tab-weekly');
+    const monthlyTab = document.getElementById('cl-tab-monthly');
+    if (weeklyTab) weeklyTab.style.display = isAssistantManager ? 'none' : '';
+    if (monthlyTab) monthlyTab.style.display = isAssistantManager ? 'none' : '';
+    if (isAssistantManager && currentChecklistTab !== 'daily') switchChecklistTab('daily');
+
+    // Only show Quarterly tab for CORP/ALL stores
     const qTab = document.getElementById('cl-tab-quarterly');
     if (qTab) {
-        if (store === 'CORP' || store === 'ALL') {
+        if (!isAssistantManager && (store === 'CORP' || store === 'ALL')) {
             qTab.style.display = 'inline-flex';
         } else {
             qTab.style.display = 'none';
-            // Failsafe: if a retail manager somehow gets stuck on Quarterly, move them to Daily
             if (currentChecklistTab === 'quarterly') switchChecklistTab('daily');
         }
     }
@@ -5686,12 +7155,13 @@ function renderChecklist() {
     });
 
     container.innerHTML = html;
+    updateChecklistChip();
 }
 
 // --- API ACTIONS (POST to Apps Script) ---
 async function toggleChecklistState(id, isChecked) {
-    const userName = sessionStorage.getItem('speeksUserName');
-    const store = sessionStorage.getItem('speeksUserStore') || 'OVL'; // <--- Added this
+    const userName = getChecklistUser();
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     
     const item = checklistDataCache[currentChecklistTab].find(i => i.id === id);
     if (item) item.checked = isChecked;
@@ -5712,9 +7182,9 @@ async function addChecklistItem() {
     input.value = 'Saving...';
     input.disabled = true;
 
-    const userName = sessionStorage.getItem('speeksUserName');
+    const userName = getChecklistUser();
     const store = sessionStorage.getItem('speeksUserStore');
-    const tempId = 'temp_' + Date.now(); // Temp ID until server refreshes
+    const tempId = 'temp_' + Date.now();
 
     const payload = {
         action: 'add',
@@ -5744,8 +7214,8 @@ async function addChecklistItem() {
 }
 
 async function deleteChecklistItem(id) {
-    const userName = sessionStorage.getItem('speeksUserName');
-    const store = sessionStorage.getItem('speeksUserStore') || 'OVL'; // <--- Added this
+    const userName = getChecklistUser();
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
 
     checklistDataCache[currentChecklistTab] = checklistDataCache[currentChecklistTab].filter(i => i.id !== id);
     renderChecklist();
@@ -5753,7 +7223,7 @@ async function deleteChecklistItem(id) {
     fetch(CHECKLIST_URL, {
         method: 'POST', mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'delete', id: id, user: userName, store: store }) // <--- Added store here
+        body: JSON.stringify({ action: 'delete', id: id, user: userName, store: store })
     }).catch(() => {});
 }
 
@@ -5762,7 +7232,7 @@ function clearChecklistTab() {
     const checkedItems = items.filter(i => i.checked);
     if (checkedItems.length === 0) return;
 
-    const userName = sessionStorage.getItem('speeksUserName');
+    const userName = getChecklistUser();
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
 
     items.forEach(i => i.checked = false);
@@ -5777,6 +7247,29 @@ function clearChecklistTab() {
     });
 }
 
+// --- CHECKLIST NUDGE HELPERS ---
+function updateChecklistChip() {
+    const chip = document.getElementById('cl-progress-chip');
+    const btn = document.querySelector('.cl-nav-toggle');
+    if (!chip || !btn) return;
+
+    const dailyItems = checklistDataCache['daily'] || [];
+    const total = dailyItems.length;
+    if (total === 0) {
+        chip.textContent = '';
+        btn.classList.remove('cl-needs-attention');
+        return;
+    }
+
+    const done = dailyItems.filter(i => i.checked).length;
+    chip.textContent = done === total ? '✓ All done' : `${done}/${total} done`;
+
+    const panel = document.getElementById('checklistSidePanel');
+    const isOpen = panel && panel.classList.contains('open');
+    btn.classList.toggle('cl-needs-attention', done < total && !isOpen);
+}
+
+
 // --- BULLETPROOF TOGGLE & CLICK-AWAY LOGIC ---
 window.toggleChecklistPanel = function(event) {
     if (event) event.stopPropagation();
@@ -5784,44 +7277,43 @@ window.toggleChecklistPanel = function(event) {
     if (!panel) return;
     const isOpen = panel.classList.toggle('open');
     const toggle = document.querySelector('.cl-nav-toggle');
-    if (toggle) toggle.classList.toggle('panel-active', isOpen);
+    if (toggle) {
+        toggle.classList.toggle('panel-active', isOpen);
+        if (isOpen) toggle.classList.remove('cl-needs-attention');
+    }
+    if (isOpen) {
+        document.getElementById('goalsSidePanel')?.classList.remove('open');
+        document.querySelector('.gi-nav-toggle')?.classList.remove('panel-active');
+        _resetToCurrentMonth?.();
+    }
 };
 
 // Closes the panel if you click outside of it
 document.addEventListener('click', function(e) {
     // CRITICAL FIX: If the clicked element was just removed from the DOM (like deleting a task), ignore the click!
     if (!document.body.contains(e.target)) return;
+    // Don't close panels while a modal is open or the click was inside one (e.g. ✖ button fires closeAllModals before bubbling)
+    if (document.getElementById('globalOverlay')?.classList.contains('show')) return;
+    if (e.target.closest('.modal-menu')) return;
 
-    const panel = document.getElementById('checklistSidePanel');
-    
-    if (panel && panel.classList.contains('open')) {
-        // Because the tab is now attached TO the panel, we only need to check if the click was inside the panel
-        if (!panel.contains(e.target)) {
-            panel.classList.remove('open');
-        }
+    const clPanel = document.getElementById('checklistSidePanel');
+    if (clPanel && clPanel.classList.contains('open')) {
+        if (!clPanel.contains(e.target)) {
+            clPanel.classList.remove('open');
+            document.querySelector('.cl-nav-toggle')?.classList.remove('panel-active');
+                }
+    }
+
+    const giPanel = document.getElementById('goalsSidePanel');
+    const giToggle = document.querySelector('.gi-nav-toggle');
+    if (giPanel && giPanel.classList.contains('open')) {
+        if (!giPanel.contains(e.target) && !giToggle?.contains(e.target)) {
+            giPanel.classList.remove('open');
+            giToggle?.classList.remove('panel-active');
+            _resetToCurrentMonth();
+                }
     }
 });
-
-// Run this on the 1st of EVERY month using the Monthly Time-Driven Trigger
-function resetQuarterlyTasks() {
-  const today = new Date();
-  
-  // In Javascript, months are 0-indexed (Jan = 0, Feb = 1... Apr = 3, Jul = 6, Oct = 9).
-  // If the month number divided by 3 does NOT have a remainder of 0, it is NOT the start of a quarter.
-  if (today.getMonth() % 3 !== 0) {
-    return; // Stop the script immediately. Do nothing.
-  }
-  
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Tasks');
-  const data = sheet.getDataRange().getValues();
-  
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][1]).toLowerCase() === 'quarterly') {
-      // Uncheck OVL through CORP
-      sheet.getRange(i + 1, 7, 1, 6).setValue(false); 
-    }
-  }
-}
 
 // --- ROLE SELECTION LOGIC ---
 window.updateRoleLocks = function() {
@@ -5985,6 +7477,20 @@ function renderPatchNotes(data) {
 
     const sorted = buildPatchGroups(entries);
     listEl.innerHTML = sorted.map((g, i) => buildPatchCardHTML(g, i === 0)).join('');
+
+    // User is now viewing the patch notes — mark latest version as seen
+    if (sorted.length > 0) {
+        _latestPatchKey = sorted[0].title + '|' + sorted[0].date;
+        const currentUser = sessionStorage.getItem('speeksUserName');
+        const cleanUser   = currentUser ? String(currentUser).trim().toLowerCase() : null;
+        if (cleanUser) {
+            localStorage.setItem('speeksPatchNotesSeen_'   + cleanUser, _latestPatchKey);
+            localStorage.removeItem('speeksUnseenPatchNotes_' + cleanUser);
+        }
+        const pnBadge = document.getElementById('patchNotesBadge');
+        if (pnBadge) { pnBadge.style.display = 'none'; pnBadge.classList.remove('active'); }
+        updateMainBadge();
+    }
 }
 
 function togglePatchNotes() {
