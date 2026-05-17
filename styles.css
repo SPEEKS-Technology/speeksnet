@@ -2560,7 +2560,7 @@ body.is-authenticated .info-ticker { display: flex; }
 .main-content {
     flex-grow: 1;
     margin-left: 0;
-    padding: 170px 50px 50px 50px;
+    padding: 120px 50px 50px 50px;
     transition: padding 0.3s ease;
 }
 
