@@ -909,7 +909,7 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
     row.className = 'user-manage-row';
 
     const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL', 'CORP'];
-    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Employee', 'Training', 'TOM'];
+    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM'];
 
     const storeOptions = stores.map(s => `<option value="${s}" ${(user.store || '').toUpperCase() === s ? 'selected' : ''}>${s}</option>`).join('');
     const roleOptions = roles.map(r => `<option value="${r}" ${(user.role || '').toLowerCase() === r.toLowerCase() ? 'selected' : ''}>${r}</option>`).join('');
@@ -4745,7 +4745,9 @@ function applyRoleBasedUI() {
         const requiredRoles = classes.filter(c => c.startsWith('role-'));
         const requiredStores = classes.filter(c => c.startsWith('store-'));
 
-        const passesRole = requiredRoles.length === 0 || requiredRoles.includes(userRoleClass);
+        const passesRole = requiredRoles.length === 0 ||
+            requiredRoles.includes(userRoleClass) ||
+            (userRoleClass === 'role-assistant-manager' && requiredRoles.includes('role-employee'));
         const passesStore = requiredStores.length === 0 || requiredStores.includes(userStoreClass);
 
         if (passesRole && passesStore) {
@@ -4756,7 +4758,7 @@ function applyRoleBasedUI() {
         }
     });
 
-    if (userRole === 'employee') {
+    if (userRole === 'employee' || userRole === 'assistant manager') {
         document.querySelectorAll('.manager-only').forEach(el => el.style.setProperty('display', 'none', 'important'));
     }
 
@@ -7058,6 +7060,30 @@ async function fetchChampions() {
 let currentChecklistTab = 'daily';
 let checklistDataCache = { daily: [], weekly: [], monthly: [], quarterly: [] };
 
+// For assistant managers, returns the store's primary manager name so both share the same checklist data.
+// All other roles return their own name, preserving existing behavior.
+function getChecklistUser() {
+    const role = sessionStorage.getItem('speeksUserRole') || '';
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+    const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
+
+    if (role !== 'assistant manager') return userName;
+
+    try {
+        const authCache = JSON.parse(localStorage.getItem('speeksAuthCache')) || {};
+        const users = authCache.users || [];
+        for (const targetRole of ['owner (manager)', 'manager']) {
+            const mgr = users.find(u =>
+                u.store && u.store.toUpperCase() === store &&
+                u.role && u.role.toLowerCase() === targetRole
+            );
+            if (mgr) return mgr.name;
+        }
+    } catch (e) {}
+
+    return userName;
+}
+
 function switchChecklistTab(tab) {
     currentChecklistTab = tab;
     document.getElementById('cl-tab-daily').classList.toggle('active', tab === 'daily');
@@ -7073,17 +7099,26 @@ function switchChecklistTab(tab) {
 
 async function loadChecklist() {
     const container = document.getElementById('checklistContent');
-    const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    const userName = getChecklistUser();
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
 
-    // NEW LOGIC: Only show the Quarterly tab if the user is CORP
+    const role = sessionStorage.getItem('speeksUserRole') || '';
+    const isAssistantManager = role === 'assistant manager';
+
+    // Assistant managers only see Daily
+    const weeklyTab = document.getElementById('cl-tab-weekly');
+    const monthlyTab = document.getElementById('cl-tab-monthly');
+    if (weeklyTab) weeklyTab.style.display = isAssistantManager ? 'none' : '';
+    if (monthlyTab) monthlyTab.style.display = isAssistantManager ? 'none' : '';
+    if (isAssistantManager && currentChecklistTab !== 'daily') switchChecklistTab('daily');
+
+    // Only show Quarterly tab for CORP/ALL stores
     const qTab = document.getElementById('cl-tab-quarterly');
     if (qTab) {
-        if (store === 'CORP' || store === 'ALL') {
+        if (!isAssistantManager && (store === 'CORP' || store === 'ALL')) {
             qTab.style.display = 'inline-flex';
         } else {
             qTab.style.display = 'none';
-            // Failsafe: if a retail manager somehow gets stuck on Quarterly, move them to Daily
             if (currentChecklistTab === 'quarterly') switchChecklistTab('daily');
         }
     }
@@ -7133,8 +7168,8 @@ function renderChecklist() {
 
 // --- API ACTIONS (POST to Apps Script) ---
 async function toggleChecklistState(id, isChecked) {
-    const userName = sessionStorage.getItem('speeksUserName');
-    const store = sessionStorage.getItem('speeksUserStore') || 'OVL'; // <--- Added this
+    const userName = getChecklistUser();
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     
     const item = checklistDataCache[currentChecklistTab].find(i => i.id === id);
     if (item) item.checked = isChecked;
@@ -7155,9 +7190,9 @@ async function addChecklistItem() {
     input.value = 'Saving...';
     input.disabled = true;
 
-    const userName = sessionStorage.getItem('speeksUserName');
+    const userName = getChecklistUser();
     const store = sessionStorage.getItem('speeksUserStore');
-    const tempId = 'temp_' + Date.now(); // Temp ID until server refreshes
+    const tempId = 'temp_' + Date.now();
 
     const payload = {
         action: 'add',
@@ -7187,8 +7222,8 @@ async function addChecklistItem() {
 }
 
 async function deleteChecklistItem(id) {
-    const userName = sessionStorage.getItem('speeksUserName');
-    const store = sessionStorage.getItem('speeksUserStore') || 'OVL'; // <--- Added this
+    const userName = getChecklistUser();
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
 
     checklistDataCache[currentChecklistTab] = checklistDataCache[currentChecklistTab].filter(i => i.id !== id);
     renderChecklist();
@@ -7196,7 +7231,7 @@ async function deleteChecklistItem(id) {
     fetch(CHECKLIST_URL, {
         method: 'POST', mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'delete', id: id, user: userName, store: store }) // <--- Added store here
+        body: JSON.stringify({ action: 'delete', id: id, user: userName, store: store })
     }).catch(() => {});
 }
 
@@ -7205,7 +7240,7 @@ function clearChecklistTab() {
     const checkedItems = items.filter(i => i.checked);
     if (checkedItems.length === 0) return;
 
-    const userName = sessionStorage.getItem('speeksUserName');
+    const userName = getChecklistUser();
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
 
     items.forEach(i => i.checked = false);
