@@ -2365,7 +2365,6 @@ body.is-authenticated .info-ticker { display: flex; }
     height: 100%;
     display: flex;
     align-items: center;
-    padding-left: 14px;
 }
 
 .ticker-panel-buttons {
@@ -2381,12 +2380,21 @@ body.is-authenticated .info-ticker { display: flex; }
     display: flex;
     align-items: center;
     white-space: nowrap;
+    animation: ticker-scroll 55s linear infinite;
+    will-change: transform;
 }
+
+@keyframes ticker-scroll {
+    0%   { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+}
+
 
 .ticker-item {
     display: inline-flex;
     align-items: center;
     gap: 7px;
+    padding: 0 30px;
     font-size: 12px;
     font-weight: 700;
     color: rgba(255,255,255,0.95);

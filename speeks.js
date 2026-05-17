@@ -91,6 +91,9 @@ const TICKER_URL = 'https://script.google.com/macros/s/AKfycbyfvqCn2Vwwp1xGzKiXM
         }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
         checkNavCompact(); // no-op if not yet auth'd, harmless
+
+        // Pre-fetch ticker data during login screen so it's ready the moment the user logs in.
+        loadTickerItems();
     });
 })();
 
@@ -601,20 +604,19 @@ function startReactionPolling() {
 }
 
 // --- 4B. MODULE: INFO TICKER ---
+const _TICKER_PPS = 40;
 const _TICKER_DEFAULTS = [
     { icon: '⭐', text: 'Ask every customer for a Google Review — every one counts', _type: 'static' },
     { icon: '📋', text: 'Use the Margin Guide for every offer', _type: 'static' },
     { icon: '📦', text: 'Listing efficiency is key — process fast, list faster', _type: 'static' },
     { icon: '💬', text: 'Use PayMore and SPEEKS Discord for buying & listing help', _type: 'static' },
 ];
-const _TICKER_FADE_MS   = 500;
-const _TICKER_HOLD_MS   = 5000;
 
-let _tickerItems        = [];
-let _tickerReady        = false;
-let _tickerCycleIndex   = 0;
-let _tickerCycleTimeout = null;
-let _tickerCycling      = false; // true once the cycle loop is running
+let _tickerItems          = [];
+let _tickerReady          = false;
+let _tickerShown          = false;
+let _tickerFetchDone      = false;
+let _tickerRebuildTimeout = null;
 
 function _syncLayout() {
     const nav = document.querySelector('.top-nav');
@@ -627,42 +629,6 @@ function _syncLayout() {
     document.documentElement.style.setProperty('--panel-top', totalTop + 'px');
 }
 
-function _tickerFadeIn(track) {
-    track.style.transition = 'none';
-    track.style.opacity = '0';
-    void track.offsetHeight;
-    track.style.transition = `opacity ${_TICKER_FADE_MS}ms ease`;
-    track.style.opacity = '1';
-}
-
-function _tickerFadeOut(track, cb) {
-    track.style.transition = `opacity ${_TICKER_FADE_MS}ms ease`;
-    track.style.opacity = '0';
-    _tickerCycleTimeout = setTimeout(cb, _TICKER_FADE_MS);
-}
-
-function _tickerStep() {
-    const track = document.getElementById('tickerTrack');
-    if (!track) return;
-    const items = _tickerItems.length > 0 ? _tickerItems : _TICKER_DEFAULTS;
-    const item  = items[_tickerCycleIndex % items.length];
-    track.innerHTML = `<span class="ticker-item"><span class="t-icon">${item.icon}</span>${escapeHtml(item.text)}</span>`;
-    _tickerFadeIn(track);
-    _tickerCycleTimeout = setTimeout(() => {
-        _tickerFadeOut(track, () => {
-            _tickerCycleIndex = (_tickerCycleIndex + 1) % items.length;
-            _tickerStep();
-        });
-    }, _TICKER_HOLD_MS);
-}
-
-function _startTickerCycle() {
-    if (_tickerCycling) return; // already running — new items picked up naturally at next step
-    _tickerCycling = true;
-    _tickerCycleIndex = 0;
-    _tickerStep();
-}
-
 function initTicker() {
     if (_tickerReady) return;
     const ticker = document.getElementById('infoTicker');
@@ -672,31 +638,41 @@ function initTicker() {
     const nav = document.querySelector('.top-nav');
     if (nav && window.ResizeObserver) new ResizeObserver(_syncLayout).observe(nav);
     window.addEventListener('resize', _syncLayout);
-
-    loadTickerItems(); // fetch in background; _rebuildTicker will start cycle when done
-
-    const track = document.getElementById('tickerTrack');
-    if (!track) return;
-
-    // Welcome shown only once per session (not on every page navigation)
-    if (sessionStorage.getItem('_tickerWelcomeShown')) {
-        _startTickerCycle();
-        return;
-    }
-    sessionStorage.setItem('_tickerWelcomeShown', '1');
-
-    const firstName = (sessionStorage.getItem('speeksUserName') || '').trim().split(' ')[0] || 'there';
-    track.innerHTML = `<span class="ticker-item"><span class="t-icon">👋</span>${escapeHtml('Hello ' + firstName + '! Welcome to SPEEKSNET!')}</span>`;
-    _tickerFadeIn(track);
-    _tickerCycleTimeout = setTimeout(() => {
-        _tickerFadeOut(track, _startTickerCycle);
-    }, _TICKER_HOLD_MS);
+    // Data may already be fetched (pre-loaded at page load); trigger display now.
+    _rebuildTicker();
 }
 
-// Called by loadTickerItems and feed functions when data arrives.
-// Never restarts a running cycle — new items are picked up at the next natural step.
 function _rebuildTicker() {
-    _startTickerCycle();
+    // Don't attempt to render before the user is authenticated and the ticker DOM is live.
+    if (!_tickerReady) return;
+    // Once scrolling, never restart — feed updates land in _tickerItems for the next page load.
+    if (_tickerShown) return;
+    if (_tickerRebuildTimeout) clearTimeout(_tickerRebuildTimeout);
+    _tickerRebuildTimeout = setTimeout(() => {
+        _tickerRebuildTimeout = null;
+        if (!_tickerFetchDone) return;
+        _showTickerFirstTime();
+    }, 800);
+}
+
+function _showTickerFirstTime() {
+    _tickerShown = true;
+    if (_tickerItems.length === 0) _tickerItems = [..._TICKER_DEFAULTS];
+    _applyTickerContent();
+}
+
+function _applyTickerContent() {
+    const track = document.getElementById('tickerTrack');
+    if (!track) return;
+    const sep  = '<span class="ticker-sep">◆</span>';
+    const html = _tickerItems.map(item =>
+        `<span class="ticker-item"><span class="t-icon">${item.icon}</span>${escapeHtml(item.text)}</span>${sep}`
+    ).join('');
+    track.innerHTML = html + html;
+    track.style.animation = 'none';
+    void track.offsetHeight;
+    const cw = track.scrollWidth / 2;
+    track.style.animation = `ticker-scroll ${(cw / _TICKER_PPS).toFixed(1)}s linear infinite`;
 }
 
 function feedAnnouncementsToTicker(announcements) {
@@ -772,6 +748,7 @@ async function loadTickerItems() {
         }
     } catch (e) { console.warn('[Ticker] AppScript fetch failed — check deployment access settings:', e); }
     clearTimeout(tid);
+    _tickerFetchDone = true;
     _rebuildTicker();
 }
 
@@ -2902,7 +2879,6 @@ function handleSignOut() {
     
     // Remove the comment tracker so it pops up again on next login
     sessionStorage.removeItem('speeksSeenCommentKeys');
-    sessionStorage.removeItem('_tickerWelcomeShown');
     
     location.reload(); 
 }
