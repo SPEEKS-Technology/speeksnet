@@ -339,8 +339,10 @@ async function loadCMS() {
                 recentHtml = recentCount === 0 ? '<div style="padding: 20px; color:#999; text-align:center;">No recent announcements</div>' : recentHtml;
                 archiveHtml = archiveCount === 0 ? '<div style="padding: 20px; color:#999; text-align:center;">No archived announcements</div>' : archiveHtml;
                 feedAnnouncementsToTicker(sortedAnns.slice(0, 2));
+                _tickerSourceDone('cms');
             } else {
                 recentHtml = archiveHtml = '<div style="padding: 20px; color:#999; text-align:center;">No announcements</div>';
+                _tickerSourceDone('cms');
             }
 
             annContainer.innerHTML = recentHtml;
@@ -380,8 +382,9 @@ async function loadCMS() {
                     '<div class="cms-item">No upcoming projects</div>';
             }
         }
-    } catch (e) { 
-        console.error("CMS Sync Failed", e); 
+    } catch (e) {
+        console.error("CMS Sync Failed", e);
+        _tickerSourceDone('cms');
     }
 }
 
@@ -615,8 +618,9 @@ const _TICKER_DEFAULTS = [
 let _tickerItems          = [];
 let _tickerReady          = false;
 let _tickerShown          = false;
-let _tickerFetchDone      = false;
-let _tickerRebuildTimeout = null;
+let _tickerFetchDone      = false;                             // TICKER_URL static items loaded
+let _tickerPendingSources = new Set(['cms','hub','champions']); // sources still loading; idempotent — delete is a no-op if already removed
+let _tickerMaxWaitTimer   = null;
 
 function _syncLayout() {
     const nav = document.querySelector('.top-nav');
@@ -634,25 +638,52 @@ function initTicker() {
     const ticker = document.getElementById('infoTicker');
     if (!ticker) return;
     _tickerReady = true;
+    _tickerPendingSources = new Set(['cms', 'hub', 'champions']);
     requestAnimationFrame(_syncLayout);
     const nav = document.querySelector('.top-nav');
     if (nav && window.ResizeObserver) new ResizeObserver(_syncLayout).observe(nav);
     window.addEventListener('resize', _syncLayout);
-    // Data may already be fetched (pre-loaded at page load); trigger display now.
-    _rebuildTicker();
+    // Fallback: start after 10s even if a source is still pending or slow
+    _tickerMaxWaitTimer = setTimeout(() => {
+        _tickerMaxWaitTimer = null;
+        _tickerPendingSources.clear();
+        _tickerFetchDone = true;
+        _tryStartTicker();
+    }, 10000);
+    _tryStartTicker(); // fires immediately if loadTickerItems already finished pre-auth and pending is 0
 }
 
-function _rebuildTicker() {
-    // Don't attempt to render before the user is authenticated and the ticker DOM is live.
-    if (!_tickerReady) return;
-    // Once scrolling, never restart — feed updates land in _tickerItems for the next page load.
-    if (_tickerShown) return;
-    if (_tickerRebuildTimeout) clearTimeout(_tickerRebuildTimeout);
-    _tickerRebuildTimeout = setTimeout(() => {
-        _tickerRebuildTimeout = null;
-        if (!_tickerFetchDone) return;
-        _showTickerFirstTime();
-    }, 800);
+function _tryStartTicker() {
+    if (!_tickerReady || _tickerShown) return;
+    if (!_tickerFetchDone || _tickerPendingSources.size > 0) return;
+    if (_tickerMaxWaitTimer) { clearTimeout(_tickerMaxWaitTimer); _tickerMaxWaitTimer = null; }
+    _showTickerFirstTime();
+}
+
+// Each source passes its own name; Set.delete is idempotent so double-calls are safe.
+function _tickerSourceDone(source) {
+    _tickerPendingSources.delete(source);
+    _tryStartTicker();
+}
+
+function _resetTicker() {
+    if (_tickerMaxWaitTimer) { clearTimeout(_tickerMaxWaitTimer); _tickerMaxWaitTimer = null; }
+    const track = document.getElementById('tickerTrack');
+    if (track) {
+        if (track._tickerLoopHandler) {
+            track.removeEventListener('animationend', track._tickerLoopHandler);
+            track._tickerLoopHandler = null;
+        }
+        track.style.animation = 'none';
+        track.innerHTML = '';
+    }
+    _tickerItems          = [];
+    _tickerReady          = false;
+    _tickerShown          = false;
+    _tickerFetchDone      = false;
+    _tickerPendingSources = new Set(['cms', 'hub', 'champions']);
+    loadTickerItems();
+    initTicker();
 }
 
 function _showTickerFirstTime() {
@@ -671,12 +702,40 @@ function _applyTickerContent() {
     track.innerHTML = html + html;
     track.style.animation = 'none';
     void track.offsetHeight;
-    const cw = track.scrollWidth / 2;
-    track.style.animation = `ticker-scroll ${(cw / _TICKER_PPS).toFixed(1)}s linear infinite`;
+    const cw   = track.scrollWidth / 2;
+    const ctnW = (track.parentElement ? track.parentElement.offsetWidth : 0);
+    const durIntro = ((ctnW + cw) / _TICKER_PPS).toFixed(1);
+    const durLoop  = (cw / _TICKER_PPS).toFixed(1);
+    let styleEl = document.getElementById('_tickerKeyframes');
+    if (!styleEl) {
+        styleEl = document.createElement('style');
+        styleEl.id = '_tickerKeyframes';
+        document.head.appendChild(styleEl);
+    }
+    // Phase 1: enter from right and scroll through all content exactly once.
+    // Phase 2: seamless infinite loop (translateX(0) == translateX(-cw) visually
+    //          because content is doubled, so the cut is invisible).
+    styleEl.textContent = [
+        `@keyframes ticker-intro{from{transform:translateX(${ctnW}px)}to{transform:translateX(${-cw}px)}}`,
+        `@keyframes ticker-loop{from{transform:translateX(0px)}to{transform:translateX(${-cw}px)}}`
+    ].join('');
+    // Clean up any leftover listener from a previous call (admin save, etc.)
+    if (track._tickerLoopHandler) {
+        track.removeEventListener('animationend', track._tickerLoopHandler);
+    }
+    track._tickerLoopHandler = function onIntroEnd() {
+        track.removeEventListener('animationend', track._tickerLoopHandler);
+        track._tickerLoopHandler = null;
+        track.style.animation = 'none';
+        void track.offsetHeight;
+        track.style.animation = `ticker-loop ${durLoop}s linear infinite`;
+    };
+    track.addEventListener('animationend', track._tickerLoopHandler);
+    track.style.animation = `ticker-intro ${durIntro}s linear`;
 }
 
 function feedAnnouncementsToTicker(announcements) {
-    if (!_tickerReady || !announcements || !announcements.length) return;
+    if (!announcements || !announcements.length) return;
     const isHighPriority = announcements.some(a => a.text && (a.text.includes('HIGH PRIORITY') || a.text.includes('🚨')));
     _tickerItems = _tickerItems.filter(i => i._type !== 'announcement');
     _tickerItems.unshift({
@@ -684,18 +743,19 @@ function feedAnnouncementsToTicker(announcements) {
         text: isHighPriority ? 'High Priority Announcement — check the bell!' : 'New Announcement posted — check the bell!',
         _type: 'announcement'
     });
-    _rebuildTicker();
 }
 
 function feedLeaderboardToTicker(leaderboardData) {
     if (!_tickerReady || !leaderboardData || !leaderboardData.activeStores) return;
     const stores = leaderboardData.activeStores;
     const getLeader = (data) => {
+        const norm = {};
+        Object.keys(data).forEach(k => norm[k.toLowerCase()] = data[k]);
         const scores = stores.map(s => {
-            const arr = (data[s] || []).filter(v => v !== null && v !== undefined);
-            return { store: s, val: arr.length ? arr[arr.length - 1] : 0 };
+            const arr = (norm[String(s).toLowerCase()] || []).filter(v => v !== null && v !== undefined && v !== '');
+            return { store: s, val: arr.length ? (parseFloat(arr[arr.length - 1]) || 0) : 0 };
         }).sort((a, b) => b.val - a.val);
-        return scores.length && scores[0].val ? scores[0].store : null;
+        return scores.length && scores[0].val > 0 ? scores[0].store : null;
     };
     const gpLeader = getLeader(leaderboardData.gp || {});
     const revLeader = getLeader(leaderboardData.revenue || {});
@@ -708,7 +768,6 @@ function feedLeaderboardToTicker(leaderboardData) {
         text = `${gpLeader || revLeader} is leading district GP & Revenue this month`;
     }
     _tickerItems.push({ icon: '🏆', text, _type: 'leaderboard' });
-    _rebuildTicker();
 }
 
 function feedChampionsToTicker(allBuyers, allListers, allGoogleReviews) {
@@ -732,7 +791,6 @@ function feedChampionsToTicker(allBuyers, allListers, allGoogleReviews) {
     if (topLister) parts.push(`Listing: ${topLister.name} (${topLister.store})`);
     if (topReviewer) parts.push(`Reviews: ${topReviewer.name} (${topReviewer.store})`);
     _tickerItems.push({ icon: '🥇', text: 'Weekly Champions — ' + parts.join('  ·  '), _type: 'champions' });
-    _rebuildTicker();
 }
 
 async function loadTickerItems() {
@@ -749,7 +807,7 @@ async function loadTickerItems() {
     } catch (e) { console.warn('[Ticker] AppScript fetch failed — check deployment access settings:', e); }
     clearTimeout(tid);
     _tickerFetchDone = true;
-    _rebuildTicker();
+    _tryStartTicker();
 }
 
 const TICKER_EMOJIS = [
@@ -843,7 +901,7 @@ async function saveTickerItems() {
         _tickerItems = _tickerItems.filter(i => i._type !== 'static');
         const newStatic = items.map(item => ({ icon: item.icon, text: item.text, _type: 'static' }));
         _tickerItems = newStatic.length ? [...newStatic, ..._tickerItems] : [..._TICKER_DEFAULTS, ..._tickerItems];
-        _rebuildTicker();
+        if (_tickerShown) _applyTickerContent(); else _tryStartTicker();
         closeAllModals();
     } catch (e) {
         alert('Failed to save ticker items.');
@@ -1888,13 +1946,16 @@ async function fetchHubData() {
         // Let the Hub power the Leaderboard automatically!
         if (hubDataCache.leaderboard) {
             cachedLeaderboardData = hubDataCache.leaderboard;
+            console.log('[Ticker] leaderboard data:', JSON.stringify(cachedLeaderboardData).slice(0, 300));
             feedLeaderboardToTicker(cachedLeaderboardData);
             if (document.getElementById('lb-wrapper')) drawLeaderboard();
         } else if (document.getElementById('lb-wrapper')) {
             document.getElementById('lb-wrapper').innerHTML = '<div class="status-message" style="color:var(--red-alert);">Please Deploy "New Version" of Hub App Script!</div>';
         }
+        _tickerSourceDone('hub');
     } catch(e) {
         console.error("Hub Sync Failed", e);
+        _tickerSourceDone('hub');
     }
 }
 
@@ -2154,26 +2215,26 @@ async function fetchChartData(tf) {
     } 
 }
 
-function syncAllData() { 
+function syncAllData() {
     try {
         const mSelect = document.getElementById('metricSelector');
         if (typeof kpiChartCache !== 'undefined' && kpiChartCache && kpiChartCache[currentTimeframe] && mSelect) {
-            renderKpiChart(kpiChartCache[currentTimeframe], mSelect.value); 
+            renderKpiChart(kpiChartCache[currentTimeframe], mSelect.value);
         }
     } catch (e) {}
-    
+
     try {
         if (typeof cachedLeaderboardData !== 'undefined' && cachedLeaderboardData) drawLeaderboard();
     } catch (e) {}
-    
+
     try {
-        if (typeof hubDataCache !== 'undefined' && hubDataCache) renderLiveData(hubDataCache); 
+        if (typeof hubDataCache !== 'undefined' && hubDataCache) renderLiveData(hubDataCache);
     } catch (e) {}
-    
-    fetchChartData(currentTimeframe); 
-    fetchHubData(); 
-    if (typeof loadCMS === 'function') loadCMS(); 
-    if (typeof fetchRecordsData === 'function') fetchRecordsData(); 
+
+    fetchChartData(currentTimeframe);
+    fetchHubData();
+    if (typeof loadCMS === 'function') loadCMS();
+    if (typeof fetchRecordsData === 'function') fetchRecordsData();
 }
 
 // --- 14. MODULE: RECORDS MANAGER ---
@@ -7034,6 +7095,7 @@ async function fetchChampions() {
         };
 
         feedChampionsToTicker(allBuyers, allListers, allGoogleReviews);
+        _tickerSourceDone('champions');
 
         if (listerBody) listerBody.innerHTML = buildPodiumHtml(allListers, 'listed', 'Items', 'lister');
         if (grBody) grBody.innerHTML = buildPodiumHtml(allGoogleReviews, 'reviews', 'Reviews', 'review');
@@ -7043,6 +7105,7 @@ async function fetchChampions() {
         if (listerBody) listerBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
         if (grBody) grBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
         if (buyerBody) buyerBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
+        _tickerSourceDone('champions');
     }
 }
 
