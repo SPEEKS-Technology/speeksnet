@@ -1925,9 +1925,10 @@ async function fetchHubData() {
         const _bsFields = s => [`${s}BuyVal`,`${s}BuyProj`,`${s}BuyMargin`,`${s}Pct`,`${s}Goal`,`${s}TrackGP`,`${s}GP`,`${s}Rev`,`${s}SellMargin`];
         const _bsPrev = JSON.parse(localStorage.getItem('bsPrevHubCache') || '{}');
         const _bsTs = JSON.parse(localStorage.getItem('bsStoreTimestamps') || '{}');
-        _bsStores.forEach(s => { if (_bsTs[s]) _bsTs[s] = _bsTs[s].replace(/\s+\d{1,2}:\d{2}\s*(AM|PM)/i, ''); });
+        // Migrate any old long-form weekdays ("Monday, May 18" → "May 18") and strip stale time suffixes
+        _bsStores.forEach(s => { if (_bsTs[s]) _bsTs[s] = _bsTs[s].replace(/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s*/i, '').replace(/\s+\d{1,2}:\d{2}\s*(AM|PM)/i, ''); });
         const _bsNow = new Date();
-        const _bsLabel = _bsNow.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+        const _bsLabel = _bsNow.toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric' });
         _bsStores.forEach(s => {
             if (_bsFields(s).some(f => freshData[f] !== _bsPrev[f])) _bsTs[s] = _bsLabel;
         });
@@ -3486,9 +3487,11 @@ async function fetchMasterDistrictDashboard() {
 
     const renderMasterBoard = (hubData, varData, scoreData, alertsData, weeklyResults) => {
         let html = '';
+        const _bsTs = JSON.parse(localStorage.getItem('bsStoreTimestamps') || '{}');
         STORES.forEach(store => {
             const sLower = store.toLowerCase();
             const icon = STORE_ICONS[store];
+            const storeLastEdited = _bsTs[sLower] || null;
 
             // 1. SCORECARD & HEADER
             const sScore = scoreData.data?.find(s => s.store.toUpperCase() === store) || {};
@@ -3678,7 +3681,10 @@ async function fetchMasterDistrictDashboard() {
 
                 <div class="master-card-body">
                     <div>
-                        <div class="master-section-title">Buying & Selling Snapshot</div>
+                        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px;">
+                            <div class="master-section-title" style="margin-bottom:0;min-width:0;">Buying &amp; Selling Snapshot</div>
+                            ${storeLastEdited ? `<span class="master-section-title" style="margin-bottom:0;white-space:nowrap;">${storeLastEdited}</span>` : ''}
+                        </div>
                         <div class="master-stat-box">
                             <div class="master-stat-row"><span class="master-stat-label">Sales vs Goal</span><span class="master-stat-val" style="color: ${pctColor}; background: ${pctBg};">${salesPct}%</span></div>
                             <div class="master-stat-row"><span class="master-stat-label">Revenue</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${Math.round(rev).toLocaleString()}</span></div>
