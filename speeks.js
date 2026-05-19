@@ -1528,58 +1528,78 @@ async function fetchKPIData(isRetry = false) {
         compareSelect.value = monthArray.indexOf(currC) !== -1 ? monthArray.indexOf(currC) : Math.max(0, monthArray.length - 2); 
     };
 
+    const _syncAMSelects = () => {
+        const amP = document.getElementById('am-primaryMonthSelect');
+        const amC = document.getElementById('am-compareMonthSelect');
+        if (amP && amC) {
+            setDD(amP, amC, dynamicMonths);
+            renderAMKPIDashboard();
+        }
+    };
+
     // Use cached data if available for instant loading
     if (monthlyKpiCache[store]) {
-        dynamicMonths = monthlyKpiCache[store].months; 
+        dynamicMonths = monthlyKpiCache[store].months;
         rawKPIData = monthlyKpiCache[store].data;
         setDD(document.getElementById('primaryMonthSelect'), document.getElementById('compareMonthSelect'), dynamicMonths);
-        return renderKPIDashboard(); 
+        _syncAMSelects();
+        return renderKPIDashboard();
     }
-    
+
     try {
         const response = await fetch(`${MONTHLY_KPI_URL}?store=${store}&v=${Date.now()}`);
         const payload = await response.json();
-        
-        monthlyKpiCache[store] = { 
-            months: payload.months, 
-            data: groupKPIs(payload.data) 
+
+        monthlyKpiCache[store] = {
+            months: payload.months,
+            data: groupKPIs(payload.data)
         };
-        
-        dynamicMonths = monthlyKpiCache[store].months; 
+
+        dynamicMonths = monthlyKpiCache[store].months;
         rawKPIData = monthlyKpiCache[store].data;
-        
+
         setDD(document.getElementById('primaryMonthSelect'), document.getElementById('compareMonthSelect'), dynamicMonths);
+        _syncAMSelects();
         renderKPIDashboard();
-    } catch (e) { 
-        console.error("Monthly KPI fetch failed:", e); 
+    } catch (e) {
+        console.error("Monthly KPI fetch failed:", e);
     }
 }
 
-function renderKPIDashboard() {
-    const store = document.getElementById('kpiStoreSelect').value;
-    const pIdx = document.getElementById('primaryMonthSelect').value;
-    const cIdx = document.getElementById('compareMonthSelect').value;
-    const cont = document.getElementById('kpiDashboardContainer');
-    
-    document.getElementById('header-primary-label').innerText = dynamicMonths[pIdx]; 
-    document.getElementById('header-compare-label').innerText = dynamicMonths[cIdx];
-    
-    const vId = `kpi-view-${store}-${pIdx}-${cIdx}`;
-    
+function renderKPIDashboard(opts) {
+    opts = opts || {};
+    const storeId  = opts.storeId  || 'kpiStoreSelect';
+    const pId      = opts.pId      || 'primaryMonthSelect';
+    const cId      = opts.cId      || 'compareMonthSelect';
+    const contId   = opts.contId   || 'kpiDashboardContainer';
+    const pLabelId = opts.pLabelId || 'header-primary-label';
+    const cLabelId = opts.cLabelId || 'header-compare-label';
+    const vPrefix  = opts.vPrefix  || 'kpi-view';
+
+    const store = document.getElementById(storeId).value;
+    const pIdx = document.getElementById(pId).value;
+    const cIdx = document.getElementById(cId).value;
+    const cont = document.getElementById(contId);
+
+    document.getElementById(pLabelId).innerText = dynamicMonths[pIdx];
+    document.getElementById(cLabelId).innerText = dynamicMonths[cIdx];
+
+    const vId = `${vPrefix}-${store}-${pIdx}-${cIdx}`;
+
     // Hide all existing views
     Array.from(cont.children).forEach(c => c.style.display = 'none');
-    
+
     // If we've already built this specific comparison view, just show it
     if (document.getElementById(vId)) {
         return document.getElementById(vId).style.display = 'block';
     }
 
     setTimeout(() => {
-        const newView = document.createElement('div'); 
+        const newView = document.createElement('div');
         newView.id = vId;
-        
+
         let html = '';
-        
+
         rawKPIData.forEach(cat => {
             html += `
             <div class="kpi-category">
@@ -1588,26 +1608,26 @@ function renderKPIDashboard() {
                     <span class="chevron">▼</span>
                 </div>
                 <div class="kpi-category-content">`;
-                
+
             cat.metrics.forEach(m => {
                 const rP = m.values[pIdx];
                 const rC = m.values[cIdx];
                 const dNum = parseNum(rP) - parseNum(rC);
-                
-                let dStr = m.name.toLowerCase().match(/%|rate|variance|margin|gm|cogs/) 
-                    ? `${Math.abs(dNum).toFixed(2).replace(/\.00$/, '')}%` 
+
+                let dStr = m.name.toLowerCase().match(/%|rate|variance|margin|gm|cogs/)
+                    ? `${Math.abs(dNum).toFixed(2).replace(/\.00$/, '')}%`
                     : formatSmartValue(Math.abs(dNum), m.name);
-                    
+
                 let bClass = 'delta-neutral';
                 let sign = '';
-                
-                if (Math.abs(dNum) > 0.001) { 
-                    sign = dNum > 0 ? '+' : '-'; 
-                    bClass = dNum > 0 ? (m.inverse ? 'delta-neg' : 'delta-pos') : (m.inverse ? 'delta-pos' : 'delta-neg'); 
+
+                if (Math.abs(dNum) > 0.001) {
+                    sign = dNum > 0 ? '+' : '-';
+                    bClass = dNum > 0 ? (m.inverse ? 'delta-neg' : 'delta-pos') : (m.inverse ? 'delta-pos' : 'delta-neg');
                 } else {
                     dStr = '0';
                 }
-                
+
                 html += `
                 <div class="kpi-row">
                     <div class="kpi-name-col">
@@ -1621,13 +1641,25 @@ function renderKPIDashboard() {
                     </div>
                 </div>`;
             });
-            
+
             html += `</div></div>`;
         });
-        
+
         newView.innerHTML = html;
         cont.appendChild(newView);
     }, 10);
+}
+
+function renderAMKPIDashboard() {
+    renderKPIDashboard({
+        storeId:  'am-kpiStoreSelect',
+        pId:      'am-primaryMonthSelect',
+        cId:      'am-compareMonthSelect',
+        contId:   'am-kpiDashboardContainer',
+        pLabelId: 'am-header-primary-label',
+        cLabelId: 'am-header-compare-label',
+        vPrefix:  'am-kpi-view'
+    });
 }
 
 // --- 10. MODULE: LIVE VARIANCE REPORTS ---
@@ -4859,8 +4891,20 @@ function applyRoleBasedUI() {
         document.querySelectorAll('.manager-only').forEach(el => el.style.setProperty('display', 'none', 'important'));
     }
 
+    if (userRoleClass === 'role-assistant-manager') {
+        document.body.classList.add('am-mode');
+        const empRow = document.querySelector('.employee-dashboard-row');
+        if (empRow) {
+            empRow.style.setProperty('display', 'grid', 'important');
+            empRow.style.setProperty('grid-template-columns', '1fr 1fr', 'important');
+            empRow.style.setProperty('align-items', 'stretch', 'important');
+        }
+        const bsCard = document.querySelector('.buying-sales-module');
+        if (bsCard) bsCard.style.setProperty('display', 'flex', 'important');
+    }
+
     if (userStore !== 'ALL') {
-        ['kpiStoreSelect', 'weeklyKpiStoreSelect', 'bsStoreSelect', 'vw-primary', 'dmChartStoreSelector'].forEach(id => {
+        ['kpiStoreSelect', 'am-kpiStoreSelect', 'weeklyKpiStoreSelect', 'bsStoreSelect', 'vw-primary', 'dmChartStoreSelector'].forEach(id => {
             const dropdown = document.getElementById(id);
             if (dropdown && Array.from(dropdown.options).some(opt => opt.value === userStore)) {
                 dropdown.value = userStore;
@@ -5054,11 +5098,19 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
     
-    ['kpiStoreSelect', 'weeklyKpiStoreSelect', 'vw-primary', 'vw-compare'].forEach(id => {
+    ['kpiStoreSelect', 'am-kpiStoreSelect', 'weeklyKpiStoreSelect', 'vw-primary', 'vw-compare'].forEach(id => {
         document.getElementById(id)?.addEventListener('change', () => {
-            if (id === 'kpiStoreSelect') fetchKPIData(false);
-            else if (id === 'weeklyKpiStoreSelect') fetchWeeklyKPIs();
-            else renderVariance();
+            if (id === 'kpiStoreSelect') {
+                fetchKPIData(false);
+            } else if (id === 'am-kpiStoreSelect') {
+                const origStore = document.getElementById('kpiStoreSelect');
+                if (origStore) origStore.value = document.getElementById('am-kpiStoreSelect').value;
+                fetchKPIData(false);
+            } else if (id === 'weeklyKpiStoreSelect') {
+                fetchWeeklyKPIs();
+            } else {
+                renderVariance();
+            }
         });
     });
     
