@@ -4924,6 +4924,20 @@ async function checkForNewPatchNotes() {
         const groups = buildPatchGroups(data.entries);
         if (groups.length > 0) {
             _latestPatchKey = groups[0].title + '|' + groups[0].date;
+
+            // Restore read state from server in case browser data was cleared
+            const currentUser = sessionStorage.getItem('speeksUserName');
+            const cleanUser   = currentUser ? String(currentUser).trim().toLowerCase() : null;
+            if (cleanUser) {
+                try {
+                    const readData = await fetch(`${PATCH_NOTES_URL}?action=getPatchRead&user=${encodeURIComponent(cleanUser)}&v=${Date.now()}`).then(r => r.json());
+                    if (readData.lastSeenKey === _latestPatchKey) {
+                        localStorage.setItem('speeksPatchNotesSeen_' + cleanUser, _latestPatchKey);
+                        localStorage.removeItem('speeksUnseenPatchNotes_' + cleanUser);
+                    }
+                } catch (e) {}
+            }
+
             checkPatchNotesBadge();
         }
     } catch (e) {}
@@ -7579,6 +7593,11 @@ function renderPatchNotes(data) {
         if (cleanUser) {
             localStorage.setItem('speeksPatchNotesSeen_'   + cleanUser, _latestPatchKey);
             localStorage.removeItem('speeksUnseenPatchNotes_' + cleanUser);
+            // Persist read state server-side so it survives browser data clearing
+            fetch(PATCH_NOTES_URL, {
+                method: 'POST',
+                body: JSON.stringify({ action: 'markPatchRead', user: cleanUser, lastSeenKey: _latestPatchKey })
+            }).catch(() => {});
         }
         const pnBadge = document.getElementById('patchNotesBadge');
         if (pnBadge) { pnBadge.style.display = 'none'; pnBadge.classList.remove('active'); }
