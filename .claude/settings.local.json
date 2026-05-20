@@ -10,7 +10,8 @@
       "Bash(Select-Object FullName, PSIsContainer)",
       "Bash(Sort-Object FullName)",
       "mcp__supabase__get_project_url",
-      "mcp__supabase__list_tables"
+      "mcp__supabase__list_tables",
+      "WebFetch(domain:docs.google.com)"
     ]
   }
 }

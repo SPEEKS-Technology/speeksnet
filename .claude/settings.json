@@ -14,7 +14,8 @@
       "PowerShell($env:PATH = $env:PATH + \";C:\\\\Program Files\\\\Git\\\\bin;C:\\\\Program Files\\\\Git\\\\cmd\"; cd \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\"; git log --oneline -20)",
       "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\" -Depth 2 | Where-Object { -not $_.FullName.Contains\\('.git'\\) } | Select-Object FullName)",
       "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\" -Recurse -Directory | Select-Object -First 30 | ForEach-Object { $_.FullName })",
-      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\" -Recurse -File | Select-Object Name, @{N='FullPath';E={$_.FullName}} | ForEach-Object { \"$\\($_.FullPath\\)\" } | Sort-Object)"
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\" -Recurse -File | Select-Object Name, @{N='FullPath';E={$_.FullName}} | ForEach-Object { \"$\\($_.FullPath\\)\" } | Sort-Object)",
+      "mcp__supabase__apply_migration"
     ]
   }
 }
