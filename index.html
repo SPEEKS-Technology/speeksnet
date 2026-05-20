@@ -661,6 +661,42 @@
           </div>
       </div>
 
+      <div class="card kpi-master-card district-master-panel employee-widget-card dynamic-module-flex role-assistant-manager bottom-locked-card">
+          <div class="district-kpi-header">
+              <span class="district-kpi-title">Monthly KPI Comparison</span>
+              <div class="kpi-header-controls">
+                  <div class="kpi-select-group">
+                      <select id="am-kpiStoreSelect" class="kpi-select hide-by-default">
+                          <option value="OVL">OVL</option>
+                          <option value="LEE">LEE</option>
+                          <option value="WSP">WSP</option>
+                          <option value="MPL">MPL</option>
+                          <option value="BAL">BAL</option>
+                      </select>
+                  </div>
+                  <div class="kpi-select-group" style="margin-left: auto;">
+                      <select id="am-primaryMonthSelect" class="kpi-select" onchange="renderAMKPIDashboard()"></select>
+                  </div>
+                  <div class="kpi-select-group vw-vs-text">vs</div>
+                  <div class="kpi-select-group">
+                      <select id="am-compareMonthSelect" class="kpi-select" onchange="renderAMKPIDashboard()"></select>
+                  </div>
+              </div>
+          </div>
+
+          <div class="kpi-inner-wrapper">
+              <div class="kpi-table-header">
+                  <div>Metric & 12-Mo Trend</div>
+                  <div id="am-header-primary-label">Primary</div>
+                  <div id="am-header-compare-label">Compare</div>
+                  <div>Delta (+/-)</div>
+              </div>
+              <div id="am-kpiDashboardContainer" class="kpi-scroll-area">
+                  <div class="status-message">Syncing KPI Data...</div>
+              </div>
+          </div>
+      </div>
+
       <div class="card dynamic-module-flex role-manager role-owner-manager district-master-panel employee-widget-card flex-col-card">
           <div class="district-kpi-header">
               <div class="goals-title-wrapper">

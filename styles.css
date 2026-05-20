@@ -2722,6 +2722,17 @@ body.is-authenticated .info-ticker { display: flex; }
     margin-bottom: 30px;
 }
 
+body.am-mode .employee-dashboard-row {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    align-items: stretch;
+}
+
+body.am-mode .employee-widget-card {
+    max-width: none;
+    flex: none;
+}
+
 .employee-spacer {
     flex: 1 1 calc(33.33% - 20px);
     max-width: calc(33.33% - 20px);

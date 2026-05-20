@@ -338,9 +338,11 @@ async function loadCMS() {
 
                 recentHtml = recentCount === 0 ? '<div style="padding: 20px; color:#999; text-align:center;">No recent announcements</div>' : recentHtml;
                 archiveHtml = archiveCount === 0 ? '<div style="padding: 20px; color:#999; text-align:center;">No archived announcements</div>' : archiveHtml;
-                feedAnnouncementsToTicker(sortedAnns.slice(0, 2));
+                feedAnnouncementsToTicker(showBadge ? sortedAnns.slice(0, 2) : []);
+                _tickerSourceDone('cms');
             } else {
                 recentHtml = archiveHtml = '<div style="padding: 20px; color:#999; text-align:center;">No announcements</div>';
+                _tickerSourceDone('cms');
             }
 
             annContainer.innerHTML = recentHtml;
@@ -380,8 +382,9 @@ async function loadCMS() {
                     '<div class="cms-item">No upcoming projects</div>';
             }
         }
-    } catch (e) { 
-        console.error("CMS Sync Failed", e); 
+    } catch (e) {
+        console.error("CMS Sync Failed", e);
+        _tickerSourceDone('cms');
     }
 }
 
@@ -612,11 +615,37 @@ const _TICKER_DEFAULTS = [
     { icon: '💬', text: 'Use PayMore and SPEEKS Discord for buying & listing help', _type: 'static' },
 ];
 
-let _tickerItems          = [];
-let _tickerReady          = false;
+let _tickerAnnouncement   = null;
+let _tickerChampions      = null;
+let _tickerLeaderboard    = null;
+let _tickerStatic         = [];
 let _tickerShown          = false;
-let _tickerFetchDone      = false;
-let _tickerRebuildTimeout = null;
+let _tickerIniting        = false;
+
+// Each source gets a Promise; we await all of them before starting the ticker.
+let _tickerSrcResolvers   = {};
+let _tickerSrcPromises    = {};
+
+function _tickerResetSources() {
+    ['static', 'cms', 'hub', 'champions'].forEach(name => {
+        _tickerSrcPromises[name] = new Promise(resolve => { _tickerSrcResolvers[name] = resolve; });
+    });
+}
+_tickerResetSources();
+
+function _tickerSourceDone(name) {
+    if (_tickerSrcResolvers[name]) _tickerSrcResolvers[name]();
+}
+
+// Always assemble items in fixed order: announcement → champions → leaderboard → static
+function _getOrderedTickerItems() {
+    const items = [];
+    if (_tickerAnnouncement) items.push(_tickerAnnouncement);
+    if (_tickerChampions)    items.push(_tickerChampions);
+    if (_tickerLeaderboard)  items.push(_tickerLeaderboard);
+    items.push(..._tickerStatic);
+    return items.length ? items : [..._TICKER_DEFAULTS];
+}
 
 function _syncLayout() {
     const nav = document.querySelector('.top-nav');
@@ -629,90 +658,143 @@ function _syncLayout() {
     document.documentElement.style.setProperty('--panel-top', totalTop + 'px');
 }
 
-function initTicker() {
-    if (_tickerReady) return;
+async function initTicker() {
+    if (_tickerIniting || _tickerShown) return;
+    _tickerIniting = true;
     const ticker = document.getElementById('infoTicker');
-    if (!ticker) return;
-    _tickerReady = true;
+    if (!ticker) { _tickerIniting = false; return; }
+
     requestAnimationFrame(_syncLayout);
     const nav = document.querySelector('.top-nav');
     if (nav && window.ResizeObserver) new ResizeObserver(_syncLayout).observe(nav);
     window.addEventListener('resize', _syncLayout);
-    // Data may already be fetched (pre-loaded at page load); trigger display now.
-    _rebuildTicker();
-}
 
-function _rebuildTicker() {
-    // Don't attempt to render before the user is authenticated and the ticker DOM is live.
-    if (!_tickerReady) return;
-    // Once scrolling, never restart — feed updates land in _tickerItems for the next page load.
+    // Wait until all 4 sources check in, or 12 s absolute max
+    await Promise.race([
+        Promise.allSettled(Object.values(_tickerSrcPromises)),
+        new Promise(r => setTimeout(r, 12000))
+    ]);
+
     if (_tickerShown) return;
-    if (_tickerRebuildTimeout) clearTimeout(_tickerRebuildTimeout);
-    _tickerRebuildTimeout = setTimeout(() => {
-        _tickerRebuildTimeout = null;
-        if (!_tickerFetchDone) return;
-        _showTickerFirstTime();
-    }, 800);
+    _tickerShown = true;
+
+    if (!_tickerLeaderboard && typeof cachedLeaderboardData !== 'undefined' && cachedLeaderboardData) {
+        feedLeaderboardToTicker(cachedLeaderboardData);
+    }
+    _loadCachedLeaderboard();
+    _loadCachedChampions();
+    _applyTickerContent();
 }
 
-function _showTickerFirstTime() {
-    _tickerShown = true;
-    if (_tickerItems.length === 0) _tickerItems = [..._TICKER_DEFAULTS];
-    _applyTickerContent();
+function _resetTicker() {
+    const track = document.getElementById('tickerTrack');
+    if (track) {
+        if (track._tickerLoopHandler) {
+            track.removeEventListener('animationend', track._tickerLoopHandler);
+            track._tickerLoopHandler = null;
+        }
+        track.style.animation = 'none';
+        track.innerHTML = '';
+    }
+    _tickerAnnouncement = null;
+    _tickerChampions    = null;
+    _tickerLeaderboard  = null;
+    _tickerStatic       = [];
+    _tickerShown        = false;
+    _tickerIniting      = false;
+    _tickerResetSources();
+    loadTickerItems();
+    initTicker();
 }
 
 function _applyTickerContent() {
     const track = document.getElementById('tickerTrack');
     if (!track) return;
     const sep  = '<span class="ticker-sep">◆</span>';
-    const html = _tickerItems.map(item =>
+    const html = _getOrderedTickerItems().map(item =>
         `<span class="ticker-item"><span class="t-icon">${item.icon}</span>${escapeHtml(item.text)}</span>${sep}`
     ).join('');
     track.innerHTML = html + html;
     track.style.animation = 'none';
     void track.offsetHeight;
-    const cw = track.scrollWidth / 2;
-    track.style.animation = `ticker-scroll ${(cw / _TICKER_PPS).toFixed(1)}s linear infinite`;
+    const cw   = track.scrollWidth / 2;
+    const ctnW = (track.parentElement ? track.parentElement.offsetWidth : 0);
+    const durIntro = ((ctnW + cw) / _TICKER_PPS).toFixed(1);
+    const durLoop  = (cw / _TICKER_PPS).toFixed(1);
+    let styleEl = document.getElementById('_tickerKeyframes');
+    if (!styleEl) {
+        styleEl = document.createElement('style');
+        styleEl.id = '_tickerKeyframes';
+        document.head.appendChild(styleEl);
+    }
+    // Phase 1: enter from right and scroll through all content exactly once.
+    // Phase 2: seamless infinite loop (translateX(0) == translateX(-cw) visually
+    //          because content is doubled, so the cut is invisible).
+    styleEl.textContent = [
+        `@keyframes ticker-intro{from{transform:translateX(${ctnW}px)}to{transform:translateX(${-cw}px)}}`,
+        `@keyframes ticker-loop{from{transform:translateX(0px)}to{transform:translateX(${-cw}px)}}`
+    ].join('');
+    // Clean up any leftover listener from a previous call (admin save, etc.)
+    if (track._tickerLoopHandler) {
+        track.removeEventListener('animationend', track._tickerLoopHandler);
+    }
+    track._tickerLoopHandler = function onIntroEnd() {
+        track.removeEventListener('animationend', track._tickerLoopHandler);
+        track._tickerLoopHandler = null;
+        track.style.animation = 'none';
+        void track.offsetHeight;
+        track.style.animation = `ticker-loop ${durLoop}s linear infinite`;
+    };
+    track.addEventListener('animationend', track._tickerLoopHandler);
+    track.style.animation = `ticker-intro ${durIntro}s linear`;
 }
 
 function feedAnnouncementsToTicker(announcements) {
-    if (!_tickerReady || !announcements || !announcements.length) return;
+    if (!announcements || !announcements.length) { _tickerAnnouncement = null; return; }
     const isHighPriority = announcements.some(a => a.text && (a.text.includes('HIGH PRIORITY') || a.text.includes('🚨')));
-    _tickerItems = _tickerItems.filter(i => i._type !== 'announcement');
-    _tickerItems.unshift({
+    _tickerAnnouncement = {
         icon: isHighPriority ? '🚨' : '📣',
         text: isHighPriority ? 'High Priority Announcement — check the bell!' : 'New Announcement posted — check the bell!',
         _type: 'announcement'
-    });
-    _rebuildTicker();
+    };
 }
 
 function feedLeaderboardToTicker(leaderboardData) {
-    if (!_tickerReady || !leaderboardData || !leaderboardData.activeStores) return;
+    if (!leaderboardData || !leaderboardData.activeStores) return;
     const stores = leaderboardData.activeStores;
     const getLeader = (data) => {
+        const norm = {};
+        Object.keys(data).forEach(k => norm[k.toLowerCase()] = data[k]);
         const scores = stores.map(s => {
-            const arr = (data[s] || []).filter(v => v !== null && v !== undefined);
-            return { store: s, val: arr.length ? arr[arr.length - 1] : 0 };
+            const arr = (norm[String(s).toLowerCase()] || []).filter(v => v !== null && v !== undefined && v !== '');
+            return { store: s, val: arr.length ? (parseFloat(arr[arr.length - 1]) || 0) : 0 };
         }).sort((a, b) => b.val - a.val);
-        return scores.length && scores[0].val ? scores[0].store : null;
+        return scores.length && scores[0].val > 0 ? scores[0].store : null;
     };
     const gpLeader = getLeader(leaderboardData.gp || {});
     const revLeader = getLeader(leaderboardData.revenue || {});
-    if (!gpLeader && !revLeader) return;
-    _tickerItems = _tickerItems.filter(i => i._type !== 'leaderboard');
     let text;
     if (gpLeader && revLeader && gpLeader !== revLeader) {
         text = `Monthly GP Leader: ${gpLeader}  ·  Revenue Leader: ${revLeader}`;
-    } else {
+    } else if (gpLeader || revLeader) {
         text = `${gpLeader || revLeader} is leading district GP & Revenue this month`;
     }
-    _tickerItems.push({ icon: '🏆', text, _type: 'leaderboard' });
-    _rebuildTicker();
+    if (text) {
+        _tickerLeaderboard = { icon: '🏆', text, _type: 'leaderboard' };
+        localStorage.setItem('_tickerLeaderboardCache', JSON.stringify(_tickerLeaderboard));
+    } else {
+        const cached = localStorage.getItem('_tickerLeaderboardCache');
+        if (cached) try { _tickerLeaderboard = JSON.parse(cached); } catch (_) {}
+    }
+}
+
+function _loadCachedLeaderboard() {
+    if (_tickerLeaderboard) return;
+    const cached = localStorage.getItem('_tickerLeaderboardCache');
+    if (cached) try { _tickerLeaderboard = JSON.parse(cached); } catch (_) {}
 }
 
 function feedChampionsToTicker(allBuyers, allListers, allGoogleReviews) {
-    if (!_tickerReady) return;
     const getTop = (arr, key) => {
         if (!arr.length) return null;
         const merged = {};
@@ -725,31 +807,48 @@ function feedChampionsToTicker(allBuyers, allListers, allGoogleReviews) {
     const topBuyer = getTop(allBuyers, 'score');
     const topLister = getTop(allListers, 'listed');
     const topReviewer = getTop(allGoogleReviews, 'reviews');
-    if (!topBuyer && !topLister && !topReviewer) return;
-    _tickerItems = _tickerItems.filter(i => i._type !== 'champions');
     const parts = [];
-    if (topBuyer) parts.push(`Buying: ${topBuyer.name} (${topBuyer.store})`);
-    if (topLister) parts.push(`Listing: ${topLister.name} (${topLister.store})`);
+    if (topBuyer)    parts.push(`Buying: ${topBuyer.name} (${topBuyer.store})`);
+    if (topLister)   parts.push(`Listing: ${topLister.name} (${topLister.store})`);
     if (topReviewer) parts.push(`Reviews: ${topReviewer.name} (${topReviewer.store})`);
-    _tickerItems.push({ icon: '🥇', text: 'Weekly Champions — ' + parts.join('  ·  '), _type: 'champions' });
-    _rebuildTicker();
+    if (parts.length) {
+        _tickerChampions = { icon: '🥇', text: 'Weekly Champions — ' + parts.join('  ·  '), _type: 'champions' };
+        localStorage.setItem('_tickerChampionsCache', JSON.stringify(_tickerChampions));
+    } else {
+        const cached = localStorage.getItem('_tickerChampionsCache');
+        if (cached) try { _tickerChampions = JSON.parse(cached); } catch (_) {}
+    }
+}
+
+function _loadCachedChampions() {
+    if (_tickerChampions) return;
+    const cached = localStorage.getItem('_tickerChampionsCache');
+    if (cached) try { _tickerChampions = JSON.parse(cached); } catch (_) {}
 }
 
 async function loadTickerItems() {
     const controller = new AbortController();
     const tid = setTimeout(() => controller.abort(), 8000);
+    let loaded = false;
     try {
         const res = await fetch(`${TICKER_URL}?v=${Date.now()}`, { signal: controller.signal });
         const data = await res.json();
         if (data.items && data.items.length > 0) {
-            _tickerItems = _tickerItems.filter(i => i._type !== 'static');
-            const staticItems = data.items.map(item => ({ icon: item.icon || '📌', text: item.text, _type: 'static' }));
-            _tickerItems = [...staticItems, ..._tickerItems];
+            localStorage.setItem('_tickerStaticCache', JSON.stringify(data.items));
+            _tickerStatic = data.items.map(item => ({ icon: item.icon || '📌', text: item.text, _type: 'static' }));
+            loaded = true;
         }
-    } catch (e) { console.warn('[Ticker] AppScript fetch failed — check deployment access settings:', e); }
+    } catch (e) { console.warn('[Ticker] AppScript fetch failed — using cache:', e); }
+    if (!loaded) {
+        try {
+            const cached = JSON.parse(localStorage.getItem('_tickerStaticCache') || '[]');
+            if (cached.length > 0) {
+                _tickerStatic = cached.map(item => ({ icon: item.icon || '📌', text: item.text, _type: 'static' }));
+            }
+        } catch (_) {}
+    }
     clearTimeout(tid);
-    _tickerFetchDone = true;
-    _rebuildTicker();
+    _tickerSourceDone('static');
 }
 
 const TICKER_EMOJIS = [
@@ -840,10 +939,8 @@ async function saveTickerItems() {
     btn.style.opacity = '0.7';
     try {
         await fetch(TICKER_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ items }) });
-        _tickerItems = _tickerItems.filter(i => i._type !== 'static');
-        const newStatic = items.map(item => ({ icon: item.icon, text: item.text, _type: 'static' }));
-        _tickerItems = newStatic.length ? [...newStatic, ..._tickerItems] : [..._TICKER_DEFAULTS, ..._tickerItems];
-        _rebuildTicker();
+        _tickerStatic = items.length ? items.map(item => ({ icon: item.icon, text: item.text, _type: 'static' })) : [..._TICKER_DEFAULTS];
+        if (_tickerShown) _applyTickerContent();
         closeAllModals();
     } catch (e) {
         alert('Failed to save ticker items.');
@@ -1431,58 +1528,78 @@ async function fetchKPIData(isRetry = false) {
         compareSelect.value = monthArray.indexOf(currC) !== -1 ? monthArray.indexOf(currC) : Math.max(0, monthArray.length - 2); 
     };
 
+    const _syncAMSelects = () => {
+        const amP = document.getElementById('am-primaryMonthSelect');
+        const amC = document.getElementById('am-compareMonthSelect');
+        if (amP && amC) {
+            setDD(amP, amC, dynamicMonths);
+            renderAMKPIDashboard();
+        }
+    };
+
     // Use cached data if available for instant loading
     if (monthlyKpiCache[store]) {
-        dynamicMonths = monthlyKpiCache[store].months; 
+        dynamicMonths = monthlyKpiCache[store].months;
         rawKPIData = monthlyKpiCache[store].data;
         setDD(document.getElementById('primaryMonthSelect'), document.getElementById('compareMonthSelect'), dynamicMonths);
-        return renderKPIDashboard(); 
+        _syncAMSelects();
+        return renderKPIDashboard();
     }
-    
+
     try {
         const response = await fetch(`${MONTHLY_KPI_URL}?store=${store}&v=${Date.now()}`);
         const payload = await response.json();
-        
-        monthlyKpiCache[store] = { 
-            months: payload.months, 
-            data: groupKPIs(payload.data) 
+
+        monthlyKpiCache[store] = {
+            months: payload.months,
+            data: groupKPIs(payload.data)
         };
-        
-        dynamicMonths = monthlyKpiCache[store].months; 
+
+        dynamicMonths = monthlyKpiCache[store].months;
         rawKPIData = monthlyKpiCache[store].data;
-        
+
         setDD(document.getElementById('primaryMonthSelect'), document.getElementById('compareMonthSelect'), dynamicMonths);
+        _syncAMSelects();
         renderKPIDashboard();
-    } catch (e) { 
-        console.error("Monthly KPI fetch failed:", e); 
+    } catch (e) {
+        console.error("Monthly KPI fetch failed:", e);
     }
 }
 
-function renderKPIDashboard() {
-    const store = document.getElementById('kpiStoreSelect').value;
-    const pIdx = document.getElementById('primaryMonthSelect').value;
-    const cIdx = document.getElementById('compareMonthSelect').value;
-    const cont = document.getElementById('kpiDashboardContainer');
-    
-    document.getElementById('header-primary-label').innerText = dynamicMonths[pIdx]; 
-    document.getElementById('header-compare-label').innerText = dynamicMonths[cIdx];
-    
-    const vId = `kpi-view-${store}-${pIdx}-${cIdx}`;
-    
+function renderKPIDashboard(opts) {
+    opts = opts || {};
+    const storeId  = opts.storeId  || 'kpiStoreSelect';
+    const pId      = opts.pId      || 'primaryMonthSelect';
+    const cId      = opts.cId      || 'compareMonthSelect';
+    const contId   = opts.contId   || 'kpiDashboardContainer';
+    const pLabelId = opts.pLabelId || 'header-primary-label';
+    const cLabelId = opts.cLabelId || 'header-compare-label';
+    const vPrefix  = opts.vPrefix  || 'kpi-view';
+
+    const store = document.getElementById(storeId).value;
+    const pIdx = document.getElementById(pId).value;
+    const cIdx = document.getElementById(cId).value;
+    const cont = document.getElementById(contId);
+
+    document.getElementById(pLabelId).innerText = dynamicMonths[pIdx];
+    document.getElementById(cLabelId).innerText = dynamicMonths[cIdx];
+
+    const vId = `${vPrefix}-${store}-${pIdx}-${cIdx}`;
+
     // Hide all existing views
     Array.from(cont.children).forEach(c => c.style.display = 'none');
-    
+
     // If we've already built this specific comparison view, just show it
     if (document.getElementById(vId)) {
         return document.getElementById(vId).style.display = 'block';
     }
 
     setTimeout(() => {
-        const newView = document.createElement('div'); 
+        const newView = document.createElement('div');
         newView.id = vId;
-        
+
         let html = '';
-        
+
         rawKPIData.forEach(cat => {
             html += `
             <div class="kpi-category">
@@ -1491,26 +1608,26 @@ function renderKPIDashboard() {
                     <span class="chevron">▼</span>
                 </div>
                 <div class="kpi-category-content">`;
-                
+
             cat.metrics.forEach(m => {
                 const rP = m.values[pIdx];
                 const rC = m.values[cIdx];
                 const dNum = parseNum(rP) - parseNum(rC);
-                
-                let dStr = m.name.toLowerCase().match(/%|rate|variance|margin|gm|cogs/) 
-                    ? `${Math.abs(dNum).toFixed(2).replace(/\.00$/, '')}%` 
+
+                let dStr = m.name.toLowerCase().match(/%|rate|variance|margin|gm|cogs/)
+                    ? `${Math.abs(dNum).toFixed(2).replace(/\.00$/, '')}%`
                     : formatSmartValue(Math.abs(dNum), m.name);
-                    
+
                 let bClass = 'delta-neutral';
                 let sign = '';
-                
-                if (Math.abs(dNum) > 0.001) { 
-                    sign = dNum > 0 ? '+' : '-'; 
-                    bClass = dNum > 0 ? (m.inverse ? 'delta-neg' : 'delta-pos') : (m.inverse ? 'delta-pos' : 'delta-neg'); 
+
+                if (Math.abs(dNum) > 0.001) {
+                    sign = dNum > 0 ? '+' : '-';
+                    bClass = dNum > 0 ? (m.inverse ? 'delta-neg' : 'delta-pos') : (m.inverse ? 'delta-pos' : 'delta-neg');
                 } else {
                     dStr = '0';
                 }
-                
+
                 html += `
                 <div class="kpi-row">
                     <div class="kpi-name-col">
@@ -1524,13 +1641,25 @@ function renderKPIDashboard() {
                     </div>
                 </div>`;
             });
-            
+
             html += `</div></div>`;
         });
-        
+
         newView.innerHTML = html;
         cont.appendChild(newView);
     }, 10);
+}
+
+function renderAMKPIDashboard() {
+    renderKPIDashboard({
+        storeId:  'am-kpiStoreSelect',
+        pId:      'am-primaryMonthSelect',
+        cId:      'am-compareMonthSelect',
+        contId:   'am-kpiDashboardContainer',
+        pLabelId: 'am-header-primary-label',
+        cLabelId: 'am-header-compare-label',
+        vPrefix:  'am-kpi-view'
+    });
 }
 
 // --- 10. MODULE: LIVE VARIANCE REPORTS ---
@@ -1862,19 +1991,6 @@ async function fetchHubData() {
         const response = await fetch(`${HUB_URL}?v=${Date.now()}`);
         const freshData = await response.json();
 
-        // Track per-store last-updated timestamps based on actual data changes
-        const _bsStores = ['ovl', 'lee', 'wsp', 'mpl', 'bal'];
-        const _bsFields = s => [`${s}BuyVal`,`${s}BuyProj`,`${s}BuyMargin`,`${s}Pct`,`${s}Goal`,`${s}TrackGP`,`${s}GP`,`${s}Rev`,`${s}SellMargin`];
-        const _bsPrev = JSON.parse(localStorage.getItem('bsPrevHubCache') || '{}');
-        const _bsTs = JSON.parse(localStorage.getItem('bsStoreTimestamps') || '{}');
-        _bsStores.forEach(s => { if (_bsTs[s]) _bsTs[s] = _bsTs[s].replace(/\s+\d{1,2}:\d{2}\s*(AM|PM)/i, ''); });
-        const _bsNow = new Date();
-        const _bsLabel = _bsNow.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-        _bsStores.forEach(s => {
-            if (_bsFields(s).some(f => freshData[f] !== _bsPrev[f])) _bsTs[s] = _bsLabel;
-        });
-        localStorage.setItem('bsStoreTimestamps', JSON.stringify(_bsTs));
-        localStorage.setItem('bsPrevHubCache', JSON.stringify(freshData));
 
         hubDataCache = freshData;
 
@@ -1893,8 +2009,12 @@ async function fetchHubData() {
         } else if (document.getElementById('lb-wrapper')) {
             document.getElementById('lb-wrapper').innerHTML = '<div class="status-message" style="color:var(--red-alert);">Please Deploy "New Version" of Hub App Script!</div>';
         }
+        _tickerSourceDone('hub');
     } catch(e) {
         console.error("Hub Sync Failed", e);
+        // Delay so a concurrent fetchHubData call (syncAllData vs initDashboardData race)
+        // has time to succeed and set the leaderboard before the ticker starts.
+        setTimeout(() => _tickerSourceDone('hub'), 2000);
     }
 }
 
@@ -1955,8 +2075,7 @@ function renderBuyingSales() {
 
     const bsDateEl = document.getElementById('bs-last-updated');
     if (bsDateEl) {
-        const _bsTs = JSON.parse(localStorage.getItem('bsStoreTimestamps') || '{}');
-        bsDateEl.innerText = _bsTs[store] || '—';
+        bsDateEl.innerText = hubDataCache[`${store}BuyDate`] || '—';
     }
 }
 
@@ -2154,26 +2273,26 @@ async function fetchChartData(tf) {
     } 
 }
 
-function syncAllData() { 
+function syncAllData() {
     try {
         const mSelect = document.getElementById('metricSelector');
         if (typeof kpiChartCache !== 'undefined' && kpiChartCache && kpiChartCache[currentTimeframe] && mSelect) {
-            renderKpiChart(kpiChartCache[currentTimeframe], mSelect.value); 
+            renderKpiChart(kpiChartCache[currentTimeframe], mSelect.value);
         }
     } catch (e) {}
-    
+
     try {
         if (typeof cachedLeaderboardData !== 'undefined' && cachedLeaderboardData) drawLeaderboard();
     } catch (e) {}
-    
+
     try {
-        if (typeof hubDataCache !== 'undefined' && hubDataCache) renderLiveData(hubDataCache); 
+        if (typeof hubDataCache !== 'undefined' && hubDataCache) renderLiveData(hubDataCache);
     } catch (e) {}
-    
-    fetchChartData(currentTimeframe); 
-    fetchHubData(); 
-    if (typeof loadCMS === 'function') loadCMS(); 
-    if (typeof fetchRecordsData === 'function') fetchRecordsData(); 
+
+    fetchChartData(currentTimeframe);
+    fetchHubData();
+    if (typeof loadCMS === 'function') loadCMS();
+    if (typeof fetchRecordsData === 'function') fetchRecordsData();
 }
 
 // --- 14. MODULE: RECORDS MANAGER ---
@@ -3428,6 +3547,7 @@ async function fetchMasterDistrictDashboard() {
         STORES.forEach(store => {
             const sLower = store.toLowerCase();
             const icon = STORE_ICONS[store];
+            const storeLastEdited = hubData[`${sLower}BuyDate`] || null;
 
             // 1. SCORECARD & HEADER
             const sScore = scoreData.data?.find(s => s.store.toUpperCase() === store) || {};
@@ -3617,7 +3737,10 @@ async function fetchMasterDistrictDashboard() {
 
                 <div class="master-card-body">
                     <div>
-                        <div class="master-section-title">Buying & Selling Snapshot</div>
+                        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px;">
+                            <div class="master-section-title" style="margin-bottom:0;min-width:0;">Buying &amp; Selling Snapshot</div>
+                            ${storeLastEdited ? `<span class="master-section-title" style="margin-bottom:0;white-space:nowrap;">${storeLastEdited}</span>` : ''}
+                        </div>
                         <div class="master-stat-box">
                             <div class="master-stat-row"><span class="master-stat-label">Sales vs Goal</span><span class="master-stat-val" style="color: ${pctColor}; background: ${pctBg};">${salesPct}%</span></div>
                             <div class="master-stat-row"><span class="master-stat-label">Revenue</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${Math.round(rev).toLocaleString()}</span></div>
@@ -4768,8 +4891,20 @@ function applyRoleBasedUI() {
         document.querySelectorAll('.manager-only').forEach(el => el.style.setProperty('display', 'none', 'important'));
     }
 
+    if (userRoleClass === 'role-assistant-manager') {
+        document.body.classList.add('am-mode');
+        const empRow = document.querySelector('.employee-dashboard-row');
+        if (empRow) {
+            empRow.style.setProperty('display', 'grid', 'important');
+            empRow.style.setProperty('grid-template-columns', '1fr 1fr', 'important');
+            empRow.style.setProperty('align-items', 'stretch', 'important');
+        }
+        const bsCard = document.querySelector('.buying-sales-module');
+        if (bsCard) bsCard.style.setProperty('display', 'flex', 'important');
+    }
+
     if (userStore !== 'ALL') {
-        ['kpiStoreSelect', 'weeklyKpiStoreSelect', 'bsStoreSelect', 'vw-primary', 'dmChartStoreSelector'].forEach(id => {
+        ['kpiStoreSelect', 'am-kpiStoreSelect', 'weeklyKpiStoreSelect', 'bsStoreSelect', 'vw-primary', 'dmChartStoreSelector'].forEach(id => {
             const dropdown = document.getElementById(id);
             if (dropdown && Array.from(dropdown.options).some(opt => opt.value === userStore)) {
                 dropdown.value = userStore;
@@ -4833,6 +4968,20 @@ async function checkForNewPatchNotes() {
         const groups = buildPatchGroups(data.entries);
         if (groups.length > 0) {
             _latestPatchKey = groups[0].title + '|' + groups[0].date;
+
+            // Restore read state from server in case browser data was cleared
+            const currentUser = sessionStorage.getItem('speeksUserName');
+            const cleanUser   = currentUser ? String(currentUser).trim().toLowerCase() : null;
+            if (cleanUser) {
+                try {
+                    const readData = await fetch(`${PATCH_NOTES_URL}?action=getPatchRead&user=${encodeURIComponent(cleanUser)}&v=${Date.now()}`).then(r => r.json());
+                    if (readData.lastSeenKey === _latestPatchKey) {
+                        localStorage.setItem('speeksPatchNotesSeen_' + cleanUser, _latestPatchKey);
+                        localStorage.removeItem('speeksUnseenPatchNotes_' + cleanUser);
+                    }
+                } catch (e) {}
+            }
+
             checkPatchNotesBadge();
         }
     } catch (e) {}
@@ -4949,11 +5098,19 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
     
-    ['kpiStoreSelect', 'weeklyKpiStoreSelect', 'vw-primary', 'vw-compare'].forEach(id => {
+    ['kpiStoreSelect', 'am-kpiStoreSelect', 'weeklyKpiStoreSelect', 'vw-primary', 'vw-compare'].forEach(id => {
         document.getElementById(id)?.addEventListener('change', () => {
-            if (id === 'kpiStoreSelect') fetchKPIData(false);
-            else if (id === 'weeklyKpiStoreSelect') fetchWeeklyKPIs();
-            else renderVariance();
+            if (id === 'kpiStoreSelect') {
+                fetchKPIData(false);
+            } else if (id === 'am-kpiStoreSelect') {
+                const origStore = document.getElementById('kpiStoreSelect');
+                if (origStore) origStore.value = document.getElementById('am-kpiStoreSelect').value;
+                fetchKPIData(false);
+            } else if (id === 'weeklyKpiStoreSelect') {
+                fetchWeeklyKPIs();
+            } else {
+                renderVariance();
+            }
         });
     });
     
@@ -7034,6 +7191,7 @@ async function fetchChampions() {
         };
 
         feedChampionsToTicker(allBuyers, allListers, allGoogleReviews);
+        _tickerSourceDone('champions');
 
         if (listerBody) listerBody.innerHTML = buildPodiumHtml(allListers, 'listed', 'Items', 'lister');
         if (grBody) grBody.innerHTML = buildPodiumHtml(allGoogleReviews, 'reviews', 'Reviews', 'review');
@@ -7043,6 +7201,7 @@ async function fetchChampions() {
         if (listerBody) listerBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
         if (grBody) grBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
         if (buyerBody) buyerBody.innerHTML = '<div style="color: var(--red-alert); font-weight: bold;">Failed to load Champions.</div>';
+        _tickerSourceDone('champions');
     }
 }
 
@@ -7486,6 +7645,11 @@ function renderPatchNotes(data) {
         if (cleanUser) {
             localStorage.setItem('speeksPatchNotesSeen_'   + cleanUser, _latestPatchKey);
             localStorage.removeItem('speeksUnseenPatchNotes_' + cleanUser);
+            // Persist read state server-side so it survives browser data clearing
+            fetch(PATCH_NOTES_URL, {
+                method: 'POST',
+                body: JSON.stringify({ action: 'markPatchRead', user: cleanUser, lastSeenKey: _latestPatchKey })
+            }).catch(() => {});
         }
         const pnBadge = document.getElementById('patchNotesBadge');
         if (pnBadge) { pnBadge.style.display = 'none'; pnBadge.classList.remove('active'); }
