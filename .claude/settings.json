@@ -16,7 +16,9 @@
       "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\" -Recurse -Directory | Select-Object -First 30 | ForEach-Object { $_.FullName })",
       "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\" -Recurse -File | Select-Object Name, @{N='FullPath';E={$_.FullName}} | ForEach-Object { \"$\\($_.FullPath\\)\" } | Sort-Object)",
       "mcp__supabase__apply_migration",
-      "mcp__supabase__execute_sql"
+      "mcp__supabase__execute_sql",
+      "Bash(grep -o '\"https://docs.google.com/spreadsheets/d/[^\"]*\"' \"C:\\\\Users\\\\nickh\\\\.claude\\\\projects\\\\c--Users-nickh-Github-Repos-speeksnet\\\\1a6861c7-f771-45d3-894c-6e00ef68b123.jsonl\" 2>/dev/null | grep -i \"Ticker\\\\|Announcement\\\\|CMS\\\\|Patch\\\\|Quick\\\\|ticker\\\\|announcement\" | sort -u | head -20)",
+      "Read(//c/Users/nickh/.claude/projects/c--Users-nickh-Github-Repos-speeksnet/**)"
     ]
   }
 }
