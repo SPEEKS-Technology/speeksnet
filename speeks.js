@@ -3335,24 +3335,25 @@ async function fetchAlertsData() {
         if (!storeData) return;
 
         const formatPercent = (val) => {
-            if (!val || String(val).trim() === '') return '';
+            if (val === null || val === undefined) return '0%';
             let str = String(val).trim();
+            if (str === '' || str === 'null') return '0%';
             if (str.endsWith('%')) return str;
             let num = parseFloat(str.replace(/[^0-9.-]/g, ''));
-            if (isNaN(num)) return str; 
-            return (num * 100).toFixed(2) + '%';
+            if (isNaN(num)) return '0%';
+            return num.toFixed(2) + '%';
         };
 
         // NEW: Dynamic Severity Calculator for eBay Top Rated Thresholds
         const getSeverity = (type, rawVal) => {
-            if (!rawVal || String(rawVal).trim() === '') return 'clear';
+            if (rawVal === null || rawVal === undefined || String(rawVal).trim() === '') return 'clear';
             let str = String(rawVal).trim();
-            
+
             let num = parseFloat(str.replace(/[^0-9.-]/g, ''));
             if (isNaN(num)) return 'clear';
 
-            // Convert raw sheet decimal to percentage for accurate logic comparison
-            let valToCheck = str.endsWith('%') ? num : num * 100;
+            // Values are stored as percentages (e.g. 0.12 = 0.12%, 99.19 = 99.19%)
+            let valToCheck = num;
 
             if (type === 'defectRate') {
                 if (valToCheck >= 0.5) return 'very-high'; // Red
@@ -3668,20 +3669,21 @@ async function fetchMasterDistrictDashboard() {
 
             // 4 New Service Metrics logic
             const formatPercent = (val) => {
-                if (!val || String(val).trim() === '') return '';
+                if (val === null || val === undefined) return '0%';
                 let str = String(val).trim();
+                if (str === '' || str === 'null') return '0%';
                 if (str.endsWith('%')) return str;
                 let num = parseFloat(str.replace(/[^0-9.-]/g, ''));
-                if (isNaN(num)) return str; 
-                return (num * 100).toFixed(2) + '%';
+                if (isNaN(num)) return '0%';
+                return num.toFixed(2) + '%';
             };
 
             const getSev = (type, rawVal) => {
-                if (!rawVal || String(rawVal).trim() === '') return 'clear';
+                if (rawVal === null || rawVal === undefined || String(rawVal).trim() === '') return 'clear';
                 let str = String(rawVal).trim();
                 let num = parseFloat(str.replace(/[^0-9.-]/g, ''));
                 if (isNaN(num)) return 'clear';
-                let valToCheck = str.endsWith('%') ? num : num * 100;
+                let valToCheck = num;
 
                 if (type === 'defectRate') {
                     if (valToCheck >= 0.5) return 'very-high';
