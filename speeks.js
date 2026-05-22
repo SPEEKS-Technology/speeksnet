@@ -3385,12 +3385,12 @@ async function fetchAlertsData() {
             let displayText = 'All Clear';
             let pulseHtml = '';
             
-            if (rawValue !== '') {
+            if (rawValue !== null && rawValue !== undefined && String(rawValue).trim() !== '') {
                 if (isPercent) {
                     displayText = formatPercent(rawValue);
                 } else {
                     if (String(rawValue).includes(',')) {
-                        displayText = String(rawValue).split(',').map(s => 
+                        displayText = String(rawValue).split(',').map(s =>
                             `<span style="display:block; padding: 2px 0;">${s.trim()}</span>`
                         ).join('<div style="height:1px; background:rgba(0,0,0,0.1); margin: 3px 0;"></div>');
                     } else {
@@ -3399,7 +3399,7 @@ async function fetchAlertsData() {
                 }
 
                 if (severity === 'high') {
-                    bgColor = '#fef3c7'; 
+                    bgColor = '#fef3c7';
                     textColor = '#92400e';
                 } else if (severity === 'very-high') {
                     bgColor = '#fee2e2';
