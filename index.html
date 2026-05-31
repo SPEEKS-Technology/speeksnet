@@ -162,6 +162,13 @@
                 <button id="kpi-tab-weekly"  class="tab-btn active" onclick="switchKpiTab('weekly')">📅 Weekly</button>
                 <button id="kpi-tab-monthly" class="tab-btn"        onclick="switchKpiTab('monthly')">📆 Monthly</button>
             </div>
+            <select id="kpiModalStoreSelect" class="kpi-select dynamic-module-block role-district-manager role-ceo role-tom" onchange="_kpiLoadAll(_kpiCurrentTab)" style="display:none;">
+                <option value="OVL">OVL</option>
+                <option value="LEE">LEE</option>
+                <option value="WSP">WSP</option>
+                <option value="MPL">MPL</option>
+                <option value="BAL">BAL</option>
+            </select>
             <span id="kpiModalSubtitle" style="font-size:11px;color:#888;font-weight:600;"></span>
         </div>
         <div class="align-center gap-8">
@@ -490,17 +497,7 @@
         <div class="hotbar-container">
           <span class="hotbar-label">DM</span>
           <div class="hotbar-links">
-            <div class="hotbar-kpi-picker">
-                <button class="hotbar-btn hotbar-btn-primary" onclick="toggleDmKpiPicker(event)">📊 View KPIs ▾</button>
-                <div class="hotbar-kpi-dropdown" id="dmKpiDropdown">
-                    <div class="hotbar-kpi-dropdown-label">Select Store</div>
-                    <button onclick="openKpiEntryPanelForStore('OVL','weekly')">OVL</button>
-                    <button onclick="openKpiEntryPanelForStore('LEE','weekly')">LEE</button>
-                    <button onclick="openKpiEntryPanelForStore('WSP','weekly')">WSP</button>
-                    <button onclick="openKpiEntryPanelForStore('MPL','weekly')">MPL</button>
-                    <button onclick="openKpiEntryPanelForStore('BAL','weekly')">BAL</button>
-                </div>
-            </div>
+            <button class="hotbar-btn hotbar-btn-primary" onclick="openKpiEntryPanel('weekly')">📊 View KPIs</button>
             <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn">📁 Store Manager Folder</a>
             <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn">🔑 Store Passwords</a>
             <a href="https://docs.google.com/spreadsheets/d/1NkIdw8dlvwXmQ6kdpo73zqRwnPd4kIAkgJ7yAG2XCt4/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Listing Goals</a>  

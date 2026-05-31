@@ -2370,7 +2370,8 @@ function _kpiRenderMonthly(periods) {
 }
 
 async function _kpiLoadAll(tab) {
-    const store = sessionStorage.getItem('speeksUserStore');
+    const modalSel = document.getElementById('kpiModalStoreSelect');
+    const store = (modalSel && modalSel.offsetParent !== null && modalSel.value) || sessionStorage.getItem('speeksUserStore');
     if (!store) return;
     const body = document.getElementById('kpiModalBody');
     if (body) body.innerHTML = '<div class="kpi-empty-state">Loading…</div>';
@@ -2397,18 +2398,18 @@ function toggleDmKpiPicker(e) {
 }
 
 async function openKpiEntryPanelForStore(store, tab) {
-    document.getElementById('dmKpiDropdown')?.classList.remove('open');
-    const prev = sessionStorage.getItem('speeksUserStore');
-    sessionStorage.setItem('speeksUserStore', store);
+    const sel = document.getElementById('kpiModalStoreSelect');
+    if (sel) sel.value = store;
     await openKpiEntryPanel(tab);
-    // Restore DM's own store after the modal is open (they don't belong to a specific store)
-    if (!prev) sessionStorage.removeItem('speeksUserStore');
-    else sessionStorage.setItem('speeksUserStore', prev);
 }
 
 async function openKpiEntryPanel(tab) {
     _kpiCurrentTab = tab || 'weekly';
     _kpiEditingPeriod = null;
+    // Seed the modal store selector with the user's own store (managers); DMs keep whatever is selected
+    const sel = document.getElementById('kpiModalStoreSelect');
+    const userStore = sessionStorage.getItem('speeksUserStore');
+    if (sel && userStore && sel.offsetParent === null) sel.value = userStore;
     document.getElementById('kpi-tab-weekly') && document.getElementById('kpi-tab-weekly').classList.toggle('active', _kpiCurrentTab === 'weekly');
     document.getElementById('kpi-tab-monthly') && document.getElementById('kpi-tab-monthly').classList.toggle('active', _kpiCurrentTab === 'monthly');
     toggleModal('kpiEntryModal');
