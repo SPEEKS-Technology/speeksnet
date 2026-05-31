@@ -14,7 +14,11 @@
       "WebFetch(domain:docs.google.com)",
       "Bash(node -e ' *)",
       "Bash(ls \"C:\\\\Users\\\\nickh\\\\OneDrive\\\\Desktop\\\\Json from sales summary.txt\" 2>/dev/null && echo \"EXISTS\" || echo \"NOT FOUND\")",
-      "Read(//c/Users/nickh/OneDrive/Desktop/**)"
+      "Read(//c/Users/nickh/OneDrive/Desktop/**)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\nickh\\\\Github Repos\\\\speeksnet\" -Force)",
+      "Bash(Select-Object Name, FullName)",
+      "Bash(powershell -Command \"Get-Content 'c:\\\\Users\\\\nickh\\\\Github Repos\\\\speeksnet\\\\speeks.js' | Measure-Object -Line\")",
+      "Bash(powershell -Command ' *)"
     ]
   }
 }

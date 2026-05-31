@@ -2146,6 +2146,7 @@ select.bs-hidden-select:focus {
 .store-mpl .hotbar-label,
 .store-bal .hotbar-label { background: var(--sage-professional); }
 .hotbar-links { display: flex; width: 100%; gap: 6px; }
+button.hotbar-btn { cursor: pointer; font-family: inherit; }
 .hotbar-btn {
     flex: 1;
     text-align: center;
@@ -4966,4 +4967,556 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     .district-goals-grid { grid-template-columns: 1fr 1fr; }
     .dg-store-card:nth-child(2n) { border-right: none; }
     .dg-store-card:nth-child(n+3) { border-top: 1px solid var(--gen-border); }
+}
+
+/* =========================================================
+   KPI UPDATE TRIGGER BUTTON (in card headers)
+   ========================================================= */
+.kpi-update-trigger-btn {
+    height: 30px;
+    padding: 0 12px;
+    background: var(--sage-professional);
+    color: white;
+    border: none;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+    font-family: 'Inter', sans-serif;
+}
+.kpi-update-trigger-btn:hover { background: #4a7a2f; }
+
+/* =========================================================
+   KPI ENTRY MODAL
+   ========================================================= */
+/* Old single-period modal — kept for reference, superseded by kpi-fullscreen-modal */
+.kpi-entry-modal-menu { display: none !important; }
+
+/* =========================================================
+   KPI FULL-SCREEN MODAL
+   ========================================================= */
+.kpi-fullscreen-modal {
+    width: 99vw;
+    height: 94vh;
+    max-width: none;
+    border-radius: 16px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.kpi-modal-header-tight { padding: 14px 20px !important; }
+
+.kpi-fullscreen-body {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background: #f8f9fb;
+}
+
+.kpi-fullscreen-body .kpi-grid-scroll-wrapper {
+    flex: 1;
+    overflow: auto;
+    background: white;
+}
+
+.kpi-full-table { width: 100%; table-layout: fixed; }
+
+/* Empty / loading state */
+.kpi-empty-state {
+    padding: 60px 40px;
+    text-align: center;
+    color: #9ca3af;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.kpi-entry-locked-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 20px;
+    background: #fef3c7;
+    border-bottom: 1px solid #fcd34d;
+    color: #92400e;
+    font-size: 12px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.kpi-entry-modal-body {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.kpi-grid-scroll-wrapper {
+    overflow: auto;
+    flex: 1;
+}
+
+/* =========================================================
+   KPI SPREADSHEET GRID
+   ========================================================= */
+.kpi-entry-grid {
+    border-collapse: collapse;
+    width: 100%;
+    table-layout: fixed;
+    font-size: 11px;
+    font-family: 'Inter', sans-serif;
+}
+
+/* Fixed column widths via colgroup */
+.kpi-entry-grid col.col-name          { width: 105px; }
+.kpi-entry-grid col.col-buying-input  { width: 4.0%; }
+.kpi-entry-grid col.col-nd-input      { width: 4.0%; }
+.kpi-entry-grid col.col-listing-input { width: 4.0%; }
+.kpi-entry-grid col.col-review-input  { width: 4.5%; }
+.kpi-entry-grid col.col-computed      { width: 3.5%; }
+
+/* Entire thead locks vertically as one unit */
+.kpi-entry-grid thead {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.kpi-grid-th {
+    background: #f8f9fb;
+    z-index: 2;
+    padding: 5px 3px;
+    text-align: center;
+    font-size: 10px;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border: 1px solid #e2e6ea;
+    color: #374151;
+}
+
+.kpi-grid-section-header {
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 4px 4px;
+    border: 1px solid #e2e6ea;
+    text-align: center;
+}
+
+.kpi-section-buying   { background: #eff6ff; color: #1d4ed8; }
+.kpi-section-nodeals  { background: #fff7ed; color: #c2410c; }
+.kpi-section-listings { background: #f0fdf4; color: #166534; }
+.kpi-section-reviews  { background: #f5f3ff; color: #6d28d9; }
+
+.kpi-col-input    { color: #1f2937; }
+.kpi-col-computed { color: #9ca3af; font-style: italic; }
+
+/* Employee column locks horizontally; z-index above thead so corner cell is always on top */
+.kpi-grid-name-col {
+    position: sticky;
+    left: 0;
+    background: white !important;
+    z-index: 12;
+    width: 105px;
+    border-right: 2px solid #d1d5db !important;
+    text-align: left;
+    padding: 0 6px;
+}
+
+.kpi-entry-grid thead .kpi-grid-name-col { z-index: 15 !important; background: #f8f9fb !important; }
+
+.kpi-entry-grid tbody tr td {
+    padding: 2px 2px;
+    border: 1px solid #f0f0f0;
+    vertical-align: middle;
+    overflow: hidden;
+}
+
+.kpi-entry-grid tbody tr:hover td { background: #fafbfc; }
+.kpi-entry-grid tbody tr:hover .kpi-grid-name-col { background: #f5f5f5 !important; }
+
+.kpi-grid-name-cell {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    height: 32px;
+}
+
+.kpi-grid-emp-name {
+    font-weight: 700;
+    font-size: 11px;
+    color: var(--slate-charcoal);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+}
+
+.kpi-grid-status {
+    font-size: 11px;
+    font-weight: 900;
+    flex-shrink: 0;
+    cursor: default;
+    width: 14px;
+    text-align: center;
+}
+
+.kpi-grid-td-input { padding: 2px 2px !important; }
+
+.kpi-grid-input {
+    width: 100%;
+    height: 26px;
+    border: 1px solid #e2e6ea;
+    border-radius: 3px;
+    padding: 0 3px;
+    font-size: 11px;
+    font-weight: 600;
+    text-align: right;
+    color: var(--slate-charcoal);
+    font-family: 'Inter', sans-serif;
+    background: white;
+    transition: border-color 0.1s;
+    display: block;
+    box-sizing: border-box;
+    min-width: 0;
+}
+
+.kpi-grid-input:focus {
+    outline: none;
+    border-color: var(--sage-professional);
+    box-shadow: 0 0 0 2px rgba(90,141,59,0.1);
+}
+
+.kpi-grid-input:disabled { background: #f5f5f5; color: #aaa; cursor: not-allowed; }
+
+.kpi-grid-computed {
+    text-align: center;
+    font-size: 11px;
+    font-weight: 700;
+    color: #6b7280;
+    background: #fafafa;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 0 2px !important;
+}
+
+/* =========================================================
+   KPI MODAL FOOTER (Save All)
+   ========================================================= */
+.kpi-entry-modal-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 12px 20px;
+    border-top: 1px solid #eee;
+    background: #fcfcfc;
+    flex-shrink: 0;
+}
+
+.kpi-save-all-msg {
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.kpi-save-all-btn {
+    height: 38px;
+    padding: 0 28px;
+    background: var(--sage-professional);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 800;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    transition: background 0.15s;
+    letter-spacing: 0.2px;
+}
+
+.kpi-save-all-btn:hover    { background: #4a7a2f; }
+.kpi-save-all-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* =========================================================
+   KPI SECTION DIVIDERS (week / month separators)
+   ========================================================= */
+.kpi-section-divider-row td {
+    padding: 0 !important;
+    border: none !important;
+    border-bottom: none !important;
+}
+
+.kpi-section-header-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 14px 9px 14px;
+    background: #f1f5f9;
+    border-top: 1px solid #e2e8f0;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.kpi-section-label {
+    font-size: 12px;
+    font-weight: 800;
+    color: var(--slate-charcoal);
+    white-space: nowrap;
+}
+
+.kpi-section-badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 20px;
+    white-space: nowrap;
+}
+.badge-current { background: #dcfce7; color: #166534; }
+.badge-prev    { background: #dbeafe; color: #1d4ed8; }
+.badge-old     { background: #f1f5f9; color: #64748b; border: 1px solid #e2e8f0; }
+
+.kpi-readonly-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #9ca3af;
+}
+
+.kpi-edit-section-btn {
+    height: 28px;
+    padding: 0 12px;
+    background: white;
+    color: var(--slate-charcoal);
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    transition: background 0.12s, border-color 0.12s;
+}
+.kpi-edit-section-btn:hover { background: #f9fafb; border-color: var(--sage-professional); }
+
+.kpi-save-section-btn {
+    height: 28px;
+    padding: 0 14px;
+    background: var(--sage-professional);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 800;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    transition: background 0.12s;
+}
+.kpi-save-section-btn:hover    { background: #4a7a2f; }
+.kpi-save-section-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* Average section rows */
+.kpi-avg-row { background: #fafff6 !important; }
+.kpi-avg-row .kpi-grid-name-col { background: #f0fdf4 !important; }
+.kpi-avg-cell { background: #fafff6; color: #166534; font-weight: 800 !important; }
+
+/* Alternating row shade */
+.kpi-row-alt { background: #fafafa; }
+.kpi-row-alt .kpi-grid-name-col { background: #f5f5f5 !important; }
+
+.kpi-cancel-btn {
+    height: 38px;
+    padding: 0 20px;
+    background: white;
+    color: #374151;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    transition: background 0.15s, border-color 0.15s;
+}
+.kpi-cancel-btn:hover { background: #f9fafb; border-color: #9ca3af; }
+
+/* Period selector in modal header */
+.kpi-period-select {
+    height: 32px;
+    padding: 0 10px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid #d1d5db;
+    border-radius: 7px;
+    background: white;
+    color: var(--slate-charcoal);
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    max-width: 230px;
+}
+.kpi-period-select:focus { outline: none; border-color: var(--sage-professional); }
+
+/* gap-12 utility (used in modal header) */
+.gap-12 { gap: 12px; }
+
+/* =========================================================
+   KPI ENTRY FORM (legacy card styles — kept for reference)
+   ========================================================= */
+.kpi-entry-wrapper {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+    padding: 16px;
+}
+
+.kpi-entry-emp-card {
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.kpi-entry-emp-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: #f9fafb;
+    border-bottom: 1px solid #eee;
+}
+
+.kpi-entry-emp-name {
+    font-size: 14px;
+    font-weight: 800;
+    color: var(--slate-charcoal);
+}
+
+.kpi-entry-save-status {
+    font-size: 12px;
+    font-weight: 700;
+    color: #888;
+}
+
+.kpi-entry-fields {
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.kpi-entry-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+
+.kpi-entry-section-label {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--sage-professional);
+    padding: 4px 0 2px;
+    border-bottom: 1px solid #f0f0f0;
+    margin-bottom: 2px;
+}
+
+.kpi-entry-field-row {
+    display: grid;
+    grid-template-columns: 1fr 110px;
+    align-items: center;
+    gap: 8px;
+}
+
+.kpi-entry-field-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #555;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kpi-entry-input {
+    height: 32px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    padding: 0 8px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--slate-charcoal);
+    font-family: 'Inter', sans-serif;
+    width: 100%;
+    text-align: right;
+    transition: border-color 0.15s;
+}
+
+.kpi-entry-input:focus {
+    outline: none;
+    border-color: var(--sage-professional);
+    box-shadow: 0 0 0 2px rgba(90,141,59,0.12);
+}
+
+.kpi-entry-input:disabled {
+    background: #f5f5f5;
+    color: #999;
+    cursor: not-allowed;
+}
+
+.kpi-entry-computed {
+    background: #f9fafb;
+    border-top: 1px solid #eee;
+    padding: 10px 16px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 12px;
+}
+
+.kpi-entry-computed-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 0;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.kpi-entry-computed-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #888;
+}
+
+.kpi-entry-computed-value {
+    font-size: 12px;
+    font-weight: 800;
+    color: var(--slate-charcoal);
+}
+
+.kpi-entry-save-btn {
+    margin: 12px 16px;
+    height: 38px;
+    background: var(--sage-professional);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 800;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+    letter-spacing: 0.3px;
+}
+
+.kpi-entry-save-btn:hover { background: #4a7a2f; }
+.kpi-entry-save-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+@media (max-width: 768px) {
+    .kpi-entry-wrapper { grid-template-columns: 1fr; }
+    .kpi-entry-computed { grid-template-columns: 1fr; }
 }

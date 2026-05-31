@@ -46,6 +46,7 @@ const CHECKLIST_URL     = `${_BASE}/checklist`;
 const TUTORIAL_URL      = `${_BASE}/tutorial`;
 const PATCH_NOTES_URL   = `${_BASE}/patch-notes`;
 const TICKER_URL        = `${_BASE}/ticker`;
+const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
 
 // --- 2. NAV COMPACT MODE ---
 (function () {
@@ -1396,10 +1397,11 @@ async function checkPIN() {
         const matched = payload.users.find(u => u.pin === String(pin));
         
         if (matched) {
-            sessionStorage.setItem('speeksUnlocked', 'true'); 
+            sessionStorage.setItem('speeksUnlocked', 'true');
             sessionStorage.setItem('speeksUserName', matched.name);
             sessionStorage.setItem('speeksUserRole', matched.role ? matched.role.toLowerCase() : 'employee');
             sessionStorage.setItem('speeksUserStore', matched.store ? matched.store.toUpperCase() : 'ALL');
+            sessionStorage.setItem('speeksUserPin', matched.pin);
             
             const authOverlay = document.getElementById('authOverlay');
             if (authOverlay) authOverlay.style.display = 'none'; 
@@ -1457,49 +1459,38 @@ function toggleCategory(el) {
 }
 
 function groupKPIs(data) {
-    const cats = { 
-        "Buying Metrics": [], 
-        "Inventory": [], 
-        "Gross Sales": [], 
-        "Net Sales & Margins": [], 
-        "Sales Channels": [], 
-        "Shipping Costs": [], 
-        "eBay Performance": [], 
-        "Rankings & Reviews": [], 
-        "Recycled & Confiscated": [], 
-        "Other Metrics": [] 
+    const cats = {
+        "Buying Metrics":    [],
+        "No Deal Tracking":  [],
+        "Listings":          [],
+        "Rankings & Reviews":[],
+        "Other Metrics":     [],
     };
-    
-    const ignore = ['ebay rank', 'top rated', 'cases closed'];
+
     let all = [];
-    
     if (Array.isArray(data)) {
         data.forEach(item => {
-            if (item.metrics) {
-                all.push(...item.metrics);
-            } else if (item.name) {
-                all.push(item);
-            }
+            if (item.metrics) all.push(...item.metrics);
+            else if (item.name) all.push(item);
         });
     }
-    
+
     all.forEach(m => {
         if (!m?.name) return;
-        let n = m.name.toLowerCase().replace(/\s+/g, ' ').trim();
-        if (ignore.some(iw => n.includes(iw))) return; 
-        
-        if (n.match(/buying|buy vs|close rate|# of customers|buy value|# of items|returning|avg trans/)) cats["Buying Metrics"].push(m);
-        else if (n.match(/inventory cost|% of inventory over/)) cats["Inventory"].push(m);
-        else if (n.match(/gross sales|discount|refund|return/)) cats["Gross Sales"].push(m);
-        else if (n.match(/net sales|cogs|gross profit/)) cats["Net Sales & Margins"].push(m);
-        else if (n.match(/draft order|pos|online|non ebay/)) cats["Sales Channels"].push(m);
-        else if (n.includes("shipping")) cats["Shipping Costs"].push(m);
-        else if (n.match(/defect rate|late shipment|case with no resolution|case w\/no resolution|tracking uploaded/)) cats["eBay Performance"].push(m);
-        else if (n.match(/paymore|google/)) cats["Rankings & Reviews"].push(m);
-        else if (n.match(/recycled|confiscation/)) cats["Recycled & Confiscated"].push(m);
-        else cats["Other Metrics"].push(m);
+        const n = m.name.toLowerCase();
+        if (n.match(/buying value|buying cost|estimated gross profit|gross margin|transaction count|customer conversion|device count|device conversion|avg transaction/)) {
+            cats["Buying Metrics"].push(m);
+        } else if (n.match(/no deal count|no deal value|no deal cost|lost profit|% no deal/)) {
+            cats["No Deal Tracking"].push(m);
+        } else if (n.match(/listed count|listed retail|listed cost|listed sold|listed gross|% listed/)) {
+            cats["Listings"].push(m);
+        } else if (n.match(/google|paymore/)) {
+            cats["Rankings & Reviews"].push(m);
+        } else {
+            cats["Other Metrics"].push(m);
+        }
     });
-    
+
     return Object.keys(cats)
         .map(c => ({ category: c, metrics: cats[c] }))
         .filter(g => g.metrics.length > 0);
@@ -1905,28 +1896,23 @@ function checkRule(r, v) {
 }
 
 async function fetchWeeklyKPIs() {
-    const cont = document.getElementById('weeklyKpiContainer');
+    const cont  = document.getElementById('weeklyKpiContainer');
     const store = document.getElementById('weeklyKpiStoreSelect')?.value;
-    const pB = document.getElementById('weeklyKpiPeriod');
-    
-    if(!cont || !store) return;
-    
-    // Clean up the parent container to prevent grid-in-grid conflicts
-    cont.style.display = 'block'; 
+    const pB    = document.getElementById('weeklyKpiPeriod');
+
+    if (!cont || !store) return;
+
+    cont.style.display = 'block';
     cont.classList.remove('weekly-kpi-grid');
-    
-    const vId = `weekly-view-${store}`; 
+
+    const vId = `weekly-view-${store}`;
     Array.from(cont.children).forEach(c => c.style.display = 'none');
-    
+
     if (document.getElementById(vId)) {
-        document.getElementById(vId).style.display = 'grid'; 
-        if (weeklyKpiCache[store]?.periodText) { 
-            pB.innerText = weeklyKpiCache[store].periodText; 
-            pB.style.display = "inline-block"; 
-        } else {
-            pB.style.display = "none";
-        }
-        return; 
+        document.getElementById(vId).style.display = 'grid';
+        pB.innerText = weeklyKpiCache[store]?.periodText || '';
+        pB.style.display = weeklyKpiCache[store]?.periodText ? 'inline-block' : 'none';
+        return;
     }
 
     let msg = document.getElementById('weekly-fetch-msg');
@@ -1936,141 +1922,457 @@ async function fetchWeeklyKPIs() {
         msg.style.cssText = 'padding: 40px; text-align: center; color: #888; font-weight: 600;';
         cont.appendChild(msg);
     }
-    
-    msg.innerText = 'Syncing Data...'; 
+    msg.innerText = 'Syncing Data...';
     msg.style.display = 'block';
 
     try {
-        const response = await fetch(`${WEEKLY_KPI_URL}?store=${store}&time=4-Week&v=${Date.now()}`);
-        const d = await response.json();
-        
-        let sAvg = {};
-        let emps = [];
-        let fIdx = -1;
-        const _kpiStoreLabels = ["store", "store total", "ovl", "lee", "wsp", "mpl", "bal"];
-        let sIdx = d.findLastIndex(r => String(r[0]).trim().toLowerCase() === "store" || String(r[0]).trim().toLowerCase() === "store total");
+        const resp = await fetch(`${WEEKLY_KPI_URL}?store=${store}&v=${Date.now()}`);
+        const d    = await resp.json();
 
-        if (sIdx !== -1) {
-            let st = d[sIdx];
-            sAvg = { buyVal: st[2], buyMargin: st[5], customers: st[6], conversion: st[8], time: formatTime(st[12]), noDeals: st[14], listed: st[20] };
+        const emps  = d.employees   || [];
+        const total = d.store_total || {};
+        const pTxt  = d.period_label || '';
 
-            for (let i = Math.max(0, sIdx - 6); i <= Math.min(d.length - 1, sIdx + 6); i++) {
-                if (i === sIdx) continue;
-                let n = String(d[i][0]).trim();
-                let lN = n.toLowerCase();
+        weeklyKpiCache[store] = { periodText: pTxt };
+        pB.innerText      = pTxt;
+        pB.style.display  = pTxt ? 'inline-block' : 'none';
 
-                if (n && !_kpiStoreLabels.includes(lN) && !lN.includes("average") && !lN.includes("week")) {
-                    if (String(d[i][2]).trim() !== "" || String(d[i][20]).trim() !== "") {
-                        if (fIdx === -1) fIdx = i; 
-                        emps.push({ name: n, buyVal: d[i][2], buyMargin: d[i][5], customers: d[i][6], conversion: d[i][8], time: formatTime(d[i][12]), noDeals: d[i][14], listed: d[i][20] });
-                    }
-                }
-            }
+        if (!emps.length) {
+            msg.innerText   = 'No data entered yet for this week.';
+            msg.style.color = '#888';
+            return;
         }
 
-        let pTxt = "";
-        if (fIdx !== -1) {
-            let hR = d[fIdx - 3] || d[fIdx - 2];
-            if (hR && hR[2] && hR[4] && hR[6]) {
-                const getOrdinal = (n) => {
-                    let val = parseInt(String(n).replace(/\D/g, ''));
-                    if (isNaN(val)) return n;
-                    let s = ["th", "st", "nd", "rd"], v = val % 100;
-                    return val + (s[(v - 20) % 10] || s[v] || s[0]);
-                };
-                
-                const monthNames = {"Jan":"January","Feb":"February","Mar":"March","Apr":"April","May":"May","Jun":"June","Jul":"July","Aug":"August","Sep":"September","Oct":"October","Nov":"November","Dec":"December"};
-                let monthName = String(hR[2]).replace(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/ig, m => monthNames[m.charAt(0).toUpperCase() + m.slice(1).toLowerCase()] || m);
-                
-                let startDay = getOrdinal(hR[4]);
-                let endDay = getOrdinal(hR[6]);
-                
-                pTxt = `${monthName} ${startDay} - ${endDay}`;
-            }
-        }
-        
-        weeklyKpiCache[store] = { periodText: pTxt }; 
-        pB.innerText = pTxt; 
-        pB.style.display = pTxt ? "inline-block" : "none";
-
-        if (!emps.length) { 
-            msg.innerText = 'No employee data.'; 
-            msg.style.color = '#dc2626'; 
-            return; 
-        }
-
-        msg.style.display = 'none'; 
-        const nV = document.createElement('div'); 
-        nV.id = vId; 
-        
-        // BULLETPROOF GRID OVERRIDE
+        msg.style.display = 'none';
+        const nV = document.createElement('div');
+        nV.id        = vId;
         nV.className = 'weekly-kpi-grid';
-        nV.style.display = 'grid';
-        nV.style.gap = '20px';
-        nV.style.alignItems = 'start';
-        
-        // This ensures the columns auto-stack if you look at it on a phone vs a desktop!
+        nV.style.cssText = 'display:grid; gap:20px; align-items:start;';
+
         const applyGridColumns = () => {
-            if (window.innerWidth > 1100) nV.style.gridTemplateColumns = 'repeat(5, 1fr)';
-            else if (window.innerWidth > 768) nV.style.gridTemplateColumns = 'repeat(2, 1fr)';
-            else nV.style.gridTemplateColumns = '1fr';
+            if (window.innerWidth > 1100)      nV.style.gridTemplateColumns = 'repeat(5, 1fr)';
+            else if (window.innerWidth > 768)  nV.style.gridTemplateColumns = 'repeat(2, 1fr)';
+            else                               nV.style.gridTemplateColumns = '1fr';
         };
         applyGridColumns();
         if (_weeklyGridResizeListener) window.removeEventListener('resize', _weeklyGridResizeListener);
         _weeklyGridResizeListener = applyGridColumns;
         window.addEventListener('resize', applyGridColumns);
 
-        // HTML Column Builder Helper
-        const buildColHtml = (title, storeVal, storeBadgeVal, empKey, empBadgeKey, ruleName, isPercentBadge) => {
-            let html = `
-            <div style="border: 1px solid #eee; border-radius: 12px; background: white; overflow: hidden; display: flex; flex-direction: column;">
-                <div style="background: #f9fafb; padding: 15px; border-bottom: 1px solid #eee; text-align: center;">
-                    <h4 style="font-size: 12px; font-weight: 800; color: var(--slate-charcoal); text-transform: uppercase; margin-bottom: 10px; letter-spacing: 0.5px; white-space: nowrap;">${title}</h4>
-                    <div style="display: grid; grid-template-columns: 1fr 75px 55px; align-items: center; background: white; padding: 0 12px; height: 40px; border-radius: 8px; border: 1px solid #eee; gap: 8px;">
-                        <span style="font-size: 11px; font-weight: 800; color: #888; text-align: left;">STORE TOTAL</span>
-                        <span style="font-size: 13px; font-weight: 800; text-align: right; white-space: nowrap; ${checkRule(ruleName, storeVal) ? 'color: var(--red-alert);' : 'color: var(--slate-charcoal);'}">${storeVal || ''}</span>`;
-                        
-            if (empBadgeKey && storeBadgeVal) {
-                html += `<span style="display: flex; justify-content: flex-end;"><span class="delta-badge ${checkRule(ruleName, storeBadgeVal) ? 'delta-neg' : 'delta-neutral'}">${storeBadgeVal}${isPercentBadge && !String(storeBadgeVal).includes('%') ? '%' : ''}</span></span>`;
-            } else {
-                html += `<span></span>`;
-            }
-            
-            html += `</div></div><div style="display: flex; flex-direction: column;">`;
-            
+        const fmt$ = v => (v != null && v !== '') ? `$${Math.round(Number(v)).toLocaleString()}` : '—';
+        const fmtPct = v => (v != null && v !== '') ? `${Number(v).toFixed(1)}%` : '—';
+        const fmtN   = v => (v != null && v !== '') ? String(v) : '—';
+        const fmtMin = v => (v != null && v !== '') ? `${Number(v).toFixed(1)} min` : '—';
+
+        const buildCol = (title, storeMain, storeBadge, getMain, getBadge, ruleName, mainFmt, badgeFmt) => {
+            let h = `<div style="border:1px solid #eee;border-radius:12px;background:white;overflow:hidden;display:flex;flex-direction:column;">
+                <div style="background:#f9fafb;padding:15px;border-bottom:1px solid #eee;text-align:center;">
+                    <h4 style="font-size:12px;font-weight:800;color:var(--slate-charcoal);text-transform:uppercase;margin-bottom:10px;letter-spacing:0.5px;white-space:nowrap;">${title}</h4>
+                    <div style="display:grid;grid-template-columns:1fr 75px 55px;align-items:center;background:white;padding:0 12px;height:40px;border-radius:8px;border:1px solid #eee;gap:8px;">
+                        <span style="font-size:11px;font-weight:800;color:#888;text-align:left;">STORE TOTAL</span>
+                        <span style="font-size:13px;font-weight:800;text-align:right;white-space:nowrap;color:${checkRule(ruleName,storeMain)?'var(--red-alert)':'var(--slate-charcoal)'};">${mainFmt(storeMain)}</span>`;
+            h += storeBadge != null
+                ? `<span style="display:flex;justify-content:flex-end;"><span class="delta-badge ${checkRule(ruleName,storeBadge)?'delta-neg':'delta-neutral'}">${badgeFmt(storeBadge)}</span></span>`
+                : `<span></span>`;
+            h += `</div></div><div style="display:flex;flex-direction:column;">`;
             emps.forEach(e => {
-                html += `
-                <div class="kpi-row" style="display: grid; grid-template-columns: 1fr 75px 55px; align-items: center; padding: 0 15px; height: 48px; border-top: 1px solid #f5f5f5; border-radius: 0; background: white; margin: 0; border-left: none; border-right: none; gap: 8px;">
-                    <span class="kpi-name" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${e.name}</span>
-                    <span style="text-align: right; font-size: 12px; font-weight: ${checkRule(ruleName, e[empKey]) ? '900' : '700'}; color: ${checkRule(ruleName, e[empKey]) ? 'var(--red-alert)' : '#555'}; white-space: nowrap;">${e[empKey] || ''}</span>`;
-                    
-                if (empBadgeKey && e[empBadgeKey]) {
-                    html += `<span style="display: flex; justify-content: flex-end;"><span class="delta-badge ${checkRule(ruleName, e[empBadgeKey]) ? 'delta-neg' : 'delta-neutral'}">${e[empBadgeKey]}${isPercentBadge && !String(e[empBadgeKey]).includes('%') ? '%' : ''}</span></span>`;
-                } else {
-                    html += `<span></span>`;
-                }
-                html += `</div>`;
+                const mv = getMain(e), bv = getBadge ? getBadge(e) : null;
+                h += `<div class="kpi-row" style="display:grid;grid-template-columns:1fr 75px 55px;align-items:center;padding:0 15px;height:48px;border-top:1px solid #f5f5f5;background:white;margin:0;border-left:none;border-right:none;gap:8px;">
+                    <span class="kpi-name" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${e.employee_name}</span>
+                    <span style="text-align:right;font-size:12px;font-weight:${checkRule(ruleName,mv)?'900':'700'};color:${checkRule(ruleName,mv)?'var(--red-alert)':'#555'};white-space:nowrap;">${mainFmt(mv)}</span>`;
+                h += bv != null
+                    ? `<span style="display:flex;justify-content:flex-end;"><span class="delta-badge ${checkRule(ruleName,bv)?'delta-neg':'delta-neutral'}">${badgeFmt(bv)}</span></span>`
+                    : `<span></span>`;
+                h += `</div>`;
             });
-            
-            html += `</div></div>`;
-            return html;
+            h += `</div></div>`;
+            return h;
         };
-        
-        // Assemble the 5 Columns perfectly!
-        nV.innerHTML = 
-            buildColHtml('Buying Performance', sAvg.buyVal, sAvg.buyMargin, 'buyVal', 'buyMargin', 'margin', true) + 
-            buildColHtml('Customer Conversion', sAvg.customers, sAvg.conversion, 'customers', 'conversion', 'conversion', true) + 
-            buildColHtml('No Deals', '', sAvg.noDeals, '', 'noDeals', 'nodeals', false) + 
-            buildColHtml('Avg Trans. Time', '', sAvg.time, '', 'time', 'time', false) + 
-            buildColHtml('Processed / Listed', sAvg.listed, '', 'listed', '', null, false);
-            
+
+        nV.innerHTML =
+            buildCol('Buying Performance',
+                total.buying_value,          total.gross_margin_pct,
+                e => e.buying_value,         e => e.gross_margin_pct,
+                'margin', fmt$, fmtPct) +
+            buildCol('Customer Conversion',
+                total.transaction_count,     total.customer_conversion_pct,
+                e => e.transaction_count,    e => e.customer_conversion_pct,
+                'conversion', fmtN, fmtPct) +
+            buildCol('No Deals',
+                total.no_deal_count,         total.no_deal_vs_buying_pct,
+                e => e.no_deal_count,        e => e.no_deal_vs_buying_pct,
+                null, fmtN, fmtPct) +
+            buildCol('Avg Trans. Time',
+                total.avg_transaction_time,  null,
+                e => e.avg_transaction_time, null,
+                null, fmtMin, null) +
+            buildCol('Listed / Sold',
+                total.listed_count,          total.listed_sold_pct,
+                e => e.listed_count,         e => e.listed_sold_pct,
+                null, fmtN, fmtPct);
+
         cont.appendChild(nV);
-        
-    } catch (e) { 
-        msg.innerText = 'Failed to load Weekly KPI.'; 
-        msg.style.color = '#dc2626'; 
+
+    } catch (e) {
+        msg.innerText   = 'Failed to load Weekly KPI.';
+        msg.style.color = '#dc2626';
     }
 }
+
+// --- 11b. MODULE: KPI VIEW / ENTRY ---
+
+let _kpiCurrentTab     = 'weekly';
+let _kpiPeriodsData    = [];   // [{ period_end_date, period_label, is_editable, entries[] }]
+let _kpiEditingPeriod  = null; // period_end_date string currently in edit mode
+
+// Keep these for backward compat with saveKpiEntry
+let _kpiEntryPeriodType    = 'weekly';
+let _kpiEntryPeriodEndDate = '';
+let _kpiEntryData          = [];
+
+
+// ── KPI Grid constants ────────────────────────────────────────────────────────
+const _KPI_GRID_FIELDS = [
+    { key: 'buying_value',            step: '0.01', computed: false },
+    { key: 'buying_cost',             step: '0.01', computed: false },
+    { key: 'estimated_gross_profit',               computed: true  },
+    { key: 'gross_margin_pct',                     computed: true  },
+    { key: 'transaction_count',       step: '1',   computed: false },
+    { key: 'transaction_converted',   step: '1',   computed: false },
+    { key: 'customer_conversion_pct',              computed: true  },
+    { key: 'device_count',            step: '1',   computed: false },
+    { key: 'device_converted',        step: '1',   computed: false },
+    { key: 'device_conversion_pct',                computed: true  },
+    { key: 'avg_transaction_time',    step: '0.1', computed: false },
+    { key: 'no_deal_count',           step: '1',   computed: false },
+    { key: 'no_deal_value',           step: '0.01',computed: false },
+    { key: 'no_deal_cost',            step: '0.01',computed: false },
+    { key: 'lost_profit',                          computed: true  },
+    { key: 'no_deal_vs_buying_pct',                computed: true  },
+    { key: 'listed_count',            step: '1',   computed: false },
+    { key: 'listed_retail_price',     step: '0.01',computed: false },
+    { key: 'listed_cost',             step: '0.01',computed: false },
+    { key: 'listed_sold_value',       step: '0.01',computed: false },
+    { key: 'listed_gross_margin_pct',              computed: true  },
+    { key: 'listed_sold_pct',                      computed: true  },
+    { key: 'mtd_google_reviews',      step: '1',   computed: false },
+];
+const _KPI_INPUT_FIELDS = _KPI_GRID_FIELDS.filter(f => !f.computed).map(f => f.key);
+const _KPI_INT_FIELDS   = new Set(['transaction_count','transaction_converted','device_count','device_converted','no_deal_count','listed_count','mtd_google_reviews']);
+
+// ── Derived-field calculator ──────────────────────────────────────────────────
+function _kpiCalcDerived(entry) {
+    const bv  = Number(entry.buying_value)          || 0;
+    const bc  = Number(entry.buying_cost)           || 0;
+    const tc  = Number(entry.transaction_count)     || 0;
+    const tco = Number(entry.transaction_converted) || 0;
+    const dc  = Number(entry.device_count)          || 0;
+    const dco = Number(entry.device_converted)      || 0;
+    const ndv = Number(entry.no_deal_value)         || 0;
+    const ndc = Number(entry.no_deal_cost)          || 0;
+    const lrp = Number(entry.listed_retail_price)   || 0;
+    const lc  = Number(entry.listed_cost)           || 0;
+    const lsv = Number(entry.listed_sold_value)     || 0;
+    const gp  = bv - bc;
+    const r2  = n => n !== null ? Math.round(n * 100) / 100 : null;
+    return {
+        ...entry,
+        estimated_gross_profit:  gp,
+        gross_margin_pct:        bv  > 0 ? r2((1 - bc  / bv)  * 100) : null,
+        customer_conversion_pct: tc  > 0 ? r2((tco / tc)  * 100)     : null,
+        device_conversion_pct:   dc  > 0 ? r2((dco / dc)  * 100)     : null,
+        lost_profit:             ndv - ndc,
+        no_deal_vs_buying_pct:   gp  > 0 ? r2(((ndv - ndc) / gp) * 100) : null,
+        listed_gross_margin_pct: lrp > 0 ? r2((1 - lc  / lrp) * 100)    : null,
+        listed_sold_pct:         lrp > 0 ? r2((lsv / lrp) * 100)         : null,
+    };
+}
+
+function _kpiFormatComputed(key, val) {
+    if (val == null || val === '') return '—';
+    const n = Number(val);
+    if (isNaN(n)) return '—';
+    const pctKeys = ['gross_margin_pct','customer_conversion_pct','device_conversion_pct',
+                     'no_deal_vs_buying_pct','listed_gross_margin_pct','listed_sold_pct'];
+    const dollarKeys = ['estimated_gross_profit','lost_profit','buying_value','buying_cost',
+                        'no_deal_value','no_deal_cost','listed_retail_price','listed_cost','listed_sold_value'];
+    if (pctKeys.includes(key))    return n.toFixed(1) + '%';
+    if (dollarKeys.includes(key)) return '$' + Math.round(n).toLocaleString();
+    if (key === 'avg_transaction_time') return n.toFixed(1) + ' min';
+    return String(Math.round(n * 10) / 10);
+}
+
+function _kpiComputeAverages(periods) {
+    if (!periods || !periods.length) return [];
+    const empNames = periods[0].entries.map(e => e.employee_name);
+    return empNames.map(name => {
+        const empRows = periods.map(p => p.entries.find(e => e.employee_name === name)).filter(Boolean);
+        const avg = { employee_name: name };
+        _KPI_INPUT_FIELDS.forEach(f => {
+            const vals = empRows.map(e => e[f]).filter(v => v != null && v !== '' && !isNaN(Number(v)));
+            avg[f] = vals.length ? vals.reduce((a, b) => a + Number(b), 0) / vals.length : null;
+        });
+        return _kpiCalcDerived(avg);
+    });
+}
+
+// ── HTML builders ─────────────────────────────────────────────────────────────
+function _kpiTheadHtml() {
+    return '<colgroup>' +
+        '<col class="col-name">' +
+        '<col span="2" class="col-buying-input"><col span="2" class="col-computed">' +
+        '<col span="2" class="col-buying-input"><col class="col-computed">' +
+        '<col span="2" class="col-buying-input"><col class="col-computed">' +
+        '<col class="col-buying-input">' +
+        '<col span="3" class="col-nd-input"><col span="2" class="col-computed">' +
+        '<col span="4" class="col-listing-input"><col span="2" class="col-computed">' +
+        '<col class="col-review-input">' +
+        '</colgroup>' +
+        '<thead><tr>' +
+        '<th rowspan="2" class="kpi-grid-th kpi-grid-name-col">Employee</th>' +
+        '<th colspan="11" class="kpi-grid-section-header kpi-section-buying">Buying</th>' +
+        '<th colspan="5"  class="kpi-grid-section-header kpi-section-nodeals">No Deals</th>' +
+        '<th colspan="6"  class="kpi-grid-section-header kpi-section-listings">Listings</th>' +
+        '<th colspan="1"  class="kpi-grid-section-header kpi-section-reviews">Reviews</th>' +
+        '</tr><tr>' +
+        '<th class="kpi-grid-th kpi-col-input">Buy Value</th>' +
+        '<th class="kpi-grid-th kpi-col-input">Buy Cost</th>' +
+        '<th class="kpi-grid-th kpi-col-computed">Est. GP</th>' +
+        '<th class="kpi-grid-th kpi-col-computed">Margin %</th>' +
+        '<th class="kpi-grid-th kpi-col-input"># Trans.</th>' +
+        '<th class="kpi-grid-th kpi-col-input"># Conv.</th>' +
+        '<th class="kpi-grid-th kpi-col-computed">Conv %</th>' +
+        '<th class="kpi-grid-th kpi-col-input"># Devices</th>' +
+        '<th class="kpi-grid-th kpi-col-input"># Dev Conv.</th>' +
+        '<th class="kpi-grid-th kpi-col-computed">Dev Conv %</th>' +
+        '<th class="kpi-grid-th kpi-col-input">Avg Time</th>' +
+        '<th class="kpi-grid-th kpi-col-input"># No Deals</th>' +
+        '<th class="kpi-grid-th kpi-col-input">ND Value</th>' +
+        '<th class="kpi-grid-th kpi-col-input">ND Cost</th>' +
+        '<th class="kpi-grid-th kpi-col-computed">Lost Profit</th>' +
+        '<th class="kpi-grid-th kpi-col-computed">% vs Buy GP</th>' +
+        '<th class="kpi-grid-th kpi-col-input"># Listed</th>' +
+        '<th class="kpi-grid-th kpi-col-input">Retail ($)</th>' +
+        '<th class="kpi-grid-th kpi-col-input">Cost ($)</th>' +
+        '<th class="kpi-grid-th kpi-col-input">Sold ($)</th>' +
+        '<th class="kpi-grid-th kpi-col-computed">Listed Margin</th>' +
+        '<th class="kpi-grid-th kpi-col-computed">% Sold</th>' +
+        '<th class="kpi-grid-th kpi-col-input">Google Reviews</th>' +
+        '</tr></thead>';
+}
+
+function _kpiSectionDividerHtml(label, badge, badgeClass, controls, borderColor) {
+    const bdg = badge ? '<span class="kpi-section-badge ' + badgeClass + '">' + badge + '</span>' : '';
+    return '<tr class="kpi-section-divider-row"><td colspan="24"><div class="kpi-section-header-inner" style="border-left:4px solid ' + borderColor + ';">' +
+        '<div class="align-center gap-8"><span class="kpi-section-label">' + label + '</span>' + bdg + '</div>' +
+        '<div class="align-center gap-8">' + controls + '</div>' +
+        '</div></td></tr>';
+}
+
+function _kpiSectionControls(periodDate, isEditing, isEditable) {
+    const pk = periodDate.replace(/-/g, '');
+    if (!isEditable) return '<span class="kpi-readonly-label">🔒 Read only</span>';
+    if (isEditing) {
+        return '<button class="kpi-cancel-btn" onclick="_kpiCancelEdit()">Cancel</button>' +
+               '<button class="kpi-save-section-btn" id="kpiSaveBtn-' + pk + '" onclick="_kpiSavePeriod(\'' + periodDate + '\')">Save</button>';
+    }
+    return '<button class="kpi-edit-section-btn" onclick="_kpiStartEdit(\'' + periodDate + '\')">✏️ Edit</button>';
+}
+
+function _kpiEmpRowsHtml(entries, periodDate, isEditing, isAvg) {
+    const pk = periodDate.replace(/-/g, '');
+    return entries.map(function(entry, empIdx) {
+        const hasSaved = !!entry.id;
+        const sc = hasSaved ? '#16a34a' : 'transparent';
+        const rowClass = isAvg ? 'kpi-avg-row' : (empIdx % 2 === 1 ? 'kpi-row-alt' : '');
+        let cells = '<td class="kpi-grid-name-col"><div class="kpi-grid-name-cell">' +
+            '<span class="kpi-grid-emp-name">' + entry.employee_name + '</span>' +
+            (!isAvg ? '<span class="kpi-grid-status" id="kpiS-' + pk + '-' + empIdx + '" style="color:' + sc + '" title="' + (hasSaved ? 'Saved' : '') + '">' + (hasSaved ? '✓' : '') + '</span>' : '') +
+            '</div></td>';
+        _KPI_GRID_FIELDS.forEach(function(f) {
+            if (f.computed || isAvg) {
+                cells += '<td class="kpi-grid-computed' + (isAvg ? ' kpi-avg-cell' : '') + '" id="kpiC-' + pk + '-' + empIdx + '-' + f.key + '">' + _kpiFormatComputed(f.key, entry[f.key]) + '</td>';
+            } else {
+                const val = entry[f.key] != null ? entry[f.key] : '';
+                const dis = isEditing ? '' : 'disabled';
+                cells += '<td class="kpi-grid-td-input"><input class="kpi-grid-input" type="number" step="' + f.step + '" min="0" id="kpi-' + pk + '-' + empIdx + '-' + f.key + '" value="' + val + '" ' + dis + ' oninput="_kpiUpdateRow(\'' + pk + '\',' + empIdx + ')"></td>';
+            }
+        });
+        return '<tr class="' + rowClass + '" data-period="' + periodDate + '">' + cells + '</tr>';
+    }).join('');
+}
+
+function _kpiUpdateRow(pk, empIdx) {
+    const g   = function(k) { var el = document.getElementById('kpi-' + pk + '-' + empIdx + '-' + k); return el ? (Number(el.value) || 0) : 0; };
+    const bv  = g('buying_value'),        bc  = g('buying_cost');
+    const tc  = g('transaction_count'),   tco = g('transaction_converted');
+    const dc  = g('device_count'),        dco = g('device_converted');
+    const ndv = g('no_deal_value'),       ndc = g('no_deal_cost');
+    const lrp = g('listed_retail_price'),  lc = g('listed_cost'), lsv = g('listed_sold_value');
+    const gp  = bv - bc;
+    const r2  = function(n) { return n !== null ? Math.round(n * 100) / 100 : null; };
+    const computed = {
+        estimated_gross_profit:  gp,
+        gross_margin_pct:        bv  > 0 ? r2((1-bc/bv)*100)        : null,
+        customer_conversion_pct: tc  > 0 ? r2((tco/tc)*100)         : null,
+        device_conversion_pct:   dc  > 0 ? r2((dco/dc)*100)         : null,
+        lost_profit:             ndv - ndc,
+        no_deal_vs_buying_pct:   gp  > 0 ? r2(((ndv-ndc)/gp)*100)  : null,
+        listed_gross_margin_pct: lrp > 0 ? r2((1-lc/lrp)*100)      : null,
+        listed_sold_pct:         lrp > 0 ? r2((lsv/lrp)*100)        : null,
+    };
+    Object.keys(computed).forEach(function(key) {
+        const el = document.getElementById('kpiC-' + pk + '-' + empIdx + '-' + key);
+        if (el) el.textContent = _kpiFormatComputed(key, computed[key]);
+    });
+    const statusEl = document.getElementById('kpiS-' + pk + '-' + empIdx);
+    if (statusEl) { statusEl.textContent = '●'; statusEl.style.color = '#f59e0b'; statusEl.title = 'Unsaved'; }
+}
+
+function _kpiWeekRangeLabel(periodEndDate) {
+    const end = new Date(periodEndDate + 'T12:00:00');
+    const start = new Date(end);
+    start.setDate(start.getDate() - 6);
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const sm = months[start.getMonth()], sd = start.getDate();
+    const em = months[end.getMonth()],   ed = end.getDate();
+    return 'Week ' + sm + ' ' + sd + ' - ' + em + ' ' + ed;
+}
+
+function _kpiRenderWeekly(periods) {
+    const body = document.getElementById('kpiModalBody');
+    if (!body) return;
+    const store = sessionStorage.getItem('speeksUserStore') || '';
+    const sub = document.getElementById('kpiModalSubtitle');
+    if (sub) sub.textContent = store + ' · 4-Week View';
+    if (!periods || !periods.length) {
+        body.innerHTML = '<div class="kpi-empty-state">No weekly KPI data yet. Click Edit on the current week to get started.</div>';
+        return;
+    }
+    const wkBadges  = ['Current Week','Last Week','2 Weeks Ago','3 Weeks Ago'];
+    const wkBClass  = ['badge-current','badge-prev','badge-old','badge-old'];
+    let tbody = '';
+    periods.forEach(function(p, i) {
+        const isEd = _kpiEditingPeriod === p.period_end_date;
+        tbody += _kpiSectionDividerHtml('📅 ' + _kpiWeekRangeLabel(p.period_end_date), wkBadges[i] || '', wkBClass[i] || 'badge-old',
+            _kpiSectionControls(p.period_end_date, isEd, p.is_editable), '#3b82f6');
+        tbody += _kpiEmpRowsHtml(p.entries, p.period_end_date, isEd, false);
+    });
+    body.innerHTML = '<div class="kpi-grid-scroll-wrapper"><table class="kpi-entry-grid kpi-full-table">' + _kpiTheadHtml() + '<tbody>' + tbody + '</tbody></table></div>';
+}
+
+function _kpiRenderMonthly(periods) {
+    const body = document.getElementById('kpiModalBody');
+    if (!body) return;
+    const store = sessionStorage.getItem('speeksUserStore') || '';
+    const sub = document.getElementById('kpiModalSubtitle');
+    if (sub) sub.textContent = store + ' · Monthly';
+    if (!periods || !periods.length) {
+        body.innerHTML = '<div class="kpi-empty-state">No monthly KPI data yet. Click Edit on the current month to get started.</div>';
+        return;
+    }
+    const moBadges  = ['Current Month','Last Month'];
+    const moBClass  = ['badge-current','badge-prev'];
+    let tbody = '';
+    periods.forEach(function(p, i) {
+        const isEd = _kpiEditingPeriod === p.period_end_date;
+        tbody += _kpiSectionDividerHtml('📆 ' + p.period_label, i < 2 ? moBadges[i] : null, i < 2 ? moBClass[i] : '',
+            _kpiSectionControls(p.period_end_date, isEd, p.is_editable), '#7c3aed');
+        tbody += _kpiEmpRowsHtml(p.entries, p.period_end_date, isEd, false);
+    });
+    body.innerHTML = '<div class="kpi-grid-scroll-wrapper"><table class="kpi-entry-grid kpi-full-table">' + _kpiTheadHtml() + '<tbody>' + tbody + '</tbody></table></div>';
+}
+
+async function _kpiLoadAll(tab) {
+    const store = sessionStorage.getItem('speeksUserStore');
+    if (!store) return;
+    const body = document.getElementById('kpiModalBody');
+    if (body) body.innerHTML = '<div class="kpi-empty-state">Loading…</div>';
+    try {
+        const resp = await fetch(KPI_MANAGE_URL + '?store=' + store + '&period_type=' + tab + '&v=' + Date.now());
+        const data = await resp.json();
+        _kpiPeriodsData = data.periods || [];
+        if (tab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
+        else                  _kpiRenderMonthly(_kpiPeriodsData);
+    } catch(e) {
+        if (body) body.innerHTML = '<div class="kpi-empty-state" style="color:var(--red-alert)">Failed to load KPI data.</div>';
+    }
+}
+
+async function openKpiEntryPanel(tab) {
+    _kpiCurrentTab = tab || 'weekly';
+    _kpiEditingPeriod = null;
+    document.getElementById('kpi-tab-weekly') && document.getElementById('kpi-tab-weekly').classList.toggle('active', _kpiCurrentTab === 'weekly');
+    document.getElementById('kpi-tab-monthly') && document.getElementById('kpi-tab-monthly').classList.toggle('active', _kpiCurrentTab === 'monthly');
+    toggleModal('kpiEntryModal');
+    await _kpiLoadAll(_kpiCurrentTab);
+}
+
+async function switchKpiTab(tab) {
+    _kpiCurrentTab = tab;
+    _kpiEditingPeriod = null;
+    document.getElementById('kpi-tab-weekly') && document.getElementById('kpi-tab-weekly').classList.toggle('active', tab === 'weekly');
+    document.getElementById('kpi-tab-monthly') && document.getElementById('kpi-tab-monthly').classList.toggle('active', tab === 'monthly');
+    await _kpiLoadAll(tab);
+}
+
+function _kpiStartEdit(periodDate) {
+    if (_kpiEditingPeriod === periodDate) return;
+    _kpiEditingPeriod = periodDate;
+    if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
+    else _kpiRenderMonthly(_kpiPeriodsData);
+}
+
+function _kpiCancelEdit() {
+    _kpiEditingPeriod = null;
+    if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
+    else _kpiRenderMonthly(_kpiPeriodsData);
+}
+
+async function _kpiSavePeriod(periodDate) {
+    const store = sessionStorage.getItem('speeksUserStore');
+    const pin   = sessionStorage.getItem('speeksUserPin');
+    if (!store || !pin) return;
+    const pk     = periodDate.replace(/-/g, '');
+    const period = _kpiPeriodsData.find(function(p) { return p.period_end_date === periodDate; });
+    if (!period) return;
+    const saveBtn = document.getElementById('kpiSaveBtn-' + pk);
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; }
+    for (let empIdx = 0; empIdx < period.entries.length; empIdx++) {
+        const entry   = period.entries[empIdx];
+        const reqBody = { store: store, period_type: _kpiCurrentTab, period_end_date: periodDate, employee_name: entry.employee_name };
+        _KPI_INPUT_FIELDS.forEach(function(f) {
+            const el = document.getElementById('kpi-' + pk + '-' + empIdx + '-' + f);
+            if (el && el.value !== '') reqBody[f] = _KPI_INT_FIELDS.has(f) ? parseInt(el.value) : parseFloat(el.value);
+        });
+        const hasData = _KPI_INPUT_FIELDS.some(function(f) { return reqBody[f] != null; });
+        if (!hasData) continue;
+        try {
+            const resp   = await fetch(KPI_MANAGE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-pin': pin }, body: JSON.stringify(reqBody) });
+            const result = await resp.json();
+            if (!resp.ok) throw new Error(result.error || 'Save failed');
+            period.entries[empIdx] = result.entry;
+            const s = document.getElementById('kpiS-' + pk + '-' + empIdx);
+            if (s) { s.textContent = '✓'; s.style.color = '#16a34a'; s.title = 'Saved'; }
+        } catch(e) {
+            const s = document.getElementById('kpiS-' + pk + '-' + empIdx);
+            if (s) { s.textContent = '✗'; s.style.color = 'var(--red-alert)'; s.title = String(e.message); }
+        }
+    }
+    _kpiEditingPeriod = null;
+    await _kpiLoadAll(_kpiCurrentTab);
+}
+
+function _kpiGetThisSunday() {
+    const d = new Date(); d.setHours(0,0,0,0);
+    const day = d.getDay(); d.setDate(d.getDate() + (day === 0 ? 0 : 7 - day));
+    return d.toISOString().slice(0,10);
+}
+function _kpiGetLastDayOfMonth() {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth()+1, 0).toISOString().slice(0,10);
+}
+
 
 // --- 12. MODULE: HUB DATA & LIVE DASHBOARDS ---
 
@@ -3477,7 +3779,7 @@ async function fetchDistrictMonthlyKPIs() {
                 districtKpiCache.masterMonths = res.data.months; 
             }
             if (res.data && !res.data.error && res.data.data) {
-                districtKpiCache.stores[res.store] = { months: res.data.months || [], data: res.data.data };
+                districtKpiCache.stores[res.store] = { months: res.data.months || [], data: groupKPIs(res.data.data) };
             } else {
                 districtKpiCache.stores[res.store] = { months: [], data: [] }; 
             }
@@ -3898,13 +4200,18 @@ async function fetchMasterDistrictDashboard() {
         ]);
 
         const weeklyPromises = STORES.map(async (store) => {
-            const d = await fetch(`${WEEKLY_KPI_URL}?store=${store}&time=4-Week&v=${Date.now()}`).then(r => r.json());
-            let sAvg = {};
-            let sIdx = d.findLastIndex(r => String(r[0]).trim().toLowerCase() === "store" || String(r[0]).trim().toLowerCase() === "store total");
-            if (sIdx !== -1) {
-                let st = d[sIdx];
-                sAvg = { buyMargin: st[5], conversion: st[8], time: formatTime(st[12]), noDeals: st[14], listed: st[20] };
-            }
+            const d = await fetch(`${WEEKLY_KPI_URL}?store=${store}&v=${Date.now()}`).then(r => r.json());
+            const t = d.store_total || {};
+            const fmtPct = v => v != null ? `${Number(v).toFixed(1)}` : '';
+            const fmtN   = v => v != null ? String(Math.round(Number(v))) : '';
+            const fmtMin = v => v != null ? `${Number(v).toFixed(1)} min` : '';
+            const sAvg = {
+                buyMargin:  fmtPct(t.gross_margin_pct),
+                conversion: fmtPct(t.customer_conversion_pct),
+                time:       fmtMin(t.avg_transaction_time),
+                noDeals:    fmtN(t.no_deal_count),
+                listed:     fmtN(t.listed_count),
+            };
             return { store, sAvg };
         });
 
@@ -4701,80 +5008,52 @@ async function fetchAndRenderEmployeeKPIs() {
     if (store === 'ALL' || store === 'CORP') store = 'OVL';
 
     try {
-        const response = await fetch(`${WEEKLY_KPI_URL}?store=${store}&time=4-Week&v=${Date.now()}`);
+        const response = await fetch(`${WEEKLY_KPI_URL}?store=${store}&v=${Date.now()}`);
         const d = await response.json();
-        
-        let sAvg = {};
+
+        // New clean JSON format: { employees, store_total, period_label }
+        const emps   = d.employees   || [];
+        const total  = d.store_total || {};
+        const pTxt   = d.period_label || '';
+
+        const fmtBuy = v => v != null ? `$${Math.round(Number(v)).toLocaleString()}` : '';
+        const fmtPct = v => v != null ? `${Number(v).toFixed(1)}` : '';
+        const fmtN   = v => v != null ? String(Math.round(Number(v))) : '';
+        const fmtMin = v => v != null ? `${Number(v).toFixed(1)} min` : '';
+
+        let sAvg = {
+            buyVal:     fmtBuy(total.buying_value),
+            buyMargin:  fmtPct(total.gross_margin_pct),
+            customers:  fmtN(total.transaction_count),
+            conversion: fmtPct(total.customer_conversion_pct),
+            time:       fmtMin(total.avg_transaction_time),
+            noDeals:    fmtN(total.no_deal_count),
+            listed:     fmtN(total.listed_count),
+        };
+
+        const sessionName      = String(userName).trim().toLowerCase();
+        const sessionFirstName = sessionName.split(' ')[0];
+        const myEntry = emps.find(e => {
+            const dbName  = String(e.employee_name).trim().toLowerCase();
+            if (dbName === sessionName) return true;
+            const dbFirst = dbName.split(' ')[0];
+            return dbFirst.length > 2 && sessionFirstName.length > 2 &&
+                   (dbFirst.startsWith(sessionFirstName) || sessionFirstName.startsWith(dbFirst));
+        });
+
         let myData = {};
-        let sIdx = d.findLastIndex(r => String(r[0]).trim().toLowerCase() === "store" || String(r[0]).trim().toLowerCase() === "store total");
-        
-        if (sIdx !== -1) {
-            let st = d[sIdx];
-            sAvg = { buyVal: st[2], buyMargin: st[5], customers: st[6], conversion: st[8], time: formatTime(st[12]), noDeals: st[14], listed: st[20] };
-            
-            const sessionName = String(userName).trim().toLowerCase();
-            const sessionFirstName = sessionName.split(' ')[0];
-
-            for (let i = Math.max(0, sIdx - 6); i <= Math.min(d.length - 1, sIdx + 6); i++) {
-                if (i === sIdx) continue;
-                let n = String(d[i][0]).trim();
-                let dbName = n.toLowerCase();
-                
-                if (n && !["name", "employee", "store", "store total", "ovl", "lee", "wsp", "mpl", "bal"].includes(dbName) && !dbName.includes("average") && !dbName.includes("week")) {
-                    
-                    let isMatch = false;
-                    if (dbName === sessionName) {
-                        isMatch = true;
-                    } else {
-                        const dbFirstName = dbName.split(' ')[0];
-                        if (dbFirstName.length > 2 && sessionFirstName.length > 2) {
-                            if (dbFirstName.startsWith(sessionFirstName) || sessionFirstName.startsWith(dbFirstName)) {
-                                isMatch = true;
-                            }
-                        }
-                    }
-
-                    if (isMatch) {
-                        myData = { buyVal: d[i][2], buyMargin: d[i][5], customers: d[i][6], conversion: d[i][8], time: formatTime(d[i][12]), noDeals: d[i][14], listed: d[i][20] };
-                        break; 
-                    }
-                }
-            }
+        if (myEntry) {
+            myData = {
+                buyVal:     fmtBuy(myEntry.buying_value),
+                buyMargin:  fmtPct(myEntry.gross_margin_pct),
+                customers:  fmtN(myEntry.transaction_count),
+                conversion: fmtPct(myEntry.customer_conversion_pct),
+                time:       fmtMin(myEntry.avg_transaction_time),
+                noDeals:    fmtN(myEntry.no_deal_count),
+                listed:     fmtN(myEntry.listed_count),
+            };
         }
 
-        let pTxt = "";
-        if (sIdx !== -1) {
-            let firstEmpIdx = -1;
-            for (let i = Math.max(0, sIdx - 6); i <= Math.min(d.length - 1, sIdx + 6); i++) {
-                let n = String(d[i][0]).trim(), lN = n.toLowerCase();
-                if (n && !["name", "employee", "store", "store total", "ovl", "lee", "wsp", "mpl", "bal"].includes(lN) && !lN.includes("average") && !lN.includes("week")) {
-                    if (String(d[i][2]).trim() !== "" || String(d[i][20]).trim() !== "") {
-                        firstEmpIdx = i;
-                        break; 
-                    }
-                }
-            }
-
-            if (firstEmpIdx !== -1) {
-                let hR = d[firstEmpIdx - 3] || d[firstEmpIdx - 2];
-                if (hR && hR[2] && hR[4] && hR[6]) {
-                    const getOrdinal = (n) => {
-                        let val = parseInt(String(n).replace(/\D/g, ''));
-                        if (isNaN(val)) return n;
-                        let s = ["th", "st", "nd", "rd"], v = val % 100;
-                        return val + (s[(v - 20) % 10] || s[v] || s[0]);
-                    };
-                    
-                    const monthNames = {"Jan":"January","Feb":"February","Mar":"March","Apr":"April","May":"May","Jun":"June","Jul":"July","Aug":"August","Sep":"September","Oct":"October","Nov":"November","Dec":"December"};
-                    let monthName = String(hR[2]).replace(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/ig, m => monthNames[m.charAt(0).toUpperCase() + m.slice(1).toLowerCase()] || m);
-                    
-                    let startDay = getOrdinal(hR[4]);
-                    let endDay = getOrdinal(hR[6]);
-                    
-                    pTxt = `${monthName} ${startDay} - ${endDay}`;
-                }
-            }
-        }
         if (periodLabel) periodLabel.innerText = pTxt;
 
         // --- NEW: ROBUST VARIANCE FETCH ---
@@ -5121,6 +5400,7 @@ function initDashboardData() {
         if (_clRole === 'manager' || _clRole === 'district manager') {
             setTimeout(loadChecklist, 1200);
         }
+
 
         if (typeof preloadAllStores === 'function') setTimeout(preloadAllStores, 4000); 
         if (typeof initListingGoals === 'function') setTimeout(initListingGoals, 200);
@@ -7152,74 +7432,31 @@ async function fetchChampions() {
         };
 
         // 3. FETCH LISTERS
-        const listerFetches = stores.map(s => fetch(`${WEEKLY_KPI_URL}?store=${s}&time=4-Week&v=${Date.now()}`).then(r => r.json()));
+        const listerFetches = stores.map(s => fetch(`${WEEKLY_KPI_URL}?store=${s}&v=${Date.now()}`).then(r => r.json()));
         const listerResults = await Promise.all(listerFetches);
 
         listerResults.forEach((d, storeIdx) => {
-            let sIdx = d.findLastIndex(r => String(r[0]).trim().toLowerCase() === "store" || String(r[0]).trim().toLowerCase() === "store total");
-            if (sIdx !== -1) {
-                for (let i = Math.max(0, sIdx - 6); i <= Math.min(d.length - 1, sIdx + 6); i++) {
-                    if (i === sIdx) continue;
-                    let n = String(d[i][0]).trim();
-                    let lN = n.toLowerCase();
-                    if (n && !["name", "employee", "store", "store total", "ovl", "lee", "wsp", "mpl", "bal"].includes(lN) && !lN.includes("average") && !lN.includes("week")) {
-                        let listed = parseNum(d[i][20]);
-                        if (listed > 0) {
-                            allListers.push({ name: getFullName(n), store: stores[storeIdx], listed: listed });
-                        }
-                        let reviews = parseNum(d[i][29]); // Column AD
-                        if (reviews > 0) {
-                            allGoogleReviews.push({ name: getFullName(n), store: stores[storeIdx], reviews: reviews });
-                        }
-                    }
-                }
-            }
+            // New clean JSON format: { employees, store_total, period_label }
+            (d.employees || []).forEach(e => {
+                const listed  = parseNum(e.listed_count);
+                const reviews = parseNum(e.mtd_google_reviews);
+                if (listed  > 0) allListers.push({ name: getFullName(e.employee_name), store: stores[storeIdx], listed });
+                if (reviews > 0) allGoogleReviews.push({ name: getFullName(e.employee_name), store: stores[storeIdx], reviews });
+            });
         });
 
-        // 4. FETCH BUYERS
+        // 4. FETCH BUYERS — reads from each store's weekly entries and ranks by buying_value
         try {
-            const buyerData = await fetch(`${WEEKLY_KPI_URL}?store=Weekly&time=Scores&v=${Date.now()}`).then(r => r.json());
-            let currentStore = "Store";
-            
-            buyerData.forEach((row, index) => {
-                let colA = String(row[0] || "").trim(); // Column A
-                let colB = String(row[1] || "").trim(); // Column B
-                let colC = String(row[2] || "").trim(); // Column C
-                
-                // Track which store's section we are in
-                if (colA.toUpperCase().includes("TEAM")) currentStore = colA.split(' ')[0]; 
-                if (colB.toUpperCase().includes("TEAM")) currentStore = colB.split(' ')[0]; 
-
-                let empName = colC; 
-                if (!empName) empName = colB; // Fallback to col B just in case
-
-                // parseNum automatically strips commas. If undefined, defaults to 0.
-                let finalScore = parseNum(row[7]) || 0; // Column H (Index 7)
-
-                let isWeek4 = colA.toLowerCase().replace(/\s/g, '') === "week4" || colB.toLowerCase().replace(/\s/g, '') === "week4";
-                
-                // Hardcoded row fallback (1-indexed for human readability)
-                let rowIndex = index + 1;
-                let isHardcodedWeek4Row = 
-                    (rowIndex >= 19 && rowIndex <= 22) || // OVL
-                    (rowIndex >= 38 && rowIndex <= 40) || // LEE
-                    (rowIndex >= 59 && rowIndex <= 62) || // WSP
-                    (rowIndex >= 78 && rowIndex <= 80) || // MPL
-                    (rowIndex >= 96 && rowIndex <= 98);   // BAL
-                
-                if (isWeek4 || isHardcodedWeek4Row) {
-                    let cleanName = empName.toLowerCase();
-                    if (cleanName && cleanName !== "employee" && cleanName !== "name" && !cleanName.includes("week") && !cleanName.includes("team")) {
-                        allBuyers.push({
-                            name: getFullName(empName),
-                            store: currentStore,
-                            score: finalScore
-                        });
-                    }
-                }
+            const buyerFetches = stores.map(s => fetch(`${WEEKLY_KPI_URL}?store=${s}&v=${Date.now()}`).then(r => r.json()));
+            const buyerResults = await Promise.all(buyerFetches);
+            buyerResults.forEach((d, storeIdx) => {
+                (d.employees || []).forEach(e => {
+                    const score = parseNum(e.buying_value);
+                    if (score > 0) allBuyers.push({ name: getFullName(e.employee_name), store: stores[storeIdx], score });
+                });
             });
         } catch (buyerErr) {
-            console.error("Failed to fetch Weekly Scores:", buyerErr);
+            console.error("Failed to fetch Weekly Buyers:", buyerErr);
         }
 
         // 5. BUILDER HELPER

@@ -153,6 +153,24 @@
     </div>
 </div>
 
+<!-- KPI View Modal (full screen) -->
+<div class="modal-menu kpi-fullscreen-modal" id="kpiEntryModal">
+    <div class="modal-header kpi-modal-header-tight">
+        <div class="align-center gap-15">
+            <h3>Store KPIs</h3>
+            <div class="notif-tabs">
+                <button id="kpi-tab-weekly"  class="tab-btn active" onclick="switchKpiTab('weekly')">📅 Weekly</button>
+                <button id="kpi-tab-monthly" class="tab-btn"        onclick="switchKpiTab('monthly')">📆 Monthly</button>
+            </div>
+            <span id="kpiModalSubtitle" style="font-size:11px;color:#888;font-weight:600;"></span>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div class="kpi-fullscreen-body" id="kpiModalBody">
+        <div class="kpi-empty-state">Loading…</div>
+    </div>
+</div>
+
 <div class="modal-menu manage-menu" id="manageRecordsDropdown">
     <div class="modal-header">
         <h3>Edit Company Records</h3>
@@ -522,6 +540,7 @@
         <div class="hotbar-container">
           <span class="hotbar-label">MGR</span>
           <div class="hotbar-links">
+            <button class="hotbar-btn" onclick="openKpiEntryPanel('weekly')">📊 View KPIs</button>
             <a href="https://docs.google.com/spreadsheets/d/1oHOnA6wDwaLQ-EP4-CiDTkKpAdP2V7y8mOay416HDME/edit?usp=sharing" target="_blank" class="hotbar-btn">📈 Weekly Metrics</a>
             <a href="https://docs.google.com/spreadsheets/d/1e4mW-pcwUMJjl2Pjry6PT180P8M8nkYL5Z4GcspQmEA/edit" target="_blank" class="hotbar-btn">📉 Monthly KPIs</a>
             <a href="https://docs.google.com/spreadsheets/d/1NkIdw8dlvwXmQ6kdpo73zqRwnPd4kIAkgJ7yAG2XCt4/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Daily Listing Goals</a>  
@@ -945,6 +964,7 @@
                   <span class="district-kpi-title">Weekly KPI Breakdown <span id="weeklyKpiPeriod" class="widget-date-display"></span></span>
               </div>
               <div class="align-center gap-10">
+                  <button class="kpi-update-trigger-btn" onclick="openKpiEntryPanel('weekly')">📊 View KPIs</button>
                   <select id="weeklyKpiStoreSelect" class="kpi-select hide-by-default" onchange="fetchWeeklyKPIs()">
                       <option value="OVL">OVL</option>
                       <option value="LEE">LEE</option>
@@ -964,6 +984,7 @@
           <div class="district-kpi-header">
               <span class="district-kpi-title">Monthly KPI Comparison</span>
               <div class="kpi-header-controls">
+                  <button class="kpi-update-trigger-btn" onclick="openKpiEntryPanel('monthly')">📊 View KPIs</button>
                   <div class="kpi-select-group">
                       <select id="kpiStoreSelect" class="kpi-select hide-by-default">
                           <option value="OVL">OVL</option>
