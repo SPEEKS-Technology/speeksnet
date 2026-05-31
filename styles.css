@@ -5246,6 +5246,21 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .kpi-save-all-btn:hover    { background: #4a7a2f; }
 .kpi-save-all-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
+.kpi-export-btn {
+    height: 30px;
+    padding: 0 12px;
+    background: white;
+    color: #374151;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    transition: background 0.12s, border-color 0.12s;
+}
+.kpi-export-btn:hover { background: #f0fdf4; border-color: var(--sage-professional); color: var(--sage-professional); }
+
 /* =========================================================
    KPI SECTION DIVIDERS (week / month separators)
    ========================================================= */

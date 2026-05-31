@@ -2261,6 +2261,67 @@ function _kpiRenderWeekly(periods) {
     body.innerHTML = '<div class="kpi-grid-scroll-wrapper"><table class="kpi-entry-grid kpi-full-table">' + _kpiTheadHtml() + '<tbody>' + tbody + '</tbody></table></div>';
 }
 
+function _kpiExportCSV() {
+    if (!_kpiPeriodsData || !_kpiPeriodsData.length) return;
+    const store = sessionStorage.getItem('speeksUserStore') || 'STORE';
+    const isWeekly = _kpiCurrentTab === 'weekly';
+
+    const headers = [
+        'Period','Employee',
+        'Buy Value','Buy Cost','Est. GP','Margin %',
+        '# Trans','# Conv.','Conv. %',
+        '# Devices','# Dev Conv.','Dev Conv. %',
+        'Avg Time (min)',
+        '# No Deals','ND Value','ND Cost','Lost Profit','% vs Buy GP',
+        '# Listed','Retail ($)','Cost ($)','Sold ($)','Listed Margin %','% Sold',
+        'Google Reviews'
+    ];
+
+    const csvRows = [headers];
+
+    _kpiPeriodsData.forEach(function(p) {
+        const label = isWeekly ? _kpiWeekRangeLabel(p.period_end_date) : p.period_label;
+        p.entries.forEach(function(raw) {
+            const e = _kpiCalcDerived(raw);
+            const r2 = function(v) { return v == null ? '' : Math.round(v * 100) / 100; };
+            csvRows.push([
+                label,
+                e.employee_name,
+                r2(e.buying_value),       r2(e.buying_cost),
+                r2(e.estimated_gross_profit), r2(e.gross_margin_pct),
+                r2(e.transaction_count),  r2(e.transaction_converted), r2(e.customer_conversion_pct),
+                r2(e.device_count),       r2(e.device_converted),      r2(e.device_conversion_pct),
+                r2(e.avg_transaction_time),
+                r2(e.no_deal_count),      r2(e.no_deal_value),         r2(e.no_deal_cost),
+                r2(e.lost_profit),        r2(e.no_deal_vs_buying_pct),
+                r2(e.listed_count),       r2(e.listed_retail_price),   r2(e.listed_cost),
+                r2(e.listed_sold_value),  r2(e.listed_gross_margin_pct), r2(e.listed_sold_pct),
+                r2(e.mtd_google_reviews)
+            ]);
+        });
+    });
+
+    const csv = csvRows.map(function(row) {
+        return row.map(function(v) {
+            const s = String(v);
+            return s.includes(',') || s.includes('"') || s.includes('\n') ? '"' + s.replace(/"/g, '""') + '"' : s;
+        }).join(',');
+    }).join('\r\n');
+
+    const tab = isWeekly ? 'Weekly' : 'Monthly';
+    const ts  = new Date().toISOString().slice(0, 10);
+    const filename = store + '_KPI_' + tab + '_' + ts + '.csv';
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = filename; a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
 function _kpiRenderMonthly(periods) {
     const body = document.getElementById('kpiModalBody');
     if (!body) return;
