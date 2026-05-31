@@ -490,6 +490,17 @@
         <div class="hotbar-container">
           <span class="hotbar-label">DM</span>
           <div class="hotbar-links">
+            <div class="hotbar-kpi-picker">
+                <button class="hotbar-btn hotbar-btn-primary" onclick="toggleDmKpiPicker(event)">📊 View KPIs ▾</button>
+                <div class="hotbar-kpi-dropdown" id="dmKpiDropdown">
+                    <div class="hotbar-kpi-dropdown-label">Select Store</div>
+                    <button onclick="openKpiEntryPanelForStore('OVL','weekly')">OVL</button>
+                    <button onclick="openKpiEntryPanelForStore('LEE','weekly')">LEE</button>
+                    <button onclick="openKpiEntryPanelForStore('WSP','weekly')">WSP</button>
+                    <button onclick="openKpiEntryPanelForStore('MPL','weekly')">MPL</button>
+                    <button onclick="openKpiEntryPanelForStore('BAL','weekly')">BAL</button>
+                </div>
+            </div>
             <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn">📁 Store Manager Folder</a>
             <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn">🔑 Store Passwords</a>
             <a href="https://docs.google.com/spreadsheets/d/1NkIdw8dlvwXmQ6kdpo73zqRwnPd4kIAkgJ7yAG2XCt4/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Listing Goals</a>  

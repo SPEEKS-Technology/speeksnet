@@ -2385,6 +2385,27 @@ async function _kpiLoadAll(tab) {
     }
 }
 
+function toggleDmKpiPicker(e) {
+    e.stopPropagation();
+    const dd = document.getElementById('dmKpiDropdown');
+    if (!dd) return;
+    const open = dd.classList.toggle('open');
+    if (open) {
+        const close = () => { dd.classList.remove('open'); document.removeEventListener('click', close); };
+        setTimeout(() => document.addEventListener('click', close), 0);
+    }
+}
+
+async function openKpiEntryPanelForStore(store, tab) {
+    document.getElementById('dmKpiDropdown')?.classList.remove('open');
+    const prev = sessionStorage.getItem('speeksUserStore');
+    sessionStorage.setItem('speeksUserStore', store);
+    await openKpiEntryPanel(tab);
+    // Restore DM's own store after the modal is open (they don't belong to a specific store)
+    if (!prev) sessionStorage.removeItem('speeksUserStore');
+    else sessionStorage.setItem('speeksUserStore', prev);
+}
+
 async function openKpiEntryPanel(tab) {
     _kpiCurrentTab = tab || 'weekly';
     _kpiEditingPeriod = null;
@@ -5473,6 +5494,7 @@ function initDashboardData() {
         setTimeout(fetchKPIData, 700);
         setTimeout(fetchDistrictMonthlyKPIs, 750);
         setTimeout(fetchRecordsData, 800);
+        setTimeout(() => { if (document.getElementById('mainKpiChart')) fetchChartData(currentTimeframe); }, 950);
         setTimeout(fetchChampions, 850);
         setTimeout(fetchAwardsData, 900);
         setTimeout(fetchDmGoalsData, 1000);
@@ -5840,7 +5862,15 @@ function renderKpiChart(payload, metric) {
             ? periods.map(p => p.period_label)
             : periods.map(p => _kpiWeekRangeLabel(p.period_end_date));
 
-        const empNames = [...new Set(periods.flatMap(p => (p.entries || []).map(e => e.employee_name)))];
+        // Only chart employees who are still current — use the editable (current) period's
+        // roster as the authoritative list, filtering out anyone who has since left the store
+        const editablePeriod = r.periods.find(p => p.is_editable);
+        const currentEmpSet = editablePeriod
+            ? new Set(editablePeriod.entries.map(e => e.employee_name))
+            : null;
+
+        const allEmpNames = [...new Set(periods.flatMap(p => (p.entries || []).map(e => e.employee_name)))];
+        const empNames = currentEmpSet ? allEmpNames.filter(n => currentEmpSet.has(n)) : allEmpNames;
 
         empNames.forEach((name, eIdx) => {
             const vals = periods.map(p => {
@@ -5875,7 +5905,7 @@ function renderKpiChart(payload, metric) {
 
     const fmtVal = (v) => {
         if (v === null) return '';
-        if (metric === 'time') { const m2=Math.floor(v), s=Math.round((v-m2)*60); return m2+':'+(s<10?'0':'')+s+' min'; }
+        if (metric === 'time') { const m2=Math.floor(v), s=Math.round((v-m2)*60); return m2+':'+(s<10?'0':'')+s; }
         return (Math.round(v*10)/10) + unit;
     };
 
@@ -5897,7 +5927,7 @@ function renderKpiChart(payload, metric) {
                 tooltip: { callbacks: { label: ctx => { const lbl = ctx.dataset.label.trim(); return lbl + ': ' + fmtVal(ctx.parsed.y); } } }
             },
             scales: {
-                y: { min: yMin, max: yMax, ticks: { callback: v => metric === 'time' ? (Math.floor(v)+':'+(Math.round((v-Math.floor(v))*60)<10?'0':'')+Math.round((v-Math.floor(v))*60)+' min') : (v+unit) } },
+                y: { min: yMin, max: yMax, ticks: { callback: v => metric === 'time' ? (Math.floor(v)+':'+(Math.round((v-Math.floor(v))*60)<10?'0':'')+Math.round((v-Math.floor(v))*60)) : (v+unit) } },
                 x: { grid: { display: false } }
             }
         }

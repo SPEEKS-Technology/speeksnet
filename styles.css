@@ -2148,6 +2148,44 @@ select.bs-hidden-select:focus {
 .hotbar-links { display: flex; width: 100%; gap: 6px; }
 button.hotbar-btn { cursor: pointer; font-family: inherit; }
 
+.hotbar-kpi-picker { position: relative; }
+.hotbar-kpi-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    min-width: 130px;
+    z-index: 200;
+    overflow: hidden;
+}
+.hotbar-kpi-dropdown.open { display: block; }
+.hotbar-kpi-dropdown-label {
+    padding: 7px 12px 4px;
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #94a3b8;
+}
+.hotbar-kpi-dropdown button {
+    display: block;
+    width: 100%;
+    padding: 8px 14px;
+    background: none;
+    border: none;
+    text-align: left;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--slate-charcoal);
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+}
+.hotbar-kpi-dropdown button:hover { background: #f0fdf4; color: var(--sage-professional); }
+
 .hotbar-btn.hotbar-btn-primary {
     background: white !important;
     color: var(--slate-charcoal) !important;
