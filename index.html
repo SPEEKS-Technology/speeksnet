@@ -494,7 +494,6 @@
             <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn">🔑 Store Passwords</a>
             <a href="https://docs.google.com/spreadsheets/d/1NkIdw8dlvwXmQ6kdpo73zqRwnPd4kIAkgJ7yAG2XCt4/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Listing Goals</a>  
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">📊 Sales Summary</a>  
-            <a href="https://docs.google.com/spreadsheets/d/1oHOnA6wDwaLQ-EP4-CiDTkKpAdP2V7y8mOay416HDME/edit" target="_blank" class="hotbar-btn">📈 Weekly Metrics</a>
             <a href="https://docs.google.com/spreadsheets/d/1e4mW-pcwUMJjl2Pjry6PT180P8M8nkYL5Z4GcspQmEA/edit" target="_blank" class="hotbar-btn">📉 Monthly KPIs</a>
             <a href="https://drive.google.com/drive/folders/12Fjxp44sY6T-o6OlrG6n_YtrHow4bE2f?usp=sharing" target="_blank" class="hotbar-btn">⚖️ Variance</a>
             <a href="https://docs.google.com/spreadsheets/d/1agChyBxxwJqP-3CXo10C36-95Y_dVKXTA4GboeCaRRs/edit" target="_blank" class="hotbar-btn">📋 Scorecard</a>
@@ -543,8 +542,7 @@
         <div class="hotbar-container">
           <span class="hotbar-label">MGR</span>
           <div class="hotbar-links">
-            <button class="hotbar-btn" onclick="openKpiEntryPanel('weekly')">📊 View KPIs</button>
-            <a href="https://docs.google.com/spreadsheets/d/1oHOnA6wDwaLQ-EP4-CiDTkKpAdP2V7y8mOay416HDME/edit?usp=sharing" target="_blank" class="hotbar-btn">📈 Weekly Metrics</a>
+            <button class="hotbar-btn hotbar-btn-primary" onclick="openKpiEntryPanel('weekly')">📊 View KPIs</button>
             <a href="https://docs.google.com/spreadsheets/d/1e4mW-pcwUMJjl2Pjry6PT180P8M8nkYL5Z4GcspQmEA/edit" target="_blank" class="hotbar-btn">📉 Monthly KPIs</a>
             <a href="https://docs.google.com/spreadsheets/d/1NkIdw8dlvwXmQ6kdpo73zqRwnPd4kIAkgJ7yAG2XCt4/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Daily Listing Goals</a>  
             <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn">⏳ Aging Inventory</a>
@@ -962,27 +960,15 @@
       </div>
 
       <div class="card kpi-master-card district-master-panel employee-widget-card dynamic-module-flex role-manager role-owner-manager weekly-expanded-card">
-          <div class="district-kpi-header weekly-kpi-header">
+          <div class="district-kpi-header">
               <div class="align-center gap-8">
-                  <span class="district-kpi-title">Weekly KPI Breakdown <span id="weeklyKpiPeriod" class="widget-date-display"></span></span>
-              </div>
-              <div class="align-center gap-10">
-                  <button class="kpi-update-trigger-btn" onclick="openKpiEntryPanel('weekly')">📊 View / Edit KPIs</button>
-                  <button class="kpi-update-trigger-btn" onclick="openKpiEntryPanel('monthly')" style="background:#f0fdf4; color:var(--sage-professional); border-color:var(--sage-professional);">📆 Monthly KPIs</button>
-                  <select id="weeklyKpiStoreSelect" class="kpi-select hide-by-default" onchange="fetchWeeklyKPIs()">
-                      <option value="OVL">OVL</option>
-                      <option value="LEE">LEE</option>
-                      <option value="WSP">WSP</option>
-                      <option value="MPL">MPL</option>
-                      <option value="BAL">BAL</option>
-                  </select>
+                  <span class="district-kpi-title">Monthly Performance Brief</span>
               </div>
           </div>
-
-          <div class="weekly-kpi-scroll-area">
-              <div class="weekly-kpi-grid" id="weeklyKpiContainer">
-                  <div class="status-message">Syncing Live Weekly Data...</div>
-              </div>
+          <div class="module-coming-soon">
+              <div class="module-coming-soon-icon">📋</div>
+              <div class="module-coming-soon-title">Monthly Performance Brief</div>
+              <div class="module-coming-soon-sub">Extended district-level monthly KPI comparison — coming soon</div>
           </div>
       </div>
 
