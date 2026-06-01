@@ -3292,13 +3292,13 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .mb-row:hover td { background: #fafbfc; }
 .mb-metric-name { font-weight: 600; color: #334155; }
 .mb-val { text-align: right; font-weight: 700; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
-.mb-val-primary { color: #1d4ed8; }
+.mb-val-primary { color: var(--slate-charcoal); }
 .mb-delta { text-align: right; font-weight: 700; font-size: 11px; font-variant-numeric: tabular-nums; color: #94a3b8; }
 .mb-delta.mb-up   { color: #16a34a; }
 .mb-delta.mb-down { color: #dc2626; }
 .mb-input {
     width: 92px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 5px;
-    font-size: 12px; font-weight: 600; text-align: right; color: #1d4ed8; outline: none;
+    font-size: 12px; font-weight: 600; text-align: right; color: var(--slate-charcoal); outline: none;
     font-family: 'Inter', sans-serif;
 }
 .mb-input:focus { border-color: var(--sage-professional); box-shadow: 0 0 0 2px rgba(106,153,78,0.15); }

@@ -2368,6 +2368,25 @@ function _mbFmt(type, v) {
     return String(Math.round(n * 10) / 10);
 }
 
+// Metrics where a DECREASE is good (lower = better). All others: increase = good.
+const _MB_INVERSE = new Set([
+    'avg_transaction_time', 'inventory_cost', 'inventory_cost_under_30', 'pct_inventory_over_30',
+    'recycled_inventory', 'recycled_pct_inventory', 'inventory_confiscation',
+    'refunds', 'discounts', 'return_rate', 'shipping_label_cost', 'shipping_cost_pct_sales',
+    'paymore_ranking', 'defect_rate', 'late_shipment_rate', 'case_no_resolution',
+]);
+
+// Absolute difference (primary − compare), signed and formatted by type.
+function _mbFmtDelta(type, diff) {
+    const s = diff > 0 ? '+' : (diff < 0 ? '-' : '');
+    const a = Math.abs(diff);
+    if (type === 'money')  return s + '$' + Math.round(a).toLocaleString();
+    if (type === 'pct')    return s + a.toFixed(1) + ' pts';
+    if (type === 'rating') return s + a.toFixed(1);
+    if (type === 'int')    return s + Math.round(a).toLocaleString();
+    return s + (Math.round(a * 10) / 10);
+}
+
 async function fetchMonthlyBrief() {
     const body = document.getElementById('mbBody');
     if (!body) return;
@@ -2450,17 +2469,15 @@ function renderMonthlyBrief() {
             } else {
                 primaryCell = _mbFmt(m.type, pv);
             }
-            // Delta: percent change for most; absolute point diff for pct/rating metrics
+            // Delta = primary column − compare column. Color by whether the change
+            // is good for THIS metric (some metrics are better when they drop).
             let delta = '—', deltaCls = '';
             if (pv != null && cv != null && !isNaN(pv) && !isNaN(cv)) {
-                if (m.type === 'pct' || m.type === 'rating') {
-                    const diff = Number(pv) - Number(cv);
-                    delta = (diff >= 0 ? '+' : '') + diff.toFixed(1) + (m.type === 'pct' ? ' pts' : '');
-                    deltaCls = diff >= 0 ? 'mb-up' : 'mb-down';
-                } else if (Number(cv) !== 0) {
-                    const pct = (Number(pv) - Number(cv)) / Math.abs(Number(cv)) * 100;
-                    delta = (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%';
-                    deltaCls = pct >= 0 ? 'mb-up' : 'mb-down';
+                const diff = Number(cv) - Number(pv);
+                delta = _mbFmtDelta(m.type, diff);
+                if (diff !== 0) {
+                    const good = _MB_INVERSE.has(m.key) ? (diff < 0) : (diff > 0);
+                    deltaCls = good ? 'mb-up' : 'mb-down';
                 }
             }
             html += '<tr class="mb-row">' +
