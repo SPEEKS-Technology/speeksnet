@@ -1388,25 +1388,25 @@ async function checkPIN() {
     try {
         let cachedData = localStorage.getItem('speeksAuthCache');
         let payload = cachedData ? JSON.parse(cachedData) : null;
-        
+
         if (!payload) {
             payload = await authFetchPromise;
         }
 
         if (!payload || !payload.users) throw new Error("Could not load users.");
-        
+
         const matched = payload.users.find(u => u.pin === String(pin));
-        
+
         if (matched) {
             sessionStorage.setItem('speeksUnlocked', 'true');
             sessionStorage.setItem('speeksUserName', matched.name);
             sessionStorage.setItem('speeksUserRole', matched.role ? matched.role.toLowerCase() : 'employee');
             sessionStorage.setItem('speeksUserStore', matched.store ? matched.store.toUpperCase() : 'ALL');
             sessionStorage.setItem('speeksUserPin', matched.pin);
-            
+
             const authOverlay = document.getElementById('authOverlay');
-            if (authOverlay) authOverlay.style.display = 'none'; 
-            
+            if (authOverlay) authOverlay.style.display = 'none';
+
             document.documentElement.classList.remove('no-scroll');
             document.body.classList.remove('no-scroll');
             document.documentElement.style.overflow = '';
@@ -1428,8 +1428,8 @@ async function checkPIN() {
         }
     } catch (e) {
         console.error(e);
-        err.innerText = "Connection Error."; 
-        err.style.display = 'block'; 
+        err.innerText = "Connection Error.";
+        err.style.display = 'block';
     } finally {
         btn.classList.remove('loading');
         document.getElementById('pinInput').classList.remove('pin-filled');
@@ -2688,16 +2688,15 @@ async function fetchHubData() {
         const response = await fetch(`${HUB_URL}?v=${Date.now()}`);
         const freshData = await response.json();
 
-
         hubDataCache = freshData;
 
         if (document.getElementById('bs-buy-val')) renderBuyingSales();
         renderMonthlyGoalsBanner();
         renderDistrictGoals();
-        
+
         // Render Live Data globally (Fixes CEO Rings)
         renderLiveData(hubDataCache);
-        
+
         // Let the Hub power the Leaderboard automatically!
         if (hubDataCache.leaderboard) {
             cachedLeaderboardData = hubDataCache.leaderboard;
@@ -4338,12 +4337,11 @@ async function fetchMasterDistrictDashboard() {
                     }
                 }
 
-                // REMOVED 'overflow: hidden' from the outer div so the dot isn't clipped!
                 return `
-                <div style="position: relative; background: #fff; padding: 8px 8px; border-radius: 8px; border: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; width: 100%; box-sizing: border-box; min-height: 42px; gap: 4px;">
+                <div style="position: relative; background: #fff; padding: 8px 6px 7px; border-radius: 8px; border: 1px solid #e2e8f0; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; box-sizing: border-box; min-height: 52px; gap: 5px; text-align: center;">
                     ${pulseHtml}
-                    <span style="font-size: 9px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;">${title}</span>
-                    <span style="font-size: 11px; font-weight: 900; color: ${textColor}; background: ${bgColor}; padding: 3px 6px; border-radius: 6px; text-align: center; white-space: nowrap; flex-shrink: 0;">${displayText}</span>
+                    <span style="font-size: 8px; font-weight: 800; color: #b0bec5; text-transform: uppercase; letter-spacing: 0.4px; line-height: 1.2; word-break: break-word;">${title}</span>
+                    <span style="font-size: 12px; font-weight: 900; color: ${textColor}; background: ${bgColor}; padding: 3px 8px; border-radius: 6px; white-space: nowrap;">${displayText}</span>
                 </div>`;
             };
 
@@ -5684,10 +5682,10 @@ function initDashboardData() {
         setTimeout(checkForNewPatchNotes, 800); // background check for new patch notes
         setTimeout(startReactionPolling, 3000);
 
-        setTimeout(fetchHubData, 100); 
-        setTimeout(fetchVarianceData, 300); 
-        setTimeout(fetchWeeklyKPIs, 500); 
-        
+        setTimeout(fetchHubData, 100);
+        setTimeout(fetchVarianceData, 300);
+        setTimeout(fetchWeeklyKPIs, 500);
+
         setTimeout(fetchScorecardData, 600);
         setTimeout(fetchAlertsData, 650);
         setTimeout(fetchMasterDistrictDashboard, 680);
@@ -5707,12 +5705,12 @@ function initDashboardData() {
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
         const _clRole = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
-        if (_clRole === 'manager' || _clRole === 'district manager') {
+        if (_clRole === 'manager' || _clRole === 'district manager' || _clRole === 'assistant manager') {
             setTimeout(loadChecklist, 1200);
         }
 
 
-        if (typeof preloadAllStores === 'function') setTimeout(preloadAllStores, 4000); 
+        if (typeof preloadAllStores === 'function') setTimeout(preloadAllStores, 4000);
         if (typeof initListingGoals === 'function') setTimeout(initListingGoals, 200);
     };
 
@@ -5745,7 +5743,7 @@ document.addEventListener("DOMContentLoaded", () => {
     
     loadCMS();
     injectGlobalAuth();
-    injectIdeaModal(); 
+    injectIdeaModal();
     startAuthFetch();
     
     if (document.getElementById('kbBody')) loadHotkeys();
@@ -5822,16 +5820,16 @@ document.addEventListener('mouseover', function(e) {
     if (panelItem) {
         const titleEl = panelItem.querySelector('.mgb-goal-title');
         const descEl  = panelItem.querySelector('.mgb-goal-desc');
-        const isTitleCut = titleEl && titleEl.scrollWidth > titleEl.clientWidth;
-        const isDescCut  = descEl  && descEl.scrollHeight > descEl.clientHeight;
-        if (isTitleCut || isDescCut) {
+        const titleText = titleEl ? titleEl.innerText.trim() : '';
+        const descText  = descEl  ? descEl.innerText.trim()  : '';
+        if (titleText || descText) {
             const color = panelItem.classList.contains('cpb-initiative-item') ? '#f59e0b'
                         : panelItem.classList.contains('mgb-goal-item')       ? '#5a8d3b'
                         : '#3b82f6';
             customTooltip.style.setProperty('--tip-color', color);
             customTooltip.innerHTML = `
-                <strong style="display:block; margin-bottom: 6px; font-size: 13px; color: var(--slate-charcoal);">${titleEl ? titleEl.innerText.trim() : ''}</strong>
-                ${descEl ? `<span style="font-size: 12px; color: #64748b; line-height: 1.4;">${descEl.innerText.trim()}</span>` : ''}`;
+                <strong style="display:block; margin-bottom: 6px; font-size: 13px; color: var(--slate-charcoal);">${titleText}</strong>
+                ${descText ? `<span style="font-size: 12px; color: #64748b; line-height: 1.4;">${descText}</span>` : ''}`;
             customTooltip.classList.add('show');
             return;
         }
@@ -5865,13 +5863,14 @@ document.addEventListener('mouseover', function(e) {
 
 document.addEventListener('mousemove', function(e) {
     if (customTooltip.classList.contains('show')) {
-        let x = e.pageX + 15;
+        let x = e.pageX - customTooltip.offsetWidth - 15;
         let y = e.pageY + 15;
-        
-        if (x + customTooltip.offsetWidth > window.innerWidth - 20) {
-            x = e.pageX - customTooltip.offsetWidth - 10;
+
+        if (x < 10) x = 10;
+        if (y + customTooltip.offsetHeight > window.innerHeight - 20) {
+            y = e.pageY - customTooltip.offsetHeight - 10;
         }
-        
+
         customTooltip.style.left = x + 'px';
         customTooltip.style.top = y + 'px';
     }
@@ -7287,13 +7286,14 @@ const SCORECARD_CATEGORIES = [
     "Online Store Pictures",        // index 6 — Media and Markets starts here
     "5 Facebook Listings",
     "2 Social Media Posts",
+    "PayMore Sync",
     "Store Listing Review",
     "Store Buying Review"
 ];
 
 const SCORECARD_BUCKETS = [
     { label: "In-Store Operations", count: 6 },
-    { label: "Media and Markets", count: 3 },
+    { label: "Media and Markets", count: 4 },
     { label: "Store Reviews", count: 2 }
 ];
 
@@ -7815,20 +7815,20 @@ async function loadChecklist() {
     const userName = getChecklistUser();
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
 
-    const role = sessionStorage.getItem('speeksUserRole') || '';
-    const isAssistantManager = role === 'assistant manager';
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
+    const isASM = role === 'assistant manager';
 
-    // Assistant managers only see Daily
+    // ASMs only see Daily (they share the manager's checklist but don't manage weekly/monthly)
     const weeklyTab = document.getElementById('cl-tab-weekly');
     const monthlyTab = document.getElementById('cl-tab-monthly');
-    if (weeklyTab) weeklyTab.style.display = isAssistantManager ? 'none' : '';
-    if (monthlyTab) monthlyTab.style.display = isAssistantManager ? 'none' : '';
-    if (isAssistantManager && currentChecklistTab !== 'daily') switchChecklistTab('daily');
+    if (weeklyTab) weeklyTab.style.display = isASM ? 'none' : '';
+    if (monthlyTab) monthlyTab.style.display = isASM ? 'none' : '';
+    if (isASM && currentChecklistTab !== 'daily') switchChecklistTab('daily');
 
-    // Only show Quarterly tab for CORP/ALL stores
+    // Only show Quarterly tab for CORP/ALL stores (never for ASMs)
     const qTab = document.getElementById('cl-tab-quarterly');
     if (qTab) {
-        if (!isAssistantManager && (store === 'CORP' || store === 'ALL')) {
+        if (!isASM && (store === 'CORP' || store === 'ALL')) {
             qTab.style.display = 'inline-flex';
         } else {
             qTab.style.display = 'none';
@@ -7992,6 +7992,29 @@ function updateChecklistChip() {
 
 
 // --- BULLETPROOF TOGGLE & CLICK-AWAY LOGIC ---
+let _clSyncInterval = null;
+
+function _startChecklistSync() {
+    if (_clSyncInterval) return;
+    _clSyncInterval = setInterval(async () => {
+        const panel = document.getElementById('checklistSidePanel');
+        if (!panel?.classList.contains('open')) return;
+        const userName = getChecklistUser();
+        const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+        try {
+            const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
+            const fresh = await res.json();
+            // Merge: preserve any in-flight optimistic state for unchecked items
+            checklistDataCache = fresh;
+            renderChecklist();
+        } catch (_) {}
+    }, 30000);
+}
+
+function _stopChecklistSync() {
+    if (_clSyncInterval) { clearInterval(_clSyncInterval); _clSyncInterval = null; }
+}
+
 window.toggleChecklistPanel = function(event) {
     if (event) event.stopPropagation();
     const panel = document.getElementById('checklistSidePanel');
@@ -8006,6 +8029,9 @@ window.toggleChecklistPanel = function(event) {
         document.getElementById('goalsSidePanel')?.classList.remove('open');
         document.querySelector('.gi-nav-toggle')?.classList.remove('panel-active');
         _resetToCurrentMonth?.();
+        _startChecklistSync();
+    } else {
+        _stopChecklistSync();
     }
 };
 
@@ -8022,7 +8048,8 @@ document.addEventListener('click', function(e) {
         if (!clPanel.contains(e.target)) {
             clPanel.classList.remove('open');
             document.querySelector('.cl-nav-toggle')?.classList.remove('panel-active');
-                }
+            _stopChecklistSync();
+        }
     }
 
     const giPanel = document.getElementById('goalsSidePanel');
