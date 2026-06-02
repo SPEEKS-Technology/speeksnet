@@ -1080,10 +1080,10 @@ html {
     animation: auth-btn-spin 0.65s linear infinite;
 }
 
-@keyframes shake { 
-    0%, 100% { transform: translateX(0); } 
-    25% { transform: translateX(-5px); } 
-    75% { transform: translateX(5px); } 
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
 }
 
 /* =========================================================
@@ -2387,7 +2387,7 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
 .master-stat-label { font-size: 10px; font-weight: 800; color: #888; }
 .master-stat-val { font-size: 11px; font-weight: 900; padding: 4px 0; border-radius: 6px; width: 58px; display: flex; justify-content: center; align-items: center; box-sizing: border-box; }
 
-.master-action-badge { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 48px; font-size: 11px; font-weight: 800; padding: 4px 10px; border-radius: 8px; text-align: center; line-height: 1.2; width: 100%; box-sizing: border-box; cursor: pointer; border: 1px solid rgba(0,0,0,0.05); box-shadow: 0 2px 4px rgba(0,0,0,0.03); transition: transform 0.2s ease, box-shadow 0.2s ease; margin-bottom: 8px; }
+.master-action-badge { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 40px; font-size: 11px; font-weight: 800; padding: 8px 10px; border-radius: 8px; text-align: center; line-height: 1.3; width: 100%; box-sizing: border-box; cursor: pointer; border: 1px solid rgba(0,0,0,0.05); box-shadow: 0 2px 4px rgba(0,0,0,0.03); transition: transform 0.2s ease, box-shadow 0.2s ease; margin-bottom: 8px; word-break: break-word; overflow-wrap: break-word; }
 .master-action-badge:hover { transform: translateY(-2px); box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
 .master-action-badge .fast-tip { position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); background: var(--slate-charcoal); color: white; padding: 6px 12px; border-radius: 6px; font-size: 11px; font-weight: 700; white-space: nowrap; opacity: 0; visibility: hidden; transition: opacity 0.15s ease, visibility 0.15s ease; pointer-events: none; z-index: 50; box-shadow: 0 6px 16px rgba(0,0,0,0.15); }
 .master-action-badge:hover .fast-tip { opacity: 1; visibility: visible; }
