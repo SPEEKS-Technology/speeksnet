@@ -28,6 +28,8 @@
 
 // --- 1. API URLS ---
 const _BASE = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1';
+const _SUPABASE_URL = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co';
+const _SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVqemFxbXl4eHJrbXh2emJqZXVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwNzA2NjAsImV4cCI6MjA5NDY0NjY2MH0.-SrbSaF-n8WkNW6tieDiA2FhGHB7qP4b6XrEyy2JF74';
 const CMS_URL           = `${_BASE}/cms`;
 const HOTKEYS_URL       = `${_BASE}/hotkeys`;
 const DOCS_URL          = `${_BASE}/docs`;
@@ -193,6 +195,8 @@ function toggleModal(modalId, badgeId = null) {
     }
 }
 
+let _annDocsCache = [];
+
 async function loadCMS() {
     try {
         const response = await fetch(`${CMS_URL}?v=${Date.now()}`);
@@ -210,6 +214,8 @@ async function loadCMS() {
             const cleanUser = currentUser ? String(currentUser).trim().toLowerCase() : null;
             const userRole = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
             const isPrivileged = userRole === 'ceo' || userRole === 'district manager';
+
+            _annDocsCache = (data.announcements || []).filter(a => a.docUrl).reverse();
 
             if (data.announcements && data.announcements.length > 0) {
                 const sortedAnns = [...data.announcements].reverse();
@@ -294,7 +300,7 @@ async function loadCMS() {
                     reactionsHtml += `</div>`;
 
                     const markReadBtn = (!isArchived && cleanUser) ? `
-                        <button class="mark-read-btn" onclick="markAnnouncementRead(${annId})">
+                        <button class="mark-read-btn" onclick="markAnnouncementRead('${annId}')">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
                             Mark as Read
                         </button>` : '';
@@ -314,6 +320,12 @@ async function loadCMS() {
                             </div>
                         </div>` : '';
 
+                    const docLinkHtml = item.docUrl ? `
+                        <a href="${item.docUrl}" target="_blank" rel="noopener" class="ann-doc-link">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                            ${item.docName || 'Attached Document'}
+                        </a>` : '';
+
                     const html = `
                         <div class="notif-item"${unreadHtmlAttr ? ` ${unreadHtmlAttr}` : ''}>
                             <div class="ann-header">
@@ -325,6 +337,7 @@ async function loadCMS() {
                             </div>
                             <hr />
                             <div class="ann-text">${item.text || ''}</div>
+                            ${docLinkHtml}
                             <div class="ann-card-footer">
                                 ${reactionsHtml}
                                 ${markReadBtn}
@@ -434,16 +447,10 @@ function switchAnnTab(tab) {
     const isPatchNotes = tab === 'patchnotes';
 
     const annC = document.getElementById('ann-container');
-    if (annC) {
-        annC.style.display = isRecent ? 'block' : 'none';
-        annC.classList.remove('hidden');
-    }
+    if (annC) { annC.style.display = isRecent ? 'block' : 'none'; annC.classList.remove('hidden'); }
 
     const archC = document.getElementById('archive-container');
-    if (archC) {
-        archC.style.display = isArchive ? 'block' : 'none';
-        archC.classList.remove('hidden');
-    }
+    if (archC) { archC.style.display = isArchive ? 'block' : 'none'; archC.classList.remove('hidden'); }
 
     const pnC = document.getElementById('pn-container');
     if (pnC) {
@@ -456,6 +463,39 @@ function switchAnnTab(tab) {
     document.getElementById('tab-archive').classList.toggle('active', isArchive);
     const pnTab = document.getElementById('tab-patchnotes');
     if (pnTab) pnTab.classList.toggle('active', isPatchNotes);
+}
+
+function openDocsModal() {
+    closeAllModals();
+    const modal = document.getElementById('annDocsModal');
+    if (!modal) return;
+    modal.classList.add('show');
+    lockAndBlurScreen();
+    loadAnnouncementDocs();
+}
+
+function loadAnnouncementDocs() {
+    const list = document.getElementById('annDocsList');
+    if (!list) return;
+    if (!_annDocsCache.length) {
+        list.innerHTML = '<div style="padding:30px;text-align:center;color:#999;font-size:14px;">No documents have been attached to announcements yet.</div>';
+        return;
+    }
+    list.innerHTML = _annDocsCache.map(item => {
+        const date = item.date ? new Date(item.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : '';
+        const ext = (item.docName || '').split('.').pop().toUpperCase();
+        const extColors = { PDF: '#ef4444', DOC: '#3b82f6', DOCX: '#3b82f6', XLS: '#22c55e', XLSX: '#22c55e' };
+        const badgeColor = extColors[ext] || '#64748b';
+        return `
+            <div class="ann-doc-card">
+                <div class="ann-doc-badge" style="background:${badgeColor};">${ext || 'FILE'}</div>
+                <div class="ann-doc-card-info">
+                    <div class="ann-doc-card-name">${item.docName || 'Attached Document'}</div>
+                    <div class="ann-doc-card-meta">${item.author || ''}${date ? ` · ${date}` : ''}</div>
+                </div>
+                <a href="${item.docUrl}" target="_blank" rel="noopener" class="ann-doc-dl-btn">⬇ Download</a>
+            </div>`;
+    }).join('');
 }
 
 // DEV TOOLS DROPDOWN GLOBAL TOGGLE
@@ -6130,6 +6170,10 @@ function applyRoleBasedUI() {
     const greetingEl = document.getElementById('userGreeting');
     if (greetingEl) greetingEl.innerText = `Welcome ${userName}!`;
 
+    const firstName = userName.split(' ')[0];
+    const wsTitleEl = document.getElementById('wsTitle');
+    if (wsTitleEl) wsTitleEl.innerHTML = `<span>📈</span> ${firstName}'s Workspace`;
+
     const userRoleClass = `role-${userRole.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-')}`;
     const userStoreClass = `store-${userStore.toLowerCase()}`;
 
@@ -6923,11 +6967,32 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+function onAnnDocSelected(input) {
+    const file = input.files?.[0];
+    const nameEl = document.getElementById('annDocFileName');
+    const clearBtn = document.getElementById('annDocClear');
+    if (file) {
+        nameEl.textContent = file.name;
+        if (clearBtn) clearBtn.style.display = 'inline-flex';
+    }
+}
+
+function clearAnnDoc() {
+    const input = document.getElementById('annDocInput');
+    const nameEl = document.getElementById('annDocFileName');
+    const clearBtn = document.getElementById('annDocClear');
+    if (input) input.value = '';
+    if (nameEl) nameEl.textContent = 'No file selected';
+    if (clearBtn) clearBtn.style.display = 'none';
+}
+
 async function publishAnnouncement() {
     const title = document.getElementById('annTitleInput').value.trim();
     const body = document.getElementById('annBodyInput').innerHTML.trim();
     const isPriority = document.getElementById('annPriorityInput').checked;
     const btn = document.getElementById('publishAnnBtn');
+    const fileInput = document.getElementById('annDocInput');
+    const file = fileInput?.files?.[0];
 
     if (!title || !body) {
         alert("Wait! You must fill out both a Title and a Message before publishing.");
@@ -6938,6 +7003,41 @@ async function publishAnnouncement() {
     btn.style.opacity = "0.7";
     btn.style.pointerEvents = "none";
 
+    let docUrl = null;
+    let docName = null;
+
+    if (file) {
+        btn.innerHTML = "Uploading document... ⏳";
+        try {
+            const safeName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+            const uploadResp = await fetch(
+                `${_SUPABASE_URL}/storage/v1/object/ann-docs/${safeName}`,
+                {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${_SUPABASE_ANON_KEY}`,
+                        'apikey': _SUPABASE_ANON_KEY,
+                        'Content-Type': file.type || 'application/octet-stream',
+                        'x-upsert': 'true'
+                    },
+                    body: file
+                }
+            );
+            if (uploadResp.ok) {
+                docUrl = `${_SUPABASE_URL}/storage/v1/object/public/ann-docs/${safeName}`;
+                docName = file.name;
+            } else {
+                const err = await uploadResp.text();
+                console.error('Document upload failed:', err);
+                alert('Document upload failed. The announcement will be published without the attachment.');
+            }
+        } catch (e) {
+            console.error('Document upload error:', e);
+            alert('Document upload failed. The announcement will be published without the attachment.');
+        }
+        btn.innerHTML = "Publishing... ⏳";
+    }
+
     let compiledMessage = "";
     if (isPriority) {
         compiledMessage += `<span style="color: #ef4444; font-weight: 900; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">🚨 HIGH PRIORITY</span><br>`;
@@ -6946,26 +7046,31 @@ async function publishAnnouncement() {
     compiledMessage += body;
 
     const payload = {
+        type: 'publish',
         text: compiledMessage,
-        date: new Date().toISOString(),
-        author: sessionStorage.getItem('speeksUserName') || 'Executive Team'
+        author: sessionStorage.getItem('speeksUserName') || 'Executive Team',
+        high_priority: isPriority,
+        doc_url: docUrl,
+        doc_name: docName
     };
 
     try {
-        await fetch(CMS_URL, {
+        const resp = await fetch(CMS_URL, {
             method: 'POST',
-            mode: 'no-cors', 
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
-        
+        if (!resp.ok) throw new Error(`Server error ${resp.status}`);
         alert("Success! Your announcement has been published to all stores.");
-        closeAllModals(); 
-        if(typeof syncAllData === 'function') syncAllData(); 
-        
+        document.getElementById('annTitleInput').value = '';
+        document.getElementById('annBodyInput').innerHTML = '';
+        document.getElementById('annPriorityInput').checked = false;
+        clearAnnDoc();
+        closeAllModals();
+        if (typeof syncAllData === 'function') syncAllData();
     } catch (error) {
         console.error("Error publishing announcement:", error);
-        alert("Failed to connect to the server.");
+        alert("Failed to publish announcement. Please try again.");
     } finally {
         btn.innerHTML = "<span>Publish to All Stores</span> 🚀";
         btn.style.opacity = "1";

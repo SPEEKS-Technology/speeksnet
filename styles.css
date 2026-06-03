@@ -3333,7 +3333,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .mb-view-btn.active { background: #fff; color: var(--sage-professional); box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
 
 /* ── overview: metrics × stores for the most-recent month ── */
-.mb-overview-cap { font-size: 12px; font-weight: 700; color: #64748b; padding: 2px 2px 10px; letter-spacing: 0.2px; }
+.mb-overview-cap { font-size: 12px; font-weight: 700; color: #64748b; padding: 2px 2px 10px 14px; letter-spacing: 0.2px; }
 .mb-table-overview .mb-th-metric { width: 25%; }
 .mb-table-overview .mb-th-val { width: 15%; }
 .mb-best  { background: #eaf6ee; color: #15803d; }
@@ -5814,6 +5814,148 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     font-weight: 800; font-size: 12px; letter-spacing: 0.5px;
     padding: 6px 14px; border-radius: 20px; text-transform: uppercase;
 }
+
+/* ============================================================================
+   ANNOUNCEMENT DOCUMENT UPLOAD & DOCS TAB
+   ============================================================================ */
+
+/* File upload row in publish modal */
+.ann-doc-dropzone {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #f8fafc;
+    border: 2px dashed #e2e8f0;
+    border-radius: 10px;
+    padding: 12px 16px;
+    transition: border-color 0.2s;
+}
+.ann-doc-dropzone:hover { border-color: var(--sage-professional); }
+.ann-doc-browse-btn {
+    background: var(--slate-charcoal);
+    color: white;
+    border: none;
+    border-radius: 7px;
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.ann-doc-browse-btn:hover { background: #2d3748; }
+.ann-doc-filename {
+    flex: 1;
+    font-size: 13px;
+    color: #64748b;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ann-doc-clear {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: #94a3b8;
+    font-size: 14px;
+    padding: 2px 4px;
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+.ann-doc-clear:hover { color: #ef4444; }
+
+/* Inline document link inside announcement cards */
+.ann-doc-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 8px 0 4px;
+    padding: 7px 14px;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--slate-charcoal);
+    text-decoration: none;
+    transition: background 0.15s, border-color 0.15s;
+}
+.ann-doc-link:hover { background: #e2e8f0; border-color: #cbd5e1; color: var(--slate-charcoal); }
+.ann-doc-link svg { flex-shrink: 0; }
+
+/* Documents tab list */
+.ann-docs-list { display: flex; flex-direction: column; gap: 0; }
+.ann-doc-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 20px;
+    border-bottom: 1px solid #f1f5f9;
+    transition: background 0.15s;
+}
+.ann-doc-card:last-child { border-bottom: none; }
+.ann-doc-card:hover { background: #f8fafc; }
+.ann-doc-badge {
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 900;
+    color: white;
+    letter-spacing: 0.5px;
+}
+.ann-doc-card-info { flex: 1; min-width: 0; }
+.ann-doc-card-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--slate-charcoal);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ann-doc-card-meta { font-size: 12px; color: #94a3b8; margin-top: 3px; font-weight: 500; }
+.ann-doc-dl-btn {
+    flex-shrink: 0;
+    background: var(--sage-professional);
+    color: white;
+    text-decoration: none;
+    border-radius: 8px;
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    transition: opacity 0.15s;
+    white-space: nowrap;
+}
+.ann-doc-dl-btn:hover { opacity: 0.85; color: white; }
+.ann-docs-icon-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 18px;
+    padding: 4px 6px;
+    border-radius: 6px;
+    line-height: 1;
+    transition: background 0.15s;
+}
+.ann-docs-icon-btn:hover { background: rgba(0,0,0,0.07); }
+.ann-docs-back-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--sage-professional);
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: background 0.15s;
+    white-space: nowrap;
+}
+.ann-docs-back-btn:hover { background: rgba(0,0,0,0.06); }
 
 @media (max-width: 768px) {
     .ws-titlebar { flex-direction: column; align-items: stretch; }

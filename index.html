@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260602l">
+  <link rel="stylesheet" href="styles.css?v=20260603a">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260602l" defer></script>
+  <script src="speeks.js?v=20260603a" defer></script>
 </head>
 
 <body class="preload">
@@ -28,9 +28,9 @@
   
   <nav class="nav-bar">
     <a href="index.html" class="nav-link active"><i>⚡</i><span>QuickPortal</span></a>
+    <a href="workspace.html" class="nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-tom role-assistant-manager"><i>📈</i><span>Workspace</span></a>
     <a href="docs.html" class="nav-link"><i>📚</i><span>Processes & Policies</span></a>
     <a href="stats.html" class="nav-link"><i>🏆</i><span>Stats & Awards</span></a>
-    <a href="workspace.html" class="nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-tom role-assistant-manager"><i>📈</i><span>Analytics</span></a>
   </nav>
 
   <div class="nav-right">
@@ -200,8 +200,18 @@
 
             <div id="annBodyInput" class="editor-body" contenteditable="true" placeholder="Start typing your announcement here..."></div>
         </div>
+
+        <div>
+            <label class="form-label-caps">Attach Document <span style="font-weight:400;text-transform:none;color:#888;">(optional — Word, PDF, Excel · max 10 MB)</span></label>
+            <div class="ann-doc-dropzone" id="annDocDropzone">
+                <input type="file" id="annDocInput" accept=".doc,.docx,.pdf,.xls,.xlsx" style="display:none;" onchange="onAnnDocSelected(this)">
+                <button type="button" class="ann-doc-browse-btn" onclick="document.getElementById('annDocInput').click()">📎 Browse File</button>
+                <span id="annDocFileName" class="ann-doc-filename">No file selected</span>
+                <button type="button" id="annDocClear" class="ann-doc-clear" style="display:none;" onclick="clearAnnDoc()">✖</button>
+            </div>
+        </div>
     </div>
-    
+
     <div class="manage-footer flex-end">
         <button id="publishAnnBtn" class="btn-primary" onclick="publishAnnouncement()">
             <span class="align-center gap-8">Publish to All Stores 🚀</span>
@@ -423,6 +433,7 @@
                     <button id="tab-archive" class="tab-btn" onclick="switchAnnTab('archive')">Archived</button>
                     <button id="tab-patchnotes" class="tab-btn" onclick="switchAnnTab('patchnotes')" style="position: relative;">📋 Patch Notes<div class="notif-dot" id="patchNotesBadge" style="top: -3px; right: -3px;"></div></button>
                 </div>
+                <button class="ann-docs-icon-btn" onclick="openDocsModal()" title="View Attached Documents">📎</button>
                 <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
             </div>
         </div>
@@ -438,6 +449,20 @@
         <div id="patchNotesList" class="pn-modal-body">
             <div class="pn-loading">Loading patch notes...</div>
         </div>
+    </div>
+
+</div>
+
+<div class="modal-menu notif-menu" id="annDocsModal">
+    <div class="modal-header">
+        <div class="align-center gap-15">
+            <button class="ann-docs-back-btn" onclick="closeAllModals(); toggleNotifs();">← Back</button>
+            <h3>📎 Documents</h3>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div id="annDocsList" class="ann-docs-list" style="padding: 0 4px;">
+        <div class="status-message">Loading documents...</div>
     </div>
 </div>
 
