@@ -14,7 +14,20 @@
       "PowerShell($env:PATH = $env:PATH + \";C:\\\\Program Files\\\\Git\\\\bin;C:\\\\Program Files\\\\Git\\\\cmd\"; cd \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\"; git log --oneline -20)",
       "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\" -Depth 2 | Where-Object { -not $_.FullName.Contains\\('.git'\\) } | Select-Object FullName)",
       "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\" -Recurse -Directory | Select-Object -First 30 | ForEach-Object { $_.FullName })",
-      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\" -Recurse -File | Select-Object Name, @{N='FullPath';E={$_.FullName}} | ForEach-Object { \"$\\($_.FullPath\\)\" } | Sort-Object)"
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\User\\\\Documents\\\\GitHub\\\\speeksnet\" -Recurse -File | Select-Object Name, @{N='FullPath';E={$_.FullName}} | ForEach-Object { \"$\\($_.FullPath\\)\" } | Sort-Object)",
+      "mcp__supabase__apply_migration",
+      "mcp__supabase__execute_sql",
+      "Bash(grep -o '\"https://docs.google.com/spreadsheets/d/[^\"]*\"' \"C:\\\\Users\\\\nickh\\\\.claude\\\\projects\\\\c--Users-nickh-Github-Repos-speeksnet\\\\1a6861c7-f771-45d3-894c-6e00ef68b123.jsonl\" 2>/dev/null | grep -i \"Ticker\\\\|Announcement\\\\|CMS\\\\|Patch\\\\|Quick\\\\|ticker\\\\|announcement\" | sort -u | head -20)",
+      "Read(//c/Users/nickh/.claude/projects/c--Users-nickh-Github-Repos-speeksnet/**)",
+      "mcp__supabase__list_edge_functions",
+      "mcp__supabase__deploy_edge_function",
+      "mcp__supabase__get_edge_function",
+      "Bash(node -e ' *)",
+      "Bash(cd /tmp)",
+      "Bash(curl -sL https://docs.google.com/spreadsheets/d/__TRACKED_VAR__/edit -o brief.html)",
+      "Bash(wc -c)",
+      "Bash(echo \"bytes: $\\(wc -c < brief.html\\)\")",
+      "Bash(echo \"=== tab captions ===\")"
     ]
   }
 }

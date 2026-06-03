@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SPEEKSNET | Processes & Policies</title>
+  <title>SPEEKSNET | Analytics</title>
   <style>
     /* Critical anti-FOUC: keep slide-in side panels out of flow until styles.css loads.
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
@@ -11,6 +11,9 @@
   </style>
   <link rel="stylesheet" href="styles.css?v=20260602l">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
   <script src="speeks.js?v=20260602l" defer></script>
 </head>
 <body class="preload">
@@ -21,12 +24,12 @@
       <img src="images/speeksnet_logo.png" alt="SPEEKS Logo" class="brand-logo">
     </div>
   </div>
-  
+
   <nav class="nav-bar">
     <a href="index.html" class="nav-link"><i>⚡</i> <span>QuickPortal</span></a>
-    <a href="docs.html" class="nav-link active"><i>📚</i> <span>Processes & Policies</span></a>
+    <a href="docs.html" class="nav-link"><i>📚</i> <span>Processes & Policies</span></a>
     <a href="stats.html" class="nav-link"><i>🏆</i> <span>Stats & Awards</span></a>
-    <a href="workspace.html" class="nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-tom role-assistant-manager"><i>📈</i> <span>Analytics</span></a>
+    <a href="workspace.html" class="nav-link active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-tom role-assistant-manager"><i>📈</i> <span>Analytics</span></a>
   </nav>
 
   <div class="nav-right">
@@ -74,63 +77,30 @@
       <div class="greeting-stack">
         <h2 id="userGreeting">Welcome!</h2>
         <div class="version-signout-row">
-            <span class="version-tag">v2.0.3-alpha</span>
+            <span class="version-tag">v2.0.2-alpha</span>
             <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
         </div>
       </div>
     </div>
 </header>
 
-<div class="nav-panel-tabs">
+<div id="infoTicker" class="info-ticker">
+  <div class="ticker-scroll-area">
+    <div class="ticker-track" id="tickerTrack"></div>
+  </div>
+  <div class="ticker-panel-buttons">
     <button class="gi-nav-toggle dynamic-module-flex role-manager role-owner-manager role-employee role-training" onclick="toggleGoalsPanel()" title="Goals &amp; Initiatives">
-        <span style="font-size: 14px; line-height: 1;">🎯</span>
+        <span style="font-size: 13px; line-height: 1;">🎯</span>
         <span>Goals &amp; Initiatives</span>
         <svg class="gi-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
-    <button class="cl-nav-toggle dynamic-module-flex role-manager role-owner-manager role-district-manager" onclick="toggleChecklistPanel(event); loadChecklist();" title="Checklist">
-        <span style="font-size: 14px; line-height: 1;">📋</span>
+    <button class="cl-nav-toggle dynamic-module-flex role-manager role-owner-manager role-district-manager role-assistant-manager" onclick="toggleChecklistPanel(event); loadChecklist();" title="Checklist">
+        <span style="font-size: 13px; line-height: 1;">📋</span>
         <span>Checklist</span>
+        <span id="cl-progress-chip" class="cl-progress-chip"></span>
         <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
-</div>
-
-<!-- ===== FIRST-LOGIN TUTORIAL ===== -->
-<div id="tutorialOverlay" class="tutorial-overlay">
-    <div class="tutorial-modal">
-        <div class="tutorial-header">
-            <h2>Welcome to SPEEKSNET!</h2>
-            <div class="tutorial-dots">
-                <span class="tut-dot active"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-            </div>
-        </div>
-        <div class="tutorial-slides-wrap">
-            <div class="tutorial-slide active">
-                <div class="tutorial-welcome-card">
-                    <div class="tutorial-welcome-icon">🎉</div>
-                    <p class="tutorial-welcome-msg">Welcome to your personal tour for the all new SPEEKSNET. This tutorial will show you around all of the new features. Let's begin!</p>
-                </div>
-            </div>
-            <div class="tutorial-slide"><img src="tutorial/1.png" alt="Tutorial Step 1" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/2.png" alt="Tutorial Step 2" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/3.png" alt="Tutorial Step 3" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/4.png" alt="Tutorial Step 4" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/5.png" alt="Tutorial Step 5" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/6.png" alt="Tutorial Step 6" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/7.png" alt="Tutorial Step 7" class="tutorial-img" loading="lazy"></div>
-        </div>
-        <div class="tutorial-footer">
-            <button class="tutorial-btn tut-prev" id="tutorialPrev" onclick="tutorialNav(-1)" disabled>← Back</button>
-            <span class="tutorial-counter" id="tutorialCounter">1 of 8</span>
-            <button class="tutorial-btn tut-next" id="tutorialNext" onclick="tutorialNav(1)">Next →</button>
-        </div>
-    </div>
+  </div>
 </div>
 
 <div id="globalOverlay" class="overlay"></div>
@@ -229,7 +199,7 @@
     </div>
     <div class="manage-content">
         <p style="font-size: 13px; color: #666; margin-bottom: 15px;">This message will pop up for all users in the selected store when they sign in today. It will expire at midnight.</p>
-        
+
         <label class="form-label-caps">Target Store</label>
         <select id="commentStoreSelect" class="form-input-lg" style="margin-bottom: 15px;">
             <option value="ALL">All Stores</option>
@@ -328,96 +298,132 @@
 </div>
 
 <main class="main-content">
-  <div class="page-header mb-40">
-    <div class="w-full-max-500">
-        <h2>Processes & Policies</h2>
-        <p class="mb-20">Your central library for company guidelines, procedures, and manuals.</p>
-        
-        <div class="kb-search-bar doc-search-wrapper">
-            <span class="doc-search-icon">🔍</span>
-            <input type="text" id="docSearch" class="kb-search-input doc-search-input" placeholder="Search for documents..." onkeyup="filterDocs()">
-        </div>
+
+  <div class="ws-wrap">
+    <div class="ws-titlebar">
+      <h2 class="ws-title"><span>📈</span> Analytics Workspace</h2>
     </div>
+
+    <div class="ws-layout">
+      <div class="ws-subtabs">
+        <button class="ws-tab active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo" id="ws-tab-brief" onclick="switchWorkspaceTab('brief')">📋 Monthly Brief</button>
+        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo" id="ws-tab-kpis" onclick="switchWorkspaceTab('kpis')">📊 Store KPIs</button>
+        <button class="ws-tab dynamic-module-flex role-district-manager role-ceo role-tom role-manager role-owner-manager role-assistant-manager" id="ws-tab-b2b" onclick="switchWorkspaceTab('b2b')">🏢 B2B</button>
+      </div>
+
+      <div class="ws-panes">
+
+    <!-- ===== MONTHLY PERFORMANCE BRIEF PANE ===== -->
+    <section class="ws-pane active" id="ws-pane-brief">
+      <div class="card kpi-master-card district-master-panel ws-panel ws-panel-brief">
+          <div class="district-kpi-header mb-brief-header">
+              <span class="district-kpi-title">Monthly Performance Brief</span>
+              <div class="mb-brief-controls">
+                  <div class="mb-view-toggle dynamic-module-flex role-ceo role-district-manager">
+                      <button id="mbViewOverviewBtn" class="mb-view-btn active" onclick="mbSetView('overview')">📊 Overview</button>
+                      <button id="mbViewStoreBtn" class="mb-view-btn" onclick="mbSetView('store')">🏬 Store View</button>
+                  </div>
+                  <select id="mbStoreSelect" class="kpi-select" onchange="fetchMonthlyBrief()" style="display:none;">
+                      <option value="OVL">OVL</option>
+                      <option value="LEE">LEE</option>
+                      <option value="WSP">WSP</option>
+                      <option value="MPL">MPL</option>
+                      <option value="BAL">BAL</option>
+                  </select>
+                  <button id="mbEditBtn" class="kpi-update-trigger-btn" style="display:none;" onclick="mbStartEdit()">✏️ Edit</button>
+                  <button id="mbSaveBtn" class="kpi-save-section-btn" style="display:none;" onclick="mbSaveBrief()">Save</button>
+                  <button id="mbCancelBtn" class="kpi-cancel-btn" style="display:none;" onclick="mbCancelEdit()">Cancel</button>
+              </div>
+          </div>
+          <div class="weekly-kpi-scroll-area ws-scroll" id="mbBody">
+              <div class="status-message">Syncing Performance Brief…</div>
+          </div>
+      </div>
+    </section>
+
+    <!-- ===== STORE KPIs PANE ===== -->
+    <section class="ws-pane" id="ws-pane-kpis">
+      <div class="card kpi-master-card district-master-panel ws-panel ws-panel-kpis">
+          <div class="district-kpi-header kpi-modal-header-tight">
+              <div class="align-center gap-15">
+                  <span class="district-kpi-title">Store KPIs</span>
+                  <div class="notif-tabs">
+                      <button id="kpi-tab-weekly"  class="tab-btn active" onclick="switchKpiTab('weekly')">📅 Weekly</button>
+                      <button id="kpi-tab-monthly" class="tab-btn"        onclick="switchKpiTab('monthly')">📆 Monthly</button>
+                  </div>
+                  <select id="kpiModalStoreSelect" class="kpi-select dynamic-module-block role-district-manager role-ceo role-tom" onchange="_kpiLoadAll(_kpiCurrentTab)" style="display:none;">
+                      <option value="OVL">OVL</option>
+                      <option value="LEE">LEE</option>
+                      <option value="WSP">WSP</option>
+                      <option value="MPL">MPL</option>
+                      <option value="BAL">BAL</option>
+                  </select>
+                  <span id="kpiModalSubtitle" style="font-size:11px;color:#888;font-weight:600;"></span>
+              </div>
+              <div class="align-center gap-8">
+                  <button class="kpi-export-btn" onclick="_kpiExportCSV()" title="Export to CSV">⬇ Export CSV</button>
+              </div>
+          </div>
+          <div class="kpi-fullscreen-body ws-kpi-body" id="kpiModalBody">
+              <div class="kpi-empty-state">Loading…</div>
+          </div>
+      </div>
+    </section>
+
+    <!-- ===== B2B PANE ===== -->
+    <section class="ws-pane" id="ws-pane-b2b">
+      <div class="card kpi-master-card district-master-panel ws-panel b2b-board-panel">
+          <div class="district-kpi-header b2b-board-header">
+              <span class="district-kpi-title">🏢 B2B Deals <span id="b2b-count" class="widget-date-display"></span></span>
+              <div class="b2b-controls">
+                  <select id="b2bStoreFilter" class="kpi-select dynamic-module-block role-district-manager role-ceo role-tom" onchange="fetchB2BDeals()" style="display:none;">
+                      <option value="ALL">All Stores</option>
+                      <option value="OVL">OVL</option>
+                      <option value="LEE">LEE</option>
+                      <option value="WSP">WSP</option>
+                      <option value="MPL">MPL</option>
+                      <option value="BAL">BAL</option>
+                  </select>
+                  <label class="b2b-toggle-completed"><input type="checkbox" id="b2bShowCompleted" onchange="renderB2BDeals()"> Show completed</label>
+                  <button id="b2bNewBtn" class="btn-primary b2b-new-btn dynamic-module-flex role-district-manager role-ceo role-tom" onclick="openB2BCreate()">+ New Deal</button>
+              </div>
+          </div>
+          <div class="b2b-board ws-scroll" id="b2bDealList">
+              <div class="status-message">Syncing B2B Deals…</div>
+          </div>
+      </div>
+    </section>
+
+      </div><!-- /.ws-panes -->
+    </div><!-- /.ws-layout -->
   </div>
 
-  <div id="content-container">
-      <div class="empty-state">Syncing Data...</div>
-  </div>
-  <div id="noResults" class="empty-state hidden">No documents found matching your search.</div>
-
-<div id="scorecardModalOverlay" onclick="closeScorecardModal()"></div>
-<div class="modal-menu manage-menu" id="scorecardSubmitModal">
+<!-- ===== B2B NEW DEAL MODAL (inside .main-content so the SPA router carries it) ===== -->
+<div class="modal-menu manage-menu" id="b2bCreateModal">
     <div class="modal-header">
-        <h3>Submit Store Scorecard</h3>
+        <h3>🏢 New B2B Deal</h3>
         <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
     </div>
-    
     <div class="manage-content">
-        <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-            <select id="dm-store-select" class="form-input-lg" style="flex: 1; margin-top: 0;">
-                <option value="OVL">OVL</option>
-                <option value="LEE">LEE</option>
-                <option value="WSP">WSP</option>
-                <option value="MPL">MPL</option>
-                <option value="BAL">BAL</option>
-            </select>
-            <input type="date" id="dm-score-date" class="form-input-lg" style="flex: 1; margin-top: 0;">
-        </div>
-
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;" id="dm-category-inputs">
-        </div>
+        <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Log a new Business-to-Business deal. It will enter <b>Location Pending</b> for a store to be assigned.</p>
+        <label class="form-label-caps">Company</label>
+        <input id="b2bCompanyInput" class="form-input-lg" style="margin-bottom: 15px;" placeholder="e.g., Acme Corp" />
+        <label class="form-label-caps">Date Picked Up</label>
+        <input id="b2bPickupInput" type="date" class="form-input-lg" />
     </div>
-    
     <div class="manage-footer flex-end">
-        <button onclick="submitNewScorecard()" class="btn-primary" id="submitScorecardBtn">Save Scorecard</button>
+        <button id="b2bCreateBtn" class="btn-primary" onclick="createB2BDeal()">Create Deal</button>
     </div>
 </div>
 
-<!-- ===== EDIT MONTHLY GOALS MODAL ===== -->
-<div class="modal-menu manage-menu" id="editMonthlyGoalsModal">
+<!-- ===== B2B DEAL DETAIL MODAL ===== -->
+<div class="modal-menu manage-menu b2b-detail-modal" id="b2bDetailModal">
     <div class="modal-header">
-        <h3>🎯 Set Monthly Team Goals</h3>
+        <h3 id="b2bDetailTitle">B2B Deal</h3>
         <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
     </div>
-    <div class="manage-content">
-        <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Set up to 6 goals for your team this month. Give each goal a title and an optional description.</p>
-        <div id="editGoalsList" class="edit-goals-list"></div>
-        <button class="btn-secondary" id="addGoalRowBtn" onclick="addGoalRow()" style="margin-top: 6px; padding: 8px 16px; font-size: 12px;">+ Add Goal</button>
-    </div>
-    <div class="manage-footer flex-end">
-        <button class="btn-primary" onclick="saveMonthlyGoals()" id="saveMonthlyGoalsBtn">Save Goals</button>
-    </div>
-</div>
-
-<!-- ===== EDIT COMPANY PROJECTS MODAL ===== -->
-<div class="modal-menu manage-menu" id="editCompanyProjectsModal">
-    <div class="modal-header">
-        <h3>🏢 Company Initiatives</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
-    </div>
-    <div class="manage-content">
-        <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Set up to 8 company-wide initiatives or projects. All stores will see these.</p>
-        <div id="editCompanyProjectsList" class="edit-goals-list"></div>
-        <button class="btn-secondary" id="addCompanyProjectRowBtn" onclick="addCompanyProjectRow()" style="margin-top: 6px; padding: 8px 16px; font-size: 12px;">+ Add Initiative</button>
-    </div>
-    <div class="manage-footer flex-end">
-        <button class="btn-primary" onclick="saveCompanyProjects()">Save Initiatives</button>
-    </div>
-</div>
-
-<!-- ===== EDIT STORE INITIATIVES MODAL ===== -->
-<div class="modal-menu manage-menu" id="editStoreInitiativesModal">
-    <div class="modal-header">
-        <h3 id="editStoreInitiativesTitle">🧪 Store Initiatives</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
-    </div>
-    <div class="manage-content">
-        <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Set up to 6 ongoing initiatives or experiments for your store. These persist until you remove them.</p>
-        <div id="editStoreInitiativesList" class="edit-goals-list"></div>
-        <button class="btn-secondary" id="addStoreInitiativeRowBtn" onclick="addStoreInitiativeRow()" style="margin-top: 6px; padding: 8px 16px; font-size: 12px;">+ Add Initiative</button>
-    </div>
-    <div class="manage-footer flex-end">
-        <button class="btn-primary" onclick="saveStoreInitiatives()">Save Initiatives</button>
+    <div class="manage-content" id="b2bDetailBody">
+        <div class="status-message">Loading...</div>
     </div>
 </div>
 
@@ -472,7 +478,7 @@
             <h3 style="margin: 0;">Manager Checklist</h3>
             <button class="modal-close-btn" onclick="toggleChecklistPanel(event)" style="width: 28px; height: 28px; font-size: 14px; background: #f1f5f9; color: #64748b;">✖</button>
         </div>
-        
+
         <div class="notif-tabs">
             <button id="cl-tab-daily" class="tab-btn active" onclick="switchChecklistTab('daily')">Daily</button>
             <button id="cl-tab-weekly" class="tab-btn" onclick="switchChecklistTab('weekly')">Weekly</button>
@@ -480,12 +486,12 @@
             <button id="cl-tab-quarterly" class="tab-btn" style="display: none;" onclick="switchChecklistTab('quarterly')">Quarterly</button>
         </div>
     </div>
-    
+
     <div class="cl-panel-body">
         <div id="checklistContent" class="cl-scroll-area">
             <div class="status-message">Syncing Data...</div>
         </div>
-        
+
         <div class="cl-footer-row">
             <button class="cl-clear-btn" onclick="clearChecklistTab()" title="Uncheck all items on this tab">Reset</button>
         </div>
