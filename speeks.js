@@ -51,6 +51,8 @@ const TICKER_URL        = `${_BASE}/ticker`;
 const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
 const MONTHLY_BRIEF_URL = `${_BASE}/monthly-brief`;
 const B2B_URL           = `${_BASE}/b2b-deals`;
+const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
+const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
 // --- 2. NAV COMPACT MODE ---
 (function () {
@@ -9362,4 +9364,207 @@ async function confirmDeletePatchItem(rowNum) {
         });
     } catch (e) { /* no-cors always throws, reload regardless */ }
     loadPatchNotesEditor();
+}
+
+// ============================================================
+// BOX ORDER TOOL
+// ============================================================
+
+const BOX_STORE_NAMES = {
+    'OVL': 'Overland Park',
+    'LEE': "Lee's Summit",
+    'WSP': 'Westport',
+    'MPL': 'Maplewood',
+    'BAL': 'Ballwin'
+};
+
+function _boxOrderGetStore() {
+    const selectorEl = document.getElementById('boxOrderStoreSelector');
+    const corpVisible = selectorEl && selectorEl.style.display !== 'none';
+    const sel = document.getElementById('boxOrderStoreSelect');
+    const code = (corpVisible && sel && sel.value) ? sel.value : (sessionStorage.getItem('speeksUserStore') || '');
+    return BOX_STORE_NAMES[code] || code || 'Store';
+}
+
+let _boxOrderEmails = { primary: '', secondary: '' };
+
+async function toggleBoxOrder() {
+    closeAllModals();
+    const modal = document.getElementById('boxOrderModal');
+    if (!modal) return;
+    // Always start on page 1
+    document.getElementById('boxOrderPage1').style.display    = '';
+    document.getElementById('boxOrderFooter1').style.display  = '';
+    document.getElementById('boxOrderPage2').style.display    = 'none';
+    document.getElementById('boxOrderFooter2').style.display  = 'none';
+    modal.classList.add('show');
+    lockAndBlurScreen();
+    await _loadBoxOrderData();
+}
+
+async function _loadBoxOrderData() {
+    const container = document.getElementById('boxOrderItemsContainer');
+    if (!container) return;
+    container.innerHTML = '<div style="color:#a0aab2;font-size:13px;padding:12px 0;">Loading items...</div>';
+    const h = { 'apikey': _SUPABASE_ANON_KEY, 'Authorization': `Bearer ${_SUPABASE_ANON_KEY}` };
+    try {
+        const [iRes, cRes] = await Promise.all([
+            fetch(BOX_ITEMS_URL, { headers: h }),
+            fetch(BOX_CONFIG_URL, { headers: h })
+        ]);
+        const items  = await iRes.json();
+        const config = await cRes.json();
+        if (Array.isArray(config)) {
+            config.forEach(c => {
+                if (c.key === 'email_primary')   _boxOrderEmails.primary   = c.value;
+                if (c.key === 'email_secondary')  _boxOrderEmails.secondary = c.value;
+            });
+        }
+        _renderBoxOrderItems(container, Array.isArray(items) ? items : []);
+    } catch (e) {
+        container.innerHTML = '<div style="color:#ef4444;font-size:13px;">Failed to load items. Please try again.</div>';
+    }
+}
+
+function _renderBoxOrderItems(container, items) {
+    const BUCKETS = [
+        { key: 'Common Box',       label: 'Common Boxes' },
+        { key: 'Rare Box',         label: 'Rare Boxes' },
+        { key: 'Very Rare Box',    label: 'Very Rare Boxes' },
+        { key: 'Shipping Supplies',  label: 'Shipping Supplies' },
+        { key: 'White Storage Box', label: 'White Storage Boxes' },
+        { key: 'Bubble Mailer',     label: 'Bubble Mailers' },
+    ];
+    let html = '';
+
+    const buildSection = (label, group, includeHdWarning) => {
+        let itemsHtml = '';
+        group.forEach(item => {
+            itemsHtml += _buildBoxRow(item);
+            if (includeHdWarning && item.is_heavy_duty) {
+                itemsHtml += '<div class="box-order-warning">⚠ HD boxes are significantly more expensive per unit. Only order what is truly needed.</div>';
+            }
+        });
+        return `<div class="box-order-section">
+  <div class="box-order-section-label box-order-collapsible" onclick="boxOrderToggleSection(this)">
+    <span>${label}</span><span class="box-order-chevron" style="transform:rotate(-90deg)">▾</span>
+  </div>
+  <div class="box-order-section-items" style="display:none">${itemsHtml}</div>
+</div>`;
+    };
+
+    BUCKETS.forEach(({ key, label }) => {
+        const group = items.filter(i => i.category === key);
+        if (group.length) html += buildSection(label, group, key === 'Rare Box');
+    });
+
+    container.innerHTML = html || '<div style="color:#a0aab2;font-size:13px;">No items found.</div>';
+}
+
+function boxOrderToggleSection(labelEl) {
+    const section = labelEl.closest('.box-order-section');
+    const itemsEl = section.querySelector('.box-order-section-items');
+    const chevron = labelEl.querySelector('.box-order-chevron');
+    const isOpen  = itemsEl.style.display !== 'none';
+    itemsEl.style.display  = isOpen ? 'none' : '';
+    chevron.style.transform = isOpen ? 'rotate(-90deg)' : '';
+}
+
+function _buildBoxRow(item) {
+    const displayCat = item.category.replace(/^(?:Common |Rare |Very Rare )/, '');
+    const label      = escapeHtml(`${item.name} ${displayCat}`);
+    const nameHtml   = escapeHtml(item.name);
+    const subParts   = [item.dimensions, displayCat].filter(Boolean);
+    const subHtml    = escapeHtml(subParts.join(' · '));
+    return `<div class="box-order-row" data-item="${label}">
+  <div class="box-order-info">
+    <span class="box-order-name">${nameHtml}</span>
+    <span class="box-order-subtype">${subHtml}</span>
+  </div>
+  <div class="box-order-stepper">
+    <button class="box-stepper-btn" onclick="boxStepperChange(this,-1)">−</button>
+    <span class="box-stepper-qty">0</span>
+    <button class="box-stepper-btn" onclick="boxStepperChange(this,1)">+</button>
+  </div>
+</div>`;
+}
+
+function boxStepperChange(btn, delta) {
+    const qtyEl = btn.closest('.box-order-stepper').querySelector('.box-stepper-qty');
+    const row   = btn.closest('.box-order-row');
+    const next  = Math.max(0, (parseInt(qtyEl.textContent) || 0) + delta);
+    qtyEl.textContent = next;
+    qtyEl.classList.toggle('box-stepper-active', next > 0);
+    row.classList.toggle('box-row-selected', next > 0);
+}
+
+let _boxOrderSelected = [];
+
+function boxOrderNextPage() {
+    const rows = document.querySelectorAll('#boxOrderItemsContainer .box-order-row');
+    _boxOrderSelected = [];
+    rows.forEach(row => {
+        const qty = parseInt(row.querySelector('.box-stepper-qty')?.textContent) || 0;
+        if (qty > 0) _boxOrderSelected.push({ item: row.dataset.item, qty });
+    });
+    if (!_boxOrderSelected.length) {
+        alert('Please add at least one item before continuing.');
+        return;
+    }
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const isCorpRole = role === 'ceo' || role === 'district manager';
+    const selectorEl = document.getElementById('boxOrderStoreSelector');
+    if (selectorEl) {
+        selectorEl.style.display = isCorpRole ? '' : 'none';
+        const sel = document.getElementById('boxOrderStoreSelect');
+        if (sel) sel.value = '';
+    }
+    const notesEl = document.getElementById('boxOrderNotes');
+    if (notesEl) notesEl.value = '';
+    boxOrderUpdatePreview();
+    document.getElementById('boxOrderPage1').style.display    = 'none';
+    document.getElementById('boxOrderFooter1').style.display  = 'none';
+    document.getElementById('boxOrderPage2').style.display    = '';
+    document.getElementById('boxOrderFooter2').style.display  = '';
+}
+
+function boxOrderBackPage() {
+    document.getElementById('boxOrderPage2').style.display    = 'none';
+    document.getElementById('boxOrderFooter2').style.display  = 'none';
+    document.getElementById('boxOrderPage1').style.display    = '';
+    document.getElementById('boxOrderFooter1').style.display  = '';
+}
+
+function boxOrderUpdatePreview() {
+    const preview  = document.getElementById('boxOrderEmailPreview');
+    if (!preview) return;
+    const store    = _boxOrderGetStore();
+    const userName = sessionStorage.getItem('speeksUserName')  || '';
+    const notes    = document.getElementById('boxOrderNotes')?.value.trim() || '';
+    const to       = _boxOrderEmails.primary   || 'orders@placeholder.com';
+    const lines    = _boxOrderSelected.map(o => `  • ${o.item}: ${o.qty} ${o.qty === 1 ? 'Bundle' : 'Bundles'}`).join('\n');
+    const noteBlock = notes ? `\n\n${notes}` : '';
+    preview.textContent =
+        `To: ${to}\nSubject: PayMore ${store} Location\n\n` +
+        `Hi,\n\nPlease process the following order for ${store}:\n\n${lines}${noteBlock}\n\n` +
+        `Thank you,\n${userName}`;
+}
+
+function sendBoxOrder() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const isCorpRole = role === 'ceo' || role === 'district manager';
+    const sel = document.getElementById('boxOrderStoreSelect');
+    if (isCorpRole && (!sel || !sel.value)) {
+        alert('Please select a store before sending.');
+        return;
+    }
+    const store     = _boxOrderGetStore();
+    const userName  = sessionStorage.getItem('speeksUserName')  || '';
+    const notes     = document.getElementById('boxOrderNotes')?.value.trim() || '';
+    const noteBlock = notes ? `%0A%0A${encodeURIComponent(notes)}` : '';
+    const to        = encodeURIComponent(_boxOrderEmails.primary || 'orders@placeholder.com');
+    const subject   = encodeURIComponent(`PayMore ${store} Location`);
+    const lines     = _boxOrderSelected.map(o => encodeURIComponent(`  • ${o.item}: ${o.qty} ${o.qty === 1 ? 'Bundle' : 'Bundles'}`)).join('%0A');
+    const body      = `Hi,%0A%0APlease process the following order for ${encodeURIComponent(store)}:%0A%0A${lines}${noteBlock}%0A%0AThank you,%0A${encodeURIComponent(userName)}`;
+    window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
 }
