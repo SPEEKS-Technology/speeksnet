@@ -1850,7 +1850,15 @@ select.bs-hidden-select:focus {
 
 /* Nav compact: triggered by JS class when tabs collide with right actions */
 .top-nav.nav-compact .nav-link span { display: none; }
-.top-nav.nav-compact .nav-link { padding: 0 10px; font-size: 22px; }
+.top-nav.nav-compact .nav-link { padding: 0 12px; font-size: 22px; justify-content: center; gap: 0; }
+.top-nav.nav-compact .nav-link i {
+    font-style: normal;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    text-align: center;
+}
 
 @media (max-width: 768px) {
     body { flex-direction: column; }
