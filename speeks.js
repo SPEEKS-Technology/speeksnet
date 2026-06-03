@@ -4235,7 +4235,8 @@ async function fetchScorecardData() {
         const response = await fetch(`${SCORECARD_URL}?v=${Date.now()}`);
         const json = await response.json();
         if (!json.success) throw new Error(json.error);
-        
+        window._scorecardAllData = json.data || [];
+
         const storeData = json.data.find(item => String(item.store).toUpperCase() === targetStore.toUpperCase());
 
         if (!storeData) {
@@ -4318,6 +4319,9 @@ async function fetchScorecardData() {
                 const sectionPulse = (!showOverallDot && bIdx === singleRecentBucketIdx)
                     ? `<div class="notif-dot active" style="position:relative; top:auto; right:auto; width:9px; height:9px; border:1px solid white; flex-shrink:0;"></div>`
                     : '';
+                const notesHtml = bucket.notes
+                    ? `<div style="margin-top: 6px; padding: 6px 10px; background: #f8fafc; border-left: 3px solid #94a3b8; border-radius: 0 6px 6px 0; font-size: 11px; color: #475569; line-height: 1.5; font-style: italic;">${String(bucket.notes).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</div>`
+                    : '';
                 breakdownHtml += `<div style="margin-bottom: 12px;">
                     <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; min-width: 0;">
                         <span style="font-size: 9px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;">${bucket.name}</span>
@@ -4328,6 +4332,7 @@ async function fetchScorecardData() {
                     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;">
                         ${bucket.categories.map(renderCategoryCard).join('')}
                     </div>
+                    ${notesHtml}
                 </div>`;
             });
             breakdownHtml += `</div>`;
@@ -8133,20 +8138,29 @@ const SCORECARD_BUCKETS = [
 ];
 
 function openScorecardModal() {
-    // 1. Let your native portal handle the animations and overlays!
     toggleModal('scorecardSubmitModal');
 
-    // 2. Auto-fill today's date
     const dateInput = document.getElementById('dm-score-date');
     if (dateInput) dateInput.valueAsDate = new Date();
 
-    // 3. Generate the inputs grouped by bucket, each with a section toggle
+    _buildScorecardModalInputs();
+}
+
+function _buildScorecardModalInputs() {
+    const storeEl = document.getElementById('dm-store-select');
+    const store = (storeEl ? storeEl.value : null) || sessionStorage.getItem('speeksUserStore') || '';
+    const existingEntry = (window._scorecardAllData || []).find(d => String(d.store).toUpperCase() === store.toUpperCase());
+
     const container = document.getElementById('dm-category-inputs');
-    if (container) {
-        let html = '';
-        let catIndex = 0;
-        SCORECARD_BUCKETS.forEach((bucket, bIdx) => {
-            html += `<div style="grid-column: 1 / -1; margin-top: ${bIdx > 0 ? '8px' : '0'}; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between;">
+    if (!container) return;
+    let html = '';
+    let catIndex = 0;
+    SCORECARD_BUCKETS.forEach((bucket, bIdx) => {
+        const existingBucket = existingEntry && existingEntry.buckets
+            ? existingEntry.buckets.find(b => b.name === bucket.label)
+            : null;
+        const existingNote = existingBucket && existingBucket.notes ? existingBucket.notes : '';
+        html += `<div style="grid-column: 1 / -1; margin-top: ${bIdx > 0 ? '8px' : '0'}; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between;">
                 <span style="font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">${bucket.label}</span>
                 <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 10px; color: #94a3b8; font-weight: 700;">
                     <input type="checkbox" id="section-toggle-${bIdx}" checked onchange="toggleScorecardSection(${bIdx})" style="cursor: pointer; width: 13px; height: 13px;">
@@ -8154,9 +8168,9 @@ function openScorecardModal() {
                 </label>
             </div>
             <div id="section-inputs-${bIdx}" style="display: contents;">`;
-            for (let i = 0; i < bucket.count; i++) {
-                const cat = SCORECARD_CATEGORIES[catIndex];
-                html += `<div style="display: flex; flex-direction: column;">
+        for (let i = 0; i < bucket.count; i++) {
+            const cat = SCORECARD_CATEGORIES[catIndex];
+            html += `<div style="display: flex; flex-direction: column;">
                     <label class="form-label-caps">${cat}</label>
                     <select id="score-input-${catIndex}" class="form-input-lg" style="margin-top: 0; padding: 10px; font-size: 14px;">
                         <option value="">--</option>
@@ -8168,12 +8182,20 @@ function openScorecardModal() {
                         <option value="0">0</option>
                     </select>
                 </div>`;
-                catIndex++;
-            }
-            html += `</div>`;
-        });
-        container.innerHTML = html;
-    }
+            catIndex++;
+        }
+        const escapedNote = existingNote.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        html += `<div style="grid-column: 1 / -1; margin-top: 4px; margin-bottom: 2px;">
+                <label class="form-label-caps" style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">Section Notes <span style="font-weight: 400; text-transform: none; font-size: 10px; color: #94a3b8; letter-spacing: 0;">(optional)</span></label>
+                <textarea id="score-notes-${bIdx}" class="scorecard-notes-input" rows="2" placeholder="Leave a note for the manager about this section...">${escapedNote}</textarea>
+            </div>`;
+        html += `</div>`;
+    });
+    container.innerHTML = html;
+}
+
+function refreshScorecardNotes() {
+    _buildScorecardModalInputs();
 }
 
 function toggleScorecardSection(bIdx) {
@@ -8207,7 +8229,7 @@ function submitNewScorecard() {
         return;
     }
 
-    // Gather scores per section — blanks are allowed (Apps Script carries previous value forward)
+    // Gather scores and notes per section
     let catIndex = 0;
     let sectionData = [];
 
@@ -8219,7 +8241,9 @@ function submitNewScorecard() {
             scores.push(val === '' ? null : parseFloat(val));
             catIndex++;
         }
-        if (enabled) sectionData.push({ bucketIndex: bIdx, scores: scores });
+        const noteEl = document.getElementById(`score-notes-${bIdx}`);
+        const notes = noteEl ? noteEl.value.trim() : '';
+        if (enabled) sectionData.push({ bucketIndex: bIdx, scores: scores, notes: notes });
     });
 
     btn.innerText = "Saving...";
@@ -8240,7 +8264,8 @@ function submitNewScorecard() {
             action: 'submit_scorecard',
             store: store,
             date: date,
-            scores: sectionData.flatMap(s => s.scores)
+            scores: sectionData.flatMap(s => s.scores),
+            sectionNotes: sectionData.map(s => s.notes)
         };
     }
 
