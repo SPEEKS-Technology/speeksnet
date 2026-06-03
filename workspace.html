@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260603a">
+  <link rel="stylesheet" href="styles.css?v=20260603d">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260603a" defer></script>
+  <script src="speeks.js?v=20260603d" defer></script>
 </head>
 <body class="preload">
 
@@ -306,20 +306,20 @@
 
     <div class="ws-layout">
       <div class="ws-subtabs">
-        <button class="ws-tab active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo" id="ws-tab-brief" onclick="switchWorkspaceTab('brief')">📋 Monthly KPI's</button>
-        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo" id="ws-tab-kpis" onclick="switchWorkspaceTab('kpis')">📊 Weekly KPI's</button>
-        <button class="ws-tab dynamic-module-flex role-district-manager role-ceo role-tom role-manager role-owner-manager role-assistant-manager" id="ws-tab-b2b" onclick="switchWorkspaceTab('b2b')">🏢 B2B</button>
+        <button class="ws-tab active dynamic-module-flex role-district-manager role-ceo role-tom role-manager role-owner-manager role-assistant-manager" id="ws-tab-b2b" onclick="switchWorkspaceTab('b2b')">🏢 B2B</button>
+        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" id="ws-tab-brief" onclick="switchWorkspaceTab('brief')">📋 Monthly KPI's</button>
+        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" id="ws-tab-kpis" onclick="switchWorkspaceTab('kpis')">📊 Weekly KPI's</button>
       </div>
 
       <div class="ws-panes">
 
     <!-- ===== MONTHLY PERFORMANCE BRIEF PANE ===== -->
-    <section class="ws-pane active" id="ws-pane-brief">
+    <section class="ws-pane" id="ws-pane-brief">
       <div class="card kpi-master-card district-master-panel ws-panel ws-panel-brief">
-          <div class="district-kpi-header mb-brief-header">
-              <span class="district-kpi-title">Monthly Performance Brief</span>
-              <div class="mb-brief-controls">
-                  <div class="mb-view-toggle dynamic-module-flex role-ceo role-district-manager">
+          <div class="district-kpi-header kpi-modal-header-tight">
+              <div class="align-center gap-15">
+                  <span class="district-kpi-title">Monthly KPI's</span>
+                  <div class="mb-view-toggle dynamic-module-flex role-ceo role-district-manager role-owner-manager">
                       <button id="mbViewOverviewBtn" class="mb-view-btn active" onclick="mbSetView('overview')">📊 Overview</button>
                       <button id="mbViewStoreBtn" class="mb-view-btn" onclick="mbSetView('store')">🏬 Store View</button>
                   </div>
@@ -330,9 +330,13 @@
                       <option value="MPL">MPL</option>
                       <option value="BAL">BAL</option>
                   </select>
+                  <span id="mbSubtitle" style="font-size:11px;color:#888;font-weight:600;"></span>
+              </div>
+              <div class="align-center gap-8">
                   <button id="mbEditBtn" class="kpi-update-trigger-btn" style="display:none;" onclick="mbStartEdit()">✏️ Edit</button>
                   <button id="mbSaveBtn" class="kpi-save-section-btn" style="display:none;" onclick="mbSaveBrief()">Save</button>
                   <button id="mbCancelBtn" class="kpi-cancel-btn" style="display:none;" onclick="mbCancelEdit()">Cancel</button>
+                  <button class="kpi-export-btn" onclick="mbExportCSV()" title="Export to CSV">⬇ Export CSV</button>
               </div>
           </div>
           <div class="weekly-kpi-scroll-area ws-scroll" id="mbBody">
@@ -346,7 +350,7 @@
       <div class="card kpi-master-card district-master-panel ws-panel ws-panel-kpis">
           <div class="district-kpi-header kpi-modal-header-tight">
               <div class="align-center gap-15">
-                  <span class="district-kpi-title">Store KPIs</span>
+                  <span class="district-kpi-title">Weekly KPI's</span>
                   <div class="notif-tabs">
                       <button id="kpi-tab-weekly"  class="tab-btn active" onclick="switchKpiTab('weekly')">📅 Weekly</button>
                       <button id="kpi-tab-monthly" class="tab-btn"        onclick="switchKpiTab('monthly')">📆 Monthly</button>
@@ -361,6 +365,9 @@
                   <span id="kpiModalSubtitle" style="font-size:11px;color:#888;font-weight:600;"></span>
               </div>
               <div class="align-center gap-8">
+                  <button id="kpiEditBtn"   class="kpi-update-trigger-btn" onclick="kpiHeaderStartEdit()" style="display:none;">✏️ Edit</button>
+                  <button id="kpiSaveBtn"   class="kpi-save-section-btn"   onclick="kpiHeaderSave()"      style="display:none;">Save</button>
+                  <button id="kpiCancelBtn" class="kpi-cancel-btn"          onclick="kpiHeaderCancel()"    style="display:none;">Cancel</button>
                   <button class="kpi-export-btn" onclick="_kpiExportCSV()" title="Export to CSV">⬇ Export CSV</button>
               </div>
           </div>
@@ -371,7 +378,7 @@
     </section>
 
     <!-- ===== B2B PANE ===== -->
-    <section class="ws-pane" id="ws-pane-b2b">
+    <section class="ws-pane active" id="ws-pane-b2b">
       <div class="card kpi-master-card district-master-panel ws-panel b2b-board-panel">
           <div class="district-kpi-header b2b-board-header">
               <span class="district-kpi-title">🏢 B2B Deals <span id="b2b-count" class="widget-date-display"></span></span>

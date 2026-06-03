@@ -3340,6 +3340,10 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .mb-worst { background: #fdecec; color: #c81e1e; }
 .mb-row:hover td.mb-best  { background: #e1f1e6; }
 .mb-row:hover td.mb-worst { background: #f9e2e2; }
+.mb-ebay-warn { background: #fef9c3; color: #a16207; }
+.mb-ebay-bad  { background: #fdecec; color: #c81e1e; }
+.mb-row:hover td.mb-ebay-warn { background: #fef08a; }
+.mb-row:hover td.mb-ebay-bad  { background: #f9e2e2; }
 .mb-input {
     width: 92px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 5px;
     font-size: 12px; font-weight: 600; text-align: right; color: var(--slate-charcoal); outline: none;
@@ -5487,6 +5491,12 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     font-size: 11px;
     font-weight: 600;
     color: #9ca3af;
+}
+.kpi-editing-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--sage-professional);
+    letter-spacing: 0.2px;
 }
 
 .kpi-edit-section-btn {

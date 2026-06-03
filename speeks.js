@@ -2219,13 +2219,8 @@ function _kpiSectionDividerHtml(label, badge, badgeClass, controls, borderColor)
 }
 
 function _kpiSectionControls(periodDate, isEditing, isEditable) {
-    const pk = periodDate.replace(/-/g, '');
-    if (!isEditable) return '<span class="kpi-readonly-label">🔒 Read only</span>';
-    if (isEditing) {
-        return '<button class="kpi-cancel-btn" onclick="_kpiCancelEdit()">Cancel</button>' +
-               '<button class="kpi-save-section-btn" id="kpiSaveBtn-' + pk + '" onclick="_kpiSavePeriod(\'' + periodDate + '\')">Save</button>';
-    }
-    return '<button class="kpi-edit-section-btn" onclick="_kpiStartEdit(\'' + periodDate + '\')">✏️ Edit</button>';
+    if (isEditing) return '<span class="kpi-editing-label">✏️ Editing</span>';
+    return '';
 }
 
 function _kpiEmpRowsHtml(entries, periodDate, isEditing, isAvg) {
@@ -2315,14 +2310,24 @@ function _kpiRenderWeekly(periods) {
     const store = (_modalSel && _modalSel.offsetParent !== null && _modalSel.value) || sessionStorage.getItem('speeksUserStore') || '';
     const sub = document.getElementById('kpiModalSubtitle');
     if (sub) sub.textContent = store + ' · 4-Week View';
-    if (!periods || !periods.length) {
-        body.innerHTML = '<div class="kpi-empty-state">No weekly KPI data yet. Click Edit on the current week to get started.</div>';
+
+    // Only show weeks with saved data; when editing, also include the editable period at top
+    let visible = (periods || []).filter(function(p) { return p.entries.some(function(e) { return e.id; }); });
+    if (_kpiEditingPeriod) {
+        const ep = periods.find(function(p) { return p.period_end_date === _kpiEditingPeriod; });
+        if (ep && !visible.find(function(p) { return p.period_end_date === ep.period_end_date; })) visible.unshift(ep);
+        else if (ep) { visible = visible.filter(function(p) { return p.period_end_date !== ep.period_end_date; }); visible.unshift(ep); }
+    }
+
+    _kpiSyncHeaderBtns();
+    if (!visible.length) {
+        body.innerHTML = '<div class="kpi-empty-state">No weekly KPI data yet. Click ✏️ Edit above to enter the current week.</div>';
         return;
     }
-    const wkBadges  = ['Current Week','Last Week','2 Weeks Ago','3 Weeks Ago'];
-    const wkBClass  = ['badge-current','badge-prev','badge-old','badge-old'];
+    const wkBadges = ['Current Week','Last Week','2 Weeks Ago','3 Weeks Ago'];
+    const wkBClass = ['badge-current','badge-prev','badge-old','badge-old'];
     let tbody = '';
-    periods.forEach(function(p, i) {
+    visible.forEach(function(p, i) {
         const isEd = _kpiEditingPeriod === p.period_end_date;
         tbody += _kpiSectionDividerHtml('📅 ' + _kpiWeekRangeLabel(p.period_end_date), wkBadges[i] || '', wkBClass[i] || 'badge-old',
             _kpiSectionControls(p.period_end_date, isEd, p.is_editable), '#3b82f6');
@@ -2464,6 +2469,11 @@ function _mbSyncControls() {
     document.getElementById('mbViewStoreBtn')?.classList.toggle('active', _mbView === 'store');
     const sel = document.getElementById('mbStoreSelect');
     if (sel) sel.style.display = (_mbView === 'store' && canPickStore) ? '' : 'none';
+    const sub = document.getElementById('mbSubtitle');
+    if (sub) {
+        const store = (sel && canPickStore ? sel.value : null) || sessionStorage.getItem('speeksUserStore') || '';
+        sub.textContent = _mbView === 'overview' ? 'All Stores' : (store + ' · Store View');
+    }
 }
 
 function mbSetView(view) {
@@ -2549,17 +2559,22 @@ function _mbRenderStore() {
     const body = document.getElementById('mbBody');
     if (!body) return;
 
-    // Newest-first window of up to 5 months. Always include the editable
-    // (current) month so the DM can fill it in even before it has data.
+    // Newest-first window of up to 5 months. Only include the editable month
+    // when actively editing — it stays hidden until the user clicks Edit.
     const monthSet = new Set(_mbMonths);
-    if (_mbEditable) monthSet.add(_mbEditable);
-    const months = [...monthSet].sort().reverse().slice(0, MB_MONTH_WINDOW);
+    if (_mbEditable && _mbEditing) monthSet.add(_mbEditable);
+    const months = [...monthSet].sort().reverse().slice(0, MB_MONTH_WINDOW)
+        .filter(mo => {
+            if (_mbEditing && mo === _mbEditable) return true;
+            const d = _mbData[mo] || {};
+            return Object.values(d).some(v => v != null);
+        });
     if (!months.length) { body.innerHTML = '<div class="status-message">No data available.</div>'; return; }
 
-    // Edit only for DM, and only on the editable (current) month
+    // Edit for DM, CEO, and owner-manager on the editable (current) month
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     const isDM = role === 'district manager';
-    const canEdit = isDM && !!_mbEditable && months.includes(_mbEditable);
+    const canEdit = (isDM || role === 'ceo' || role === 'owner manager') && !!_mbEditable && months.includes(_mbEditable);
     const editBtn = document.getElementById('mbEditBtn');
     if (editBtn) editBtn.style.display = (canEdit && !_mbEditing) ? 'inline-block' : 'none';
     const saveBtn = document.getElementById('mbSaveBtn');
@@ -2599,7 +2614,14 @@ function _mbRenderStore() {
                     html += '<td class="mb-val mb-val-primary"><input class="mb-input" type="number" step="' + step +
                         '" id="mb-in-' + m.key + '" value="' + (v != null ? v : '') + '"></td>';
                 } else {
-                    const cls = (mo === _mbEditable) ? 'mb-val mb-val-primary' : 'mb-val';
+                    const ebayOverride = _mbEbayThresholdCls(m.key, v);
+                    let cls;
+                    if (ebayOverride !== null) {
+                        // Clear eBay cells in the current month keep the primary column tint
+                        cls = (ebayOverride === 'mb-val' && mo === _mbEditable) ? 'mb-val mb-val-primary' : ebayOverride;
+                    } else {
+                        cls = (mo === _mbEditable) ? 'mb-val mb-val-primary' : 'mb-val';
+                    }
                     html += '<td class="' + cls + '">' + _mbFmt(m.type, v) + '</td>';
                 }
                 // Delta between this (newer, left) and the next (older, right) month.
@@ -2630,16 +2652,45 @@ function _mbRenderStore() {
     body.innerHTML = html;
 }
 
+// Returns an override CSS class for eBay Health metrics based on absolute thresholds.
+// Returns null for non-eBay-health metrics (fall through to best/worst logic).
+function _mbEbayThresholdCls(key, val) {
+    if (val == null) return null;
+    const v = Number(val);
+    if (isNaN(v)) return null;
+    if (key === 'defect_rate') {
+        if (v >= 0.5)  return 'mb-val mb-ebay-bad';
+        if (v >= 0.25) return 'mb-val mb-ebay-warn';
+        return 'mb-val';
+    }
+    if (key === 'late_shipment_rate') {
+        if (v >= 3.0) return 'mb-val mb-ebay-bad';
+        if (v >= 1.5) return 'mb-val mb-ebay-warn';
+        return 'mb-val';
+    }
+    if (key === 'case_no_resolution') {
+        if (v >= 0.3)  return 'mb-val mb-ebay-bad';
+        if (v >= 0.15) return 'mb-val mb-ebay-warn';
+        return 'mb-val';
+    }
+    if (key === 'tracking_uploaded') {
+        if (v <= 95.0)  return 'mb-val mb-ebay-bad';
+        if (v <= 97.5)  return 'mb-val mb-ebay-warn';
+        return 'mb-val';
+    }
+    return null;
+}
+
 // OVERVIEW render: metrics × stores for the most-recent month, with the
 // best store per metric flagged green and the worst red (honoring inverse metrics).
 function _mbRenderOverview() {
     const body = document.getElementById('mbBody');
     if (!body) return;
 
-    // DM can edit the current (editable) month across all stores from here
+    // DM and CEO can edit the current (editable) month across all stores from here
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     const isDM = role === 'district manager';
-    const canEdit = isDM && !!_mbOverviewEditable;
+    const canEdit = (isDM || role === 'ceo' || role === 'owner manager') && !!_mbOverviewEditable;
     const editing = _mbEditing && canEdit;
     // View the most recent month that has data; while editing, switch to the open window.
     const shownMonth = editing ? _mbOverviewEditable : _mbOverviewMonth;
@@ -2693,7 +2744,10 @@ function _mbRenderOverview() {
                     html += '<td class="mb-val"><input class="mb-input" type="number" step="' + step +
                         '" id="mb-ov-' + s + '-' + m.key + '" value="' + (raw[idx] != null ? raw[idx] : '') + '"></td>';
                 } else {
-                    const cls = idx === bestIdx ? 'mb-val mb-best' : (idx === worstIdx ? 'mb-val mb-worst' : 'mb-val');
+                    const ebayOverride = _mbEbayThresholdCls(m.key, raw[idx]);
+                    const cls = ebayOverride !== null
+                        ? ebayOverride
+                        : (idx === bestIdx ? 'mb-val mb-best' : (idx === worstIdx ? 'mb-val mb-worst' : 'mb-val'));
                     html += '<td class="' + cls + '">' + _mbFmt(m.type, raw[idx]) + '</td>';
                 }
             });
@@ -2702,6 +2756,53 @@ function _mbRenderOverview() {
     });
     html += '</tbody></table>';
     body.innerHTML = html;
+}
+
+function mbExportCSV() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const canPickStore = role === 'ceo' || role === 'district manager';
+    const sel   = document.getElementById('mbStoreSelect');
+    const store = (sel && canPickStore ? sel.value : null) || sessionStorage.getItem('speeksUserStore') || 'STORE';
+    const ts    = new Date().toISOString().slice(0, 10);
+
+    const esc = v => { const s = String(v == null ? '' : v); return (s.includes(',') || s.includes('"') || s.includes('\n')) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const toCSV = rows => rows.map(r => r.map(esc).join(',')).join('\r\n');
+    const dl = (csv, name) => {
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a'); a.href = url; a.download = name; a.style.display = 'none';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    };
+
+    const sections = {}, secOrder = [];
+    _mbMetrics.forEach(m => { if (!sections[m.section]) { sections[m.section] = []; secOrder.push(m.section); } sections[m.section].push(m); });
+
+    if (_mbView === 'overview') {
+        const month = _mbOverviewMonth;
+        if (!month || !_mbMetrics.length) return;
+        const rows = [['Section', 'Metric', ...MB_STORES]];
+        secOrder.forEach(sec => {
+            sections[sec].forEach(m => {
+                const row = [sec, m.label];
+                MB_STORES.forEach(s => { const v = (_mbOverviewData[s] || {})[month]; row.push(v ? v[m.key] : ''); });
+                rows.push(row);
+            });
+        });
+        dl(toCSV(rows), 'Monthly_Overview_' + _mbMonthLabelShort(month).replace(/[^a-zA-Z0-9]/g, '_') + '_' + ts + '.csv');
+    } else {
+        const monthSet = new Set(_mbMonths);
+        const months = [...monthSet].sort().reverse().slice(0, MB_MONTH_WINDOW).filter(mo => _mbData[mo] && Object.keys(_mbData[mo]).length);
+        if (!_mbMetrics.length || !months.length) return;
+        const rows = [['Section', 'Metric', ...months.map(m => _mbMonthLabelShort(m))]];
+        secOrder.forEach(sec => {
+            sections[sec].forEach(m => {
+                const row = [sec, m.label];
+                months.forEach(mo => { const v = (_mbData[mo] || {})[m.key]; row.push(v != null ? v : ''); });
+                rows.push(row);
+            });
+        });
+        dl(toCSV(rows), store + '_Monthly_Brief_' + ts + '.csv');
+    }
 }
 
 function mbStartEdit() {
@@ -2795,14 +2896,24 @@ function _kpiRenderMonthly(periods) {
     const store = (_modalSel && _modalSel.offsetParent !== null && _modalSel.value) || sessionStorage.getItem('speeksUserStore') || '';
     const sub = document.getElementById('kpiModalSubtitle');
     if (sub) sub.textContent = store + ' · Monthly';
-    if (!periods || !periods.length) {
-        body.innerHTML = '<div class="kpi-empty-state">No monthly KPI data yet. Click Edit on the current month to get started.</div>';
+
+    // Only show months with saved data; when editing, also include the editable period at top
+    let visible = (periods || []).filter(function(p) { return p.entries.some(function(e) { return e.id; }); });
+    if (_kpiEditingPeriod) {
+        const ep = periods.find(function(p) { return p.period_end_date === _kpiEditingPeriod; });
+        if (ep && !visible.find(function(p) { return p.period_end_date === ep.period_end_date; })) visible.unshift(ep);
+        else if (ep) { visible = visible.filter(function(p) { return p.period_end_date !== ep.period_end_date; }); visible.unshift(ep); }
+    }
+
+    _kpiSyncHeaderBtns();
+    if (!visible.length) {
+        body.innerHTML = '<div class="kpi-empty-state">No monthly KPI data yet. Click ✏️ Edit above to enter the current month.</div>';
         return;
     }
-    const moBadges  = ['Current Month','Last Month'];
-    const moBClass  = ['badge-current','badge-prev'];
+    const moBadges = ['Current Month','Last Month'];
+    const moBClass = ['badge-current','badge-prev'];
     let tbody = '';
-    periods.forEach(function(p, i) {
+    visible.forEach(function(p, i) {
         const isEd = _kpiEditingPeriod === p.period_end_date;
         tbody += _kpiSectionDividerHtml('📆 ' + p.period_label, i < 2 ? moBadges[i] : null, i < 2 ? moBClass[i] : '',
             _kpiSectionControls(p.period_end_date, isEd, p.is_editable), '#7c3aed');
@@ -2812,6 +2923,38 @@ function _kpiRenderMonthly(periods) {
         if (hasSavedData) tbody += _kpiStoreTotalRowHtml(p.entries);
     });
     body.innerHTML = '<div class="kpi-grid-scroll-wrapper"><table class="kpi-entry-grid kpi-full-table">' + _kpiColgroupHtml() + '<tbody>' + tbody + '</tbody></table></div>';
+}
+
+function _kpiSyncHeaderBtns() {
+    const editBtn   = document.getElementById('kpiEditBtn');
+    const saveBtn   = document.getElementById('kpiSaveBtn');
+    const cancelBtn = document.getElementById('kpiCancelBtn');
+    const isEditing   = !!_kpiEditingPeriod;
+    const hasEditable = (_kpiPeriodsData || []).some(function(p) { return p.is_editable; });
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const canEditRole = role === 'district manager' || role === 'ceo' || role === 'owner manager' || role === 'manager' || role === 'assistant manager';
+    const hasPeriods  = (_kpiPeriodsData || []).length > 0;
+    if (editBtn)   editBtn.style.display   = (!isEditing && canEditRole && (hasEditable || hasPeriods)) ? '' : 'none';
+    if (saveBtn)   saveBtn.style.display   = isEditing ? '' : 'none';
+    if (cancelBtn) cancelBtn.style.display = isEditing ? '' : 'none';
+}
+
+function kpiHeaderStartEdit() {
+    const ep = (_kpiPeriodsData || []).find(function(p) { return p.is_editable; }) || (_kpiPeriodsData || [])[0];
+    if (!ep) return;
+    _kpiEditingPeriod = ep.period_end_date;
+    if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
+    else _kpiRenderMonthly(_kpiPeriodsData);
+}
+
+function kpiHeaderSave() {
+    if (_kpiEditingPeriod) _kpiSavePeriod(_kpiEditingPeriod);
+}
+
+function kpiHeaderCancel() {
+    _kpiEditingPeriod = null;
+    if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
+    else _kpiRenderMonthly(_kpiPeriodsData);
 }
 
 async function _kpiLoadAll(tab) {
@@ -2913,12 +3056,8 @@ function initWorkspace() {
     if (!document.querySelector('.ws-wrap')) return;
     _wsBriefLoaded = false;
     _wsKpiLoaded   = false;
-    // Roles without Brief/KPIs access (TOM, Assistant Manager) land on the B2B board.
-    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
-    const canSeeBrief = ['manager', 'owner (manager)', 'district manager', 'ceo'].includes(role);
     const hash = (window.location.hash || '').replace('#', '');
-    let initial = ['brief', 'kpis', 'b2b'].includes(hash) ? hash : (canSeeBrief ? 'brief' : 'b2b');
-    if (!canSeeBrief && (initial === 'brief' || initial === 'kpis')) initial = 'b2b';
+    const initial = ['brief', 'kpis', 'b2b'].includes(hash) ? hash : 'b2b';
     switchWorkspaceTab(initial);
 }
 
@@ -2942,8 +3081,8 @@ async function _kpiSavePeriod(periodDate) {
     const pk     = periodDate.replace(/-/g, '');
     const period = _kpiPeriodsData.find(function(p) { return p.period_end_date === periodDate; });
     if (!period) return;
-    const saveBtn = document.getElementById('kpiSaveBtn-' + pk);
-    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; }
+    const saveBtn = document.getElementById('kpiSaveBtn');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
     for (let empIdx = 0; empIdx < period.entries.length; empIdx++) {
         const entry   = period.entries[empIdx];
         const reqBody = { store: store, period_type: _kpiCurrentTab, period_end_date: periodDate, employee_name: entry.employee_name };
