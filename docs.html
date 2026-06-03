@@ -4,9 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SPEEKSNET | Processes & Policies</title>
-  <link rel="stylesheet" href="styles.css">
+  <style>
+    /* Critical anti-FOUC: keep slide-in side panels out of flow until styles.css loads.
+       styles.css (loaded next) restores their display:flex + off-canvas positioning. */
+    .goals-side-panel, .checklist-side-panel { display: none; }
+  </style>
+  <link rel="stylesheet" href="styles.css?v=20260602l">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <script src="speeks.js" defer></script>
+  <script src="speeks.js?v=20260602l" defer></script>
 </head>
 <body class="preload">
 
@@ -21,6 +26,7 @@
     <a href="index.html" class="nav-link"><i>⚡</i> <span>QuickPortal</span></a>
     <a href="docs.html" class="nav-link active"><i>📚</i> <span>Processes & Policies</span></a>
     <a href="stats.html" class="nav-link"><i>🏆</i> <span>Stats & Awards</span></a>
+    <a href="workspace.html" class="nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo"><i>📈</i> <span>Analytics</span></a>
   </nav>
 
   <div class="nav-right">
