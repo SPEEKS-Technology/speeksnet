@@ -9,9 +9,9 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260603a">
+  <link rel="stylesheet" href="styles.css?v=20260603f">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <script src="speeks.js?v=20260603a" defer></script>
+  <script src="speeks.js?v=20260603f" defer></script>
 </head>
 <body class="preload">
 
@@ -32,29 +32,13 @@
   <div class="nav-right">
     <div class="user-profile-nav">
 
-      <div class="dev-dropdown-container dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" id="devDropdown">
-        <button class="dev-workspace-btn" id="devWorkspaceBtn" onclick="window.toggleDevDropdown(event)">
-          <svg class="lock-icon text-gold" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-          </svg>
-          <span class="dev-title">SPEEKS Tools</span>
-          <svg class="chevron-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="6 9 12 15 18 9"></polyline>
-          </svg>
-        </button>
-
-        <div class="dev-dropdown-menu">
-          <a class="dev-dropdown-link dynamic-module-block role-district-manager role-ceo role-tom role-owner-manager" onclick="toggleManageAnnouncements()">Announcements</a>
-          <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleSendCommentModal()">Send Store Comment</a>
-          <a class="dev-dropdown-link dynamic-module-block role-district-manager role-ceo role-owner-manager" onclick="toggleManageUsers()">User Permissions</a>
-          <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleManageAlerts()">Performance Metrics</a>
-          <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleManageRecords()">Company Records</a>
-          <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="openScorecardModal()">Submit Scorecard</a>
-          <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleManageDocs()">Manage Policies</a>
-          <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleManageHotkeys()">Edit System Hotkeys</a>
-        </div>
-      </div>
+      <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" title="SPEEKS Tools">
+        <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+        <span class="tools-nav-label">Tools</span>
+      </button>
 
       <div id="dailyMessageBubble">
             <span id="dailyMessageBubbleIcon">📣</span>
@@ -498,5 +482,44 @@
 </div>
 
 </main>
+
+<!-- ===== SPEEKS TOOLS SIDE PANEL ===== -->
+<div class="tools-side-panel dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" id="toolsSidePanel" style="flex-direction:column;">
+  <div class="tools-panel-header">
+    <div class="tools-panel-title">
+      <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+      SPEEKS Tools
+    </div>
+    <button class="tools-panel-close" onclick="_closeToolsPanel()">✕</button>
+  </div>
+  <div class="tools-panel-body">
+
+    <div class="tools-group dynamic-module-block role-district-manager role-ceo role-tom role-owner-manager">
+      <div class="tools-group-label">📢 Content</div>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon">📣</span>Announcements</a>
+    </div>
+
+    <div class="tools-group dynamic-module-block role-district-manager">
+      <div class="tools-group-label">🏪 Store Ops</div>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon">🏆</span>Submit Scorecard</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon">💬</span>Send Store Comment</a>
+    </div>
+
+    <div class="tools-group dynamic-module-block role-district-manager role-ceo role-owner-manager">
+      <div class="tools-group-label">👥 Admin</div>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-owner-manager" onclick="_closeToolsPanel(); toggleManageUsers();"><span class="tools-item-icon">👤</span>User Permissions</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageAlerts();"><span class="tools-item-icon">📈</span>Performance Metrics</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageRecords();"><span class="tools-item-icon">📁</span>Company Records</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageDocs();"><span class="tools-item-icon">📚</span>Manage Policies</a>
+    </div>
+
+    <div class="tools-group dynamic-module-block role-district-manager">
+      <div class="tools-group-label">⚙ System</div>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageHotkeys();"><span class="tools-item-icon">⌨️</span>System Hotkeys</a>
+    </div>
+
+  </div>
+</div>
+
 </body>
 </html>

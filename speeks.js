@@ -498,17 +498,35 @@ function loadAnnouncementDocs() {
     }).join('');
 }
 
-// DEV TOOLS DROPDOWN GLOBAL TOGGLE
-window.toggleDevDropdown = function(e) {
-    e.stopPropagation();
-    const dropdown = document.getElementById('devDropdown');
-    if (dropdown) dropdown.classList.toggle('open');
+// SPEEKS TOOLS PANEL
+window.toggleToolsPanel = function(e) {
+    if (e) e.stopPropagation();
+    const panel = document.getElementById('toolsSidePanel');
+    if (!panel) return;
+    const isOpen = panel.classList.toggle('open');
+    const btn = document.getElementById('toolsNavBtn');
+    if (btn) btn.classList.toggle('panel-open', isOpen);
+    if (isOpen) {
+        document.getElementById('checklistSidePanel')?.classList.remove('open');
+        document.querySelector('.cl-nav-toggle')?.classList.remove('panel-active');
+        document.getElementById('goalsSidePanel')?.classList.remove('open');
+        document.querySelector('.gi-nav-toggle')?.classList.remove('panel-active');
+    }
 };
 
+function _closeToolsPanel() {
+    const panel = document.getElementById('toolsSidePanel');
+    if (panel) panel.classList.remove('open');
+    const btn = document.getElementById('toolsNavBtn');
+    if (btn) btn.classList.remove('panel-open');
+}
+
 document.addEventListener('click', (e) => {
-    const devDropdown = document.getElementById('devDropdown');
-    if (devDropdown && !devDropdown.contains(e.target)) {
-        devDropdown.classList.remove('open');
+    const panel = document.getElementById('toolsSidePanel');
+    const btn = document.getElementById('toolsNavBtn');
+    if (panel && panel.classList.contains('open') && !panel.contains(e.target) && !btn?.contains(e.target)) {
+        panel.classList.remove('open');
+        btn?.classList.remove('panel-open');
     }
 });
 
