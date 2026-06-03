@@ -2550,7 +2550,7 @@ body.is-authenticated .info-ticker { display: flex; }
     margin: 0;
     flex-shrink: 1;
     min-width: 0;
-    overflow: hidden;
+    overflow: visible;
 }
 
 .top-nav .nav-link {
@@ -3272,30 +3272,66 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 /* ── Monthly Performance Brief ── */
 .mb-brief-header { flex-wrap: wrap; gap: 8px; }
 .mb-brief-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.mb-table { width: 100%; border-collapse: separate; border-spacing: 0; font-family: 'Inter', sans-serif; font-size: 12px; }
+.mb-table { width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 0; font-family: 'Inter', sans-serif; font-size: 12.5px; }
 .mb-table thead th {
     position: sticky; top: 0; z-index: 5;
-    background: #f8f9fb; color: #374151;
-    font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px;
-    padding: 8px 12px; text-align: right; border-bottom: 2px solid #c8cdd4;
+    background: #f8f9fb; color: #475569;
+    font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.3px;
+    padding: 9px 10px; text-align: right; border-bottom: 2px solid #c8cdd4; white-space: nowrap;
 }
 .mb-table thead th.mb-th-metric { text-align: left; }
-.mb-th-metric { width: 42%; }
-.mb-th-val { width: 21%; }
-.mb-th-delta { width: 16%; }
+/* fixed widths: metric gets the most, value cols wider than the interleaved delta cols */
+.mb-th-metric { width: 17%; }
+.mb-th-val { width: 9.5%; }
+.mb-th-delta { width: 7%; }
+/* separate each month block with a light rule before its value column */
+.mb-table th.mb-th-val, .mb-table td.mb-val { border-left: 1px solid #e7ebef; }
+/* tint the interleaved delta columns so the alternating value / change reads clearly */
+.mb-table th.mb-th-delta, .mb-table td.mb-delta { background: #f5f8fa; }
+/* highlight the most-recent (current / editable) month */
+.mb-table th.mb-th-current { background: #eaf2e1; color: var(--sage-professional); }
 .mb-section-row td {
     background: #dde3eb; color: var(--slate-charcoal);
     font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px;
-    padding: 6px 12px; border-top: 1px solid #c4cdd8; border-bottom: 1px solid #c4cdd8;
+    padding: 6px 10px; border-top: 1px solid #c4cdd8; border-bottom: 1px solid #c4cdd8;
 }
-.mb-row td { padding: 6px 12px; border-bottom: 1px solid #f0f0f0; }
+.mb-row td { padding: 7px 10px; border-bottom: 1px solid #f0f0f0; }
 .mb-row:hover td { background: #fafbfc; }
-.mb-metric-name { font-weight: 600; color: #334155; }
+.mb-row:hover td.mb-delta { background: #eef3f6; }
+.mb-metric-name { font-weight: 600; color: #334155; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mb-val { text-align: right; font-weight: 700; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
-.mb-val-primary { color: var(--slate-charcoal); }
-.mb-delta { text-align: right; font-weight: 700; font-size: 11px; font-variant-numeric: tabular-nums; color: #94a3b8; }
-.mb-delta.mb-up   { color: #16a34a; }
-.mb-delta.mb-down { color: #dc2626; }
+.mb-val-primary { background: #f4f8ef; }
+.mb-row:hover td.mb-val-primary { background: #eef4e6; }
+.mb-delta { text-align: right; }
+.mb-dash { color: #cbd2da; }
+/* delta as a colored pill: arrow shows direction, color shows good/bad */
+.mb-chip {
+    display: inline-block; padding: 1.5px 7px; border-radius: 11px;
+    font-size: 10.5px; font-weight: 800; letter-spacing: 0.2px;
+    font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 1.6;
+}
+.mb-chip.mb-up   { background: #e6f6ec; color: #15803d; }
+.mb-chip.mb-down { background: #fde8e8; color: #c81e1e; }
+.mb-chip-flat    { background: #eef1f4; color: #9aa4af; }
+
+/* ── view toggle: Overview / Store View ── */
+.mb-view-toggle { display: inline-flex; gap: 2px; background: #eef1f5; border-radius: 9px; padding: 3px; }
+.mb-view-btn {
+    border: none; background: transparent; cursor: pointer; font-family: inherit;
+    padding: 6px 12px; border-radius: 7px; font-size: 12px; font-weight: 700; color: #64748b;
+    transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.mb-view-btn:hover { color: var(--slate-charcoal); }
+.mb-view-btn.active { background: #fff; color: var(--sage-professional); box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+
+/* ── overview: metrics × stores for the most-recent month ── */
+.mb-overview-cap { font-size: 12px; font-weight: 700; color: #64748b; padding: 2px 2px 10px; letter-spacing: 0.2px; }
+.mb-table-overview .mb-th-metric { width: 25%; }
+.mb-table-overview .mb-th-val { width: 15%; }
+.mb-best  { background: #eaf6ee; color: #15803d; }
+.mb-worst { background: #fdecec; color: #c81e1e; }
+.mb-row:hover td.mb-best  { background: #e1f1e6; }
+.mb-row:hover td.mb-worst { background: #f9e2e2; }
 .mb-input {
     width: 92px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 5px;
     font-size: 12px; font-weight: 600; text-align: right; color: var(--slate-charcoal); outline: none;
@@ -5685,4 +5721,193 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 @media (max-width: 768px) {
     .kpi-entry-wrapper { grid-template-columns: 1fr; }
     .kpi-entry-computed { grid-template-columns: 1fr; }
+}
+/* ============================================================================
+   ANALYTICS WORKSPACE (workspace.html)
+   Monthly Brief / Store KPIs / B2B — full-screen sub-tab panes
+   ============================================================================ */
+.ws-wrap { display: flex; flex-direction: column; gap: 16px; }
+
+.ws-titlebar {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 14px;
+}
+.ws-title {
+    display: flex; align-items: center; gap: 10px; margin: 0;
+    font-size: 22px; font-weight: 800; color: var(--slate-charcoal);
+}
+
+/* layout wrapper: column for row-style tabs, row for the sidebar style */
+.ws-layout { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.ws-panes  { min-width: 0; }
+
+/* shared tab reset — visual treatment comes from the per-style rules below */
+.ws-tab {
+    border: none; background: transparent; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: inherit; font-size: 13px; font-weight: 700; line-height: 1;
+    color: #64748b; white-space: nowrap;
+    transition: background 0.18s ease, color 0.18s ease,
+                box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.ws-pane { display: none; }
+.ws-pane.active { display: block; }
+
+/* Each pane's panel fills the viewport below the header for a full-screen feel */
+.ws-panel {
+    display: flex !important;
+    flex-direction: column;
+    height: calc(100vh - 250px) !important;
+    min-height: 460px;
+    margin: 0 !important;
+}
+.ws-scroll   { flex: 1; min-height: 0; }
+.ws-kpi-body { flex: 1; min-height: 0; }
+
+/* Store KPIs pane flows as part of the page: natural height, no inner scrollbar.
+   overflow:visible on every ancestor is required so the sticky header rows below
+   resolve against the page/viewport rather than an inner scroll container. */
+.ws-panel-kpis {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+}
+.ws-panel-kpis .ws-kpi-body { display: block; overflow: visible; flex: none; }
+.ws-panel-kpis .kpi-grid-scroll-wrapper { overflow: visible !important; flex: none; }
+
+/* Column headers are repeated inside each weekly/monthly section (see
+   _kpiHeaderRowsHtml) rather than pinned, so render them inline, not sticky. */
+.ws-panel-kpis .kpi-grid-section-header,
+.ws-panel-kpis .kpi-grid-th { position: static; }
+
+/* Monthly Brief pane flows as part of the page too: natural height, no inner scrollbar */
+.ws-panel-brief { height: auto !important; min-height: 0 !important; overflow: visible !important; }
+.ws-panel-brief .ws-scroll { overflow: visible; flex: none; min-height: 0; }
+.ws-panel-brief .mb-table thead th { position: static; }
+
+/* underline tabs: flat row, active = sage underline + bold */
+.ws-subtabs { display: flex; gap: 2px; border-bottom: 2px solid #e5e8ec; }
+.ws-tab {
+    padding: 11px 18px; border-radius: 0;
+    border-bottom: 3px solid transparent; margin-bottom: -2px;
+}
+.ws-tab:hover { color: var(--slate-charcoal); }
+.ws-tab.active { color: var(--sage-professional); border-bottom-color: var(--sage-professional); }
+
+/* B2B placeholder */
+.ws-b2b-placeholder { align-items: center; justify-content: center; }
+.ws-placeholder-inner { text-align: center; max-width: 460px; margin: auto; padding: 40px 24px; }
+.ws-placeholder-icon { font-size: 54px; line-height: 1; }
+.ws-placeholder-title { margin: 16px 0 8px; font-size: 22px; font-weight: 800; color: var(--slate-charcoal); }
+.ws-placeholder-text { color: #64748b; font-size: 14px; line-height: 1.6; margin: 0 0 18px; }
+.ws-placeholder-badge {
+    display: inline-block; background: #fef3c7; color: #b45309;
+    font-weight: 800; font-size: 12px; letter-spacing: 0.5px;
+    padding: 6px 14px; border-radius: 20px; text-transform: uppercase;
+}
+
+@media (max-width: 768px) {
+    .ws-titlebar { flex-direction: column; align-items: stretch; }
+    .ws-subtabs { overflow-x: auto; }
+    .ws-panel { height: auto !important; min-height: 70vh; }
+}
+
+/* ============================================================
+   B2B DEAL STATUS TRACKER
+   ============================================================ */
+.b2b-board-header { display: flex; align-items: center; justify-content: space-between; }
+.b2b-controls { display: flex; align-items: center; gap: 12px; }
+.b2b-new-btn { padding: 8px 16px; font-size: 12px; }
+.b2b-toggle-completed { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: #6b7280; cursor: pointer; user-select: none; }
+
+/* Pipeline board: one column per state */
+.b2b-board {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px 2px 12px;
+    height: 100%;
+}
+.b2b-col {
+    flex: 1 0 240px;
+    min-width: 240px;
+    max-width: 340px;
+    background: #f3f4f6;
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    max-height: 100%;
+}
+.b2b-col-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 8px; }
+.b2b-col-count { font-size: 12px; font-weight: 800; color: #6b7280; background: #fff; border-radius: 999px; padding: 1px 9px; }
+.b2b-col-body { display: flex; flex-direction: column; gap: 10px; padding: 4px 10px 12px; overflow-y: auto; }
+.b2b-col-empty { text-align: center; color: #c4c9d1; font-size: 13px; padding: 10px 0; }
+
+.b2b-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-left: 4px solid #cbd5e1;
+    border-radius: 10px;
+    padding: 12px;
+    cursor: pointer;
+    transition: box-shadow 0.18s ease, transform 0.18s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    position: relative;
+}
+.b2b-card:hover { box-shadow: 0 6px 16px rgba(0,0,0,0.10); transform: translateY(-2px); }
+.b2b-card-actionable { border-left-color: var(--sage-professional); background: #f6fbf2; }
+
+.b2b-card-company { font-weight: 800; font-size: 14px; color: var(--text-dark); }
+.b2b-card-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11.5px; color: #6b7280; }
+.b2b-card-totals { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: #374151; border-top: 1px dashed #eee; padding-top: 7px; }
+.b2b-card-totals b { color: var(--slate-charcoal); }
+
+.b2b-action-pill {
+    align-self: flex-start;
+    background: var(--sage-professional); color: #fff;
+    font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px;
+    padding: 3px 9px; border-radius: 999px;
+}
+
+/* Status badges */
+.b2b-badge { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+.b2b-badge-location-pending { background: #fef3c7; color: #92400e; }
+.b2b-badge-pricing         { background: #dbeafe; color: #1e40af; }
+.b2b-badge-approval-pending{ background: #ede9fe; color: #6d28d9; }
+.b2b-badge-approved        { background: #dcfce7; color: #166534; }
+.b2b-badge-completed       { background: #e5e7eb; color: #4b5563; }
+
+/* Detail modal */
+.b2b-detail-summary { display: flex; flex-wrap: wrap; gap: 24px; background: #fff; padding: 14px 16px; border-radius: 8px; border: 1px solid #eee; }
+.b2b-detail-summary .form-label-caps { display: block; margin-bottom: 2px; }
+.b2b-assign-box { background: #fff; padding: 18px; border-radius: 8px; border: 1px solid #eee; max-width: 360px; }
+
+.b2b-items-wrap { background: #fff; border-radius: 8px; border: 1px solid #eee; overflow-x: auto; }
+.b2b-items-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.b2b-items-table th { text-align: left; background: #f3f4f6; color: #6b7280; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; padding: 10px 12px; border-bottom: 1px solid #e5e7eb; }
+.b2b-items-table td { padding: 8px 12px; border-bottom: 1px solid #f3f4f6; }
+.b2b-items-table tfoot td { background: #f9fafb; border-top: 2px solid #e5e7eb; }
+.b2b-empty-row { text-align: center; color: #9ca3af; padding: 18px; }
+.b2b-add-row td { background: #f6fbf2; }
+
+.b2b-cell { width: 100%; border: 1px solid #d1d5db; border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit; }
+.b2b-cell:focus { outline: none; border-color: var(--sage-professional); }
+.b2b-cell-num { max-width: 90px; }
+
+.b2b-del-btn, .b2b-add-btn { border: none; cursor: pointer; border-radius: 6px; width: 28px; height: 28px; font-weight: bold; }
+.b2b-del-btn { background: #fee2e2; color: var(--red-alert); }
+.b2b-del-btn:hover { background: var(--red-alert); color: #fff; }
+.b2b-add-btn { background: var(--sage-professional); color: #fff; font-size: 16px; }
+.b2b-add-btn:hover { opacity: 0.88; }
+
+.b2b-detail-action { display: flex; justify-content: flex-end; padding-top: 6px; }
+#b2bDetailTitle { display: flex; align-items: center; gap: 10px; }
+
+@media (max-width: 768px) {
+    .b2b-deal-list { grid-template-columns: 1fr; }
 }

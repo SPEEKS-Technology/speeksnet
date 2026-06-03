@@ -4,12 +4,17 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SPEEKSNET | QuickPortal</title>
-  <link rel="stylesheet" href="styles.css">
+  <style>
+    /* Critical anti-FOUC: keep slide-in side panels out of flow until styles.css loads.
+       styles.css (loaded next) restores their display:flex + off-canvas positioning. */
+    .goals-side-panel, .checklist-side-panel { display: none; }
+  </style>
+  <link rel="stylesheet" href="styles.css?v=20260602l">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  
+
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js" defer></script>
+  <script src="speeks.js?v=20260602l" defer></script>
 </head>
 
 <body class="preload">
@@ -25,6 +30,7 @@
     <a href="index.html" class="nav-link active"><i>⚡</i> <span>QuickPortal</span></a>
     <a href="docs.html" class="nav-link"><i>📚</i> <span>Processes & Policies</span></a>
     <a href="stats.html" class="nav-link"><i>🏆</i> <span>Stats & Awards</span></a>
+    <a href="workspace.html" class="nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-tom role-assistant-manager"><i>📈</i> <span>Analytics</span></a>
   </nav>
 
   <div class="nav-right">
@@ -150,34 +156,6 @@
     <div class="manage-footer">
         <button class="btn-secondary" onclick="addManageUserRow()">+ Add New User</button>
         <button id="saveUsersBtn" class="btn-primary" onclick="saveManageUsers()">Save Changes</button>
-    </div>
-</div>
-
-<!-- KPI View Modal (full screen) -->
-<div class="modal-menu kpi-fullscreen-modal" id="kpiEntryModal">
-    <div class="modal-header kpi-modal-header-tight">
-        <div class="align-center gap-15">
-            <h3>Store KPIs</h3>
-            <div class="notif-tabs">
-                <button id="kpi-tab-weekly"  class="tab-btn active" onclick="switchKpiTab('weekly')">📅 Weekly</button>
-                <button id="kpi-tab-monthly" class="tab-btn"        onclick="switchKpiTab('monthly')">📆 Monthly</button>
-            </div>
-            <select id="kpiModalStoreSelect" class="kpi-select dynamic-module-block role-district-manager role-ceo role-tom" onchange="_kpiLoadAll(_kpiCurrentTab)" style="display:none;">
-                <option value="OVL">OVL</option>
-                <option value="LEE">LEE</option>
-                <option value="WSP">WSP</option>
-                <option value="MPL">MPL</option>
-                <option value="BAL">BAL</option>
-            </select>
-            <span id="kpiModalSubtitle" style="font-size:11px;color:#888;font-weight:600;"></span>
-        </div>
-        <div class="align-center gap-8">
-            <button class="kpi-export-btn" onclick="_kpiExportCSV()" title="Export to CSV">⬇ Export CSV</button>
-            <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
-        </div>
-    </div>
-    <div class="kpi-fullscreen-body" id="kpiModalBody">
-        <div class="kpi-empty-state">Loading…</div>
     </div>
 </div>
 
@@ -497,7 +475,7 @@
         <div class="hotbar-container">
           <span class="hotbar-label">DM</span>
           <div class="hotbar-links">
-            <button class="hotbar-btn hotbar-btn-primary" onclick="openKpiEntryPanel('weekly')">📊 View KPIs</button>
+            <button class="hotbar-btn hotbar-btn-primary" onclick="window.location.href='workspace.html#kpis'">📊 View KPIs</button>
             <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn">📁 Store Manager Folder</a>
             <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn">🔑 Store Passwords</a>
             <a href="https://docs.google.com/spreadsheets/d/1NkIdw8dlvwXmQ6kdpo73zqRwnPd4kIAkgJ7yAG2XCt4/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Listing Goals</a>  
@@ -550,7 +528,7 @@
         <div class="hotbar-container">
           <span class="hotbar-label">MGR</span>
           <div class="hotbar-links">
-            <button class="hotbar-btn hotbar-btn-primary" onclick="openKpiEntryPanel('weekly')">📊 View KPIs</button>
+            <button class="hotbar-btn hotbar-btn-primary" onclick="window.location.href='workspace.html#kpis'">📊 View KPIs</button>
             <a href="https://docs.google.com/spreadsheets/d/1e4mW-pcwUMJjl2Pjry6PT180P8M8nkYL5Z4GcspQmEA/edit" target="_blank" class="hotbar-btn">📉 Monthly KPIs</a>
             <a href="https://docs.google.com/spreadsheets/d/1NkIdw8dlvwXmQ6kdpo73zqRwnPd4kIAkgJ7yAG2XCt4/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Daily Listing Goals</a>  
             <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn">⏳ Aging Inventory</a>
@@ -967,30 +945,6 @@
           </div>
       </div>
 
-      <div class="card kpi-master-card district-master-panel employee-widget-card dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo weekly-expanded-card">
-          <div class="district-kpi-header mb-brief-header">
-              <span class="district-kpi-title">Monthly Performance Brief</span>
-              <div class="mb-brief-controls">
-                  <select id="mbStoreSelect" class="kpi-select" onchange="fetchMonthlyBrief()">
-                      <option value="OVL">OVL</option>
-                      <option value="LEE">LEE</option>
-                      <option value="WSP">WSP</option>
-                      <option value="MPL">MPL</option>
-                      <option value="BAL">BAL</option>
-                  </select>
-                  <select id="mbPrimaryMonth" class="kpi-select" onchange="renderMonthlyBrief()"></select>
-                  <span class="vw-vs-text">vs</span>
-                  <select id="mbCompareMonth" class="kpi-select" onchange="renderMonthlyBrief()"></select>
-                  <button id="mbEditBtn" class="kpi-update-trigger-btn" style="display:none;" onclick="mbStartEdit()">✏️ Edit</button>
-                  <button id="mbSaveBtn" class="kpi-save-section-btn" style="display:none;" onclick="mbSaveBrief()">Save</button>
-                  <button id="mbCancelBtn" class="kpi-cancel-btn" style="display:none;" onclick="mbCancelEdit()">Cancel</button>
-              </div>
-          </div>
-          <div class="weekly-kpi-scroll-area" id="mbBody">
-              <div class="status-message">Syncing Performance Brief…</div>
-          </div>
-      </div>
-
       <div class="card kpi-master-card district-master-panel employee-widget-card dynamic-module-flex role-manager role-owner-manager flex-col-card bottom-locked-card" style="margin-bottom: 0;">
           <div class="district-kpi-header" style="border-bottom: none;">
               <span class="district-kpi-title">Live Variance Reports <span id="variance-date-display" class="widget-date-display"></span></span>
@@ -1021,8 +975,8 @@
           <div class="vw-footer">
               <a href="https://drive.google.com/drive/folders/12Fjxp44sY6T-o6OlrG6n_YtrHow4bE2f?usp=sharing" target="_blank" class="quick-link-pill vw-footer-btn">📁 Variance Replies</a>
           </div>
-      </div>  
-  
+      </div>
+
 <div id="scorecardModalOverlay" onclick="closeScorecardModal()"></div>
 <div class="modal-menu manage-menu" id="scorecardSubmitModal">
     <div class="modal-header">
