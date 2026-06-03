@@ -5812,3 +5812,102 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     .ws-subtabs { overflow-x: auto; }
     .ws-panel { height: auto !important; min-height: 70vh; }
 }
+
+/* ============================================================
+   B2B DEAL STATUS TRACKER
+   ============================================================ */
+.b2b-board-header { display: flex; align-items: center; justify-content: space-between; }
+.b2b-controls { display: flex; align-items: center; gap: 12px; }
+.b2b-new-btn { padding: 8px 16px; font-size: 12px; }
+.b2b-toggle-completed { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: #6b7280; cursor: pointer; user-select: none; }
+
+/* Pipeline board: one column per state */
+.b2b-board {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px 2px 12px;
+    height: 100%;
+}
+.b2b-col {
+    flex: 1 0 240px;
+    min-width: 240px;
+    max-width: 340px;
+    background: #f3f4f6;
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    max-height: 100%;
+}
+.b2b-col-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 8px; }
+.b2b-col-count { font-size: 12px; font-weight: 800; color: #6b7280; background: #fff; border-radius: 999px; padding: 1px 9px; }
+.b2b-col-body { display: flex; flex-direction: column; gap: 10px; padding: 4px 10px 12px; overflow-y: auto; }
+.b2b-col-empty { text-align: center; color: #c4c9d1; font-size: 13px; padding: 10px 0; }
+
+.b2b-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-left: 4px solid #cbd5e1;
+    border-radius: 10px;
+    padding: 12px;
+    cursor: pointer;
+    transition: box-shadow 0.18s ease, transform 0.18s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    position: relative;
+}
+.b2b-card:hover { box-shadow: 0 6px 16px rgba(0,0,0,0.10); transform: translateY(-2px); }
+.b2b-card-actionable { border-left-color: var(--sage-professional); background: #f6fbf2; }
+
+.b2b-card-company { font-weight: 800; font-size: 14px; color: var(--text-dark); }
+.b2b-card-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11.5px; color: #6b7280; }
+.b2b-card-totals { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: #374151; border-top: 1px dashed #eee; padding-top: 7px; }
+.b2b-card-totals b { color: var(--slate-charcoal); }
+
+.b2b-action-pill {
+    align-self: flex-start;
+    background: var(--sage-professional); color: #fff;
+    font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px;
+    padding: 3px 9px; border-radius: 999px;
+}
+
+/* Status badges */
+.b2b-badge { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+.b2b-badge-location-pending { background: #fef3c7; color: #92400e; }
+.b2b-badge-pricing         { background: #dbeafe; color: #1e40af; }
+.b2b-badge-approval-pending{ background: #ede9fe; color: #6d28d9; }
+.b2b-badge-approved        { background: #dcfce7; color: #166534; }
+.b2b-badge-completed       { background: #e5e7eb; color: #4b5563; }
+
+/* Detail modal */
+.b2b-detail-summary { display: flex; flex-wrap: wrap; gap: 24px; background: #fff; padding: 14px 16px; border-radius: 8px; border: 1px solid #eee; }
+.b2b-detail-summary .form-label-caps { display: block; margin-bottom: 2px; }
+.b2b-assign-box { background: #fff; padding: 18px; border-radius: 8px; border: 1px solid #eee; max-width: 360px; }
+
+.b2b-items-wrap { background: #fff; border-radius: 8px; border: 1px solid #eee; overflow-x: auto; }
+.b2b-items-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.b2b-items-table th { text-align: left; background: #f3f4f6; color: #6b7280; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; padding: 10px 12px; border-bottom: 1px solid #e5e7eb; }
+.b2b-items-table td { padding: 8px 12px; border-bottom: 1px solid #f3f4f6; }
+.b2b-items-table tfoot td { background: #f9fafb; border-top: 2px solid #e5e7eb; }
+.b2b-empty-row { text-align: center; color: #9ca3af; padding: 18px; }
+.b2b-add-row td { background: #f6fbf2; }
+
+.b2b-cell { width: 100%; border: 1px solid #d1d5db; border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit; }
+.b2b-cell:focus { outline: none; border-color: var(--sage-professional); }
+.b2b-cell-num { max-width: 90px; }
+
+.b2b-del-btn, .b2b-add-btn { border: none; cursor: pointer; border-radius: 6px; width: 28px; height: 28px; font-weight: bold; }
+.b2b-del-btn { background: #fee2e2; color: var(--red-alert); }
+.b2b-del-btn:hover { background: var(--red-alert); color: #fff; }
+.b2b-add-btn { background: var(--sage-professional); color: #fff; font-size: 16px; }
+.b2b-add-btn:hover { opacity: 0.88; }
+
+.b2b-detail-action { display: flex; justify-content: flex-end; padding-top: 6px; }
+#b2bDetailTitle { display: flex; align-items: center; gap: 10px; }
+
+@media (max-width: 768px) {
+    .b2b-deal-list { grid-template-columns: 1fr; }
+}

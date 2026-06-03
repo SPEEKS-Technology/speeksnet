@@ -48,6 +48,7 @@ const PATCH_NOTES_URL   = `${_BASE}/patch-notes`;
 const TICKER_URL        = `${_BASE}/ticker`;
 const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
 const MONTHLY_BRIEF_URL = `${_BASE}/monthly-brief`;
+const B2B_URL           = `${_BASE}/b2b-deals`;
 
 // --- 2. NAV COMPACT MODE ---
 (function () {
@@ -2861,6 +2862,8 @@ function switchWorkspaceTab(name) {
         if (!_wsBriefLoaded) { _wsBriefLoaded = true; if (typeof fetchMonthlyBrief === 'function') fetchMonthlyBrief(); }
     } else if (name === 'kpis') {
         loadWorkspaceKpis();
+    } else if (name === 'b2b') {
+        fetchB2BDeals();
     }
 }
 
@@ -2870,8 +2873,12 @@ function initWorkspace() {
     if (!document.querySelector('.ws-wrap')) return;
     _wsBriefLoaded = false;
     _wsKpiLoaded   = false;
+    // Roles without Brief/KPIs access (TOM, Assistant Manager) land on the B2B board.
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
+    const canSeeBrief = ['manager', 'owner (manager)', 'district manager', 'ceo'].includes(role);
     const hash = (window.location.hash || '').replace('#', '');
-    const initial = ['brief', 'kpis', 'b2b'].includes(hash) ? hash : 'brief';
+    let initial = ['brief', 'kpis', 'b2b'].includes(hash) ? hash : (canSeeBrief ? 'brief' : 'b2b');
+    if (!canSeeBrief && (initial === 'brief' || initial === 'kpis')) initial = 'b2b';
     switchWorkspaceTab(initial);
 }
 
@@ -5780,6 +5787,336 @@ async function _completeTutorial() {
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
             body: JSON.stringify({ action: 'complete', user: userName })
         }).catch(() => {});
+    }
+}
+
+// ============================================================================
+// 22b. MODULE: B2B DEAL STATUS TRACKER
+// ============================================================================
+
+const B2B_STORE_ICONS = { 'OVL': '🟣', 'LEE': '🔵', 'WSP': '🟢', 'MPL': '🟠', 'BAL': '🔴' };
+const B2B_STORE_LIST  = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+const B2B_CORP_ROLES  = ['district manager', 'ceo', 'tom'];   // can create + leave Location Pending
+const B2B_APPROVERS   = ['ceo', 'district manager'];          // can approve
+const B2B_STORE_ROLES = ['manager', 'owner (manager)', 'assistant manager']; // store actors
+
+let b2bDealsCache = [];
+let b2bCurrentDealId = null;
+
+function b2bMoney(n) {
+    return '$' + (Number(n) || 0).toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+
+function b2bStoreLabel(store) {
+    if (!store) return 'Unassigned';
+    return `${B2B_STORE_ICONS[store] || '🏬'} ${store}`;
+}
+
+function b2bStatusBadge(status) {
+    const slug = status.toLowerCase().replace(/\s+/g, '-');
+    return `<span class="b2b-badge b2b-badge-${slug}">${status}</span>`;
+}
+
+// Who can act on a deal in its current state (UI gating; server enforces transition legality)
+function b2bCanAct(deal) {
+    const role  = (sessionStorage.getItem('speeksUserRole')  || '').toLowerCase();
+    const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    switch (deal.status) {
+        case 'Location Pending': return B2B_CORP_ROLES.includes(role);
+        case 'Pricing':          return B2B_STORE_ROLES.includes(role) && deal.assigned_store === store;
+        case 'Approval Pending': return B2B_APPROVERS.includes(role);
+        case 'Approved':         return B2B_STORE_ROLES.includes(role) && deal.assigned_store === store;
+        default:                 return false;
+    }
+}
+
+const B2B_PIPELINE = ['Location Pending', 'Pricing', 'Approval Pending', 'Approved'];
+
+async function fetchB2BDeals() {
+    const list = document.getElementById('b2bDealList');
+    if (!list) return; // not on this page
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
+    let store = (sessionStorage.getItem('speeksUserStore') || 'ALL').toUpperCase();
+    // Corporate roles can pick any store (or ALL) via the board filter
+    if (B2B_CORP_ROLES.includes(role)) {
+        store = document.getElementById('b2bStoreFilter')?.value || 'ALL';
+    }
+    try {
+        const res = await fetch(`${B2B_URL}?store=${encodeURIComponent(store)}&v=${Date.now()}`);
+        b2bDealsCache = await res.json();
+        if (!Array.isArray(b2bDealsCache)) b2bDealsCache = [];
+        renderB2BDeals();
+    } catch (e) {
+        list.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load B2B deals.</div>';
+    }
+}
+
+// Full-page Kanban-style pipeline: one column per state, deals as cards.
+function renderB2BDeals() {
+    const board = document.getElementById('b2bDealList');
+    if (!board) return;
+    const showCompleted = document.getElementById('b2bShowCompleted')?.checked;
+    const columns = showCompleted ? [...B2B_PIPELINE, 'Completed'] : B2B_PIPELINE;
+
+    const countEl = document.getElementById('b2b-count');
+    if (countEl) {
+        const actionable = b2bDealsCache.filter(b2bCanAct).length;
+        countEl.textContent = actionable ? `• ${actionable} need${actionable === 1 ? 's' : ''} your action` : '';
+    }
+
+    board.innerHTML = columns.map(state => {
+        const deals = b2bDealsCache.filter(d => d.status === state);
+        const slug = state.toLowerCase().replace(/\s+/g, '-');
+        const cards = deals.length
+            ? deals.map(d => b2bCardHtml(d)).join('')
+            : '<div class="b2b-col-empty">—</div>';
+        return `
+        <div class="b2b-col b2b-col-${slug}">
+            <div class="b2b-col-head">
+                ${b2bStatusBadge(state)}
+                <span class="b2b-col-count">${deals.length}</span>
+            </div>
+            <div class="b2b-col-body">${cards}</div>
+        </div>`;
+    }).join('');
+}
+
+function b2bCardHtml(d) {
+    const act = b2bCanAct(d);
+    const pill = act ? '<span class="b2b-action-pill">Action needed</span>' : '';
+    return `
+        <div class="b2b-card ${act ? 'b2b-card-actionable' : ''}" onclick="openB2BDeal('${d.id}')">
+            <div class="b2b-card-company">${escapeHtml(d.company)}</div>
+            <div class="b2b-card-meta">
+                <span>📅 ${escapeHtml(d.pickup_date)}</span>
+                <span>${b2bStoreLabel(d.assigned_store)}</span>
+            </div>
+            <div class="b2b-card-totals">
+                <span><b>${d.line_count || 0}</b> items · qty <b>${d.total_qty || 0}</b></span>
+                <span>Offer <b>${b2bMoney(d.total_offer)}</b></span>
+                <span>Value <b>${b2bMoney(d.total_value)}</b></span>
+            </div>
+            ${pill}
+        </div>`;
+}
+
+// ----- Create -----
+function openB2BCreate() {
+    const modal = document.getElementById('b2bCreateModal');
+    if (!modal) { console.warn('B2B create modal not found in DOM'); return; }
+    const dateEl = document.getElementById('b2bPickupInput');
+    if (dateEl && !dateEl.value) {
+        dateEl.value = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' }); // YYYY-MM-DD
+    }
+    const companyEl = document.getElementById('b2bCompanyInput');
+    if (companyEl) companyEl.value = '';
+    toggleModal('b2bCreateModal');
+}
+
+async function createB2BDeal() {
+    const company = document.getElementById('b2bCompanyInput').value.trim();
+    const pickup  = document.getElementById('b2bPickupInput').value;
+    if (!company || !pickup) { alert('Please enter a company and pickup date.'); return; }
+
+    const btn = document.getElementById('b2bCreateBtn');
+    btn.disabled = true; btn.innerText = 'Creating...';
+    try {
+        const res = await fetch(B2B_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+                action: 'create',
+                company,
+                pickup_date: pickup,
+                created_by: sessionStorage.getItem('speeksUserName') || 'Unknown'
+            })
+        });
+        const out = await res.json();
+        if (!res.ok) throw new Error(out.error || 'Failed');
+        closeAllModals();
+        await fetchB2BDeals();
+    } catch (e) {
+        alert('Could not create deal: ' + e.message);
+    } finally {
+        btn.disabled = false; btn.innerText = 'Create Deal';
+    }
+}
+
+// ----- Detail view -----
+async function openB2BDeal(id) {
+    const deal = b2bDealsCache.find(d => d.id === id);
+    if (!deal) return;
+    b2bCurrentDealId = id;
+    const body = document.getElementById('b2bDetailBody');
+    document.getElementById('b2bDetailTitle').innerHTML = `${escapeHtml(deal.company)} ${b2bStatusBadge(deal.status)}`;
+    body.innerHTML = '<div class="status-message">Loading items...</div>';
+
+    const modal = document.getElementById('b2bDetailModal');
+    closeAllModals();
+    modal.classList.add('show');
+    lockAndBlurScreen();
+
+    let items = [];
+    try {
+        const res = await fetch(`${B2B_URL}?deal_id=${encodeURIComponent(id)}&v=${Date.now()}`);
+        items = await res.json();
+        if (!Array.isArray(items)) items = [];
+    } catch (e) { /* show empty */ }
+    renderB2BDetail(deal, items);
+}
+
+function renderB2BDetail(deal, items) {
+    const body = document.getElementById('b2bDetailBody');
+    const canAct = b2bCanAct(deal);
+    const editable = deal.status === 'Pricing' && canAct;
+
+    let html = `
+        <div class="b2b-detail-summary">
+            <div><span class="form-label-caps">Pickup</span> ${escapeHtml(deal.pickup_date)}</div>
+            <div><span class="form-label-caps">Store</span> ${b2bStoreLabel(deal.assigned_store)}</div>
+            <div><span class="form-label-caps">Logged by</span> ${escapeHtml(deal.created_by || '—')}</div>
+        </div>`;
+
+    // Location Pending: assign a store
+    if (deal.status === 'Location Pending') {
+        if (canAct) {
+            html += `
+            <div class="b2b-assign-box">
+                <label class="form-label-caps">Assign to store</label>
+                <select id="b2bAssignStore" class="form-input-lg" style="margin-bottom:12px;">
+                    ${B2B_STORE_LIST.map(s => `<option value="${s}">${B2B_STORE_ICONS[s]} ${s}</option>`).join('')}
+                </select>
+                <button class="btn-primary" onclick="assignAndAdvanceB2B('${deal.id}')">Assign &amp; Start Pricing →</button>
+            </div>`;
+        } else {
+            html += '<p class="status-message">Awaiting a store assignment from DM / CEO / TOM.</p>';
+        }
+        body.innerHTML = html;
+        return;
+    }
+
+    // Items table (Pricing / Approval Pending / Approved / Completed)
+    const totalOffer = items.reduce((s, it) => s + (it.qty_offer_total || 0), 0);
+    const totalValue = items.reduce((s, it) => s + (it.qty_value_total || 0), 0);
+    const totalQty   = items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+
+    html += '<div class="b2b-items-wrap"><table class="b2b-items-table"><thead><tr>' +
+            '<th>Make</th><th>Model</th><th>Qty</th><th>Unit Value</th><th>Unit Offer</th>' +
+            '<th>Value Total</th><th>Offer Total</th>' + (editable ? '<th></th>' : '') +
+            '</tr></thead><tbody>';
+
+    if (!items.length) {
+        html += `<tr><td colspan="${editable ? 8 : 7}" class="b2b-empty-row">No items added yet.</td></tr>`;
+    } else {
+        html += items.map(it => editable ? `
+            <tr>
+                <td><input class="b2b-cell" value="${escapeHtml(it.make)}" onchange="updateB2BItem('${it.id}','make',this.value)"></td>
+                <td><input class="b2b-cell" value="${escapeHtml(it.model)}" onchange="updateB2BItem('${it.id}','model',this.value)"></td>
+                <td><input class="b2b-cell b2b-cell-num" type="number" min="0" value="${it.quantity}" onchange="updateB2BItem('${it.id}','quantity',this.value)"></td>
+                <td><input class="b2b-cell b2b-cell-num" type="number" min="0" step="0.01" value="${it.value}" onchange="updateB2BItem('${it.id}','value',this.value)"></td>
+                <td><input class="b2b-cell b2b-cell-num" type="number" min="0" step="0.01" value="${it.offer}" onchange="updateB2BItem('${it.id}','offer',this.value)"></td>
+                <td>${b2bMoney(it.qty_value_total)}</td>
+                <td>${b2bMoney(it.qty_offer_total)}</td>
+                <td><button class="b2b-del-btn" onclick="deleteB2BItem('${it.id}')" title="Remove">✖</button></td>
+            </tr>` : `
+            <tr>
+                <td>${escapeHtml(it.make)}</td>
+                <td>${escapeHtml(it.model)}</td>
+                <td>${it.quantity}</td>
+                <td>${b2bMoney(it.value)}</td>
+                <td>${b2bMoney(it.offer)}</td>
+                <td>${b2bMoney(it.qty_value_total)}</td>
+                <td>${b2bMoney(it.qty_offer_total)}</td>
+            </tr>`).join('');
+    }
+
+    // Add-item row (Pricing only)
+    if (editable) {
+        html += `
+            <tr class="b2b-add-row">
+                <td><input id="b2bNewMake" class="b2b-cell" placeholder="Make"></td>
+                <td><input id="b2bNewModel" class="b2b-cell" placeholder="Model"></td>
+                <td><input id="b2bNewQty" class="b2b-cell b2b-cell-num" type="number" min="0" value="1"></td>
+                <td><input id="b2bNewValue" class="b2b-cell b2b-cell-num" type="number" min="0" step="0.01" placeholder="0"></td>
+                <td><input id="b2bNewOffer" class="b2b-cell b2b-cell-num" type="number" min="0" step="0.01" placeholder="0"></td>
+                <td colspan="2"></td>
+                <td><button class="b2b-add-btn" onclick="addB2BItem('${deal.id}')" title="Add item">＋</button></td>
+            </tr>`;
+    }
+
+    html += '</tbody><tfoot><tr>' +
+            `<td colspan="2"><b>Totals</b></td><td><b>${totalQty}</b></td><td></td><td></td>` +
+            `<td><b>${b2bMoney(totalValue)}</b></td><td><b>${b2bMoney(totalOffer)}</b></td>` +
+            (editable ? '<td></td>' : '') + '</tr></tfoot></table></div>';
+
+    // Primary state action
+    if (canAct) {
+        if (deal.status === 'Pricing') {
+            html += `<div class="b2b-detail-action"><button class="btn-primary" onclick="advanceB2BDeal('${deal.id}','Submit these items for approval?')">Submit for Approval →</button></div>`;
+        } else if (deal.status === 'Approval Pending') {
+            html += `<div class="b2b-detail-action"><button class="btn-primary" onclick="advanceB2BDeal('${deal.id}','Approve this deal?')">✓ Approve Deal</button></div>`;
+        } else if (deal.status === 'Approved') {
+            html += `<div class="b2b-detail-action"><button class="btn-primary" onclick="advanceB2BDeal('${deal.id}','Mark this deal completed and archive it?')">Mark Completed ✓</button></div>`;
+        }
+    }
+
+    body.innerHTML = html;
+}
+
+// ----- State transitions -----
+async function assignAndAdvanceB2B(id) {
+    const store = document.getElementById('b2bAssignStore')?.value;
+    if (!store) return;
+    await b2bPost({ action: 'assign_advance', id, assigned_store: store }, 'Could not assign store');
+    closeAllModals();
+    await fetchB2BDeals();
+}
+
+async function advanceB2BDeal(id, confirmMsg) {
+    if (confirmMsg && !confirm(confirmMsg)) return;
+    await b2bPost({ action: 'advance', id }, 'Could not advance deal');
+    closeAllModals();
+    await fetchB2BDeals();
+}
+
+// ----- Item CRUD -----
+async function addB2BItem(dealId) {
+    const make  = document.getElementById('b2bNewMake').value.trim();
+    const model = document.getElementById('b2bNewModel').value.trim();
+    const qty   = document.getElementById('b2bNewQty').value;
+    const value = document.getElementById('b2bNewValue').value;
+    const offer = document.getElementById('b2bNewOffer').value;
+    if (!make && !model) { alert('Enter a make or model.'); return; }
+    await b2bPost({ action: 'add_item', deal_id: dealId, make, model, quantity: qty, value, offer }, 'Could not add item');
+    await openB2BDeal(dealId);   // re-fetch items + re-render
+    fetchB2BDeals();             // refresh card totals in background
+}
+
+async function updateB2BItem(id, field, value) {
+    await b2bPost({ action: 'update_item', id, [field]: value }, 'Could not update item');
+    if (b2bCurrentDealId) await openB2BDeal(b2bCurrentDealId);
+    fetchB2BDeals();
+}
+
+async function deleteB2BItem(id) {
+    await b2bPost({ action: 'delete_item', id }, 'Could not remove item');
+    if (b2bCurrentDealId) await openB2BDeal(b2bCurrentDealId);
+    fetchB2BDeals();
+}
+
+async function b2bPost(payload, errLabel) {
+    try {
+        const res = await fetch(B2B_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify(payload)
+        });
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(out.error || 'Request failed');
+        return out;
+    } catch (e) {
+        alert(`${errLabel}: ${e.message}`);
+        throw e;
     }
 }
 
