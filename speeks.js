@@ -6503,7 +6503,7 @@ function initDashboardData() {
         // Pre-load checklist in background so chip + glow appear without opening the panel
         const _clRole = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
         if (_clRole === 'manager' || _clRole === 'district manager' || _clRole === 'assistant manager') {
-            setTimeout(loadChecklist, 1200);
+            setTimeout(_prefetchChecklistForChip, 1200);
         }
 
 
@@ -8652,6 +8652,20 @@ async function fetchChampions() {
 // ============================================================================
 let currentChecklistTab = 'daily';
 let checklistDataCache = { daily: [], weekly: [], monthly: [], quarterly: [] };
+// Tracks optimistic toggle state for up to 20 seconds so a slow backend response
+// can't overwrite a locally-checked item before Apps Script persists it.
+const _pendingToggles = new Map(); // id -> { checked, expiresAt }
+
+function _applyPendingToggles() {
+    const now = Date.now();
+    for (const [id, { checked, expiresAt }] of _pendingToggles) {
+        if (now > expiresAt) { _pendingToggles.delete(id); continue; }
+        for (const tab of Object.keys(checklistDataCache)) {
+            const item = checklistDataCache[tab].find(i => i.id === id);
+            if (item) item.checked = checked;
+        }
+    }
+}
 
 // For assistant managers, returns the store's primary manager name so both share the same checklist data.
 // All other roles return their own name, preserving existing behavior.
@@ -8691,6 +8705,12 @@ function switchChecklistTab(tab) {
 }
 
 async function loadChecklist() {
+    // Only run when the panel is actually opening — not on close.
+    // Without this guard, the GET races against the in-flight toggle POST and
+    // overwrites the cache with stale (unchecked) data before the backend saves.
+    const panel = document.getElementById('checklistSidePanel');
+    if (!panel?.classList.contains('open')) return;
+
     const container = document.getElementById('checklistContent');
     const userName = getChecklistUser();
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
@@ -8698,12 +8718,12 @@ async function loadChecklist() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
     const isASM = role === 'assistant manager';
 
-    // ASMs only see Daily (they share the manager's checklist but don't manage weekly/monthly)
+    // ASMs see Daily and Weekly; Monthly and Quarterly remain hidden for them
     const weeklyTab = document.getElementById('cl-tab-weekly');
     const monthlyTab = document.getElementById('cl-tab-monthly');
-    if (weeklyTab) weeklyTab.style.display = isASM ? 'none' : '';
+    if (weeklyTab) weeklyTab.style.display = '';
     if (monthlyTab) monthlyTab.style.display = isASM ? 'none' : '';
-    if (isASM && currentChecklistTab !== 'daily') switchChecklistTab('daily');
+    if (isASM && currentChecklistTab !== 'daily' && currentChecklistTab !== 'weekly') switchChecklistTab('daily');
 
     // Only show Quarterly tab for CORP/ALL stores (never for ASMs)
     const qTab = document.getElementById('cl-tab-quarterly');
@@ -8721,6 +8741,7 @@ async function loadChecklist() {
     try {
         const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
         checklistDataCache = await res.json();
+        _applyPendingToggles();
         renderChecklist();
     } catch (e) {
         console.error("Checklist Fetch Error", e);
@@ -8766,12 +8787,14 @@ async function toggleChecklistState(id, isChecked) {
     
     const item = checklistDataCache[currentChecklistTab].find(i => i.id === id);
     if (item) item.checked = isChecked;
-    renderChecklist(); 
+    // Protect this optimistic state for 20s so a slow server response can't overwrite it
+    _pendingToggles.set(id, { checked: isChecked, expiresAt: Date.now() + 20000 });
+    renderChecklist();
 
     fetch(CHECKLIST_URL, {
         method: 'POST', mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'toggle', id: id, checked: isChecked, user: userName, store: store }) // <--- Added store here
+        body: JSON.stringify({ action: 'toggle', id: id, checked: isChecked, tab: currentChecklistTab, user: userName, store: store })
     }).catch(() => {});
 }
 
@@ -8824,7 +8847,7 @@ async function deleteChecklistItem(id) {
     fetch(CHECKLIST_URL, {
         method: 'POST', mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'delete', id: id, user: userName, store: store })
+        body: JSON.stringify({ action: 'delete', id: id, tab: currentChecklistTab, user: userName, store: store })
     }).catch(() => {});
 }
 
@@ -8843,7 +8866,7 @@ function clearChecklistTab() {
         fetch(CHECKLIST_URL, {
             method: 'POST', mode: 'no-cors',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'toggle', id: item.id, checked: false, user: userName, store: store })
+            body: JSON.stringify({ action: 'toggle', id: item.id, checked: false, tab: currentChecklistTab, user: userName, store: store })
         }).catch(() => {});
     });
 }
@@ -8870,6 +8893,18 @@ function updateChecklistChip() {
     btn.classList.toggle('cl-needs-attention', done < total && !isOpen);
 }
 
+// Fetches checklist data at startup to populate the progress chip without opening the panel.
+// Uses a separate path from loadChecklist() so the panel-open guard doesn't suppress it.
+async function _prefetchChecklistForChip() {
+    const userName = getChecklistUser();
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+    try {
+        const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
+        checklistDataCache = await res.json();
+        _applyPendingToggles();
+        updateChecklistChip();
+    } catch (_) {}
+}
 
 // --- BULLETPROOF TOGGLE & CLICK-AWAY LOGIC ---
 let _clSyncInterval = null;
@@ -8883,9 +8918,8 @@ function _startChecklistSync() {
         const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
         try {
             const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
-            const fresh = await res.json();
-            // Merge: preserve any in-flight optimistic state for unchecked items
-            checklistDataCache = fresh;
+            checklistDataCache = await res.json();
+            _applyPendingToggles();
             renderChecklist();
         } catch (_) {}
     }, 30000);
