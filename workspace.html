@@ -370,25 +370,29 @@
       </div>
     </section>
 
-    <!-- ===== B2B PANE ===== -->
+    <!-- ===== B2B PANE (role-reactive: Needs You · Pipeline · Overview) ===== -->
     <section class="ws-pane" id="ws-pane-b2b">
-      <div class="card kpi-master-card district-master-panel ws-panel b2b-board-panel">
-          <div class="district-kpi-header b2b-board-header">
-              <span class="district-kpi-title">🏢 B2B Deals <span id="b2b-count" class="widget-date-display"></span></span>
-              <div class="b2b-controls">
-                  <select id="b2bStoreFilter" class="kpi-select dynamic-module-block role-district-manager role-ceo role-tom" onchange="fetchB2BDeals()" style="display:none;">
-                      <option value="ALL">All Stores</option>
-                      <option value="OVL">OVL</option>
-                      <option value="LEE">LEE</option>
-                      <option value="WSP">WSP</option>
-                      <option value="MPL">MPL</option>
-                      <option value="BAL">BAL</option>
-                  </select>
-                  <label class="b2b-toggle-completed"><input type="checkbox" id="b2bShowCompleted" onchange="renderB2BDeals()"> Show completed</label>
-                  <button id="b2bNewBtn" class="btn-primary b2b-new-btn dynamic-module-flex role-district-manager role-ceo role-tom" onclick="openB2BCreate()">+ New Deal</button>
+      <div class="b2b-page">
+          <div class="b2b-page-header">
+              <h1>🏢 B2B Deals</h1>
+              <p id="b2bSubhead">Bulk electronics deals — from pickup to payout.</p>
+          </div>
+
+          <div class="b2b-bar">
+              <div class="b2b-seg" id="b2bSeg">
+                  <button data-view="queue" class="on" onclick="setB2BView('queue')">🎯 Needs You <span class="pip" id="b2bQueuePip" style="display:none;">0</span></button>
+                  <button data-view="pipeline" onclick="setB2BView('pipeline')">📋 Pipeline</button>
+                  <button data-view="overview" onclick="setB2BView('overview')">📊 <span id="b2bOverviewLabel">Overview</span></button>
+              </div>
+              <div class="b2b-bar-right">
+                  <span class="b2b-scope-chip" id="b2bScopeChip" style="display:none;"></span>
+                  <button id="b2bNewBtn" class="b2b-btn b2b-btn-primary b2b-new-btn dynamic-module-flex role-district-manager role-ceo role-tom" onclick="openB2BCreate()">+ New Deal</button>
               </div>
           </div>
-          <div class="b2b-board ws-scroll" id="b2bDealList">
+
+          <div class="b2b-summary" id="b2bSummary"></div>
+
+          <div id="b2bViewBody">
               <div class="status-message">Syncing B2B Deals…</div>
           </div>
       </div>
@@ -408,6 +412,8 @@
         <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Log a new Business-to-Business deal. It will enter <b>Location Pending</b> for a store to be assigned.</p>
         <label class="form-label-caps">Company</label>
         <input id="b2bCompanyInput" class="form-input-lg" style="margin-bottom: 15px;" placeholder="e.g., Acme Corp" />
+        <label class="form-label-caps">Client Contact</label>
+        <input id="b2bContactInput" class="form-input-lg" style="margin-bottom: 15px;" placeholder="e.g., Maria T." />
         <label class="form-label-caps">Date Picked Up</label>
         <input id="b2bPickupInput" type="date" class="form-input-lg" />
     </div>
@@ -416,7 +422,7 @@
     </div>
 </div>
 
-<!-- ===== B2B DEAL DETAIL MODAL ===== -->
+<!-- ===== B2B DEAL ACTION / DETAIL MODAL (title/body/footer driven by openB2BModal) ===== -->
 <div class="modal-menu manage-menu b2b-detail-modal" id="b2bDetailModal">
     <div class="modal-header">
         <h3 id="b2bDetailTitle">B2B Deal</h3>
@@ -425,6 +431,7 @@
     <div class="manage-content" id="b2bDetailBody">
         <div class="status-message">Loading...</div>
     </div>
+    <div class="manage-footer flex-end" id="b2bDetailFooter"></div>
 </div>
 
 <div id="goalsSidePanel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee role-training">
