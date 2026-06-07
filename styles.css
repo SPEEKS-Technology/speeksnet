@@ -5456,6 +5456,16 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     padding: 0 2px !important;
 }
 
+/* Performance highlighting on the Weekly/Monthly KPI grid.
+   Applied to computed <td>s, the Store Total row, and the editable inputs
+   (time / no-deals) by _kpiThresholdCls(). */
+td.kpi-cell-green { background: #dcfce7 !important; color: #15803d !important; }
+td.kpi-cell-red   { background: #fee2e2 !important; color: #c81e1e !important; }
+input.kpi-grid-input.kpi-cell-green,
+input.kpi-grid-input.kpi-cell-green:disabled { background: #dcfce7 !important; color: #15803d !important; }
+input.kpi-grid-input.kpi-cell-red,
+input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; color: #c81e1e !important; }
+
 /* =========================================================
    KPI MODAL FOOTER (Save All)
    ========================================================= */
@@ -5608,6 +5618,9 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .kpi-total-row td:last-child             { border-bottom-right-radius: 7px; border-right: 1px solid #c0c0c0 !important; }
 .kpi-total-emp-name  { color: #3a3a3a !important; font-weight: 700 !important; font-size: 9.5px !important; text-transform: uppercase; letter-spacing: 0.4px; }
 .kpi-total-cell      { color: #2a2a2a !important; font-weight: 600 !important; font-size: 10px !important; }
+/* Performance shading wins over the grey Store Total fill (same base specificity, defined later) */
+.kpi-total-row td.kpi-cell-green, .kpi-total-row:hover td.kpi-cell-green { background: #dcfce7 !important; color: #15803d !important; }
+.kpi-total-row td.kpi-cell-red,   .kpi-total-row:hover td.kpi-cell-red   { background: #fee2e2 !important; color: #c81e1e !important; }
 
 .kpi-cancel-btn {
     height: 38px;

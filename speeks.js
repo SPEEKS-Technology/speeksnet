@@ -2165,6 +2165,39 @@ function _kpiFormatComputed(key, val) {
     return String(Math.round(n * 10) / 10);
 }
 
+// Performance highlighting: returns 'kpi-cell-green', 'kpi-cell-red', or '' for a
+// metric value against fixed targets. `listed_count` only grades on the Store Total row.
+function _kpiThresholdCls(key, val, isStoreTotal) {
+    if (val == null || val === '' || isNaN(Number(val))) return '';
+    const v = Number(val);
+    switch (key) {
+        case 'gross_margin_pct':
+            if (v >= 54) return 'kpi-cell-green';
+            if (v <= 50) return 'kpi-cell-red';
+            return '';
+        case 'customer_conversion_pct':
+        case 'device_conversion_pct':
+            if (v >= 87) return 'kpi-cell-green';
+            if (v <= 83) return 'kpi-cell-red';
+            return '';
+        case 'avg_transaction_time':
+            if (v <= 12) return 'kpi-cell-green';
+            if (v >= 17) return 'kpi-cell-red';
+            return '';
+        case 'no_deal_count':
+            if (v <= 8)  return 'kpi-cell-green';
+            if (v >= 10) return 'kpi-cell-red';
+            return '';
+        case 'listed_count':
+            if (!isStoreTotal) return '';
+            if (v >= 200) return 'kpi-cell-green';
+            if (v <= 160) return 'kpi-cell-red';
+            return '';
+        default:
+            return '';
+    }
+}
+
 function _kpiComputeAverages(periods) {
     if (!periods || !periods.length) return [];
     const empNames = periods[0].entries.map(e => e.employee_name);
@@ -2255,11 +2288,13 @@ function _kpiEmpRowsHtml(entries, periodDate, isEditing, isAvg) {
             '</div></td>';
         _KPI_GRID_FIELDS.forEach(function(f) {
             if (f.computed || isAvg) {
-                cells += '<td class="kpi-grid-computed' + (isAvg ? ' kpi-avg-cell' : '') + '" id="kpiC-' + pk + '-' + empIdx + '-' + f.key + '">' + _kpiFormatComputed(f.key, entry[f.key]) + '</td>';
+                const tc = _kpiThresholdCls(f.key, entry[f.key], false);
+                cells += '<td class="kpi-grid-computed' + (isAvg ? ' kpi-avg-cell' : '') + (tc ? ' ' + tc : '') + '" id="kpiC-' + pk + '-' + empIdx + '-' + f.key + '">' + _kpiFormatComputed(f.key, entry[f.key]) + '</td>';
             } else {
                 const val = entry[f.key] != null ? entry[f.key] : '';
                 const dis = isEditing ? '' : 'disabled';
-                cells += '<td class="kpi-grid-td-input"><input class="kpi-grid-input" type="number" step="' + f.step + '" min="0" id="kpi-' + pk + '-' + empIdx + '-' + f.key + '" value="' + val + '" ' + dis + ' oninput="_kpiUpdateRow(\'' + pk + '\',' + empIdx + ')"></td>';
+                const tc = _kpiThresholdCls(f.key, entry[f.key], false);
+                cells += '<td class="kpi-grid-td-input"><input class="kpi-grid-input' + (tc ? ' ' + tc : '') + '" type="number" step="' + f.step + '" min="0" id="kpi-' + pk + '-' + empIdx + '-' + f.key + '" value="' + val + '" ' + dis + ' oninput="_kpiUpdateRow(\'' + pk + '\',' + empIdx + ')"></td>';
             }
         });
         return '<tr class="' + rowClass + '" data-period="' + periodDate + '">' + cells + '</tr>';
@@ -2287,7 +2322,19 @@ function _kpiUpdateRow(pk, empIdx) {
     };
     Object.keys(computed).forEach(function(key) {
         const el = document.getElementById('kpiC-' + pk + '-' + empIdx + '-' + key);
-        if (el) el.textContent = _kpiFormatComputed(key, computed[key]);
+        if (el) {
+            el.textContent = _kpiFormatComputed(key, computed[key]);
+            const tc = _kpiThresholdCls(key, computed[key], false);
+            el.className = 'kpi-grid-computed' + (tc ? ' ' + tc : '');
+        }
+    });
+    // Re-grade the directly-entered metrics that carry highlighting (time, no deals)
+    ['avg_transaction_time', 'no_deal_count'].forEach(function(key) {
+        const el = document.getElementById('kpi-' + pk + '-' + empIdx + '-' + key);
+        if (el) {
+            const tc = _kpiThresholdCls(key, el.value, false);
+            el.className = 'kpi-grid-input' + (tc ? ' ' + tc : '');
+        }
     });
     const statusEl = document.getElementById('kpiS-' + pk + '-' + empIdx);
     if (statusEl) { statusEl.textContent = '●'; statusEl.style.color = '#f59e0b'; statusEl.title = 'Unsaved'; }
@@ -2308,7 +2355,8 @@ function _kpiStoreTotalRowHtml(entries) {
     const computed = _kpiCalcDerived(totals);
     let cells = '<td class="kpi-grid-name-col kpi-total-name-col"><div class="kpi-grid-name-cell"><span class="kpi-grid-emp-name kpi-total-emp-name">Store Total</span></div></td>';
     _KPI_GRID_FIELDS.forEach(function(f) {
-        cells += '<td class="kpi-grid-computed kpi-total-cell">' + _kpiFormatComputed(f.key, computed[f.key]) + '</td>';
+        const tc = _kpiThresholdCls(f.key, computed[f.key], true);
+        cells += '<td class="kpi-grid-computed kpi-total-cell' + (tc ? ' ' + tc : '') + '">' + _kpiFormatComputed(f.key, computed[f.key]) + '</td>';
     });
     return '<tr class="kpi-total-row">' + cells + '</tr>';
 }
