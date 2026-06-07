@@ -28,6 +28,8 @@
 
 // --- 1. API URLS ---
 const _BASE = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1';
+const _SUPABASE_URL = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co';
+const _SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVqemFxbXl4eHJrbXh2emJqZXVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwNzA2NjAsImV4cCI6MjA5NDY0NjY2MH0.-SrbSaF-n8WkNW6tieDiA2FhGHB7qP4b6XrEyy2JF74';
 const CMS_URL           = `${_BASE}/cms`;
 const HOTKEYS_URL       = `${_BASE}/hotkeys`;
 const DOCS_URL          = `${_BASE}/docs`;
@@ -49,6 +51,8 @@ const TICKER_URL        = `${_BASE}/ticker`;
 const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
 const MONTHLY_BRIEF_URL = `${_BASE}/monthly-brief`;
 const B2B_URL           = `${_BASE}/b2b-deals`;
+const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
+const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
 // --- 2. NAV COMPACT MODE ---
 (function () {
@@ -193,6 +197,8 @@ function toggleModal(modalId, badgeId = null) {
     }
 }
 
+let _annDocsCache = [];
+
 async function loadCMS() {
     try {
         const response = await fetch(`${CMS_URL}?v=${Date.now()}`);
@@ -210,6 +216,8 @@ async function loadCMS() {
             const cleanUser = currentUser ? String(currentUser).trim().toLowerCase() : null;
             const userRole = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
             const isPrivileged = userRole === 'ceo' || userRole === 'district manager';
+
+            _annDocsCache = (data.announcements || []).filter(a => a.docUrl).reverse();
 
             if (data.announcements && data.announcements.length > 0) {
                 const sortedAnns = [...data.announcements].reverse();
@@ -294,7 +302,7 @@ async function loadCMS() {
                     reactionsHtml += `</div>`;
 
                     const markReadBtn = (!isArchived && cleanUser) ? `
-                        <button class="mark-read-btn" onclick="markAnnouncementRead(${annId})">
+                        <button class="mark-read-btn" onclick="markAnnouncementRead('${annId}')">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
                             Mark as Read
                         </button>` : '';
@@ -314,6 +322,12 @@ async function loadCMS() {
                             </div>
                         </div>` : '';
 
+                    const docLinkHtml = item.docUrl ? `
+                        <a href="${item.docUrl}" target="_blank" rel="noopener" class="ann-doc-link">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                            ${item.docName || 'Attached Document'}
+                        </a>` : '';
+
                     const html = `
                         <div class="notif-item"${unreadHtmlAttr ? ` ${unreadHtmlAttr}` : ''}>
                             <div class="ann-header">
@@ -325,6 +339,7 @@ async function loadCMS() {
                             </div>
                             <hr />
                             <div class="ann-text">${item.text || ''}</div>
+                            ${docLinkHtml}
                             <div class="ann-card-footer">
                                 ${reactionsHtml}
                                 ${markReadBtn}
@@ -434,16 +449,10 @@ function switchAnnTab(tab) {
     const isPatchNotes = tab === 'patchnotes';
 
     const annC = document.getElementById('ann-container');
-    if (annC) {
-        annC.style.display = isRecent ? 'block' : 'none';
-        annC.classList.remove('hidden');
-    }
+    if (annC) { annC.style.display = isRecent ? 'block' : 'none'; annC.classList.remove('hidden'); }
 
     const archC = document.getElementById('archive-container');
-    if (archC) {
-        archC.style.display = isArchive ? 'block' : 'none';
-        archC.classList.remove('hidden');
-    }
+    if (archC) { archC.style.display = isArchive ? 'block' : 'none'; archC.classList.remove('hidden'); }
 
     const pnC = document.getElementById('pn-container');
     if (pnC) {
@@ -458,17 +467,68 @@ function switchAnnTab(tab) {
     if (pnTab) pnTab.classList.toggle('active', isPatchNotes);
 }
 
-// DEV TOOLS DROPDOWN GLOBAL TOGGLE
-window.toggleDevDropdown = function(e) {
-    e.stopPropagation();
-    const dropdown = document.getElementById('devDropdown');
-    if (dropdown) dropdown.classList.toggle('open');
+function openDocsModal() {
+    closeAllModals();
+    const modal = document.getElementById('annDocsModal');
+    if (!modal) return;
+    modal.classList.add('show');
+    lockAndBlurScreen();
+    loadAnnouncementDocs();
+}
+
+function loadAnnouncementDocs() {
+    const list = document.getElementById('annDocsList');
+    if (!list) return;
+    if (!_annDocsCache.length) {
+        list.innerHTML = '<div style="padding:30px;text-align:center;color:#999;font-size:14px;">No documents have been attached to announcements yet.</div>';
+        return;
+    }
+    list.innerHTML = _annDocsCache.map(item => {
+        const date = item.date ? new Date(item.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : '';
+        const ext = (item.docName || '').split('.').pop().toUpperCase();
+        const extColors = { PDF: '#ef4444', DOC: '#3b82f6', DOCX: '#3b82f6', XLS: '#22c55e', XLSX: '#22c55e' };
+        const badgeColor = extColors[ext] || '#64748b';
+        return `
+            <div class="ann-doc-card">
+                <div class="ann-doc-badge" style="background:${badgeColor};">${ext || 'FILE'}</div>
+                <div class="ann-doc-card-info">
+                    <div class="ann-doc-card-name">${item.docName || 'Attached Document'}</div>
+                    <div class="ann-doc-card-meta">${item.author || ''}${date ? ` · ${date}` : ''}</div>
+                </div>
+                <a href="${item.docUrl}" target="_blank" rel="noopener" class="ann-doc-dl-btn">⬇ Download</a>
+            </div>`;
+    }).join('');
+}
+
+// SPEEKS TOOLS PANEL
+window.toggleToolsPanel = function(e) {
+    if (e) e.stopPropagation();
+    const panel = document.getElementById('toolsSidePanel');
+    if (!panel) return;
+    const isOpen = panel.classList.toggle('open');
+    const btn = document.getElementById('toolsNavBtn');
+    if (btn) btn.classList.toggle('panel-open', isOpen);
+    if (isOpen) {
+        document.getElementById('checklistSidePanel')?.classList.remove('open');
+        document.querySelector('.cl-nav-toggle')?.classList.remove('panel-active');
+        document.getElementById('goalsSidePanel')?.classList.remove('open');
+        document.querySelector('.gi-nav-toggle')?.classList.remove('panel-active');
+    }
 };
 
+function _closeToolsPanel() {
+    const panel = document.getElementById('toolsSidePanel');
+    if (panel) panel.classList.remove('open');
+    const btn = document.getElementById('toolsNavBtn');
+    if (btn) btn.classList.remove('panel-open');
+}
+
 document.addEventListener('click', (e) => {
-    const devDropdown = document.getElementById('devDropdown');
-    if (devDropdown && !devDropdown.contains(e.target)) {
-        devDropdown.classList.remove('open');
+    const panel = document.getElementById('toolsSidePanel');
+    const btn = document.getElementById('toolsNavBtn');
+    if (panel && panel.classList.contains('open') && !panel.contains(e.target) && !btn?.contains(e.target)) {
+        panel.classList.remove('open');
+        btn?.classList.remove('panel-open');
     }
 });
 
@@ -2105,6 +2165,39 @@ function _kpiFormatComputed(key, val) {
     return String(Math.round(n * 10) / 10);
 }
 
+// Performance highlighting: returns 'kpi-cell-green', 'kpi-cell-red', or '' for a
+// metric value against fixed targets. `listed_count` only grades on the Store Total row.
+function _kpiThresholdCls(key, val, isStoreTotal) {
+    if (val == null || val === '' || isNaN(Number(val))) return '';
+    const v = Number(val);
+    switch (key) {
+        case 'gross_margin_pct':
+            if (v >= 54) return 'kpi-cell-green';
+            if (v <= 50) return 'kpi-cell-red';
+            return '';
+        case 'customer_conversion_pct':
+        case 'device_conversion_pct':
+            if (v >= 87) return 'kpi-cell-green';
+            if (v <= 83) return 'kpi-cell-red';
+            return '';
+        case 'avg_transaction_time':
+            if (v <= 12) return 'kpi-cell-green';
+            if (v >= 17) return 'kpi-cell-red';
+            return '';
+        case 'no_deal_count':
+            if (v <= 8)  return 'kpi-cell-green';
+            if (v >= 10) return 'kpi-cell-red';
+            return '';
+        case 'listed_count':
+            if (!isStoreTotal) return '';
+            if (v >= 200) return 'kpi-cell-green';
+            if (v <= 160) return 'kpi-cell-red';
+            return '';
+        default:
+            return '';
+    }
+}
+
 function _kpiComputeAverages(periods) {
     if (!periods || !periods.length) return [];
     const empNames = periods[0].entries.map(e => e.employee_name);
@@ -2179,13 +2272,8 @@ function _kpiSectionDividerHtml(label, badge, badgeClass, controls, borderColor)
 }
 
 function _kpiSectionControls(periodDate, isEditing, isEditable) {
-    const pk = periodDate.replace(/-/g, '');
-    if (!isEditable) return '<span class="kpi-readonly-label">🔒 Read only</span>';
-    if (isEditing) {
-        return '<button class="kpi-cancel-btn" onclick="_kpiCancelEdit()">Cancel</button>' +
-               '<button class="kpi-save-section-btn" id="kpiSaveBtn-' + pk + '" onclick="_kpiSavePeriod(\'' + periodDate + '\')">Save</button>';
-    }
-    return '<button class="kpi-edit-section-btn" onclick="_kpiStartEdit(\'' + periodDate + '\')">✏️ Edit</button>';
+    if (isEditing) return '<span class="kpi-editing-label">✏️ Editing</span>';
+    return '';
 }
 
 function _kpiEmpRowsHtml(entries, periodDate, isEditing, isAvg) {
@@ -2200,11 +2288,13 @@ function _kpiEmpRowsHtml(entries, periodDate, isEditing, isAvg) {
             '</div></td>';
         _KPI_GRID_FIELDS.forEach(function(f) {
             if (f.computed || isAvg) {
-                cells += '<td class="kpi-grid-computed' + (isAvg ? ' kpi-avg-cell' : '') + '" id="kpiC-' + pk + '-' + empIdx + '-' + f.key + '">' + _kpiFormatComputed(f.key, entry[f.key]) + '</td>';
+                const tc = _kpiThresholdCls(f.key, entry[f.key], false);
+                cells += '<td class="kpi-grid-computed' + (isAvg ? ' kpi-avg-cell' : '') + (tc ? ' ' + tc : '') + '" id="kpiC-' + pk + '-' + empIdx + '-' + f.key + '">' + _kpiFormatComputed(f.key, entry[f.key]) + '</td>';
             } else {
                 const val = entry[f.key] != null ? entry[f.key] : '';
                 const dis = isEditing ? '' : 'disabled';
-                cells += '<td class="kpi-grid-td-input"><input class="kpi-grid-input" type="number" step="' + f.step + '" min="0" id="kpi-' + pk + '-' + empIdx + '-' + f.key + '" value="' + val + '" ' + dis + ' oninput="_kpiUpdateRow(\'' + pk + '\',' + empIdx + ')"></td>';
+                const tc = _kpiThresholdCls(f.key, entry[f.key], false);
+                cells += '<td class="kpi-grid-td-input"><input class="kpi-grid-input' + (tc ? ' ' + tc : '') + '" type="number" step="' + f.step + '" min="0" id="kpi-' + pk + '-' + empIdx + '-' + f.key + '" value="' + val + '" ' + dis + ' oninput="_kpiUpdateRow(\'' + pk + '\',' + empIdx + ')"></td>';
             }
         });
         return '<tr class="' + rowClass + '" data-period="' + periodDate + '">' + cells + '</tr>';
@@ -2232,7 +2322,19 @@ function _kpiUpdateRow(pk, empIdx) {
     };
     Object.keys(computed).forEach(function(key) {
         const el = document.getElementById('kpiC-' + pk + '-' + empIdx + '-' + key);
-        if (el) el.textContent = _kpiFormatComputed(key, computed[key]);
+        if (el) {
+            el.textContent = _kpiFormatComputed(key, computed[key]);
+            const tc = _kpiThresholdCls(key, computed[key], false);
+            el.className = 'kpi-grid-computed' + (tc ? ' ' + tc : '');
+        }
+    });
+    // Re-grade the directly-entered metrics that carry highlighting (time, no deals)
+    ['avg_transaction_time', 'no_deal_count'].forEach(function(key) {
+        const el = document.getElementById('kpi-' + pk + '-' + empIdx + '-' + key);
+        if (el) {
+            const tc = _kpiThresholdCls(key, el.value, false);
+            el.className = 'kpi-grid-input' + (tc ? ' ' + tc : '');
+        }
     });
     const statusEl = document.getElementById('kpiS-' + pk + '-' + empIdx);
     if (statusEl) { statusEl.textContent = '●'; statusEl.style.color = '#f59e0b'; statusEl.title = 'Unsaved'; }
@@ -2253,7 +2355,8 @@ function _kpiStoreTotalRowHtml(entries) {
     const computed = _kpiCalcDerived(totals);
     let cells = '<td class="kpi-grid-name-col kpi-total-name-col"><div class="kpi-grid-name-cell"><span class="kpi-grid-emp-name kpi-total-emp-name">Store Total</span></div></td>';
     _KPI_GRID_FIELDS.forEach(function(f) {
-        cells += '<td class="kpi-grid-computed kpi-total-cell">' + _kpiFormatComputed(f.key, computed[f.key]) + '</td>';
+        const tc = _kpiThresholdCls(f.key, computed[f.key], true);
+        cells += '<td class="kpi-grid-computed kpi-total-cell' + (tc ? ' ' + tc : '') + '">' + _kpiFormatComputed(f.key, computed[f.key]) + '</td>';
     });
     return '<tr class="kpi-total-row">' + cells + '</tr>';
 }
@@ -2275,14 +2378,24 @@ function _kpiRenderWeekly(periods) {
     const store = (_modalSel && _modalSel.offsetParent !== null && _modalSel.value) || sessionStorage.getItem('speeksUserStore') || '';
     const sub = document.getElementById('kpiModalSubtitle');
     if (sub) sub.textContent = store + ' · 4-Week View';
-    if (!periods || !periods.length) {
-        body.innerHTML = '<div class="kpi-empty-state">No weekly KPI data yet. Click Edit on the current week to get started.</div>';
+
+    // Only show weeks with saved data; when editing, also include the editable period at top
+    let visible = (periods || []).filter(function(p) { return p.entries.some(function(e) { return e.id; }); });
+    if (_kpiEditingPeriod) {
+        const ep = periods.find(function(p) { return p.period_end_date === _kpiEditingPeriod; });
+        if (ep && !visible.find(function(p) { return p.period_end_date === ep.period_end_date; })) visible.unshift(ep);
+        else if (ep) { visible = visible.filter(function(p) { return p.period_end_date !== ep.period_end_date; }); visible.unshift(ep); }
+    }
+
+    _kpiSyncHeaderBtns();
+    if (!visible.length) {
+        body.innerHTML = '<div class="kpi-empty-state">No weekly KPI data yet. Click ✏️ Edit above to enter the current week.</div>';
         return;
     }
-    const wkBadges  = ['Current Week','Last Week','2 Weeks Ago','3 Weeks Ago'];
-    const wkBClass  = ['badge-current','badge-prev','badge-old','badge-old'];
+    const wkBadges = ['Current Week','Last Week','2 Weeks Ago','3 Weeks Ago'];
+    const wkBClass = ['badge-current','badge-prev','badge-old','badge-old'];
     let tbody = '';
-    periods.forEach(function(p, i) {
+    visible.forEach(function(p, i) {
         const isEd = _kpiEditingPeriod === p.period_end_date;
         tbody += _kpiSectionDividerHtml('📅 ' + _kpiWeekRangeLabel(p.period_end_date), wkBadges[i] || '', wkBClass[i] || 'badge-old',
             _kpiSectionControls(p.period_end_date, isEd, p.is_editable), '#3b82f6');
@@ -2424,6 +2537,11 @@ function _mbSyncControls() {
     document.getElementById('mbViewStoreBtn')?.classList.toggle('active', _mbView === 'store');
     const sel = document.getElementById('mbStoreSelect');
     if (sel) sel.style.display = (_mbView === 'store' && canPickStore) ? '' : 'none';
+    const sub = document.getElementById('mbSubtitle');
+    if (sub) {
+        const store = (sel && canPickStore ? sel.value : null) || sessionStorage.getItem('speeksUserStore') || '';
+        sub.textContent = _mbView === 'overview' ? 'All Stores' : (store + ' · Store View');
+    }
 }
 
 function mbSetView(view) {
@@ -2509,17 +2627,22 @@ function _mbRenderStore() {
     const body = document.getElementById('mbBody');
     if (!body) return;
 
-    // Newest-first window of up to 5 months. Always include the editable
-    // (current) month so the DM can fill it in even before it has data.
+    // Newest-first window of up to 5 months. Only include the editable month
+    // when actively editing — it stays hidden until the user clicks Edit.
     const monthSet = new Set(_mbMonths);
-    if (_mbEditable) monthSet.add(_mbEditable);
-    const months = [...monthSet].sort().reverse().slice(0, MB_MONTH_WINDOW);
+    if (_mbEditable && _mbEditing) monthSet.add(_mbEditable);
+    const months = [...monthSet].sort().reverse().slice(0, MB_MONTH_WINDOW)
+        .filter(mo => {
+            if (_mbEditing && mo === _mbEditable) return true;
+            const d = _mbData[mo] || {};
+            return Object.values(d).some(v => v != null);
+        });
     if (!months.length) { body.innerHTML = '<div class="status-message">No data available.</div>'; return; }
 
-    // Edit only for DM, and only on the editable (current) month
+    // Edit for DM, CEO, and owner-manager on the editable (current) month
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     const isDM = role === 'district manager';
-    const canEdit = isDM && !!_mbEditable && months.includes(_mbEditable);
+    const canEdit = (isDM || role === 'ceo' || role === 'owner manager') && !!_mbEditable && months.includes(_mbEditable);
     const editBtn = document.getElementById('mbEditBtn');
     if (editBtn) editBtn.style.display = (canEdit && !_mbEditing) ? 'inline-block' : 'none';
     const saveBtn = document.getElementById('mbSaveBtn');
@@ -2559,7 +2682,14 @@ function _mbRenderStore() {
                     html += '<td class="mb-val mb-val-primary"><input class="mb-input" type="number" step="' + step +
                         '" id="mb-in-' + m.key + '" value="' + (v != null ? v : '') + '"></td>';
                 } else {
-                    const cls = (mo === _mbEditable) ? 'mb-val mb-val-primary' : 'mb-val';
+                    const ebayOverride = _mbEbayThresholdCls(m.key, v);
+                    let cls;
+                    if (ebayOverride !== null) {
+                        // Clear eBay cells in the current month keep the primary column tint
+                        cls = (ebayOverride === 'mb-val' && mo === _mbEditable) ? 'mb-val mb-val-primary' : ebayOverride;
+                    } else {
+                        cls = (mo === _mbEditable) ? 'mb-val mb-val-primary' : 'mb-val';
+                    }
                     html += '<td class="' + cls + '">' + _mbFmt(m.type, v) + '</td>';
                 }
                 // Delta between this (newer, left) and the next (older, right) month.
@@ -2590,16 +2720,45 @@ function _mbRenderStore() {
     body.innerHTML = html;
 }
 
+// Returns an override CSS class for eBay Health metrics based on absolute thresholds.
+// Returns null for non-eBay-health metrics (fall through to best/worst logic).
+function _mbEbayThresholdCls(key, val) {
+    if (val == null) return null;
+    const v = Number(val);
+    if (isNaN(v)) return null;
+    if (key === 'defect_rate') {
+        if (v >= 0.5)  return 'mb-val mb-ebay-bad';
+        if (v >= 0.25) return 'mb-val mb-ebay-warn';
+        return 'mb-val';
+    }
+    if (key === 'late_shipment_rate') {
+        if (v >= 3.0) return 'mb-val mb-ebay-bad';
+        if (v >= 1.5) return 'mb-val mb-ebay-warn';
+        return 'mb-val';
+    }
+    if (key === 'case_no_resolution') {
+        if (v >= 0.3)  return 'mb-val mb-ebay-bad';
+        if (v >= 0.15) return 'mb-val mb-ebay-warn';
+        return 'mb-val';
+    }
+    if (key === 'tracking_uploaded') {
+        if (v <= 95.0)  return 'mb-val mb-ebay-bad';
+        if (v <= 97.5)  return 'mb-val mb-ebay-warn';
+        return 'mb-val';
+    }
+    return null;
+}
+
 // OVERVIEW render: metrics × stores for the most-recent month, with the
 // best store per metric flagged green and the worst red (honoring inverse metrics).
 function _mbRenderOverview() {
     const body = document.getElementById('mbBody');
     if (!body) return;
 
-    // DM can edit the current (editable) month across all stores from here
+    // DM and CEO can edit the current (editable) month across all stores from here
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     const isDM = role === 'district manager';
-    const canEdit = isDM && !!_mbOverviewEditable;
+    const canEdit = (isDM || role === 'ceo' || role === 'owner manager') && !!_mbOverviewEditable;
     const editing = _mbEditing && canEdit;
     // View the most recent month that has data; while editing, switch to the open window.
     const shownMonth = editing ? _mbOverviewEditable : _mbOverviewMonth;
@@ -2653,7 +2812,10 @@ function _mbRenderOverview() {
                     html += '<td class="mb-val"><input class="mb-input" type="number" step="' + step +
                         '" id="mb-ov-' + s + '-' + m.key + '" value="' + (raw[idx] != null ? raw[idx] : '') + '"></td>';
                 } else {
-                    const cls = idx === bestIdx ? 'mb-val mb-best' : (idx === worstIdx ? 'mb-val mb-worst' : 'mb-val');
+                    const ebayOverride = _mbEbayThresholdCls(m.key, raw[idx]);
+                    const cls = ebayOverride !== null
+                        ? ebayOverride
+                        : (idx === bestIdx ? 'mb-val mb-best' : (idx === worstIdx ? 'mb-val mb-worst' : 'mb-val'));
                     html += '<td class="' + cls + '">' + _mbFmt(m.type, raw[idx]) + '</td>';
                 }
             });
@@ -2662,6 +2824,53 @@ function _mbRenderOverview() {
     });
     html += '</tbody></table>';
     body.innerHTML = html;
+}
+
+function mbExportCSV() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const canPickStore = role === 'ceo' || role === 'district manager';
+    const sel   = document.getElementById('mbStoreSelect');
+    const store = (sel && canPickStore ? sel.value : null) || sessionStorage.getItem('speeksUserStore') || 'STORE';
+    const ts    = new Date().toISOString().slice(0, 10);
+
+    const esc = v => { const s = String(v == null ? '' : v); return (s.includes(',') || s.includes('"') || s.includes('\n')) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const toCSV = rows => rows.map(r => r.map(esc).join(',')).join('\r\n');
+    const dl = (csv, name) => {
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a'); a.href = url; a.download = name; a.style.display = 'none';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    };
+
+    const sections = {}, secOrder = [];
+    _mbMetrics.forEach(m => { if (!sections[m.section]) { sections[m.section] = []; secOrder.push(m.section); } sections[m.section].push(m); });
+
+    if (_mbView === 'overview') {
+        const month = _mbOverviewMonth;
+        if (!month || !_mbMetrics.length) return;
+        const rows = [['Section', 'Metric', ...MB_STORES]];
+        secOrder.forEach(sec => {
+            sections[sec].forEach(m => {
+                const row = [sec, m.label];
+                MB_STORES.forEach(s => { const v = (_mbOverviewData[s] || {})[month]; row.push(v ? v[m.key] : ''); });
+                rows.push(row);
+            });
+        });
+        dl(toCSV(rows), 'Monthly_Overview_' + _mbMonthLabelShort(month).replace(/[^a-zA-Z0-9]/g, '_') + '_' + ts + '.csv');
+    } else {
+        const monthSet = new Set(_mbMonths);
+        const months = [...monthSet].sort().reverse().slice(0, MB_MONTH_WINDOW).filter(mo => _mbData[mo] && Object.keys(_mbData[mo]).length);
+        if (!_mbMetrics.length || !months.length) return;
+        const rows = [['Section', 'Metric', ...months.map(m => _mbMonthLabelShort(m))]];
+        secOrder.forEach(sec => {
+            sections[sec].forEach(m => {
+                const row = [sec, m.label];
+                months.forEach(mo => { const v = (_mbData[mo] || {})[m.key]; row.push(v != null ? v : ''); });
+                rows.push(row);
+            });
+        });
+        dl(toCSV(rows), store + '_Monthly_Brief_' + ts + '.csv');
+    }
 }
 
 function mbStartEdit() {
@@ -2755,14 +2964,24 @@ function _kpiRenderMonthly(periods) {
     const store = (_modalSel && _modalSel.offsetParent !== null && _modalSel.value) || sessionStorage.getItem('speeksUserStore') || '';
     const sub = document.getElementById('kpiModalSubtitle');
     if (sub) sub.textContent = store + ' · Monthly';
-    if (!periods || !periods.length) {
-        body.innerHTML = '<div class="kpi-empty-state">No monthly KPI data yet. Click Edit on the current month to get started.</div>';
+
+    // Only show months with saved data; when editing, also include the editable period at top
+    let visible = (periods || []).filter(function(p) { return p.entries.some(function(e) { return e.id; }); });
+    if (_kpiEditingPeriod) {
+        const ep = periods.find(function(p) { return p.period_end_date === _kpiEditingPeriod; });
+        if (ep && !visible.find(function(p) { return p.period_end_date === ep.period_end_date; })) visible.unshift(ep);
+        else if (ep) { visible = visible.filter(function(p) { return p.period_end_date !== ep.period_end_date; }); visible.unshift(ep); }
+    }
+
+    _kpiSyncHeaderBtns();
+    if (!visible.length) {
+        body.innerHTML = '<div class="kpi-empty-state">No monthly KPI data yet. Click ✏️ Edit above to enter the current month.</div>';
         return;
     }
-    const moBadges  = ['Current Month','Last Month'];
-    const moBClass  = ['badge-current','badge-prev'];
+    const moBadges = ['Current Month','Last Month'];
+    const moBClass = ['badge-current','badge-prev'];
     let tbody = '';
-    periods.forEach(function(p, i) {
+    visible.forEach(function(p, i) {
         const isEd = _kpiEditingPeriod === p.period_end_date;
         tbody += _kpiSectionDividerHtml('📆 ' + p.period_label, i < 2 ? moBadges[i] : null, i < 2 ? moBClass[i] : '',
             _kpiSectionControls(p.period_end_date, isEd, p.is_editable), '#7c3aed');
@@ -2772,6 +2991,38 @@ function _kpiRenderMonthly(periods) {
         if (hasSavedData) tbody += _kpiStoreTotalRowHtml(p.entries);
     });
     body.innerHTML = '<div class="kpi-grid-scroll-wrapper"><table class="kpi-entry-grid kpi-full-table">' + _kpiColgroupHtml() + '<tbody>' + tbody + '</tbody></table></div>';
+}
+
+function _kpiSyncHeaderBtns() {
+    const editBtn   = document.getElementById('kpiEditBtn');
+    const saveBtn   = document.getElementById('kpiSaveBtn');
+    const cancelBtn = document.getElementById('kpiCancelBtn');
+    const isEditing   = !!_kpiEditingPeriod;
+    const hasEditable = (_kpiPeriodsData || []).some(function(p) { return p.is_editable; });
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const canEditRole = role === 'district manager' || role === 'ceo' || role === 'owner manager' || role === 'manager' || role === 'assistant manager';
+    const hasPeriods  = (_kpiPeriodsData || []).length > 0;
+    if (editBtn)   editBtn.style.display   = (!isEditing && canEditRole && (hasEditable || hasPeriods)) ? '' : 'none';
+    if (saveBtn)   saveBtn.style.display   = isEditing ? '' : 'none';
+    if (cancelBtn) cancelBtn.style.display = isEditing ? '' : 'none';
+}
+
+function kpiHeaderStartEdit() {
+    const ep = (_kpiPeriodsData || []).find(function(p) { return p.is_editable; }) || (_kpiPeriodsData || [])[0];
+    if (!ep) return;
+    _kpiEditingPeriod = ep.period_end_date;
+    if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
+    else _kpiRenderMonthly(_kpiPeriodsData);
+}
+
+function kpiHeaderSave() {
+    if (_kpiEditingPeriod) _kpiSavePeriod(_kpiEditingPeriod);
+}
+
+function kpiHeaderCancel() {
+    _kpiEditingPeriod = null;
+    if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
+    else _kpiRenderMonthly(_kpiPeriodsData);
 }
 
 async function _kpiLoadAll(tab) {
@@ -2873,12 +3124,8 @@ function initWorkspace() {
     if (!document.querySelector('.ws-wrap')) return;
     _wsBriefLoaded = false;
     _wsKpiLoaded   = false;
-    // Roles without Brief/KPIs access (TOM, Assistant Manager) land on the B2B board.
-    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
-    const canSeeBrief = ['manager', 'owner (manager)', 'district manager', 'ceo'].includes(role);
     const hash = (window.location.hash || '').replace('#', '');
-    let initial = ['brief', 'kpis', 'b2b'].includes(hash) ? hash : (canSeeBrief ? 'brief' : 'b2b');
-    if (!canSeeBrief && (initial === 'brief' || initial === 'kpis')) initial = 'b2b';
+    const initial = ['brief', 'kpis', 'b2b'].includes(hash) ? hash : 'b2b';
     switchWorkspaceTab(initial);
 }
 
@@ -2902,8 +3149,8 @@ async function _kpiSavePeriod(periodDate) {
     const pk     = periodDate.replace(/-/g, '');
     const period = _kpiPeriodsData.find(function(p) { return p.period_end_date === periodDate; });
     if (!period) return;
-    const saveBtn = document.getElementById('kpiSaveBtn-' + pk);
-    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; }
+    const saveBtn = document.getElementById('kpiSaveBtn');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
     for (let empIdx = 0; empIdx < period.entries.length; empIdx++) {
         const entry   = period.entries[empIdx];
         const reqBody = { store: store, period_type: _kpiCurrentTab, period_end_date: periodDate, employee_name: entry.employee_name };
@@ -4056,7 +4303,8 @@ async function fetchScorecardData() {
         const response = await fetch(`${SCORECARD_URL}?v=${Date.now()}`);
         const json = await response.json();
         if (!json.success) throw new Error(json.error);
-        
+        window._scorecardAllData = json.data || [];
+
         const storeData = json.data.find(item => String(item.store).toUpperCase() === targetStore.toUpperCase());
 
         if (!storeData) {
@@ -4139,6 +4387,9 @@ async function fetchScorecardData() {
                 const sectionPulse = (!showOverallDot && bIdx === singleRecentBucketIdx)
                     ? `<div class="notif-dot active" style="position:relative; top:auto; right:auto; width:9px; height:9px; border:1px solid white; flex-shrink:0;"></div>`
                     : '';
+                const notesHtml = bucket.notes
+                    ? `<div style="margin-top: 6px; padding: 6px 10px; background: #f8fafc; border-left: 3px solid #94a3b8; border-radius: 0 6px 6px 0; font-size: 11px; color: #475569; line-height: 1.5; font-style: italic;">${String(bucket.notes).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</div>`
+                    : '';
                 breakdownHtml += `<div style="margin-bottom: 12px;">
                     <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; min-width: 0;">
                         <span style="font-size: 9px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;">${bucket.name}</span>
@@ -4149,6 +4400,7 @@ async function fetchScorecardData() {
                     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;">
                         ${bucket.categories.map(renderCategoryCard).join('')}
                     </div>
+                    ${notesHtml}
                 </div>`;
             });
             breakdownHtml += `</div>`;
@@ -6130,6 +6382,10 @@ function applyRoleBasedUI() {
     const greetingEl = document.getElementById('userGreeting');
     if (greetingEl) greetingEl.innerText = `Welcome ${userName}!`;
 
+    const firstName = userName.split(' ')[0];
+    const wsTitleEl = document.getElementById('wsTitle');
+    if (wsTitleEl) wsTitleEl.innerHTML = `<span>📈</span> ${firstName}'s Workspace`;
+
     const userRoleClass = `role-${userRole.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-')}`;
     const userStoreClass = `store-${userStore.toLowerCase()}`;
 
@@ -6295,7 +6551,7 @@ function initDashboardData() {
         // Pre-load checklist in background so chip + glow appear without opening the panel
         const _clRole = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
         if (_clRole === 'manager' || _clRole === 'district manager' || _clRole === 'assistant manager') {
-            setTimeout(loadChecklist, 1200);
+            setTimeout(_prefetchChecklistForChip, 1200);
         }
 
 
@@ -6923,11 +7179,32 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+function onAnnDocSelected(input) {
+    const file = input.files?.[0];
+    const nameEl = document.getElementById('annDocFileName');
+    const clearBtn = document.getElementById('annDocClear');
+    if (file) {
+        nameEl.textContent = file.name;
+        if (clearBtn) clearBtn.style.display = 'inline-flex';
+    }
+}
+
+function clearAnnDoc() {
+    const input = document.getElementById('annDocInput');
+    const nameEl = document.getElementById('annDocFileName');
+    const clearBtn = document.getElementById('annDocClear');
+    if (input) input.value = '';
+    if (nameEl) nameEl.textContent = 'No file selected';
+    if (clearBtn) clearBtn.style.display = 'none';
+}
+
 async function publishAnnouncement() {
     const title = document.getElementById('annTitleInput').value.trim();
     const body = document.getElementById('annBodyInput').innerHTML.trim();
     const isPriority = document.getElementById('annPriorityInput').checked;
     const btn = document.getElementById('publishAnnBtn');
+    const fileInput = document.getElementById('annDocInput');
+    const file = fileInput?.files?.[0];
 
     if (!title || !body) {
         alert("Wait! You must fill out both a Title and a Message before publishing.");
@@ -6938,6 +7215,41 @@ async function publishAnnouncement() {
     btn.style.opacity = "0.7";
     btn.style.pointerEvents = "none";
 
+    let docUrl = null;
+    let docName = null;
+
+    if (file) {
+        btn.innerHTML = "Uploading document... ⏳";
+        try {
+            const safeName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+            const uploadResp = await fetch(
+                `${_SUPABASE_URL}/storage/v1/object/ann-docs/${safeName}`,
+                {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${_SUPABASE_ANON_KEY}`,
+                        'apikey': _SUPABASE_ANON_KEY,
+                        'Content-Type': file.type || 'application/octet-stream',
+                        'x-upsert': 'true'
+                    },
+                    body: file
+                }
+            );
+            if (uploadResp.ok) {
+                docUrl = `${_SUPABASE_URL}/storage/v1/object/public/ann-docs/${safeName}`;
+                docName = file.name;
+            } else {
+                const err = await uploadResp.text();
+                console.error('Document upload failed:', err);
+                alert('Document upload failed. The announcement will be published without the attachment.');
+            }
+        } catch (e) {
+            console.error('Document upload error:', e);
+            alert('Document upload failed. The announcement will be published without the attachment.');
+        }
+        btn.innerHTML = "Publishing... ⏳";
+    }
+
     let compiledMessage = "";
     if (isPriority) {
         compiledMessage += `<span style="color: #ef4444; font-weight: 900; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">🚨 HIGH PRIORITY</span><br>`;
@@ -6946,26 +7258,31 @@ async function publishAnnouncement() {
     compiledMessage += body;
 
     const payload = {
+        type: 'publish',
         text: compiledMessage,
-        date: new Date().toISOString(),
-        author: sessionStorage.getItem('speeksUserName') || 'Executive Team'
+        author: sessionStorage.getItem('speeksUserName') || 'Executive Team',
+        high_priority: isPriority,
+        doc_url: docUrl,
+        doc_name: docName
     };
 
     try {
-        await fetch(CMS_URL, {
+        const resp = await fetch(CMS_URL, {
             method: 'POST',
-            mode: 'no-cors', 
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
-        
+        if (!resp.ok) throw new Error(`Server error ${resp.status}`);
         alert("Success! Your announcement has been published to all stores.");
-        closeAllModals(); 
-        if(typeof syncAllData === 'function') syncAllData(); 
-        
+        document.getElementById('annTitleInput').value = '';
+        document.getElementById('annBodyInput').innerHTML = '';
+        document.getElementById('annPriorityInput').checked = false;
+        clearAnnDoc();
+        closeAllModals();
+        if (typeof syncAllData === 'function') syncAllData();
     } catch (error) {
         console.error("Error publishing announcement:", error);
-        alert("Failed to connect to the server.");
+        alert("Failed to publish announcement. Please try again.");
     } finally {
         btn.innerHTML = "<span>Publish to All Stores</span> 🚀";
         btn.style.opacity = "1";
@@ -7889,20 +8206,29 @@ const SCORECARD_BUCKETS = [
 ];
 
 function openScorecardModal() {
-    // 1. Let your native portal handle the animations and overlays!
     toggleModal('scorecardSubmitModal');
 
-    // 2. Auto-fill today's date
     const dateInput = document.getElementById('dm-score-date');
     if (dateInput) dateInput.valueAsDate = new Date();
 
-    // 3. Generate the inputs grouped by bucket, each with a section toggle
+    _buildScorecardModalInputs();
+}
+
+function _buildScorecardModalInputs() {
+    const storeEl = document.getElementById('dm-store-select');
+    const store = (storeEl ? storeEl.value : null) || sessionStorage.getItem('speeksUserStore') || '';
+    const existingEntry = (window._scorecardAllData || []).find(d => String(d.store).toUpperCase() === store.toUpperCase());
+
     const container = document.getElementById('dm-category-inputs');
-    if (container) {
-        let html = '';
-        let catIndex = 0;
-        SCORECARD_BUCKETS.forEach((bucket, bIdx) => {
-            html += `<div style="grid-column: 1 / -1; margin-top: ${bIdx > 0 ? '8px' : '0'}; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between;">
+    if (!container) return;
+    let html = '';
+    let catIndex = 0;
+    SCORECARD_BUCKETS.forEach((bucket, bIdx) => {
+        const existingBucket = existingEntry && existingEntry.buckets
+            ? existingEntry.buckets.find(b => b.name === bucket.label)
+            : null;
+        const existingNote = existingBucket && existingBucket.notes ? existingBucket.notes : '';
+        html += `<div style="grid-column: 1 / -1; margin-top: ${bIdx > 0 ? '8px' : '0'}; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between;">
                 <span style="font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">${bucket.label}</span>
                 <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 10px; color: #94a3b8; font-weight: 700;">
                     <input type="checkbox" id="section-toggle-${bIdx}" checked onchange="toggleScorecardSection(${bIdx})" style="cursor: pointer; width: 13px; height: 13px;">
@@ -7910,9 +8236,9 @@ function openScorecardModal() {
                 </label>
             </div>
             <div id="section-inputs-${bIdx}" style="display: contents;">`;
-            for (let i = 0; i < bucket.count; i++) {
-                const cat = SCORECARD_CATEGORIES[catIndex];
-                html += `<div style="display: flex; flex-direction: column;">
+        for (let i = 0; i < bucket.count; i++) {
+            const cat = SCORECARD_CATEGORIES[catIndex];
+            html += `<div style="display: flex; flex-direction: column;">
                     <label class="form-label-caps">${cat}</label>
                     <select id="score-input-${catIndex}" class="form-input-lg" style="margin-top: 0; padding: 10px; font-size: 14px;">
                         <option value="">--</option>
@@ -7924,12 +8250,20 @@ function openScorecardModal() {
                         <option value="0">0</option>
                     </select>
                 </div>`;
-                catIndex++;
-            }
-            html += `</div>`;
-        });
-        container.innerHTML = html;
-    }
+            catIndex++;
+        }
+        const escapedNote = existingNote.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        html += `<div style="grid-column: 1 / -1; margin-top: 4px; margin-bottom: 2px;">
+                <label class="form-label-caps" style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">Section Notes <span style="font-weight: 400; text-transform: none; font-size: 10px; color: #94a3b8; letter-spacing: 0;">(optional)</span></label>
+                <textarea id="score-notes-${bIdx}" class="scorecard-notes-input" rows="2" placeholder="Leave a note for the manager about this section...">${escapedNote}</textarea>
+            </div>`;
+        html += `</div>`;
+    });
+    container.innerHTML = html;
+}
+
+function refreshScorecardNotes() {
+    _buildScorecardModalInputs();
 }
 
 function toggleScorecardSection(bIdx) {
@@ -7963,7 +8297,7 @@ function submitNewScorecard() {
         return;
     }
 
-    // Gather scores per section — blanks are allowed (Apps Script carries previous value forward)
+    // Gather scores and notes per section
     let catIndex = 0;
     let sectionData = [];
 
@@ -7975,7 +8309,9 @@ function submitNewScorecard() {
             scores.push(val === '' ? null : parseFloat(val));
             catIndex++;
         }
-        if (enabled) sectionData.push({ bucketIndex: bIdx, scores: scores });
+        const noteEl = document.getElementById(`score-notes-${bIdx}`);
+        const notes = noteEl ? noteEl.value.trim() : '';
+        if (enabled) sectionData.push({ bucketIndex: bIdx, scores: scores, notes: notes });
     });
 
     btn.innerText = "Saving...";
@@ -7996,7 +8332,8 @@ function submitNewScorecard() {
             action: 'submit_scorecard',
             store: store,
             date: date,
-            scores: sectionData.flatMap(s => s.scores)
+            scores: sectionData.flatMap(s => s.scores),
+            sectionNotes: sectionData.map(s => s.notes)
         };
     }
 
@@ -8363,6 +8700,20 @@ async function fetchChampions() {
 // ============================================================================
 let currentChecklistTab = 'daily';
 let checklistDataCache = { daily: [], weekly: [], monthly: [], quarterly: [] };
+// Tracks optimistic toggle state for up to 20 seconds so a slow backend response
+// can't overwrite a locally-checked item before Apps Script persists it.
+const _pendingToggles = new Map(); // id -> { checked, expiresAt }
+
+function _applyPendingToggles() {
+    const now = Date.now();
+    for (const [id, { checked, expiresAt }] of _pendingToggles) {
+        if (now > expiresAt) { _pendingToggles.delete(id); continue; }
+        for (const tab of Object.keys(checklistDataCache)) {
+            const item = checklistDataCache[tab].find(i => i.id === id);
+            if (item) item.checked = checked;
+        }
+    }
+}
 
 // For assistant managers, returns the store's primary manager name so both share the same checklist data.
 // All other roles return their own name, preserving existing behavior.
@@ -8402,6 +8753,12 @@ function switchChecklistTab(tab) {
 }
 
 async function loadChecklist() {
+    // Only run when the panel is actually opening — not on close.
+    // Without this guard, the GET races against the in-flight toggle POST and
+    // overwrites the cache with stale (unchecked) data before the backend saves.
+    const panel = document.getElementById('checklistSidePanel');
+    if (!panel?.classList.contains('open')) return;
+
     const container = document.getElementById('checklistContent');
     const userName = getChecklistUser();
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
@@ -8409,12 +8766,12 @@ async function loadChecklist() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
     const isASM = role === 'assistant manager';
 
-    // ASMs only see Daily (they share the manager's checklist but don't manage weekly/monthly)
+    // ASMs see Daily and Weekly; Monthly and Quarterly remain hidden for them
     const weeklyTab = document.getElementById('cl-tab-weekly');
     const monthlyTab = document.getElementById('cl-tab-monthly');
-    if (weeklyTab) weeklyTab.style.display = isASM ? 'none' : '';
+    if (weeklyTab) weeklyTab.style.display = '';
     if (monthlyTab) monthlyTab.style.display = isASM ? 'none' : '';
-    if (isASM && currentChecklistTab !== 'daily') switchChecklistTab('daily');
+    if (isASM && currentChecklistTab !== 'daily' && currentChecklistTab !== 'weekly') switchChecklistTab('daily');
 
     // Only show Quarterly tab for CORP/ALL stores (never for ASMs)
     const qTab = document.getElementById('cl-tab-quarterly');
@@ -8432,6 +8789,7 @@ async function loadChecklist() {
     try {
         const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
         checklistDataCache = await res.json();
+        _applyPendingToggles();
         renderChecklist();
     } catch (e) {
         console.error("Checklist Fetch Error", e);
@@ -8477,12 +8835,14 @@ async function toggleChecklistState(id, isChecked) {
     
     const item = checklistDataCache[currentChecklistTab].find(i => i.id === id);
     if (item) item.checked = isChecked;
-    renderChecklist(); 
+    // Protect this optimistic state for 20s so a slow server response can't overwrite it
+    _pendingToggles.set(id, { checked: isChecked, expiresAt: Date.now() + 20000 });
+    renderChecklist();
 
     fetch(CHECKLIST_URL, {
         method: 'POST', mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'toggle', id: id, checked: isChecked, user: userName, store: store }) // <--- Added store here
+        body: JSON.stringify({ action: 'toggle', id: id, checked: isChecked, tab: currentChecklistTab, user: userName, store: store })
     }).catch(() => {});
 }
 
@@ -8535,7 +8895,7 @@ async function deleteChecklistItem(id) {
     fetch(CHECKLIST_URL, {
         method: 'POST', mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'delete', id: id, user: userName, store: store })
+        body: JSON.stringify({ action: 'delete', id: id, tab: currentChecklistTab, user: userName, store: store })
     }).catch(() => {});
 }
 
@@ -8554,7 +8914,7 @@ function clearChecklistTab() {
         fetch(CHECKLIST_URL, {
             method: 'POST', mode: 'no-cors',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'toggle', id: item.id, checked: false, user: userName, store: store })
+            body: JSON.stringify({ action: 'toggle', id: item.id, checked: false, tab: currentChecklistTab, user: userName, store: store })
         }).catch(() => {});
     });
 }
@@ -8581,6 +8941,18 @@ function updateChecklistChip() {
     btn.classList.toggle('cl-needs-attention', done < total && !isOpen);
 }
 
+// Fetches checklist data at startup to populate the progress chip without opening the panel.
+// Uses a separate path from loadChecklist() so the panel-open guard doesn't suppress it.
+async function _prefetchChecklistForChip() {
+    const userName = getChecklistUser();
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+    try {
+        const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
+        checklistDataCache = await res.json();
+        _applyPendingToggles();
+        updateChecklistChip();
+    } catch (_) {}
+}
 
 // --- BULLETPROOF TOGGLE & CLICK-AWAY LOGIC ---
 let _clSyncInterval = null;
@@ -8594,9 +8966,8 @@ function _startChecklistSync() {
         const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
         try {
             const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
-            const fresh = await res.json();
-            // Merge: preserve any in-flight optimistic state for unchecked items
-            checklistDataCache = fresh;
+            checklistDataCache = await res.json();
+            _applyPendingToggles();
             renderChecklist();
         } catch (_) {}
     }, 30000);
@@ -9075,4 +9446,207 @@ async function confirmDeletePatchItem(rowNum) {
         });
     } catch (e) { /* no-cors always throws, reload regardless */ }
     loadPatchNotesEditor();
+}
+
+// ============================================================
+// BOX ORDER TOOL
+// ============================================================
+
+const BOX_STORE_NAMES = {
+    'OVL': 'Overland Park',
+    'LEE': "Lee's Summit",
+    'WSP': 'Westport',
+    'MPL': 'Maplewood',
+    'BAL': 'Ballwin'
+};
+
+function _boxOrderGetStore() {
+    const selectorEl = document.getElementById('boxOrderStoreSelector');
+    const corpVisible = selectorEl && selectorEl.style.display !== 'none';
+    const sel = document.getElementById('boxOrderStoreSelect');
+    const code = (corpVisible && sel && sel.value) ? sel.value : (sessionStorage.getItem('speeksUserStore') || '');
+    return BOX_STORE_NAMES[code] || code || 'Store';
+}
+
+let _boxOrderEmails = { primary: '', secondary: '' };
+
+async function toggleBoxOrder() {
+    closeAllModals();
+    const modal = document.getElementById('boxOrderModal');
+    if (!modal) return;
+    // Always start on page 1
+    document.getElementById('boxOrderPage1').style.display    = '';
+    document.getElementById('boxOrderFooter1').style.display  = '';
+    document.getElementById('boxOrderPage2').style.display    = 'none';
+    document.getElementById('boxOrderFooter2').style.display  = 'none';
+    modal.classList.add('show');
+    lockAndBlurScreen();
+    await _loadBoxOrderData();
+}
+
+async function _loadBoxOrderData() {
+    const container = document.getElementById('boxOrderItemsContainer');
+    if (!container) return;
+    container.innerHTML = '<div style="color:#a0aab2;font-size:13px;padding:12px 0;">Loading items...</div>';
+    const h = { 'apikey': _SUPABASE_ANON_KEY, 'Authorization': `Bearer ${_SUPABASE_ANON_KEY}` };
+    try {
+        const [iRes, cRes] = await Promise.all([
+            fetch(BOX_ITEMS_URL, { headers: h }),
+            fetch(BOX_CONFIG_URL, { headers: h })
+        ]);
+        const items  = await iRes.json();
+        const config = await cRes.json();
+        if (Array.isArray(config)) {
+            config.forEach(c => {
+                if (c.key === 'email_primary')   _boxOrderEmails.primary   = c.value;
+                if (c.key === 'email_secondary')  _boxOrderEmails.secondary = c.value;
+            });
+        }
+        _renderBoxOrderItems(container, Array.isArray(items) ? items : []);
+    } catch (e) {
+        container.innerHTML = '<div style="color:#ef4444;font-size:13px;">Failed to load items. Please try again.</div>';
+    }
+}
+
+function _renderBoxOrderItems(container, items) {
+    const BUCKETS = [
+        { key: 'Common Box',       label: 'Common Boxes' },
+        { key: 'Rare Box',         label: 'Rare Boxes' },
+        { key: 'Very Rare Box',    label: 'Very Rare Boxes' },
+        { key: 'Shipping Supplies',  label: 'Shipping Supplies' },
+        { key: 'White Storage Box', label: 'White Storage Boxes' },
+        { key: 'Bubble Mailer',     label: 'Bubble Mailers' },
+    ];
+    let html = '';
+
+    const buildSection = (label, group, includeHdWarning) => {
+        let itemsHtml = '';
+        group.forEach(item => {
+            itemsHtml += _buildBoxRow(item);
+            if (includeHdWarning && item.is_heavy_duty) {
+                itemsHtml += '<div class="box-order-warning">⚠ HD boxes are significantly more expensive per unit. Only order what is truly needed.</div>';
+            }
+        });
+        return `<div class="box-order-section">
+  <div class="box-order-section-label box-order-collapsible" onclick="boxOrderToggleSection(this)">
+    <span>${label}</span><span class="box-order-chevron" style="transform:rotate(-90deg)">▾</span>
+  </div>
+  <div class="box-order-section-items" style="display:none">${itemsHtml}</div>
+</div>`;
+    };
+
+    BUCKETS.forEach(({ key, label }) => {
+        const group = items.filter(i => i.category === key);
+        if (group.length) html += buildSection(label, group, key === 'Rare Box');
+    });
+
+    container.innerHTML = html || '<div style="color:#a0aab2;font-size:13px;">No items found.</div>';
+}
+
+function boxOrderToggleSection(labelEl) {
+    const section = labelEl.closest('.box-order-section');
+    const itemsEl = section.querySelector('.box-order-section-items');
+    const chevron = labelEl.querySelector('.box-order-chevron');
+    const isOpen  = itemsEl.style.display !== 'none';
+    itemsEl.style.display  = isOpen ? 'none' : '';
+    chevron.style.transform = isOpen ? 'rotate(-90deg)' : '';
+}
+
+function _buildBoxRow(item) {
+    const displayCat = item.category.replace(/^(?:Common |Rare |Very Rare )/, '');
+    const label      = escapeHtml(`${item.name} ${displayCat}`);
+    const nameHtml   = escapeHtml(item.name);
+    const subParts   = [item.dimensions, displayCat].filter(Boolean);
+    const subHtml    = escapeHtml(subParts.join(' · '));
+    return `<div class="box-order-row" data-item="${label}">
+  <div class="box-order-info">
+    <span class="box-order-name">${nameHtml}</span>
+    <span class="box-order-subtype">${subHtml}</span>
+  </div>
+  <div class="box-order-stepper">
+    <button class="box-stepper-btn" onclick="boxStepperChange(this,-1)">−</button>
+    <span class="box-stepper-qty">0</span>
+    <button class="box-stepper-btn" onclick="boxStepperChange(this,1)">+</button>
+  </div>
+</div>`;
+}
+
+function boxStepperChange(btn, delta) {
+    const qtyEl = btn.closest('.box-order-stepper').querySelector('.box-stepper-qty');
+    const row   = btn.closest('.box-order-row');
+    const next  = Math.max(0, (parseInt(qtyEl.textContent) || 0) + delta);
+    qtyEl.textContent = next;
+    qtyEl.classList.toggle('box-stepper-active', next > 0);
+    row.classList.toggle('box-row-selected', next > 0);
+}
+
+let _boxOrderSelected = [];
+
+function boxOrderNextPage() {
+    const rows = document.querySelectorAll('#boxOrderItemsContainer .box-order-row');
+    _boxOrderSelected = [];
+    rows.forEach(row => {
+        const qty = parseInt(row.querySelector('.box-stepper-qty')?.textContent) || 0;
+        if (qty > 0) _boxOrderSelected.push({ item: row.dataset.item, qty });
+    });
+    if (!_boxOrderSelected.length) {
+        alert('Please add at least one item before continuing.');
+        return;
+    }
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const isCorpRole = role === 'ceo' || role === 'district manager';
+    const selectorEl = document.getElementById('boxOrderStoreSelector');
+    if (selectorEl) {
+        selectorEl.style.display = isCorpRole ? '' : 'none';
+        const sel = document.getElementById('boxOrderStoreSelect');
+        if (sel) sel.value = '';
+    }
+    const notesEl = document.getElementById('boxOrderNotes');
+    if (notesEl) notesEl.value = '';
+    boxOrderUpdatePreview();
+    document.getElementById('boxOrderPage1').style.display    = 'none';
+    document.getElementById('boxOrderFooter1').style.display  = 'none';
+    document.getElementById('boxOrderPage2').style.display    = '';
+    document.getElementById('boxOrderFooter2').style.display  = '';
+}
+
+function boxOrderBackPage() {
+    document.getElementById('boxOrderPage2').style.display    = 'none';
+    document.getElementById('boxOrderFooter2').style.display  = 'none';
+    document.getElementById('boxOrderPage1').style.display    = '';
+    document.getElementById('boxOrderFooter1').style.display  = '';
+}
+
+function boxOrderUpdatePreview() {
+    const preview  = document.getElementById('boxOrderEmailPreview');
+    if (!preview) return;
+    const store    = _boxOrderGetStore();
+    const userName = sessionStorage.getItem('speeksUserName')  || '';
+    const notes    = document.getElementById('boxOrderNotes')?.value.trim() || '';
+    const to       = _boxOrderEmails.primary   || 'orders@placeholder.com';
+    const lines    = _boxOrderSelected.map(o => `  • ${o.item}: ${o.qty} ${o.qty === 1 ? 'Bundle' : 'Bundles'}`).join('\n');
+    const noteBlock = notes ? `\n\n${notes}` : '';
+    preview.textContent =
+        `To: ${to}\nSubject: PayMore ${store} Location\n\n` +
+        `Hi,\n\nPlease process the following order for ${store}:\n\n${lines}${noteBlock}\n\n` +
+        `Thank you,\n${userName}`;
+}
+
+function sendBoxOrder() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const isCorpRole = role === 'ceo' || role === 'district manager';
+    const sel = document.getElementById('boxOrderStoreSelect');
+    if (isCorpRole && (!sel || !sel.value)) {
+        alert('Please select a store before sending.');
+        return;
+    }
+    const store     = _boxOrderGetStore();
+    const userName  = sessionStorage.getItem('speeksUserName')  || '';
+    const notes     = document.getElementById('boxOrderNotes')?.value.trim() || '';
+    const noteBlock = notes ? `%0A%0A${encodeURIComponent(notes)}` : '';
+    const to        = encodeURIComponent(_boxOrderEmails.primary || 'orders@placeholder.com');
+    const subject   = encodeURIComponent(`PayMore ${store} Location`);
+    const lines     = _boxOrderSelected.map(o => encodeURIComponent(`  • ${o.item}: ${o.qty} ${o.qty === 1 ? 'Bundle' : 'Bundles'}`)).join('%0A');
+    const body      = `Hi,%0A%0APlease process the following order for ${encodeURIComponent(store)}:%0A%0A${lines}${noteBlock}%0A%0AThank you,%0A${encodeURIComponent(userName)}`;
+    window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
 }

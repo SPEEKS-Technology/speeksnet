@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260602l">
+  <link rel="stylesheet" href="styles.css?v=20260603f">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260602l" defer></script>
+  <script src="speeks.js?v=20260603f" defer></script>
 </head>
 
 <body class="preload">
@@ -27,42 +27,22 @@
   </div>
   
   <nav class="nav-bar">
-    <a href="index.html" class="nav-link active"><i>⚡</i> <span>QuickPortal</span></a>
-    <a href="docs.html" class="nav-link"><i>📚</i> <span>Processes & Policies</span></a>
-    <a href="stats.html" class="nav-link"><i>🏆</i> <span>Stats & Awards</span></a>
-    <a href="workspace.html" class="nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-tom role-assistant-manager"><i>📈</i> <span>Analytics</span></a>
+    <a href="index.html" class="nav-link active"><i>⚡</i><span>QuickPortal</span></a>
+    <a href="workspace.html" class="nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-tom role-assistant-manager"><i>📈</i><span>Workspace</span></a>
+    <a href="docs.html" class="nav-link"><i>📚</i><span>Processes & Policies</span></a>
+    <a href="stats.html" class="nav-link"><i>🏆</i><span>Stats & Awards</span></a>
   </nav>
 
   <div class="nav-right">
     <div class="user-profile-nav">
 
-      <div class="dev-dropdown-container dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" id="devDropdown">
-        <button class="dev-workspace-btn" id="devWorkspaceBtn" onclick="window.toggleDevDropdown(event)">
-          <svg class="lock-icon text-gold" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-          </svg>
-          <span class="dev-title">SPEEKS Tools</span>
-          <svg class="chevron-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="6 9 12 15 18 9"></polyline>
-          </svg>
-        </button>
-
-        <div class="dev-dropdown-menu">
-            <a class="dev-dropdown-link dynamic-module-block role-district-manager role-ceo role-tom role-owner-manager" onclick="toggleManageAnnouncements()">Announcements</a>
-            <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleManageTicker()">Ticker Items</a>
-            <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleSendCommentModal()">Send Store Comment</a>
-            <a class="dev-dropdown-link dynamic-module-block role-district-manager role-ceo role-owner-manager" onclick="toggleManageUsers()">User Permissions</a>
-            <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleVarianceInput()">Submit Variance Report</a>
-            <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleManageAlerts()">Performance Metrics</a>
-            <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleManageRecords()">Company Records</a>
-            <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="openScorecardModal()">Submit Scorecard</a>
-            <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleManageDocs()">Manage Policies</a>
-            <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleManageHotkeys()">System Hotkeys</a>
-            <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="togglePatchNotesManage()">Patch Notes</a>
-            <a class="dev-dropdown-link dynamic-module-block role-district-manager" onclick="toggleManageAwards()">Monthly Awards</a>
-        </div>
-      </div>
+      <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager role-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" title="SPEEKS Tools">
+        <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+        <span class="tools-nav-label">Tools</span>
+      </button>
 
     <div id="dailyMessageBubble">
             <span id="dailyMessageBubbleIcon">📣</span>
@@ -200,8 +180,18 @@
 
             <div id="annBodyInput" class="editor-body" contenteditable="true" placeholder="Start typing your announcement here..."></div>
         </div>
+
+        <div>
+            <label class="form-label-caps">Attach Document <span style="font-weight:400;text-transform:none;color:#888;">(optional — Word, PDF, Excel · max 10 MB)</span></label>
+            <div class="ann-doc-dropzone" id="annDocDropzone">
+                <input type="file" id="annDocInput" accept=".doc,.docx,.pdf,.xls,.xlsx" style="display:none;" onchange="onAnnDocSelected(this)">
+                <button type="button" class="ann-doc-browse-btn" onclick="document.getElementById('annDocInput').click()">📎 Browse File</button>
+                <span id="annDocFileName" class="ann-doc-filename">No file selected</span>
+                <button type="button" id="annDocClear" class="ann-doc-clear" style="display:none;" onclick="clearAnnDoc()">✖</button>
+            </div>
+        </div>
     </div>
-    
+
     <div class="manage-footer flex-end">
         <button id="publishAnnBtn" class="btn-primary" onclick="publishAnnouncement()">
             <span class="align-center gap-8">Publish to All Stores 🚀</span>
@@ -423,6 +413,7 @@
                     <button id="tab-archive" class="tab-btn" onclick="switchAnnTab('archive')">Archived</button>
                     <button id="tab-patchnotes" class="tab-btn" onclick="switchAnnTab('patchnotes')" style="position: relative;">📋 Patch Notes<div class="notif-dot" id="patchNotesBadge" style="top: -3px; right: -3px;"></div></button>
                 </div>
+                <button class="ann-docs-icon-btn" onclick="openDocsModal()" title="View Attached Documents">📎</button>
                 <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
             </div>
         </div>
@@ -438,6 +429,20 @@
         <div id="patchNotesList" class="pn-modal-body">
             <div class="pn-loading">Loading patch notes...</div>
         </div>
+    </div>
+
+</div>
+
+<div class="modal-menu notif-menu" id="annDocsModal">
+    <div class="modal-header">
+        <div class="align-center gap-15">
+            <button class="ann-docs-back-btn" onclick="closeAllModals(); toggleNotifs();">← Back</button>
+            <h3>📎 Documents</h3>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div id="annDocsList" class="ann-docs-list" style="padding: 0 4px;">
+        <div class="status-message">Loading documents...</div>
     </div>
 </div>
 
@@ -464,7 +469,8 @@
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">📊 Sales Summary</a> 
             <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn">🔑 Store Passwords</a>
             <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn">📁 TOM Folder</a> 
+            <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn">📁 Store Manager Folder</a>
+            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn">📁 TOM Folder</a>
             <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn">☁️ PayMore Google Drive</a> 
             <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn">☁️ SPEEKSNET Google Drive</a>  
         </div>
@@ -475,12 +481,10 @@
         <div class="hotbar-container">
           <span class="hotbar-label">DM</span>
           <div class="hotbar-links">
-            <button class="hotbar-btn hotbar-btn-primary" onclick="window.location.href='workspace.html#kpis'">📊 View KPIs</button>
             <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn">📁 Store Manager Folder</a>
             <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn">🔑 Store Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1NkIdw8dlvwXmQ6kdpo73zqRwnPd4kIAkgJ7yAG2XCt4/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Listing Goals</a>  
-            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">📊 Sales Summary</a>  
-            <a href="https://docs.google.com/spreadsheets/d/1e4mW-pcwUMJjl2Pjry6PT180P8M8nkYL5Z4GcspQmEA/edit" target="_blank" class="hotbar-btn">📉 Monthly KPIs</a>
+            <a href="https://docs.google.com/spreadsheets/d/1NkIdw8dlvwXmQ6kdpo73zqRwnPd4kIAkgJ7yAG2XCt4/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Listing Goals</a>
+            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">📊 Sales Summary</a>
             <a href="https://drive.google.com/drive/folders/12Fjxp44sY6T-o6OlrG6n_YtrHow4bE2f?usp=sharing" target="_blank" class="hotbar-btn">⚖️ Variance</a>
             <a href="https://docs.google.com/spreadsheets/d/1agChyBxxwJqP-3CXo10C36-95Y_dVKXTA4GboeCaRRs/edit" target="_blank" class="hotbar-btn">📋 Scorecard</a>
             <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn">☁️ SPEEKSNET Google Drive</a>
@@ -528,8 +532,6 @@
         <div class="hotbar-container">
           <span class="hotbar-label">MGR</span>
           <div class="hotbar-links">
-            <button class="hotbar-btn hotbar-btn-primary" onclick="window.location.href='workspace.html#kpis'">📊 View KPIs</button>
-            <a href="https://docs.google.com/spreadsheets/d/1e4mW-pcwUMJjl2Pjry6PT180P8M8nkYL5Z4GcspQmEA/edit" target="_blank" class="hotbar-btn">📉 Monthly KPIs</a>
             <a href="https://docs.google.com/spreadsheets/d/1NkIdw8dlvwXmQ6kdpo73zqRwnPd4kIAkgJ7yAG2XCt4/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Daily Listing Goals</a>  
             <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn">⏳ Aging Inventory</a>
             <a href="https://docs.google.com/spreadsheets/d/1zw-jcqpAnMY6PNofERbUz4pUHA3qnlnZx6O6C_XSmLY/edit?usp=sharing" target="_blank" class="hotbar-btn">🛡️ Insurance Cases</a>
@@ -707,41 +709,6 @@
           </div>
       </div>
 
-      <div class="card kpi-master-card district-master-panel employee-widget-card dynamic-module-flex role-assistant-manager bottom-locked-card">
-          <div class="district-kpi-header">
-              <span class="district-kpi-title">Monthly KPI Comparison</span>
-              <div class="kpi-header-controls">
-                  <div class="kpi-select-group">
-                      <select id="am-kpiStoreSelect" class="kpi-select hide-by-default">
-                          <option value="OVL">OVL</option>
-                          <option value="LEE">LEE</option>
-                          <option value="WSP">WSP</option>
-                          <option value="MPL">MPL</option>
-                          <option value="BAL">BAL</option>
-                      </select>
-                  </div>
-                  <div class="kpi-select-group" style="margin-left: auto;">
-                      <select id="am-primaryMonthSelect" class="kpi-select" onchange="renderAMKPIDashboard()"></select>
-                  </div>
-                  <div class="kpi-select-group vw-vs-text">vs</div>
-                  <div class="kpi-select-group">
-                      <select id="am-compareMonthSelect" class="kpi-select" onchange="renderAMKPIDashboard()"></select>
-                  </div>
-              </div>
-          </div>
-
-          <div class="kpi-inner-wrapper">
-              <div class="kpi-table-header">
-                  <div>Metric & 12-Mo Trend</div>
-                  <div id="am-header-primary-label">Primary</div>
-                  <div id="am-header-compare-label">Compare</div>
-                  <div>Delta (+/-)</div>
-              </div>
-              <div id="am-kpiDashboardContainer" class="kpi-scroll-area">
-                  <div class="status-message">Syncing KPI Data...</div>
-              </div>
-          </div>
-      </div>
 
       <div class="card dynamic-module-flex role-manager role-owner-manager district-master-panel employee-widget-card flex-col-card">
           <div class="district-kpi-header">
@@ -830,34 +797,6 @@
 
       <div class="district-split-row dynamic-module-flex role-district-manager">
           
-          <div class="flex-col-gap-30">
-              <div class="card district-master-panel district-kpi-panel">
-                  <div class="district-kpi-header">
-                      <span class="district-kpi-title">District Monthly KPIs</span>
-                      <div class="align-center gap-12">
-                          <span class="form-label-caps">Month:</span>
-                          <select id="dist-kpi-month" class="dist-kpi-select" onchange="renderDistrictKPIs()"></select>
-                      </div>
-                  </div>
-
-                  <div class="kpi-scroll-wrapper">
-                      <div class="kpi-table-min-width">
-                          <div class="district-kpi-table-header">
-                              <div class="district-kpi-metric-lbl">Metric</div>
-                              <div class="district-kpi-store-lbl">🟣 OVL</div>
-                              <div class="district-kpi-store-lbl">🔵 LEE</div>
-                              <div class="district-kpi-store-lbl">🟢 WSP</div>
-                              <div class="district-kpi-store-lbl">🟠 MPL</div>
-                              <div class="district-kpi-store-lbl">🔴 BAL</div>
-                          </div>
-                          <div id="district-kpi-body" class="kpi-scroll-area kpi-table-body">
-                              <div class="status-message">Syncing Data...</div>
-                          </div>
-                      </div>
-                  </div>
-              </div>
-          </div>
-
           <div class="flex-col-gap-30">
               <div class="card district-master-panel district-kpi-panel">
                   <div class="district-kpi-header">
@@ -986,7 +925,7 @@
     
     <div class="manage-content">
         <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-            <select id="dm-store-select" class="form-input-lg" style="flex: 1; margin-top: 0;">
+            <select id="dm-store-select" class="form-input-lg" style="flex: 1; margin-top: 0;" onchange="refreshScorecardNotes()">
                 <option value="OVL">OVL</option>
                 <option value="LEE">LEE</option>
                 <option value="WSP">WSP</option>
@@ -1187,6 +1126,104 @@
     </div>
 </div>
 
+<!-- ===== BOX ORDER MODAL ===== -->
+<div class="modal-menu manage-menu" id="boxOrderModal">
+    <div class="modal-header">
+        <h3>📦 Box Order</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+
+    <!-- PAGE 1: Item Selection -->
+    <div class="manage-content" id="boxOrderPage1">
+        <div id="boxOrderItemsContainer"></div>
+        <div class="box-order-disclaimer">
+            If a box or item you need is not on this page, please reach out to your District Manager for approval.
+        </div>
+    </div>
+
+    <!-- PAGE 2: Email Preview + Notes -->
+    <div class="manage-content" id="boxOrderPage2" style="display:none;">
+        <!-- CORP store selector — shown for CEO / DM only -->
+        <div id="boxOrderStoreSelector" style="display:none; margin-bottom:14px;">
+            <label class="form-label-caps">Order For <span style="font-weight:400;color:#ef4444;">*</span></label>
+            <select id="boxOrderStoreSelect" class="form-input-lg" onchange="boxOrderUpdatePreview()">
+                <option value="">Select a store…</option>
+                <option value="OVL">OVL</option>
+                <option value="LEE">LEE</option>
+                <option value="WSP">WSP</option>
+                <option value="MPL">MPL</option>
+                <option value="BAL">BAL</option>
+            </select>
+        </div>
+        <div class="box-order-preview-label">Email Preview</div>
+        <div class="box-order-email-preview" id="boxOrderEmailPreview"></div>
+        <label class="form-label-caps" style="margin-top:16px;">
+            Notes <span style="font-weight:400;color:#a0aab2;">(optional)</span>
+        </label>
+        <textarea id="boxOrderNotes" class="form-input-lg" rows="2"
+            placeholder="e.g. Please deliver by Friday"
+            oninput="boxOrderUpdatePreview()"></textarea>
+    </div>
+
+    <!-- FOOTER PAGE 1 -->
+    <div class="manage-footer box-order-footer" id="boxOrderFooter1">
+        <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
+        <button class="btn-primary" onclick="boxOrderNextPage()">Next →</button>
+    </div>
+
+    <!-- FOOTER PAGE 2 -->
+    <div class="manage-footer box-order-footer" id="boxOrderFooter2" style="display:none;">
+        <button class="btn-secondary" onclick="boxOrderBackPage()">← Back</button>
+        <button class="btn-primary" onclick="sendBoxOrder()">Send Email →</button>
+    </div>
+</div>
+
+<!-- ===== SPEEKS TOOLS SIDE PANEL ===== -->
+<div class="tools-side-panel dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager role-manager" id="toolsSidePanel" style="flex-direction:column;">
+  <div class="tools-panel-header">
+    <div class="tools-panel-title">
+      <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+      SPEEKS Tools
+    </div>
+    <button class="tools-panel-close" onclick="_closeToolsPanel()">✕</button>
+  </div>
+  <div class="tools-panel-body">
+
+    <div class="tools-group dynamic-module-block role-district-manager role-ceo role-tom role-owner-manager">
+      <div class="tools-group-label">📢 Content</div>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon">📣</span>Announcements</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageTicker();"><span class="tools-item-icon">📌</span>Ticker Items</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); togglePatchNotesManage();"><span class="tools-item-icon">📝</span>Patch Notes</a>
+    </div>
+
+    <div class="tools-group dynamic-module-block role-district-manager">
+      <div class="tools-group-label">🏪 Store Ops</div>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon">🏆</span>Submit Scorecard</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleVarianceInput();"><span class="tools-item-icon">📊</span>Submit Variance Report</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon">💬</span>Send Store Comment</a>
+    </div>
+
+    <div class="tools-group dynamic-module-block role-district-manager role-ceo role-manager role-owner-manager">
+      <div class="tools-group-label">📦 Orders</div>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon">📦</span>Box Order</a>
+    </div>
+
+    <div class="tools-group dynamic-module-block role-district-manager role-ceo role-owner-manager">
+      <div class="tools-group-label">👥 Admin</div>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-owner-manager" onclick="_closeToolsPanel(); toggleManageUsers();"><span class="tools-item-icon">👤</span>User Permissions</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageAlerts();"><span class="tools-item-icon">📈</span>Performance Metrics</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageRecords();"><span class="tools-item-icon">📁</span>Company Records</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageDocs();"><span class="tools-item-icon">📚</span>Manage Policies</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageAwards();"><span class="tools-item-icon">🏅</span>Monthly Awards</a>
+    </div>
+
+    <div class="tools-group dynamic-module-block role-district-manager">
+      <div class="tools-group-label">⚙ System</div>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageHotkeys();"><span class="tools-item-icon">⌨️</span>System Hotkeys</a>
+    </div>
+
+  </div>
+</div>
 
 </body>
 </html>
