@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Listing Goals — Redesign Prototype</title>
+<style>
+  :root{
+    --charcoal:#1e293b; --slate:#64748b; --line:#eef2f6; --bg:#f4f6f9;
+    --green-bg:#d1fae5; --green-tx:#065f46; --sage:#10b981;
+    --red-bg:#fee2e2; --red-tx:#991b1b; --red:#ef4444;
+    --gold-bg:#fef3c7; --gold-tx:#92400e; --gold:#f59e0b;
+    --neutral-bg:#f1f5f9; --neutral-tx:#64748b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--charcoal);padding:24px;line-height:1.4}
+  h1{font-size:22px;font-weight:900;margin-bottom:4px}
+  .sub{color:var(--slate);font-size:13px;margin-bottom:20px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:20px;align-items:start}
+  .card{background:#fff;border-radius:16px;box-shadow:0 4px 18px rgba(15,23,42,.06);padding:18px 20px}
+  .card h2{font-size:13px;font-weight:900;text-transform:uppercase;letter-spacing:.04em;color:var(--charcoal);display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+  .tag{font-size:10px;font-weight:800;padding:3px 8px;border-radius:6px;background:var(--neutral-bg);color:var(--neutral-tx)}
+  .tag.who{background:#ede9fe;color:#6d28d9}
+
+  /* Global controls */
+  .controls{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end;background:#fff;border-radius:16px;padding:16px 20px;margin-bottom:20px;box-shadow:0 4px 18px rgba(15,23,42,.06)}
+  .ctrl label{display:block;font-size:10px;font-weight:800;text-transform:uppercase;color:var(--slate);margin-bottom:5px;letter-spacing:.04em}
+  .seg{display:inline-flex;background:var(--neutral-bg);border-radius:8px;padding:3px}
+  .seg button{border:none;background:transparent;padding:6px 12px;font-size:12px;font-weight:800;border-radius:6px;cursor:pointer;color:var(--slate)}
+  .seg button.active{background:#fff;color:var(--charcoal);box-shadow:0 1px 4px rgba(0,0,0,.08)}
+  input[type=number]{width:72px;padding:7px 9px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;font-weight:800;font-family:inherit}
+
+  /* Manager roster */
+  .roster-row{display:grid;grid-template-columns:1.4fr auto 48px;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .roster-row:last-child{border-bottom:none}
+  .emp-name{font-size:13px;font-weight:800}
+  .emp-note{font-size:10px;color:var(--slate);font-weight:600}
+  .role-dots{display:flex;gap:5px}
+  .role-dot{width:30px;height:30px;border-radius:8px;border:1.5px solid #e2e8f0;background:#fff;font-size:11px;font-weight:900;color:var(--slate);cursor:pointer;transition:.12s}
+  .role-dot:hover{border-color:var(--sage)}
+  .role-dot.active{background:var(--charcoal);color:#fff;border-color:var(--charcoal)}
+  .role-dot.off{opacity:.45;background:repeating-linear-gradient(45deg,#fff,#fff 4px,#f8fafc 4px,#f8fafc 8px)}
+  .goal-pill{font-size:16px;font-weight:900;text-align:center;background:var(--neutral-bg);border-radius:8px;padding:6px 0;color:var(--charcoal)}
+  .goal-pill.set{background:var(--green-bg);color:var(--green-tx)}
+  .total-row{display:grid;grid-template-columns:1.4fr auto 48px;align-items:center;gap:10px;padding-top:12px;margin-top:6px;border-top:2px solid var(--charcoal)}
+  .total-row .emp-name{font-size:13px}
+  .total-pill{font-size:18px;font-weight:900;text-align:center}
+
+  /* Week grid */
+  table.week{width:100%;border-collapse:collapse;font-size:12px}
+  table.week th,table.week td{padding:7px 4px;text-align:center}
+  table.week th{font-size:10px;font-weight:800;color:var(--slate);text-transform:uppercase;border-bottom:1.5px solid var(--line)}
+  table.week td.rolelbl{text-align:left;font-weight:800;font-size:11px;white-space:nowrap}
+  table.week td.num{font-weight:800}
+  table.week td.dash{color:#cbd5e1}
+  table.week tr.total td{border-top:2px solid var(--charcoal);font-weight:900;padding-top:9px}
+  td.sat{background:var(--gold-bg)}
+  .cellgoal{font-weight:800}
+
+  /* Team member */
+  .tm-top{display:flex;gap:12px;margin-bottom:14px}
+  .tm-box{flex:1;background:var(--neutral-bg);border-radius:12px;padding:12px 14px;text-align:center}
+  .tm-box .lbl{font-size:9px;font-weight:800;color:var(--slate);text-transform:uppercase;letter-spacing:.04em}
+  .tm-box .val{font-size:26px;font-weight:900;display:block;margin-top:2px}
+  .tm-desc{font-size:11px;color:var(--slate);background:#f8fafc;border-left:3px solid var(--sage);padding:9px 11px;border-radius:0 8px 8px 0;margin-bottom:14px;font-weight:600}
+  .progress-wrap{margin-bottom:8px}
+  .progress-head{display:flex;justify-content:space-between;font-size:11px;font-weight:800;margin-bottom:5px}
+  .bar{height:10px;background:var(--neutral-bg);border-radius:6px;overflow:hidden;position:relative}
+  .bar .fill{height:100%;border-radius:6px;transition:width .5s}
+  .bar .pace{position:absolute;top:-3px;width:2px;height:16px;background:var(--charcoal);border-radius:2px}
+  .weekpills{display:flex;gap:5px;margin-top:12px}
+  .pill{flex:1;text-align:center;font-size:9px;font-weight:800;padding:5px 2px;border-radius:5px}
+  .pill.pass{background:var(--green-bg);color:var(--green-tx)}
+  .pill.fail{background:var(--red-bg);color:var(--red-tx)}
+  .pill.null{background:var(--neutral-bg);color:var(--neutral-tx)}
+  .pill.future{border:1px dashed #e2e8f0;color:#cbd5e1}
+
+  /* Previous week + meter */
+  .prevweek{display:flex;align-items:center;gap:14px;background:#f8fafc;border-radius:12px;padding:14px;margin-bottom:14px}
+  .donut{flex-shrink:0}
+  .pw-info .pw-lbl{font-size:10px;font-weight:800;color:var(--slate);text-transform:uppercase}
+  .pw-info .pw-big{font-size:22px;font-weight:900}
+  .pw-info .pw-sm{font-size:11px;font-weight:700;color:var(--slate)}
+  .badge{display:inline-block;font-size:10px;font-weight:900;padding:3px 9px;border-radius:6px;margin-top:4px}
+  .badge.pass{background:var(--green-bg);color:var(--green-tx)}
+  .badge.fail{background:var(--red-bg);color:var(--red-tx)}
+
+  .meter{margin-top:4px}
+  .meter-head{display:flex;justify-content:space-between;align-items:center;font-size:11px;font-weight:800;margin-bottom:6px}
+  .segs{display:flex;gap:5px}
+  .segs .s{flex:1;height:14px;border-radius:4px;background:var(--neutral-bg)}
+  .segs .s.on{background:var(--sage)}
+  .meter-note{font-size:10px;color:var(--slate);font-weight:700;margin-top:6px}
+  .flag{font-size:11px;font-weight:900;padding:8px 11px;border-radius:8px;margin-top:10px;display:flex;align-items:center;gap:8px}
+  .flag.review{background:var(--red-bg);color:var(--red-tx)}
+  .flag.urgent{background:#7f1d1d;color:#fff}
+  .flag.ok{background:var(--green-bg);color:var(--green-tx)}
+
+  /* DM */
+  .dm-row{display:grid;grid-template-columns:42px 1fr auto;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}
+  .dm-row:last-child{border-bottom:none}
+  .dm-store{font-size:15px;font-weight:900}
+  .dm-sz{font-size:9px;color:var(--slate);font-weight:700}
+  .dm-meter .segs .s{height:10px}
+  .dm-status{font-size:18px}
+  .dm-result{text-align:right}
+  .dm-result .r{font-size:15px;font-weight:900}
+  .dm-result .t{font-size:11px;color:var(--slate);font-weight:700}
+  .company{background:var(--charcoal);color:#fff;border-radius:12px;padding:14px 16px;margin-top:14px;display:flex;justify-content:space-between;align-items:center}
+  .company .lbl{font-size:10px;font-weight:800;text-transform:uppercase;opacity:.7}
+  .company .big{font-size:24px;font-weight:900}
+  .note{font-size:11px;color:var(--slate);margin-top:10px;font-style:italic}
+</style>
+</head>
+<body>
+
+<h1>Listing Goals — Redesign Prototype</h1>
+<div class="sub">Pick roles → goals auto-fill. Actuals come from the Weekly KPI. Goals ratchet up via the level-up meter. Every number below is driven by the shared engine at the bottom of this file — tweak the controls to feel it.</div>
+
+<div class="controls">
+  <div class="ctrl">
+    <label>Store size</label>
+    <div class="seg" id="seg-size">
+      <button data-size="4" class="active">4-person</button>
+      <button data-size="3">3-person</button>
+    </div>
+  </div>
+  <div class="ctrl">
+    <label>"Today" is</label>
+    <div class="seg" id="seg-day">
+      <button data-day="Mon">Mon</button><button data-day="Tue">Tue</button>
+      <button data-day="Wed" class="active">Wed</button><button data-day="Thu">Thu</button>
+      <button data-day="Fri">Fri</button><button data-day="Sat">Sat</button>
+    </div>
+  </div>
+  <div class="ctrl">
+    <label>Weekly target</label>
+    <input type="number" id="ctl-target" value="190" step="5" />
+  </div>
+  <div class="ctrl">
+    <label>Saturday factor</label>
+    <input type="number" id="ctl-sat" value="0.5" step="0.05" min="0" max="1" />
+  </div>
+</div>
+
+<div class="grid">
+
+  <!-- MANAGER -->
+  <div class="card" style="grid-column:span 1">
+    <h2>Manager — Set Today's Roles <span class="tag who">Manager</span></h2>
+    <div id="mgr-roster"></div>
+    <div class="total-row">
+      <span class="emp-name">Store goal · <span id="mgr-day"></span></span>
+      <span></span>
+      <span class="total-pill" id="mgr-total">0</span>
+    </div>
+    <div class="note">Tap a role. The goal fills itself — no typing. Greyed roles aren't staffed that day. On 2-person days the lister auto-switches to "shared" (also covering the floor).</div>
+  </div>
+
+  <!-- WEEK VISUALIZATION -->
+  <div class="card">
+    <h2>The Whole Week (standard staffing) <span class="tag" id="wk-target-tag"></span></h2>
+    <table class="week" id="week-table"></table>
+    <div class="note" id="wk-note"></div>
+  </div>
+
+  <!-- TEAM MEMBER -->
+  <div class="card">
+    <h2>Team Member — My Listing Goals <span class="tag who">Employee</span></h2>
+    <div class="tm-top">
+      <div class="tm-box"><span class="lbl">Today's Target</span><span class="val" id="tm-target">19</span></div>
+      <div class="tm-box"><span class="lbl">My Role</span><span class="val" id="tm-role" style="font-size:18px;padding-top:6px">Lister 1</span></div>
+    </div>
+    <div class="tm-desc" id="tm-desc"></div>
+    <div class="progress-wrap">
+      <div class="progress-head"><span>This week so far</span><span id="tm-prog-lbl"></span></div>
+      <div class="bar"><div class="fill" id="tm-fill"></div><div class="pace" id="tm-pace"></div></div>
+    </div>
+    <div class="weekpills" id="tm-pills"></div>
+    <div class="meter">
+      <div class="meter-head"><span>📈 Goal level-up</span><span id="tm-meter-lbl"></span></div>
+      <div class="segs" id="tm-segs"></div>
+      <div class="meter-note" id="tm-meter-note"></div>
+    </div>
+  </div>
+
+  <!-- DM -->
+  <div class="card" style="grid-column:span 1">
+    <h2>District Manager — Monday Recap <span class="tag who">DM</span></h2>
+    <div id="dm-rows"></div>
+    <div class="company">
+      <div><div class="lbl">Company last week</div><div class="big" id="dm-co-pct">—</div></div>
+      <div style="text-align:right"><div class="lbl">Actual / Target</div><div class="big" id="dm-co-num">—</div></div>
+    </div>
+    <div class="note">Every Monday: how each store finished last week + how close they are to leveling up. Stores missing goal 2 of 3 weeks (or 2 in a row) auto-flag here and on the Manager view.</div>
+  </div>
+
+</div>
+
+<script>
+/* =====================================================================
+   LISTING GOALS ENGINE  —  pure, portable. This block drops into speeks.js.
+   Daily goal = role weight × store scale × day factor.  Stable per role,
+   independent of week-to-date actuals (overtime-proof).
+   ===================================================================== */
+const Engine = {
+  cfg: {
+    roleWeight: { B1:5, B2:8, L1:25, L2:25, L1_SHARED:15 },
+    saturdayFactor: 0.5,          // overridden by control
+    step: 10,                     // ratchet step (+listings/week)
+    window: 3,                    // rolling weeks
+    needHits: 2,                  // hits within window to level up
+    needMiss: 2                   // misses within window to flag
+  },
+
+  // Standard week schedule used ONLY to calibrate the scale constant so a
+  // normal week sums to the weekly target. Day-to-day goals use live roles.
+  standardWeek(size){
+    return size === 4
+      ? { Mon:['B1','B2','L1'], Tue:['B1','B2','L1'], Wed:['B1','B2','L1'],
+          Thu:['B1','B2','L1'], Fri:['B1','B2','L1','L2'], Sat:['B1','B2','L1','L2'] }
+      : { Mon:['B1','L1'], Tue:['B1','L1'], Wed:['B1','L1'],
+          Thu:['B1','B2','L1'], Fri:['B1','B2','L1'], Sat:['B1','B2','L1'] };
+  },
+
+  dayFactor(day){ return day === 'Sat' ? this.cfg.saturdayFactor : (day === 'Sun' ? 0 : 1); },
+
+  // effective weight for a role given how many people are staffed that day
+  weightFor(role, staffedCount){
+    if (role === 'L1' && staffedCount <= 2) return this.cfg.roleWeight.L1_SHARED;
+    return this.cfg.roleWeight[role] || 0;
+  },
+
+  // calibration constant: weeklyTarget / weighted-capacity of a standard week
+  scale(size, weeklyTarget){
+    const wk = this.standardWeek(size);
+    let cap = 0;
+    for (const day in wk){
+      const roles = wk[day];
+      const f = this.dayFactor(day);
+      roles.forEach(r => cap += this.weightFor(r, roles.length) * f);
+    }
+    return weeklyTarget / cap;
+  },
+
+  // THE function the widgets call: goal for one role, one day
+  goal(role, day, size, weeklyTarget, staffedCount){
+    const g = this.weightFor(role, staffedCount) * this.scale(size, weeklyTarget) * this.dayFactor(day);
+    return Math.round(g);
+  },
+
+  // sum a day's roles into a store daily goal
+  dayGoal(roles, day, size, weeklyTarget){
+    return roles.reduce((s, r) => s + this.goal(r, day, size, weeklyTarget, roles.length), 0);
+  },
+
+  // ---- ratchet / level-up meter ----
+  // actuals = array of weekly # Listed, oldest→newest. Evaluate the window.
+  ratchet(actuals, target){
+    const win = actuals.slice(-this.cfg.window);
+    const hits = win.filter(a => a >= target).length;
+    const miss = win.filter(a => a < target).length;
+    const lastTwo = actuals.slice(-2);
+    const twoInARow = lastTwo.length === 2 && lastTwo.every(a => a < target);
+    const levelUp = hits >= this.cfg.needHits;
+    const flagged = miss >= this.cfg.needMiss || twoInARow;
+    return {
+      win, hits, miss, twoInARow, levelUp, flagged,
+      urgent: twoInARow,
+      nextTarget: target + this.cfg.step,
+      prev: actuals[actuals.length - 1],
+      prevPct: Math.round((actuals[actuals.length - 1] / target) * 100)
+    };
+  },
+
+  roleName: { B1:'Buyer 1', B2:'Buyer 2', L1:'Lister 1', L2:'Lister 2' },
+  roleDesc: {
+    B1:'Lead buyer — first up for every customer. Keep a light listing load.',
+    B2:'Second buyer in rotation. Jump in when a second customer arrives.',
+    L1:'Dedicated listing only — no buying, no shipping. Pure listing focus.',
+    L2:'Primary lister, emergency buyer only when 4+ customers are in at once.'
+  }
+};
+
+/* =====================================================================
+   SAMPLE DATA (stands in for roster + Weekly-KPI history)
+   ===================================================================== */
+const STORES = [
+  { code:'OVL', size:4, target:190, actuals:[192,188,201] },
+  { code:'LEE', size:4, target:190, actuals:[185,178,182] },
+  { code:'WSP', size:3, target:170, actuals:[172,169,175] },
+  { code:'MPL', size:3, target:170, actuals:[160,165,158] },
+  { code:'BAL', size:4, target:190, actuals:[190,195,188] }
+];
+const ROSTER = {
+  4: [{name:'Alex M.',role:'L1'},{name:'Jordan P.',role:'L2'},{name:'Sam R.',role:'B1'},{name:'Casey T.',role:'B2'}],
+  3: [{name:'Riley K.',role:'L1'},{name:'Morgan D.',role:'B1'},{name:'Taylor V.',role:'B2'}]
+};
+
+/* =====================================================================
+   STATE + RENDER
+   ===================================================================== */
+const S = { size:4, day:'Wed', target:190, sat:0.5 };
+const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat'];
+
+function staffedRoles(){ return ROSTER[S.size].filter(p => p.role).map(p => p.role); }
+
+function renderManager(){
+  Engine.cfg.saturdayFactor = S.sat;
+  const roster = ROSTER[S.size];
+  const allRoles = S.size === 4 ? ['B1','B2','L1','L2'] : ['B1','B2','L1'];
+  const staffed = roster.filter(p => p.role).length;
+  let html = '';
+  roster.forEach((p, i) => {
+    const dots = allRoles.map(r => {
+      const active = p.role === r ? 'active' : '';
+      return `<button class="role-dot ${active}" onclick="pickRole(${i},'${r}')">${r}</button>`;
+    }).join('');
+    let goal = '–', cls = '', note = '';
+    if (p.role){
+      goal = Engine.goal(p.role, S.day, S.size, S.target, staffed);
+      cls = 'set';
+      if (p.role === 'L1' && staffed <= 2) note = 'shared lister (also on floor)';
+      else note = Engine.roleName[p.role];
+    }
+    html += `<div class="roster-row">
+      <div><div class="emp-name">${p.name}</div><div class="emp-note">${note}</div></div>
+      <div class="role-dots">${dots}</div>
+      <div class="goal-pill ${cls}">${goal}</div>
+    </div>`;
+  });
+  document.getElementById('mgr-roster').innerHTML = html;
+  document.getElementById('mgr-total').innerText = Engine.dayGoal(staffedRoles(), S.day, S.size, S.target);
+  document.getElementById('mgr-day').innerText = S.day + (S.day === 'Sat' ? ' (busy · ×'+S.sat+')' : '');
+}
+
+function pickRole(i, r){
+  const p = ROSTER[S.size][i];
+  p.role = (p.role === r) ? '' : r;   // toggle off if same
+  renderManager(); renderTeamMember();
+}
+
+function renderWeek(){
+  Engine.cfg.saturdayFactor = S.sat;
+  const wk = Engine.standardWeek(S.size);
+  const rolesOrder = S.size === 4 ? ['B1','B2','L1','L2'] : ['B1','B2','L1'];
+  let head = '<tr><th>Role</th>' + DAYS.map(d => `<th>${d}${d==='Sat'?' ½':''}</th>`).join('') + '<th>Wk</th></tr>';
+  let body = '';
+  const colTot = {}; DAYS.forEach(d => colTot[d]=0);
+  rolesOrder.forEach(role => {
+    let wkTot = 0;
+    let cells = DAYS.map(d => {
+      const roles = wk[d] || [];
+      if (!roles.includes(role)) return `<td class="dash ${d==='Sat'?'sat':''}">–</td>`;
+      const shared = (role==='L1' && roles.length<=2);
+      const g = Engine.goal(role, d, S.size, S.target, roles.length);
+      wkTot += g; colTot[d]+=g;
+      return `<td class="num ${d==='Sat'?'sat':''}">${g}${shared?'<sup>s</sup>':''}</td>`;
+    }).join('');
+    body += `<tr><td class="rolelbl">${Engine.roleName[role]}</td>${cells}<td class="num">${wkTot}</td></tr>`;
+  });
+  let grand = 0;
+  let totCells = DAYS.map(d => { grand+=colTot[d]; return `<td class="${d==='Sat'?'sat':''}">${colTot[d]}</td>`; }).join('');
+  body += `<tr class="total"><td class="rolelbl">Daily total</td>${totCells}<td>${grand}</td></tr>`;
+  document.getElementById('week-table').innerHTML = head + body;
+  document.getElementById('wk-target-tag').innerText = 'target ' + S.target + '/wk';
+  const scale = Engine.scale(S.size, S.target);
+  document.getElementById('wk-note').innerHTML =
+    `Scale factor <b>${scale.toFixed(3)}</b> — calibrated so a standard ${S.size}-person week sums to ${S.target}. `+
+    `Week actually sums to <b>${grand}</b>. <sup>s</sup> = shared lister day.`;
+}
+
+function renderTeamMember(){
+  // Use the L1/L2 person from the roster as "me"
+  const me = ROSTER[S.size].find(p => p.role==='L1') || ROSTER[S.size][0];
+  const staffed = staffedRoles().length;
+  const role = me.role || 'L1';
+  const todayGoal = Engine.goal(role, S.day, S.size, S.target, staffed);
+  document.getElementById('tm-target').innerText = todayGoal;
+  document.getElementById('tm-role').innerText = Engine.roleName[role];
+  document.getElementById('tm-desc').innerText = Engine.roleDesc[role] || '';
+
+  // Week-to-date goal accrued (standard week, days up to & including today)
+  const wk = Engine.standardWeek(S.size);
+  const todayIdx = DAYS.indexOf(S.day);
+  let accrued = 0, weekTotal = 0;
+  // simulate "my" role each day = my standard role if I'm scheduled
+  const myStdRole = (size=>{ for(const d in wk){ if(wk[d].includes('L2')&&role==='L2')return 'L2'; } return role; })();
+  DAYS.forEach((d,idx) => {
+    const roles = wk[d];
+    const r = roles.includes(role) ? role : (roles.includes('L1')?'L1':null);
+    if(!r) return;
+    const g = Engine.goal(r, d, S.size, S.target, roles.length);
+    weekTotal += g;
+    if (idx <= todayIdx) accrued += g;
+  });
+  const pacePct = Math.round((accrued/weekTotal)*100);
+  document.getElementById('tm-prog-lbl').innerText = accrued + ' / ' + weekTotal + ' goal-to-date';
+  document.getElementById('tm-fill').style.width = pacePct + '%';
+  document.getElementById('tm-fill').style.background = 'var(--sage)';
+  document.getElementById('tm-pace').style.left = pacePct + '%';
+
+  // week pills (mock: actuals only land at week end, so future/empty)
+  let pills = '';
+  DAYS.forEach((d,idx) => {
+    if (idx < todayIdx) pills += `<div class="pill null" title="actuals arrive in weekly KPI">${d}</div>`;
+    else if (idx === todayIdx) pills += `<div class="pill pass">${d}</div>`;
+    else pills += `<div class="pill future">${d}</div>`;
+  });
+  document.getElementById('tm-pills').innerHTML = pills;
+
+  // level-up meter for this person's store
+  const store = STORES.find(s => s.size === S.size) || STORES[0];
+  const r = Engine.ratchet(store.actuals, store.target);
+  let segs = '';
+  for (let k=0;k<Engine.cfg.needHits;k++) segs += `<div class="s ${k<r.hits?'on':''}"></div>`;
+  document.getElementById('tm-segs').innerHTML = segs;
+  document.getElementById('tm-meter-lbl').innerText = `${r.hits} of last ${Engine.cfg.window} weeks above goal`;
+  document.getElementById('tm-meter-note').innerHTML = r.levelUp
+    ? `🎉 Goal rising to <b>${r.nextTarget}</b> — you earned it.`
+    : `${Engine.cfg.needHits - r.hits} more week above goal to raise to ${r.nextTarget}.`;
+}
+
+function renderDM(){
+  let html = '';
+  let coAct=0, coTgt=0;
+  STORES.forEach(st => {
+    const r = Engine.ratchet(st.actuals, st.target);
+    coAct += r.prev; coTgt += st.target;
+    let segs='';
+    for(let k=0;k<Engine.cfg.needHits;k++) segs+=`<div class="s ${k<r.hits?'on':''}"></div>`;
+    const status = r.urgent ? '🚨' : (r.flagged ? '⚠️' : (r.levelUp ? '⬆️' : '✅'));
+    html += `<div class="dm-row">
+      <div><div class="dm-store">${st.code}</div><div class="dm-sz">${st.size}-person</div></div>
+      <div class="dm-meter">
+        <div style="font-size:10px;font-weight:800;margin-bottom:4px;color:${r.prevPct>=100?'var(--green-tx)':'var(--red-tx)'}">${r.prevPct}% of goal last wk</div>
+        <div class="segs">${segs}</div>
+      </div>
+      <div class="dm-result"><div class="r">${r.prev}<span class="t"> / ${st.target}</span></div><div class="dm-status">${status}</div></div>
+    </div>`;
+  });
+  document.getElementById('dm-rows').innerHTML = html;
+  document.getElementById('dm-co-pct').innerText = Math.round((coAct/coTgt)*100) + '%';
+  document.getElementById('dm-co-num').innerText = coAct + ' / ' + coTgt;
+}
+
+function renderAll(){ renderManager(); renderWeek(); renderTeamMember(); renderDM(); }
+
+/* ---- control wiring ---- */
+document.getElementById('seg-size').addEventListener('click', e => {
+  if(!e.target.dataset.size) return;
+  S.size = +e.target.dataset.size;
+  S.target = S.size===4?190:170;
+  document.getElementById('ctl-target').value = S.target;
+  [...e.currentTarget.children].forEach(b=>b.classList.toggle('active',b===e.target));
+  renderAll();
+});
+document.getElementById('seg-day').addEventListener('click', e => {
+  if(!e.target.dataset.day) return;
+  S.day = e.target.dataset.day;
+  [...e.currentTarget.children].forEach(b=>b.classList.toggle('active',b===e.target));
+  renderAll();
+});
+document.getElementById('ctl-target').addEventListener('input', e => { S.target=+e.target.value||0; renderAll(); });
+document.getElementById('ctl-sat').addEventListener('input', e => { S.sat=+e.target.value||0; renderAll(); });
+
+renderAll();
+</script>
+</body>
+</html>

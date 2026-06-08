@@ -89,44 +89,6 @@
 </div>
 
 <!-- ===== FIRST-LOGIN TUTORIAL ===== -->
-<div id="tutorialOverlay" class="tutorial-overlay">
-    <div class="tutorial-modal">
-        <div class="tutorial-header">
-            <h2>Welcome to SPEEKSNET!</h2>
-            <div class="tutorial-dots">
-                <span class="tut-dot active"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-            </div>
-        </div>
-        <div class="tutorial-slides-wrap">
-            <div class="tutorial-slide active">
-                <div class="tutorial-welcome-card">
-                    <div class="tutorial-welcome-icon">🎉</div>
-                    <p class="tutorial-welcome-msg">Welcome to your personal tour for the all new SPEEKSNET. This tutorial will show you around all of the new features. Let's begin!</p>
-                </div>
-            </div>
-            <div class="tutorial-slide"><img src="tutorial/1.png" alt="Tutorial Step 1" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/2.png" alt="Tutorial Step 2" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/3.png" alt="Tutorial Step 3" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/4.png" alt="Tutorial Step 4" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/5.png" alt="Tutorial Step 5" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/6.png" alt="Tutorial Step 6" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/7.png" alt="Tutorial Step 7" class="tutorial-img" loading="lazy"></div>
-        </div>
-        <div class="tutorial-footer">
-            <button class="tutorial-btn tut-prev" id="tutorialPrev" onclick="tutorialNav(-1)" disabled>← Back</button>
-            <span class="tutorial-counter" id="tutorialCounter">1 of 8</span>
-            <button class="tutorial-btn tut-next" id="tutorialNext" onclick="tutorialNav(1)">Next →</button>
-        </div>
-    </div>
-</div>
-
 <div class="modal-menu manage-menu" id="manageUsersDropdown">
     <div class="modal-header">
         <h3>Manage Portal Users</h3>
@@ -532,7 +494,8 @@
         <div class="hotbar-container">
           <span class="hotbar-label">MGR</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1NkIdw8dlvwXmQ6kdpo73zqRwnPd4kIAkgJ7yAG2XCt4/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Daily Listing Goals</a>  
+            <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn">📁 Store Manager Folder</a>
+            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">📊 Sales Summary</a>
             <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn">⏳ Aging Inventory</a>
             <a href="https://docs.google.com/spreadsheets/d/1zw-jcqpAnMY6PNofERbUz4pUHA3qnlnZx6O6C_XSmLY/edit?usp=sharing" target="_blank" class="hotbar-btn">🛡️ Insurance Cases</a>
             <a href="https://docs.google.com/spreadsheets/d/1ar3tabN-bUqkjWqgy25MCHzSup2jhiaAKaGxLwZTeJ8/edit?usp=sharing" target="_blank" class="hotbar-btn">🚗 Location Visits</a>
@@ -637,7 +600,7 @@
       <div class="card district-master-panel employee-widget-card dynamic-module-block role-manager role-owner-manager role-employee buying-sales-module">
           <div class="district-kpi-header">
               <span class="district-kpi-title">Buying & Sales <span id="bs-last-updated" class="widget-date-display"></span></span>
-              <span class="widget-date-display no-dash">Goal: <span id="bs-goal"></span></span>
+              <span class="widget-date-display no-dash goal-strong">Goal: <span id="bs-goal"></span></span>
               <select id="bsStoreSelect" class="bs-hidden-select" onchange="renderBuyingSales()">
                   <option value="OVL">OVL</option>
                   <option value="LEE">LEE</option>
@@ -702,8 +665,9 @@
                   <span class="district-kpi-title">My Listing Goals <span id="emp-goals-date" class="widget-date-display"></span></span>
                   <div id="emp-goals-pulse-dot" class="notif-dot active goals-pulse" style="display: none;"></div>
               </div>
+              <span id="emp-goals-store-target" class="widget-date-display no-dash goal-strong"></span>
           </div>
-          
+
           <div id="employee-goals-widget-body" class="employee-widget-body">
               <div class="status-message">Syncing Data...</div>
           </div>
@@ -716,48 +680,27 @@
                   <span class="district-kpi-title">Listing Goals <span id="goals-date-display" class="widget-date-display"></span></span>
                   <div id="goals-pulse-dot" class="notif-dot active goals-pulse" style="display: none;"></div>
               </div>
-              
-              <div class="align-center gap-10">
-                  <button id="goals-action-btn" onclick="flipGoalCard(true)" class="mini-action-btn">Update ↗</button>
-                  <div class="goal-tab-container">
-                      <div id="tab-daily" class="goal-tab active" onclick="switchGoalTab('daily')">Daily</div>
-                      <div id="tab-weekly" class="goal-tab inactive" onclick="switchGoalTab('weekly')">Weekly</div>
-                  </div>
-              </div>
+              <span id="goals-store-target" class="widget-date-display no-dash goal-strong"></span>
           </div>
 
-          <div class="flip-container employee-kpi-body">
-              <div class="flip-inner" id="goals-flipper">
-                  
-                  <div class="flip-front" id="goals-front-view">
-                      <div class="goals-header-row">
-                          <span class="goals-header-lbl">Employee & Role</span>
-                          <span class="goals-header-lbl center">Goal</span>
-                          <span class="goals-header-lbl center">Result</span>
-                      </div>
-
-                      <div id="goals-roster-list" class="goals-roster-container">
-                          <div class="status-message goals-loading-msg">Loading Roster...</div>
-                      </div>
-
-                      <div class="goals-total-row">
-                          <span class="goals-total-lbl">Total</span>
-                          <span id="goals-total-target" class="goals-total-val target">0</span>
-                          <span id="goals-total-actual" class="goals-total-val actual">0</span>
-                      </div>
-                  </div>
-
-                  <div class="flip-back">
-                      <div class="goals-edit-header">
-                          <span id="goals-input-title" class="goals-edit-title">Set Goals & Log Results</span>
-                          <button onclick="flipGoalCard(false)" class="goals-close-btn">✖</button>
-                      </div>
-
-                      <div id="goals-edit-list" class="goals-edit-list-container"></div>
-
-                      <button onclick="saveGoalsData()" id="saveGoalsBtn" class="btn-primary goals-save-btn">Save Changes</button>
-                  </div>
+          <div class="employee-kpi-body">
+              <div class="goals-header-row goals-mgr-header">
+                  <span class="goals-header-lbl">Employee &amp; Role</span>
+                  <span class="goals-header-lbl center">Today</span>
+                  <span class="goals-header-lbl center">Week</span>
               </div>
+
+              <div id="goals-manager-body" class="goals-roster-container">
+                  <div class="status-message goals-loading-msg">Loading Roster...</div>
+              </div>
+
+              <div class="goals-total-row">
+                  <span class="goals-total-lbl">Total</span>
+                  <span id="goals-total-target" class="goals-total-val target">0</span>
+                  <span id="goals-total-actual" class="goals-total-val actual">0</span>
+              </div>
+
+              <div id="goals-levelup" class="goals-levelup"></div>
           </div>
       </div>
 
@@ -800,11 +743,7 @@
           <div class="flex-col-gap-30">
               <div class="card district-master-panel district-kpi-panel">
                   <div class="district-kpi-header">
-                      <span class="district-kpi-title">Daily/Weekly Listing Goals</span>
-                      <div class="timeframe-toggle dark-toggle">
-                          <button class="toggle-btn active" id="dm-compact-tab-daily" onclick="switchCompactDmTab('daily')">Today</button>
-                          <button class="toggle-btn" id="dm-compact-tab-weekly" onclick="switchCompactDmTab('weekly')">Week</button>
-                      </div>
+                      <span class="district-kpi-title">Listing Goals <span class="widget-date-display no-dash">All Stores</span></span>
                   </div>
                   
                   <div class="panel-padding">
