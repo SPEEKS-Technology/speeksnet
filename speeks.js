@@ -5815,7 +5815,7 @@ const B2B_CLIENT  = { cta: 'Log client response', why: 'Waiting on client confir
 const B2B_LISTING = { cta: 'Open listing',        why: 'Approved — list the items',    kind: 'listing' };
 const B2B_ROLES = {
     'ceo':               { scope: 'company', acts: { 'Location Pending': B2B_ASSIGN, 'Quote': B2B_QUOTE, 'Awaiting Client': B2B_CLIENT } },
-    'district manager':  { scope: 'company', acts: { 'Location Pending': B2B_ASSIGN, 'Quote': B2B_QUOTE, 'Awaiting Client': B2B_CLIENT } },
+    'district manager':  { scope: 'company', acts: { 'Location Pending': B2B_ASSIGN, 'Quote': B2B_QUOTE, 'Awaiting Client': B2B_CLIENT, 'Listing': B2B_LISTING } },
     'tom':               { scope: 'company', acts: { 'Location Pending': B2B_ASSIGN } },
     'manager':           { scope: 'store',   acts: { 'Pricing': B2B_PRICE, 'Listing': B2B_LISTING } },
     'owner (manager)':   { scope: 'store',   acts: { 'Pricing': B2B_PRICE, 'Listing': B2B_LISTING } },
@@ -5823,12 +5823,16 @@ const B2B_ROLES = {
 };
 
 let b2bDealsCache   = [];
+let b2bClientsCache = [];           // CRM client directory
+let b2bSelectedClient = null;       // client chosen in the create-deal combobox
 let b2bView         = 'queue';      // 'queue' | 'pipeline' | 'overview'
 let b2bStoreFilter  = 'ALL';        // pipeline store filter (company roles)
 let b2bModalDealId  = null;
 let b2bModalItems   = [];           // items for the deal currently open in a modal
 let b2bQuoteStep    = 0;
-let b2bQuotePayout  = 0;
+let b2bEditingClientId = null;      // client being edited in the clients manager
+
+function b2bCanManageClients() { const r = b2bRole(); return r === 'ceo' || r === 'district manager'; }
 
 /* ---------- small helpers ---------- */
 function b2bMoney(n) { return '$' + Math.round(Number(n) || 0).toLocaleString('en-US'); }
@@ -5844,19 +5848,37 @@ function b2bFmtDate(iso) {
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' });
 }
 function b2bDaysInStage(d) {
-    if (!d.updated_at) return 0;
-    return Math.max(0, Math.floor((Date.now() - new Date(d.updated_at).getTime()) / 86400000));
+    const ts = d.stage_changed_at || d.updated_at;   // only resets on real stage moves
+    if (!ts) return 0;
+    return Math.max(0, Math.floor((Date.now() - new Date(ts).getTime()) / 86400000));
 }
 function b2bAgingClass(days) { return days >= 7 ? 'bad' : days >= 4 ? 'warn' : 'ok'; }
 function b2bDealValue(d) { return Number(d.total_value) || 0; }   // resale value
-function b2bDealOffer(d) { return Number(d.total_offer) || 0; }   // our cost / default payout
-function b2bPayout(d)    { return Number(d.client_payout) || b2bDealOffer(d) || Math.round(b2bDealValue(d) * 0.62); }
+function b2bDealOffer(d) { return Number(d.total_offer) || 0; }   // total offer to client (sum of per-item offers)
+function b2bPayout(d)    { return b2bDealOffer(d); }              // client payout = sum of per-item offers
 function b2bQuoteNo(d)   { return 'Q-2026-' + String(d.id || '').replace(/\D/g, '').slice(0, 4).padStart(4, '0'); }
 function b2bListing(d)   { const total = Number(d.listed_total) || Number(d.line_count) || 0; const done = Number(d.listed_done) || 0; return { done, total, pct: total ? Math.round(done / total * 100) : 0 }; }
+
+const B2B_CONDITIONS = ['New', 'Like New', 'Good', 'Fair', 'For parts'];
 
 function b2bBadge(status) {
     const s = B2B_STAGE[status] || { icon: '', cls: '' };
     return `<span class="b2b-badge ${s.cls}">${s.icon} ${status}</span>`;
+}
+function b2bWipeChip(d) {
+    return d.needs_wipe
+        ? '<span class="b2b-wipe-badge">🧹 Wipe required</span>'
+        : '<span style="color:var(--text-faint);font-weight:700;">Not required</span>';
+}
+async function b2bToggleWipe(id) {
+    const d = b2bDealsCache.find(x => x.id === id);
+    if (!d) return;
+    const nv = !d.needs_wipe;
+    await b2bPost({ action: 'set_wipe', id, needs_wipe: nv }, 'Could not update wipe flag');
+    d.needs_wipe = nv;
+    const cell = document.getElementById('b2bWipeCell');
+    if (cell) cell.innerHTML = `${b2bWipeChip(d)} <button class="b2b-wipe-btn" onclick="b2bToggleWipe('${id}')">${nv ? 'Unmark' : 'Mark'}</button>`;
+    fetchB2BDealsQuiet();
 }
 function b2bStoreTag(code) {
     if (!code) return `<span style="font-size:11px;font-weight:800;color:#92400e;">📍 Unassigned</span>`;
@@ -5877,20 +5899,37 @@ function b2bInScope(deal) {
     return r.scope === 'company' ? true : deal.assigned_store === b2bStore();
 }
 
+// Which modal a card/row click opens: the user's queued action if any, else an
+// oversight upgrade (DM can jump into Pricing on any deal without it being queued), else read-only.
+function b2bClickKind(deal) {
+    const a = b2bActionFor(deal);
+    if (a) return a.kind;
+    if (deal.status === 'Pricing' && b2bRole() === 'district manager') return 'price';
+    return 'view';
+}
+
 /* ---------- data load + controller ---------- */
 async function fetchB2BDeals() {
     const body = document.getElementById('b2bViewBody');
     if (!body) return; // not on this page
     const store = b2bScope() === 'company' ? 'ALL' : b2bStore();
     try {
-        const res = await fetch(`${B2B_URL}?store=${encodeURIComponent(store)}&v=${Date.now()}`);
-        b2bDealsCache = await res.json();
+        const [dealsRes, clientsRes] = await Promise.all([
+            fetch(`${B2B_URL}?store=${encodeURIComponent(store)}&v=${Date.now()}`),
+            fetch(`${B2B_URL}?clients=1&v=${Date.now()}`),
+        ]);
+        b2bDealsCache = await dealsRes.json();
         if (!Array.isArray(b2bDealsCache)) b2bDealsCache = [];
+        const cj = await clientsRes.json();
+        if (Array.isArray(cj)) b2bClientsCache = cj;
         renderB2BView();
     } catch (e) {
         body.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load B2B deals.</div>';
     }
 }
+
+function b2bClientById(id) { return b2bClientsCache.find(c => c.id === id) || null; }
+function b2bClientForDeal(d) { return (d.client_id && b2bClientById(d.client_id)) || b2bClientsCache.find(c => (c.company || '').toLowerCase() === (d.company || '').toLowerCase()) || null; }
 
 function b2bCanOverview() { const r = b2bRole(); return r === 'ceo' || r === 'district manager'; }
 
@@ -5954,6 +5993,7 @@ function b2bRenderQueue(scoped, queue) {
                         <span class="q-company">${escapeHtml(d.company)}</span>
                         ${b2bBadge(d.status)}
                         ${b2bStoreTag(d.assigned_store)}
+                        ${d.needs_wipe ? '<span class="b2b-wipe-badge">🧹 Wipe</span>' : ''}
                     </div>
                     <div class="q-meta">
                         <span class="mi">💰 <b>${b2bMoney(b2bDealValue(d))}</b></span>
@@ -5976,7 +6016,7 @@ function b2bRenderQueue(scoped, queue) {
         html += `<div class="b2b-sec-head" style="margin-top:30px;"><h3 style="font-size:13px;color:var(--text-soft);">Also in flight</h3>
                  <span class="muted">${inFlight.length} deal${inFlight.length > 1 ? 's' : ''} not waiting on you</span></div>`;
         html += '<div class="b2b-flight">' + inFlight.map(d => `
-            <div class="f-row" onclick="openB2BModal('view','${d.id}')">
+            <div class="f-row" onclick="openB2BModal('${b2bClickKind(d)}','${d.id}')">
                 <span class="f-co">${escapeHtml(d.company)}</span>
                 <span class="f-meta">${b2bStoreTag(d.assigned_store)}</span>
                 <span>${b2bBadge(d.status)}</span>
@@ -6009,8 +6049,8 @@ function b2bRenderPipeline(scoped) {
             const prog = (d.status === 'Listing' || d.status === 'Completed')
                 ? `<div class="lst-prog compact"><div class="lst-prog-row"><span class="lst-lbl">📋</span><span class="lst-cnt">${lp.done}/${lp.total}</span></div><div class="lst-prog-track"><div class="lst-prog-fill" style="width:${lp.pct}%"></div></div></div>` : '';
             return `
-            <div class="d-card ${a ? 'act' : ''}" onclick="openB2BModal('${a ? a.kind : 'view'}','${d.id}')">
-                <span class="d-company">${escapeHtml(d.company)}</span>
+            <div class="d-card ${a ? 'act' : ''}" onclick="openB2BModal('${b2bClickKind(d)}','${d.id}')">
+                <span class="d-company">${escapeHtml(d.company)}${d.needs_wipe ? ' <span class="b2b-wipe-badge sm">🧹</span>' : ''}</span>
                 <div class="d-meta">
                     <span>${b2bStoreTag(d.assigned_store)}</span>
                     <span>🚚 ${b2bFmtDate(d.pickup_date)}</span>
@@ -6024,8 +6064,8 @@ function b2bRenderPipeline(scoped) {
             </div>`;
         }).join('') : '<div class="b2b-col-empty">—</div>';
         return `
-        <div class="b2b-col">
-            <div class="b2b-col-head"><span class="ct"><span>${s.icon}</span><span class="nm">${stage}</span></span><span class="b2b-col-count">${col.length}</span></div>
+        <div class="b2b-col" style="border-top:3px solid ${s.color};">
+            <div class="b2b-col-head"><span class="ct"><span>${s.icon}</span><span class="nm" style="color:${s.color};">${stage}</span></span><span class="b2b-col-count">${col.length}</span></div>
             <div class="b2b-col-body">${cards}</div>
         </div>`;
     }).join('') + '</div>';
@@ -6059,7 +6099,7 @@ function b2bRenderOverview(scoped) {
         .sort((a, b) => b2bPricingDeadline(a).left - b2bPricingDeadline(b).left);
     const aRows = pricing.map(d => {
         const sla = b2bPricingDeadline(d);
-        return `<tr onclick="openB2BModal('view','${d.id}')" style="cursor:pointer;">
+        return `<tr onclick="openB2BModal('${b2bClickKind(d)}','${d.id}')" style="cursor:pointer;">
             <td><span class="ov-co">${escapeHtml(d.company)}</span></td>
             <td>${b2bStoreTag(d.assigned_store)}</td>
             <td>${b2bFmtDate(d.pickup_date)}</td>
@@ -6077,7 +6117,7 @@ function b2bRenderOverview(scoped) {
         const days = b2bDaysInStage(d);
         const cls = days >= 5 ? 'bad' : days >= 3 ? 'warn' : 'ok';
         const ago = days === 0 ? 'today' : `${days}d ago`;
-        return `<tr onclick="openB2BModal('view','${d.id}')" style="cursor:pointer;">
+        return `<tr onclick="openB2BModal('${b2bClickKind(d)}','${d.id}')" style="cursor:pointer;">
             <td><span class="ov-co">${escapeHtml(d.company)}</span></td>
             <td>${escapeHtml(d.contact || '—')}</td>
             <td>${b2bStoreTag(d.assigned_store)}</td>
@@ -6096,7 +6136,7 @@ function b2bRenderOverview(scoped) {
         const unlisted = Number(d.listed_total) - Number(d.listed_done);
         const v = Number(d.unlisted_value) || 0, c = Number(d.unlisted_offer) || 0;
         totV += v; totC += c; totN += unlisted;
-        return `<tr onclick="openB2BModal('view','${d.id}')" style="cursor:pointer;">
+        return `<tr onclick="openB2BModal('${b2bClickKind(d)}','${d.id}')" style="cursor:pointer;">
             <td><span class="ov-co">${escapeHtml(d.company)}</span></td>
             <td>${b2bStoreTag(d.assigned_store)}</td>
             <td class="r">${unlisted} / ${d.listed_total}</td>
@@ -6118,7 +6158,7 @@ function b2bRenderOverview(scoped) {
         byClient[k].value += b2bDealValue(d);
     });
     const clients = Object.values(byClient).sort((a, b) => b.value - a.value);
-    const dealRow = d => `<div class="ov-deal-row" onclick="openB2BModal('view','${d.id}')">
+    const dealRow = d => `<div class="ov-deal-row" onclick="openB2BModal('${b2bClickKind(d)}','${d.id}')">
         <span><span class="ov-co">${escapeHtml(d.company)}</span> · ${b2bStoreTag(d.assigned_store)}</span>
         <span>${b2bBadge(d.status)}</span>
         <span style="text-align:right;font-weight:800;color:var(--text-head);">${b2bMoney(b2bDealValue(d))}</span></div>`;
@@ -6136,38 +6176,175 @@ function b2bRenderOverview(scoped) {
     return `<div class="b2b-ov-stack">${moduleA}${moduleB}${moduleC}${moduleD}</div>`;
 }
 
-/* ---------- Create ---------- */
-function openB2BCreate() {
+/* ---------- Create deal (with client search combobox) ---------- */
+function openB2BCreate(keepPickup) {
     const modal = document.getElementById('b2bCreateModal');
     if (!modal) { console.warn('B2B create modal not found in DOM'); return; }
     const dateEl = document.getElementById('b2bPickupInput');
-    if (dateEl && !dateEl.value) dateEl.value = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
-    ['b2bCompanyInput', 'b2bContactInput'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    const prev = keepPickup ? (dateEl && dateEl.value) : null;
+    if (dateEl) dateEl.value = prev || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+    const search = document.getElementById('b2bClientSearch');
+    if (search) search.value = '';
+    if (!keepPickup) { b2bSelectedClient = null; const w = document.getElementById('b2bWipeInput'); if (w) w.checked = false; }
+    b2bRenderSelectedClient();
+    const results = document.getElementById('b2bClientResults');
+    if (results) results.style.display = 'none';
     toggleModal('b2bCreateModal');
 }
 
+function b2bClientSearchInput() {
+    const q = (document.getElementById('b2bClientSearch').value || '').trim().toLowerCase();
+    const box = document.getElementById('b2bClientResults');
+    if (!box) return;
+    let matches = b2bClientsCache;
+    if (q) matches = b2bClientsCache.filter(c =>
+        (c.company || '').toLowerCase().includes(q) ||
+        (c.contact || '').toLowerCase().includes(q) ||
+        (c.contact_email || '').toLowerCase().includes(q));
+    let html = matches.slice(0, 30).map(c => `<div class="b2b-combo-opt" onmousedown="b2bSelectClientForDeal('${c.id}')">
+        <span class="b2b-combo-co">${escapeHtml(c.company)}</span>
+        <span class="b2b-combo-sub">${escapeHtml(c.contact || '')}${c.contact_email ? ' · ' + escapeHtml(c.contact_email) : ''}</span></div>`).join('');
+    const exact = b2bClientsCache.some(c => (c.company || '').toLowerCase() === q);
+    if (q && !exact && b2bCanManageClients())
+        html += `<div class="b2b-combo-opt b2b-combo-add" onmousedown="b2bAddClientFromDeal()">➕ Add new client “${escapeHtml(document.getElementById('b2bClientSearch').value.trim())}”</div>`;
+    if (!html) html = `<div class="b2b-combo-empty">No matching clients${b2bCanManageClients() ? '' : ' — ask a DM/CEO to add one'}.</div>`;
+    box.innerHTML = html;
+    box.style.display = '';
+}
+function b2bSelectClientForDeal(id) {
+    b2bSelectedClient = b2bClientById(id);
+    document.getElementById('b2bClientResults').style.display = 'none';
+    document.getElementById('b2bClientSearch').value = '';
+    b2bRenderSelectedClient();
+}
+function b2bRenderSelectedClient() {
+    const el = document.getElementById('b2bSelectedClient');
+    if (!el) return;
+    if (!b2bSelectedClient) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    const c = b2bSelectedClient;
+    el.style.display = '';
+    el.innerHTML = `<div><div class="b2b-sel-co">${escapeHtml(c.company)}</div>
+        <div class="b2b-sel-sub">${escapeHtml(c.contact || 'No contact')}${c.contact_email ? ' · ' + escapeHtml(c.contact_email) : ''}${c.contact_phone ? ' · ' + escapeHtml(c.contact_phone) : ''}</div></div>
+        <button class="b2b-sel-clear" onclick="b2bClearSelectedClient()" title="Change">✖</button>`;
+}
+function b2bClearSelectedClient() { b2bSelectedClient = null; b2bRenderSelectedClient(); const s = document.getElementById('b2bClientSearch'); if (s) s.focus(); }
+function b2bAddClientFromDeal() {
+    const name = (document.getElementById('b2bClientSearch').value || '').trim();
+    openB2BClients({ prefillCompany: name, returnToDeal: true });
+}
+
 async function createB2BDeal() {
-    const company = document.getElementById('b2bCompanyInput').value.trim();
-    const contact = document.getElementById('b2bContactInput').value.trim();
-    const pickup  = document.getElementById('b2bPickupInput').value;
-    if (!company || !pickup) { alert('Please enter a company and pickup date.'); return; }
+    if (!b2bSelectedClient) { alert('Pick a client (search above), or add a new one.'); return; }
+    const pickup = document.getElementById('b2bPickupInput').value;
+    if (!pickup) { alert('Please choose the pickup date.'); return; }
+    const c = b2bSelectedClient;
+    const needsWipe = !!document.getElementById('b2bWipeInput')?.checked;
     const btn = document.getElementById('b2bCreateBtn');
     btn.disabled = true; btn.innerText = 'Creating...';
     try {
-        await b2bPost({ action: 'create', company, contact, pickup_date: pickup, created_by: b2bUserName() }, 'Could not create deal');
+        await b2bPost({ action: 'create', company: c.company, contact: c.contact || '', client_id: c.id, needs_wipe: needsWipe, pickup_date: pickup, created_by: b2bUserName() }, 'Could not create deal');
         closeAllModals();
         await fetchB2BDeals();
-        b2bToast(`${company} logged — awaiting store assignment`);
+        b2bToast(`${c.company} logged — awaiting store assignment`);
     } catch (e) { /* alerted */ } finally { btn.disabled = false; btn.innerText = 'Create Deal'; }
 }
 
+/* ---------- Clients manager (DM/CEO CRM) ---------- */
+let b2bClientReturnToDeal = false;
+async function openB2BClients(opts = {}) {
+    if (!b2bCanManageClients()) { alert('Only a DM or CEO can manage clients.'); return; }
+    b2bClientReturnToDeal = !!opts.returnToDeal;
+    b2bEditingClientId = null;
+    // refresh the directory
+    try { const r = await fetch(`${B2B_URL}?clients=1&v=${Date.now()}`); const j = await r.json(); if (Array.isArray(j)) b2bClientsCache = j; } catch (e) {}
+    b2bRenderClients(opts.prefillCompany || '');
+    toggleModal('b2bClientsModal');
+}
+function b2bRenderClients(prefillCompany) {
+    const body = document.getElementById('b2bClientsBody');
+    if (!body) return;
+    const editing = b2bEditingClientId ? b2bClientById(b2bEditingClientId) : null;
+    const v = (k) => editing ? escapeHtml(editing[k] || '') : '';
+    const form = `<div class="b2b-client-form">
+        <div class="b2b-client-form-title">${editing ? '✏️ Edit client' : '➕ New client'}</div>
+        <div class="b2b-client-grid">
+            <div><label class="form-label-caps">Company *</label><input id="cl-company" class="form-input-lg" value="${editing ? v('company') : escapeHtml(prefillCompany || '')}" placeholder="Company name"></div>
+            <div><label class="form-label-caps">Contact</label><input id="cl-contact" class="form-input-lg" value="${v('contact')}" placeholder="Contact name"></div>
+            <div><label class="form-label-caps">Contact email</label><input id="cl-email" class="form-input-lg" value="${v('contact_email')}" placeholder="name@company.com"></div>
+            <div><label class="form-label-caps">Contact phone</label><input id="cl-phone" class="form-input-lg" value="${v('contact_phone')}" placeholder="555-0100"></div>
+        </div>
+        <label class="form-label-caps" style="margin-top:10px;">Notes</label>
+        <textarea id="cl-notes" class="form-input-lg" rows="2" placeholder="Anything worth remembering about this client…">${v('notes')}</textarea>
+        <div class="b2b-client-form-actions">
+            ${editing ? `<button class="b2b-btn b2b-btn-ghost" onclick="b2bNewClientForm()">Cancel edit</button>` : ''}
+            <button class="b2b-btn b2b-btn-primary" id="clSaveBtn" onclick="saveB2BClient()">${editing ? 'Save changes' : 'Add client'}</button>
+        </div>
+    </div>`;
+    const rows = b2bClientsCache.length ? b2bClientsCache.map(c => `
+        <div class="b2b-client-row ${b2bEditingClientId === c.id ? 'editing' : ''}">
+            <div class="b2b-client-main">
+                <div class="b2b-client-co">${escapeHtml(c.company)}</div>
+                <div class="b2b-client-sub">${escapeHtml(c.contact || '—')}${c.contact_email ? ' · ' + escapeHtml(c.contact_email) : ''}${c.contact_phone ? ' · ' + escapeHtml(c.contact_phone) : ''}</div>
+                ${c.notes ? `<div class="b2b-client-notes">${escapeHtml(c.notes)}</div>` : ''}
+            </div>
+            <div class="b2b-client-acts">
+                <button class="mini-btn" onclick="editB2BClient('${c.id}')">Edit</button>
+                <button class="b2b-del-btn" title="Delete" onclick="deleteB2BClient('${c.id}')">✖</button>
+            </div>
+        </div>`).join('') : '<div class="ov-empty">No clients yet — add your first above.</div>';
+    body.innerHTML = form + `<div class="b2b-client-list">${rows}</div>`;
+    if (!editing) { const f = document.getElementById('cl-company'); if (f && prefillCompany) f.focus(); }
+}
+function b2bNewClientForm() { b2bEditingClientId = null; b2bRenderClients(''); }
+function editB2BClient(id) { b2bEditingClientId = id; b2bRenderClients(''); }
+async function saveB2BClient() {
+    const g = id => (document.getElementById(id).value || '').trim();
+    const company = g('cl-company');
+    if (!company) { alert('Company name is required.'); return; }
+    const payload = {
+        action: b2bEditingClientId ? 'update_client' : 'create_client',
+        id: b2bEditingClientId || undefined,
+        company, contact: g('cl-contact'), contact_email: g('cl-email'), contact_phone: g('cl-phone'), notes: g('cl-notes'),
+    };
+    const btn = document.getElementById('clSaveBtn');
+    btn.disabled = true; btn.innerText = 'Saving…';
+    try {
+        const out = await b2bPost(payload, 'Could not save client');
+        // refresh directory
+        const r = await fetch(`${B2B_URL}?clients=1&v=${Date.now()}`); const j = await r.json();
+        if (Array.isArray(j)) b2bClientsCache = j;
+        b2bToast(b2bEditingClientId ? 'Client updated' : 'Client added');
+        const newId = out && out.id ? out.id : (b2bClientsCache.find(c => c.company.toLowerCase() === company.toLowerCase()) || {}).id;
+        b2bEditingClientId = null;
+        if (b2bClientReturnToDeal) {
+            b2bClientReturnToDeal = false;
+            b2bSelectedClient = b2bClientById(newId) || b2bClientsCache.find(c => c.company.toLowerCase() === company.toLowerCase()) || null;
+            openB2BCreate(true);              // reopen deal modal, keep pickup date
+        } else {
+            b2bRenderClients('');
+        }
+    } catch (e) { /* alerted */ } finally { if (document.getElementById('clSaveBtn')) { btn.disabled = false; } }
+}
+async function deleteB2BClient(id) {
+    const c = b2bClientById(id);
+    if (!confirm(`Delete client “${c ? c.company : ''}”? Existing deals keep their company name but will be unlinked.`)) return;
+    try {
+        await b2bPost({ action: 'delete_client', id }, 'Could not delete client');
+        b2bClientsCache = b2bClientsCache.filter(x => x.id !== id);
+        if (b2bEditingClientId === id) b2bEditingClientId = null;
+        b2bRenderClients('');
+        b2bToast('Client deleted');
+    } catch (e) { /* alerted */ }
+}
+
 /* ---------- Action / detail modal ---------- */
-function b2bShowModal(title, bodyHtml, footerHtml) {
+function b2bShowModal(title, bodyHtml, footerHtml, opts = {}) {
     document.getElementById('b2bDetailTitle').innerHTML = title;
     document.getElementById('b2bDetailBody').innerHTML = bodyHtml;
     document.getElementById('b2bDetailFooter').innerHTML = footerHtml || '';
     const modal = document.getElementById('b2bDetailModal');
     closeAllModals();
+    modal.classList.toggle('b2b-modal-full', !!opts.full);
     modal.classList.add('show');
     lockAndBlurScreen();
 }
@@ -6179,21 +6356,33 @@ function b2bSummaryHtml(d) {
         <div class="it"><div class="k">Picked up</div><div class="vv">${b2bFmtDate(d.pickup_date)}</div></div>
         <div class="it"><div class="k">Store</div><div class="vv">${b2bStoreTag(d.assigned_store)}</div></div>
         <div class="it"><div class="k">Stage</div><div class="vv">${b2bBadge(d.status)}</div></div>
+        <div class="it"><div class="k">Certified wipe</div><div class="vv" id="b2bWipeCell">${b2bWipeChip(d)} <button class="b2b-wipe-btn" onclick="b2bToggleWipe('${d.id}')">${d.needs_wipe ? 'Unmark' : 'Mark'}</button></div></div>
     </div>`;
 }
 
+function b2bItemName(i) { return escapeHtml((i.make || '') + (i.make && i.model ? ' ' : '') + (i.model || '')) || '—'; }
+function b2bItemNotes(i) {
+    let h = '';
+    if (i.client_notes) h += `<div class="b2b-it-note">🗣️ ${escapeHtml(i.client_notes)}</div>`;
+    if (i.staff_notes)  h += `<div class="b2b-it-note staff">🔒 ${escapeHtml(i.staff_notes)}</div>`;
+    return h;
+}
 function b2bItemsTable(items, opts = {}) {
-    const showOffer = opts.showOffer;
-    const head = `<thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Unit value</th>${showOffer ? '<th class="r">Unit offer</th>' : ''}<th class="r">Line value</th></tr></thead>`;
+    const cols = 6; // Item, Condition, Qty, Unit value, Unit offer, Line value
+    const head = `<thead><tr><th>Item</th><th>Condition</th><th class="r">Qty</th><th class="r">Unit value</th><th class="r">Unit offer</th><th class="r">Line value</th></tr></thead>`;
     const rows = items.length ? items.map(i => `<tr>
-        <td>${i.listed ? '✓ ' : ''}${escapeHtml((i.make || '') + (i.make && i.model ? ' ' : '') + (i.model || '')) || '—'}</td>
+        <td>${i.listed ? '✓ ' : ''}${b2bItemName(i)}${b2bItemNotes(i)}</td>
+        <td>${i.condition ? escapeHtml(i.condition) : '<span style="color:var(--text-faint);">—</span>'}</td>
         <td class="r">${i.quantity}</td>
         <td class="r">${b2bMoney(i.value)}</td>
-        ${showOffer ? `<td class="r">${b2bMoney(i.offer)}</td>` : ''}
+        <td class="r">${b2bMoney(i.offer)}</td>
         <td class="r" style="font-weight:800;">${b2bMoney(i.qty_value_total)}</td></tr>`).join('')
-        : `<tr><td colspan="${showOffer ? 5 : 4}" style="text-align:center;color:#9ca3af;padding:18px;">No items logged yet.</td></tr>`;
-    const total = items.reduce((s, i) => s + (Number(i.qty_value_total) || 0), 0);
-    const foot = items.length ? `<tfoot><tr><td colspan="${showOffer ? 3 : 2}">Total resale value</td>${showOffer ? '<td></td>' : ''}<td class="r">${b2bMoney(total)}</td></tr></tfoot>` : '';
+        : `<tr><td colspan="${cols}" style="text-align:center;color:#9ca3af;padding:18px;">No items logged yet.</td></tr>`;
+    const totV = items.reduce((s, i) => s + (Number(i.qty_value_total) || 0), 0);
+    const totO = items.reduce((s, i) => s + (Number(i.qty_offer_total) || 0), 0);
+    const foot = items.length ? `<tfoot>
+        <tr><td colspan="5">Total resale value</td><td class="r">${b2bMoney(totV)}</td></tr>
+        <tr><td colspan="5">Total offer</td><td class="r">${b2bMoney(totO)}</td></tr></tfoot>` : '';
     return `<table class="b2b-items">${head}<tbody>${rows}</tbody>${foot}</table>`;
 }
 
@@ -6202,7 +6391,7 @@ async function openB2BModal(kind, id) {
     if (!deal) return;
     b2bModalDealId = id;
     b2bQuoteStep = 0;
-    b2bShowModal(`${escapeHtml(deal.company)} ${b2bBadge(deal.status)}`, '<div class="status-message">Loading…</div>', '');
+    b2bShowModal(`${escapeHtml(deal.company)} ${b2bBadge(deal.status)}`, '<div class="status-message">Loading…</div>', '', { full: kind === 'price' });
 
     // fetch items for kinds that need them
     b2bModalItems = [];
@@ -6236,7 +6425,7 @@ function b2bRenderAssign(deal) {
         </div>`;
     const footer = `<button class="b2b-btn b2b-btn-secondary" onclick="closeAllModals()">Cancel</button>
         <button class="b2b-btn b2b-btn-primary" id="b2bAssignBtn" disabled onclick="b2bDoAssign('${deal.id}')">Assign &amp; send to pricing</button>`;
-    b2bShowModal(`📍 Assign a store`, body, footer);
+    b2bShowModal(`📍 Assign store — ${escapeHtml(deal.company)}`, body, footer);
 }
 let b2bAssignStore = null;
 function b2bPickAssign(s) {
@@ -6251,51 +6440,65 @@ async function b2bDoAssign(id) {
     b2bAssignStore = null;
 }
 
-/* price (editable) */
+/* price (editable cards: brand/model/condition/qty/value/offer + staff & client notes) */
 function b2bRenderPrice(deal, items) {
-    const totalVal = items.reduce((s, i) => s + (Number(i.qty_value_total) || 0), 0);
-    const totalOff = items.reduce((s, i) => s + (Number(i.qty_offer_total) || 0), 0);
-    const rows = items.length ? items.map(it => `
-        <tr>
-            <td><input class="pr-cell" value="${escapeHtml(it.make)}" onchange="b2bItemEdit('${it.id}','make',this.value)" placeholder="Make"></td>
-            <td><input class="pr-cell" value="${escapeHtml(it.model)}" onchange="b2bItemEdit('${it.id}','model',this.value)" placeholder="Model"></td>
-            <td><input class="pr-cell r" type="number" min="0" value="${it.quantity}" onchange="b2bItemEdit('${it.id}','quantity',this.value)"></td>
-            <td><input class="pr-cell r" type="number" min="0" step="0.01" value="${it.value}" onchange="b2bItemEdit('${it.id}','value',this.value)"></td>
-            <td><input class="pr-cell r" type="number" min="0" step="0.01" value="${it.offer}" onchange="b2bItemEdit('${it.id}','offer',this.value)"></td>
-            <td class="r pr-line">${b2bMoney(it.qty_value_total)}</td>
-            <td><button class="pr-del" title="Remove" onclick="b2bItemDelete('${it.id}')">✕</button></td>
-        </tr>`).join('') : `<tr><td colspan="7" class="pr-empty">No items yet — add the first line below.</td></tr>`;
-    const body = `<p class="b2b-help">Add every item received, set quantities, unit resale value and our unit offer, then submit to a DM/CEO to quote the client.</p>
+    const condOpts = it => ['<option value="">— condition —</option>'].concat(
+        B2B_CONDITIONS.map(c => `<option ${it.condition === c ? 'selected' : ''}>${c}</option>`)).join('');
+    const cards = items.length ? items.map(it => `
+        <div class="b2b-pcard">
+            <div class="b2b-pcard-grid">
+                <div class="f"><label>Brand</label><input class="pr-cell" value="${escapeHtml(it.make)}" placeholder="e.g. Apple" onchange="b2bItemEdit('${it.id}','make',this.value)"></div>
+                <div class="f"><label>Model</label><input class="pr-cell" value="${escapeHtml(it.model)}" placeholder="e.g. iPhone 13" onchange="b2bItemEdit('${it.id}','model',this.value)"></div>
+                <div class="f"><label>Condition</label><select class="pr-cell" onchange="b2bItemEdit('${it.id}','condition',this.value)">${condOpts(it)}</select></div>
+                <div class="f sm"><label>Qty</label><input class="pr-cell r" type="number" min="0" value="${it.quantity}" onchange="b2bItemEdit('${it.id}','quantity',this.value)"></div>
+                <div class="f sm"><label>Unit value</label><input class="pr-cell r" type="number" min="0" step="0.01" value="${it.value}" onchange="b2bItemEdit('${it.id}','value',this.value)"></div>
+                <div class="f sm"><label>Unit offer</label><input class="pr-cell r" type="number" min="0" step="0.01" value="${it.offer}" onchange="b2bItemEdit('${it.id}','offer',this.value)"></div>
+                <div class="f sm"><label>Line value</label><span class="pr-line" id="pln-${it.id}">${b2bMoney((Number(it.quantity)||0)*(Number(it.value)||0))}</span></div>
+                <button class="pr-del" title="Remove item" onclick="b2bItemDelete('${it.id}')">✕</button>
+            </div>
+            <div class="b2b-pcard-notes">
+                <div><label>Staff notes <span class="b2b-note-tag">internal</span></label><textarea class="pr-cell" rows="2" placeholder="Internal notes for the team…" onchange="b2bItemEdit('${it.id}','staff_notes',this.value)">${escapeHtml(it.staff_notes)}</textarea></div>
+                <div><label>Client notes <span class="b2b-note-tag client">prints on quote</span></label><textarea class="pr-cell" rows="2" placeholder="Notes the client will see on the quote…" onchange="b2bItemEdit('${it.id}','client_notes',this.value)">${escapeHtml(it.client_notes)}</textarea></div>
+            </div>
+        </div>`).join('') : `<div class="pr-empty">No items yet — add the first one below.</div>`;
+    const totV = items.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.value) || 0), 0);
+    const totO = items.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.offer) || 0), 0);
+    const body = `<p class="b2b-help">Add every item received: brand, model, condition, quantity, unit resale value and our unit offer. Add staff/client notes per item, then submit to a DM/CEO to quote the client.</p>
         ${b2bSummaryHtml(deal)}
-        <label class="b2b-form-label">Line items</label>
-        <table class="pr-table">
-            <thead><tr><th>Make</th><th>Model</th><th class="r" style="width:64px;">Qty</th><th class="r" style="width:90px;">Unit value</th><th class="r" style="width:90px;">Unit offer</th><th class="r" style="width:92px;">Line value</th><th style="width:38px;"></th></tr></thead>
-            <tbody>${rows}</tbody>
-            <tfoot>
-                <tr class="pr-addrow">
-                    <td><input id="b2bNewMake" class="pr-cell" placeholder="Make"></td>
-                    <td><input id="b2bNewModel" class="pr-cell" placeholder="Model"></td>
-                    <td><input id="b2bNewQty" class="pr-cell r" type="number" min="0" value="1"></td>
-                    <td><input id="b2bNewValue" class="pr-cell r" type="number" min="0" step="0.01" placeholder="0"></td>
-                    <td><input id="b2bNewOffer" class="pr-cell r" type="number" min="0" step="0.01" placeholder="0"></td>
-                    <td colspan="2"><button class="pr-add" onclick="b2bItemAdd('${deal.id}')">+ Add item</button></td>
-                </tr>
-                <tr><td colspan="5">Total resale value · our offer</td><td class="r pr-total">${b2bMoney(totalVal)}</td><td></td></tr>
-                <tr><td colspan="5" style="color:var(--text-faint);font-size:11px;">Our total offer (cost)</td><td class="r" style="color:var(--text-soft);font-weight:800;">${b2bMoney(totalOff)}</td><td></td></tr>
-            </tfoot>
-        </table>`;
+        <div class="b2b-pcards">${cards}</div>
+        <div class="b2b-pcard-add"><button class="pr-add" onclick="b2bItemAdd('${deal.id}')">+ Add item</button></div>
+        <div class="b2b-ptotals">
+            <span>Total resale value <b id="pTotV">${b2bMoney(totV)}</b></span>
+            <span>Total offer <b id="pTotO">${b2bMoney(totO)}</b></span>
+        </div>`;
     const valid = items.length > 0;
     const footer = `<button class="b2b-btn b2b-btn-secondary" onclick="closeAllModals()">Close</button>
         <button class="b2b-btn b2b-btn-primary" ${valid ? '' : 'disabled'} onclick="b2bSubmitPricing('${deal.id}')">Submit for quoting →</button>`;
-    b2bShowModal(`🏷️ Itemize &amp; price`, body, footer);
+    b2bShowModal(`🏷️ Itemize &amp; price — ${escapeHtml(deal.company)}`, body, footer, { full: true });
 }
-async function b2bItemEdit(id, field, value) { await b2bPost({ action: 'update_item', id, [field]: value }, 'Could not update item'); await openB2BModal('price', b2bModalDealId); fetchB2BDealsQuiet(); }
-async function b2bItemDelete(id) { await b2bPost({ action: 'delete_item', id }, 'Could not remove item'); await openB2BModal('price', b2bModalDealId); fetchB2BDealsQuiet(); }
+function b2bPricingRecalc() {
+    let tv = 0, to = 0;
+    b2bModalItems.forEach(it => {
+        const lv = (Number(it.quantity) || 0) * (Number(it.value) || 0);
+        to += (Number(it.quantity) || 0) * (Number(it.offer) || 0); tv += lv;
+        const el = document.getElementById('pln-' + it.id); if (el) el.textContent = b2bMoney(lv);
+    });
+    const a = document.getElementById('pTotV'); if (a) a.textContent = b2bMoney(tv);
+    const b = document.getElementById('pTotO'); if (b) b.textContent = b2bMoney(to);
+}
+function b2bItemEdit(id, field, value) {
+    const it = b2bModalItems.find(i => i.id === id);
+    if (it) it[field] = ['quantity', 'value', 'offer'].includes(field) ? (Number(value) || 0) : value;
+    if (['quantity', 'value', 'offer'].includes(field)) b2bPricingRecalc();
+    b2bPost({ action: 'update_item', id, [field]: value }, 'Could not update item').then(() => fetchB2BDealsQuiet()).catch(() => {});
+}
+async function b2bItemDelete(id) {
+    if (!confirm('Remove this item?')) return;
+    await b2bPost({ action: 'delete_item', id }, 'Could not remove item');
+    await openB2BModal('price', b2bModalDealId); fetchB2BDealsQuiet();
+}
 async function b2bItemAdd(dealId) {
-    const g = id => document.getElementById(id).value;
-    const make = g('b2bNewMake').trim(), model = g('b2bNewModel').trim();
-    if (!make && !model) { alert('Enter a make or model.'); return; }
-    await b2bPost({ action: 'add_item', deal_id: dealId, make, model, quantity: g('b2bNewQty'), value: g('b2bNewValue'), offer: g('b2bNewOffer') }, 'Could not add item');
+    await b2bPost({ action: 'add_item', deal_id: dealId, quantity: 1, value: 0, offer: 0 }, 'Could not add item');
     await openB2BModal('price', dealId); fetchB2BDealsQuiet();
 }
 async function b2bSubmitPricing(id) {
@@ -6303,70 +6506,83 @@ async function b2bSubmitPricing(id) {
     closeAllModals(); await fetchB2BDeals(); b2bToast('Priced — ready for a DM/CEO to quote');
 }
 
-/* quote (CEO/DM): step 0 review → step 1 quote doc → email */
+/* quote (CEO/DM): step 0 edit each item's offer → step 1 quote doc → email */
+function b2bQuoteItemsTotal() { return b2bModalItems.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.offer) || 0), 0); }
 function b2bRenderQuote(deal, items) {
-    const resale = b2bDealValue(deal);
+    const resale = items.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.value) || 0), 0);
     if (b2bQuoteStep === 0) {
-        const defPayout = b2bPayout(deal);
-        b2bQuotePayout = defPayout;
-        const margin = resale - defPayout;
+        const totOffer = b2bQuoteItemsTotal();
+        const margin = resale - totOffer;
         const mp = resale > 0 ? Math.round(margin / resale * 100) : 0;
-        const body = `<p class="b2b-help">Only a <b>CEO or District Manager</b> can quote. Review the store's pricing, set the client payout, then generate a PayMore quote to email for confirmation.</p>
+        const rows = items.length ? items.map(it => `<tr>
+            <td>${b2bItemName(it)}${it.condition ? ` <span class="b2b-cond-tag">${escapeHtml(it.condition)}</span>` : ''}</td>
+            <td class="r">${it.quantity}</td>
+            <td class="r">${b2bMoney(it.value)}</td>
+            <td class="r"><input class="pr-cell r b2b-offer-cell" type="number" min="0" step="0.01" value="${it.offer}" onchange="b2bQuoteOfferEdit('${it.id}',this.value)"></td>
+            <td class="r" style="font-weight:800;" id="qln-${it.id}">${b2bMoney((Number(it.quantity)||0)*(Number(it.offer)||0))}</td></tr>`).join('')
+            : `<tr><td colspan="5" style="text-align:center;color:#9ca3af;padding:16px;">No items.</td></tr>`;
+        const body = `<p class="b2b-help">Only a <b>CEO or District Manager</b> can quote. Set the <b>offer</b> for each item individually, then generate a PayMore quote to email for confirmation.</p>
             ${b2bSummaryHtml(deal)}
             <div class="approve-stats">
                 <div class="b2b-stat"><div class="k">Resale value</div><div class="v">${b2bMoney(resale)}</div></div>
-                <div class="b2b-stat alert"><div class="k">Gross margin</div><div class="v" id="b2bMarginV">${b2bMoney(margin)} <span style="font-size:13px;color:var(--text-faint);">(${mp}%)</span></div></div>
+                <div class="b2b-stat"><div class="k">Total offer</div><div class="v" id="qTotO">${b2bMoney(totOffer)}</div></div>
+                <div class="b2b-stat alert"><div class="k">Gross margin</div><div class="v" id="qMargin">${b2bMoney(margin)} <span style="font-size:13px;color:var(--text-faint);">(${mp}%)</span></div></div>
             </div>
-            <label class="b2b-form-label">Client payout (buyback offer)</label>
-            <input id="b2bPayoutInput" class="b2b-payout-input" type="number" min="0" step="1" value="${defPayout}" oninput="b2bRecalcMargin(${resale})">
-            <label class="b2b-form-label" style="margin-top:16px;">Items priced by ${escapeHtml(deal.priced_by || 'store')}</label>
-            ${b2bItemsTable(items, { showOffer: true })}`;
+            <label class="b2b-form-label" style="margin-top:6px;">Items priced by ${escapeHtml(deal.priced_by || 'store')} — edit each offer</label>
+            <table class="b2b-items"><thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Unit value</th><th class="r">Unit offer</th><th class="r">Line offer</th></tr></thead>
+                <tbody>${rows}</tbody></table>`;
         const footer = `<button class="b2b-btn b2b-btn-secondary" onclick="closeAllModals()">Cancel</button>
             <button class="b2b-btn b2b-btn-primary" onclick="b2bQuoteNext('${deal.id}')">Generate quote →</button>`;
-        b2bShowModal(`🔎 Review pricing`, body, footer);
+        b2bShowModal(`🔎 Review &amp; offer — ${escapeHtml(deal.company)}`, body, footer);
     } else {
-        const body = `<p class="b2b-help">Review the PayMore buyback quote, then email it to the client. They confirm before it moves to Listing.</p>${b2bQuoteDoc(deal, items, b2bQuotePayout)}`;
+        const body = `<p class="b2b-help">Review the PayMore quote, then email it to the client. They confirm before it moves to Listing.</p>${b2bQuoteDoc(deal, items)}`;
         const footer = `<button class="b2b-btn b2b-btn-ghost" onclick="b2bQuoteBack('${deal.id}')">← Back</button>
             <button class="b2b-btn b2b-btn-secondary" onclick="window.print()">🖨 Print</button>
             <button class="b2b-btn b2b-btn-primary" onclick="b2bEmailQuote('${deal.id}')">📧 Email to client</button>`;
-        b2bShowModal(`📄 Client quote`, body, footer);
+        b2bShowModal(`📄 Quote — ${escapeHtml(deal.company)}`, body, footer);
     }
 }
-function b2bRecalcMargin(resale) {
-    const payout = Number(document.getElementById('b2bPayoutInput').value) || 0;
-    b2bQuotePayout = payout;
-    const margin = resale - payout;
-    const mp = resale > 0 ? Math.round(margin / resale * 100) : 0;
-    const el = document.getElementById('b2bMarginV');
-    if (el) el.innerHTML = `${b2bMoney(margin)} <span style="font-size:13px;color:var(--text-faint);">(${mp}%)</span>`;
+function b2bQuoteOfferEdit(id, value) {
+    const it = b2bModalItems.find(i => i.id === id);
+    if (it) it.offer = Number(value) || 0;
+    // recalc line + totals + margin in place
+    if (it) { const el = document.getElementById('qln-' + id); if (el) el.textContent = b2bMoney((Number(it.quantity) || 0) * (Number(it.offer) || 0)); }
+    const resale = b2bModalItems.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.value) || 0), 0);
+    const totOffer = b2bQuoteItemsTotal();
+    const to = document.getElementById('qTotO'); if (to) to.textContent = b2bMoney(totOffer);
+    const margin = resale - totOffer, mp = resale > 0 ? Math.round(margin / resale * 100) : 0;
+    const mEl = document.getElementById('qMargin'); if (mEl) mEl.innerHTML = `${b2bMoney(margin)} <span style="font-size:13px;color:var(--text-faint);">(${mp}%)</span>`;
+    b2bPost({ action: 'update_quote_item', id, offer: value }, 'Could not update offer').then(() => fetchB2BDealsQuiet()).catch(() => {});
 }
-function b2bQuoteNext(id) { b2bQuotePayout = Number(document.getElementById('b2bPayoutInput').value) || b2bQuotePayout; b2bQuoteStep = 1; b2bRenderModal('quote', b2bDealsCache.find(d => d.id === id)); }
+function b2bQuoteNext(id) { b2bQuoteStep = 1; b2bRenderModal('quote', b2bDealsCache.find(d => d.id === id)); }
 function b2bQuoteBack(id)  { b2bQuoteStep = 0; b2bRenderModal('quote', b2bDealsCache.find(d => d.id === id)); }
 async function b2bEmailQuote(id) {
     const deal = b2bDealsCache.find(d => d.id === id);
-    await b2bPost({ action: 'generate_quote', id, client_payout: b2bQuotePayout }, 'Could not save quote');
+    const payout = b2bQuoteItemsTotal();
+    await b2bPost({ action: 'generate_quote', id }, 'Could not save quote');
     await b2bPost({ action: 'email_quote', id }, 'Could not send quote');
-    // open the user's mail client with a prefilled draft
-    const subject = `PayMore Buyback Quote ${b2bQuoteNo(deal)} — ${deal.company}`;
+    const client = b2bClientForDeal(deal);
+    const to = client && client.contact_email ? client.contact_email : '';
+    const subject = `PayMore Quote ${b2bQuoteNo(deal)} — ${deal.company}`;
     const lines = [
-        `Hi ${deal.contact || 'there'},`, '',
-        `Please find PayMore buyback quote ${b2bQuoteNo(deal)} for the equipment picked up ${b2bFmtDate(deal.pickup_date)}.`,
-        `Total buyback offer: ${b2bMoney(b2bQuotePayout)}.`, '',
+        `Hi ${deal.contact || (client && client.contact) || 'there'},`, '',
+        `Please find PayMore quote ${b2bQuoteNo(deal)} for the equipment picked up ${b2bFmtDate(deal.pickup_date)}.`,
+        `Total offer: ${b2bMoney(payout)}.`, '',
         `The quote is valid for 14 days and contingent on items matching the described condition on inspection.`,
         `Reply to confirm and we'll proceed.`, '', `Thank you,`, `SPEEKS Technology — authorized PayMore franchisee`
     ];
-    window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(lines.join('\n'))}`;
+    window.location.href = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(lines.join('\n'))}`;
     closeAllModals(); await fetchB2BDeals(); b2bToast(`Quote ${b2bQuoteNo(deal)} emailed — awaiting client`);
 }
 
 /* awaiting client (CEO/DM) */
 function b2bRenderClient(deal, items) {
     const body = `<p class="b2b-help">Quote <b>${b2bQuoteNo(deal)}</b> was emailed to <b>${escapeHtml(deal.contact || 'the client')}</b>. Once they reply, log their response.</p>
-        <div class="client-banner">📧 Sent to ${escapeHtml(deal.contact || '—')} · ${escapeHtml(deal.company)} — total buyback offer <b>${b2bMoney(b2bPayout(deal))}</b></div>
-        ${b2bQuoteDoc(deal, items, b2bPayout(deal))}`;
+        <div class="client-banner">📧 Sent to ${escapeHtml(deal.contact || '—')} · ${escapeHtml(deal.company)} — total offer <b>${b2bMoney(b2bPayout(deal))}</b></div>
+        ${b2bQuoteDoc(deal, items)}`;
     const footer = `<button class="b2b-btn b2b-btn-ghost" onclick="b2bClientResponse('${deal.id}',false)">✕ Client declined</button>
         <button class="b2b-btn b2b-btn-primary" onclick="b2bClientResponse('${deal.id}',true)">✅ Client confirmed</button>`;
-    b2bShowModal(`✉️ Client confirmation`, body, footer);
+    b2bShowModal(`✉️ Client confirmation — ${escapeHtml(deal.company)}`, body, footer);
 }
 async function b2bClientResponse(id, confirmed) {
     await b2bPost({ action: 'client_response', id, confirmed }, 'Could not log response');
@@ -6389,7 +6605,7 @@ function b2bRenderListing(deal, items) {
             </div>`).join('') || '<div class="pr-empty">No items on this deal.</div>'}</div>`;
     const footer = `${deal.quoted ? `<button class="b2b-btn b2b-btn-ghost" onclick="b2bViewQuoteOnly('${deal.id}')">📄 View quote</button>` : ''}
         <button class="b2b-btn b2b-btn-primary" onclick="b2bComplete('${deal.id}')">${done === total && total ? 'Mark deal completed' : `Complete (${done}/${total} listed)`}</button>`;
-    b2bShowModal(`📋 Listing checklist`, body, footer);
+    b2bShowModal(`📋 Listing — ${escapeHtml(deal.company)}`, body, footer);
 }
 async function b2bToggleListed(itemId) { await b2bPost({ action: 'toggle_listed', id: itemId }, 'Could not update item'); await openB2BModal('listing', b2bModalDealId); fetchB2BDealsQuiet(); }
 async function b2bComplete(id) { await b2bPost({ action: 'complete', id }, 'Could not complete deal'); closeAllModals(); await fetchB2BDeals(); b2bToast('Deal completed — all items listed! 🎉'); }
@@ -6402,29 +6618,29 @@ function b2bRenderViewModal(deal, items) {
     const body = `${b2bSummaryHtml(deal)}${prog}<label class="b2b-form-label">Items</label>${b2bItemsTable(items, { showOffer: true })}`;
     const footer = `${deal.quoted ? `<button class="b2b-btn b2b-btn-ghost" onclick="b2bViewQuoteOnly('${deal.id}')">📄 View quote</button>` : ''}
         <button class="b2b-btn b2b-btn-secondary" onclick="closeAllModals()">Close</button>`;
-    b2bShowModal(`🏢 ${escapeHtml(deal.company)}`, body, footer);
+    b2bShowModal(`🏢 ${escapeHtml(deal.company)} ${b2bBadge(deal.status)}`, body, footer);
 }
 function b2bViewQuoteOnly(id) {
     const deal = b2bDealsCache.find(d => d.id === id);
-    const body = b2bQuoteDoc(deal, b2bModalItems, b2bPayout(deal));
+    const body = b2bQuoteDoc(deal, b2bModalItems);
     const footer = `<button class="b2b-btn b2b-btn-secondary" onclick="window.print()">🖨 Print</button>
         <button class="b2b-btn b2b-btn-ghost" onclick="openB2BModal('view','${id}')">← Back</button>`;
-    b2bShowModal(`📄 Client quote`, body, footer);
+    b2bShowModal(`📄 Quote — ${escapeHtml(deal.company)}`, body, footer);
 }
 
-/* formal PayMore buyback quote */
-function b2bQuoteDoc(deal, items, payout) {
-    const resale = items.reduce((s, i) => s + (Number(i.qty_value_total) || 0), 0);
+/* formal PayMore quote — per-line offer comes straight from each item's offer */
+function b2bQuoteDoc(deal, items) {
+    const payout = items.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.offer) || 0), 0);
     const rows = items.map(i => {
-        const lineResale = Number(i.qty_value_total) || 0;
-        const lineOffer = resale ? payout * (lineResale / resale) : 0;
-        return `<tr><td>${escapeHtml((i.make || '') + (i.make && i.model ? ' ' : '') + (i.model || '')) || '—'}</td>
-            <td class="r">${i.quantity}</td><td class="r">${b2bMoney(i.quantity ? lineOffer / i.quantity : 0)}</td><td class="r">${b2bMoney(lineOffer)}</td></tr>`;
+        const lineOffer = (Number(i.quantity) || 0) * (Number(i.offer) || 0);
+        const desc = `${b2bItemName(i)}${i.condition ? ` <span class="b2b-cond-tag">${escapeHtml(i.condition)}</span>` : ''}${i.client_notes ? `<div class="quote-line-note">${escapeHtml(i.client_notes)}</div>` : ''}`;
+        return `<tr><td>${desc}</td>
+            <td class="r">${i.quantity}</td><td class="r">${b2bMoney(i.offer)}</td><td class="r">${b2bMoney(lineOffer)}</td></tr>`;
     }).join('');
     return `<div class="quote" id="b2bQuoteDoc">
         <div class="quote-head">
             <div><div class="quote-logo">Pay<span>More</span></div><div class="quote-tag">Buy · Sell · Recycle Electronics</div></div>
-            <div class="quote-meta"><div class="qm-title">Buyback Quote</div>
+            <div class="quote-meta"><div class="qm-title">Quote</div>
                 <div class="qm-row"><span>Quote #</span><b>${b2bQuoteNo(deal)}</b></div>
                 <div class="qm-row"><span>Date</span><b>${b2bFmtDate(new Date().toISOString().slice(0, 10))}</b></div>
                 <div class="qm-row"><span>Valid until</span><b>14 days</b></div></div>
@@ -6438,7 +6654,7 @@ function b2bQuoteDoc(deal, items, payout) {
         <table class="quote-table">
             <thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Unit offer</th><th class="r">Line total</th></tr></thead>
             <tbody>${rows || '<tr><td colspan="4" style="text-align:center;color:#9ca3af;padding:14px;">No items.</td></tr>'}</tbody>
-            <tfoot><tr><td colspan="3">Total buyback offer</td><td class="r">${b2bMoney(payout)}</td></tr></tfoot>
+            <tfoot><tr><td colspan="3">Total offer</td><td class="r">${b2bMoney(payout)}</td></tr></tfoot>
         </table>
         <div class="quote-terms"><b>Terms.</b> This offer is valid for 14 days and is contingent on items matching the described condition upon inspection at the receiving store. Payment is issued by company check or ACH within 3 business days of acceptance. All storage devices are securely data-wiped to NIST standards.</div>
     </div>`;

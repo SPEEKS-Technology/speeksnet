@@ -31,11 +31,21 @@ Deno.serve(async (req: Request) => {
     const url = new URL(req.url);
     const dealId = url.searchParams.get("deal_id");
 
+    // client directory (CRM)
+    if (url.searchParams.get("clients")) {
+      const { data, error } = await supabase
+        .from("b2b_clients")
+        .select("id, company, contact, contact_email, contact_phone, notes, created_at, updated_at")
+        .order("company", { ascending: true });
+      if (error) return json({ error: error.message }, 500);
+      return json(data || []);
+    }
+
     // detail: items for one deal
     if (dealId) {
       const { data, error } = await supabase
         .from("b2b_deal_items")
-        .select("id, deal_id, make, model, quantity, value, offer, listed, created_at")
+        .select("id, deal_id, make, model, condition, staff_notes, client_notes, quantity, value, offer, listed, created_at")
         .eq("deal_id", dealId)
         .order("created_at", { ascending: true });
       if (error) return json({ error: error.message }, 500);
@@ -51,7 +61,7 @@ Deno.serve(async (req: Request) => {
     const store = (url.searchParams.get("store") || "").toUpperCase();
     let q = supabase
       .from("b2b_deals")
-      .select("id, company, contact, pickup_date, status, assigned_store, created_by, priced_by, client_payout, quoted, quote_emailed, client_confirmed, created_at, updated_at")
+      .select("id, company, contact, client_id, pickup_date, status, assigned_store, created_by, priced_by, client_payout, quoted, quote_emailed, client_confirmed, needs_wipe, created_at, updated_at, stage_changed_at")
       .order("created_at", { ascending: false });
     if (store && store !== "ALL" && store !== "CORP") q = q.eq("assigned_store", store);
     const { data: deals, error } = await q;
@@ -118,6 +128,9 @@ Deno.serve(async (req: Request) => {
     };
     const touch = (id: string, patch: any = {}) =>
       supabase.from("b2b_deals").update({ ...patch, updated_at: now }).eq("id", id);
+    // use for stage transitions so the "time in stage" clock only moves on real moves
+    const touchStage = (id: string, patch: any = {}) =>
+      supabase.from("b2b_deals").update({ ...patch, updated_at: now, stage_changed_at: now }).eq("id", id);
 
     // ----- create -----
     if (action === "create") {
@@ -127,12 +140,48 @@ Deno.serve(async (req: Request) => {
       const { data, error } = await supabase.from("b2b_deals").insert({
         company,
         contact: (body.contact || "").trim() || null,
+        client_id: body.client_id || null,
+        needs_wipe: !!body.needs_wipe,
         pickup_date,
         created_by: body.created_by || "Unknown",
         status: "Location Pending",
       }).select("id").single();
       if (error) return json({ error: error.message }, 500);
       return json({ success: true, id: data.id });
+    }
+
+    // ----- client CRM (DM/CEO; gated client-side) -----
+    if (action === "create_client" || action === "update_client") {
+      const company = (body.company || "").trim();
+      if (!company) return json({ error: "Company name is required" }, 400);
+      const fields = {
+        company,
+        contact: (body.contact || "").trim() || null,
+        contact_email: (body.contact_email || "").trim() || null,
+        contact_phone: (body.contact_phone || "").trim() || null,
+        notes: (body.notes || "").trim() || null,
+      };
+      if (action === "create_client") {
+        const { data, error } = await supabase.from("b2b_clients").insert(fields).select("id").single();
+        if (error) {
+          if (String(error.message).toLowerCase().includes("duplicate")) return json({ error: "A client with that company name already exists." }, 409);
+          return json({ error: error.message }, 500);
+        }
+        return json({ success: true, id: data.id });
+      }
+      if (!body.id) return json({ error: "Missing client id" }, 400);
+      const { error } = await supabase.from("b2b_clients").update({ ...fields, updated_at: now }).eq("id", body.id);
+      if (error) {
+        if (String(error.message).toLowerCase().includes("duplicate")) return json({ error: "A client with that company name already exists." }, 409);
+        return json({ error: error.message }, 500);
+      }
+      return json({ success: true });
+    }
+    if (action === "delete_client") {
+      if (!body.id) return json({ error: "Missing client id" }, 400);
+      const { error } = await supabase.from("b2b_clients").delete().eq("id", body.id);
+      if (error) return json({ error: error.message }, 500);
+      return json({ success: true });
     }
 
     // ----- assign store: Location Pending -> Pricing -----
@@ -143,7 +192,7 @@ Deno.serve(async (req: Request) => {
       const { deal, error } = await getDeal(id);
       if (error) return json({ error: error.message }, 500);
       if (deal.status !== "Location Pending") return json({ error: `Cannot assign from '${deal.status}'` }, 409);
-      const { error: uErr } = await touch(id, { assigned_store, status: "Pricing" });
+      const { error: uErr } = await touchStage(id, { assigned_store, status: "Pricing" });
       if (uErr) return json({ error: uErr.message }, 500);
       return json({ success: true });
     }
@@ -159,6 +208,9 @@ Deno.serve(async (req: Request) => {
           deal_id: dealId,
           make: body.make || null,
           model: body.model || null,
+          condition: body.condition || null,
+          staff_notes: body.staff_notes || null,
+          client_notes: body.client_notes || null,
           quantity: Number(body.quantity) || 1,
           value: Number(body.value) || 0,
           offer: Number(body.offer) || 0,
@@ -173,7 +225,7 @@ Deno.serve(async (req: Request) => {
       if (status !== "Pricing") return json({ error: "Items editable only while Pricing" }, 409);
       if (action === "update_item") {
         const patch: any = {};
-        for (const k of ["make", "model"]) if (k in body) patch[k] = body[k];
+        for (const k of ["make", "model", "condition", "staff_notes", "client_notes"]) if (k in body) patch[k] = body[k] || null;
         for (const k of ["quantity", "value", "offer"]) if (k in body) patch[k] = Number(body[k]) || 0;
         const { error: uErr } = await supabase.from("b2b_deal_items").update(patch).eq("id", body.id);
         if (uErr) return json({ error: uErr.message }, 500);
@@ -185,6 +237,29 @@ Deno.serve(async (req: Request) => {
       return json({ success: true });
     }
 
+    // ----- per-item offer edit during Quote -----
+    if (action === "update_quote_item") {
+      const { status, dealId, error } = await itemParentStatus(body.id);
+      if (error) return json({ error: error.message }, 500);
+      if (!dealId) return json({ error: "Item not found" }, 404);
+      if (status !== "Quote") return json({ error: "Offers are editable only during Quote" }, 409);
+      const patch: any = {};
+      if ("offer" in body) patch.offer = Number(body.offer) || 0;
+      if ("client_notes" in body) patch.client_notes = body.client_notes || null;
+      const { error: uErr } = await supabase.from("b2b_deal_items").update(patch).eq("id", body.id);
+      if (uErr) return json({ error: uErr.message }, 500);
+      await touch(dealId);
+      return json({ success: true });
+    }
+
+    // ----- mark/unmark certified wipe (any stage) -----
+    if (action === "set_wipe") {
+      if (!body.id) return json({ error: "Missing id" }, 400);
+      const { error } = await touch(body.id, { needs_wipe: !!body.needs_wipe });
+      if (error) return json({ error: error.message }, 500);
+      return json({ success: true });
+    }
+
     // ----- submit pricing: Pricing -> Quote -----
     if (action === "submit_pricing") {
       const { id } = body;
@@ -193,18 +268,18 @@ Deno.serve(async (req: Request) => {
       if (deal.status !== "Pricing") return json({ error: `Cannot submit from '${deal.status}'` }, 409);
       const { count } = await supabase.from("b2b_deal_items").select("id", { count: "exact", head: true }).eq("deal_id", id);
       if (!count) return json({ error: "Add at least one item before submitting" }, 400);
-      const { error: uErr } = await touch(id, { status: "Quote", priced_by: body.priced_by || deal.priced_by || null });
+      const { error: uErr } = await touchStage(id, { status: "Quote", priced_by: body.priced_by || deal.priced_by || null });
       if (uErr) return json({ error: uErr.message }, 500);
       return json({ success: true });
     }
 
-    // ----- generate quote (stays in Quote; records payout) -----
+    // ----- generate quote (stays in Quote; payout derived from per-item offers) -----
     if (action === "generate_quote") {
       const { id } = body;
       const { deal, error } = await getDeal(id);
       if (error) return json({ error: error.message }, 500);
       if (deal.status !== "Quote") return json({ error: `Cannot quote from '${deal.status}'` }, 409);
-      const { error: uErr } = await touch(id, { client_payout: Number(body.client_payout) || 0, quoted: true });
+      const { error: uErr } = await touch(id, { quoted: true });
       if (uErr) return json({ error: uErr.message }, 500);
       return json({ success: true });
     }
@@ -215,7 +290,7 @@ Deno.serve(async (req: Request) => {
       const { deal, error } = await getDeal(id);
       if (error) return json({ error: error.message }, 500);
       if (deal.status !== "Quote") return json({ error: `Cannot email from '${deal.status}'` }, 409);
-      const { error: uErr } = await touch(id, { status: "Awaiting Client", quoted: true, quote_emailed: true });
+      const { error: uErr } = await touchStage(id, { status: "Awaiting Client", quoted: true, quote_emailed: true });
       if (uErr) return json({ error: uErr.message }, 500);
       return json({ success: true });
     }
@@ -229,7 +304,7 @@ Deno.serve(async (req: Request) => {
       const patch = body.confirmed
         ? { status: "Listing", client_confirmed: true }
         : { status: "Pricing", quoted: false, quote_emailed: false, client_payout: null };
-      const { error: uErr } = await touch(id, patch);
+      const { error: uErr } = await touchStage(id, patch);
       if (uErr) return json({ error: uErr.message }, 500);
       return json({ success: true });
     }
@@ -253,7 +328,7 @@ Deno.serve(async (req: Request) => {
       const { deal, error } = await getDeal(id);
       if (error) return json({ error: error.message }, 500);
       if (deal.status !== "Listing") return json({ error: `Cannot complete from '${deal.status}'` }, 409);
-      const { error: uErr } = await touch(id, { status: "Completed" });
+      const { error: uErr } = await touchStage(id, { status: "Completed" });
       if (uErr) return json({ error: uErr.message }, 500);
       return json({ success: true });
     }
