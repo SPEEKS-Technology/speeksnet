@@ -382,15 +382,13 @@
               <div class="b2b-seg" id="b2bSeg">
                   <button data-view="queue" class="on" onclick="setB2BView('queue')">🎯 Needs You <span class="pip" id="b2bQueuePip" style="display:none;">0</span></button>
                   <button data-view="pipeline" onclick="setB2BView('pipeline')">📋 Pipeline</button>
-                  <button data-view="overview" onclick="setB2BView('overview')">📊 <span id="b2bOverviewLabel">Overview</span></button>
+                  <button data-view="overview" class="dynamic-module-flex role-district-manager role-ceo" onclick="setB2BView('overview')">📊 Overview</button>
               </div>
               <div class="b2b-bar-right">
                   <span class="b2b-scope-chip" id="b2bScopeChip" style="display:none;"></span>
                   <button id="b2bNewBtn" class="b2b-btn b2b-btn-primary b2b-new-btn dynamic-module-flex role-district-manager role-ceo role-tom" onclick="openB2BCreate()">+ New Deal</button>
               </div>
           </div>
-
-          <div class="b2b-summary" id="b2bSummary"></div>
 
           <div id="b2bViewBody">
               <div class="status-message">Syncing B2B Deals…</div>

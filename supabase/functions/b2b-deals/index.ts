@@ -67,7 +67,8 @@ Deno.serve(async (req: Request) => {
       if (iErr) return json({ error: iErr.message }, 500);
       for (const it of items || []) {
         const t = (totals[it.deal_id] ||= {
-          total_offer: 0, total_value: 0, total_qty: 0, line_count: 0, listed_done: 0, listed_total: 0,
+          total_offer: 0, total_value: 0, total_qty: 0, line_count: 0,
+          listed_done: 0, listed_total: 0, unlisted_value: 0, unlisted_offer: 0,
         });
         const qty = Number(it.quantity);
         t.total_offer += qty * Number(it.offer);
@@ -75,7 +76,12 @@ Deno.serve(async (req: Request) => {
         t.total_qty += qty;
         t.line_count += 1;
         t.listed_total += 1;
-        if (it.listed) t.listed_done += 1;
+        if (it.listed) {
+          t.listed_done += 1;
+        } else {
+          t.unlisted_value += qty * Number(it.value);
+          t.unlisted_offer += qty * Number(it.offer);
+        }
       }
     }
 
@@ -87,6 +93,8 @@ Deno.serve(async (req: Request) => {
       line_count: totals[d.id]?.line_count ?? 0,
       listed_done: totals[d.id]?.listed_done ?? 0,
       listed_total: totals[d.id]?.listed_total ?? 0,
+      unlisted_value: totals[d.id]?.unlisted_value ?? 0,
+      unlisted_offer: totals[d.id]?.unlisted_offer ?? 0,
     }));
     return json(result);
   }

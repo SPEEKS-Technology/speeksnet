@@ -5835,7 +5835,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
    B2B DEAL TRACKER — ported from intranet/ design kit (b2b.css)
    Role-reactive: Needs You queue · Pipeline board · Overview
    ============================================================ */
-.b2b-page { padding: 26px 30px 60px; max-width: 1320px; margin: 0 auto; }
+.b2b-page { padding: 20px 8px 60px; max-width: none; margin: 0; width: 100%; }
 .b2b-page-header h1 { font-size: 26px; font-weight: 800; color: var(--text-head); letter-spacing: -0.8px; margin: 0 0 6px; }
 .b2b-page-header p { font-size: 13.5px; color: var(--text-muted); font-weight: 500; margin: 0 0 20px; }
 
@@ -5972,6 +5972,34 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .client-name { font-weight: 800; font-size: 13px; color: var(--text-head); }
 .client-sub { font-size: 11px; color: var(--text-faint); font-weight: 700; }
 .client-val { font-weight: 900; font-size: 14px; color: var(--sage-professional); }
+
+/* Overview (DM/CEO) operational modules */
+.b2b-ov-stack { display: flex; flex-direction: column; gap: 20px; }
+.b2b-ov-stack .b2b-ovcard.full { grid-column: auto; }
+.ov-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ov-table th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; color: var(--text-faint); font-weight: 800; padding: 0 10px 9px; border-bottom: 1px solid var(--border-faint); }
+.ov-table th.r, .ov-table td.r { text-align: right; }
+.ov-table td { padding: 10px; border-bottom: 1px solid #f3f4f6; color: var(--text-muted); font-weight: 600; }
+.ov-table tbody tr:hover { background: var(--surface-2); }
+.ov-table tfoot td { border-top: 2px solid var(--border); border-bottom: none; font-weight: 900; color: var(--text-head); background: #f9fafb; }
+.ov-co { font-weight: 800; color: var(--text-head); }
+.ov-chip { display: inline-flex; align-items: center; gap: 5px; font-weight: 800; font-size: 12px; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+.ov-chip.ok { background: #f1f5f9; color: #475569; }
+.ov-chip.warn { background: #fef3c7; color: #92400e; }
+.ov-chip.bad { background: #fee2e2; color: #b91c1c; }
+.ov-empty { color: var(--text-soft); font-weight: 600; font-size: 13px; padding: 10px 2px; }
+
+.ov-client { border: 1px solid var(--border-faint); border-radius: 10px; margin-bottom: 8px; overflow: hidden; background: #fff; }
+.ov-client > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; font-size: 14px; font-weight: 800; color: var(--text-head); }
+.ov-client > summary::-webkit-details-marker { display: none; }
+.ov-client > summary::before { content: '▸'; color: var(--text-faint); font-size: 12px; margin-right: 2px; transition: transform .15s; }
+.ov-client[open] > summary::before { transform: rotate(90deg); }
+.ov-client[open] > summary { border-bottom: 1px solid var(--border-faint); background: var(--surface-2); }
+.ov-client-meta { display: flex; gap: 10px; align-items: center; font-size: 12px; font-weight: 700; color: var(--text-soft); }
+.ov-pill-count { background: var(--surface-3); color: var(--text-soft); border-radius: 999px; padding: 1px 9px; font-size: 11px; font-weight: 800; }
+.ov-client-deals { display: flex; flex-direction: column; }
+.ov-deal-row { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; padding: 10px 14px; border-top: 1px solid #f3f4f6; cursor: pointer; font-size: 12.5px; color: var(--text-muted); }
+.ov-deal-row:hover { background: var(--surface-2); }
 
 /* ---- modal body (B2B-scoped, reuses product .modal-menu shell) ---- */
 .b2b-help { font-size: 13px; color: var(--text-muted); margin: 0 0 16px; line-height: 1.5; font-weight: 500; }

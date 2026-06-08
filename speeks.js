@@ -5892,7 +5892,10 @@ async function fetchB2BDeals() {
     }
 }
 
+function b2bCanOverview() { const r = b2bRole(); return r === 'ceo' || r === 'district manager'; }
+
 function setB2BView(view) {
+    if (view === 'overview' && !b2bCanOverview()) view = 'queue';
     b2bView = view;
     document.querySelectorAll('#b2bSeg button').forEach(b => b.classList.toggle('on', b.dataset.view === view));
     renderB2BView();
@@ -5917,20 +5920,10 @@ function renderB2BView() {
         else if (scope === 'store') { chip.style.display = ''; chip.style.background = B2B_STORE_COLORS[b2bStore()] || '#64748b'; chip.textContent = `${B2B_STORE_ICONS[b2bStore()] || '🏬'} ${b2bStore()}`; }
         else chip.style.display = 'none';
     }
-    const ovLabel = document.getElementById('b2bOverviewLabel');
-    if (ovLabel) ovLabel.textContent = scope === 'company' ? 'Company Overview' : 'Store Overview';
     const pip = document.getElementById('b2bQueuePip');
     if (pip) { pip.textContent = queue.length; pip.style.display = queue.length ? '' : 'none'; }
 
-    const open = scoped.filter(d => d.status !== 'Completed');
-    const openValue = open.reduce((s, d) => s + b2bDealValue(d), 0);
-    const completed = scoped.filter(d => d.status === 'Completed').length;
-    const summary = document.getElementById('b2bSummary');
-    if (summary) summary.innerHTML =
-        `<div class="b2b-stat alert"><div class="k">🎯 Needs you</div><div class="v">${queue.length}</div></div>` +
-        `<div class="b2b-stat"><div class="k">📂 Open deals</div><div class="v">${open.length}</div></div>` +
-        `<div class="b2b-stat"><div class="k">💰 Open value</div><div class="v">${b2bMoney(openValue)}</div></div>` +
-        `<div class="b2b-stat"><div class="k">📦 Completed</div><div class="v">${completed}</div></div>`;
+    if (b2bView === 'overview' && !b2bCanOverview()) b2bView = 'queue';
 
     if (b2bView === 'queue')         body.innerHTML = b2bRenderQueue(scoped, queue);
     else if (b2bView === 'pipeline') body.innerHTML = b2bRenderPipeline(scoped);
@@ -6040,56 +6033,107 @@ function b2bRenderPipeline(scoped) {
 }
 function setB2BStoreFilter(code) { b2bStoreFilter = code; renderB2BView(); }
 
-/* ---------- VIEW 3 — Overview ---------- */
+/* ---------- VIEW 3 — Overview (DM/CEO operational dashboard) ---------- */
+function b2bDaysSincePickup(d) {
+    if (!d.pickup_date) return 0;
+    return Math.floor((Date.now() - new Date(d.pickup_date + 'T12:00:00Z').getTime()) / 86400000);
+}
+function b2bPricingDeadline(d) {              // 7-day SLA from pickup
+    const left = 7 - b2bDaysSincePickup(d);
+    if (left < 0)  return { left, text: `Overdue ${-left}d`, cls: 'bad' };
+    if (left === 0) return { left, text: 'Due today',        cls: 'bad' };
+    if (left === 1) return { left, text: 'Due in 1d',        cls: 'bad' };
+    if (left <= 3)  return { left, text: `Due in ${left}d`,  cls: 'warn' };
+    return { left, text: `Due in ${left}d`, cls: 'ok' };
+}
+function b2bDeadlineDate(d) {
+    if (!d.pickup_date) return '—';
+    const dt = new Date(d.pickup_date + 'T12:00:00Z');
+    dt.setUTCDate(dt.getUTCDate() + 7);
+    return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' });
+}
+
 function b2bRenderOverview(scoped) {
-    const company = b2bScope() === 'company';
-    const open = scoped.filter(d => d.status !== 'Completed');
-    const byStage = B2B_STAGE_ORDER.map(st => ({ st, deals: scoped.filter(d => d.status === st) }));
-    const maxStage = Math.max(1, ...byStage.map(s => s.deals.length));
-    const aging = open.filter(d => b2bDaysInStage(d) >= 4).sort((a, b) => b2bDaysInStage(b) - b2bDaysInStage(a));
-    const clients = [...scoped].sort((a, b) => b2bDealValue(b) - b2bDealValue(a)).slice(0, 5);
+    // --- A. Pricing deadlines (7-day SLA) ---
+    const pricing = scoped.filter(d => d.status === 'Pricing')
+        .sort((a, b) => b2bPricingDeadline(a).left - b2bPricingDeadline(b).left);
+    const aRows = pricing.map(d => {
+        const sla = b2bPricingDeadline(d);
+        return `<tr onclick="openB2BModal('view','${d.id}')" style="cursor:pointer;">
+            <td><span class="ov-co">${escapeHtml(d.company)}</span></td>
+            <td>${b2bStoreTag(d.assigned_store)}</td>
+            <td>${b2bFmtDate(d.pickup_date)}</td>
+            <td>${b2bDeadlineDate(d)}</td>
+            <td class="r"><span class="ov-chip ${sla.cls}">⏳ ${sla.text}</span></td></tr>`;
+    }).join('');
+    const moduleA = `<div class="b2b-ovcard full"><span class="b2b-ovcard-title">⏳ Pricing deadlines — 7 days from pickup</span>
+        ${pricing.length ? `<table class="ov-table"><thead><tr><th>Company</th><th>Store</th><th>Picked up</th><th>Price by</th><th class="r">Status</th></tr></thead>
+            <tbody>${aRows}</tbody></table>` : `<div class="ov-empty">No deals waiting to be priced. 👍</div>`}</div>`;
 
-    const funnel = `<div class="b2b-ovcard"><span class="b2b-ovcard-title">Pipeline Funnel — ${company ? 'District' : b2bStore()}</span>
-        <div class="funnel">${byStage.map(({ st, deals }) => {
-            const val = deals.reduce((s, d) => s + b2bDealValue(d), 0);
-            return `<div class="fn-row"><span class="fn-lbl">${B2B_STAGE[st].icon} ${st}</span>
-                <div class="fn-track"><div class="fn-fill" style="width:${Math.max(8, (deals.length / maxStage) * 100)}%;background:${B2B_STAGE[st].color};">${deals.length}</div></div>
-                <span class="fn-val"><b>${b2bMoney(val)}</b></span></div>`;
-        }).join('')}</div></div>`;
+    // --- B. Quotes awaiting client response ---
+    const awaiting = scoped.filter(d => d.status === 'Awaiting Client')
+        .sort((a, b) => b2bDaysInStage(b) - b2bDaysInStage(a));
+    const bRows = awaiting.map(d => {
+        const days = b2bDaysInStage(d);
+        const cls = days >= 5 ? 'bad' : days >= 3 ? 'warn' : 'ok';
+        const ago = days === 0 ? 'today' : `${days}d ago`;
+        return `<tr onclick="openB2BModal('view','${d.id}')" style="cursor:pointer;">
+            <td><span class="ov-co">${escapeHtml(d.company)}</span></td>
+            <td>${escapeHtml(d.contact || '—')}</td>
+            <td>${b2bStoreTag(d.assigned_store)}</td>
+            <td class="r">${b2bMoney(b2bPayout(d))}</td>
+            <td class="r"><span class="ov-chip ${cls}">📧 ${ago}</span></td></tr>`;
+    }).join('');
+    const moduleB = `<div class="b2b-ovcard full"><span class="b2b-ovcard-title">✉️ Awaiting client response</span>
+        ${awaiting.length ? `<table class="ov-table"><thead><tr><th>Company</th><th>Contact</th><th>Store</th><th class="r">Offer</th><th class="r">Reached out</th></tr></thead>
+            <tbody>${bRows}</tbody></table>` : `<div class="ov-empty">No quotes are out for confirmation.</div>`}</div>`;
 
-    let second;
-    if (company) {
-        const storeData = B2B_STORE_LIST.map(code => ({ code, color: B2B_STORE_COLORS[code], n: scoped.filter(d => d.assigned_store === code && d.status !== 'Completed').length }));
-        const maxStore = Math.max(1, ...storeData.map(s => s.n));
-        second = `<div class="b2b-ovcard"><span class="b2b-ovcard-title">Open Deals by Store</span>
-            <div class="store-bars">${storeData.map(s => `
-                <div class="sb-col"><span class="sb-v">${s.n}</span>
-                    <div class="sb-fill" style="height:${(s.n / maxStore) * 100}%;background:linear-gradient(180deg,${s.color},${s.color}cc);"></div>
-                    <span class="sb-l" style="color:${s.color};">${s.code}</span></div>`).join('')}</div></div>`;
-    } else {
-        const ov = (k, v) => `<div class="b2b-stat" style="box-shadow:none;border:1px solid var(--border-faint);"><div class="k">${k}</div><div class="v">${v}</div></div>`;
-        second = `<div class="b2b-ovcard"><span class="b2b-ovcard-title">This Store at a Glance</span>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-                ${ov('Open deals', open.length)}
-                ${ov('Open value', b2bMoney(open.reduce((s, d) => s + b2bDealValue(d), 0)))}
-                ${ov('Awaiting pricing', scoped.filter(d => d.status === 'Pricing').length)}
-                ${ov('Completed', scoped.filter(d => d.status === 'Completed').length)}
-            </div></div>`;
-    }
+    // --- C. Ready for listing, not yet listed ---
+    const listing = scoped.filter(d => d.status === 'Listing' && (Number(d.listed_total) - Number(d.listed_done)) > 0)
+        .sort((a, b) => (Number(b.unlisted_value) || 0) - (Number(a.unlisted_value) || 0));
+    let totV = 0, totC = 0, totN = 0;
+    const cRows = listing.map(d => {
+        const unlisted = Number(d.listed_total) - Number(d.listed_done);
+        const v = Number(d.unlisted_value) || 0, c = Number(d.unlisted_offer) || 0;
+        totV += v; totC += c; totN += unlisted;
+        return `<tr onclick="openB2BModal('view','${d.id}')" style="cursor:pointer;">
+            <td><span class="ov-co">${escapeHtml(d.company)}</span></td>
+            <td>${b2bStoreTag(d.assigned_store)}</td>
+            <td class="r">${unlisted} / ${d.listed_total}</td>
+            <td class="r">${b2bMoney(v)}</td>
+            <td class="r">${b2bMoney(c)}</td></tr>`;
+    }).join('');
+    const moduleC = `<div class="b2b-ovcard full"><span class="b2b-ovcard-title">📋 Ready to list — not yet listed</span>
+        ${listing.length ? `<table class="ov-table"><thead><tr><th>Company</th><th>Store</th><th class="r">Unlisted</th><th class="r">Total value</th><th class="r">Total cost</th></tr></thead>
+            <tbody>${cRows}</tbody>
+            <tfoot><tr><td colspan="2">Totals · ${totN} items across ${listing.length} deal${listing.length > 1 ? 's' : ''}</td><td class="r">${totN}</td><td class="r">${b2bMoney(totV)}</td><td class="r">${b2bMoney(totC)}</td></tr></tfoot></table>`
+        : `<div class="ov-empty">Nothing waiting to be listed.</div>`}</div>`;
 
-    const agingCard = `<div class="b2b-ovcard ${company ? '' : 'full'}"><span class="b2b-ovcard-title">⏱ Aging — needs attention</span>
-        ${aging.length ? `<div class="aging-list">${aging.map(d => { const days = b2bDaysInStage(d); return `
-            <div class="ag-row ${days >= 7 ? 'bad' : ''}"><div><div class="ag-co">${escapeHtml(d.company)}</div><div class="ag-sub">${d.status}${d.assigned_store ? ' · ' + d.assigned_store : ''}</div></div>
-            <span class="aging ${b2bAgingClass(days)}" style="font-size:13px;">⏱ ${days} days</span></div>`; }).join('')}</div>`
-        : `<div style="color:var(--text-soft);font-weight:600;font-size:13px;padding:8px 0;">Nothing stuck — every open deal is fresh. 👍</div>`}</div>`;
+    // --- D. Deals by client ---
+    const byClient = {};
+    scoped.forEach(d => {
+        const k = d.company || '—';
+        (byClient[k] ||= { name: k, current: [], completed: [], value: 0 });
+        byClient[k][d.status === 'Completed' ? 'completed' : 'current'].push(d);
+        byClient[k].value += b2bDealValue(d);
+    });
+    const clients = Object.values(byClient).sort((a, b) => b.value - a.value);
+    const dealRow = d => `<div class="ov-deal-row" onclick="openB2BModal('view','${d.id}')">
+        <span><span class="ov-co">${escapeHtml(d.company)}</span> · ${b2bStoreTag(d.assigned_store)}</span>
+        <span>${b2bBadge(d.status)}</span>
+        <span style="text-align:right;font-weight:800;color:var(--text-head);">${b2bMoney(b2bDealValue(d))}</span></div>`;
+    const dRows = clients.map(c => `<details class="ov-client">
+        <summary><span>${escapeHtml(c.name)}</span>
+            <span class="ov-client-meta">
+                <span class="ov-pill-count">${c.current.length} current</span>
+                <span class="ov-pill-count">${c.completed.length} done</span>
+                <span style="color:var(--sage-professional);font-weight:900;">${b2bMoney(c.value)}</span>
+            </span></summary>
+        <div class="ov-client-deals">${[...c.current, ...c.completed].map(dealRow).join('')}</div></details>`).join('');
+    const moduleD = `<div class="b2b-ovcard full"><span class="b2b-ovcard-title">🏢 Deals by client</span>
+        ${clients.length ? dRows : `<div class="ov-empty">No clients yet.</div>`}</div>`;
 
-    const clientsCard = `<div class="b2b-ovcard ${company ? '' : 'full'}"><span class="b2b-ovcard-title">🏢 Top B2B Clients</span>
-        ${clients.length ? clients.map(d => `<div class="client-row"><div><div class="client-name">${escapeHtml(d.company)}</div>
-            <div class="client-sub">${d.assigned_store ? d.assigned_store + ' · ' : ''}${d.status}</div></div>
-            <span class="client-val">${b2bMoney(b2bDealValue(d))}</span></div>`).join('')
-        : '<div style="color:var(--text-faint);font-size:13px;padding:8px 0;">No deals yet.</div>'}</div>`;
-
-    return `<div class="b2b-ov-grid">${funnel}${second}${agingCard}${clientsCard}</div>`;
+    return `<div class="b2b-ov-stack">${moduleA}${moduleB}${moduleC}${moduleD}</div>`;
 }
 
 /* ---------- Create ---------- */
