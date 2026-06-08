@@ -9460,12 +9460,32 @@ const BOX_STORE_NAMES = {
     'BAL': 'Ballwin'
 };
 
-function _boxOrderGetStore() {
+// Maps each store to the supplier email its box orders should be sent to.
+const BOX_ORDER_STORE_EMAILS = {
+    'OVL': 'doug@crosscorpusa.com',
+    'LEE': 'doug@crosscorpusa.com',
+    'WSP': 'doug@crosscorpusa.com',
+    'MPL': 'jordan@cleancarton.com',
+    'BAL': 'jordan@cleancarton.com'
+};
+
+function _boxOrderGetStoreCode() {
     const selectorEl = document.getElementById('boxOrderStoreSelector');
     const corpVisible = selectorEl && selectorEl.style.display !== 'none';
     const sel = document.getElementById('boxOrderStoreSelect');
-    const code = (corpVisible && sel && sel.value) ? sel.value : (sessionStorage.getItem('speeksUserStore') || '');
+    return (corpVisible && sel && sel.value) ? sel.value : (sessionStorage.getItem('speeksUserStore') || '');
+}
+
+function _boxOrderGetStore() {
+    const code = _boxOrderGetStoreCode();
     return BOX_STORE_NAMES[code] || code || 'Store';
+}
+
+// Resolves the destination email from the selected store, falling back to the
+// configured primary email (and finally a placeholder) when no store maps.
+function _boxOrderGetEmail() {
+    const code = _boxOrderGetStoreCode();
+    return BOX_ORDER_STORE_EMAILS[code] || _boxOrderEmails.primary || 'orders@placeholder.com';
 }
 
 let _boxOrderEmails = { primary: '', secondary: '' };
@@ -9623,7 +9643,7 @@ function boxOrderUpdatePreview() {
     const store    = _boxOrderGetStore();
     const userName = sessionStorage.getItem('speeksUserName')  || '';
     const notes    = document.getElementById('boxOrderNotes')?.value.trim() || '';
-    const to       = _boxOrderEmails.primary   || 'orders@placeholder.com';
+    const to       = _boxOrderGetEmail();
     const lines    = _boxOrderSelected.map(o => `  • ${o.item}: ${o.qty} ${o.qty === 1 ? 'Bundle' : 'Bundles'}`).join('\n');
     const noteBlock = notes ? `\n\n${notes}` : '';
     preview.textContent =
@@ -9644,7 +9664,7 @@ function sendBoxOrder() {
     const userName  = sessionStorage.getItem('speeksUserName')  || '';
     const notes     = document.getElementById('boxOrderNotes')?.value.trim() || '';
     const noteBlock = notes ? `%0A%0A${encodeURIComponent(notes)}` : '';
-    const to        = encodeURIComponent(_boxOrderEmails.primary || 'orders@placeholder.com');
+    const to        = encodeURIComponent(_boxOrderGetEmail());
     const subject   = encodeURIComponent(`PayMore ${store} Location`);
     const lines     = _boxOrderSelected.map(o => encodeURIComponent(`  • ${o.item}: ${o.qty} ${o.qty === 1 ? 'Bundle' : 'Bundles'}`)).join('%0A');
     const body      = `Hi,%0A%0APlease process the following order for ${encodeURIComponent(store)}:%0A%0A${lines}${noteBlock}%0A%0AThank you,%0A${encodeURIComponent(userName)}`;
