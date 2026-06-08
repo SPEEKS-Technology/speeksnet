@@ -6122,8 +6122,6 @@ textarea.pr-cell { font-family: inherit; line-height: 1.4; }
 .quote-table th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-faint); font-weight: 800; padding: 0 10px 8px; border-bottom: 1px solid var(--border-faint); }
 .quote-table td { padding: 9px 10px; border-bottom: 1px solid #f3f4f6; color: var(--text-dark); font-weight: 600; }
 .quote-table tfoot td { border-bottom: none; border-top: 2px solid var(--slate-charcoal); font-size: 15px; font-weight: 900; color: var(--text-head); padding-top: 12px; }
-.quote-terms { font-size: 11px; line-height: 1.6; color: var(--text-soft); background: var(--surface-2); border-radius: 9px; padding: 12px 14px; }
-.quote-terms b { color: var(--text-head); }
 
 /* B2B-scoped buttons (avoid clobbering product .btn-primary) */
 .b2b-btn { border: none; border-radius: 10px; font-weight: 800; font-size: 13px; cursor: pointer; text-transform: uppercase; letter-spacing: .5px; padding: 11px 22px; transition: all .2s ease; white-space: nowrap; font-family: inherit; }

@@ -5829,7 +5829,6 @@ let b2bView         = 'queue';      // 'queue' | 'pipeline' | 'overview'
 let b2bStoreFilter  = 'ALL';        // pipeline store filter (company roles)
 let b2bModalDealId  = null;
 let b2bModalItems   = [];           // items for the deal currently open in a modal
-let b2bQuoteStep    = 0;
 let b2bEditingClientId = null;      // client being edited in the clients manager
 
 function b2bCanManageClients() { const r = b2bRole(); return r === 'ceo' || r === 'district manager'; }
@@ -6390,7 +6389,6 @@ async function openB2BModal(kind, id) {
     const deal = b2bDealsCache.find(d => d.id === id);
     if (!deal) return;
     b2bModalDealId = id;
-    b2bQuoteStep = 0;
     b2bShowModal(`${escapeHtml(deal.company)} ${b2bBadge(deal.status)}`, '<div class="status-message">Loading…</div>', '', { full: kind === 'price' });
 
     // fetch items for kinds that need them
@@ -6506,81 +6504,91 @@ async function b2bSubmitPricing(id) {
     closeAllModals(); await fetchB2BDeals(); b2bToast('Priced — ready for a DM/CEO to quote');
 }
 
-/* quote (CEO/DM): step 0 edit each item's offer → step 1 quote doc → email */
+/* quote (CEO/DM): single live-preview screen — edit each offer on the quote, then confirm */
 function b2bQuoteItemsTotal() { return b2bModalItems.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.offer) || 0), 0); }
 function b2bRenderQuote(deal, items) {
     const resale = items.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.value) || 0), 0);
-    if (b2bQuoteStep === 0) {
-        const totOffer = b2bQuoteItemsTotal();
-        const margin = resale - totOffer;
-        const mp = resale > 0 ? Math.round(margin / resale * 100) : 0;
-        const rows = items.length ? items.map(it => `<tr>
-            <td>${b2bItemName(it)}${it.condition ? ` <span class="b2b-cond-tag">${escapeHtml(it.condition)}</span>` : ''}</td>
-            <td class="r">${it.quantity}</td>
-            <td class="r">${b2bMoney(it.value)}</td>
-            <td class="r"><input class="pr-cell r b2b-offer-cell" type="number" min="0" step="0.01" value="${it.offer}" onchange="b2bQuoteOfferEdit('${it.id}',this.value)"></td>
-            <td class="r" style="font-weight:800;" id="qln-${it.id}">${b2bMoney((Number(it.quantity)||0)*(Number(it.offer)||0))}</td></tr>`).join('')
-            : `<tr><td colspan="5" style="text-align:center;color:#9ca3af;padding:16px;">No items.</td></tr>`;
-        const body = `<p class="b2b-help">Only a <b>CEO or District Manager</b> can quote. Set the <b>offer</b> for each item individually, then generate a PayMore quote to email for confirmation.</p>
-            ${b2bSummaryHtml(deal)}
-            <div class="approve-stats">
-                <div class="b2b-stat"><div class="k">Resale value</div><div class="v">${b2bMoney(resale)}</div></div>
-                <div class="b2b-stat"><div class="k">Total offer</div><div class="v" id="qTotO">${b2bMoney(totOffer)}</div></div>
-                <div class="b2b-stat alert"><div class="k">Gross margin</div><div class="v" id="qMargin">${b2bMoney(margin)} <span style="font-size:13px;color:var(--text-faint);">(${mp}%)</span></div></div>
-            </div>
-            <label class="b2b-form-label" style="margin-top:6px;">Items priced by ${escapeHtml(deal.priced_by || 'store')} — edit each offer</label>
-            <table class="b2b-items"><thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Unit value</th><th class="r">Unit offer</th><th class="r">Line offer</th></tr></thead>
-                <tbody>${rows}</tbody></table>`;
-        const footer = `<button class="b2b-btn b2b-btn-secondary" onclick="closeAllModals()">Cancel</button>
-            <button class="b2b-btn b2b-btn-primary" onclick="b2bQuoteNext('${deal.id}')">Generate quote →</button>`;
-        b2bShowModal(`🔎 Review &amp; offer — ${escapeHtml(deal.company)}`, body, footer);
-    } else {
-        const body = `<p class="b2b-help">Review the PayMore quote, then email it to the client. They confirm before it moves to Listing.</p>${b2bQuoteDoc(deal, items)}`;
-        const footer = `<button class="b2b-btn b2b-btn-ghost" onclick="b2bQuoteBack('${deal.id}')">← Back</button>
-            <button class="b2b-btn b2b-btn-secondary" onclick="window.print()">🖨 Print</button>
-            <button class="b2b-btn b2b-btn-primary" onclick="b2bEmailQuote('${deal.id}')">📧 Email to client</button>`;
-        b2bShowModal(`📄 Quote — ${escapeHtml(deal.company)}`, body, footer);
-    }
+    const totOffer = b2bQuoteItemsTotal();
+    const margin = resale - totOffer;
+    const mp = resale > 0 ? Math.round(margin / resale * 100) : 0;
+    const body = `<p class="b2b-help">Only a <b>CEO or District Manager</b> can quote. Set each item's <b>offer</b> right on the quote below — totals update live. <b>Confirm quote</b> locks it in and moves the deal to Awaiting Client.</p>
+        ${b2bSummaryHtml(deal)}
+        <div class="approve-stats">
+            <div class="b2b-stat"><div class="k">Resale value</div><div class="v">${b2bMoney(resale)}</div></div>
+            <div class="b2b-stat"><div class="k">Total offer</div><div class="v" id="qTotO">${b2bMoney(totOffer)}</div></div>
+            <div class="b2b-stat alert"><div class="k">Gross margin</div><div class="v" id="qMargin">${b2bMoney(margin)} <span style="font-size:13px;color:var(--text-faint);">(${mp}%)</span></div></div>
+        </div>
+        ${b2bQuoteDoc(deal, items, true)}`;
+    const footer = `<button class="b2b-btn b2b-btn-secondary" onclick="closeAllModals()">Cancel</button>
+        <button class="b2b-btn b2b-btn-primary" onclick="b2bConfirmQuote('${deal.id}')">Confirm quote →</button>`;
+    b2bShowModal(`📄 Quote — ${escapeHtml(deal.company)}`, body, footer);
 }
 function b2bQuoteOfferEdit(id, value) {
     const it = b2bModalItems.find(i => i.id === id);
     if (it) it.offer = Number(value) || 0;
-    // recalc line + totals + margin in place
-    if (it) { const el = document.getElementById('qln-' + id); if (el) el.textContent = b2bMoney((Number(it.quantity) || 0) * (Number(it.offer) || 0)); }
+    const line = it ? (Number(it.quantity) || 0) * (Number(it.offer) || 0) : 0;
+    const set = (elid, txt) => { const e = document.getElementById(elid); if (e) e.textContent = txt; };
+    set('qln-' + id, b2bMoney(line));                       // preview line total
     const resale = b2bModalItems.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.value) || 0), 0);
     const totOffer = b2bQuoteItemsTotal();
-    const to = document.getElementById('qTotO'); if (to) to.textContent = b2bMoney(totOffer);
+    set('qTotO', b2bMoney(totOffer));                       // stats: total offer
+    set('qDocTotal', b2bMoney(totOffer));                   // preview footer total
     const margin = resale - totOffer, mp = resale > 0 ? Math.round(margin / resale * 100) : 0;
     const mEl = document.getElementById('qMargin'); if (mEl) mEl.innerHTML = `${b2bMoney(margin)} <span style="font-size:13px;color:var(--text-faint);">(${mp}%)</span>`;
     b2bPost({ action: 'update_quote_item', id, offer: value }, 'Could not update offer').then(() => fetchB2BDealsQuiet()).catch(() => {});
 }
-function b2bQuoteNext(id) { b2bQuoteStep = 1; b2bRenderModal('quote', b2bDealsCache.find(d => d.id === id)); }
-function b2bQuoteBack(id)  { b2bQuoteStep = 0; b2bRenderModal('quote', b2bDealsCache.find(d => d.id === id)); }
-async function b2bEmailQuote(id) {
-    const deal = b2bDealsCache.find(d => d.id === id);
-    const payout = b2bQuoteItemsTotal();
+async function b2bConfirmQuote(id) {
     await b2bPost({ action: 'generate_quote', id }, 'Could not save quote');
-    await b2bPost({ action: 'email_quote', id }, 'Could not send quote');
+    await b2bPost({ action: 'email_quote', id }, 'Could not confirm quote');
+    closeAllModals(); await fetchB2BDeals(); b2bToast('Quote confirmed — awaiting client response');
+}
+
+/* plain-text quote the rep can copy + paste to the client */
+function b2bQuoteText(deal, items) {
+    const payout = items.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.offer) || 0), 0);
     const client = b2bClientForDeal(deal);
-    const to = client && client.contact_email ? client.contact_email : '';
-    const subject = `PayMore Quote ${b2bQuoteNo(deal)} — ${deal.company}`;
-    const lines = [
-        `Hi ${deal.contact || (client && client.contact) || 'there'},`, '',
-        `Please find PayMore quote ${b2bQuoteNo(deal)} for the equipment picked up ${b2bFmtDate(deal.pickup_date)}.`,
-        `Total offer: ${b2bMoney(payout)}.`, '',
-        `The quote is valid for 14 days and contingent on items matching the described condition on inspection.`,
-        `Reply to confirm and we'll proceed.`, '', `Thank you,`, `SPEEKS Technology — authorized PayMore franchisee`
-    ];
-    window.location.href = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(lines.join('\n'))}`;
-    closeAllModals(); await fetchB2BDeals(); b2bToast(`Quote ${b2bQuoteNo(deal)} emailed — awaiting client`);
+    const attn = deal.contact || (client && client.contact) || '';
+    const out = [];
+    out.push(`PayMore Quote ${b2bQuoteNo(deal)}`);
+    out.push(`Prepared for: ${deal.company}${attn ? ` (Attn: ${attn})` : ''}`);
+    out.push(`Equipment picked up ${b2bFmtDate(deal.pickup_date)}`);
+    out.push('');
+    items.forEach(i => {
+        const name = ((i.make || '') + (i.make && i.model ? ' ' : '') + (i.model || '')) || 'Item';
+        const cond = i.condition ? ` [${i.condition}]` : '';
+        out.push(`• ${name}${cond} — Qty ${i.quantity} @ ${b2bMoney(i.offer)} = ${b2bMoney((Number(i.quantity) || 0) * (Number(i.offer) || 0))}`);
+        if (i.client_notes) out.push(`    ${i.client_notes}`);
+    });
+    out.push('');
+    out.push(`Total offer: ${b2bMoney(payout)}`);
+    out.push('');
+    out.push(`Issued by SPEEKS Technology — authorized PayMore franchisee.`);
+    return out.join('\n');
+}
+async function b2bCopyQuote(id) {
+    const deal = b2bDealsCache.find(d => d.id === id);
+    if (!deal) return;
+    const text = b2bQuoteText(deal, b2bModalItems);
+    try {
+        await navigator.clipboard.writeText(text);
+        b2bToast('Quote copied — paste it to the client');
+    } catch (e) {
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        try { document.execCommand('copy'); b2bToast('Quote copied — paste it to the client'); }
+        catch (_) { alert('Could not copy automatically — please copy the quote manually.'); }
+        ta.remove();
+    }
 }
 
 /* awaiting client (CEO/DM) */
 function b2bRenderClient(deal, items) {
-    const body = `<p class="b2b-help">Quote <b>${b2bQuoteNo(deal)}</b> was emailed to <b>${escapeHtml(deal.contact || 'the client')}</b>. Once they reply, log their response.</p>
-        <div class="client-banner">📧 Sent to ${escapeHtml(deal.contact || '—')} · ${escapeHtml(deal.company)} — total offer <b>${b2bMoney(b2bPayout(deal))}</b></div>
+    const body = `<p class="b2b-help">Use <b>📋 Copy quote</b> to grab quote <b>${b2bQuoteNo(deal)}</b> and send it to <b>${escapeHtml(deal.contact || 'the client')}</b>. Once they reply, log their response below.</p>
+        <div class="client-banner">📋 Ready to send · ${escapeHtml(deal.company)} — total offer <b>${b2bMoney(b2bPayout(deal))}</b></div>
         ${b2bQuoteDoc(deal, items)}`;
-    const footer = `<button class="b2b-btn b2b-btn-ghost" onclick="b2bClientResponse('${deal.id}',false)">✕ Client declined</button>
+    const footer = `<button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote('${deal.id}')">📋 Copy quote</button>
+        <button class="b2b-btn b2b-btn-ghost" onclick="b2bClientResponse('${deal.id}',false)">✕ Client declined</button>
         <button class="b2b-btn b2b-btn-primary" onclick="b2bClientResponse('${deal.id}',true)">✅ Client confirmed</button>`;
     b2bShowModal(`✉️ Client confirmation — ${escapeHtml(deal.company)}`, body, footer);
 }
@@ -6623,19 +6631,23 @@ function b2bRenderViewModal(deal, items) {
 function b2bViewQuoteOnly(id) {
     const deal = b2bDealsCache.find(d => d.id === id);
     const body = b2bQuoteDoc(deal, b2bModalItems);
-    const footer = `<button class="b2b-btn b2b-btn-secondary" onclick="window.print()">🖨 Print</button>
+    const footer = `<button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote('${id}')">📋 Copy quote</button>
         <button class="b2b-btn b2b-btn-ghost" onclick="openB2BModal('view','${id}')">← Back</button>`;
     b2bShowModal(`📄 Quote — ${escapeHtml(deal.company)}`, body, footer);
 }
 
-/* formal PayMore quote — per-line offer comes straight from each item's offer */
-function b2bQuoteDoc(deal, items) {
+/* formal PayMore quote — per-line offer comes straight from each item's offer.
+   editable=true turns the Unit offer column into live inputs (used during the Quote stage). */
+function b2bQuoteDoc(deal, items, editable) {
     const payout = items.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.offer) || 0), 0);
     const rows = items.map(i => {
         const lineOffer = (Number(i.quantity) || 0) * (Number(i.offer) || 0);
         const desc = `${b2bItemName(i)}${i.condition ? ` <span class="b2b-cond-tag">${escapeHtml(i.condition)}</span>` : ''}${i.client_notes ? `<div class="quote-line-note">${escapeHtml(i.client_notes)}</div>` : ''}`;
+        const offerCell = editable
+            ? `<input class="pr-cell r b2b-offer-cell" type="number" min="0" step="0.01" value="${i.offer}" onchange="b2bQuoteOfferEdit('${i.id}',this.value)">`
+            : b2bMoney(i.offer);
         return `<tr><td>${desc}</td>
-            <td class="r">${i.quantity}</td><td class="r">${b2bMoney(i.offer)}</td><td class="r">${b2bMoney(lineOffer)}</td></tr>`;
+            <td class="r">${i.quantity}</td><td class="r">${offerCell}</td><td class="r" id="qln-${i.id}">${b2bMoney(lineOffer)}</td></tr>`;
     }).join('');
     return `<div class="quote" id="b2bQuoteDoc">
         <div class="quote-head">
@@ -6654,9 +6666,8 @@ function b2bQuoteDoc(deal, items) {
         <table class="quote-table">
             <thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Unit offer</th><th class="r">Line total</th></tr></thead>
             <tbody>${rows || '<tr><td colspan="4" style="text-align:center;color:#9ca3af;padding:14px;">No items.</td></tr>'}</tbody>
-            <tfoot><tr><td colspan="3">Total offer</td><td class="r">${b2bMoney(payout)}</td></tr></tfoot>
+            <tfoot><tr><td colspan="3">Total offer</td><td class="r" id="qDocTotal">${b2bMoney(payout)}</td></tr></tfoot>
         </table>
-        <div class="quote-terms"><b>Terms.</b> This offer is valid for 14 days and is contingent on items matching the described condition upon inspection at the receiving store. Payment is issued by company check or ACH within 3 business days of acceptance. All storage devices are securely data-wiped to NIST standards.</div>
     </div>`;
 }
 
