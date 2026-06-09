@@ -3421,6 +3421,10 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .mb-worst { background: #fdecec; color: #c81e1e; }
 .mb-row:hover td.mb-best  { background: #e1f1e6; }
 .mb-row:hover td.mb-worst { background: #f9e2e2; }
+
+/* Monthly KPI tab: center every header and data cell, but keep metric labels left */
+.mb-table th, .mb-table td { text-align: center !important; }
+.mb-table td.mb-metric-name { text-align: left !important; }
 .mb-ebay-warn { background: #fef9c3; color: #a16207; }
 .mb-ebay-bad  { background: #fdecec; color: #c81e1e; }
 .mb-row:hover td.mb-ebay-warn { background: #fef08a; }
@@ -5447,7 +5451,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     padding: 0 3px;
     font-size: 11px;
     font-weight: 600;
-    text-align: right;
+    text-align: center;
     color: var(--slate-charcoal);
     font-family: 'Inter', sans-serif;
     background: white;
@@ -5476,6 +5480,8 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     text-overflow: ellipsis;
     padding: 0 2px !important;
 }
+/* Actual entered values in view mode: dark text, white bg (distinct from grey computed cells) */
+.kpi-grid-computed.kpi-grid-view-val { color: var(--slate-charcoal); background: #fff; font-style: normal; }
 
 /* Performance highlighting on the Weekly/Monthly KPI grid.
    Applied to computed <td>s, the Store Total row, and the editable inputs

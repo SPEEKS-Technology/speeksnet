@@ -2285,14 +2285,15 @@ function _kpiEmpRowsHtml(entries, periodDate, isEditing, isAvg) {
             (!isAvg ? '<span class="kpi-grid-status" id="kpiS-' + pk + '-' + empIdx + '" style="color:' + sc + '" title="' + (hasSaved ? 'Saved' : '') + '">' + (hasSaved ? '✓' : '') + '</span>' : '') +
             '</div></td>';
         _KPI_GRID_FIELDS.forEach(function(f) {
+            const tc = _kpiThresholdCls(f.key, entry[f.key], false);
             if (f.computed || isAvg) {
-                const tc = _kpiThresholdCls(f.key, entry[f.key], false);
                 cells += '<td class="kpi-grid-computed' + (isAvg ? ' kpi-avg-cell' : '') + (tc ? ' ' + tc : '') + '" id="kpiC-' + pk + '-' + empIdx + '-' + f.key + '">' + _kpiFormatComputed(f.key, entry[f.key]) + '</td>';
+            } else if (!isEditing) {
+                // View mode: formatted text — money columns show $, all centered.
+                cells += '<td class="kpi-grid-computed kpi-grid-view-val' + (tc ? ' ' + tc : '') + '">' + _kpiFormatComputed(f.key, entry[f.key]) + '</td>';
             } else {
                 const val = entry[f.key] != null ? entry[f.key] : '';
-                const dis = isEditing ? '' : 'disabled';
-                const tc = _kpiThresholdCls(f.key, entry[f.key], false);
-                cells += '<td class="kpi-grid-td-input"><input class="kpi-grid-input' + (tc ? ' ' + tc : '') + '" type="number" step="' + f.step + '" min="0" id="kpi-' + pk + '-' + empIdx + '-' + f.key + '" value="' + val + '" ' + dis + ' oninput="_kpiUpdateRow(\'' + pk + '\',' + empIdx + ')"></td>';
+                cells += '<td class="kpi-grid-td-input"><input class="kpi-grid-input' + (tc ? ' ' + tc : '') + '" type="number" step="' + f.step + '" min="0" id="kpi-' + pk + '-' + empIdx + '-' + f.key + '" value="' + val + '" oninput="_kpiUpdateRow(\'' + pk + '\',' + empIdx + ')"></td>';
             }
         });
         return '<tr class="' + rowClass + '" data-period="' + periodDate + '">' + cells + '</tr>';
