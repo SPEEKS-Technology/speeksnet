@@ -45,7 +45,7 @@ Deno.serve(async (req: Request) => {
     if (dealId) {
       const { data, error } = await supabase
         .from("b2b_deal_items")
-        .select("id, deal_id, make, model, condition, staff_notes, client_notes, quantity, value, offer, listed, created_at")
+        .select("id, deal_id, make, model, condition, staff_notes, client_notes, quantity, value, offer, recycle, listed, created_at")
         .eq("deal_id", dealId)
         .order("created_at", { ascending: true });
       if (error) return json({ error: error.message }, 500);
@@ -61,7 +61,7 @@ Deno.serve(async (req: Request) => {
     const store = (url.searchParams.get("store") || "").toUpperCase();
     let q = supabase
       .from("b2b_deals")
-      .select("id, company, contact, client_id, pickup_date, status, assigned_store, created_by, priced_by, client_payout, quoted, quote_emailed, client_confirmed, needs_wipe, created_at, updated_at, stage_changed_at")
+      .select("id, company, contact, client_id, pickup_date, status, assigned_store, created_by, priced_by, client_payout, quoted, quote_emailed, client_confirmed, quote_no, delivered_by, received_by, created_at, updated_at, stage_changed_at")
       .order("created_at", { ascending: false });
     if (store && store !== "ALL" && store !== "CORP") q = q.eq("assigned_store", store);
     const { data: deals, error } = await q;
@@ -72,7 +72,7 @@ Deno.serve(async (req: Request) => {
     if (ids.length) {
       const { data: items, error: iErr } = await supabase
         .from("b2b_deal_items")
-        .select("deal_id, quantity, value, offer, listed")
+        .select("deal_id, quantity, value, offer, recycle, listed")
         .in("deal_id", ids);
       if (iErr) return json({ error: iErr.message }, 500);
       for (const it of items || []) {
@@ -81,14 +81,17 @@ Deno.serve(async (req: Request) => {
           listed_done: 0, listed_total: 0, unlisted_value: 0, unlisted_offer: 0,
         });
         const qty = Number(it.quantity);
-        t.total_offer += qty * Number(it.offer);
-        t.total_value += qty * Number(it.value);
+        // recycle-only items carry no offer/price, so they don't add to the money totals
+        if (!it.recycle) {
+          t.total_offer += qty * Number(it.offer);
+          t.total_value += qty * Number(it.value);
+        }
         t.total_qty += qty;
         t.line_count += 1;
         t.listed_total += 1;
         if (it.listed) {
           t.listed_done += 1;
-        } else {
+        } else if (!it.recycle) {
           t.unlisted_value += qty * Number(it.value);
           t.unlisted_offer += qty * Number(it.offer);
         }
@@ -141,7 +144,6 @@ Deno.serve(async (req: Request) => {
         company,
         contact: (body.contact || "").trim() || null,
         client_id: body.client_id || null,
-        needs_wipe: !!body.needs_wipe,
         pickup_date,
         created_by: body.created_by || "Unknown",
         status: "Location Pending",
@@ -192,7 +194,11 @@ Deno.serve(async (req: Request) => {
       const { deal, error } = await getDeal(id);
       if (error) return json({ error: error.message }, 500);
       if (deal.status !== "Location Pending") return json({ error: `Cannot assign from '${deal.status}'` }, 409);
-      const { error: uErr } = await touchStage(id, { assigned_store, status: "Pricing" });
+      const { error: uErr } = await touchStage(id, {
+        assigned_store, status: "Pricing",
+        delivered_by: (body.delivered_by || "").trim() || null,
+        received_by:  (body.received_by  || "").trim() || null,
+      });
       if (uErr) return json({ error: uErr.message }, 500);
       return json({ success: true });
     }
@@ -204,6 +210,7 @@ Deno.serve(async (req: Request) => {
         if (!dealId) return json({ error: "Missing deal_id" }, 400);
         const { deal } = await getDeal(dealId);
         if (deal?.status !== "Pricing") return json({ error: "Items editable only while Pricing" }, 409);
+        const recycle = !!body.recycle;
         const { error } = await supabase.from("b2b_deal_items").insert({
           deal_id: dealId,
           make: body.make || null,
@@ -212,8 +219,9 @@ Deno.serve(async (req: Request) => {
           staff_notes: body.staff_notes || null,
           client_notes: body.client_notes || null,
           quantity: Number(body.quantity) || 1,
-          value: Number(body.value) || 0,
-          offer: Number(body.offer) || 0,
+          value: recycle ? 0 : (Number(body.value) || 0),
+          offer: recycle ? 0 : (Number(body.offer) || 0),
+          recycle,
         });
         if (error) return json({ error: error.message }, 500);
         await touch(dealId);
@@ -227,6 +235,9 @@ Deno.serve(async (req: Request) => {
         const patch: any = {};
         for (const k of ["make", "model", "condition", "staff_notes", "client_notes"]) if (k in body) patch[k] = body[k] || null;
         for (const k of ["quantity", "value", "offer"]) if (k in body) patch[k] = Number(body[k]) || 0;
+        if ("recycle" in body) patch.recycle = !!body.recycle;
+        // recycle-only items never carry an offer/price
+        if (patch.recycle === true) { patch.value = 0; patch.offer = 0; }
         const { error: uErr } = await supabase.from("b2b_deal_items").update(patch).eq("id", body.id);
         if (uErr) return json({ error: uErr.message }, 500);
       } else {
@@ -242,21 +253,20 @@ Deno.serve(async (req: Request) => {
       const { status, dealId, error } = await itemParentStatus(body.id);
       if (error) return json({ error: error.message }, 500);
       if (!dealId) return json({ error: "Item not found" }, 404);
-      if (status !== "Quote") return json({ error: "Offers are editable only during Quote" }, 409);
       const patch: any = {};
-      if ("offer" in body) patch.offer = Number(body.offer) || 0;
-      if ("client_notes" in body) patch.client_notes = body.client_notes || null;
+      // offers only change while quoting; client notes can also be edited while awaiting the client
+      if ("offer" in body) {
+        if (status !== "Quote") return json({ error: "Offers are editable only during Quote" }, 409);
+        patch.offer = Number(body.offer) || 0;
+      }
+      if ("client_notes" in body) {
+        if (status !== "Quote" && status !== "Awaiting Client") return json({ error: "Notes are editable only during Quote / Awaiting Client" }, 409);
+        patch.client_notes = body.client_notes || null;
+      }
+      if (!Object.keys(patch).length) return json({ error: "Nothing to update" }, 400);
       const { error: uErr } = await supabase.from("b2b_deal_items").update(patch).eq("id", body.id);
       if (uErr) return json({ error: uErr.message }, 500);
       await touch(dealId);
-      return json({ success: true });
-    }
-
-    // ----- mark/unmark certified wipe (any stage) -----
-    if (action === "set_wipe") {
-      if (!body.id) return json({ error: "Missing id" }, 400);
-      const { error } = await touch(body.id, { needs_wipe: !!body.needs_wipe });
-      if (error) return json({ error: error.message }, 500);
       return json({ success: true });
     }
 

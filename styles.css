@@ -6143,3 +6143,34 @@ textarea.pr-cell { font-family: inherit; line-height: 1.4; }
     .q-cta { justify-content: flex-start; }
     .b2b-bar-right { margin-left: 0; width: 100%; }
 }
+
+/* ============================================================================
+   B2B QUOTE ENHANCEMENTS — recycle items, client-note tags, custody, confirm review
+   ============================================================================ */
+.b2b-custody-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+@media (max-width: 560px) { .b2b-custody-grid { grid-template-columns: 1fr; } }
+
+/* client-note multi-select chips (+ free-text "Other") */
+.b2b-cn-wrap { display: flex; flex-wrap: wrap; gap: 5px; margin: 2px 0 6px; }
+.b2b-cn-chip { border: 1px solid #d8dde3; background: #fff; color: #475569; border-radius: 14px; padding: 3px 10px; font-size: 11px; font-weight: 700; cursor: pointer; transition: background .12s ease, color .12s ease, border-color .12s ease; font-family: inherit; }
+.b2b-cn-chip:hover { border-color: #16a34a; color: #15803d; }
+.b2b-cn-chip.sel { background: #16a34a; border-color: #16a34a; color: #fff; }
+.b2b-cn-other { width: 100%; }
+
+/* recycle-only line items */
+.b2b-recycle-toggle { display: inline-flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 12px; font-weight: 700; color: #475569; cursor: pointer; user-select: none; }
+.b2b-recycle-toggle input { width: 15px; height: 15px; accent-color: #16a34a; }
+.b2b-pcard.recycle { background: #f0fdf4; border-color: #bbf7d0; }
+.pr-line.muted { color: #94a3b8; font-weight: 700; font-style: italic; }
+.b2b-cond-tag.recycle { background: #dcfce7; color: #15803d; }
+.q-recycle { color: #15803d; font-weight: 800; font-size: 12px; }
+
+/* confirm-stage internal review (edit client notes, see staff notes) */
+.b2b-confirm-review { margin: 12px 0; border: 1px solid #e5e7eb; border-radius: 10px; background: #fcfcfd; padding: 2px 12px 10px; }
+.b2b-confirm-review > summary { cursor: pointer; font-weight: 800; font-size: 12px; color: #334155; padding: 9px 2px; list-style: none; }
+.b2b-confirm-review > summary::-webkit-details-marker { display: none; }
+.b2b-confirm-item { padding: 10px 0; border-top: 1px solid #eef1f4; }
+.b2b-confirm-item:first-of-type { border-top: none; }
+.b2b-confirm-head { font-size: 13px; color: #1f2937; margin-bottom: 5px; }
+.b2b-ci-qty { color: #94a3b8; font-weight: 700; font-size: 12px; }
+.b2b-ci-lbl { display: block; font-size: 11px; font-weight: 700; color: #64748b; margin: 6px 0 3px; }

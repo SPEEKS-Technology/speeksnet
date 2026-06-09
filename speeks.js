@@ -5809,7 +5809,7 @@ const B2B_STAGE_ORDER = ['Location Pending', 'Pricing', 'Quote', 'Awaiting Clien
 
 // Role model: scope + the action (cta/why/kind) each role takes per stage.
 const B2B_ASSIGN  = { cta: 'Assign store',        why: 'New pickup needs routing',     kind: 'assign'  };
-const B2B_PRICE   = { cta: 'Itemize & price',     why: 'Price the pickup for the client', kind: 'price'   };
+const B2B_PRICE   = { cta: 'Price',               why: 'Price the pickup for the client', kind: 'price'   };
 const B2B_QUOTE   = { cta: 'Generate & send quote', why: 'Pricing in — quote the client', kind: 'quote'   };
 const B2B_CLIENT  = { cta: 'Log client response', why: 'Waiting on client confirmation', kind: 'client'  };
 const B2B_LISTING = { cta: 'Open listing',        why: 'Approved — list the items',    kind: 'listing' };
@@ -5855,29 +5855,57 @@ function b2bAgingClass(days) { return days >= 7 ? 'bad' : days >= 4 ? 'warn' : '
 function b2bDealValue(d) { return Number(d.total_value) || 0; }   // resale value
 function b2bDealOffer(d) { return Number(d.total_offer) || 0; }   // total offer to client (sum of per-item offers)
 function b2bPayout(d)    { return b2bDealOffer(d); }              // client payout = sum of per-item offers
-function b2bQuoteNo(d)   { return 'Q-2026-' + String(d.id || '').replace(/\D/g, '').slice(0, 4).padStart(4, '0'); }
+function b2bQuoteNo(d)   { return 'Q-' + (d.quote_no != null ? d.quote_no : '—'); }
 function b2bListing(d)   { const total = Number(d.listed_total) || Number(d.line_count) || 0; const done = Number(d.listed_done) || 0; return { done, total, pct: total ? Math.round(done / total * 100) : 0 }; }
 
 const B2B_CONDITIONS = ['New', 'Like New', 'Good', 'Fair', 'For parts'];
 
+// Client-note quick tags (multi-select); anything typed in "Other" is appended free-text.
+const B2B_CLIENT_NOTE_TAGS = ['Cracked', 'LCD Damage', 'No RAM', 'No HDD', 'Too Low Value', 'Non-functional', 'iCloud Locked', 'Scratched', 'Body Damage'];
+
+// Company member directory (for delivered-by / received-by), sourced from the auth roster.
+let b2bMembersCache = [];
+async function b2bLoadMembers() {
+    if (b2bMembersCache.length) return b2bMembersCache;
+    try {
+        let cached = localStorage.getItem('speeksAuthCache');
+        let data = cached ? JSON.parse(cached) : null;
+        if (!data) { const r = await fetch(`${AUTH_URL}?v=${Date.now()}`); data = await r.json(); localStorage.setItem('speeksAuthCache', JSON.stringify(data)); }
+        b2bMembersCache = [...new Set((data.users || []).map(u => (u.name || '').trim()).filter(Boolean))].sort();
+    } catch (e) { /* leave empty */ }
+    return b2bMembersCache;
+}
+
+// ----- client-notes multi-select (preset chips + free-text "Other") -----
+function b2bClientNotesField(it, mode) {
+    const stored = (it.client_notes || '').split(',').map(s => s.trim()).filter(Boolean);
+    const otherText = stored.filter(s => !B2B_CLIENT_NOTE_TAGS.includes(s)).join(', ');
+    const chips = B2B_CLIENT_NOTE_TAGS.map(t =>
+        `<button type="button" class="b2b-cn-chip ${stored.includes(t) ? 'sel' : ''}" data-tag="${escapeHtml(t)}" onclick="b2bClientNoteToggle('${it.id}','${mode}',this)">${escapeHtml(t)}</button>`).join('');
+    return `<div class="b2b-cn-wrap" id="cn-${it.id}">${chips}</div>
+        <input class="pr-cell b2b-cn-other" id="cno-${it.id}" value="${escapeHtml(otherText)}" placeholder="Other notes…" onchange="b2bClientNoteOther('${it.id}','${mode}')">`;
+}
+function b2bClientNoteVal(itemId) {
+    const cont = document.getElementById('cn-' + itemId);
+    const tags = cont ? [...cont.querySelectorAll('.b2b-cn-chip.sel')].map(c => c.dataset.tag) : [];
+    const other = (document.getElementById('cno-' + itemId)?.value || '').trim();
+    if (other) tags.push(other);
+    return tags.join(', ');
+}
+function b2bClientNotePost(itemId, mode) {
+    const val = b2bClientNoteVal(itemId);
+    const it = b2bModalItems.find(i => i.id === itemId);
+    if (it) it.client_notes = val;
+    // Pricing edits go through update_item; confirm-stage edits through update_quote_item.
+    const action = (mode === 'confirm') ? 'update_quote_item' : 'update_item';
+    b2bPost({ action, id: itemId, client_notes: val }, 'Could not update notes').then(() => fetchB2BDealsQuiet()).catch(() => {});
+}
+function b2bClientNoteToggle(itemId, mode, el) { el.classList.toggle('sel'); b2bClientNotePost(itemId, mode); }
+function b2bClientNoteOther(itemId, mode) { b2bClientNotePost(itemId, mode); }
+
 function b2bBadge(status) {
     const s = B2B_STAGE[status] || { icon: '', cls: '' };
     return `<span class="b2b-badge ${s.cls}">${s.icon} ${status}</span>`;
-}
-function b2bWipeChip(d) {
-    return d.needs_wipe
-        ? '<span class="b2b-wipe-badge">🧹 Wipe required</span>'
-        : '<span style="color:var(--text-faint);font-weight:700;">Not required</span>';
-}
-async function b2bToggleWipe(id) {
-    const d = b2bDealsCache.find(x => x.id === id);
-    if (!d) return;
-    const nv = !d.needs_wipe;
-    await b2bPost({ action: 'set_wipe', id, needs_wipe: nv }, 'Could not update wipe flag');
-    d.needs_wipe = nv;
-    const cell = document.getElementById('b2bWipeCell');
-    if (cell) cell.innerHTML = `${b2bWipeChip(d)} <button class="b2b-wipe-btn" onclick="b2bToggleWipe('${id}')">${nv ? 'Unmark' : 'Mark'}</button>`;
-    fetchB2BDealsQuiet();
 }
 function b2bStoreTag(code) {
     if (!code) return `<span style="font-size:11px;font-weight:800;color:#92400e;">📍 Unassigned</span>`;
@@ -5992,7 +6020,6 @@ function b2bRenderQueue(scoped, queue) {
                         <span class="q-company">${escapeHtml(d.company)}</span>
                         ${b2bBadge(d.status)}
                         ${b2bStoreTag(d.assigned_store)}
-                        ${d.needs_wipe ? '<span class="b2b-wipe-badge">🧹 Wipe</span>' : ''}
                     </div>
                     <div class="q-meta">
                         <span class="mi">💰 <b>${b2bMoney(b2bDealValue(d))}</b></span>
@@ -6049,7 +6076,7 @@ function b2bRenderPipeline(scoped) {
                 ? `<div class="lst-prog compact"><div class="lst-prog-row"><span class="lst-lbl">📋</span><span class="lst-cnt">${lp.done}/${lp.total}</span></div><div class="lst-prog-track"><div class="lst-prog-fill" style="width:${lp.pct}%"></div></div></div>` : '';
             return `
             <div class="d-card ${a ? 'act' : ''}" onclick="openB2BModal('${b2bClickKind(d)}','${d.id}')">
-                <span class="d-company">${escapeHtml(d.company)}${d.needs_wipe ? ' <span class="b2b-wipe-badge sm">🧹</span>' : ''}</span>
+                <span class="d-company">${escapeHtml(d.company)}</span>
                 <div class="d-meta">
                     <span>${b2bStoreTag(d.assigned_store)}</span>
                     <span>🚚 ${b2bFmtDate(d.pickup_date)}</span>
@@ -6184,7 +6211,7 @@ function openB2BCreate(keepPickup) {
     if (dateEl) dateEl.value = prev || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
     const search = document.getElementById('b2bClientSearch');
     if (search) search.value = '';
-    if (!keepPickup) { b2bSelectedClient = null; const w = document.getElementById('b2bWipeInput'); if (w) w.checked = false; }
+    if (!keepPickup) { b2bSelectedClient = null; }
     b2bRenderSelectedClient();
     const results = document.getElementById('b2bClientResults');
     if (results) results.style.display = 'none';
@@ -6237,11 +6264,10 @@ async function createB2BDeal() {
     const pickup = document.getElementById('b2bPickupInput').value;
     if (!pickup) { alert('Please choose the pickup date.'); return; }
     const c = b2bSelectedClient;
-    const needsWipe = !!document.getElementById('b2bWipeInput')?.checked;
     const btn = document.getElementById('b2bCreateBtn');
     btn.disabled = true; btn.innerText = 'Creating...';
     try {
-        await b2bPost({ action: 'create', company: c.company, contact: c.contact || '', client_id: c.id, needs_wipe: needsWipe, pickup_date: pickup, created_by: b2bUserName() }, 'Could not create deal');
+        await b2bPost({ action: 'create', company: c.company, contact: c.contact || '', client_id: c.id, pickup_date: pickup, created_by: b2bUserName() }, 'Could not create deal');
         closeAllModals();
         await fetchB2BDeals();
         b2bToast(`${c.company} logged — awaiting store assignment`);
@@ -6355,7 +6381,7 @@ function b2bSummaryHtml(d) {
         <div class="it"><div class="k">Picked up</div><div class="vv">${b2bFmtDate(d.pickup_date)}</div></div>
         <div class="it"><div class="k">Store</div><div class="vv">${b2bStoreTag(d.assigned_store)}</div></div>
         <div class="it"><div class="k">Stage</div><div class="vv">${b2bBadge(d.status)}</div></div>
-        <div class="it"><div class="k">Certified wipe</div><div class="vv" id="b2bWipeCell">${b2bWipeChip(d)} <button class="b2b-wipe-btn" onclick="b2bToggleWipe('${d.id}')">${d.needs_wipe ? 'Unmark' : 'Mark'}</button></div></div>
+        ${(d.delivered_by || d.received_by) ? `<div class="it"><div class="k">Custody</div><div class="vv">${d.delivered_by ? 'Delivered by ' + escapeHtml(d.delivered_by) : ''}${d.delivered_by && d.received_by ? ' · ' : ''}${d.received_by ? 'Received by ' + escapeHtml(d.received_by) : ''}</div></div>` : ''}
     </div>`;
 }
 
@@ -6415,8 +6441,15 @@ function b2bRenderModal(kind, deal) {
 
 /* assign */
 function b2bRenderAssign(deal) {
-    const body = `<p class="b2b-help">Pick the store that will receive, itemize, and price this pickup.</p>
+    const body = `<p class="b2b-help">Pick the store that will receive, itemize, and price this pickup, and record who handed it off.</p>
         ${b2bSummaryHtml(deal)}
+        <div class="b2b-custody-grid">
+            <div><label class="b2b-form-label">Delivered by</label>
+                <input id="b2bDeliveredBy" class="form-input-lg" list="b2bMemberList" autocomplete="off" placeholder="Search team members…" value="${escapeHtml(deal.delivered_by || '')}"></div>
+            <div><label class="b2b-form-label">Received by</label>
+                <input id="b2bReceivedBy" class="form-input-lg" list="b2bMemberList" autocomplete="off" placeholder="Search team members…" value="${escapeHtml(deal.received_by || '')}"></div>
+        </div>
+        <datalist id="b2bMemberList"></datalist>
         <label class="b2b-form-label">Route to store</label>
         <div class="b2b-store-pick" id="b2bAssignPick">
             ${B2B_STORE_LIST.map(s => `<button data-store="${s}" onclick="b2bPickAssign('${s}')">${B2B_STORE_ICONS[s]} ${s}</button>`).join('')}
@@ -6424,6 +6457,11 @@ function b2bRenderAssign(deal) {
     const footer = `<button class="b2b-btn b2b-btn-secondary" onclick="closeAllModals()">Cancel</button>
         <button class="b2b-btn b2b-btn-primary" id="b2bAssignBtn" disabled onclick="b2bDoAssign('${deal.id}')">Assign &amp; send to pricing</button>`;
     b2bShowModal(`📍 Assign store — ${escapeHtml(deal.company)}`, body, footer);
+    // populate the member directory for the searchable delivered/received fields
+    b2bLoadMembers().then(names => {
+        const dl = document.getElementById('b2bMemberList');
+        if (dl) dl.innerHTML = names.map(n => `<option value="${escapeHtml(n)}"></option>`).join('');
+    });
 }
 let b2bAssignStore = null;
 function b2bPickAssign(s) {
@@ -6433,7 +6471,9 @@ function b2bPickAssign(s) {
 }
 async function b2bDoAssign(id) {
     if (!b2bAssignStore) return;
-    await b2bPost({ action: 'assign_advance', id, assigned_store: b2bAssignStore }, 'Could not assign store');
+    const delivered_by = (document.getElementById('b2bDeliveredBy')?.value || '').trim();
+    const received_by  = (document.getElementById('b2bReceivedBy')?.value || '').trim();
+    await b2bPost({ action: 'assign_advance', id, assigned_store: b2bAssignStore, delivered_by, received_by }, 'Could not assign store');
     closeAllModals(); await fetchB2BDeals(); b2bToast(`Routed to ${b2bAssignStore} — pricing next`);
     b2bAssignStore = null;
 }
@@ -6442,25 +6482,29 @@ async function b2bDoAssign(id) {
 function b2bRenderPrice(deal, items) {
     const condOpts = it => ['<option value="">— condition —</option>'].concat(
         B2B_CONDITIONS.map(c => `<option ${it.condition === c ? 'selected' : ''}>${c}</option>`)).join('');
-    const cards = items.length ? items.map(it => `
-        <div class="b2b-pcard">
+    const cards = items.length ? items.map(it => {
+        const rec = !!it.recycle;
+        return `
+        <div class="b2b-pcard${rec ? ' recycle' : ''}">
             <div class="b2b-pcard-grid">
                 <div class="f"><label>Brand</label><input class="pr-cell" value="${escapeHtml(it.make)}" placeholder="e.g. Apple" onchange="b2bItemEdit('${it.id}','make',this.value)"></div>
                 <div class="f"><label>Model</label><input class="pr-cell" value="${escapeHtml(it.model)}" placeholder="e.g. iPhone 13" onchange="b2bItemEdit('${it.id}','model',this.value)"></div>
                 <div class="f"><label>Condition</label><select class="pr-cell" onchange="b2bItemEdit('${it.id}','condition',this.value)">${condOpts(it)}</select></div>
                 <div class="f sm"><label>Qty</label><input class="pr-cell r" type="number" min="0" value="${it.quantity}" onchange="b2bItemEdit('${it.id}','quantity',this.value)"></div>
-                <div class="f sm"><label>Unit value</label><input class="pr-cell r" type="number" min="0" step="0.01" value="${it.value}" onchange="b2bItemEdit('${it.id}','value',this.value)"></div>
-                <div class="f sm"><label>Unit offer</label><input class="pr-cell r" type="number" min="0" step="0.01" value="${it.offer}" onchange="b2bItemEdit('${it.id}','offer',this.value)"></div>
-                <div class="f sm"><label>Line value</label><span class="pr-line" id="pln-${it.id}">${b2bMoney((Number(it.quantity)||0)*(Number(it.value)||0))}</span></div>
+                <div class="f sm"><label>Unit value</label>${rec ? '<span class="pr-line muted">recycle</span>' : `<input class="pr-cell r" type="number" min="0" step="0.01" value="${it.value}" onchange="b2bItemEdit('${it.id}','value',this.value)">`}</div>
+                <div class="f sm"><label>Unit offer</label>${rec ? '<span class="pr-line muted">—</span>' : `<input class="pr-cell r" type="number" min="0" step="0.01" value="${it.offer}" onchange="b2bItemEdit('${it.id}','offer',this.value)">`}</div>
+                <div class="f sm"><label>Line value</label><span class="pr-line" id="pln-${it.id}">${rec ? '—' : b2bMoney((Number(it.quantity)||0)*(Number(it.value)||0))}</span></div>
                 <button class="pr-del" title="Remove item" onclick="b2bItemDelete('${it.id}')">✕</button>
             </div>
             <div class="b2b-pcard-notes">
-                <div><label>Staff notes <span class="b2b-note-tag">internal</span></label><textarea class="pr-cell" rows="2" placeholder="Internal notes for the team…" onchange="b2bItemEdit('${it.id}','staff_notes',this.value)">${escapeHtml(it.staff_notes)}</textarea></div>
-                <div><label>Client notes <span class="b2b-note-tag client">prints on quote</span></label><textarea class="pr-cell" rows="2" placeholder="Notes the client will see on the quote…" onchange="b2bItemEdit('${it.id}','client_notes',this.value)">${escapeHtml(it.client_notes)}</textarea></div>
+                <div><label>Staff notes <span class="b2b-note-tag">internal</span></label><input class="pr-cell" placeholder="Internal note for the team…" value="${escapeHtml(it.staff_notes)}" onchange="b2bItemEdit('${it.id}','staff_notes',this.value)"></div>
+                <div><label>Client notes <span class="b2b-note-tag client">prints on quote</span></label>${b2bClientNotesField(it, 'price')}</div>
             </div>
-        </div>`).join('') : `<div class="pr-empty">No items yet — add the first one below.</div>`;
-    const totV = items.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.value) || 0), 0);
-    const totO = items.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.offer) || 0), 0);
+            <label class="b2b-recycle-toggle"><input type="checkbox" ${rec ? 'checked' : ''} onchange="b2bItemToggleRecycle('${it.id}',this.checked)"> ♻️ Recycle only — no offer / price</label>
+        </div>`;
+    }).join('') : `<div class="pr-empty">No items yet — add the first one below.</div>`;
+    const totV = items.reduce((s, i) => s + (i.recycle ? 0 : (Number(i.quantity) || 0) * (Number(i.value) || 0)), 0);
+    const totO = items.reduce((s, i) => s + (i.recycle ? 0 : (Number(i.quantity) || 0) * (Number(i.offer) || 0)), 0);
     const body = `<p class="b2b-help">Add every item received: brand, model, condition, quantity, unit resale value and our unit offer. Add staff/client notes per item, then submit to a DM/CEO to quote the client.</p>
         ${b2bSummaryHtml(deal)}
         <div class="b2b-pcards">${cards}</div>
@@ -6472,11 +6516,12 @@ function b2bRenderPrice(deal, items) {
     const valid = items.length > 0;
     const footer = `<button class="b2b-btn b2b-btn-secondary" onclick="closeAllModals()">Close</button>
         <button class="b2b-btn b2b-btn-primary" ${valid ? '' : 'disabled'} onclick="b2bSubmitPricing('${deal.id}')">Submit for quoting →</button>`;
-    b2bShowModal(`🏷️ Itemize &amp; price — ${escapeHtml(deal.company)}`, body, footer, { full: true });
+    b2bShowModal(`🏷️ Price — ${escapeHtml(deal.company)}`, body, footer, { full: true });
 }
 function b2bPricingRecalc() {
     let tv = 0, to = 0;
     b2bModalItems.forEach(it => {
+        if (it.recycle) return; // recycle-only lines carry no value/offer
         const lv = (Number(it.quantity) || 0) * (Number(it.value) || 0);
         to += (Number(it.quantity) || 0) * (Number(it.offer) || 0); tv += lv;
         const el = document.getElementById('pln-' + it.id); if (el) el.textContent = b2bMoney(lv);
@@ -6499,15 +6544,19 @@ async function b2bItemAdd(dealId) {
     await b2bPost({ action: 'add_item', deal_id: dealId, quantity: 1, value: 0, offer: 0 }, 'Could not add item');
     await openB2BModal('price', dealId); fetchB2BDealsQuiet();
 }
+async function b2bItemToggleRecycle(id, checked) {
+    await b2bPost({ action: 'update_item', id, recycle: checked }, 'Could not update item');
+    await openB2BModal('price', b2bModalDealId); fetchB2BDealsQuiet();
+}
 async function b2bSubmitPricing(id) {
     await b2bPost({ action: 'submit_pricing', id, priced_by: b2bUserName() }, 'Could not submit pricing');
     closeAllModals(); await fetchB2BDeals(); b2bToast('Priced — ready for a DM/CEO to quote');
 }
 
 /* quote (CEO/DM): single live-preview screen — edit each offer on the quote, then confirm */
-function b2bQuoteItemsTotal() { return b2bModalItems.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.offer) || 0), 0); }
+function b2bQuoteItemsTotal() { return b2bModalItems.reduce((s, i) => s + (i.recycle ? 0 : (Number(i.quantity) || 0) * (Number(i.offer) || 0)), 0); }
 function b2bRenderQuote(deal, items) {
-    const resale = items.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.value) || 0), 0);
+    const resale = items.reduce((s, i) => s + (i.recycle ? 0 : (Number(i.quantity) || 0) * (Number(i.value) || 0)), 0);
     const totOffer = b2bQuoteItemsTotal();
     const margin = resale - totOffer;
     const mp = resale > 0 ? Math.round(margin / resale * 100) : 0;
@@ -6529,7 +6578,7 @@ function b2bQuoteOfferEdit(id, value) {
     const line = it ? (Number(it.quantity) || 0) * (Number(it.offer) || 0) : 0;
     const set = (elid, txt) => { const e = document.getElementById(elid); if (e) e.textContent = txt; };
     set('qln-' + id, b2bMoney(line));                       // preview line total
-    const resale = b2bModalItems.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.value) || 0), 0);
+    const resale = b2bModalItems.reduce((s, i) => s + (i.recycle ? 0 : (Number(i.quantity) || 0) * (Number(i.value) || 0)), 0);
     const totOffer = b2bQuoteItemsTotal();
     set('qTotO', b2bMoney(totOffer));                       // stats: total offer
     set('qDocTotal', b2bMoney(totOffer));                   // preview footer total
@@ -6540,23 +6589,28 @@ function b2bQuoteOfferEdit(id, value) {
 async function b2bConfirmQuote(id) {
     await b2bPost({ action: 'generate_quote', id }, 'Could not save quote');
     await b2bPost({ action: 'email_quote', id }, 'Could not confirm quote');
-    closeAllModals(); await fetchB2BDeals(); b2bToast('Quote confirmed — awaiting client response');
+    await fetchB2BDeals();
+    b2bToast('Quote confirmed — review & send to the client');
+    // jump straight into the client confirmation window (don't just close)
+    openB2BModal('client', id);
 }
 
-/* plain-text quote the rep can copy + paste to the client */
+/* plain-text quote (fallback when rich HTML can't be placed on the clipboard) */
 function b2bQuoteText(deal, items) {
-    const payout = items.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.offer) || 0), 0);
-    const client = b2bClientForDeal(deal);
-    const attn = deal.contact || (client && client.contact) || '';
+    const payout = items.reduce((s, i) => s + (i.recycle ? 0 : (Number(i.quantity) || 0) * (Number(i.offer) || 0)), 0);
     const out = [];
     out.push(`PayMore Quote ${b2bQuoteNo(deal)}`);
-    out.push(`Prepared for: ${deal.company}${attn ? ` (Attn: ${attn})` : ''}`);
+    out.push(`Prepared for: ${deal.company}`);
     out.push(`Equipment picked up ${b2bFmtDate(deal.pickup_date)}`);
     out.push('');
     items.forEach(i => {
         const name = ((i.make || '') + (i.make && i.model ? ' ' : '') + (i.model || '')) || 'Item';
         const cond = i.condition ? ` [${i.condition}]` : '';
-        out.push(`• ${name}${cond} — Qty ${i.quantity} @ ${b2bMoney(i.offer)} = ${b2bMoney((Number(i.quantity) || 0) * (Number(i.offer) || 0))}`);
+        if (i.recycle) {
+            out.push(`• ${name}${cond} — Qty ${i.quantity} — Recycle (no offer)`);
+        } else {
+            out.push(`• ${name}${cond} — Qty ${i.quantity} @ ${b2bMoney(i.offer)} = ${b2bMoney((Number(i.quantity) || 0) * (Number(i.offer) || 0))}`);
+        }
         if (i.client_notes) out.push(`    ${i.client_notes}`);
     });
     out.push('');
@@ -6565,27 +6619,124 @@ function b2bQuoteText(deal, items) {
     out.push(`Issued by SPEEKS Technology — authorized PayMore franchisee.`);
     return out.join('\n');
 }
+/* email-safe HTML quote (table layout + inline styles) — pastes into Gmail & Outlook
+   keeping the SpeeksNet quote look. Mirrors b2bQuoteDoc; no Attn / Valid-until. */
+function b2bQuoteEmailHtml(deal, items) {
+    const esc = s => escapeHtml(s == null ? '' : String(s));
+    const payout = items.reduce((s, i) => s + (i.recycle ? 0 : (Number(i.quantity) || 0) * (Number(i.offer) || 0)), 0);
+    const dateStr = b2bFmtDate(new Date().toISOString().slice(0, 10));
+    const cellBase = 'padding:10px 12px;border-bottom:1px solid #eceff3;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#1f2937;';
+    const rowsHtml = items.map((i, idx) => {
+        const rec = !!i.recycle;
+        const name = ((i.make || '') + (i.make && i.model ? ' ' : '') + (i.model || '')) || 'Item';
+        const cond = i.condition ? ` — ${i.condition}` : '';
+        const note = i.client_notes ? `<div style="font-size:12px;color:#6b7280;margin-top:3px;">${esc(i.client_notes)}</div>` : '';
+        const lineOffer = rec ? 0 : (Number(i.quantity) || 0) * (Number(i.offer) || 0);
+        const offerCell = rec ? 'Recycle' : b2bMoney(i.offer);
+        const lineCell = rec ? '—' : b2bMoney(lineOffer);
+        const bg = idx % 2 ? 'background:#f9fafb;' : 'background:#ffffff;';
+        return `<tr>
+            <td style="${cellBase}${bg}">${esc(name)}${esc(cond)}${note}</td>
+            <td align="right" style="${cellBase}${bg}">${i.quantity}</td>
+            <td align="right" style="${cellBase}${bg}">${offerCell}</td>
+            <td align="right" style="${cellBase}${bg}font-weight:bold;">${lineCell}</td>
+        </tr>`;
+    }).join('');
+    const store = deal.assigned_store ? ` &middot; ${esc(deal.assigned_store)} location` : '';
+    const th = 'padding:9px 12px;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;font-size:11px;font-weight:bold;text-transform:uppercase;letter-spacing:0.4px;color:#374151;border-bottom:1px solid #e5e7eb;';
+    return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="width:600px;max-width:600px;border-collapse:collapse;border:1px solid #e5e7eb;font-family:Arial,Helvetica,sans-serif;background:#ffffff;">
+      <tr><td style="padding:22px 24px;border-bottom:3px solid #16a34a;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr>
+          <td valign="top">
+            <div style="font-size:24px;font-weight:bold;color:#111827;letter-spacing:-0.5px;">Pay<span style="color:#16a34a;">More</span></div>
+            <div style="font-size:12px;color:#6b7280;margin-top:2px;">Buy &middot; Sell &middot; Recycle Electronics</div>
+          </td>
+          <td valign="top" align="right">
+            <div style="font-size:18px;font-weight:bold;color:#111827;">QUOTE</div>
+            <div style="font-size:12px;color:#374151;margin-top:4px;"><b>${esc(b2bQuoteNo(deal))}</b></div>
+            <div style="font-size:12px;color:#6b7280;">${esc(dateStr)}</div>
+          </td>
+        </tr></table>
+      </td></tr>
+      <tr><td style="padding:18px 24px 6px 24px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr>
+          <td valign="top" width="50%">
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;font-weight:bold;">Prepared for</div>
+            <div style="font-size:15px;font-weight:bold;color:#111827;margin-top:2px;">${esc(deal.company)}</div>
+          </td>
+          <td valign="top" width="50%">
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;font-weight:bold;">Issued by</div>
+            <div style="font-size:15px;font-weight:bold;color:#111827;margin-top:2px;">SPEEKS Technology</div>
+            <div style="font-size:12px;color:#6b7280;">Authorized PayMore franchisee${store}</div>
+            <div style="font-size:12px;color:#6b7280;">Equipment picked up ${esc(b2bFmtDate(deal.pickup_date))}</div>
+          </td>
+        </tr></table>
+      </td></tr>
+      <tr><td style="padding:14px 24px 24px 24px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;border:1px solid #e5e7eb;">
+          <tr>
+            <td style="${th}">Description</td>
+            <td align="right" style="${th}">Qty</td>
+            <td align="right" style="${th}">Unit offer</td>
+            <td align="right" style="${th}">Line total</td>
+          </tr>
+          ${rowsHtml || `<tr><td colspan="4" style="padding:14px;text-align:center;color:#9ca3af;font-family:Arial,Helvetica,sans-serif;font-size:13px;">No items.</td></tr>`}
+          <tr>
+            <td colspan="3" align="right" style="padding:12px;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:bold;color:#111827;background:#f9fafb;">Total offer</td>
+            <td align="right" style="padding:12px;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;color:#16a34a;background:#f9fafb;">${b2bMoney(payout)}</td>
+          </tr>
+        </table>
+        <div style="font-size:11px;color:#9ca3af;font-family:Arial,Helvetica,sans-serif;margin-top:14px;">Issued by SPEEKS Technology — authorized PayMore franchisee.</div>
+      </td></tr>
+    </table>`;
+}
 async function b2bCopyQuote(id) {
     const deal = b2bDealsCache.find(d => d.id === id);
     if (!deal) return;
+    const html = b2bQuoteEmailHtml(deal, b2bModalItems);
     const text = b2bQuoteText(deal, b2bModalItems);
+    // modern path: place rich HTML + a plain-text fallback on the clipboard
     try {
-        await navigator.clipboard.writeText(text);
-        b2bToast('Quote copied — paste it to the client');
-    } catch (e) {
-        const ta = document.createElement('textarea');
-        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-        document.body.appendChild(ta); ta.focus(); ta.select();
-        try { document.execCommand('copy'); b2bToast('Quote copied — paste it to the client'); }
-        catch (_) { alert('Could not copy automatically — please copy the quote manually.'); }
-        ta.remove();
-    }
+        if (navigator.clipboard && window.ClipboardItem) {
+            await navigator.clipboard.write([new ClipboardItem({
+                'text/html':  new Blob([html], { type: 'text/html' }),
+                'text/plain': new Blob([text], { type: 'text/plain' }),
+            })]);
+            b2bToast('Quote copied — paste into Gmail or Outlook');
+            return;
+        }
+    } catch (e) { /* fall through to selection copy */ }
+    // fallback: copy a live rich selection (older browsers / restricted clipboard)
+    const holder = document.createElement('div');
+    holder.contentEditable = 'true';
+    holder.innerHTML = html;
+    holder.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+    document.body.appendChild(holder);
+    const range = document.createRange();
+    range.selectNodeContents(holder);
+    const sel = window.getSelection();
+    sel.removeAllRanges(); sel.addRange(range);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (_) {}
+    sel.removeAllRanges(); holder.remove();
+    if (ok) { b2bToast('Quote copied — paste into Gmail or Outlook'); return; }
+    try { await navigator.clipboard.writeText(text); b2bToast('Quote copied (text)'); }
+    catch (_) { alert('Could not copy automatically — please copy the quote manually.'); }
 }
 
 /* awaiting client (CEO/DM) */
 function b2bRenderClient(deal, items) {
-    const body = `<p class="b2b-help">Use <b>📋 Copy quote</b> to grab quote <b>${b2bQuoteNo(deal)}</b> and send it to <b>${escapeHtml(deal.contact || 'the client')}</b>. Once they reply, log their response below.</p>
+    // internal review: see staff (internal) notes and tweak client notes before sending
+    const review = items.map(it => `
+        <div class="b2b-confirm-item${it.recycle ? ' recycle' : ''}">
+            <div class="b2b-confirm-head"><b>${b2bItemName(it)}</b>${it.recycle ? ' <span class="b2b-cond-tag recycle">♻️ Recycle</span>' : ''}${it.condition ? ` <span class="b2b-cond-tag">${escapeHtml(it.condition)}</span>` : ''} <span class="b2b-ci-qty">×${it.quantity}</span></div>
+            ${it.staff_notes ? `<div class="b2b-it-note staff">🔒 Internal: ${escapeHtml(it.staff_notes)}</div>` : ''}
+            <label class="b2b-ci-lbl">Client notes <span class="b2b-note-tag client">prints on quote</span></label>
+            ${b2bClientNotesField(it, 'confirm')}
+        </div>`).join('') || '<div class="pr-empty">No items on this deal.</div>';
+    const body = `<p class="b2b-help">Review internal notes and adjust what the client will see, then <b>📋 Copy quote</b> (pastes into Gmail/Outlook) for quote <b>${b2bQuoteNo(deal)}</b>. Log their response once they reply.</p>
         <div class="client-banner">📋 Ready to send · ${escapeHtml(deal.company)} — total offer <b>${b2bMoney(b2bPayout(deal))}</b></div>
+        <details class="b2b-confirm-review" open><summary>📝 Internal review · edit client notes · see staff notes</summary>${review}</details>
         ${b2bQuoteDoc(deal, items)}`;
     const footer = `<button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote('${deal.id}')">📋 Copy quote</button>
         <button class="b2b-btn b2b-btn-ghost" onclick="b2bClientResponse('${deal.id}',false)">✕ Client declined</button>
@@ -6639,26 +6790,29 @@ function b2bViewQuoteOnly(id) {
 /* formal PayMore quote — per-line offer comes straight from each item's offer.
    editable=true turns the Unit offer column into live inputs (used during the Quote stage). */
 function b2bQuoteDoc(deal, items, editable) {
-    const payout = items.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.offer) || 0), 0);
+    const payout = items.reduce((s, i) => s + (i.recycle ? 0 : (Number(i.quantity) || 0) * (Number(i.offer) || 0)), 0);
     const rows = items.map(i => {
-        const lineOffer = (Number(i.quantity) || 0) * (Number(i.offer) || 0);
-        const desc = `${b2bItemName(i)}${i.condition ? ` <span class="b2b-cond-tag">${escapeHtml(i.condition)}</span>` : ''}${i.client_notes ? `<div class="quote-line-note">${escapeHtml(i.client_notes)}</div>` : ''}`;
-        const offerCell = editable
-            ? `<input class="pr-cell r b2b-offer-cell" type="number" min="0" step="0.01" value="${i.offer}" onchange="b2bQuoteOfferEdit('${i.id}',this.value)">`
-            : b2bMoney(i.offer);
+        const rec = !!i.recycle;
+        const lineOffer = rec ? 0 : (Number(i.quantity) || 0) * (Number(i.offer) || 0);
+        const desc = `${b2bItemName(i)}${rec ? ' <span class="b2b-cond-tag recycle">♻️ Recycle</span>' : ''}${i.condition ? ` <span class="b2b-cond-tag">${escapeHtml(i.condition)}</span>` : ''}${i.client_notes ? `<div class="quote-line-note">${escapeHtml(i.client_notes)}</div>` : ''}`;
+        const offerCell = rec
+            ? '<span class="q-recycle">Recycle</span>'
+            : (editable
+                ? `<input class="pr-cell r b2b-offer-cell" type="number" min="0" step="0.01" value="${i.offer}" onchange="b2bQuoteOfferEdit('${i.id}',this.value)">`
+                : b2bMoney(i.offer));
+        const lineCell = rec ? '<span class="q-recycle">—</span>' : b2bMoney(lineOffer);
         return `<tr><td>${desc}</td>
-            <td class="r">${i.quantity}</td><td class="r">${offerCell}</td><td class="r" id="qln-${i.id}">${b2bMoney(lineOffer)}</td></tr>`;
+            <td class="r">${i.quantity}</td><td class="r">${offerCell}</td><td class="r" id="qln-${i.id}">${lineCell}</td></tr>`;
     }).join('');
     return `<div class="quote" id="b2bQuoteDoc">
         <div class="quote-head">
             <div><div class="quote-logo">Pay<span>More</span></div><div class="quote-tag">Buy · Sell · Recycle Electronics</div></div>
             <div class="quote-meta"><div class="qm-title">Quote</div>
                 <div class="qm-row"><span>Quote #</span><b>${b2bQuoteNo(deal)}</b></div>
-                <div class="qm-row"><span>Date</span><b>${b2bFmtDate(new Date().toISOString().slice(0, 10))}</b></div>
-                <div class="qm-row"><span>Valid until</span><b>14 days</b></div></div>
+                <div class="qm-row"><span>Date</span><b>${b2bFmtDate(new Date().toISOString().slice(0, 10))}</b></div></div>
         </div>
         <div class="quote-parties">
-            <div><div class="qp-label">Prepared for</div><div class="qp-co">${escapeHtml(deal.company)}</div><div class="qp-line">Attn: ${escapeHtml(deal.contact || '—')}</div></div>
+            <div><div class="qp-label">Prepared for</div><div class="qp-co">${escapeHtml(deal.company)}</div></div>
             <div><div class="qp-label">Issued by</div><div class="qp-co">SPEEKS Technology</div>
                 <div class="qp-line">Authorized PayMore franchisee${deal.assigned_store ? ' · ' + deal.assigned_store + ' location' : ''}</div>
                 <div class="qp-line">Equipment picked up ${b2bFmtDate(deal.pickup_date)}</div></div>
