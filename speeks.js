@@ -41,6 +41,7 @@ const AUTH_URL          = `${_BASE}/auth`;
 const RECORDS_URL       = `${_BASE}/records`;
 const QUICK_MSG_URL     = `${_BASE}/quick-messages`;
 const GOALS_API_URL     = `${_BASE}/listing-goals`;
+const STORE_TARGETS_URL = `${_BASE}/store-targets`;
 const SCORECARD_URL     = `${_BASE}/scorecard`;
 const EBAY_ALERTS_URL   = `${_BASE}/ebay-alerts`;
 const STORE_COMMENT_URL = `${_BASE}/store-comments`;
@@ -5555,7 +5556,8 @@ async function markListingGoalsChecklistComplete() {
 
 // ---- Inline manager scoreboard: pick roles → auto goals, weekly results, level-up ----
 async function fetchManagerWeeklyKpi() {
-    managerWeeklyHistory = await fetchStoreWeeklyHistory(goalsTargetStore);
+    await fetchStoreTarget(goalsTargetStore);
+    managerWeeklyHistory = weeksFor(goalsTargetStore);
 }
 
 function getWeeklyResultFor(emp) {
@@ -5586,7 +5588,7 @@ function renderManagerGoals() {
     const availableRoles = goalsRoster.length <= 2 ? ['B1', 'B2', 'L1'] : ['B1', 'B2', 'L1', 'L2'];
 
     _priorWeekGoals = {};
-    _weekTargetTotal = ListingGoalsEngine.weeklyTarget(goalsRoster.length);
+    _weekTargetTotal = targetFor(goalsTargetStore);
     const storeTargetEl = document.getElementById('goals-store-target');
     if (storeTargetEl) storeTargetEl.innerText = `Goal: ${_weekTargetTotal} Listings`;
 
@@ -5649,6 +5651,45 @@ function storeRosterSize(store) {
     } catch (e) { return 4; }
 }
 
+// Persisted per-store target + flag + last-4-week totals (server-side ratchet).
+let _storeTargets = {}; // store -> { target, base, flag, weeks:[{week,total}] }
+
+async function fetchStoreTarget(store) {
+    try {
+        const r = await fetch(`${STORE_TARGETS_URL}?store=${store}&v=${Date.now()}`).then(x => x.json());
+        if (r && r.store) _storeTargets[r.store] = r;
+        return r;
+    } catch (e) { return null; }
+}
+async function fetchAllStoreTargets() {
+    try {
+        const arr = await fetch(`${STORE_TARGETS_URL}?v=${Date.now()}`).then(x => x.json());
+        if (Array.isArray(arr)) arr.forEach(r => { if (r && r.store) _storeTargets[r.store] = r; });
+        return arr || [];
+    } catch (e) { return []; }
+}
+// Current weekly target for a store (server value; falls back to roster-derived base).
+function targetFor(store) {
+    return (_storeTargets[store] && _storeTargets[store].target) || ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
+}
+// Last-4 completed-week listing totals (oldest→newest) for the bars.
+function weeksFor(store) {
+    return ((_storeTargets[store] && _storeTargets[store].weeks) || []).map(w => w.total);
+}
+// DM action on a flagged store: 'lower' (−10) or 'keep' (hold). Resolves the flag.
+async function dmGoalAction(store, action) {
+    try {
+        await fetch(STORE_TARGETS_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ store, action })
+        });
+        await fetchStoreTarget(store);
+        renderCompactDmGoals();
+    } catch (e) {}
+}
+window.dmGoalAction = dmGoalAction;
+
 // Completed-week store listing totals (oldest→newest) from the Weekly KPI.
 async function fetchStoreWeeklyHistory(store) {
     try {
@@ -5681,7 +5722,7 @@ function levelUpHtml(history, target) {
 function renderGoalsLevelUp() {
     const el = document.getElementById('goals-levelup');
     if (!el) return;
-    el.innerHTML = levelUpHtml(managerWeeklyHistory, ListingGoalsEngine.weeklyTarget(goalsRoster.length));
+    el.innerHTML = levelUpHtml(managerWeeklyHistory, targetFor(goalsTargetStore));
 }
 
 // --- DM COMPACT GOALS WIDGET ---
@@ -5694,13 +5735,13 @@ async function fetchDmGoalsData() {
     const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 
     try {
-        const [goalsResults, histResults] = await Promise.all([
+        const [goalsResults] = await Promise.all([
             Promise.all(stores.map(s => fetch(`${GOALS_API_URL}?store=${s}&v=${Date.now()}`).then(r => r.json()))),
-            Promise.all(stores.map(s => fetchStoreWeeklyHistory(s)))
+            fetchAllStoreTargets()
         ]);
         allDistrictGoalsData = goalsResults.flat();
         dmStoreHistory = {};
-        stores.forEach((s, i) => { dmStoreHistory[s] = histResults[i]; });
+        stores.forEach(s => { dmStoreHistory[s] = weeksFor(s); });
         renderCompactDmGoals();
     } catch (e) {
         cont.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Network Sync Failed.</div>';
@@ -5743,7 +5784,8 @@ function renderCompactDmGoals() {
     let html = '<div style="display:flex; flex-direction:column;">';
 
     stores.forEach((store, idx) => {
-        const target = ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
+        const target = targetFor(store);
+        const flag = (_storeTargets[store] && _storeTargets[store].flag) || 'none';
         const storeData = allDistrictGoalsData.filter(r => r.store === store);
 
         // Per-employee today + weekly goals (last record per day wins). Read-only.
@@ -5769,7 +5811,7 @@ function renderCompactDmGoals() {
         html += `
         <div onclick="toggleDmStoreAccordion('${store}')" class="lb-row dm-store-head" style="display:grid; grid-template-columns:60px 1fr auto 18px; align-items:center; gap:12px; border-bottom:1px solid ${lastBorder}; cursor:pointer; padding:13px 15px; ${muted}">
             <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal);">${store}</span>
-            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal); text-transform:uppercase; letter-spacing:0.04em;">Goal: ${target} Listings</span>
+            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal); text-transform:uppercase; letter-spacing:0.04em;">Goal: ${target} Listings${flag === 'flagged' ? ' <span class="dm-flag-badge">⚠ Review</span>' : ''}</span>
             <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal); text-align:right;">${weekTotal}<span style="font-size:14px; color:var(--slate-charcoal); font-weight:900;"> wk</span></span>
             <div id="dm-caret-${store}" class="dm-store-caret" style="text-align:right; color:#888; font-size:10px; font-weight:800; transition:transform 0.3s; transform:rotate(-90deg);">▼</div>
         </div>`;
@@ -5795,6 +5837,13 @@ function renderCompactDmGoals() {
 
         html += `<div class="goals-total-row"><span class="goals-total-lbl">Total</span><span class="goals-total-val target">${todayTotal}</span><span class="goals-total-val target">${weekTotal}</span></div>`;
         html += `<div class="goals-levelup">${levelUpHtml(dmStoreHistory[store] || [], target)}</div>`;
+        if (flag === 'flagged') {
+            html += `<div class="dm-flag-actions">
+                <span class="dm-flag-msg">⚠️ Missed goal 2 weeks — review:</span>
+                <button class="dm-flag-btn lower" onclick="event.stopPropagation(); dmGoalAction('${store}','lower')">Lower −10</button>
+                <button class="dm-flag-btn keep" onclick="event.stopPropagation(); dmGoalAction('${store}','keep')">Keep</button>
+            </div>`;
+        }
         html += `</div>`;
     });
 
@@ -6059,12 +6108,12 @@ async function fetchAndRenderEmployeeGoals() {
         `;
 
         // Store goal in the header + level-up bar (mirrors the manager widget).
-        const empTarget = ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
+        await fetchStoreTarget(store);
+        const empTarget = targetFor(store);
         const empStoreTargetEl = document.getElementById('emp-goals-store-target');
         if (empStoreTargetEl) empStoreTargetEl.innerText = `Goal: ${empTarget} Listings`;
-        const empHistory = await fetchStoreWeeklyHistory(store);
         const empLuEl = document.getElementById('emp-goals-levelup');
-        if (empLuEl) empLuEl.innerHTML = levelUpHtml(empHistory, empTarget);
+        if (empLuEl) empLuEl.innerHTML = levelUpHtml(weeksFor(store), empTarget);
     } catch (e) {
         container.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to sync goals.</div>';
     }

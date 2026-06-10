@@ -2921,6 +2921,16 @@ body.is-authenticated .info-ticker { display: flex; }
 .dm-store-roster .goals-mgr-week,
 .dm-store-roster .goals-total-lbl,
 .dm-store-roster .goals-total-val { font-size: 14px; font-weight: 800; color: var(--slate-charcoal); }
+
+/* DM flag for review + Lower/Keep controls */
+.dm-flag-badge { font-size: 9px; font-weight: 900; color: #fff; background: #ef4444; padding: 2px 6px; border-radius: 5px; letter-spacing: 0; vertical-align: middle; }
+.dm-flag-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px dashed #e2e8f0; }
+.dm-flag-msg { font-size: 11px; font-weight: 800; color: #991b1b; }
+.dm-flag-btn { border: none; border-radius: 7px; padding: 6px 12px; font-size: 11px; font-weight: 800; cursor: pointer; font-family: inherit; }
+.dm-flag-btn.lower { background: #fee2e2; color: #991b1b; }
+.dm-flag-btn.lower:hover { background: #fecaca; }
+.dm-flag-btn.keep { background: #e2e8f0; color: var(--slate-charcoal); }
+.dm-flag-btn.keep:hover { background: #cbd5e1; }
 .goals-total-val .gt-target { font-size: 9px; font-weight: 800; color: #94a3b8; margin-left: 2px; }
 
 /* Level-up bars (above the total) */

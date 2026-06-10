@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Listing Goals — Multi-Week Simulator</title>
+<style>
+  :root{
+    --charcoal:#1e293b; --slate:#64748b; --line:#eef2f6; --bg:#f4f6f9;
+    --green-bg:#d1fae5; --green-tx:#065f46; --sage:#10b981;
+    --red-bg:#fee2e2; --red-tx:#991b1b; --red:#ef4444;
+    --gold-bg:#fef3c7; --gold-tx:#92400e; --gold:#f59e0b;
+    --neutral-bg:#f1f5f9; --neutral-tx:#64748b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--charcoal);padding:24px;line-height:1.45;max-width:1100px;margin:0 auto}
+  h1{font-size:22px;font-weight:900;margin-bottom:4px}
+  .sub{color:var(--slate);font-size:13px;margin-bottom:18px}
+  .card{background:#fff;border-radius:16px;box-shadow:0 4px 18px rgba(15,23,42,.06);padding:18px 20px;margin-bottom:18px}
+  .card h2{font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.05em;color:var(--charcoal);margin-bottom:14px}
+  .row{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end}
+  .ctrl label{display:block;font-size:10px;font-weight:800;text-transform:uppercase;color:var(--slate);margin-bottom:5px;letter-spacing:.04em}
+  input[type=number]{width:90px;padding:8px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:14px;font-weight:800;font-family:inherit}
+  .seg{display:inline-flex;background:var(--neutral-bg);border-radius:8px;padding:3px}
+  .seg button{border:none;background:transparent;padding:7px 13px;font-size:12px;font-weight:800;border-radius:6px;cursor:pointer;color:var(--slate)}
+  .seg button.active{background:#fff;color:var(--charcoal);box-shadow:0 1px 4px rgba(0,0,0,.08)}
+  .btn{border:none;border-radius:9px;padding:10px 16px;font-size:13px;font-weight:800;cursor:pointer;font-family:inherit}
+  .btn-primary{background:var(--charcoal);color:#fff}
+  .btn-green{background:var(--sage);color:#fff}
+  .btn-red{background:var(--red);color:#fff}
+  .btn-ghost{background:var(--neutral-bg);color:var(--charcoal)}
+  .btn:hover{filter:brightness(1.05)}
+
+  /* current state */
+  .state{display:flex;gap:16px;flex-wrap:wrap}
+  .state .box{flex:1;min-width:150px;background:var(--neutral-bg);border-radius:12px;padding:14px 16px;text-align:center}
+  .state .lbl{font-size:10px;font-weight:800;color:var(--slate);text-transform:uppercase;letter-spacing:.04em}
+  .state .val{font-size:30px;font-weight:900;display:block;margin-top:2px}
+  .state .val small{font-size:13px;color:var(--slate);font-weight:700}
+  .streak-pips{display:inline-flex;gap:4px;margin-top:8px}
+  .pip{width:12px;height:12px;border-radius:50%;background:#cbd5e1}
+  .pip.hit{background:var(--sage)} .pip.miss{background:var(--red)}
+
+  /* week bars (mirror the real widget) */
+  .weeks{display:flex;gap:8px;margin-top:6px}
+  .wk{flex:1;border-radius:6px;background:#eef2f6;height:46px;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .wk.green{background:var(--sage)} .wk.red{background:var(--red)} .wk.empty{background:#eef2f6}
+  .wk .n{font-size:15px;font-weight:900;color:#fff}
+  .wk.empty .n{color:#cbd5e1}
+  .wk .t{font-size:9px;font-weight:700;color:rgba(255,255,255,.85)}
+  .wk-labels{display:flex;gap:8px;margin-top:4px}
+  .wk-labels span{flex:1;text-align:center;font-size:9px;font-weight:800;color:var(--slate);text-transform:uppercase}
+
+  /* history table */
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:4px}
+  th,td{padding:7px 8px;text-align:center;border-bottom:1px solid var(--line)}
+  th{font-size:10px;font-weight:800;color:var(--slate);text-transform:uppercase}
+  td.up{color:var(--green-tx);font-weight:800}
+  td.down{color:var(--red-tx);font-weight:800}
+  .pass{color:var(--green-tx);font-weight:800}
+  .fail{color:var(--red-tx);font-weight:800}
+
+  /* log */
+  .log{font-size:12px;font-weight:600}
+  .log div{padding:6px 0;border-bottom:1px dashed var(--line)}
+  .log .up{color:var(--green-tx)} .log .down{color:var(--red-tx)} .log .flag{color:var(--gold-tx)}
+  .log .reset{color:var(--slate)}
+  .muted{color:var(--slate);font-size:12px;font-style:italic}
+
+  /* daily breakdown */
+  .daily{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  .daily .d{flex:1;min-width:90px;background:#f8fafc;border-radius:8px;padding:8px;text-align:center}
+  .daily .d .dl{font-size:10px;font-weight:800;color:var(--slate)}
+  .daily .d .dv{font-size:18px;font-weight:900}
+  .note{font-size:11px;color:var(--slate);margin-top:10px}
+  .hint{background:#f8fafc;border-left:3px solid var(--sage);padding:9px 12px;border-radius:0 8px 8px 0;font-size:12px;color:var(--slate);font-weight:600;margin-bottom:14px}
+</style>
+</head>
+<body>
+
+<h1>Listing Goals — Multi-Week Simulator</h1>
+<div class="sub">Fast-forward through weeks to see exactly how the reset, the 4-week display, and the goal increase/decrease behave — without waiting for real weeks. Each "Advance to Monday" = the week closes at Mon 12:00 AM, the actual is recorded, and a fresh week begins.</div>
+
+<div class="hint">⚙️ <b>The rules are the knobs below.</b> Tune them, run weeks, and watch the log. This is a sandbox to lock down the exact ratchet rules before they're built into the backend — nothing here touches the live app.</div>
+
+<!-- RULES -->
+<div class="card">
+  <h2>Rules</h2>
+  <div class="row">
+    <div class="ctrl">
+      <label>Store size</label>
+      <div class="seg" id="seg-size">
+        <button data-size="4" class="active">4-person (190)</button>
+        <button data-size="3">3-person (170)</button>
+      </div>
+    </div>
+    <div class="ctrl"><label>Base target / wk</label><input type="number" id="r-base" value="190" step="5"></div>
+    <div class="ctrl"><label>Step (+/–)</label><input type="number" id="r-step" value="10" step="5"></div>
+    <div class="ctrl"><label>Hits in a row to RAISE</label><input type="number" id="r-up" value="2" min="1"></div>
+    <div class="ctrl"><label>Misses in a row to LOWER<br><span style="font-weight:600;text-transform:none">(0 = never lower, flag only)</span></label><input type="number" id="r-down" value="0" min="0"></div>
+    <button class="btn btn-ghost" onclick="resetSim()">↺ Reset simulation</button>
+  </div>
+</div>
+
+<!-- CURRENT STATE -->
+<div class="card">
+  <h2>Where the store is now</h2>
+  <div class="state">
+    <div class="box"><span class="lbl">Current Week</span><span class="val" id="s-week">1</span></div>
+    <div class="box"><span class="lbl">This Week's Target</span><span class="val" id="s-target">190</span></div>
+    <div class="box"><span class="lbl">Streak</span><span class="val" id="s-streak" style="font-size:20px;padding-top:6px">—</span><div class="streak-pips" id="s-pips"></div></div>
+  </div>
+</div>
+
+<!-- ADVANCE -->
+<div class="card">
+  <h2>Close out this week → next Monday</h2>
+  <div class="row">
+    <div class="ctrl"><label>This week's actual # Listed</label><input type="number" id="a-actual" value="190" step="5"></div>
+    <button class="btn btn-green" onclick="advancePreset('hit')">✓ Auto-hit &amp; advance</button>
+    <button class="btn btn-red" onclick="advancePreset('miss')">✗ Auto-miss &amp; advance</button>
+    <button class="btn btn-primary" onclick="advanceCustom()">▶ Advance with entered #</button>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <span class="muted">Quick runs:</span>
+    <button class="btn btn-ghost" onclick="run(['hit','hit','hit','hit'])">4 weeks hitting</button>
+    <button class="btn btn-ghost" onclick="run(['miss','miss','miss'])">3 weeks missing</button>
+    <button class="btn btn-ghost" onclick="run(['hit','miss','hit','miss'])">alternating</button>
+    <button class="btn btn-ghost" onclick="run(['hit','hit','miss','hit','hit'])">recover</button>
+  </div>
+  <div class="note">Hit = actual ≥ this week's target. Miss = below. As the target rises, hitting gets harder — exactly like the real thing.</div>
+</div>
+
+<!-- 4-WEEK DISPLAY -->
+<div class="card">
+  <h2>What the widget shows — Last 4 Weeks</h2>
+  <div class="weeks" id="bars"></div>
+  <div class="wk-labels" id="bar-labels"></div>
+  <div class="note">This is the exact view managers/employees see: the last four completed weeks, green if the store hit that week's target, red if it missed. No leveling-up wording is shown — the increase happens quietly in the backend.</div>
+</div>
+
+<!-- DAILY GOALS AT CURRENT TARGET -->
+<div class="card">
+  <h2>Daily goals at the current target <span class="muted" id="daily-cap"></span></h2>
+  <div class="daily" id="daily"></div>
+  <div class="note">These are the per-role daily goals derived from the current weekly target. When the target rises, every daily goal rises with it. Daily goals reset to a fresh week every Monday — the week accumulates Mon → Sat.</div>
+</div>
+
+<!-- HISTORY -->
+<div class="card">
+  <h2>Week-by-week history</h2>
+  <table id="hist">
+    <thead><tr><th>Week</th><th>Target that week</th><th>Actual</th><th>Result</th><th>Goal change after</th></tr></thead>
+    <tbody id="hist-body"></tbody>
+  </table>
+  <div class="muted" id="hist-empty" style="padding:10px 0">No weeks completed yet — advance a week to begin.</div>
+</div>
+
+<!-- LOG -->
+<div class="card">
+  <h2>Goal-change log</h2>
+  <div class="log" id="log"><div class="reset">Simulation started — target locked at the base until the rules fire.</div></div>
+</div>
+
+<script>
+/* ======================================================================
+   The simulator state + ratchet rules. This is the candidate spec for the
+   backend: a one-way (or two-way) target ratchet evaluated each Monday.
+   ====================================================================== */
+const sim = {
+  size: 4, base: 190, step: 10, hitsUp: 2, missDown: 0,
+  target: 190, week: 1,
+  hitStreak: 0, missStreak: 0,
+  history: [],   // [{week, target, actual, hit, change}]
+  log: []
+};
+
+/* ---- engine: daily role goals from the weekly target (same math as app) ---- */
+const ROLE_W = { B1:5, B2:8, L1:25, L2:25, L1S:15 };
+const SAT = 0.5;
+function stdWeek(size){
+  return size>=4
+    ? {Mon:['B1','B2','L1'],Tue:['B1','B2','L1'],Wed:['B1','B2','L1'],Thu:['B1','B2','L1'],Fri:['B1','B2','L1','L2'],Sat:['B1','B2','L1','L2']}
+    : {Mon:['B1','L1'],Tue:['B1','L1'],Wed:['B1','L1'],Thu:['B1','B2','L1'],Fri:['B1','B2','L1'],Sat:['B1','B2','L1']};
+}
+function wFor(r,n){ if(r==='L1'&&n<=2) return ROLE_W.L1S; return ROLE_W[r]||0; }
+function scale(size,target){
+  const wk=stdWeek(size); const f={Mon:1,Tue:1,Wed:1,Thu:1,Fri:1,Sat:SAT}; let cap=0;
+  for(const d in wk){ wk[d].forEach(r=>cap+=wFor(r,wk[d].length)*f[d]); }
+  return cap>0?target/cap:0;
+}
+function dailyGoal(role,size,target,sat){ return Math.round(wFor(role,4)*scale(size,target)*(sat?SAT:1)); }
+
+/* ---- core: advance one week ---- */
+function advance(actual){
+  const appliedTarget = sim.target;            // the target this week was judged against
+  const hit = actual >= appliedTarget;
+  if (hit){ sim.hitStreak++; sim.missStreak=0; } else { sim.missStreak++; sim.hitStreak=0; }
+
+  // Evaluate the ratchet at Monday close.
+  let change = '';
+  if (sim.hitStreak >= sim.hitsUp){
+    const old=sim.target; sim.target += sim.step;
+    sim.log.unshift({t:'up', m:`Week ${sim.week}: hit goal ${sim.hitStreak} weeks running → target RAISED ${old} → ${sim.target}`});
+    sim.hitStreak = 0; change='up';
+  } else if (sim.missDown>0 && sim.missStreak >= sim.missDown){
+    const old=sim.target; sim.target = Math.max(sim.base, sim.target - sim.step);
+    if (sim.target!==old){ sim.log.unshift({t:'down', m:`Week ${sim.week}: missed ${sim.missStreak} weeks running → target LOWERED ${old} → ${sim.target}`}); change='down'; }
+    sim.missStreak = 0;
+  } else if (!hit && sim.missDown===0 && sim.missStreak>=2){
+    sim.log.unshift({t:'flag', m:`Week ${sim.week}: missed ${sim.missStreak} weeks running → FLAGGED for manager/DM review (target held)`});
+  }
+
+  sim.history.push({ week: sim.week, target: appliedTarget, actual, hit, change });
+  sim.log.unshift({t:'reset', m:`Monday 12:00 AM — Week ${sim.week} closed (${actual} listed). Week ${sim.week+1} begins fresh; daily goals reset.`});
+  sim.week++;
+  render();
+}
+
+function advanceCustom(){ advance(Number(document.getElementById('a-actual').value)||0); }
+function advancePreset(kind){
+  const actual = kind==='hit' ? sim.target + 5 : Math.max(0, sim.target - 25);
+  advance(actual);
+}
+function run(seq){ seq.forEach(k=>{ const a = k==='hit'? sim.target+5 : Math.max(0,sim.target-25); advance(a); }); }
+
+function resetSim(){
+  sim.size = +document.querySelector('#seg-size .active').dataset.size;
+  sim.base = Number(document.getElementById('r-base').value)||190;
+  sim.step = Number(document.getElementById('r-step').value)||10;
+  sim.hitsUp = Math.max(1, Number(document.getElementById('r-up').value)||2);
+  sim.missDown = Math.max(0, Number(document.getElementById('r-down').value)||0);
+  sim.target = sim.base; sim.week = 1; sim.hitStreak=0; sim.missStreak=0;
+  sim.history = []; sim.log = [{t:'reset', m:'Simulation reset — target at base.'}];
+  document.getElementById('a-actual').value = sim.base;
+  render();
+}
+
+/* ---- render ---- */
+function render(){
+  document.getElementById('s-week').innerText = sim.week;
+  document.getElementById('s-target').innerText = sim.target;
+
+  // streak indicator
+  const onHit = sim.hitStreak>0;
+  const cnt = onHit ? sim.hitStreak : sim.missStreak;
+  document.getElementById('s-streak').innerText = cnt===0 ? '—' : (onHit? `${cnt} hit` : `${cnt} miss`);
+  let pips='';
+  const need = onHit ? sim.hitsUp : (sim.missDown||2);
+  for(let i=0;i<need;i++) pips += `<span class="pip ${i<cnt?(onHit?'hit':'miss'):''}"></span>`;
+  document.getElementById('s-pips').innerHTML = pips;
+
+  // 4-week bars
+  const last4 = sim.history.slice(-4);
+  const pad = [...Array(Math.max(0,4-last4.length)).fill(null), ...last4];
+  document.getElementById('bars').innerHTML = pad.map(w => w==null
+    ? '<div class="wk empty"><span class="n">–</span></div>'
+    : `<div class="wk ${w.hit?'green':'red'}"><span class="n">${w.actual}</span><span class="t">goal ${w.target}</span></div>`).join('');
+  document.getElementById('bar-labels').innerHTML = pad.map(w => `<span>${w==null?'—':'Wk '+w.week}</span>`).join('');
+
+  // daily goals at current target
+  document.getElementById('daily-cap').innerText = `(weekly target ${sim.target})`;
+  const roles = sim.size>=4 ? [['Buyer 1','B1'],['Buyer 2','B2'],['Lister 1','L1'],['Lister 2','L2']] : [['Buyer 1','B1'],['Buyer 2','B2'],['Lister 1','L1']];
+  document.getElementById('daily').innerHTML = roles.map(([name,r]) =>
+    `<div class="d"><div class="dl">${name}</div><div class="dv">${dailyGoal(r,sim.size,sim.target,false)}</div><div class="dl" style="margin-top:4px;color:#94a3b8">Sat ${dailyGoal(r,sim.size,sim.target,true)}</div></div>`).join('');
+
+  // history table
+  const body = document.getElementById('hist-body');
+  document.getElementById('hist-empty').style.display = sim.history.length? 'none':'block';
+  body.innerHTML = sim.history.slice().reverse().map(w => {
+    const chg = w.change==='up' ? `<td class="up">↑ +${sim.step}</td>` : w.change==='down' ? `<td class="down">↓ −${sim.step}</td>` : '<td class="muted">—</td>';
+    return `<tr><td>Wk ${w.week}</td><td>${w.target}</td><td>${w.actual}</td><td class="${w.hit?'pass':'fail'}">${w.hit?'HIT':'miss'}</td>${chg}</tr>`;
+  }).join('');
+
+  // log
+  document.getElementById('log').innerHTML = sim.log.map(e => `<div class="${e.t}">${e.m}</div>`).join('');
+}
+
+/* wiring */
+document.getElementById('seg-size').addEventListener('click', e=>{
+  if(!e.target.dataset.size) return;
+  [...e.currentTarget.children].forEach(b=>b.classList.toggle('active',b===e.target));
+  const base = e.target.dataset.size==='4'?190:170;
+  document.getElementById('r-base').value = base;
+  resetSim();
+});
+['r-base','r-step','r-up','r-down'].forEach(id=>document.getElementById(id).addEventListener('change', resetSim));
+
+resetSim();
+</script>
+</body>
+</html>
