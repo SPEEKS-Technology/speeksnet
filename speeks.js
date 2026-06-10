@@ -2726,26 +2726,28 @@ function _mbEbayThresholdCls(key, val) {
     if (val == null) return null;
     const v = Number(val);
     if (isNaN(v)) return null;
+    // Red fires at 80% of the way to the eBay limit (was 100%); warn at 50%.
     if (key === 'defect_rate') {
-        if (v >= 0.5)  return 'mb-val mb-ebay-bad';
+        if (v >= 0.40) return 'mb-val mb-ebay-bad';
         if (v >= 0.25) return 'mb-val mb-ebay-warn';
         return 'mb-val';
     }
     if (key === 'late_shipment_rate') {
-        if (v >= 3.0) return 'mb-val mb-ebay-bad';
+        if (v >= 2.4) return 'mb-val mb-ebay-bad';
         if (v >= 1.5) return 'mb-val mb-ebay-warn';
         return 'mb-val';
     }
     if (key === 'case_no_resolution') {
-        if (v >= 0.3)  return 'mb-val mb-ebay-bad';
+        if (v >= 0.24) return 'mb-val mb-ebay-bad';
         if (v >= 0.15) return 'mb-val mb-ebay-warn';
         return 'mb-val';
     }
     if (key === 'tracking_uploaded') {
-        if (v <= 95.0)  return 'mb-val mb-ebay-bad';
+        if (v <= 96.0)  return 'mb-val mb-ebay-bad';
         if (v <= 97.5)  return 'mb-val mb-ebay-warn';
         return 'mb-val';
     }
+
     return null;
 }
 
@@ -4475,23 +4477,24 @@ async function fetchAlertsData() {
             // Values are stored as percentages (e.g. 0.12 = 0.12%, 99.19 = 99.19%)
             let valToCheck = num;
 
+            // Red now fires at 80% of the way to the eBay limit (was 100%); yellow at 50%.
             if (type === 'defectRate') {
-                if (valToCheck >= 0.5) return 'very-high'; // Red
-                if (valToCheck >= 0.25) return 'high';     // Yellow
-                return 'clear';                            // Green
+                if (valToCheck >= 0.40) return 'very-high'; // Red  (80% of 0.5 limit)
+                if (valToCheck >= 0.25) return 'high';      // Yellow
+                return 'clear';                             // Green
             }
             if (type === 'lateShipment') {
-                if (valToCheck >= 3.0) return 'very-high';
+                if (valToCheck >= 2.4) return 'very-high';  // 80% of 3.0
                 if (valToCheck >= 1.5) return 'high';
                 return 'clear';
             }
             if (type === 'casesClosed') {
-                if (valToCheck >= 0.3) return 'very-high';
+                if (valToCheck >= 0.24) return 'very-high'; // 80% of 0.3
                 if (valToCheck >= 0.15) return 'high';
                 return 'clear';
             }
             if (type === 'tracking') {
-                if (valToCheck <= 95.0) return 'very-high';
+                if (valToCheck <= 96.0) return 'very-high'; // 80% toward the 95 floor
                 if (valToCheck <= 97.5) return 'high';
                 return 'clear';
             }
@@ -4806,19 +4809,19 @@ async function fetchMasterDistrictDashboard() {
                 let valToCheck = num;
 
                 if (type === 'defectRate') {
-                    if (valToCheck >= 0.5) return 'very-high';
+                    if (valToCheck >= 0.40) return 'very-high';
                     if (valToCheck >= 0.25) return 'high';
                 }
                 if (type === 'lateShipment') {
-                    if (valToCheck >= 3.0) return 'very-high';
+                    if (valToCheck >= 2.4) return 'very-high';
                     if (valToCheck >= 1.5) return 'high';
                 }
                 if (type === 'casesClosed') {
-                    if (valToCheck >= 0.3) return 'very-high';
+                    if (valToCheck >= 0.24) return 'very-high';
                     if (valToCheck >= 0.15) return 'high';
                 }
                 if (type === 'tracking') {
-                    if (valToCheck <= 95.0) return 'very-high';
+                    if (valToCheck <= 96.0) return 'very-high';
                     if (valToCheck <= 97.5) return 'high';
                 }
                 return 'clear';
