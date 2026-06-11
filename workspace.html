@@ -290,15 +290,17 @@
 
     <div class="ws-layout">
       <div class="ws-subtabs">
+        <!-- TEMP HIDDEN: restore by uncommenting this button, moving `active` back to it (tab + #ws-pane-b2b), and re-adding 'b2b' to initWorkspace() in speeks.js
         <button class="ws-tab active dynamic-module-flex role-district-manager role-ceo role-tom role-manager role-owner-manager role-assistant-manager" id="ws-tab-b2b" onclick="switchWorkspaceTab('b2b')">🏢 B2B</button>
-        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" id="ws-tab-brief" onclick="switchWorkspaceTab('brief')">📋 Monthly KPI's</button>
+        -->
+        <button class="ws-tab active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" id="ws-tab-brief" onclick="switchWorkspaceTab('brief')">📋 Monthly KPI's</button>
         <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" id="ws-tab-kpis" onclick="switchWorkspaceTab('kpis')">📊 Weekly KPI's</button>
       </div>
 
       <div class="ws-panes">
 
     <!-- ===== MONTHLY PERFORMANCE BRIEF PANE ===== -->
-    <section class="ws-pane" id="ws-pane-brief">
+    <section class="ws-pane active" id="ws-pane-brief">
       <div class="card kpi-master-card district-master-panel ws-panel ws-panel-brief">
           <div class="district-kpi-header kpi-modal-header-tight">
               <div class="align-center gap-15">
@@ -362,7 +364,7 @@
     </section>
 
     <!-- ===== B2B PANE ===== -->
-    <section class="ws-pane active" id="ws-pane-b2b">
+    <section class="ws-pane" id="ws-pane-b2b">
       <div class="card kpi-master-card district-master-panel ws-panel b2b-board-panel">
           <div class="district-kpi-header b2b-board-header">
               <span class="district-kpi-title">🏢 B2B Deals <span id="b2b-count" class="widget-date-display"></span></span>

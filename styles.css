@@ -3445,6 +3445,8 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     font-family: 'Inter', sans-serif;
 }
 .mb-input:focus { border-color: var(--sage-professional); box-shadow: 0 0 0 2px rgba(106,153,78,0.15); }
+/* formula-derived cells: locked, auto-filled from the other inputs */
+.mb-input-auto { background: #f1f5f9; border-style: dashed; color: #64748b; cursor: not-allowed; }
 
 .vw-dashboard {
     min-height: 0 !important;

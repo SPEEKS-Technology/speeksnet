@@ -2510,6 +2510,59 @@ const _MB_INVERSE = new Set([
     'paymore_ranking', 'defect_rate', 'late_shipment_rate', 'case_no_resolution',
 ]);
 
+// Metrics that never get good/bad coloring — month-over-month or cross-store
+// comparison isn't meaningful for them (running totals / external rankings).
+const _MB_NO_SHADE = new Set(['google_score', 'google_reviews', 'paymore_ranking']);
+
+// Derived metrics, replicating the Monthly KPI spreadsheet's cell formulas.
+// These are auto-calculated from the manually entered fields (and locked in edit
+// mode). Percent metrics are stored as percent numbers (58.54), not fractions.
+// Order matters: pct_non_ebay_sales uses the three channel percentages above it.
+const _mbR2  = n => Math.round(n * 100) / 100;
+const _mbPctOf = (num, den) => (num != null && den > 0) ? _mbR2(num / den * 100) : null;
+const _MB_DERIVED = [
+    ['buy_value_per_customer', v => (v.buying != null && v.num_customers > 0 && v.customer_close_rate > 0)
+        ? _mbR2(v.buying / (v.num_customers * v.customer_close_rate / 100)) : null],
+    ['pct_returning_customers', v => _mbPctOf(v.returning_customers, v.num_customers)],
+    ['pct_inventory_over_30',   v => _mbPctOf(v.inventory_cost_under_30, v.inventory_cost)],
+    ['return_rate',             v => _mbPctOf(v.refunds, v.gross_sales)],
+    ['gross_profit',            v => (v.net_sales != null && v.cogs != null) ? _mbR2(v.net_sales - v.cogs) : null],
+    ['gross_profit_pct',        v => (v.net_sales > 0 && v.cogs != null) ? _mbR2((1 - v.cogs / v.net_sales) * 100) : null],
+    ['cogs_sold_vs_listed',     v => _mbPctOf(v.cogs, v.inventory_cost)],
+    ['pct_sales_at_pos',        v => _mbPctOf(v.sales_at_pos, v.net_sales)],
+    ['pct_sales_online',        v => _mbPctOf(v.sales_online, v.net_sales)],
+    ['pct_sales_draft_order',   v => _mbPctOf(v.sale_draft_order, v.net_sales)],
+    ['pct_non_ebay_sales',      v => (v.pct_sales_at_pos != null && v.pct_sales_online != null && v.pct_sales_draft_order != null)
+        ? _mbR2(v.pct_sales_at_pos + v.pct_sales_online + v.pct_sales_draft_order) : null],
+    ['shipping_cost_pct_sales', v => _mbPctOf(v.shipping_label_cost, v.net_sales)],
+    ['recycled_pct_inventory',  v => _mbPctOf(v.recycled_inventory, v.inventory_cost)],
+];
+const _MB_DERIVED_KEYS = new Set(_MB_DERIVED.map(d => d[0]));
+
+// Fills the derived keys of a values object in place (null when inputs incomplete).
+function _mbApplyDerived(values) {
+    _MB_DERIVED.forEach(([key, fn]) => {
+        const x = fn(values);
+        values[key] = (x == null || !isFinite(x)) ? null : x;
+    });
+    return values;
+}
+
+// Live recompute while typing in edit mode: reads every metric input with the
+// given id prefix, derives, and writes results back into the locked inputs.
+function _mbLiveDerive(prefix) {
+    const values = {};
+    _mbMetrics.forEach(m => {
+        const el = document.getElementById(prefix + m.key);
+        if (el) values[m.key] = el.value === '' ? null : Number(el.value);
+    });
+    _mbApplyDerived(values);
+    _MB_DERIVED_KEYS.forEach(key => {
+        const el = document.getElementById(prefix + key);
+        if (el) el.value = values[key] != null ? values[key] : '';
+    });
+}
+
 // Unsigned magnitude of a change, formatted by type (direction shown via arrow).
 function _mbDeltaMag(type, diff) {
     const a = Math.abs(diff);
@@ -2679,8 +2732,14 @@ function _mbRenderStore() {
                 // Value cell — editable month becomes an input in edit mode
                 if (_mbEditing && canEdit && mo === _mbEditable) {
                     const step = (m.type === 'int') ? '1' : (m.type === 'rating' ? '0.1' : '0.01');
-                    html += '<td class="mb-val mb-val-primary"><input class="mb-input" type="number" step="' + step +
-                        '" id="mb-in-' + m.key + '" value="' + (v != null ? v : '') + '"></td>';
+                    if (_MB_DERIVED_KEYS.has(m.key)) {
+                        // spreadsheet-formula cell — locked, fills itself from the other inputs
+                        html += '<td class="mb-val mb-val-primary"><input class="mb-input mb-input-auto" type="number" disabled ' +
+                            'title="Auto-calculated" placeholder="auto" id="mb-in-' + m.key + '" value="' + (v != null ? v : '') + '"></td>';
+                    } else {
+                        html += '<td class="mb-val mb-val-primary"><input class="mb-input" type="number" step="' + step +
+                            '" id="mb-in-' + m.key + '" value="' + (v != null ? v : '') + '" oninput="_mbLiveDerive(\'mb-in-\')"></td>';
+                    }
                 } else {
                     const ebayOverride = _mbEbayThresholdCls(m.key, v);
                     let cls;
@@ -2701,6 +2760,10 @@ function _mbRenderStore() {
                         const diff = Number(v) - Number(older);
                         if (diff === 0) {
                             chip = '<span class="mb-chip mb-chip-flat">0</span>';
+                        } else if (_MB_NO_SHADE.has(m.key)) {
+                            // direction only, no good/bad color
+                            chip = '<span class="mb-chip mb-chip-flat">' +
+                                (diff > 0 ? '▲' : '▼') + ' ' + _mbDeltaMag(m.type, diff) + '</span>';
                         } else {
                             // arrow = direction of change; color = good/bad for this metric
                             const good  = _MB_INVERSE.has(m.key) ? (diff < 0) : (diff > 0);
@@ -2797,7 +2860,7 @@ function _mbRenderOverview() {
             });
             // best / worst store for this metric (only when not editing, ≥2 have data, and they differ)
             let bestIdx = -1, worstIdx = -1;
-            if (!editing && raw.filter(x => x != null).length >= 2) {
+            if (!editing && !_MB_NO_SHADE.has(m.key) && raw.filter(x => x != null).length >= 2) {
                 const inv = _MB_INVERSE.has(m.key);
                 let best = inv ? Infinity : -Infinity, worst = inv ? -Infinity : Infinity;
                 raw.forEach((x, idx) => {
@@ -2811,8 +2874,14 @@ function _mbRenderOverview() {
             MB_STORES.forEach((s, idx) => {
                 if (editing) {
                     const step = (m.type === 'int') ? '1' : (m.type === 'rating' ? '0.1' : '0.01');
-                    html += '<td class="mb-val"><input class="mb-input" type="number" step="' + step +
-                        '" id="mb-ov-' + s + '-' + m.key + '" value="' + (raw[idx] != null ? raw[idx] : '') + '"></td>';
+                    if (_MB_DERIVED_KEYS.has(m.key)) {
+                        html += '<td class="mb-val"><input class="mb-input mb-input-auto" type="number" disabled ' +
+                            'title="Auto-calculated" placeholder="auto" id="mb-ov-' + s + '-' + m.key + '" value="' + (raw[idx] != null ? raw[idx] : '') + '"></td>';
+                    } else {
+                        html += '<td class="mb-val"><input class="mb-input" type="number" step="' + step +
+                            '" id="mb-ov-' + s + '-' + m.key + '" value="' + (raw[idx] != null ? raw[idx] : '') +
+                            '" oninput="_mbLiveDerive(\'mb-ov-' + s + '-\')"></td>';
+                    }
                 } else {
                     const ebayOverride = _mbEbayThresholdCls(m.key, raw[idx]);
                     const cls = ebayOverride !== null
@@ -2900,6 +2969,7 @@ async function mbSaveBriefStore() {
         const el = document.getElementById('mb-in-' + m.key);
         if (el) values[m.key] = el.value === '' ? null : Number(el.value);
     });
+    _mbApplyDerived(values);
 
     const saveBtn = document.getElementById('mbSaveBtn');
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
@@ -2939,6 +3009,7 @@ async function mbSaveOverview() {
                 const el = document.getElementById('mb-ov-' + s + '-' + m.key);
                 if (el) values[m.key] = el.value === '' ? null : Number(el.value);
             });
+            _mbApplyDerived(values);
             const resp = await fetch(MONTHLY_BRIEF_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
@@ -3127,7 +3198,8 @@ function initWorkspace() {
     _wsBriefLoaded = false;
     _wsKpiLoaded   = false;
     const hash = (window.location.hash || '').replace('#', '');
-    const initial = ['brief', 'kpis', 'b2b'].includes(hash) ? hash : 'b2b';
+    // TEMP: B2B tab hidden — restore by putting 'b2b' back in the list and as the default.
+    const initial = ['brief', 'kpis'].includes(hash) ? hash : 'brief';
     switchWorkspaceTab(initial);
 }
 
@@ -8855,13 +8927,24 @@ async function fetchChampions() {
             });
         });
 
-        // 4. FETCH BUYERS — reads from each store's weekly entries and ranks by buying_value
+        // 4. FETCH BUYERS — ranks by the Buyer Champion Final Score from the old
+        // Team Member KPIs "Weekly Scores" tab, computed from each store's weekly entries:
+        //   Final = (ConvScore + MarginScore) × (BuyValue + 1.2 × #Converted) / 100
         try {
             const buyerFetches = stores.map(s => fetch(`${WEEKLY_KPI_URL}?store=${s}&v=${Date.now()}`).then(r => r.json()));
             const buyerResults = await Promise.all(buyerFetches);
             buyerResults.forEach((d, storeIdx) => {
                 (d.employees || []).forEach(e => {
-                    const score = parseNum(e.buying_value);
+                    const bv  = parseNum(e.buying_value);
+                    const bc  = parseNum(e.buying_cost);
+                    const tc  = parseNum(e.transaction_count);
+                    const tco = parseNum(e.transaction_converted);
+                    if (bv <= 0) return;
+                    const conv = tc > 0 ? tco / tc : 0;
+                    const gm   = 1 - bc / bv;
+                    const convScore = conv >= 0.95 ? 100 : conv >= 0.9 ? 400 * conv - 280 : conv >= 0.8 ? 600 * conv - 460 : conv >= 0.7 ? 200 * conv - 140 : 0;
+                    const mgnScore  = gm >= 0.6 ? 100 : gm >= 0.5 ? 800 * gm - 380 : gm >= 0.45 ? 400 * gm - 180 : 0;
+                    const score = ((convScore + mgnScore) * (bv + tco * 1.2)) / 100;
                     if (score > 0) allBuyers.push({ name: getFullName(e.employee_name), store: stores[storeIdx], score });
                 });
             });
