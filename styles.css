@@ -1661,18 +1661,18 @@ select.bs-hidden-select:focus {
 /* Info button */
 .award-info-btn {
     position: absolute;
-    top: 4px;
-    right: 4px;
-    width: 20px;
-    height: 20px;
+    top: 6px;
+    right: 6px;
+    width: 18px;
+    height: 18px;
     border-radius: 50%;
-    background: rgba(30,58,138,0.4);
-    color: rgba(255,255,255,0.85);
-    border: 1px solid rgba(255,255,255,0.45);
+    background: #f1f5f9;
+    color: #a0aab2;
+    border: 1px solid #e2e8f0;
     font-size: 11px;
-    font-style: italic;
-    font-weight: 700;
-    font-family: Georgia, serif;
+    font-style: normal;
+    font-weight: 900;
+    text-transform: lowercase;
     cursor: default;
     display: flex;
     align-items: center;
@@ -1680,31 +1680,9 @@ select.bs-hidden-select:focus {
     z-index: 10;
     line-height: 1;
     padding: 0;
+    transition: all 0.2s;
 }
-.award-info-btn::after {
-    content: attr(data-desc);
-    position: absolute;
-    top: calc(100% + 8px);
-    right: 0;
-    min-width: 150px;
-    max-width: 190px;
-    background: rgba(15,23,42,0.93);
-    color: #fff;
-    font-size: 11px;
-    font-style: normal;
-    font-weight: 500;
-    font-family: inherit;
-    padding: 7px 10px;
-    border-radius: 7px;
-    white-space: normal;
-    text-align: center;
-    line-height: 1.45;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.18s;
-    z-index: 100;
-}
-.award-info-btn:hover::after { opacity: 1; }
+.award-info-btn:hover { background: #e2e8f0; color: var(--sage-professional); border-color: var(--sage-professional); }
 /* Trophy stand */
 .award-style-octo .award-card-trophy-wrap::after {
     content: '';
@@ -2857,17 +2835,6 @@ body.is-authenticated .info-ticker { display: flex; }
     margin-bottom: 30px;
 }
 
-body.am-mode .employee-dashboard-row {
-    display: grid !important;
-    grid-template-columns: 1fr 1fr;
-    align-items: stretch;
-}
-
-body.am-mode .employee-widget-card {
-    max-width: none;
-    flex: none;
-}
-
 .employee-spacer {
     flex: 1 1 calc(33.33% - 20px);
     max-width: calc(33.33% - 20px);
@@ -2929,6 +2896,70 @@ body.am-mode .employee-widget-card {
 .pill-fail { color: #991b1b; background: #fee2e2; }
 .pill-null { color: #64748b; background: #f1f5f9; }
 .pill-future { color: #cbd5e1; border: 1px dashed #e2e8f0; background: transparent; }
+.pill-goal { color: var(--slate-charcoal); background: #eef2f6; }
+
+/* Listing-goals redesign: auto-goal display, weekly total, info icons */
+.emp-week-head { display: flex; justify-content: space-between; align-items: center; }
+.emp-week-total { font-size: 18px; font-weight: 900; color: var(--slate-charcoal); }
+.goal-auto-display { width: 48px; text-align: center; font-size: 16px; font-weight: 900; color: #cbd5e1; padding: 6px 0; border-radius: 8px; background: #f1f5f9; transition: all 0.2s; }
+.goal-auto-display.goal-auto-set { color: #065f46; background: #d1fae5; }
+.goals-info-i { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin-left: 6px; border-radius: 50%; background: #f1f5f9; border: 1px solid #e2e8f0; color: #a0aab2; font-size: 11px; font-weight: 900; font-style: normal; text-transform: lowercase; cursor: default; vertical-align: middle; transition: all 0.2s; }
+.goals-info-i:hover { background: #e2e8f0; color: var(--sage-professional); border-color: var(--sage-professional); }
+
+/* Manager inline scoreboard */
+.goals-mgr-header small { display: block; font-size: 8px; font-weight: 700; color: #a0aab2; text-transform: none; letter-spacing: 0; }
+.goals-mgr-row { display: grid; grid-template-columns: 2fr 1fr 1fr; align-items: center; padding: 9px 0; border-bottom: 1px solid #f4f7f9; }
+.goals-mgr-row:last-child { border-bottom: none; }
+.goals-mgr-emp { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.goals-mgr-emp .goals-roster-name { font-size: 13px; font-weight: 800; color: var(--slate-charcoal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.goals-mgr-emp .goals-edit-roles { display: flex; gap: 5px; flex-wrap: wrap; }
+.goals-mgr-row .goal-auto-display { justify-self: center; }
+.goals-mgr-week { justify-self: center; font-size: 15px; font-weight: 900; color: var(--slate-charcoal); }
+.dm-role-badge { font-size: 10px; font-weight: 800; background: #e2e8f0; color: var(--slate-charcoal); padding: 3px 7px; border-radius: 4px; width: fit-content; }
+/* DM widget: all three columns + total uniform — black, same size */
+.dm-store-roster .goals-roster-name,
+.dm-store-roster .goals-mgr-week,
+.dm-store-roster .goals-total-lbl,
+.dm-store-roster .goals-total-val { font-size: 14px; font-weight: 800; color: var(--slate-charcoal); }
+
+/* DM flag for review + Lower/Keep controls */
+.dm-flag-badge { font-size: 9px; font-weight: 900; color: #fff; background: #ef4444; padding: 2px 6px; border-radius: 5px; letter-spacing: 0; vertical-align: middle; }
+.dm-flag-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px dashed #e2e8f0; }
+.dm-flag-msg { font-size: 11px; font-weight: 800; color: #991b1b; }
+.dm-flag-btn { border: none; border-radius: 7px; padding: 6px 12px; font-size: 11px; font-weight: 800; cursor: pointer; font-family: inherit; }
+.dm-flag-btn.lower { background: #fee2e2; color: #991b1b; }
+.dm-flag-btn.lower:hover { background: #fecaca; }
+.dm-flag-btn.keep { background: #e2e8f0; color: var(--slate-charcoal); }
+.dm-flag-btn.keep:hover { background: #cbd5e1; }
+.goals-total-val .gt-target { font-size: 9px; font-weight: 800; color: #94a3b8; margin-left: 2px; }
+
+/* Level-up bars (above the total) */
+.goals-levelup { padding: 12px 0 10px; border-top: 1px dashed #e2e8f0; margin-top: 8px; }
+.goals-levelup .lu-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 7px; }
+.goals-levelup .lu-title { font-size: 11px; font-weight: 900; color: var(--slate-charcoal); text-transform: uppercase; letter-spacing: 0.03em; display: inline-flex; align-items: center; }
+.goals-levelup .lu-note { font-size: 11px; font-weight: 700; color: #64748b; }
+.goals-levelup .lu-status { font-size: 11px; font-weight: 900; }
+.goals-levelup .lu-status.up { color: #065f46; }
+.goals-levelup .lu-status.brew { color: #b45309; }
+.goals-levelup .lu-status.flag { color: #b45309; }
+.goals-levelup .lu-status.urgent { color: #991b1b; }
+.goals-levelup .lu-weeks { display: flex; gap: 6px; }
+.goals-levelup .lu-week { flex: 1; height: 28px; border-radius: 6px; background: #eef2f6; display: flex; align-items: center; justify-content: center; transition: background 0.3s; }
+.goals-levelup .lu-week .lu-week-num { font-size: 13px; font-weight: 900; color: #fff; }
+.goals-levelup .lu-week.green { background: var(--sage-professional); }
+.goals-levelup .lu-week.red { background: #ef4444; }
+.goals-levelup .lu-week.empty { background: #eef2f6; }
+.goals-levelup .lu-week.empty .lu-week-num { color: #cbd5e1; }
+
+/* Auto-save status pill */
+.goals-save-status { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; }
+.goals-save-status.saving { color: #a0aab2; }
+.goals-save-status.saved { color: #065f46; }
+.goals-save-status.error { color: var(--red-alert); }
+
+/* Goal labels — white-bold goal on dark widget headers, with a clear space after "Goal:" */
+.goal-strong { gap: 4px; }
+.district-kpi-header .goal-strong, .master-card-header .goal-strong { color: #ffffff !important; font-weight: 900 !important; }
 
 .emp-kpi-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed #f0f0f0; }
 .emp-kpi-info { display: flex; flex-direction: column; gap: 4px; }
@@ -3400,6 +3431,10 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .mb-worst { background: #fdecec; color: #c81e1e; }
 .mb-row:hover td.mb-best  { background: #e1f1e6; }
 .mb-row:hover td.mb-worst { background: #f9e2e2; }
+
+/* Monthly KPI tab: center every header and data cell, but keep metric labels left */
+.mb-table th, .mb-table td { text-align: center !important; }
+.mb-table td.mb-metric-name { text-align: left !important; }
 .mb-ebay-warn { background: #fef9c3; color: #a16207; }
 .mb-ebay-bad  { background: #fdecec; color: #c81e1e; }
 .mb-row:hover td.mb-ebay-warn { background: #fef08a; }
@@ -3410,6 +3445,8 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     font-family: 'Inter', sans-serif;
 }
 .mb-input:focus { border-color: var(--sage-professional); box-shadow: 0 0 0 2px rgba(106,153,78,0.15); }
+/* formula-derived cells: locked, auto-filled from the other inputs */
+.mb-input-auto { background: #f1f5f9; border-style: dashed; color: #64748b; cursor: not-allowed; }
 
 .vw-dashboard {
     min-height: 0 !important;
@@ -5426,7 +5463,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     padding: 0 3px;
     font-size: 11px;
     font-weight: 600;
-    text-align: right;
+    text-align: center;
     color: var(--slate-charcoal);
     font-family: 'Inter', sans-serif;
     background: white;
@@ -5455,6 +5492,8 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     text-overflow: ellipsis;
     padding: 0 2px !important;
 }
+/* Actual entered values in view mode: dark text, white bg (distinct from grey computed cells) */
+.kpi-grid-computed.kpi-grid-view-val { color: var(--slate-charcoal); background: #fff; font-style: normal; }
 
 /* Performance highlighting on the Weekly/Monthly KPI grid.
    Applied to computed <td>s, the Store Total row, and the editable inputs

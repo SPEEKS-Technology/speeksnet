@@ -41,11 +41,11 @@ const AUTH_URL          = `${_BASE}/auth`;
 const RECORDS_URL       = `${_BASE}/records`;
 const QUICK_MSG_URL     = `${_BASE}/quick-messages`;
 const GOALS_API_URL     = `${_BASE}/listing-goals`;
+const STORE_TARGETS_URL = `${_BASE}/store-targets`;
 const SCORECARD_URL     = `${_BASE}/scorecard`;
 const EBAY_ALERTS_URL   = `${_BASE}/ebay-alerts`;
 const STORE_COMMENT_URL = `${_BASE}/store-comments`;
 const CHECKLIST_URL     = `${_BASE}/checklist`;
-const TUTORIAL_URL      = `${_BASE}/tutorial`;
 const PATCH_NOTES_URL   = `${_BASE}/patch-notes`;
 const TICKER_URL        = `${_BASE}/ticker`;
 const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
@@ -1478,7 +1478,6 @@ async function checkPIN() {
 
             closeAllModals();
             applyRoleBasedUI();
-            checkAndShowTutorial(matched.name);
 
             if (typeof initDashboardData === 'function') initDashboardData();
             initTicker();
@@ -2287,14 +2286,15 @@ function _kpiEmpRowsHtml(entries, periodDate, isEditing, isAvg) {
             (!isAvg ? '<span class="kpi-grid-status" id="kpiS-' + pk + '-' + empIdx + '" style="color:' + sc + '" title="' + (hasSaved ? 'Saved' : '') + '">' + (hasSaved ? '✓' : '') + '</span>' : '') +
             '</div></td>';
         _KPI_GRID_FIELDS.forEach(function(f) {
+            const tc = _kpiThresholdCls(f.key, entry[f.key], false);
             if (f.computed || isAvg) {
-                const tc = _kpiThresholdCls(f.key, entry[f.key], false);
                 cells += '<td class="kpi-grid-computed' + (isAvg ? ' kpi-avg-cell' : '') + (tc ? ' ' + tc : '') + '" id="kpiC-' + pk + '-' + empIdx + '-' + f.key + '">' + _kpiFormatComputed(f.key, entry[f.key]) + '</td>';
+            } else if (!isEditing) {
+                // View mode: formatted text — money columns show $, all centered.
+                cells += '<td class="kpi-grid-computed kpi-grid-view-val' + (tc ? ' ' + tc : '') + '">' + _kpiFormatComputed(f.key, entry[f.key]) + '</td>';
             } else {
                 const val = entry[f.key] != null ? entry[f.key] : '';
-                const dis = isEditing ? '' : 'disabled';
-                const tc = _kpiThresholdCls(f.key, entry[f.key], false);
-                cells += '<td class="kpi-grid-td-input"><input class="kpi-grid-input' + (tc ? ' ' + tc : '') + '" type="number" step="' + f.step + '" min="0" id="kpi-' + pk + '-' + empIdx + '-' + f.key + '" value="' + val + '" ' + dis + ' oninput="_kpiUpdateRow(\'' + pk + '\',' + empIdx + ')"></td>';
+                cells += '<td class="kpi-grid-td-input"><input class="kpi-grid-input' + (tc ? ' ' + tc : '') + '" type="number" step="' + f.step + '" min="0" id="kpi-' + pk + '-' + empIdx + '-' + f.key + '" value="' + val + '" oninput="_kpiUpdateRow(\'' + pk + '\',' + empIdx + ')"></td>';
             }
         });
         return '<tr class="' + rowClass + '" data-period="' + periodDate + '">' + cells + '</tr>';
@@ -2510,6 +2510,59 @@ const _MB_INVERSE = new Set([
     'paymore_ranking', 'defect_rate', 'late_shipment_rate', 'case_no_resolution',
 ]);
 
+// Metrics that never get good/bad coloring — month-over-month or cross-store
+// comparison isn't meaningful for them (running totals / external rankings).
+const _MB_NO_SHADE = new Set(['google_score', 'google_reviews', 'paymore_ranking']);
+
+// Derived metrics, replicating the Monthly KPI spreadsheet's cell formulas.
+// These are auto-calculated from the manually entered fields (and locked in edit
+// mode). Percent metrics are stored as percent numbers (58.54), not fractions.
+// Order matters: pct_non_ebay_sales uses the three channel percentages above it.
+const _mbR2  = n => Math.round(n * 100) / 100;
+const _mbPctOf = (num, den) => (num != null && den > 0) ? _mbR2(num / den * 100) : null;
+const _MB_DERIVED = [
+    ['buy_value_per_customer', v => (v.buying != null && v.num_customers > 0 && v.customer_close_rate > 0)
+        ? _mbR2(v.buying / (v.num_customers * v.customer_close_rate / 100)) : null],
+    ['pct_returning_customers', v => _mbPctOf(v.returning_customers, v.num_customers)],
+    ['pct_inventory_over_30',   v => _mbPctOf(v.inventory_cost_under_30, v.inventory_cost)],
+    ['return_rate',             v => _mbPctOf(v.refunds, v.gross_sales)],
+    ['gross_profit',            v => (v.net_sales != null && v.cogs != null) ? _mbR2(v.net_sales - v.cogs) : null],
+    ['gross_profit_pct',        v => (v.net_sales > 0 && v.cogs != null) ? _mbR2((1 - v.cogs / v.net_sales) * 100) : null],
+    ['cogs_sold_vs_listed',     v => _mbPctOf(v.cogs, v.inventory_cost)],
+    ['pct_sales_at_pos',        v => _mbPctOf(v.sales_at_pos, v.net_sales)],
+    ['pct_sales_online',        v => _mbPctOf(v.sales_online, v.net_sales)],
+    ['pct_sales_draft_order',   v => _mbPctOf(v.sale_draft_order, v.net_sales)],
+    ['pct_non_ebay_sales',      v => (v.pct_sales_at_pos != null && v.pct_sales_online != null && v.pct_sales_draft_order != null)
+        ? _mbR2(v.pct_sales_at_pos + v.pct_sales_online + v.pct_sales_draft_order) : null],
+    ['shipping_cost_pct_sales', v => _mbPctOf(v.shipping_label_cost, v.net_sales)],
+    ['recycled_pct_inventory',  v => _mbPctOf(v.recycled_inventory, v.inventory_cost)],
+];
+const _MB_DERIVED_KEYS = new Set(_MB_DERIVED.map(d => d[0]));
+
+// Fills the derived keys of a values object in place (null when inputs incomplete).
+function _mbApplyDerived(values) {
+    _MB_DERIVED.forEach(([key, fn]) => {
+        const x = fn(values);
+        values[key] = (x == null || !isFinite(x)) ? null : x;
+    });
+    return values;
+}
+
+// Live recompute while typing in edit mode: reads every metric input with the
+// given id prefix, derives, and writes results back into the locked inputs.
+function _mbLiveDerive(prefix) {
+    const values = {};
+    _mbMetrics.forEach(m => {
+        const el = document.getElementById(prefix + m.key);
+        if (el) values[m.key] = el.value === '' ? null : Number(el.value);
+    });
+    _mbApplyDerived(values);
+    _MB_DERIVED_KEYS.forEach(key => {
+        const el = document.getElementById(prefix + key);
+        if (el) el.value = values[key] != null ? values[key] : '';
+    });
+}
+
 // Unsigned magnitude of a change, formatted by type (direction shown via arrow).
 function _mbDeltaMag(type, diff) {
     const a = Math.abs(diff);
@@ -2679,8 +2732,14 @@ function _mbRenderStore() {
                 // Value cell — editable month becomes an input in edit mode
                 if (_mbEditing && canEdit && mo === _mbEditable) {
                     const step = (m.type === 'int') ? '1' : (m.type === 'rating' ? '0.1' : '0.01');
-                    html += '<td class="mb-val mb-val-primary"><input class="mb-input" type="number" step="' + step +
-                        '" id="mb-in-' + m.key + '" value="' + (v != null ? v : '') + '"></td>';
+                    if (_MB_DERIVED_KEYS.has(m.key)) {
+                        // spreadsheet-formula cell — locked, fills itself from the other inputs
+                        html += '<td class="mb-val mb-val-primary"><input class="mb-input mb-input-auto" type="number" disabled ' +
+                            'title="Auto-calculated" placeholder="auto" id="mb-in-' + m.key + '" value="' + (v != null ? v : '') + '"></td>';
+                    } else {
+                        html += '<td class="mb-val mb-val-primary"><input class="mb-input" type="number" step="' + step +
+                            '" id="mb-in-' + m.key + '" value="' + (v != null ? v : '') + '" oninput="_mbLiveDerive(\'mb-in-\')"></td>';
+                    }
                 } else {
                     const ebayOverride = _mbEbayThresholdCls(m.key, v);
                     let cls;
@@ -2701,6 +2760,10 @@ function _mbRenderStore() {
                         const diff = Number(v) - Number(older);
                         if (diff === 0) {
                             chip = '<span class="mb-chip mb-chip-flat">0</span>';
+                        } else if (_MB_NO_SHADE.has(m.key)) {
+                            // direction only, no good/bad color
+                            chip = '<span class="mb-chip mb-chip-flat">' +
+                                (diff > 0 ? '▲' : '▼') + ' ' + _mbDeltaMag(m.type, diff) + '</span>';
                         } else {
                             // arrow = direction of change; color = good/bad for this metric
                             const good  = _MB_INVERSE.has(m.key) ? (diff < 0) : (diff > 0);
@@ -2726,26 +2789,28 @@ function _mbEbayThresholdCls(key, val) {
     if (val == null) return null;
     const v = Number(val);
     if (isNaN(v)) return null;
+    // Red fires at 80% of the way to the eBay limit (was 100%); warn at 50%.
     if (key === 'defect_rate') {
-        if (v >= 0.5)  return 'mb-val mb-ebay-bad';
+        if (v >= 0.40) return 'mb-val mb-ebay-bad';
         if (v >= 0.25) return 'mb-val mb-ebay-warn';
         return 'mb-val';
     }
     if (key === 'late_shipment_rate') {
-        if (v >= 3.0) return 'mb-val mb-ebay-bad';
+        if (v >= 2.4) return 'mb-val mb-ebay-bad';
         if (v >= 1.5) return 'mb-val mb-ebay-warn';
         return 'mb-val';
     }
     if (key === 'case_no_resolution') {
-        if (v >= 0.3)  return 'mb-val mb-ebay-bad';
+        if (v >= 0.24) return 'mb-val mb-ebay-bad';
         if (v >= 0.15) return 'mb-val mb-ebay-warn';
         return 'mb-val';
     }
     if (key === 'tracking_uploaded') {
-        if (v <= 95.0)  return 'mb-val mb-ebay-bad';
+        if (v <= 96.0)  return 'mb-val mb-ebay-bad';
         if (v <= 97.5)  return 'mb-val mb-ebay-warn';
         return 'mb-val';
     }
+
     return null;
 }
 
@@ -2795,7 +2860,7 @@ function _mbRenderOverview() {
             });
             // best / worst store for this metric (only when not editing, ≥2 have data, and they differ)
             let bestIdx = -1, worstIdx = -1;
-            if (!editing && raw.filter(x => x != null).length >= 2) {
+            if (!editing && !_MB_NO_SHADE.has(m.key) && raw.filter(x => x != null).length >= 2) {
                 const inv = _MB_INVERSE.has(m.key);
                 let best = inv ? Infinity : -Infinity, worst = inv ? -Infinity : Infinity;
                 raw.forEach((x, idx) => {
@@ -2809,8 +2874,14 @@ function _mbRenderOverview() {
             MB_STORES.forEach((s, idx) => {
                 if (editing) {
                     const step = (m.type === 'int') ? '1' : (m.type === 'rating' ? '0.1' : '0.01');
-                    html += '<td class="mb-val"><input class="mb-input" type="number" step="' + step +
-                        '" id="mb-ov-' + s + '-' + m.key + '" value="' + (raw[idx] != null ? raw[idx] : '') + '"></td>';
+                    if (_MB_DERIVED_KEYS.has(m.key)) {
+                        html += '<td class="mb-val"><input class="mb-input mb-input-auto" type="number" disabled ' +
+                            'title="Auto-calculated" placeholder="auto" id="mb-ov-' + s + '-' + m.key + '" value="' + (raw[idx] != null ? raw[idx] : '') + '"></td>';
+                    } else {
+                        html += '<td class="mb-val"><input class="mb-input" type="number" step="' + step +
+                            '" id="mb-ov-' + s + '-' + m.key + '" value="' + (raw[idx] != null ? raw[idx] : '') +
+                            '" oninput="_mbLiveDerive(\'mb-ov-' + s + '-\')"></td>';
+                    }
                 } else {
                     const ebayOverride = _mbEbayThresholdCls(m.key, raw[idx]);
                     const cls = ebayOverride !== null
@@ -2898,6 +2969,7 @@ async function mbSaveBriefStore() {
         const el = document.getElementById('mb-in-' + m.key);
         if (el) values[m.key] = el.value === '' ? null : Number(el.value);
     });
+    _mbApplyDerived(values);
 
     const saveBtn = document.getElementById('mbSaveBtn');
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
@@ -2937,6 +3009,7 @@ async function mbSaveOverview() {
                 const el = document.getElementById('mb-ov-' + s + '-' + m.key);
                 if (el) values[m.key] = el.value === '' ? null : Number(el.value);
             });
+            _mbApplyDerived(values);
             const resp = await fetch(MONTHLY_BRIEF_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
@@ -3125,7 +3198,8 @@ function initWorkspace() {
     _wsBriefLoaded = false;
     _wsKpiLoaded   = false;
     const hash = (window.location.hash || '').replace('#', '');
-    const initial = ['brief', 'kpis', 'b2b'].includes(hash) ? hash : 'b2b';
+    // TEMP: B2B tab hidden — restore by putting 'b2b' back in the list and as the default.
+    const initial = ['brief', 'kpis'].includes(hash) ? hash : 'brief';
     switchWorkspaceTab(initial);
 }
 
@@ -4475,23 +4549,24 @@ async function fetchAlertsData() {
             // Values are stored as percentages (e.g. 0.12 = 0.12%, 99.19 = 99.19%)
             let valToCheck = num;
 
+            // Red now fires at 80% of the way to the eBay limit (was 100%); yellow at 50%.
             if (type === 'defectRate') {
-                if (valToCheck >= 0.5) return 'very-high'; // Red
-                if (valToCheck >= 0.25) return 'high';     // Yellow
-                return 'clear';                            // Green
+                if (valToCheck >= 0.40) return 'very-high'; // Red  (80% of 0.5 limit)
+                if (valToCheck >= 0.25) return 'high';      // Yellow
+                return 'clear';                             // Green
             }
             if (type === 'lateShipment') {
-                if (valToCheck >= 3.0) return 'very-high';
+                if (valToCheck >= 2.4) return 'very-high';  // 80% of 3.0
                 if (valToCheck >= 1.5) return 'high';
                 return 'clear';
             }
             if (type === 'casesClosed') {
-                if (valToCheck >= 0.3) return 'very-high';
+                if (valToCheck >= 0.24) return 'very-high'; // 80% of 0.3
                 if (valToCheck >= 0.15) return 'high';
                 return 'clear';
             }
             if (type === 'tracking') {
-                if (valToCheck <= 95.0) return 'very-high';
+                if (valToCheck <= 96.0) return 'very-high'; // 80% toward the 95 floor
                 if (valToCheck <= 97.5) return 'high';
                 return 'clear';
             }
@@ -4806,19 +4881,19 @@ async function fetchMasterDistrictDashboard() {
                 let valToCheck = num;
 
                 if (type === 'defectRate') {
-                    if (valToCheck >= 0.5) return 'very-high';
+                    if (valToCheck >= 0.40) return 'very-high';
                     if (valToCheck >= 0.25) return 'high';
                 }
                 if (type === 'lateShipment') {
-                    if (valToCheck >= 3.0) return 'very-high';
+                    if (valToCheck >= 2.4) return 'very-high';
                     if (valToCheck >= 1.5) return 'high';
                 }
                 if (type === 'casesClosed') {
-                    if (valToCheck >= 0.3) return 'very-high';
+                    if (valToCheck >= 0.24) return 'very-high';
                     if (valToCheck >= 0.15) return 'high';
                 }
                 if (type === 'tracking') {
-                    if (valToCheck <= 95.0) return 'very-high';
+                    if (valToCheck <= 96.0) return 'very-high';
                     if (valToCheck <= 97.5) return 'high';
                 }
                 return 'clear';
@@ -4936,7 +5011,7 @@ async function fetchMasterDistrictDashboard() {
                         <a href="${PORTAL_LINKS[store]}" target="_blank" class="portal-link-title">
                             ${icon} ${store}
                         </a>
-                        <span class="master-card-date" style="margin: 0;">Goal: ${storeGoalText}</span>
+                        <span class="master-card-date goal-strong" style="margin: 0;">Goal: ${storeGoalText}</span>
                     </div>
                     <div style="display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; gap: 10px;">
                         <span class="master-card-score" style="background: ${sBg}; color: ${sColor};">${scoreNum.toFixed(1)}</span>
@@ -5054,6 +5129,85 @@ let editingYesterday = false;
 let goalsTargetStore = 'OVL';
 let currentAppDate = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
 let currentDmGoalView = 'daily';
+let _l1SelectSeq = 0; // tracks order L1 was assigned, for FIFO when a 3rd L1 is picked
+let managerWeeklyEntries = []; // [{ name, listed }] — this week's # Listed per employee (from Weekly KPI)
+let managerWeeklyHistory = []; // [storeTotal, ...] completed weeks, oldest→newest (drives level-up bars)
+let _goalsAutosaveTimer = null;
+let _goalsChecklistDone = false;
+let _priorWeekGoals = {};      // idx → sum of this week's saved daily goals EXCLUDING today (today is live)
+let _weekTargetTotal = 0;      // store's weekly goal target (shown in the Week total)
+
+// ----------------------------------------------------------------------------
+// LISTING GOALS ENGINE — role → auto goal. Goals are derived, never typed.
+// daily goal = role weight × store scale × day factor (stable; overtime-proof).
+// Reference + visual sandbox: prototypes/listing-goals-prototype.html
+// ----------------------------------------------------------------------------
+const ListingGoalsEngine = {
+    roleWeight: { B1: 5, B2: 8, L1: 25, L2: 25, L1_SHARED: 15 },
+    saturdayFactor: 0.5,
+    step: 10,           // ratchet step (+listings/week) once a store levels up
+    ratchetWindow: 3,   // rolling weeks evaluated
+    needHits: 2,        // weeks at/above target within window to level up
+    needMiss: 2,        // weeks below target within window to flag for review
+
+    weeklyTarget(rosterSize) { return rosterSize >= 4 ? 190 : 170; },
+    modelSize(rosterSize)    { return rosterSize >= 4 ? 4 : 3; },
+
+    // Standard staffed week, used ONLY to calibrate the scale so a normal week
+    // sums to the weekly target. Day-to-day goals use the live roles selected.
+    standardWeek(size) {
+        return size >= 4
+            ? { Mon:['B1','B2','L1'], Tue:['B1','B2','L1'], Wed:['B1','B2','L1'],
+                Thu:['B1','B2','L1'], Fri:['B1','B2','L1','L2'], Sat:['B1','B2','L1','L2'] }
+            : { Mon:['B1','L1'], Tue:['B1','L1'], Wed:['B1','L1'],
+                Thu:['B1','B2','L1'], Fri:['B1','B2','L1'], Sat:['B1','B2','L1'] };
+    },
+    dayFactorFromDate(dateStr) {
+        const dow = new Date(dateStr).getDay(); // 0 Sun .. 6 Sat
+        if (dow === 6) return this.saturdayFactor; // Saturday: shorter + busiest
+        if (dow === 0) return 0;                   // closed Sundays
+        return 1;
+    },
+    weightFor(role, staffedCount) {
+        // On 2-person days the lister also covers the floor → reduced weight.
+        if (role === 'L1' && staffedCount <= 2) return this.roleWeight.L1_SHARED;
+        return this.roleWeight[role] || 0;
+    },
+    scale(rosterSize) {
+        const size = this.modelSize(rosterSize);
+        const target = this.weeklyTarget(rosterSize);
+        const wk = this.standardWeek(size);
+        const factor = { Mon:1, Tue:1, Wed:1, Thu:1, Fri:1, Sat:this.saturdayFactor };
+        let cap = 0;
+        for (const day in wk) {
+            const roles = wk[day];
+            roles.forEach(r => { cap += this.weightFor(r, roles.length) * factor[day]; });
+        }
+        return cap > 0 ? target / cap : 0;
+    },
+    // The function the widgets call: goal for one role, on a date, given how
+    // many people are staffed that day (needed for the shared-lister rule).
+    goalFor(role, dateStr, rosterSize, staffedCount) {
+        if (!role || role === '-') return 0;
+        const g = this.weightFor(role, staffedCount) * this.scale(rosterSize) * this.dayFactorFromDate(dateStr);
+        return Math.round(g);
+    },
+    // Level-up / flag evaluation. actuals = weekly # Listed, oldest → newest.
+    ratchet(actuals, target) {
+        const win = (actuals || []).slice(-this.ratchetWindow);
+        const hits = win.filter(a => a >= target).length;
+        const miss = win.filter(a => a < target).length;
+        const lastTwo = (actuals || []).slice(-2);
+        const twoInARow = lastTwo.length === 2 && lastTwo.every(a => a < target);
+        return {
+            hits, miss, twoInARow,
+            levelUp: hits >= this.needHits,
+            flagged: (miss >= this.needMiss || twoInARow),
+            urgent: twoInARow,
+            nextTarget: target + this.step
+        };
+    }
+};
 
 function normalizeGoalDate(s) {
     const d = new Date(s);
@@ -5077,8 +5231,7 @@ function runScheduledTasks() {
 
     if (ctDateStr !== currentAppDate) {
         currentAppDate = ctDateStr;
-        const activeTab = document.getElementById('tab-daily')?.classList.contains('active') ? 'daily' : 'weekly';
-        renderGoalsScoreboard(activeTab);
+        if (document.getElementById('goals-manager-body')) renderManagerGoals();
     }
 }
 
@@ -5089,7 +5242,7 @@ async function initListingGoals() {
 }
 
 async function fetchLiveGoalsData() {
-    const list = document.getElementById('goals-roster-list');
+    const list = document.getElementById('goals-manager-body');
     if (!list) return;
     list.innerHTML = '<div class="status-message">Syncing Data...</div>';
 
@@ -5112,7 +5265,8 @@ async function fetchLiveGoalsData() {
         liveGoalsData = await fetch(`${GOALS_API_URL}?store=${goalsTargetStore}&v=${Date.now()}`).then(r => r.json()).catch(() => []);
         if (!Array.isArray(liveGoalsData)) liveGoalsData = [];
 
-        renderGoalsScoreboard('daily');
+        await fetchManagerWeeklyKpi();
+        renderManagerGoals();
     } catch (e) {
         list.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; text-align: center; padding: 20px 0;">Error loading roster.</div>';
     }
@@ -5292,58 +5446,6 @@ function buildGoalsEditForm() {
     const container = document.getElementById('goals-edit-list');
     const now = new Date();
     
-    // Shift the target date if they toggled to Yesterday
-    if (editingYesterday) {
-        now.setDate(now.getDate() - 1);
-    }
-    const targetDateStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-    
-    let html = '';
-    const availableRoles = goalsRoster.length <= 2 ? ['B1', 'B2', 'L1'] : ['B1', 'B2', 'L1', 'L2'];
-
-    // Inject the Toggle into the Header title space dynamically
-    const titleEl = document.getElementById('goals-input-title');
-    if (titleEl) {
-        titleEl.innerHTML = `
-            <div class="timeframe-toggle dark-toggle" style="margin-left: 0;">
-                <button class="toggle-btn ${!editingYesterday ? 'active' : ''}" onclick="toggleEditDate(false)">Today</button>
-                <button class="toggle-btn ${editingYesterday ? 'active' : ''}" onclick="toggleEditDate(true)">Yesterday</button>
-            </div>
-        `;
-    }
-
-    goalsRoster.forEach((emp, idx) => {
-        // Find the record for the TARGET date (either Today or Yesterday)
-        const targetRecord = liveGoalsData.find(r => r.employee === emp && r.date === targetDateStr) || { role: '', goal: '', result: '' };
-        
-        let rolesHtml = '';
-        availableRoles.forEach(r => {
-            const isActive = targetRecord.role === r ? 'active' : '';
-            rolesHtml += `<button type="button" class="role-dot ${isActive}" onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
-        });
-
-        html += `
-        <div class="goals-edit-item">
-            <div class="goals-edit-name">${emp}</div>
-            <div class="goals-edit-controls">
-                <div class="goals-edit-roles" id="roles-${idx}">
-                    ${rolesHtml}
-                </div>
-                <div style="display:flex; gap: 8px;">
-                    <input type="number" id="input-goal-${idx}" class="goal-input" placeholder="Goal" value="${targetRecord.goal}" title="Target Goal" />
-                    <input type="number" id="input-result-${idx}" class="goal-input" placeholder="Actual" value="${targetRecord.result}" title="Actual Result" style="border-color: #a7f3d0; background: #ecfdf5;" />
-                </div>
-            </div>
-        </div>`;
-    });
-
-    container.innerHTML = html;
-}
-
-function buildGoalsEditForm() {
-    const container = document.getElementById('goals-edit-list');
-    const now = new Date();
-    
     // 1. Calculate the current time in Central Time to enforce the 10:30 AM lock
     const ctTimeString = now.toLocaleString('en-US', { timeZone: 'America/Chicago', hour12: false, hour: 'numeric', minute: 'numeric' });
     const [hours, minutes] = ctTimeString.split(':').map(Number);
@@ -5373,6 +5475,7 @@ function buildGoalsEditForm() {
                 <button class="toggle-btn ${!editingYesterday ? 'active' : ''}" onclick="toggleEditDate(false)">Today</button>
                 <button class="toggle-btn ${editingYesterday ? 'active' : ''}" onclick="toggleEditDate(true)">Yesterday</button>
             </div>
+            <span class="goals-info-i" data-tip-title="How goals are set" data-tip-desc="Just pick each person's role — the goal fills in automatically.">i</span>
         `;
     }
     
@@ -5408,38 +5511,51 @@ function buildGoalsEditForm() {
                 <div class="goals-edit-roles" id="roles-${idx}">
                     ${rolesHtml}
                 </div>
-                <div style="display:flex; gap: 8px;">
-                    <input type="number" id="input-goal-${idx}" class="goal-input" placeholder="Goal" value="${targetRecord.goal}" title="${lockWarning}" ${disableGoalAttr} />
-                    <input type="number" id="input-result-${idx}" class="goal-input" placeholder="Actual" value="${targetRecord.result}" title="Actual Result" style="border-color: #a7f3d0; background: #ecfdf5;" />
-                </div>
+                <div class="goal-auto-display" id="goal-display-${idx}" title="Set automatically from the selected role">–</div>
             </div>
         </div>`;
     });
 
     container.innerHTML = html;
-    setTimeout(updateRoleLocks, 50); // <--- ADD THIS LINE
+    setTimeout(() => { updateRoleLocks(); recomputeGoalDisplays(); }, 50);
 }
 
-async function saveGoalsData() {
-    const btn = document.getElementById('saveGoalsBtn');
-    btn.innerText = "Saving to Database...";
-    btn.style.opacity = "0.7";
+// Debounced auto-save — managers just pick roles, no Save button.
+window.scheduleGoalsAutosave = function() {
+    const status = document.getElementById('goals-save-status');
+    if (status) { status.textContent = 'Saving…'; status.className = 'goals-save-status saving'; }
+    clearTimeout(_goalsAutosaveTimer);
+    _goalsAutosaveTimer = setTimeout(() => saveGoalsData(true), 900);
+};
+
+async function saveGoalsData(silent = false) {
+    const status = document.getElementById('goals-save-status');
+    if (status && !silent) { status.textContent = 'Saving…'; status.className = 'goals-save-status saving'; }
 
     const now = new Date();
-    if (editingYesterday) {
-        now.setDate(now.getDate() - 1);
-    }
     const targetDateStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
 
     let payloadEmployees = [];
 
+    // How many people are staffed today — needed for the shared-lister rule.
+    let staffedCount = 0;
+    goalsRoster.forEach((emp, idx) => {
+        const group = document.getElementById(`roles-${idx}`);
+        if (group && group.querySelector('.role-dot.active')) staffedCount++;
+    });
+    const rosterSize = goalsRoster.length;
+
     goalsRoster.forEach((emp, idx) => {
         const roleGroup = document.getElementById(`roles-${idx}`);
-        const activeBtn = roleGroup?.querySelector('.active');
-        const role = activeBtn ? (activeBtn.getAttribute('data-selected-role') || activeBtn.innerText) : '-';
-        
-        const goal = document.getElementById(`input-goal-${idx}`).value;
-        const result = document.getElementById(`input-result-${idx}`).value;
+        const activeBtn = roleGroup?.querySelector('.role-dot.active');
+        const role = activeBtn ? activeBtn.innerText : '-';
+
+        // Goal is derived from the role — never typed.
+        const goal = role !== '-' ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount)) : '';
+
+        // Results now come from the Weekly KPI (# Listed); preserve any existing value.
+        const existing = liveGoalsData.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
+        const result = existing && existing.result != null ? String(existing.result) : '';
 
         if (role !== '-' || goal !== '' || result !== '') {
             payloadEmployees.push({ employee: emp, role: role, goal: goal, result: result });
@@ -5450,89 +5566,257 @@ async function saveGoalsData() {
         const response = await fetch(GOALS_API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ 
-                store: goalsTargetStore, 
-                date: targetDateStr, 
-                employees: payloadEmployees 
-            })
+            body: JSON.stringify({ store: goalsTargetStore, date: targetDateStr, employees: payloadEmployees })
         });
 
-        if(response.ok) {
-            // Instantly update the local cache so the UI reflects it
-            liveGoalsData = liveGoalsData.filter(r => !(r.date === targetDateStr && r.store === goalsTargetStore));
+        if (response.ok) {
+            // Update the local cache so the UI reflects it instantly.
+            liveGoalsData = liveGoalsData.filter(r => !(normalizeGoalDate(r.date) === targetDateStr && r.store === goalsTargetStore));
             payloadEmployees.forEach(p => {
                 liveGoalsData.push({ date: targetDateStr, store: goalsTargetStore, employee: p.employee, role: p.role, goal: p.goal, result: p.result });
             });
 
-            document.getElementById('goals-pulse-dot').style.display = 'none';
-            const activeTab = document.getElementById('tab-daily').classList.contains('active') ? 'daily' : 'weekly';
-            renderGoalsScoreboard(activeTab);
-            flipGoalCard(false);
+            const pulse = document.getElementById('goals-pulse-dot');
+            if (pulse) pulse.style.display = 'none';
+            if (status) { status.textContent = 'Saved ✓'; status.className = 'goals-save-status saved'; }
 
-            // =========================================================
-            // BULLETPROOF CHECKLIST AUTO-COMPLETE
-            // =========================================================
-            const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
-            const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
-            let targetTaskId = null;
-
-            // Step 1: Check if the user has already opened the TASKS tab today
-            if (checklistDataCache && checklistDataCache.daily && checklistDataCache.daily.length > 0) {
-                const task = checklistDataCache.daily.find(t => t.text.toLowerCase().includes('listing goals'));
-                if (task) {
-                    targetTaskId = task.id;
-                    if (!task.checked) {
-                        task.checked = true; // Visually check it off in memory
-                        if (typeof renderChecklist === 'function') renderChecklist();
-                    }
-                }
-            } 
-            
-            // Step 2: If the TASKS tab is unopened, silently fetch their list to find the correct Task ID
-            if (!targetTaskId) {
-                try {
-                    const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
-                    const data = await res.json();
-                    if (data && data.daily) {
-                        const task = data.daily.find(t => t.text.toLowerCase().includes('listing goals'));
-                        if (task && !task.checked) targetTaskId = task.id;
-                    }
-                } catch (e) {
-                }
+            // Mark the "set listing goals" checklist task done — once per session load.
+            if (!_goalsChecklistDone) {
+                _goalsChecklistDone = true;
+                markListingGoalsChecklistComplete();
             }
-
-            // Step 3: Tell the Apps Script to flip the specific store column to TRUE
-            if (targetTaskId) {
-                fetch(CHECKLIST_URL, {
-                    method: 'POST', mode: 'no-cors',
-                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                    body: JSON.stringify({ action: 'toggle', id: targetTaskId, checked: true, user: userName, store: store })
-                }).catch(() => {});
-            }
-            // =========================================================
-
         } else {
-            alert("Error saving goals to server.");
+            if (status) { status.textContent = 'Save failed'; status.className = 'goals-save-status error'; }
+            else alert("Error saving goals to server.");
         }
     } catch (error) {
-        alert("Connection failed. Please try again.");
-    } finally {
-        btn.innerText = "Save Changes";
-        btn.style.opacity = "1";
+        if (status) { status.textContent = 'Save failed'; status.className = 'goals-save-status error'; }
+        else alert("Connection failed. Please try again.");
     }
 }
 
+// Flip the manager's "Set Listing Goals" daily checklist task to done.
+async function markListingGoalsChecklistComplete() {
+    const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+    let targetTaskId = null;
+
+    if (checklistDataCache && checklistDataCache.daily && checklistDataCache.daily.length > 0) {
+        const task = checklistDataCache.daily.find(t => t.text.toLowerCase().includes('listing goals'));
+        if (task) {
+            targetTaskId = task.id;
+            if (!task.checked) { task.checked = true; if (typeof renderChecklist === 'function') renderChecklist(); }
+        }
+    }
+
+    if (!targetTaskId) {
+        try {
+            const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
+            const data = await res.json();
+            if (data && data.daily) {
+                const task = data.daily.find(t => t.text.toLowerCase().includes('listing goals'));
+                if (task && !task.checked) targetTaskId = task.id;
+            }
+        } catch (e) {}
+    }
+
+    if (targetTaskId) {
+        fetch(CHECKLIST_URL, {
+            method: 'POST', mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'toggle', id: targetTaskId, checked: true, user: userName, store: store })
+        }).catch(() => {});
+    }
+}
+
+// ---- Inline manager scoreboard: pick roles → auto goals, weekly results, level-up ----
+async function fetchManagerWeeklyKpi() {
+    await fetchStoreTarget(goalsTargetStore);
+    managerWeeklyHistory = weeksFor(goalsTargetStore);
+}
+
+function getWeeklyResultFor(emp) {
+    const target = String(emp).trim().toLowerCase();
+    const tFirst = target.split(' ')[0];
+    for (const e of managerWeeklyEntries) {
+        const n = String(e.name).trim().toLowerCase();
+        if (n === target) return e.listed;
+        const nFirst = n.split(' ')[0];
+        if (nFirst.length > 2 && tFirst.length > 2 && (nFirst.startsWith(tFirst) || tFirst.startsWith(nFirst))) return e.listed;
+    }
+    return 0;
+}
+
+function renderManagerGoals() {
+    const list = document.getElementById('goals-manager-body');
+    if (!list) return;
+
+    const now = new Date();
+    const dateDisplay = document.getElementById('goals-date-display');
+    if (dateDisplay) dateDisplay.innerText = now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+
+    const todayStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    const availableRoles = goalsRoster.length <= 2 ? ['B1', 'B2', 'L1'] : ['B1', 'B2', 'L1', 'L2'];
+
+    _priorWeekGoals = {};
+    _weekTargetTotal = targetFor(goalsTargetStore);
+    const storeTargetEl = document.getElementById('goals-store-target');
+    if (storeTargetEl) storeTargetEl.innerText = `Goal: ${_weekTargetTotal} Listings`;
+
+    let html = '';
+    goalsRoster.forEach((emp, idx) => {
+        const rec = liveGoalsData.find(r => r.employee === emp && normalizeGoalDate(r.date) === todayStr) || { role: '' };
+
+        let rolesHtml = '';
+        availableRoles.forEach(r => {
+            const isActive = rec.role === r ? 'active' : '';
+            rolesHtml += `<button type="button" class="role-dot ${isActive}" onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
+        });
+
+        // Weekly goal = this week's saved daily goals, excluding today (today is added live).
+        _priorWeekGoals[idx] = priorWeekGoal(emp, todayStr, startOfWeek);
+
+        html += `
+        <div class="goals-mgr-row">
+            <div class="goals-mgr-emp">
+                <span class="goals-roster-name">${emp}</span>
+                <div class="goals-edit-roles" id="roles-${idx}">${rolesHtml}</div>
+            </div>
+            <div class="goal-auto-display" id="goal-display-${idx}">–</div>
+            <div class="goals-mgr-week" id="week-display-${idx}">–</div>
+        </div>`;
+    });
+
+    list.innerHTML = html;
+
+    renderGoalsLevelUp();
+    setTimeout(() => { updateRoleLocks(); recomputeGoalDisplays(); }, 30);
+}
+
+// Sum of an employee's saved daily goals this week, excluding today (last record per day wins).
+function priorWeekGoal(emp, todayStr, startOfWeek) {
+    const target = String(emp).trim().toLowerCase();
+    const tFirst = target.split(' ')[0];
+    const byDay = {};
+    liveGoalsData.forEach(r => {
+        const n = String(r.employee).trim().toLowerCase();
+        const nFirst = n.split(' ')[0];
+        const match = n === target || (nFirst.length > 2 && tFirst.length > 2 && (nFirst.startsWith(tFirst) || tFirst.startsWith(nFirst)));
+        if (!match) return;
+        const dStr = normalizeGoalDate(r.date);
+        if (dStr === todayStr) return;
+        if (new Date(r.date) >= startOfWeek) byDay[dStr] = parseInt(r.goal) || 0;
+    });
+    return Object.values(byDay).reduce((s, g) => s + g, 0);
+}
+
+// Roster size for a store (from auth cache), used to pick the weekly target.
+function storeRosterSize(store) {
+    try {
+        const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
+        const excluded = ['ceo', 'district manager'];
+        return (auth.users || []).filter(u =>
+            (u.store || '').trim().toUpperCase() === String(store).toUpperCase() &&
+            !excluded.includes((u.role || '').toLowerCase())
+        ).length || 4;
+    } catch (e) { return 4; }
+}
+
+// Persisted per-store target + flag + last-4-week totals (server-side ratchet).
+let _storeTargets = {}; // store -> { target, base, flag, weeks:[{week,total}] }
+
+async function fetchStoreTarget(store) {
+    try {
+        const r = await fetch(`${STORE_TARGETS_URL}?store=${store}&v=${Date.now()}`).then(x => x.json());
+        if (r && r.store) _storeTargets[r.store] = r;
+        return r;
+    } catch (e) { return null; }
+}
+async function fetchAllStoreTargets() {
+    try {
+        const arr = await fetch(`${STORE_TARGETS_URL}?v=${Date.now()}`).then(x => x.json());
+        if (Array.isArray(arr)) arr.forEach(r => { if (r && r.store) _storeTargets[r.store] = r; });
+        return arr || [];
+    } catch (e) { return []; }
+}
+// Current weekly target for a store (server value; falls back to roster-derived base).
+function targetFor(store) {
+    return (_storeTargets[store] && _storeTargets[store].target) || ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
+}
+// Last-4 completed-week listing totals (oldest→newest) for the bars.
+function weeksFor(store) {
+    return ((_storeTargets[store] && _storeTargets[store].weeks) || []).map(w => w.total);
+}
+// DM action on a flagged store: 'lower' (−10) or 'keep' (hold). Resolves the flag.
+async function dmGoalAction(store, action) {
+    try {
+        await fetch(STORE_TARGETS_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ store, action })
+        });
+        await fetchStoreTarget(store);
+        renderCompactDmGoals();
+    } catch (e) {}
+}
+window.dmGoalAction = dmGoalAction;
+
+// Completed-week store listing totals (oldest→newest) from the Weekly KPI.
+async function fetchStoreWeeklyHistory(store) {
+    try {
+        const resp = await fetch(`${KPI_MANAGE_URL}?store=${store}&period_type=weekly&v=${Date.now()}`);
+        const data = await resp.json();
+        const periods = (data && Array.isArray(data.periods)) ? data.periods : [];
+        return periods.slice()
+            .sort((a, b) => new Date(a.period_end_date) - new Date(b.period_end_date))
+            .filter(p => !p.is_editable)
+            .map(p => (p.entries || []).reduce((s, e) => s + (parseInt(e.listed_count) || 0), 0));
+    } catch (e) { return []; }
+}
+
+// Running 4-week listing view (manager + employee/ASM + DM widgets).
+// NOTE: the level-up ratchet logic stays server-side — the frontend only shows
+// the last four weeks of totals so the mechanism can't be gamed.
+function levelUpHtml(history, target) {
+    const last4 = history.slice(-4);
+    const padded = [...Array(Math.max(0, 4 - last4.length)).fill(null), ...last4];
+    const bars = padded.map(v => v == null
+        ? '<div class="lu-week empty"><span class="lu-week-num">–</span></div>'
+        : `<div class="lu-week ${v >= target ? 'green' : 'red'}"><span class="lu-week-num">${v}</span></div>`
+    ).join('');
+
+    return `
+        <div class="lu-head"><span class="lu-title">Last 4 Weeks</span></div>
+        <div class="lu-weeks">${bars}</div>`;
+}
+
+function renderGoalsLevelUp() {
+    const el = document.getElementById('goals-levelup');
+    if (!el) return;
+    el.innerHTML = levelUpHtml(managerWeeklyHistory, targetFor(goalsTargetStore));
+}
+
 // --- DM COMPACT GOALS WIDGET ---
+let dmStoreHistory = {}; // store -> completed weekly listing totals (for level-up bars)
+
 async function fetchDmGoalsData() {
     const cont = document.getElementById('dm-compact-goals-container');
     if (!cont) return;
 
     const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-    
+
     try {
-        const fetches = stores.map(s => fetch(`${GOALS_API_URL}?store=${s}&v=${Date.now()}`).then(r => r.json()));
-        const results = await Promise.all(fetches);
-        allDistrictGoalsData = results.flat();
+        const [goalsResults] = await Promise.all([
+            Promise.all(stores.map(s => fetch(`${GOALS_API_URL}?store=${s}&v=${Date.now()}`).then(r => r.json()))),
+            fetchAllStoreTargets()
+        ]);
+        allDistrictGoalsData = goalsResults.flat();
+        dmStoreHistory = {};
+        stores.forEach(s => { dmStoreHistory[s] = weeksFor(s); });
         renderCompactDmGoals();
     } catch (e) {
         cont.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Network Sync Failed.</div>';
@@ -5564,15 +5848,93 @@ function renderCompactDmGoals() {
     const cont = document.getElementById('dm-compact-goals-container');
     if (!cont) return;
 
-    const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
     const now = new Date();
+    const todayStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
     const startOfWeek = new Date(now);
     startOfWeek.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
-    startOfWeek.setHours(0,0,0,0);
+    startOfWeek.setHours(0, 0, 0, 0);
 
     const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-    let html = '<div style="display: flex; flex-direction: column;">';
+    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2' };
+    let html = '<div style="display:flex; flex-direction:column;">';
 
+    stores.forEach((store, idx) => {
+        const target = targetFor(store);
+        const flag = (_storeTargets[store] && _storeTargets[store].flag) || 'none';
+        const storeData = allDistrictGoalsData.filter(r => r.store === store);
+
+        // Per-employee today + weekly goals (last record per day wins). Read-only.
+        const emps = {};
+        storeData.forEach(r => {
+            if (new Date(r.date) < startOfWeek) return;
+            const dStr = normalizeGoalDate(r.date);
+            if (!emps[r.employee]) emps[r.employee] = { role: '-', byDay: {} };
+            emps[r.employee].byDay[dStr] = parseInt(r.goal) || 0;
+            if (dStr === todayStr && r.role && r.role !== '-') emps[r.employee].role = r.role;
+        });
+
+        const empNames = Object.keys(emps);
+        let todayTotal = 0, weekTotal = 0;
+        empNames.forEach(e => {
+            todayTotal += emps[e].byDay[todayStr] || 0;
+            weekTotal += Object.values(emps[e].byDay).reduce((s, g) => s + g, 0);
+        });
+
+        const muted = weekTotal === 0 ? 'opacity:0.6;' : '';
+        const lastBorder = idx === stores.length - 1 ? 'transparent' : '#f0f0f0';
+
+        html += `
+        <div onclick="toggleDmStoreAccordion('${store}')" class="lb-row dm-store-head" style="display:grid; grid-template-columns:60px 1fr auto 18px; align-items:center; gap:12px; border-bottom:1px solid ${lastBorder}; cursor:pointer; padding:13px 15px; ${muted}">
+            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal);">${store}</span>
+            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal); text-transform:uppercase; letter-spacing:0.04em;">Goal: ${target} Listings${flag === 'flagged' ? ' <span class="dm-flag-badge">⚠ Review</span>' : ''}</span>
+            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal); text-align:right;">${weekTotal}<span style="font-size:14px; color:var(--slate-charcoal); font-weight:900;"> wk</span></span>
+            <div id="dm-caret-${store}" class="dm-store-caret" style="text-align:right; color:#888; font-size:10px; font-weight:800; transition:transform 0.3s; transform:rotate(-90deg);">▼</div>
+        </div>`;
+
+        html += `<div id="dm-roster-${store}" class="dm-store-roster" style="display:none; background:#fdfdfd; padding:10px 18px 14px; border-bottom:1px solid #e2e8f0; box-shadow:inset 0 3px 6px rgba(0,0,0,0.02);">`;
+        html += `<div class="goals-header-row"><span class="goals-header-lbl">Employee &amp; Role</span><span class="goals-header-lbl center">Today</span><span class="goals-header-lbl center">Week</span></div>`;
+
+        if (empNames.length === 0) {
+            html += `<div style="font-size:12px; color:#888; text-align:center; font-weight:600; padding:10px 0;">No roles set this week.</div>`;
+        } else {
+            empNames.forEach(e => {
+                const eToday = emps[e].byDay[todayStr] || 0;
+                const eWeek = Object.values(emps[e].byDay).reduce((s, g) => s + g, 0);
+                const badge = emps[e].role !== '-' ? `<span class="dm-role-badge">${roleName[emps[e].role] || emps[e].role}</span>` : '';
+                html += `
+                <div class="goals-mgr-row">
+                    <div class="goals-mgr-emp"><span class="goals-roster-name">${e}</span>${badge}</div>
+                    <div class="goals-mgr-week">${eToday || '–'}</div>
+                    <div class="goals-mgr-week">${eWeek || '–'}</div>
+                </div>`;
+            });
+        }
+
+        html += `<div class="goals-total-row"><span class="goals-total-lbl">Total</span><span class="goals-total-val target">${todayTotal}</span><span class="goals-total-val target">${weekTotal}</span></div>`;
+        html += `<div class="goals-levelup">${levelUpHtml(dmStoreHistory[store] || [], target)}</div>`;
+        if (flag === 'flagged') {
+            html += `<div class="dm-flag-actions">
+                <span class="dm-flag-msg">⚠️ Missed goal 2 weeks — review:</span>
+                <button class="dm-flag-btn lower" onclick="event.stopPropagation(); dmGoalAction('${store}','lower')">Lower −10</button>
+                <button class="dm-flag-btn keep" onclick="event.stopPropagation(); dmGoalAction('${store}','keep')">Keep</button>
+            </div>`;
+        }
+        html += `</div>`;
+    });
+
+    html += '</div>';
+    cont.innerHTML = html;
+}
+
+function _dmLegacyGoalsUnused() {
+    // (Superseded by the manager-style DM view above. Kept inert; never called.)
+    const cont = { innerHTML: '' };
+    const now = new Date();
+    const todayStr = '';
+    const startOfWeek = new Date(0);
+    const currentDmGoalView = 'weekly';
+    const stores = [];
+    let html = '';
     stores.forEach((store, idx) => {
         const storeData = allDistrictGoalsData.filter(r => r.store === store);
         let tGoal = 0, tResult = 0;
@@ -5775,16 +6137,18 @@ async function fetchAndRenderEmployeeGoals() {
         const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
         const currentDayIdx = (now.getDay() + 6) % 7;
         
+        // Personal weekly goal = sum of THIS person's daily goals, across
+        // whatever roles they held each day (not tied to one fixed role).
+        let weekGoalTotal = 0;
+        Object.values(dailyStats).forEach(d => { weekGoalTotal += (d.goal || 0); });
+
         let dailyBreakdownHtml = '<div class="emp-pill-container">';
-        
+
         daysOfWeek.forEach((dName, dIdx) => {
-            if (dailyStats[dName]) {
-                const dG = dailyStats[dName].goal;
-                const dR = dailyStats[dName].result;
-                const dClass = dR >= dG ? 'pill-pass' : 'pill-fail';
-                dailyBreakdownHtml += `<div class="emp-daily-pill ${dClass}">${dName}: ${dR}/${dG}</div>`;
+            if (dailyStats[dName] && dailyStats[dName].goal > 0) {
+                dailyBreakdownHtml += `<div class="emp-daily-pill pill-goal">${dName}: ${dailyStats[dName].goal}</div>`;
             } else if (dIdx <= currentDayIdx) {
-                dailyBreakdownHtml += `<div class="emp-daily-pill pill-null" title="Not Logged">${dName}</div>`;
+                dailyBreakdownHtml += `<div class="emp-daily-pill pill-null" title="No role set">${dName}</div>`;
             } else {
                 dailyBreakdownHtml += `<div class="emp-daily-pill pill-future">${dName}</div>`;
             }
@@ -5806,10 +6170,25 @@ async function fetchAndRenderEmployeeGoals() {
             ${roleDesc ? `<div class="emp-role-description">${roleDesc}</div>` : ''}
 
             <div class="emp-week-section">
-                <span class="emp-goal-label">THIS WEEK'S BREAKDOWN</span>
+                <div class="emp-week-head">
+                    <span class="emp-goal-label">THIS WEEK'S GOALS
+                        <span class="goals-info-i" data-tip-title="Your weekly goal" data-tip-desc="The sum of your daily listing goals so far this week — across whatever roles you've had each day.">i</span>
+                    </span>
+                    <span class="emp-week-total" title="Your goal so far this week">${weekGoalTotal || 0}</span>
+                </div>
                 ${dailyBreakdownHtml}
             </div>
+
+            <div class="goals-levelup" id="emp-goals-levelup"></div>
         `;
+
+        // Store goal in the header + level-up bar (mirrors the manager widget).
+        await fetchStoreTarget(store);
+        const empTarget = targetFor(store);
+        const empStoreTargetEl = document.getElementById('emp-goals-store-target');
+        if (empStoreTargetEl) empStoreTargetEl.innerText = `Goal: ${empTarget} Listings`;
+        const empLuEl = document.getElementById('emp-goals-levelup');
+        if (empLuEl) empLuEl.innerHTML = levelUpHtml(weeksFor(store), empTarget);
     } catch (e) {
         container.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to sync goals.</div>';
     }
@@ -5968,75 +6347,6 @@ async function fetchAndRenderEmployeeKPIs() {
         `;
     } catch (e) {
         container.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to sync KPIs.</div>';
-    }
-}
-
-// ============================================================================
-// 22. MODULE: FIRST-LOGIN TUTORIAL
-// ============================================================================
-
-let _tutorialSlide = 0;
-const _TUTORIAL_TOTAL = 8;
-
-async function checkAndShowTutorial(userName) {
-    const key = 'speeksTutorial_' + userName.trim().toLowerCase().replace(/\s+/g, '_');
-    if (localStorage.getItem(key) === 'done') return;
-
-    if (TUTORIAL_URL) {
-        try {
-            const res = await fetch(`${TUTORIAL_URL}?user=${encodeURIComponent(userName)}&v=${Date.now()}`);
-            const data = await res.json();
-            if (data.completed) { localStorage.setItem(key, 'done'); return; }
-        } catch (e) { /* network error — still show tutorial, server will re-check next login */ }
-    }
-
-    _tutorialSlide = 0;
-    _updateTutorialUI();
-    const overlay = document.getElementById('tutorialOverlay');
-    if (overlay) overlay.classList.add('active');
-    document.body.classList.add('no-scroll');
-}
-
-function tutorialNav(dir) {
-    const next = _tutorialSlide + dir;
-    if (next < 0) return;
-    if (next >= _TUTORIAL_TOTAL) { _completeTutorial(); return; }
-    _tutorialSlide = next;
-    _updateTutorialUI();
-}
-
-function _updateTutorialUI() {
-    document.querySelectorAll('.tutorial-slide').forEach((s, i) => s.classList.toggle('active', i === _tutorialSlide));
-    document.querySelectorAll('.tut-dot').forEach((d, i) => d.classList.toggle('active', i === _tutorialSlide));
-
-    const prev = document.getElementById('tutorialPrev');
-    const next = document.getElementById('tutorialNext');
-    const counter = document.getElementById('tutorialCounter');
-    const isLast = _tutorialSlide === _TUTORIAL_TOTAL - 1;
-
-    if (prev) prev.disabled = _tutorialSlide === 0;
-    if (counter) counter.textContent = `${_tutorialSlide + 1} of ${_TUTORIAL_TOTAL}`;
-    if (next) {
-        next.textContent = isLast ? 'Get Started! 🚀' : 'Next →';
-        next.classList.toggle('tut-finish', isLast);
-    }
-}
-
-async function _completeTutorial() {
-    const overlay = document.getElementById('tutorialOverlay');
-    if (overlay) overlay.classList.remove('active');
-    document.body.classList.remove('no-scroll');
-
-    const userName = sessionStorage.getItem('speeksUserName') || '';
-    const key = 'speeksTutorial_' + userName.trim().toLowerCase().replace(/\s+/g, '_');
-    localStorage.setItem(key, 'done');
-
-    if (userName && TUTORIAL_URL) {
-        fetch(TUTORIAL_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'complete', user: userName })
-        }).catch(() => {});
     }
 }
 
@@ -6411,17 +6721,7 @@ function applyRoleBasedUI() {
         document.querySelectorAll('.manager-only').forEach(el => el.style.setProperty('display', 'none', 'important'));
     }
 
-    if (userRoleClass === 'role-assistant-manager') {
-        document.body.classList.add('am-mode');
-        const empRow = document.querySelector('.employee-dashboard-row');
-        if (empRow) {
-            empRow.style.setProperty('display', 'grid', 'important');
-            empRow.style.setProperty('grid-template-columns', '1fr 1fr', 'important');
-            empRow.style.setProperty('align-items', 'stretch', 'important');
-        }
-        const bsCard = document.querySelector('.buying-sales-module');
-        if (bsCard) bsCard.style.setProperty('display', 'flex', 'important');
-    }
+    // ASM uses the same dashboard layout as the team-member view (no special grid).
 
     if (userStore !== 'ALL') {
         ['kpiStoreSelect', 'am-kpiStoreSelect', 'weeklyKpiStoreSelect', 'bsStoreSelect', 'vw-primary', 'dmChartStoreSelector', 'mbStoreSelect'].forEach(id => {
@@ -6648,6 +6948,29 @@ customTooltip.className = 'speeks-tooltip';
 document.body.appendChild(customTooltip);
 
 document.addEventListener('mouseover', function(e) {
+    const infoI = e.target.closest('.goals-info-i');
+    if (infoI && infoI.dataset.tipTitle) {
+        customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
+        customTooltip.innerHTML = `
+            <strong style="display:block; margin-bottom: 6px; color: var(--sage-professional); font-size: 13px;">${infoI.dataset.tipTitle}</strong>
+            ${infoI.dataset.tipDesc ? `<span style="font-size: 12px; color: var(--slate-charcoal); line-height: 1.5;">${infoI.dataset.tipDesc}</span>` : ''}`;
+        customTooltip.classList.add('show');
+        return;
+    }
+
+    const awardI = e.target.closest('.award-info-btn');
+    if (awardI) {
+        const wrap = awardI.closest('.award-card-trophy-wrap');
+        const nameEl = wrap ? wrap.querySelector('.award-card-name') : null;
+        const title = nameEl ? nameEl.innerText.replace(/\s+/g, ' ').trim() : 'Award';
+        customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
+        customTooltip.innerHTML = `
+            <strong style="display:block; margin-bottom: 6px; color: var(--sage-professional); font-size: 13px;">${title}</strong>
+            ${awardI.dataset.desc ? `<span style="font-size: 12px; color: var(--slate-charcoal); line-height: 1.5;">${awardI.dataset.desc}</span>` : ''}`;
+        customTooltip.classList.add('show');
+        return;
+    }
+
     const goalMini = e.target.closest('.dg-goal-mini');
     if (goalMini) {
         const title = goalMini.dataset.goalTitle;
@@ -8604,13 +8927,24 @@ async function fetchChampions() {
             });
         });
 
-        // 4. FETCH BUYERS — reads from each store's weekly entries and ranks by buying_value
+        // 4. FETCH BUYERS — ranks by the Buyer Champion Final Score from the old
+        // Team Member KPIs "Weekly Scores" tab, computed from each store's weekly entries:
+        //   Final = (ConvScore + MarginScore) × (BuyValue + 1.2 × #Converted) / 100
         try {
             const buyerFetches = stores.map(s => fetch(`${WEEKLY_KPI_URL}?store=${s}&v=${Date.now()}`).then(r => r.json()));
             const buyerResults = await Promise.all(buyerFetches);
             buyerResults.forEach((d, storeIdx) => {
                 (d.employees || []).forEach(e => {
-                    const score = parseNum(e.buying_value);
+                    const bv  = parseNum(e.buying_value);
+                    const bc  = parseNum(e.buying_cost);
+                    const tc  = parseNum(e.transaction_count);
+                    const tco = parseNum(e.transaction_converted);
+                    if (bv <= 0) return;
+                    const conv = tc > 0 ? tco / tc : 0;
+                    const gm   = 1 - bc / bv;
+                    const convScore = conv >= 0.95 ? 100 : conv >= 0.9 ? 400 * conv - 280 : conv >= 0.8 ? 600 * conv - 460 : conv >= 0.7 ? 200 * conv - 140 : 0;
+                    const mgnScore  = gm >= 0.6 ? 100 : gm >= 0.5 ? 800 * gm - 380 : gm >= 0.45 ? 400 * gm - 180 : 0;
+                    const score = ((convScore + mgnScore) * (bv + tco * 1.2)) / 100;
                     if (score > 0) allBuyers.push({ name: getFullName(e.employee_name), store: stores[storeIdx], score });
                 });
             });
@@ -9026,66 +9360,110 @@ document.addEventListener('click', function(e) {
 });
 
 // --- ROLE SELECTION LOGIC ---
+// Per-role capacity: most roles are 1-per-store, but a store can run TWO listers.
+const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1 };
+
 window.updateRoleLocks = function() {
-    // Find which roles are currently selected by anyone
-    const activeRoles = Array.from(document.querySelectorAll('.role-dot.active')).map(btn => btn.innerText);
-    
+    // Count how many people currently hold each role.
+    const counts = {};
+    document.querySelectorAll('.role-dot.active').forEach(btn => {
+        const r = btn.innerText;
+        counts[r] = (counts[r] || 0) + 1;
+    });
+
     document.querySelectorAll('.role-dot').forEach(btn => {
-        if (!btn.classList.contains('active')) {
-            if (activeRoles.includes(btn.innerText)) {
-                // Gray it out and mark it as taken
-                btn.style.opacity = '0.3';
-                btn.style.cursor = 'not-allowed';
-                btn.dataset.roleTaken = 'true';
-            } else {
-                // Only restore if it isn't locked by the 10:30am cutoff
-                if (!btn.hasAttribute('disabled')) {
-                    btn.style.opacity = '1';
-                    btn.style.cursor = 'pointer';
-                    btn.dataset.roleTaken = 'false';
-                }
-            }
-        } else {
-            // If it is active, make sure it looks fully visible
-            if (!btn.hasAttribute('disabled')) {
-                btn.style.opacity = '1';
-                btn.style.cursor = 'pointer';
-            }
+        if (btn.classList.contains('active')) {
+            // Active buttons always look fully visible.
+            if (!btn.hasAttribute('disabled')) { btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }
+            return;
+        }
+        const role = btn.innerText;
+        const cap = ROLE_CAP[role] || 1;
+        const isFull = (counts[role] || 0) >= cap;
+        if (isFull) {
+            // At capacity for this role. (L1 still allows a deliberate swap — see selectRole.)
+            btn.style.opacity = '0.3';
+            btn.style.cursor = 'not-allowed';
+            btn.dataset.roleTaken = 'true';
+        } else if (!btn.hasAttribute('disabled')) {
+            // Only restore if it isn't locked by the 10:30am cutoff.
+            btn.style.opacity = '1';
+            btn.style.cursor = 'pointer';
+            btn.dataset.roleTaken = 'false';
         }
     });
 };
 
 window.selectRole = function(clickedBtn, emp, role) {
     if (clickedBtn.hasAttribute('disabled')) return;
-    
-    // Prevent selecting if someone else already has it
+
+    const isAlreadyActive = clickedBtn.classList.contains('active');
+
+    // 1. If clicking the already active role, toggle it off and free it up.
+    if (isAlreadyActive) {
+        clickedBtn.classList.remove('active');
+        updateRoleLocks();
+        recomputeGoalDisplays();
+        scheduleGoalsAutosave();
+        return;
+    }
+
+    // 2. Role already taken by someone else? One person per role.
     if (clickedBtn.dataset.roleTaken === 'true') {
         alert(`The role ${role} is already assigned to another team member. Please deselect it from them first.`);
         return;
     }
 
-    const isAlreadyActive = clickedBtn.classList.contains('active');
-
-    // 1. If clicking the already active role, toggle it off and free it up
-    if (isAlreadyActive) {
-        clickedBtn.classList.remove('active');
-        updateRoleLocks(); // Re-check the board
-        return;
-    }
-
-    // 2. Remove ALL roles from the CURRENT employee (Only 1 role per person)
+    // 3. Remove ALL roles from the CURRENT employee (only 1 role per person).
     const parentRow = clickedBtn.closest('.goals-edit-roles');
     if (parentRow) {
-        parentRow.querySelectorAll('.role-dot').forEach(btn => {
-            btn.classList.remove('active');
-        });
+        parentRow.querySelectorAll('.role-dot').forEach(btn => btn.classList.remove('active'));
     }
 
-    // 3. Make the newly clicked button active
+    // 4. Activate the clicked button.
     clickedBtn.classList.add('active');
 
-    // 4. Lock this role out for everyone else
     updateRoleLocks();
+    recomputeGoalDisplays();
+    scheduleGoalsAutosave();
+};
+
+// Recompute every visible auto-goal from the currently selected roles.
+window.recomputeGoalDisplays = function() {
+    if (!document.getElementById('goal-display-0') && !document.querySelector('.goal-auto-display')) return;
+    let staffedCount = 0;
+    goalsRoster.forEach((emp, idx) => {
+        const group = document.getElementById(`roles-${idx}`);
+        if (group && group.querySelector('.role-dot.active')) staffedCount++;
+    });
+    const rosterSize = goalsRoster.length;
+    const dateStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+
+    let todayTotal = 0;
+    let weekTotal = 0;
+    goalsRoster.forEach((emp, idx) => {
+        const group = document.getElementById(`roles-${idx}`);
+        const activeBtn = group?.querySelector('.role-dot.active');
+        const role = activeBtn ? activeBtn.innerText : '-';
+        const todayGoal = role !== '-' ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount) : 0;
+
+        const disp = document.getElementById(`goal-display-${idx}`);
+        if (disp) {
+            disp.innerText = role === '-' ? '–' : todayGoal;
+            disp.classList.toggle('goal-auto-set', role !== '-');
+        }
+        todayTotal += todayGoal;
+
+        const weekVal = (_priorWeekGoals[idx] || 0) + todayGoal;
+        const wkEl = document.getElementById(`week-display-${idx}`);
+        if (wkEl) wkEl.innerText = weekVal || '–';
+        weekTotal += weekVal;
+    });
+
+    const todayEl = document.getElementById('goals-total-target');
+    if (todayEl) todayEl.innerText = todayTotal;
+    const weekEl = document.getElementById('goals-total-actual');
+    if (weekEl) weekEl.innerText = weekTotal;
 };
 
 // --- PATCH NOTES ---

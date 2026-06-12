@@ -79,44 +79,6 @@
 </div>
 
 <!-- ===== FIRST-LOGIN TUTORIAL ===== -->
-<div id="tutorialOverlay" class="tutorial-overlay">
-    <div class="tutorial-modal">
-        <div class="tutorial-header">
-            <h2>Welcome to SPEEKSNET!</h2>
-            <div class="tutorial-dots">
-                <span class="tut-dot active"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-                <span class="tut-dot"></span>
-            </div>
-        </div>
-        <div class="tutorial-slides-wrap">
-            <div class="tutorial-slide active">
-                <div class="tutorial-welcome-card">
-                    <div class="tutorial-welcome-icon">🎉</div>
-                    <p class="tutorial-welcome-msg">Welcome to your personal tour for the all new SPEEKSNET. This tutorial will show you around all of the new features. Let's begin!</p>
-                </div>
-            </div>
-            <div class="tutorial-slide"><img src="tutorial/1.png" alt="Tutorial Step 1" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/2.png" alt="Tutorial Step 2" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/3.png" alt="Tutorial Step 3" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/4.png" alt="Tutorial Step 4" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/5.png" alt="Tutorial Step 5" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/6.png" alt="Tutorial Step 6" class="tutorial-img" loading="lazy"></div>
-            <div class="tutorial-slide"><img src="tutorial/7.png" alt="Tutorial Step 7" class="tutorial-img" loading="lazy"></div>
-        </div>
-        <div class="tutorial-footer">
-            <button class="tutorial-btn tut-prev" id="tutorialPrev" onclick="tutorialNav(-1)" disabled>← Back</button>
-            <span class="tutorial-counter" id="tutorialCounter">1 of 8</span>
-            <button class="tutorial-btn tut-next" id="tutorialNext" onclick="tutorialNav(1)">Next →</button>
-        </div>
-    </div>
-</div>
-
 <div id="globalOverlay" class="overlay"></div>
 
 <div class="modal-menu manage-docs-menu" id="hotkeysDropdown">
@@ -351,7 +313,7 @@
               <div style="text-align: center; margin-bottom: 35px; width: 100%; display: flex; flex-direction: column; align-items: center;">
                   <h3 style="font-size: 19px; font-weight: 900; color: var(--slate-charcoal); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 8px;">
                       🏆 Weekly Buyer Champion
-                      <span title="Based on a Proprietary Buying Metric Formula." style="cursor: default; font-size: 11px; font-weight: 900; color: #a0aab2; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 50%; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; text-transform: lowercase;">i</span>
+                      <span class="goals-info-i" data-tip-title="Weekly Buyer Champion" data-tip-desc="Based on a Proprietary Buying Metric Formula.">i</span>
                   </h3>
                   <div id="buyer-champions-date" style="font-size: 13px; font-weight: 800; color: #888; text-transform: uppercase; letter-spacing: 1px; text-align: center;"></div>
               </div>
