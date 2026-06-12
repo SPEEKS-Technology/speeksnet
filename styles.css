@@ -279,10 +279,33 @@ html {
     margin-bottom: 8px; 
 }
 
-.page-header p { 
-    font-size: clamp(13px, 1.5vw, 15px); 
-    color: #666; 
-    font-weight: 500; 
+.page-header p {
+    font-size: clamp(13px, 1.5vw, 15px);
+    color: #666;
+    font-weight: 500;
+}
+
+/* UI titles & subtitles are labels, not copyable text — suppress the
+   text I-beam and selection caret when they are clicked. */
+h1, h2, h3, h4, h5, h6,
+.page-header p,
+.card-title, .store-name,
+.district-kpi-title, .master-card-title, .district-command-title,
+.master-section-title, .widget-date-display,
+.awards-section-title, .award-card-header,
+.emp-kpi-title, .goals-edit-title, .goals-header-lbl,
+.gi-section-title, .pn-section-title, .pne-group-title, .pn-manage-section-title,
+.tools-panel-title, .portal-link-title, .module-coming-soon-title,
+.ws-title, .dcc-store-title, .ceo-ring-title, .ceo-mini-section-title,
+.rr-title, .dev-title, .category-title, .doc-title, .mgb-goal-title {
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+/* Rich-text editors must stay selectable/editable. */
+[contenteditable="true"], [contenteditable="true"] * {
+    -webkit-user-select: text;
+    user-select: text;
 }
 
 .card { 
