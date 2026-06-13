@@ -285,8 +285,15 @@ html {
     font-weight: 500;
 }
 
-/* UI titles & subtitles are labels, not copyable text — suppress the
-   text I-beam and selection caret when they are clicked. */
+/* UI chrome — nav, modals, buttons, headings and labels — is not copyable
+   text. Suppress the text I-beam and selection caret when these are clicked.
+   Scoping to whole containers (nav bar, every .modal-menu) means new modals
+   and titles are covered automatically, instead of a hand-maintained list.
+   Body content (announcements, policies, docs, quick messages) is untouched
+   and stays selectable; form fields are re-enabled in the rule below. */
+.top-nav, .nav-bar,
+.modal-menu, .modal-header,
+button,
 h1, h2, h3, h4, h5, h6,
 .page-header p,
 .card-title, .store-name,
@@ -302,7 +309,9 @@ h1, h2, h3, h4, h5, h6,
     user-select: none;
 }
 
-/* Rich-text editors must stay selectable/editable. */
+/* Form fields and rich-text editors must stay editable/selectable, even
+   when nested inside a non-selectable modal above. */
+input, textarea, select,
 [contenteditable="true"], [contenteditable="true"] * {
     -webkit-user-select: text;
     user-select: text;
@@ -4162,7 +4171,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     font-weight: 500;
     color: var(--gen-text);
     letter-spacing: 1px;
-    text-transform: uppercase;
+    text-transform: lowercase;
     opacity: 0.6;
     transition: opacity 0.3s ease, color 0.3s ease;
 }
@@ -4640,6 +4649,9 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 }
 .pne-group-title { font-size: 15px; font-weight: 800; color: var(--slate-charcoal); }
 .pne-group-date  { font-size: 11px; font-weight: 600; color: #999; text-transform: uppercase; letter-spacing: 0.5px; }
+.pne-group-view  { display: flex; align-items: center; gap: 10px; flex: 1; }
+.pne-group-edit-btn { margin-left: auto; }
+.pne-group-edit  { display: flex; flex-direction: column; gap: 8px; flex: 1; }
 
 .pne-item {
     background: white;

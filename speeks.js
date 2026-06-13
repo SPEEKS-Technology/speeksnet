@@ -9717,17 +9717,21 @@ function renderPatchNotesEditor(data) {
     const sorted = buildPatchGroups(entries);
     const catBadge = { 'New Features': 'pn-badge-new', 'Improvements': 'pn-badge-improved', 'Bug Fixes': 'pn-badge-fixed' };
 
-    list.innerHTML = sorted.map(group => {
+    list.innerHTML = sorted.map((group, gi) => {
         const vLabel = group.title;
+        const safeTitle = group.title.replace(/"/g, '&quot;');
         return `
-            <div class="pne-group">
+            <div class="pne-group" id="pne-group-${gi}" data-title="${safeTitle}" data-date="${group.date}">
                 <div class="pne-group-header">
-                    <span class="pne-group-title">${vLabel}</span>
-                    <span class="pne-group-date">${formatPatchDate(group.date)}</span>
+                    <div class="pne-group-view">
+                        <span class="pne-group-title">${vLabel}</span>
+                        <span class="pne-group-date">${formatPatchDate(group.date)}</span>
+                        <button class="pne-btn pne-group-edit-btn" onclick="startEditPatchGroup(${gi})">Edit Version</button>
+                    </div>
                 </div>
                 ${group.items.map(item => `
-                    <div class="pne-item" id="pne-item-${item.rowNum}"
-                         data-rownum="${item.rowNum}"
+                    <div class="pne-item" id="pne-item-${item.id}"
+                         data-id="${item.id}"
                          data-category="${item.category}"
                          data-summary="${item.summary.replace(/"/g, '&quot;').replace(/\n/g, '&#10;')}"
                          data-title="${group.title}"
@@ -9736,8 +9740,8 @@ function renderPatchNotesEditor(data) {
                             <span class="pn-badge ${catBadge[item.category] || ''}">${item.category}</span>
                             <span class="pne-item-summary">${item.summary.replace(/\n/g, ' ')}</span>
                             <div class="pne-item-actions">
-                                <button class="pne-btn" onclick="startEditPatchItem(${item.rowNum})">Edit</button>
-                                <button class="pne-btn pne-btn-delete" onclick="promptDeletePatchItem(${item.rowNum})">Delete</button>
+                                <button class="pne-btn" onclick="startEditPatchItem('${item.id}')">Edit</button>
+                                <button class="pne-btn pne-btn-delete" onclick="promptDeletePatchItem('${item.id}')">Delete</button>
                             </div>
                         </div>
                     </div>`).join('')}
@@ -9745,8 +9749,63 @@ function renderPatchNotesEditor(data) {
     }).join('');
 }
 
-function startEditPatchItem(rowNum) {
-    const el = document.getElementById(`pne-item-${rowNum}`);
+// --- Edit a whole version's title + date (applies to all its items) ---
+function startEditPatchGroup(gi) {
+    const el = document.getElementById(`pne-group-${gi}`);
+    if (!el) return;
+    const title = el.dataset.title || '';
+    const date  = el.dataset.date  || '';
+    const header = el.querySelector('.pne-group-header');
+    const view   = el.querySelector('.pne-group-view');
+    if (view) view.style.display = 'none';
+
+    const editDiv = document.createElement('div');
+    editDiv.className = 'pne-group-edit';
+    editDiv.innerHTML = `
+        <input type="text" class="form-input-lg pne-edit-gtitle" value="${title.replace(/"/g, '&quot;')}" placeholder="Version title">
+        <input type="date" class="form-input-lg pne-edit-gdate" value="${date}">
+        <div class="pne-edit-actions">
+            <button class="btn-primary" onclick="saveEditPatchGroup(${gi})">Save</button>
+            <button class="pne-btn" onclick="cancelEditPatchGroup(${gi})">Cancel</button>
+        </div>`;
+    if (header) header.appendChild(editDiv);
+}
+
+function cancelEditPatchGroup(gi) {
+    const el = document.getElementById(`pne-group-${gi}`);
+    if (!el) return;
+    const view    = el.querySelector('.pne-group-view');
+    const editDiv = el.querySelector('.pne-group-edit');
+    if (view) view.style.display = '';
+    if (editDiv) editDiv.remove();
+}
+
+async function saveEditPatchGroup(gi) {
+    const el = document.getElementById(`pne-group-${gi}`);
+    if (!el) return;
+    const oldTitle = el.dataset.title;
+    const oldDate  = el.dataset.date;
+    const title    = el.querySelector('.pne-edit-gtitle').value.trim();
+    const dateRaw  = el.querySelector('.pne-edit-gdate').value; // YYYY-MM-DD
+    if (!title || !dateRaw) return;
+
+    const saveBtn = el.querySelector('.btn-primary');
+    if (saveBtn) { saveBtn.textContent = 'Saving...'; saveBtn.disabled = true; }
+
+    try {
+        await fetch(PATCH_NOTES_URL, {
+            method: 'POST', mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'editGroup', oldTitle, oldDate, title, date: dateRaw })
+        });
+        loadPatchNotesEditor();
+    } catch (e) {
+        if (saveBtn) { saveBtn.textContent = 'Save'; saveBtn.disabled = false; }
+    }
+}
+
+function startEditPatchItem(id) {
+    const el = document.getElementById(`pne-item-${id}`);
     if (!el) return;
     const { category, summary } = el.dataset;
     const decodedSummary = summary.replace(/&#10;/g, '\n');
@@ -9763,14 +9822,14 @@ function startEditPatchItem(rowNum) {
         </select>
         <textarea class="form-input-lg pn-textarea pne-edit-sum">${decodedSummary}</textarea>
         <div class="pne-edit-actions">
-            <button class="btn-primary" onclick="saveEditPatchItem(${rowNum})">Save Changes</button>
-            <button class="pne-btn" onclick="cancelEditPatchItem(${rowNum})">Cancel</button>
+            <button class="btn-primary" onclick="saveEditPatchItem('${id}')">Save Changes</button>
+            <button class="pne-btn" onclick="cancelEditPatchItem('${id}')">Cancel</button>
         </div>`;
     el.appendChild(editDiv);
 }
 
-function cancelEditPatchItem(rowNum) {
-    const el = document.getElementById(`pne-item-${rowNum}`);
+function cancelEditPatchItem(id) {
+    const el = document.getElementById(`pne-item-${id}`);
     if (!el) return;
     const viewDiv = el.querySelector('.pne-item-view');
     const editDiv = el.querySelector('.pne-item-edit');
@@ -9778,8 +9837,8 @@ function cancelEditPatchItem(rowNum) {
     if (editDiv) editDiv.remove();
 }
 
-async function saveEditPatchItem(rowNum) {
-    const el       = document.getElementById(`pne-item-${rowNum}`);
+async function saveEditPatchItem(id) {
+    const el       = document.getElementById(`pne-item-${id}`);
     if (!el) return;
     const category = el.querySelector('.pne-edit-cat').value;
     const summary  = el.querySelector('.pne-edit-sum').value.trim();
@@ -9794,7 +9853,7 @@ async function saveEditPatchItem(rowNum) {
         await fetch(PATCH_NOTES_URL, {
             method: 'POST', mode: 'no-cors',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'editEntry', rowNum, title, date, category, summary })
+            body: JSON.stringify({ action: 'editEntry', id, title, date, category, summary })
         });
         loadPatchNotesEditor();
     } catch (e) {
@@ -9802,25 +9861,25 @@ async function saveEditPatchItem(rowNum) {
     }
 }
 
-function promptDeletePatchItem(rowNum) {
-    const el = document.getElementById(`pne-item-${rowNum}`);
+function promptDeletePatchItem(id) {
+    const el = document.getElementById(`pne-item-${id}`);
     if (!el) return;
     const actions = el.querySelector('.pne-item-actions');
     if (!actions) return;
     actions.innerHTML = `
         <span class="pne-confirm-label">Delete this item?</span>
-        <button class="pne-btn pne-btn-confirm-delete" onclick="confirmDeletePatchItem(${rowNum})">Yes, Delete</button>
+        <button class="pne-btn pne-btn-confirm-delete" onclick="confirmDeletePatchItem('${id}')">Yes, Delete</button>
         <button class="pne-btn" onclick="loadPatchNotesEditor()">Cancel</button>`;
 }
 
-async function confirmDeletePatchItem(rowNum) {
-    const btn = document.querySelector(`#pne-item-${rowNum} .pne-btn-confirm-delete`);
+async function confirmDeletePatchItem(id) {
+    const btn = document.querySelector(`#pne-item-${id} .pne-btn-confirm-delete`);
     if (btn) { btn.textContent = 'Deleting...'; btn.disabled = true; }
     try {
         await fetch(PATCH_NOTES_URL, {
             method: 'POST', mode: 'no-cors',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'deleteEntry', rowNum })
+            body: JSON.stringify({ action: 'deleteEntry', id })
         });
     } catch (e) { /* no-cors always throws, reload regardless */ }
     loadPatchNotesEditor();
