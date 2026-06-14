@@ -3278,7 +3278,11 @@ function _kpiCancelEdit() {
 }
 
 async function _kpiSavePeriod(periodDate) {
-    const store = sessionStorage.getItem('speeksUserStore');
+    // Mirror the load/render store resolution: DM/CEO/TOM save the store picked in
+    // the (visible) selector; managers fall back to their own store. Reading only
+    // sessionStorage here misrouted DM saves to their own store ('CORP').
+    const modalSel = document.getElementById('kpiModalStoreSelect');
+    const store = (modalSel && modalSel.offsetParent !== null && modalSel.value) || sessionStorage.getItem('speeksUserStore');
     const pin   = sessionStorage.getItem('speeksUserPin');
     if (!store || !pin) return;
     const pk     = periodDate.replace(/-/g, '');
