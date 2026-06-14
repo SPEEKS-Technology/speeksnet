@@ -36,9 +36,10 @@ function createWeeklyTrigger() {
   ScriptApp.newTrigger('sendWeeklyReport')
     .timeBased()
     .onWeekDay(ScriptApp.WeekDay.MONDAY)
-    .atHour(7)
+    .atHour(8)
+    .nearMinute(30)
     .create();
-  Logger.log('Trigger created: sendWeeklyReport every Monday at 7 AM Central.');
+  Logger.log('Trigger created: sendWeeklyReport every Monday at 8:30 AM Central.');
 }
 
 // =============================================================================

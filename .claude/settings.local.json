@@ -8,7 +8,19 @@
       "Bash(Select-Object -ExpandProperty FullName)",
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\nickh\\\\Github Repos\\\\speeksnet\" -Recurse -Force)",
       "Bash(Select-Object FullName, PSIsContainer)",
-      "Bash(Sort-Object FullName)"
+      "Bash(Sort-Object FullName)",
+      "mcp__supabase__get_project_url",
+      "mcp__supabase__list_tables",
+      "WebFetch(domain:docs.google.com)",
+      "Bash(node -e ' *)",
+      "Bash(ls \"C:\\\\Users\\\\nickh\\\\OneDrive\\\\Desktop\\\\Json from sales summary.txt\" 2>/dev/null && echo \"EXISTS\" || echo \"NOT FOUND\")",
+      "Read(//c/Users/nickh/OneDrive/Desktop/**)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\nickh\\\\Github Repos\\\\speeksnet\" -Force)",
+      "Bash(Select-Object Name, FullName)",
+      "Bash(powershell -Command \"Get-Content 'c:\\\\Users\\\\nickh\\\\Github Repos\\\\speeksnet\\\\speeks.js' | Measure-Object -Line\")",
+      "Bash(powershell -Command ' *)",
+      "Bash(curl -sL \"https://docs.google.com/spreadsheets/d/1oHOnA6wDwaLQ-EP4-CiDTkKpAdP2V7y8mOay416HDME/edit\" -o /tmp/sheet.html)",
+      "Read(//tmp/**)"
     ]
   }
 }
