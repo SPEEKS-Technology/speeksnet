@@ -6332,3 +6332,67 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     line-height: 1.65;
     word-break: break-word;
 }
+
+/* ============================================================================
+   WEEKLY-KPI REMINDER — guided breadcrumb (Analytics tab → Store KPIs → Edit)
+   Active Sat 4pm → Sun midnight for managers. Red = "action needed".
+   ============================================================================ */
+.kpi-due { position: relative; overflow: visible; }
+/* the dot is just a 10px positioning box; the visuals are two pseudo circles so the
+   pulsing ripple is a transform-scaled circle (stays perfectly round at any zoom/DPI). */
+.kpi-due-dot {
+    position: absolute; top: -3px; right: -3px;
+    width: 10px; height: 10px;
+    pointer-events: none; z-index: 4;
+}
+.kpi-due-dot::before,
+.kpi-due-dot::after {
+    content: ""; position: absolute; inset: 0;
+    border-radius: 50%; box-sizing: border-box;
+}
+.kpi-due-dot::before {                 /* expanding ripple — scaled, never distorts */
+    background: #dc2626;
+    transform-origin: center center;
+    animation: kpiDueRipple 1.8s ease-out infinite;
+}
+.kpi-due-dot::after {                   /* crisp solid dot on top */
+    background: #dc2626;
+    border: 2px solid #fff;
+    transform: translateZ(0);
+}
+/* on the dark top-nav, nudge the dot just inside the link */
+.top-nav .nav-link.kpi-due { overflow: visible; }
+.top-nav .nav-link.kpi-due .kpi-due-dot { top: 4px; right: 6px; }
+
+@keyframes kpiDueRipple {
+    0%   { transform: scale(1);   opacity: 0.55; }
+    70%  { transform: scale(3);   opacity: 0;    }
+    100% { transform: scale(3);   opacity: 0;    }
+}
+
+/* Step 3: the "Enter this week's KPIs 👉" pill + a soft pulse on the Edit button */
+.kpi-due-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca;
+    font-size: 11px; font-weight: 800; letter-spacing: 0.2px;
+    padding: 5px 11px; border-radius: 20px; margin-right: 9px; white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(220, 38, 38, 0.18);
+    animation: kpiDueNudge 1.5s ease-in-out infinite;
+}
+@keyframes kpiDueNudge {
+    0%, 100% { transform: translateX(0); }
+    50%      { transform: translateX(4px); }
+}
+.kpi-update-trigger-btn.kpi-due-pulse {
+    animation: kpiDueBtnPulse 1.8s ease-out infinite;
+    border-color: #dc2626;
+}
+@keyframes kpiDueBtnPulse {           /* box-shadow pulse is fine on a large element */
+    0%   { box-shadow: 0 0 0 0   rgba(220, 38, 38, 0.55); }
+    70%  { box-shadow: 0 0 0 8px rgba(220, 38, 38, 0);    }
+    100% { box-shadow: 0 0 0 0   rgba(220, 38, 38, 0);    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .kpi-due-dot::before, .kpi-due-pill, .kpi-update-trigger-btn.kpi-due-pulse { animation: none; }
+}
