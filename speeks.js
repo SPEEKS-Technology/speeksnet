@@ -3078,6 +3078,65 @@ function _kpiSyncHeaderBtns() {
     if (editBtn)   editBtn.style.display   = (!isEditing && canEditRole && (hasEditable || hasPeriods)) ? '' : 'none';
     if (saveBtn)   saveBtn.style.display   = isEditing ? '' : 'none';
     if (cancelBtn) cancelBtn.style.display = isEditing ? '' : 'none';
+    _kpiDecorateEditBtn();
+}
+
+// ============================================================================
+// Weekly-KPI reminder — guides managers Sat 4pm → Sun midnight (America/Chicago)
+// Breadcrumb: Analytics nav-link → Store KPIs sub-tab → the Edit button.
+// ============================================================================
+const _KPI_REMINDER_ROLES = new Set(['manager', 'owner manager', 'owner (manager)', 'assistant manager']);
+
+function _kpiReminderActive() {
+    // Read the current wall-clock weekday + hour in Central time
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Chicago', weekday: 'short', hour: 'numeric', hour12: false,
+    }).formatToParts(new Date());
+    const wd = (parts.find(p => p.type === 'weekday') || {}).value || '';
+    let hr = parseInt((parts.find(p => p.type === 'hour') || {}).value || '0', 10);
+    if (hr === 24) hr = 0;                 // midnight edge
+    if (wd === 'Sat') return hr >= 16;     // Saturday after 4pm
+    return wd === 'Sun';                    // all day Sunday (until Mon 00:00)
+}
+function _kpiReminderOn() {
+    return _kpiReminderActive() && _KPI_REMINDER_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
+}
+
+// add/remove a pulsing dot on an element (idempotent)
+function _kpiToggleDot(el, on) {
+    if (!el) return;
+    el.classList.toggle('kpi-due', on);
+    let dot = el.querySelector(':scope > .kpi-due-dot');
+    if (on && !dot) { dot = document.createElement('span'); dot.className = 'kpi-due-dot'; el.appendChild(dot); }
+    else if (!on && dot) dot.remove();
+}
+
+// Step 3: a nudging pill + pulse beside the Edit button (only when it's visible & on the weekly tab)
+function _kpiDecorateEditBtn(force) {
+    const btn = document.getElementById('kpiEditBtn');
+    if (!btn) return;
+    const on = (force !== undefined ? force : _kpiReminderOn());
+    const wants = on && btn.style.display !== 'none' && _kpiCurrentTab === 'weekly';
+    btn.classList.toggle('kpi-due-pulse', wants);
+    let pill = document.getElementById('kpiDuePill');
+    if (wants && !pill) {
+        pill = document.createElement('span');
+        pill.id = 'kpiDuePill';
+        pill.className = 'kpi-due-pill';
+        pill.innerHTML = "Enter this week’s KPIs 👉";
+        btn.parentNode.insertBefore(pill, btn);
+    } else if (!wants && pill) {
+        pill.remove();
+    }
+}
+
+// Steps 1 & 2: dots on the Analytics nav-link, the Store KPIs sub-tab, and the Weekly toggle
+function applyKpiReminder() {
+    const on = _kpiReminderOn();
+    document.querySelectorAll('.nav-link[href="workspace.html"]').forEach(a => _kpiToggleDot(a, on));
+    _kpiToggleDot(document.getElementById('ws-tab-kpis'), on);
+    _kpiToggleDot(document.getElementById('kpi-tab-weekly'), on);
+    _kpiDecorateEditBtn(on);
 }
 
 function kpiHeaderStartEdit() {
@@ -3189,6 +3248,7 @@ function switchWorkspaceTab(name) {
     } else if (name === 'b2b') {
         fetchB2BDeals();
     }
+    applyKpiReminder();
 }
 
 // Detects the workspace page and opens the requested sub-tab (defaults to the
@@ -3201,6 +3261,7 @@ function initWorkspace() {
     // TEMP: B2B tab hidden — restore by putting 'b2b' back in the list and as the default.
     const initial = ['brief', 'kpis'].includes(hash) ? hash : 'brief';
     switchWorkspaceTab(initial);
+    applyKpiReminder();
 }
 
 function _kpiStartEdit(periodDate) {
@@ -6908,6 +6969,9 @@ document.addEventListener("DOMContentLoaded", () => {
         initDashboardData();
         initTicker();
         initWorkspace();
+        applyKpiReminder();
+        // re-evaluate the weekly-KPI reminder window each minute so it appears/clears live
+        setInterval(applyKpiReminder, 60000);
         if (document.getElementById('mainKpiChart')) syncAllData();
     } else {
         if (!window.location.href.includes('index.html') && document.getElementById('authOverlay')) {
@@ -7098,6 +7162,7 @@ document.addEventListener('click', async (e) => {
             } else {
                 setTimeout(() => {
                     if (typeof initDashboardData === 'function') initDashboardData();
+                    if (typeof applyKpiReminder === 'function') applyKpiReminder();
                     if (document.querySelector('.ws-wrap') && typeof initWorkspace === 'function') initWorkspace();
                     if (document.getElementById('mainKpiChart') && typeof syncAllData === 'function') syncAllData();
                     if (document.getElementById('pane-records') && typeof fetchRecordsData === 'function') fetchRecordsData();
