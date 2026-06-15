@@ -8376,13 +8376,10 @@ function populateAlertsModal() {
         let str = String(val).trim();
         
         if (isNaN(parseFloat(str))) return str;
-        
-        if (str.includes('%')) {
-            return parseFloat(str.replace(/[^0-9.-]/g, '')).toFixed(2);
-        }
-        
-        let num = parseFloat(str.replace(/[^0-9.-]/g, ''));
-        return (num * 100).toFixed(2);
+
+        // Rate values are stored as the percentage number itself (e.g. 99.49 = 99.49%);
+        // strip any stray '%' the value may carry and show the number as-is.
+        return parseFloat(str.replace(/[^0-9.-]/g, '')).toFixed(2);
     };
 
     let html = '';
@@ -8456,21 +8453,22 @@ async function saveAlertsData() {
     });
 
     try {
-        await fetch(EBAY_ALERTS_URL, {
+        const res = await fetch(EBAY_ALERTS_URL, {
             method: 'POST',
-            mode: 'no-cors', 
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ data: updatedAlerts }) 
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data: updatedAlerts })
         });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
 
         alert("eBay Performance Metrics successfully updated!");
         closeAllModals();
-        if (typeof fetchAlertsData === 'function') fetchAlertsData(); 
+        if (typeof fetchAlertsData === 'function') fetchAlertsData();
         if (typeof fetchMasterDistrictDashboard === 'function') fetchMasterDistrictDashboard();
-        
+
     } catch (e) {
         console.error(e);
-        alert("Failed to connect to server.");
+        alert("Failed to save metrics: " + (e.message || e));
     } finally {
         btn.textContent = "Save Changes";
         btn.style.opacity = "1";
