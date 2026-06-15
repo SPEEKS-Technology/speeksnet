@@ -3073,7 +3073,7 @@ function _kpiSyncHeaderBtns() {
     const isEditing   = !!_kpiEditingPeriod;
     const hasEditable = (_kpiPeriodsData || []).some(function(p) { return p.is_editable; });
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    const canEditRole = role === 'district manager' || role === 'ceo' || role === 'owner manager' || role === 'manager' || role === 'assistant manager';
+    const canEditRole = role === 'district manager' || role === 'ceo' || role === 'owner (manager)' || role === 'owner manager' || role === 'manager' || role === 'assistant manager';
     const hasPeriods  = (_kpiPeriodsData || []).length > 0;
     if (editBtn)   editBtn.style.display   = (!isEditing && canEditRole && (hasEditable || hasPeriods)) ? '' : 'none';
     if (saveBtn)   saveBtn.style.display   = isEditing ? '' : 'none';
