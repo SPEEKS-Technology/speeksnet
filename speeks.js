@@ -10020,6 +10020,8 @@ async function toggleBoxOrder() {
     document.getElementById('boxOrderFooter1').style.display  = '';
     document.getElementById('boxOrderPage2').style.display    = 'none';
     document.getElementById('boxOrderFooter2').style.display  = 'none';
+    const searchEl = document.getElementById('boxOrderSearch');
+    if (searchEl) searchEl.value = '';
     modal.classList.add('show');
     lockAndBlurScreen();
     await _loadBoxOrderData();
@@ -10082,6 +10084,41 @@ function _renderBoxOrderItems(container, items) {
     });
 
     container.innerHTML = html || '<div style="color:#a0aab2;font-size:13px;">No items found.</div>';
+}
+
+// Live search over the box-order items. Matches name / category / dimensions
+// (× and x treated the same). Matching sections expand; the rest collapse.
+// Clearing the box restores the default collapsed accordion.
+function filterBoxOrderItems() {
+    const input = document.getElementById('boxOrderSearch');
+    const container = document.getElementById('boxOrderItemsContainer');
+    if (!input || !container) return;
+    const norm = s => (s || '').toLowerCase().replace(/×/g, 'x');
+    const q = norm(input.value.trim());
+    container.querySelectorAll('.box-order-section').forEach(section => {
+        const itemsEl = section.querySelector('.box-order-section-items');
+        const chevron = section.querySelector('.box-order-chevron');
+        let anyMatch = false;
+        section.querySelectorAll('.box-order-row').forEach(row => {
+            if (!q) { row.style.display = ''; return; }
+            const hay = norm((row.dataset.name || '') + ' ' + (row.dataset.category || '') + ' ' +
+                (row.querySelector('.box-order-subtype')?.textContent || ''));
+            const match = hay.includes(q);
+            row.style.display = match ? '' : 'none';
+            if (match) anyMatch = true;
+        });
+        // Heavy-duty warnings are advisory — hide them while searching.
+        section.querySelectorAll('.box-order-warning').forEach(w => { w.style.display = q ? 'none' : ''; });
+        if (!q) {
+            section.style.display = '';
+            if (itemsEl) itemsEl.style.display = 'none';
+            if (chevron) chevron.style.transform = 'rotate(-90deg)';
+        } else {
+            section.style.display = anyMatch ? '' : 'none';
+            if (itemsEl) itemsEl.style.display = anyMatch ? '' : 'none';
+            if (chevron) chevron.style.transform = anyMatch ? '' : 'rotate(-90deg)';
+        }
+    });
 }
 
 function boxOrderToggleSection(labelEl) {

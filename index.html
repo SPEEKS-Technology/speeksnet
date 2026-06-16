@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260615i">
+  <link rel="stylesheet" href="styles.css?v=20260615j">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260615i" defer></script>
+  <script src="speeks.js?v=20260615j" defer></script>
 </head>
 
 <body class="preload">
@@ -1074,6 +1074,10 @@
 
     <!-- PAGE 1: Item Selection -->
     <div class="manage-content" id="boxOrderPage1">
+        <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:14px;">
+            <span class="doc-search-icon">🔍</span>
+            <input type="text" id="boxOrderSearch" class="kb-search-input doc-search-input" placeholder="Search boxes & supplies..." oninput="filterBoxOrderItems()">
+        </div>
         <div id="boxOrderItemsContainer"></div>
         <div class="box-order-disclaimer">
             If a box or item you need is not on this page, please reach out to your District Manager for approval.
