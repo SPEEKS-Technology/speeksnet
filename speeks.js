@@ -54,6 +54,25 @@ const B2B_URL           = `${_BASE}/b2b-deals`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
+// --- WRITE HELPER ---
+// POST JSON to an edge function as a "simple" request: keeping Content-Type
+// text/plain avoids a CORS preflight, and dropping mode:'no-cors' means the
+// response is READABLE — so a failed write is detected instead of silently
+// reported as success. Throws on HTTP error or an {error}/{success:false} body.
+async function postWrite(url, payload) {
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+    });
+    let data = {};
+    try { data = await res.json(); } catch (_) { /* empty/non-JSON body */ }
+    if (!res.ok || data.success === false || data.error) {
+        throw new Error(data.error || `Request failed (HTTP ${res.status})`);
+    }
+    return data;
+}
+
 // --- 2. NAV COMPACT MODE ---
 (function () {
     let naturalNavWidth = 0;
@@ -417,11 +436,8 @@ function markAnnouncementRead(rowId) {
     localRead.add(rowId);
     localStorage.setItem(localReadKey, JSON.stringify([...localRead]));
 
-    fetch(CMS_URL, {
-        method: 'POST', mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ type: 'mark_read', user: userName, rowIds: [rowId] })
-    }).catch(() => {});
+    postWrite(CMS_URL, { type: 'mark_read', user: userName, rowIds: [rowId] })
+        .catch(err => console.warn('mark_read failed:', err.message));
 
     const card = document.querySelector(`.notif-item[data-ann-id="${rowId}"]`);
     if (card) {
@@ -586,12 +602,10 @@ window.toggleReaction = function(id, emoji) {
         payload.addEmoji = emoji; // Tell backend to add this in
     }
 
-    // Fire ONE single request to the database
-    fetch(CMS_URL, {
-        method: 'POST', mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload)
-    }).catch(() => {});
+    // Fire ONE single request to the database. Optimistic UI above is reconciled
+    // by pollReactions() every 15s, so on failure we just log rather than alert.
+    postWrite(CMS_URL, payload)
+        .catch(err => console.warn('reaction save failed:', err.message));
 };
 
 window.toggleReactionPicker = function(id) {
@@ -1002,12 +1016,12 @@ async function saveTickerItems() {
     btn.textContent = 'Saving...';
     btn.style.opacity = '0.7';
     try {
-        await fetch(TICKER_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ items }) });
+        await postWrite(TICKER_URL, { items });
         _tickerStatic = items.length ? items.map(item => ({ icon: item.icon, text: item.text, _type: 'static' })) : [..._TICKER_DEFAULTS];
         if (_tickerShown) _applyTickerContent();
         closeAllModals();
     } catch (e) {
-        alert('Failed to save ticker items.');
+        alert('Failed to save ticker items: ' + (e.message || e));
     } finally {
         btn.textContent = 'Save Changes';
         btn.style.opacity = '1';
@@ -4111,11 +4125,7 @@ async function saveAwards() {
     };
 
     try {
-        await fetch(RECORDS_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(payload)
-        });
+        await postWrite(RECORDS_URL, payload);
 
         if (!awardsCache) awardsCache = [];
         const idx = awardsCache.findIndex(a => a.month === month);
@@ -4127,6 +4137,7 @@ async function saveAwards() {
         closeAllModals();
     } catch (e) {
         if (status) status.textContent = '✗ Error saving.';
+        alert('Failed to save awards: ' + (e.message || e));
     } finally {
         btn.textContent = 'Save Awards';
         btn.disabled = false;
@@ -5686,11 +5697,8 @@ async function markListingGoalsChecklistComplete() {
     }
 
     if (targetTaskId) {
-        fetch(CHECKLIST_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'toggle', id: targetTaskId, checked: true, user: userName, store: store })
-        }).catch(() => {});
+        postWrite(CHECKLIST_URL, { action: 'toggle', id: targetTaskId, checked: true, user: userName, store: store })
+            .catch(err => console.warn('Listing-goals checklist tick failed:', err.message));
     }
 }
 
@@ -8835,17 +8843,12 @@ async function submitStoreComment() {
     };
 
     try {
-        await fetch(STORE_COMMENT_URL, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(payload)
-        });
-        
+        await postWrite(STORE_COMMENT_URL, payload);
+
         alert("Success! The message is live for " + store);
         closeAllModals();
     } catch (e) {
-        alert("Failed to send the message.");
+        alert("Failed to send the message: " + (e.message || e));
     } finally {
         btn.innerText = "Send Message";
         btn.style.opacity = "1";
@@ -9240,11 +9243,15 @@ async function toggleChecklistState(id, isChecked) {
     _pendingToggles.set(id, { checked: isChecked, expiresAt: Date.now() + 20000 });
     renderChecklist();
 
-    fetch(CHECKLIST_URL, {
-        method: 'POST', mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'toggle', id: id, checked: isChecked, tab: currentChecklistTab, user: userName, store: store })
-    }).catch(() => {});
+    postWrite(CHECKLIST_URL, { action: 'toggle', id: id, checked: isChecked, tab: currentChecklistTab, user: userName, store: store })
+        .catch(err => {
+            // Write failed — revert the optimistic toggle so the UI matches the server.
+            const it = checklistDataCache[currentChecklistTab].find(i => i.id === id);
+            if (it) it.checked = !isChecked;
+            _pendingToggles.delete(id);
+            renderChecklist();
+            alert('Could not save that change: ' + err.message);
+        });
 }
 
 async function addChecklistItem() {
@@ -9268,17 +9275,13 @@ async function addChecklistItem() {
     };
 
     try {
-        await fetch(CHECKLIST_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(payload)
-        });
-        
-        // Optimistically add to local cache so they see it instantly
-        checklistDataCache[currentChecklistTab].push({ id: tempId, text: text, isGlobal: false, checked: false });
+        const out = await postWrite(CHECKLIST_URL, payload);
+
+        // Add to local cache so they see it instantly (use the server id when returned)
+        checklistDataCache[currentChecklistTab].push({ id: out.id || tempId, text: text, isGlobal: false, checked: false });
         renderChecklist();
     } catch (e) {
-        alert("Failed to add task.");
+        alert("Failed to add task: " + (e.message || e));
     } finally {
         input.value = '';
         input.disabled = false;
@@ -9290,14 +9293,16 @@ async function deleteChecklistItem(id) {
     const userName = getChecklistUser();
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
 
+    const removed = checklistDataCache[currentChecklistTab].find(i => i.id === id);
     checklistDataCache[currentChecklistTab] = checklistDataCache[currentChecklistTab].filter(i => i.id !== id);
     renderChecklist();
 
-    fetch(CHECKLIST_URL, {
-        method: 'POST', mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'delete', id: id, tab: currentChecklistTab, user: userName, store: store })
-    }).catch(() => {});
+    postWrite(CHECKLIST_URL, { action: 'delete', id: id, tab: currentChecklistTab, user: userName, store: store })
+        .catch(err => {
+            // Restore the item if the server rejected the delete.
+            if (removed) { checklistDataCache[currentChecklistTab].push(removed); renderChecklist(); }
+            alert('Could not delete task: ' + err.message);
+        });
 }
 
 function clearChecklistTab() {
@@ -9311,12 +9316,21 @@ function clearChecklistTab() {
     items.forEach(i => i.checked = false);
     renderChecklist();
 
-    checkedItems.forEach(item => {
-        fetch(CHECKLIST_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'toggle', id: item.id, checked: false, tab: currentChecklistTab, user: userName, store: store })
-        }).catch(() => {});
+    Promise.allSettled(checkedItems.map(item =>
+        postWrite(CHECKLIST_URL, { action: 'toggle', id: item.id, checked: false, tab: currentChecklistTab, user: userName, store: store })
+            .then(() => ({ ok: true }))
+            .catch(() => ({ ok: false, item }))
+    )).then(results => {
+        const failed = results.filter(r => r.value && !r.value.ok).map(r => r.value.item);
+        if (failed.length) {
+            // Re-check the ones the server didn't accept so the UI stays truthful.
+            failed.forEach(it => {
+                const c = checklistDataCache[currentChecklistTab].find(i => i.id === it.id);
+                if (c) c.checked = true;
+            });
+            renderChecklist();
+            alert('Some items could not be cleared — please try again.');
+        }
     });
 }
 
@@ -9742,11 +9756,7 @@ async function savePatchEntry() {
     status.className = 'pn-save-status';
 
     try {
-        await fetch(PATCH_NOTES_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'addEntries', title, date, items })
-        });
+        await postWrite(PATCH_NOTES_URL, { action: 'addEntries', title, date, items });
         status.textContent = `${items.length} item${items.length !== 1 ? 's' : ''} saved!`;
         status.className = 'pn-save-status pn-save-ok';
         document.getElementById('pnEntryTitle').value = '';
@@ -9860,14 +9870,11 @@ async function saveEditPatchGroup(gi) {
     if (saveBtn) { saveBtn.textContent = 'Saving...'; saveBtn.disabled = true; }
 
     try {
-        await fetch(PATCH_NOTES_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'editGroup', oldTitle, oldDate, title, date: dateRaw })
-        });
+        await postWrite(PATCH_NOTES_URL, { action: 'editGroup', oldTitle, oldDate, title, date: dateRaw });
         loadPatchNotesEditor();
     } catch (e) {
         if (saveBtn) { saveBtn.textContent = 'Save'; saveBtn.disabled = false; }
+        alert('Failed to save changes: ' + (e.message || e));
     }
 }
 
@@ -9917,14 +9924,11 @@ async function saveEditPatchItem(id) {
     if (saveBtn) saveBtn.disabled = true;
 
     try {
-        await fetch(PATCH_NOTES_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'editEntry', id, title, date, category, summary })
-        });
+        await postWrite(PATCH_NOTES_URL, { action: 'editEntry', id, title, date, category, summary });
         loadPatchNotesEditor();
     } catch (e) {
         if (saveBtn) { saveBtn.textContent = 'Save Changes'; saveBtn.disabled = false; }
+        alert('Failed to save changes: ' + (e.message || e));
     }
 }
 
@@ -9943,12 +9947,10 @@ async function confirmDeletePatchItem(id) {
     const btn = document.querySelector(`#pne-item-${id} .pne-btn-confirm-delete`);
     if (btn) { btn.textContent = 'Deleting...'; btn.disabled = true; }
     try {
-        await fetch(PATCH_NOTES_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'deleteEntry', id })
-        });
-    } catch (e) { /* no-cors always throws, reload regardless */ }
+        await postWrite(PATCH_NOTES_URL, { action: 'deleteEntry', id });
+    } catch (e) {
+        alert('Delete failed: ' + (e.message || e));
+    }
     loadPatchNotesEditor();
 }
 
