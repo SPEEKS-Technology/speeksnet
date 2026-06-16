@@ -3426,7 +3426,9 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px;
     padding: 6px 10px; border-top: 1px solid #c4cdd8; border-bottom: 1px solid #c4cdd8;
 }
-.mb-row td { padding: 7px 10px; border-bottom: 1px solid #f0f0f0; }
+/* Fixed cell height in BOTH modes so swapping the value for an input doesn't
+   grow the row and push the table down. Content is vertically centered. */
+.mb-row td { height: 34px; padding: 0 10px; border-bottom: 1px solid #f0f0f0; box-sizing: border-box; vertical-align: middle; }
 .mb-row:hover td { background: #fafbfc; }
 .mb-row:hover td.mb-delta { background: #eef3f6; }
 .mb-metric-name { font-weight: 600; color: #334155; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -3472,10 +3474,15 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .mb-row:hover td.mb-ebay-warn { background: #fef08a; }
 .mb-row:hover td.mb-ebay-bad  { background: #f9e2e2; }
 .mb-input {
-    width: 92px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 5px;
-    font-size: 12px; font-weight: 600; text-align: right; color: var(--slate-charcoal); outline: none;
+    width: 92px; height: 26px; box-sizing: border-box;
+    padding: 2px 6px; border: 1px solid #cbd5e1; border-radius: 5px;
+    font-size: 12px; font-weight: 600; text-align: center; color: var(--slate-charcoal); outline: none;
     font-family: 'Inter', sans-serif;
+    /* 26px fits inside the 34px row cell, so the row height never changes. */
+    -moz-appearance: textfield; appearance: textfield;
 }
+.mb-input::-webkit-outer-spin-button,
+.mb-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .mb-input:focus { border-color: var(--sage-professional); box-shadow: 0 0 0 2px rgba(106,153,78,0.15); }
 /* formula-derived cells: locked, auto-filled from the other inputs */
 .mb-input-auto { background: #f1f5f9; border-style: dashed; color: #64748b; cursor: not-allowed; }
