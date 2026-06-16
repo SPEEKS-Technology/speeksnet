@@ -10088,18 +10088,32 @@ function boxOrderToggleSection(labelEl) {
     const section = labelEl.closest('.box-order-section');
     const itemsEl = section.querySelector('.box-order-section-items');
     const chevron = labelEl.querySelector('.box-order-chevron');
-    const isOpen  = itemsEl.style.display !== 'none';
-    itemsEl.style.display  = isOpen ? 'none' : '';
-    chevron.style.transform = isOpen ? 'rotate(-90deg)' : '';
+    const willOpen = itemsEl.style.display === 'none';
+    // Accordion: close every section first, then open the clicked one (if it was
+    // closed) — so only one section is ever open at a time.
+    const container = section.parentElement;
+    if (container) {
+        container.querySelectorAll('.box-order-section').forEach(s => {
+            const it = s.querySelector('.box-order-section-items');
+            const ch = s.querySelector('.box-order-chevron');
+            if (it) it.style.display = 'none';
+            if (ch) ch.style.transform = 'rotate(-90deg)';
+        });
+    }
+    if (willOpen) {
+        itemsEl.style.display = '';
+        chevron.style.transform = '';
+    }
 }
 
 function _buildBoxRow(item) {
     const displayCat = item.category.replace(/^(?:Common |Rare |Very Rare )/, '');
     const label      = escapeHtml(`${item.name} ${displayCat}`);
     const nameHtml   = escapeHtml(item.name);
+    const catHtml    = escapeHtml(item.category || '');
     const subParts   = [item.dimensions, displayCat].filter(Boolean);
     const subHtml    = escapeHtml(subParts.join(' · '));
-    return `<div class="box-order-row" data-item="${label}">
+    return `<div class="box-order-row" data-item="${label}" data-name="${nameHtml}" data-category="${catHtml}">
   <div class="box-order-info">
     <span class="box-order-name">${nameHtml}</span>
     <span class="box-order-subtype">${subHtml}</span>
@@ -10128,7 +10142,7 @@ function boxOrderNextPage() {
     _boxOrderSelected = [];
     rows.forEach(row => {
         const qty = parseInt(row.querySelector('.box-stepper-qty')?.textContent) || 0;
-        if (qty > 0) _boxOrderSelected.push({ item: row.dataset.item, qty });
+        if (qty > 0) _boxOrderSelected.push({ item: row.dataset.item, name: row.dataset.name, category: row.dataset.category, qty });
     });
     if (!_boxOrderSelected.length) {
         alert('Please add at least one item before continuing.');
@@ -10158,6 +10172,23 @@ function boxOrderBackPage() {
     document.getElementById('boxOrderFooter1').style.display  = '';
 }
 
+// Format one selected item for the order: drop the word "Box" from box sizes
+// and "Shipping Supplies" from supplies, and pick the unit per item type
+// (Peanuts → Bag(s), Gum Tape → Box(es), everything else → Bundle(s)).
+function _boxOrderLine(o) {
+    const displayCat = (o.category || '')
+        .replace(/^(?:Common |Rare |Very Rare )/, '')
+        .replace(/\bShipping Supplies\b/i, '')
+        .replace(/\bBox(?:es)?\b/i, '')
+        .replace(/\s+/g, ' ').trim();
+    const display = `${o.name || o.item || ''} ${displayCat}`.replace(/\s+/g, ' ').trim();
+    const n = (o.name || '').toLowerCase();
+    let one = 'Bundle', many = 'Bundles';
+    if (n.includes('peanut'))        { one = 'Bag'; many = 'Bags'; }
+    else if (n.includes('gum tape')) { one = 'Box'; many = 'Boxes'; }
+    return `${display}: ${o.qty} ${o.qty === 1 ? one : many}`;
+}
+
 function boxOrderUpdatePreview() {
     const preview  = document.getElementById('boxOrderEmailPreview');
     if (!preview) return;
@@ -10165,7 +10196,7 @@ function boxOrderUpdatePreview() {
     const userName = sessionStorage.getItem('speeksUserName')  || '';
     const notes    = document.getElementById('boxOrderNotes')?.value.trim() || '';
     const to       = _boxOrderGetEmail();
-    const lines    = _boxOrderSelected.map(o => `  • ${o.item}: ${o.qty} ${o.qty === 1 ? 'Bundle' : 'Bundles'}`).join('\n');
+    const lines    = _boxOrderSelected.map(o => `  • ${_boxOrderLine(o)}`).join('\n');
     const noteBlock = notes ? `\n\n${notes}` : '';
     preview.textContent =
         `To: ${to}\nSubject: PayMore ${store} Location\n\n` +
@@ -10191,7 +10222,7 @@ function _boxOrderCompose() {
     const store    = _boxOrderGetStore();
     const userName = sessionStorage.getItem('speeksUserName') || '';
     const notes    = document.getElementById('boxOrderNotes')?.value.trim() || '';
-    const lines    = _boxOrderSelected.map(o => `  • ${o.item}: ${o.qty} ${o.qty === 1 ? 'Bundle' : 'Bundles'}`).join('\n');
+    const lines    = _boxOrderSelected.map(o => `  • ${_boxOrderLine(o)}`).join('\n');
     const noteBlock = notes ? `\n\n${notes}` : '';
     const body = `Hi,\n\nPlease process the following order for ${store}:\n\n${lines}${noteBlock}\n\nThank you,\n${userName}`;
     return { email: _boxOrderGetEmail(), subject: `PayMore ${store} Location`, body };
