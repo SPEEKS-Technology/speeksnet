@@ -5488,8 +5488,8 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     text-align: center;
 }
 
-/* Input fills the cell with no extra td padding so its text right-edge lands at
-   the same x as the read-only value (see .kpi-grid-computed: both inset 3px). */
+/* Input fills the cell with no extra td padding and symmetric inset so its
+   centered text lines up with the centered read-only value (no shift on edit). */
 .kpi-grid-td-input { padding: 0 !important; }
 
 .kpi-grid-input {
@@ -5500,9 +5500,9 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     padding: 0 2px;
     font-size: 11px;
     font-weight: 600;
-    /* Right-aligned to match the view value — anchors the number's right edge so
-       it doesn't jump left when the $/comma formatting drops on edit. */
-    text-align: right;
+    /* Centered to match the centered read-only value (symmetric padding keeps the
+       center aligned, so the value doesn't shift when it becomes editable). */
+    text-align: center;
     color: var(--slate-charcoal);
     font-family: 'Inter', sans-serif;
     background: white;
@@ -5526,7 +5526,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .kpi-grid-input:disabled { background: #f5f5f5; color: #aaa; cursor: not-allowed; }
 
 .kpi-grid-computed {
-    text-align: right;
+    text-align: center;
     font-size: 11px;
     font-weight: 700;
     color: #6b7280;
