@@ -10173,21 +10173,53 @@ function boxOrderUpdatePreview() {
         `Thank you,\n${userName}`;
 }
 
-function sendBoxOrder() {
+// Corp roles (CEO/DM) must pick a store first; managers default to their own.
+function _boxOrderEnsureStore() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     const isCorpRole = role === 'ceo' || role === 'district manager';
     const sel = document.getElementById('boxOrderStoreSelect');
     if (isCorpRole && (!sel || !sel.value)) {
         alert('Please select a store before sending.');
-        return;
+        return false;
     }
-    const store     = _boxOrderGetStore();
-    const userName  = sessionStorage.getItem('speeksUserName')  || '';
-    const notes     = document.getElementById('boxOrderNotes')?.value.trim() || '';
-    const noteBlock = notes ? `%0A%0A${encodeURIComponent(notes)}` : '';
-    const to        = encodeURIComponent(_boxOrderGetEmail());
-    const subject   = encodeURIComponent(`PayMore ${store} Location`);
-    const lines     = _boxOrderSelected.map(o => encodeURIComponent(`  • ${o.item}: ${o.qty} ${o.qty === 1 ? 'Bundle' : 'Bundles'}`)).join('%0A');
-    const body      = `Hi,%0A%0APlease process the following order for ${encodeURIComponent(store)}:%0A%0A${lines}${noteBlock}%0A%0AThank you,%0A${encodeURIComponent(userName)}`;
-    window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+    return true;
+}
+
+// Build the order as plain text (real newlines) — shared by the email and the
+// copy failsafe so both always say exactly the same thing.
+function _boxOrderCompose() {
+    const store    = _boxOrderGetStore();
+    const userName = sessionStorage.getItem('speeksUserName') || '';
+    const notes    = document.getElementById('boxOrderNotes')?.value.trim() || '';
+    const lines    = _boxOrderSelected.map(o => `  • ${o.item}: ${o.qty} ${o.qty === 1 ? 'Bundle' : 'Bundles'}`).join('\n');
+    const noteBlock = notes ? `\n\n${notes}` : '';
+    const body = `Hi,\n\nPlease process the following order for ${store}:\n\n${lines}${noteBlock}\n\nThank you,\n${userName}`;
+    return { email: _boxOrderGetEmail(), subject: `PayMore ${store} Location`, body };
+}
+
+function sendBoxOrder() {
+    if (!_boxOrderEnsureStore()) return;
+    const { email, subject, body } = _boxOrderCompose();
+    window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+// Failsafe for machines with no default mail client: copy the full order
+// (recipient, subject, body) to the clipboard to paste into any email.
+function copyBoxOrder(button) {
+    if (!_boxOrderEnsureStore()) return;
+    const { email, subject, body } = _boxOrderCompose();
+    const text = `To: ${email}\nSubject: ${subject}\n\n${body}`;
+    navigator.clipboard.writeText(text).then(() => {
+        const originalText = button.innerText;
+        button.innerText = 'Copied!';
+        button.style.background = '#d1fae5';
+        button.style.color = '#065f46';
+        button.style.borderColor = '#34d399';
+        setTimeout(() => {
+            button.innerText = originalText;
+            button.style.background = '';
+            button.style.color = '';
+            button.style.borderColor = '';
+        }, 2000);
+    }).catch(() => alert('Could not copy automatically. Please select and copy the order manually.'));
 }
