@@ -2393,8 +2393,10 @@ function _kpiRenderWeekly(periods) {
     const sub = document.getElementById('kpiModalSubtitle');
     if (sub) sub.textContent = store + ' · 4-Week View';
 
-    // Only show weeks with saved data; when editing, also include the editable period at top
-    let visible = (periods || []).filter(function(p) { return p.entries.some(function(e) { return e.id; }); });
+    // Always show the current (editable) week plus any past weeks with saved data.
+    // Rendering it even in view mode means clicking Edit just swaps its cells from
+    // text to inputs IN PLACE — no new section appears, so nothing on the page shifts.
+    let visible = (periods || []).filter(function(p) { return p.is_editable || p.entries.some(function(e) { return e.id; }); });
     if (_kpiEditingPeriod) {
         const ep = periods.find(function(p) { return p.period_end_date === _kpiEditingPeriod; });
         if (ep && !visible.find(function(p) { return p.period_end_date === ep.period_end_date; })) visible.unshift(ep);
@@ -3052,8 +3054,10 @@ function _kpiRenderMonthly(periods) {
     const sub = document.getElementById('kpiModalSubtitle');
     if (sub) sub.textContent = store + ' · Monthly';
 
-    // Only show months with saved data; when editing, also include the editable period at top
-    let visible = (periods || []).filter(function(p) { return p.entries.some(function(e) { return e.id; }); });
+    // Always show the current (editable) month plus any past months with saved data.
+    // Rendering it even in view mode means clicking Edit just swaps its cells from
+    // text to inputs IN PLACE — no new section appears, so nothing on the page shifts.
+    let visible = (periods || []).filter(function(p) { return p.is_editable || p.entries.some(function(e) { return e.id; }); });
     if (_kpiEditingPeriod) {
         const ep = periods.find(function(p) { return p.period_end_date === _kpiEditingPeriod; });
         if (ep && !visible.find(function(p) { return p.period_end_date === ep.period_end_date; })) visible.unshift(ep);
