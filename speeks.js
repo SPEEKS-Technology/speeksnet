@@ -5226,7 +5226,10 @@ const ListingGoalsEngine = {
     needHits: 2,        // weeks at/above target within window to level up
     needMiss: 2,        // weeks below target within window to flag for review
 
-    weeklyTarget(rosterSize) { return rosterSize >= 4 ? 190 : 170; },
+    // Incremental: ±20 listings per person, anchored at 4 people = 190 (floor 150).
+    // 2→150, 3→170, 4→190, 5→210, 6→230. Mirrors baseForSize() in the
+    // store-targets edge function so the frontend and server stay in lock-step.
+    weeklyTarget(size)       { return Math.max(150, 110 + 20 * size); },
     modelSize(rosterSize)    { return rosterSize >= 4 ? 4 : 3; },
 
     // Standard staffed week, used ONLY to calibrate the scale so a normal week
@@ -5619,7 +5622,7 @@ async function saveGoalsData(silent = false) {
         const group = document.getElementById(`roles-${idx}`);
         if (group && group.querySelector('.role-dot.active')) staffedCount++;
     });
-    const rosterSize = goalsRoster.length;
+    const rosterSize = effectiveTeamSize(goalsTargetStore);
 
     goalsRoster.forEach((emp, idx) => {
         const roleGroup = document.getElementById(`roles-${idx}`);
@@ -5819,6 +5822,14 @@ async function fetchAllStoreTargets() {
 // Current weekly target for a store (server value; falls back to roster-derived base).
 function targetFor(store) {
     return (_storeTargets[store] && _storeTargets[store].target) || ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
+}
+// Effective team size for goal math. Prefers the server's settled size, which
+// honors the timing rule (a subtraction shrinks the goal immediately, an addition
+// waits until next week). Falls back to the live roster before the target loads.
+function effectiveTeamSize(store) {
+    const t = _storeTargets[store];
+    if (t && typeof t.size === 'number') return t.size;
+    return storeRosterSize(store);
 }
 // Last-4 completed-week listing totals (oldest→newest) for the bars.
 function weeksFor(store) {
@@ -9517,7 +9528,7 @@ window.recomputeGoalDisplays = function() {
         const group = document.getElementById(`roles-${idx}`);
         if (group && group.querySelector('.role-dot.active')) staffedCount++;
     });
-    const rosterSize = goalsRoster.length;
+    const rosterSize = effectiveTeamSize(goalsTargetStore);
     const dateStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
 
     let todayTotal = 0;
