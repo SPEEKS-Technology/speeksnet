@@ -5488,17 +5488,21 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     text-align: center;
 }
 
-.kpi-grid-td-input { padding: 2px 2px !important; }
+/* Input fills the cell with no extra td padding so its text right-edge lands at
+   the same x as the read-only value (see .kpi-grid-computed: both inset 3px). */
+.kpi-grid-td-input { padding: 0 !important; }
 
 .kpi-grid-input {
     width: 100%;
     height: 26px;
     border: 1px solid #e2e6ea;
     border-radius: 3px;
-    padding: 0 3px;
+    padding: 0 2px;
     font-size: 11px;
     font-weight: 600;
-    text-align: center;
+    /* Right-aligned to match the view value — anchors the number's right edge so
+       it doesn't jump left when the $/comma formatting drops on edit. */
+    text-align: right;
     color: var(--slate-charcoal);
     font-family: 'Inter', sans-serif;
     background: white;
@@ -5506,7 +5510,12 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     display: block;
     box-sizing: border-box;
     min-width: 0;
+    /* Drop the number spinner so it doesn't reserve right-side space. */
+    -moz-appearance: textfield;
+    appearance: textfield;
 }
+.kpi-grid-input::-webkit-outer-spin-button,
+.kpi-grid-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
 .kpi-grid-input:focus {
     outline: none;
@@ -5517,7 +5526,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .kpi-grid-input:disabled { background: #f5f5f5; color: #aaa; cursor: not-allowed; }
 
 .kpi-grid-computed {
-    text-align: center;
+    text-align: right;
     font-size: 11px;
     font-weight: 700;
     color: #6b7280;
@@ -5525,7 +5534,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    padding: 0 2px !important;
+    padding: 0 3px !important;
 }
 /* Actual entered values in view mode: dark text, white bg (distinct from grey computed cells) */
 .kpi-grid-computed.kpi-grid-view-val { color: var(--slate-charcoal); background: #fff; font-style: normal; }
