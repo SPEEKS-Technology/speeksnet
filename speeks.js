@@ -54,6 +54,25 @@ const B2B_URL           = `${_BASE}/b2b-deals`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
+// --- WRITE HELPER ---
+// POST JSON to an edge function as a "simple" request: keeping Content-Type
+// text/plain avoids a CORS preflight, and dropping mode:'no-cors' means the
+// response is READABLE — so a failed write is detected instead of silently
+// reported as success. Throws on HTTP error or an {error}/{success:false} body.
+async function postWrite(url, payload) {
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+    });
+    let data = {};
+    try { data = await res.json(); } catch (_) { /* empty/non-JSON body */ }
+    if (!res.ok || data.success === false || data.error) {
+        throw new Error(data.error || `Request failed (HTTP ${res.status})`);
+    }
+    return data;
+}
+
 // --- 2. NAV COMPACT MODE ---
 (function () {
     let naturalNavWidth = 0;
@@ -417,11 +436,8 @@ function markAnnouncementRead(rowId) {
     localRead.add(rowId);
     localStorage.setItem(localReadKey, JSON.stringify([...localRead]));
 
-    fetch(CMS_URL, {
-        method: 'POST', mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ type: 'mark_read', user: userName, rowIds: [rowId] })
-    }).catch(() => {});
+    postWrite(CMS_URL, { type: 'mark_read', user: userName, rowIds: [rowId] })
+        .catch(err => console.warn('mark_read failed:', err.message));
 
     const card = document.querySelector(`.notif-item[data-ann-id="${rowId}"]`);
     if (card) {
@@ -586,12 +602,10 @@ window.toggleReaction = function(id, emoji) {
         payload.addEmoji = emoji; // Tell backend to add this in
     }
 
-    // Fire ONE single request to the database
-    fetch(CMS_URL, {
-        method: 'POST', mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload)
-    }).catch(() => {});
+    // Fire ONE single request to the database. Optimistic UI above is reconciled
+    // by pollReactions() every 15s, so on failure we just log rather than alert.
+    postWrite(CMS_URL, payload)
+        .catch(err => console.warn('reaction save failed:', err.message));
 };
 
 window.toggleReactionPicker = function(id) {
@@ -1002,12 +1016,12 @@ async function saveTickerItems() {
     btn.textContent = 'Saving...';
     btn.style.opacity = '0.7';
     try {
-        await fetch(TICKER_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ items }) });
+        await postWrite(TICKER_URL, { items });
         _tickerStatic = items.length ? items.map(item => ({ icon: item.icon, text: item.text, _type: 'static' })) : [..._TICKER_DEFAULTS];
         if (_tickerShown) _applyTickerContent();
         closeAllModals();
     } catch (e) {
-        alert('Failed to save ticker items.');
+        alert('Failed to save ticker items: ' + (e.message || e));
     } finally {
         btn.textContent = 'Save Changes';
         btn.style.opacity = '1';
@@ -2379,8 +2393,10 @@ function _kpiRenderWeekly(periods) {
     const sub = document.getElementById('kpiModalSubtitle');
     if (sub) sub.textContent = store + ' · 4-Week View';
 
-    // Only show weeks with saved data; when editing, also include the editable period at top
-    let visible = (periods || []).filter(function(p) { return p.entries.some(function(e) { return e.id; }); });
+    // Always show the current (editable) week plus any past weeks with saved data.
+    // Rendering it even in view mode means clicking Edit just swaps its cells from
+    // text to inputs IN PLACE — no new section appears, so nothing on the page shifts.
+    let visible = (periods || []).filter(function(p) { return p.is_editable || p.entries.some(function(e) { return e.id; }); });
     if (_kpiEditingPeriod) {
         const ep = periods.find(function(p) { return p.period_end_date === _kpiEditingPeriod; });
         if (ep && !visible.find(function(p) { return p.period_end_date === ep.period_end_date; })) visible.unshift(ep);
@@ -3038,8 +3054,10 @@ function _kpiRenderMonthly(periods) {
     const sub = document.getElementById('kpiModalSubtitle');
     if (sub) sub.textContent = store + ' · Monthly';
 
-    // Only show months with saved data; when editing, also include the editable period at top
-    let visible = (periods || []).filter(function(p) { return p.entries.some(function(e) { return e.id; }); });
+    // Always show the current (editable) month plus any past months with saved data.
+    // Rendering it even in view mode means clicking Edit just swaps its cells from
+    // text to inputs IN PLACE — no new section appears, so nothing on the page shifts.
+    let visible = (periods || []).filter(function(p) { return p.is_editable || p.entries.some(function(e) { return e.id; }); });
     if (_kpiEditingPeriod) {
         const ep = periods.find(function(p) { return p.period_end_date === _kpiEditingPeriod; });
         if (ep && !visible.find(function(p) { return p.period_end_date === ep.period_end_date; })) visible.unshift(ep);
@@ -3073,7 +3091,7 @@ function _kpiSyncHeaderBtns() {
     const isEditing   = !!_kpiEditingPeriod;
     const hasEditable = (_kpiPeriodsData || []).some(function(p) { return p.is_editable; });
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    const canEditRole = role === 'district manager' || role === 'ceo' || role === 'owner manager' || role === 'manager' || role === 'assistant manager';
+    const canEditRole = role === 'district manager' || role === 'ceo' || role === 'owner (manager)' || role === 'owner manager' || role === 'manager' || role === 'assistant manager';
     const hasPeriods  = (_kpiPeriodsData || []).length > 0;
     if (editBtn)   editBtn.style.display   = (!isEditing && canEditRole && (hasEditable || hasPeriods)) ? '' : 'none';
     if (saveBtn)   saveBtn.style.display   = isEditing ? '' : 'none';
@@ -4111,11 +4129,7 @@ async function saveAwards() {
     };
 
     try {
-        await fetch(RECORDS_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(payload)
-        });
+        await postWrite(RECORDS_URL, payload);
 
         if (!awardsCache) awardsCache = [];
         const idx = awardsCache.findIndex(a => a.month === month);
@@ -4127,6 +4141,7 @@ async function saveAwards() {
         closeAllModals();
     } catch (e) {
         if (status) status.textContent = '✗ Error saving.';
+        alert('Failed to save awards: ' + (e.message || e));
     } finally {
         btn.textContent = 'Save Awards';
         btn.disabled = false;
@@ -5215,7 +5230,10 @@ const ListingGoalsEngine = {
     needHits: 2,        // weeks at/above target within window to level up
     needMiss: 2,        // weeks below target within window to flag for review
 
-    weeklyTarget(rosterSize) { return rosterSize >= 4 ? 190 : 170; },
+    // Incremental: ±20 listings per person, anchored at 4 people = 190 (floor 150).
+    // 2→150, 3→170, 4→190, 5→210, 6→230. Mirrors baseForSize() in the
+    // store-targets edge function so the frontend and server stay in lock-step.
+    weeklyTarget(size)       { return Math.max(150, 110 + 20 * size); },
     modelSize(rosterSize)    { return rosterSize >= 4 ? 4 : 3; },
 
     // Standard staffed week, used ONLY to calibrate the scale so a normal week
@@ -5608,7 +5626,7 @@ async function saveGoalsData(silent = false) {
         const group = document.getElementById(`roles-${idx}`);
         if (group && group.querySelector('.role-dot.active')) staffedCount++;
     });
-    const rosterSize = goalsRoster.length;
+    const rosterSize = effectiveTeamSize(goalsTargetStore);
 
     goalsRoster.forEach((emp, idx) => {
         const roleGroup = document.getElementById(`roles-${idx}`);
@@ -5686,11 +5704,8 @@ async function markListingGoalsChecklistComplete() {
     }
 
     if (targetTaskId) {
-        fetch(CHECKLIST_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'toggle', id: targetTaskId, checked: true, user: userName, store: store })
-        }).catch(() => {});
+        postWrite(CHECKLIST_URL, { action: 'toggle', id: targetTaskId, checked: true, user: userName, store: store })
+            .catch(err => console.warn('Listing-goals checklist tick failed:', err.message));
     }
 }
 
@@ -5811,6 +5826,14 @@ async function fetchAllStoreTargets() {
 // Current weekly target for a store (server value; falls back to roster-derived base).
 function targetFor(store) {
     return (_storeTargets[store] && _storeTargets[store].target) || ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
+}
+// Effective team size for goal math. Prefers the server's settled size, which
+// honors the timing rule (a subtraction shrinks the goal immediately, an addition
+// waits until next week). Falls back to the live roster before the target loads.
+function effectiveTeamSize(store) {
+    const t = _storeTargets[store];
+    if (t && typeof t.size === 'number') return t.size;
+    return storeRosterSize(store);
 }
 // Last-4 completed-week listing totals (oldest→newest) for the bars.
 function weeksFor(store) {
@@ -8376,13 +8399,10 @@ function populateAlertsModal() {
         let str = String(val).trim();
         
         if (isNaN(parseFloat(str))) return str;
-        
-        if (str.includes('%')) {
-            return parseFloat(str.replace(/[^0-9.-]/g, '')).toFixed(2);
-        }
-        
-        let num = parseFloat(str.replace(/[^0-9.-]/g, ''));
-        return (num * 100).toFixed(2);
+
+        // Rate values are stored as the percentage number itself (e.g. 99.49 = 99.49%);
+        // strip any stray '%' the value may carry and show the number as-is.
+        return parseFloat(str.replace(/[^0-9.-]/g, '')).toFixed(2);
     };
 
     let html = '';
@@ -8456,21 +8476,22 @@ async function saveAlertsData() {
     });
 
     try {
-        await fetch(EBAY_ALERTS_URL, {
+        const res = await fetch(EBAY_ALERTS_URL, {
             method: 'POST',
-            mode: 'no-cors', 
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ data: updatedAlerts }) 
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data: updatedAlerts })
         });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
 
         alert("eBay Performance Metrics successfully updated!");
         closeAllModals();
-        if (typeof fetchAlertsData === 'function') fetchAlertsData(); 
+        if (typeof fetchAlertsData === 'function') fetchAlertsData();
         if (typeof fetchMasterDistrictDashboard === 'function') fetchMasterDistrictDashboard();
-        
+
     } catch (e) {
         console.error(e);
-        alert("Failed to connect to server.");
+        alert("Failed to save metrics: " + (e.message || e));
     } finally {
         btn.textContent = "Save Changes";
         btn.style.opacity = "1";
@@ -8837,17 +8858,12 @@ async function submitStoreComment() {
     };
 
     try {
-        await fetch(STORE_COMMENT_URL, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(payload)
-        });
-        
+        await postWrite(STORE_COMMENT_URL, payload);
+
         alert("Success! The message is live for " + store);
         closeAllModals();
     } catch (e) {
-        alert("Failed to send the message.");
+        alert("Failed to send the message: " + (e.message || e));
     } finally {
         btn.innerText = "Send Message";
         btn.style.opacity = "1";
@@ -9242,11 +9258,15 @@ async function toggleChecklistState(id, isChecked) {
     _pendingToggles.set(id, { checked: isChecked, expiresAt: Date.now() + 20000 });
     renderChecklist();
 
-    fetch(CHECKLIST_URL, {
-        method: 'POST', mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'toggle', id: id, checked: isChecked, tab: currentChecklistTab, user: userName, store: store })
-    }).catch(() => {});
+    postWrite(CHECKLIST_URL, { action: 'toggle', id: id, checked: isChecked, tab: currentChecklistTab, user: userName, store: store })
+        .catch(err => {
+            // Write failed — revert the optimistic toggle so the UI matches the server.
+            const it = checklistDataCache[currentChecklistTab].find(i => i.id === id);
+            if (it) it.checked = !isChecked;
+            _pendingToggles.delete(id);
+            renderChecklist();
+            alert('Could not save that change: ' + err.message);
+        });
 }
 
 async function addChecklistItem() {
@@ -9270,17 +9290,13 @@ async function addChecklistItem() {
     };
 
     try {
-        await fetch(CHECKLIST_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(payload)
-        });
-        
-        // Optimistically add to local cache so they see it instantly
-        checklistDataCache[currentChecklistTab].push({ id: tempId, text: text, isGlobal: false, checked: false });
+        const out = await postWrite(CHECKLIST_URL, payload);
+
+        // Add to local cache so they see it instantly (use the server id when returned)
+        checklistDataCache[currentChecklistTab].push({ id: out.id || tempId, text: text, isGlobal: false, checked: false });
         renderChecklist();
     } catch (e) {
-        alert("Failed to add task.");
+        alert("Failed to add task: " + (e.message || e));
     } finally {
         input.value = '';
         input.disabled = false;
@@ -9292,14 +9308,16 @@ async function deleteChecklistItem(id) {
     const userName = getChecklistUser();
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
 
+    const removed = checklistDataCache[currentChecklistTab].find(i => i.id === id);
     checklistDataCache[currentChecklistTab] = checklistDataCache[currentChecklistTab].filter(i => i.id !== id);
     renderChecklist();
 
-    fetch(CHECKLIST_URL, {
-        method: 'POST', mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'delete', id: id, tab: currentChecklistTab, user: userName, store: store })
-    }).catch(() => {});
+    postWrite(CHECKLIST_URL, { action: 'delete', id: id, tab: currentChecklistTab, user: userName, store: store })
+        .catch(err => {
+            // Restore the item if the server rejected the delete.
+            if (removed) { checklistDataCache[currentChecklistTab].push(removed); renderChecklist(); }
+            alert('Could not delete task: ' + err.message);
+        });
 }
 
 function clearChecklistTab() {
@@ -9313,12 +9331,21 @@ function clearChecklistTab() {
     items.forEach(i => i.checked = false);
     renderChecklist();
 
-    checkedItems.forEach(item => {
-        fetch(CHECKLIST_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'toggle', id: item.id, checked: false, tab: currentChecklistTab, user: userName, store: store })
-        }).catch(() => {});
+    Promise.allSettled(checkedItems.map(item =>
+        postWrite(CHECKLIST_URL, { action: 'toggle', id: item.id, checked: false, tab: currentChecklistTab, user: userName, store: store })
+            .then(() => ({ ok: true }))
+            .catch(() => ({ ok: false, item }))
+    )).then(results => {
+        const failed = results.filter(r => r.value && !r.value.ok).map(r => r.value.item);
+        if (failed.length) {
+            // Re-check the ones the server didn't accept so the UI stays truthful.
+            failed.forEach(it => {
+                const c = checklistDataCache[currentChecklistTab].find(i => i.id === it.id);
+                if (c) c.checked = true;
+            });
+            renderChecklist();
+            alert('Some items could not be cleared — please try again.');
+        }
     });
 }
 
@@ -9505,7 +9532,7 @@ window.recomputeGoalDisplays = function() {
         const group = document.getElementById(`roles-${idx}`);
         if (group && group.querySelector('.role-dot.active')) staffedCount++;
     });
-    const rosterSize = goalsRoster.length;
+    const rosterSize = effectiveTeamSize(goalsTargetStore);
     const dateStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
 
     let todayTotal = 0;
@@ -9744,11 +9771,7 @@ async function savePatchEntry() {
     status.className = 'pn-save-status';
 
     try {
-        await fetch(PATCH_NOTES_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'addEntries', title, date, items })
-        });
+        await postWrite(PATCH_NOTES_URL, { action: 'addEntries', title, date, items });
         status.textContent = `${items.length} item${items.length !== 1 ? 's' : ''} saved!`;
         status.className = 'pn-save-status pn-save-ok';
         document.getElementById('pnEntryTitle').value = '';
@@ -9862,14 +9885,11 @@ async function saveEditPatchGroup(gi) {
     if (saveBtn) { saveBtn.textContent = 'Saving...'; saveBtn.disabled = true; }
 
     try {
-        await fetch(PATCH_NOTES_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'editGroup', oldTitle, oldDate, title, date: dateRaw })
-        });
+        await postWrite(PATCH_NOTES_URL, { action: 'editGroup', oldTitle, oldDate, title, date: dateRaw });
         loadPatchNotesEditor();
     } catch (e) {
         if (saveBtn) { saveBtn.textContent = 'Save'; saveBtn.disabled = false; }
+        alert('Failed to save changes: ' + (e.message || e));
     }
 }
 
@@ -9919,14 +9939,11 @@ async function saveEditPatchItem(id) {
     if (saveBtn) saveBtn.disabled = true;
 
     try {
-        await fetch(PATCH_NOTES_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'editEntry', id, title, date, category, summary })
-        });
+        await postWrite(PATCH_NOTES_URL, { action: 'editEntry', id, title, date, category, summary });
         loadPatchNotesEditor();
     } catch (e) {
         if (saveBtn) { saveBtn.textContent = 'Save Changes'; saveBtn.disabled = false; }
+        alert('Failed to save changes: ' + (e.message || e));
     }
 }
 
@@ -9945,12 +9962,10 @@ async function confirmDeletePatchItem(id) {
     const btn = document.querySelector(`#pne-item-${id} .pne-btn-confirm-delete`);
     if (btn) { btn.textContent = 'Deleting...'; btn.disabled = true; }
     try {
-        await fetch(PATCH_NOTES_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'deleteEntry', id })
-        });
-    } catch (e) { /* no-cors always throws, reload regardless */ }
+        await postWrite(PATCH_NOTES_URL, { action: 'deleteEntry', id });
+    } catch (e) {
+        alert('Delete failed: ' + (e.message || e));
+    }
     loadPatchNotesEditor();
 }
 
@@ -10005,6 +10020,8 @@ async function toggleBoxOrder() {
     document.getElementById('boxOrderFooter1').style.display  = '';
     document.getElementById('boxOrderPage2').style.display    = 'none';
     document.getElementById('boxOrderFooter2').style.display  = 'none';
+    const searchEl = document.getElementById('boxOrderSearch');
+    if (searchEl) searchEl.value = '';
     modal.classList.add('show');
     lockAndBlurScreen();
     await _loadBoxOrderData();
@@ -10069,22 +10086,71 @@ function _renderBoxOrderItems(container, items) {
     container.innerHTML = html || '<div style="color:#a0aab2;font-size:13px;">No items found.</div>';
 }
 
+// Live search over the box-order items. Matches name / category / dimensions
+// (× and x treated the same). Matching sections expand; the rest collapse.
+// Clearing the box restores the default collapsed accordion.
+function filterBoxOrderItems() {
+    const input = document.getElementById('boxOrderSearch');
+    const container = document.getElementById('boxOrderItemsContainer');
+    if (!input || !container) return;
+    const norm = s => (s || '').toLowerCase().replace(/×/g, 'x');
+    const q = norm(input.value.trim());
+    container.querySelectorAll('.box-order-section').forEach(section => {
+        const itemsEl = section.querySelector('.box-order-section-items');
+        const chevron = section.querySelector('.box-order-chevron');
+        let anyMatch = false;
+        section.querySelectorAll('.box-order-row').forEach(row => {
+            if (!q) { row.style.display = ''; return; }
+            const hay = norm((row.dataset.name || '') + ' ' + (row.dataset.category || '') + ' ' +
+                (row.querySelector('.box-order-subtype')?.textContent || ''));
+            const match = hay.includes(q);
+            row.style.display = match ? '' : 'none';
+            if (match) anyMatch = true;
+        });
+        // Heavy-duty warnings are advisory — hide them while searching.
+        section.querySelectorAll('.box-order-warning').forEach(w => { w.style.display = q ? 'none' : ''; });
+        if (!q) {
+            section.style.display = '';
+            if (itemsEl) itemsEl.style.display = 'none';
+            if (chevron) chevron.style.transform = 'rotate(-90deg)';
+        } else {
+            section.style.display = anyMatch ? '' : 'none';
+            if (itemsEl) itemsEl.style.display = anyMatch ? '' : 'none';
+            if (chevron) chevron.style.transform = anyMatch ? '' : 'rotate(-90deg)';
+        }
+    });
+}
+
 function boxOrderToggleSection(labelEl) {
     const section = labelEl.closest('.box-order-section');
     const itemsEl = section.querySelector('.box-order-section-items');
     const chevron = labelEl.querySelector('.box-order-chevron');
-    const isOpen  = itemsEl.style.display !== 'none';
-    itemsEl.style.display  = isOpen ? 'none' : '';
-    chevron.style.transform = isOpen ? 'rotate(-90deg)' : '';
+    const willOpen = itemsEl.style.display === 'none';
+    // Accordion: close every section first, then open the clicked one (if it was
+    // closed) — so only one section is ever open at a time.
+    const container = section.parentElement;
+    if (container) {
+        container.querySelectorAll('.box-order-section').forEach(s => {
+            const it = s.querySelector('.box-order-section-items');
+            const ch = s.querySelector('.box-order-chevron');
+            if (it) it.style.display = 'none';
+            if (ch) ch.style.transform = 'rotate(-90deg)';
+        });
+    }
+    if (willOpen) {
+        itemsEl.style.display = '';
+        chevron.style.transform = '';
+    }
 }
 
 function _buildBoxRow(item) {
     const displayCat = item.category.replace(/^(?:Common |Rare |Very Rare )/, '');
     const label      = escapeHtml(`${item.name} ${displayCat}`);
     const nameHtml   = escapeHtml(item.name);
+    const catHtml    = escapeHtml(item.category || '');
     const subParts   = [item.dimensions, displayCat].filter(Boolean);
     const subHtml    = escapeHtml(subParts.join(' · '));
-    return `<div class="box-order-row" data-item="${label}">
+    return `<div class="box-order-row" data-item="${label}" data-name="${nameHtml}" data-category="${catHtml}">
   <div class="box-order-info">
     <span class="box-order-name">${nameHtml}</span>
     <span class="box-order-subtype">${subHtml}</span>
@@ -10113,7 +10179,7 @@ function boxOrderNextPage() {
     _boxOrderSelected = [];
     rows.forEach(row => {
         const qty = parseInt(row.querySelector('.box-stepper-qty')?.textContent) || 0;
-        if (qty > 0) _boxOrderSelected.push({ item: row.dataset.item, qty });
+        if (qty > 0) _boxOrderSelected.push({ item: row.dataset.item, name: row.dataset.name, category: row.dataset.category, qty });
     });
     if (!_boxOrderSelected.length) {
         alert('Please add at least one item before continuing.');
@@ -10143,6 +10209,23 @@ function boxOrderBackPage() {
     document.getElementById('boxOrderFooter1').style.display  = '';
 }
 
+// Format one selected item for the order: drop the word "Box" from box sizes
+// and "Shipping Supplies" from supplies, and pick the unit per item type
+// (Peanuts → Bag(s), Gum Tape → Box(es), everything else → Bundle(s)).
+function _boxOrderLine(o) {
+    const displayCat = (o.category || '')
+        .replace(/^(?:Common |Rare |Very Rare )/, '')
+        .replace(/\bShipping Supplies\b/i, '')
+        .replace(/\bBox(?:es)?\b/i, '')
+        .replace(/\s+/g, ' ').trim();
+    const display = `${o.name || o.item || ''} ${displayCat}`.replace(/\s+/g, ' ').trim();
+    const n = (o.name || '').toLowerCase();
+    let one = 'Bundle', many = 'Bundles';
+    if (n.includes('peanut'))        { one = 'Bag'; many = 'Bags'; }
+    else if (n.includes('gum tape')) { one = 'Box'; many = 'Boxes'; }
+    return `${display}: ${o.qty} ${o.qty === 1 ? one : many}`;
+}
+
 function boxOrderUpdatePreview() {
     const preview  = document.getElementById('boxOrderEmailPreview');
     if (!preview) return;
@@ -10150,7 +10233,7 @@ function boxOrderUpdatePreview() {
     const userName = sessionStorage.getItem('speeksUserName')  || '';
     const notes    = document.getElementById('boxOrderNotes')?.value.trim() || '';
     const to       = _boxOrderGetEmail();
-    const lines    = _boxOrderSelected.map(o => `  • ${o.item}: ${o.qty} ${o.qty === 1 ? 'Bundle' : 'Bundles'}`).join('\n');
+    const lines    = _boxOrderSelected.map(o => `  • ${_boxOrderLine(o)}`).join('\n');
     const noteBlock = notes ? `\n\n${notes}` : '';
     preview.textContent =
         `To: ${to}\nSubject: PayMore ${store} Location\n\n` +
@@ -10158,21 +10241,53 @@ function boxOrderUpdatePreview() {
         `Thank you,\n${userName}`;
 }
 
-function sendBoxOrder() {
+// Corp roles (CEO/DM) must pick a store first; managers default to their own.
+function _boxOrderEnsureStore() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     const isCorpRole = role === 'ceo' || role === 'district manager';
     const sel = document.getElementById('boxOrderStoreSelect');
     if (isCorpRole && (!sel || !sel.value)) {
         alert('Please select a store before sending.');
-        return;
+        return false;
     }
-    const store     = _boxOrderGetStore();
-    const userName  = sessionStorage.getItem('speeksUserName')  || '';
-    const notes     = document.getElementById('boxOrderNotes')?.value.trim() || '';
-    const noteBlock = notes ? `%0A%0A${encodeURIComponent(notes)}` : '';
-    const to        = encodeURIComponent(_boxOrderGetEmail());
-    const subject   = encodeURIComponent(`PayMore ${store} Location`);
-    const lines     = _boxOrderSelected.map(o => encodeURIComponent(`  • ${o.item}: ${o.qty} ${o.qty === 1 ? 'Bundle' : 'Bundles'}`)).join('%0A');
-    const body      = `Hi,%0A%0APlease process the following order for ${encodeURIComponent(store)}:%0A%0A${lines}${noteBlock}%0A%0AThank you,%0A${encodeURIComponent(userName)}`;
-    window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+    return true;
+}
+
+// Build the order as plain text (real newlines) — shared by the email and the
+// copy failsafe so both always say exactly the same thing.
+function _boxOrderCompose() {
+    const store    = _boxOrderGetStore();
+    const userName = sessionStorage.getItem('speeksUserName') || '';
+    const notes    = document.getElementById('boxOrderNotes')?.value.trim() || '';
+    const lines    = _boxOrderSelected.map(o => `  • ${_boxOrderLine(o)}`).join('\n');
+    const noteBlock = notes ? `\n\n${notes}` : '';
+    const body = `Hi,\n\nPlease process the following order for ${store}:\n\n${lines}${noteBlock}\n\nThank you,\n${userName}`;
+    return { email: _boxOrderGetEmail(), subject: `PayMore ${store} Location`, body };
+}
+
+function sendBoxOrder() {
+    if (!_boxOrderEnsureStore()) return;
+    const { email, subject, body } = _boxOrderCompose();
+    window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+// Failsafe for machines with no default mail client: copy the full order
+// (recipient, subject, body) to the clipboard to paste into any email.
+function copyBoxOrder(button) {
+    if (!_boxOrderEnsureStore()) return;
+    const { email, subject, body } = _boxOrderCompose();
+    const text = `To: ${email}\nSubject: ${subject}\n\n${body}`;
+    navigator.clipboard.writeText(text).then(() => {
+        const originalText = button.innerText;
+        button.innerText = 'Copied!';
+        button.style.background = '#d1fae5';
+        button.style.color = '#065f46';
+        button.style.borderColor = '#34d399';
+        setTimeout(() => {
+            button.innerText = originalText;
+            button.style.background = '';
+            button.style.color = '';
+            button.style.borderColor = '';
+        }, 2000);
+    }).catch(() => alert('Could not copy automatically. Please select and copy the order manually.'));
 }

@@ -2742,18 +2742,23 @@ body.is-authenticated .info-ticker { display: flex; }
 }
 
 /* Daily store-comment bubble (shown/hidden via JS: bubble.style.display = 'flex') */
+/* Floating toast — pulled OUT of the nav so a DM comment never squishes the
+   header. Anchors to the top-right of the viewport, just below the ticker bar. */
 #dailyMessageBubble {
     display: none;
+    position: fixed;
+    top: 116px;
+    right: 24px;
     background: linear-gradient(135deg, var(--sage-professional), #4a7530);
     color: white;
-    padding: 6px 14px 6px 16px;
-    border-radius: 20px;
+    padding: 11px 14px 11px 16px;
+    border-radius: 14px;
     align-items: flex-start;
     gap: 8px;
     font-size: 13px;
-    box-shadow: 0 4px 10px rgba(90, 141, 59, 0.3);
-    max-width: min(500px, calc(100vw - 80px));
-    z-index: 1000;
+    box-shadow: 0 10px 28px rgba(31, 41, 55, 0.28);
+    max-width: min(380px, calc(100vw - 48px));
+    z-index: 1001;
 }
 #dailyMessageBubbleIcon { font-size: 16px; flex-shrink: 0; margin-top: 2px; }
 #dailyMessageBubbleText { white-space: normal; overflow-y: auto; max-height: 220px; }
@@ -3426,7 +3431,9 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px;
     padding: 6px 10px; border-top: 1px solid #c4cdd8; border-bottom: 1px solid #c4cdd8;
 }
-.mb-row td { padding: 7px 10px; border-bottom: 1px solid #f0f0f0; }
+/* Fixed cell height in BOTH modes so swapping the value for an input doesn't
+   grow the row and push the table down. Content is vertically centered. */
+.mb-row td { height: 34px; padding: 0 10px; border-bottom: 1px solid #f0f0f0; box-sizing: border-box; vertical-align: middle; }
 .mb-row:hover td { background: #fafbfc; }
 .mb-row:hover td.mb-delta { background: #eef3f6; }
 .mb-metric-name { font-weight: 600; color: #334155; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -3472,10 +3479,15 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .mb-row:hover td.mb-ebay-warn { background: #fef08a; }
 .mb-row:hover td.mb-ebay-bad  { background: #f9e2e2; }
 .mb-input {
-    width: 92px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 5px;
-    font-size: 12px; font-weight: 600; text-align: right; color: var(--slate-charcoal); outline: none;
+    width: 92px; height: 26px; box-sizing: border-box;
+    padding: 2px 6px; border: 1px solid #cbd5e1; border-radius: 5px;
+    font-size: 12px; font-weight: 600; text-align: center; color: var(--slate-charcoal); outline: none;
     font-family: 'Inter', sans-serif;
+    /* 26px fits inside the 34px row cell, so the row height never changes. */
+    -moz-appearance: textfield; appearance: textfield;
 }
+.mb-input::-webkit-outer-spin-button,
+.mb-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .mb-input:focus { border-color: var(--sage-professional); box-shadow: 0 0 0 2px rgba(106,153,78,0.15); }
 /* formula-derived cells: locked, auto-filled from the other inputs */
 .mb-input-auto { background: #f1f5f9; border-style: dashed; color: #64748b; cursor: not-allowed; }
@@ -5488,16 +5500,20 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     text-align: center;
 }
 
-.kpi-grid-td-input { padding: 2px 2px !important; }
+/* Input fills the cell with no extra td padding and symmetric inset so its
+   centered text lines up with the centered read-only value (no shift on edit). */
+.kpi-grid-td-input { padding: 0 !important; }
 
 .kpi-grid-input {
     width: 100%;
     height: 26px;
     border: 1px solid #e2e6ea;
     border-radius: 3px;
-    padding: 0 3px;
+    padding: 0 2px;
     font-size: 11px;
     font-weight: 600;
+    /* Centered to match the centered read-only value (symmetric padding keeps the
+       center aligned, so the value doesn't shift when it becomes editable). */
     text-align: center;
     color: var(--slate-charcoal);
     font-family: 'Inter', sans-serif;
@@ -5506,7 +5522,12 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     display: block;
     box-sizing: border-box;
     min-width: 0;
+    /* Drop the number spinner so it doesn't reserve right-side space. */
+    -moz-appearance: textfield;
+    appearance: textfield;
 }
+.kpi-grid-input::-webkit-outer-spin-button,
+.kpi-grid-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
 .kpi-grid-input:focus {
     outline: none;
@@ -5525,7 +5546,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    padding: 0 2px !important;
+    padding: 0 3px !important;
 }
 /* Actual entered values in view mode: dark text, white bg (distinct from grey computed cells) */
 .kpi-grid-computed.kpi-grid-view-val { color: var(--slate-charcoal); background: #fff; font-style: normal; }
