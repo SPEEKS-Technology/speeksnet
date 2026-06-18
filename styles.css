@@ -2389,7 +2389,14 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
 /* =========================================================
    CONSOLIDATED WIDGETS
    ========================================================= */
-.dynamic-module { display: none; }
+/* Role-gated modules are hidden by default and revealed by applyRoleBasedUI()
+   via inline `display:... !important`. The -flex/-block variants must be listed
+   explicitly — `.dynamic-module` does NOT match the `dynamic-module-flex` token —
+   otherwise they have no hidden state before JS runs (or while signed out), which
+   caused role-gated controls (e.g. the green ticker toggles) to flash on load/sign-out. */
+.dynamic-module,
+.dynamic-module-flex,
+.dynamic-module-block { display: none; }
 
 .portal-link-title { 
     text-decoration: none; 

@@ -4380,11 +4380,18 @@ function handleSignOut() {
     sessionStorage.removeItem('speeksUserName');
     sessionStorage.removeItem('speeksUserRole');
     sessionStorage.removeItem('speeksUserStore');
-    
+
     // Remove the comment tracker so it pops up again on next login
     sessionStorage.removeItem('speeksSeenCommentKeys');
-    
-    location.reload(); 
+
+    // Hide authenticated chrome and close any open panels BEFORE reloading, so the
+    // teardown/fetch window can't briefly paint role-gated controls (e.g. the green
+    // ticker toggles) as the layout collapses.
+    document.body.classList.remove('is-authenticated');
+    document.getElementById('checklistSidePanel')?.classList.remove('open');
+    document.getElementById('goalsSidePanel')?.classList.remove('open');
+
+    location.reload();
 }
 
 // --- 17. MODULE: IDEA SUBMISSION MODAL ---
