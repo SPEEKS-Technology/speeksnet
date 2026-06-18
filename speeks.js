@@ -238,6 +238,18 @@ async function loadCMS() {
 
             _annDocsCache = (data.announcements || []).filter(a => a.docUrl).reverse();
 
+            // New hires only see announcements from their onboarding day onward in the
+            // recent feed; anything older is auto-archived. Cutoff = start of that day.
+            // Blank (pre-existing users) means no filtering — they behave as before.
+            let onboardCutoff = null;
+            const onboardedRaw = sessionStorage.getItem('speeksUserOnboardedAt');
+            if (onboardedRaw) {
+                const od = new Date(onboardedRaw);
+                if (!isNaN(od.getTime())) {
+                    onboardCutoff = new Date(od.getFullYear(), od.getMonth(), od.getDate());
+                }
+            }
+
             if (data.announcements && data.announcements.length > 0) {
                 const sortedAnns = [...data.announcements].reverse();
                 const now = new Date();
@@ -269,6 +281,14 @@ async function loadCMS() {
                             localStorage.setItem(localReadKey, JSON.stringify([...localRead]));
                         }
                         isArchived = inReadBy || localRead.has(item.rowId);
+                        // Auto-archive anything posted before this user joined, so a new
+                        // hire isn't flooded with the whole backlog (archive still shows it).
+                        if (!isArchived && onboardCutoff && item.date) {
+                            const aDate = new Date(item.date);
+                            if (!isNaN(aDate.getTime()) && aDate < onboardCutoff) {
+                                isArchived = true;
+                            }
+                        }
                         if (!isArchived) {
                             showBadge = true;
                             unreadHtmlAttr = `data-ann-id="${item.rowId}"`;
@@ -1478,6 +1498,8 @@ async function checkPIN() {
             sessionStorage.setItem('speeksUserRole', matched.role ? matched.role.toLowerCase() : 'employee');
             sessionStorage.setItem('speeksUserStore', matched.store ? matched.store.toUpperCase() : 'ALL');
             sessionStorage.setItem('speeksUserPin', matched.pin);
+            // New-hire announcement baseline: blank for pre-existing users (no filtering).
+            sessionStorage.setItem('speeksUserOnboardedAt', matched.onboarded_at || '');
 
             const authOverlay = document.getElementById('authOverlay');
             if (authOverlay) authOverlay.style.display = 'none';
