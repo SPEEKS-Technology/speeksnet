@@ -8596,6 +8596,146 @@ async function saveManageHotkeys() {
     }
 }
 
+// ===== DM: MANAGER CHECKLIST (required tasks pushed to managers) =====
+// Lets the District Manager create/edit/remove the "required" (non-deletable)
+// checklist items managers see, targeted at specific stores per time period.
+const MCL_PERIOD_LABELS = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly' };
+
+function _mclRole() {
+    return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
+}
+
+async function toggleManagerChecklist() {
+    const dropdown = document.getElementById('managerChecklistDropdown');
+    if (!dropdown) return;
+
+    const isOpen = dropdown.classList.contains('show');
+    closeAllModals();
+    if (isOpen) return;
+
+    dropdown.classList.add('show');
+    lockAndBlurScreen();
+
+    // Reset the add form to a clean state each time it opens
+    const text = document.getElementById('mcl-text'); if (text) text.value = '';
+    const period = document.getElementById('mcl-period'); if (period) period.value = 'daily';
+    document.querySelectorAll('#mcl-stores input[type="checkbox"]').forEach(c => c.checked = false);
+
+    await loadRequiredTasks();
+}
+
+function mclToggleAllStores() {
+    const boxes = [...document.querySelectorAll('#mcl-stores input[type="checkbox"]')];
+    const allOn = boxes.length > 0 && boxes.every(b => b.checked);
+    boxes.forEach(b => b.checked = !allOn);
+}
+
+async function loadRequiredTasks() {
+    const list = document.getElementById('mcl-list');
+    if (!list) return;
+    list.innerHTML = '<div class="status-message">Loading required tasks…</div>';
+    try {
+        const res = await fetch(`${CHECKLIST_URL}?action=listRequired&v=${Date.now()}`);
+        const data = await res.json();
+        renderRequiredTasks(data.tasks || []);
+    } catch (e) {
+        list.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load required tasks.</div>';
+    }
+}
+
+function renderRequiredTasks(tasks) {
+    const list = document.getElementById('mcl-list');
+    if (!list) return;
+
+    if (!tasks.length) {
+        list.innerHTML = '<div style="text-align:center; padding:18px; color:#94a3b8; font-size:12px; font-weight:600;">No required tasks yet. Add one above.</div>';
+        return;
+    }
+
+    const order = ['daily', 'weekly', 'monthly', 'quarterly'];
+    const byPeriod = {};
+    tasks.forEach(t => { (byPeriod[t.tab] = byPeriod[t.tab] || []).push(t); });
+
+    let html = '';
+    order.forEach(period => {
+        const items = byPeriod[period];
+        if (!items || !items.length) return;
+        html += `<div class="mcl-group-label">${MCL_PERIOD_LABELS[period] || period}</div>`;
+        items.forEach(t => {
+            const badges = (t.stores || []).length
+                ? t.stores.map(s => `<span class="mcl-badge">${s === 'CORP' ? 'Corp' : s}</span>`).join('')
+                : '<span class="mcl-badge mcl-badge-none">No stores</span>';
+            html += `
+            <div class="mcl-row" data-id="${t.id}">
+                <div class="mcl-row-main">
+                    <span class="mcl-row-text">${escapeHtml(t.text)}</span>
+                    <div class="mcl-row-badges">${badges}</div>
+                </div>
+                <div class="mcl-row-actions">
+                    <button class="mcl-edit-btn" title="Edit task text" onclick="editRequiredTask('${t.id}')">✎</button>
+                    <button class="mcl-del-btn" title="Delete for all managers" onclick="deleteRequiredTask('${t.id}')">✖</button>
+                </div>
+            </div>`;
+        });
+    });
+    list.innerHTML = html;
+}
+
+async function addRequiredTask() {
+    const btn = document.getElementById('mcl-add-btn');
+    const text = (document.getElementById('mcl-text').value || '').trim();
+    const tab = document.getElementById('mcl-period').value;
+    const stores = [...document.querySelectorAll('#mcl-stores input[type="checkbox"]:checked')].map(c => c.value);
+
+    if (!text) { alert('Enter the task text.'); return; }
+    if (!stores.length) { alert('Pick at least one store this task applies to.'); return; }
+
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    try {
+        await postWrite(CHECKLIST_URL, {
+            action: 'addRequired',
+            tab, text, stores,
+            user: sessionStorage.getItem('speeksUserName') || '',
+            role: _mclRole()
+        });
+        document.getElementById('mcl-text').value = '';
+        document.querySelectorAll('#mcl-stores input[type="checkbox"]').forEach(c => c.checked = false);
+        await loadRequiredTasks();
+    } catch (e) {
+        alert('Could not add task: ' + (e.message || e));
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '+ Add Required Task';
+    }
+}
+
+async function deleteRequiredTask(id) {
+    if (!confirm('Delete this required task for all managers it applies to? This cannot be undone.')) return;
+    try {
+        await postWrite(CHECKLIST_URL, { action: 'deleteRequired', id, role: _mclRole() });
+        await loadRequiredTasks();
+    } catch (e) {
+        alert('Could not delete task: ' + (e.message || e));
+    }
+}
+
+async function editRequiredTask(id) {
+    const row = document.querySelector(`.mcl-row[data-id="${id}"]`);
+    if (!row) return;
+    const current = row.querySelector('.mcl-row-text').textContent;
+    const next = prompt('Edit task text:', current);
+    if (next === null) return; // cancelled
+    const trimmed = next.trim();
+    if (!trimmed || trimmed === current) return;
+    try {
+        await postWrite(CHECKLIST_URL, { action: 'editRequired', id, text: trimmed, role: _mclRole() });
+        await loadRequiredTasks();
+    } catch (e) {
+        alert('Could not edit task: ' + (e.message || e));
+    }
+}
+
 // --- DM SCORECARD SUBMISSION LOGIC ---
 const SCORECARD_CATEGORIES = [
     "Front of House Cleanliness",
