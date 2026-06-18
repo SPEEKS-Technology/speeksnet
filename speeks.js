@@ -9231,10 +9231,15 @@ async function fetchChampions() {
                 const emp = podium.data;
                 const isFirst = podium.place === 1;
                 
-                // Only render the inner score/items text block if it is the Lister or Review podium
+                // Render the inner number/label block for Lister, Review, and Buyer podiums.
+                // Buyer raw score scales with dollars (tens of thousands), so show a
+                // compact, absolute "points" figure: the raw score / 100, rounded. This
+                // preserves the exact ranking while staying small and readable.
                 let blockContent = '';
-                if (type === 'lister' || type === 'review') {
-                    const val = type === 'lister' ? emp.listed : emp.reviews;
+                if (type === 'lister' || type === 'review' || type === 'buyer') {
+                    const val = type === 'lister' ? emp.listed
+                              : type === 'review' ? emp.reviews
+                              : Math.round(emp.score / 100);
                     blockContent = `
                         <div style="z-index: 2; display: flex; flex-direction: column; align-items: center;">
                             <span style="font-size: ${isFirst ? '32px' : '26px'}; font-weight: 900; color: var(--slate-charcoal); line-height: 1;">${val}</span>
