@@ -6417,3 +6417,32 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 @media (prefers-reduced-motion: reduce) {
     .kpi-due-dot::before, .kpi-due-pill, .kpi-update-trigger-btn.kpi-due-pulse { animation: none; }
 }
+
+/* ===== DM Manager Checklist (required tasks) modal ===== */
+.mcl-add-form { display: flex; flex-direction: column; gap: 12px; }
+.mcl-add-row { display: flex; gap: 10px; }
+.mcl-field { display: flex; flex-direction: column; gap: 5px; }
+.mcl-field-period { flex: 0 0 130px; }
+.mcl-field-text { flex: 1 1 auto; min-width: 0; }
+.mcl-field .form-label-caps { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mcl-allbtn { background: #eef2ff; color: #4338ca; border: none; border-radius: 6px; padding: 3px 8px; font-size: 10px; font-weight: 700; cursor: pointer; }
+.mcl-allbtn:hover { background: #e0e7ff; }
+.mcl-store-checks { display: flex; flex-wrap: wrap; gap: 8px; }
+.mcl-store-checks label { display: flex; align-items: center; gap: 6px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 11px; font-size: 12px; font-weight: 700; color: #475569; cursor: pointer; user-select: none; }
+.mcl-store-checks label:has(input:checked) { background: #eef2ff; border-color: #a5b4fc; color: #4338ca; }
+.mcl-store-checks input { cursor: pointer; width: 14px; height: 14px; }
+.mcl-add-btn { align-self: flex-start; }
+.mcl-existing-label { margin: 16px 0 8px; font-size: 10px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 14px; }
+.mcl-group-label { font-size: 10px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; color: #6366f1; margin: 10px 0 4px; }
+.mcl-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 6px; }
+.mcl-row-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mcl-row-text { font-size: 13px; font-weight: 600; color: #1e293b; }
+.mcl-row-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+.mcl-badge { font-size: 9px; font-weight: 800; letter-spacing: .3px; background: #eef2ff; color: #4338ca; border-radius: 5px; padding: 2px 6px; }
+.mcl-badge-none { background: #fef2f2; color: #dc2626; }
+.mcl-row-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.mcl-edit-btn, .mcl-del-btn { width: 26px; height: 26px; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 700; line-height: 1; }
+.mcl-edit-btn { background: #f1f5f9; color: #475569; }
+.mcl-del-btn { background: #fef2f2; color: #dc2626; }
+.mcl-edit-btn:hover { background: #e2e8f0; }
+.mcl-del-btn:hover { background: #fee2e2; }
