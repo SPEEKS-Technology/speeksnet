@@ -238,6 +238,18 @@ async function loadCMS() {
 
             _annDocsCache = (data.announcements || []).filter(a => a.docUrl).reverse();
 
+            // New hires only see announcements from their onboarding day onward in the
+            // recent feed; anything older is auto-archived. Cutoff = start of that day.
+            // Blank (pre-existing users) means no filtering — they behave as before.
+            let onboardCutoff = null;
+            const onboardedRaw = sessionStorage.getItem('speeksUserOnboardedAt');
+            if (onboardedRaw) {
+                const od = new Date(onboardedRaw);
+                if (!isNaN(od.getTime())) {
+                    onboardCutoff = new Date(od.getFullYear(), od.getMonth(), od.getDate());
+                }
+            }
+
             if (data.announcements && data.announcements.length > 0) {
                 const sortedAnns = [...data.announcements].reverse();
                 const now = new Date();
@@ -269,6 +281,14 @@ async function loadCMS() {
                             localStorage.setItem(localReadKey, JSON.stringify([...localRead]));
                         }
                         isArchived = inReadBy || localRead.has(item.rowId);
+                        // Auto-archive anything posted before this user joined, so a new
+                        // hire isn't flooded with the whole backlog (archive still shows it).
+                        if (!isArchived && onboardCutoff && item.date) {
+                            const aDate = new Date(item.date);
+                            if (!isNaN(aDate.getTime()) && aDate < onboardCutoff) {
+                                isArchived = true;
+                            }
+                        }
                         if (!isArchived) {
                             showBadge = true;
                             unreadHtmlAttr = `data-ann-id="${item.rowId}"`;
@@ -1084,7 +1104,7 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
     row.className = 'user-manage-row';
 
     const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL', 'CORP'];
-    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM'];
+    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM'];
 
     const storeOptions = stores.map(s => `<option value="${s}" ${(user.store || '').toUpperCase() === s ? 'selected' : ''}>${s}</option>`).join('');
     const roleOptions = roles.map(r => `<option value="${r}" ${(user.role || '').toLowerCase() === r.toLowerCase() ? 'selected' : ''}>${r}</option>`).join('');
@@ -1475,9 +1495,25 @@ async function checkPIN() {
         if (matched) {
             sessionStorage.setItem('speeksUnlocked', 'true');
             sessionStorage.setItem('speeksUserName', matched.name);
-            sessionStorage.setItem('speeksUserRole', matched.role ? matched.role.toLowerCase() : 'employee');
-            sessionStorage.setItem('speeksUserStore', matched.store ? matched.store.toUpperCase() : 'ALL');
+
+            let _loginRole = matched.role ? matched.role.toLowerCase() : 'employee';
+            let _loginStore = matched.store ? matched.store.toUpperCase() : 'ALL';
+            // A Multi-Store Manager behaves EXACTLY like a store manager everywhere — so we
+            // store their effective role as 'manager' (covers every role check, current and
+            // future) and flag the multi-store capability separately to drive the store
+            // switcher. Default to their first managed store.
+            if (_loginRole === 'multi-store manager') {
+                sessionStorage.setItem('speeksMultiStore', 'true');
+                _loginRole = 'manager';
+                _loginStore = MULTISTORE_MANAGER_STORES[0];
+            } else {
+                sessionStorage.removeItem('speeksMultiStore');
+            }
+            sessionStorage.setItem('speeksUserRole', _loginRole);
+            sessionStorage.setItem('speeksUserStore', _loginStore);
             sessionStorage.setItem('speeksUserPin', matched.pin);
+            // New-hire announcement baseline: blank for pre-existing users (no filtering).
+            sessionStorage.setItem('speeksUserOnboardedAt', matched.onboarded_at || '');
 
             const authOverlay = document.getElementById('authOverlay');
             if (authOverlay) authOverlay.style.display = 'none';
@@ -1865,7 +1901,7 @@ function loadVarianceStoreEmployees() {
     try {
         const authData = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
         storeUsers = (authData.users || []).filter(u =>
-            (u.store || '').toUpperCase() === store.toUpperCase() &&
+            userInStore(u, store) &&
             (u.role || '').toLowerCase() !== 'training'
         );
     } catch (_) {}
@@ -4272,7 +4308,7 @@ function renderQMTab(tab) {
                 <span style="font-size: 13px; font-weight: 900; color: #92400e;">Handling a Sub-5-Star Review?</span>
                 <span style="font-size: 11px; font-weight: 700; color: #b45309;">Follow the SOP for mixed or negative feedback before replying.</span>
             </div>
-            <a href="https://drive.google.com/file/d/1HKhBSVl7dNkgLd6f9O1_9Rhf9sYeAA1b/view?usp=sharing" target="_blank" class="mini-action-btn" style="background: white; border-color: #fde68a; color: #92400e; box-shadow: 0 2px 4px rgba(251,191,36,0.15);">View Process ↗</a>
+            <a href="https://drive.google.com/file/d/1D4VBM5nSD0KpK-bzE3_O9OOncFCsk80w/view?usp=sharing" target="_blank" class="mini-action-btn" style="background: white; border-color: #fde68a; color: #92400e; box-shadow: 0 2px 4px rgba(251,191,36,0.15);">View Process ↗</a>
         </div>`;
 
         html += '<div class="qm-category-items open" style="margin-left: 0; padding-left: 0; border: none; background: transparent; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start;">';
@@ -4358,11 +4394,19 @@ function handleSignOut() {
     sessionStorage.removeItem('speeksUserName');
     sessionStorage.removeItem('speeksUserRole');
     sessionStorage.removeItem('speeksUserStore');
-    
+    sessionStorage.removeItem('speeksMultiStore');
+
     // Remove the comment tracker so it pops up again on next login
     sessionStorage.removeItem('speeksSeenCommentKeys');
-    
-    location.reload(); 
+
+    // Hide authenticated chrome and close any open panels BEFORE reloading, so the
+    // teardown/fetch window can't briefly paint role-gated controls (e.g. the green
+    // ticker toggles) as the layout collapses.
+    document.body.classList.remove('is-authenticated');
+    document.getElementById('checklistSidePanel')?.classList.remove('open');
+    document.getElementById('goalsSidePanel')?.classList.remove('open');
+
+    location.reload();
 }
 
 // --- 17. MODULE: IDEA SUBMISSION MODAL ---
@@ -5339,7 +5383,7 @@ async function fetchLiveGoalsData() {
             const _authData = JSON.parse(_authRaw);
             const _excluded = ['ceo', 'district manager'];
             const _emps = (_authData.users || [])
-                .filter(u => (u.store || '').trim().toUpperCase() === goalsTargetStore.toUpperCase() && !_excluded.includes((u.role || '').toLowerCase()))
+                .filter(u => userInStore(u, goalsTargetStore) && !_excluded.includes((u.role || '').toLowerCase()))
                 .map(u => u.name)
                 .filter(Boolean);
             goalsRoster = _emps.length ? _emps : ['No Employees Found'];
@@ -5800,7 +5844,7 @@ function storeRosterSize(store) {
         const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
         const excluded = ['ceo', 'district manager'];
         return (auth.users || []).filter(u =>
-            (u.store || '').trim().toUpperCase() === String(store).toUpperCase() &&
+            userInStore(u, store) &&
             !excluded.includes((u.role || '').toLowerCase())
         ).length || 4;
     } catch (e) { return 4; }
@@ -6820,6 +6864,52 @@ function applyRoleBasedUI() {
         });
     }
 
+    initMultiStoreSwitcher();
+}
+
+// ===== MULTI-STORE MANAGER: global store switcher =====
+// A Multi-Store Manager (e.g. Joseph Ortega) oversees more than one store and toggles
+// which one the whole dashboard is scoped to. The first entry is the default (and is
+// set as their `store` at login). Toggling re-points the session store and reloads, so
+// every widget re-scopes through the normal load path. Single-store users never reach
+// this code, so their dashboards/feeds are unaffected.
+const MULTISTORE_MANAGER_STORES = ['BAL', 'MPL'];
+
+// True if a directory user belongs to a given store's roster. A Multi-Store Manager
+// belongs to EVERY store they manage (not just their home store), so they're included
+// anywhere a regular store manager would be — variance, listing-goals roster, etc.
+function userInStore(user, storeCode) {
+    const store = String(storeCode || '').toUpperCase();
+    if (String(user.store || '').toUpperCase() === store) return true;
+    return String(user.role || '').toLowerCase() === 'multi-store manager'
+        && MULTISTORE_MANAGER_STORES.includes(store);
+}
+
+// Effective role is 'manager', so multi-store status is tracked via this flag (set at login).
+function isMultiStoreManager() {
+    return sessionStorage.getItem('speeksMultiStore') === 'true';
+}
+
+function setMultiStore(store) {
+    const next = String(store || '').toUpperCase();
+    if (!next || !MULTISTORE_MANAGER_STORES.includes(next)) return;
+    if (next === (sessionStorage.getItem('speeksUserStore') || '').toUpperCase()) return;
+    sessionStorage.setItem('speeksUserStore', next);
+    location.reload();
+}
+
+function initMultiStoreSwitcher() {
+    const sw = document.querySelector('.msm-store-switch');
+    if (!sw) return;
+    if (!isMultiStoreManager()) { sw.style.display = 'none'; return; }
+    const sel = sw.querySelector('#msmStoreSelect');
+    const current = (sessionStorage.getItem('speeksUserStore') || MULTISTORE_MANAGER_STORES[0]).toUpperCase();
+    if (sel) {
+        sel.innerHTML = MULTISTORE_MANAGER_STORES
+            .map(s => `<option value="${s}" ${s === current ? 'selected' : ''}>${s}</option>`)
+            .join('');
+    }
+    sw.style.display = 'flex';
 }
 
 function checkInstantNotifCache() {
@@ -9209,10 +9299,15 @@ async function fetchChampions() {
                 const emp = podium.data;
                 const isFirst = podium.place === 1;
                 
-                // Only render the inner score/items text block if it is the Lister or Review podium
+                // Render the inner number/label block for Lister, Review, and Buyer podiums.
+                // Buyer raw score scales with dollars (tens of thousands), so show a
+                // compact, absolute "points" figure: the raw score / 100, rounded. This
+                // preserves the exact ranking while staying small and readable.
                 let blockContent = '';
-                if (type === 'lister' || type === 'review') {
-                    const val = type === 'lister' ? emp.listed : emp.reviews;
+                if (type === 'lister' || type === 'review' || type === 'buyer') {
+                    const val = type === 'lister' ? emp.listed
+                              : type === 'review' ? emp.reviews
+                              : Math.round(emp.score / 100);
                     blockContent = `
                         <div style="z-index: 2; display: flex; flex-direction: column; align-items: center;">
                             <span style="font-size: ${isFirst ? '32px' : '26px'}; font-weight: 900; color: var(--slate-charcoal); line-height: 1;">${val}</span>
