@@ -1104,7 +1104,7 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
     row.className = 'user-manage-row';
 
     const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL', 'CORP'];
-    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM'];
+    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM'];
 
     const storeOptions = stores.map(s => `<option value="${s}" ${(user.store || '').toUpperCase() === s ? 'selected' : ''}>${s}</option>`).join('');
     const roleOptions = roles.map(r => `<option value="${r}" ${(user.role || '').toLowerCase() === r.toLowerCase() ? 'selected' : ''}>${r}</option>`).join('');
@@ -1495,8 +1495,22 @@ async function checkPIN() {
         if (matched) {
             sessionStorage.setItem('speeksUnlocked', 'true');
             sessionStorage.setItem('speeksUserName', matched.name);
-            sessionStorage.setItem('speeksUserRole', matched.role ? matched.role.toLowerCase() : 'employee');
-            sessionStorage.setItem('speeksUserStore', matched.store ? matched.store.toUpperCase() : 'ALL');
+
+            let _loginRole = matched.role ? matched.role.toLowerCase() : 'employee';
+            let _loginStore = matched.store ? matched.store.toUpperCase() : 'ALL';
+            // A Multi-Store Manager behaves EXACTLY like a store manager everywhere — so we
+            // store their effective role as 'manager' (covers every role check, current and
+            // future) and flag the multi-store capability separately to drive the store
+            // switcher. Default to their first managed store.
+            if (_loginRole === 'multi-store manager') {
+                sessionStorage.setItem('speeksMultiStore', 'true');
+                _loginRole = 'manager';
+                _loginStore = MULTISTORE_MANAGER_STORES[0];
+            } else {
+                sessionStorage.removeItem('speeksMultiStore');
+            }
+            sessionStorage.setItem('speeksUserRole', _loginRole);
+            sessionStorage.setItem('speeksUserStore', _loginStore);
             sessionStorage.setItem('speeksUserPin', matched.pin);
             // New-hire announcement baseline: blank for pre-existing users (no filtering).
             sessionStorage.setItem('speeksUserOnboardedAt', matched.onboarded_at || '');
@@ -1887,7 +1901,7 @@ function loadVarianceStoreEmployees() {
     try {
         const authData = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
         storeUsers = (authData.users || []).filter(u =>
-            (u.store || '').toUpperCase() === store.toUpperCase() &&
+            userInStore(u, store) &&
             (u.role || '').toLowerCase() !== 'training'
         );
     } catch (_) {}
@@ -4380,6 +4394,7 @@ function handleSignOut() {
     sessionStorage.removeItem('speeksUserName');
     sessionStorage.removeItem('speeksUserRole');
     sessionStorage.removeItem('speeksUserStore');
+    sessionStorage.removeItem('speeksMultiStore');
 
     // Remove the comment tracker so it pops up again on next login
     sessionStorage.removeItem('speeksSeenCommentKeys');
@@ -5368,7 +5383,7 @@ async function fetchLiveGoalsData() {
             const _authData = JSON.parse(_authRaw);
             const _excluded = ['ceo', 'district manager'];
             const _emps = (_authData.users || [])
-                .filter(u => (u.store || '').trim().toUpperCase() === goalsTargetStore.toUpperCase() && !_excluded.includes((u.role || '').toLowerCase()))
+                .filter(u => userInStore(u, goalsTargetStore) && !_excluded.includes((u.role || '').toLowerCase()))
                 .map(u => u.name)
                 .filter(Boolean);
             goalsRoster = _emps.length ? _emps : ['No Employees Found'];
@@ -5829,7 +5844,7 @@ function storeRosterSize(store) {
         const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
         const excluded = ['ceo', 'district manager'];
         return (auth.users || []).filter(u =>
-            (u.store || '').trim().toUpperCase() === String(store).toUpperCase() &&
+            userInStore(u, store) &&
             !excluded.includes((u.role || '').toLowerCase())
         ).length || 4;
     } catch (e) { return 4; }
@@ -6849,6 +6864,52 @@ function applyRoleBasedUI() {
         });
     }
 
+    initMultiStoreSwitcher();
+}
+
+// ===== MULTI-STORE MANAGER: global store switcher =====
+// A Multi-Store Manager (e.g. Joseph Ortega) oversees more than one store and toggles
+// which one the whole dashboard is scoped to. The first entry is the default (and is
+// set as their `store` at login). Toggling re-points the session store and reloads, so
+// every widget re-scopes through the normal load path. Single-store users never reach
+// this code, so their dashboards/feeds are unaffected.
+const MULTISTORE_MANAGER_STORES = ['BAL', 'MPL'];
+
+// True if a directory user belongs to a given store's roster. A Multi-Store Manager
+// belongs to EVERY store they manage (not just their home store), so they're included
+// anywhere a regular store manager would be — variance, listing-goals roster, etc.
+function userInStore(user, storeCode) {
+    const store = String(storeCode || '').toUpperCase();
+    if (String(user.store || '').toUpperCase() === store) return true;
+    return String(user.role || '').toLowerCase() === 'multi-store manager'
+        && MULTISTORE_MANAGER_STORES.includes(store);
+}
+
+// Effective role is 'manager', so multi-store status is tracked via this flag (set at login).
+function isMultiStoreManager() {
+    return sessionStorage.getItem('speeksMultiStore') === 'true';
+}
+
+function setMultiStore(store) {
+    const next = String(store || '').toUpperCase();
+    if (!next || !MULTISTORE_MANAGER_STORES.includes(next)) return;
+    if (next === (sessionStorage.getItem('speeksUserStore') || '').toUpperCase()) return;
+    sessionStorage.setItem('speeksUserStore', next);
+    location.reload();
+}
+
+function initMultiStoreSwitcher() {
+    const sw = document.querySelector('.msm-store-switch');
+    if (!sw) return;
+    if (!isMultiStoreManager()) { sw.style.display = 'none'; return; }
+    const sel = sw.querySelector('#msmStoreSelect');
+    const current = (sessionStorage.getItem('speeksUserStore') || MULTISTORE_MANAGER_STORES[0]).toUpperCase();
+    if (sel) {
+        sel.innerHTML = MULTISTORE_MANAGER_STORES
+            .map(s => `<option value="${s}" ${s === current ? 'selected' : ''}>${s}</option>`)
+            .join('');
+    }
+    sw.style.display = 'flex';
 }
 
 function checkInstantNotifCache() {
