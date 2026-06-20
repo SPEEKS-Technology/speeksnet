@@ -10383,9 +10383,14 @@ function _buildBoxRow(item) {
     const label      = escapeHtml(`${item.name} ${displayCat}`);
     const nameHtml   = escapeHtml(item.name);
     const catHtml    = escapeHtml(item.category || '');
+    const bundleSize = Math.max(1, parseInt(item.bundle_size) || 1);
+    // The stepper counts individual units; clicking +/- jumps by one bundle so a
+    // manager always sees the true unit count. Surface the bundle size so it's
+    // clear why the number jumps the way it does.
     const subParts   = [item.dimensions, displayCat].filter(Boolean);
+    if (bundleSize > 1) subParts.push(`${bundleSize}/bundle`);
     const subHtml    = escapeHtml(subParts.join(' · '));
-    return `<div class="box-order-row" data-item="${label}" data-name="${nameHtml}" data-category="${catHtml}">
+    return `<div class="box-order-row" data-item="${label}" data-name="${nameHtml}" data-category="${catHtml}" data-bundle="${bundleSize}">
   <div class="box-order-info">
     <span class="box-order-name">${nameHtml}</span>
     <span class="box-order-subtype">${subHtml}</span>
@@ -10399,9 +10404,11 @@ function _buildBoxRow(item) {
 }
 
 function boxStepperChange(btn, delta) {
-    const qtyEl = btn.closest('.box-order-stepper').querySelector('.box-stepper-qty');
-    const row   = btn.closest('.box-order-row');
-    const next  = Math.max(0, (parseInt(qtyEl.textContent) || 0) + delta);
+    const qtyEl  = btn.closest('.box-order-stepper').querySelector('.box-stepper-qty');
+    const row    = btn.closest('.box-order-row');
+    // Step by the bundle size so the displayed quantity is the actual unit count.
+    const bundle = Math.max(1, parseInt(row.dataset.bundle) || 1);
+    const next   = Math.max(0, (parseInt(qtyEl.textContent) || 0) + delta * bundle);
     qtyEl.textContent = next;
     qtyEl.classList.toggle('box-stepper-active', next > 0);
     row.classList.toggle('box-row-selected', next > 0);
@@ -10414,7 +10421,8 @@ function boxOrderNextPage() {
     _boxOrderSelected = [];
     rows.forEach(row => {
         const qty = parseInt(row.querySelector('.box-stepper-qty')?.textContent) || 0;
-        if (qty > 0) _boxOrderSelected.push({ item: row.dataset.item, name: row.dataset.name, category: row.dataset.category, qty });
+        const bundle = Math.max(1, parseInt(row.dataset.bundle) || 1);
+        if (qty > 0) _boxOrderSelected.push({ item: row.dataset.item, name: row.dataset.name, category: row.dataset.category, qty, bundle });
     });
     if (!_boxOrderSelected.length) {
         alert('Please add at least one item before continuing.');
@@ -10447,6 +10455,8 @@ function boxOrderBackPage() {
 // Format one selected item for the order: drop the word "Box" from box sizes
 // and "Shipping Supplies" from supplies, and pick the unit per item type
 // (Peanuts → Bag(s), Gum Tape → Box(es), everything else → Bundle(s)).
+// The stepper tracks individual units; convert back to bundle count here so the
+// vendor email keeps reading in bundles (qty ÷ bundle size).
 function _boxOrderLine(o) {
     const displayCat = (o.category || '')
         .replace(/^(?:Common |Rare |Very Rare )/, '')
@@ -10458,7 +10468,9 @@ function _boxOrderLine(o) {
     let one = 'Bundle', many = 'Bundles';
     if (n.includes('peanut'))        { one = 'Bag'; many = 'Bags'; }
     else if (n.includes('gum tape')) { one = 'Box'; many = 'Boxes'; }
-    return `${display}: ${o.qty} ${o.qty === 1 ? one : many}`;
+    const bundle  = Math.max(1, parseInt(o.bundle) || 1);
+    const bundles = Math.max(1, Math.round((o.qty || 0) / bundle));
+    return `${display}: ${bundles} ${bundles === 1 ? one : many}`;
 }
 
 function boxOrderUpdatePreview() {
