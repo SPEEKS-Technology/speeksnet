@@ -10538,3 +10538,164 @@ function copyBoxOrder(button) {
         }, 2000);
     }).catch(() => alert('Could not copy automatically. Please select and copy the order manually.'));
 }
+
+// ============================================================
+// RECYCLE INVENTORY TOOL
+// ============================================================
+// Stores submit these when an item needs to be recycled out of inventory.
+// Mirrors the Box Order flow (two-page form → mailto + copy failsafe) but is a
+// free-text request that always routes to a single SPEEKS inbox.
+
+const RECYCLE_INV_EMAIL = 'ethan.kushnir@speekstechnology.com';
+
+// Corp roles (CEO/DM) pick a store; managers/ASM default to their own.
+function _recycleInvGetStoreCode() {
+    const selectorEl = document.getElementById('recycleInvStoreSelector');
+    const corpVisible = selectorEl && selectorEl.style.display !== 'none';
+    const sel = document.getElementById('recycleInvStoreSelect');
+    return (corpVisible && sel && sel.value) ? sel.value : (sessionStorage.getItem('speeksUserStore') || '');
+}
+
+function _recycleInvGetStore() {
+    const code = _recycleInvGetStoreCode();
+    return BOX_STORE_NAMES[code] || code || 'Store';
+}
+
+// Keep money fields numeric: strip anything that isn't a digit or a decimal
+// point (so a typed "$" simply vanishes) and allow only one decimal point.
+function recycleInvSanitizeMoney(input) {
+    let v = (input.value || '').replace(/[^\d.]/g, '');
+    const firstDot = v.indexOf('.');
+    if (firstDot !== -1) {
+        v = v.slice(0, firstDot + 1) + v.slice(firstDot + 1).replace(/\./g, '');
+    }
+    input.value = v;
+}
+
+// Normalize a money field for the email: exactly one leading "$" plus thousands
+// separators ("12345" → "$12,345", "$25" → "$25", "1234.5" → "$1,234.5").
+// Decimals are kept only if typed, capped at two places. Empty stays empty.
+function _recycleInvFormatMoney(raw) {
+    const v = String(raw || '').replace(/[^\d.]/g, '');
+    if (!v) return '';
+    const firstDot = v.indexOf('.');
+    let intPart = firstDot === -1 ? v : v.slice(0, firstDot);
+    let decPart = firstDot === -1 ? '' : v.slice(firstDot + 1).replace(/\./g, '').slice(0, 2);
+    intPart = intPart.replace(/^0+(?=\d)/, '') || '0';   // trim leading zeros, keep one digit
+    const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return decPart !== '' ? `$${grouped}.${decPart}` : `$${grouped}`;
+}
+
+function toggleRecycleInventory() {
+    closeAllModals();
+    const modal = document.getElementById('recycleInvModal');
+    if (!modal) return;
+    // Reset to a blank page 1 every time.
+    ['recycleInvSku', 'recycleInvDescription', 'recycleInvValue', 'recycleInvCost'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const isCorpRole = role === 'ceo' || role === 'district manager';
+    const selectorEl = document.getElementById('recycleInvStoreSelector');
+    if (selectorEl) {
+        selectorEl.style.display = isCorpRole ? '' : 'none';
+        const sel = document.getElementById('recycleInvStoreSelect');
+        if (sel) sel.value = '';
+    }
+    document.getElementById('recycleInvPage1').style.display   = '';
+    document.getElementById('recycleInvFooter1').style.display = '';
+    document.getElementById('recycleInvPage2').style.display   = 'none';
+    document.getElementById('recycleInvFooter2').style.display = 'none';
+    modal.classList.add('show');
+    lockAndBlurScreen();
+}
+
+// Validate page 1: every field is required; corp roles must also pick a store.
+function _recycleInvEnsureValid() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const isCorpRole = role === 'ceo' || role === 'district manager';
+    const sel = document.getElementById('recycleInvStoreSelect');
+    if (isCorpRole && (!sel || !sel.value)) {
+        alert('Please select a store first.');
+        return false;
+    }
+    const sku  = document.getElementById('recycleInvSku')?.value.trim();
+    const desc = document.getElementById('recycleInvDescription')?.value.trim();
+    const val  = document.getElementById('recycleInvValue')?.value.trim();
+    const cost = document.getElementById('recycleInvCost')?.value.trim();
+    if (!sku || !desc || !val || !cost) {
+        alert('Please fill in the SKU, description, value, and cost before continuing.');
+        return false;
+    }
+    return true;
+}
+
+function recycleInvNextPage() {
+    if (!_recycleInvEnsureValid()) return;
+    recycleInvUpdatePreview();
+    document.getElementById('recycleInvPage1').style.display   = 'none';
+    document.getElementById('recycleInvFooter1').style.display = 'none';
+    document.getElementById('recycleInvPage2').style.display   = '';
+    document.getElementById('recycleInvFooter2').style.display = '';
+}
+
+function recycleInvBackPage() {
+    document.getElementById('recycleInvPage2').style.display   = 'none';
+    document.getElementById('recycleInvFooter2').style.display = 'none';
+    document.getElementById('recycleInvPage1').style.display   = '';
+    document.getElementById('recycleInvFooter1').style.display = '';
+}
+
+// Build the request as plain text (real newlines) — shared by the email and the
+// copy failsafe so both always say exactly the same thing.
+function _recycleInvCompose() {
+    const store    = _recycleInvGetStore();
+    const userName = sessionStorage.getItem('speeksUserName') || '';
+    const sku  = document.getElementById('recycleInvSku')?.value.trim()         || '';
+    const desc = document.getElementById('recycleInvDescription')?.value.trim() || '';
+    const val  = _recycleInvFormatMoney(document.getElementById('recycleInvValue')?.value);
+    const cost = _recycleInvFormatMoney(document.getElementById('recycleInvCost')?.value);
+    const body =
+        `Hi,\n\nThe following item needs to be recycled out of inventory for ${store}:\n\n` +
+        `SKU: ${sku}\n` +
+        `Description: ${desc}\n` +
+        `Value: ${val}\n` +
+        `Cost: ${cost}\n\n` +
+        `Thank you,\n${userName}`;
+    return { email: RECYCLE_INV_EMAIL, subject: `${sku} - Recycle`, body };
+}
+
+function recycleInvUpdatePreview() {
+    const preview = document.getElementById('recycleInvEmailPreview');
+    if (!preview) return;
+    const { email, subject, body } = _recycleInvCompose();
+    preview.textContent = `To: ${email}\nSubject: ${subject}\n\n${body}`;
+}
+
+function sendRecycleInventory() {
+    if (!_recycleInvEnsureValid()) return;
+    const { email, subject, body } = _recycleInvCompose();
+    window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+// Failsafe for machines with no default mail client: copy the full request
+// (recipient, subject, body) to the clipboard to paste into any email.
+function copyRecycleInventory(button) {
+    if (!_recycleInvEnsureValid()) return;
+    const { email, subject, body } = _recycleInvCompose();
+    const text = `To: ${email}\nSubject: ${subject}\n\n${body}`;
+    navigator.clipboard.writeText(text).then(() => {
+        const originalText = button.innerText;
+        button.innerText = 'Copied!';
+        button.style.background = '#d1fae5';
+        button.style.color = '#065f46';
+        button.style.borderColor = '#34d399';
+        setTimeout(() => {
+            button.innerText = originalText;
+            button.style.background = '';
+            button.style.color = '';
+            button.style.borderColor = '';
+        }, 2000);
+    }).catch(() => alert('Could not copy automatically. Please select and copy the request manually.'));
+}

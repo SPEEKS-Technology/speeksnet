@@ -9,12 +9,23 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260615k">
+  <link rel="stylesheet" href="styles.css?v=20260621b">
+  <style>
+    /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
+       Inventory). These also live in styles.css, but are duplicated inline here
+       so they apply even if a browser is serving a stale cached stylesheet:
+       - box-sizing stops the inputs from overflowing the modal by their padding
+       - overflow-x:hidden stops the modal body from scrolling/dragging sideways
+         (it beats the mobile media-query rules that force overflow-x:auto). */
+    .form-input-lg { box-sizing: border-box; }
+    #boxOrderModal .manage-content,
+    #recycleInvModal .manage-content { overflow-x: hidden !important; }
+  </style>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260615k" defer></script>
+  <script src="speeks.js?v=20260621b" defer></script>
 </head>
 
 <body class="preload">
@@ -40,7 +51,7 @@
         <select id="msmStoreSelect" class="msm-store-select" onchange="setMultiStore(this.value)" aria-label="Managed store"></select>
       </div>
 
-      <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager role-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" title="SPEEKS Tools">
+      <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager role-manager role-assistant-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" title="SPEEKS Tools">
         <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
           <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
@@ -1165,8 +1176,69 @@
     </div>
 </div>
 
+<!-- ===== RECYCLE INVENTORY MODAL ===== -->
+<div class="modal-menu manage-menu" id="recycleInvModal">
+    <div class="modal-header">
+        <h3>♻️ Recycle Inventory</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+
+    <!-- PAGE 1: Item Details -->
+    <div class="manage-content" id="recycleInvPage1">
+        <!-- CORP store selector — shown for CEO / DM only -->
+        <div id="recycleInvStoreSelector" style="display:none; margin-bottom:14px;">
+            <label class="form-label-caps">Store <span style="font-weight:400;color:#ef4444;">*</span></label>
+            <select id="recycleInvStoreSelect" class="form-input-lg" onchange="recycleInvUpdatePreview()">
+                <option value="">Select a store…</option>
+                <option value="OVL">OVL</option>
+                <option value="LEE">LEE</option>
+                <option value="WSP">WSP</option>
+                <option value="MPL">MPL</option>
+                <option value="BAL">BAL</option>
+            </select>
+        </div>
+        <label class="form-label-caps">SKU <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <input type="text" id="recycleInvSku" class="form-input-lg" placeholder="e.g. ABC-12345"
+            oninput="recycleInvUpdatePreview()">
+        <label class="form-label-caps" style="margin-top:16px;">
+            Item Description <span style="font-weight:400;color:#ef4444;">*</span>
+        </label>
+        <textarea id="recycleInvDescription" class="form-input-lg" rows="3"
+            placeholder="What is the item, and why is it being recycled out of inventory?"
+            oninput="recycleInvUpdatePreview()"></textarea>
+        <label class="form-label-caps" style="margin-top:16px;">Value <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <input type="text" id="recycleInvValue" class="form-input-lg" placeholder="e.g. 50.00" inputmode="decimal"
+            oninput="recycleInvSanitizeMoney(this); recycleInvUpdatePreview()">
+        <label class="form-label-caps" style="margin-top:16px;">Cost <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <input type="text" id="recycleInvCost" class="form-input-lg" placeholder="e.g. 20.00" inputmode="decimal"
+            oninput="recycleInvSanitizeMoney(this); recycleInvUpdatePreview()">
+        <div class="box-order-disclaimer">
+            This request is sent to SPEEKS for approval before the item is recycled out of inventory.
+        </div>
+    </div>
+
+    <!-- PAGE 2: Email Preview -->
+    <div class="manage-content" id="recycleInvPage2" style="display:none;">
+        <div class="box-order-preview-label">Email Preview</div>
+        <div class="box-order-email-preview" id="recycleInvEmailPreview"></div>
+    </div>
+
+    <!-- FOOTER PAGE 1 -->
+    <div class="manage-footer box-order-footer" id="recycleInvFooter1">
+        <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
+        <button class="btn-primary" onclick="recycleInvNextPage()">Next →</button>
+    </div>
+
+    <!-- FOOTER PAGE 2 -->
+    <div class="manage-footer box-order-footer" id="recycleInvFooter2" style="display:none;">
+        <button class="btn-secondary" onclick="recycleInvBackPage()">← Back</button>
+        <button class="btn-secondary" onclick="copyRecycleInventory(this)">📋 Copy</button>
+        <button class="btn-primary" onclick="sendRecycleInventory()">Send Email →</button>
+    </div>
+</div>
+
 <!-- ===== SPEEKS TOOLS SIDE PANEL ===== -->
-<div class="tools-side-panel dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager role-manager" id="toolsSidePanel" style="flex-direction:column;">
+<div class="tools-side-panel dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager role-manager role-assistant-manager" id="toolsSidePanel" style="flex-direction:column;">
   <div class="tools-panel-header">
     <div class="tools-panel-title">
       <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
@@ -1191,9 +1263,10 @@
       <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon">💬</span>Send Store Comment</a>
     </div>
 
-    <div class="tools-group dynamic-module-block role-district-manager role-ceo role-manager role-owner-manager">
+    <div class="tools-group dynamic-module-block role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager">
       <div class="tools-group-label">📦 Orders</div>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon">📦</span>Box Order</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-manager role-owner-manager role-assistant-manager" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon">♻️</span>Recycle Inventory</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-owner-manager">

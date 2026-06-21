@@ -44,10 +44,15 @@ body.no-scroll {
     position: fixed !important;
     width: 100% !important;
     overflow-y: hidden !important;
+    overflow-x: hidden !important;
 }
 
 html {
     overflow-y: scroll;
+    /* Never let the page itself scroll/drag sideways. Anything genuinely wide
+       (tables, KPI grids) has its own overflow-x:auto container, so the root
+       should always fit the viewport width. */
+    overflow-x: hidden;
 }
 
 /* =========================================================
@@ -3326,7 +3331,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .kb-table th:nth-child(4) { width: 20%; padding-bottom: 10px; }
 
 .form-label-caps { font-size: 12px; font-weight: 900; color: #a0aab2; text-transform: uppercase; display: block; margin-bottom: 6px; }
-.form-input-lg { width: 100%; padding: 12px; border: 2px solid #e2e8f0; border-radius: 8px; font-size: 15px; margin-top: 6px; outline: none; transition: 0.2s; }
+.form-input-lg { width: 100%; box-sizing: border-box; padding: 12px; border: 2px solid #e2e8f0; border-radius: 8px; font-size: 15px; margin-top: 6px; outline: none; transition: 0.2s; }
 .form-input-lg:focus { border-color: var(--sage-professional); }
 
 .checkbox-wrapper { display: flex; align-items: center; gap: 10px; background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0; }
@@ -6360,6 +6365,13 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     line-height: 1.65;
     word-break: break-word;
 }
+
+/* The order tools are fixed-size boxes — never let their content scroll/drag
+   sideways off the screen (an overflowing input used to create a draggable
+   horizontal scrollbar). The !important overrides the mobile media-query rules
+   that otherwise force overflow-x:auto on every .manage-content. */
+#boxOrderModal .manage-content,
+#recycleInvModal .manage-content { overflow-x: hidden !important; }
 
 /* ============================================================================
    WEEKLY-KPI REMINDER — guided breadcrumb (Analytics tab → Store KPIs → Edit)
