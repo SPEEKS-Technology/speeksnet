@@ -285,8 +285,15 @@ html {
     font-weight: 500;
 }
 
-/* UI titles & subtitles are labels, not copyable text — suppress the
-   text I-beam and selection caret when they are clicked. */
+/* UI chrome — nav, modals, buttons, headings and labels — is not copyable
+   text. Suppress the text I-beam and selection caret when these are clicked.
+   Scoping to whole containers (nav bar, every .modal-menu) means new modals
+   and titles are covered automatically, instead of a hand-maintained list.
+   Body content (announcements, policies, docs, quick messages) is untouched
+   and stays selectable; form fields are re-enabled in the rule below. */
+.top-nav, .nav-bar,
+.modal-menu, .modal-header,
+button,
 h1, h2, h3, h4, h5, h6,
 .page-header p,
 .card-title, .store-name,
@@ -302,7 +309,9 @@ h1, h2, h3, h4, h5, h6,
     user-select: none;
 }
 
-/* Rich-text editors must stay selectable/editable. */
+/* Form fields and rich-text editors must stay editable/selectable, even
+   when nested inside a non-selectable modal above. */
+input, textarea, select,
 [contenteditable="true"], [contenteditable="true"] * {
     -webkit-user-select: text;
     user-select: text;
@@ -2380,7 +2389,14 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
 /* =========================================================
    CONSOLIDATED WIDGETS
    ========================================================= */
-.dynamic-module { display: none; }
+/* Role-gated modules are hidden by default and revealed by applyRoleBasedUI()
+   via inline `display:... !important`. The -flex/-block variants must be listed
+   explicitly — `.dynamic-module` does NOT match the `dynamic-module-flex` token —
+   otherwise they have no hidden state before JS runs (or while signed out), which
+   caused role-gated controls (e.g. the green ticker toggles) to flash on load/sign-out. */
+.dynamic-module,
+.dynamic-module-flex,
+.dynamic-module-block { display: none; }
 
 .portal-link-title { 
     text-decoration: none; 
@@ -2733,18 +2749,23 @@ body.is-authenticated .info-ticker { display: flex; }
 }
 
 /* Daily store-comment bubble (shown/hidden via JS: bubble.style.display = 'flex') */
+/* Floating toast — pulled OUT of the nav so a DM comment never squishes the
+   header. Anchors to the top-right of the viewport, just below the ticker bar. */
 #dailyMessageBubble {
     display: none;
+    position: fixed;
+    top: 116px;
+    right: 24px;
     background: linear-gradient(135deg, var(--sage-professional), #4a7530);
     color: white;
-    padding: 6px 14px 6px 16px;
-    border-radius: 20px;
+    padding: 11px 14px 11px 16px;
+    border-radius: 14px;
     align-items: flex-start;
     gap: 8px;
     font-size: 13px;
-    box-shadow: 0 4px 10px rgba(90, 141, 59, 0.3);
-    max-width: min(500px, calc(100vw - 80px));
-    z-index: 1000;
+    box-shadow: 0 10px 28px rgba(31, 41, 55, 0.28);
+    max-width: min(380px, calc(100vw - 48px));
+    z-index: 1001;
 }
 #dailyMessageBubbleIcon { font-size: 16px; flex-shrink: 0; margin-top: 2px; }
 #dailyMessageBubbleText { white-space: normal; overflow-y: auto; max-height: 220px; }
@@ -3417,7 +3438,9 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px;
     padding: 6px 10px; border-top: 1px solid #c4cdd8; border-bottom: 1px solid #c4cdd8;
 }
-.mb-row td { padding: 7px 10px; border-bottom: 1px solid #f0f0f0; }
+/* Fixed cell height in BOTH modes so swapping the value for an input doesn't
+   grow the row and push the table down. Content is vertically centered. */
+.mb-row td { height: 34px; padding: 0 10px; border-bottom: 1px solid #f0f0f0; box-sizing: border-box; vertical-align: middle; }
 .mb-row:hover td { background: #fafbfc; }
 .mb-row:hover td.mb-delta { background: #eef3f6; }
 .mb-metric-name { font-weight: 600; color: #334155; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -3463,10 +3486,15 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .mb-row:hover td.mb-ebay-warn { background: #fef08a; }
 .mb-row:hover td.mb-ebay-bad  { background: #f9e2e2; }
 .mb-input {
-    width: 92px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 5px;
-    font-size: 12px; font-weight: 600; text-align: right; color: var(--slate-charcoal); outline: none;
+    width: 92px; height: 26px; box-sizing: border-box;
+    padding: 2px 6px; border: 1px solid #cbd5e1; border-radius: 5px;
+    font-size: 12px; font-weight: 600; text-align: center; color: var(--slate-charcoal); outline: none;
     font-family: 'Inter', sans-serif;
+    /* 26px fits inside the 34px row cell, so the row height never changes. */
+    -moz-appearance: textfield; appearance: textfield;
 }
+.mb-input::-webkit-outer-spin-button,
+.mb-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .mb-input:focus { border-color: var(--sage-professional); box-shadow: 0 0 0 2px rgba(106,153,78,0.15); }
 /* formula-derived cells: locked, auto-filled from the other inputs */
 .mb-input-auto { background: #f1f5f9; border-style: dashed; color: #64748b; cursor: not-allowed; }
@@ -4162,7 +4190,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     font-weight: 500;
     color: var(--gen-text);
     letter-spacing: 1px;
-    text-transform: uppercase;
+    text-transform: lowercase;
     opacity: 0.6;
     transition: opacity 0.3s ease, color 0.3s ease;
 }
@@ -4640,6 +4668,9 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 }
 .pne-group-title { font-size: 15px; font-weight: 800; color: var(--slate-charcoal); }
 .pne-group-date  { font-size: 11px; font-weight: 600; color: #999; text-transform: uppercase; letter-spacing: 0.5px; }
+.pne-group-view  { display: flex; align-items: center; gap: 10px; flex: 1; }
+.pne-group-edit-btn { margin-left: auto; }
+.pne-group-edit  { display: flex; flex-direction: column; gap: 8px; flex: 1; }
 
 .pne-item {
     background: white;
@@ -5476,16 +5507,20 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     text-align: center;
 }
 
-.kpi-grid-td-input { padding: 2px 2px !important; }
+/* Input fills the cell with no extra td padding and symmetric inset so its
+   centered text lines up with the centered read-only value (no shift on edit). */
+.kpi-grid-td-input { padding: 0 !important; }
 
 .kpi-grid-input {
     width: 100%;
     height: 26px;
     border: 1px solid #e2e6ea;
     border-radius: 3px;
-    padding: 0 3px;
+    padding: 0 2px;
     font-size: 11px;
     font-weight: 600;
+    /* Centered to match the centered read-only value (symmetric padding keeps the
+       center aligned, so the value doesn't shift when it becomes editable). */
     text-align: center;
     color: var(--slate-charcoal);
     font-family: 'Inter', sans-serif;
@@ -5494,7 +5529,12 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     display: block;
     box-sizing: border-box;
     min-width: 0;
+    /* Drop the number spinner so it doesn't reserve right-side space. */
+    -moz-appearance: textfield;
+    appearance: textfield;
 }
+.kpi-grid-input::-webkit-outer-spin-button,
+.kpi-grid-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
 .kpi-grid-input:focus {
     outline: none;
@@ -5513,7 +5553,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    padding: 0 2px !important;
+    padding: 0 3px !important;
 }
 /* Actual entered values in view mode: dark text, white bg (distinct from grey computed cells) */
 .kpi-grid-computed.kpi-grid-view-val { color: var(--slate-charcoal); background: #fff; font-style: normal; }
@@ -6320,3 +6360,126 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     line-height: 1.65;
     word-break: break-word;
 }
+
+/* ============================================================================
+   WEEKLY-KPI REMINDER — guided breadcrumb (Analytics tab → Store KPIs → Edit)
+   Active Sat 4pm → Sun midnight for managers. Red = "action needed".
+   ============================================================================ */
+.kpi-due { position: relative; overflow: visible; }
+/* the dot is just a 10px positioning box; the visuals are two pseudo circles so the
+   pulsing ripple is a transform-scaled circle (stays perfectly round at any zoom/DPI). */
+.kpi-due-dot {
+    position: absolute; top: -3px; right: -3px;
+    width: 10px; height: 10px;
+    pointer-events: none; z-index: 4;
+}
+.kpi-due-dot::before,
+.kpi-due-dot::after {
+    content: ""; position: absolute; inset: 0;
+    border-radius: 50%; box-sizing: border-box;
+}
+.kpi-due-dot::before {                 /* expanding ripple — scaled, never distorts */
+    background: #dc2626;
+    transform-origin: center center;
+    animation: kpiDueRipple 1.8s ease-out infinite;
+}
+.kpi-due-dot::after {                   /* crisp solid dot on top */
+    background: #dc2626;
+    border: 2px solid #fff;
+    transform: translateZ(0);
+}
+/* on the dark top-nav, nudge the dot just inside the link */
+.top-nav .nav-link.kpi-due { overflow: visible; }
+.top-nav .nav-link.kpi-due .kpi-due-dot { top: 4px; right: 6px; }
+
+@keyframes kpiDueRipple {
+    0%   { transform: scale(1);   opacity: 0.55; }
+    70%  { transform: scale(3);   opacity: 0;    }
+    100% { transform: scale(3);   opacity: 0;    }
+}
+
+/* Step 3: the "Enter this week's KPIs 👉" pill + a soft pulse on the Edit button */
+.kpi-due-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca;
+    font-size: 11px; font-weight: 800; letter-spacing: 0.2px;
+    padding: 5px 11px; border-radius: 20px; margin-right: 9px; white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(220, 38, 38, 0.18);
+    animation: kpiDueNudge 1.5s ease-in-out infinite;
+}
+@keyframes kpiDueNudge {
+    0%, 100% { transform: translateX(0); }
+    50%      { transform: translateX(4px); }
+}
+.kpi-update-trigger-btn.kpi-due-pulse {
+    animation: kpiDueBtnPulse 1.8s ease-out infinite;
+    border-color: #dc2626;
+}
+@keyframes kpiDueBtnPulse {           /* box-shadow pulse is fine on a large element */
+    0%   { box-shadow: 0 0 0 0   rgba(220, 38, 38, 0.55); }
+    70%  { box-shadow: 0 0 0 8px rgba(220, 38, 38, 0);    }
+    100% { box-shadow: 0 0 0 0   rgba(220, 38, 38, 0);    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .kpi-due-dot::before, .kpi-due-pill, .kpi-update-trigger-btn.kpi-due-pulse { animation: none; }
+}
+
+/* ===== DM Manager Checklist (required tasks) modal ===== */
+.mcl-add-form { display: flex; flex-direction: column; gap: 12px; }
+.mcl-add-row { display: flex; gap: 10px; }
+.mcl-field { display: flex; flex-direction: column; gap: 5px; }
+.mcl-field-period { flex: 0 0 130px; }
+.mcl-field-text { flex: 1 1 auto; min-width: 0; }
+.mcl-field .form-label-caps { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mcl-allbtn { background: #eef2ff; color: #4338ca; border: none; border-radius: 6px; padding: 3px 8px; font-size: 10px; font-weight: 700; cursor: pointer; }
+.mcl-allbtn:hover { background: #e0e7ff; }
+.mcl-store-checks { display: flex; flex-wrap: wrap; gap: 8px; }
+.mcl-store-checks label { display: flex; align-items: center; gap: 6px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 11px; font-size: 12px; font-weight: 700; color: #475569; cursor: pointer; user-select: none; }
+.mcl-store-checks label:has(input:checked) { background: #eef2ff; border-color: #a5b4fc; color: #4338ca; }
+.mcl-store-checks input { cursor: pointer; width: 14px; height: 14px; }
+.mcl-add-btn { align-self: flex-start; }
+.mcl-existing-label { margin: 16px 0 8px; font-size: 10px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 14px; }
+.mcl-group-label { font-size: 10px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; color: #6366f1; margin: 10px 0 4px; }
+.mcl-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 6px; }
+.mcl-row-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mcl-row-text { font-size: 13px; font-weight: 600; color: #1e293b; }
+.mcl-row-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+.mcl-badge { font-size: 9px; font-weight: 800; letter-spacing: .3px; background: #eef2ff; color: #4338ca; border-radius: 5px; padding: 2px 6px; }
+.mcl-badge-none { background: #fef2f2; color: #dc2626; }
+.mcl-row-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.mcl-edit-btn, .mcl-del-btn { width: 26px; height: 26px; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 700; line-height: 1; }
+.mcl-edit-btn { background: #f1f5f9; color: #475569; }
+.mcl-del-btn { background: #fef2f2; color: #dc2626; }
+.mcl-edit-btn:hover { background: #e2e8f0; }
+.mcl-del-btn:hover { background: #fee2e2; }
+
+/* ===== Multi-Store Manager: nav store switcher (matches site dropdowns) ===== */
+.msm-store-switch { display: none; align-items: center; gap: 7px; margin-right: 10px; }
+.msm-store-label { font-size: 14px; line-height: 1; opacity: 0.9; }
+.msm-store-select {
+    appearance: none;
+    -webkit-appearance: none;
+    background-color: #ffffff;
+    background-image: url('data:image/svg+xml;utf8,<svg fill="%23111827" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M6 9l6 6 6-6"/></svg>');
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 14px;
+    color: var(--slate-charcoal);
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 0 32px 0 12px;
+    font-family: 'Inter', sans-serif;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    outline: none;
+    cursor: pointer;
+    height: 34px;
+    min-width: 84px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.msm-store-select:hover { border-color: #cbd5e1; }
+.msm-store-select:focus { border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.15); }
+.msm-store-select option { color: #1a1c1e; background: #fff; font-weight: 700; }

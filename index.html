@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260612a">
+  <link rel="stylesheet" href="styles.css?v=20260615k">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260603f" defer></script>
+  <script src="speeks.js?v=20260615k" defer></script>
 </head>
 
 <body class="preload">
@@ -35,6 +35,10 @@
 
   <div class="nav-right">
     <div class="user-profile-nav">
+
+      <div class="msm-store-switch" title="Switch the store you're managing">
+        <select id="msmStoreSelect" class="msm-store-select" onchange="setMultiStore(this.value)" aria-label="Managed store"></select>
+      </div>
 
       <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager role-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" title="SPEEKS Tools">
         <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -62,7 +66,7 @@
     <div class="greeting-stack">
         <h2 id="userGreeting">Welcome!</h2>
         <div class="version-signout-row">
-            <span class="version-tag">v2.0.3-alpha</span>
+            <span class="version-tag">v2.1.2</span>
             <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
         </div>
       </div>
@@ -285,6 +289,46 @@
     </div>
 </div>
 
+<div class="modal-menu manage-menu" id="managerChecklistDropdown">
+    <div class="modal-header">
+        <h3>Manager Checklist</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div class="manage-content">
+        <div class="mcl-add-form">
+            <div class="mcl-add-row">
+                <div class="mcl-field mcl-field-period">
+                    <label class="form-label-caps">Time Period</label>
+                    <select id="mcl-period" class="form-input-lg">
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="quarterly">Quarterly</option>
+                    </select>
+                </div>
+                <div class="mcl-field mcl-field-text">
+                    <label class="form-label-caps">Required Task</label>
+                    <input type="text" id="mcl-text" class="form-input-lg" placeholder="e.g. Confirm register float counted" onkeydown="if(event.key==='Enter')addRequiredTask()">
+                </div>
+            </div>
+            <div class="mcl-field">
+                <label class="form-label-caps">Applies To <button type="button" class="mcl-allbtn" onclick="mclToggleAllStores()">Toggle all</button></label>
+                <div class="mcl-store-checks" id="mcl-stores">
+                    <label><input type="checkbox" value="OVL"><span>OVL</span></label>
+                    <label><input type="checkbox" value="LEE"><span>LEE</span></label>
+                    <label><input type="checkbox" value="WSP"><span>WSP</span></label>
+                    <label><input type="checkbox" value="MPL"><span>MPL</span></label>
+                    <label><input type="checkbox" value="BAL"><span>BAL</span></label>
+                    <label><input type="checkbox" value="CORP"><span>Corp</span></label>
+                </div>
+            </div>
+            <button class="btn-primary mcl-add-btn" id="mcl-add-btn" onclick="addRequiredTask()">+ Add Required Task</button>
+        </div>
+        <div class="mcl-existing-label">Current required tasks</div>
+        <div id="mcl-list"><div class="status-message">Loading…</div></div>
+    </div>
+</div>
+
 <div class="modal-menu manage-menu" id="manageHotkeysDropdown">
     <div class="modal-header">
         <h3>Edit Hotkeys</h3>
@@ -445,7 +489,6 @@
           <div class="hotbar-links">
             <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn">📁 Store Manager Folder</a>
             <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn">🔑 Store Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1NkIdw8dlvwXmQ6kdpo73zqRwnPd4kIAkgJ7yAG2XCt4/edit?usp=sharing" target="_blank" class="hotbar-btn">🎯 Listing Goals</a>
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">📊 Sales Summary</a>
             <a href="https://drive.google.com/drive/folders/12Fjxp44sY6T-o6OlrG6n_YtrHow4bE2f?usp=sharing" target="_blank" class="hotbar-btn">⚖️ Variance</a>
             <a href="https://docs.google.com/spreadsheets/d/1agChyBxxwJqP-3CXo10C36-95Y_dVKXTA4GboeCaRRs/edit" target="_blank" class="hotbar-btn">📋 Scorecard</a>
@@ -1074,6 +1117,10 @@
 
     <!-- PAGE 1: Item Selection -->
     <div class="manage-content" id="boxOrderPage1">
+        <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:14px;">
+            <span class="doc-search-icon">🔍</span>
+            <input type="text" id="boxOrderSearch" class="kb-search-input doc-search-input" placeholder="Search boxes & supplies..." oninput="filterBoxOrderItems()">
+        </div>
         <div id="boxOrderItemsContainer"></div>
         <div class="box-order-disclaimer">
             If a box or item you need is not on this page, please reach out to your District Manager for approval.
@@ -1113,6 +1160,7 @@
     <!-- FOOTER PAGE 2 -->
     <div class="manage-footer box-order-footer" id="boxOrderFooter2" style="display:none;">
         <button class="btn-secondary" onclick="boxOrderBackPage()">← Back</button>
+        <button class="btn-secondary" onclick="copyBoxOrder(this)">📋 Copy</button>
         <button class="btn-primary" onclick="sendBoxOrder()">Send Email →</button>
     </div>
 </div>
@@ -1138,6 +1186,7 @@
     <div class="tools-group dynamic-module-block role-district-manager">
       <div class="tools-group-label">🏪 Store Ops</div>
       <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon">🏆</span>Submit Scorecard</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManagerChecklist();"><span class="tools-item-icon">📋</span>Manager Checklist</a>
       <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleVarianceInput();"><span class="tools-item-icon">📊</span>Submit Variance Report</a>
       <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon">💬</span>Send Store Comment</a>
     </div>

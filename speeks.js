@@ -54,6 +54,25 @@ const B2B_URL           = `${_BASE}/b2b-deals`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
+// --- WRITE HELPER ---
+// POST JSON to an edge function as a "simple" request: keeping Content-Type
+// text/plain avoids a CORS preflight, and dropping mode:'no-cors' means the
+// response is READABLE — so a failed write is detected instead of silently
+// reported as success. Throws on HTTP error or an {error}/{success:false} body.
+async function postWrite(url, payload) {
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+    });
+    let data = {};
+    try { data = await res.json(); } catch (_) { /* empty/non-JSON body */ }
+    if (!res.ok || data.success === false || data.error) {
+        throw new Error(data.error || `Request failed (HTTP ${res.status})`);
+    }
+    return data;
+}
+
 // --- 2. NAV COMPACT MODE ---
 (function () {
     let naturalNavWidth = 0;
@@ -219,6 +238,18 @@ async function loadCMS() {
 
             _annDocsCache = (data.announcements || []).filter(a => a.docUrl).reverse();
 
+            // New hires only see announcements from their onboarding day onward in the
+            // recent feed; anything older is auto-archived. Cutoff = start of that day.
+            // Blank (pre-existing users) means no filtering — they behave as before.
+            let onboardCutoff = null;
+            const onboardedRaw = sessionStorage.getItem('speeksUserOnboardedAt');
+            if (onboardedRaw) {
+                const od = new Date(onboardedRaw);
+                if (!isNaN(od.getTime())) {
+                    onboardCutoff = new Date(od.getFullYear(), od.getMonth(), od.getDate());
+                }
+            }
+
             if (data.announcements && data.announcements.length > 0) {
                 const sortedAnns = [...data.announcements].reverse();
                 const now = new Date();
@@ -250,6 +281,14 @@ async function loadCMS() {
                             localStorage.setItem(localReadKey, JSON.stringify([...localRead]));
                         }
                         isArchived = inReadBy || localRead.has(item.rowId);
+                        // Auto-archive anything posted before this user joined, so a new
+                        // hire isn't flooded with the whole backlog (archive still shows it).
+                        if (!isArchived && onboardCutoff && item.date) {
+                            const aDate = new Date(item.date);
+                            if (!isNaN(aDate.getTime()) && aDate < onboardCutoff) {
+                                isArchived = true;
+                            }
+                        }
                         if (!isArchived) {
                             showBadge = true;
                             unreadHtmlAttr = `data-ann-id="${item.rowId}"`;
@@ -417,11 +456,8 @@ function markAnnouncementRead(rowId) {
     localRead.add(rowId);
     localStorage.setItem(localReadKey, JSON.stringify([...localRead]));
 
-    fetch(CMS_URL, {
-        method: 'POST', mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ type: 'mark_read', user: userName, rowIds: [rowId] })
-    }).catch(() => {});
+    postWrite(CMS_URL, { type: 'mark_read', user: userName, rowIds: [rowId] })
+        .catch(err => console.warn('mark_read failed:', err.message));
 
     const card = document.querySelector(`.notif-item[data-ann-id="${rowId}"]`);
     if (card) {
@@ -586,12 +622,10 @@ window.toggleReaction = function(id, emoji) {
         payload.addEmoji = emoji; // Tell backend to add this in
     }
 
-    // Fire ONE single request to the database
-    fetch(CMS_URL, {
-        method: 'POST', mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload)
-    }).catch(() => {});
+    // Fire ONE single request to the database. Optimistic UI above is reconciled
+    // by pollReactions() every 15s, so on failure we just log rather than alert.
+    postWrite(CMS_URL, payload)
+        .catch(err => console.warn('reaction save failed:', err.message));
 };
 
 window.toggleReactionPicker = function(id) {
@@ -1002,12 +1036,12 @@ async function saveTickerItems() {
     btn.textContent = 'Saving...';
     btn.style.opacity = '0.7';
     try {
-        await fetch(TICKER_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ items }) });
+        await postWrite(TICKER_URL, { items });
         _tickerStatic = items.length ? items.map(item => ({ icon: item.icon, text: item.text, _type: 'static' })) : [..._TICKER_DEFAULTS];
         if (_tickerShown) _applyTickerContent();
         closeAllModals();
     } catch (e) {
-        alert('Failed to save ticker items.');
+        alert('Failed to save ticker items: ' + (e.message || e));
     } finally {
         btn.textContent = 'Save Changes';
         btn.style.opacity = '1';
@@ -1070,7 +1104,7 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
     row.className = 'user-manage-row';
 
     const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL', 'CORP'];
-    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM'];
+    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM'];
 
     const storeOptions = stores.map(s => `<option value="${s}" ${(user.store || '').toUpperCase() === s ? 'selected' : ''}>${s}</option>`).join('');
     const roleOptions = roles.map(r => `<option value="${r}" ${(user.role || '').toLowerCase() === r.toLowerCase() ? 'selected' : ''}>${r}</option>`).join('');
@@ -1461,9 +1495,25 @@ async function checkPIN() {
         if (matched) {
             sessionStorage.setItem('speeksUnlocked', 'true');
             sessionStorage.setItem('speeksUserName', matched.name);
-            sessionStorage.setItem('speeksUserRole', matched.role ? matched.role.toLowerCase() : 'employee');
-            sessionStorage.setItem('speeksUserStore', matched.store ? matched.store.toUpperCase() : 'ALL');
+
+            let _loginRole = matched.role ? matched.role.toLowerCase() : 'employee';
+            let _loginStore = matched.store ? matched.store.toUpperCase() : 'ALL';
+            // A Multi-Store Manager behaves EXACTLY like a store manager everywhere — so we
+            // store their effective role as 'manager' (covers every role check, current and
+            // future) and flag the multi-store capability separately to drive the store
+            // switcher. Default to their first managed store.
+            if (_loginRole === 'multi-store manager') {
+                sessionStorage.setItem('speeksMultiStore', 'true');
+                _loginRole = 'manager';
+                _loginStore = MULTISTORE_MANAGER_STORES[0];
+            } else {
+                sessionStorage.removeItem('speeksMultiStore');
+            }
+            sessionStorage.setItem('speeksUserRole', _loginRole);
+            sessionStorage.setItem('speeksUserStore', _loginStore);
             sessionStorage.setItem('speeksUserPin', matched.pin);
+            // New-hire announcement baseline: blank for pre-existing users (no filtering).
+            sessionStorage.setItem('speeksUserOnboardedAt', matched.onboarded_at || '');
 
             const authOverlay = document.getElementById('authOverlay');
             if (authOverlay) authOverlay.style.display = 'none';
@@ -1851,7 +1901,7 @@ function loadVarianceStoreEmployees() {
     try {
         const authData = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
         storeUsers = (authData.users || []).filter(u =>
-            (u.store || '').toUpperCase() === store.toUpperCase() &&
+            userInStore(u, store) &&
             (u.role || '').toLowerCase() !== 'training'
         );
     } catch (_) {}
@@ -2379,8 +2429,10 @@ function _kpiRenderWeekly(periods) {
     const sub = document.getElementById('kpiModalSubtitle');
     if (sub) sub.textContent = store + ' · 4-Week View';
 
-    // Only show weeks with saved data; when editing, also include the editable period at top
-    let visible = (periods || []).filter(function(p) { return p.entries.some(function(e) { return e.id; }); });
+    // Always show the current (editable) week plus any past weeks with saved data.
+    // Rendering it even in view mode means clicking Edit just swaps its cells from
+    // text to inputs IN PLACE — no new section appears, so nothing on the page shifts.
+    let visible = (periods || []).filter(function(p) { return p.is_editable || p.entries.some(function(e) { return e.id; }); });
     if (_kpiEditingPeriod) {
         const ep = periods.find(function(p) { return p.period_end_date === _kpiEditingPeriod; });
         if (ep && !visible.find(function(p) { return p.period_end_date === ep.period_end_date; })) visible.unshift(ep);
@@ -3038,8 +3090,10 @@ function _kpiRenderMonthly(periods) {
     const sub = document.getElementById('kpiModalSubtitle');
     if (sub) sub.textContent = store + ' · Monthly';
 
-    // Only show months with saved data; when editing, also include the editable period at top
-    let visible = (periods || []).filter(function(p) { return p.entries.some(function(e) { return e.id; }); });
+    // Always show the current (editable) month plus any past months with saved data.
+    // Rendering it even in view mode means clicking Edit just swaps its cells from
+    // text to inputs IN PLACE — no new section appears, so nothing on the page shifts.
+    let visible = (periods || []).filter(function(p) { return p.is_editable || p.entries.some(function(e) { return e.id; }); });
     if (_kpiEditingPeriod) {
         const ep = periods.find(function(p) { return p.period_end_date === _kpiEditingPeriod; });
         if (ep && !visible.find(function(p) { return p.period_end_date === ep.period_end_date; })) visible.unshift(ep);
@@ -3073,11 +3127,70 @@ function _kpiSyncHeaderBtns() {
     const isEditing   = !!_kpiEditingPeriod;
     const hasEditable = (_kpiPeriodsData || []).some(function(p) { return p.is_editable; });
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    const canEditRole = role === 'district manager' || role === 'ceo' || role === 'owner manager' || role === 'manager' || role === 'assistant manager';
+    const canEditRole = role === 'district manager' || role === 'ceo' || role === 'owner (manager)' || role === 'owner manager' || role === 'manager' || role === 'assistant manager';
     const hasPeriods  = (_kpiPeriodsData || []).length > 0;
     if (editBtn)   editBtn.style.display   = (!isEditing && canEditRole && (hasEditable || hasPeriods)) ? '' : 'none';
     if (saveBtn)   saveBtn.style.display   = isEditing ? '' : 'none';
     if (cancelBtn) cancelBtn.style.display = isEditing ? '' : 'none';
+    _kpiDecorateEditBtn();
+}
+
+// ============================================================================
+// Weekly-KPI reminder — guides managers Sat 4pm → Sun midnight (America/Chicago)
+// Breadcrumb: Analytics nav-link → Store KPIs sub-tab → the Edit button.
+// ============================================================================
+const _KPI_REMINDER_ROLES = new Set(['manager', 'owner manager', 'owner (manager)', 'assistant manager']);
+
+function _kpiReminderActive() {
+    // Read the current wall-clock weekday + hour in Central time
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Chicago', weekday: 'short', hour: 'numeric', hour12: false,
+    }).formatToParts(new Date());
+    const wd = (parts.find(p => p.type === 'weekday') || {}).value || '';
+    let hr = parseInt((parts.find(p => p.type === 'hour') || {}).value || '0', 10);
+    if (hr === 24) hr = 0;                 // midnight edge
+    if (wd === 'Sat') return hr >= 16;     // Saturday after 4pm
+    return wd === 'Sun';                    // all day Sunday (until Mon 00:00)
+}
+function _kpiReminderOn() {
+    return _kpiReminderActive() && _KPI_REMINDER_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
+}
+
+// add/remove a pulsing dot on an element (idempotent)
+function _kpiToggleDot(el, on) {
+    if (!el) return;
+    el.classList.toggle('kpi-due', on);
+    let dot = el.querySelector(':scope > .kpi-due-dot');
+    if (on && !dot) { dot = document.createElement('span'); dot.className = 'kpi-due-dot'; el.appendChild(dot); }
+    else if (!on && dot) dot.remove();
+}
+
+// Step 3: a nudging pill + pulse beside the Edit button (only when it's visible & on the weekly tab)
+function _kpiDecorateEditBtn(force) {
+    const btn = document.getElementById('kpiEditBtn');
+    if (!btn) return;
+    const on = (force !== undefined ? force : _kpiReminderOn());
+    const wants = on && btn.style.display !== 'none' && _kpiCurrentTab === 'weekly';
+    btn.classList.toggle('kpi-due-pulse', wants);
+    let pill = document.getElementById('kpiDuePill');
+    if (wants && !pill) {
+        pill = document.createElement('span');
+        pill.id = 'kpiDuePill';
+        pill.className = 'kpi-due-pill';
+        pill.innerHTML = "Enter this week’s KPIs 👉";
+        btn.parentNode.insertBefore(pill, btn);
+    } else if (!wants && pill) {
+        pill.remove();
+    }
+}
+
+// Steps 1 & 2: dots on the Analytics nav-link, the Store KPIs sub-tab, and the Weekly toggle
+function applyKpiReminder() {
+    const on = _kpiReminderOn();
+    document.querySelectorAll('.nav-link[href="workspace.html"]').forEach(a => _kpiToggleDot(a, on));
+    _kpiToggleDot(document.getElementById('ws-tab-kpis'), on);
+    _kpiToggleDot(document.getElementById('kpi-tab-weekly'), on);
+    _kpiDecorateEditBtn(on);
 }
 
 function kpiHeaderStartEdit() {
@@ -3189,6 +3302,7 @@ function switchWorkspaceTab(name) {
     } else if (name === 'b2b') {
         fetchB2BDeals();
     }
+    applyKpiReminder();
 }
 
 // Detects the workspace page and opens the requested sub-tab (defaults to the
@@ -3201,6 +3315,7 @@ function initWorkspace() {
     // TEMP: B2B tab hidden — restore by putting 'b2b' back in the list and as the default.
     const initial = ['brief', 'kpis'].includes(hash) ? hash : 'brief';
     switchWorkspaceTab(initial);
+    applyKpiReminder();
 }
 
 function _kpiStartEdit(periodDate) {
@@ -3217,7 +3332,11 @@ function _kpiCancelEdit() {
 }
 
 async function _kpiSavePeriod(periodDate) {
-    const store = sessionStorage.getItem('speeksUserStore');
+    // Mirror the load/render store resolution: DM/CEO/TOM save the store picked in
+    // the (visible) selector; managers fall back to their own store. Reading only
+    // sessionStorage here misrouted DM saves to their own store ('CORP').
+    const modalSel = document.getElementById('kpiModalStoreSelect');
+    const store = (modalSel && modalSel.offsetParent !== null && modalSel.value) || sessionStorage.getItem('speeksUserStore');
     const pin   = sessionStorage.getItem('speeksUserPin');
     if (!store || !pin) return;
     const pk     = periodDate.replace(/-/g, '');
@@ -4046,11 +4165,7 @@ async function saveAwards() {
     };
 
     try {
-        await fetch(RECORDS_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(payload)
-        });
+        await postWrite(RECORDS_URL, payload);
 
         if (!awardsCache) awardsCache = [];
         const idx = awardsCache.findIndex(a => a.month === month);
@@ -4062,6 +4177,7 @@ async function saveAwards() {
         closeAllModals();
     } catch (e) {
         if (status) status.textContent = '✗ Error saving.';
+        alert('Failed to save awards: ' + (e.message || e));
     } finally {
         btn.textContent = 'Save Awards';
         btn.disabled = false;
@@ -4192,7 +4308,7 @@ function renderQMTab(tab) {
                 <span style="font-size: 13px; font-weight: 900; color: #92400e;">Handling a Sub-5-Star Review?</span>
                 <span style="font-size: 11px; font-weight: 700; color: #b45309;">Follow the SOP for mixed or negative feedback before replying.</span>
             </div>
-            <a href="https://drive.google.com/file/d/1HKhBSVl7dNkgLd6f9O1_9Rhf9sYeAA1b/view?usp=sharing" target="_blank" class="mini-action-btn" style="background: white; border-color: #fde68a; color: #92400e; box-shadow: 0 2px 4px rgba(251,191,36,0.15);">View Process ↗</a>
+            <a href="https://drive.google.com/file/d/1D4VBM5nSD0KpK-bzE3_O9OOncFCsk80w/view?usp=sharing" target="_blank" class="mini-action-btn" style="background: white; border-color: #fde68a; color: #92400e; box-shadow: 0 2px 4px rgba(251,191,36,0.15);">View Process ↗</a>
         </div>`;
 
         html += '<div class="qm-category-items open" style="margin-left: 0; padding-left: 0; border: none; background: transparent; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start;">';
@@ -4278,11 +4394,19 @@ function handleSignOut() {
     sessionStorage.removeItem('speeksUserName');
     sessionStorage.removeItem('speeksUserRole');
     sessionStorage.removeItem('speeksUserStore');
-    
+    sessionStorage.removeItem('speeksMultiStore');
+
     // Remove the comment tracker so it pops up again on next login
     sessionStorage.removeItem('speeksSeenCommentKeys');
-    
-    location.reload(); 
+
+    // Hide authenticated chrome and close any open panels BEFORE reloading, so the
+    // teardown/fetch window can't briefly paint role-gated controls (e.g. the green
+    // ticker toggles) as the layout collapses.
+    document.body.classList.remove('is-authenticated');
+    document.getElementById('checklistSidePanel')?.classList.remove('open');
+    document.getElementById('goalsSidePanel')?.classList.remove('open');
+
+    location.reload();
 }
 
 // --- 17. MODULE: IDEA SUBMISSION MODAL ---
@@ -5150,7 +5274,10 @@ const ListingGoalsEngine = {
     needHits: 2,        // weeks at/above target within window to level up
     needMiss: 2,        // weeks below target within window to flag for review
 
-    weeklyTarget(rosterSize) { return rosterSize >= 4 ? 190 : 170; },
+    // Incremental: ±20 listings per person, anchored at 4 people = 190 (floor 150).
+    // 2→150, 3→170, 4→190, 5→210, 6→230. Mirrors baseForSize() in the
+    // store-targets edge function so the frontend and server stay in lock-step.
+    weeklyTarget(size)       { return Math.max(150, 110 + 20 * size); },
     modelSize(rosterSize)    { return rosterSize >= 4 ? 4 : 3; },
 
     // Standard staffed week, used ONLY to calibrate the scale so a normal week
@@ -5256,7 +5383,7 @@ async function fetchLiveGoalsData() {
             const _authData = JSON.parse(_authRaw);
             const _excluded = ['ceo', 'district manager'];
             const _emps = (_authData.users || [])
-                .filter(u => (u.store || '').trim().toUpperCase() === goalsTargetStore.toUpperCase() && !_excluded.includes((u.role || '').toLowerCase()))
+                .filter(u => userInStore(u, goalsTargetStore) && !_excluded.includes((u.role || '').toLowerCase()))
                 .map(u => u.name)
                 .filter(Boolean);
             goalsRoster = _emps.length ? _emps : ['No Employees Found'];
@@ -5543,7 +5670,7 @@ async function saveGoalsData(silent = false) {
         const group = document.getElementById(`roles-${idx}`);
         if (group && group.querySelector('.role-dot.active')) staffedCount++;
     });
-    const rosterSize = goalsRoster.length;
+    const rosterSize = effectiveTeamSize(goalsTargetStore);
 
     goalsRoster.forEach((emp, idx) => {
         const roleGroup = document.getElementById(`roles-${idx}`);
@@ -5621,11 +5748,8 @@ async function markListingGoalsChecklistComplete() {
     }
 
     if (targetTaskId) {
-        fetch(CHECKLIST_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'toggle', id: targetTaskId, checked: true, user: userName, store: store })
-        }).catch(() => {});
+        postWrite(CHECKLIST_URL, { action: 'toggle', id: targetTaskId, checked: true, user: userName, store: store })
+            .catch(err => console.warn('Listing-goals checklist tick failed:', err.message));
     }
 }
 
@@ -5720,7 +5844,7 @@ function storeRosterSize(store) {
         const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
         const excluded = ['ceo', 'district manager'];
         return (auth.users || []).filter(u =>
-            (u.store || '').trim().toUpperCase() === String(store).toUpperCase() &&
+            userInStore(u, store) &&
             !excluded.includes((u.role || '').toLowerCase())
         ).length || 4;
     } catch (e) { return 4; }
@@ -5746,6 +5870,14 @@ async function fetchAllStoreTargets() {
 // Current weekly target for a store (server value; falls back to roster-derived base).
 function targetFor(store) {
     return (_storeTargets[store] && _storeTargets[store].target) || ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
+}
+// Effective team size for goal math. Prefers the server's settled size, which
+// honors the timing rule (a subtraction shrinks the goal immediately, an addition
+// waits until next week). Falls back to the live roster before the target loads.
+function effectiveTeamSize(store) {
+    const t = _storeTargets[store];
+    if (t && typeof t.size === 'number') return t.size;
+    return storeRosterSize(store);
 }
 // Last-4 completed-week listing totals (oldest→newest) for the bars.
 function weeksFor(store) {
@@ -6732,6 +6864,52 @@ function applyRoleBasedUI() {
         });
     }
 
+    initMultiStoreSwitcher();
+}
+
+// ===== MULTI-STORE MANAGER: global store switcher =====
+// A Multi-Store Manager (e.g. Joseph Ortega) oversees more than one store and toggles
+// which one the whole dashboard is scoped to. The first entry is the default (and is
+// set as their `store` at login). Toggling re-points the session store and reloads, so
+// every widget re-scopes through the normal load path. Single-store users never reach
+// this code, so their dashboards/feeds are unaffected.
+const MULTISTORE_MANAGER_STORES = ['BAL', 'MPL'];
+
+// True if a directory user belongs to a given store's roster. A Multi-Store Manager
+// belongs to EVERY store they manage (not just their home store), so they're included
+// anywhere a regular store manager would be — variance, listing-goals roster, etc.
+function userInStore(user, storeCode) {
+    const store = String(storeCode || '').toUpperCase();
+    if (String(user.store || '').toUpperCase() === store) return true;
+    return String(user.role || '').toLowerCase() === 'multi-store manager'
+        && MULTISTORE_MANAGER_STORES.includes(store);
+}
+
+// Effective role is 'manager', so multi-store status is tracked via this flag (set at login).
+function isMultiStoreManager() {
+    return sessionStorage.getItem('speeksMultiStore') === 'true';
+}
+
+function setMultiStore(store) {
+    const next = String(store || '').toUpperCase();
+    if (!next || !MULTISTORE_MANAGER_STORES.includes(next)) return;
+    if (next === (sessionStorage.getItem('speeksUserStore') || '').toUpperCase()) return;
+    sessionStorage.setItem('speeksUserStore', next);
+    location.reload();
+}
+
+function initMultiStoreSwitcher() {
+    const sw = document.querySelector('.msm-store-switch');
+    if (!sw) return;
+    if (!isMultiStoreManager()) { sw.style.display = 'none'; return; }
+    const sel = sw.querySelector('#msmStoreSelect');
+    const current = (sessionStorage.getItem('speeksUserStore') || MULTISTORE_MANAGER_STORES[0]).toUpperCase();
+    if (sel) {
+        sel.innerHTML = MULTISTORE_MANAGER_STORES
+            .map(s => `<option value="${s}" ${s === current ? 'selected' : ''}>${s}</option>`)
+            .join('');
+    }
+    sw.style.display = 'flex';
 }
 
 function checkInstantNotifCache() {
@@ -6908,6 +7086,9 @@ document.addEventListener("DOMContentLoaded", () => {
         initDashboardData();
         initTicker();
         initWorkspace();
+        applyKpiReminder();
+        // re-evaluate the weekly-KPI reminder window each minute so it appears/clears live
+        setInterval(applyKpiReminder, 60000);
         if (document.getElementById('mainKpiChart')) syncAllData();
     } else {
         if (!window.location.href.includes('index.html') && document.getElementById('authOverlay')) {
@@ -7098,6 +7279,7 @@ document.addEventListener('click', async (e) => {
             } else {
                 setTimeout(() => {
                     if (typeof initDashboardData === 'function') initDashboardData();
+                    if (typeof applyKpiReminder === 'function') applyKpiReminder();
                     if (document.querySelector('.ws-wrap') && typeof initWorkspace === 'function') initWorkspace();
                     if (document.getElementById('mainKpiChart') && typeof syncAllData === 'function') syncAllData();
                     if (document.getElementById('pane-records') && typeof fetchRecordsData === 'function') fetchRecordsData();
@@ -8307,13 +8489,10 @@ function populateAlertsModal() {
         let str = String(val).trim();
         
         if (isNaN(parseFloat(str))) return str;
-        
-        if (str.includes('%')) {
-            return parseFloat(str.replace(/[^0-9.-]/g, '')).toFixed(2);
-        }
-        
-        let num = parseFloat(str.replace(/[^0-9.-]/g, ''));
-        return (num * 100).toFixed(2);
+
+        // Rate values are stored as the percentage number itself (e.g. 99.49 = 99.49%);
+        // strip any stray '%' the value may carry and show the number as-is.
+        return parseFloat(str.replace(/[^0-9.-]/g, '')).toFixed(2);
     };
 
     let html = '';
@@ -8387,21 +8566,22 @@ async function saveAlertsData() {
     });
 
     try {
-        await fetch(EBAY_ALERTS_URL, {
+        const res = await fetch(EBAY_ALERTS_URL, {
             method: 'POST',
-            mode: 'no-cors', 
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ data: updatedAlerts }) 
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data: updatedAlerts })
         });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
 
         alert("eBay Performance Metrics successfully updated!");
         closeAllModals();
-        if (typeof fetchAlertsData === 'function') fetchAlertsData(); 
+        if (typeof fetchAlertsData === 'function') fetchAlertsData();
         if (typeof fetchMasterDistrictDashboard === 'function') fetchMasterDistrictDashboard();
-        
+
     } catch (e) {
         console.error(e);
-        alert("Failed to connect to server.");
+        alert("Failed to save metrics: " + (e.message || e));
     } finally {
         btn.textContent = "Save Changes";
         btn.style.opacity = "1";
@@ -8503,6 +8683,146 @@ async function saveManageHotkeys() {
     } finally {
         btn.textContent = "Save Changes";
         btn.style.opacity = "1";
+    }
+}
+
+// ===== DM: MANAGER CHECKLIST (required tasks pushed to managers) =====
+// Lets the District Manager create/edit/remove the "required" (non-deletable)
+// checklist items managers see, targeted at specific stores per time period.
+const MCL_PERIOD_LABELS = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly' };
+
+function _mclRole() {
+    return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
+}
+
+async function toggleManagerChecklist() {
+    const dropdown = document.getElementById('managerChecklistDropdown');
+    if (!dropdown) return;
+
+    const isOpen = dropdown.classList.contains('show');
+    closeAllModals();
+    if (isOpen) return;
+
+    dropdown.classList.add('show');
+    lockAndBlurScreen();
+
+    // Reset the add form to a clean state each time it opens
+    const text = document.getElementById('mcl-text'); if (text) text.value = '';
+    const period = document.getElementById('mcl-period'); if (period) period.value = 'daily';
+    document.querySelectorAll('#mcl-stores input[type="checkbox"]').forEach(c => c.checked = false);
+
+    await loadRequiredTasks();
+}
+
+function mclToggleAllStores() {
+    const boxes = [...document.querySelectorAll('#mcl-stores input[type="checkbox"]')];
+    const allOn = boxes.length > 0 && boxes.every(b => b.checked);
+    boxes.forEach(b => b.checked = !allOn);
+}
+
+async function loadRequiredTasks() {
+    const list = document.getElementById('mcl-list');
+    if (!list) return;
+    list.innerHTML = '<div class="status-message">Loading required tasks…</div>';
+    try {
+        const res = await fetch(`${CHECKLIST_URL}?action=listRequired&v=${Date.now()}`);
+        const data = await res.json();
+        renderRequiredTasks(data.tasks || []);
+    } catch (e) {
+        list.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load required tasks.</div>';
+    }
+}
+
+function renderRequiredTasks(tasks) {
+    const list = document.getElementById('mcl-list');
+    if (!list) return;
+
+    if (!tasks.length) {
+        list.innerHTML = '<div style="text-align:center; padding:18px; color:#94a3b8; font-size:12px; font-weight:600;">No required tasks yet. Add one above.</div>';
+        return;
+    }
+
+    const order = ['daily', 'weekly', 'monthly', 'quarterly'];
+    const byPeriod = {};
+    tasks.forEach(t => { (byPeriod[t.tab] = byPeriod[t.tab] || []).push(t); });
+
+    let html = '';
+    order.forEach(period => {
+        const items = byPeriod[period];
+        if (!items || !items.length) return;
+        html += `<div class="mcl-group-label">${MCL_PERIOD_LABELS[period] || period}</div>`;
+        items.forEach(t => {
+            const badges = (t.stores || []).length
+                ? t.stores.map(s => `<span class="mcl-badge">${s === 'CORP' ? 'Corp' : s}</span>`).join('')
+                : '<span class="mcl-badge mcl-badge-none">No stores</span>';
+            html += `
+            <div class="mcl-row" data-id="${t.id}">
+                <div class="mcl-row-main">
+                    <span class="mcl-row-text">${escapeHtml(t.text)}</span>
+                    <div class="mcl-row-badges">${badges}</div>
+                </div>
+                <div class="mcl-row-actions">
+                    <button class="mcl-edit-btn" title="Edit task text" onclick="editRequiredTask('${t.id}')">✎</button>
+                    <button class="mcl-del-btn" title="Delete for all managers" onclick="deleteRequiredTask('${t.id}')">✖</button>
+                </div>
+            </div>`;
+        });
+    });
+    list.innerHTML = html;
+}
+
+async function addRequiredTask() {
+    const btn = document.getElementById('mcl-add-btn');
+    const text = (document.getElementById('mcl-text').value || '').trim();
+    const tab = document.getElementById('mcl-period').value;
+    const stores = [...document.querySelectorAll('#mcl-stores input[type="checkbox"]:checked')].map(c => c.value);
+
+    if (!text) { alert('Enter the task text.'); return; }
+    if (!stores.length) { alert('Pick at least one store this task applies to.'); return; }
+
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    try {
+        await postWrite(CHECKLIST_URL, {
+            action: 'addRequired',
+            tab, text, stores,
+            user: sessionStorage.getItem('speeksUserName') || '',
+            role: _mclRole()
+        });
+        document.getElementById('mcl-text').value = '';
+        document.querySelectorAll('#mcl-stores input[type="checkbox"]').forEach(c => c.checked = false);
+        await loadRequiredTasks();
+    } catch (e) {
+        alert('Could not add task: ' + (e.message || e));
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '+ Add Required Task';
+    }
+}
+
+async function deleteRequiredTask(id) {
+    if (!confirm('Delete this required task for all managers it applies to? This cannot be undone.')) return;
+    try {
+        await postWrite(CHECKLIST_URL, { action: 'deleteRequired', id, role: _mclRole() });
+        await loadRequiredTasks();
+    } catch (e) {
+        alert('Could not delete task: ' + (e.message || e));
+    }
+}
+
+async function editRequiredTask(id) {
+    const row = document.querySelector(`.mcl-row[data-id="${id}"]`);
+    if (!row) return;
+    const current = row.querySelector('.mcl-row-text').textContent;
+    const next = prompt('Edit task text:', current);
+    if (next === null) return; // cancelled
+    const trimmed = next.trim();
+    if (!trimmed || trimmed === current) return;
+    try {
+        await postWrite(CHECKLIST_URL, { action: 'editRequired', id, text: trimmed, role: _mclRole() });
+        await loadRequiredTasks();
+    } catch (e) {
+        alert('Could not edit task: ' + (e.message || e));
     }
 }
 
@@ -8768,17 +9088,12 @@ async function submitStoreComment() {
     };
 
     try {
-        await fetch(STORE_COMMENT_URL, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(payload)
-        });
-        
+        await postWrite(STORE_COMMENT_URL, payload);
+
         alert("Success! The message is live for " + store);
         closeAllModals();
     } catch (e) {
-        alert("Failed to send the message.");
+        alert("Failed to send the message: " + (e.message || e));
     } finally {
         btn.innerText = "Send Message";
         btn.style.opacity = "1";
@@ -8984,10 +9299,15 @@ async function fetchChampions() {
                 const emp = podium.data;
                 const isFirst = podium.place === 1;
                 
-                // Only render the inner score/items text block if it is the Lister or Review podium
+                // Render the inner number/label block for Lister, Review, and Buyer podiums.
+                // Buyer raw score scales with dollars (tens of thousands), so show a
+                // compact, absolute "points" figure: the raw score / 100, rounded. This
+                // preserves the exact ranking while staying small and readable.
                 let blockContent = '';
-                if (type === 'lister' || type === 'review') {
-                    const val = type === 'lister' ? emp.listed : emp.reviews;
+                if (type === 'lister' || type === 'review' || type === 'buyer') {
+                    const val = type === 'lister' ? emp.listed
+                              : type === 'review' ? emp.reviews
+                              : Math.round(emp.score / 100);
                     blockContent = `
                         <div style="z-index: 2; display: flex; flex-direction: column; align-items: center;">
                             <span style="font-size: ${isFirst ? '32px' : '26px'}; font-weight: 900; color: var(--slate-charcoal); line-height: 1;">${val}</span>
@@ -9173,11 +9493,15 @@ async function toggleChecklistState(id, isChecked) {
     _pendingToggles.set(id, { checked: isChecked, expiresAt: Date.now() + 20000 });
     renderChecklist();
 
-    fetch(CHECKLIST_URL, {
-        method: 'POST', mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'toggle', id: id, checked: isChecked, tab: currentChecklistTab, user: userName, store: store })
-    }).catch(() => {});
+    postWrite(CHECKLIST_URL, { action: 'toggle', id: id, checked: isChecked, tab: currentChecklistTab, user: userName, store: store })
+        .catch(err => {
+            // Write failed — revert the optimistic toggle so the UI matches the server.
+            const it = checklistDataCache[currentChecklistTab].find(i => i.id === id);
+            if (it) it.checked = !isChecked;
+            _pendingToggles.delete(id);
+            renderChecklist();
+            alert('Could not save that change: ' + err.message);
+        });
 }
 
 async function addChecklistItem() {
@@ -9201,17 +9525,13 @@ async function addChecklistItem() {
     };
 
     try {
-        await fetch(CHECKLIST_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(payload)
-        });
-        
-        // Optimistically add to local cache so they see it instantly
-        checklistDataCache[currentChecklistTab].push({ id: tempId, text: text, isGlobal: false, checked: false });
+        const out = await postWrite(CHECKLIST_URL, payload);
+
+        // Add to local cache so they see it instantly (use the server id when returned)
+        checklistDataCache[currentChecklistTab].push({ id: out.id || tempId, text: text, isGlobal: false, checked: false });
         renderChecklist();
     } catch (e) {
-        alert("Failed to add task.");
+        alert("Failed to add task: " + (e.message || e));
     } finally {
         input.value = '';
         input.disabled = false;
@@ -9223,14 +9543,16 @@ async function deleteChecklistItem(id) {
     const userName = getChecklistUser();
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
 
+    const removed = checklistDataCache[currentChecklistTab].find(i => i.id === id);
     checklistDataCache[currentChecklistTab] = checklistDataCache[currentChecklistTab].filter(i => i.id !== id);
     renderChecklist();
 
-    fetch(CHECKLIST_URL, {
-        method: 'POST', mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'delete', id: id, tab: currentChecklistTab, user: userName, store: store })
-    }).catch(() => {});
+    postWrite(CHECKLIST_URL, { action: 'delete', id: id, tab: currentChecklistTab, user: userName, store: store })
+        .catch(err => {
+            // Restore the item if the server rejected the delete.
+            if (removed) { checklistDataCache[currentChecklistTab].push(removed); renderChecklist(); }
+            alert('Could not delete task: ' + err.message);
+        });
 }
 
 function clearChecklistTab() {
@@ -9244,12 +9566,21 @@ function clearChecklistTab() {
     items.forEach(i => i.checked = false);
     renderChecklist();
 
-    checkedItems.forEach(item => {
-        fetch(CHECKLIST_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'toggle', id: item.id, checked: false, tab: currentChecklistTab, user: userName, store: store })
-        }).catch(() => {});
+    Promise.allSettled(checkedItems.map(item =>
+        postWrite(CHECKLIST_URL, { action: 'toggle', id: item.id, checked: false, tab: currentChecklistTab, user: userName, store: store })
+            .then(() => ({ ok: true }))
+            .catch(() => ({ ok: false, item }))
+    )).then(results => {
+        const failed = results.filter(r => r.value && !r.value.ok).map(r => r.value.item);
+        if (failed.length) {
+            // Re-check the ones the server didn't accept so the UI stays truthful.
+            failed.forEach(it => {
+                const c = checklistDataCache[currentChecklistTab].find(i => i.id === it.id);
+                if (c) c.checked = true;
+            });
+            renderChecklist();
+            alert('Some items could not be cleared — please try again.');
+        }
     });
 }
 
@@ -9436,7 +9767,7 @@ window.recomputeGoalDisplays = function() {
         const group = document.getElementById(`roles-${idx}`);
         if (group && group.querySelector('.role-dot.active')) staffedCount++;
     });
-    const rosterSize = goalsRoster.length;
+    const rosterSize = effectiveTeamSize(goalsTargetStore);
     const dateStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
 
     let todayTotal = 0;
@@ -9675,11 +10006,7 @@ async function savePatchEntry() {
     status.className = 'pn-save-status';
 
     try {
-        await fetch(PATCH_NOTES_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'addEntries', title, date, items })
-        });
+        await postWrite(PATCH_NOTES_URL, { action: 'addEntries', title, date, items });
         status.textContent = `${items.length} item${items.length !== 1 ? 's' : ''} saved!`;
         status.className = 'pn-save-status pn-save-ok';
         document.getElementById('pnEntryTitle').value = '';
@@ -9717,17 +10044,21 @@ function renderPatchNotesEditor(data) {
     const sorted = buildPatchGroups(entries);
     const catBadge = { 'New Features': 'pn-badge-new', 'Improvements': 'pn-badge-improved', 'Bug Fixes': 'pn-badge-fixed' };
 
-    list.innerHTML = sorted.map(group => {
+    list.innerHTML = sorted.map((group, gi) => {
         const vLabel = group.title;
+        const safeTitle = group.title.replace(/"/g, '&quot;');
         return `
-            <div class="pne-group">
+            <div class="pne-group" id="pne-group-${gi}" data-title="${safeTitle}" data-date="${group.date}">
                 <div class="pne-group-header">
-                    <span class="pne-group-title">${vLabel}</span>
-                    <span class="pne-group-date">${formatPatchDate(group.date)}</span>
+                    <div class="pne-group-view">
+                        <span class="pne-group-title">${vLabel}</span>
+                        <span class="pne-group-date">${formatPatchDate(group.date)}</span>
+                        <button class="pne-btn pne-group-edit-btn" onclick="startEditPatchGroup(${gi})">Edit Version</button>
+                    </div>
                 </div>
                 ${group.items.map(item => `
-                    <div class="pne-item" id="pne-item-${item.rowNum}"
-                         data-rownum="${item.rowNum}"
+                    <div class="pne-item" id="pne-item-${item.id}"
+                         data-id="${item.id}"
                          data-category="${item.category}"
                          data-summary="${item.summary.replace(/"/g, '&quot;').replace(/\n/g, '&#10;')}"
                          data-title="${group.title}"
@@ -9736,8 +10067,8 @@ function renderPatchNotesEditor(data) {
                             <span class="pn-badge ${catBadge[item.category] || ''}">${item.category}</span>
                             <span class="pne-item-summary">${item.summary.replace(/\n/g, ' ')}</span>
                             <div class="pne-item-actions">
-                                <button class="pne-btn" onclick="startEditPatchItem(${item.rowNum})">Edit</button>
-                                <button class="pne-btn pne-btn-delete" onclick="promptDeletePatchItem(${item.rowNum})">Delete</button>
+                                <button class="pne-btn" onclick="startEditPatchItem('${item.id}')">Edit</button>
+                                <button class="pne-btn pne-btn-delete" onclick="promptDeletePatchItem('${item.id}')">Delete</button>
                             </div>
                         </div>
                     </div>`).join('')}
@@ -9745,8 +10076,60 @@ function renderPatchNotesEditor(data) {
     }).join('');
 }
 
-function startEditPatchItem(rowNum) {
-    const el = document.getElementById(`pne-item-${rowNum}`);
+// --- Edit a whole version's title + date (applies to all its items) ---
+function startEditPatchGroup(gi) {
+    const el = document.getElementById(`pne-group-${gi}`);
+    if (!el) return;
+    const title = el.dataset.title || '';
+    const date  = el.dataset.date  || '';
+    const header = el.querySelector('.pne-group-header');
+    const view   = el.querySelector('.pne-group-view');
+    if (view) view.style.display = 'none';
+
+    const editDiv = document.createElement('div');
+    editDiv.className = 'pne-group-edit';
+    editDiv.innerHTML = `
+        <input type="text" class="form-input-lg pne-edit-gtitle" value="${title.replace(/"/g, '&quot;')}" placeholder="Version title">
+        <input type="date" class="form-input-lg pne-edit-gdate" value="${date}">
+        <div class="pne-edit-actions">
+            <button class="btn-primary" onclick="saveEditPatchGroup(${gi})">Save</button>
+            <button class="pne-btn" onclick="cancelEditPatchGroup(${gi})">Cancel</button>
+        </div>`;
+    if (header) header.appendChild(editDiv);
+}
+
+function cancelEditPatchGroup(gi) {
+    const el = document.getElementById(`pne-group-${gi}`);
+    if (!el) return;
+    const view    = el.querySelector('.pne-group-view');
+    const editDiv = el.querySelector('.pne-group-edit');
+    if (view) view.style.display = '';
+    if (editDiv) editDiv.remove();
+}
+
+async function saveEditPatchGroup(gi) {
+    const el = document.getElementById(`pne-group-${gi}`);
+    if (!el) return;
+    const oldTitle = el.dataset.title;
+    const oldDate  = el.dataset.date;
+    const title    = el.querySelector('.pne-edit-gtitle').value.trim();
+    const dateRaw  = el.querySelector('.pne-edit-gdate').value; // YYYY-MM-DD
+    if (!title || !dateRaw) return;
+
+    const saveBtn = el.querySelector('.btn-primary');
+    if (saveBtn) { saveBtn.textContent = 'Saving...'; saveBtn.disabled = true; }
+
+    try {
+        await postWrite(PATCH_NOTES_URL, { action: 'editGroup', oldTitle, oldDate, title, date: dateRaw });
+        loadPatchNotesEditor();
+    } catch (e) {
+        if (saveBtn) { saveBtn.textContent = 'Save'; saveBtn.disabled = false; }
+        alert('Failed to save changes: ' + (e.message || e));
+    }
+}
+
+function startEditPatchItem(id) {
+    const el = document.getElementById(`pne-item-${id}`);
     if (!el) return;
     const { category, summary } = el.dataset;
     const decodedSummary = summary.replace(/&#10;/g, '\n');
@@ -9763,14 +10146,14 @@ function startEditPatchItem(rowNum) {
         </select>
         <textarea class="form-input-lg pn-textarea pne-edit-sum">${decodedSummary}</textarea>
         <div class="pne-edit-actions">
-            <button class="btn-primary" onclick="saveEditPatchItem(${rowNum})">Save Changes</button>
-            <button class="pne-btn" onclick="cancelEditPatchItem(${rowNum})">Cancel</button>
+            <button class="btn-primary" onclick="saveEditPatchItem('${id}')">Save Changes</button>
+            <button class="pne-btn" onclick="cancelEditPatchItem('${id}')">Cancel</button>
         </div>`;
     el.appendChild(editDiv);
 }
 
-function cancelEditPatchItem(rowNum) {
-    const el = document.getElementById(`pne-item-${rowNum}`);
+function cancelEditPatchItem(id) {
+    const el = document.getElementById(`pne-item-${id}`);
     if (!el) return;
     const viewDiv = el.querySelector('.pne-item-view');
     const editDiv = el.querySelector('.pne-item-edit');
@@ -9778,8 +10161,8 @@ function cancelEditPatchItem(rowNum) {
     if (editDiv) editDiv.remove();
 }
 
-async function saveEditPatchItem(rowNum) {
-    const el       = document.getElementById(`pne-item-${rowNum}`);
+async function saveEditPatchItem(id) {
+    const el       = document.getElementById(`pne-item-${id}`);
     if (!el) return;
     const category = el.querySelector('.pne-edit-cat').value;
     const summary  = el.querySelector('.pne-edit-sum').value.trim();
@@ -9791,38 +10174,33 @@ async function saveEditPatchItem(rowNum) {
     if (saveBtn) saveBtn.disabled = true;
 
     try {
-        await fetch(PATCH_NOTES_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'editEntry', rowNum, title, date, category, summary })
-        });
+        await postWrite(PATCH_NOTES_URL, { action: 'editEntry', id, title, date, category, summary });
         loadPatchNotesEditor();
     } catch (e) {
         if (saveBtn) { saveBtn.textContent = 'Save Changes'; saveBtn.disabled = false; }
+        alert('Failed to save changes: ' + (e.message || e));
     }
 }
 
-function promptDeletePatchItem(rowNum) {
-    const el = document.getElementById(`pne-item-${rowNum}`);
+function promptDeletePatchItem(id) {
+    const el = document.getElementById(`pne-item-${id}`);
     if (!el) return;
     const actions = el.querySelector('.pne-item-actions');
     if (!actions) return;
     actions.innerHTML = `
         <span class="pne-confirm-label">Delete this item?</span>
-        <button class="pne-btn pne-btn-confirm-delete" onclick="confirmDeletePatchItem(${rowNum})">Yes, Delete</button>
+        <button class="pne-btn pne-btn-confirm-delete" onclick="confirmDeletePatchItem('${id}')">Yes, Delete</button>
         <button class="pne-btn" onclick="loadPatchNotesEditor()">Cancel</button>`;
 }
 
-async function confirmDeletePatchItem(rowNum) {
-    const btn = document.querySelector(`#pne-item-${rowNum} .pne-btn-confirm-delete`);
+async function confirmDeletePatchItem(id) {
+    const btn = document.querySelector(`#pne-item-${id} .pne-btn-confirm-delete`);
     if (btn) { btn.textContent = 'Deleting...'; btn.disabled = true; }
     try {
-        await fetch(PATCH_NOTES_URL, {
-            method: 'POST', mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'deleteEntry', rowNum })
-        });
-    } catch (e) { /* no-cors always throws, reload regardless */ }
+        await postWrite(PATCH_NOTES_URL, { action: 'deleteEntry', id });
+    } catch (e) {
+        alert('Delete failed: ' + (e.message || e));
+    }
     loadPatchNotesEditor();
 }
 
@@ -9877,6 +10255,8 @@ async function toggleBoxOrder() {
     document.getElementById('boxOrderFooter1').style.display  = '';
     document.getElementById('boxOrderPage2').style.display    = 'none';
     document.getElementById('boxOrderFooter2').style.display  = 'none';
+    const searchEl = document.getElementById('boxOrderSearch');
+    if (searchEl) searchEl.value = '';
     modal.classList.add('show');
     lockAndBlurScreen();
     await _loadBoxOrderData();
@@ -9941,22 +10321,76 @@ function _renderBoxOrderItems(container, items) {
     container.innerHTML = html || '<div style="color:#a0aab2;font-size:13px;">No items found.</div>';
 }
 
+// Live search over the box-order items. Matches name / category / dimensions
+// (× and x treated the same). Matching sections expand; the rest collapse.
+// Clearing the box restores the default collapsed accordion.
+function filterBoxOrderItems() {
+    const input = document.getElementById('boxOrderSearch');
+    const container = document.getElementById('boxOrderItemsContainer');
+    if (!input || !container) return;
+    const norm = s => (s || '').toLowerCase().replace(/×/g, 'x');
+    const q = norm(input.value.trim());
+    container.querySelectorAll('.box-order-section').forEach(section => {
+        const itemsEl = section.querySelector('.box-order-section-items');
+        const chevron = section.querySelector('.box-order-chevron');
+        let anyMatch = false;
+        section.querySelectorAll('.box-order-row').forEach(row => {
+            if (!q) { row.style.display = ''; return; }
+            const hay = norm((row.dataset.name || '') + ' ' + (row.dataset.category || '') + ' ' +
+                (row.querySelector('.box-order-subtype')?.textContent || ''));
+            const match = hay.includes(q);
+            row.style.display = match ? '' : 'none';
+            if (match) anyMatch = true;
+        });
+        // Heavy-duty warnings are advisory — hide them while searching.
+        section.querySelectorAll('.box-order-warning').forEach(w => { w.style.display = q ? 'none' : ''; });
+        if (!q) {
+            section.style.display = '';
+            if (itemsEl) itemsEl.style.display = 'none';
+            if (chevron) chevron.style.transform = 'rotate(-90deg)';
+        } else {
+            section.style.display = anyMatch ? '' : 'none';
+            if (itemsEl) itemsEl.style.display = anyMatch ? '' : 'none';
+            if (chevron) chevron.style.transform = anyMatch ? '' : 'rotate(-90deg)';
+        }
+    });
+}
+
 function boxOrderToggleSection(labelEl) {
     const section = labelEl.closest('.box-order-section');
     const itemsEl = section.querySelector('.box-order-section-items');
     const chevron = labelEl.querySelector('.box-order-chevron');
-    const isOpen  = itemsEl.style.display !== 'none';
-    itemsEl.style.display  = isOpen ? 'none' : '';
-    chevron.style.transform = isOpen ? 'rotate(-90deg)' : '';
+    const willOpen = itemsEl.style.display === 'none';
+    // Accordion: close every section first, then open the clicked one (if it was
+    // closed) — so only one section is ever open at a time.
+    const container = section.parentElement;
+    if (container) {
+        container.querySelectorAll('.box-order-section').forEach(s => {
+            const it = s.querySelector('.box-order-section-items');
+            const ch = s.querySelector('.box-order-chevron');
+            if (it) it.style.display = 'none';
+            if (ch) ch.style.transform = 'rotate(-90deg)';
+        });
+    }
+    if (willOpen) {
+        itemsEl.style.display = '';
+        chevron.style.transform = '';
+    }
 }
 
 function _buildBoxRow(item) {
     const displayCat = item.category.replace(/^(?:Common |Rare |Very Rare )/, '');
     const label      = escapeHtml(`${item.name} ${displayCat}`);
     const nameHtml   = escapeHtml(item.name);
+    const catHtml    = escapeHtml(item.category || '');
+    const bundleSize = Math.max(1, parseInt(item.bundle_size) || 1);
+    // The stepper counts individual units; clicking +/- jumps by one bundle so a
+    // manager always sees the true unit count. Surface the bundle size so it's
+    // clear why the number jumps the way it does.
     const subParts   = [item.dimensions, displayCat].filter(Boolean);
+    if (bundleSize > 1) subParts.push(`${bundleSize}/bundle`);
     const subHtml    = escapeHtml(subParts.join(' · '));
-    return `<div class="box-order-row" data-item="${label}">
+    return `<div class="box-order-row" data-item="${label}" data-name="${nameHtml}" data-category="${catHtml}" data-bundle="${bundleSize}">
   <div class="box-order-info">
     <span class="box-order-name">${nameHtml}</span>
     <span class="box-order-subtype">${subHtml}</span>
@@ -9970,9 +10404,11 @@ function _buildBoxRow(item) {
 }
 
 function boxStepperChange(btn, delta) {
-    const qtyEl = btn.closest('.box-order-stepper').querySelector('.box-stepper-qty');
-    const row   = btn.closest('.box-order-row');
-    const next  = Math.max(0, (parseInt(qtyEl.textContent) || 0) + delta);
+    const qtyEl  = btn.closest('.box-order-stepper').querySelector('.box-stepper-qty');
+    const row    = btn.closest('.box-order-row');
+    // Step by the bundle size so the displayed quantity is the actual unit count.
+    const bundle = Math.max(1, parseInt(row.dataset.bundle) || 1);
+    const next   = Math.max(0, (parseInt(qtyEl.textContent) || 0) + delta * bundle);
     qtyEl.textContent = next;
     qtyEl.classList.toggle('box-stepper-active', next > 0);
     row.classList.toggle('box-row-selected', next > 0);
@@ -9985,7 +10421,8 @@ function boxOrderNextPage() {
     _boxOrderSelected = [];
     rows.forEach(row => {
         const qty = parseInt(row.querySelector('.box-stepper-qty')?.textContent) || 0;
-        if (qty > 0) _boxOrderSelected.push({ item: row.dataset.item, qty });
+        const bundle = Math.max(1, parseInt(row.dataset.bundle) || 1);
+        if (qty > 0) _boxOrderSelected.push({ item: row.dataset.item, name: row.dataset.name, category: row.dataset.category, qty, bundle });
     });
     if (!_boxOrderSelected.length) {
         alert('Please add at least one item before continuing.');
@@ -10015,6 +10452,27 @@ function boxOrderBackPage() {
     document.getElementById('boxOrderFooter1').style.display  = '';
 }
 
+// Format one selected item for the order: drop the word "Box" from box sizes
+// and "Shipping Supplies" from supplies, and pick the unit per item type
+// (Peanuts → Bag(s), Gum Tape → Box(es), everything else → Bundle(s)).
+// The stepper tracks individual units; convert back to bundle count here so the
+// vendor email keeps reading in bundles (qty ÷ bundle size).
+function _boxOrderLine(o) {
+    const displayCat = (o.category || '')
+        .replace(/^(?:Common |Rare |Very Rare )/, '')
+        .replace(/\bShipping Supplies\b/i, '')
+        .replace(/\bBox(?:es)?\b/i, '')
+        .replace(/\s+/g, ' ').trim();
+    const display = `${o.name || o.item || ''} ${displayCat}`.replace(/\s+/g, ' ').trim();
+    const n = (o.name || '').toLowerCase();
+    let one = 'Bundle', many = 'Bundles';
+    if (n.includes('peanut'))        { one = 'Bag'; many = 'Bags'; }
+    else if (n.includes('gum tape')) { one = 'Box'; many = 'Boxes'; }
+    const bundle  = Math.max(1, parseInt(o.bundle) || 1);
+    const bundles = Math.max(1, Math.round((o.qty || 0) / bundle));
+    return `${display}: ${bundles} ${bundles === 1 ? one : many}`;
+}
+
 function boxOrderUpdatePreview() {
     const preview  = document.getElementById('boxOrderEmailPreview');
     if (!preview) return;
@@ -10022,7 +10480,7 @@ function boxOrderUpdatePreview() {
     const userName = sessionStorage.getItem('speeksUserName')  || '';
     const notes    = document.getElementById('boxOrderNotes')?.value.trim() || '';
     const to       = _boxOrderGetEmail();
-    const lines    = _boxOrderSelected.map(o => `  • ${o.item}: ${o.qty} ${o.qty === 1 ? 'Bundle' : 'Bundles'}`).join('\n');
+    const lines    = _boxOrderSelected.map(o => `  • ${_boxOrderLine(o)}`).join('\n');
     const noteBlock = notes ? `\n\n${notes}` : '';
     preview.textContent =
         `To: ${to}\nSubject: PayMore ${store} Location\n\n` +
@@ -10030,21 +10488,53 @@ function boxOrderUpdatePreview() {
         `Thank you,\n${userName}`;
 }
 
-function sendBoxOrder() {
+// Corp roles (CEO/DM) must pick a store first; managers default to their own.
+function _boxOrderEnsureStore() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     const isCorpRole = role === 'ceo' || role === 'district manager';
     const sel = document.getElementById('boxOrderStoreSelect');
     if (isCorpRole && (!sel || !sel.value)) {
         alert('Please select a store before sending.');
-        return;
+        return false;
     }
-    const store     = _boxOrderGetStore();
-    const userName  = sessionStorage.getItem('speeksUserName')  || '';
-    const notes     = document.getElementById('boxOrderNotes')?.value.trim() || '';
-    const noteBlock = notes ? `%0A%0A${encodeURIComponent(notes)}` : '';
-    const to        = encodeURIComponent(_boxOrderGetEmail());
-    const subject   = encodeURIComponent(`PayMore ${store} Location`);
-    const lines     = _boxOrderSelected.map(o => encodeURIComponent(`  • ${o.item}: ${o.qty} ${o.qty === 1 ? 'Bundle' : 'Bundles'}`)).join('%0A');
-    const body      = `Hi,%0A%0APlease process the following order for ${encodeURIComponent(store)}:%0A%0A${lines}${noteBlock}%0A%0AThank you,%0A${encodeURIComponent(userName)}`;
-    window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+    return true;
+}
+
+// Build the order as plain text (real newlines) — shared by the email and the
+// copy failsafe so both always say exactly the same thing.
+function _boxOrderCompose() {
+    const store    = _boxOrderGetStore();
+    const userName = sessionStorage.getItem('speeksUserName') || '';
+    const notes    = document.getElementById('boxOrderNotes')?.value.trim() || '';
+    const lines    = _boxOrderSelected.map(o => `  • ${_boxOrderLine(o)}`).join('\n');
+    const noteBlock = notes ? `\n\n${notes}` : '';
+    const body = `Hi,\n\nPlease process the following order for ${store}:\n\n${lines}${noteBlock}\n\nThank you,\n${userName}`;
+    return { email: _boxOrderGetEmail(), subject: `PayMore ${store} Location`, body };
+}
+
+function sendBoxOrder() {
+    if (!_boxOrderEnsureStore()) return;
+    const { email, subject, body } = _boxOrderCompose();
+    window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+// Failsafe for machines with no default mail client: copy the full order
+// (recipient, subject, body) to the clipboard to paste into any email.
+function copyBoxOrder(button) {
+    if (!_boxOrderEnsureStore()) return;
+    const { email, subject, body } = _boxOrderCompose();
+    const text = `To: ${email}\nSubject: ${subject}\n\n${body}`;
+    navigator.clipboard.writeText(text).then(() => {
+        const originalText = button.innerText;
+        button.innerText = 'Copied!';
+        button.style.background = '#d1fae5';
+        button.style.color = '#065f46';
+        button.style.borderColor = '#34d399';
+        setTimeout(() => {
+            button.innerText = originalText;
+            button.style.background = '';
+            button.style.color = '';
+            button.style.borderColor = '';
+        }, 2000);
+    }).catch(() => alert('Could not copy automatically. Please select and copy the order manually.'));
 }

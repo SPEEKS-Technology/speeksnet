@@ -4,16 +4,19 @@ on:
   pull_request:
     branches:
       - main
+      - pre-release
 
 jobs:
   check-source-branch:
     runs-on: ubuntu-latest
     steps:
-      - name: Verify PR comes from pre-release
+      - name: Verify PR source branch
         run: |
-          if [[ "${{ github.head_ref }}" != "pre-release" ]]; then
+          # Only main is gated: it may only be merged into from pre-release.
+          # PRs into pre-release (from any feature branch) always pass, so the
+          # required status check can actually report on those PRs.
+          if [[ "${{ github.base_ref }}" == "main" && "${{ github.head_ref }}" != "pre-release" ]]; then
             echo "Error: You can only merge into main from the pre-release branch."
             exit 1
-          else
-            echo "Success: PR is coming from pre-release."
           fi
+          echo "Success: source '${{ github.head_ref }}' -> base '${{ github.base_ref }}' is allowed."
