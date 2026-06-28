@@ -7032,8 +7032,8 @@ function initDashboardData() {
         if (_clRole === 'manager' || _clRole === 'district manager' || _clRole === 'assistant manager') {
             setTimeout(_prefetchChecklistForChip, 1200);
         }
-        // Pre-load the store-audit checklist for its chip (managers + ASMs)
-        if (['manager', 'owner (manager)', 'district manager', 'assistant manager'].includes(_clRole)) {
+        // Pre-load the store-audit checklist for its chip (managers + ASMs, not DM)
+        if (['manager', 'owner (manager)', 'assistant manager'].includes(_clRole)) {
             setTimeout(_prefetchAuditForChip, 1300);
         }
 
