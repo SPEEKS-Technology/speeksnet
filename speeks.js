@@ -46,6 +46,7 @@ const SCORECARD_URL     = `${_BASE}/scorecard`;
 const EBAY_ALERTS_URL   = `${_BASE}/ebay-alerts`;
 const STORE_COMMENT_URL = `${_BASE}/store-comments`;
 const CHECKLIST_URL     = `${_BASE}/checklist`;
+const STORE_AUDIT_URL   = `${_BASE}/store-audit`;
 const PATCH_NOTES_URL   = `${_BASE}/patch-notes`;
 const TICKER_URL        = `${_BASE}/ticker`;
 const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
@@ -7031,6 +7032,10 @@ function initDashboardData() {
         if (_clRole === 'manager' || _clRole === 'district manager' || _clRole === 'assistant manager') {
             setTimeout(_prefetchChecklistForChip, 1200);
         }
+        // Pre-load the store-audit checklist for its chip (managers + ASMs)
+        if (['manager', 'owner (manager)', 'district manager', 'assistant manager'].includes(_clRole)) {
+            setTimeout(_prefetchAuditForChip, 1300);
+        }
 
 
         if (typeof preloadAllStores === 'function') setTimeout(preloadAllStores, 4000);
@@ -9655,6 +9660,9 @@ window.toggleChecklistPanel = function(event) {
     if (isOpen) {
         document.getElementById('goalsSidePanel')?.classList.remove('open');
         document.querySelector('.gi-nav-toggle')?.classList.remove('panel-active');
+        document.getElementById('auditSidePanel')?.classList.remove('open');
+        document.querySelector('.audit-nav-toggle')?.classList.remove('panel-active');
+        _stopAuditSync?.();
         _resetToCurrentMonth?.();
         _startChecklistSync();
     } else {
@@ -9688,7 +9696,168 @@ document.addEventListener('click', function(e) {
             _resetToCurrentMonth();
                 }
     }
+
+    const auditPanel = document.getElementById('auditSidePanel');
+    const auditToggle = document.querySelector('.audit-nav-toggle');
+    if (auditPanel && auditPanel.classList.contains('open')) {
+        if (!auditPanel.contains(e.target) && !auditToggle?.contains(e.target)) {
+            auditPanel.classList.remove('open');
+            auditToggle?.classList.remove('panel-active');
+            _stopAuditSync();
+        }
+    }
 });
+
+// =============================================================================
+// STORE AUDIT CHECKLIST — PayMore audit-readiness, weekly, shared per store.
+// Mirrors the Manager Checklist panel but reads a fixed admin-defined item list
+// (store-audit fn) and tracks one shared completion set per store per week.
+// =============================================================================
+let auditDataCache = { items: [], total: 0, completed: 0, weekStart: '' };
+let _auditSyncInterval = null;
+
+async function loadAudit() {
+    const panel = document.getElementById('auditSidePanel');
+    if (!panel?.classList.contains('open')) return;   // only fetch when opening
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+    const container = document.getElementById('auditContent');
+    if (container) container.innerHTML = '<div class="status-message">Syncing Audit...</div>';
+    try {
+        const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
+        auditDataCache = await res.json();
+        renderAudit();
+    } catch (e) {
+        console.error('Audit Fetch Error', e);
+        if (container) container.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load audit checklist.</div>';
+    }
+}
+
+function renderAudit() {
+    const container = document.getElementById('auditContent');
+    if (!container) return;
+    const items = auditDataCache.items || [];
+
+    const label = document.getElementById('audit-week-label');
+    if (label) {
+        label.textContent = items.length
+            ? `${auditDataCache.completed || 0}/${auditDataCache.total || items.length} complete this week`
+            : '';
+    }
+
+    if (items.length === 0) {
+        container.innerHTML = `<div style="text-align: center; padding: 30px; color: #888; font-weight: 600; font-size: 13px;">No audit items have been set up yet.</div>`;
+        updateAuditChip();
+        return;
+    }
+
+    let html = '';
+    let lastSection = null;
+    items.forEach(item => {
+        if (item.section !== lastSection) {
+            html += `<div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: #94a3b8; margin: 14px 4px 6px;">${escapeHtml(item.section)}</div>`;
+            lastSection = item.section;
+        }
+        const completedClass = item.checked ? 'completed' : '';
+        html += `
+        <div class="cl-item ${completedClass}">
+            <input type="checkbox" class="cl-checkbox" ${item.checked ? 'checked' : ''} onchange="toggleAuditState('${item.id}', this.checked)">
+            <div class="cl-content-wrapper" style="justify-content: center;">
+                <span class="cl-text">${escapeHtml(item.text)}</span>
+            </div>
+        </div>`;
+    });
+    container.innerHTML = html;
+    updateAuditChip();
+}
+
+async function toggleAuditState(id, isChecked) {
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+    const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
+
+    const item = (auditDataCache.items || []).find(i => i.id === id);
+    if (item) item.checked = isChecked;
+    auditDataCache.completed = (auditDataCache.items || []).filter(i => i.checked).length;
+    renderAudit();
+
+    postWrite(STORE_AUDIT_URL, { action: 'toggle', id: id, checked: isChecked, store: store, user: userName })
+        .catch(err => {
+            if (item) item.checked = !isChecked;
+            auditDataCache.completed = (auditDataCache.items || []).filter(i => i.checked).length;
+            renderAudit();
+            alert('Could not save that change: ' + err.message);
+        });
+}
+
+function updateAuditChip() {
+    const chip = document.getElementById('audit-progress-chip');
+    const btn = document.querySelector('.audit-nav-toggle');
+    if (!chip || !btn) return;
+
+    const total = auditDataCache.total || (auditDataCache.items || []).length;
+    if (total === 0) {
+        chip.textContent = '';
+        btn.classList.remove('cl-needs-attention');
+        return;
+    }
+    const done = (auditDataCache.completed != null)
+        ? auditDataCache.completed
+        : (auditDataCache.items || []).filter(i => i.checked).length;
+    chip.textContent = done === total ? '✓ All done' : `${done}/${total} done`;
+
+    const panel = document.getElementById('auditSidePanel');
+    const isOpen = panel && panel.classList.contains('open');
+    btn.classList.toggle('cl-needs-attention', done < total && !isOpen);
+}
+
+async function _prefetchAuditForChip() {
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+    try {
+        const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
+        auditDataCache = await res.json();
+        updateAuditChip();
+    } catch (_) {}
+}
+
+function _startAuditSync() {
+    if (_auditSyncInterval) return;
+    _auditSyncInterval = setInterval(async () => {
+        const panel = document.getElementById('auditSidePanel');
+        if (!panel?.classList.contains('open')) return;
+        const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+        try {
+            const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
+            auditDataCache = await res.json();
+            renderAudit();
+        } catch (_) {}
+    }, 30000);
+}
+
+function _stopAuditSync() {
+    if (_auditSyncInterval) { clearInterval(_auditSyncInterval); _auditSyncInterval = null; }
+}
+
+window.toggleAuditPanel = function(event) {
+    if (event) event.stopPropagation();
+    const panel = document.getElementById('auditSidePanel');
+    if (!panel) return;
+    const isOpen = panel.classList.toggle('open');
+    const toggle = document.querySelector('.audit-nav-toggle');
+    if (toggle) {
+        toggle.classList.toggle('panel-active', isOpen);
+        if (isOpen) toggle.classList.remove('cl-needs-attention');
+    }
+    if (isOpen) {
+        // mutually exclusive with the other side panels
+        document.getElementById('checklistSidePanel')?.classList.remove('open');
+        document.querySelector('.cl-nav-toggle')?.classList.remove('panel-active');
+        _stopChecklistSync?.();
+        document.getElementById('goalsSidePanel')?.classList.remove('open');
+        document.querySelector('.gi-nav-toggle')?.classList.remove('panel-active');
+        _startAuditSync();
+    } else {
+        _stopAuditSync();
+    }
+};
 
 // --- ROLE SELECTION LOGIC ---
 // Per-role capacity: most roles are 1-per-store, but a store can run TWO listers.
