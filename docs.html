@@ -495,11 +495,15 @@
 
 <div id="auditSidePanel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-assistant-manager">
     <div class="cl-panel-header">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
             <h3 style="margin: 0;">Store Audit Checklist</h3>
             <button class="modal-close-btn" onclick="toggleAuditPanel(event)" style="width: 28px; height: 28px; font-size: 14px; background: #f1f5f9; color: #64748b;">✖</button>
         </div>
-        <div id="audit-week-label" style="font-size: 12px; color: #64748b; font-weight: 600;"></div>
+        <div class="notif-tabs">
+            <button id="audit-tab-daily" class="tab-btn active" onclick="switchAuditTab('daily')">Daily</button>
+            <button id="audit-tab-weekly" class="tab-btn" onclick="switchAuditTab('weekly')">Weekly</button>
+        </div>
+        <div id="audit-week-label" style="font-size: 12px; color: #64748b; font-weight: 600; margin-top: 8px;"></div>
     </div>
     <div class="cl-panel-body">
         <div id="auditContent" class="cl-scroll-area">

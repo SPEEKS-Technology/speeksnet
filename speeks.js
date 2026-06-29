@@ -9709,12 +9709,22 @@ document.addEventListener('click', function(e) {
 });
 
 // =============================================================================
-// STORE AUDIT CHECKLIST — PayMore audit-readiness, weekly, shared per store.
-// Mirrors the Manager Checklist panel but reads a fixed admin-defined item list
-// (store-audit fn) and tracks one shared completion set per store per week.
+// STORE AUDIT CHECKLIST — PayMore audit-readiness, shared per store.
+// Two tabs: Daily (resets each day) and Weekly (resets each Monday). Reads a
+// fixed admin-defined list (store-audit fn); completions are shared per store.
 // =============================================================================
-let auditDataCache = { items: [], total: 0, completed: 0, weekStart: '' };
+let auditDataCache = { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
+let currentAuditTab = 'daily';
 let _auditSyncInterval = null;
+
+function _auditTab(tab) { return auditDataCache[tab] || { items: [], total: 0, completed: 0 }; }
+
+function switchAuditTab(tab) {
+    currentAuditTab = tab;
+    document.getElementById('audit-tab-daily')?.classList.toggle('active', tab === 'daily');
+    document.getElementById('audit-tab-weekly')?.classList.toggle('active', tab === 'weekly');
+    renderAudit();
+}
 
 async function loadAudit() {
     const panel = document.getElementById('auditSidePanel');
@@ -9735,17 +9745,18 @@ async function loadAudit() {
 function renderAudit() {
     const container = document.getElementById('auditContent');
     if (!container) return;
-    const items = auditDataCache.items || [];
+    const data = _auditTab(currentAuditTab);
+    const items = data.items || [];
 
     const label = document.getElementById('audit-week-label');
     if (label) {
         label.textContent = items.length
-            ? `${auditDataCache.completed || 0}/${auditDataCache.total || items.length} complete this week`
+            ? `${data.completed || 0}/${data.total || items.length} complete ${currentAuditTab === 'daily' ? 'today' : 'this week'}`
             : '';
     }
 
     if (items.length === 0) {
-        container.innerHTML = `<div style="text-align: center; padding: 30px; color: #888; font-weight: 600; font-size: 13px;">No audit items have been set up yet.</div>`;
+        container.innerHTML = `<div style="text-align: center; padding: 30px; color: #888; font-weight: 600; font-size: 13px;">No ${currentAuditTab} audit items have been set up yet.</div>`;
         updateAuditChip();
         return;
     }
@@ -9773,16 +9784,18 @@ function renderAudit() {
 async function toggleAuditState(id, isChecked) {
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    const tab = currentAuditTab;
+    const data = _auditTab(tab);
 
-    const item = (auditDataCache.items || []).find(i => i.id === id);
+    const item = (data.items || []).find(i => i.id === id);
     if (item) item.checked = isChecked;
-    auditDataCache.completed = (auditDataCache.items || []).filter(i => i.checked).length;
+    data.completed = (data.items || []).filter(i => i.checked).length;
     renderAudit();
 
-    postWrite(STORE_AUDIT_URL, { action: 'toggle', id: id, checked: isChecked, store: store, user: userName })
+    postWrite(STORE_AUDIT_URL, { action: 'toggle', id: id, checked: isChecked, store: store, user: userName, period: tab })
         .catch(err => {
             if (item) item.checked = !isChecked;
-            auditDataCache.completed = (auditDataCache.items || []).filter(i => i.checked).length;
+            data.completed = (data.items || []).filter(i => i.checked).length;
             renderAudit();
             alert('Could not save that change: ' + err.message);
         });
@@ -9793,16 +9806,16 @@ function updateAuditChip() {
     const btn = document.querySelector('.audit-nav-toggle');
     if (!chip || !btn) return;
 
-    const total = auditDataCache.total || (auditDataCache.items || []).length;
+    // Chip reflects the DAILY list (the everyday cadence).
+    const daily = _auditTab('daily');
+    const total = daily.total || (daily.items || []).length;
     if (total === 0) {
         chip.textContent = '';
         btn.classList.remove('cl-needs-attention');
         return;
     }
-    const done = (auditDataCache.completed != null)
-        ? auditDataCache.completed
-        : (auditDataCache.items || []).filter(i => i.checked).length;
-    chip.textContent = done === total ? '✓ All done' : `${done}/${total} done`;
+    const done = (daily.completed != null) ? daily.completed : (daily.items || []).filter(i => i.checked).length;
+    chip.textContent = done === total ? '✓ All done' : `${done}/${total} today`;
 
     const panel = document.getElementById('auditSidePanel');
     const isOpen = panel && panel.classList.contains('open');

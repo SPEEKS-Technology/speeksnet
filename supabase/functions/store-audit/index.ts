@@ -2,11 +2,11 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 // ============================================================================
-// SPEEKS Store Audit Checklist  —  PayMore audit-readiness, weekly, per store.
-// A fixed master list (audit_items, DM/CEO-managed) that each store checks off
-// through the week (audit_completions, shared across that store's managers).
-// Resets every Monday (America/Chicago). Powers the "Audit Checklist" stat on
-// the weekly CEO/DM report.
+// SPEEKS Store Audit Checklist  —  PayMore audit-readiness, per store.
+// Two lists: DAILY (resets each day) and WEEKLY (resets each Monday). A fixed
+// master list (audit_items, DM/CEO-managed) checked off per store, shared
+// across that store's managers (audit_completions). All dates America/Chicago.
+// Powers the "Audit Checklist" stat on the weekly CEO/DM report.
 // ============================================================================
 
 const corsHeaders = {
@@ -28,13 +28,26 @@ function isAdminRole(role?: string): boolean {
 }
 
 function pad(x: number) { return x < 10 ? "0" + x : "" + x; }
+function ymd(d: Date) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
 
-// Monday of the current week in America/Chicago, as YYYY-MM-DD.
+// "Now" as a Date in America/Chicago wall-clock.
+function nowCentral(): Date {
+  return new Date(new Date().toLocaleString("en-US", { timeZone: "America/Chicago" }));
+}
+// Today (Central), YYYY-MM-DD.
+function todayCentral(): string {
+  const n = nowCentral();
+  return ymd(new Date(n.getFullYear(), n.getMonth(), n.getDate()));
+}
+// Monday of the current week (Central), YYYY-MM-DD.
 function mondayCentral(): string {
-  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Chicago" }));
-  const dow = now.getDay() === 0 ? 6 : now.getDay() - 1; // 0=Mon … 6=Sun
-  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow);
-  return monday.getFullYear() + "-" + pad(monday.getMonth() + 1) + "-" + pad(monday.getDate());
+  const n = nowCentral();
+  const dow = n.getDay() === 0 ? 6 : n.getDay() - 1; // 0=Mon … 6=Sun
+  return ymd(new Date(n.getFullYear(), n.getMonth(), n.getDate() - dow));
+}
+// The period_start a given period resets on.
+function periodStartFor(period: string): string {
+  return period === "daily" ? todayCentral() : mondayCentral();
 }
 
 Deno.serve(async (req: Request) => {
@@ -55,16 +68,18 @@ Deno.serve(async (req: Request) => {
       const { data, error } = await supabase
         .from("audit_items")
         .select("*")
+        .order("period", { ascending: true })
         .order("sort_order", { ascending: true })
         .order("created_at", { ascending: true });
       if (error) return json({ error: error.message }, 500);
       return json({ items: (data || []).map((t: any) => ({
-        id: t.id, section: t.section, text: t.task_text, sortOrder: t.sort_order, active: t.active,
+        id: t.id, period: t.period, section: t.section, text: t.task_text, sortOrder: t.sort_order, active: t.active,
       })) });
     }
 
-    // Manager-facing read: active items + this week's checked state for a store.
+    // Manager-facing read: active items + checked state for a store, both periods.
     const store = (url.searchParams.get("store") || "").toUpperCase();
+    const dayStart = todayCentral();
     const weekStart = mondayCentral();
 
     const { data: items, error } = await supabase
@@ -75,26 +90,27 @@ Deno.serve(async (req: Request) => {
       .order("created_at", { ascending: true });
     if (error) return json({ error: error.message }, 500);
 
+    // Completions that matter right now: this day's and this week's.
     const { data: comps } = await supabase
       .from("audit_completions")
-      .select("item_id")
+      .select("item_id, period_start")
       .eq("store", store)
-      .eq("week_start", weekStart);
-    const done = new Set((comps || []).map((c: any) => c.item_id));
+      .in("period_start", [dayStart, weekStart]);
+    const done = new Set((comps || []).map((c: any) => `${c.item_id}|${c.period_start}`));
 
-    const list = (items || []).map((t: any) => ({
-      id: t.id,
-      section: t.section || "General",
-      text: t.task_text,
-      checked: done.has(t.id),
-    }));
+    const build = (period: string, periodStart: string) => {
+      const list = (items || [])
+        .filter((t: any) => (t.period || "weekly") === period)
+        .map((t: any) => ({
+          id: t.id,
+          section: t.section || "General",
+          text: t.task_text,
+          checked: done.has(`${t.id}|${periodStart}`),
+        }));
+      return { periodStart, items: list, total: list.length, completed: list.filter((i) => i.checked).length };
+    };
 
-    return json({
-      weekStart,
-      items: list,
-      total: list.length,
-      completed: list.filter((i) => i.checked).length,
-    });
+    return json({ daily: build("daily", dayStart), weekly: build("weekly", weekStart) });
   }
 
   // -------------------- POST --------------------
@@ -102,28 +118,33 @@ Deno.serve(async (req: Request) => {
     const body = await req.json();
     const action = body.action || "";
 
-    // Manager: toggle an item for this store + week (shared across the store).
+    // Manager: toggle an item for this store + its period window (shared per store).
     if (action === "toggle") {
       const itemId = body.id;
       const store = (body.store || "").toUpperCase();
       if (!itemId || !store) return json({ error: "Missing id or store" }, 400);
-      const weekStart = mondayCentral();
+
+      // Resolve the item's period from the DB so the period_start can't be spoofed.
+      const { data: item } = await supabase
+        .from("audit_items").select("period").eq("id", itemId).single();
+      const period = (item?.period as string) || (body.period === "daily" ? "daily" : "weekly");
+      const periodStart = periodStartFor(period);
 
       if (body.checked) {
         const { error } = await supabase.from("audit_completions").upsert({
           item_id: itemId,
           store,
-          week_start: weekStart,
+          period_start: periodStart,
           user_name: body.user || null,
           completed_at: new Date().toISOString(),
-        }, { onConflict: "item_id,store,week_start" });
+        }, { onConflict: "item_id,store,period_start" });
         if (error) return json({ error: error.message }, 500);
       } else {
         await supabase.from("audit_completions")
           .delete()
           .eq("item_id", itemId)
           .eq("store", store)
-          .eq("week_start", weekStart);
+          .eq("period_start", periodStart);
       }
       return json({ success: true });
     }
@@ -133,9 +154,11 @@ Deno.serve(async (req: Request) => {
       if (!isAdminRole(body.role)) return json({ error: "Not authorized" }, 403);
       const text = (body.text || "").trim();
       if (!text) return json({ error: "Missing item text" }, 400);
+      const period = body.period === "daily" ? "daily" : "weekly";
       const newId = `audit_${Date.now()}`;
       const { error } = await supabase.from("audit_items").insert({
         id: newId,
+        period,
         section: (body.section || "General").trim() || "General",
         task_text: text,
         sort_order: Number.isFinite(body.sortOrder) ? body.sortOrder : 0,
@@ -151,6 +174,7 @@ Deno.serve(async (req: Request) => {
       const patch: Record<string, unknown> = {};
       if (typeof body.text === "string" && body.text.trim()) patch.task_text = body.text.trim();
       if (typeof body.section === "string" && body.section.trim()) patch.section = body.section.trim();
+      if (body.period === "daily" || body.period === "weekly") patch.period = body.period;
       if (Number.isFinite(body.sortOrder)) patch.sort_order = body.sortOrder;
       if (typeof body.active === "boolean") patch.active = body.active;
       if (Object.keys(patch).length === 0) return json({ error: "Nothing to update" }, 400);
@@ -162,7 +186,6 @@ Deno.serve(async (req: Request) => {
     if (action === "deleteItem") {
       if (!isAdminRole(body.role)) return json({ error: "Not authorized" }, 403);
       if (!body.id) return json({ error: "Missing id" }, 400);
-      // completions cascade-delete via FK
       const { error } = await supabase.from("audit_items").delete().eq("id", body.id);
       if (error) return json({ error: error.message }, 500);
       return json({ success: true });
