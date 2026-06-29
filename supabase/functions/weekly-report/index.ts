@@ -291,22 +291,20 @@ const statCell = (label: string, value: string, rank?: number | null, valColor?:
 // `ranks` (optional) adds #rank badges on Buy Value / Revenue / MTD GP (manager only).
 function cashFlowSummary(r: any, ranks?: { buy?: number; rev?: number; gp?: number }) {
   const cogsSold = r.soldRev - r.soldGp;
-  const bsValue = r.soldRev ? r.boughtResale / r.soldRev : 0;
-  const bsCost = cogsSold ? r.boughtCash / cogsSold : 0;
   const banked = r.gpGoal ? Math.min(100, r.gpMtd / r.gpGoal * 100) : 0;
   const goalPct = r.gpGoal ? (r.gpProj / r.gpGoal) * 100 : 0;
   const channel = (title: string, cells: string, footer: string) =>
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:12px;border-collapse:collapse;margin-bottom:10px;overflow:hidden;">
       <tr><td colspan="3" style="padding:11px 14px 0;"><span style="font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.6px;color:${C.charcoal};">${title}</span></td></tr>
       <tr>${cells}</tr>
-      <tr><td colspan="3" style="padding:0 14px 13px;">${footer}</td></tr>
+      ${footer ? `<tr><td colspan="3" style="padding:0 14px 13px;">${footer}</td></tr>` : '<tr><td colspan="3" style="padding:0 0 6px;"></td></tr>'}
     </table>`;
   const bar = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:9px 0 0;background:#eef2f6;border-radius:99px;"><tr><td style="background:${C.sage};height:10px;width:${banked}%;border-radius:99px;font-size:0;line-height:0;">&nbsp;</td><td style="font-size:0;line-height:0;">&nbsp;</td></tr></table>`;
   const buying = channel('Buying',
     statCell('Buy Value', money(r.boughtResale), ranks?.buy ?? null) +
     statCell('Cash Cost', money(r.boughtCash)) +
     statCell('Buy Margin', pct(r.buyMargin), null, buyColor(r.buyMargin)),
-    `<span style="font-size:11px;font-weight:600;color:${C.muted};">Buy vs sell value <b style="color:${C.charcoal};">${bsValue.toFixed(2)}×</b> · buy vs sell cost <b style="color:${C.charcoal};">${bsCost.toFixed(2)}×</b></span>`);
+    '');
   const selling = channel('Selling',
     statCell('Revenue', money(r.soldRev), ranks?.rev ?? null) +
     statCell('COGS', money(cogsSold)) +
