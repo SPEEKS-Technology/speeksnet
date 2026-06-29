@@ -129,11 +129,22 @@ async function gather(sb: any, weekEnd: Date) {
   const cardBy: Record<string, any> = {};
   for (const c of cards) if (!cardBy[c.store]) cardBy[c.store] = c;
 
-  // 5) checklist completions during the week
-  const checks = (await sb.from('checklist_completions').select('store, completed_at')
-    .gte('completed_at', ymd(weekStart)).lte('completed_at', ymd(new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate() + 1)))).data ?? [];
-  const checkDays: Record<string, Set<string>> = {};
-  for (const c of checks) (checkDays[c.store] ??= new Set<string>()).add(String(c.completed_at).slice(0, 10));
+  // 5) store-audit readiness for this week (Daily + Weekly checklists)
+  const weekStartStr = ymd(weekStart);
+  const auditItems = (await sb.from('audit_items').select('id, period, active').eq('active', true)).data ?? [];
+  const dailyIds = new Set(auditItems.filter((a: any) => a.period === 'daily').map((a: any) => a.id));
+  const weeklyIds = new Set(auditItems.filter((a: any) => a.period !== 'daily').map((a: any) => a.id));
+  const auditDailyTotal = dailyIds.size;
+  const auditWeeklyTotal = weeklyIds.size;
+  // period_start within the report week: daily rows land on each day; the weekly row lands on Monday (= weekStartStr).
+  const auditComps = (await sb.from('audit_completions').select('store, item_id, period_start')
+    .gte('period_start', weekStartStr).lte('period_start', weekEndStr)).data ?? [];
+  const auditDailyCount: Record<string, number> = {};
+  const auditWeeklyCount: Record<string, number> = {};
+  for (const c of auditComps) {
+    if (dailyIds.has(c.item_id)) auditDailyCount[c.store] = (auditDailyCount[c.store] || 0) + 1;
+    else if (weeklyIds.has(c.item_id) && c.period_start === weekStartStr) auditWeeklyCount[c.store] = (auditWeeklyCount[c.store] || 0) + 1;
+  }
 
   // ----- per-store rollups -----
   const rows: Record<string, any> = {};
@@ -170,8 +181,8 @@ async function gather(sb: any, weekEnd: Date) {
       target: tgt, listingPct: tgt ? (processed / tgt) * 100 : 0, people: k.length,
       gpMtd, gpGoal, gpProj, goalPct: gpGoal ? (gpProj / gpGoal) * 100 : 0,
       card: cardBy[s] || null,
-      checklistDays: checkDays[s]?.size || 0,
-      checklistPct: ((checkDays[s]?.size || 0) / 7) * 100,
+      auditWeeklyPct: auditWeeklyTotal ? ((auditWeeklyCount[s] || 0) / auditWeeklyTotal) * 100 : null,
+      auditDailyPct: auditDailyTotal ? ((auditDailyCount[s] || 0) / (auditDailyTotal * 7)) * 100 : null,
       kpiSubmitted: k.length > 0,
     };
   }
@@ -450,7 +461,13 @@ function buildLeadership(d: any) {
   ${sectionLabel('People')}
   ${rowsBox(peopleRows)}
   ${sectionLabel('Ops Compliance')}
-  ${rowsBox(`<tr><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:12.5px;"><b>Weekly KPIs submitted</b> <span style="float:right;font-weight:900;color:${kpiCount === 5 ? C.green : C.amber};">${kpiCount} / 5</span></td></tr><tr><td style="padding:11px 14px;font-size:12.5px;"><b>Checklist usage</b> <span style="color:${C.faint};font-weight:600;">days used / 7</span><div style="margin-top:6px;">${STORES.map(s => { const p = d.rows[s].checklistPct; return `<span style="font-weight:800;color:${p >= 70 ? C.green : p >= 40 ? C.amber : C.red};margin-right:13px;">${s} ${Math.round(p)}%</span>`; }).join('')}</div></td></tr>`)}
+  ${rowsBox(`<tr><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:12.5px;"><b>Weekly KPIs submitted</b> <span style="float:right;font-weight:900;color:${kpiCount === 5 ? C.green : C.amber};">${kpiCount} / 5</span></td></tr><tr><td style="padding:11px 14px;font-size:12.5px;"><b>Audit Readiness</b> <span style="color:${C.faint};font-weight:600;">weekly % · daily avg % (Mon–Sun)</span>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">${STORES.map(s => {
+      const w = d.rows[s].auditWeeklyPct, da = d.rows[s].auditDailyPct;
+      const ac = (p: number | null) => p == null ? C.faint : p >= 80 ? C.green : p >= 50 ? C.amber : C.red;
+      const fmt = (p: number | null) => p == null ? '—' : Math.round(p) + '%';
+      return `<tr><td style="padding:3px 0;">${badge(s)}</td><td align="right" style="font-weight:800;color:${ac(w)};">Weekly ${fmt(w)}</td><td align="right" style="font-weight:800;color:${ac(da)};padding-left:16px;">Daily ${fmt(da)}</td></tr>`;
+    }).join('')}</table></td></tr>`)}
   `;
   return wrapEmail('Weekly Performance Report', C.sage, range, body);
 }
