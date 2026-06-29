@@ -6059,6 +6059,108 @@ function renderCompactDmGoals() {
     cont.innerHTML = html;
 }
 
+// --- DM AUDIT READINESS WIDGET (read-only, live through the week) ---
+// Lets the DM/CEO see each store's daily + weekly audit checklist progress as
+// it fills in, so they can follow up with managers before the Monday report.
+let dmAuditData = {};            // { OVL: { daily:{items,total,completed}, weekly:{...} }, ... }
+let currentDmAuditTab = 'daily';
+
+async function fetchDmAuditData() {
+    const cont = document.getElementById('dm-audit-container');
+    if (!cont) return;
+    try {
+        const res = await fetch(`${STORE_AUDIT_URL}?action=overview&v=${Date.now()}`);
+        const json = await res.json();
+        dmAuditData = json.stores || {};
+        renderDmAudit();
+    } catch (e) {
+        cont.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Network Sync Failed.</div>';
+    }
+}
+
+function switchDmAuditTab(view) {
+    currentDmAuditTab = view;
+    document.getElementById('dm-audit-tab-daily')?.classList.toggle('active', view === 'daily');
+    document.getElementById('dm-audit-tab-weekly')?.classList.toggle('active', view === 'weekly');
+    renderDmAudit();
+}
+
+function toggleDmAuditAccordion(store) {
+    const rosterDiv = document.getElementById(`dm-audit-roster-${store}`);
+    const caret = document.getElementById(`dm-audit-caret-${store}`);
+    if (!rosterDiv) return;
+    const isOpen = rosterDiv.style.display === 'block';
+
+    document.querySelectorAll('.dm-audit-roster').forEach(el => el.style.display = 'none');
+    document.querySelectorAll('.dm-audit-caret').forEach(el => el.style.transform = 'rotate(-90deg)');
+
+    if (!isOpen) {
+        rosterDiv.style.display = 'block';
+        if (caret) caret.style.transform = 'rotate(0deg)';
+    }
+}
+
+// PayMore-style readiness colors: pass ≥80, watch ≥50, behind below.
+function _auditPctColor(pct) {
+    if (pct >= 80) return 'var(--green-go, #16a34a)';
+    if (pct >= 50) return '#d97706';
+    return 'var(--red-alert, #dc2626)';
+}
+
+function renderDmAudit() {
+    const cont = document.getElementById('dm-audit-container');
+    if (!cont) return;
+
+    const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    const tab = currentDmAuditTab;
+    const periodWord = tab === 'daily' ? 'today' : 'this week';
+    let html = '<div style="display:flex; flex-direction:column;">';
+
+    stores.forEach((store, idx) => {
+        const sd = dmAuditData[store] || {};
+        const pd = sd[tab] || { items: [], total: 0, completed: 0 };
+        const items = pd.items || [];
+        const total = pd.total || items.length;
+        const completed = pd.completed != null ? pd.completed : items.filter(i => i.checked).length;
+        const pct = total ? Math.round((completed / total) * 100) : 0;
+        const col = _auditPctColor(pct);
+        const muted = completed === 0 ? 'opacity:0.6;' : '';
+        const lastBorder = idx === stores.length - 1 ? 'transparent' : '#f0f0f0';
+
+        html += `
+        <div onclick="toggleDmAuditAccordion('${store}')" class="lb-row dm-store-head" style="display:grid; grid-template-columns:56px 1fr 92px 18px; align-items:center; gap:12px; border-bottom:1px solid ${lastBorder}; cursor:pointer; padding:13px 15px; ${muted}">
+            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal);">${store}</span>
+            <div style="height:8px; border-radius:6px; background:#eef2f6; overflow:hidden;"><div style="height:100%; width:${pct}%; background:${col}; border-radius:6px; transition:width .3s;"></div></div>
+            <span style="font-size:13px; font-weight:900; color:${col}; text-align:right;">${completed}/${total} · ${pct}%</span>
+            <div id="dm-audit-caret-${store}" class="dm-audit-caret" style="text-align:right; color:#888; font-size:10px; font-weight:800; transition:transform 0.3s; transform:rotate(-90deg);">▼</div>
+        </div>`;
+
+        html += `<div id="dm-audit-roster-${store}" class="dm-audit-roster" style="display:none; background:#fdfdfd; padding:10px 18px 14px; border-bottom:1px solid #e2e8f0; box-shadow:inset 0 3px 6px rgba(0,0,0,0.02);">`;
+        if (items.length === 0) {
+            html += `<div style="font-size:12px; color:#888; text-align:center; font-weight:600; padding:10px 0;">No ${tab} audit items set up yet.</div>`;
+        } else {
+            let lastSection = null;
+            items.forEach(item => {
+                if (item.section !== lastSection) {
+                    html += `<div style="font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:12px 0 4px;">${escapeHtml(item.section || 'General')}</div>`;
+                    lastSection = item.section;
+                }
+                const done = !!item.checked;
+                html += `
+                <div style="display:flex; gap:9px; align-items:center; padding:5px 2px;">
+                    <span style="font-size:14px; font-weight:900; line-height:1; color:${done ? 'var(--green-go,#16a34a)' : '#cbd5e1'};">${done ? '✓' : '○'}</span>
+                    <span style="font-size:13px; font-weight:600; color:${done ? '#94a3b8' : 'var(--slate-charcoal)'}; ${done ? 'text-decoration:line-through;' : ''}">${escapeHtml(item.text)}</span>
+                </div>`;
+            });
+            html += `<div style="margin-top:10px; font-size:12px; font-weight:800; color:${col}; text-align:right;">${completed} of ${total} done ${periodWord}</div>`;
+        }
+        html += `</div>`;
+    });
+
+    html += '</div>';
+    cont.innerHTML = html;
+}
+
 function _dmLegacyGoalsUnused() {
     // (Superseded by the manager-style DM view above. Kept inert; never called.)
     const cont = { innerHTML: '' };
@@ -7021,6 +7123,11 @@ function initDashboardData() {
         setTimeout(fetchChampions, 850);
         setTimeout(fetchAwardsData, 900);
         setTimeout(fetchDmGoalsData, 1000);
+        setTimeout(fetchDmAuditData, 1050);
+        // Keep audit readiness live while the DM has the dashboard open.
+        if (!window._dmAuditSync) window._dmAuditSync = setInterval(() => {
+            if (document.getElementById('dm-audit-container')) fetchDmAuditData();
+        }, 60000);
         setTimeout(fetchAndRenderEmployeeGoals, 1100);
         setTimeout(fetchAndRenderEmployeeKPIs, 1200);
         setTimeout(fetchAndDisplayStoreComment, 1500);

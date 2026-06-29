@@ -77,6 +77,52 @@ Deno.serve(async (req: Request) => {
       })) });
     }
 
+    // DM/CEO overview: every store's daily + weekly progress (item-level) in one
+    // call, so leadership can track audit readiness live through the week.
+    if (action === "overview") {
+      const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
+      const dStart = todayCentral();
+      const wStart = mondayCentral();
+
+      const { data: items, error: iErr } = await supabase
+        .from("audit_items")
+        .select("*")
+        .eq("active", true)
+        .order("sort_order", { ascending: true })
+        .order("created_at", { ascending: true });
+      if (iErr) return json({ error: iErr.message }, 500);
+
+      const { data: comps } = await supabase
+        .from("audit_completions")
+        .select("item_id, store, period_start")
+        .in("store", STORES)
+        .in("period_start", [dStart, wStart]);
+      const done = new Set(
+        (comps || []).map((c: any) => `${c.store}|${c.item_id}|${c.period_start}`),
+      );
+
+      const buildFor = (st: string, period: string, periodStart: string) => {
+        const list = (items || [])
+          .filter((t: any) => (t.period || "weekly") === period)
+          .map((t: any) => ({
+            id: t.id,
+            section: t.section || "General",
+            text: t.task_text,
+            checked: done.has(`${st}|${t.id}|${periodStart}`),
+          }));
+        return { items: list, total: list.length, completed: list.filter((i) => i.checked).length };
+      };
+
+      const stores: Record<string, unknown> = {};
+      for (const st of STORES) {
+        stores[st] = {
+          daily: buildFor(st, "daily", dStart),
+          weekly: buildFor(st, "weekly", wStart),
+        };
+      }
+      return json({ dayStart: dStart, weekStart: wStart, stores });
+    }
+
     // Manager-facing read: active items + checked state for a store, both periods.
     const store = (url.searchParams.get("store") || "").toUpperCase();
     const dayStart = todayCentral();

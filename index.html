@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260628a">
+  <link rel="stylesheet" href="styles.css?v=20260629a">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260628a" defer></script>
+  <script src="speeks.js?v=20260629a" defer></script>
 </head>
 
 <body class="preload">
@@ -820,6 +820,24 @@
                   
                   <div class="panel-padding">
                       <div id="dm-compact-goals-container" class="dm-compact-goals-wrapper">
+                          <div class="status-message">Syncing Data...</div>
+                      </div>
+                  </div>
+              </div>
+          </div>
+
+          <div class="flex-col-gap-30">
+              <div class="card district-master-panel district-kpi-panel">
+                  <div class="district-kpi-header">
+                      <span class="district-kpi-title">Audit Readiness <span class="widget-date-display no-dash">All Stores</span></span>
+                      <div class="notif-tabs dm-audit-tabs" style="margin:0;">
+                          <button id="dm-audit-tab-daily" class="tab-btn active" onclick="switchDmAuditTab('daily')">Daily</button>
+                          <button id="dm-audit-tab-weekly" class="tab-btn" onclick="switchDmAuditTab('weekly')">Weekly</button>
+                      </div>
+                  </div>
+
+                  <div class="panel-padding">
+                      <div id="dm-audit-container" class="dm-compact-goals-wrapper">
                           <div class="status-message">Syncing Data...</div>
                       </div>
                   </div>
