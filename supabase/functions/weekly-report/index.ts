@@ -32,12 +32,16 @@ const FROM         = Deno.env.get('RESEND_FROM') || 'Speeks Reports <onboarding@
 const GMAIL_RELAY  = Deno.env.get('GMAIL_RELAY_URL') || 'https://script.google.com/macros/s/AKfycby4Y2l3DJ6fQCrpFuwTTXKeaD3QV5DbLhf7jmberZCUFx86VaaE6vb9Bs_CweNh3K9VtQ/exec';
 const DEFAULT_TO   = 'ethan.kushnir@speekstechnology.com';
 
-// Leadership recipients (expand once the rest are provided).
-const LEADERSHIP_TO: string[] = ['ethan.kushnir@speekstechnology.com'];
-// Per-store manager recipients (filled in after the test week). Falls back to
-// DEFAULT_TO when a store has no recipients yet.
+// Leadership (DM/CEO) recipients.
+const LEADERSHIP_TO: string[] = ['ethan.kushnir@speekstechnology.com', 'paul.kushnir@pikinvestments.com'];
+// Per-store manager recipients. Falls back to DEFAULT_TO if a store is empty.
+// (Multi-store managers are listed under each store they run.)
 const STORE_TO: Record<string, string[]> = {
-  OVL: [], LEE: [], WSP: [], MPL: [], BAL: [],
+  OVL: ['nickhett707@gmail.com'],
+  LEE: ['jurellguild@outlook.com'],
+  WSP: ['eli.kushnir@speekstechnology.com'],
+  MPL: ['josephorte191@hotmail.com'],
+  BAL: ['josephorte191@hotmail.com'],
 };
 
 const STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
