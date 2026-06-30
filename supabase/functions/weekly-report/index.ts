@@ -478,16 +478,37 @@ function buildLeadership(d: any) {
   const range = `${fmtMD(d.weekStart)} – ${fmtMD(d.weekEnd)}, ${d.weekEnd.getFullYear()} · All Stores`;
   const tp = d.topPerformer;
   const tpConv = tp && n(tp.transaction_count) ? Math.round(100 * n(tp.transaction_converted) / n(tp.transaction_count)) : null;
-  const cards = STORES.filter(s => d.rows[s].card).map(s => `${s} ${(n(d.rows[s].card.store_average) * 2).toFixed(1)}`).join(' · ');
-  const audits = STORES.filter(s => d.rows[s].audit).map(s => {
-    const a = d.rows[s].audit; const col = a.pct >= 90 ? C.green : (a.pct >= 80 ? '#d97706' : C.red);
-    return `${s} <span style="color:${col};font-weight:900;">${a.pct}%</span>`;
-  }).join(' · ');
   const kpiCount = STORES.filter(s => d.rows[s].kpiSubmitted).length;
-  const peopleRows =
-    (tp ? `<tr><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;"><span style="font-size:9.5px;font-weight:900;color:#fff;background:${C.green};padding:3px 8px;border-radius:99px;">TOP PERFORMER</span> <b style="color:${C.charcoal};">${esc(tp.employee_name)} · ${tp.store}</b> <span style="color:${C.muted};font-size:11px;">${n(tp.listed_count)} processed${tpConv != null ? ` · ${tpConv}% conversion` : ''}</span></td></tr>` : '') +
-    `<tr><td style="padding:11px 14px;font-size:12px;color:${C.charcoal};border-bottom:1px solid #f1f5f9;"><b>Scorecard averages</b> <span style="color:${C.muted};">${cards || '—'} /10</span></td></tr>` +
-    `<tr><td style="padding:11px 14px;font-size:12px;color:${C.charcoal};"><b>PayMore Audit</b> <span style="color:${C.muted};">${audits || 'no practice audits yet'}</span> <span style="color:${C.muted};font-size:10.5px;">· pass 80% · target 90%+</span></td></tr>`;
+
+  // per-store score table — Online & Marketing /10 + PayMore practice Audit %
+  const tpRow = tp
+    ? `<tr><td colspan="4" style="padding:11px 14px;border-bottom:1px solid #f1f5f9;background:#f0f7eb;"><span style="font-size:9.5px;font-weight:900;color:#fff;background:${C.green};padding:3px 8px;border-radius:99px;">TOP PERFORMER</span> <b style="color:${C.charcoal};">${esc(tp.employee_name)} · ${tp.store}</b> <span style="color:${C.muted};font-size:11px;">${n(tp.listed_count)} processed${tpConv != null ? ` · ${tpConv}% conversion` : ''}</span></td></tr>`
+    : '';
+  // ranked by practice-audit % (stores without an audit fall to the bottom)
+  const scoreOrder = [...STORES].sort((a, b) => (d.rows[b].audit ? d.rows[b].audit.pct : -1) - (d.rows[a].audit ? d.rows[a].audit.pct : -1));
+  const scoreRows = scoreOrder.map((s, i) => {
+    const r = d.rows[s];
+    const sc = r.card ? n(r.card.store_average) * 2 : null;
+    const scStr = sc == null
+      ? `<span style="color:${C.faint};">—</span>`
+      : `<span style="color:${scoreColor(sc)};font-weight:900;">${sc.toFixed(1)}</span><span style="color:${C.faint};font-size:11px;font-weight:700;margin-left:5px;">/ 10</span>`;
+    const a = r.audit;
+    const aCol = a ? (a.pct >= 90 ? C.green : a.pct >= 80 ? C.amber : C.red) : C.faint;
+    const aStr = a
+      ? `<span style="color:${aCol};font-weight:900;">${a.pct}%</span><span style="color:${C.faint};font-size:10.5px;font-weight:700;margin-left:10px;">${a.earned} / ${a.possible}</span>`
+      : `<span style="color:${C.faint};">—</span>`;
+    return `<tr>
+      <td style="padding:12px 10px;text-align:center;font-weight:900;color:${i === 0 ? C.gold : C.faint};border-bottom:1px solid #f1f5f9;">${i + 1}</td>
+      <td style="padding:12px 14px;border-bottom:1px solid #f1f5f9;">${badge(s)}</td>
+      <td style="padding:12px 18px;text-align:center;border-bottom:1px solid #f1f5f9;font-size:16px;white-space:nowrap;">${scStr}</td>
+      <td style="padding:12px 18px;text-align:center;border-bottom:1px solid #f1f5f9;font-size:16px;white-space:nowrap;">${aStr}</td>
+    </tr>`;
+  }).join('');
+  const scoreBox = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:12px;overflow:hidden;border-collapse:separate;">
+    ${tpRow}
+    <tr>${th('#')}${th('Store', 'left')}${th('Scorecard')}${th('PayMore Audit')}</tr>
+    ${scoreRows}
+  </table>`;
 
   const body = `
   ${sectionLabel('Cash Flow Summary', 'all stores combined')}
@@ -500,8 +521,8 @@ function buildLeadership(d: any) {
   ${listingTable(d.rows, d.company)}
   ${sectionLabel('Needs Attention')}
   ${flagsBlock(d)}
-  ${sectionLabel('People')}
-  ${rowsBox(peopleRows)}
+  ${sectionLabel('Store Scores', 'ranked by audit · targets 8.0+ and 90%+')}
+  ${scoreBox}
   ${sectionLabel('Ops Compliance')}
   ${rowsBox(`<tr><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:12.5px;"><b>Weekly KPIs submitted</b> <span style="float:right;font-weight:900;color:${kpiCount === 5 ? C.green : C.amber};">${kpiCount} / 5</span></td></tr><tr><td style="padding:11px 14px;font-size:12.5px;"><b>Audit Readiness</b> <span style="color:${C.faint};font-weight:600;">weekly % · daily avg % (Mon–Sun)</span>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">${STORES.map(s => {
