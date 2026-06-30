@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260629i">
+  <link rel="stylesheet" href="styles.css?v=20260629j">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260629i" defer></script>
+  <script src="speeks.js?v=20260629j" defer></script>
 </head>
 
 <body class="preload">
@@ -933,6 +933,73 @@
       </div>
 
 <div id="scorecardModalOverlay" onclick="closeScorecardModal()"></div>
+<div class="modal-menu manage-menu" id="claimsModal">
+    <div class="modal-header">
+        <h3>Insurance Claims &amp; Refunds</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+
+    <div style="padding: 14px 18px 0;">
+        <div class="notif-tabs" style="display: inline-flex;">
+            <button id="claims-tab-new" class="tab-btn active" onclick="switchClaimsTab('new')">New Case</button>
+            <button id="claims-tab-view" class="tab-btn" onclick="switchClaimsTab('view')">My Cases</button>
+        </div>
+    </div>
+
+    <div class="manage-content">
+        <div id="claims-panel-new">
+            <div id="claims-store-row" style="margin-bottom: 14px;">
+                <label class="form-label-caps">Store</label>
+                <select id="claim-store" class="form-input-lg"></select>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px;">
+                <div>
+                    <label class="form-label-caps">Case Number</label>
+                    <input id="claim-case-number" class="form-input-lg" placeholder="e.g. SHPVS-040326141943">
+                </div>
+                <div>
+                    <label class="form-label-caps">Item SKU</label>
+                    <input id="claim-sku" class="form-input-lg" placeholder="e.g. KS01-5759A-E15">
+                </div>
+                <div>
+                    <label class="form-label-caps">Price</label>
+                    <input id="claim-price" type="number" step="0.01" min="0" class="form-input-lg" placeholder="0.00">
+                </div>
+                <div>
+                    <label class="form-label-caps">Case Reason</label>
+                    <select id="claim-reason" class="form-input-lg">
+                        <option value="Shopify Insurance Claim">Shopify Insurance Claim</option>
+                        <option value="Item Not Received">Item Not Received</option>
+                        <option value="Arrived Damaged">Arrived Damaged</option>
+                        <option value="Lost in Transit">Lost in Transit</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+            </div>
+            <div style="margin-bottom:14px;">
+                <label class="form-label-caps">Detail (optional)</label>
+                <input id="claim-detail" class="form-input-lg" placeholder="Any extra detail about the case…">
+            </div>
+            <div>
+                <label class="form-label-caps">Status</label>
+                <select id="claim-status" class="form-input-lg">
+                    <option value="in_progress">In Progress</option>
+                    <option value="recovered">Recovered</option>
+                    <option value="denied">Denied</option>
+                </select>
+            </div>
+        </div>
+
+        <div id="claims-panel-view" style="display:none;">
+            <div id="claims-table-wrap"></div>
+        </div>
+    </div>
+
+    <div class="manage-footer flex-end">
+        <button onclick="submitClaim()" class="btn-primary" id="submitClaimBtn">Save Case</button>
+    </div>
+</div>
+
 <div class="modal-menu manage-menu" id="scorecardSubmitModal">
     <div class="modal-header">
         <h3>Submit Store Scores</h3>
@@ -1314,6 +1381,11 @@
     <button class="tools-panel-close" onclick="_closeToolsPanel()">✕</button>
   </div>
   <div class="tools-panel-body">
+
+    <div class="tools-group dynamic-module-block role-manager role-owner-manager">
+      <div class="tools-group-label">🛟 Claims &amp; Refunds</div>
+      <a class="tools-item dynamic-module-flex role-manager role-owner-manager" onclick="_closeToolsPanel(); openClaimsModal();"><span class="tools-item-icon">🛟</span>Insurance Claims</a>
+    </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-tom role-owner-manager">
       <div class="tools-group-label">📢 Content</div>

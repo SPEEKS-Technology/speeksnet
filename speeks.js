@@ -47,6 +47,7 @@ const EBAY_ALERTS_URL   = `${_BASE}/ebay-alerts`;
 const STORE_COMMENT_URL = `${_BASE}/store-comments`;
 const CHECKLIST_URL     = `${_BASE}/checklist`;
 const STORE_AUDIT_URL   = `${_BASE}/store-audit`;
+const CLAIMS_URL        = `${_BASE}/shopify-claims`;
 const PATCH_NOTES_URL   = `${_BASE}/patch-notes`;
 const TICKER_URL        = `${_BASE}/ticker`;
 const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
@@ -9558,6 +9559,188 @@ function buildAuditSummaryHtml(audit, store) {
             </div>
         </div>
         <button onclick="openAuditBreakdown('${store}')" class="btn-secondary" style="margin-top:10px; width:100%; padding:8px; font-size:12px; font-weight:800;">View Full Breakdown</button>`;
+}
+
+// =========================================================
+//  SHOPIFY INSURANCE CLAIMS / ITEM-NOT-RECEIVED TOOL
+//  Store managers + owner-managers + multi-store managers log
+//  claims here. A manager sees their store's cases; a Multi-Store
+//  Manager sees every store they manage, from either dashboard.
+// =========================================================
+const CLAIM_STATUS = {
+    in_progress: { label: 'In Progress', bg: '#fef3c7', fg: '#b45309' },
+    recovered:   { label: 'Recovered',   bg: '#d1fae5', fg: '#059669' },
+    denied:      { label: 'Denied',      bg: '#fee2e2', fg: '#dc2626' },
+};
+
+// Which store(s) this user can file/view claims for.
+function _claimStores() {
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        return [...MULTISTORE_MANAGER_STORES];
+    }
+    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
+}
+
+function openClaimsModal() {
+    toggleModal('claimsModal');
+    _buildClaimStorePicker();
+    ['claim-case-number', 'claim-sku', 'claim-price', 'claim-detail'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.value = '';
+    });
+    const r = document.getElementById('claim-reason'); if (r) r.selectedIndex = 0;
+    const st = document.getElementById('claim-status'); if (st) st.value = 'in_progress';
+    switchClaimsTab('new');
+}
+
+function switchClaimsTab(tab) {
+    const nb = document.getElementById('claims-tab-new');
+    const vb = document.getElementById('claims-tab-view');
+    if (nb) nb.classList.toggle('active', tab === 'new');
+    if (vb) vb.classList.toggle('active', tab === 'view');
+    const np = document.getElementById('claims-panel-new');
+    const vp = document.getElementById('claims-panel-view');
+    if (np) np.style.display = tab === 'new' ? 'block' : 'none';
+    if (vp) vp.style.display = tab === 'view' ? 'block' : 'none';
+    const sb = document.getElementById('submitClaimBtn');
+    if (sb) sb.style.display = tab === 'new' ? '' : 'none';
+    if (tab === 'view') fetchMyClaims();
+}
+
+// MSM gets a store chooser; a single-store manager is locked to their store.
+function _buildClaimStorePicker() {
+    const row = document.getElementById('claims-store-row');
+    const sel = document.getElementById('claim-store');
+    if (!sel) return;
+    const stores = _claimStores();
+    sel.innerHTML = stores.map(s => `<option value="${s}">${s}</option>`).join('');
+    const multi = stores.length > 1;
+    sel.disabled = !multi;
+    sel.style.opacity = multi ? '1' : '0.7';
+    sel.style.cursor = multi ? 'pointer' : 'not-allowed';
+    if (row) row.style.display = stores.length ? 'block' : 'none';
+    if (sel.options.length) sel.selectedIndex = 0;
+}
+
+async function submitClaim() {
+    const val = id => (document.getElementById(id) || {}).value;
+    const store = (val('claim-store') || '').toUpperCase();
+    const caseNumber = (val('claim-case-number') || '').trim();
+    const sku = (val('claim-sku') || '').trim();
+    const priceRaw = val('claim-price');
+    const reason = val('claim-reason');
+    const detail = (val('claim-detail') || '').trim();
+    const status = val('claim-status') || 'in_progress';
+
+    if (!store) { alert('Please select a store for this case.'); return; }
+    if (!caseNumber) { alert('Please enter a case number.'); return; }
+
+    const btn = document.getElementById('submitClaimBtn');
+    const old = btn ? btn.innerText : '';
+    if (btn) { btn.disabled = true; btn.innerText = 'Saving…'; }
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'submit_claim', store, case_number: caseNumber, item_sku: sku,
+                price: priceRaw === '' || priceRaw == null ? null : Number(priceRaw),
+                reason_type: reason, reason_detail: detail || null, status,
+                created_by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+        switchClaimsTab('view'); // jump to My Cases so they see it landed
+    } catch (e) {
+        alert('Could not save the case: ' + e.message);
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerText = old; }
+    }
+}
+
+async function fetchMyClaims() {
+    const wrap = document.getElementById('claims-table-wrap');
+    if (!wrap) return;
+    const stores = _claimStores();
+    if (!stores.length) {
+        wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">No store assigned to your account.</div>';
+        return;
+    }
+    wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading cases…</div>';
+    try {
+        const res = await fetch(`${CLAIMS_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        renderClaimsTable(json.data || [], stores.length > 1);
+    } catch (e) {
+        wrap.innerHTML = '<div style="color:var(--red-alert); padding:24px; text-align:center; font-weight:700;">Error loading cases.</div>';
+    }
+}
+
+function renderClaimsTable(rows, showStore) {
+    const wrap = document.getElementById('claims-table-wrap');
+    if (!wrap) return;
+    if (!rows.length) {
+        wrap.innerHTML = '<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No cases yet. Add one from the <b>New Case</b> tab.</div>';
+        return;
+    }
+    const fmtPrice = v => (v == null || v === '') ? '—' : '$' + Number(v).toFixed(2);
+    const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
+    const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
+
+    let html = `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+        <thead><tr>${showStore ? th('Store') : ''}${th('Case #')}${th('SKU')}${th('Price')}${th('Reason')}${th('Status')}${th('Date')}${th('')}</tr></thead><tbody>`;
+    rows.forEach(r => {
+        const opts = Object.entries(CLAIM_STATUS)
+            .map(([k, v]) => `<option value="${k}" ${k === r.status ? 'selected' : ''}>${v.label}</option>`).join('');
+        const sc = CLAIM_STATUS[r.status] || CLAIM_STATUS.in_progress;
+        const statusSel = `<select onchange="updateClaimStatus('${r.id}', this.value)" style="font-size:11px; font-weight:800; border:none; border-radius:6px; padding:4px 6px; cursor:pointer; background:${sc.bg}; color:${sc.fg};">${opts}</select>`;
+        const reasonCell = `${escapeHtml(r.reason_type || '—')}${r.reason_detail ? `<div style="color:#94a3b8; font-size:11px; margin-top:2px;">${escapeHtml(r.reason_detail)}</div>` : ''}`;
+        const del = `<button onclick="deleteClaim('${r.id}')" title="Delete case" style="background:none; border:none; cursor:pointer; font-size:14px; opacity:.5;">🗑</button>`;
+        html += `<tr>
+            ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`) : ''}
+            ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`)}
+            ${td(escapeHtml(r.item_sku || '—'))}
+            ${td(fmtPrice(r.price), 'white-space:nowrap; font-weight:700;')}
+            ${td(reasonCell)}
+            ${td(statusSel, 'white-space:nowrap;')}
+            ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
+            ${td(del, 'text-align:center;')}
+        </tr>`;
+    });
+    html += '</tbody></table></div>';
+    wrap.innerHTML = html;
+}
+
+async function updateClaimStatus(id, status) {
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'update_status', id, status }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Update failed');
+        fetchMyClaims();
+    } catch (e) {
+        alert('Could not update status: ' + e.message);
+        fetchMyClaims();
+    }
+}
+
+async function deleteClaim(id) {
+    if (!confirm('Delete this case? This cannot be undone.')) return;
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_claim', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Delete failed');
+        fetchMyClaims();
+    } catch (e) {
+        alert('Could not delete: ' + e.message);
+    }
 }
 
 // --- STORE COMMENTS LOGIC ---
