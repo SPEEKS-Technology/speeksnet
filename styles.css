@@ -619,10 +619,15 @@ input, textarea, select,
     box-shadow: 0 14px 30px rgba(90, 141, 59, 0.3); 
 }
 
-.manage-menu { 
-    width: 1050px; 
-    max-width: calc(100% - 40px); 
+.manage-menu {
+    width: 1050px;
+    max-width: calc(100% - 40px);
 }
+
+/* Submit Store Scores — large so each audit line item is easy to read,
+   but capped so line text stays scannable on ultra-wide monitors. */
+#scorecardSubmitModal { width: 96vw; max-width: 1500px; }
+#scorecardSubmitModal .manage-content { height: 80vh; }
 
 .manage-content { 
     height: 60vh; 

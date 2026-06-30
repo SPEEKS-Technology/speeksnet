@@ -81,11 +81,18 @@ const AUDIT_SECTIONS: { title: string; items: Record<string, number> }[] = [
   { title: 'Safety & Security', items: { ss1:3, ss2:2, ss3:2, ss4:4, ss5:5, ss6:2, ss7:1, ss8:1, ss9:1, ss10:4, ss11:1, ss12:1, ss13:1 } },
 ];
 
-// Per-section earned/total for an audit results map ({id:true|false}).
+// Per-section earned/total. results[id] is points awarded (0..pts);
+// legacy boolean true = full pts.
 function auditSectionBreakdown(results: Record<string, any>) {
   return AUDIT_SECTIONS.map((sec) => {
     let earned = 0, total = 0;
-    for (const [id, pts] of Object.entries(sec.items)) { total += pts; if (results && results[id] === true) earned += pts; }
+    for (const [id, pts] of Object.entries(sec.items)) {
+      total += pts;
+      const v = results ? results[id] : 0;
+      let a = v === true ? pts : Number(v);
+      if (!Number.isFinite(a)) a = 0;
+      earned += Math.min(Math.max(a, 0), pts);
+    }
     return { title: sec.title, earned, total };
   });
 }

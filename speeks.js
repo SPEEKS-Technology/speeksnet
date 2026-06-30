@@ -4574,14 +4574,9 @@ async function fetchScorecardData() {
 
         let breakdownHtml = '';
         if (storeData.buckets && storeData.buckets.some(b => b.categories && b.categories.length > 0)) {
-            breakdownHtml = `<div style="max-height: 340px; overflow-y: auto; padding-right: 4px; margin-top: 15px; border-top: 1px solid #f0f0f0; padding-top: 15px;" class="kpi-scroll-area">`;
+            breakdownHtml = `<div style="max-height: 340px; overflow-y: auto; padding-right: 4px; margin-top: 12px;" class="kpi-scroll-area">`;
             storeData.buckets.forEach((bucket, bIdx) => {
                 if (!bucket.categories || bucket.categories.length === 0) return;
-                let bAvgNum = bucket.avg * 2;
-                let bBg = '#f1f5f9', bColor = '#64748b';
-                if (bAvgNum >= 8) { bBg = '#d1fae5'; bColor = '#059669'; }
-                else if (bAvgNum >= 6) { bBg = '#fef3c7'; bColor = '#d97706'; }
-                else { bBg = '#fee2e2'; bColor = '#dc2626'; }
                 const bDateStr = bucket.sectionDate ? formatWeekOf(bucket.sectionDate) : '';
                 const sectionPulse = (!showOverallDot && bIdx === singleRecentBucketIdx)
                     ? `<div class="notif-dot active" style="position:relative; top:auto; right:auto; width:9px; height:9px; border:1px solid white; flex-shrink:0;"></div>`
@@ -4592,7 +4587,6 @@ async function fetchScorecardData() {
                 breakdownHtml += `<div style="margin-bottom: 12px;">
                     <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; min-width: 0;">
                         <span style="font-size: 9px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;">${bucket.name}</span>
-                        <span style="font-size: 10px; font-weight: 900; background: ${bBg}; color: ${bColor}; padding: 2px 7px; border-radius: 6px; flex-shrink: 0;">${bAvgNum.toFixed(1)}</span>
                         ${bDateStr ? `<span style="font-size: 9px; color: #94a3b8; font-style: italic; white-space: nowrap; flex-shrink: 0;">${bDateStr}</span>` : ''}
                         ${sectionPulse}
                     </div>
@@ -4613,20 +4607,22 @@ async function fetchScorecardData() {
 
         container.innerHTML = `
         <div class="scorecard-widget" style="padding: 20px; align-items: stretch; text-align: left; justify-content: flex-start;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                    <div class="scorecard-label" style="text-align: left; margin-bottom: 2px;">Online &amp; Marketing</div>
-                    <div class="scorecard-date" style="margin-bottom: 0; font-size: 11px;">${displayDate}</div>
-                </div>
-                <div style="position: relative; display: inline-block;">
-                    <div class="scorecard-val" style="color: ${scoreColor}; font-size: 36px; text-shadow: 0 4px 15px ${scoreColor}30; line-height: 1;">
-                        ${displayScore.toFixed(1)}<span style="font-size:16px; color:#94a3b8;">/10</span>
-                    </div>
-                    ${pulse}
-                </div>
-            </div>
             ${auditHtml}
-            ${breakdownHtml}
+            <div style="margin-top: 15px; border-top: 1px solid #f0f0f0; padding-top: 15px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div class="scorecard-label" style="text-align: left; margin-bottom: 2px;">Online &amp; Marketing</div>
+                        <div class="scorecard-date" style="margin-bottom: 0; font-size: 11px;">${displayDate}</div>
+                    </div>
+                    <div style="position: relative; display: inline-block;">
+                        <div class="scorecard-val" style="color: ${scoreColor}; font-size: 36px; text-shadow: 0 4px 15px ${scoreColor}30; line-height: 1;">
+                            ${displayScore.toFixed(1)}<span style="color:#94a3b8;">/10</span>
+                        </div>
+                        ${pulse}
+                    </div>
+                </div>
+                ${breakdownHtml}
+            </div>
         </div>`;
     } catch (error) {
         console.error('Error fetching scorecard:', error);
@@ -4972,9 +4968,15 @@ async function fetchMasterDistrictDashboard() {
             let auditBadge = '';
             if (sAudit) {
                 const ac = auditPctColor(sAudit.pct);
-                auditBadge = `<span class="master-card-score" onclick="event.stopPropagation(); openAuditBreakdown('${store}')" title="View full audit breakdown" style="cursor:pointer; background:${ac.bg}; color:${ac.fg};">Audit ${sAudit.pct}%</span>`;
+                auditBadge = `<span onclick="event.stopPropagation(); openAuditBreakdown('${store}')" title="PayMore practice audit — ${sAudit.earned}/${sAudit.possible} · view full breakdown" style="display:inline-flex; align-items:center; gap:5px; height:25px; padding:0 10px; border-radius:8px; background:${ac.bg}; color:${ac.fg}; cursor:pointer; white-space:nowrap; box-sizing:border-box;">
+                    <span style="font-size:8px; font-weight:800; letter-spacing:.6px; opacity:.75;">AUDIT</span>
+                    <span style="font-size:14px; font-weight:900; line-height:1;">${sAudit.pct}%</span>
+                </span>`;
             } else {
-                auditBadge = `<span class="master-card-score" style="background:#f1f5f9; color:#94a3b8;">Audit —</span>`;
+                auditBadge = `<span title="No practice audit submitted yet" style="display:inline-flex; align-items:center; gap:5px; height:25px; padding:0 10px; border-radius:8px; background:transparent; color:#94a3b8; border:1px dashed #4a5365; white-space:nowrap; box-sizing:border-box;">
+                    <span style="font-size:8px; font-weight:800; letter-spacing:.6px;">AUDIT</span>
+                    <span style="font-size:11px; font-weight:700; letter-spacing:.3px; line-height:1;">NO DATA</span>
+                </span>`;
             }
 
             let displayDate = "Recent";
@@ -9319,18 +9321,29 @@ function renderAuditEntry() {
             <div onclick="toggleAuditEntrySection(${sIdx})" style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:11px 13px; background:#f8fafc; cursor:pointer;">
                 <span style="font-size:12px; font-weight:800; color:var(--slate-charcoal); text-transform:uppercase; letter-spacing:.4px;">${sec.title}</span>
                 <span style="display:flex; align-items:center; gap:8px;">
-                    <span id="audit-sec-sub-${sIdx}" style="font-size:11px; font-weight:900; color:#64748b; background:#fff; border:1px solid #e2e8f0; padding:2px 7px; border-radius:6px;">0/${secTotal}</span>
+                    <span id="audit-sec-sub-${sIdx}" style="font-size:11px; font-weight:900; color:#64748b; background:#fff; border:1px solid #e2e8f0; padding:3px 0; border-radius:6px; display:inline-block; min-width:56px; text-align:center;">0/${secTotal}</span>
                     <span id="audit-sec-caret-${sIdx}" style="color:#94a3b8; font-size:10px; font-weight:800; transition:transform .2s; transform:rotate(-90deg);">▼</span>
                 </span>
             </div>
             <div id="audit-sec-body-${sIdx}" style="display:none; padding:6px 13px 11px;">`;
         sec.items.forEach(item => {
-            const checked = prefill[item.id] === true ? 'checked' : '';
-            html += `<label style="display:flex; align-items:flex-start; gap:9px; padding:6px 2px; cursor:pointer; border-bottom:1px solid #f1f5f9;">
-                <input type="checkbox" class="audit-entry-cb" data-section="${sIdx}" data-pts="${item.pts}" id="audit-cb-${item.id}" ${checked} onchange="onAuditEntryToggle(${sIdx})" style="margin-top:2px; width:16px; height:16px; flex-shrink:0; cursor:pointer;">
-                <span style="font-size:12.5px; color:var(--slate-charcoal); line-height:1.4; flex:1;">${escapeHtml(item.text)}</span>
-                <span style="font-size:11px; font-weight:900; color:#64748b; flex-shrink:0;">+${item.pts}</span>
-            </label>`;
+            const aw = _prefillAward(prefill[item.id], item.pts);
+            let control;
+            if (item.pts === 1) {
+                // 1-point item → checkbox (0 or 1).
+                control = `<input type="checkbox" class="audit-entry-input" data-section="${sIdx}" data-pts="1" data-itemid="${item.id}" ${aw >= 1 ? 'checked' : ''} onchange="onAuditEntryToggle(${sIdx})" style="width:18px; height:18px; cursor:pointer;">
+                    <span style="font-size:10px; font-weight:800; color:#94a3b8; width:26px; text-align:right;">/ 1</span>`;
+            } else {
+                // multi-point item → 0..max points dropdown (partial credit).
+                let opts = '';
+                for (let p = 0; p <= item.pts; p++) opts += `<option value="${p}"${p === aw ? ' selected' : ''}>${p}</option>`;
+                control = `<select class="audit-entry-input" data-section="${sIdx}" data-pts="${item.pts}" data-itemid="${item.id}" onchange="onAuditEntryToggle(${sIdx})" style="width:58px; padding:5px 6px; font-size:13px; font-weight:800; color:var(--slate-charcoal); border:1px solid #cbd5e1; border-radius:7px; cursor:pointer; background:#fff;">${opts}</select>
+                    <span style="font-size:10px; font-weight:800; color:#94a3b8; width:26px; text-align:right;">/ ${item.pts}</span>`;
+            }
+            html += `<div style="display:flex; align-items:center; gap:10px; padding:7px 2px; border-bottom:1px solid #f1f5f9;">
+                <span style="flex:1; font-size:12.5px; color:var(--slate-charcoal); line-height:1.4;">${escapeHtml(item.text)}</span>
+                <span style="flex-shrink:0; display:flex; align-items:center; justify-content:flex-end; gap:8px; width:100px;">${control}</span>
+            </div>`;
         });
         html += `</div></div>`;
     });
@@ -9341,13 +9354,33 @@ function renderAuditEntry() {
     updateAuditRunningBar();
 }
 
+// Clamp a stored result value (boolean legacy or number) to 0..pts.
+function _prefillAward(v, pts) {
+    if (v === true) return pts;
+    const num = Number(v);
+    return Number.isFinite(num) ? Math.min(Math.max(Math.round(num), 0), pts) : 0;
+}
+
+// Points awarded by one entry control (checkbox = 0|pts, select = its value).
+function _auditItemAward(el) {
+    const pts = parseInt(el.getAttribute('data-pts')) || 0;
+    if (el.type === 'checkbox') return el.checked ? pts : 0;
+    const v = parseInt(el.value);
+    return Number.isFinite(v) ? Math.min(Math.max(v, 0), pts) : 0;
+}
+
+// One section open at a time — opening a section collapses the others.
 function toggleAuditEntrySection(sIdx) {
     const body = document.getElementById(`audit-sec-body-${sIdx}`);
     const caret = document.getElementById(`audit-sec-caret-${sIdx}`);
     if (!body) return;
-    const open = body.style.display === 'block';
-    body.style.display = open ? 'none' : 'block';
-    if (caret) caret.style.transform = open ? 'rotate(-90deg)' : 'rotate(0deg)';
+    const isOpen = body.style.display === 'block';
+    document.querySelectorAll('[id^="audit-sec-body-"]').forEach(el => { el.style.display = 'none'; });
+    document.querySelectorAll('[id^="audit-sec-caret-"]').forEach(el => { el.style.transform = 'rotate(-90deg)'; });
+    if (!isOpen) {
+        body.style.display = 'block';
+        if (caret) caret.style.transform = 'rotate(0deg)';
+    }
 }
 
 // Recompute one section's subtotal; if not a silent refresh, also bump the running bar.
@@ -9355,10 +9388,7 @@ function onAuditEntryToggle(sIdx, silent) {
     const sec = AUDIT_DEFINITION[sIdx];
     const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
     let earned = 0;
-    sec.items.forEach(item => {
-        const cb = document.getElementById(`audit-cb-${item.id}`);
-        if (cb && cb.checked) earned += item.pts;
-    });
+    document.querySelectorAll(`.audit-entry-input[data-section="${sIdx}"]`).forEach(el => { earned += _auditItemAward(el); });
     const sub = document.getElementById(`audit-sec-sub-${sIdx}`);
     if (sub) {
         sub.textContent = `${earned}/${secTotal}`;
@@ -9370,9 +9400,7 @@ function onAuditEntryToggle(sIdx, silent) {
 
 function _auditEntryTotals() {
     let earned = 0;
-    document.querySelectorAll('.audit-entry-cb').forEach(cb => {
-        if (cb.checked) earned += parseInt(cb.getAttribute('data-pts')) || 0;
-    });
+    document.querySelectorAll('.audit-entry-input').forEach(el => { earned += _auditItemAward(el); });
     return { earned, possible: AUDIT_POSSIBLE };
 }
 
@@ -9381,15 +9409,19 @@ function updateAuditRunningBar() {
     if (!bar) return;
     const { earned, possible } = _auditEntryTotals();
     const pct = possible ? Math.round((earned / possible) * 1000) / 10 : 0;
-    const c = auditPctColor(pct);
-    const verdict = pct >= AUDIT_PASS_PCT ? (pct >= AUDIT_TARGET_PCT ? 'On target' : 'Passing') : 'Below pass';
+    // Neutral (not alarming red) until the auditor starts checking items.
+    const started = earned > 0;
+    const c = started ? auditPctColor(pct) : { bg: '#f1f5f9', fg: '#64748b' };
+    const verdict = !started ? 'Not started — check items as you walk the store'
+        : (pct >= AUDIT_PASS_PCT ? (pct >= AUDIT_TARGET_PCT ? 'On target' : 'Passing') : 'Below pass')
+          + ` · pass ${AUDIT_PASS_PCT}% · target ${AUDIT_TARGET_PCT}%+`;
     bar.innerHTML = `
         <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:${c.bg}; border-radius:10px; padding:10px 13px;">
             <span style="font-size:12px; font-weight:800; color:${c.fg}; text-transform:uppercase; letter-spacing:.4px;">Live Audit Score</span>
             <span style="font-size:18px; font-weight:900; color:${c.fg};">${earned}/${possible} <span style="font-size:13px;">(${pct}%)</span></span>
         </div>
-        <div style="height:7px; border-radius:6px; background:#eef2f6; overflow:hidden; margin-top:6px;"><div style="height:100%; width:${pct}%; background:${c.fg}; border-radius:6px;"></div></div>
-        <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:4px;">${verdict} · pass ${AUDIT_PASS_PCT}% · target ${AUDIT_TARGET_PCT}%+</div>`;
+        <div style="height:7px; border-radius:6px; background:#eef2f6; overflow:hidden; margin-top:6px;"><div style="height:100%; width:${pct}%; background:${c.fg}; border-radius:6px; transition:width .2s;"></div></div>
+        <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:4px;">${verdict}</div>`;
 }
 
 function submitNewAudit() {
@@ -9401,9 +9433,8 @@ function submitNewAudit() {
     if (!store || !date) { alert('Pick a store and date.'); return; }
 
     const results = {};
-    document.querySelectorAll('.audit-entry-cb').forEach(cb => {
-        const id = cb.id.replace('audit-cb-', '');
-        results[id] = cb.checked;
+    document.querySelectorAll('.audit-entry-input').forEach(el => {
+        results[el.getAttribute('data-itemid')] = _auditItemAward(el);
     });
 
     btn.innerText = 'Saving...';
@@ -9474,7 +9505,7 @@ function renderAuditBreakdown(store) {
     AUDIT_DEFINITION.forEach(sec => {
         const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
         let secEarned = 0;
-        sec.items.forEach(i => { if (results[i.id] === true) secEarned += i.pts; });
+        sec.items.forEach(i => { secEarned += _prefillAward(results[i.id], i.pts); });
         const secFull = secEarned === secTotal;
         html += `<div style="margin-bottom:12px;">
             <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:5px;">
@@ -9482,11 +9513,15 @@ function renderAuditBreakdown(store) {
                 <span style="font-size:11px; font-weight:900; color:${secFull ? '#059669' : (secEarned > 0 ? '#d97706' : '#dc2626')};">${secEarned}/${secTotal}</span>
             </div>`;
         sec.items.forEach(item => {
-            const ok = results[item.id] === true;
+            const aw = _prefillAward(results[item.id], item.pts);
+            const full = aw === item.pts, none = aw === 0;
+            const icon = full ? '✓' : (none ? '✗' : '◐');
+            const iconColor = full ? '#16a34a' : (none ? '#dc2626' : '#d97706');
+            const valColor = full ? '#16a34a' : (none ? '#cbd5e1' : '#d97706');
             html += `<div style="display:flex; align-items:flex-start; gap:9px; padding:4px 2px;">
-                <span style="font-size:13px; font-weight:900; line-height:1.3; color:${ok ? '#16a34a' : '#dc2626'}; flex-shrink:0;">${ok ? '✓' : '✗'}</span>
-                <span style="font-size:12px; color:${ok ? '#94a3b8' : 'var(--slate-charcoal)'}; line-height:1.4; flex:1; ${ok ? '' : 'font-weight:600;'}">${escapeHtml(item.text)}</span>
-                <span style="font-size:11px; font-weight:800; color:${ok ? '#16a34a' : '#cbd5e1'}; flex-shrink:0;">${ok ? '+' : '−'}${item.pts}</span>
+                <span style="font-size:13px; font-weight:900; line-height:1.3; color:${iconColor}; flex-shrink:0;">${icon}</span>
+                <span style="font-size:12px; color:${full ? '#94a3b8' : 'var(--slate-charcoal)'}; line-height:1.4; flex:1; ${full ? '' : 'font-weight:600;'}">${escapeHtml(item.text)}</span>
+                <span style="font-size:11px; font-weight:800; color:${valColor}; flex-shrink:0;">${aw}/${item.pts}</span>
             </div>`;
         });
         html += `</div>`;
@@ -9498,11 +9533,10 @@ function renderAuditBreakdown(store) {
 // missed points + a button into the full breakdown popout.
 function buildAuditSummaryHtml(audit, store) {
     if (!audit) {
-        return `<div style="margin-top:15px; border-top:1px solid #f0f0f0; padding-top:14px;">
-            <div style="display:flex; align-items:center; justify-content:space-between;">
+        return `<div style="display:flex; align-items:center; justify-content:space-between;">
                 <span class="scorecard-label" style="text-align:left;">PayMore Audit</span>
                 <span style="font-size:12px; color:#94a3b8; font-weight:700;">No practice audit yet</span>
-            </div></div>`;
+            </div>`;
     }
     const c = auditPctColor(audit.pct);
     const dateStr = audit.date ? new Date(audit.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
@@ -9512,21 +9546,8 @@ function buildAuditSummaryHtml(audit, store) {
         const up = delta >= 0;
         trend = `<span style="font-size:11px; font-weight:800; color:${up ? '#16a34a' : '#dc2626'};">${up ? '▲' : '▼'} ${Math.abs(delta)}%</span>`;
     }
-    const results = audit.results || {};
-    let missedHtml = '';
-    AUDIT_DEFINITION.forEach(sec => {
-        const missed = sec.items.filter(i => results[i.id] !== true);
-        if (!missed.length) return;
-        missedHtml += `<div style="margin-top:8px;"><div style="font-size:9px; font-weight:800; color:#94a3b8; text-transform:uppercase; letter-spacing:.5px;">${sec.title}</div>`;
-        missed.forEach(i => {
-            missedHtml += `<div style="display:flex; justify-content:space-between; gap:8px; padding:3px 0; font-size:11.5px; color:var(--slate-charcoal);"><span style="line-height:1.35;">${escapeHtml(i.text)}</span><span style="font-weight:800; color:#dc2626; flex-shrink:0;">−${i.pts}</span></div>`;
-        });
-        missedHtml += `</div>`;
-    });
-    if (!missedHtml) missedHtml = `<div style="margin-top:8px; font-size:12px; color:#059669; font-weight:700;">Perfect audit — every item earned. 🎉</div>`;
 
-    return `<div style="margin-top:15px; border-top:1px solid #f0f0f0; padding-top:14px;">
-        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+    return `<div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
             <div>
                 <div class="scorecard-label" style="text-align:left; margin-bottom:2px;">PayMore Audit</div>
                 <div class="scorecard-date" style="font-size:11px;">${dateStr}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
@@ -9536,12 +9557,7 @@ function buildAuditSummaryHtml(audit, store) {
                 <span style="font-size:16px; font-weight:900; background:${c.bg}; color:${c.fg}; padding:4px 10px; border-radius:8px;">${audit.earned}/${audit.possible} · ${audit.pct}%</span>
             </div>
         </div>
-        <div style="max-height:200px; overflow-y:auto; margin-top:4px;" class="kpi-scroll-area">
-            <div style="font-size:10px; font-weight:800; color:#94a3b8; text-transform:uppercase; letter-spacing:.5px; margin-top:6px;">Points Missed</div>
-            ${missedHtml}
-        </div>
-        <button onclick="openAuditBreakdown('${store}')" class="btn-secondary" style="margin-top:10px; width:100%; padding:8px; font-size:12px; font-weight:800;">View Full Breakdown</button>
-    </div>`;
+        <button onclick="openAuditBreakdown('${store}')" class="btn-secondary" style="margin-top:10px; width:100%; padding:8px; font-size:12px; font-weight:800;">View Full Breakdown</button>`;
 }
 
 // --- STORE COMMENTS LOGIC ---

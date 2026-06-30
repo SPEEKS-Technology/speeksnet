@@ -36,10 +36,14 @@ const AUDIT_POINTS: Record<string, number> = {
 };
 const AUDIT_POSSIBLE = Object.values(AUDIT_POINTS).reduce((a, b) => a + b, 0); // 165
 
+// results[id] is points awarded (0..pts); legacy boolean true = full pts.
 function scoreAudit(results: Record<string, unknown>) {
   let earned = 0;
   for (const [id, pts] of Object.entries(AUDIT_POINTS)) {
-    if (results && results[id] === true) earned += pts;
+    const v = results ? (results as any)[id] : 0;
+    let a = v === true ? pts : Number(v);
+    if (!Number.isFinite(a)) a = 0;
+    earned += Math.min(Math.max(a, 0), pts);
   }
   const possible = AUDIT_POSSIBLE;
   const pct = possible ? Math.round((earned / possible) * 1000) / 10 : 0;
@@ -168,12 +172,15 @@ Deno.serve(async (req: Request) => {
         buckets = [{
           name: BUCKET.name,
           avg,
-          sectionDate: latest.section_0_date || latest.date,
+          sectionDate: latest.date,
           notes: latest.section_0_notes || null,
           categories,
         }];
       }
-      score = latest.store_average ?? 0;
+      // Headline score is the average of the 4 Online & Marketing categories
+      // only — NOT latest.store_average, which on legacy rows still reflects the
+      // removed In-Store Operations / Store Reviews sections.
+      score = avg;
       date = latest.date;
     }
 
