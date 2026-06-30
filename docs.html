@@ -9,9 +9,9 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260629b">
+  <link rel="stylesheet" href="styles.css?v=20260629c">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <script src="speeks.js?v=20260629b" defer></script>
+  <script src="speeks.js?v=20260629c" defer></script>
 </head>
 <body class="preload">
 
@@ -348,9 +348,11 @@
         <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
     </div>
 
-    <div class="notif-tabs" style="padding: 0 18px;">
-        <button id="sc-tab-scorecard" class="tab-btn active" onclick="switchScoreTab('scorecard')">Scorecard</button>
-        <button id="sc-tab-audit" class="tab-btn" onclick="switchScoreTab('audit')">SPEEKS Audit</button>
+    <div style="padding: 14px 18px 0;">
+        <div class="notif-tabs" style="display: inline-flex;">
+            <button id="sc-tab-scorecard" class="tab-btn active" onclick="switchScoreTab('scorecard')">Scorecard</button>
+            <button id="sc-tab-audit" class="tab-btn" onclick="switchScoreTab('audit')">SPEEKS Audit</button>
+        </div>
     </div>
 
     <div class="manage-content">

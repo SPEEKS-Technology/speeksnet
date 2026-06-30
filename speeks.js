@@ -9157,12 +9157,8 @@ function _buildScorecardModalInputs() {
             ? existingEntry.buckets.find(b => b.name === bucket.label)
             : null;
         const existingNote = existingBucket && existingBucket.notes ? existingBucket.notes : '';
-        html += `<div style="grid-column: 1 / -1; margin-top: ${bIdx > 0 ? '8px' : '0'}; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between;">
+        html += `<div style="grid-column: 1 / -1; margin-top: ${bIdx > 0 ? '8px' : '0'}; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0;">
                 <span style="font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">${bucket.label}</span>
-                <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 10px; color: #94a3b8; font-weight: 700;">
-                    <input type="checkbox" id="section-toggle-${bIdx}" checked onchange="toggleScorecardSection(${bIdx})" style="cursor: pointer; width: 13px; height: 13px;">
-                    Update
-                </label>
             </div>
             <div id="section-inputs-${bIdx}" style="display: contents;">`;
         for (let i = 0; i < bucket.count; i++) {
