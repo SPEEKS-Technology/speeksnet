@@ -9,9 +9,9 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260628a">
+  <link rel="stylesheet" href="styles.css?v=20260629b">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <script src="speeks.js?v=20260628a" defer></script>
+  <script src="speeks.js?v=20260629b" defer></script>
 </head>
 <body class="preload">
 
@@ -344,29 +344,52 @@
 <div id="scorecardModalOverlay" onclick="closeScorecardModal()"></div>
 <div class="modal-menu manage-menu" id="scorecardSubmitModal">
     <div class="modal-header">
-        <h3>Submit Store Scorecard</h3>
+        <h3>Submit Store Scores</h3>
         <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
     </div>
-    
+
+    <div class="notif-tabs" style="padding: 0 18px;">
+        <button id="sc-tab-scorecard" class="tab-btn active" onclick="switchScoreTab('scorecard')">Scorecard</button>
+        <button id="sc-tab-audit" class="tab-btn" onclick="switchScoreTab('audit')">SPEEKS Audit</button>
+    </div>
+
     <div class="manage-content">
-        <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-            <select id="dm-store-select" class="form-input-lg" style="flex: 1; margin-top: 0;">
+        <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+            <select id="dm-store-select" class="form-input-lg" style="flex: 1; margin-top: 0;" onchange="onScoreStoreChange()">
                 <option value="OVL">OVL</option>
                 <option value="LEE">LEE</option>
                 <option value="WSP">WSP</option>
                 <option value="MPL">MPL</option>
                 <option value="BAL">BAL</option>
             </select>
-            <input type="date" id="dm-score-date" class="form-input-lg" style="flex: 1; margin-top: 0;">
+            <input type="date" id="dm-score-date" class="form-input-lg" style="flex: 1; margin-top: 0;" onchange="onScoreDateChange()">
         </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;" id="dm-category-inputs">
+        <div id="sc-panel-scorecard">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;" id="dm-category-inputs"></div>
+        </div>
+
+        <div id="sc-panel-audit" style="display: none;">
+            <input id="dm-audit-auditor" class="form-input-lg" placeholder="Auditor name (optional)" style="margin-top: 0; margin-bottom: 12px;">
+            <div id="dm-audit-runningbar"></div>
+            <div id="audit-entry-container" style="margin-top: 12px;"></div>
         </div>
     </div>
-    
+
     <div class="manage-footer flex-end">
         <button onclick="submitNewScorecard()" class="btn-primary" id="submitScorecardBtn">Save Scorecard</button>
+        <button onclick="submitNewAudit()" class="btn-primary" id="submitAuditBtn" style="display: none;">Save Audit</button>
     </div>
+</div>
+
+<!-- ===== AUDIT BREAKDOWN POPOUT (shared, read-only full breakdown) ===== -->
+<div id="auditBreakdownOverlay" onclick="closeAuditBreakdown()"></div>
+<div class="modal-menu manage-menu" id="auditBreakdownModal">
+    <div class="modal-header">
+        <h3 id="audit-breakdown-title">Audit Breakdown</h3>
+        <button class="modal-close-btn" onclick="closeAuditBreakdown()">✖</button>
+    </div>
+    <div class="manage-content" id="audit-breakdown-body"></div>
 </div>
 
 <!-- ===== EDIT MONTHLY GOALS MODAL ===== -->
@@ -532,7 +555,7 @@
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo">
       <div class="tools-group-label">🏪 Store Ops</div>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon">🏆</span>Submit Scorecard</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon">🏆</span>Submit Scores</a>
       <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManagerChecklist();"><span class="tools-item-icon">📋</span>Manager Checklist</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon">💬</span>Send Store Comment</a>
     </div>

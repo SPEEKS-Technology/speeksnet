@@ -59,20 +59,36 @@ const C = {
   line: '#e2e8f0', muted: '#64748b', faint: '#94a3b8', card: '#ffffff', soft: '#f8fafc',
 };
 
+// The SPEEKS Scorecard is now just the "Online & Marketing" four categories.
 const SCORECARD_CATS: [string, string][] = [
-  ['front_of_house_cleanliness', 'Front of House Cleanliness'],
-  ['back_of_house_cleanliness', 'Back of House Cleanliness'],
-  ['retail_displays', 'Retail Displays'],
-  ['overall_organization', 'Overall Organization'],
-  ['recycle_organization', 'Recycle Organization'],
   ['online_store_pictures', 'Online Store Pictures'],
-  ['staff_goals_readiness', 'Staff Goals Readiness'],
-  ['paymore_sync', 'PayMore Sync'],
-  ['social_media_posts', 'Social Media Posts'],
   ['facebook_listings', 'Facebook Listings'],
-  ['store_listing_review', 'Store Listing Review'],
-  ['store_buying_review', 'Store Buying Review'],
+  ['social_media_posts', 'Social Media Posts'],
+  ['paymore_sync', 'PayMore Sync'],
 ];
+
+// PayMore Audit Playbook v3 — section → item points (id:pts). Used to show
+// per-section subtotals (where points were lost) in the manager email; the full
+// item-level breakdown lives in the dashboard popout. (Totals = 165.)
+const AUDIT_SECTIONS: { title: string; items: Record<string, number> }[] = [
+  { title: 'Exterior', items: { ex1:1, ex2:1, ex3:1 } },
+  { title: 'Entry & Sales Floor', items: { ef1:1, ef2:1, ef3:1, ef4:1, ef5:1, ef6:2, ef7:1, ef8:1, ef9:1, ef10:2, ef11:1, ef12:1, ef13:1, ef14:3 } },
+  { title: 'Display Cases & Merchandising', items: { dc1:1, dc2:1, dc3:1, dc4:2, dc5:1, dc6:2, dc7:2, dc8:2, dc9:3, dc10:2, dc11:3, dc12:2 } },
+  { title: 'Retail Counter', items: { rc1:1, rc2:1, rc3:1, rc4:1, rc5:1, rc6:1, rc7:2, rc8:1 } },
+  { title: 'Buy Transaction Area', items: { bt1:3, bt2:1, bt3:2, bt4:2, bt5:1, bt6:1, bt7:2, bt8:3, bt9:7, bt10:3, bt11:3, bt12:4 } },
+  { title: 'Back of House', items: { bh1:1, bh2:2, bh3:1, bh4:2, bh5:1, bh6:1, bh7:1, bh8:1, bh9:2, bh10:1, bh11:2, bh12:2, bh13:1, bh14:3, bh15:1, bh16:3, bh17:3, bh18:1, bh19:2, bh20:2, bh21:5, bh22:2, bh23:4, bh24:1, bh25:1, bh26:1 } },
+  { title: 'Personnel & Appearance', items: { pa1:1, pa2:1, pa3:1, pa4:1, pa5:1, pa6:1 } },
+  { title: 'Safety & Security', items: { ss1:3, ss2:2, ss3:2, ss4:4, ss5:5, ss6:2, ss7:1, ss8:1, ss9:1, ss10:4, ss11:1, ss12:1, ss13:1 } },
+];
+
+// Per-section earned/total for an audit results map ({id:true|false}).
+function auditSectionBreakdown(results: Record<string, any>) {
+  return AUDIT_SECTIONS.map((sec) => {
+    let earned = 0, total = 0;
+    for (const [id, pts] of Object.entries(sec.items)) { total += pts; if (results && results[id] === true) earned += pts; }
+    return { title: sec.title, earned, total };
+  });
+}
 
 // ---------- small helpers ----------
 const n = (v: unknown) => { const x = parseFloat(String(v ?? '')); return isNaN(x) ? 0 : x; };
@@ -133,6 +149,12 @@ async function gather(sb: any, weekEnd: Date) {
   const cardBy: Record<string, any> = {};
   for (const c of cards) if (!cardBy[c.store]) cardBy[c.store] = c;
 
+  // 4b) latest PayMore practice-audit score per store on/before the week-end
+  const auditScores = (await sb.from('audit_scores').select('store, date, earned_points, possible_points, pct, results')
+    .lte('date', weekEndStr).order('date', { ascending: false })).data ?? [];
+  const auditBy: Record<string, any> = {};
+  for (const a of auditScores) if (!auditBy[a.store]) auditBy[a.store] = a;
+
   // 5) store-audit readiness for this week (Daily + Weekly checklists)
   const weekStartStr = ymd(weekStart);
   const auditItems = (await sb.from('audit_items').select('id, period, active').eq('active', true)).data ?? [];
@@ -185,6 +207,7 @@ async function gather(sb: any, weekEnd: Date) {
       target: tgt, listingPct: tgt ? (processed / tgt) * 100 : 0, people: k.length,
       gpMtd, gpGoal, gpProj, goalPct: gpGoal ? (gpProj / gpGoal) * 100 : 0,
       card: cardBy[s] || null,
+      audit: auditBy[s] ? { earned: auditBy[s].earned_points, possible: auditBy[s].possible_points, pct: Number(auditBy[s].pct), date: auditBy[s].date, results: auditBy[s].results || {} } : null,
       auditWeeklyPct: auditWeeklyTotal ? ((auditWeeklyCount[s] || 0) / auditWeeklyTotal) * 100 : null,
       auditDailyPct: auditDailyTotal ? ((auditDailyCount[s] || 0) / (auditDailyTotal * 7)) * 100 : null,
       kpiSubmitted: k.length > 0,
@@ -428,6 +451,11 @@ function flagsBlock(d: any) {
   }
   // scorecard lowest
   if (d.lowestCat) items.push(`<div style="padding:11px 14px;border-bottom:1px solid #fde7b8;"><div style="font-size:13px;font-weight:900;color:${C.charcoal};">${esc(d.lowestCat)} is the lowest scorecard category</div><div style="font-size:11.5px;color:${C.muted};font-weight:600;">Company average ${d.lowestVal.toFixed(1)}/10</div></div>`);
+  // practice audit below the 80% pass line
+  const failAudit = STORES.filter(s => d.rows[s].audit && d.rows[s].audit.pct < 80);
+  if (failAudit.length) {
+    items.push(`<div style="padding:11px 14px;border-bottom:1px solid #fde7b8;"><div style="font-size:13px;font-weight:900;color:${C.red};">${failAudit.length} store${failAudit.length === 1 ? '' : 's'} below the 80% audit pass line</div><div style="font-size:11.5px;color:${C.muted};font-weight:600;">target is 90%+</div><div>${failAudit.map(s => chip(`${s} ${d.rows[s].audit.pct}%`, 'bad')).join('')}</div></div>`);
+  }
   // incomplete kpi
   if (d.incomplete.length) items.push(`<div style="padding:11px 14px;"><div style="font-size:13px;font-weight:900;color:${C.charcoal};">${d.incomplete.length} incomplete KPI ${d.incomplete.length === 1 ? 'entry' : 'entries'}</div><div>${d.incomplete.map((x: any) => chip(`${esc(x.name)} · ${x.store} — ${x.what}`, 'warn')).join('')}</div></div>`);
   if (!items.length) items.push(`<div style="padding:11px 14px;font-size:12.5px;color:${C.muted};">No flags this week.</div>`);
@@ -444,10 +472,15 @@ function buildLeadership(d: any) {
   const tp = d.topPerformer;
   const tpConv = tp && n(tp.transaction_count) ? Math.round(100 * n(tp.transaction_converted) / n(tp.transaction_count)) : null;
   const cards = STORES.filter(s => d.rows[s].card).map(s => `${s} ${(n(d.rows[s].card.store_average) * 2).toFixed(1)}`).join(' · ');
+  const audits = STORES.filter(s => d.rows[s].audit).map(s => {
+    const a = d.rows[s].audit; const col = a.pct >= 90 ? C.green : (a.pct >= 80 ? '#d97706' : C.red);
+    return `${s} <span style="color:${col};font-weight:900;">${a.pct}%</span>`;
+  }).join(' · ');
   const kpiCount = STORES.filter(s => d.rows[s].kpiSubmitted).length;
   const peopleRows =
     (tp ? `<tr><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;"><span style="font-size:9.5px;font-weight:900;color:#fff;background:${C.green};padding:3px 8px;border-radius:99px;">TOP PERFORMER</span> <b style="color:${C.charcoal};">${esc(tp.employee_name)} · ${tp.store}</b> <span style="color:${C.muted};font-size:11px;">${n(tp.listed_count)} processed${tpConv != null ? ` · ${tpConv}% conversion` : ''}</span></td></tr>` : '') +
-    `<tr><td style="padding:11px 14px;font-size:12px;color:${C.charcoal};"><b>Scorecard averages</b> <span style="color:${C.muted};">${cards} /10</span></td></tr>`;
+    `<tr><td style="padding:11px 14px;font-size:12px;color:${C.charcoal};border-bottom:1px solid #f1f5f9;"><b>Scorecard averages</b> <span style="color:${C.muted};">${cards || '—'} /10</span></td></tr>` +
+    `<tr><td style="padding:11px 14px;font-size:12px;color:${C.charcoal};"><b>PayMore Audit</b> <span style="color:${C.muted};">${audits || 'no practice audits yet'}</span> <span style="color:${C.muted};font-size:10.5px;">· pass 80% · target 90%+</span></td></tr>`;
 
   const body = `
   ${sectionLabel('Cash Flow Summary', 'all stores combined')}
@@ -490,19 +523,27 @@ function buildManager(d: any, store: string) {
   const buyRank = rankOf(x => x.boughtResale);
   const listRank = rankOf(x => x.listingPct);
   const scoreRank = rankOf(x => x.card ? n(x.card.store_average) : -1);
+  const auditRank = rankOf(x => x.audit ? x.audit.pct : -1);
+  const auditPctStr = r.audit ? `${r.audit.pct}<span style="font-size:12px;">%</span>` : '—';
 
-  // header card: store name + Scorecard / Listing Productivity (each ranked)
+  // header card: store name + Scorecard / Listing / Audit (each ranked)
   const headTile = (label: string, rank: number, value: string) =>
-    `<td width="50%" valign="top" style="padding:0 4px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:rgba(255,255,255,.16);border-radius:10px;"><tr><td style="padding:10px 13px;">
+    `<td width="50%" valign="top" style="padding:3px 4px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:rgba(255,255,255,.16);border-radius:10px;"><tr><td style="padding:10px 13px;">
       <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:rgba(255,255,255,.9);">${label}${rank > 0 ? rankBadge(rank) : ''}</div>
       <div style="font-size:21px;font-weight:900;color:#fff;margin-top:3px;">${value}</div>
     </td></tr></table></td>`;
   const headerCard = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${STORE_COLOR[store]};border-radius:14px;"><tr><td style="padding:18px 16px;">
     <div style="font-size:21px;font-weight:900;color:#fff;">${store} · ${STORE_NAME[store]}</div>
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:13px;"><tr>
-      ${headTile('Scorecard', r.card ? scoreRank : 0, r.card ? `${avg}<span style="font-size:12px;">/10</span>` : '—')}
-      ${headTile('Listing Prod.', listRank, `${Math.round(r.listingPct)}<span style="font-size:12px;">% goal</span>`)}
-    </tr></table>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:10px;">
+      <tr>
+        ${headTile('Scorecard', r.card ? scoreRank : 0, r.card ? `${avg}<span style="font-size:12px;">/10</span>` : '—')}
+        ${headTile('Listing Prod.', listRank, `${Math.round(r.listingPct)}<span style="font-size:12px;">% goal</span>`)}
+      </tr>
+      <tr>
+        ${headTile('PayMore Audit', r.audit ? auditRank : 0, auditPctStr)}
+        ${headTile('Audit Pass', 0, r.audit ? (r.audit.pct >= 80 ? `<span style="font-size:15px;">${r.audit.pct >= 90 ? 'On target ✓' : 'Passing'}</span>` : `<span style="font-size:15px;">Below 80%</span>`) : '—')}
+      </tr>
+    </table>
   </td></tr></table>`;
 
   // team listing rows + Team Total
@@ -544,9 +585,26 @@ function buildManager(d: any, store: string) {
         <td style="padding:10px 14px;text-align:right;font-weight:900;font-size:14px;color:${scoreColor(n(r.card.store_average) * 2)};${tt}">${avg}/10</td></tr>`;
   }
 
+  // PayMore practice-audit section: overall score + per-section subtotals (where points were lost)
+  let auditHtml = `<tr><td colspan="2" style="padding:11px 14px;color:${C.muted};font-size:12px;">No practice audit on file for this period.</td></tr>`;
+  if (r.audit) {
+    const aCol = r.audit.pct >= 90 ? C.green : (r.audit.pct >= 80 ? C.amber : C.red);
+    const secs = auditSectionBreakdown(r.audit.results);
+    auditHtml = secs.map(sec => {
+      const full = sec.earned === sec.total;
+      const col = full ? C.green : (sec.earned > 0 ? C.amber : C.red);
+      return `<tr><td style="padding:8px 14px;font-weight:700;color:${C.charcoal};font-size:12px;border-bottom:1px solid #f1f5f9;width:70%;">${sec.title}</td>
+        <td style="padding:8px 14px;text-align:right;font-weight:900;color:${col};border-bottom:1px solid #f1f5f9;">${sec.earned}/${sec.total}</td></tr>`;
+    }).join('') +
+      `<tr><td style="padding:10px 14px;font-weight:900;color:${C.charcoal};font-size:13px;${tt}">Audit Score</td>
+        <td style="padding:10px 14px;text-align:right;font-weight:900;font-size:14px;color:${aCol};${tt}">${r.audit.earned}/${r.audit.possible} · ${r.audit.pct}%</td></tr>`;
+  }
+
   // focus — every 0/10 first (immediate), then the lowest, then listings + buying strength
   const focus: string[] = [];
   scoredCats.filter(x => x.v === 0).forEach(z => focus.push(`<span style="color:${C.red};">●</span> <b>${z.label} scored 0/10</b> — needs immediate attention.`));
+  if (r.audit && r.audit.pct < 80) focus.push(`<span style="color:${C.red};">●</span> <b>PayMore audit ${r.audit.pct}%</b> — below the 80% pass line (target 90%+). Review the missed items on your dashboard.`);
+  else if (r.audit && r.audit.pct < 90) focus.push(`<span style="color:${C.amber};">●</span> <b>PayMore audit ${r.audit.pct}%</b> — passing, but push for the 90%+ target.`);
   const worst = scoredCats[0];
   if (worst && (worst.v as number) > 0 && (worst.v as number) < 8) focus.push(`<span style="color:${C.amber};">●</span> <b>${worst.label} scored ${worst.v}/10</b> — your lowest scored category.`);
   if (r.listingPct < 100) focus.push(`<span style="color:${C.red};">●</span> <b>Listings ${Math.round(r.listingPct)}% of target</b> (${r.target - r.processed} short) — push processing volume.`);
@@ -562,8 +620,10 @@ function buildManager(d: any, store: string) {
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:12px;overflow:hidden;border-collapse:separate;">
     <tr>${th('Lister', 'left')}${th('Listed')}${th('Retail $')}${th('Margin')}${th('% Sold')}</tr>${teamRows}${teamTotal}
   </table>
-  ${sectionLabel('Scorecard', r.card ? `store average ${avg}/10` : '')}
+  ${sectionLabel('Scorecard', r.card ? `Online & Marketing · ${avg}/10` : '')}
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:12px;overflow:hidden;">${scoreHtml}</table>
+  ${sectionLabel('PayMore Audit', r.audit ? `${r.audit.earned}/${r.audit.possible} · ${r.audit.pct}% · pass 80% · target 90%+` : '')}
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:12px;overflow:hidden;">${auditHtml}</table>
   ${focus.length ? sectionLabel('Focus This Week') + rowsBox(focus.map(f => `<tr><td style="padding:10px 14px;font-size:12.5px;border-bottom:1px solid #f1f5f9;">${f}</td></tr>`).join('')) : ''}
   `;
   return wrapEmail('Your Weekly Report', STORE_COLOR[store], range, body);
@@ -604,6 +664,8 @@ async function writeSnapshots(sb: any, d: any) {
       listing_pct: r.listingPct, retail_value: r.retail, listed_margin_pct: r.listedMargin, pct_sold: r.pctSold,
       gp_mtd: r.gpMtd, gp_goal: r.gpGoal, gp_proj: r.gpProj, goal_pct: r.goalPct,
       scorecard_avg: r.card ? n(r.card.store_average) * 2 : null,
+      audit_pct: r.audit ? r.audit.pct : null,
+      audit_earned: r.audit ? r.audit.earned : null,
     };
   });
   recs.push({
@@ -611,6 +673,7 @@ async function writeSnapshots(sb: any, d: any) {
     sold_revenue: d.company.soldRev, sold_gp: d.company.soldGp, gp_margin_pct: d.company.gpMargin, processed: d.company.processed,
     listing_target: d.company.target, listing_pct: d.company.listingPct, retail_value: d.company.retail, listed_margin_pct: d.company.listedMargin,
     pct_sold: d.company.pctSold, gp_mtd: d.company.gpMtd, gp_goal: d.company.gpGoal, gp_proj: d.company.gpProj, goal_pct: d.company.goalPct, scorecard_avg: null,
+    audit_pct: null, audit_earned: null,
   } as any);
   await sb.from('weekly_report_snapshots').upsert(recs, { onConflict: 'week_end,store' });
 }

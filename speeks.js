@@ -4609,20 +4609,23 @@ async function fetchScorecardData() {
             </div>`;
         }
 
+        const auditHtml = buildAuditSummaryHtml(storeData.audit, targetStore);
+
         container.innerHTML = `
         <div class="scorecard-widget" style="padding: 20px; align-items: stretch; text-align: left; justify-content: flex-start;">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                    <div class="scorecard-label" style="text-align: left; margin-bottom: 2px;">Store Average</div>
+                    <div class="scorecard-label" style="text-align: left; margin-bottom: 2px;">Online &amp; Marketing</div>
                     <div class="scorecard-date" style="margin-bottom: 0; font-size: 11px;">${displayDate}</div>
                 </div>
                 <div style="position: relative; display: inline-block;">
                     <div class="scorecard-val" style="color: ${scoreColor}; font-size: 36px; text-shadow: 0 4px 15px ${scoreColor}30; line-height: 1;">
-                        ${displayScore.toFixed(1)}
+                        ${displayScore.toFixed(1)}<span style="font-size:16px; color:#94a3b8;">/10</span>
                     </div>
                     ${pulse}
                 </div>
             </div>
+            ${auditHtml}
             ${breakdownHtml}
         </div>`;
     } catch (error) {
@@ -4964,6 +4967,16 @@ async function fetchMasterDistrictDashboard() {
             let sColor = scoreNum > 8 ? '#065f46' : (scoreNum >= 6 ? '#92400e' : '#991b1b');
             let sBg = scoreNum > 8 ? '#d1fae5' : (scoreNum >= 6 ? '#fef3c7' : '#fee2e2');
 
+            // Practice audit badge (clickable into the full breakdown popout).
+            const sAudit = sScore.audit || null;
+            let auditBadge = '';
+            if (sAudit) {
+                const ac = auditPctColor(sAudit.pct);
+                auditBadge = `<span class="master-card-score" onclick="event.stopPropagation(); openAuditBreakdown('${store}')" title="View full audit breakdown" style="cursor:pointer; background:${ac.bg}; color:${ac.fg};">Audit ${sAudit.pct}%</span>`;
+            } else {
+                auditBadge = `<span class="master-card-score" style="background:#f1f5f9; color:#94a3b8;">Audit —</span>`;
+            }
+
             let displayDate = "Recent";
             if (sScore.date) {
                 const parsedDate = new Date(sScore.date);
@@ -5138,8 +5151,11 @@ async function fetchMasterDistrictDashboard() {
                         </a>
                         <span class="master-card-date goal-strong" style="margin: 0;">Goal: ${storeGoalText}</span>
                     </div>
-                    <div style="display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; gap: 10px;">
-                        <span class="master-card-score" style="background: ${sBg}; color: ${sColor};">${scoreNum.toFixed(1)}</span>
+                    <div style="display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; gap: 6px;">
+                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
+                            <span class="master-card-score" style="background: ${sBg}; color: ${sColor};" title="Online & Marketing scorecard">${scoreNum.toFixed(1)}</span>
+                            ${auditBadge}
+                        </div>
                         <span class="master-card-date" style="margin: 0;">Week of ${displayDate}</span>
                     </div>
                 </div>
@@ -8939,26 +8955,156 @@ async function editRequiredTask(id) {
 }
 
 // --- DM SCORECARD SUBMISSION LOGIC ---
+// The SPEEKS Scorecard is now just the former "Media and Markets" four
+// categories, renamed "Online & Marketing" — the only thing the DM/CEO score
+// by hand. (In-Store Operations + Store Reviews were retired; the PayMore
+// practice Audit below now covers store condition.)
 const SCORECARD_CATEGORIES = [
-    "Front of House Cleanliness",
-    "Back of House Cleanliness",
-    "Recycle Organization",
-    "Retail Displays",
-    "Overall Organization",
-    "Staff Goals Readiness",        // index 5 — In-Store Operations ends here
-    "Online Store Pictures",        // index 6 — Media and Markets starts here
+    "Online Store Pictures",
     "5 Facebook Listings",
     "2 Social Media Posts",
-    "PayMore Sync",
-    "Store Listing Review",
-    "Store Buying Review"
+    "PayMore Sync"
 ];
 
 const SCORECARD_BUCKETS = [
-    { label: "In-Store Operations", count: 6 },
-    { label: "Media and Markets", count: 4 },
-    { label: "Store Reviews", count: 2 }
+    { label: "Online & Marketing", count: 4 }
 ];
+
+// ============================================================================
+// PayMore practice Audit — exact transcription of Audit Playbook v3 (165 pts,
+// 94 items, 8 sections). Binary scoring: checked = full points, else 0.
+// Pass = 80%, target = 90%+. Shared shape with the scorecard edge fn, which
+// re-derives earned/possible from the same point values (server-authoritative).
+// ============================================================================
+const AUDIT_TARGET_PCT = 90;
+const AUDIT_PASS_PCT = 80;
+const AUDIT_DEFINITION = [
+    { key: "exterior", title: "Exterior", items: [
+        { id: "ex1", pts: 1, text: "Sidewalks and entryways free of litter, debris, and obstructions" },
+        { id: "ex2", pts: 1, text: "Exterior and road signage clean, lit (if applicable), free of damage or fading" },
+        { id: "ex3", pts: 1, text: "Building exterior clean, well-maintained (windows, paint, no handmade signs on doors). Window decals and signage appropriate. Door hours match website" },
+    ]},
+    { key: "entry", title: "Entry & Sales Floor", items: [
+        { id: "ef1", pts: 1, text: "Floors swept/mopped; entry mats clean" },
+        { id: "ef2", pts: 1, text: "Customer area free of clutter; no products stored on the floor" },
+        { id: "ef3", pts: 1, text: "Video games displayed on shelves and organized" },
+        { id: "ef4", pts: 1, text: "Store lighting fully functional throughout (no burned out bulbs, adequate brightness and clean)" },
+        { id: "ef5", pts: 1, text: "Walls, vents, and high surfaces free of dust and cobwebs" },
+        { id: "ef6", pts: 2, text: "Ceiling tiles in place and in good shape; less than 10% of tiles with no water damage" },
+        { id: "ef7", pts: 1, text: "Window ledges and sills clean; free of merchandise or debris" },
+        { id: "ef8", pts: 1, text: "No recycling items in customer view" },
+        { id: "ef9", pts: 1, text: "All customers greeted within 10 seconds of entering the store" },
+        { id: "ef10", pts: 2, text: "Team acknowledges entering customers even while helping others" },
+        { id: "ef11", pts: 1, text: "Customers asked for Google review at end of transaction" },
+        { id: "ef12", pts: 1, text: "No QR codes or signage for Google review signage in transaction area" },
+        { id: "ef13", pts: 1, text: "Music playing from RockBot system and volume is appropriate" },
+        { id: "ef14", pts: 3, text: "Retail Browsing iPads on and locked to store website" },
+    ]},
+    { key: "display", title: "Display Cases & Merchandising", items: [
+        { id: "dc1", pts: 1, text: "Display case glass is clean and fingerprint-free" },
+        { id: "dc2", pts: 1, text: "Devices organized by category (i.e. all mobile phones together, tablets etc)" },
+        { id: "dc3", pts: 1, text: "Phones and tablets positioned back-facing" },
+        { id: "dc4", pts: 2, text: "Small items in PayMore stands; tags NOT visible to customers" },
+        { id: "dc5", pts: 1, text: "Shelves full but not overcrowded; visually balanced" },
+        { id: "dc6", pts: 2, text: "Gaming items: clean/dusted, organized by category (consoles together, cords, accessories, etc)" },
+        { id: "dc7", pts: 2, text: "Consoles positioned on shelves; shelves are full but not overcrowded/balanced visually" },
+        { id: "dc8", pts: 2, text: "Gaming small items in PayMore stands; tags NOT visible" },
+        { id: "dc9", pts: 3, text: "All items in clean PayMore stands; tags NOT visible" },
+        { id: "dc10", pts: 2, text: "All items forward-facing (excluding phones/tablets)" },
+        { id: "dc11", pts: 3, text: "High-priced items (Apple phones, tablets) in locked case" },
+        { id: "dc12", pts: 2, text: "Retail glass in good shape and clean — no cracks, scratches, or broken areas" },
+    ]},
+    { key: "counter", title: "Retail Counter", items: [
+        { id: "rc1", pts: 1, text: "Counter neatly arranged, no clutter, no un-branded signage" },
+        { id: "rc2", pts: 1, text: "Testing equipment out of customer view" },
+        { id: "rc3", pts: 1, text: "Completed transactions out of customer view" },
+        { id: "rc4", pts: 1, text: "Printer stored in cabinet underneath" },
+        { id: "rc5", pts: 1, text: "No team member food or drink in customer view" },
+        { id: "rc6", pts: 1, text: "PayMore branded retail bags stocked" },
+        { id: "rc7", pts: 2, text: "All computers do not have any personal accounts open" },
+        { id: "rc8", pts: 1, text: "PayMore branded signage at counter; Freedom to Trade In trifold nearby; promo materials in plexi frames (not taped)" },
+    ]},
+    { key: "buy", title: "Buy Transaction Area", items: [
+        { id: "bt1", pts: 3, text: "Counter neatly arranged; no unbranded signage; testing equipment out of view (cables, gaming controllers, flashlights, etc); printer under cabinet" },
+        { id: "bt2", pts: 1, text: "Completed transactions out of customer view" },
+        { id: "bt3", pts: 2, text: "Diagnostic device/testing software present and stored out of view. Spec-Finder thumb drive available" },
+        { id: "bt4", pts: 2, text: "Screen-display tester present; in-cabinet testing monitors working (may be covered with a PayMore branded mat)" },
+        { id: "bt5", pts: 1, text: "Cable management for customer-facing monitors: cords neatly tied and snaked through the cabinet" },
+        { id: "bt6", pts: 1, text: "Charger/cable tester present" },
+        { id: "bt7", pts: 2, text: "PayMore Seller Book under the counter" },
+        { id: "bt8", pts: 3, text: "Last 10 transactions: at least one signature on each page half on/off sticker" },
+        { id: "bt9", pts: 7, text: "Green bin (<$100), Red bin (>$100), Blue bin (video games) — labeled (not handwritten), out of view; items bubble-wrapped with purchase order receipt" },
+        { id: "bt10", pts: 3, text: "Larger items in white boxes: purchase order attached, bubble-wrapped, on shelving or neatly stacked on back counter (must be in boxes)" },
+        { id: "bt11", pts: 3, text: "All intake merchandise logged immediately; no untagged or unlogged items" },
+        { id: "bt12", pts: 4, text: "Cash drawer locked; keys out of customer reach" },
+    ]},
+    { key: "boh", title: "Back of House", items: [
+        { id: "bh1", pts: 1, text: "Floors swept and clean" },
+        { id: "bh2", pts: 2, text: "Walls in good condition (no holes). No stickers from customer devices stuck to the walls" },
+        { id: "bh3", pts: 1, text: "Ceiling tiles in good shape (no missing tiles, no water damage)" },
+        { id: "bh4", pts: 2, text: "Holding shelves labeled (A, B, C, D, etc.). Not handwritten" },
+        { id: "bh5", pts: 1, text: "Holding shelves have colored bins (Green/Red/Blue), labeled correctly, not handwritten" },
+        { id: "bh6", pts: 1, text: "Items in bins are bubble wrapped" },
+        { id: "bh7", pts: 1, text: "All items tagged with purchase order and visible" },
+        { id: "bh8", pts: 1, text: "Location on purchase order receipt matches shelf location" },
+        { id: "bh9", pts: 2, text: "Shelves are organized and neat; all large items in boxes" },
+        { id: "bh10", pts: 1, text: "Items in holding bins have the Shopify barcode" },
+        { id: "bh11", pts: 2, text: "Ready-to-purchase shelves labeled (1, 2, 3, etc.). Not handwritten" },
+        { id: "bh12", pts: 2, text: "Black bins present, labeled correctly (E1, E2, etc.); items bubble-wrapped, not handwritten" },
+        { id: "bh13", pts: 1, text: "Boxes on ready-to-purchase shelves have Shopify barcode displayed" },
+        { id: "bh14", pts: 3, text: "Ready-to-purchase shelves organized and neat; all large items in boxes; items tagged" },
+        { id: "bh15", pts: 1, text: "Listing Station: barcode label printer present" },
+        { id: "bh16", pts: 3, text: "Listing Station: Lenovo computer present, clean and organized" },
+        { id: "bh17", pts: 3, text: "Testing Area: device cleaning material, external monitor, charging cables neat" },
+        { id: "bh18", pts: 1, text: "Testing Area: troubleshooting accessories present (controllers, Spec-Finder, flash drives)" },
+        { id: "bh19", pts: 2, text: "Testing Area: clean and organized" },
+        { id: "bh20", pts: 2, text: "Shipping Area: bubble wrap/peanuts; unused boxes neatly stacked by size" },
+        { id: "bh21", pts: 5, text: "Shipping Area: Lenovo computer, shipping label printer, scale, box re-adjusting tool, scanner present" },
+        { id: "bh22", pts: 2, text: "Shipping Area: clean and organized" },
+        { id: "bh23", pts: 4, text: "Photography Area: photo box or well-lit table with clean white butcher paper on a roll" },
+        { id: "bh24", pts: 1, text: "Adequate lighting throughout all back-of-house areas" },
+        { id: "bh25", pts: 1, text: "Recycling in proper containers; not stored on floor" },
+        { id: "bh26", pts: 1, text: "All storage closets clean and organized" },
+    ]},
+    { key: "personnel", title: "Personnel & Appearance", items: [
+        { id: "pa1", pts: 1, text: "PayMore Polo shirt worn. No T-shirt, vests, sweatshirts, etc" },
+        { id: "pa2", pts: 1, text: "Khaki pants or jeans — no shorts, not faded, in good condition" },
+        { id: "pa3", pts: 1, text: "Optional PayMore branded hat worn forward, or backwards during a transaction" },
+        { id: "pa4", pts: 1, text: "Closed-toed shoes worn" },
+        { id: "pa5", pts: 1, text: "No headphones or earbuds (unless testing a device)" },
+        { id: "pa6", pts: 1, text: "Team members conducting themselves professionally" },
+    ]},
+    { key: "safety", title: "Safety & Security", items: [
+        { id: "ss1", pts: 3, text: "Fire extinguishers tagged, charged, and hung 3.5–5 feet above the floor" },
+        { id: "ss2", pts: 2, text: "First aid kit stocked according to OSHA requirements" },
+        { id: "ss3", pts: 2, text: "Back door locked from outside, openable from inside without keys or bolts; no obstructions" },
+        { id: "ss4", pts: 4, text: "Safe is locked; cash/bank deposits not sitting out" },
+        { id: "ss5", pts: 5, text: "Store fully open and purchasing during all posted business hours" },
+        { id: "ss6", pts: 2, text: "Labor law / workplace compliance poster displayed on the wall" },
+        { id: "ss7", pts: 1, text: "All aisles have 32-inch clearance; no products/devices stored on the floor, unless too large to fit on the rack/shelf" },
+        { id: "ss8", pts: 1, text: "All products on shelves at least 18 inches from the ceiling" },
+        { id: "ss9", pts: 1, text: "All products clear from sprinkler systems" },
+        { id: "ss10", pts: 4, text: "Restrooms: clean, maintained, stocked with soap, TP, paper towels" },
+        { id: "ss11", pts: 1, text: "Restroom garbage not overflowing" },
+        { id: "ss12", pts: 1, text: "No personal pictures, posters, stickers, political signage posted throughout the store" },
+        { id: "ss13", pts: 1, text: "Second Hand License posted per state/country law. Hung in a glass case or framed, not taped/stapled. Record expiration" },
+    ]},
+];
+
+// Total possible audit points (derived, = 165) and a quick id→{pts,text,section} lookup.
+const AUDIT_POSSIBLE = AUDIT_DEFINITION.reduce((s, sec) => s + sec.items.reduce((a, i) => a + i.pts, 0), 0);
+const AUDIT_ITEM_MAP = (() => {
+    const m = {};
+    AUDIT_DEFINITION.forEach(sec => sec.items.forEach(i => { m[i.id] = { pts: i.pts, text: i.text, section: sec.title }; }));
+    return m;
+})();
+
+// Audit color by percentage: target 90+ green, pass 80+ amber, else red.
+function auditPctColor(pct) {
+    if (pct >= AUDIT_TARGET_PCT) return { bg: '#d1fae5', fg: '#059669' };
+    if (pct >= AUDIT_PASS_PCT) return { bg: '#fef3c7', fg: '#d97706' };
+    return { bg: '#fee2e2', fg: '#dc2626' };
+}
 
 function openScorecardModal() {
     toggleModal('scorecardSubmitModal');
@@ -8966,7 +9112,35 @@ function openScorecardModal() {
     const dateInput = document.getElementById('dm-score-date');
     if (dateInput) dateInput.valueAsDate = new Date();
 
+    switchScoreTab('scorecard');
     _buildScorecardModalInputs();
+    renderAuditEntry();
+}
+
+// ---- Submit-modal tab switching (Scorecard | SPEEKS Audit) ----
+let currentScoreTab = 'scorecard';
+function switchScoreTab(tab) {
+    currentScoreTab = tab;
+    const scTab = document.getElementById('sc-tab-scorecard');
+    const auTab = document.getElementById('sc-tab-audit');
+    if (scTab) scTab.classList.toggle('active', tab === 'scorecard');
+    if (auTab) auTab.classList.toggle('active', tab === 'audit');
+    const scPanel = document.getElementById('sc-panel-scorecard');
+    const auPanel = document.getElementById('sc-panel-audit');
+    if (scPanel) scPanel.style.display = tab === 'scorecard' ? 'block' : 'none';
+    if (auPanel) auPanel.style.display = tab === 'audit' ? 'block' : 'none';
+    const scBtn = document.getElementById('submitScorecardBtn');
+    const auBtn = document.getElementById('submitAuditBtn');
+    if (scBtn) scBtn.style.display = tab === 'scorecard' ? '' : 'none';
+    if (auBtn) auBtn.style.display = tab === 'audit' ? '' : 'none';
+}
+
+function onScoreStoreChange() {
+    _buildScorecardModalInputs();
+    renderAuditEntry();
+}
+function onScoreDateChange() {
+    renderAuditEntry();
 }
 
 function _buildScorecardModalInputs() {
@@ -9117,6 +9291,261 @@ function submitNewScorecard() {
         btn.style.background = "";
         btn.disabled = false;
     });
+}
+
+// ============================================================================
+// SPEEKS AUDIT — entry form (in the submit modal) + read-only breakdown popout.
+// Uses AUDIT_DEFINITION / AUDIT_ITEM_MAP / AUDIT_POSSIBLE defined near the top.
+// ============================================================================
+
+// Returns the cached latest audit for the modal's selected store (or null).
+function _selectedStoreAudit() {
+    const store = (document.getElementById('dm-store-select')?.value || '').toUpperCase();
+    const entry = (window._scorecardAllData || []).find(d => String(d.store).toUpperCase() === store);
+    return entry && entry.audit ? entry.audit : null;
+}
+
+// Build the collapsible audit checklist. If an audit already exists for the
+// selected store AND the chosen date matches it, pre-check its results (edit mode).
+function renderAuditEntry() {
+    const container = document.getElementById('audit-entry-container');
+    if (!container) return;
+    const dateVal = document.getElementById('dm-score-date')?.value || '';
+    const existing = _selectedStoreAudit();
+    const prefill = (existing && existing.date === dateVal && existing.results) ? existing.results : {};
+    const auditorEl = document.getElementById('dm-audit-auditor');
+    if (auditorEl) auditorEl.value = (existing && existing.date === dateVal && existing.auditor) ? existing.auditor : '';
+
+    let html = '';
+    AUDIT_DEFINITION.forEach((sec, sIdx) => {
+        const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
+        html += `<div class="audit-entry-section" style="border:1px solid #e2e8f0; border-radius:10px; margin-bottom:10px; overflow:hidden;">
+            <div onclick="toggleAuditEntrySection(${sIdx})" style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:11px 13px; background:#f8fafc; cursor:pointer;">
+                <span style="font-size:12px; font-weight:800; color:var(--slate-charcoal); text-transform:uppercase; letter-spacing:.4px;">${sec.title}</span>
+                <span style="display:flex; align-items:center; gap:8px;">
+                    <span id="audit-sec-sub-${sIdx}" style="font-size:11px; font-weight:900; color:#64748b; background:#fff; border:1px solid #e2e8f0; padding:2px 7px; border-radius:6px;">0/${secTotal}</span>
+                    <span id="audit-sec-caret-${sIdx}" style="color:#94a3b8; font-size:10px; font-weight:800; transition:transform .2s; transform:rotate(-90deg);">▼</span>
+                </span>
+            </div>
+            <div id="audit-sec-body-${sIdx}" style="display:none; padding:6px 13px 11px;">`;
+        sec.items.forEach(item => {
+            const checked = prefill[item.id] === true ? 'checked' : '';
+            html += `<label style="display:flex; align-items:flex-start; gap:9px; padding:6px 2px; cursor:pointer; border-bottom:1px solid #f1f5f9;">
+                <input type="checkbox" class="audit-entry-cb" data-section="${sIdx}" data-pts="${item.pts}" id="audit-cb-${item.id}" ${checked} onchange="onAuditEntryToggle(${sIdx})" style="margin-top:2px; width:16px; height:16px; flex-shrink:0; cursor:pointer;">
+                <span style="font-size:12.5px; color:var(--slate-charcoal); line-height:1.4; flex:1;">${escapeHtml(item.text)}</span>
+                <span style="font-size:11px; font-weight:900; color:#64748b; flex-shrink:0;">+${item.pts}</span>
+            </label>`;
+        });
+        html += `</div></div>`;
+    });
+    container.innerHTML = html;
+
+    // Refresh subtotals + running bar from the prefilled state.
+    AUDIT_DEFINITION.forEach((_s, sIdx) => onAuditEntryToggle(sIdx, true));
+    updateAuditRunningBar();
+}
+
+function toggleAuditEntrySection(sIdx) {
+    const body = document.getElementById(`audit-sec-body-${sIdx}`);
+    const caret = document.getElementById(`audit-sec-caret-${sIdx}`);
+    if (!body) return;
+    const open = body.style.display === 'block';
+    body.style.display = open ? 'none' : 'block';
+    if (caret) caret.style.transform = open ? 'rotate(-90deg)' : 'rotate(0deg)';
+}
+
+// Recompute one section's subtotal; if not a silent refresh, also bump the running bar.
+function onAuditEntryToggle(sIdx, silent) {
+    const sec = AUDIT_DEFINITION[sIdx];
+    const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
+    let earned = 0;
+    sec.items.forEach(item => {
+        const cb = document.getElementById(`audit-cb-${item.id}`);
+        if (cb && cb.checked) earned += item.pts;
+    });
+    const sub = document.getElementById(`audit-sec-sub-${sIdx}`);
+    if (sub) {
+        sub.textContent = `${earned}/${secTotal}`;
+        const full = earned === secTotal;
+        sub.style.color = full ? '#059669' : (earned > 0 ? '#d97706' : '#64748b');
+    }
+    if (!silent) updateAuditRunningBar();
+}
+
+function _auditEntryTotals() {
+    let earned = 0;
+    document.querySelectorAll('.audit-entry-cb').forEach(cb => {
+        if (cb.checked) earned += parseInt(cb.getAttribute('data-pts')) || 0;
+    });
+    return { earned, possible: AUDIT_POSSIBLE };
+}
+
+function updateAuditRunningBar() {
+    const bar = document.getElementById('dm-audit-runningbar');
+    if (!bar) return;
+    const { earned, possible } = _auditEntryTotals();
+    const pct = possible ? Math.round((earned / possible) * 1000) / 10 : 0;
+    const c = auditPctColor(pct);
+    const verdict = pct >= AUDIT_PASS_PCT ? (pct >= AUDIT_TARGET_PCT ? 'On target' : 'Passing') : 'Below pass';
+    bar.innerHTML = `
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:${c.bg}; border-radius:10px; padding:10px 13px;">
+            <span style="font-size:12px; font-weight:800; color:${c.fg}; text-transform:uppercase; letter-spacing:.4px;">Live Audit Score</span>
+            <span style="font-size:18px; font-weight:900; color:${c.fg};">${earned}/${possible} <span style="font-size:13px;">(${pct}%)</span></span>
+        </div>
+        <div style="height:7px; border-radius:6px; background:#eef2f6; overflow:hidden; margin-top:6px;"><div style="height:100%; width:${pct}%; background:${c.fg}; border-radius:6px;"></div></div>
+        <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:4px;">${verdict} · pass ${AUDIT_PASS_PCT}% · target ${AUDIT_TARGET_PCT}%+</div>`;
+}
+
+function submitNewAudit() {
+    const store = document.getElementById('dm-store-select').value;
+    const date = document.getElementById('dm-score-date').value;
+    const auditor = (document.getElementById('dm-audit-auditor')?.value || '').trim()
+        || sessionStorage.getItem('speeksUserName') || null;
+    const btn = document.getElementById('submitAuditBtn');
+    if (!store || !date) { alert('Pick a store and date.'); return; }
+
+    const results = {};
+    document.querySelectorAll('.audit-entry-cb').forEach(cb => {
+        const id = cb.id.replace('audit-cb-', '');
+        results[id] = cb.checked;
+    });
+
+    btn.innerText = 'Saving...';
+    btn.style.opacity = '0.7';
+    btn.disabled = true;
+
+    fetch(SCORECARD_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'submit_audit', store, date, auditor, results })
+    }).then(async res => {
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+        btn.innerText = `Saved — ${json.earned}/${json.possible} (${json.pct}%)`;
+        btn.style.background = 'var(--sage-professional)';
+        setTimeout(() => {
+            if (typeof fetchScorecardData === 'function') fetchScorecardData();
+            if (typeof fetchMasterDistrictDashboard === 'function') fetchMasterDistrictDashboard();
+            closeScorecardModal();
+            btn.innerText = 'Save Audit';
+            btn.style.background = '';
+            btn.style.opacity = '';
+            btn.disabled = false;
+        }, 1400);
+    }).catch(err => {
+        alert('Error saving audit: ' + (err.message || err));
+        btn.innerText = 'Save Audit';
+        btn.style.background = '';
+        btn.style.opacity = '';
+        btn.disabled = false;
+    });
+}
+
+// ---- Read-only Audit Breakdown popout (reused by every display site) ----
+function openAuditBreakdown(store) {
+    renderAuditBreakdown(store);
+    toggleModal('auditBreakdownModal');   // closes any open modal, then shows this one + backdrop
+}
+function closeAuditBreakdown() {
+    closeAllModals();
+}
+
+function renderAuditBreakdown(store) {
+    const body = document.getElementById('audit-breakdown-body');
+    const title = document.getElementById('audit-breakdown-title');
+    if (!body) return;
+    const entry = (window._scorecardAllData || []).find(d => String(d.store).toUpperCase() === String(store).toUpperCase());
+    const audit = entry && entry.audit ? entry.audit : null;
+
+    if (!audit) {
+        if (title) title.textContent = `${store} · Audit Breakdown`;
+        body.innerHTML = `<div style="padding:24px 4px; text-align:center; color:#94a3b8; font-weight:600;">No practice audit on file for ${store} yet.</div>`;
+        return;
+    }
+    const results = audit.results || {};
+    const c = auditPctColor(audit.pct);
+    const dateStr = audit.date ? new Date(audit.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+    if (title) title.textContent = `${store} · Audit Breakdown`;
+
+    let html = `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:${c.bg}; border-radius:10px; padding:12px 14px; margin-bottom:14px;">
+        <div>
+            <div style="font-size:11px; font-weight:800; color:${c.fg}; text-transform:uppercase; letter-spacing:.4px;">PayMore Audit${dateStr ? ' · ' + dateStr : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
+            <div style="font-size:11px; color:#64748b; font-weight:600; margin-top:2px;">Pass ${AUDIT_PASS_PCT}% · Target ${AUDIT_TARGET_PCT}%+${audit.prevPct != null ? ` · prev ${audit.prevPct}%` : ''}</div>
+        </div>
+        <div style="font-size:22px; font-weight:900; color:${c.fg};">${audit.earned}/${audit.possible} <span style="font-size:14px;">(${audit.pct}%)</span></div>
+    </div>`;
+
+    AUDIT_DEFINITION.forEach(sec => {
+        const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
+        let secEarned = 0;
+        sec.items.forEach(i => { if (results[i.id] === true) secEarned += i.pts; });
+        const secFull = secEarned === secTotal;
+        html += `<div style="margin-bottom:12px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:5px;">
+                <span style="font-size:11px; font-weight:800; color:#94a3b8; text-transform:uppercase; letter-spacing:.5px;">${sec.title}</span>
+                <span style="font-size:11px; font-weight:900; color:${secFull ? '#059669' : (secEarned > 0 ? '#d97706' : '#dc2626')};">${secEarned}/${secTotal}</span>
+            </div>`;
+        sec.items.forEach(item => {
+            const ok = results[item.id] === true;
+            html += `<div style="display:flex; align-items:flex-start; gap:9px; padding:4px 2px;">
+                <span style="font-size:13px; font-weight:900; line-height:1.3; color:${ok ? '#16a34a' : '#dc2626'}; flex-shrink:0;">${ok ? '✓' : '✗'}</span>
+                <span style="font-size:12px; color:${ok ? '#94a3b8' : 'var(--slate-charcoal)'}; line-height:1.4; flex:1; ${ok ? '' : 'font-weight:600;'}">${escapeHtml(item.text)}</span>
+                <span style="font-size:11px; font-weight:800; color:${ok ? '#16a34a' : '#cbd5e1'}; flex-shrink:0;">${ok ? '+' : '−'}${item.pts}</span>
+            </div>`;
+        });
+        html += `</div>`;
+    });
+    body.innerHTML = html;
+}
+
+// Audit summary block for the manager Store Scorecard widget: score + trend +
+// missed points + a button into the full breakdown popout.
+function buildAuditSummaryHtml(audit, store) {
+    if (!audit) {
+        return `<div style="margin-top:15px; border-top:1px solid #f0f0f0; padding-top:14px;">
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+                <span class="scorecard-label" style="text-align:left;">PayMore Audit</span>
+                <span style="font-size:12px; color:#94a3b8; font-weight:700;">No practice audit yet</span>
+            </div></div>`;
+    }
+    const c = auditPctColor(audit.pct);
+    const dateStr = audit.date ? new Date(audit.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+    let trend = '';
+    if (audit.prevPct != null) {
+        const delta = Math.round((audit.pct - audit.prevPct) * 10) / 10;
+        const up = delta >= 0;
+        trend = `<span style="font-size:11px; font-weight:800; color:${up ? '#16a34a' : '#dc2626'};">${up ? '▲' : '▼'} ${Math.abs(delta)}%</span>`;
+    }
+    const results = audit.results || {};
+    let missedHtml = '';
+    AUDIT_DEFINITION.forEach(sec => {
+        const missed = sec.items.filter(i => results[i.id] !== true);
+        if (!missed.length) return;
+        missedHtml += `<div style="margin-top:8px;"><div style="font-size:9px; font-weight:800; color:#94a3b8; text-transform:uppercase; letter-spacing:.5px;">${sec.title}</div>`;
+        missed.forEach(i => {
+            missedHtml += `<div style="display:flex; justify-content:space-between; gap:8px; padding:3px 0; font-size:11.5px; color:var(--slate-charcoal);"><span style="line-height:1.35;">${escapeHtml(i.text)}</span><span style="font-weight:800; color:#dc2626; flex-shrink:0;">−${i.pts}</span></div>`;
+        });
+        missedHtml += `</div>`;
+    });
+    if (!missedHtml) missedHtml = `<div style="margin-top:8px; font-size:12px; color:#059669; font-weight:700;">Perfect audit — every item earned. 🎉</div>`;
+
+    return `<div style="margin-top:15px; border-top:1px solid #f0f0f0; padding-top:14px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+            <div>
+                <div class="scorecard-label" style="text-align:left; margin-bottom:2px;">PayMore Audit</div>
+                <div class="scorecard-date" style="font-size:11px;">${dateStr}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+                ${trend}
+                <span style="font-size:16px; font-weight:900; background:${c.bg}; color:${c.fg}; padding:4px 10px; border-radius:8px;">${audit.earned}/${audit.possible} · ${audit.pct}%</span>
+            </div>
+        </div>
+        <div style="max-height:200px; overflow-y:auto; margin-top:4px;" class="kpi-scroll-area">
+            <div style="font-size:10px; font-weight:800; color:#94a3b8; text-transform:uppercase; letter-spacing:.5px; margin-top:6px;">Points Missed</div>
+            ${missedHtml}
+        </div>
+        <button onclick="openAuditBreakdown('${store}')" class="btn-secondary" style="margin-top:10px; width:100%; padding:8px; font-size:12px; font-weight:800;">View Full Breakdown</button>
+    </div>`;
 }
 
 // --- STORE COMMENTS LOGIC ---
