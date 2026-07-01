@@ -12201,6 +12201,44 @@ function _renderBoxOrderItems(container, items) {
     });
 
     container.innerHTML = html || '<div style="color:#a0aab2;font-size:13px;">No items found.</div>';
+    // Stable ids so the live receipt can point its "remove" button back at a row.
+    container.querySelectorAll('.box-order-row').forEach((r, i) => { r.id = 'box-row-' + i; });
+    boxOrderRenderReceipt(); // reset to empty on a fresh load
+}
+
+// Live "receipt" of the current selection, pinned under the item list. Rebuilt from
+// the rows' current quantities on every change so it always matches what's selected.
+function boxOrderRenderReceipt() {
+    const panel = document.getElementById('boxOrderReceipt');
+    if (!panel) return;
+    const rows = document.querySelectorAll('#boxOrderItemsContainer .box-order-row');
+    const picked = [];
+    rows.forEach(row => {
+        const qty = parseInt(row.querySelector('.box-stepper-qty')?.textContent) || 0;
+        if (qty > 0) picked.push({ id: row.id, name: row.dataset.name || row.dataset.item || '', qty });
+    });
+    if (!picked.length) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+    const lines = picked.map(p => `
+        <div class="box-receipt-line">
+            <span class="box-receipt-name">${escapeHtml(p.name)}</span>
+            <span class="box-receipt-qty">${p.qty}</span>
+            <button class="box-receipt-x" title="Remove" onclick="boxReceiptRemove('${p.id}')">×</button>
+        </div>`).join('');
+    panel.innerHTML =
+        `<div class="box-receipt-head">🧾 Your order · ${picked.length} item${picked.length === 1 ? '' : 's'}</div>` +
+        `<div class="box-receipt-list">${lines}</div>`;
+    panel.style.display = '';
+}
+
+// Remove a line from the receipt by zeroing that row's stepper.
+function boxReceiptRemove(rowId) {
+    const row = document.getElementById(rowId);
+    if (row) {
+        const qtyEl = row.querySelector('.box-stepper-qty');
+        if (qtyEl) { qtyEl.textContent = '0'; qtyEl.classList.remove('box-stepper-active'); }
+        row.classList.remove('box-row-selected');
+    }
+    boxOrderRenderReceipt();
 }
 
 // Live search over the box-order items. Matches name / category / dimensions
@@ -12296,6 +12334,7 @@ function boxStepperChange(btn, delta) {
     qtyEl.textContent = next;
     qtyEl.classList.toggle('box-stepper-active', next > 0);
     row.classList.toggle('box-row-selected', next > 0);
+    boxOrderRenderReceipt(); // keep the live receipt in sync
 }
 
 let _boxOrderSelected = [];
@@ -12336,6 +12375,7 @@ function boxOrderBackPage() {
     document.getElementById('boxOrderFooter2').style.display  = 'none';
     document.getElementById('boxOrderPage1').style.display    = '';
     document.getElementById('boxOrderFooter1').style.display  = '';
+    boxOrderRenderReceipt(); // selection is preserved in the rows — reflect it again
 }
 
 // Format one selected item for the order: drop the word "Box" from box sizes

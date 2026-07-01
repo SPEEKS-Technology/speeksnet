@@ -6422,6 +6422,59 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     line-height: 1;
 }
 .box-admin-item .bai-del:hover { background: #fee2e2; }
+
+/* Live "receipt" of the current box-order selection — sticky to the bottom of the
+   item list so managers always see what they've picked without scrolling. */
+.box-receipt {
+    position: sticky;
+    bottom: 0;
+    margin-top: auto;
+    background: #fff;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 10px;
+    box-shadow: 0 -8px 20px rgba(15, 23, 42, 0.08);
+}
+.box-receipt-head {
+    font-size: 11px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #475569;
+    padding: 9px 12px;
+    border-bottom: 1px solid #f1f5f9;
+}
+.box-receipt-list { max-height: 128px; overflow-y: auto; padding: 4px 0; }
+.box-receipt-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 12px;
+    font-size: 13px;
+}
+.box-receipt-name {
+    flex: 1;
+    min-width: 0;
+    color: var(--slate-charcoal);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.box-receipt-qty { font-weight: 800; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
+.box-receipt-x {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    border: none;
+    background: #fef2f2;
+    color: #dc2626;
+    font-weight: 800;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+}
+.box-receipt-x:hover { background: #fee2e2; }
 .box-order-email-preview {
     background: #f8fafc;
     border: 1px solid #e2e8f0;

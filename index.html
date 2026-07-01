@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260701d">
+  <link rel="stylesheet" href="styles.css?v=20260701e">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260701d" defer></script>
+  <script src="speeks.js?v=20260701e" defer></script>
 </head>
 
 <body class="preload">
@@ -1321,6 +1321,8 @@
         <div class="box-order-disclaimer">
             If a box or item you need is not on this page, please reach out to your District Manager for approval.
         </div>
+        <!-- Live "receipt" of what's selected — sticky to the bottom of the list -->
+        <div id="boxOrderReceipt" class="box-receipt" style="display:none;"></div>
     </div>
 
     <!-- PAGE 2: Email Preview + Notes -->
