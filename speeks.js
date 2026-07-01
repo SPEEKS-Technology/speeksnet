@@ -7151,6 +7151,11 @@ function initDashboardData() {
         setTimeout(fetchAndRenderEmployeeKPIs, 1200);
         setTimeout(fetchAndDisplayStoreComment, 1500);
         startStoreCommentPolling();
+        // Both feed the SAME red bubble, so run them in sequence, not in parallel:
+        // a DM/CEO-pushed reminder wins (it's personal + already states the aging
+        // count); the generic aging alert only fires if no reminder claimed the
+        // bubble. Awaiting avoids the login flicker of one overwriting the other.
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -8841,8 +8846,23 @@ async function toggleManagerChecklist() {
     const text = document.getElementById('mcl-text'); if (text) text.value = '';
     const period = document.getElementById('mcl-period'); if (period) period.value = 'daily';
     document.querySelectorAll('#mcl-stores input[type="checkbox"]').forEach(c => c.checked = false);
+    // Default the view filter back to "All stores" (the tasks the DM created)
+    const filter = document.getElementById('mcl-filter-store'); if (filter) filter.value = '';
+    applyChecklistFilter('');
+}
 
-    await loadRequiredTasks();
+// The "Viewing" dropdown at the top of the Manager Checklist tool:
+//  - ""    → all required tasks the DM created (across every store)
+//  - store → that store's FULL checklist (DM-required + manager-added), all deletable
+function applyChecklistFilter(store) {
+    const label = document.getElementById('mcl-list-label');
+    if (!store) {
+        if (label) label.textContent = 'Current required tasks (all stores)';
+        loadRequiredTasks();
+    } else {
+        if (label) label.textContent = `${store} checklist — required + manager-added`;
+        loadStoreChecklistView(store);
+    }
 }
 
 function mclToggleAllStores() {
@@ -8900,6 +8920,127 @@ function renderRequiredTasks(tasks) {
         });
     });
     list.innerHTML = html;
+}
+
+// --- DM: view ONE store's full checklist — both the required tasks the DM set
+//     and the personal tasks that store's manager added themselves. Read-only.
+function _resolveStoreManager(store) {
+    try {
+        const authCache = JSON.parse(localStorage.getItem('speeksAuthCache')) || {};
+        const users = authCache.users || [];
+        for (const targetRole of ['owner (manager)', 'manager']) {
+            const mgr = users.find(u =>
+                u.store && u.store.toUpperCase() === String(store).toUpperCase() &&
+                u.role && u.role.toLowerCase() === targetRole
+            );
+            if (mgr) return mgr.name;
+        }
+    } catch (e) {}
+    return null;
+}
+
+async function loadStoreChecklistView(store) {
+    const out = document.getElementById('mcl-list');
+    if (!out) return;
+    if (!store) { loadRequiredTasks(); return; }
+
+    const mgr = _resolveStoreManager(store);
+    if (!mgr) {
+        out.innerHTML = `<div class="status-message" style="color:var(--red-alert);">No manager found for ${escapeHtml(store)} in the directory.</div>`;
+        return;
+    }
+    out.innerHTML = `<div class="status-message">Loading ${escapeHtml(store)}'s checklist…</div>`;
+    try {
+        // The store's full checklist + the required-task master, so we can resolve
+        // each global item back to its required-task id for deletion.
+        const [data, reqResp] = await Promise.all([
+            fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(mgr)}&store=${encodeURIComponent(store)}&v=${Date.now()}`).then(r => r.json()),
+            fetch(`${CHECKLIST_URL}?action=listRequired&v=${Date.now()}`).then(r => r.json()),
+        ]);
+        renderStoreChecklistView(store, mgr, data || {}, (reqResp && reqResp.tasks) || []);
+    } catch (e) {
+        out.innerHTML = `<div class="status-message" style="color:var(--red-alert);">Failed to load that store's checklist.</div>`;
+    }
+}
+
+function renderStoreChecklistView(store, mgr, data, requiredTasks) {
+    const out = document.getElementById('mcl-list');
+    if (!out) return;
+    const order = ['daily', 'weekly', 'monthly', 'quarterly'];
+    const norm = s => String(s || '').trim().toLowerCase();
+    const upper = s => String(s || '').toUpperCase();
+    // Map a global checklist item back to the required task it came from.
+    const findReqId = (tab, txt) => {
+        const exact = requiredTasks.find(t => t.tab === tab && norm(t.text) === norm(txt) &&
+            (t.stores || []).map(upper).includes(upper(store)));
+        if (exact) return exact.id;
+        const any = requiredTasks.find(t => t.tab === tab && norm(t.text) === norm(txt));
+        return any ? any.id : null;
+    };
+
+    let html = `<div style="font-size:12px; font-weight:700; color:#64748b; margin:4px 0 10px;">Showing <strong style="color:var(--slate-charcoal);">${escapeHtml(store)}</strong> · manager <strong style="color:var(--slate-charcoal);">${escapeHtml(mgr)}</strong></div>`;
+    let any = false;
+    order.forEach(period => {
+        const items = data[period] || [];
+        if (!items.length) return;
+        any = true;
+        html += `<div class="mcl-group-label">${MCL_PERIOD_LABELS[period] || period}</div>`;
+        items.forEach(it => {
+            const check = it.checked ? `<span style="color:#16a34a; font-weight:800; margin-right:5px;">✓</span>` : '';
+            let badge, delBtn;
+            if (it.isGlobal) {
+                const reqId = findReqId(period, it.text);
+                badge = `<span class="mcl-badge" style="background:#e0e7ff; color:#4338ca;">Required</span>`;
+                delBtn = `<button class="mcl-del-btn" title="Delete required task (removes it for every store it applies to)" onclick="deleteRequiredFromStoreView('${reqId}', '${store}')">✖</button>`;
+            } else {
+                badge = `<span class="mcl-badge" style="background:#dcfce7; color:#15803d;">Manager-added</span>`;
+                delBtn = `<button class="mcl-del-btn" title="Delete this manager-added task" onclick="deleteStorePersonalItem('${store}', '${period}', '${it.id}')">✖</button>`;
+            }
+            html += `
+            <div class="mcl-row">
+                <div class="mcl-row-main">
+                    <span class="mcl-row-text">${check}${escapeHtml(it.text)}</span>
+                    <div class="mcl-row-badges">${badge}</div>
+                </div>
+                <div class="mcl-row-actions">${delBtn}</div>
+            </div>`;
+        });
+    });
+    if (!any) html += `<div style="text-align:center; padding:14px; color:#94a3b8; font-size:12px; font-weight:600;">No checklist items for this store.</div>`;
+    out.innerHTML = html;
+}
+
+// DM deletes a manager-added (personal) task on that store's behalf. We send the
+// DM's role + identity so the backend can authorize a cross-user delete (the
+// `delete` handler must allow district manager / ceo to remove ANY user's item).
+async function deleteStorePersonalItem(store, tab, id) {
+    if (!confirm('Delete this manager-added task? This cannot be undone.')) return;
+    const mgr = _resolveStoreManager(store);
+    try {
+        await postWrite(CHECKLIST_URL, {
+            action: 'delete', id, tab, user: mgr, store,
+            role: _mclRole(),
+            requestedBy: sessionStorage.getItem('speeksUserName') || '',
+        });
+        loadStoreChecklistView(store);
+    } catch (e) {
+        alert('Could not delete: ' + (e.message || e));
+    }
+}
+
+// DM deletes a required task from inside the per-store view (then reloads that view).
+async function deleteRequiredFromStoreView(id, store) {
+    if (!id || id === 'null') {
+        alert('Could not resolve this required task — delete it from the "All stores" list instead.');
+        return;
+    }
+    if (!confirm('Delete this required task for every store it applies to? This cannot be undone.')) return;
+    try {
+        await postWrite(CHECKLIST_URL, { action: 'deleteRequired', id, role: _mclRole() });
+        loadStoreChecklistView(store);
+    } catch (e) {
+        alert('Could not delete: ' + (e.message || e));
+    }
 }
 
 async function addRequiredTask() {
@@ -9585,12 +9726,20 @@ function _claimStores() {
 function openClaimsModal() {
     toggleModal('claimsModal');
     _buildClaimStorePicker();
-    ['claim-case-number', 'claim-sku', 'claim-price', 'claim-detail'].forEach(id => {
+    ['claim-case-number', 'claim-sku', 'claim-price', 'claim-cost', 'claim-detail'].forEach(id => {
         const el = document.getElementById(id); if (el) el.value = '';
     });
     const r = document.getElementById('claim-reason'); if (r) r.selectedIndex = 0;
-    const st = document.getElementById('claim-status'); if (st) st.value = 'in_progress';
+    const ct = document.getElementById('claim-type'); if (ct) ct.selectedIndex = 0;
+    _onClaimReasonChange();
     switchClaimsTab('new');
+}
+
+// "Claim Type" (Damage / Loss) only applies to a Claim, not an Item-Not-Received case.
+function _onClaimReasonChange() {
+    const reason = (document.getElementById('claim-reason') || {}).value;
+    const wrap = document.getElementById('claim-type-wrap');
+    if (wrap) wrap.style.display = reason !== 'Item Not Received' ? 'block' : 'none';
 }
 
 function switchClaimsTab(tab) {
@@ -9628,13 +9777,20 @@ async function submitClaim() {
     const caseNumber = (val('claim-case-number') || '').trim();
     const sku = (val('claim-sku') || '').trim();
     const priceRaw = val('claim-price');
+    const costRaw = val('claim-cost');
     const reason = val('claim-reason');
+    const claimType = val('claim-type');
     const detail = (val('claim-detail') || '').trim();
-    const status = val('claim-status') || 'in_progress';
+    const status = 'in_progress'; // a ticket is always open the moment it's created
+
+    // Every claim type (Shopify / USPS / UPS) carries its Damage/Loss type;
+    // only Item Not Received stands alone.
+    const reasonType = reason !== 'Item Not Received' ? `${reason} — ${claimType}` : reason;
 
     if (!store) { alert('Please select a store for this case.'); return; }
     if (!caseNumber) { alert('Please enter a case number.'); return; }
 
+    const num = v => (v === '' || v == null) ? null : Number(v);
     const btn = document.getElementById('submitClaimBtn');
     const old = btn ? btn.innerText : '';
     if (btn) { btn.disabled = true; btn.innerText = 'Saving…'; }
@@ -9643,8 +9799,8 @@ async function submitClaim() {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 action: 'submit_claim', store, case_number: caseNumber, item_sku: sku,
-                price: priceRaw === '' || priceRaw == null ? null : Number(priceRaw),
-                reason_type: reason, reason_detail: detail || null, status,
+                price: num(priceRaw), cost: num(costRaw),
+                reason_type: reasonType, reason_detail: detail || null, status,
                 created_by: sessionStorage.getItem('speeksUserName') || null,
             }),
         });
@@ -9657,6 +9813,8 @@ async function submitClaim() {
         if (btn) { btn.disabled = false; btn.innerText = old; }
     }
 }
+
+let _claimsAll = []; // last fetched cases, so the MSM store filter can re-render without refetching
 
 async function fetchMyClaims() {
     const wrap = document.getElementById('claims-table-wrap');
@@ -9671,46 +9829,440 @@ async function fetchMyClaims() {
         const res = await fetch(`${CLAIMS_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
         const json = await res.json();
         if (!json.success) throw new Error(json.error);
-        renderClaimsTable(json.data || [], stores.length > 1);
+        _claimsAll = json.data || [];
+        _buildClaimsViewFilter(stores);
+        renderClaimsTable();
     } catch (e) {
         wrap.innerHTML = '<div style="color:var(--red-alert); padding:24px; text-align:center; font-weight:700;">Error loading cases.</div>';
     }
 }
 
-function renderClaimsTable(rows, showStore) {
+// MSM-only: a store filter on the My Cases tab (single-store managers don't need it).
+function _buildClaimsViewFilter(stores) {
+    const row = document.getElementById('claims-view-filter-row');
+    const sel = document.getElementById('claims-view-filter');
+    if (!row || !sel) return;
+    if (stores.length <= 1) { row.style.display = 'none'; return; }
+    row.style.display = 'block';
+    const current = sel.value;
+    sel.innerHTML = `<option value="">All stores</option>` +
+        stores.map(s => `<option value="${s}">${s}</option>`).join('');
+    if ([...sel.options].some(o => o.value === current)) sel.value = current;
+}
+
+function renderClaimsTable() {
     const wrap = document.getElementById('claims-table-wrap');
     if (!wrap) return;
-    if (!rows.length) {
-        wrap.innerHTML = '<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No cases yet. Add one from the <b>New Case</b> tab.</div>';
+    const stores = _claimStores();
+    const multi = stores.length > 1;
+    const filterStore = (document.getElementById('claims-view-filter') || {}).value || '';
+    const filterStatus = (document.getElementById('claims-status-filter') || {}).value || '';
+    let rows = _claimsAll;
+    if (filterStore) rows = rows.filter(r => (r.store || '').toUpperCase() === filterStore);
+    const showStore = multi && !filterStore; // store column only matters when mixing stores
+    const colCount = (showStore ? 1 : 0) + 10; // # column + 9 base
+
+    // A follow-up loss claim is a real claim row with parent_id pointing at the
+    // Item-Not-Received ticket it came from. Render it nested under its parent.
+    const byId = {}; rows.forEach(r => { byId[r.id] = r; });
+    const kidsOf = {}; rows.forEach(r => { if (r.parent_id) (kidsOf[r.parent_id] = kidsOf[r.parent_id] || []).push(r); });
+    // Status filter applies to top-level claims; their child claims render alongside.
+    let tops = rows.filter(r => !r.parent_id || !byId[r.parent_id]);
+    if (filterStatus) tops = tops.filter(r => r.status === filterStatus);
+    // Needs-attention first: over-7-day open → other open → escalated INRs → resolved;
+    // newest first within each group. (An INR with a child loss claim isn't "aging".)
+    const clRank = r => {
+        if (r.status !== 'in_progress') return 3;
+        if ((kidsOf[r.id] || []).length) return 2;
+        if (_isClaimAging(r)) return 0;
+        return 1;
+    };
+    tops.sort((a, b) => clRank(a) - clRank(b) || new Date(b.created_at) - new Date(a.created_at));
+
+    if (!tops.length) {
+        wrap.innerHTML = '<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No cases match this view.</div>';
         return;
     }
-    const fmtPrice = v => (v == null || v === '') ? '—' : '$' + Number(v).toFixed(2);
-    const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
     const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
-    const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
-
     let html = `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
-        <thead><tr>${showStore ? th('Store') : ''}${th('Case #')}${th('SKU')}${th('Price')}${th('Reason')}${th('Status')}${th('Date')}${th('')}</tr></thead><tbody>`;
-    rows.forEach(r => {
-        const opts = Object.entries(CLAIM_STATUS)
-            .map(([k, v]) => `<option value="${k}" ${k === r.status ? 'selected' : ''}>${v.label}</option>`).join('');
-        const sc = CLAIM_STATUS[r.status] || CLAIM_STATUS.in_progress;
-        const statusSel = `<select onchange="updateClaimStatus('${r.id}', this.value)" style="font-size:11px; font-weight:800; border:none; border-radius:6px; padding:4px 6px; cursor:pointer; background:${sc.bg}; color:${sc.fg};">${opts}</select>`;
-        const reasonCell = `${escapeHtml(r.reason_type || '—')}${r.reason_detail ? `<div style="color:#94a3b8; font-size:11px; margin-top:2px;">${escapeHtml(r.reason_detail)}</div>` : ''}`;
-        const del = `<button onclick="deleteClaim('${r.id}')" title="Delete case" style="background:none; border:none; cursor:pointer; font-size:14px; opacity:.5;">🗑</button>`;
-        html += `<tr>
-            ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`) : ''}
-            ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`)}
-            ${td(escapeHtml(r.item_sku || '—'))}
-            ${td(fmtPrice(r.price), 'white-space:nowrap; font-weight:700;')}
-            ${td(reasonCell)}
-            ${td(statusSel, 'white-space:nowrap;')}
-            ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
-            ${td(del, 'text-align:center;')}
-        </tr>`;
+        <thead><tr>${th('#')}${showStore ? th('Store') : ''}${th('Case #')}${th('SKU')}${th('Value')}${th('Cost')}${th('Reason')}${th('Status')}${th('Created')}${th('Resolved')}${th('')}</tr></thead><tbody>`;
+    let n = 0;
+    tops.forEach(r => {
+        const kids = kidsOf[r.id] || [];
+        const isINR = String(r.reason_type || '').toLowerCase().startsWith('item not received');
+        const canEscalate = isINR && !kids.length; // one loss claim per INR ticket
+        n++;
+        html += _claimRowHtml(r, showStore, false, canEscalate, kids.length > 0, `${n}`);
+        if (canEscalate) html += _escalateFormRow(r, colCount);
+        kids.forEach((k, ci) => { html += _claimRowHtml(k, showStore, true, false, false, `${n}.${ci + 1}`); });
     });
     html += '</tbody></table></div>';
     wrap.innerHTML = html;
+}
+
+// One claim row. `isChild` nests it (indent + blue edge) under its parent INR ticket;
+// it's otherwise a full, normal claim row with its own status/value/cost/dates/actions.
+function _claimRowHtml(r, showStore, isChild, canEscalate, hasChild, num) {
+    const fmtPrice = v => (v == null || v === '') ? '—' : '$' + Number(v).toFixed(2);
+    const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+    const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
+    const opts = Object.entries(CLAIM_STATUS).map(([k, v]) => `<option value="${k}" ${k === r.status ? 'selected' : ''}>${v.label}</option>`).join('');
+    const sc = CLAIM_STATUS[r.status] || CLAIM_STATUS.in_progress;
+    const aging = _isClaimAging(r) && !hasChild; // a parent superseded by a loss claim isn't "aging"
+    const caret = encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><path d="M2 3.5L5 6.5L8 3.5" stroke="#475569" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`);
+    // Once a loss claim is opened, status tracking moves to that child claim — so a
+    // parent INR with a child shows a static status, and only the claim has the pill.
+    const statusCell = hasChild
+        ? `<span style="font-size:11px; font-weight:800; color:#94a3b8;">${sc.label}</span><div style="font-size:9px; color:#cbd5e1; font-weight:800; text-transform:uppercase; letter-spacing:.3px; margin-top:1px;">on claim ↓</div>`
+        : `<select onchange="updateClaimStatus('${r.id}', this.value)" style="appearance:none; -webkit-appearance:none; font-size:11px; font-weight:800; border:1.5px solid ${sc.fg}55; border-radius:999px; padding:5px 26px 5px 12px; cursor:pointer; background-color:#fff; color:#1e293b; background-image:url('data:image/svg+xml,${caret}'); background-repeat:no-repeat; background-position:right 9px center;">${opts}</select>`;
+
+    let reasonCell = `${escapeHtml(r.reason_type || '—')}`;
+    if (r.reason_detail) reasonCell += `<div style="color:#94a3b8; font-size:11px; margin-top:2px;">${escapeHtml(r.reason_detail)}</div>`;
+    if (aging) reasonCell += `<div style="color:#dc2626; font-size:11px; font-weight:800; margin-top:3px;">⚠️ Open ${_claimDaysOpen(r)} days${canEscalate ? ' · likely lost' : ''}</div>`;
+
+    const sBtn = 'font-size:11px; font-weight:800; border-radius:7px; padding:5px 9px; cursor:pointer; line-height:1; white-space:nowrap;';
+    const acts = [];
+    if (aging) acts.push(`<button onclick="ackClaim('${r.id}')" title="Mark that you checked on this — resets the 7-day reminder" style="${sBtn} background:#ecfdf5; border:1.5px solid #a7f3d0; color:#047857;">✓ Still in progress</button>`);
+    if (canEscalate) acts.push(`<button onclick="toggleEscalateRow('${r.id}')" title="Open a loss claim on this ticket" style="${sBtn} background:#eff6ff; border:1.5px solid #bfdbfe; color:#1d4ed8;">Open a claim</button>`);
+    // Deleting a claim needs DM/CEO approval — the trash button sends a request, and a
+    // claim already awaiting approval shows a pending badge instead.
+    if (r.delete_requested_at) {
+        acts.push(`<span title="Waiting on DM/CEO approval" style="display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:800; color:#b45309; background:#fffbeb; border:1.5px solid #fde68a; border-radius:9px; padding:6px 9px; white-space:nowrap;">🗑 Delete requested</span>`);
+    } else {
+        acts.push(`<button onclick="requestClaimDelete('${r.id}', ${!!hasChild})" title="Request deletion (a DM or CEO must approve)" style="display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:9px; cursor:pointer; font-size:17px; line-height:1;" onmouseover="this.style.background='#fee2e2';" onmouseout="this.style.background='#fff5f5';">🗑</button>`);
+    }
+    const actionsCell = `<div style="display:flex; flex-direction:column; gap:5px; align-items:flex-start;">${acts.join('')}</div>`;
+
+    const resolvedCell = r.resolved_at
+        ? `<span style="color:${sc.fg}; white-space:nowrap; font-weight:700;">${fmtDate(r.resolved_at)}</span>`
+        : `<span style="color:#cbd5e1; white-space:nowrap;">—</span>`;
+
+    // Aging → red tint/edge; otherwise a child claim gets a blue tint/edge.
+    let rowStyle = '';
+    if (aging) rowStyle = 'background:#fef2f2; box-shadow:inset 3px 0 0 #dc2626;';
+    else if (isChild) rowStyle = 'background:#f0f7ff; box-shadow:inset 3px 0 0 #93c5fd;';
+
+    const caseCell = isChild
+        ? `<span style="color:#60a5fa; font-weight:900; margin-right:5px;">↳</span><span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`
+        : `<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`;
+
+    return `<tr style="${rowStyle}">
+        ${td(`<span style="font-weight:800; color:${isChild ? '#94a3b8' : 'var(--slate-charcoal)'};">${num}</span>`, 'white-space:nowrap;')}
+        ${showStore ? td(isChild ? '' : `<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`) : ''}
+        ${td(caseCell, isChild ? 'padding-left:20px;' : '')}
+        ${td(escapeHtml(r.item_sku || '—'))}
+        ${td(fmtPrice(r.price), 'white-space:nowrap; font-weight:700;')}
+        ${td(fmtPrice(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}
+        ${td(reasonCell)}
+        ${td(statusCell, 'white-space:nowrap;')}
+        ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
+        ${td(resolvedCell)}
+        ${td(actionsCell)}
+    </tr>`;
+}
+
+// Inline form (a hidden table row) for opening a loss claim on an Item-Not-Received
+// ticket — same fields as a new claim, prefilled with the item's value/cost.
+function _escalateFormRow(r, colCount) {
+    const inp = 'width:100%; padding:7px 9px; border:1.5px solid #cbd5e1; border-radius:7px; font-size:12px; font-weight:600; box-sizing:border-box; background:#fff;';
+    const lbl = t => `<label style="display:block; font-size:9px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; margin-bottom:3px;">${t}</label>`;
+    const val = r.price != null ? r.price : '';
+    const cost = r.cost != null ? r.cost : '';
+    return `<tr id="esc-row-${r.id}" style="display:none; background:#f1f5f9;">
+        <td colspan="${colCount}" style="padding:14px 16px; border-bottom:1px solid #e2e8f0;">
+            <div style="font-weight:800; font-size:12px; color:#1d4ed8; margin-bottom:10px;">Open a loss claim on this ticket</div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:10px;">
+                <div>${lbl('Claim')}<select id="esc-${r.id}-reason" style="${inp}"><option value="Shopify Claim">Shopify Claim</option><option value="USPS Claim">USPS Claim</option><option value="UPS Claim">UPS Claim</option></select></div>
+                <div>${lbl('Type')}<select id="esc-${r.id}-type" style="${inp}"><option value="Loss">Loss</option><option value="Damage">Damage</option></select></div>
+                <div>${lbl('Claim #')}<input id="esc-${r.id}-num" style="${inp}" placeholder="e.g. 9400-1234"></div>
+                <div>${lbl('Value')}<input id="esc-${r.id}-value" type="number" step="0.01" min="0" value="${val}" style="${inp}"></div>
+                <div>${lbl('Cost')}<input id="esc-${r.id}-cost" type="number" step="0.01" min="0" value="${cost}" style="${inp}"></div>
+                <div>${lbl('Detail (optional)')}<input id="esc-${r.id}-detail" style="${inp}" placeholder="Notes"></div>
+            </div>
+            <div style="display:flex; gap:8px; margin-top:12px;">
+                <button onclick="saveEscalation('${r.id}')" class="btn-primary" style="font-size:12px; padding:7px 16px;">Save claim</button>
+                <button onclick="toggleEscalateRow('${r.id}')" class="btn-secondary" style="font-size:12px; padding:7px 16px;">Cancel</button>
+            </div>
+        </td>
+    </tr>`;
+}
+
+function toggleEscalateRow(id) {
+    const row = document.getElementById('esc-row-' + id);
+    if (row) row.style.display = (row.style.display === 'none' || !row.style.display) ? 'table-row' : 'none';
+}
+
+// "Still in progress" — verify the manager checked on an aging case (resets the clock).
+async function ackClaim(id) {
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'ack_claim', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        const seen = _seenAgingClaims(); seen.delete(id); _saveSeenAgingClaims(seen);
+        fetchMyClaims();
+    } catch (e) {
+        alert('Could not update: ' + e.message);
+    }
+}
+
+// Save the inline "open a claim" form — creates a real child claim linked to the
+// Item-Not-Received ticket (and resets the parent's clock; that's a check-in).
+async function saveEscalation(id) {
+    const g = s => { const el = document.getElementById(`esc-${id}-${s}`); return el ? String(el.value).trim() : ''; };
+    const reason = g('reason'), type = g('type'), num = g('num'), value = g('value'), cost = g('cost'), detail = g('detail');
+    const num2 = v => (v === '' || v == null) ? null : Number(v);
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'escalate_claim', id,
+                reason_type: `${reason} — ${type}`,
+                case_number: num || null,
+                price: num2(value), cost: num2(cost),
+                reason_detail: detail || null,
+                created_by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        const seen = _seenAgingClaims(); seen.delete(id); _saveSeenAgingClaims(seen);
+        fetchMyClaims();
+    } catch (e) {
+        alert('Could not save: ' + e.message);
+    }
+}
+
+// =========================================================
+//  DM / CEO CLAIMS OVERSIGHT — checks & balances across all stores
+// =========================================================
+const _CLAIMS_OVERSIGHT_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+let _oversightAll = [];
+let _ovStore = '', _ovStatus = ''; // oversight "All claims" filters
+
+function openClaimsOversight() {
+    toggleModal('claimsOversightModal');
+    fetchAllClaims();
+}
+
+async function fetchAllClaims() {
+    const body = document.getElementById('claims-oversight-body');
+    if (!body) return;
+    body.innerHTML = '<div class="status-message">Loading all claims…</div>';
+    try {
+        const res = await fetch(`${CLAIMS_URL}?v=${Date.now()}`); // no stores param → every store
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        _oversightAll = json.data || [];
+        renderClaimsOversight();
+    } catch (e) {
+        body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load claims.</div>';
+    }
+}
+
+function renderClaimsOversight() {
+    const body = document.getElementById('claims-oversight-body');
+    if (!body) return;
+    const rows = _oversightAll;
+    // An INR ticket that's been escalated to a loss claim (has a child) is no longer
+    // an open claim itself — the child loss claim is the active one. Exclude it.
+    const supersededParents = new Set(rows.filter(r => r.parent_id).map(r => r.parent_id));
+    const open = rows.filter(r => r.status === 'in_progress' && !supersededParents.has(r.id));
+    const aging = open.filter(_isClaimAging);
+    const reviewed = open.filter(r => r.last_checked_at && !_isClaimAging(r)); // checked in & current
+    const resolved = rows.filter(r => r.status !== 'in_progress');
+    const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+
+    const card = (label, val, color) => `<div style="flex:1; min-width:110px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:13px 15px;">
+        <div style="font-size:26px; font-weight:900; color:${color}; line-height:1;">${val}</div>
+        <div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; margin-top:4px;">${label}</div>
+    </div>`;
+    let html = `<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px;">
+        ${card('Open', open.length, '#1e293b')}
+        ${card('Over 7 days', aging.length, aging.length ? '#dc2626' : '#94a3b8')}
+        ${card('Reviewed', reviewed.length, '#059669')}
+        ${card('Resolved', resolved.length, '#64748b')}
+    </div>`;
+
+    // Pending delete requests — a manager can't remove a claim directly; a DM/CEO
+    // approves (permanently deletes) or denies (keeps it). Shown up top for action.
+    const deleteReqs = rows.filter(r => r.delete_requested_at)
+        .sort((a, b) => new Date(a.delete_requested_at) - new Date(b.delete_requested_at));
+    if (deleteReqs.length) {
+        html += `<div style="background:#fffbeb; border:1.5px solid #fde68a; border-radius:12px; padding:14px 16px; margin-bottom:18px;">
+            <div style="font-weight:800; font-size:13px; color:#92400e; margin-bottom:10px;">🗑 Delete requests (${deleteReqs.length}) — approval needed</div>
+            <div style="display:flex; flex-direction:column; gap:8px;">`;
+        deleteReqs.forEach(r => {
+            const who = r.delete_requested_by ? escapeHtml(r.delete_requested_by) : 'Manager';
+            html += `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:#fff; border:1px solid #fde68a; border-radius:9px; padding:9px 12px;">
+                <div style="font-size:12.5px; color:var(--slate-charcoal);">
+                    <span style="font-weight:800;">${escapeHtml(r.store || '')}</span>
+                    · <span style="font-weight:700;">${escapeHtml(r.case_number || '')}</span>
+                    <span style="color:#94a3b8;"> — ${escapeHtml(r.reason_type || '')}</span>
+                    <span style="color:#b45309; font-weight:700;"> · requested by ${who}</span>
+                </div>
+                <div style="display:flex; gap:8px;">
+                    <button onclick="approveClaimDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Approve delete</button>
+                    <button onclick="denyClaimDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#f1f5f9; border:1.5px solid #cbd5e1; color:#475569;">Deny</button>
+                </div>
+            </div>`;
+        });
+        html += `</div></div>`;
+    }
+
+    // Per-store breakdown + a reminder ping.
+    const byStore = {};
+    _CLAIMS_OVERSIGHT_STORES.forEach(s => { byStore[s] = { open: 0, aging: 0, reviewed: 0 }; });
+    open.forEach(r => {
+        const s = (r.store || '').toUpperCase();
+        if (!byStore[s]) byStore[s] = { open: 0, aging: 0, reviewed: 0 };
+        byStore[s].open++;
+        if (_isClaimAging(r)) byStore[s].aging++;
+        else if (r.last_checked_at) byStore[s].reviewed++;
+    });
+    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0;">${t}</th>`;
+    const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; ${extra}">${c}</td>`;
+    html += `<div style="font-weight:800; font-size:13px; margin-bottom:8px; color:var(--slate-charcoal);">By store</div>
+        <div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px; margin-bottom:20px;">
+        <thead><tr>${th('Store')}${th('Open')}${th('Over 7 Days')}${th('Reviewed')}${th('')}</tr></thead><tbody>`;
+    Object.keys(byStore).forEach(s => {
+        const d = byStore[s];
+        // A reminder is only warranted for claims over 7 days that haven't been
+        // reviewed or escalated to a claim — i.e. the store's aging count. If a
+        // store is caught up (or only has fresh/reviewed claims), no button.
+        const ping = d.aging
+            ? `<button onclick="pingStoreClaims('${s}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:5px 11px; cursor:pointer; background:#eff6ff; border:1.5px solid #bfdbfe; color:#1d4ed8;">🔔 Send reminder</button>`
+            : `<span style="color:#cbd5e1; font-size:11px;">—</span>`;
+        html += `<tr>
+            ${td(`<span style="font-weight:800; color:var(--slate-charcoal);">${s}</span>`)}
+            ${td(`<span style="font-weight:700;">${d.open}</span>`)}
+            ${td(`<span style="font-weight:800; color:${d.aging ? '#dc2626' : '#cbd5e1'};">${d.aging}</span>`)}
+            ${td(`<span style="font-weight:800; color:${d.reviewed ? '#059669' : '#cbd5e1'};">${d.reviewed}</span>`)}
+            ${td(ping, 'text-align:right;')}
+        </tr>`;
+    });
+    html += `</tbody></table></div>`;
+
+    // Full claims list — every claim across all stores, with details + store/status filters.
+    const byId = {}; rows.forEach(r => { byId[r.id] = r; });
+    const storeOpts = ['', ..._CLAIMS_OVERSIGHT_STORES].map(s => `<option value="${s}" ${s === _ovStore ? 'selected' : ''}>${s || 'All stores'}</option>`).join('');
+    const statusOpts = [['', 'All statuses'], ['in_progress', 'In Progress'], ['recovered', 'Recovered'], ['denied', 'Denied']]
+        .map(([v, l]) => `<option value="${v}" ${v === _ovStatus ? 'selected' : ''}>${l}</option>`).join('');
+    const selStyle = 'padding:8px 10px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:12.5px; font-weight:600; background:#fff;';
+    html += `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin:6px 0 10px;">
+        <div style="font-weight:800; font-size:13px; color:var(--slate-charcoal);">All claims</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <select onchange="_ovStore=this.value; renderClaimsOversight();" style="${selStyle}">${storeOpts}</select>
+            <select onchange="_ovStatus=this.value; renderClaimsOversight();" style="${selStyle}">${statusOpts}</select>
+        </div>
+    </div>`;
+
+    // Nest loss claims under their original INR ticket (same as the manager view).
+    const hasKids = new Set(rows.filter(r => r.parent_id).map(r => r.parent_id));
+    const kidsOf = {}; rows.forEach(r => { if (r.parent_id) (kidsOf[r.parent_id] = kidsOf[r.parent_id] || []).push(r); });
+    let tops = rows.filter(r => !r.parent_id || !byId[r.parent_id]);
+    if (_ovStore) tops = tops.filter(r => (r.store || '').toUpperCase() === _ovStore);
+    if (_ovStatus) tops = tops.filter(r => r.status === _ovStatus);
+    // Sort needs-attention first: over-7-day open claims → other open → escalated
+    // INRs → resolved; newest created first within each group.
+    const ovRank = r => {
+        if (r.status !== 'in_progress') return 3;          // resolved (recovered/denied)
+        if (supersededParents.has(r.id)) return 2;         // INR that became a loss claim
+        if (_isClaimAging(r)) return 0;                    // open & over 7 days — act now
+        return 1;                                          // open & current
+    };
+    tops.sort((a, b) => ovRank(a) - ovRank(b) || new Date(b.created_at) - new Date(a.created_at));
+    if (!tops.length) {
+        html += `<div style="padding:18px; text-align:center; color:#94a3b8; font-weight:600; background:#f8fafc; border-radius:10px;">No claims match this view.</div>`;
+    } else {
+        html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12px;">
+            <thead><tr>${th('#')}${th('Store')}${th('Case #')}${th('SKU')}${th('Value')}${th('Cost')}${th('Reason')}${th('Status')}${th('Created')}${th('Reviewed')}</tr></thead><tbody>`;
+        let n = 0;
+        tops.forEach(r => {
+            n++;
+            html += _ovRowHtml(r, byId, hasKids.has(r.id), `${n}`);
+            (kidsOf[r.id] || []).forEach((k, ci) => { html += _ovRowHtml(k, byId, false, `${n}.${ci + 1}`); });
+        });
+        html += `</tbody></table></div>`;
+    }
+    body.innerHTML = html;
+}
+
+// Read-only detail row for the oversight "All claims" table. A child loss claim
+// (parent_id set) is indented and notes which ticket it came from.
+function _ovRowHtml(r, byId, hasChild, num) {
+    const isChild = !!r.parent_id;
+    const fmtPrice = v => (v == null || v === '') ? '—' : '$' + Number(v).toFixed(2);
+    const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+    const td = (c, extra = '') => `<td style="padding:8px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
+    const sc = CLAIM_STATUS[r.status] || CLAIM_STATUS.in_progress;
+    const aging = _isClaimAging(r) && !hasChild;
+    // Mirror the manager view: a parent INR with a child shows status "on claim ↓".
+    const statusCell = hasChild
+        ? `<span style="font-size:11px; font-weight:800; color:#94a3b8;">${sc.label}</span><div style="font-size:9px; color:#cbd5e1; font-weight:800; text-transform:uppercase; letter-spacing:.3px; margin-top:1px;">on claim ↓</div>`
+        : `<span style="display:inline-block; font-size:10px; font-weight:800; background:${sc.bg}; color:${sc.fg}; border-radius:999px; padding:3px 10px; white-space:nowrap;">${sc.label}</span>`;
+    let reasonCell = escapeHtml(r.reason_type || '—');
+    if (aging) reasonCell += `<div style="color:#dc2626; font-size:10.5px; font-weight:800; margin-top:2px;">⚠️ Open ${_claimDaysOpen(r)} days</div>`;
+    if (r.delete_requested_at) reasonCell += `<div style="color:#b45309; font-size:10.5px; font-weight:800; margin-top:2px;">🗑 Delete requested</div>`;
+    const reviewed = r.status !== 'in_progress'
+        ? `<span style="color:#cbd5e1;">—</span>`
+        : (r.last_checked_at ? `<span style="color:#059669; font-weight:700; white-space:nowrap;">${fmtDate(r.last_checked_at)}</span>` : `<span style="color:#dc2626; font-weight:800;">Never</span>`);
+    let rowStyle = '';
+    if (aging) rowStyle = 'background:#fef2f2; box-shadow:inset 3px 0 0 #dc2626;';
+    else if (isChild) rowStyle = 'background:#f0f7ff; box-shadow:inset 3px 0 0 #93c5fd;';
+    const parent = isChild ? byId[r.parent_id] : null;
+    const caseCell = isChild
+        ? `<span style="color:#60a5fa; font-weight:900; margin-right:5px;">↳</span><span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>${parent ? `<div style="font-size:10px; color:#94a3b8; font-weight:600;">claim on ${escapeHtml(parent.case_number || '')}</div>` : ''}`
+        : `<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`;
+    return `<tr style="${rowStyle}">
+        ${td(`<span style="font-weight:800; color:${isChild ? '#94a3b8' : 'var(--slate-charcoal)'};">${num}</span>`, 'white-space:nowrap;')}
+        ${td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`)}
+        ${td(caseCell, isChild ? 'padding-left:18px;' : '')}
+        ${td(escapeHtml(r.item_sku || '—'))}
+        ${td(fmtPrice(r.price), 'white-space:nowrap; font-weight:700;')}
+        ${td(fmtPrice(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}
+        ${td(reasonCell)}
+        ${td(statusCell, 'white-space:nowrap;')}
+        ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
+        ${td(reviewed)}
+    </tr>`;
+}
+
+// Nudge a store's manager to review their open claims. Delivers as a dedicated RED
+// review pop-up on the manager's dashboard (separate from green store comments).
+async function pingStoreClaims(store) {
+    const rows = _oversightAll || [];
+    // Reminders target only claims that are actually behind: open, over 7 days,
+    // not yet reviewed ("Still in progress") and not already escalated to a claim.
+    // Escalated INRs (parents with a child loss claim) are excluded like everywhere else.
+    const sup = new Set(rows.filter(r => r.parent_id).map(r => r.parent_id));
+    const aging = rows.filter(r => r.status === 'in_progress'
+        && (r.store || '').toUpperCase() === store
+        && !sup.has(r.id)
+        && _isClaimAging(r));
+    if (!aging.length) {
+        alert(`${store} has no claims over 7 days awaiting review — nothing to remind about.`);
+        return;
+    }
+    if (!confirm(`Send ${store} a reminder to review ${aging.length} claim${aging.length === 1 ? '' : 's'} open over 7 days without a review?`)) return;
+    // Message is generic — the manager's popup computes the live over-7-day count.
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'send_reminder', store,
+                message: 'Please review your open insurance claims.',
+                from: sessionStorage.getItem('speeksUserName') || 'Leadership',
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        alert(`Reminder sent to ${store}.`);
+    } catch (e) {
+        alert('Could not send the reminder: ' + (e.message || e));
+    }
 }
 
 async function updateClaimStatus(id, status) {
@@ -9728,8 +10280,36 @@ async function updateClaimStatus(id, status) {
     }
 }
 
-async function deleteClaim(id) {
-    if (!confirm('Delete this case? This cannot be undone.')) return;
+// Manager-side: request deletion. Claims are never deleted directly by a manager —
+// a DM/CEO must approve, so nothing is quietly removed.
+async function requestClaimDelete(id, hasChild) {
+    // Deleting an Item-Not-Received ticket that already has a loss claim removes
+    // both (child cascades) — spell that out so it isn't a surprise.
+    const msg = hasChild
+        ? 'Request deletion of this Item-Not-Received ticket?\n\nThis also removes the loss claim opened on it. A DM or CEO must approve before anything is removed.'
+        : 'Request deletion of this claim?\n\nA DM or CEO must approve it before the claim is removed.';
+    if (!confirm(msg)) return;
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'request_delete', id, requested_by: sessionStorage.getItem('speeksUserName') || null }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Request failed');
+        alert('Delete request sent. A DM or CEO will review it.');
+        fetchMyClaims();
+    } catch (e) {
+        alert('Could not send the request: ' + (e.message || e));
+    }
+}
+
+// DM/CEO-side: approve a pending delete request → permanently removes the claim.
+async function approveClaimDelete(id) {
+    const kids = (_oversightAll || []).filter(r => r.parent_id === id).length;
+    const msg = kids
+        ? `Approve deletion? This permanently removes the ticket AND the ${kids} loss claim${kids === 1 ? '' : 's'} opened on it. This cannot be undone.`
+        : 'Approve deletion? This permanently removes the claim and cannot be undone.';
+    if (!confirm(msg)) return;
     try {
         const res = await fetch(CLAIMS_URL, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -9737,11 +10317,213 @@ async function deleteClaim(id) {
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Delete failed');
-        fetchMyClaims();
+        fetchAllClaims();
     } catch (e) {
-        alert('Could not delete: ' + e.message);
+        alert('Could not delete: ' + (e.message || e));
     }
 }
+
+// DM/CEO-side: deny a pending delete request → keeps the claim, clears the flag.
+async function denyClaimDelete(id) {
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'deny_delete', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        fetchAllClaims();
+    } catch (e) {
+        alert('Could not deny: ' + (e.message || e));
+    }
+}
+
+// --- AGING-CLAIM RED ALERT BUBBLE ---
+// Nudges managers to revisit any case still "In Progress" after 7 days. For an
+// Item-Not-Received case that old, the buyer was likely already refunded and the
+// item is probably truly lost — so we recommend opening a Damage/Loss claim.
+const CLAIM_AGE_DAYS = 7;
+
+// A case "ages" from when it was last checked on (last_checked_at) or, if never
+// checked, from when it was opened (created_at). Acking via "Still in progress"
+// resets this clock.
+function _claimEffectiveDate(r) {
+    return new Date(r.last_checked_at || r.created_at).getTime();
+}
+function _claimDaysOpen(r) {
+    const t = _claimEffectiveDate(r);
+    return isNaN(t) ? '?' : Math.floor((Date.now() - t) / 86400000);
+}
+function _isClaimAging(r) {
+    if (!r || r.status !== 'in_progress') return false;
+    const t = _claimEffectiveDate(r);
+    return !isNaN(t) && t < Date.now() - CLAIM_AGE_DAYS * 86400000;
+}
+
+function _seenAgingClaims() {
+    try { return new Set(JSON.parse(sessionStorage.getItem('speeksSeenAgingClaims') || '[]')); }
+    catch (e) { return new Set(); }
+}
+function _saveSeenAgingClaims(keys) {
+    sessionStorage.setItem('speeksSeenAgingClaims', JSON.stringify([...keys]));
+}
+
+// True while a DM/CEO-pushed reminder currently owns the shared red bubble, so the
+// generic aging alert won't overwrite it (avoids the login flicker of two firing).
+let _reminderBubbleActive = false;
+window.closeClaimAlertBubble = function () {
+    const b = document.getElementById('claimAlertBubble');
+    if (b) b.style.display = 'none';
+    _reminderBubbleActive = false; // free the bubble for a later aging alert
+};
+
+// --- DM/CEO-pushed review reminders (delivered to the manager as the same RED bubble) ---
+function _seenReminders() {
+    try { return new Set(JSON.parse(sessionStorage.getItem('speeksSeenClaimReminders') || '[]')); }
+    catch (e) { return new Set(); }
+}
+function _saveSeenReminders(keys) {
+    sessionStorage.setItem('speeksSeenClaimReminders', JSON.stringify([...keys]));
+}
+
+async function checkClaimReminders() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
+    if (!_CLAIM_ALERT_ROLES.has(role)) return;
+    const stores = (typeof _claimStores === 'function') ? _claimStores() : [];
+    if (!stores.length) return;
+    try {
+        const res = await fetch(`${CLAIMS_URL}?reminders=1&stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) return;
+        const seen = _seenReminders();
+        const fresh = (json.data || []).filter(r => !seen.has(r.id)); // newest first from API
+        if (!fresh.length) return;
+        fresh.forEach(r => seen.add(r.id));
+        _saveSeenReminders(seen);
+
+        // Compute the manager's CURRENT open / over-7-day counts so the reminder
+        // reflects what actually still needs review (not a stale number).
+        let openCount = 0, agingCount = 0;
+        try {
+            const cRes = await fetch(`${CLAIMS_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+            const cj = await cRes.json();
+            if (cj.success) {
+                const sup = new Set((cj.data || []).filter(r => r.parent_id).map(r => r.parent_id));
+                const op = (cj.data || []).filter(r => r.status === 'in_progress' && !sup.has(r.id));
+                openCount = op.length;
+                agingCount = op.filter(_isClaimAging).length;
+            }
+        } catch (e) { /* counts stay 0 */ }
+        _showClaimReminder(fresh[0], openCount, agingCount);
+    } catch (e) { /* silent */ }
+}
+
+function _showClaimReminder(rem, openCount, agingCount) {
+    const from = rem.from_name ? escapeHtml(rem.from_name) : 'Leadership';
+    let body;
+    if (agingCount) {
+        body = agingCount === 1
+            ? '1 claim has been open over 7 days. Please review it.'
+            : `${agingCount} claims have been open over 7 days. Please review them.`;
+    } else if (openCount) {
+        body = "You're all caught up on aging claims.";
+    } else {
+        body = 'All your claims are resolved — nice work!';
+    }
+    _reminderBubbleActive = true; // claims the shared bubble so the aging alert won't clobber it
+    _renderClaimBubble('🛟', `${from} — Claims Review`, body);
+}
+
+let _claimAlertPollStarted = false;
+const _CLAIM_ALERT_ROLES = new Set(['manager', 'owner (manager)', 'owner manager']);
+async function checkAgingClaims() {
+    // Same audience as the Insurance Claims tool: managers, owner-managers, MSM
+    // (MSM logs in as role 'manager'). ASMs/employees never file claims.
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
+    if (!_CLAIM_ALERT_ROLES.has(role)) return;
+    const stores = (typeof _claimStores === 'function') ? _claimStores() : [];
+    if (!stores.length) return; // no store scope → nothing to check
+
+    if (!_claimAlertPollStarted) {
+        _claimAlertPollStarted = true;
+        setInterval(checkAgingClaims, 10 * 60 * 1000);
+    }
+
+    try {
+        const res = await fetch(`${CLAIMS_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) return;
+        const data = json.data || [];
+        const sup = new Set(data.filter(r => r.parent_id).map(r => r.parent_id)); // exclude escalated INRs
+        const aging = data.filter(r => !sup.has(r.id) && _isClaimAging(r));
+        if (!aging.length) return;
+
+        // A DM/CEO reminder already owns the bubble — don't clobber it (it already
+        // conveys the aging count). The aging alert can show once that's dismissed.
+        const bubble = document.getElementById('claimAlertBubble');
+        const bubbleVisible = bubble && getComputedStyle(bubble).display !== 'none';
+        if (_reminderBubbleActive && bubbleVisible) return;
+
+        // Only auto-pop when there's an aging case we haven't surfaced this session.
+        const seen = _seenAgingClaims();
+        if (!aging.some(r => !seen.has(r.id))) return;
+        aging.forEach(r => seen.add(r.id));
+        _saveSeenAgingClaims(seen);
+
+        _showClaimAlert(aging.length);
+    } catch (e) {
+        console.error('Aging claim check failed:', e);
+    }
+}
+
+// Keep the claim alert stacked UNDER the green store-comment bubble whenever that
+// one is showing; otherwise sit at the normal top spot. Called both when the alert
+// appears and when the comment bubble shows/hides, so order of arrival doesn't matter.
+function _positionClaimAlert() {
+    const bubble = document.getElementById('claimAlertBubble');
+    if (!bubble) return;
+    const daily = document.getElementById('dailyMessageBubble');
+    const dailyVisible = daily && getComputedStyle(daily).display !== 'none' && daily.offsetHeight > 0;
+    bubble.style.top = dailyVisible ? (daily.getBoundingClientRect().bottom + 12) + 'px' : '116px';
+}
+
+// A general red reminder — it does NOT name specific cases; the My Cases tab
+// highlights the actual aging case(s) in red. A button jumps straight there.
+// Shared red-bubble renderer (same size/format as the green store-comment bubble:
+// emoji in the icon slot, title + body in the text slot), with a Review button.
+function _renderClaimBubble(icon, titleHtml, bodyHtml) {
+    const bubble = document.getElementById('claimAlertBubble');
+    const textEl = document.getElementById('claimAlertBubbleText');
+    const iconEl = document.getElementById('claimAlertBubbleIcon');
+    if (!bubble || !textEl) return;
+    if (iconEl) { iconEl.textContent = icon; iconEl.style.display = ''; }
+    textEl.style.display = 'flex';
+    textEl.style.flexDirection = 'column';
+    textEl.style.gap = '7px';
+    textEl.innerHTML = `
+        <div style="line-height:1.4;"><strong>${titleHtml}</strong></div>
+        <div style="line-height:1.4; opacity:0.96;">${bodyHtml}</div>
+        <button onclick="closeClaimAlertBubble(); openClaimsModal(); switchClaimsTab('view');"
+            style="align-self:flex-start; background:rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.5); color:#fff; font-weight:800; font-size:12px; border-radius:8px; padding:6px 12px; cursor:pointer;"
+            onmouseover="this.style.background='rgba(255,255,255,0.3)';" onmouseout="this.style.background='rgba(255,255,255,0.18)';">Review claims</button>`;
+    bubble.style.display = 'flex';
+    _positionClaimAlert();
+    bubble.animate([
+        { transform: 'scale(0.95) translateX(10px)', opacity: 0 },
+        { transform: 'scale(1) translateX(0)', opacity: 1 }
+    ], { duration: 400, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
+}
+
+function _showClaimAlert(count) {
+    const body = count === 1
+        ? '1 claim has been open over 7 days. Please review it.'
+        : `${count} claims have been open over 7 days. Please review them.`;
+    _renderClaimBubble('⚠️', 'Claims Review', body);
+}
+
+// Console preview of the red aging-claim bubble (no need to wait 7 days):
+// open DevTools → console and run:  _previewClaimAlert()
+window._previewClaimAlert = function () { _showClaimAlert(2); };
 
 // --- STORE COMMENTS LOGIC ---
 
@@ -9761,7 +10543,7 @@ let _storeCommentPollingStarted = false;
 function startStoreCommentPolling() {
     if (_storeCommentPollingStarted) return;
     _storeCommentPollingStarted = true;
-    setInterval(fetchAndDisplayStoreComment, 30 * 1000);
+    setInterval(() => { fetchAndDisplayStoreComment(); checkClaimReminders(); }, 30 * 1000);
 }
 
 // Opens the modal normally from the Speeks Tools menu (Fully Unlocked)
@@ -9840,6 +10622,7 @@ async function submitStoreComment() {
 window.closeDailyCommentBubble = function() {
     const bubble = document.getElementById('dailyMessageBubble');
     if (bubble) bubble.style.display = 'none';
+    if (typeof _positionClaimAlert === 'function') _positionClaimAlert(); // claim alert moves back up
 };
 
 async function fetchAndDisplayStoreComment() {
@@ -9913,11 +10696,12 @@ async function fetchAndDisplayStoreComment() {
 
                 setTimeout(() => {
                     bubble.style.display = 'flex';
+                    if (typeof _positionClaimAlert === 'function') _positionClaimAlert(); // push the red claim alert below this
                     bubble.animate([
                         { transform: 'scale(0.9) translateX(10px)', opacity: 0 },
                         { transform: 'scale(1) translateX(0)', opacity: 1 }
                     ], { duration: 400, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
-                }, 1500); 
+                }, 1500);
             }
         }
     } catch (e) {
@@ -10189,7 +10973,20 @@ async function loadChecklist() {
 
 function renderChecklist() {
     const container = document.getElementById('checklistContent');
-    const items = checklistDataCache[currentChecklistTab] || [];
+    const rawItems = checklistDataCache[currentChecklistTab] || [];
+
+    // Collapse duplicate GLOBAL/required tasks (same text) that a manager can't
+    // delete themselves — e.g. LEE daily had "Live Product Category Check" twice.
+    // Personal items are left alone (those have their own delete button).
+    const seenGlobal = new Set();
+    const items = rawItems.filter(it => {
+        if (it.isGlobal) {
+            const key = String(it.text || '').trim().toLowerCase();
+            if (seenGlobal.has(key)) return false;
+            seenGlobal.add(key);
+        }
+        return true;
+    });
 
     if (items.length === 0) {
         container.innerHTML = `<div style="text-align: center; padding: 30px; color: #888; font-weight: 600; font-size: 13px;">No tasks for this tab. Add one below!</div>`;

@@ -2796,6 +2796,33 @@ body.is-authenticated .info-ticker { display: flex; }
 }
 .daily-bubble-close:hover { background: rgba(255,255,255,0.4); }
 
+/* Red alert bubble — aging Shopify/carrier claims & item-not-received cases.
+   Top-right like the store-comment bubble; JS stacks it underneath that one
+   (_positionClaimAlert) whenever a comment is showing so they never overlap. */
+#claimAlertBubble {
+    display: none;
+    position: fixed;
+    top: 116px;
+    right: 24px;
+    background: linear-gradient(135deg, #dc2626, #991b1b);
+    color: white;
+    padding: 11px 14px 11px 16px;
+    border-radius: 14px;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 13px;
+    box-shadow: 0 10px 28px rgba(127, 29, 29, 0.38);
+    max-width: min(380px, calc(100vw - 48px));
+    /* Lives INSIDE the header (.top-nav, z-index 100) beside the store comment, so
+       it shares that stacking context: visible over the dashboard but tucked BEHIND
+       the side panels (101) and modals (300+), exactly like the store comment.
+       This z-index only orders it vs the comment (1001) within the header; JS
+       (_positionClaimAlert) offsets it vertically so they never overlap. */
+    z-index: 1000;
+}
+#claimAlertBubbleIcon { font-size: 16px; flex-shrink: 0; margin-top: 2px; }
+#claimAlertBubbleText { white-space: normal; overflow-y: auto; max-height: 220px; }
+
 .metrics-card {
     width: 33%;
 }

@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260629j">
+  <link rel="stylesheet" href="styles.css?v=20260630w">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260629j" defer></script>
+  <script src="speeks.js?v=20260630w" defer></script>
 </head>
 <body class="preload">
 
@@ -54,6 +54,13 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
             </button>
         </div>
+    <div id="claimAlertBubble">
+    <span id="claimAlertBubbleIcon">⚠️</span>
+    <span id="claimAlertBubbleText"></span>
+    <button onclick="closeClaimAlertBubble()" class="daily-bubble-close" title="Dismiss">
+        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+    </button>
+</div>
         <a href="#" onclick="toggleIdeaModal(); return false;" class="idea-btn action-btn" title="Have an Idea?">💡</a>
         <div class="action-btn" onclick="toggleModal('quickMsgDropdown'); loadQuickMessages();" title="Quick Messages">💬</div>
         <div class="action-btn" onclick="toggleModal('hotkeysDropdown')" title="Hotkeys & Commands">🚀</div>
@@ -96,6 +103,8 @@
     </button>
   </div>
 </div>
+
+
 
 <div id="globalOverlay" class="overlay"></div>
 
@@ -204,17 +213,27 @@
                     <input id="claim-sku" class="form-input-lg" placeholder="e.g. KS01-5759A-E15">
                 </div>
                 <div>
-                    <label class="form-label-caps">Price</label>
+                    <label class="form-label-caps">Value</label>
                     <input id="claim-price" type="number" step="0.01" min="0" class="form-input-lg" placeholder="0.00">
                 </div>
                 <div>
+                    <label class="form-label-caps">Cost</label>
+                    <input id="claim-cost" type="number" step="0.01" min="0" class="form-input-lg" placeholder="0.00">
+                </div>
+                <div>
                     <label class="form-label-caps">Case Reason</label>
-                    <select id="claim-reason" class="form-input-lg">
-                        <option value="Shopify Insurance Claim">Shopify Insurance Claim</option>
+                    <select id="claim-reason" class="form-input-lg" onchange="_onClaimReasonChange()">
+                        <option value="Shopify Claim">Shopify Claim</option>
+                        <option value="USPS Claim">USPS Claim</option>
+                        <option value="UPS Claim">UPS Claim</option>
                         <option value="Item Not Received">Item Not Received</option>
-                        <option value="Arrived Damaged">Arrived Damaged</option>
-                        <option value="Lost in Transit">Lost in Transit</option>
-                        <option value="Other">Other</option>
+                    </select>
+                </div>
+                <div id="claim-type-wrap">
+                    <label class="form-label-caps">Claim Type</label>
+                    <select id="claim-type" class="form-input-lg">
+                        <option value="Damage">Damage</option>
+                        <option value="Loss">Loss</option>
                     </select>
                 </div>
             </div>
@@ -222,23 +241,40 @@
                 <label class="form-label-caps">Detail (optional)</label>
                 <input id="claim-detail" class="form-input-lg" placeholder="Any extra detail about the case…">
             </div>
-            <div>
-                <label class="form-label-caps">Status</label>
-                <select id="claim-status" class="form-input-lg">
-                    <option value="in_progress">In Progress</option>
-                    <option value="recovered">Recovered</option>
-                    <option value="denied">Denied</option>
-                </select>
-            </div>
         </div>
 
         <div id="claims-panel-view" style="display:none;">
+            <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px;">
+                <div style="flex:1; min-width:150px;">
+                    <label class="form-label-caps">Status</label>
+                    <select id="claims-status-filter" class="form-input-lg" onchange="renderClaimsTable()">
+                        <option value="">All statuses</option>
+                        <option value="in_progress">In Progress</option>
+                        <option value="recovered">Recovered</option>
+                        <option value="denied">Denied</option>
+                    </select>
+                </div>
+                <div id="claims-view-filter-row" style="display:none; flex:1; min-width:150px;">
+                    <label class="form-label-caps">Store</label>
+                    <select id="claims-view-filter" class="form-input-lg" onchange="renderClaimsTable()"></select>
+                </div>
+            </div>
             <div id="claims-table-wrap"></div>
         </div>
     </div>
 
     <div class="manage-footer flex-end">
         <button onclick="submitClaim()" class="btn-primary" id="submitClaimBtn">Save Case</button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="claimsOversightModal">
+    <div class="modal-header">
+        <h3>Insurance Claims</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div class="manage-content">
+        <div id="claims-oversight-body"><div class="status-message">Loading…</div></div>
     </div>
 </div>
 
@@ -393,6 +429,17 @@
         <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
     </div>
     <div class="manage-content">
+        <div class="mcl-field" style="margin-bottom:16px;">
+            <label class="form-label-caps">Viewing</label>
+            <select id="mcl-filter-store" class="form-input-lg" onchange="applyChecklistFilter(this.value)">
+                <option value="">All stores</option>
+                <option value="OVL">OVL</option>
+                <option value="LEE">LEE</option>
+                <option value="WSP">WSP</option>
+                <option value="MPL">MPL</option>
+                <option value="BAL">BAL</option>
+            </select>
+        </div>
         <div class="mcl-add-form">
             <div class="mcl-add-row">
                 <div class="mcl-field mcl-field-period">
@@ -422,7 +469,7 @@
             </div>
             <button class="btn-primary mcl-add-btn" id="mcl-add-btn" onclick="addRequiredTask()">+ Add Required Task</button>
         </div>
-        <div class="mcl-existing-label">Current required tasks</div>
+        <div class="mcl-existing-label" id="mcl-list-label">Current required tasks</div>
         <div id="mcl-list"><div class="status-message">Loading…</div></div>
     </div>
 </div>
@@ -698,9 +745,10 @@
   </div>
   <div class="tools-panel-body">
 
-    <div class="tools-group dynamic-module-block role-manager role-owner-manager">
+    <div class="tools-group dynamic-module-block role-manager role-owner-manager role-district-manager role-ceo">
       <div class="tools-group-label">🛟 Claims &amp; Refunds</div>
       <a class="tools-item dynamic-module-flex role-manager role-owner-manager" onclick="_closeToolsPanel(); openClaimsModal();"><span class="tools-item-icon">🛟</span>Insurance Claims</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" onclick="_closeToolsPanel(); openClaimsOversight();"><span class="tools-item-icon">📊</span>Insurance Claims</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-tom role-owner-manager">
