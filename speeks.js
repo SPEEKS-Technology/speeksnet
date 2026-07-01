@@ -11955,6 +11955,23 @@ function _boxOrderGetEmail() {
 }
 
 let _boxOrderEmails = { primary: '', secondary: '' };
+// Full box-order catalog (all store variants), kept so the vendor email can resolve
+// the correct per-store spec for products that differ by store (e.g. Packing Paper).
+let _boxOrderAllItems = [];
+
+// For a selected line, return the vendor spec (order_name) that matches the chosen
+// store — preferring a store-specific variant of the same product. Falls back to
+// whatever spec the selected row carried (or '' for plain items).
+function _resolveOrderName(o) {
+    const code = (_boxOrderGetStoreCode() || '').toUpperCase();
+    if (code && Array.isArray(_boxOrderAllItems)) {
+        const match = _boxOrderAllItems.find(it =>
+            it.order_name && it.name === o.name && it.category === o.category &&
+            (it.stores || '').split(',').map(s => s.trim().toUpperCase()).includes(code));
+        if (match) return match.order_name;
+    }
+    return o.orderName || '';
+}
 
 async function toggleBoxOrder() {
     closeAllModals();
@@ -11997,6 +12014,34 @@ async function _loadBoxOrderData() {
 }
 
 function _renderBoxOrderItems(container, items) {
+    // Keep the full catalog (every store variant) so the email can resolve the right
+    // per-store spec later — even for rows corp collapses into one line.
+    _boxOrderAllItems = Array.isArray(items) ? items.slice() : [];
+    // Some items are store-specific (e.g. MPL/BAL use a different supplier than the
+    // other stores). Show an item only if it has no store restriction, or the
+    // current store is in its list. Corp roles (CEO/DM) choose the store on the
+    // next page, so they see every item here.
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const isCorp = role === 'ceo' || role === 'district manager';
+    const storeCode = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    items = (items || []).filter(it => {
+        const s = (it.stores || '').trim();
+        if (!s) return true;        // no restriction → all stores
+        if (isCorp) return true;    // corp picks the store later → show it
+        return s.split(',').map(x => x.trim().toUpperCase()).includes(storeCode);
+    });
+    // Collapse per-store variants that share a name (e.g. "Packing Paper" differs by
+    // supplier) into ONE row. Corp then sees a single line and the vendor email
+    // resolves the correct spec from the store they pick on the next page. Managers
+    // only ever have their own store's variant here, so this is a no-op for them.
+    const seenVariant = new Set();
+    items = items.filter(it => {
+        if (!(it.stores || '').trim()) return true;   // non-scoped items never collapse
+        const k = `${it.category}|${it.name}`;
+        if (seenVariant.has(k)) return false;
+        seenVariant.add(k);
+        return true;
+    });
     const BUCKETS = [
         { key: 'Common Box',       label: 'Common Boxes' },
         { key: 'Rare Box',         label: 'Rare Boxes' },
@@ -12100,7 +12145,8 @@ function _buildBoxRow(item) {
     const subParts   = [item.dimensions, displayCat].filter(Boolean);
     if (bundleSize > 1) subParts.push(`${bundleSize}/bundle`);
     const subHtml    = escapeHtml(subParts.join(' · '));
-    return `<div class="box-order-row" data-item="${label}" data-name="${nameHtml}" data-category="${catHtml}" data-bundle="${bundleSize}">
+    const orderNameHtml = escapeHtml(item.order_name || '');
+    return `<div class="box-order-row" data-item="${label}" data-name="${nameHtml}" data-order-name="${orderNameHtml}" data-category="${catHtml}" data-bundle="${bundleSize}">
   <div class="box-order-info">
     <span class="box-order-name">${nameHtml}</span>
     <span class="box-order-subtype">${subHtml}</span>
@@ -12132,7 +12178,7 @@ function boxOrderNextPage() {
     rows.forEach(row => {
         const qty = parseInt(row.querySelector('.box-stepper-qty')?.textContent) || 0;
         const bundle = Math.max(1, parseInt(row.dataset.bundle) || 1);
-        if (qty > 0) _boxOrderSelected.push({ item: row.dataset.item, name: row.dataset.name, category: row.dataset.category, qty, bundle });
+        if (qty > 0) _boxOrderSelected.push({ item: row.dataset.item, name: row.dataset.name, orderName: row.dataset.orderName, category: row.dataset.category, qty, bundle });
     });
     if (!_boxOrderSelected.length) {
         alert('Please add at least one item before continuing.');
@@ -12144,7 +12190,9 @@ function boxOrderNextPage() {
     if (selectorEl) {
         selectorEl.style.display = isCorpRole ? '' : 'none';
         const sel = document.getElementById('boxOrderStoreSelect');
-        if (sel) sel.value = '';
+        // Corp picks a store here; default it to OVL so the preview is populated
+        // right away (they can switch stores from the dropdown).
+        if (sel) sel.value = isCorpRole ? 'OVL' : '';
     }
     const notesEl = document.getElementById('boxOrderNotes');
     if (notesEl) notesEl.value = '';
@@ -12173,11 +12221,18 @@ function _boxOrderLine(o) {
         .replace(/\bShipping Supplies\b/i, '')
         .replace(/\bBox(?:es)?\b/i, '')
         .replace(/\s+/g, ' ').trim();
-    const display = `${o.name || o.item || ''} ${displayCat}`.replace(/\s+/g, ' ').trim();
+    // A store-facing UI name can differ from the full spec the vendor needs on the
+    // order — order_name (when set) is what goes on the email; UI keeps the short name.
+    // For per-store products (e.g. Packing Paper) resolve the spec from the chosen store.
+    const orderName = _resolveOrderName(o);
+    const display = orderName
+        ? orderName
+        : `${o.name || o.item || ''} ${displayCat}`.replace(/\s+/g, ' ').trim();
     const n = (o.name || '').toLowerCase();
     let one = 'Bundle', many = 'Bundles';
     if (n.includes('peanut'))        { one = 'Bag'; many = 'Bags'; }
     else if (n.includes('gum tape')) { one = 'Box'; many = 'Boxes'; }
+    else if (n.includes('paper'))    { one = 'Roll'; many = 'Rolls'; }
     const bundle  = Math.max(1, parseInt(o.bundle) || 1);
     const bundles = Math.max(1, Math.round((o.qty || 0) / bundle));
     return `${display}: ${bundles} ${bundles === 1 ? one : many}`;
