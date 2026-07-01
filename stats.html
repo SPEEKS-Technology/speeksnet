@@ -9,9 +9,9 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260615k">
+  <link rel="stylesheet" href="styles.css?v=20260630w">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <script src="speeks.js?v=20260615k" defer></script>
+  <script src="speeks.js?v=20260630w" defer></script>
 </head>
 <body class="preload">
 
@@ -24,7 +24,7 @@
   
   <nav class="nav-bar">
     <a href="index.html" class="nav-link"><i>⚡</i><span>QuickPortal</span></a>
-    <a href="workspace.html" class="nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-tom role-assistant-manager"><i>📈</i><span>Workspace</span></a>
+    <a href="workspace.html" class="nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager"><i>📈</i><span>Workspace</span></a>
     <a href="docs.html" class="nav-link"><i>📚</i><span>Processes & Policies</span></a>
     <a href="stats.html" class="nav-link active"><i>🏆</i><span>Stats & Awards</span></a>
   </nav>
@@ -36,7 +36,7 @@
         <select id="msmStoreSelect" class="msm-store-select" onchange="setMultiStore(this.value)" aria-label="Managed store"></select>
       </div>
 
-      <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" title="SPEEKS Tools">
+      <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-owner-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" title="SPEEKS Tools">
         <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
           <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
@@ -51,6 +51,13 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
             </button>
         </div>
+    <div id="claimAlertBubble">
+    <span id="claimAlertBubbleIcon">⚠️</span>
+    <span id="claimAlertBubbleText"></span>
+    <button onclick="closeClaimAlertBubble()" class="daily-bubble-close" title="Dismiss">
+        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+    </button>
+</div>
         <a href="#" onclick="toggleIdeaModal(); return false;" class="idea-btn action-btn" title="Have an Idea?">💡</a>
         <div class="action-btn" onclick="toggleModal('quickMsgDropdown'); loadQuickMessages();" title="Quick Messages">💬</div>
         <div class="action-btn" onclick="toggleModal('hotkeysDropdown')" title="Hotkeys & Commands">🚀</div>
@@ -69,20 +76,34 @@
     </div>
 </header>
 
-<div class="nav-panel-tabs">
+<div id="infoTicker" class="info-ticker">
+  <div class="ticker-scroll-area">
+    <div class="ticker-track" id="tickerTrack"></div>
+  </div>
+  <div class="ticker-panel-buttons">
     <button class="gi-nav-toggle dynamic-module-flex role-manager role-owner-manager role-employee role-training" onclick="toggleGoalsPanel()" title="Goals &amp; Initiatives">
-        <span style="font-size: 14px; line-height: 1;">🎯</span>
+        <span style="font-size: 13px; line-height: 1;">🎯</span>
         <span>Goals &amp; Initiatives</span>
         <svg class="gi-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
-    <button class="cl-nav-toggle dynamic-module-flex role-manager role-owner-manager role-district-manager" onclick="toggleChecklistPanel(event); loadChecklist();" title="Checklist">
-        <span style="font-size: 14px; line-height: 1;">📋</span>
+    <button class="cl-nav-toggle dynamic-module-flex role-manager role-owner-manager role-district-manager role-assistant-manager" onclick="toggleChecklistPanel(event); loadChecklist();" title="Checklist">
+        <span style="font-size: 13px; line-height: 1;">📋</span>
         <span>Checklist</span>
+        <span id="cl-progress-chip" class="cl-progress-chip"></span>
         <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
+    <button class="cl-nav-toggle audit-nav-toggle dynamic-module-flex role-manager role-owner-manager role-assistant-manager" onclick="toggleAuditPanel(event); loadAudit();" title="Store Audit">
+        <span style="font-size: 13px; line-height: 1;">🧹</span>
+        <span>Store Audit</span>
+        <span id="audit-progress-chip" class="cl-progress-chip"></span>
+        <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+    </button>
+  </div>
 </div>
 
 <!-- ===== FIRST-LOGIN TUTORIAL ===== -->
+
+
 <div id="globalOverlay" class="overlay"></div>
 
 <div class="modal-menu manage-docs-menu" id="hotkeysDropdown">
@@ -271,6 +292,17 @@
         <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
     </div>
     <div class="manage-content">
+        <div class="mcl-field" style="margin-bottom:16px;">
+            <label class="form-label-caps">Viewing</label>
+            <select id="mcl-filter-store" class="form-input-lg" onchange="applyChecklistFilter(this.value)">
+                <option value="">All stores</option>
+                <option value="OVL">OVL</option>
+                <option value="LEE">LEE</option>
+                <option value="WSP">WSP</option>
+                <option value="MPL">MPL</option>
+                <option value="BAL">BAL</option>
+            </select>
+        </div>
         <div class="mcl-add-form">
             <div class="mcl-add-row">
                 <div class="mcl-field mcl-field-period">
@@ -300,7 +332,7 @@
             </div>
             <button class="btn-primary mcl-add-btn" id="mcl-add-btn" onclick="addRequiredTask()">+ Add Required Task</button>
         </div>
-        <div class="mcl-existing-label">Current required tasks</div>
+        <div class="mcl-existing-label" id="mcl-list-label">Current required tasks</div>
         <div id="mcl-list"><div class="status-message">Loading…</div></div>
     </div>
 </div>
@@ -396,31 +428,150 @@
   </div>
 
 <div id="scorecardModalOverlay" onclick="closeScorecardModal()"></div>
-<div class="modal-menu manage-menu" id="scorecardSubmitModal">
+<div class="modal-menu manage-menu" id="claimsModal">
     <div class="modal-header">
-        <h3>Submit Store Scorecard</h3>
+        <h3>Insurance Claims &amp; Refunds</h3>
         <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
     </div>
-    
+
+    <div style="padding: 14px 18px 0;">
+        <div class="notif-tabs" style="display: inline-flex;">
+            <button id="claims-tab-new" class="tab-btn active" onclick="switchClaimsTab('new')">New Case</button>
+            <button id="claims-tab-view" class="tab-btn" onclick="switchClaimsTab('view')">My Cases</button>
+        </div>
+    </div>
+
     <div class="manage-content">
-        <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-            <select id="dm-store-select" class="form-input-lg" style="flex: 1; margin-top: 0;">
+        <div id="claims-panel-new">
+            <div id="claims-store-row" style="margin-bottom: 14px;">
+                <label class="form-label-caps">Store</label>
+                <select id="claim-store" class="form-input-lg"></select>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px;">
+                <div>
+                    <label class="form-label-caps">Case Number</label>
+                    <input id="claim-case-number" class="form-input-lg" placeholder="e.g. SHPVS-040326141943">
+                </div>
+                <div>
+                    <label class="form-label-caps">Item SKU</label>
+                    <input id="claim-sku" class="form-input-lg" placeholder="e.g. KS01-5759A-E15">
+                </div>
+                <div>
+                    <label class="form-label-caps">Value</label>
+                    <input id="claim-price" type="number" step="0.01" min="0" class="form-input-lg" placeholder="0.00">
+                </div>
+                <div>
+                    <label class="form-label-caps">Cost</label>
+                    <input id="claim-cost" type="number" step="0.01" min="0" class="form-input-lg" placeholder="0.00">
+                </div>
+                <div>
+                    <label class="form-label-caps">Case Reason</label>
+                    <select id="claim-reason" class="form-input-lg" onchange="_onClaimReasonChange()">
+                        <option value="Shopify Claim">Shopify Claim</option>
+                        <option value="USPS Claim">USPS Claim</option>
+                        <option value="UPS Claim">UPS Claim</option>
+                        <option value="Item Not Received">Item Not Received</option>
+                    </select>
+                </div>
+                <div id="claim-type-wrap">
+                    <label class="form-label-caps">Claim Type</label>
+                    <select id="claim-type" class="form-input-lg">
+                        <option value="Damage">Damage</option>
+                        <option value="Loss">Loss</option>
+                    </select>
+                </div>
+            </div>
+            <div style="margin-bottom:14px;">
+                <label class="form-label-caps">Detail (optional)</label>
+                <input id="claim-detail" class="form-input-lg" placeholder="Any extra detail about the case…">
+            </div>
+        </div>
+
+        <div id="claims-panel-view" style="display:none;">
+            <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px;">
+                <div style="flex:1; min-width:150px;">
+                    <label class="form-label-caps">Status</label>
+                    <select id="claims-status-filter" class="form-input-lg" onchange="renderClaimsTable()">
+                        <option value="">All statuses</option>
+                        <option value="in_progress">In Progress</option>
+                        <option value="recovered">Recovered</option>
+                        <option value="denied">Denied</option>
+                    </select>
+                </div>
+                <div id="claims-view-filter-row" style="display:none; flex:1; min-width:150px;">
+                    <label class="form-label-caps">Store</label>
+                    <select id="claims-view-filter" class="form-input-lg" onchange="renderClaimsTable()"></select>
+                </div>
+            </div>
+            <div id="claims-table-wrap"></div>
+        </div>
+    </div>
+
+    <div class="manage-footer flex-end">
+        <button onclick="submitClaim()" class="btn-primary" id="submitClaimBtn">Save Case</button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="claimsOversightModal">
+    <div class="modal-header">
+        <h3>Insurance Claims</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div class="manage-content">
+        <div id="claims-oversight-body"><div class="status-message">Loading…</div></div>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="scorecardSubmitModal">
+    <div class="modal-header">
+        <h3>Submit Store Scores</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+
+    <div style="padding: 14px 18px 0;">
+        <div class="notif-tabs" style="display: inline-flex;">
+            <button id="sc-tab-scorecard" class="tab-btn active" onclick="switchScoreTab('scorecard')">Scorecard</button>
+            <button id="sc-tab-audit" class="tab-btn" onclick="switchScoreTab('audit')">SPEEKS Audit</button>
+        </div>
+    </div>
+
+    <div class="manage-content">
+        <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+            <select id="dm-store-select" class="form-input-lg" style="flex: 1; margin-top: 0;" onchange="onScoreStoreChange()">
                 <option value="OVL">OVL</option>
                 <option value="LEE">LEE</option>
                 <option value="WSP">WSP</option>
                 <option value="MPL">MPL</option>
                 <option value="BAL">BAL</option>
             </select>
-            <input type="date" id="dm-score-date" class="form-input-lg" style="flex: 1; margin-top: 0;">
+            <input type="date" id="dm-score-date" class="form-input-lg" style="flex: 1; margin-top: 0;" onchange="onScoreDateChange()">
         </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;" id="dm-category-inputs">
+        <div id="sc-panel-scorecard">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;" id="dm-category-inputs"></div>
+        </div>
+
+        <div id="sc-panel-audit" style="display: none;">
+            <input id="dm-audit-auditor" class="form-input-lg" placeholder="Auditor name (optional)" style="margin-top: 0; margin-bottom: 12px;">
+            <div id="dm-audit-runningbar"></div>
+            <div id="audit-entry-container" style="margin-top: 12px;"></div>
         </div>
     </div>
-    
+
     <div class="manage-footer flex-end">
         <button onclick="submitNewScorecard()" class="btn-primary" id="submitScorecardBtn">Save Scorecard</button>
+        <button onclick="submitNewAudit()" class="btn-primary" id="submitAuditBtn" style="display: none;">Save Audit</button>
     </div>
+</div>
+
+<!-- ===== AUDIT BREAKDOWN POPOUT (shared, read-only full breakdown) ===== -->
+<div id="auditBreakdownOverlay" onclick="closeAuditBreakdown()"></div>
+<div class="modal-menu manage-menu" id="auditBreakdownModal">
+    <div class="modal-header">
+        <h3 id="audit-breakdown-title">Audit Breakdown</h3>
+        <button class="modal-close-btn" onclick="closeAuditBreakdown()">✖</button>
+    </div>
+    <div class="manage-content" id="audit-breakdown-body"></div>
 </div>
 
 <!-- ===== EDIT MONTHLY GOALS MODAL ===== -->
@@ -663,6 +814,25 @@
     </div>
 </div>
 
+<div id="auditSidePanel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-assistant-manager">
+    <div class="cl-panel-header">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin: 0;">Store Audit Checklist</h3>
+            <button class="modal-close-btn" onclick="toggleAuditPanel(event)" style="width: 28px; height: 28px; font-size: 14px; background: #f1f5f9; color: #64748b;">✖</button>
+        </div>
+        <div class="notif-tabs">
+            <button id="audit-tab-daily" class="tab-btn active" onclick="switchAuditTab('daily')">Daily</button>
+            <button id="audit-tab-weekly" class="tab-btn" onclick="switchAuditTab('weekly')">Weekly</button>
+        </div>
+        <div id="audit-week-label" style="font-size: 12px; color: #64748b; font-weight: 600; margin-top: 8px;"></div>
+    </div>
+    <div class="cl-panel-body">
+        <div id="auditContent" class="cl-scroll-area">
+            <div class="status-message">Syncing Data...</div>
+        </div>
+    </div>
+</div>
+
 </main>
 
 <!-- ===== SPEEKS TOOLS SIDE PANEL ===== -->
@@ -676,17 +846,23 @@
   </div>
   <div class="tools-panel-body">
 
+    <div class="tools-group dynamic-module-block role-manager role-owner-manager role-district-manager role-ceo">
+      <div class="tools-group-label">🛟 Claims &amp; Refunds</div>
+      <a class="tools-item dynamic-module-flex role-manager role-owner-manager" onclick="_closeToolsPanel(); openClaimsModal();"><span class="tools-item-icon">🛟</span>Insurance Claims</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" onclick="_closeToolsPanel(); openClaimsOversight();"><span class="tools-item-icon">📊</span>Insurance Claims</a>
+    </div>
+
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-tom role-owner-manager">
       <div class="tools-group-label">📢 Content</div>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon">📣</span>Announcements</a>
       <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); togglePatchNotesManage();"><span class="tools-item-icon">📝</span>Patch Notes</a>
     </div>
 
-    <div class="tools-group dynamic-module-block role-district-manager">
+    <div class="tools-group dynamic-module-block role-district-manager role-ceo">
       <div class="tools-group-label">🏪 Store Ops</div>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon">🏆</span>Submit Scorecard</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon">🏆</span>Submit Scores</a>
       <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManagerChecklist();"><span class="tools-item-icon">📋</span>Manager Checklist</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon">💬</span>Send Store Comment</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon">💬</span>Send Store Comment</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-owner-manager">
