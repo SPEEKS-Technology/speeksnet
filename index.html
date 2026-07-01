@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260630w">
+  <link rel="stylesheet" href="styles.css?v=20260701d">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260701c" defer></script>
+  <script src="speeks.js?v=20260701d" defer></script>
 </head>
 
 <body class="preload">
@@ -1305,6 +1305,12 @@
         <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
     </div>
 
+    <!-- TABS — DM/CEO only (managers just see the order flow) -->
+    <div id="boxOrderTabs" style="display:none; gap:8px; padding:2px 0 14px;">
+        <button id="boxOrderTabOrder" class="box-order-tab active" onclick="boxOrderSwitchTab('order')">Order</button>
+        <button id="boxOrderTabManage" class="box-order-tab" onclick="boxOrderSwitchTab('manage')">Manage Items</button>
+    </div>
+
     <!-- PAGE 1: Item Selection -->
     <div class="manage-content" id="boxOrderPage1">
         <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:14px;">
@@ -1341,6 +1347,56 @@
             oninput="boxOrderUpdatePreview()"></textarea>
     </div>
 
+    <!-- MANAGE ITEMS (DM/CEO) — add/remove catalog items -->
+    <div class="manage-content" id="boxOrderManagePage" style="display:none;">
+        <div class="box-order-preview-label">Add an item</div>
+        <label class="form-label-caps">Title — what managers see <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <input type="text" id="boxAdminName" class="form-input-lg" placeholder="e.g. Packing Paper">
+
+        <label class="form-label-caps" style="margin-top:12px;">Section <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <select id="boxAdminCategory" class="form-input-lg">
+            <option value="Shipping Supplies">Shipping Supplies</option>
+            <option value="Common Box">Common Boxes</option>
+            <option value="Rare Box">Rare Boxes</option>
+            <option value="Very Rare Box">Very Rare Boxes</option>
+            <option value="White Storage Box">White Storage Boxes</option>
+            <option value="Bubble Mailer">Bubble Mailers</option>
+        </select>
+
+        <label class="form-label-caps" style="margin-top:12px;">Market <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <select id="boxAdminMarket" class="form-input-lg">
+            <option value="">All stores</option>
+            <option value="KC">KC — Overland Park, Lee's Summit, Westport</option>
+            <option value="STL">STL — Maplewood, Ballwin</option>
+        </select>
+
+        <div style="display:flex; gap:12px; margin-top:12px;">
+            <div style="flex:1;">
+                <label class="form-label-caps">Units per bundle <span style="font-weight:400;color:#ef4444;">*</span></label>
+                <input type="number" id="boxAdminBundle" class="form-input-lg" min="1" step="1" value="1">
+            </div>
+            <div style="flex:1;">
+                <label class="form-label-caps">Unit word <span style="font-weight:400;color:#ef4444;">*</span></label>
+                <select id="boxAdminUnit" class="form-input-lg">
+                    <option>Bundle</option>
+                    <option>Roll</option>
+                    <option>Box</option>
+                    <option>Bag</option>
+                    <option>Case</option>
+                    <option>Pack</option>
+                </select>
+            </div>
+        </div>
+
+        <label class="form-label-caps" style="margin-top:12px;">Email name — the full spec the vendor needs <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <input type="text" id="boxAdminOrderName" class="form-input-lg" placeholder="e.g. 24&quot; 40# 900' Kraft Paper">
+
+        <button class="btn-primary" style="margin-top:14px; width:100%;" onclick="boxAdminAddItem(this)">+ Add item</button>
+
+        <div class="box-order-preview-label" style="margin-top:24px;">Current items</div>
+        <div id="boxAdminItemsList"></div>
+    </div>
+
     <!-- FOOTER PAGE 1 -->
     <div class="manage-footer box-order-footer" id="boxOrderFooter1">
         <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
@@ -1352,6 +1408,11 @@
         <button class="btn-secondary" onclick="boxOrderBackPage()">← Back</button>
         <button class="btn-secondary" onclick="copyBoxOrder(this)">📋 Copy</button>
         <button class="btn-primary" onclick="sendBoxOrder()">Send Email →</button>
+    </div>
+
+    <!-- FOOTER: MANAGE ITEMS -->
+    <div class="manage-footer box-order-footer" id="boxOrderManageFooter" style="display:none;">
+        <button class="btn-secondary" onclick="closeAllModals()">Done</button>
     </div>
 </div>
 

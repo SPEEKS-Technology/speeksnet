@@ -6385,6 +6385,43 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     color: #a0aab2;
     padding-bottom: 6px;
 }
+/* DM/CEO tabs inside the Box Order tool (Order vs Manage Items) */
+#boxOrderTabs { display: flex; }
+.box-order-tab {
+    flex: 1;
+    padding: 9px 12px;
+    border: 1.5px solid #e2e8f0;
+    background: #fff;
+    border-radius: 9px;
+    font-weight: 800;
+    font-size: 13px;
+    color: #64748b;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.box-order-tab:hover { background: #f8fafc; }
+.box-order-tab.active { background: var(--slate-charcoal); color: #fff; border-color: var(--slate-charcoal); }
+.box-admin-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 9px;
+    margin-bottom: 8px;
+}
+.box-admin-item .bai-del {
+    flex-shrink: 0;
+    width: 32px; height: 32px;
+    background: #fff5f5;
+    border: 1.5px solid #fecaca;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+}
+.box-admin-item .bai-del:hover { background: #fee2e2; }
 .box-order-email-preview {
     background: #f8fafc;
     border: 1px solid #e2e8f0;

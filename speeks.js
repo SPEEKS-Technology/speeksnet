@@ -48,6 +48,7 @@ const STORE_COMMENT_URL = `${_BASE}/store-comments`;
 const CHECKLIST_URL     = `${_BASE}/checklist`;
 const STORE_AUDIT_URL   = `${_BASE}/store-audit`;
 const CLAIMS_URL        = `${_BASE}/shopify-claims`;
+const BOX_ADMIN_URL     = `${_BASE}/box-order-admin`;
 const PATCH_NOTES_URL   = `${_BASE}/patch-notes`;
 const TICKER_URL        = `${_BASE}/ticker`;
 const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
@@ -11935,6 +11936,17 @@ const BOX_ORDER_STORE_EMAILS = {
     'BAL': 'jordan@cleancarton.com'
 };
 
+// Store markets — used by the DM/CEO "Manage Items" tab to scope new catalog items.
+// KC = Kansas City metro, STL = St. Louis metro. Empty = all stores.
+const BOX_MARKET_STORES = { '': '', 'KC': 'OVL,LEE,WSP', 'STL': 'MPL,BAL' };
+function _boxStoresToMarket(stores) {
+    const s = (stores || '').replace(/\s+/g, '').toUpperCase();
+    if (!s) return 'All';
+    if (s === 'OVL,LEE,WSP') return 'KC';
+    if (s === 'MPL,BAL') return 'STL';
+    return s; // any custom combination
+}
+
 function _boxOrderGetStoreCode() {
     const selectorEl = document.getElementById('boxOrderStoreSelector');
     const corpVisible = selectorEl && selectorEl.style.display !== 'none';
@@ -11959,34 +11971,149 @@ let _boxOrderEmails = { primary: '', secondary: '' };
 // the correct per-store spec for products that differ by store (e.g. Packing Paper).
 let _boxOrderAllItems = [];
 
-// For a selected line, return the vendor spec (order_name) that matches the chosen
-// store — preferring a store-specific variant of the same product. Falls back to
-// whatever spec the selected row carried (or '' for plain items).
-function _resolveOrderName(o) {
+// Match a selected line back to a catalog item for the chosen store, so per-store
+// products (e.g. Packing Paper) use the right spec + unit. Prefers a store-specific
+// variant of the same product; falls back to any variant with that name.
+function _resolveItemVariant(o) {
+    if (!Array.isArray(_boxOrderAllItems)) return null;
     const code = (_boxOrderGetStoreCode() || '').toUpperCase();
-    if (code && Array.isArray(_boxOrderAllItems)) {
-        const match = _boxOrderAllItems.find(it =>
-            it.order_name && it.name === o.name && it.category === o.category &&
+    if (code) {
+        const m = _boxOrderAllItems.find(it => it.name === o.name && it.category === o.category &&
             (it.stores || '').split(',').map(s => s.trim().toUpperCase()).includes(code));
-        if (match) return match.order_name;
+        if (m) return m;
     }
-    return o.orderName || '';
+    return _boxOrderAllItems.find(it => it.name === o.name && it.category === o.category) || null;
+}
+
+// Naive pluralizer for unit words: Box→Boxes, Roll→Rolls, Bundle→Bundles, Bag→Bags.
+function _pluralizeUnit(w) {
+    if (!w) return w;
+    return /(?:s|x|z|ch|sh)$/i.test(w) ? w + 'es' : w + 's';
 }
 
 async function toggleBoxOrder() {
     closeAllModals();
     const modal = document.getElementById('boxOrderModal');
     if (!modal) return;
-    // Always start on page 1
-    document.getElementById('boxOrderPage1').style.display    = '';
-    document.getElementById('boxOrderFooter1').style.display  = '';
-    document.getElementById('boxOrderPage2').style.display    = 'none';
-    document.getElementById('boxOrderFooter2').style.display  = 'none';
+    // DM/CEO get a "Manage Items" tab to edit the catalog; managers just see the order flow.
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const isCorpRole = role === 'ceo' || role === 'district manager';
+    const tabs = document.getElementById('boxOrderTabs');
+    if (tabs) tabs.style.display = isCorpRole ? 'flex' : 'none';
+    boxOrderSwitchTab('order'); // reset to the order flow (page 1)
     const searchEl = document.getElementById('boxOrderSearch');
     if (searchEl) searchEl.value = '';
     modal.classList.add('show');
     lockAndBlurScreen();
     await _loadBoxOrderData();
+}
+
+// Switch between the order wizard and the DM/CEO "Manage Items" catalog editor.
+function boxOrderSwitchTab(tab) {
+    const isManage = tab === 'manage';
+    const set = (id, disp) => { const el = document.getElementById(id); if (el) el.style.display = disp; };
+    set('boxOrderManagePage', isManage ? '' : 'none');
+    set('boxOrderManageFooter', isManage ? '' : 'none');
+    if (isManage) {
+        ['boxOrderPage1', 'boxOrderPage2', 'boxOrderFooter1', 'boxOrderFooter2'].forEach(id => set(id, 'none'));
+        renderBoxAdminList();
+    } else {
+        set('boxOrderPage1', '');
+        set('boxOrderFooter1', '');
+        set('boxOrderPage2', 'none');
+        set('boxOrderFooter2', 'none');
+    }
+    const to = document.getElementById('boxOrderTabOrder');
+    const tm = document.getElementById('boxOrderTabManage');
+    if (to) to.classList.toggle('active', !isManage);
+    if (tm) tm.classList.toggle('active', isManage);
+}
+
+// Render the current catalog in the Manage Items tab, grouped by section, each with
+// a remove button. Reads _boxOrderAllItems (the full, un-collapsed catalog).
+function renderBoxAdminList() {
+    const el = document.getElementById('boxAdminItemsList');
+    if (!el) return;
+    const items = Array.isArray(_boxOrderAllItems) ? _boxOrderAllItems : [];
+    if (!items.length) {
+        el.innerHTML = '<div style="color:#a0aab2;font-size:13px;padding:6px 0;">No items yet.</div>';
+        return;
+    }
+    const cats = ['Common Box', 'Rare Box', 'Very Rare Box', 'Shipping Supplies', 'White Storage Box', 'Bubble Mailer'];
+    const label = {
+        'Common Box': 'Common Boxes', 'Rare Box': 'Rare Boxes', 'Very Rare Box': 'Very Rare Boxes',
+        'Shipping Supplies': 'Shipping Supplies', 'White Storage Box': 'White Storage Boxes', 'Bubble Mailer': 'Bubble Mailers'
+    };
+    let html = '';
+    cats.forEach(cat => {
+        const group = items.filter(i => i.category === cat);
+        if (!group.length) return;
+        html += `<div style="font-weight:800;font-size:12px;color:#64748b;margin:12px 0 6px;">${label[cat]}</div>`;
+        group.forEach(it => {
+            const meta = [
+                _boxStoresToMarket(it.stores),
+                (it.bundle_size > 1) ? `${it.bundle_size}/bundle` : '1/unit',
+                it.unit_label ? _pluralizeUnit(it.unit_label) : '',
+                it.order_name ? `“${escapeHtml(it.order_name)}”` : ''
+            ].filter(Boolean).join(' · ');
+            html += `<div class="box-admin-item">
+                <div style="min-width:0;">
+                    <div style="font-weight:800;color:var(--slate-charcoal);font-size:13px;">${escapeHtml(it.name)}</div>
+                    <div style="font-size:11px;color:#94a3b8;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${meta}</div>
+                </div>
+                <button class="bai-del" title="Remove item" onclick="boxAdminDeleteItem('${it.id}', this)">🗑</button>
+            </div>`;
+        });
+    });
+    el.innerHTML = html;
+}
+
+async function boxAdminAddItem(btn) {
+    const name = document.getElementById('boxAdminName')?.value.trim();
+    const category = document.getElementById('boxAdminCategory')?.value;
+    const market = document.getElementById('boxAdminMarket')?.value || '';
+    const bundle = parseInt(document.getElementById('boxAdminBundle')?.value) || 1;
+    const unit = document.getElementById('boxAdminUnit')?.value || 'Bundle';
+    const orderName = document.getElementById('boxAdminOrderName')?.value.trim();
+    if (!name) { alert('Enter a title (what managers see).'); return; }
+    if (!orderName) { alert('Enter the email name — the full spec the vendor needs.'); return; }
+    const stores = BOX_MARKET_STORES[market] || '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Adding…'; }
+    try {
+        const res = await fetch(BOX_ADMIN_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'add_item', name, category, order_name: orderName, unit_label: unit, bundle_size: bundle, stores }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        // Clear name + spec for the next entry; keep section/market/unit for quick repeats.
+        ['boxAdminName', 'boxAdminOrderName'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+        const b = document.getElementById('boxAdminBundle'); if (b) b.value = '1';
+        await _loadBoxOrderData();   // refresh the catalog + _boxOrderAllItems
+        renderBoxAdminList();
+    } catch (e) {
+        alert('Could not add the item: ' + (e.message || e));
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '+ Add item'; }
+    }
+}
+
+async function boxAdminDeleteItem(id, btn) {
+    if (!confirm('Remove this item from the Box Order catalog?')) return;
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch(BOX_ADMIN_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_item', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        await _loadBoxOrderData();
+        renderBoxAdminList();
+    } catch (e) {
+        alert('Could not remove: ' + (e.message || e));
+        if (btn) btn.disabled = false;
+    }
 }
 
 async function _loadBoxOrderData() {
@@ -12146,7 +12273,8 @@ function _buildBoxRow(item) {
     if (bundleSize > 1) subParts.push(`${bundleSize}/bundle`);
     const subHtml    = escapeHtml(subParts.join(' · '));
     const orderNameHtml = escapeHtml(item.order_name || '');
-    return `<div class="box-order-row" data-item="${label}" data-name="${nameHtml}" data-order-name="${orderNameHtml}" data-category="${catHtml}" data-bundle="${bundleSize}">
+    const unitLabelHtml = escapeHtml(item.unit_label || '');
+    return `<div class="box-order-row" data-item="${label}" data-name="${nameHtml}" data-order-name="${orderNameHtml}" data-unit-label="${unitLabelHtml}" data-category="${catHtml}" data-bundle="${bundleSize}">
   <div class="box-order-info">
     <span class="box-order-name">${nameHtml}</span>
     <span class="box-order-subtype">${subHtml}</span>
@@ -12178,7 +12306,7 @@ function boxOrderNextPage() {
     rows.forEach(row => {
         const qty = parseInt(row.querySelector('.box-stepper-qty')?.textContent) || 0;
         const bundle = Math.max(1, parseInt(row.dataset.bundle) || 1);
-        if (qty > 0) _boxOrderSelected.push({ item: row.dataset.item, name: row.dataset.name, orderName: row.dataset.orderName, category: row.dataset.category, qty, bundle });
+        if (qty > 0) _boxOrderSelected.push({ item: row.dataset.item, name: row.dataset.name, orderName: row.dataset.orderName, unitLabel: row.dataset.unitLabel, category: row.dataset.category, qty, bundle });
     });
     if (!_boxOrderSelected.length) {
         alert('Please add at least one item before continuing.');
@@ -12224,15 +12352,24 @@ function _boxOrderLine(o) {
     // A store-facing UI name can differ from the full spec the vendor needs on the
     // order — order_name (when set) is what goes on the email; UI keeps the short name.
     // For per-store products (e.g. Packing Paper) resolve the spec from the chosen store.
-    const orderName = _resolveOrderName(o);
+    const variant = _resolveItemVariant(o);
+    const orderName = (variant && variant.order_name) || o.orderName || '';
     const display = orderName
         ? orderName
         : `${o.name || o.item || ''} ${displayCat}`.replace(/\s+/g, ' ').trim();
     const n = (o.name || '').toLowerCase();
-    let one = 'Bundle', many = 'Bundles';
-    if (n.includes('peanut'))        { one = 'Bag'; many = 'Bags'; }
-    else if (n.includes('gum tape')) { one = 'Box'; many = 'Boxes'; }
-    else if (n.includes('paper'))    { one = 'Roll'; many = 'Rolls'; }
+    // Unit word: an explicit unit_label (set in Manage Items) wins; otherwise fall
+    // back to the legacy heuristic for older items that never had one.
+    const explicitUnit = (variant && variant.unit_label) || o.unitLabel || '';
+    let one, many;
+    if (explicitUnit) {
+        one = explicitUnit; many = _pluralizeUnit(explicitUnit);
+    } else {
+        one = 'Bundle'; many = 'Bundles';
+        if (n.includes('peanut'))        { one = 'Bag'; many = 'Bags'; }
+        else if (n.includes('gum tape')) { one = 'Box'; many = 'Boxes'; }
+        else if (n.includes('paper'))    { one = 'Roll'; many = 'Rolls'; }
+    }
     const bundle  = Math.max(1, parseInt(o.bundle) || 1);
     const bundles = Math.max(1, Math.round((o.qty || 0) / bundle));
     return `${display}: ${bundles} ${bundles === 1 ? one : many}`;
