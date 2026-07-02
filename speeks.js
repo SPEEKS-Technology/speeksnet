@@ -7092,9 +7092,15 @@ const CB_STATUS_META = {
     completed: { label: 'Completed', next: 'open' }
 };
 
+function _cbIsCorpRole() {
+    return CB_CORP_ROLES.includes((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
+}
+
 // --- Load & render
 async function cbLoad() {
-    if (_cbView === null) _cbView = 'mine';
+    // Corp roles (DM/CEO/TOM) watch the whole district — no "My Store" view;
+    // they land on All Stores and narrow with the store filter instead.
+    if (_cbView === null) _cbView = _cbIsCorpRole() ? 'all' : 'mine';
     if (_cbLoading) return;
     _cbLoading = true;
     const body = document.getElementById('cbBody');
@@ -7125,6 +7131,8 @@ function _cbSyncControls() {
         const btn = document.getElementById('cbView' + v.charAt(0).toUpperCase() + v.slice(1) + 'Btn');
         if (btn) btn.classList.toggle('active', _cbView === v);
     });
+    const mineBtn = document.getElementById('cbViewMineBtn');
+    if (mineBtn) mineBtn.style.display = _cbIsCorpRole() ? 'none' : '';
     const filter = document.getElementById('cbStoreFilter');
     if (filter) filter.style.display = (_cbView === 'mine') ? 'none' : '';
 }
