@@ -14,7 +14,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260702c" defer></script>
+  <script src="speeks.js?v=20260702d" defer></script>
 </head>
 <body class="preload">
 
@@ -520,7 +520,8 @@
               <div class="align-center gap-15">
                   <span class="district-kpi-title">📞 Customer Call Backs</span>
                   <div class="mb-view-toggle">
-                      <button id="cbViewMineBtn" class="mb-view-btn active" onclick="cbSetView('mine')">🏬 My Store</button>
+                      <!-- Corp roles (DM/CEO/TOM) get no My Store view — hidden pre-paint by applyRoleBasedUI so it never flashes -->
+                      <button id="cbViewMineBtn" class="mb-view-btn active dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-employee role-training" onclick="cbSetView('mine')">🏬 My Store</button>
                       <button id="cbViewAllBtn" class="mb-view-btn" onclick="cbSetView('all')">🌐 All Stores</button>
                       <button id="cbViewArchivedBtn" class="mb-view-btn" onclick="cbSetView('archived')">🗂️ Archived</button>
                   </div>

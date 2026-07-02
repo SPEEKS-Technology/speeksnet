@@ -7101,6 +7101,7 @@ async function cbLoad() {
     // Corp roles (DM/CEO/TOM) watch the whole district — no "My Store" view;
     // they land on All Stores and narrow with the store filter instead.
     if (_cbView === null) _cbView = _cbIsCorpRole() ? 'all' : 'mine';
+    _cbSyncControls();   // highlight the right view button before the fetch resolves
     if (_cbLoading) return;
     _cbLoading = true;
     const body = document.getElementById('cbBody');
@@ -7131,8 +7132,8 @@ function _cbSyncControls() {
         const btn = document.getElementById('cbView' + v.charAt(0).toUpperCase() + v.slice(1) + 'Btn');
         if (btn) btn.classList.toggle('active', _cbView === v);
     });
-    const mineBtn = document.getElementById('cbViewMineBtn');
-    if (mineBtn) mineBtn.style.display = _cbIsCorpRole() ? 'none' : '';
+    // (The My Store button itself is role-gated in the HTML — applyRoleBasedUI
+    // hides it for corp roles before first paint, so no JS display toggling here.)
     const filter = document.getElementById('cbStoreFilter');
     if (filter) filter.style.display = (_cbView === 'mine') ? 'none' : '';
 }
