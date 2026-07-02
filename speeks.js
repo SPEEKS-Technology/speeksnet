@@ -3321,6 +3321,32 @@ function initWorkspace() {
     applyKpiReminder();
 }
 
+// ============================================================================
+// OPERATIONS PAGE (operations.html) — sub-tab shell for operational tools.
+// Mirrors the workspace tab system but keys off .ops-wrap / ops-tab-* / ops-pane-*
+// so initWorkspace() never misfires on this page (and vice versa).
+// ============================================================================
+function switchOperationsTab(name) {
+    document.querySelectorAll('.ws-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.ws-pane').forEach(p => p.classList.remove('active'));
+    document.getElementById('ops-tab-' + name)?.classList.add('active');
+    document.getElementById('ops-pane-' + name)?.classList.add('active');
+    try { history.replaceState(null, '', 'operations.html#' + name); } catch (e) {}
+
+    if (name === 'callbacks') {
+        cbLoad();
+    }
+}
+
+// Detects the operations page and opens the requested sub-tab (defaults to
+// call backs, or honors a #callbacks deep-link). Safe no-op elsewhere.
+function initOperations() {
+    if (!document.querySelector('.ops-wrap')) return;
+    const hash = (window.location.hash || '').replace('#', '');
+    const initial = ['callbacks'].includes(hash) ? hash : 'callbacks';
+    switchOperationsTab(initial);
+}
+
 function _kpiStartEdit(periodDate) {
     if (_kpiEditingPeriod === periodDate) return;
     _kpiEditingPeriod = periodDate;
@@ -6936,6 +6962,455 @@ async function b2bPost(payload, errLabel) {
 }
 
 // ============================================================================
+// MODULE: CUSTOMER CALL BACKS (operations.html #ops-pane-callbacks)
+// Entries live 30 days from date_of_call, then auto-archive (recoverable for
+// 90 more days before purge). Anyone may add/act on their OWN store's entries
+// and leave notes on ANY store's entry; edit/delete elsewhere needs Manager+.
+// Phase A: runs on _CB_MOCK_DATA (CB_MOCK = true). Phase B swaps cbFetch/cbPost
+// to a customer-callbacks edge function — those two functions are the only seam.
+// ============================================================================
+const CB_CORP_ROLES = ['district manager', 'ceo', 'tom'];   // may create/edit entries for any store
+const CB_ACTIVE_DAYS  = 30;   // days an entry stays on the sheet
+const CB_PURGE_DAYS   = 120;  // days from date_of_call until permanent deletion
+
+let CB_MOCK = true;           // Phase B: flip to false to use the live endpoint
+let _cbCache = [];
+let _cbView = null;           // 'mine' | 'all' | 'archived'
+let _cbExpandedId = null;
+let _cbEditingId = null;
+let _cbLoading = false;
+
+// --- Mock data layer (Phase A)
+function _cbDaysAgo(n) {
+    const d = new Date(); d.setDate(d.getDate() - n);
+    return d.toISOString().slice(0, 10);
+}
+let _CB_MOCK_DATA = [
+    { id: 'm1',  store: 'OVL', customer_name: 'Maria Gonzalez', phone: '8175550142', item: 'iPhone 15 Pro Max 256GB (Blue)', status: 'open',      date_of_call: _cbDaysAgo(1),  created_by: 'Jess',    archived_at: null, notes: [{ text: 'Wants blue but would take black. Budget around $700', user: 'Jess', store: 'OVL', at: _cbDaysAgo(1) }] },
+    { id: 'm2',  store: 'OVL', customer_name: 'Derrick Hall',   phone: '8175550911', item: 'PS5 Slim Disc Edition',          status: 'contacted', date_of_call: _cbDaysAgo(4),  created_by: 'Jess',    archived_at: null, status_by: 'Simeon', status_store: 'WSP', notes: [{ text: 'Needs it before his son\'s birthday on the 20th', user: 'Jess', store: 'OVL', at: _cbDaysAgo(4) }] },
+    { id: 'm3',  store: 'OVL', customer_name: 'Tina Brooks',    phone: '6825550377', item: 'MacBook Air M2 (any color)',     status: 'open',      date_of_call: _cbDaysAgo(18), created_by: 'Marcus',  archived_at: null, notes: [] },
+    { id: 'm4',  store: 'OVL', customer_name: 'Ray Whitfield',  phone: '8175550264', item: 'Meta Quest 3 128GB',             status: 'completed', date_of_call: _cbDaysAgo(6),  created_by: 'Jess',    archived_at: null, status_by: 'Marcus', status_store: 'OVL', notes: [{ text: 'Came in and bought it. Easy sale.', user: 'Marcus', store: 'OVL', at: _cbDaysAgo(3) }] },
+    { id: 'm5',  store: 'LEE', customer_name: 'Carol Jenkins',  phone: '2145550883', item: 'Galaxy S24 Ultra (Titanium)',    status: 'open',      date_of_call: _cbDaysAgo(3),  created_by: 'Ethan F', archived_at: null, notes: [] },
+    { id: 'm6',  store: 'LEE', customer_name: 'Hector Ramos',   phone: '2145550412', item: 'Nintendo Switch OLED + Mario Kart', status: 'contacted', date_of_call: _cbDaysAgo(25), created_by: 'Dana',  archived_at: null, status_by: 'Priya', status_store: 'MPL', notes: [{ text: 'Wants the bundle, not console alone. Up to $280', user: 'Dana', store: 'LEE', at: _cbDaysAgo(25) }, { text: 'Called — he wants to wait for a bundle deal', user: 'Dana', store: 'LEE', at: _cbDaysAgo(18) }] },
+    { id: 'm7',  store: 'WSP', customer_name: 'Angela Wu',      phone: '9725550633', item: 'iPad Pro 11" M4',                status: 'open',      date_of_call: _cbDaysAgo(12), created_by: 'Simeon',  archived_at: null, notes: [] },
+    { id: 'm8',  store: 'WSP', customer_name: 'Bob Castillo',   phone: '9725550199', item: 'Xbox Series X (disc)',           status: 'open',      date_of_call: _cbDaysAgo(28), created_by: 'Simeon',  archived_at: null, notes: [] },
+    { id: 'm9',  store: 'MPL', customer_name: 'Sandra Lee',     phone: '4695550745', item: 'AirPods Max (USB-C)',            status: 'open',      date_of_call: _cbDaysAgo(7),  created_by: 'Priya',   archived_at: null, notes: [] },
+    { id: 'm10', store: 'MPL', customer_name: 'Jamal Carter',   phone: '4695550528', item: 'Steam Deck OLED 512GB',          status: 'contacted', date_of_call: _cbDaysAgo(15), created_by: 'Priya',   archived_at: null, status_by: 'Chris', status_store: 'BAL', notes: [{ text: 'Flexible on 512GB vs 1TB if the price is right', user: 'Priya', store: 'MPL', at: _cbDaysAgo(15) }] },
+    { id: 'm11', store: 'BAL', customer_name: 'Felicia Moore',  phone: '8175550866', item: 'Apple Watch Ultra 2',            status: 'open',      date_of_call: _cbDaysAgo(2),  created_by: 'Chris',   archived_at: null, notes: [] },
+    { id: 'm12', store: 'BAL', customer_name: 'Greg Tanner',    phone: '8175550307', item: 'Dell XPS 15 (i7 or better)',     status: 'open',      date_of_call: _cbDaysAgo(35), created_by: 'Chris',   archived_at: _cbDaysAgo(5),  notes: [] },
+    { id: 'm13', store: 'LEE', customer_name: 'Olivia Park',    phone: '2145550190', item: 'Canon EOS R50 kit',              status: 'contacted', date_of_call: _cbDaysAgo(45), created_by: 'Dana',    archived_at: _cbDaysAgo(15), status_by: 'Dana', status_store: 'LEE', notes: [] }
+];
+
+async function cbFetch(view, store) {
+    if (CB_MOCK) {
+        await new Promise(r => setTimeout(r, 150));
+        return _CB_MOCK_DATA.filter(e => {
+            const expired = !!e.archived_at || cbDaysInfo(e).daysLeft <= 0;
+            if (view === 'archived' ? !expired : expired) return false;
+            return store === 'ALL' || e.store === store;
+        });
+    }
+    const res = await fetch(`${CALLBACKS_URL}?view=${view === 'archived' ? 'archived' : 'active'}&store=${store}&v=${Date.now()}`);
+    return res.json();
+}
+
+async function cbPost(payload) {
+    if (CB_MOCK) {
+        await new Promise(r => setTimeout(r, 150));
+        const find = id => _CB_MOCK_DATA.find(e => e.id === id);
+        switch (payload.action) {
+            case 'add': {
+                // Fill server-side defaults so the stored entry is complete even
+                // after a view switch refetches from the mock store.
+                const { note, ...fields } = payload.entry;
+                const entry = {
+                    id: 'm' + Date.now(),
+                    status: 'open',
+                    date_of_call: _cbDaysAgo(0),
+                    archived_at: null,
+                    notes: note ? [{ text: note, user: fields.created_by, store: fields.store, at: _cbDaysAgo(0) }] : [],
+                    ...fields
+                };
+                _CB_MOCK_DATA.unshift(entry);
+                return { success: true, entry };
+            }
+            case 'status':  { const e = find(payload.id); if (e) { e.status = payload.status; e.status_by = payload.status_by; e.status_store = payload.status_store; } return { success: true }; }
+            case 'note':    { const e = find(payload.id); if (e) e.notes.push(payload.note); return { success: true }; }
+            case 'edit':    { const e = find(payload.id); if (e) Object.assign(e, payload.fields); return { success: true }; }
+            case 'delete':  { _CB_MOCK_DATA = _CB_MOCK_DATA.filter(e => e.id !== payload.id); return { success: true }; }
+            case 'restore': { const e = find(payload.id); if (e) { e.archived_at = null; e.date_of_call = _cbDaysAgo(0); e.status = 'open'; } return { success: true }; }
+        }
+        return { success: false };
+    }
+    const res = await fetch(CALLBACKS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+            ...payload,
+            user:  sessionStorage.getItem('speeksUserName')  || '',
+            role:  (sessionStorage.getItem('speeksUserRole') || '').toLowerCase(),
+            store: (sessionStorage.getItem('speeksUserStore') || '').toUpperCase()
+        })
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(out.error || 'Request failed');
+    return out;
+}
+
+// --- Helpers
+// Edit/delete/restore: own store only (MSM covers both of theirs, corp covers all).
+// Status changes are deliberately NOT gated — any store marking an entry Contacted
+// is the cross-store "we've got this" signal, and the change is attributed below.
+function cbCanModify(entry) {
+    const role  = (sessionStorage.getItem('speeksUserRole')  || '').toLowerCase().trim();
+    const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    if (CB_CORP_ROLES.includes(role) || store === 'ALL') return true;
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return MULTISTORE_MANAGER_STORES.includes(entry.store);
+    return entry.store === store;
+}
+
+// Stores this user may CREATE entries for: corp roles get all stores, the MSM
+// gets both of their stores, everyone else is locked to their own (no picker).
+function _cbAddStores() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (CB_CORP_ROLES.includes(role)) return B2B_STORE_LIST;
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return [...MULTISTORE_MANAGER_STORES];
+    return null;
+}
+
+function _cbHomeStore() {
+    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return B2B_STORE_LIST.includes(s) ? s : 'OVL';
+}
+
+function cbDaysInfo(entry) {
+    const called = new Date(entry.date_of_call + 'T00:00:00');
+    const today  = new Date(); today.setHours(0, 0, 0, 0);
+    const since  = Math.floor((today - called) / 86400000);
+    return { since, daysLeft: CB_ACTIVE_DAYS - since, purgeLeft: CB_PURGE_DAYS - since };
+}
+
+function cbFormatPhone(p) {
+    const d = String(p || '').replace(/\D/g, '');
+    if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+    return p || '';
+}
+
+// Phone inputs: digits only, max 10. A pasted 11-digit number starting with the
+// US country code drops the leading 1 instead of losing the final real digit.
+function cbPhoneInput(el) {
+    let d = el.value.replace(/\D/g, '');
+    if (d.length > 10 && d[0] === '1') d = d.slice(1);
+    el.value = d.slice(0, 10);
+}
+
+function _cbShortDate(iso) {
+    const d = new Date(iso + 'T00:00:00');
+    return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function _cbDaysBadge(entry) {
+    const { daysLeft, purgeLeft } = cbDaysInfo(entry);
+    if (_cbView === 'archived' || entry.archived_at || daysLeft <= 0) {
+        return `<span class="cb-days cb-days-archived">purges in ${Math.max(purgeLeft, 0)}d</span>`;
+    }
+    const cls = daysLeft <= 7 ? 'cb-days-urgent' : daysLeft <= 14 ? 'cb-days-warn' : 'cb-days-ok';
+    return `<span class="cb-days ${cls}">${daysLeft}d left</span>`;
+}
+
+const CB_STATUS_META = {
+    open:      { label: 'Open',      next: 'contacted' },
+    contacted: { label: 'Contacted', next: 'completed' },
+    completed: { label: 'Completed', next: 'open' }
+};
+
+// --- Load & render
+async function cbLoad() {
+    if (_cbView === null) _cbView = 'mine';
+    if (_cbLoading) return;
+    _cbLoading = true;
+    const body = document.getElementById('cbBody');
+    if (body && !_cbCache.length) body.innerHTML = '<div class="status-message">Loading Call Backs…</div>';
+    try {
+        // Fetch everything once; view filtering happens client-side in cbRender.
+        _cbCache = await cbFetch(_cbView === 'archived' ? 'archived' : 'active', 'ALL');
+        cbRender();
+    } catch (e) {
+        if (body) body.innerHTML = '<div class="status-message">Could not load call backs. Try again in a minute.</div>';
+    } finally {
+        _cbLoading = false;
+    }
+}
+
+function cbSetView(view) {
+    if (_cbView === view) return;
+    _cbView = view;
+    _cbExpandedId = null;
+    _cbEditingId = null;
+    cbLoad();
+}
+
+function _cbSyncControls() {
+    ['mine', 'all', 'archived'].forEach(v => {
+        const btn = document.getElementById('cbView' + v.charAt(0).toUpperCase() + v.slice(1) + 'Btn');
+        if (btn) btn.classList.toggle('active', _cbView === v);
+    });
+    const filter = document.getElementById('cbStoreFilter');
+    if (filter) filter.style.display = (_cbView === 'mine') ? 'none' : '';
+}
+
+function _cbVisibleEntries() {
+    const filter = document.getElementById('cbStoreFilter');
+    const filterStore = (_cbView === 'mine') ? _cbHomeStore() : (filter ? filter.value : 'ALL');
+    const showCompleted = document.getElementById('cbShowCompleted')?.checked;
+    return _cbCache
+        .filter(e => filterStore === 'ALL' || e.store === filterStore)
+        .filter(e => _cbView === 'archived' || showCompleted || e.status !== 'completed')
+        .sort((a, b) => (b.date_of_call || '').localeCompare(a.date_of_call || ''));
+}
+
+function cbRender() {
+    const body = document.getElementById('cbBody');
+    if (!body) return;
+    _cbSyncControls();
+    const entries = _cbVisibleEntries();
+
+    const filterEl = document.getElementById('cbStoreFilter');
+    const scopeStore = (_cbView === 'mine') ? _cbHomeStore() : (filterEl ? filterEl.value : 'ALL');
+    const scoped = _cbCache.filter(e => scopeStore === 'ALL' || e.store === scopeStore);
+    const open = scoped.filter(e => e.status !== 'completed' && !e.archived_at).length;
+    const expiring = scoped.filter(e => { const d = cbDaysInfo(e).daysLeft; return e.status !== 'completed' && !e.archived_at && d > 0 && d <= 7; }).length;
+    const sub = document.getElementById('cbSubtitle');
+    if (sub) sub.textContent = _cbView === 'archived'
+        ? `${entries.length} archived`
+        : `${open} open${expiring ? ` · ${expiring} expiring soon` : ''}`;
+
+    let html = '';
+    if (_cbView !== 'archived') html += _cbQuickAddHtml();
+
+    if (!entries.length) {
+        const msgs = {
+            mine:     'No call backs yet. When a customer wants something you don\'t have, log it above ↑',
+            all:      'No open call backs across stores.',
+            archived: 'Nothing archived in the last 90 days.'
+        };
+        html += `<div class="cb-empty">${msgs[_cbView]}</div>`;
+        body.innerHTML = html;
+        return;
+    }
+
+    const showStore = _cbView !== 'mine';
+    html += `<table class="cb-table"><thead><tr>
+        ${showStore ? '<th class="cb-col-store">Store</th>' : ''}
+        <th class="cb-col-customer">Customer</th><th class="cb-col-phone">Phone</th><th class="cb-col-item">Item Wanted</th>
+        <th class="cb-col-status">Status</th><th class="cb-col-timer">Timer</th><th class="cb-col-notes">💬</th><th class="cb-col-logged">Logged</th><th class="cb-col-actions"></th>
+    </tr></thead><tbody>`;
+    entries.forEach(e => { html += cbRowHtml(e, showStore); });
+    html += '</tbody></table>';
+    body.innerHTML = html;
+}
+
+function _cbQuickAddHtml() {
+    const home = _cbHomeStore();
+    const addStores = _cbAddStores();
+    const dflt = addStores && addStores.includes(home) ? home : (addStores ? addStores[0] : home);
+    const storePicker = addStores
+        ? `<select id="cbAddStore" class="kpi-select cb-add-store">${addStores.map(s => `<option value="${s}" ${s === dflt ? 'selected' : ''}>${s}</option>`).join('')}</select>`
+        : '';
+    return `<div class="cb-quickadd">
+        ${storePicker}
+        <input type="text" id="cbAddName"  placeholder="Customer name" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+        <input type="tel"  id="cbAddPhone" placeholder="Phone" inputmode="numeric" oninput="cbPhoneInput(this)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+        <input type="text" id="cbAddItem"  placeholder="Item they're looking for" class="cb-add-item" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+        <input type="text" id="cbAddNoteTxt" placeholder="Notes (optional)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+        <button class="btn-primary cb-add-btn" onclick="cbQuickAdd()">+ Add</button>
+    </div>`;
+}
+
+function cbRowHtml(e, showStore) {
+    const canAct = cbCanModify(e);
+    const meta = CB_STATUS_META[e.status] || CB_STATUS_META.open;
+    const isArchived = _cbView === 'archived';
+    const editing = _cbEditingId === e.id;
+    const expanded = _cbExpandedId === e.id || editing;
+
+    // Status is clickable for EVERYONE — another store marking Contacted is the
+    // cross-store "we have this item" signal. The change is attributed under the chip.
+    // The attribution line always renders (blank when unset) so row heights never shift.
+    const statusBy = `<div class="cb-status-by">${(e.status !== 'open' && e.status_by) ? `${escapeHtml(e.status_by)} · ${escapeHtml(e.status_store || '')}` : '&nbsp;'}</div>`;
+    const chip = isArchived
+        ? `<span class="cb-chip cb-chip-expired">Expired</span>`
+        : `<span class="cb-chip cb-chip-${e.status} cb-chip-clickable" onclick="event.stopPropagation();cbCycleStatus('${e.id}')" data-cb-tip="Click to mark ${CB_STATUS_META[meta.next].label}">${meta.label}</span>${statusBy}`;
+
+    const phoneDigits = String(e.phone || '').replace(/\D/g, '');
+    const phone = `<a class="cb-phone" href="tel:+1${phoneDigits}" onclick="event.stopPropagation()">${escapeHtml(cbFormatPhone(e.phone))}</a>`;
+
+    let actions = '';
+    if (canAct && !editing) {
+        actions = isArchived
+            ? `<button class="cb-icon-btn" data-cb-tip="Restore to active" onclick="event.stopPropagation();cbRestoreEntry('${e.id}')">♻️</button>`
+            : `<button class="cb-icon-btn" data-cb-tip="Edit" onclick="event.stopPropagation();cbEditEntry('${e.id}')">✏️</button>`;
+        actions += `<button class="cb-icon-btn" data-cb-tip="Delete" onclick="event.stopPropagation();cbDeleteEntry('${e.id}')">🗑️</button>`;
+    }
+
+    let row;
+    if (editing) {
+        row = `<tr class="cb-row cb-row-editing" data-id="${e.id}">
+            ${showStore ? `<td class="cb-col-store">${b2bStoreLabel(e.store)}</td>` : ''}
+            <td><input class="cb-edit-input" id="cbEditName" value="${escapeHtml(e.customer_name)}"></td>
+            <td><input class="cb-edit-input" id="cbEditPhone" type="tel" inputmode="numeric" oninput="cbPhoneInput(this)" value="${escapeHtml(String(e.phone || '').replace(/\D/g, '').slice(0, 10))}"></td>
+            <td class="cb-col-item"><input class="cb-edit-input" id="cbEditItem" value="${escapeHtml(e.item)}"></td>
+            <td class="cb-cell-status">${chip}</td>
+            <td class="cb-cell-timer"><input class="cb-edit-input cb-edit-date" id="cbEditDate" type="date" value="${e.date_of_call}" data-cb-tip="Date of call (resets the 30-day timer)"></td>
+            <td class="cb-col-notes"></td>
+            <td class="cb-logged"></td>
+            <td class="cb-col-actions">
+                <button class="cb-icon-btn" data-cb-tip="Save" onclick="event.stopPropagation();cbSaveEdit('${e.id}')">✅</button>
+                <button class="cb-icon-btn" data-cb-tip="Cancel" onclick="event.stopPropagation();cbCancelEdit()">✖</button>
+            </td>
+        </tr>`;
+    } else {
+        row = `<tr class="cb-row ${expanded ? 'cb-row-open' : ''} ${e.status === 'completed' ? 'cb-row-done' : ''}" data-id="${e.id}" onclick="cbToggleRow('${e.id}')">
+            ${showStore ? `<td class="cb-col-store">${b2bStoreLabel(e.store)}</td>` : ''}
+            <td class="cb-customer">${escapeHtml(e.customer_name)}</td>
+            <td>${phone}</td>
+            <td class="cb-col-item cb-item">${escapeHtml(e.item)}</td>
+            <td class="cb-cell-status">${chip}</td>
+            <td class="cb-cell-timer">${_cbDaysBadge(e)}</td>
+            <td class="cb-col-notes">${e.notes.length ? `<span class="cb-note-count">💬 ${e.notes.length}</span>` : ''}</td>
+            <td class="cb-logged">${escapeHtml(e.created_by)} · ${_cbShortDate(e.date_of_call)}</td>
+            <td class="cb-col-actions">${actions}</td>
+        </tr>`;
+    }
+
+    if (expanded && !editing) {
+        const noteItems = e.notes.map(n =>
+            `<div class="cb-note">${escapeHtml(n.text)} <span class="cb-note-meta">— ${escapeHtml(n.user)} (${escapeHtml(n.store)}) · ${_cbShortDate(n.at)}</span></div>`
+        ).join('') || '<div class="cb-note cb-note-none">No notes yet.</div>';
+        row += `<tr class="cb-row-detail"><td colspan="${showStore ? 9 : 8}">
+            <div class="cb-notes-thread">${noteItems}</div>
+            <div class="cb-note-add">
+                <input type="text" class="cb-note-input" id="cbNoteInput-${e.id}" placeholder="Details about what they're looking for — condition, budget, timing…"
+                       onclick="event.stopPropagation()" onkeydown="if(event.key==='Enter')cbAddNote('${e.id}')">
+                <button class="btn-secondary cb-note-btn" onclick="event.stopPropagation();cbAddNote('${e.id}')">Add note</button>
+            </div>
+        </td></tr>`;
+    }
+    return row;
+}
+
+// --- Actions (optimistic: mutate cache, render, POST in background)
+function cbToggleRow(id) {
+    if (_cbEditingId) return;
+    _cbExpandedId = (_cbExpandedId === id) ? null : id;
+    cbRender();
+}
+
+async function cbQuickAdd() {
+    const name  = document.getElementById('cbAddName')?.value.trim();
+    const phone = (document.getElementById('cbAddPhone')?.value || '').replace(/\D/g, '');
+    const item  = document.getElementById('cbAddItem')?.value.trim();
+    const note  = document.getElementById('cbAddNoteTxt')?.value.trim();
+    if (!name || !phone || !item) { alert('Customer name, phone, and item are required.'); return; }
+    if (phone.length !== 10) { alert('Phone number must be exactly 10 digits.'); return; }
+
+    const store = document.getElementById('cbAddStore')?.value || _cbHomeStore();
+    const user  = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    const entry = {
+        id: 'tmp-' + Date.now(), store, customer_name: name, phone, item,
+        status: 'open', date_of_call: _cbDaysAgo(0), created_by: user,
+        archived_at: null,
+        notes: note ? [{ text: note, user, store, at: _cbDaysAgo(0) }] : []
+    };
+    _cbCache.unshift(entry);
+    cbRender();
+    document.getElementById('cbAddName')?.focus();
+    try {
+        const out = await cbPost({ action: 'add', entry: { store, customer_name: name, phone, item, note: note || null, created_by: user } });
+        if (out.entry) { entry.id = out.entry.id; cbRender(); }   // reconcile temp id (row onclick handlers embed it)
+    } catch (e) {
+        _cbCache = _cbCache.filter(x => x.id !== entry.id);
+        cbRender();
+        alert('Could not save the call back: ' + e.message);
+    }
+}
+
+function cbCycleStatus(id) {
+    const e = _cbCache.find(x => x.id === id);
+    if (!e) return;
+    e.status = (CB_STATUS_META[e.status] || CB_STATUS_META.open).next;
+    e.status_by = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    e.status_store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    cbRender();
+    cbPost({ action: 'status', id, status: e.status, status_by: e.status_by, status_store: e.status_store }).catch(() => cbLoad());
+}
+
+function cbAddNote(id) {
+    const input = document.getElementById('cbNoteInput-' + id);
+    const text = input?.value.trim();
+    if (!text) return;
+    const e = _cbCache.find(x => x.id === id);
+    if (!e) return;
+    const note = {
+        text,
+        user:  sessionStorage.getItem('speeksUserName') || 'Unknown',
+        store: (sessionStorage.getItem('speeksUserStore') || '').toUpperCase(),
+        at: _cbDaysAgo(0)
+    };
+    e.notes.push(note);
+    cbRender();
+    cbPost({ action: 'note', id, note }).catch(() => cbLoad());
+}
+
+function cbEditEntry(id) {
+    _cbEditingId = id;
+    _cbExpandedId = null;
+    cbRender();
+}
+
+function cbCancelEdit() {
+    _cbEditingId = null;
+    cbRender();
+}
+
+function cbSaveEdit(id) {
+    const e = _cbCache.find(x => x.id === id);
+    if (!e) return;
+    const editedPhone = (document.getElementById('cbEditPhone')?.value || '').replace(/\D/g, '');
+    if (editedPhone && editedPhone.length !== 10) { alert('Phone number must be exactly 10 digits.'); return; }
+    const fields = {
+        customer_name: document.getElementById('cbEditName')?.value.trim()  || e.customer_name,
+        phone:         editedPhone || e.phone,
+        item:          document.getElementById('cbEditItem')?.value.trim()  || e.item,
+        date_of_call:  document.getElementById('cbEditDate')?.value         || e.date_of_call
+    };
+    Object.assign(e, fields);
+    _cbEditingId = null;
+    cbRender();
+    cbPost({ action: 'edit', id, fields }).catch(() => cbLoad());
+}
+
+function cbDeleteEntry(id) {
+    const e = _cbCache.find(x => x.id === id);
+    if (!e) return;
+    if (!confirm(`Delete the call back for ${e.customer_name}? This can't be undone.`)) return;
+    _cbCache = _cbCache.filter(x => x.id !== id);
+    cbRender();
+    cbPost({ action: 'delete', id }).catch(() => cbLoad());
+}
+
+function cbRestoreEntry(id) {
+    const e = _cbCache.find(x => x.id === id);
+    if (!e) return;
+    e.archived_at = null;
+    e.date_of_call = _cbDaysAgo(0);   // restart the 30-day timer
+    e.status = 'open';
+    _cbCache = _cbCache.filter(x => x.id !== id);   // leaves the archived view
+    cbRender();
+    cbPost({ action: 'restore', id }).catch(() => cbLoad());
+}
+
+// ============================================================================
 // 23. MODULE: ROLE-BASED UI & INITIALIZATION
 // ============================================================================
 
@@ -6950,6 +7425,9 @@ function applyRoleBasedUI() {
     const firstName = userName.split(' ')[0];
     const wsTitleEl = document.getElementById('wsTitle');
     if (wsTitleEl) wsTitleEl.innerHTML = `<span>📈</span> ${firstName}'s Workspace`;
+
+    const opsTitleEl = document.getElementById('opsTitle');
+    if (opsTitleEl) opsTitleEl.innerHTML = `<span>🛠️</span> ${firstName}'s Operations`;
 
     const userRoleClass = `role-${userRole.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-')}`;
     const userStoreClass = `store-${userStore.toLowerCase()}`;
@@ -7223,6 +7701,7 @@ document.addEventListener("DOMContentLoaded", () => {
         initDashboardData();
         initTicker();
         initWorkspace();
+        initOperations();
         applyKpiReminder();
         // re-evaluate the weekly-KPI reminder window each minute so it appears/clears live
         setInterval(applyKpiReminder, 60000);
@@ -7266,6 +7745,15 @@ customTooltip.className = 'speeks-tooltip';
 document.body.appendChild(customTooltip);
 
 document.addEventListener('mouseover', function(e) {
+    // Call Backs sheet: any element carrying data-cb-tip gets the standard site tooltip
+    const cbTip = e.target.closest('[data-cb-tip]');
+    if (cbTip) {
+        customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
+        customTooltip.innerHTML = `<strong style="display:block; color: var(--sage-professional); font-size: 13px; white-space: nowrap;">${cbTip.dataset.cbTip}</strong>`;
+        customTooltip.classList.add('show');
+        return;
+    }
+
     const infoI = e.target.closest('.goals-info-i');
     if (infoI && infoI.dataset.tipTitle) {
         customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
@@ -7418,6 +7906,7 @@ document.addEventListener('click', async (e) => {
                     if (typeof initDashboardData === 'function') initDashboardData();
                     if (typeof applyKpiReminder === 'function') applyKpiReminder();
                     if (document.querySelector('.ws-wrap') && typeof initWorkspace === 'function') initWorkspace();
+                    if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
                     if (document.getElementById('mainKpiChart') && typeof syncAllData === 'function') syncAllData();
                     if (document.getElementById('pane-records') && typeof fetchRecordsData === 'function') fetchRecordsData();
                     if (document.getElementById('listing-champions-body') && typeof fetchChampions === 'function') fetchChampions();
@@ -9919,12 +10408,19 @@ function _claimRowHtml(r, showStore, isChild, canEscalate, hasChild, num) {
 
     let reasonCell = `${escapeHtml(r.reason_type || '—')}`;
     if (r.reason_detail) reasonCell += `<div style="color:#94a3b8; font-size:11px; margin-top:2px;">${escapeHtml(r.reason_detail)}</div>`;
-    if (aging) reasonCell += `<div style="color:#dc2626; font-size:11px; font-weight:800; margin-top:3px;">⚠️ Open ${_claimDaysOpen(r)} days${canEscalate ? ' · likely lost' : ''}</div>`;
+    if (aging) {
+        // An aging INR ticket gets the triage instruction, not just an age flag:
+        // delivered since → eBay refunds (mark Recovered); still lost → open a claim.
+        reasonCell += canEscalate
+            ? `<div style="color:#dc2626; font-size:11px; font-weight:800; margin-top:3px;">⚠️ Open ${_claimDaysOpen(r)} days — check tracking: delivered since? Call eBay for the refund. Still lost? Open a claim.</div>`
+            : `<div style="color:#dc2626; font-size:11px; font-weight:800; margin-top:3px;">⚠️ Open ${_claimDaysOpen(r)} days</div>`;
+    }
 
     const sBtn = 'font-size:11px; font-weight:800; border-radius:7px; padding:5px 9px; cursor:pointer; line-height:1; white-space:nowrap;';
     const acts = [];
+    if (aging && canEscalate) acts.push(`<button onclick="updateClaimStatus('${r.id}', 'recovered')" title="Tracking shows it arrived — call eBay for the refund, then mark Recovered" style="${sBtn} background:#f0fdf4; border:1.5px solid #86efac; color:#15803d;">📦 Delivered</button>`);
     if (aging) acts.push(`<button onclick="ackClaim('${r.id}')" title="Mark that you checked on this — resets the 7-day reminder" style="${sBtn} background:#ecfdf5; border:1.5px solid #a7f3d0; color:#047857;">✓ Still in progress</button>`);
-    if (canEscalate) acts.push(`<button onclick="toggleEscalateRow('${r.id}')" title="Open a loss claim on this ticket" style="${sBtn} background:#eff6ff; border:1.5px solid #bfdbfe; color:#1d4ed8;">Open a claim</button>`);
+    if (canEscalate) acts.push(`<button onclick="toggleEscalateRow('${r.id}')" title="Still lost — open a loss claim on this ticket" style="${sBtn} background:#eff6ff; border:1.5px solid #bfdbfe; color:#1d4ed8;">Open a claim</button>`);
     // Deleting a claim needs DM/CEO approval — the trash button sends a request, and a
     // claim already awaiting approval shows a pending badge instead.
     if (r.delete_requested_at) {
@@ -9971,7 +10467,8 @@ function _escalateFormRow(r, colCount) {
     const cost = r.cost != null ? r.cost : '';
     return `<tr id="esc-row-${r.id}" style="display:none; background:#f1f5f9;">
         <td colspan="${colCount}" style="padding:14px 16px; border-bottom:1px solid #e2e8f0;">
-            <div style="font-weight:800; font-size:12px; color:#1d4ed8; margin-bottom:10px;">Open a loss claim on this ticket</div>
+            <div style="font-weight:800; font-size:12px; color:#1d4ed8; margin-bottom:4px;">Open a loss claim on this ticket</div>
+            <div style="font-size:11px; color:#64748b; margin-bottom:10px;">Check tracking first — if the item has since been delivered, call eBay for the refund and mark the ticket <b>Recovered</b>. Only open a claim if it's still lost.</div>
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:10px;">
                 <div>${lbl('Claim')}<select id="esc-${r.id}-reason" style="${inp}"><option value="Shopify Claim">Shopify Claim</option><option value="USPS Claim">USPS Claim</option><option value="UPS Claim">UPS Claim</option></select></div>
                 <div>${lbl('Type')}<select id="esc-${r.id}-type" style="${inp}"><option value="Loss">Loss</option><option value="Damage">Damage</option></select></div>
@@ -10404,7 +10901,7 @@ async function checkClaimReminders() {
 
         // Compute the manager's CURRENT open / over-7-day counts so the reminder
         // reflects what actually still needs review (not a stale number).
-        let openCount = 0, agingCount = 0;
+        let openCount = 0, agingCount = 0, agingINRCount = 0;
         try {
             const cRes = await fetch(`${CLAIMS_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
             const cj = await cRes.json();
@@ -10412,20 +10909,23 @@ async function checkClaimReminders() {
                 const sup = new Set((cj.data || []).filter(r => r.parent_id).map(r => r.parent_id));
                 const op = (cj.data || []).filter(r => r.status === 'in_progress' && !sup.has(r.id));
                 openCount = op.length;
-                agingCount = op.filter(_isClaimAging).length;
+                const agingRows = op.filter(_isClaimAging);
+                agingCount = agingRows.length;
+                agingINRCount = agingRows.filter(_isINRTicket).length;
             }
         } catch (e) { /* counts stay 0 */ }
-        _showClaimReminder(fresh[0], openCount, agingCount);
+        _showClaimReminder(fresh[0], openCount, agingCount, agingINRCount);
     } catch (e) { /* silent */ }
 }
 
-function _showClaimReminder(rem, openCount, agingCount) {
+function _showClaimReminder(rem, openCount, agingCount, agingINRCount = 0) {
     const from = rem.from_name ? escapeHtml(rem.from_name) : 'Leadership';
     let body;
     if (agingCount) {
-        body = agingCount === 1
+        body = (agingCount === 1
             ? '1 claim has been open over 7 days. Please review it.'
-            : `${agingCount} claims have been open over 7 days. Please review them.`;
+            : `${agingCount} claims have been open over 7 days. Please review them.`)
+            + _inrGuidanceHtml(agingINRCount);
     } else if (openCount) {
         body = "You're all caught up on aging claims.";
     } else {
@@ -10471,7 +10971,7 @@ async function checkAgingClaims() {
         aging.forEach(r => seen.add(r.id));
         _saveSeenAgingClaims(seen);
 
-        _showClaimAlert(aging.length);
+        _showClaimAlert(aging.length, aging.filter(_isINRTicket).length);
     } catch (e) {
         console.error('Aging claim check failed:', e);
     }
@@ -10515,16 +11015,29 @@ function _renderClaimBubble(icon, titleHtml, bodyHtml) {
     ], { duration: 400, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
 }
 
-function _showClaimAlert(count) {
-    const body = count === 1
+function _isINRTicket(r) {
+    return String(r?.reason_type || '').toLowerCase().startsWith('item not received');
+}
+
+// Shared "check tracking" instruction for Item-Not-Received tickets, appended to
+// whichever red bubble is surfacing them.
+function _inrGuidanceHtml(inrCount) {
+    if (!inrCount) return '';
+    const noun = inrCount === 1 ? 'an <b>Item Not Received</b> ticket' : `${inrCount} <b>Item Not Received</b> tickets`;
+    return `<div style="line-height:1.4; opacity:0.96; margin-top:2px;">That includes ${noun} — check tracking first: if it's since been delivered, call eBay for the refund and mark it <b>Recovered</b>. If it's still lost, open a claim on the ticket.</div>`;
+}
+
+function _showClaimAlert(count, inrCount = 0) {
+    const body = (count === 1
         ? '1 claim has been open over 7 days. Please review it.'
-        : `${count} claims have been open over 7 days. Please review them.`;
+        : `${count} claims have been open over 7 days. Please review them.`)
+        + _inrGuidanceHtml(inrCount);
     _renderClaimBubble('⚠️', 'Claims Review', body);
 }
 
 // Console preview of the red aging-claim bubble (no need to wait 7 days):
 // open DevTools → console and run:  _previewClaimAlert()
-window._previewClaimAlert = function () { _showClaimAlert(2); };
+window._previewClaimAlert = function () { _showClaimAlert(2, 1); };
 
 // --- STORE COMMENTS LOGIC ---
 
