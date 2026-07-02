@@ -5956,7 +5956,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
    ANALYTICS WORKSPACE (workspace.html)
    Monthly Brief / Store KPIs / B2B — full-screen sub-tab panes
    ============================================================================ */
-.ws-wrap { display: flex; flex-direction: column; gap: 16px; }
+.ws-wrap, .ops-wrap { display: flex; flex-direction: column; gap: 16px; }
 
 .ws-titlebar {
     display: flex; align-items: center; justify-content: space-between;
@@ -6284,6 +6284,184 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     .b2b-deal-list { grid-template-columns: 1fr; }
 }
 
+/* =========================================================
+   CUSTOMER CALL BACKS (operations.html)
+   ========================================================= */
+.cb-scroll { padding: 14px 16px; }
+
+/* Quick-add bar — pinned above the table */
+.cb-quickadd {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    background: #f6fbf2;
+    border: 1.5px solid #d8e8cc;
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-bottom: 14px;
+}
+.cb-quickadd input {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    background: #fff;
+}
+.cb-quickadd input:focus { outline: none; border-color: var(--sage-professional); }
+.cb-quickadd .cb-add-item { flex: 1.6; }
+.cb-add-store { flex: 0 0 auto; width: auto; }
+.cb-add-btn { padding: 8px 18px; font-size: 13px; white-space: nowrap; flex-shrink: 0; }
+
+/* Table — fixed layout so changing chip/badge text never reflows the columns */
+.cb-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+.cb-col-store    { width: 88px; }
+.cb-col-customer { width: 150px; }
+.cb-col-phone    { width: 128px; }
+/* .cb-col-item takes the remaining width */
+.cb-col-status   { width: 150px; }
+.cb-col-timer    { width: 122px; }  /* wide enough for the archived "purges in NNd" badge */
+.cb-col-notes    { width: 46px; }
+.cb-col-logged   { width: 130px; }
+/* Status + Timer headers and cells center together so chips sit under their titles */
+.cb-table th.cb-col-status, .cb-cell-status,
+.cb-table th.cb-col-timer,  .cb-cell-timer { text-align: center; }
+.cb-table th {
+    text-align: left;
+    background: #f3f4f6;
+    color: #6b7280;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    padding: 10px 12px;
+    border-bottom: 1px solid #e5e7eb;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+.cb-table td { padding: 9px 12px; border-bottom: 1px solid #f3f4f6; vertical-align: middle; }
+.cb-row { cursor: pointer; transition: background 0.12s ease; }
+.cb-row:hover { background: #f8fafc; }
+.cb-row-open { background: #f6fbf2; }
+.cb-row-done { opacity: 0.55; }
+.cb-col-store { white-space: nowrap; font-weight: 700; }
+.cb-customer { font-weight: 700; color: var(--slate-charcoal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cb-item { font-weight: 600; font-size: 13.5px; overflow-wrap: break-word; }
+.cb-phone { color: #2563eb; text-decoration: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cb-phone:hover { text-decoration: underline; }
+.cb-logged { color: #9ca3af; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cb-col-notes { text-align: center; }
+.cb-note-count { font-size: 11.5px; color: #6b7280; white-space: nowrap; }
+.cb-col-actions { text-align: right; white-space: nowrap; width: 70px; }
+
+/* Status chips — fixed min-width + centered so cycling text doesn't shift anything */
+.cb-chip {
+    display: inline-block;
+    font-size: 10.5px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    white-space: nowrap;
+    user-select: none;
+    min-width: 88px;
+    box-sizing: border-box;
+    text-align: center;
+}
+.cb-status-by {
+    font-size: 10.5px;
+    color: #9ca3af;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.cb-chip-open      { background: #dbeafe; color: #1e40af; }
+.cb-chip-contacted { background: #fef3c7; color: #92400e; }
+.cb-chip-completed { background: #dcfce7; color: #166534; }
+.cb-chip-expired   { background: #e5e7eb; color: #4b5563; }
+.cb-chip-clickable { cursor: pointer; transition: transform 0.1s ease, box-shadow 0.1s ease; }
+.cb-chip-clickable:hover { transform: scale(1.06); box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+
+/* 30-day countdown badges */
+.cb-days {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 800;
+    padding: 2px 8px;
+    border-radius: 6px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.cb-days-ok       { background: #f3f4f6; color: #6b7280; }
+.cb-days-warn     { background: #fef3c7; color: #92400e; }
+.cb-days-urgent   { background: #fee2e2; color: #b91c1c; }
+.cb-days-archived { background: #f3f4f6; color: #9ca3af; font-weight: 600; }
+
+/* Row actions + inline edit */
+.cb-icon-btn {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 13px;
+    padding: 3px 5px;
+    border-radius: 6px;
+    opacity: 0.45;
+    transition: opacity 0.12s ease, background 0.12s ease;
+}
+.cb-row:hover .cb-icon-btn, .cb-row-editing .cb-icon-btn { opacity: 1; }
+.cb-icon-btn:hover { background: #e5e7eb; }
+.cb-edit-input {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--sage-professional);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 13px;
+    font-family: inherit;
+}
+.cb-edit-date { max-width: 140px; }
+
+/* Expanded notes strip */
+.cb-row-detail td {
+    background: #f6fbf2;
+    border-bottom: 1px solid #e5e7eb;
+    padding: 12px 16px 14px;
+}
+.cb-notes-thread { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.cb-note { font-size: 12.5px; color: var(--slate-charcoal); line-height: 1.5; }
+.cb-note-meta { color: #9ca3af; font-size: 11.5px; }
+.cb-note-none { color: #9ca3af; font-style: italic; }
+.cb-note-add { display: flex; gap: 8px; }
+.cb-note-input {
+    flex: 1;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 12.5px;
+    font-family: inherit;
+}
+.cb-note-input:focus { outline: none; border-color: var(--sage-professional); }
+.cb-note-btn { padding: 6px 14px; font-size: 12px; white-space: nowrap; }
+
+/* Empty state */
+.cb-empty {
+    text-align: center;
+    color: #9ca3af;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 60px 20px;
+}
+
+@media (max-width: 768px) {
+    .cb-quickadd { flex-wrap: wrap; }
+    .cb-quickadd input { flex-basis: 45%; }
+    .cb-logged, .cb-col-notes { display: none; }
+}
+
 /* ── Box Order Tool ─────────────────────────────────────── */
 .box-order-section + .box-order-section { margin-top: 8px; }
 .box-order-section-label {
@@ -6385,6 +6563,96 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     color: #a0aab2;
     padding-bottom: 6px;
 }
+/* DM/CEO tabs inside the Box Order tool (Order vs Manage Items) */
+#boxOrderTabs { display: flex; }
+.box-order-tab {
+    flex: 1;
+    padding: 9px 12px;
+    border: 1.5px solid #e2e8f0;
+    background: #fff;
+    border-radius: 9px;
+    font-weight: 800;
+    font-size: 13px;
+    color: #64748b;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.box-order-tab:hover { background: #f8fafc; }
+.box-order-tab.active { background: var(--slate-charcoal); color: #fff; border-color: var(--slate-charcoal); }
+.box-admin-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 9px;
+    margin-bottom: 8px;
+}
+.box-admin-item .bai-del {
+    flex-shrink: 0;
+    width: 32px; height: 32px;
+    background: #fff5f5;
+    border: 1.5px solid #fecaca;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+}
+.box-admin-item .bai-del:hover { background: #fee2e2; }
+
+/* Live "receipt" of the current box-order selection — sticky to the bottom of the
+   item list so managers always see what they've picked without scrolling. */
+.box-receipt {
+    position: sticky;
+    bottom: 0;
+    margin-top: auto;
+    background: #fff;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 10px;
+    box-shadow: 0 -8px 20px rgba(15, 23, 42, 0.08);
+}
+.box-receipt-head {
+    font-size: 11px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #475569;
+    padding: 9px 12px;
+    border-bottom: 1px solid #f1f5f9;
+}
+.box-receipt-list { max-height: 128px; overflow-y: auto; padding: 4px 0; }
+.box-receipt-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 12px;
+    font-size: 13px;
+}
+.box-receipt-name {
+    flex: 1;
+    min-width: 0;
+    color: var(--slate-charcoal);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.box-receipt-qty { font-weight: 800; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
+.box-receipt-x {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    border: none;
+    background: #fef2f2;
+    color: #dc2626;
+    font-weight: 800;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+}
+.box-receipt-x:hover { background: #fee2e2; }
 .box-order-email-preview {
     background: #f8fafc;
     border: 1px solid #e2e8f0;

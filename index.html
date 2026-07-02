@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260630w">
+  <link rel="stylesheet" href="styles.css?v=20260702a">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260630w" defer></script>
+  <script src="speeks.js?v=20260702d" defer></script>
 </head>
 
 <body class="preload">
@@ -39,6 +39,7 @@
   
   <nav class="nav-bar">
     <a href="index.html" class="nav-link active"><i>⚡</i><span>QuickPortal</span></a>
+    <a href="operations.html" class="nav-link"><i>🛠️</i><span>Operations</span></a>
     <a href="workspace.html" class="nav-link dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager"><i>📈</i><span>Workspace</span></a>
     <a href="docs.html" class="nav-link"><i>📚</i><span>Processes & Policies</span></a>
     <a href="stats.html" class="nav-link"><i>🏆</i><span>Stats & Awards</span></a>
@@ -528,7 +529,7 @@
             <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn">🔑 Store Passwords</a>
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">📊 Sales Summary</a>
             <a href="https://drive.google.com/drive/folders/12Fjxp44sY6T-o6OlrG6n_YtrHow4bE2f?usp=sharing" target="_blank" class="hotbar-btn">⚖️ Variance</a>
-            <a href="https://docs.google.com/spreadsheets/d/1agChyBxxwJqP-3CXo10C36-95Y_dVKXTA4GboeCaRRs/edit" target="_blank" class="hotbar-btn">📋 Scorecard</a>
+            <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn">⏳ Aging Inventory</a>
             <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn">☁️ SPEEKSNET Google Drive</a>
             <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn">☁️ PayMore Google Drive</a> 
           </div>
@@ -564,7 +565,6 @@
             <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn">📁 Store Manager Folder</a>
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">📊 Sales Summary</a>
             <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn">⏳ Aging Inventory</a>
-            <a href="https://docs.google.com/spreadsheets/d/1zw-jcqpAnMY6PNofERbUz4pUHA3qnlnZx6O6C_XSmLY/edit?usp=sharing" target="_blank" class="hotbar-btn">🛡️ Insurance Cases</a>
             <a href="https://docs.google.com/spreadsheets/d/1ar3tabN-bUqkjWqgy25MCHzSup2jhiaAKaGxLwZTeJ8/edit?usp=sharing" target="_blank" class="hotbar-btn">🚗 Location Visits</a>
           </div>
         </div>
@@ -577,7 +577,6 @@
             <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn">📁 Store Manager Folder</a>
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">📊 Sales Summary</a>
             <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn">⏳ Aging Inventory</a>
-            <a href="https://docs.google.com/spreadsheets/d/1zw-jcqpAnMY6PNofERbUz4pUHA3qnlnZx6O6C_XSmLY/edit?usp=sharing" target="_blank" class="hotbar-btn">🛡️ Insurance Cases</a>
           </div>
         </div>
       </div>
@@ -817,7 +816,7 @@
           </div>
       </div>
 
-      <div class="district-split-row dynamic-module-flex role-district-manager">
+      <div class="district-split-row dynamic-module-flex role-district-manager role-ceo">
           
           <div class="flex-col-gap-30">
               <div class="card district-master-panel district-kpi-panel">
@@ -1307,6 +1306,12 @@
         <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
     </div>
 
+    <!-- TABS — DM/CEO only (managers just see the order flow) -->
+    <div id="boxOrderTabs" style="display:none; gap:8px; padding:2px 0 14px;">
+        <button id="boxOrderTabOrder" class="box-order-tab active" onclick="boxOrderSwitchTab('order')">Order</button>
+        <button id="boxOrderTabManage" class="box-order-tab" onclick="boxOrderSwitchTab('manage')">Manage Items</button>
+    </div>
+
     <!-- PAGE 1: Item Selection -->
     <div class="manage-content" id="boxOrderPage1">
         <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:14px;">
@@ -1317,6 +1322,8 @@
         <div class="box-order-disclaimer">
             If a box or item you need is not on this page, please reach out to your District Manager for approval.
         </div>
+        <!-- Live "receipt" of what's selected — sticky to the bottom of the list -->
+        <div id="boxOrderReceipt" class="box-receipt" style="display:none;"></div>
     </div>
 
     <!-- PAGE 2: Email Preview + Notes -->
@@ -1343,6 +1350,56 @@
             oninput="boxOrderUpdatePreview()"></textarea>
     </div>
 
+    <!-- MANAGE ITEMS (DM/CEO) — add/remove catalog items -->
+    <div class="manage-content" id="boxOrderManagePage" style="display:none;">
+        <div class="box-order-preview-label">Add an item</div>
+        <label class="form-label-caps">Title — what managers see <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <input type="text" id="boxAdminName" class="form-input-lg" placeholder="e.g. Packing Paper">
+
+        <label class="form-label-caps" style="margin-top:12px;">Section <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <select id="boxAdminCategory" class="form-input-lg">
+            <option value="Shipping Supplies">Shipping Supplies</option>
+            <option value="Common Box">Common Boxes</option>
+            <option value="Rare Box">Rare Boxes</option>
+            <option value="Very Rare Box">Very Rare Boxes</option>
+            <option value="White Storage Box">White Storage Boxes</option>
+            <option value="Bubble Mailer">Bubble Mailers</option>
+        </select>
+
+        <label class="form-label-caps" style="margin-top:12px;">Market <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <select id="boxAdminMarket" class="form-input-lg">
+            <option value="">All stores</option>
+            <option value="KC">KC — Overland Park, Lee's Summit, Westport</option>
+            <option value="STL">STL — Maplewood, Ballwin</option>
+        </select>
+
+        <div style="display:flex; gap:12px; margin-top:12px;">
+            <div style="flex:1;">
+                <label class="form-label-caps">Units per bundle <span style="font-weight:400;color:#ef4444;">*</span></label>
+                <input type="number" id="boxAdminBundle" class="form-input-lg" min="1" step="1" value="1">
+            </div>
+            <div style="flex:1;">
+                <label class="form-label-caps">Unit word <span style="font-weight:400;color:#ef4444;">*</span></label>
+                <select id="boxAdminUnit" class="form-input-lg">
+                    <option>Bundle</option>
+                    <option>Roll</option>
+                    <option>Box</option>
+                    <option>Bag</option>
+                    <option>Case</option>
+                    <option>Pack</option>
+                </select>
+            </div>
+        </div>
+
+        <label class="form-label-caps" style="margin-top:12px;">Email name — the full spec the vendor needs <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <input type="text" id="boxAdminOrderName" class="form-input-lg" placeholder="e.g. 24&quot; 40# 900' Kraft Paper">
+
+        <button class="btn-primary" style="margin-top:14px; width:100%;" onclick="boxAdminAddItem(this)">+ Add item</button>
+
+        <div class="box-order-preview-label" style="margin-top:24px;">Current items</div>
+        <div id="boxAdminItemsList"></div>
+    </div>
+
     <!-- FOOTER PAGE 1 -->
     <div class="manage-footer box-order-footer" id="boxOrderFooter1">
         <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
@@ -1354,6 +1411,11 @@
         <button class="btn-secondary" onclick="boxOrderBackPage()">← Back</button>
         <button class="btn-secondary" onclick="copyBoxOrder(this)">📋 Copy</button>
         <button class="btn-primary" onclick="sendBoxOrder()">Send Email →</button>
+    </div>
+
+    <!-- FOOTER: MANAGE ITEMS -->
+    <div class="manage-footer box-order-footer" id="boxOrderManageFooter" style="display:none;">
+        <button class="btn-secondary" onclick="closeAllModals()">Done</button>
     </div>
 </div>
 
@@ -1453,7 +1515,7 @@
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager">
       <div class="tools-group-label">📦 Orders</div>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon">📦</span>Box Order</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-manager role-owner-manager role-assistant-manager" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon">♻️</span>Recycle Inventory</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon">♻️</span>Recycle Inventory</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-owner-manager">
