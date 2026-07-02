@@ -54,6 +54,7 @@ const TICKER_URL        = `${_BASE}/ticker`;
 const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
 const MONTHLY_BRIEF_URL = `${_BASE}/monthly-brief`;
 const B2B_URL           = `${_BASE}/b2b-deals`;
+const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -3335,7 +3336,24 @@ function switchOperationsTab(name) {
 
     if (name === 'callbacks') {
         cbLoad();
+        _startCbSync();
     }
+}
+
+// Background refresh (60s) so one store's additions/status changes show up for
+// the others without a reload. Skips a tick while the pane is hidden or the
+// user is mid-typing/editing, so their input is never wiped by a re-render.
+let _cbSyncInterval = null;
+function _startCbSync() {
+    if (_cbSyncInterval) return;
+    _cbSyncInterval = setInterval(() => {
+        const pane = document.getElementById('ops-pane-callbacks');
+        if (!pane || !pane.classList.contains('active') || document.hidden) return;
+        if (_cbEditingId) return;
+        const active = document.activeElement;
+        if (active && active.closest && active.closest('.cb-quickadd, .cb-row-detail')) return;
+        cbLoad();
+    }, 60000);
 }
 
 // Detects the operations page and opens the requested sub-tab (defaults to
@@ -6964,84 +6982,33 @@ async function b2bPost(payload, errLabel) {
 // ============================================================================
 // MODULE: CUSTOMER CALL BACKS (operations.html #ops-pane-callbacks)
 // Entries live 30 days from date_of_call, then auto-archive (recoverable for
-// 90 more days before purge). Anyone may add/act on their OWN store's entries
-// and leave notes on ANY store's entry; edit/delete elsewhere needs Manager+.
-// Phase A: runs on _CB_MOCK_DATA (CB_MOCK = true). Phase B swaps cbFetch/cbPost
-// to a customer-callbacks edge function — those two functions are the only seam.
+// 90 more days before purge — nightly `callbacks-daily-maintenance` pg_cron job).
+// Backed by the `customer-callbacks` edge function / customer_callbacks table.
+// Status changes are open to every store (the cross-store "we have this" signal);
+// add/edit/delete/restore are store-scoped (MSM covers BAL+MPL, corp covers all).
 // ============================================================================
 const CB_CORP_ROLES = ['district manager', 'ceo', 'tom'];   // may create/edit entries for any store
 const CB_ACTIVE_DAYS  = 30;   // days an entry stays on the sheet
 const CB_PURGE_DAYS   = 120;  // days from date_of_call until permanent deletion
 
-let CB_MOCK = true;           // Phase B: flip to false to use the live endpoint
 let _cbCache = [];
 let _cbView = null;           // 'mine' | 'all' | 'archived'
 let _cbExpandedId = null;
 let _cbEditingId = null;
 let _cbLoading = false;
 
-// --- Mock data layer (Phase A)
 function _cbDaysAgo(n) {
     const d = new Date(); d.setDate(d.getDate() - n);
     return d.toISOString().slice(0, 10);
 }
-let _CB_MOCK_DATA = [
-    { id: 'm1',  store: 'OVL', customer_name: 'Maria Gonzalez', phone: '8175550142', item: 'iPhone 15 Pro Max 256GB (Blue)', status: 'open',      date_of_call: _cbDaysAgo(1),  created_by: 'Jess',    archived_at: null, notes: [{ text: 'Wants blue but would take black. Budget around $700', user: 'Jess', store: 'OVL', at: _cbDaysAgo(1) }] },
-    { id: 'm2',  store: 'OVL', customer_name: 'Derrick Hall',   phone: '8175550911', item: 'PS5 Slim Disc Edition',          status: 'contacted', date_of_call: _cbDaysAgo(4),  created_by: 'Jess',    archived_at: null, status_by: 'Simeon', status_store: 'WSP', notes: [{ text: 'Needs it before his son\'s birthday on the 20th', user: 'Jess', store: 'OVL', at: _cbDaysAgo(4) }] },
-    { id: 'm3',  store: 'OVL', customer_name: 'Tina Brooks',    phone: '6825550377', item: 'MacBook Air M2 (any color)',     status: 'open',      date_of_call: _cbDaysAgo(18), created_by: 'Marcus',  archived_at: null, notes: [] },
-    { id: 'm4',  store: 'OVL', customer_name: 'Ray Whitfield',  phone: '8175550264', item: 'Meta Quest 3 128GB',             status: 'completed', date_of_call: _cbDaysAgo(6),  created_by: 'Jess',    archived_at: null, status_by: 'Marcus', status_store: 'OVL', notes: [{ text: 'Came in and bought it. Easy sale.', user: 'Marcus', store: 'OVL', at: _cbDaysAgo(3) }] },
-    { id: 'm5',  store: 'LEE', customer_name: 'Carol Jenkins',  phone: '2145550883', item: 'Galaxy S24 Ultra (Titanium)',    status: 'open',      date_of_call: _cbDaysAgo(3),  created_by: 'Ethan F', archived_at: null, notes: [] },
-    { id: 'm6',  store: 'LEE', customer_name: 'Hector Ramos',   phone: '2145550412', item: 'Nintendo Switch OLED + Mario Kart', status: 'contacted', date_of_call: _cbDaysAgo(25), created_by: 'Dana',  archived_at: null, status_by: 'Priya', status_store: 'MPL', notes: [{ text: 'Wants the bundle, not console alone. Up to $280', user: 'Dana', store: 'LEE', at: _cbDaysAgo(25) }, { text: 'Called — he wants to wait for a bundle deal', user: 'Dana', store: 'LEE', at: _cbDaysAgo(18) }] },
-    { id: 'm7',  store: 'WSP', customer_name: 'Angela Wu',      phone: '9725550633', item: 'iPad Pro 11" M4',                status: 'open',      date_of_call: _cbDaysAgo(12), created_by: 'Simeon',  archived_at: null, notes: [] },
-    { id: 'm8',  store: 'WSP', customer_name: 'Bob Castillo',   phone: '9725550199', item: 'Xbox Series X (disc)',           status: 'open',      date_of_call: _cbDaysAgo(28), created_by: 'Simeon',  archived_at: null, notes: [] },
-    { id: 'm9',  store: 'MPL', customer_name: 'Sandra Lee',     phone: '4695550745', item: 'AirPods Max (USB-C)',            status: 'open',      date_of_call: _cbDaysAgo(7),  created_by: 'Priya',   archived_at: null, notes: [] },
-    { id: 'm10', store: 'MPL', customer_name: 'Jamal Carter',   phone: '4695550528', item: 'Steam Deck OLED 512GB',          status: 'contacted', date_of_call: _cbDaysAgo(15), created_by: 'Priya',   archived_at: null, status_by: 'Chris', status_store: 'BAL', notes: [{ text: 'Flexible on 512GB vs 1TB if the price is right', user: 'Priya', store: 'MPL', at: _cbDaysAgo(15) }] },
-    { id: 'm11', store: 'BAL', customer_name: 'Felicia Moore',  phone: '8175550866', item: 'Apple Watch Ultra 2',            status: 'open',      date_of_call: _cbDaysAgo(2),  created_by: 'Chris',   archived_at: null, notes: [] },
-    { id: 'm12', store: 'BAL', customer_name: 'Greg Tanner',    phone: '8175550307', item: 'Dell XPS 15 (i7 or better)',     status: 'open',      date_of_call: _cbDaysAgo(35), created_by: 'Chris',   archived_at: _cbDaysAgo(5),  notes: [] },
-    { id: 'm13', store: 'LEE', customer_name: 'Olivia Park',    phone: '2145550190', item: 'Canon EOS R50 kit',              status: 'contacted', date_of_call: _cbDaysAgo(45), created_by: 'Dana',    archived_at: _cbDaysAgo(15), status_by: 'Dana', status_store: 'LEE', notes: [] }
-];
 
 async function cbFetch(view, store) {
-    if (CB_MOCK) {
-        await new Promise(r => setTimeout(r, 150));
-        return _CB_MOCK_DATA.filter(e => {
-            const expired = !!e.archived_at || cbDaysInfo(e).daysLeft <= 0;
-            if (view === 'archived' ? !expired : expired) return false;
-            return store === 'ALL' || e.store === store;
-        });
-    }
     const res = await fetch(`${CALLBACKS_URL}?view=${view === 'archived' ? 'archived' : 'active'}&store=${store}&v=${Date.now()}`);
+    if (!res.ok) throw new Error('Fetch failed');
     return res.json();
 }
 
 async function cbPost(payload) {
-    if (CB_MOCK) {
-        await new Promise(r => setTimeout(r, 150));
-        const find = id => _CB_MOCK_DATA.find(e => e.id === id);
-        switch (payload.action) {
-            case 'add': {
-                // Fill server-side defaults so the stored entry is complete even
-                // after a view switch refetches from the mock store.
-                const { note, ...fields } = payload.entry;
-                const entry = {
-                    id: 'm' + Date.now(),
-                    status: 'open',
-                    date_of_call: _cbDaysAgo(0),
-                    archived_at: null,
-                    notes: note ? [{ text: note, user: fields.created_by, store: fields.store, at: _cbDaysAgo(0) }] : [],
-                    ...fields
-                };
-                _CB_MOCK_DATA.unshift(entry);
-                return { success: true, entry };
-            }
-            case 'status':  { const e = find(payload.id); if (e) { e.status = payload.status; e.status_by = payload.status_by; e.status_store = payload.status_store; } return { success: true }; }
-            case 'note':    { const e = find(payload.id); if (e) e.notes.push(payload.note); return { success: true }; }
-            case 'edit':    { const e = find(payload.id); if (e) Object.assign(e, payload.fields); return { success: true }; }
-            case 'delete':  { _CB_MOCK_DATA = _CB_MOCK_DATA.filter(e => e.id !== payload.id); return { success: true }; }
-            case 'restore': { const e = find(payload.id); if (e) { e.archived_at = null; e.date_of_call = _cbDaysAgo(0); e.status = 'open'; } return { success: true }; }
-        }
-        return { success: false };
-    }
     const res = await fetch(CALLBACKS_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -7049,7 +7016,8 @@ async function cbPost(payload) {
             ...payload,
             user:  sessionStorage.getItem('speeksUserName')  || '',
             role:  (sessionStorage.getItem('speeksUserRole') || '').toLowerCase(),
-            store: (sessionStorage.getItem('speeksUserStore') || '').toUpperCase()
+            store: (sessionStorage.getItem('speeksUserStore') || '').toUpperCase(),
+            multi: (typeof isMultiStoreManager === 'function' && isMultiStoreManager())
         })
     });
     const out = await res.json().catch(() => ({}));
@@ -7136,7 +7104,9 @@ async function cbLoad() {
         _cbCache = await cbFetch(_cbView === 'archived' ? 'archived' : 'active', 'ALL');
         cbRender();
     } catch (e) {
-        if (body) body.innerHTML = '<div class="status-message">Could not load call backs. Try again in a minute.</div>';
+        // Only surface the error when there's nothing on screen — a failed
+        // background refresh keeps showing the last good data instead.
+        if (body && !_cbCache.length) body.innerHTML = '<div class="status-message">Could not load call backs. Try again in a minute.</div>';
     } finally {
         _cbLoading = false;
     }
@@ -7327,7 +7297,9 @@ async function cbQuickAdd() {
     document.getElementById('cbAddName')?.focus();
     try {
         const out = await cbPost({ action: 'add', entry: { store, customer_name: name, phone, item, note: note || null, created_by: user } });
-        if (out.entry) { entry.id = out.entry.id; cbRender(); }   // reconcile temp id (row onclick handlers embed it)
+        // Reconcile the optimistic row with the server's (real uuid, server-side
+        // defaults) — row onclick handlers embed the id, so re-render after.
+        if (out.entry) { Object.assign(entry, out.entry); cbRender(); }
     } catch (e) {
         _cbCache = _cbCache.filter(x => x.id !== entry.id);
         cbRender();
