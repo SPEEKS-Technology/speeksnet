@@ -11,7 +11,7 @@
   </style>
   <link rel="stylesheet" href="styles.css?v=20260702a">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <script src="speeks.js?v=20260702d" defer></script>
+  <script src="speeks.js?v=20260707a" defer></script>
 </head>
 <body class="preload">
 
@@ -37,7 +37,7 @@
         <select id="msmStoreSelect" class="msm-store-select" onchange="setMultiStore(this.value)" aria-label="Managed store"></select>
       </div>
 
-      <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-owner-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" title="SPEEKS Tools">
+      <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-owner-manager role-manager role-assistant-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" title="SPEEKS Tools">
         <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
           <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
@@ -70,7 +70,7 @@
       <div class="greeting-stack">
         <h2 id="userGreeting">Welcome!</h2>
         <div class="version-signout-row">
-            <span class="version-tag">v2.1.3</span>
+            <span class="version-tag">v2.2.0</span>
             <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
         </div>
       </div>
@@ -836,8 +836,237 @@
 
 </main>
 
+<div class="modal-menu manage-menu" id="boxOrderModal">
+    <div class="modal-header">
+        <h3>📦 Box Order</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+
+    <!-- TABS — DM/CEO only (managers just see the order flow) -->
+    <div id="boxOrderTabs" style="display:none; gap:8px; padding:2px 0 14px;">
+        <button id="boxOrderTabOrder" class="box-order-tab active" onclick="boxOrderSwitchTab('order')">Order</button>
+        <button id="boxOrderTabManage" class="box-order-tab" onclick="boxOrderSwitchTab('manage')">Manage Items</button>
+    </div>
+
+    <!-- PAGE 1: Item Selection -->
+    <div class="manage-content" id="boxOrderPage1">
+        <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:14px;">
+            <span class="doc-search-icon">🔍</span>
+            <input type="text" id="boxOrderSearch" class="kb-search-input doc-search-input" placeholder="Search boxes & supplies..." oninput="filterBoxOrderItems()">
+        </div>
+        <div id="boxOrderItemsContainer"></div>
+        <div class="box-order-disclaimer">
+            If a box or item you need is not on this page, please reach out to your District Manager for approval.
+        </div>
+        <!-- Live "receipt" of what's selected — sticky to the bottom of the list -->
+        <div id="boxOrderReceipt" class="box-receipt" style="display:none;"></div>
+    </div>
+
+    <!-- PAGE 2: Email Preview + Notes -->
+    <div class="manage-content" id="boxOrderPage2" style="display:none;">
+        <!-- CORP store selector — shown for CEO / DM only -->
+        <div id="boxOrderStoreSelector" style="display:none; margin-bottom:14px;">
+            <label class="form-label-caps">Order For <span style="font-weight:400;color:#ef4444;">*</span></label>
+            <select id="boxOrderStoreSelect" class="form-input-lg" onchange="boxOrderUpdatePreview()">
+                <option value="">Select a store…</option>
+                <option value="OVL">OVL</option>
+                <option value="LEE">LEE</option>
+                <option value="WSP">WSP</option>
+                <option value="MPL">MPL</option>
+                <option value="BAL">BAL</option>
+            </select>
+        </div>
+        <div class="box-order-preview-label">Email Preview</div>
+        <div class="box-order-email-preview" id="boxOrderEmailPreview"></div>
+        <label class="form-label-caps" style="margin-top:16px;">
+            Notes <span style="font-weight:400;color:#a0aab2;">(optional)</span>
+        </label>
+        <textarea id="boxOrderNotes" class="form-input-lg" rows="2"
+            placeholder="e.g. Please deliver by Friday"
+            oninput="boxOrderUpdatePreview()"></textarea>
+    </div>
+
+    <!-- MANAGE ITEMS (DM/CEO) — add/remove catalog items -->
+    <div class="manage-content" id="boxOrderManagePage" style="display:none;">
+        <div class="box-order-preview-label">Add an item</div>
+        <label class="form-label-caps">Title — what managers see <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <input type="text" id="boxAdminName" class="form-input-lg" placeholder="e.g. Packing Paper">
+
+        <label class="form-label-caps" style="margin-top:12px;">Section <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <select id="boxAdminCategory" class="form-input-lg">
+            <option value="Shipping Supplies">Shipping Supplies</option>
+            <option value="Common Box">Common Boxes</option>
+            <option value="Rare Box">Rare Boxes</option>
+            <option value="Very Rare Box">Very Rare Boxes</option>
+            <option value="White Storage Box">White Storage Boxes</option>
+            <option value="Bubble Mailer">Bubble Mailers</option>
+        </select>
+
+        <label class="form-label-caps" style="margin-top:12px;">Market <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <select id="boxAdminMarket" class="form-input-lg">
+            <option value="">All stores</option>
+            <option value="KC">KC — Overland Park, Lee's Summit, Westport</option>
+            <option value="STL">STL — Maplewood, Ballwin</option>
+        </select>
+
+        <div style="display:flex; gap:12px; margin-top:12px;">
+            <div style="flex:1;">
+                <label class="form-label-caps">Units per bundle <span style="font-weight:400;color:#ef4444;">*</span></label>
+                <input type="number" id="boxAdminBundle" class="form-input-lg" min="1" step="1" value="1">
+            </div>
+            <div style="flex:1;">
+                <label class="form-label-caps">Unit word <span style="font-weight:400;color:#ef4444;">*</span></label>
+                <select id="boxAdminUnit" class="form-input-lg">
+                    <option>Bundle</option>
+                    <option>Roll</option>
+                    <option>Box</option>
+                    <option>Bag</option>
+                    <option>Case</option>
+                    <option>Pack</option>
+                </select>
+            </div>
+        </div>
+
+        <label class="form-label-caps" style="margin-top:12px;">Email name — the full spec the vendor needs <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <input type="text" id="boxAdminOrderName" class="form-input-lg" placeholder="e.g. 24&quot; 40# 900' Kraft Paper">
+
+        <button class="btn-primary" style="margin-top:14px; width:100%;" onclick="boxAdminAddItem(this)">+ Add item</button>
+
+        <div class="box-order-preview-label" style="margin-top:24px;">Current items</div>
+        <div id="boxAdminItemsList"></div>
+    </div>
+
+    <!-- FOOTER PAGE 1 -->
+    <div class="manage-footer box-order-footer" id="boxOrderFooter1">
+        <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
+        <button class="btn-primary" onclick="boxOrderNextPage()">Next →</button>
+    </div>
+
+    <!-- FOOTER PAGE 2 -->
+    <div class="manage-footer box-order-footer" id="boxOrderFooter2" style="display:none;">
+        <button class="btn-secondary" onclick="boxOrderBackPage()">← Back</button>
+        <button class="btn-secondary" onclick="copyBoxOrder(this)">📋 Copy</button>
+        <button class="btn-primary" onclick="sendBoxOrder()">Send Email →</button>
+    </div>
+
+    <!-- FOOTER: MANAGE ITEMS -->
+    <div class="manage-footer box-order-footer" id="boxOrderManageFooter" style="display:none;">
+        <button class="btn-secondary" onclick="closeAllModals()">Done</button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="recycleInvModal">
+    <div class="modal-header">
+        <h3>♻️ Recycle Inventory</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+
+    <!-- PAGE 1: Item Details -->
+    <div class="manage-content" id="recycleInvPage1">
+        <!-- CORP store selector — shown for CEO / DM only -->
+        <div id="recycleInvStoreSelector" style="display:none; margin-bottom:14px;">
+            <label class="form-label-caps">Store <span style="font-weight:400;color:#ef4444;">*</span></label>
+            <select id="recycleInvStoreSelect" class="form-input-lg" onchange="recycleInvUpdatePreview()">
+                <option value="">Select a store…</option>
+                <option value="OVL">OVL</option>
+                <option value="LEE">LEE</option>
+                <option value="WSP">WSP</option>
+                <option value="MPL">MPL</option>
+                <option value="BAL">BAL</option>
+            </select>
+        </div>
+        <label class="form-label-caps">SKU <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <input type="text" id="recycleInvSku" class="form-input-lg" placeholder="e.g. ABC-12345"
+            oninput="recycleInvUpdatePreview()">
+        <label class="form-label-caps" style="margin-top:16px;">
+            Item Description <span style="font-weight:400;color:#ef4444;">*</span>
+        </label>
+        <textarea id="recycleInvDescription" class="form-input-lg" rows="3"
+            placeholder="What is the item, and why is it being recycled out of inventory?"
+            oninput="recycleInvUpdatePreview()"></textarea>
+        <label class="form-label-caps" style="margin-top:16px;">Value <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <input type="text" id="recycleInvValue" class="form-input-lg" placeholder="e.g. 50.00" inputmode="decimal"
+            oninput="recycleInvSanitizeMoney(this); recycleInvUpdatePreview()">
+        <label class="form-label-caps" style="margin-top:16px;">Cost <span style="font-weight:400;color:#ef4444;">*</span></label>
+        <input type="text" id="recycleInvCost" class="form-input-lg" placeholder="e.g. 20.00" inputmode="decimal"
+            oninput="recycleInvSanitizeMoney(this); recycleInvUpdatePreview()">
+        <div class="box-order-disclaimer">
+            This request is sent to SPEEKS for approval before the item is recycled out of inventory.
+        </div>
+    </div>
+
+    <!-- PAGE 2: Email Preview -->
+    <div class="manage-content" id="recycleInvPage2" style="display:none;">
+        <div class="box-order-preview-label">Email Preview</div>
+        <div class="box-order-email-preview" id="recycleInvEmailPreview"></div>
+    </div>
+
+    <!-- FOOTER PAGE 1 -->
+    <div class="manage-footer box-order-footer" id="recycleInvFooter1">
+        <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
+        <button class="btn-primary" onclick="recycleInvNextPage()">Next →</button>
+    </div>
+
+    <!-- FOOTER PAGE 2 -->
+    <div class="manage-footer box-order-footer" id="recycleInvFooter2" style="display:none;">
+        <button class="btn-secondary" onclick="recycleInvBackPage()">← Back</button>
+        <button class="btn-secondary" onclick="copyRecycleInventory(this)">📋 Copy</button>
+        <button class="btn-primary" onclick="sendRecycleInventory()">Send Email →</button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="manageTickerDropdown">
+    <div class="modal-header">
+        <h3>Manage Ticker Items</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div class="manage-content" id="manageTickerList"></div>
+    <div class="manage-footer">
+        <button class="btn-secondary" onclick="addTickerRow()">+ Add Item</button>
+        <button id="saveTickerBtn" class="btn-primary" onclick="saveTickerItems()">Save Changes</button>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="varianceInputModal">
+    <div class="modal-header">
+        <h3>📊 Submit Variance Report</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div class="manage-content">
+        <label class="form-label-caps">Store</label>
+        <select id="vi-store" class="form-input-lg" style="margin-bottom: 15px;" onchange="loadVarianceStoreEmployees()">
+            <option value="OVL">OVL</option>
+            <option value="LEE">LEE</option>
+            <option value="WSP">WSP</option>
+            <option value="MPL">MPL</option>
+            <option value="BAL">BAL</option>
+        </select>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px;">
+            <div>
+                <label class="form-label-caps">Date From</label>
+                <input type="date" id="vi-date-from" class="form-input-lg" style="margin: 0;">
+            </div>
+            <div>
+                <label class="form-label-caps">Date To</label>
+                <input type="date" id="vi-date-to" class="form-input-lg" style="margin: 0;">
+            </div>
+        </div>
+
+        <label class="form-label-caps">Store Overall Variance %</label>
+        <input type="number" id="vi-store-pct" class="form-input-lg" step="0.01" placeholder="e.g. -2.45" style="margin-bottom: 15px;">
+
+        <label class="form-label-caps">Employees</label>
+        <div id="vi-employees" style="display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto;"></div>
+    </div>
+    <div class="manage-footer flex-end">
+        <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
+        <button id="vi-submit-btn" class="btn-primary" onclick="submitVarianceReport()">Submit Report</button>
+    </div>
+</div>
+
 <!-- ===== SPEEKS TOOLS SIDE PANEL ===== -->
-<div class="tools-side-panel dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" id="toolsSidePanel" style="flex-direction:column;">
+<div class="tools-side-panel dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager role-manager role-assistant-manager" id="toolsSidePanel" style="flex-direction:column;">
   <div class="tools-panel-header">
     <div class="tools-panel-title">
       <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
@@ -856,6 +1085,7 @@
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-tom role-owner-manager">
       <div class="tools-group-label">📢 Content</div>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon">📣</span>Announcements</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageTicker();"><span class="tools-item-icon">📌</span>Ticker Items</a>
       <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); togglePatchNotesManage();"><span class="tools-item-icon">📝</span>Patch Notes</a>
     </div>
 
@@ -863,7 +1093,14 @@
       <div class="tools-group-label">🏪 Store Ops</div>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon">🏆</span>Submit Scores</a>
       <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManagerChecklist();"><span class="tools-item-icon">📋</span>Manager Checklist</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleVarianceInput();"><span class="tools-item-icon">📊</span>Submit Variance Report</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon">💬</span>Send Store Comment</a>
+    </div>
+
+    <div class="tools-group dynamic-module-block role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager">
+      <div class="tools-group-label">📦 Orders</div>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon">📦</span>Box Order</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon">♻️</span>Recycle Inventory</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-owner-manager">

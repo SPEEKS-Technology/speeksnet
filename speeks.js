@@ -7868,6 +7868,37 @@ document.addEventListener('click', async (e) => {
                 currentMain.innerHTML = newMain.innerHTML;
             }
 
+            // This swap only replaces .main-content, so the SPEEKS Tools chrome
+            // (button, side panel, tool modals) — which lives OUTSIDE .main-content —
+            // would otherwise stay frozen at whatever the first full page load had,
+            // and any tool modal a page authored INSIDE .main-content would be wiped.
+            // Sync it all from the fetched doc so every tool opens on every tab
+            // without a hard refresh.
+            const newBtn = newDoc.getElementById('toolsNavBtn');
+            const curBtn = document.getElementById('toolsNavBtn');
+            if (newBtn && curBtn) curBtn.className = newBtn.className;
+            const newPanel = newDoc.getElementById('toolsSidePanel');
+            const curPanel = document.getElementById('toolsSidePanel');
+            if (newPanel && curPanel) {
+                curPanel.className = newPanel.className;
+                curPanel.innerHTML = newPanel.innerHTML;
+            }
+            // Pull in any modal/overlay the fetched page keeps outside .main-content
+            // that the live DOM is now missing.
+            const nMain = newDoc.querySelector('.main-content');
+            newDoc.querySelectorAll('.modal-menu, .overlay').forEach(m => {
+                if (m.id && (!nMain || !nMain.contains(m)) && !document.getElementById(m.id)) {
+                    document.body.appendChild(document.importNode(m, true));
+                }
+            });
+            // De-dupe: a modal authored inside .main-content on this page can now
+            // coexist with a persistent copy carried over from the previous page.
+            const _seenModalIds = new Set();
+            document.querySelectorAll('.modal-menu, .overlay').forEach(el => {
+                if (!el.id) return;
+                if (_seenModalIds.has(el.id)) el.remove(); else _seenModalIds.add(el.id);
+            });
+
             document.querySelectorAll('.nav-link').forEach(nav => nav.classList.remove('active'));
             const newActiveLink = Array.from(document.querySelectorAll('.nav-link')).find(n => n.href === targetUrl);
             if (newActiveLink) newActiveLink.classList.add('active');
