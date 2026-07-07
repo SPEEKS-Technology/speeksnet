@@ -9947,6 +9947,85 @@ function _selectedStoreAudit() {
     return entry && entry.audit ? entry.audit : null;
 }
 
+// Per-section notes + photo attachments captured while scoring a practice audit.
+// Notes: { [sectionTitle]: string }. Photos: { [sectionTitle]: [{file?,localUrl?,url?,path?,name}] }
+// New photos upload to the audit-photos bucket on save; a store's previous-audit
+// photos are cleared server-side once a new audit is scored.
+let _auditEntryNotes = {};
+let _auditEntryPhotos = {};
+
+function _auSecTitle(sIdx) { return (AUDIT_DEFINITION[sIdx] || {}).title || String(sIdx); }
+
+function onAuditNoteInput(sIdx) {
+    const el = document.getElementById(`audit-note-${sIdx}`);
+    _auditEntryNotes[_auSecTitle(sIdx)] = el ? el.value : '';
+}
+
+function onAuditPhotoAdd(sIdx, input) {
+    const title = _auSecTitle(sIdx);
+    if (!_auditEntryPhotos[title]) _auditEntryPhotos[title] = [];
+    const MAX = 6;
+    [...(input.files || [])].forEach(f => {
+        if (!f.type || !f.type.startsWith('image/')) return;
+        if (_auditEntryPhotos[title].length >= MAX) { return; }
+        _auditEntryPhotos[title].push({ file: f, localUrl: URL.createObjectURL(f), name: f.name });
+    });
+    input.value = '';
+    renderAuditSectionPhotos(sIdx);
+}
+
+function removeAuditPhoto(sIdx, idx) {
+    const arr = _auditEntryPhotos[_auSecTitle(sIdx)];
+    if (arr) { arr.splice(idx, 1); renderAuditSectionPhotos(sIdx); }
+}
+
+function renderAuditSectionPhotos(sIdx) {
+    const wrap = document.getElementById(`audit-photos-${sIdx}`);
+    if (!wrap) return;
+    const arr = _auditEntryPhotos[_auSecTitle(sIdx)] || [];
+    wrap.innerHTML = arr.map((p, i) => {
+        const src = p.url || p.localUrl;
+        return `<div style="position:relative; width:64px; height:64px; border-radius:8px; overflow:hidden; border:1px solid #e2e8f0;">
+            <img src="${src}" style="width:100%; height:100%; object-fit:cover; cursor:pointer;" onclick="openAuditPhotoLightbox('${src}')">
+            <button type="button" onclick="removeAuditPhoto(${sIdx}, ${i})" title="Remove" style="position:absolute; top:2px; right:2px; width:18px; height:18px; border:none; border-radius:50%; background:rgba(15,23,42,.78); color:#fff; font-size:12px; line-height:1; cursor:pointer;">&times;</button>
+        </div>`;
+    }).join('');
+    const hint = document.getElementById(`audit-photo-hint-${sIdx}`);
+    if (hint) hint.textContent = arr.length ? `${arr.length} attached` : '';
+}
+
+// Full-screen image viewer (created lazily; sits above any modal).
+function openAuditPhotoLightbox(src) {
+    let lb = document.getElementById('auditPhotoLightbox');
+    if (!lb) {
+        lb = document.createElement('div');
+        lb.id = 'auditPhotoLightbox';
+        lb.onclick = () => { lb.style.display = 'none'; };
+        lb.style.cssText = 'display:none; position:fixed; inset:0; z-index:4000; background:rgba(2,6,23,.85); align-items:center; justify-content:center; padding:30px; cursor:zoom-out;';
+        lb.innerHTML = '<img alt="" style="max-width:92vw; max-height:88vh; border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,.5);">';
+        document.body.appendChild(lb);
+    }
+    lb.querySelector('img').src = src;
+    lb.style.display = 'flex';
+}
+
+// Upload one image to the audit-photos bucket; returns {url, path, name}.
+async function _uploadAuditPhoto(file) {
+    const safeName = `${Date.now()}_${Math.round(Math.random() * 1e6)}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    const resp = await fetch(`${_SUPABASE_URL}/storage/v1/object/audit-photos/${safeName}`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${_SUPABASE_ANON_KEY}`,
+            'apikey': _SUPABASE_ANON_KEY,
+            'Content-Type': file.type || 'application/octet-stream',
+            'x-upsert': 'true',
+        },
+        body: file,
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return { url: `${_SUPABASE_URL}/storage/v1/object/public/audit-photos/${safeName}`, path: safeName, name: file.name };
+}
+
 // Build the collapsible audit checklist. If an audit already exists for the
 // selected store AND the chosen date matches it, pre-check its results (edit mode).
 function renderAuditEntry() {
@@ -9955,6 +10034,12 @@ function renderAuditEntry() {
     const dateVal = document.getElementById('dm-score-date')?.value || '';
     const existing = _selectedStoreAudit();
     const prefill = (existing && existing.date === dateVal && existing.results) ? existing.results : {};
+    const editingThis = !!(existing && existing.date === dateVal);
+    _auditEntryNotes = (editingThis && existing.notes && typeof existing.notes === 'object' && !Array.isArray(existing.notes)) ? { ...existing.notes } : {};
+    _auditEntryPhotos = {};
+    if (editingThis && existing.photos && typeof existing.photos === 'object') {
+        Object.entries(existing.photos).forEach(([k, arr]) => { if (Array.isArray(arr)) _auditEntryPhotos[k] = arr.slice(); });
+    }
     const auditorEl = document.getElementById('dm-audit-auditor');
     if (auditorEl) auditorEl.value = (existing && existing.date === dateVal && existing.auditor) ? existing.auditor : '';
 
@@ -9989,12 +10074,29 @@ function renderAuditEntry() {
                 <span style="flex-shrink:0; display:flex; align-items:center; justify-content:flex-end; gap:8px; width:100px;">${control}</span>
             </div>`;
         });
+        html += `<div style="margin-top:10px; padding-top:11px; border-top:1px dashed #e2e8f0;">
+            <label style="display:block; font-size:10.5px; font-weight:800; color:#94a3b8; text-transform:uppercase; letter-spacing:.4px; margin-bottom:5px;">Section notes</label>
+            <textarea id="audit-note-${sIdx}" oninput="onAuditNoteInput(${sIdx})" placeholder="Notes for this section (optional)…" style="width:100%; box-sizing:border-box; min-height:50px; resize:vertical; border:1px solid #cbd5e1; border-radius:8px; padding:8px 10px; font-size:12.5px; font-family:inherit; color:var(--slate-charcoal);"></textarea>
+            <div style="display:flex; align-items:center; gap:10px; margin-top:8px; flex-wrap:wrap;">
+                <label style="display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:800; color:#475569; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:8px; padding:6px 11px; cursor:pointer;">
+                    📷 Add photo(s)
+                    <input type="file" accept="image/*" multiple onchange="onAuditPhotoAdd(${sIdx}, this)" style="display:none;">
+                </label>
+                <span id="audit-photo-hint-${sIdx}" style="font-size:11px; color:#94a3b8; font-weight:700;"></span>
+            </div>
+            <div id="audit-photos-${sIdx}" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;"></div>
+        </div>`;
         html += `</div></div>`;
     });
     container.innerHTML = html;
 
-    // Refresh subtotals + running bar from the prefilled state.
-    AUDIT_DEFINITION.forEach((_s, sIdx) => onAuditEntryToggle(sIdx, true));
+    // Refresh subtotals + running bar; restore any per-section notes/photos.
+    AUDIT_DEFINITION.forEach((sec, sIdx) => {
+        onAuditEntryToggle(sIdx, true);
+        const ta = document.getElementById(`audit-note-${sIdx}`);
+        if (ta) ta.value = _auditEntryNotes[sec.title] || '';
+        renderAuditSectionPhotos(sIdx);
+    });
     updateAuditRunningBar();
 }
 
@@ -10068,7 +10170,7 @@ function updateAuditRunningBar() {
         <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:4px;">${verdict}</div>`;
 }
 
-function submitNewAudit() {
+async function submitNewAudit() {
     const store = document.getElementById('dm-store-select').value;
     const date = document.getElementById('dm-score-date').value;
     const auditor = (document.getElementById('dm-audit-auditor')?.value || '').trim()
@@ -10081,15 +10183,39 @@ function submitNewAudit() {
         results[el.getAttribute('data-itemid')] = _auditItemAward(el);
     });
 
-    btn.innerText = 'Saving...';
-    btn.style.opacity = '0.7';
-    btn.disabled = true;
+    // Per-section notes (skip blanks).
+    const sectionNotes = {};
+    Object.entries(_auditEntryNotes).forEach(([k, v]) => {
+        if (v && String(v).trim()) sectionNotes[k] = String(v).trim();
+    });
 
-    fetch(SCORECARD_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'submit_audit', store, date, auditor, results })
-    }).then(async res => {
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+
+    // Upload any newly-added photos; keep already-uploaded ones (edit mode) as-is.
+    const sectionPhotos = {};
+    try {
+        for (const [section, arr] of Object.entries(_auditEntryPhotos)) {
+            const out = [];
+            for (const p of (arr || [])) {
+                if (p.path && p.url) { out.push({ url: p.url, path: p.path, name: p.name || '' }); continue; }
+                if (p.file) { btn.innerText = 'Uploading photos…'; out.push(await _uploadAuditPhoto(p.file)); }
+            }
+            if (out.length) sectionPhotos[section] = out;
+        }
+    } catch (e) {
+        alert('Photo upload failed: ' + (e.message || e));
+        btn.innerText = 'Save Audit'; btn.style.opacity = ''; btn.disabled = false;
+        return;
+    }
+
+    btn.innerText = 'Saving...';
+    try {
+        const res = await fetch(SCORECARD_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'submit_audit', store, date, auditor, results, sectionNotes, sectionPhotos })
+        });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
         btn.innerText = `Saved — ${json.earned}/${json.possible} (${json.pct}%)`;
@@ -10103,13 +10229,13 @@ function submitNewAudit() {
             btn.style.opacity = '';
             btn.disabled = false;
         }, 1400);
-    }).catch(err => {
+    } catch (err) {
         alert('Error saving audit: ' + (err.message || err));
         btn.innerText = 'Save Audit';
         btn.style.background = '';
         btn.style.opacity = '';
         btn.disabled = false;
-    });
+    }
 }
 
 // ---- Read-only Audit Breakdown popout (reused by every display site) ----
@@ -10168,6 +10294,17 @@ function renderAuditBreakdown(store) {
                 <span style="font-size:11px; font-weight:800; color:${valColor}; flex-shrink:0;">${aw}/${item.pts}</span>
             </div>`;
         });
+        const secNote = (audit.notes && !Array.isArray(audit.notes)) ? audit.notes[sec.title] : null;
+        const secPhotos = (audit.photos && !Array.isArray(audit.photos)) ? audit.photos[sec.title] : null;
+        if (secNote && String(secNote).trim()) {
+            html += `<div style="margin-top:6px; background:#f8fafc; border:1px solid #e2e8f0; border-left:3px solid #94a3b8; border-radius:7px; padding:7px 10px; font-size:12px; color:var(--slate-charcoal); line-height:1.45;"><span style="font-weight:800; color:#64748b;">📝 </span>${escapeHtml(String(secNote))}</div>`;
+        }
+        if (Array.isArray(secPhotos) && secPhotos.length) {
+            html += `<div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">` + secPhotos.map(p => {
+                const src = (p && p.url) ? p.url : '';
+                return src ? `<img src="${src}" onclick="openAuditPhotoLightbox('${src}')" style="width:56px; height:56px; object-fit:cover; border-radius:6px; border:1px solid #e2e8f0; cursor:pointer;" alt="">` : '';
+            }).join('') + `</div>`;
+        }
         html += `</div>`;
     });
     body.innerHTML = html;
