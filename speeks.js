@@ -46,11 +46,15 @@ const SCORECARD_URL     = `${_BASE}/scorecard`;
 const EBAY_ALERTS_URL   = `${_BASE}/ebay-alerts`;
 const STORE_COMMENT_URL = `${_BASE}/store-comments`;
 const CHECKLIST_URL     = `${_BASE}/checklist`;
+const STORE_AUDIT_URL   = `${_BASE}/store-audit`;
+const CLAIMS_URL        = `${_BASE}/shopify-claims`;
+const BOX_ADMIN_URL     = `${_BASE}/box-order-admin`;
 const PATCH_NOTES_URL   = `${_BASE}/patch-notes`;
 const TICKER_URL        = `${_BASE}/ticker`;
 const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
 const MONTHLY_BRIEF_URL = `${_BASE}/monthly-brief`;
 const B2B_URL           = `${_BASE}/b2b-deals`;
+const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -3318,6 +3322,49 @@ function initWorkspace() {
     applyKpiReminder();
 }
 
+// ============================================================================
+// OPERATIONS PAGE (operations.html) — sub-tab shell for operational tools.
+// Mirrors the workspace tab system but keys off .ops-wrap / ops-tab-* / ops-pane-*
+// so initWorkspace() never misfires on this page (and vice versa).
+// ============================================================================
+function switchOperationsTab(name) {
+    document.querySelectorAll('.ws-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.ws-pane').forEach(p => p.classList.remove('active'));
+    document.getElementById('ops-tab-' + name)?.classList.add('active');
+    document.getElementById('ops-pane-' + name)?.classList.add('active');
+    try { history.replaceState(null, '', 'operations.html#' + name); } catch (e) {}
+
+    if (name === 'callbacks') {
+        cbLoad();
+        _startCbSync();
+    }
+}
+
+// Background refresh (60s) so one store's additions/status changes show up for
+// the others without a reload. Skips a tick while the pane is hidden or the
+// user is mid-typing/editing, so their input is never wiped by a re-render.
+let _cbSyncInterval = null;
+function _startCbSync() {
+    if (_cbSyncInterval) return;
+    _cbSyncInterval = setInterval(() => {
+        const pane = document.getElementById('ops-pane-callbacks');
+        if (!pane || !pane.classList.contains('active') || document.hidden) return;
+        if (_cbEditingId) return;
+        const active = document.activeElement;
+        if (active && active.closest && active.closest('.cb-quickadd, .cb-row-detail')) return;
+        cbLoad();
+    }, 60000);
+}
+
+// Detects the operations page and opens the requested sub-tab (defaults to
+// call backs, or honors a #callbacks deep-link). Safe no-op elsewhere.
+function initOperations() {
+    if (!document.querySelector('.ops-wrap')) return;
+    const hash = (window.location.hash || '').replace('#', '');
+    const initial = ['callbacks'].includes(hash) ? hash : 'callbacks';
+    switchOperationsTab(initial);
+}
+
 function _kpiStartEdit(periodDate) {
     if (_kpiEditingPeriod === periodDate) return;
     _kpiEditingPeriod = periodDate;
@@ -4573,14 +4620,9 @@ async function fetchScorecardData() {
 
         let breakdownHtml = '';
         if (storeData.buckets && storeData.buckets.some(b => b.categories && b.categories.length > 0)) {
-            breakdownHtml = `<div style="max-height: 340px; overflow-y: auto; padding-right: 4px; margin-top: 15px; border-top: 1px solid #f0f0f0; padding-top: 15px;" class="kpi-scroll-area">`;
+            breakdownHtml = `<div style="max-height: 340px; overflow-y: auto; padding-right: 4px; margin-top: 12px;" class="kpi-scroll-area">`;
             storeData.buckets.forEach((bucket, bIdx) => {
                 if (!bucket.categories || bucket.categories.length === 0) return;
-                let bAvgNum = bucket.avg * 2;
-                let bBg = '#f1f5f9', bColor = '#64748b';
-                if (bAvgNum >= 8) { bBg = '#d1fae5'; bColor = '#059669'; }
-                else if (bAvgNum >= 6) { bBg = '#fef3c7'; bColor = '#d97706'; }
-                else { bBg = '#fee2e2'; bColor = '#dc2626'; }
                 const bDateStr = bucket.sectionDate ? formatWeekOf(bucket.sectionDate) : '';
                 const sectionPulse = (!showOverallDot && bIdx === singleRecentBucketIdx)
                     ? `<div class="notif-dot active" style="position:relative; top:auto; right:auto; width:9px; height:9px; border:1px solid white; flex-shrink:0;"></div>`
@@ -4591,7 +4633,6 @@ async function fetchScorecardData() {
                 breakdownHtml += `<div style="margin-bottom: 12px;">
                     <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; min-width: 0;">
                         <span style="font-size: 9px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;">${bucket.name}</span>
-                        <span style="font-size: 10px; font-weight: 900; background: ${bBg}; color: ${bColor}; padding: 2px 7px; border-radius: 6px; flex-shrink: 0;">${bAvgNum.toFixed(1)}</span>
                         ${bDateStr ? `<span style="font-size: 9px; color: #94a3b8; font-style: italic; white-space: nowrap; flex-shrink: 0;">${bDateStr}</span>` : ''}
                         ${sectionPulse}
                     </div>
@@ -4608,21 +4649,26 @@ async function fetchScorecardData() {
             </div>`;
         }
 
+        const auditHtml = buildAuditSummaryHtml(storeData.audit, targetStore);
+
         container.innerHTML = `
         <div class="scorecard-widget" style="padding: 20px; align-items: stretch; text-align: left; justify-content: flex-start;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                    <div class="scorecard-label" style="text-align: left; margin-bottom: 2px;">Store Average</div>
-                    <div class="scorecard-date" style="margin-bottom: 0; font-size: 11px;">${displayDate}</div>
-                </div>
-                <div style="position: relative; display: inline-block;">
-                    <div class="scorecard-val" style="color: ${scoreColor}; font-size: 36px; text-shadow: 0 4px 15px ${scoreColor}30; line-height: 1;">
-                        ${displayScore.toFixed(1)}
+            ${auditHtml}
+            <div style="margin-top: 15px; border-top: 1px solid #f0f0f0; padding-top: 15px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div class="scorecard-label" style="text-align: left; margin-bottom: 2px;">Online &amp; Marketing</div>
+                        <div class="scorecard-date" style="margin-bottom: 0; font-size: 11px;">${displayDate}</div>
                     </div>
-                    ${pulse}
+                    <div style="position: relative; display: inline-block;">
+                        <div class="scorecard-val" style="color: ${scoreColor}; font-size: 36px; text-shadow: 0 4px 15px ${scoreColor}30; line-height: 1;">
+                            ${displayScore.toFixed(1)}<span style="color:#94a3b8;">/10</span>
+                        </div>
+                        ${pulse}
+                    </div>
                 </div>
+                ${breakdownHtml}
             </div>
-            ${breakdownHtml}
         </div>`;
     } catch (error) {
         console.error('Error fetching scorecard:', error);
@@ -4963,6 +5009,22 @@ async function fetchMasterDistrictDashboard() {
             let sColor = scoreNum > 8 ? '#065f46' : (scoreNum >= 6 ? '#92400e' : '#991b1b');
             let sBg = scoreNum > 8 ? '#d1fae5' : (scoreNum >= 6 ? '#fef3c7' : '#fee2e2');
 
+            // Practice audit badge (clickable into the full breakdown popout).
+            const sAudit = sScore.audit || null;
+            let auditBadge = '';
+            if (sAudit) {
+                const ac = auditPctColor(sAudit.pct);
+                auditBadge = `<span onclick="event.stopPropagation(); openAuditBreakdown('${store}')" title="PayMore practice audit — ${sAudit.earned}/${sAudit.possible} · view full breakdown" style="display:inline-flex; align-items:center; gap:5px; height:25px; padding:0 10px; border-radius:8px; background:${ac.bg}; color:${ac.fg}; cursor:pointer; white-space:nowrap; box-sizing:border-box;">
+                    <span style="font-size:8px; font-weight:800; letter-spacing:.6px; opacity:.75;">AUDIT</span>
+                    <span style="font-size:14px; font-weight:900; line-height:1;">${sAudit.pct}%</span>
+                </span>`;
+            } else {
+                auditBadge = `<span title="No practice audit submitted yet" style="display:inline-flex; align-items:center; gap:5px; height:25px; padding:0 10px; border-radius:8px; background:transparent; color:#94a3b8; border:1px dashed #4a5365; white-space:nowrap; box-sizing:border-box;">
+                    <span style="font-size:8px; font-weight:800; letter-spacing:.6px;">AUDIT</span>
+                    <span style="font-size:11px; font-weight:700; letter-spacing:.3px; line-height:1;">NO DATA</span>
+                </span>`;
+            }
+
             let displayDate = "Recent";
             if (sScore.date) {
                 const parsedDate = new Date(sScore.date);
@@ -5137,8 +5199,11 @@ async function fetchMasterDistrictDashboard() {
                         </a>
                         <span class="master-card-date goal-strong" style="margin: 0;">Goal: ${storeGoalText}</span>
                     </div>
-                    <div style="display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; gap: 10px;">
-                        <span class="master-card-score" style="background: ${sBg}; color: ${sColor};">${scoreNum.toFixed(1)}</span>
+                    <div style="display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; gap: 6px;">
+                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
+                            <span class="master-card-score" style="background: ${sBg}; color: ${sColor};" title="Online & Marketing scorecard">${scoreNum.toFixed(1)}</span>
+                            ${auditBadge}
+                        </div>
                         <span class="master-card-date" style="margin: 0;">Week of ${displayDate}</span>
                     </div>
                 </div>
@@ -6058,6 +6123,108 @@ function renderCompactDmGoals() {
     cont.innerHTML = html;
 }
 
+// --- DM AUDIT READINESS WIDGET (read-only, live through the week) ---
+// Lets the DM/CEO see each store's daily + weekly audit checklist progress as
+// it fills in, so they can follow up with managers before the Monday report.
+let dmAuditData = {};            // { OVL: { daily:{items,total,completed}, weekly:{...} }, ... }
+let currentDmAuditTab = 'daily';
+
+async function fetchDmAuditData() {
+    const cont = document.getElementById('dm-audit-container');
+    if (!cont) return;
+    try {
+        const res = await fetch(`${STORE_AUDIT_URL}?action=overview&v=${Date.now()}`);
+        const json = await res.json();
+        dmAuditData = json.stores || {};
+        renderDmAudit();
+    } catch (e) {
+        cont.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Network Sync Failed.</div>';
+    }
+}
+
+function switchDmAuditTab(view) {
+    currentDmAuditTab = view;
+    document.getElementById('dm-audit-tab-daily')?.classList.toggle('active', view === 'daily');
+    document.getElementById('dm-audit-tab-weekly')?.classList.toggle('active', view === 'weekly');
+    renderDmAudit();
+}
+
+function toggleDmAuditAccordion(store) {
+    const rosterDiv = document.getElementById(`dm-audit-roster-${store}`);
+    const caret = document.getElementById(`dm-audit-caret-${store}`);
+    if (!rosterDiv) return;
+    const isOpen = rosterDiv.style.display === 'block';
+
+    document.querySelectorAll('.dm-audit-roster').forEach(el => el.style.display = 'none');
+    document.querySelectorAll('.dm-audit-caret').forEach(el => el.style.transform = 'rotate(-90deg)');
+
+    if (!isOpen) {
+        rosterDiv.style.display = 'block';
+        if (caret) caret.style.transform = 'rotate(0deg)';
+    }
+}
+
+// PayMore-style readiness colors: pass ≥80, watch ≥50, behind below.
+function _auditPctColor(pct) {
+    if (pct >= 80) return 'var(--green-go, #16a34a)';
+    if (pct >= 50) return '#d97706';
+    return 'var(--red-alert, #dc2626)';
+}
+
+function renderDmAudit() {
+    const cont = document.getElementById('dm-audit-container');
+    if (!cont) return;
+
+    const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    const tab = currentDmAuditTab;
+    const periodWord = tab === 'daily' ? 'today' : 'this week';
+    let html = '<div style="display:flex; flex-direction:column;">';
+
+    stores.forEach((store, idx) => {
+        const sd = dmAuditData[store] || {};
+        const pd = sd[tab] || { items: [], total: 0, completed: 0 };
+        const items = pd.items || [];
+        const total = pd.total || items.length;
+        const completed = pd.completed != null ? pd.completed : items.filter(i => i.checked).length;
+        const pct = total ? Math.round((completed / total) * 100) : 0;
+        const col = _auditPctColor(pct);
+        const muted = completed === 0 ? 'opacity:0.6;' : '';
+        const lastBorder = idx === stores.length - 1 ? 'transparent' : '#f0f0f0';
+
+        html += `
+        <div onclick="toggleDmAuditAccordion('${store}')" class="lb-row dm-store-head" style="display:grid; grid-template-columns:56px 1fr 92px 18px; align-items:center; gap:12px; border-bottom:1px solid ${lastBorder}; cursor:pointer; padding:13px 15px; ${muted}">
+            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal);">${store}</span>
+            <div style="height:8px; border-radius:6px; background:#eef2f6; overflow:hidden;"><div style="height:100%; width:${pct}%; background:${col}; border-radius:6px; transition:width .3s;"></div></div>
+            <span style="font-size:13px; font-weight:900; color:${col}; text-align:right;">${completed}/${total} · ${pct}%</span>
+            <div id="dm-audit-caret-${store}" class="dm-audit-caret" style="text-align:right; color:#888; font-size:10px; font-weight:800; transition:transform 0.3s; transform:rotate(-90deg);">▼</div>
+        </div>`;
+
+        html += `<div id="dm-audit-roster-${store}" class="dm-audit-roster" style="display:none; background:#fdfdfd; padding:10px 18px 14px; border-bottom:1px solid #e2e8f0; box-shadow:inset 0 3px 6px rgba(0,0,0,0.02);">`;
+        if (items.length === 0) {
+            html += `<div style="font-size:12px; color:#888; text-align:center; font-weight:600; padding:10px 0;">No ${tab} audit items set up yet.</div>`;
+        } else {
+            let lastSection = null;
+            items.forEach(item => {
+                if (item.section !== lastSection) {
+                    html += `<div style="font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:12px 0 4px;">${escapeHtml(item.section || 'General')}</div>`;
+                    lastSection = item.section;
+                }
+                const done = !!item.checked;
+                html += `
+                <div style="display:flex; gap:9px; align-items:center; padding:5px 2px;">
+                    <span style="font-size:14px; font-weight:900; line-height:1; color:${done ? 'var(--green-go,#16a34a)' : '#cbd5e1'};">${done ? '✓' : '○'}</span>
+                    <span style="font-size:13px; font-weight:600; color:${done ? '#94a3b8' : 'var(--slate-charcoal)'}; ${done ? 'text-decoration:line-through;' : ''}">${escapeHtml(item.text)}</span>
+                </div>`;
+            });
+            html += `<div style="margin-top:10px; font-size:12px; font-weight:800; color:${col}; text-align:right;">${completed} of ${total} done ${periodWord}</div>`;
+        }
+        html += `</div>`;
+    });
+
+    html += '</div>';
+    cont.innerHTML = html;
+}
+
 function _dmLegacyGoalsUnused() {
     // (Superseded by the manager-style DM view above. Kept inert; never called.)
     const cont = { innerHTML: '' };
@@ -6813,6 +6980,418 @@ async function b2bPost(payload, errLabel) {
 }
 
 // ============================================================================
+// MODULE: CUSTOMER CALL BACKS (operations.html #ops-pane-callbacks)
+// Entries live 30 days from date_of_call, then auto-archive (recoverable for
+// 90 more days before purge — nightly `callbacks-daily-maintenance` pg_cron job).
+// Backed by the `customer-callbacks` edge function / customer_callbacks table.
+// Status changes are open to every store (the cross-store "we have this" signal);
+// add/edit/delete/restore are store-scoped (MSM covers BAL+MPL, corp covers all).
+// ============================================================================
+const CB_CORP_ROLES = ['district manager', 'ceo', 'tom'];   // may create/edit entries for any store
+const CB_ACTIVE_DAYS  = 30;   // days an entry stays on the sheet
+const CB_PURGE_DAYS   = 120;  // days from date_of_call until permanent deletion
+
+let _cbCache = [];
+let _cbView = null;           // 'mine' | 'all' | 'archived'
+let _cbExpandedId = null;
+let _cbEditingId = null;
+let _cbLoading = false;
+
+function _cbDaysAgo(n) {
+    const d = new Date(); d.setDate(d.getDate() - n);
+    return d.toISOString().slice(0, 10);
+}
+
+async function cbFetch(view, store) {
+    const res = await fetch(`${CALLBACKS_URL}?view=${view === 'archived' ? 'archived' : 'active'}&store=${store}&v=${Date.now()}`);
+    if (!res.ok) throw new Error('Fetch failed');
+    return res.json();
+}
+
+async function cbPost(payload) {
+    const res = await fetch(CALLBACKS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+            ...payload,
+            user:  sessionStorage.getItem('speeksUserName')  || '',
+            role:  (sessionStorage.getItem('speeksUserRole') || '').toLowerCase(),
+            store: (sessionStorage.getItem('speeksUserStore') || '').toUpperCase(),
+            multi: (typeof isMultiStoreManager === 'function' && isMultiStoreManager())
+        })
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(out.error || 'Request failed');
+    return out;
+}
+
+// --- Helpers
+// Edit/delete/restore: own store only (MSM covers both of theirs, corp covers all).
+// Status changes are deliberately NOT gated — any store marking an entry Contacted
+// is the cross-store "we've got this" signal, and the change is attributed below.
+function cbCanModify(entry) {
+    const role  = (sessionStorage.getItem('speeksUserRole')  || '').toLowerCase().trim();
+    const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    if (CB_CORP_ROLES.includes(role) || store === 'ALL') return true;
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return MULTISTORE_MANAGER_STORES.includes(entry.store);
+    return entry.store === store;
+}
+
+// Stores this user may CREATE entries for: corp roles get all stores, the MSM
+// gets both of their stores, everyone else is locked to their own (no picker).
+function _cbAddStores() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (CB_CORP_ROLES.includes(role)) return B2B_STORE_LIST;
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return [...MULTISTORE_MANAGER_STORES];
+    return null;
+}
+
+function _cbHomeStore() {
+    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return B2B_STORE_LIST.includes(s) ? s : 'OVL';
+}
+
+function cbDaysInfo(entry) {
+    const called = new Date(entry.date_of_call + 'T00:00:00');
+    const today  = new Date(); today.setHours(0, 0, 0, 0);
+    const since  = Math.floor((today - called) / 86400000);
+    return { since, daysLeft: CB_ACTIVE_DAYS - since, purgeLeft: CB_PURGE_DAYS - since };
+}
+
+function cbFormatPhone(p) {
+    const d = String(p || '').replace(/\D/g, '');
+    if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+    return p || '';
+}
+
+// Phone inputs: digits only, max 10. A pasted 11-digit number starting with the
+// US country code drops the leading 1 instead of losing the final real digit.
+function cbPhoneInput(el) {
+    let d = el.value.replace(/\D/g, '');
+    if (d.length > 10 && d[0] === '1') d = d.slice(1);
+    el.value = d.slice(0, 10);
+}
+
+function _cbShortDate(iso) {
+    const d = new Date(iso + 'T00:00:00');
+    return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function _cbDaysBadge(entry) {
+    const { daysLeft, purgeLeft } = cbDaysInfo(entry);
+    if (_cbView === 'archived' || entry.archived_at || daysLeft <= 0) {
+        return `<span class="cb-days cb-days-archived">purges in ${Math.max(purgeLeft, 0)}d</span>`;
+    }
+    const cls = daysLeft <= 7 ? 'cb-days-urgent' : daysLeft <= 14 ? 'cb-days-warn' : 'cb-days-ok';
+    return `<span class="cb-days ${cls}">${daysLeft}d left</span>`;
+}
+
+const CB_STATUS_META = {
+    open:      { label: 'Open',      next: 'contacted' },
+    contacted: { label: 'Contacted', next: 'completed' },
+    completed: { label: 'Completed', next: 'open' }
+};
+
+function _cbIsCorpRole() {
+    return CB_CORP_ROLES.includes((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
+}
+
+// --- Load & render
+async function cbLoad() {
+    // Corp roles (DM/CEO/TOM) watch the whole district — no "My Store" view;
+    // they land on All Stores and narrow with the store filter instead.
+    if (_cbView === null) _cbView = _cbIsCorpRole() ? 'all' : 'mine';
+    _cbSyncControls();   // highlight the right view button before the fetch resolves
+    if (_cbLoading) return;
+    _cbLoading = true;
+    const body = document.getElementById('cbBody');
+    if (body && !_cbCache.length) body.innerHTML = '<div class="status-message">Loading Call Backs…</div>';
+    try {
+        // Fetch everything once; view filtering happens client-side in cbRender.
+        _cbCache = await cbFetch(_cbView === 'archived' ? 'archived' : 'active', 'ALL');
+        cbRender();
+    } catch (e) {
+        // Only surface the error when there's nothing on screen — a failed
+        // background refresh keeps showing the last good data instead.
+        if (body && !_cbCache.length) body.innerHTML = '<div class="status-message">Could not load call backs. Try again in a minute.</div>';
+    } finally {
+        _cbLoading = false;
+    }
+}
+
+function cbSetView(view) {
+    if (_cbView === view) return;
+    _cbView = view;
+    _cbExpandedId = null;
+    _cbEditingId = null;
+    cbLoad();
+}
+
+function _cbSyncControls() {
+    ['mine', 'all', 'archived'].forEach(v => {
+        const btn = document.getElementById('cbView' + v.charAt(0).toUpperCase() + v.slice(1) + 'Btn');
+        if (btn) btn.classList.toggle('active', _cbView === v);
+    });
+    // (The My Store button itself is role-gated in the HTML — applyRoleBasedUI
+    // hides it for corp roles before first paint, so no JS display toggling here.)
+    const filter = document.getElementById('cbStoreFilter');
+    if (filter) filter.style.display = (_cbView === 'mine') ? 'none' : '';
+}
+
+function _cbVisibleEntries() {
+    const filter = document.getElementById('cbStoreFilter');
+    const filterStore = (_cbView === 'mine') ? _cbHomeStore() : (filter ? filter.value : 'ALL');
+    const showCompleted = document.getElementById('cbShowCompleted')?.checked;
+    return _cbCache
+        .filter(e => filterStore === 'ALL' || e.store === filterStore)
+        .filter(e => _cbView === 'archived' || showCompleted || e.status !== 'completed')
+        .sort((a, b) => (b.date_of_call || '').localeCompare(a.date_of_call || ''));
+}
+
+function cbRender() {
+    const body = document.getElementById('cbBody');
+    if (!body) return;
+    _cbSyncControls();
+    const entries = _cbVisibleEntries();
+
+    const filterEl = document.getElementById('cbStoreFilter');
+    const scopeStore = (_cbView === 'mine') ? _cbHomeStore() : (filterEl ? filterEl.value : 'ALL');
+    const scoped = _cbCache.filter(e => scopeStore === 'ALL' || e.store === scopeStore);
+    const open = scoped.filter(e => e.status !== 'completed' && !e.archived_at).length;
+    const expiring = scoped.filter(e => { const d = cbDaysInfo(e).daysLeft; return e.status !== 'completed' && !e.archived_at && d > 0 && d <= 7; }).length;
+    const sub = document.getElementById('cbSubtitle');
+    if (sub) sub.textContent = _cbView === 'archived'
+        ? `${entries.length} archived`
+        : `${open} open${expiring ? ` · ${expiring} expiring soon` : ''}`;
+
+    let html = '';
+    if (_cbView !== 'archived') html += _cbQuickAddHtml();
+
+    if (!entries.length) {
+        const msgs = {
+            mine:     'No call backs yet. When a customer wants something you don\'t have, log it above ↑',
+            all:      'No open call backs across stores.',
+            archived: 'Nothing archived in the last 90 days.'
+        };
+        html += `<div class="cb-empty">${msgs[_cbView]}</div>`;
+        body.innerHTML = html;
+        return;
+    }
+
+    const showStore = _cbView !== 'mine';
+    html += `<table class="cb-table"><thead><tr>
+        ${showStore ? '<th class="cb-col-store">Store</th>' : ''}
+        <th class="cb-col-customer">Customer</th><th class="cb-col-phone">Phone</th><th class="cb-col-item">Item Wanted</th>
+        <th class="cb-col-status">Status</th><th class="cb-col-timer">Timer</th><th class="cb-col-notes">💬</th><th class="cb-col-logged">Logged</th><th class="cb-col-actions"></th>
+    </tr></thead><tbody>`;
+    entries.forEach(e => { html += cbRowHtml(e, showStore); });
+    html += '</tbody></table>';
+    body.innerHTML = html;
+}
+
+function _cbQuickAddHtml() {
+    const home = _cbHomeStore();
+    const addStores = _cbAddStores();
+    const dflt = addStores && addStores.includes(home) ? home : (addStores ? addStores[0] : home);
+    const storePicker = addStores
+        ? `<select id="cbAddStore" class="kpi-select cb-add-store">${addStores.map(s => `<option value="${s}" ${s === dflt ? 'selected' : ''}>${s}</option>`).join('')}</select>`
+        : '';
+    return `<div class="cb-quickadd">
+        ${storePicker}
+        <input type="text" id="cbAddName"  placeholder="Customer name" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+        <input type="tel"  id="cbAddPhone" placeholder="Phone" inputmode="numeric" oninput="cbPhoneInput(this)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+        <input type="text" id="cbAddItem"  placeholder="Item they're looking for" class="cb-add-item" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+        <input type="text" id="cbAddNoteTxt" placeholder="Notes (optional)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
+        <button class="btn-primary cb-add-btn" onclick="cbQuickAdd()">+ Add</button>
+    </div>`;
+}
+
+function cbRowHtml(e, showStore) {
+    const canAct = cbCanModify(e);
+    const meta = CB_STATUS_META[e.status] || CB_STATUS_META.open;
+    const isArchived = _cbView === 'archived';
+    const editing = _cbEditingId === e.id;
+    const expanded = _cbExpandedId === e.id || editing;
+
+    // Status is clickable for EVERYONE — another store marking Contacted is the
+    // cross-store "we have this item" signal. The change is attributed under the chip.
+    // The attribution line always renders (blank when unset) so row heights never shift.
+    const statusBy = `<div class="cb-status-by">${(e.status !== 'open' && e.status_by) ? `${escapeHtml(e.status_by)} · ${escapeHtml(e.status_store || '')}` : '&nbsp;'}</div>`;
+    const chip = isArchived
+        ? `<span class="cb-chip cb-chip-expired">Expired</span>`
+        : `<span class="cb-chip cb-chip-${e.status} cb-chip-clickable" onclick="event.stopPropagation();cbCycleStatus('${e.id}')" data-cb-tip="Click to mark ${CB_STATUS_META[meta.next].label}">${meta.label}</span>${statusBy}`;
+
+    const phoneDigits = String(e.phone || '').replace(/\D/g, '');
+    const phone = `<a class="cb-phone" href="tel:+1${phoneDigits}" onclick="event.stopPropagation()">${escapeHtml(cbFormatPhone(e.phone))}</a>`;
+
+    let actions = '';
+    if (canAct && !editing) {
+        actions = isArchived
+            ? `<button class="cb-icon-btn" data-cb-tip="Restore to active" onclick="event.stopPropagation();cbRestoreEntry('${e.id}')">♻️</button>`
+            : `<button class="cb-icon-btn" data-cb-tip="Edit" onclick="event.stopPropagation();cbEditEntry('${e.id}')">✏️</button>`;
+        actions += `<button class="cb-icon-btn" data-cb-tip="Delete" onclick="event.stopPropagation();cbDeleteEntry('${e.id}')">🗑️</button>`;
+    }
+
+    let row;
+    if (editing) {
+        row = `<tr class="cb-row cb-row-editing" data-id="${e.id}">
+            ${showStore ? `<td class="cb-col-store">${b2bStoreLabel(e.store)}</td>` : ''}
+            <td><input class="cb-edit-input" id="cbEditName" value="${escapeHtml(e.customer_name)}"></td>
+            <td><input class="cb-edit-input" id="cbEditPhone" type="tel" inputmode="numeric" oninput="cbPhoneInput(this)" value="${escapeHtml(String(e.phone || '').replace(/\D/g, '').slice(0, 10))}"></td>
+            <td class="cb-col-item"><input class="cb-edit-input" id="cbEditItem" value="${escapeHtml(e.item)}"></td>
+            <td class="cb-cell-status">${chip}</td>
+            <td class="cb-cell-timer"><input class="cb-edit-input cb-edit-date" id="cbEditDate" type="date" value="${e.date_of_call}" data-cb-tip="Date of call (resets the 30-day timer)"></td>
+            <td class="cb-col-notes"></td>
+            <td class="cb-logged"></td>
+            <td class="cb-col-actions">
+                <button class="cb-icon-btn" data-cb-tip="Save" onclick="event.stopPropagation();cbSaveEdit('${e.id}')">✅</button>
+                <button class="cb-icon-btn" data-cb-tip="Cancel" onclick="event.stopPropagation();cbCancelEdit()">✖</button>
+            </td>
+        </tr>`;
+    } else {
+        row = `<tr class="cb-row ${expanded ? 'cb-row-open' : ''} ${e.status === 'completed' ? 'cb-row-done' : ''}" data-id="${e.id}" onclick="cbToggleRow('${e.id}')">
+            ${showStore ? `<td class="cb-col-store">${b2bStoreLabel(e.store)}</td>` : ''}
+            <td class="cb-customer">${escapeHtml(e.customer_name)}</td>
+            <td>${phone}</td>
+            <td class="cb-col-item cb-item">${escapeHtml(e.item)}</td>
+            <td class="cb-cell-status">${chip}</td>
+            <td class="cb-cell-timer">${_cbDaysBadge(e)}</td>
+            <td class="cb-col-notes">${e.notes.length ? `<span class="cb-note-count">💬 ${e.notes.length}</span>` : ''}</td>
+            <td class="cb-logged">${escapeHtml(e.created_by)} · ${_cbShortDate(e.date_of_call)}</td>
+            <td class="cb-col-actions">${actions}</td>
+        </tr>`;
+    }
+
+    if (expanded && !editing) {
+        const noteItems = e.notes.map(n =>
+            `<div class="cb-note">${escapeHtml(n.text)} <span class="cb-note-meta">— ${escapeHtml(n.user)} (${escapeHtml(n.store)}) · ${_cbShortDate(n.at)}</span></div>`
+        ).join('') || '<div class="cb-note cb-note-none">No notes yet.</div>';
+        row += `<tr class="cb-row-detail"><td colspan="${showStore ? 9 : 8}">
+            <div class="cb-notes-thread">${noteItems}</div>
+            <div class="cb-note-add">
+                <input type="text" class="cb-note-input" id="cbNoteInput-${e.id}" placeholder="Details about what they're looking for — condition, budget, timing…"
+                       onclick="event.stopPropagation()" onkeydown="if(event.key==='Enter')cbAddNote('${e.id}')">
+                <button class="btn-secondary cb-note-btn" onclick="event.stopPropagation();cbAddNote('${e.id}')">Add note</button>
+            </div>
+        </td></tr>`;
+    }
+    return row;
+}
+
+// --- Actions (optimistic: mutate cache, render, POST in background)
+function cbToggleRow(id) {
+    if (_cbEditingId) return;
+    _cbExpandedId = (_cbExpandedId === id) ? null : id;
+    cbRender();
+}
+
+async function cbQuickAdd() {
+    const name  = document.getElementById('cbAddName')?.value.trim();
+    const phone = (document.getElementById('cbAddPhone')?.value || '').replace(/\D/g, '');
+    const item  = document.getElementById('cbAddItem')?.value.trim();
+    const note  = document.getElementById('cbAddNoteTxt')?.value.trim();
+    if (!name || !phone || !item) { alert('Customer name, phone, and item are required.'); return; }
+    if (phone.length !== 10) { alert('Phone number must be exactly 10 digits.'); return; }
+
+    const store = document.getElementById('cbAddStore')?.value || _cbHomeStore();
+    const user  = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    const entry = {
+        id: 'tmp-' + Date.now(), store, customer_name: name, phone, item,
+        status: 'open', date_of_call: _cbDaysAgo(0), created_by: user,
+        archived_at: null,
+        notes: note ? [{ text: note, user, store, at: _cbDaysAgo(0) }] : []
+    };
+    _cbCache.unshift(entry);
+    cbRender();
+    document.getElementById('cbAddName')?.focus();
+    try {
+        const out = await cbPost({ action: 'add', entry: { store, customer_name: name, phone, item, note: note || null, created_by: user } });
+        // Reconcile the optimistic row with the server's (real uuid, server-side
+        // defaults) — row onclick handlers embed the id, so re-render after.
+        if (out.entry) { Object.assign(entry, out.entry); cbRender(); }
+    } catch (e) {
+        _cbCache = _cbCache.filter(x => x.id !== entry.id);
+        cbRender();
+        alert('Could not save the call back: ' + e.message);
+    }
+}
+
+function cbCycleStatus(id) {
+    const e = _cbCache.find(x => x.id === id);
+    if (!e) return;
+    e.status = (CB_STATUS_META[e.status] || CB_STATUS_META.open).next;
+    e.status_by = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    e.status_store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    cbRender();
+    cbPost({ action: 'status', id, status: e.status, status_by: e.status_by, status_store: e.status_store }).catch(() => cbLoad());
+}
+
+function cbAddNote(id) {
+    const input = document.getElementById('cbNoteInput-' + id);
+    const text = input?.value.trim();
+    if (!text) return;
+    const e = _cbCache.find(x => x.id === id);
+    if (!e) return;
+    const note = {
+        text,
+        user:  sessionStorage.getItem('speeksUserName') || 'Unknown',
+        store: (sessionStorage.getItem('speeksUserStore') || '').toUpperCase(),
+        at: _cbDaysAgo(0)
+    };
+    e.notes.push(note);
+    cbRender();
+    cbPost({ action: 'note', id, note }).catch(() => cbLoad());
+}
+
+function cbEditEntry(id) {
+    _cbEditingId = id;
+    _cbExpandedId = null;
+    cbRender();
+}
+
+function cbCancelEdit() {
+    _cbEditingId = null;
+    cbRender();
+}
+
+function cbSaveEdit(id) {
+    const e = _cbCache.find(x => x.id === id);
+    if (!e) return;
+    const editedPhone = (document.getElementById('cbEditPhone')?.value || '').replace(/\D/g, '');
+    if (editedPhone && editedPhone.length !== 10) { alert('Phone number must be exactly 10 digits.'); return; }
+    const fields = {
+        customer_name: document.getElementById('cbEditName')?.value.trim()  || e.customer_name,
+        phone:         editedPhone || e.phone,
+        item:          document.getElementById('cbEditItem')?.value.trim()  || e.item,
+        date_of_call:  document.getElementById('cbEditDate')?.value         || e.date_of_call
+    };
+    Object.assign(e, fields);
+    _cbEditingId = null;
+    cbRender();
+    cbPost({ action: 'edit', id, fields }).catch(() => cbLoad());
+}
+
+function cbDeleteEntry(id) {
+    const e = _cbCache.find(x => x.id === id);
+    if (!e) return;
+    if (!confirm(`Delete the call back for ${e.customer_name}? This can't be undone.`)) return;
+    _cbCache = _cbCache.filter(x => x.id !== id);
+    cbRender();
+    cbPost({ action: 'delete', id }).catch(() => cbLoad());
+}
+
+function cbRestoreEntry(id) {
+    const e = _cbCache.find(x => x.id === id);
+    if (!e) return;
+    e.archived_at = null;
+    e.date_of_call = _cbDaysAgo(0);   // restart the 30-day timer
+    e.status = 'open';
+    _cbCache = _cbCache.filter(x => x.id !== id);   // leaves the archived view
+    cbRender();
+    cbPost({ action: 'restore', id }).catch(() => cbLoad());
+}
+
+// ============================================================================
 // 23. MODULE: ROLE-BASED UI & INITIALIZATION
 // ============================================================================
 
@@ -6827,6 +7406,9 @@ function applyRoleBasedUI() {
     const firstName = userName.split(' ')[0];
     const wsTitleEl = document.getElementById('wsTitle');
     if (wsTitleEl) wsTitleEl.innerHTML = `<span>📈</span> ${firstName}'s Workspace`;
+
+    const opsTitleEl = document.getElementById('opsTitle');
+    if (opsTitleEl) opsTitleEl.innerHTML = `<span>🛠️</span> ${firstName}'s Operational Tools`;
 
     const userRoleClass = `role-${userRole.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-')}`;
     const userStoreClass = `store-${userStore.toLowerCase()}`;
@@ -7020,16 +7602,30 @@ function initDashboardData() {
         setTimeout(fetchChampions, 850);
         setTimeout(fetchAwardsData, 900);
         setTimeout(fetchDmGoalsData, 1000);
+        setTimeout(fetchDmAuditData, 1050);
+        // Keep audit readiness live while the DM has the dashboard open.
+        if (!window._dmAuditSync) window._dmAuditSync = setInterval(() => {
+            if (document.getElementById('dm-audit-container')) fetchDmAuditData();
+        }, 60000);
         setTimeout(fetchAndRenderEmployeeGoals, 1100);
         setTimeout(fetchAndRenderEmployeeKPIs, 1200);
         setTimeout(fetchAndDisplayStoreComment, 1500);
         startStoreCommentPolling();
+        // Both feed the SAME red bubble, so run them in sequence, not in parallel:
+        // a DM/CEO-pushed reminder wins (it's personal + already states the aging
+        // count); the generic aging alert only fires if no reminder claimed the
+        // bubble. Awaiting avoids the login flicker of one overwriting the other.
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
         const _clRole = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
         if (_clRole === 'manager' || _clRole === 'district manager' || _clRole === 'assistant manager') {
             setTimeout(_prefetchChecklistForChip, 1200);
+        }
+        // Pre-load the store-audit checklist for its chip (managers + ASMs, not DM)
+        if (['manager', 'owner (manager)', 'assistant manager'].includes(_clRole)) {
+            setTimeout(_prefetchAuditForChip, 1300);
         }
 
 
@@ -7086,6 +7682,7 @@ document.addEventListener("DOMContentLoaded", () => {
         initDashboardData();
         initTicker();
         initWorkspace();
+        initOperations();
         applyKpiReminder();
         // re-evaluate the weekly-KPI reminder window each minute so it appears/clears live
         setInterval(applyKpiReminder, 60000);
@@ -7129,6 +7726,15 @@ customTooltip.className = 'speeks-tooltip';
 document.body.appendChild(customTooltip);
 
 document.addEventListener('mouseover', function(e) {
+    // Call Backs sheet: any element carrying data-cb-tip gets the standard site tooltip
+    const cbTip = e.target.closest('[data-cb-tip]');
+    if (cbTip) {
+        customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
+        customTooltip.innerHTML = `<strong style="display:block; color: var(--sage-professional); font-size: 13px; white-space: nowrap;">${cbTip.dataset.cbTip}</strong>`;
+        customTooltip.classList.add('show');
+        return;
+    }
+
     const infoI = e.target.closest('.goals-info-i');
     if (infoI && infoI.dataset.tipTitle) {
         customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
@@ -7281,6 +7887,7 @@ document.addEventListener('click', async (e) => {
                     if (typeof initDashboardData === 'function') initDashboardData();
                     if (typeof applyKpiReminder === 'function') applyKpiReminder();
                     if (document.querySelector('.ws-wrap') && typeof initWorkspace === 'function') initWorkspace();
+                    if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
                     if (document.getElementById('mainKpiChart') && typeof syncAllData === 'function') syncAllData();
                     if (document.getElementById('pane-records') && typeof fetchRecordsData === 'function') fetchRecordsData();
                     if (document.getElementById('listing-champions-body') && typeof fetchChampions === 'function') fetchChampions();
@@ -8710,8 +9317,23 @@ async function toggleManagerChecklist() {
     const text = document.getElementById('mcl-text'); if (text) text.value = '';
     const period = document.getElementById('mcl-period'); if (period) period.value = 'daily';
     document.querySelectorAll('#mcl-stores input[type="checkbox"]').forEach(c => c.checked = false);
+    // Default the view filter back to "All stores" (the tasks the DM created)
+    const filter = document.getElementById('mcl-filter-store'); if (filter) filter.value = '';
+    applyChecklistFilter('');
+}
 
-    await loadRequiredTasks();
+// The "Viewing" dropdown at the top of the Manager Checklist tool:
+//  - ""    → all required tasks the DM created (across every store)
+//  - store → that store's FULL checklist (DM-required + manager-added), all deletable
+function applyChecklistFilter(store) {
+    const label = document.getElementById('mcl-list-label');
+    if (!store) {
+        if (label) label.textContent = 'Current required tasks (all stores)';
+        loadRequiredTasks();
+    } else {
+        if (label) label.textContent = `${store} checklist — required + manager-added`;
+        loadStoreChecklistView(store);
+    }
 }
 
 function mclToggleAllStores() {
@@ -8771,6 +9393,127 @@ function renderRequiredTasks(tasks) {
     list.innerHTML = html;
 }
 
+// --- DM: view ONE store's full checklist — both the required tasks the DM set
+//     and the personal tasks that store's manager added themselves. Read-only.
+function _resolveStoreManager(store) {
+    try {
+        const authCache = JSON.parse(localStorage.getItem('speeksAuthCache')) || {};
+        const users = authCache.users || [];
+        for (const targetRole of ['owner (manager)', 'manager']) {
+            const mgr = users.find(u =>
+                u.store && u.store.toUpperCase() === String(store).toUpperCase() &&
+                u.role && u.role.toLowerCase() === targetRole
+            );
+            if (mgr) return mgr.name;
+        }
+    } catch (e) {}
+    return null;
+}
+
+async function loadStoreChecklistView(store) {
+    const out = document.getElementById('mcl-list');
+    if (!out) return;
+    if (!store) { loadRequiredTasks(); return; }
+
+    const mgr = _resolveStoreManager(store);
+    if (!mgr) {
+        out.innerHTML = `<div class="status-message" style="color:var(--red-alert);">No manager found for ${escapeHtml(store)} in the directory.</div>`;
+        return;
+    }
+    out.innerHTML = `<div class="status-message">Loading ${escapeHtml(store)}'s checklist…</div>`;
+    try {
+        // The store's full checklist + the required-task master, so we can resolve
+        // each global item back to its required-task id for deletion.
+        const [data, reqResp] = await Promise.all([
+            fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(mgr)}&store=${encodeURIComponent(store)}&v=${Date.now()}`).then(r => r.json()),
+            fetch(`${CHECKLIST_URL}?action=listRequired&v=${Date.now()}`).then(r => r.json()),
+        ]);
+        renderStoreChecklistView(store, mgr, data || {}, (reqResp && reqResp.tasks) || []);
+    } catch (e) {
+        out.innerHTML = `<div class="status-message" style="color:var(--red-alert);">Failed to load that store's checklist.</div>`;
+    }
+}
+
+function renderStoreChecklistView(store, mgr, data, requiredTasks) {
+    const out = document.getElementById('mcl-list');
+    if (!out) return;
+    const order = ['daily', 'weekly', 'monthly', 'quarterly'];
+    const norm = s => String(s || '').trim().toLowerCase();
+    const upper = s => String(s || '').toUpperCase();
+    // Map a global checklist item back to the required task it came from.
+    const findReqId = (tab, txt) => {
+        const exact = requiredTasks.find(t => t.tab === tab && norm(t.text) === norm(txt) &&
+            (t.stores || []).map(upper).includes(upper(store)));
+        if (exact) return exact.id;
+        const any = requiredTasks.find(t => t.tab === tab && norm(t.text) === norm(txt));
+        return any ? any.id : null;
+    };
+
+    let html = `<div style="font-size:12px; font-weight:700; color:#64748b; margin:4px 0 10px;">Showing <strong style="color:var(--slate-charcoal);">${escapeHtml(store)}</strong> · manager <strong style="color:var(--slate-charcoal);">${escapeHtml(mgr)}</strong></div>`;
+    let any = false;
+    order.forEach(period => {
+        const items = data[period] || [];
+        if (!items.length) return;
+        any = true;
+        html += `<div class="mcl-group-label">${MCL_PERIOD_LABELS[period] || period}</div>`;
+        items.forEach(it => {
+            const check = it.checked ? `<span style="color:#16a34a; font-weight:800; margin-right:5px;">✓</span>` : '';
+            let badge, delBtn;
+            if (it.isGlobal) {
+                const reqId = findReqId(period, it.text);
+                badge = `<span class="mcl-badge" style="background:#e0e7ff; color:#4338ca;">Required</span>`;
+                delBtn = `<button class="mcl-del-btn" title="Delete required task (removes it for every store it applies to)" onclick="deleteRequiredFromStoreView('${reqId}', '${store}')">✖</button>`;
+            } else {
+                badge = `<span class="mcl-badge" style="background:#dcfce7; color:#15803d;">Manager-added</span>`;
+                delBtn = `<button class="mcl-del-btn" title="Delete this manager-added task" onclick="deleteStorePersonalItem('${store}', '${period}', '${it.id}')">✖</button>`;
+            }
+            html += `
+            <div class="mcl-row">
+                <div class="mcl-row-main">
+                    <span class="mcl-row-text">${check}${escapeHtml(it.text)}</span>
+                    <div class="mcl-row-badges">${badge}</div>
+                </div>
+                <div class="mcl-row-actions">${delBtn}</div>
+            </div>`;
+        });
+    });
+    if (!any) html += `<div style="text-align:center; padding:14px; color:#94a3b8; font-size:12px; font-weight:600;">No checklist items for this store.</div>`;
+    out.innerHTML = html;
+}
+
+// DM deletes a manager-added (personal) task on that store's behalf. We send the
+// DM's role + identity so the backend can authorize a cross-user delete (the
+// `delete` handler must allow district manager / ceo to remove ANY user's item).
+async function deleteStorePersonalItem(store, tab, id) {
+    if (!confirm('Delete this manager-added task? This cannot be undone.')) return;
+    const mgr = _resolveStoreManager(store);
+    try {
+        await postWrite(CHECKLIST_URL, {
+            action: 'delete', id, tab, user: mgr, store,
+            role: _mclRole(),
+            requestedBy: sessionStorage.getItem('speeksUserName') || '',
+        });
+        loadStoreChecklistView(store);
+    } catch (e) {
+        alert('Could not delete: ' + (e.message || e));
+    }
+}
+
+// DM deletes a required task from inside the per-store view (then reloads that view).
+async function deleteRequiredFromStoreView(id, store) {
+    if (!id || id === 'null') {
+        alert('Could not resolve this required task — delete it from the "All stores" list instead.');
+        return;
+    }
+    if (!confirm('Delete this required task for every store it applies to? This cannot be undone.')) return;
+    try {
+        await postWrite(CHECKLIST_URL, { action: 'deleteRequired', id, role: _mclRole() });
+        loadStoreChecklistView(store);
+    } catch (e) {
+        alert('Could not delete: ' + (e.message || e));
+    }
+}
+
 async function addRequiredTask() {
     const btn = document.getElementById('mcl-add-btn');
     const text = (document.getElementById('mcl-text').value || '').trim();
@@ -8827,26 +9570,156 @@ async function editRequiredTask(id) {
 }
 
 // --- DM SCORECARD SUBMISSION LOGIC ---
+// The SPEEKS Scorecard is now just the former "Media and Markets" four
+// categories, renamed "Online & Marketing" — the only thing the DM/CEO score
+// by hand. (In-Store Operations + Store Reviews were retired; the PayMore
+// practice Audit below now covers store condition.)
 const SCORECARD_CATEGORIES = [
-    "Front of House Cleanliness",
-    "Back of House Cleanliness",
-    "Recycle Organization",
-    "Retail Displays",
-    "Overall Organization",
-    "Staff Goals Readiness",        // index 5 — In-Store Operations ends here
-    "Online Store Pictures",        // index 6 — Media and Markets starts here
+    "Online Store Pictures",
     "5 Facebook Listings",
     "2 Social Media Posts",
-    "PayMore Sync",
-    "Store Listing Review",
-    "Store Buying Review"
+    "PayMore Sync"
 ];
 
 const SCORECARD_BUCKETS = [
-    { label: "In-Store Operations", count: 6 },
-    { label: "Media and Markets", count: 4 },
-    { label: "Store Reviews", count: 2 }
+    { label: "Online & Marketing", count: 4 }
 ];
+
+// ============================================================================
+// PayMore practice Audit — exact transcription of Audit Playbook v3 (165 pts,
+// 94 items, 8 sections). Binary scoring: checked = full points, else 0.
+// Pass = 80%, target = 90%+. Shared shape with the scorecard edge fn, which
+// re-derives earned/possible from the same point values (server-authoritative).
+// ============================================================================
+const AUDIT_TARGET_PCT = 90;
+const AUDIT_PASS_PCT = 80;
+const AUDIT_DEFINITION = [
+    { key: "exterior", title: "Exterior", items: [
+        { id: "ex1", pts: 1, text: "Sidewalks and entryways free of litter, debris, and obstructions" },
+        { id: "ex2", pts: 1, text: "Exterior and road signage clean, lit (if applicable), free of damage or fading" },
+        { id: "ex3", pts: 1, text: "Building exterior clean, well-maintained (windows, paint, no handmade signs on doors). Window decals and signage appropriate. Door hours match website" },
+    ]},
+    { key: "entry", title: "Entry & Sales Floor", items: [
+        { id: "ef1", pts: 1, text: "Floors swept/mopped; entry mats clean" },
+        { id: "ef2", pts: 1, text: "Customer area free of clutter; no products stored on the floor" },
+        { id: "ef3", pts: 1, text: "Video games displayed on shelves and organized" },
+        { id: "ef4", pts: 1, text: "Store lighting fully functional throughout (no burned out bulbs, adequate brightness and clean)" },
+        { id: "ef5", pts: 1, text: "Walls, vents, and high surfaces free of dust and cobwebs" },
+        { id: "ef6", pts: 2, text: "Ceiling tiles in place and in good shape; less than 10% of tiles with no water damage" },
+        { id: "ef7", pts: 1, text: "Window ledges and sills clean; free of merchandise or debris" },
+        { id: "ef8", pts: 1, text: "No recycling items in customer view" },
+        { id: "ef9", pts: 1, text: "All customers greeted within 10 seconds of entering the store" },
+        { id: "ef10", pts: 2, text: "Team acknowledges entering customers even while helping others" },
+        { id: "ef11", pts: 1, text: "Customers asked for Google review at end of transaction" },
+        { id: "ef12", pts: 1, text: "No QR codes or signage for Google review signage in transaction area" },
+        { id: "ef13", pts: 1, text: "Music playing from RockBot system and volume is appropriate" },
+        { id: "ef14", pts: 3, text: "Retail Browsing iPads on and locked to store website" },
+    ]},
+    { key: "display", title: "Display Cases & Merchandising", items: [
+        { id: "dc1", pts: 1, text: "Display case glass is clean and fingerprint-free" },
+        { id: "dc2", pts: 1, text: "Devices organized by category (i.e. all mobile phones together, tablets etc)" },
+        { id: "dc3", pts: 1, text: "Phones and tablets positioned back-facing" },
+        { id: "dc4", pts: 2, text: "Small items in PayMore stands; tags NOT visible to customers" },
+        { id: "dc5", pts: 1, text: "Shelves full but not overcrowded; visually balanced" },
+        { id: "dc6", pts: 2, text: "Gaming items: clean/dusted, organized by category (consoles together, cords, accessories, etc)" },
+        { id: "dc7", pts: 2, text: "Consoles positioned on shelves; shelves are full but not overcrowded/balanced visually" },
+        { id: "dc8", pts: 2, text: "Gaming small items in PayMore stands; tags NOT visible" },
+        { id: "dc9", pts: 3, text: "All items in clean PayMore stands; tags NOT visible" },
+        { id: "dc10", pts: 2, text: "All items forward-facing (excluding phones/tablets)" },
+        { id: "dc11", pts: 3, text: "High-priced items (Apple phones, tablets) in locked case" },
+        { id: "dc12", pts: 2, text: "Retail glass in good shape and clean — no cracks, scratches, or broken areas" },
+    ]},
+    { key: "counter", title: "Retail Counter", items: [
+        { id: "rc1", pts: 1, text: "Counter neatly arranged, no clutter, no un-branded signage" },
+        { id: "rc2", pts: 1, text: "Testing equipment out of customer view" },
+        { id: "rc3", pts: 1, text: "Completed transactions out of customer view" },
+        { id: "rc4", pts: 1, text: "Printer stored in cabinet underneath" },
+        { id: "rc5", pts: 1, text: "No team member food or drink in customer view" },
+        { id: "rc6", pts: 1, text: "PayMore branded retail bags stocked" },
+        { id: "rc7", pts: 2, text: "All computers do not have any personal accounts open" },
+        { id: "rc8", pts: 1, text: "PayMore branded signage at counter; Freedom to Trade In trifold nearby; promo materials in plexi frames (not taped)" },
+    ]},
+    { key: "buy", title: "Buy Transaction Area", items: [
+        { id: "bt1", pts: 3, text: "Counter neatly arranged; no unbranded signage; testing equipment out of view (cables, gaming controllers, flashlights, etc); printer under cabinet" },
+        { id: "bt2", pts: 1, text: "Completed transactions out of customer view" },
+        { id: "bt3", pts: 2, text: "Diagnostic device/testing software present and stored out of view. Spec-Finder thumb drive available" },
+        { id: "bt4", pts: 2, text: "Screen-display tester present; in-cabinet testing monitors working (may be covered with a PayMore branded mat)" },
+        { id: "bt5", pts: 1, text: "Cable management for customer-facing monitors: cords neatly tied and snaked through the cabinet" },
+        { id: "bt6", pts: 1, text: "Charger/cable tester present" },
+        { id: "bt7", pts: 2, text: "PayMore Seller Book under the counter" },
+        { id: "bt8", pts: 3, text: "Last 10 transactions: at least one signature on each page half on/off sticker" },
+        { id: "bt9", pts: 7, text: "Green bin (<$100), Red bin (>$100), Blue bin (video games) — labeled (not handwritten), out of view; items bubble-wrapped with purchase order receipt" },
+        { id: "bt10", pts: 3, text: "Larger items in white boxes: purchase order attached, bubble-wrapped, on shelving or neatly stacked on back counter (must be in boxes)" },
+        { id: "bt11", pts: 3, text: "All intake merchandise logged immediately; no untagged or unlogged items" },
+        { id: "bt12", pts: 4, text: "Cash drawer locked; keys out of customer reach" },
+    ]},
+    { key: "boh", title: "Back of House", items: [
+        { id: "bh1", pts: 1, text: "Floors swept and clean" },
+        { id: "bh2", pts: 2, text: "Walls in good condition (no holes). No stickers from customer devices stuck to the walls" },
+        { id: "bh3", pts: 1, text: "Ceiling tiles in good shape (no missing tiles, no water damage)" },
+        { id: "bh4", pts: 2, text: "Holding shelves labeled (A, B, C, D, etc.). Not handwritten" },
+        { id: "bh5", pts: 1, text: "Holding shelves have colored bins (Green/Red/Blue), labeled correctly, not handwritten" },
+        { id: "bh6", pts: 1, text: "Items in bins are bubble wrapped" },
+        { id: "bh7", pts: 1, text: "All items tagged with purchase order and visible" },
+        { id: "bh8", pts: 1, text: "Location on purchase order receipt matches shelf location" },
+        { id: "bh9", pts: 2, text: "Shelves are organized and neat; all large items in boxes" },
+        { id: "bh10", pts: 1, text: "Items in holding bins have the Shopify barcode" },
+        { id: "bh11", pts: 2, text: "Ready-to-purchase shelves labeled (1, 2, 3, etc.). Not handwritten" },
+        { id: "bh12", pts: 2, text: "Black bins present, labeled correctly (E1, E2, etc.); items bubble-wrapped, not handwritten" },
+        { id: "bh13", pts: 1, text: "Boxes on ready-to-purchase shelves have Shopify barcode displayed" },
+        { id: "bh14", pts: 3, text: "Ready-to-purchase shelves organized and neat; all large items in boxes; items tagged" },
+        { id: "bh15", pts: 1, text: "Listing Station: barcode label printer present" },
+        { id: "bh16", pts: 3, text: "Listing Station: Lenovo computer present, clean and organized" },
+        { id: "bh17", pts: 3, text: "Testing Area: device cleaning material, external monitor, charging cables neat" },
+        { id: "bh18", pts: 1, text: "Testing Area: troubleshooting accessories present (controllers, Spec-Finder, flash drives)" },
+        { id: "bh19", pts: 2, text: "Testing Area: clean and organized" },
+        { id: "bh20", pts: 2, text: "Shipping Area: bubble wrap/peanuts; unused boxes neatly stacked by size" },
+        { id: "bh21", pts: 5, text: "Shipping Area: Lenovo computer, shipping label printer, scale, box re-adjusting tool, scanner present" },
+        { id: "bh22", pts: 2, text: "Shipping Area: clean and organized" },
+        { id: "bh23", pts: 4, text: "Photography Area: photo box or well-lit table with clean white butcher paper on a roll" },
+        { id: "bh24", pts: 1, text: "Adequate lighting throughout all back-of-house areas" },
+        { id: "bh25", pts: 1, text: "Recycling in proper containers; not stored on floor" },
+        { id: "bh26", pts: 1, text: "All storage closets clean and organized" },
+    ]},
+    { key: "personnel", title: "Personnel & Appearance", items: [
+        { id: "pa1", pts: 1, text: "PayMore Polo shirt worn. No T-shirt, vests, sweatshirts, etc" },
+        { id: "pa2", pts: 1, text: "Khaki pants or jeans — no shorts, not faded, in good condition" },
+        { id: "pa3", pts: 1, text: "Optional PayMore branded hat worn forward, or backwards during a transaction" },
+        { id: "pa4", pts: 1, text: "Closed-toed shoes worn" },
+        { id: "pa5", pts: 1, text: "No headphones or earbuds (unless testing a device)" },
+        { id: "pa6", pts: 1, text: "Team members conducting themselves professionally" },
+    ]},
+    { key: "safety", title: "Safety & Security", items: [
+        { id: "ss1", pts: 3, text: "Fire extinguishers tagged, charged, and hung 3.5–5 feet above the floor" },
+        { id: "ss2", pts: 2, text: "First aid kit stocked according to OSHA requirements" },
+        { id: "ss3", pts: 2, text: "Back door locked from outside, openable from inside without keys or bolts; no obstructions" },
+        { id: "ss4", pts: 4, text: "Safe is locked; cash/bank deposits not sitting out" },
+        { id: "ss5", pts: 5, text: "Store fully open and purchasing during all posted business hours" },
+        { id: "ss6", pts: 2, text: "Labor law / workplace compliance poster displayed on the wall" },
+        { id: "ss7", pts: 1, text: "All aisles have 32-inch clearance; no products/devices stored on the floor, unless too large to fit on the rack/shelf" },
+        { id: "ss8", pts: 1, text: "All products on shelves at least 18 inches from the ceiling" },
+        { id: "ss9", pts: 1, text: "All products clear from sprinkler systems" },
+        { id: "ss10", pts: 4, text: "Restrooms: clean, maintained, stocked with soap, TP, paper towels" },
+        { id: "ss11", pts: 1, text: "Restroom garbage not overflowing" },
+        { id: "ss12", pts: 1, text: "No personal pictures, posters, stickers, political signage posted throughout the store" },
+        { id: "ss13", pts: 1, text: "Second Hand License posted per state/country law. Hung in a glass case or framed, not taped/stapled. Record expiration" },
+    ]},
+];
+
+// Total possible audit points (derived, = 165) and a quick id→{pts,text,section} lookup.
+const AUDIT_POSSIBLE = AUDIT_DEFINITION.reduce((s, sec) => s + sec.items.reduce((a, i) => a + i.pts, 0), 0);
+const AUDIT_ITEM_MAP = (() => {
+    const m = {};
+    AUDIT_DEFINITION.forEach(sec => sec.items.forEach(i => { m[i.id] = { pts: i.pts, text: i.text, section: sec.title }; }));
+    return m;
+})();
+
+// Audit color by percentage: target 90+ green, pass 80+ amber, else red.
+function auditPctColor(pct) {
+    if (pct >= AUDIT_TARGET_PCT) return { bg: '#d1fae5', fg: '#059669' };
+    if (pct >= AUDIT_PASS_PCT) return { bg: '#fef3c7', fg: '#d97706' };
+    return { bg: '#fee2e2', fg: '#dc2626' };
+}
 
 function openScorecardModal() {
     toggleModal('scorecardSubmitModal');
@@ -8854,7 +9727,35 @@ function openScorecardModal() {
     const dateInput = document.getElementById('dm-score-date');
     if (dateInput) dateInput.valueAsDate = new Date();
 
+    switchScoreTab('scorecard');
     _buildScorecardModalInputs();
+    renderAuditEntry();
+}
+
+// ---- Submit-modal tab switching (Scorecard | SPEEKS Audit) ----
+let currentScoreTab = 'scorecard';
+function switchScoreTab(tab) {
+    currentScoreTab = tab;
+    const scTab = document.getElementById('sc-tab-scorecard');
+    const auTab = document.getElementById('sc-tab-audit');
+    if (scTab) scTab.classList.toggle('active', tab === 'scorecard');
+    if (auTab) auTab.classList.toggle('active', tab === 'audit');
+    const scPanel = document.getElementById('sc-panel-scorecard');
+    const auPanel = document.getElementById('sc-panel-audit');
+    if (scPanel) scPanel.style.display = tab === 'scorecard' ? 'block' : 'none';
+    if (auPanel) auPanel.style.display = tab === 'audit' ? 'block' : 'none';
+    const scBtn = document.getElementById('submitScorecardBtn');
+    const auBtn = document.getElementById('submitAuditBtn');
+    if (scBtn) scBtn.style.display = tab === 'scorecard' ? '' : 'none';
+    if (auBtn) auBtn.style.display = tab === 'audit' ? '' : 'none';
+}
+
+function onScoreStoreChange() {
+    _buildScorecardModalInputs();
+    renderAuditEntry();
+}
+function onScoreDateChange() {
+    renderAuditEntry();
 }
 
 function _buildScorecardModalInputs() {
@@ -8871,12 +9772,8 @@ function _buildScorecardModalInputs() {
             ? existingEntry.buckets.find(b => b.name === bucket.label)
             : null;
         const existingNote = existingBucket && existingBucket.notes ? existingBucket.notes : '';
-        html += `<div style="grid-column: 1 / -1; margin-top: ${bIdx > 0 ? '8px' : '0'}; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between;">
+        html += `<div style="grid-column: 1 / -1; margin-top: ${bIdx > 0 ? '8px' : '0'}; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0;">
                 <span style="font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">${bucket.label}</span>
-                <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 10px; color: #94a3b8; font-weight: 700;">
-                    <input type="checkbox" id="section-toggle-${bIdx}" checked onchange="toggleScorecardSection(${bIdx})" style="cursor: pointer; width: 13px; height: 13px;">
-                    Update
-                </label>
             </div>
             <div id="section-inputs-${bIdx}" style="display: contents;">`;
         for (let i = 0; i < bucket.count; i++) {
@@ -9007,6 +9904,1122 @@ function submitNewScorecard() {
     });
 }
 
+// ============================================================================
+// SPEEKS AUDIT — entry form (in the submit modal) + read-only breakdown popout.
+// Uses AUDIT_DEFINITION / AUDIT_ITEM_MAP / AUDIT_POSSIBLE defined near the top.
+// ============================================================================
+
+// Returns the cached latest audit for the modal's selected store (or null).
+function _selectedStoreAudit() {
+    const store = (document.getElementById('dm-store-select')?.value || '').toUpperCase();
+    const entry = (window._scorecardAllData || []).find(d => String(d.store).toUpperCase() === store);
+    return entry && entry.audit ? entry.audit : null;
+}
+
+// Build the collapsible audit checklist. If an audit already exists for the
+// selected store AND the chosen date matches it, pre-check its results (edit mode).
+function renderAuditEntry() {
+    const container = document.getElementById('audit-entry-container');
+    if (!container) return;
+    const dateVal = document.getElementById('dm-score-date')?.value || '';
+    const existing = _selectedStoreAudit();
+    const prefill = (existing && existing.date === dateVal && existing.results) ? existing.results : {};
+    const auditorEl = document.getElementById('dm-audit-auditor');
+    if (auditorEl) auditorEl.value = (existing && existing.date === dateVal && existing.auditor) ? existing.auditor : '';
+
+    let html = '';
+    AUDIT_DEFINITION.forEach((sec, sIdx) => {
+        const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
+        html += `<div class="audit-entry-section" style="border:1px solid #e2e8f0; border-radius:10px; margin-bottom:10px; overflow:hidden;">
+            <div onclick="toggleAuditEntrySection(${sIdx})" style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:11px 13px; background:#f8fafc; cursor:pointer;">
+                <span style="font-size:12px; font-weight:800; color:var(--slate-charcoal); text-transform:uppercase; letter-spacing:.4px;">${sec.title}</span>
+                <span style="display:flex; align-items:center; gap:8px;">
+                    <span id="audit-sec-sub-${sIdx}" style="font-size:11px; font-weight:900; color:#64748b; background:#fff; border:1px solid #e2e8f0; padding:3px 0; border-radius:6px; display:inline-block; min-width:56px; text-align:center;">0/${secTotal}</span>
+                    <span id="audit-sec-caret-${sIdx}" style="color:#94a3b8; font-size:10px; font-weight:800; transition:transform .2s; transform:rotate(-90deg);">▼</span>
+                </span>
+            </div>
+            <div id="audit-sec-body-${sIdx}" style="display:none; padding:6px 13px 11px;">`;
+        sec.items.forEach(item => {
+            const aw = _prefillAward(prefill[item.id], item.pts);
+            let control;
+            if (item.pts === 1) {
+                // 1-point item → checkbox (0 or 1).
+                control = `<input type="checkbox" class="audit-entry-input" data-section="${sIdx}" data-pts="1" data-itemid="${item.id}" ${aw >= 1 ? 'checked' : ''} onchange="onAuditEntryToggle(${sIdx})" style="width:18px; height:18px; cursor:pointer;">
+                    <span style="font-size:10px; font-weight:800; color:#94a3b8; width:26px; text-align:right;">/ 1</span>`;
+            } else {
+                // multi-point item → 0..max points dropdown (partial credit).
+                let opts = '';
+                for (let p = 0; p <= item.pts; p++) opts += `<option value="${p}"${p === aw ? ' selected' : ''}>${p}</option>`;
+                control = `<select class="audit-entry-input" data-section="${sIdx}" data-pts="${item.pts}" data-itemid="${item.id}" onchange="onAuditEntryToggle(${sIdx})" style="width:58px; padding:5px 6px; font-size:13px; font-weight:800; color:var(--slate-charcoal); border:1px solid #cbd5e1; border-radius:7px; cursor:pointer; background:#fff;">${opts}</select>
+                    <span style="font-size:10px; font-weight:800; color:#94a3b8; width:26px; text-align:right;">/ ${item.pts}</span>`;
+            }
+            html += `<div style="display:flex; align-items:center; gap:10px; padding:7px 2px; border-bottom:1px solid #f1f5f9;">
+                <span style="flex:1; font-size:12.5px; color:var(--slate-charcoal); line-height:1.4;">${escapeHtml(item.text)}</span>
+                <span style="flex-shrink:0; display:flex; align-items:center; justify-content:flex-end; gap:8px; width:100px;">${control}</span>
+            </div>`;
+        });
+        html += `</div></div>`;
+    });
+    container.innerHTML = html;
+
+    // Refresh subtotals + running bar from the prefilled state.
+    AUDIT_DEFINITION.forEach((_s, sIdx) => onAuditEntryToggle(sIdx, true));
+    updateAuditRunningBar();
+}
+
+// Clamp a stored result value (boolean legacy or number) to 0..pts.
+function _prefillAward(v, pts) {
+    if (v === true) return pts;
+    const num = Number(v);
+    return Number.isFinite(num) ? Math.min(Math.max(Math.round(num), 0), pts) : 0;
+}
+
+// Points awarded by one entry control (checkbox = 0|pts, select = its value).
+function _auditItemAward(el) {
+    const pts = parseInt(el.getAttribute('data-pts')) || 0;
+    if (el.type === 'checkbox') return el.checked ? pts : 0;
+    const v = parseInt(el.value);
+    return Number.isFinite(v) ? Math.min(Math.max(v, 0), pts) : 0;
+}
+
+// One section open at a time — opening a section collapses the others.
+function toggleAuditEntrySection(sIdx) {
+    const body = document.getElementById(`audit-sec-body-${sIdx}`);
+    const caret = document.getElementById(`audit-sec-caret-${sIdx}`);
+    if (!body) return;
+    const isOpen = body.style.display === 'block';
+    document.querySelectorAll('[id^="audit-sec-body-"]').forEach(el => { el.style.display = 'none'; });
+    document.querySelectorAll('[id^="audit-sec-caret-"]').forEach(el => { el.style.transform = 'rotate(-90deg)'; });
+    if (!isOpen) {
+        body.style.display = 'block';
+        if (caret) caret.style.transform = 'rotate(0deg)';
+    }
+}
+
+// Recompute one section's subtotal; if not a silent refresh, also bump the running bar.
+function onAuditEntryToggle(sIdx, silent) {
+    const sec = AUDIT_DEFINITION[sIdx];
+    const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
+    let earned = 0;
+    document.querySelectorAll(`.audit-entry-input[data-section="${sIdx}"]`).forEach(el => { earned += _auditItemAward(el); });
+    const sub = document.getElementById(`audit-sec-sub-${sIdx}`);
+    if (sub) {
+        sub.textContent = `${earned}/${secTotal}`;
+        const full = earned === secTotal;
+        sub.style.color = full ? '#059669' : (earned > 0 ? '#d97706' : '#64748b');
+    }
+    if (!silent) updateAuditRunningBar();
+}
+
+function _auditEntryTotals() {
+    let earned = 0;
+    document.querySelectorAll('.audit-entry-input').forEach(el => { earned += _auditItemAward(el); });
+    return { earned, possible: AUDIT_POSSIBLE };
+}
+
+function updateAuditRunningBar() {
+    const bar = document.getElementById('dm-audit-runningbar');
+    if (!bar) return;
+    const { earned, possible } = _auditEntryTotals();
+    const pct = possible ? Math.round((earned / possible) * 1000) / 10 : 0;
+    // Neutral (not alarming red) until the auditor starts checking items.
+    const started = earned > 0;
+    const c = started ? auditPctColor(pct) : { bg: '#f1f5f9', fg: '#64748b' };
+    const verdict = !started ? 'Not started — check items as you walk the store'
+        : (pct >= AUDIT_PASS_PCT ? (pct >= AUDIT_TARGET_PCT ? 'On target' : 'Passing') : 'Below pass')
+          + ` · pass ${AUDIT_PASS_PCT}% · target ${AUDIT_TARGET_PCT}%+`;
+    bar.innerHTML = `
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:${c.bg}; border-radius:10px; padding:10px 13px;">
+            <span style="font-size:12px; font-weight:800; color:${c.fg}; text-transform:uppercase; letter-spacing:.4px;">Live Audit Score</span>
+            <span style="font-size:18px; font-weight:900; color:${c.fg};">${earned}/${possible} <span style="font-size:13px;">(${pct}%)</span></span>
+        </div>
+        <div style="height:7px; border-radius:6px; background:#eef2f6; overflow:hidden; margin-top:6px;"><div style="height:100%; width:${pct}%; background:${c.fg}; border-radius:6px; transition:width .2s;"></div></div>
+        <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:4px;">${verdict}</div>`;
+}
+
+function submitNewAudit() {
+    const store = document.getElementById('dm-store-select').value;
+    const date = document.getElementById('dm-score-date').value;
+    const auditor = (document.getElementById('dm-audit-auditor')?.value || '').trim()
+        || sessionStorage.getItem('speeksUserName') || null;
+    const btn = document.getElementById('submitAuditBtn');
+    if (!store || !date) { alert('Pick a store and date.'); return; }
+
+    const results = {};
+    document.querySelectorAll('.audit-entry-input').forEach(el => {
+        results[el.getAttribute('data-itemid')] = _auditItemAward(el);
+    });
+
+    btn.innerText = 'Saving...';
+    btn.style.opacity = '0.7';
+    btn.disabled = true;
+
+    fetch(SCORECARD_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'submit_audit', store, date, auditor, results })
+    }).then(async res => {
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+        btn.innerText = `Saved — ${json.earned}/${json.possible} (${json.pct}%)`;
+        btn.style.background = 'var(--sage-professional)';
+        setTimeout(() => {
+            if (typeof fetchScorecardData === 'function') fetchScorecardData();
+            if (typeof fetchMasterDistrictDashboard === 'function') fetchMasterDistrictDashboard();
+            closeScorecardModal();
+            btn.innerText = 'Save Audit';
+            btn.style.background = '';
+            btn.style.opacity = '';
+            btn.disabled = false;
+        }, 1400);
+    }).catch(err => {
+        alert('Error saving audit: ' + (err.message || err));
+        btn.innerText = 'Save Audit';
+        btn.style.background = '';
+        btn.style.opacity = '';
+        btn.disabled = false;
+    });
+}
+
+// ---- Read-only Audit Breakdown popout (reused by every display site) ----
+function openAuditBreakdown(store) {
+    renderAuditBreakdown(store);
+    toggleModal('auditBreakdownModal');   // closes any open modal, then shows this one + backdrop
+}
+function closeAuditBreakdown() {
+    closeAllModals();
+}
+
+function renderAuditBreakdown(store) {
+    const body = document.getElementById('audit-breakdown-body');
+    const title = document.getElementById('audit-breakdown-title');
+    if (!body) return;
+    const entry = (window._scorecardAllData || []).find(d => String(d.store).toUpperCase() === String(store).toUpperCase());
+    const audit = entry && entry.audit ? entry.audit : null;
+
+    if (!audit) {
+        if (title) title.textContent = `${store} · Audit Breakdown`;
+        body.innerHTML = `<div style="padding:24px 4px; text-align:center; color:#94a3b8; font-weight:600;">No practice audit on file for ${store} yet.</div>`;
+        return;
+    }
+    const results = audit.results || {};
+    const c = auditPctColor(audit.pct);
+    const dateStr = audit.date ? new Date(audit.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+    if (title) title.textContent = `${store} · Audit Breakdown`;
+
+    let html = `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:${c.bg}; border-radius:10px; padding:12px 14px; margin-bottom:14px;">
+        <div>
+            <div style="font-size:11px; font-weight:800; color:${c.fg}; text-transform:uppercase; letter-spacing:.4px;">PayMore Audit${dateStr ? ' · ' + dateStr : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
+            <div style="font-size:11px; color:#64748b; font-weight:600; margin-top:2px;">Pass ${AUDIT_PASS_PCT}% · Target ${AUDIT_TARGET_PCT}%+${audit.prevPct != null ? ` · prev ${audit.prevPct}%` : ''}</div>
+        </div>
+        <div style="font-size:22px; font-weight:900; color:${c.fg};">${audit.earned}/${audit.possible} <span style="font-size:14px;">(${audit.pct}%)</span></div>
+    </div>`;
+
+    AUDIT_DEFINITION.forEach(sec => {
+        const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
+        let secEarned = 0;
+        sec.items.forEach(i => { secEarned += _prefillAward(results[i.id], i.pts); });
+        const secFull = secEarned === secTotal;
+        html += `<div style="margin-bottom:12px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:5px;">
+                <span style="font-size:11px; font-weight:800; color:#94a3b8; text-transform:uppercase; letter-spacing:.5px;">${sec.title}</span>
+                <span style="font-size:11px; font-weight:900; color:${secFull ? '#059669' : (secEarned > 0 ? '#d97706' : '#dc2626')};">${secEarned}/${secTotal}</span>
+            </div>`;
+        sec.items.forEach(item => {
+            const aw = _prefillAward(results[item.id], item.pts);
+            const full = aw === item.pts, none = aw === 0;
+            const icon = full ? '✓' : (none ? '✗' : '◐');
+            const iconColor = full ? '#16a34a' : (none ? '#dc2626' : '#d97706');
+            const valColor = full ? '#16a34a' : (none ? '#cbd5e1' : '#d97706');
+            html += `<div style="display:flex; align-items:flex-start; gap:9px; padding:4px 2px;">
+                <span style="font-size:13px; font-weight:900; line-height:1.3; color:${iconColor}; flex-shrink:0;">${icon}</span>
+                <span style="font-size:12px; color:${full ? '#94a3b8' : 'var(--slate-charcoal)'}; line-height:1.4; flex:1; ${full ? '' : 'font-weight:600;'}">${escapeHtml(item.text)}</span>
+                <span style="font-size:11px; font-weight:800; color:${valColor}; flex-shrink:0;">${aw}/${item.pts}</span>
+            </div>`;
+        });
+        html += `</div>`;
+    });
+    body.innerHTML = html;
+}
+
+// Audit summary block for the manager Store Scorecard widget: score + trend +
+// missed points + a button into the full breakdown popout.
+function buildAuditSummaryHtml(audit, store) {
+    if (!audit) {
+        return `<div style="display:flex; align-items:center; justify-content:space-between;">
+                <span class="scorecard-label" style="text-align:left;">PayMore Audit</span>
+                <span style="font-size:12px; color:#94a3b8; font-weight:700;">No practice audit yet</span>
+            </div>`;
+    }
+    const c = auditPctColor(audit.pct);
+    const dateStr = audit.date ? new Date(audit.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+    let trend = '';
+    if (audit.prevPct != null) {
+        const delta = Math.round((audit.pct - audit.prevPct) * 10) / 10;
+        const up = delta >= 0;
+        trend = `<span style="font-size:11px; font-weight:800; color:${up ? '#16a34a' : '#dc2626'};">${up ? '▲' : '▼'} ${Math.abs(delta)}%</span>`;
+    }
+
+    return `<div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+            <div>
+                <div class="scorecard-label" style="text-align:left; margin-bottom:2px;">PayMore Audit</div>
+                <div class="scorecard-date" style="font-size:11px;">${dateStr}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+                ${trend}
+                <span style="font-size:16px; font-weight:900; background:${c.bg}; color:${c.fg}; padding:4px 10px; border-radius:8px;">${audit.earned}/${audit.possible} · ${audit.pct}%</span>
+            </div>
+        </div>
+        <button onclick="openAuditBreakdown('${store}')" class="btn-secondary" style="margin-top:10px; width:100%; padding:8px; font-size:12px; font-weight:800;">View Full Breakdown</button>`;
+}
+
+// =========================================================
+//  SHOPIFY INSURANCE CLAIMS / ITEM-NOT-RECEIVED TOOL
+//  Store managers + owner-managers + multi-store managers log
+//  claims here. A manager sees their store's cases; a Multi-Store
+//  Manager sees every store they manage, from either dashboard.
+// =========================================================
+const CLAIM_STATUS = {
+    in_progress: { label: 'In Progress', bg: '#fef3c7', fg: '#b45309' },
+    recovered:   { label: 'Recovered',   bg: '#d1fae5', fg: '#059669' },
+    denied:      { label: 'Denied',      bg: '#fee2e2', fg: '#dc2626' },
+};
+
+// Which store(s) this user can file/view claims for.
+function _claimStores() {
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        return [...MULTISTORE_MANAGER_STORES];
+    }
+    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
+}
+
+function openClaimsModal() {
+    toggleModal('claimsModal');
+    _buildClaimStorePicker();
+    ['claim-case-number', 'claim-sku', 'claim-price', 'claim-cost', 'claim-detail'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.value = '';
+    });
+    const r = document.getElementById('claim-reason'); if (r) r.selectedIndex = 0;
+    const ct = document.getElementById('claim-type'); if (ct) ct.selectedIndex = 0;
+    _onClaimReasonChange();
+    switchClaimsTab('new');
+}
+
+// "Claim Type" (Damage / Loss) only applies to a Claim, not an Item-Not-Received case.
+function _onClaimReasonChange() {
+    const reason = (document.getElementById('claim-reason') || {}).value;
+    const wrap = document.getElementById('claim-type-wrap');
+    if (wrap) wrap.style.display = reason !== 'Item Not Received' ? 'block' : 'none';
+}
+
+function switchClaimsTab(tab) {
+    const nb = document.getElementById('claims-tab-new');
+    const vb = document.getElementById('claims-tab-view');
+    if (nb) nb.classList.toggle('active', tab === 'new');
+    if (vb) vb.classList.toggle('active', tab === 'view');
+    const np = document.getElementById('claims-panel-new');
+    const vp = document.getElementById('claims-panel-view');
+    if (np) np.style.display = tab === 'new' ? 'block' : 'none';
+    if (vp) vp.style.display = tab === 'view' ? 'block' : 'none';
+    const sb = document.getElementById('submitClaimBtn');
+    if (sb) sb.style.display = tab === 'new' ? '' : 'none';
+    if (tab === 'view') fetchMyClaims();
+}
+
+// MSM gets a store chooser; a single-store manager is locked to their store.
+function _buildClaimStorePicker() {
+    const row = document.getElementById('claims-store-row');
+    const sel = document.getElementById('claim-store');
+    if (!sel) return;
+    const stores = _claimStores();
+    sel.innerHTML = stores.map(s => `<option value="${s}">${s}</option>`).join('');
+    const multi = stores.length > 1;
+    sel.disabled = !multi;
+    sel.style.opacity = multi ? '1' : '0.7';
+    sel.style.cursor = multi ? 'pointer' : 'not-allowed';
+    if (row) row.style.display = stores.length ? 'block' : 'none';
+    if (sel.options.length) sel.selectedIndex = 0;
+}
+
+async function submitClaim() {
+    const val = id => (document.getElementById(id) || {}).value;
+    const store = (val('claim-store') || '').toUpperCase();
+    const caseNumber = (val('claim-case-number') || '').trim();
+    const sku = (val('claim-sku') || '').trim();
+    const priceRaw = val('claim-price');
+    const costRaw = val('claim-cost');
+    const reason = val('claim-reason');
+    const claimType = val('claim-type');
+    const detail = (val('claim-detail') || '').trim();
+    const status = 'in_progress'; // a ticket is always open the moment it's created
+
+    // Every claim type (Shopify / USPS / UPS) carries its Damage/Loss type;
+    // only Item Not Received stands alone.
+    const reasonType = reason !== 'Item Not Received' ? `${reason} — ${claimType}` : reason;
+
+    if (!store) { alert('Please select a store for this case.'); return; }
+    if (!caseNumber) { alert('Please enter a case number.'); return; }
+
+    const num = v => (v === '' || v == null) ? null : Number(v);
+    const btn = document.getElementById('submitClaimBtn');
+    const old = btn ? btn.innerText : '';
+    if (btn) { btn.disabled = true; btn.innerText = 'Saving…'; }
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'submit_claim', store, case_number: caseNumber, item_sku: sku,
+                price: num(priceRaw), cost: num(costRaw),
+                reason_type: reasonType, reason_detail: detail || null, status,
+                created_by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+        switchClaimsTab('view'); // jump to My Cases so they see it landed
+    } catch (e) {
+        alert('Could not save the case: ' + e.message);
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerText = old; }
+    }
+}
+
+let _claimsAll = []; // last fetched cases, so the MSM store filter can re-render without refetching
+
+async function fetchMyClaims() {
+    const wrap = document.getElementById('claims-table-wrap');
+    if (!wrap) return;
+    const stores = _claimStores();
+    if (!stores.length) {
+        wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">No store assigned to your account.</div>';
+        return;
+    }
+    wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading cases…</div>';
+    try {
+        const res = await fetch(`${CLAIMS_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        _claimsAll = json.data || [];
+        _buildClaimsViewFilter(stores);
+        renderClaimsTable();
+    } catch (e) {
+        wrap.innerHTML = '<div style="color:var(--red-alert); padding:24px; text-align:center; font-weight:700;">Error loading cases.</div>';
+    }
+}
+
+// MSM-only: a store filter on the My Cases tab (single-store managers don't need it).
+function _buildClaimsViewFilter(stores) {
+    const row = document.getElementById('claims-view-filter-row');
+    const sel = document.getElementById('claims-view-filter');
+    if (!row || !sel) return;
+    if (stores.length <= 1) { row.style.display = 'none'; return; }
+    row.style.display = 'block';
+    const current = sel.value;
+    sel.innerHTML = `<option value="">All stores</option>` +
+        stores.map(s => `<option value="${s}">${s}</option>`).join('');
+    if ([...sel.options].some(o => o.value === current)) sel.value = current;
+}
+
+function renderClaimsTable() {
+    const wrap = document.getElementById('claims-table-wrap');
+    if (!wrap) return;
+    const stores = _claimStores();
+    const multi = stores.length > 1;
+    const filterStore = (document.getElementById('claims-view-filter') || {}).value || '';
+    const filterStatus = (document.getElementById('claims-status-filter') || {}).value || '';
+    let rows = _claimsAll;
+    if (filterStore) rows = rows.filter(r => (r.store || '').toUpperCase() === filterStore);
+    const showStore = multi && !filterStore; // store column only matters when mixing stores
+    const colCount = (showStore ? 1 : 0) + 10; // # column + 9 base
+
+    // A follow-up loss claim is a real claim row with parent_id pointing at the
+    // Item-Not-Received ticket it came from. Render it nested under its parent.
+    const byId = {}; rows.forEach(r => { byId[r.id] = r; });
+    const kidsOf = {}; rows.forEach(r => { if (r.parent_id) (kidsOf[r.parent_id] = kidsOf[r.parent_id] || []).push(r); });
+    // Status filter applies to top-level claims; their child claims render alongside.
+    let tops = rows.filter(r => !r.parent_id || !byId[r.parent_id]);
+    if (filterStatus) tops = tops.filter(r => r.status === filterStatus);
+    // Needs-attention first: over-7-day open → other open → escalated INRs → resolved;
+    // newest first within each group. (An INR with a child loss claim isn't "aging".)
+    const clRank = r => {
+        if (r.status !== 'in_progress') return 3;
+        if ((kidsOf[r.id] || []).length) return 2;
+        if (_isClaimAging(r)) return 0;
+        return 1;
+    };
+    tops.sort((a, b) => clRank(a) - clRank(b) || new Date(b.created_at) - new Date(a.created_at));
+
+    if (!tops.length) {
+        wrap.innerHTML = '<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No cases match this view.</div>';
+        return;
+    }
+    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
+    let html = `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+        <thead><tr>${th('#')}${showStore ? th('Store') : ''}${th('Case #')}${th('SKU')}${th('Value')}${th('Cost')}${th('Reason')}${th('Status')}${th('Created')}${th('Resolved')}${th('')}</tr></thead><tbody>`;
+    let n = 0;
+    tops.forEach(r => {
+        const kids = kidsOf[r.id] || [];
+        const isINR = String(r.reason_type || '').toLowerCase().startsWith('item not received');
+        const canEscalate = isINR && !kids.length; // one loss claim per INR ticket
+        n++;
+        html += _claimRowHtml(r, showStore, false, canEscalate, kids.length > 0, `${n}`);
+        if (canEscalate) html += _escalateFormRow(r, colCount);
+        kids.forEach((k, ci) => { html += _claimRowHtml(k, showStore, true, false, false, `${n}.${ci + 1}`); });
+    });
+    html += '</tbody></table></div>';
+    wrap.innerHTML = html;
+}
+
+// One claim row. `isChild` nests it (indent + blue edge) under its parent INR ticket;
+// it's otherwise a full, normal claim row with its own status/value/cost/dates/actions.
+function _claimRowHtml(r, showStore, isChild, canEscalate, hasChild, num) {
+    const fmtPrice = v => (v == null || v === '') ? '—' : '$' + Number(v).toFixed(2);
+    const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+    const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
+    const opts = Object.entries(CLAIM_STATUS).map(([k, v]) => `<option value="${k}" ${k === r.status ? 'selected' : ''}>${v.label}</option>`).join('');
+    const sc = CLAIM_STATUS[r.status] || CLAIM_STATUS.in_progress;
+    const aging = _isClaimAging(r) && !hasChild; // a parent superseded by a loss claim isn't "aging"
+    const caret = encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><path d="M2 3.5L5 6.5L8 3.5" stroke="#475569" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`);
+    // Once a loss claim is opened, status tracking moves to that child claim — so a
+    // parent INR with a child shows a static status, and only the claim has the pill.
+    const statusCell = hasChild
+        ? `<span style="font-size:11px; font-weight:800; color:#94a3b8;">${sc.label}</span><div style="font-size:9px; color:#cbd5e1; font-weight:800; text-transform:uppercase; letter-spacing:.3px; margin-top:1px;">on claim ↓</div>`
+        : `<select onchange="updateClaimStatus('${r.id}', this.value)" style="appearance:none; -webkit-appearance:none; font-size:11px; font-weight:800; border:1.5px solid ${sc.fg}55; border-radius:999px; padding:5px 26px 5px 12px; cursor:pointer; background-color:#fff; color:#1e293b; background-image:url('data:image/svg+xml,${caret}'); background-repeat:no-repeat; background-position:right 9px center;">${opts}</select>`;
+
+    let reasonCell = `${escapeHtml(r.reason_type || '—')}`;
+    if (r.reason_detail) reasonCell += `<div style="color:#94a3b8; font-size:11px; margin-top:2px;">${escapeHtml(r.reason_detail)}</div>`;
+    if (aging) {
+        // An aging INR ticket gets the triage instruction, not just an age flag:
+        // delivered since → eBay refunds (mark Recovered); still lost → open a claim.
+        reasonCell += canEscalate
+            ? `<div style="color:#dc2626; font-size:11px; font-weight:800; margin-top:3px;">⚠️ Open ${_claimDaysOpen(r)} days — check tracking: delivered since? Call eBay for the refund. Still lost? Open a claim.</div>`
+            : `<div style="color:#dc2626; font-size:11px; font-weight:800; margin-top:3px;">⚠️ Open ${_claimDaysOpen(r)} days</div>`;
+    }
+
+    const sBtn = 'font-size:11px; font-weight:800; border-radius:7px; padding:5px 9px; cursor:pointer; line-height:1; white-space:nowrap;';
+    const acts = [];
+    if (aging && canEscalate) acts.push(`<button onclick="updateClaimStatus('${r.id}', 'recovered')" title="Tracking shows it arrived — call eBay for the refund, then mark Recovered" style="${sBtn} background:#f0fdf4; border:1.5px solid #86efac; color:#15803d;">📦 Delivered</button>`);
+    if (aging) acts.push(`<button onclick="ackClaim('${r.id}')" title="Mark that you checked on this — resets the 7-day reminder" style="${sBtn} background:#ecfdf5; border:1.5px solid #a7f3d0; color:#047857;">✓ Still in progress</button>`);
+    if (canEscalate) acts.push(`<button onclick="toggleEscalateRow('${r.id}')" title="Still lost — open a loss claim on this ticket" style="${sBtn} background:#eff6ff; border:1.5px solid #bfdbfe; color:#1d4ed8;">Open a claim</button>`);
+    // Deleting a claim needs DM/CEO approval — the trash button sends a request, and a
+    // claim already awaiting approval shows a pending badge instead.
+    if (r.delete_requested_at) {
+        acts.push(`<span title="Waiting on DM/CEO approval" style="display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:800; color:#b45309; background:#fffbeb; border:1.5px solid #fde68a; border-radius:9px; padding:6px 9px; white-space:nowrap;">🗑 Delete requested</span>`);
+    } else {
+        acts.push(`<button onclick="requestClaimDelete('${r.id}', ${!!hasChild})" title="Request deletion (a DM or CEO must approve)" style="display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:9px; cursor:pointer; font-size:17px; line-height:1;" onmouseover="this.style.background='#fee2e2';" onmouseout="this.style.background='#fff5f5';">🗑</button>`);
+    }
+    const actionsCell = `<div style="display:flex; flex-direction:column; gap:5px; align-items:flex-start;">${acts.join('')}</div>`;
+
+    const resolvedCell = r.resolved_at
+        ? `<span style="color:${sc.fg}; white-space:nowrap; font-weight:700;">${fmtDate(r.resolved_at)}</span>`
+        : `<span style="color:#cbd5e1; white-space:nowrap;">—</span>`;
+
+    // Aging → red tint/edge; otherwise a child claim gets a blue tint/edge.
+    let rowStyle = '';
+    if (aging) rowStyle = 'background:#fef2f2; box-shadow:inset 3px 0 0 #dc2626;';
+    else if (isChild) rowStyle = 'background:#f0f7ff; box-shadow:inset 3px 0 0 #93c5fd;';
+
+    const caseCell = isChild
+        ? `<span style="color:#60a5fa; font-weight:900; margin-right:5px;">↳</span><span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`
+        : `<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`;
+
+    return `<tr style="${rowStyle}">
+        ${td(`<span style="font-weight:800; color:${isChild ? '#94a3b8' : 'var(--slate-charcoal)'};">${num}</span>`, 'white-space:nowrap;')}
+        ${showStore ? td(isChild ? '' : `<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`) : ''}
+        ${td(caseCell, isChild ? 'padding-left:20px;' : '')}
+        ${td(escapeHtml(r.item_sku || '—'))}
+        ${td(fmtPrice(r.price), 'white-space:nowrap; font-weight:700;')}
+        ${td(fmtPrice(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}
+        ${td(reasonCell)}
+        ${td(statusCell, 'white-space:nowrap;')}
+        ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
+        ${td(resolvedCell)}
+        ${td(actionsCell)}
+    </tr>`;
+}
+
+// Inline form (a hidden table row) for opening a loss claim on an Item-Not-Received
+// ticket — same fields as a new claim, prefilled with the item's value/cost.
+function _escalateFormRow(r, colCount) {
+    const inp = 'width:100%; padding:7px 9px; border:1.5px solid #cbd5e1; border-radius:7px; font-size:12px; font-weight:600; box-sizing:border-box; background:#fff;';
+    const lbl = t => `<label style="display:block; font-size:9px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; margin-bottom:3px;">${t}</label>`;
+    const val = r.price != null ? r.price : '';
+    const cost = r.cost != null ? r.cost : '';
+    return `<tr id="esc-row-${r.id}" style="display:none; background:#f1f5f9;">
+        <td colspan="${colCount}" style="padding:14px 16px; border-bottom:1px solid #e2e8f0;">
+            <div style="font-weight:800; font-size:12px; color:#1d4ed8; margin-bottom:4px;">Open a loss claim on this ticket</div>
+            <div style="font-size:11px; color:#64748b; margin-bottom:10px;">Check tracking first — if the item has since been delivered, call eBay for the refund and mark the ticket <b>Recovered</b>. Only open a claim if it's still lost.</div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:10px;">
+                <div>${lbl('Claim')}<select id="esc-${r.id}-reason" style="${inp}"><option value="Shopify Claim">Shopify Claim</option><option value="USPS Claim">USPS Claim</option><option value="UPS Claim">UPS Claim</option></select></div>
+                <div>${lbl('Type')}<select id="esc-${r.id}-type" style="${inp}"><option value="Loss">Loss</option><option value="Damage">Damage</option></select></div>
+                <div>${lbl('Claim #')}<input id="esc-${r.id}-num" style="${inp}" placeholder="e.g. 9400-1234"></div>
+                <div>${lbl('Value')}<input id="esc-${r.id}-value" type="number" step="0.01" min="0" value="${val}" style="${inp}"></div>
+                <div>${lbl('Cost')}<input id="esc-${r.id}-cost" type="number" step="0.01" min="0" value="${cost}" style="${inp}"></div>
+                <div>${lbl('Detail (optional)')}<input id="esc-${r.id}-detail" style="${inp}" placeholder="Notes"></div>
+            </div>
+            <div style="display:flex; gap:8px; margin-top:12px;">
+                <button onclick="saveEscalation('${r.id}')" class="btn-primary" style="font-size:12px; padding:7px 16px;">Save claim</button>
+                <button onclick="toggleEscalateRow('${r.id}')" class="btn-secondary" style="font-size:12px; padding:7px 16px;">Cancel</button>
+            </div>
+        </td>
+    </tr>`;
+}
+
+function toggleEscalateRow(id) {
+    const row = document.getElementById('esc-row-' + id);
+    if (row) row.style.display = (row.style.display === 'none' || !row.style.display) ? 'table-row' : 'none';
+}
+
+// "Still in progress" — verify the manager checked on an aging case (resets the clock).
+async function ackClaim(id) {
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'ack_claim', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        const seen = _seenAgingClaims(); seen.delete(id); _saveSeenAgingClaims(seen);
+        fetchMyClaims();
+    } catch (e) {
+        alert('Could not update: ' + e.message);
+    }
+}
+
+// Save the inline "open a claim" form — creates a real child claim linked to the
+// Item-Not-Received ticket (and resets the parent's clock; that's a check-in).
+async function saveEscalation(id) {
+    const g = s => { const el = document.getElementById(`esc-${id}-${s}`); return el ? String(el.value).trim() : ''; };
+    const reason = g('reason'), type = g('type'), num = g('num'), value = g('value'), cost = g('cost'), detail = g('detail');
+    const num2 = v => (v === '' || v == null) ? null : Number(v);
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'escalate_claim', id,
+                reason_type: `${reason} — ${type}`,
+                case_number: num || null,
+                price: num2(value), cost: num2(cost),
+                reason_detail: detail || null,
+                created_by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        const seen = _seenAgingClaims(); seen.delete(id); _saveSeenAgingClaims(seen);
+        fetchMyClaims();
+    } catch (e) {
+        alert('Could not save: ' + e.message);
+    }
+}
+
+// =========================================================
+//  DM / CEO CLAIMS OVERSIGHT — checks & balances across all stores
+// =========================================================
+const _CLAIMS_OVERSIGHT_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+let _oversightAll = [];
+let _ovStore = '', _ovStatus = ''; // oversight "All claims" filters
+
+function openClaimsOversight() {
+    toggleModal('claimsOversightModal');
+    fetchAllClaims();
+}
+
+async function fetchAllClaims() {
+    const body = document.getElementById('claims-oversight-body');
+    if (!body) return;
+    body.innerHTML = '<div class="status-message">Loading all claims…</div>';
+    try {
+        const res = await fetch(`${CLAIMS_URL}?v=${Date.now()}`); // no stores param → every store
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        _oversightAll = json.data || [];
+        renderClaimsOversight();
+    } catch (e) {
+        body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load claims.</div>';
+    }
+}
+
+function renderClaimsOversight() {
+    const body = document.getElementById('claims-oversight-body');
+    if (!body) return;
+    const rows = _oversightAll;
+    // An INR ticket that's been escalated to a loss claim (has a child) is no longer
+    // an open claim itself — the child loss claim is the active one. Exclude it.
+    const supersededParents = new Set(rows.filter(r => r.parent_id).map(r => r.parent_id));
+    const open = rows.filter(r => r.status === 'in_progress' && !supersededParents.has(r.id));
+    const aging = open.filter(_isClaimAging);
+    const reviewed = open.filter(r => r.last_checked_at && !_isClaimAging(r)); // checked in & current
+    const resolved = rows.filter(r => r.status !== 'in_progress');
+    const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+
+    const card = (label, val, color) => `<div style="flex:1; min-width:110px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:13px 15px;">
+        <div style="font-size:26px; font-weight:900; color:${color}; line-height:1;">${val}</div>
+        <div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; margin-top:4px;">${label}</div>
+    </div>`;
+    let html = `<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px;">
+        ${card('Open', open.length, '#1e293b')}
+        ${card('Over 7 days', aging.length, aging.length ? '#dc2626' : '#94a3b8')}
+        ${card('Reviewed', reviewed.length, '#059669')}
+        ${card('Resolved', resolved.length, '#64748b')}
+    </div>`;
+
+    // Pending delete requests — a manager can't remove a claim directly; a DM/CEO
+    // approves (permanently deletes) or denies (keeps it). Shown up top for action.
+    const deleteReqs = rows.filter(r => r.delete_requested_at)
+        .sort((a, b) => new Date(a.delete_requested_at) - new Date(b.delete_requested_at));
+    if (deleteReqs.length) {
+        html += `<div style="background:#fffbeb; border:1.5px solid #fde68a; border-radius:12px; padding:14px 16px; margin-bottom:18px;">
+            <div style="font-weight:800; font-size:13px; color:#92400e; margin-bottom:10px;">🗑 Delete requests (${deleteReqs.length}) — approval needed</div>
+            <div style="display:flex; flex-direction:column; gap:8px;">`;
+        deleteReqs.forEach(r => {
+            const who = r.delete_requested_by ? escapeHtml(r.delete_requested_by) : 'Manager';
+            html += `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:#fff; border:1px solid #fde68a; border-radius:9px; padding:9px 12px;">
+                <div style="font-size:12.5px; color:var(--slate-charcoal);">
+                    <span style="font-weight:800;">${escapeHtml(r.store || '')}</span>
+                    · <span style="font-weight:700;">${escapeHtml(r.case_number || '')}</span>
+                    <span style="color:#94a3b8;"> — ${escapeHtml(r.reason_type || '')}</span>
+                    <span style="color:#b45309; font-weight:700;"> · requested by ${who}</span>
+                </div>
+                <div style="display:flex; gap:8px;">
+                    <button onclick="approveClaimDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Approve delete</button>
+                    <button onclick="denyClaimDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#f1f5f9; border:1.5px solid #cbd5e1; color:#475569;">Deny</button>
+                </div>
+            </div>`;
+        });
+        html += `</div></div>`;
+    }
+
+    // Per-store breakdown + a reminder ping.
+    const byStore = {};
+    _CLAIMS_OVERSIGHT_STORES.forEach(s => { byStore[s] = { open: 0, aging: 0, reviewed: 0 }; });
+    open.forEach(r => {
+        const s = (r.store || '').toUpperCase();
+        if (!byStore[s]) byStore[s] = { open: 0, aging: 0, reviewed: 0 };
+        byStore[s].open++;
+        if (_isClaimAging(r)) byStore[s].aging++;
+        else if (r.last_checked_at) byStore[s].reviewed++;
+    });
+    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0;">${t}</th>`;
+    const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; ${extra}">${c}</td>`;
+    html += `<div style="font-weight:800; font-size:13px; margin-bottom:8px; color:var(--slate-charcoal);">By store</div>
+        <div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px; margin-bottom:20px;">
+        <thead><tr>${th('Store')}${th('Open')}${th('Over 7 Days')}${th('Reviewed')}${th('')}</tr></thead><tbody>`;
+    Object.keys(byStore).forEach(s => {
+        const d = byStore[s];
+        // A reminder is only warranted for claims over 7 days that haven't been
+        // reviewed or escalated to a claim — i.e. the store's aging count. If a
+        // store is caught up (or only has fresh/reviewed claims), no button.
+        const ping = d.aging
+            ? `<button onclick="pingStoreClaims('${s}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:5px 11px; cursor:pointer; background:#eff6ff; border:1.5px solid #bfdbfe; color:#1d4ed8;">🔔 Send reminder</button>`
+            : `<span style="color:#cbd5e1; font-size:11px;">—</span>`;
+        html += `<tr>
+            ${td(`<span style="font-weight:800; color:var(--slate-charcoal);">${s}</span>`)}
+            ${td(`<span style="font-weight:700;">${d.open}</span>`)}
+            ${td(`<span style="font-weight:800; color:${d.aging ? '#dc2626' : '#cbd5e1'};">${d.aging}</span>`)}
+            ${td(`<span style="font-weight:800; color:${d.reviewed ? '#059669' : '#cbd5e1'};">${d.reviewed}</span>`)}
+            ${td(ping, 'text-align:right;')}
+        </tr>`;
+    });
+    html += `</tbody></table></div>`;
+
+    // Full claims list — every claim across all stores, with details + store/status filters.
+    const byId = {}; rows.forEach(r => { byId[r.id] = r; });
+    const storeOpts = ['', ..._CLAIMS_OVERSIGHT_STORES].map(s => `<option value="${s}" ${s === _ovStore ? 'selected' : ''}>${s || 'All stores'}</option>`).join('');
+    const statusOpts = [['', 'All statuses'], ['in_progress', 'In Progress'], ['recovered', 'Recovered'], ['denied', 'Denied']]
+        .map(([v, l]) => `<option value="${v}" ${v === _ovStatus ? 'selected' : ''}>${l}</option>`).join('');
+    const selStyle = 'padding:8px 10px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:12.5px; font-weight:600; background:#fff;';
+    html += `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin:6px 0 10px;">
+        <div style="font-weight:800; font-size:13px; color:var(--slate-charcoal);">All claims</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <select onchange="_ovStore=this.value; renderClaimsOversight();" style="${selStyle}">${storeOpts}</select>
+            <select onchange="_ovStatus=this.value; renderClaimsOversight();" style="${selStyle}">${statusOpts}</select>
+        </div>
+    </div>`;
+
+    // Nest loss claims under their original INR ticket (same as the manager view).
+    const hasKids = new Set(rows.filter(r => r.parent_id).map(r => r.parent_id));
+    const kidsOf = {}; rows.forEach(r => { if (r.parent_id) (kidsOf[r.parent_id] = kidsOf[r.parent_id] || []).push(r); });
+    let tops = rows.filter(r => !r.parent_id || !byId[r.parent_id]);
+    if (_ovStore) tops = tops.filter(r => (r.store || '').toUpperCase() === _ovStore);
+    if (_ovStatus) tops = tops.filter(r => r.status === _ovStatus);
+    // Sort needs-attention first: over-7-day open claims → other open → escalated
+    // INRs → resolved; newest created first within each group.
+    const ovRank = r => {
+        if (r.status !== 'in_progress') return 3;          // resolved (recovered/denied)
+        if (supersededParents.has(r.id)) return 2;         // INR that became a loss claim
+        if (_isClaimAging(r)) return 0;                    // open & over 7 days — act now
+        return 1;                                          // open & current
+    };
+    tops.sort((a, b) => ovRank(a) - ovRank(b) || new Date(b.created_at) - new Date(a.created_at));
+    if (!tops.length) {
+        html += `<div style="padding:18px; text-align:center; color:#94a3b8; font-weight:600; background:#f8fafc; border-radius:10px;">No claims match this view.</div>`;
+    } else {
+        html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12px;">
+            <thead><tr>${th('#')}${th('Store')}${th('Case #')}${th('SKU')}${th('Value')}${th('Cost')}${th('Reason')}${th('Status')}${th('Created')}${th('Reviewed')}</tr></thead><tbody>`;
+        let n = 0;
+        tops.forEach(r => {
+            n++;
+            html += _ovRowHtml(r, byId, hasKids.has(r.id), `${n}`);
+            (kidsOf[r.id] || []).forEach((k, ci) => { html += _ovRowHtml(k, byId, false, `${n}.${ci + 1}`); });
+        });
+        html += `</tbody></table></div>`;
+    }
+    body.innerHTML = html;
+}
+
+// Read-only detail row for the oversight "All claims" table. A child loss claim
+// (parent_id set) is indented and notes which ticket it came from.
+function _ovRowHtml(r, byId, hasChild, num) {
+    const isChild = !!r.parent_id;
+    const fmtPrice = v => (v == null || v === '') ? '—' : '$' + Number(v).toFixed(2);
+    const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+    const td = (c, extra = '') => `<td style="padding:8px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
+    const sc = CLAIM_STATUS[r.status] || CLAIM_STATUS.in_progress;
+    const aging = _isClaimAging(r) && !hasChild;
+    // Mirror the manager view: a parent INR with a child shows status "on claim ↓".
+    const statusCell = hasChild
+        ? `<span style="font-size:11px; font-weight:800; color:#94a3b8;">${sc.label}</span><div style="font-size:9px; color:#cbd5e1; font-weight:800; text-transform:uppercase; letter-spacing:.3px; margin-top:1px;">on claim ↓</div>`
+        : `<span style="display:inline-block; font-size:10px; font-weight:800; background:${sc.bg}; color:${sc.fg}; border-radius:999px; padding:3px 10px; white-space:nowrap;">${sc.label}</span>`;
+    let reasonCell = escapeHtml(r.reason_type || '—');
+    if (aging) reasonCell += `<div style="color:#dc2626; font-size:10.5px; font-weight:800; margin-top:2px;">⚠️ Open ${_claimDaysOpen(r)} days</div>`;
+    if (r.delete_requested_at) reasonCell += `<div style="color:#b45309; font-size:10.5px; font-weight:800; margin-top:2px;">🗑 Delete requested</div>`;
+    const reviewed = r.status !== 'in_progress'
+        ? `<span style="color:#cbd5e1;">—</span>`
+        : (r.last_checked_at ? `<span style="color:#059669; font-weight:700; white-space:nowrap;">${fmtDate(r.last_checked_at)}</span>` : `<span style="color:#dc2626; font-weight:800;">Never</span>`);
+    let rowStyle = '';
+    if (aging) rowStyle = 'background:#fef2f2; box-shadow:inset 3px 0 0 #dc2626;';
+    else if (isChild) rowStyle = 'background:#f0f7ff; box-shadow:inset 3px 0 0 #93c5fd;';
+    const parent = isChild ? byId[r.parent_id] : null;
+    const caseCell = isChild
+        ? `<span style="color:#60a5fa; font-weight:900; margin-right:5px;">↳</span><span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>${parent ? `<div style="font-size:10px; color:#94a3b8; font-weight:600;">claim on ${escapeHtml(parent.case_number || '')}</div>` : ''}`
+        : `<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`;
+    return `<tr style="${rowStyle}">
+        ${td(`<span style="font-weight:800; color:${isChild ? '#94a3b8' : 'var(--slate-charcoal)'};">${num}</span>`, 'white-space:nowrap;')}
+        ${td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`)}
+        ${td(caseCell, isChild ? 'padding-left:18px;' : '')}
+        ${td(escapeHtml(r.item_sku || '—'))}
+        ${td(fmtPrice(r.price), 'white-space:nowrap; font-weight:700;')}
+        ${td(fmtPrice(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}
+        ${td(reasonCell)}
+        ${td(statusCell, 'white-space:nowrap;')}
+        ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
+        ${td(reviewed)}
+    </tr>`;
+}
+
+// Nudge a store's manager to review their open claims. Delivers as a dedicated RED
+// review pop-up on the manager's dashboard (separate from green store comments).
+async function pingStoreClaims(store) {
+    const rows = _oversightAll || [];
+    // Reminders target only claims that are actually behind: open, over 7 days,
+    // not yet reviewed ("Still in progress") and not already escalated to a claim.
+    // Escalated INRs (parents with a child loss claim) are excluded like everywhere else.
+    const sup = new Set(rows.filter(r => r.parent_id).map(r => r.parent_id));
+    const aging = rows.filter(r => r.status === 'in_progress'
+        && (r.store || '').toUpperCase() === store
+        && !sup.has(r.id)
+        && _isClaimAging(r));
+    if (!aging.length) {
+        alert(`${store} has no claims over 7 days awaiting review — nothing to remind about.`);
+        return;
+    }
+    if (!confirm(`Send ${store} a reminder to review ${aging.length} claim${aging.length === 1 ? '' : 's'} open over 7 days without a review?`)) return;
+    // Message is generic — the manager's popup computes the live over-7-day count.
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'send_reminder', store,
+                message: 'Please review your open insurance claims.',
+                from: sessionStorage.getItem('speeksUserName') || 'Leadership',
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        alert(`Reminder sent to ${store}.`);
+    } catch (e) {
+        alert('Could not send the reminder: ' + (e.message || e));
+    }
+}
+
+async function updateClaimStatus(id, status) {
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'update_status', id, status }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Update failed');
+        fetchMyClaims();
+    } catch (e) {
+        alert('Could not update status: ' + e.message);
+        fetchMyClaims();
+    }
+}
+
+// Manager-side: request deletion. Claims are never deleted directly by a manager —
+// a DM/CEO must approve, so nothing is quietly removed.
+async function requestClaimDelete(id, hasChild) {
+    // Deleting an Item-Not-Received ticket that already has a loss claim removes
+    // both (child cascades) — spell that out so it isn't a surprise.
+    const msg = hasChild
+        ? 'Request deletion of this Item-Not-Received ticket?\n\nThis also removes the loss claim opened on it. A DM or CEO must approve before anything is removed.'
+        : 'Request deletion of this claim?\n\nA DM or CEO must approve it before the claim is removed.';
+    if (!confirm(msg)) return;
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'request_delete', id, requested_by: sessionStorage.getItem('speeksUserName') || null }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Request failed');
+        alert('Delete request sent. A DM or CEO will review it.');
+        fetchMyClaims();
+    } catch (e) {
+        alert('Could not send the request: ' + (e.message || e));
+    }
+}
+
+// DM/CEO-side: approve a pending delete request → permanently removes the claim.
+async function approveClaimDelete(id) {
+    const kids = (_oversightAll || []).filter(r => r.parent_id === id).length;
+    const msg = kids
+        ? `Approve deletion? This permanently removes the ticket AND the ${kids} loss claim${kids === 1 ? '' : 's'} opened on it. This cannot be undone.`
+        : 'Approve deletion? This permanently removes the claim and cannot be undone.';
+    if (!confirm(msg)) return;
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_claim', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Delete failed');
+        fetchAllClaims();
+    } catch (e) {
+        alert('Could not delete: ' + (e.message || e));
+    }
+}
+
+// DM/CEO-side: deny a pending delete request → keeps the claim, clears the flag.
+async function denyClaimDelete(id) {
+    try {
+        const res = await fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'deny_delete', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        fetchAllClaims();
+    } catch (e) {
+        alert('Could not deny: ' + (e.message || e));
+    }
+}
+
+// --- AGING-CLAIM RED ALERT BUBBLE ---
+// Nudges managers to revisit any case still "In Progress" after 7 days. For an
+// Item-Not-Received case that old, the buyer was likely already refunded and the
+// item is probably truly lost — so we recommend opening a Damage/Loss claim.
+const CLAIM_AGE_DAYS = 7;
+
+// A case "ages" from when it was last checked on (last_checked_at) or, if never
+// checked, from when it was opened (created_at). Acking via "Still in progress"
+// resets this clock.
+function _claimEffectiveDate(r) {
+    return new Date(r.last_checked_at || r.created_at).getTime();
+}
+function _claimDaysOpen(r) {
+    const t = _claimEffectiveDate(r);
+    return isNaN(t) ? '?' : Math.floor((Date.now() - t) / 86400000);
+}
+function _isClaimAging(r) {
+    if (!r || r.status !== 'in_progress') return false;
+    const t = _claimEffectiveDate(r);
+    return !isNaN(t) && t < Date.now() - CLAIM_AGE_DAYS * 86400000;
+}
+
+function _seenAgingClaims() {
+    try { return new Set(JSON.parse(sessionStorage.getItem('speeksSeenAgingClaims') || '[]')); }
+    catch (e) { return new Set(); }
+}
+function _saveSeenAgingClaims(keys) {
+    sessionStorage.setItem('speeksSeenAgingClaims', JSON.stringify([...keys]));
+}
+
+// True while a DM/CEO-pushed reminder currently owns the shared red bubble, so the
+// generic aging alert won't overwrite it (avoids the login flicker of two firing).
+let _reminderBubbleActive = false;
+window.closeClaimAlertBubble = function () {
+    const b = document.getElementById('claimAlertBubble');
+    if (b) b.style.display = 'none';
+    _reminderBubbleActive = false; // free the bubble for a later aging alert
+};
+
+// --- DM/CEO-pushed review reminders (delivered to the manager as the same RED bubble) ---
+function _seenReminders() {
+    try { return new Set(JSON.parse(sessionStorage.getItem('speeksSeenClaimReminders') || '[]')); }
+    catch (e) { return new Set(); }
+}
+function _saveSeenReminders(keys) {
+    sessionStorage.setItem('speeksSeenClaimReminders', JSON.stringify([...keys]));
+}
+
+async function checkClaimReminders() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
+    if (!_CLAIM_ALERT_ROLES.has(role)) return;
+    const stores = (typeof _claimStores === 'function') ? _claimStores() : [];
+    if (!stores.length) return;
+    try {
+        const res = await fetch(`${CLAIMS_URL}?reminders=1&stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) return;
+        const seen = _seenReminders();
+        const fresh = (json.data || []).filter(r => !seen.has(r.id)); // newest first from API
+        if (!fresh.length) return;
+        fresh.forEach(r => seen.add(r.id));
+        _saveSeenReminders(seen);
+
+        // Compute the manager's CURRENT open / over-7-day counts so the reminder
+        // reflects what actually still needs review (not a stale number).
+        let openCount = 0, agingCount = 0, agingINRCount = 0;
+        try {
+            const cRes = await fetch(`${CLAIMS_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+            const cj = await cRes.json();
+            if (cj.success) {
+                const sup = new Set((cj.data || []).filter(r => r.parent_id).map(r => r.parent_id));
+                const op = (cj.data || []).filter(r => r.status === 'in_progress' && !sup.has(r.id));
+                openCount = op.length;
+                const agingRows = op.filter(_isClaimAging);
+                agingCount = agingRows.length;
+                agingINRCount = agingRows.filter(_isINRTicket).length;
+            }
+        } catch (e) { /* counts stay 0 */ }
+        _showClaimReminder(fresh[0], openCount, agingCount, agingINRCount);
+    } catch (e) { /* silent */ }
+}
+
+function _showClaimReminder(rem, openCount, agingCount, agingINRCount = 0) {
+    const from = rem.from_name ? escapeHtml(rem.from_name) : 'Leadership';
+    let body;
+    if (agingCount) {
+        body = (agingCount === 1
+            ? '1 claim has been open over 7 days. Please review it.'
+            : `${agingCount} claims have been open over 7 days. Please review them.`)
+            + _inrGuidanceHtml(agingINRCount);
+    } else if (openCount) {
+        body = "You're all caught up on aging claims.";
+    } else {
+        body = 'All your claims are resolved — nice work!';
+    }
+    _reminderBubbleActive = true; // claims the shared bubble so the aging alert won't clobber it
+    _renderClaimBubble('🛟', `${from} — Claims Review`, body);
+}
+
+let _claimAlertPollStarted = false;
+const _CLAIM_ALERT_ROLES = new Set(['manager', 'owner (manager)', 'owner manager']);
+async function checkAgingClaims() {
+    // Same audience as the Insurance Claims tool: managers, owner-managers, MSM
+    // (MSM logs in as role 'manager'). ASMs/employees never file claims.
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
+    if (!_CLAIM_ALERT_ROLES.has(role)) return;
+    const stores = (typeof _claimStores === 'function') ? _claimStores() : [];
+    if (!stores.length) return; // no store scope → nothing to check
+
+    if (!_claimAlertPollStarted) {
+        _claimAlertPollStarted = true;
+        setInterval(checkAgingClaims, 10 * 60 * 1000);
+    }
+
+    try {
+        const res = await fetch(`${CLAIMS_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) return;
+        const data = json.data || [];
+        const sup = new Set(data.filter(r => r.parent_id).map(r => r.parent_id)); // exclude escalated INRs
+        const aging = data.filter(r => !sup.has(r.id) && _isClaimAging(r));
+        if (!aging.length) return;
+
+        // A DM/CEO reminder already owns the bubble — don't clobber it (it already
+        // conveys the aging count). The aging alert can show once that's dismissed.
+        const bubble = document.getElementById('claimAlertBubble');
+        const bubbleVisible = bubble && getComputedStyle(bubble).display !== 'none';
+        if (_reminderBubbleActive && bubbleVisible) return;
+
+        // Only auto-pop when there's an aging case we haven't surfaced this session.
+        const seen = _seenAgingClaims();
+        if (!aging.some(r => !seen.has(r.id))) return;
+        aging.forEach(r => seen.add(r.id));
+        _saveSeenAgingClaims(seen);
+
+        _showClaimAlert(aging.length, aging.filter(_isINRTicket).length);
+    } catch (e) {
+        console.error('Aging claim check failed:', e);
+    }
+}
+
+// Keep the claim alert stacked UNDER the green store-comment bubble whenever that
+// one is showing; otherwise sit at the normal top spot. Called both when the alert
+// appears and when the comment bubble shows/hides, so order of arrival doesn't matter.
+function _positionClaimAlert() {
+    const bubble = document.getElementById('claimAlertBubble');
+    if (!bubble) return;
+    const daily = document.getElementById('dailyMessageBubble');
+    const dailyVisible = daily && getComputedStyle(daily).display !== 'none' && daily.offsetHeight > 0;
+    bubble.style.top = dailyVisible ? (daily.getBoundingClientRect().bottom + 12) + 'px' : '116px';
+}
+
+// A general red reminder — it does NOT name specific cases; the My Cases tab
+// highlights the actual aging case(s) in red. A button jumps straight there.
+// Shared red-bubble renderer (same size/format as the green store-comment bubble:
+// emoji in the icon slot, title + body in the text slot), with a Review button.
+function _renderClaimBubble(icon, titleHtml, bodyHtml) {
+    const bubble = document.getElementById('claimAlertBubble');
+    const textEl = document.getElementById('claimAlertBubbleText');
+    const iconEl = document.getElementById('claimAlertBubbleIcon');
+    if (!bubble || !textEl) return;
+    if (iconEl) { iconEl.textContent = icon; iconEl.style.display = ''; }
+    textEl.style.display = 'flex';
+    textEl.style.flexDirection = 'column';
+    textEl.style.gap = '7px';
+    textEl.innerHTML = `
+        <div style="line-height:1.4;"><strong>${titleHtml}</strong></div>
+        <div style="line-height:1.4; opacity:0.96;">${bodyHtml}</div>
+        <button onclick="closeClaimAlertBubble(); openClaimsModal(); switchClaimsTab('view');"
+            style="align-self:flex-start; background:rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.5); color:#fff; font-weight:800; font-size:12px; border-radius:8px; padding:6px 12px; cursor:pointer;"
+            onmouseover="this.style.background='rgba(255,255,255,0.3)';" onmouseout="this.style.background='rgba(255,255,255,0.18)';">Review claims</button>`;
+    bubble.style.display = 'flex';
+    _positionClaimAlert();
+    bubble.animate([
+        { transform: 'scale(0.95) translateX(10px)', opacity: 0 },
+        { transform: 'scale(1) translateX(0)', opacity: 1 }
+    ], { duration: 400, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
+}
+
+function _isINRTicket(r) {
+    return String(r?.reason_type || '').toLowerCase().startsWith('item not received');
+}
+
+// Shared "check tracking" instruction for Item-Not-Received tickets, appended to
+// whichever red bubble is surfacing them.
+function _inrGuidanceHtml(inrCount) {
+    if (!inrCount) return '';
+    const noun = inrCount === 1 ? 'an <b>Item Not Received</b> ticket' : `${inrCount} <b>Item Not Received</b> tickets`;
+    return `<div style="line-height:1.4; opacity:0.96; margin-top:2px;">That includes ${noun} — check tracking first: if it's since been delivered, call eBay for the refund and mark it <b>Recovered</b>. If it's still lost, open a claim on the ticket.</div>`;
+}
+
+function _showClaimAlert(count, inrCount = 0) {
+    const body = (count === 1
+        ? '1 claim has been open over 7 days. Please review it.'
+        : `${count} claims have been open over 7 days. Please review them.`)
+        + _inrGuidanceHtml(inrCount);
+    _renderClaimBubble('⚠️', 'Claims Review', body);
+}
+
+// Console preview of the red aging-claim bubble (no need to wait 7 days):
+// open DevTools → console and run:  _previewClaimAlert()
+window._previewClaimAlert = function () { _showClaimAlert(2, 1); };
+
 // --- STORE COMMENTS LOGIC ---
 
 // Per-comment fingerprint tracking so new comments always show even after closing a previous one
@@ -9025,7 +11038,7 @@ let _storeCommentPollingStarted = false;
 function startStoreCommentPolling() {
     if (_storeCommentPollingStarted) return;
     _storeCommentPollingStarted = true;
-    setInterval(fetchAndDisplayStoreComment, 30 * 1000);
+    setInterval(() => { fetchAndDisplayStoreComment(); checkClaimReminders(); }, 30 * 1000);
 }
 
 // Opens the modal normally from the Speeks Tools menu (Fully Unlocked)
@@ -9104,6 +11117,7 @@ async function submitStoreComment() {
 window.closeDailyCommentBubble = function() {
     const bubble = document.getElementById('dailyMessageBubble');
     if (bubble) bubble.style.display = 'none';
+    if (typeof _positionClaimAlert === 'function') _positionClaimAlert(); // claim alert moves back up
 };
 
 async function fetchAndDisplayStoreComment() {
@@ -9177,11 +11191,12 @@ async function fetchAndDisplayStoreComment() {
 
                 setTimeout(() => {
                     bubble.style.display = 'flex';
+                    if (typeof _positionClaimAlert === 'function') _positionClaimAlert(); // push the red claim alert below this
                     bubble.animate([
                         { transform: 'scale(0.9) translateX(10px)', opacity: 0 },
                         { transform: 'scale(1) translateX(0)', opacity: 1 }
                     ], { duration: 400, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
-                }, 1500); 
+                }, 1500);
             }
         }
     } catch (e) {
@@ -9453,7 +11468,20 @@ async function loadChecklist() {
 
 function renderChecklist() {
     const container = document.getElementById('checklistContent');
-    const items = checklistDataCache[currentChecklistTab] || [];
+    const rawItems = checklistDataCache[currentChecklistTab] || [];
+
+    // Collapse duplicate GLOBAL/required tasks (same text) that a manager can't
+    // delete themselves — e.g. LEE daily had "Live Product Category Check" twice.
+    // Personal items are left alone (those have their own delete button).
+    const seenGlobal = new Set();
+    const items = rawItems.filter(it => {
+        if (it.isGlobal) {
+            const key = String(it.text || '').trim().toLowerCase();
+            if (seenGlobal.has(key)) return false;
+            seenGlobal.add(key);
+        }
+        return true;
+    });
 
     if (items.length === 0) {
         container.innerHTML = `<div style="text-align: center; padding: 30px; color: #888; font-weight: 600; font-size: 13px;">No tasks for this tab. Add one below!</div>`;
@@ -9655,6 +11683,9 @@ window.toggleChecklistPanel = function(event) {
     if (isOpen) {
         document.getElementById('goalsSidePanel')?.classList.remove('open');
         document.querySelector('.gi-nav-toggle')?.classList.remove('panel-active');
+        document.getElementById('auditSidePanel')?.classList.remove('open');
+        document.querySelector('.audit-nav-toggle')?.classList.remove('panel-active');
+        _stopAuditSync?.();
         _resetToCurrentMonth?.();
         _startChecklistSync();
     } else {
@@ -9688,7 +11719,181 @@ document.addEventListener('click', function(e) {
             _resetToCurrentMonth();
                 }
     }
+
+    const auditPanel = document.getElementById('auditSidePanel');
+    const auditToggle = document.querySelector('.audit-nav-toggle');
+    if (auditPanel && auditPanel.classList.contains('open')) {
+        if (!auditPanel.contains(e.target) && !auditToggle?.contains(e.target)) {
+            auditPanel.classList.remove('open');
+            auditToggle?.classList.remove('panel-active');
+            _stopAuditSync();
+        }
+    }
 });
+
+// =============================================================================
+// STORE AUDIT CHECKLIST — PayMore audit-readiness, shared per store.
+// Two tabs: Daily (resets each day) and Weekly (resets each Monday). Reads a
+// fixed admin-defined list (store-audit fn); completions are shared per store.
+// =============================================================================
+let auditDataCache = { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
+let currentAuditTab = 'daily';
+let _auditSyncInterval = null;
+
+function _auditTab(tab) { return auditDataCache[tab] || { items: [], total: 0, completed: 0 }; }
+
+function switchAuditTab(tab) {
+    currentAuditTab = tab;
+    document.getElementById('audit-tab-daily')?.classList.toggle('active', tab === 'daily');
+    document.getElementById('audit-tab-weekly')?.classList.toggle('active', tab === 'weekly');
+    renderAudit();
+}
+
+async function loadAudit() {
+    const panel = document.getElementById('auditSidePanel');
+    if (!panel?.classList.contains('open')) return;   // only fetch when opening
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+    const container = document.getElementById('auditContent');
+    if (container) container.innerHTML = '<div class="status-message">Syncing Audit...</div>';
+    try {
+        const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
+        auditDataCache = await res.json();
+        renderAudit();
+    } catch (e) {
+        console.error('Audit Fetch Error', e);
+        if (container) container.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load audit checklist.</div>';
+    }
+}
+
+function renderAudit() {
+    const container = document.getElementById('auditContent');
+    if (!container) return;
+    const data = _auditTab(currentAuditTab);
+    const items = data.items || [];
+
+    const label = document.getElementById('audit-week-label');
+    if (label) {
+        label.textContent = items.length
+            ? `${data.completed || 0}/${data.total || items.length} complete ${currentAuditTab === 'daily' ? 'today' : 'this week'}`
+            : '';
+    }
+
+    if (items.length === 0) {
+        container.innerHTML = `<div style="text-align: center; padding: 30px; color: #888; font-weight: 600; font-size: 13px;">No ${currentAuditTab} audit items have been set up yet.</div>`;
+        updateAuditChip();
+        return;
+    }
+
+    let html = '';
+    let lastSection = null;
+    items.forEach(item => {
+        if (item.section !== lastSection) {
+            html += `<div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: #94a3b8; margin: 14px 4px 6px;">${escapeHtml(item.section)}</div>`;
+            lastSection = item.section;
+        }
+        const completedClass = item.checked ? 'completed' : '';
+        html += `
+        <div class="cl-item ${completedClass}">
+            <input type="checkbox" class="cl-checkbox" ${item.checked ? 'checked' : ''} onchange="toggleAuditState('${item.id}', this.checked)">
+            <div class="cl-content-wrapper" style="justify-content: center;">
+                <span class="cl-text">${escapeHtml(item.text)}</span>
+            </div>
+        </div>`;
+    });
+    container.innerHTML = html;
+    updateAuditChip();
+}
+
+async function toggleAuditState(id, isChecked) {
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+    const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    const tab = currentAuditTab;
+    const data = _auditTab(tab);
+
+    const item = (data.items || []).find(i => i.id === id);
+    if (item) item.checked = isChecked;
+    data.completed = (data.items || []).filter(i => i.checked).length;
+    renderAudit();
+
+    postWrite(STORE_AUDIT_URL, { action: 'toggle', id: id, checked: isChecked, store: store, user: userName, period: tab })
+        .catch(err => {
+            if (item) item.checked = !isChecked;
+            data.completed = (data.items || []).filter(i => i.checked).length;
+            renderAudit();
+            alert('Could not save that change: ' + err.message);
+        });
+}
+
+function updateAuditChip() {
+    const chip = document.getElementById('audit-progress-chip');
+    const btn = document.querySelector('.audit-nav-toggle');
+    if (!chip || !btn) return;
+
+    // Chip reflects the DAILY list (the everyday cadence).
+    const daily = _auditTab('daily');
+    const total = daily.total || (daily.items || []).length;
+    if (total === 0) {
+        chip.textContent = '';
+        btn.classList.remove('cl-needs-attention');
+        return;
+    }
+    const done = (daily.completed != null) ? daily.completed : (daily.items || []).filter(i => i.checked).length;
+    chip.textContent = done === total ? '✓ All done' : `${done}/${total} today`;
+
+    const panel = document.getElementById('auditSidePanel');
+    const isOpen = panel && panel.classList.contains('open');
+    btn.classList.toggle('cl-needs-attention', done < total && !isOpen);
+}
+
+async function _prefetchAuditForChip() {
+    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+    try {
+        const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
+        auditDataCache = await res.json();
+        updateAuditChip();
+    } catch (_) {}
+}
+
+function _startAuditSync() {
+    if (_auditSyncInterval) return;
+    _auditSyncInterval = setInterval(async () => {
+        const panel = document.getElementById('auditSidePanel');
+        if (!panel?.classList.contains('open')) return;
+        const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+        try {
+            const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
+            auditDataCache = await res.json();
+            renderAudit();
+        } catch (_) {}
+    }, 30000);
+}
+
+function _stopAuditSync() {
+    if (_auditSyncInterval) { clearInterval(_auditSyncInterval); _auditSyncInterval = null; }
+}
+
+window.toggleAuditPanel = function(event) {
+    if (event) event.stopPropagation();
+    const panel = document.getElementById('auditSidePanel');
+    if (!panel) return;
+    const isOpen = panel.classList.toggle('open');
+    const toggle = document.querySelector('.audit-nav-toggle');
+    if (toggle) {
+        toggle.classList.toggle('panel-active', isOpen);
+        if (isOpen) toggle.classList.remove('cl-needs-attention');
+    }
+    if (isOpen) {
+        // mutually exclusive with the other side panels
+        document.getElementById('checklistSidePanel')?.classList.remove('open');
+        document.querySelector('.cl-nav-toggle')?.classList.remove('panel-active');
+        _stopChecklistSync?.();
+        document.getElementById('goalsSidePanel')?.classList.remove('open');
+        document.querySelector('.gi-nav-toggle')?.classList.remove('panel-active');
+        _startAuditSync();
+    } else {
+        _stopAuditSync();
+    }
+};
 
 // --- ROLE SELECTION LOGIC ---
 // Per-role capacity: most roles are 1-per-store, but a store can run TWO listers.
@@ -10225,6 +12430,17 @@ const BOX_ORDER_STORE_EMAILS = {
     'BAL': 'jordan@cleancarton.com'
 };
 
+// Store markets — used by the DM/CEO "Manage Items" tab to scope new catalog items.
+// KC = Kansas City metro, STL = St. Louis metro. Empty = all stores.
+const BOX_MARKET_STORES = { '': '', 'KC': 'OVL,LEE,WSP', 'STL': 'MPL,BAL' };
+function _boxStoresToMarket(stores) {
+    const s = (stores || '').replace(/\s+/g, '').toUpperCase();
+    if (!s) return 'All';
+    if (s === 'OVL,LEE,WSP') return 'KC';
+    if (s === 'MPL,BAL') return 'STL';
+    return s; // any custom combination
+}
+
 function _boxOrderGetStoreCode() {
     const selectorEl = document.getElementById('boxOrderStoreSelector');
     const corpVisible = selectorEl && selectorEl.style.display !== 'none';
@@ -10245,21 +12461,153 @@ function _boxOrderGetEmail() {
 }
 
 let _boxOrderEmails = { primary: '', secondary: '' };
+// Full box-order catalog (all store variants), kept so the vendor email can resolve
+// the correct per-store spec for products that differ by store (e.g. Packing Paper).
+let _boxOrderAllItems = [];
+
+// Match a selected line back to a catalog item for the chosen store, so per-store
+// products (e.g. Packing Paper) use the right spec + unit. Prefers a store-specific
+// variant of the same product; falls back to any variant with that name.
+function _resolveItemVariant(o) {
+    if (!Array.isArray(_boxOrderAllItems)) return null;
+    const code = (_boxOrderGetStoreCode() || '').toUpperCase();
+    if (code) {
+        const m = _boxOrderAllItems.find(it => it.name === o.name && it.category === o.category &&
+            (it.stores || '').split(',').map(s => s.trim().toUpperCase()).includes(code));
+        if (m) return m;
+    }
+    return _boxOrderAllItems.find(it => it.name === o.name && it.category === o.category) || null;
+}
+
+// Naive pluralizer for unit words: Box→Boxes, Roll→Rolls, Bundle→Bundles, Bag→Bags.
+function _pluralizeUnit(w) {
+    if (!w) return w;
+    return /(?:s|x|z|ch|sh)$/i.test(w) ? w + 'es' : w + 's';
+}
 
 async function toggleBoxOrder() {
     closeAllModals();
     const modal = document.getElementById('boxOrderModal');
     if (!modal) return;
-    // Always start on page 1
-    document.getElementById('boxOrderPage1').style.display    = '';
-    document.getElementById('boxOrderFooter1').style.display  = '';
-    document.getElementById('boxOrderPage2').style.display    = 'none';
-    document.getElementById('boxOrderFooter2').style.display  = 'none';
+    // DM/CEO get a "Manage Items" tab to edit the catalog; managers just see the order flow.
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const isCorpRole = role === 'ceo' || role === 'district manager';
+    const tabs = document.getElementById('boxOrderTabs');
+    if (tabs) tabs.style.display = isCorpRole ? 'flex' : 'none';
+    boxOrderSwitchTab('order'); // reset to the order flow (page 1)
     const searchEl = document.getElementById('boxOrderSearch');
     if (searchEl) searchEl.value = '';
     modal.classList.add('show');
     lockAndBlurScreen();
     await _loadBoxOrderData();
+}
+
+// Switch between the order wizard and the DM/CEO "Manage Items" catalog editor.
+function boxOrderSwitchTab(tab) {
+    const isManage = tab === 'manage';
+    const set = (id, disp) => { const el = document.getElementById(id); if (el) el.style.display = disp; };
+    set('boxOrderManagePage', isManage ? '' : 'none');
+    set('boxOrderManageFooter', isManage ? '' : 'none');
+    if (isManage) {
+        ['boxOrderPage1', 'boxOrderPage2', 'boxOrderFooter1', 'boxOrderFooter2'].forEach(id => set(id, 'none'));
+        renderBoxAdminList();
+    } else {
+        set('boxOrderPage1', '');
+        set('boxOrderFooter1', '');
+        set('boxOrderPage2', 'none');
+        set('boxOrderFooter2', 'none');
+    }
+    const to = document.getElementById('boxOrderTabOrder');
+    const tm = document.getElementById('boxOrderTabManage');
+    if (to) to.classList.toggle('active', !isManage);
+    if (tm) tm.classList.toggle('active', isManage);
+}
+
+// Render the current catalog in the Manage Items tab, grouped by section, each with
+// a remove button. Reads _boxOrderAllItems (the full, un-collapsed catalog).
+function renderBoxAdminList() {
+    const el = document.getElementById('boxAdminItemsList');
+    if (!el) return;
+    const items = Array.isArray(_boxOrderAllItems) ? _boxOrderAllItems : [];
+    if (!items.length) {
+        el.innerHTML = '<div style="color:#a0aab2;font-size:13px;padding:6px 0;">No items yet.</div>';
+        return;
+    }
+    const cats = ['Common Box', 'Rare Box', 'Very Rare Box', 'Shipping Supplies', 'White Storage Box', 'Bubble Mailer'];
+    const label = {
+        'Common Box': 'Common Boxes', 'Rare Box': 'Rare Boxes', 'Very Rare Box': 'Very Rare Boxes',
+        'Shipping Supplies': 'Shipping Supplies', 'White Storage Box': 'White Storage Boxes', 'Bubble Mailer': 'Bubble Mailers'
+    };
+    let html = '';
+    cats.forEach(cat => {
+        const group = items.filter(i => i.category === cat);
+        if (!group.length) return;
+        html += `<div style="font-weight:800;font-size:12px;color:#64748b;margin:12px 0 6px;">${label[cat]}</div>`;
+        group.forEach(it => {
+            const meta = [
+                _boxStoresToMarket(it.stores),
+                (it.bundle_size > 1) ? `${it.bundle_size}/bundle` : '1/unit',
+                it.unit_label ? _pluralizeUnit(it.unit_label) : '',
+                it.order_name ? `“${escapeHtml(it.order_name)}”` : ''
+            ].filter(Boolean).join(' · ');
+            html += `<div class="box-admin-item">
+                <div style="min-width:0;">
+                    <div style="font-weight:800;color:var(--slate-charcoal);font-size:13px;">${escapeHtml(it.name)}</div>
+                    <div style="font-size:11px;color:#94a3b8;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${meta}</div>
+                </div>
+                <button class="bai-del" title="Remove item" onclick="boxAdminDeleteItem('${it.id}', this)">🗑</button>
+            </div>`;
+        });
+    });
+    el.innerHTML = html;
+}
+
+async function boxAdminAddItem(btn) {
+    const name = document.getElementById('boxAdminName')?.value.trim();
+    const category = document.getElementById('boxAdminCategory')?.value;
+    const market = document.getElementById('boxAdminMarket')?.value || '';
+    const bundle = parseInt(document.getElementById('boxAdminBundle')?.value) || 1;
+    const unit = document.getElementById('boxAdminUnit')?.value || 'Bundle';
+    const orderName = document.getElementById('boxAdminOrderName')?.value.trim();
+    if (!name) { alert('Enter a title (what managers see).'); return; }
+    if (!orderName) { alert('Enter the email name — the full spec the vendor needs.'); return; }
+    const stores = BOX_MARKET_STORES[market] || '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Adding…'; }
+    try {
+        const res = await fetch(BOX_ADMIN_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'add_item', name, category, order_name: orderName, unit_label: unit, bundle_size: bundle, stores }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        // Clear name + spec for the next entry; keep section/market/unit for quick repeats.
+        ['boxAdminName', 'boxAdminOrderName'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+        const b = document.getElementById('boxAdminBundle'); if (b) b.value = '1';
+        await _loadBoxOrderData();   // refresh the catalog + _boxOrderAllItems
+        renderBoxAdminList();
+    } catch (e) {
+        alert('Could not add the item: ' + (e.message || e));
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '+ Add item'; }
+    }
+}
+
+async function boxAdminDeleteItem(id, btn) {
+    if (!confirm('Remove this item from the Box Order catalog?')) return;
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch(BOX_ADMIN_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_item', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        await _loadBoxOrderData();
+        renderBoxAdminList();
+    } catch (e) {
+        alert('Could not remove: ' + (e.message || e));
+        if (btn) btn.disabled = false;
+    }
 }
 
 async function _loadBoxOrderData() {
@@ -10287,6 +12635,34 @@ async function _loadBoxOrderData() {
 }
 
 function _renderBoxOrderItems(container, items) {
+    // Keep the full catalog (every store variant) so the email can resolve the right
+    // per-store spec later — even for rows corp collapses into one line.
+    _boxOrderAllItems = Array.isArray(items) ? items.slice() : [];
+    // Some items are store-specific (e.g. MPL/BAL use a different supplier than the
+    // other stores). Show an item only if it has no store restriction, or the
+    // current store is in its list. Corp roles (CEO/DM) choose the store on the
+    // next page, so they see every item here.
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const isCorp = role === 'ceo' || role === 'district manager';
+    const storeCode = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    items = (items || []).filter(it => {
+        const s = (it.stores || '').trim();
+        if (!s) return true;        // no restriction → all stores
+        if (isCorp) return true;    // corp picks the store later → show it
+        return s.split(',').map(x => x.trim().toUpperCase()).includes(storeCode);
+    });
+    // Collapse per-store variants that share a name (e.g. "Packing Paper" differs by
+    // supplier) into ONE row. Corp then sees a single line and the vendor email
+    // resolves the correct spec from the store they pick on the next page. Managers
+    // only ever have their own store's variant here, so this is a no-op for them.
+    const seenVariant = new Set();
+    items = items.filter(it => {
+        if (!(it.stores || '').trim()) return true;   // non-scoped items never collapse
+        const k = `${it.category}|${it.name}`;
+        if (seenVariant.has(k)) return false;
+        seenVariant.add(k);
+        return true;
+    });
     const BUCKETS = [
         { key: 'Common Box',       label: 'Common Boxes' },
         { key: 'Rare Box',         label: 'Rare Boxes' },
@@ -10319,6 +12695,44 @@ function _renderBoxOrderItems(container, items) {
     });
 
     container.innerHTML = html || '<div style="color:#a0aab2;font-size:13px;">No items found.</div>';
+    // Stable ids so the live receipt can point its "remove" button back at a row.
+    container.querySelectorAll('.box-order-row').forEach((r, i) => { r.id = 'box-row-' + i; });
+    boxOrderRenderReceipt(); // reset to empty on a fresh load
+}
+
+// Live "receipt" of the current selection, pinned under the item list. Rebuilt from
+// the rows' current quantities on every change so it always matches what's selected.
+function boxOrderRenderReceipt() {
+    const panel = document.getElementById('boxOrderReceipt');
+    if (!panel) return;
+    const rows = document.querySelectorAll('#boxOrderItemsContainer .box-order-row');
+    const picked = [];
+    rows.forEach(row => {
+        const qty = parseInt(row.querySelector('.box-stepper-qty')?.textContent) || 0;
+        if (qty > 0) picked.push({ id: row.id, name: row.dataset.name || row.dataset.item || '', qty });
+    });
+    if (!picked.length) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+    const lines = picked.map(p => `
+        <div class="box-receipt-line">
+            <span class="box-receipt-name">${escapeHtml(p.name)}</span>
+            <span class="box-receipt-qty">${p.qty}</span>
+            <button class="box-receipt-x" title="Remove" onclick="boxReceiptRemove('${p.id}')">×</button>
+        </div>`).join('');
+    panel.innerHTML =
+        `<div class="box-receipt-head">🧾 Your order · ${picked.length} item${picked.length === 1 ? '' : 's'}</div>` +
+        `<div class="box-receipt-list">${lines}</div>`;
+    panel.style.display = '';
+}
+
+// Remove a line from the receipt by zeroing that row's stepper.
+function boxReceiptRemove(rowId) {
+    const row = document.getElementById(rowId);
+    if (row) {
+        const qtyEl = row.querySelector('.box-stepper-qty');
+        if (qtyEl) { qtyEl.textContent = '0'; qtyEl.classList.remove('box-stepper-active'); }
+        row.classList.remove('box-row-selected');
+    }
+    boxOrderRenderReceipt();
 }
 
 // Live search over the box-order items. Matches name / category / dimensions
@@ -10390,7 +12804,9 @@ function _buildBoxRow(item) {
     const subParts   = [item.dimensions, displayCat].filter(Boolean);
     if (bundleSize > 1) subParts.push(`${bundleSize}/bundle`);
     const subHtml    = escapeHtml(subParts.join(' · '));
-    return `<div class="box-order-row" data-item="${label}" data-name="${nameHtml}" data-category="${catHtml}" data-bundle="${bundleSize}">
+    const orderNameHtml = escapeHtml(item.order_name || '');
+    const unitLabelHtml = escapeHtml(item.unit_label || '');
+    return `<div class="box-order-row" data-item="${label}" data-name="${nameHtml}" data-order-name="${orderNameHtml}" data-unit-label="${unitLabelHtml}" data-category="${catHtml}" data-bundle="${bundleSize}">
   <div class="box-order-info">
     <span class="box-order-name">${nameHtml}</span>
     <span class="box-order-subtype">${subHtml}</span>
@@ -10412,6 +12828,7 @@ function boxStepperChange(btn, delta) {
     qtyEl.textContent = next;
     qtyEl.classList.toggle('box-stepper-active', next > 0);
     row.classList.toggle('box-row-selected', next > 0);
+    boxOrderRenderReceipt(); // keep the live receipt in sync
 }
 
 let _boxOrderSelected = [];
@@ -10422,7 +12839,7 @@ function boxOrderNextPage() {
     rows.forEach(row => {
         const qty = parseInt(row.querySelector('.box-stepper-qty')?.textContent) || 0;
         const bundle = Math.max(1, parseInt(row.dataset.bundle) || 1);
-        if (qty > 0) _boxOrderSelected.push({ item: row.dataset.item, name: row.dataset.name, category: row.dataset.category, qty, bundle });
+        if (qty > 0) _boxOrderSelected.push({ item: row.dataset.item, name: row.dataset.name, orderName: row.dataset.orderName, unitLabel: row.dataset.unitLabel, category: row.dataset.category, qty, bundle });
     });
     if (!_boxOrderSelected.length) {
         alert('Please add at least one item before continuing.');
@@ -10434,7 +12851,9 @@ function boxOrderNextPage() {
     if (selectorEl) {
         selectorEl.style.display = isCorpRole ? '' : 'none';
         const sel = document.getElementById('boxOrderStoreSelect');
-        if (sel) sel.value = '';
+        // Corp picks a store here; default it to OVL so the preview is populated
+        // right away (they can switch stores from the dropdown).
+        if (sel) sel.value = isCorpRole ? 'OVL' : '';
     }
     const notesEl = document.getElementById('boxOrderNotes');
     if (notesEl) notesEl.value = '';
@@ -10450,6 +12869,7 @@ function boxOrderBackPage() {
     document.getElementById('boxOrderFooter2').style.display  = 'none';
     document.getElementById('boxOrderPage1').style.display    = '';
     document.getElementById('boxOrderFooter1').style.display  = '';
+    boxOrderRenderReceipt(); // selection is preserved in the rows — reflect it again
 }
 
 // Format one selected item for the order: drop the word "Box" from box sizes
@@ -10463,11 +12883,27 @@ function _boxOrderLine(o) {
         .replace(/\bShipping Supplies\b/i, '')
         .replace(/\bBox(?:es)?\b/i, '')
         .replace(/\s+/g, ' ').trim();
-    const display = `${o.name || o.item || ''} ${displayCat}`.replace(/\s+/g, ' ').trim();
+    // A store-facing UI name can differ from the full spec the vendor needs on the
+    // order — order_name (when set) is what goes on the email; UI keeps the short name.
+    // For per-store products (e.g. Packing Paper) resolve the spec from the chosen store.
+    const variant = _resolveItemVariant(o);
+    const orderName = (variant && variant.order_name) || o.orderName || '';
+    const display = orderName
+        ? orderName
+        : `${o.name || o.item || ''} ${displayCat}`.replace(/\s+/g, ' ').trim();
     const n = (o.name || '').toLowerCase();
-    let one = 'Bundle', many = 'Bundles';
-    if (n.includes('peanut'))        { one = 'Bag'; many = 'Bags'; }
-    else if (n.includes('gum tape')) { one = 'Box'; many = 'Boxes'; }
+    // Unit word: an explicit unit_label (set in Manage Items) wins; otherwise fall
+    // back to the legacy heuristic for older items that never had one.
+    const explicitUnit = (variant && variant.unit_label) || o.unitLabel || '';
+    let one, many;
+    if (explicitUnit) {
+        one = explicitUnit; many = _pluralizeUnit(explicitUnit);
+    } else {
+        one = 'Bundle'; many = 'Bundles';
+        if (n.includes('peanut'))        { one = 'Bag'; many = 'Bags'; }
+        else if (n.includes('gum tape')) { one = 'Box'; many = 'Boxes'; }
+        else if (n.includes('paper'))    { one = 'Roll'; many = 'Rolls'; }
+    }
     const bundle  = Math.max(1, parseInt(o.bundle) || 1);
     const bundles = Math.max(1, Math.round((o.qty || 0) / bundle));
     return `${display}: ${bundles} ${bundles === 1 ? one : many}`;
@@ -10537,4 +12973,165 @@ function copyBoxOrder(button) {
             button.style.borderColor = '';
         }, 2000);
     }).catch(() => alert('Could not copy automatically. Please select and copy the order manually.'));
+}
+
+// ============================================================
+// RECYCLE INVENTORY TOOL
+// ============================================================
+// Stores submit these when an item needs to be recycled out of inventory.
+// Mirrors the Box Order flow (two-page form → mailto + copy failsafe) but is a
+// free-text request that always routes to a single SPEEKS inbox.
+
+const RECYCLE_INV_EMAIL = 'ethan.kushnir@speekstechnology.com';
+
+// Corp roles (CEO/DM) pick a store; managers/ASM default to their own.
+function _recycleInvGetStoreCode() {
+    const selectorEl = document.getElementById('recycleInvStoreSelector');
+    const corpVisible = selectorEl && selectorEl.style.display !== 'none';
+    const sel = document.getElementById('recycleInvStoreSelect');
+    return (corpVisible && sel && sel.value) ? sel.value : (sessionStorage.getItem('speeksUserStore') || '');
+}
+
+function _recycleInvGetStore() {
+    const code = _recycleInvGetStoreCode();
+    return BOX_STORE_NAMES[code] || code || 'Store';
+}
+
+// Keep money fields numeric: strip anything that isn't a digit or a decimal
+// point (so a typed "$" simply vanishes) and allow only one decimal point.
+function recycleInvSanitizeMoney(input) {
+    let v = (input.value || '').replace(/[^\d.]/g, '');
+    const firstDot = v.indexOf('.');
+    if (firstDot !== -1) {
+        v = v.slice(0, firstDot + 1) + v.slice(firstDot + 1).replace(/\./g, '');
+    }
+    input.value = v;
+}
+
+// Normalize a money field for the email: exactly one leading "$" plus thousands
+// separators ("12345" → "$12,345", "$25" → "$25", "1234.5" → "$1,234.5").
+// Decimals are kept only if typed, capped at two places. Empty stays empty.
+function _recycleInvFormatMoney(raw) {
+    const v = String(raw || '').replace(/[^\d.]/g, '');
+    if (!v) return '';
+    const firstDot = v.indexOf('.');
+    let intPart = firstDot === -1 ? v : v.slice(0, firstDot);
+    let decPart = firstDot === -1 ? '' : v.slice(firstDot + 1).replace(/\./g, '').slice(0, 2);
+    intPart = intPart.replace(/^0+(?=\d)/, '') || '0';   // trim leading zeros, keep one digit
+    const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return decPart !== '' ? `$${grouped}.${decPart}` : `$${grouped}`;
+}
+
+function toggleRecycleInventory() {
+    closeAllModals();
+    const modal = document.getElementById('recycleInvModal');
+    if (!modal) return;
+    // Reset to a blank page 1 every time.
+    ['recycleInvSku', 'recycleInvDescription', 'recycleInvValue', 'recycleInvCost'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const isCorpRole = role === 'ceo' || role === 'district manager';
+    const selectorEl = document.getElementById('recycleInvStoreSelector');
+    if (selectorEl) {
+        selectorEl.style.display = isCorpRole ? '' : 'none';
+        const sel = document.getElementById('recycleInvStoreSelect');
+        if (sel) sel.value = '';
+    }
+    document.getElementById('recycleInvPage1').style.display   = '';
+    document.getElementById('recycleInvFooter1').style.display = '';
+    document.getElementById('recycleInvPage2').style.display   = 'none';
+    document.getElementById('recycleInvFooter2').style.display = 'none';
+    modal.classList.add('show');
+    lockAndBlurScreen();
+}
+
+// Validate page 1: every field is required; corp roles must also pick a store.
+function _recycleInvEnsureValid() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const isCorpRole = role === 'ceo' || role === 'district manager';
+    const sel = document.getElementById('recycleInvStoreSelect');
+    if (isCorpRole && (!sel || !sel.value)) {
+        alert('Please select a store first.');
+        return false;
+    }
+    const sku  = document.getElementById('recycleInvSku')?.value.trim();
+    const desc = document.getElementById('recycleInvDescription')?.value.trim();
+    const val  = document.getElementById('recycleInvValue')?.value.trim();
+    const cost = document.getElementById('recycleInvCost')?.value.trim();
+    if (!sku || !desc || !val || !cost) {
+        alert('Please fill in the SKU, description, value, and cost before continuing.');
+        return false;
+    }
+    return true;
+}
+
+function recycleInvNextPage() {
+    if (!_recycleInvEnsureValid()) return;
+    recycleInvUpdatePreview();
+    document.getElementById('recycleInvPage1').style.display   = 'none';
+    document.getElementById('recycleInvFooter1').style.display = 'none';
+    document.getElementById('recycleInvPage2').style.display   = '';
+    document.getElementById('recycleInvFooter2').style.display = '';
+}
+
+function recycleInvBackPage() {
+    document.getElementById('recycleInvPage2').style.display   = 'none';
+    document.getElementById('recycleInvFooter2').style.display = 'none';
+    document.getElementById('recycleInvPage1').style.display   = '';
+    document.getElementById('recycleInvFooter1').style.display = '';
+}
+
+// Build the request as plain text (real newlines) — shared by the email and the
+// copy failsafe so both always say exactly the same thing.
+function _recycleInvCompose() {
+    const store    = _recycleInvGetStore();
+    const userName = sessionStorage.getItem('speeksUserName') || '';
+    const sku  = document.getElementById('recycleInvSku')?.value.trim()         || '';
+    const desc = document.getElementById('recycleInvDescription')?.value.trim() || '';
+    const val  = _recycleInvFormatMoney(document.getElementById('recycleInvValue')?.value);
+    const cost = _recycleInvFormatMoney(document.getElementById('recycleInvCost')?.value);
+    const body =
+        `Hi,\n\nThe following item needs to be recycled out of inventory for ${store}:\n\n` +
+        `SKU: ${sku}\n` +
+        `Description: ${desc}\n` +
+        `Value: ${val}\n` +
+        `Cost: ${cost}\n\n` +
+        `Thank you,\n${userName}`;
+    return { email: RECYCLE_INV_EMAIL, subject: `${sku} - Recycle`, body };
+}
+
+function recycleInvUpdatePreview() {
+    const preview = document.getElementById('recycleInvEmailPreview');
+    if (!preview) return;
+    const { email, subject, body } = _recycleInvCompose();
+    preview.textContent = `To: ${email}\nSubject: ${subject}\n\n${body}`;
+}
+
+function sendRecycleInventory() {
+    if (!_recycleInvEnsureValid()) return;
+    const { email, subject, body } = _recycleInvCompose();
+    window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+// Failsafe for machines with no default mail client: copy the full request
+// (recipient, subject, body) to the clipboard to paste into any email.
+function copyRecycleInventory(button) {
+    if (!_recycleInvEnsureValid()) return;
+    const { email, subject, body } = _recycleInvCompose();
+    const text = `To: ${email}\nSubject: ${subject}\n\n${body}`;
+    navigator.clipboard.writeText(text).then(() => {
+        const originalText = button.innerText;
+        button.innerText = 'Copied!';
+        button.style.background = '#d1fae5';
+        button.style.color = '#065f46';
+        button.style.borderColor = '#34d399';
+        setTimeout(() => {
+            button.innerText = originalText;
+            button.style.background = '';
+            button.style.color = '';
+            button.style.borderColor = '';
+        }, 2000);
+    }).catch(() => alert('Could not copy automatically. Please select and copy the request manually.'));
 }
