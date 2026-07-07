@@ -7408,7 +7408,7 @@ function applyRoleBasedUI() {
     if (wsTitleEl) wsTitleEl.innerHTML = `<span>📈</span> ${firstName}'s Workspace`;
 
     const opsTitleEl = document.getElementById('opsTitle');
-    if (opsTitleEl) opsTitleEl.innerHTML = `<span>🛠️</span> ${firstName}'s Operations`;
+    if (opsTitleEl) opsTitleEl.innerHTML = `<span>🛠️</span> ${firstName}'s Operational Tools`;
 
     const userRoleClass = `role-${userRole.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-')}`;
     const userStoreClass = `store-${userStore.toLowerCase()}`;
