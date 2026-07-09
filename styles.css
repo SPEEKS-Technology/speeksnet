@@ -2080,6 +2080,10 @@ select.bs-hidden-select:focus {
 .idea-label { display: block; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; color: var(--slate-charcoal); }
 .idea-input { width: 100%; padding: 14px 16px; border-radius: 10px; border: 1px solid #ddd; outline: none; font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 500; transition: 0.2s; background: #f9fafb; color: var(--slate-charcoal); }
 .idea-input:focus { border-color: var(--sage-professional); background: white; box-shadow: 0 0 0 4px rgba(90, 141, 59, 0.1); }
+/* Chrome leaves faint vertical caret/paint trails for a textarea sitting inside a
+   transform-centered modal (.modal-menu uses translate(-50%,-50%)). Promoting the
+   textarea to its own compositing layer makes the caret repaint cleanly. */
+#ideaDesc { transform: translateZ(0); -webkit-backface-visibility: hidden; backface-visibility: hidden; }
 
 /* =========================================================
    DEV SANDBOX SPECIFIC STYLES

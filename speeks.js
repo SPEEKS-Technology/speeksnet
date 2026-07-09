@@ -481,7 +481,15 @@ function markAnnouncementRead(rowId) {
 
 function toggleNotifs() { toggleModal('notifDropdown', 'notifBadge'); }
 function toggleCalendar() { toggleModal('calendarDropdown'); }
-function toggleIdeaModal() { toggleModal('ideaModal'); }
+function toggleIdeaModal() {
+    // Pre-fill the submitter's name from their session so they don't retype it.
+    const nameEl = document.getElementById('ideaName');
+    if (nameEl) {
+        const u = sessionStorage.getItem('speeksUserName');
+        if (u && u.trim()) nameEl.value = u.trim();
+    }
+    toggleModal('ideaModal');
+}
 
 function switchAnnTab(tab) {
     const isRecent = tab === 'recent';
@@ -4483,7 +4491,7 @@ function injectIdeaModal() {
                     <input type="hidden" name="_subject" id="ideaDynamicSubject" value="New SPEEKS Idea">
                     <div style="margin-bottom: 15px;">
                         <label class="idea-label">Your Name</label>
-                        <input type="text" id="ideaName" name="Name" class="idea-input" required placeholder="John Doe">
+                        <input type="text" id="ideaName" name="Name" class="idea-input" required readonly aria-readonly="true" title="Pulled from your account" style="background:#f1f5f9; color:#475569; cursor:not-allowed;">
                     </div>
                     <div style="margin-bottom: 15px;">
                         <label class="idea-label">Category</label>
@@ -11300,6 +11308,10 @@ function _commentKey(c) {
     return `${String(c.store||'').trim()}|${String(c.date||'').trim()}|${String(c.author||'').trim()}|${String(c.message||'').trim()}`.slice(0, 120);
 }
 
+// Ids of the store comments currently shown in the bubble — marked read when
+// the user dismisses (X) the bubble. Accumulates across polls until dismissed.
+let _shownCommentIds = [];
+
 let _storeCommentPollingStarted = false;
 function startStoreCommentPolling() {
     if (_storeCommentPollingStarted) return;
@@ -11340,8 +11352,152 @@ window.openCEOStoreComment = function(targetStore) {
                 storeSelect.style.cursor = 'pointer';
             }
         }
+
+        // Two tabs: Send Message | Read Receipts (built once, then reset to Send).
+        _setupCommentModalTabs();
+        _commentReadsCache = null; // refetch reads each time the modal opens
+        switchCommentTab('send');
     }
 };
+
+// Adds the Send | Read Receipts tab bar + a reads panel to the send modal (once).
+function _setupCommentModalTabs() {
+    const modal = document.getElementById('sendCommentModal');
+    if (!modal || document.getElementById('commentTabBar')) return;
+    const header = modal.querySelector('.modal-header');
+    const content = modal.querySelector('.manage-content');
+    if (!header || !content) return;
+
+    const bar = document.createElement('div');
+    bar.id = 'commentTabBar';
+    bar.style.cssText = 'padding:14px 18px 0;';
+    bar.innerHTML = `<div class="notif-tabs" style="display:inline-flex;">
+        <button id="comment-tab-send" class="tab-btn active" onclick="switchCommentTab('send')">Send Message</button>
+        <button id="comment-tab-reads" class="tab-btn" onclick="switchCommentTab('reads')">Read Receipts</button>
+    </div>`;
+    header.insertAdjacentElement('afterend', bar);
+
+    const panel = document.createElement('div');
+    panel.id = 'commentReadsPanel';
+    panel.className = 'manage-content';
+    panel.style.display = 'none';
+    panel.innerHTML = `
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;">
+            <label class="form-label-caps" style="margin:0;">Store</label>
+            <select id="commentReadsStore" class="form-input-lg" style="max-width:220px;" onchange="renderStoreCommentReads()">
+                <option value="ALL">All Stores</option>
+                <option value="OVL">OVL</option>
+                <option value="LEE">LEE</option>
+                <option value="WSP">WSP</option>
+                <option value="MPL">MPL</option>
+                <option value="BAL">BAL</option>
+            </select>
+        </div>
+        <div id="commentReadsStats"></div>
+        <div id="commentReadsList"></div>`;
+    content.insertAdjacentElement('afterend', panel);
+}
+
+function switchCommentTab(tab) {
+    const isSend = tab !== 'reads';
+    const modal = document.getElementById('sendCommentModal');
+    if (!modal) return;
+    document.getElementById('comment-tab-send')?.classList.toggle('active', isSend);
+    document.getElementById('comment-tab-reads')?.classList.toggle('active', !isSend);
+    const form = modal.querySelector('.manage-content'); // the send form (first .manage-content)
+    const footer = modal.querySelector('.manage-footer');
+    const panel = document.getElementById('commentReadsPanel');
+    if (form) form.style.display = isSend ? '' : 'none';
+    if (footer) footer.style.display = isSend ? '' : 'none';
+    if (panel) panel.style.display = isSend ? 'none' : 'flex';
+    if (!isSend) loadStoreCommentReads();
+}
+
+let _commentReadsCache = null;
+
+// Fetch the last 30 days of comments + their reads (once per modal open), then render.
+async function loadStoreCommentReads() {
+    const listEl = document.getElementById('commentReadsList');
+    if (!listEl) return;
+    if (!_commentReadsCache) {
+        listEl.innerHTML = `<div style="color:#94a3b8; font-size:13px;">Loading…</div>`;
+        try {
+            const res = await fetch(`${STORE_COMMENT_URL}?mode=reads&v=${Date.now()}`);
+            const rows = await res.json();
+            _commentReadsCache = Array.isArray(rows) ? rows : [];
+        } catch (e) {
+            listEl.innerHTML = `<div style="color:var(--red-alert); font-size:13px;">Failed to load read counts.</div>`;
+            return;
+        }
+    }
+    renderStoreCommentReads();
+}
+
+function _crStat(label, val) {
+    return `<div style="flex:1; min-width:92px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:11px 14px;">
+        <div style="font-size:22px; font-weight:900; color:#1e293b; line-height:1;">${val}</div>
+        <div style="font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; margin-top:3px;">${label}</div>
+    </div>`;
+}
+
+// Render the cached reads filtered by the store dropdown, with stats + per-store breakdown.
+function renderStoreCommentReads() {
+    const statsEl = document.getElementById('commentReadsStats');
+    const listEl = document.getElementById('commentReadsList');
+    if (!listEl) return;
+    const all = _commentReadsCache || [];
+    const store = document.getElementById('commentReadsStore')?.value || 'ALL';
+    const rows = store === 'ALL' ? all : all.filter(r => String(r.store || '').toUpperCase() === store);
+
+    const msgs = rows.length;
+    const totalReads = rows.reduce((s, r) => s + (r.readCount || 0), 0);
+    const avg = msgs ? (totalReads / msgs) : 0;
+
+    let statsHtml = `<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
+        ${_crStat('Messages', msgs)}
+        ${_crStat('Total reads', totalReads)}
+        ${_crStat('Avg reads / msg', avg.toFixed(1))}
+    </div>`;
+
+    // Per-store breakdown (only meaningful on the All view).
+    if (store === 'ALL' && msgs) {
+        const byStore = {};
+        all.forEach(r => {
+            const s = String(r.store || '').toUpperCase() || '—';
+            (byStore[s] ||= { m: 0, reads: 0 });
+            byStore[s].m++; byStore[s].reads += (r.readCount || 0);
+        });
+        statsHtml += `<div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:4px 2px; margin-bottom:14px;">`
+            + Object.keys(byStore).sort().map(s => {
+                const v = byStore[s];
+                return `<div style="display:flex; justify-content:space-between; gap:10px; padding:6px 12px; font-size:12.5px; border-bottom:1px solid #f1f5f9;">
+                    <span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(s)}</span>
+                    <span style="color:#64748b;">${v.m} msg · ${v.reads} reads · ${(v.reads / v.m).toFixed(1)} avg</span>
+                </div>`;
+            }).join('')
+            + `</div>`;
+    }
+    if (statsEl) statsEl.innerHTML = statsHtml;
+
+    if (!msgs) {
+        listEl.innerHTML = `<div style="color:#94a3b8; font-size:13px;">No messages${store !== 'ALL' ? ' for ' + escapeHtml(store) : ''} in the last 30 days.</div>`;
+        return;
+    }
+    listEl.innerHTML = rows.slice(0, 80).map(r => {
+        const names = (r.readBy || []).map(escapeHtml).join(', ');
+        const msg = escapeHtml(String(r.message || '').slice(0, 160));
+        const cnt = r.readCount || 0;
+        const sentBy = r.author ? ` · <span style="font-weight:600; color:#64748b;">by ${escapeHtml(r.author)}</span>` : '';
+        return `<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:11px 13px; margin-bottom:8px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:5px;">
+                <span style="font-size:11px; font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')} · ${escapeHtml(r.date || '')}${sentBy}</span>
+                <span style="font-size:11px; font-weight:900; color:${cnt ? '#059669' : '#94a3b8'}; background:#fff; border:1px solid #e2e8f0; border-radius:20px; padding:3px 10px; white-space:nowrap;">👁 Read by ${cnt}</span>
+            </div>
+            <div style="font-size:12.5px; color:var(--slate-charcoal); line-height:1.4;${names ? ' margin-bottom:5px;' : ''}">${msg}</div>
+            ${names ? `<div style="font-size:11px; color:#64748b;"><strong style="color:#94a3b8;">Read by:</strong> ${names}</div>` : ''}
+        </div>`;
+    }).join('');
+}
 
 async function submitStoreComment() {
     const store = document.getElementById('commentStoreSelect').value;
@@ -11379,19 +11535,31 @@ async function submitStoreComment() {
     }
 }
 
-// Helper to close the bubble (comments already marked seen when bubble was shown)
+// Close the bubble AND log a read for each comment it was showing — dismissing
+// the message (X) is the "I saw this" signal DM/CEO see in the send tool.
 window.closeDailyCommentBubble = function() {
     const bubble = document.getElementById('dailyMessageBubble');
     if (bubble) bubble.style.display = 'none';
     if (typeof _positionClaimAlert === 'function') _positionClaimAlert(); // claim alert moves back up
+
+    if (_shownCommentIds.length) {
+        const user = sessionStorage.getItem('speeksUserName') || null;
+        const ids = _shownCommentIds.slice();
+        _shownCommentIds = [];
+        postWrite(STORE_COMMENT_URL, { type: 'mark_read', commentIds: ids, user })
+            .catch(err => console.warn('comment mark_read failed:', err.message));
+    }
 };
 
 async function fetchAndDisplayStoreComment() {
     const userStore = String(sessionStorage.getItem('speeksUserStore') || 'OVL').trim().toUpperCase();
+    const userName = String(sessionStorage.getItem('speeksUserName') || '').trim();
     const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
 
     try {
-        const res = await fetch(`${STORE_COMMENT_URL}?v=${Date.now()}`);
+        // reader= tells the fn which comments this user already dismissed, so a
+        // read (X) permanently suppresses the message across sign-outs.
+        const res = await fetch(`${STORE_COMMENT_URL}?reader=${encodeURIComponent(userName)}&v=${Date.now()}`);
         const comments = await res.json();
 
         const todayComments = comments.filter(c => {
@@ -11412,10 +11580,14 @@ async function fetchAndDisplayStoreComment() {
             return isToday && isForMe;
         }).reverse(); // Newest first
 
-        // Only show comments the user hasn't seen yet in this session
+        // Show only comments the user hasn't permanently dismissed (readByMe, from
+        // the server) and hasn't already seen this session.
         const seenKeys = _getSeenCommentKeys();
-        const newComments = todayComments.filter(c => !seenKeys.has(_commentKey(c)));
+        const newComments = todayComments.filter(c => !c.readByMe && !seenKeys.has(_commentKey(c)));
         if (newComments.length === 0) return;
+
+        // Remember which comments are on screen so the X (dismiss) can log a read.
+        newComments.forEach(c => { if (c.id && !_shownCommentIds.includes(c.id)) _shownCommentIds.push(c.id); });
 
         // Mark all today's comments seen now so repeat polls don't re-show the same ones
         todayComments.forEach(c => seenKeys.add(_commentKey(c)));
