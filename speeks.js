@@ -1776,6 +1776,15 @@ function formatVariancePct(num) {
     return Math.abs(num) < 0.001 ? '0.00%' : `${num < 0 ? '-' : '+'}${Math.abs(num).toFixed(2)}%`; 
 }
 
+// Compact "Jun 1 – Jun 30" range for a variance report's dateFrom/dateTo.
+// Variance can be run weekly / bi-weekly / monthly, so its period is shown
+// wherever the variance number appears. Returns '' if either date is missing.
+function formatVarianceRange(dateFrom, dateTo) {
+    if (!dateFrom || !dateTo) return '';
+    const fmt = iso => new Date(iso + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return `${fmt(dateFrom)} – ${fmt(dateTo)}`;
+}
+
 function createVarianceStoreCard(sKey) {
     if (sKey === "NONE" || !liveVarianceDataCache[sKey]?.employees) return '';
 
@@ -5156,10 +5165,12 @@ async function fetchMasterDistrictDashboard() {
             const vColor = totalVar < 0 ? '#991b1b' : (totalVar > 0 ? '#065f46' : '#64748b');
             const vBg = totalVar < 0 ? '#fee2e2' : (totalVar > 0 ? '#d1fae5' : '#f1f5f9');
             const vSign = totalVar > 0 ? '+' : '';
+            const vRange = formatVarianceRange(sVar.dateFrom, sVar.dateTo);
 
             // 5. WEEKLY METRICS
             const sWeekData = weeklyResults.find(w => w.store === store);
             const wAvg = sWeekData?.sAvg || {};
+            const wPeriod = sWeekData?.periodLabel || '';
 
             const renderLineStat = (label, val, ruleType) => {
                 let isBad = false;
@@ -5221,12 +5232,15 @@ async function fetchMasterDistrictDashboard() {
                             <div class="master-stat-row dashed"><span class="master-stat-label">Sell Margin</span><span class="master-stat-val" style="color: ${sellMarginColor}; background: ${sellMarginBg};">${sellMarginNum > 0 ? sellMargin + '%' : '-'}</span></div>
                             <div class="master-stat-row"><span class="master-stat-label">Buy Tracking</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${buyProj.toLocaleString()}</span></div>
                             <div class="master-stat-row dashed"><span class="master-stat-label">Buy Margin</span><span class="master-stat-val" style="color: ${marginColor}; background: ${marginBg};">${buyMargin}%</span></div>
-                            <div class="master-stat-row"><span class="master-stat-label">Variance Total</span><span class="master-stat-val" style="color: ${vColor}; background: ${vBg};">${vSign}${totalVar.toFixed(2)}%</span></div>
+                            <div class="master-stat-row"><span class="master-stat-label">Variance Total${vRange ? `<span style="display:block; font-size:9px; font-weight:700; color:#94a3b8; text-transform:none; letter-spacing:0; margin-top:1px;">${vRange}</span>` : ''}</span><span class="master-stat-val" style="color: ${vColor}; background: ${vBg};" title="Variance period${vRange ? ': ' + vRange : ' not set'}">${vSign}${totalVar.toFixed(2)}%</span></div>
                         </div>
                     </div>
 
                     <div>
-                        <div class="master-section-title">Weekly Metrics</div>
+                        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px;">
+                            <div class="master-section-title" style="margin-bottom:0;min-width:0;">Weekly Metrics</div>
+                            ${wPeriod ? `<span class="master-section-title" style="margin-bottom:0;white-space:nowrap;">${escapeHtml(wPeriod)}</span>` : ''}
+                        </div>
                         <div class="master-stat-box">
                             ${renderLineStat('Conversion', wAvg.conversion, 'conversion')}
                             ${renderLineStat('Margin', wAvg.buyMargin, 'margin')}
@@ -5293,7 +5307,7 @@ async function fetchMasterDistrictDashboard() {
                 noDeals:    fmtN(t.no_deal_count),
                 listed:     fmtN(t.listed_count),
             };
-            return { store, sAvg };
+            return { store, sAvg, periodLabel: d.period_label || '' };
         });
 
         const weeklyResults = await Promise.all(weeklyPromises);
@@ -6554,6 +6568,7 @@ async function fetchAndRenderEmployeeKPIs() {
         // --- NEW: ROBUST VARIANCE FETCH ---
         let formattedMyVar = '-';
         let formattedStoreVar = '-';
+        let varRange = '';
         
         let vData = typeof liveVarianceDataCache !== 'undefined' ? liveVarianceDataCache : null;
         
@@ -6577,7 +6592,8 @@ async function fetchAndRenderEmployeeKPIs() {
             };
 
             formattedStoreVar = safeFormatVar(sVar.total);
-            
+            varRange = formatVarianceRange(sVar.dateFrom, sVar.dateTo);
+
             const sessionName = String(userName).trim().toLowerCase();
             const sessionFirstName = sessionName.split(' ')[0];
             
@@ -6603,7 +6619,7 @@ async function fetchAndRenderEmployeeKPIs() {
             return;
         }
 
-        const buildStatGridItem = (title, myVal, storeVal, ruleStr, isPercent = false, prefixLabel = "Store:", showBubble = true) => {
+        const buildStatGridItem = (title, myVal, storeVal, ruleStr, isPercent = false, prefixLabel = "Store:", showBubble = true, noteText = '') => {
             const myIsBad = ruleStr ? checkRule(ruleStr, myVal) : false;
             
             let displayMyVal = myVal || '-';
@@ -6625,6 +6641,7 @@ async function fetchAndRenderEmployeeKPIs() {
                 <span style="font-size: 9px; font-weight: 900; color: var(--slate-charcoal); text-transform: uppercase; line-height: 1;">${title}</span>
                 ${centerHtml}
                 <span style="font-size: 8px; font-weight: 700; color: #a0aab2; text-transform: uppercase;">${prefixLabel} <strong>${displayStoreVal}</strong></span>
+                ${noteText ? `<span style="font-size: 8px; font-weight: 700; color: #b6bec6; text-transform: none; margin-top: 1px; line-height: 1.2;">${noteText}</span>` : ''}
             </div>`;
         };
 
@@ -6635,7 +6652,7 @@ async function fetchAndRenderEmployeeKPIs() {
                     ${buildStatGridItem('Buying Value', myData.buyVal, sAvg.buyVal, null, false, 'Store Total:', false)}
                     ${buildStatGridItem('Margin', myData.buyMargin, sAvg.buyMargin, 'margin', true, 'Store Avg:', true)}
                     ${buildStatGridItem('Conversion', myData.conversion, sAvg.conversion, 'conversion', true, 'Store Avg:', true)}
-                    ${buildStatGridItem('Variance', formattedMyVar, formattedStoreVar, 'variance', false, 'Store Total:', true)}
+                    ${buildStatGridItem('Variance', formattedMyVar, formattedStoreVar, 'variance', false, 'Store Total:', true, varRange)}
                 </div>
                 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; flex: 1;">
                     ${buildStatGridItem('No Deals', myData.noDeals, sAvg.noDeals, 'nodeals', false, 'Store Total:', true)}
@@ -10009,6 +10026,86 @@ function openAuditPhotoLightbox(src) {
     lb.style.display = 'flex';
 }
 
+// Live camera capture (works on laptops with a webcam + phones) via getUserMedia,
+// so a photo can be taken in-app even where the file picker won't open a camera.
+// Uploading via "Add photo(s)" stays available alongside this.
+let _auditCamStream = null;
+
+async function openAuditCamera(sIdx) {
+    const md = navigator.mediaDevices;
+    if (!md || !md.getUserMedia) {
+        alert('Live camera is not available on this device/browser. Use "Add photo(s)" to upload instead.');
+        return;
+    }
+    // Acquire the camera BEFORE showing the modal, so a denied/failed request
+    // never leaves an empty black camera box on screen. Prefer the rear camera
+    // on phones; laptops fall back to their only/default camera.
+    let stream;
+    try {
+        stream = await md.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    } catch (e) {
+        const name = e && e.name;
+        let msg;
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+            msg = 'Camera access is blocked for this site. Click the camera (or lock) icon in your browser’s address bar, choose Allow for the camera, then tap “Take photo” again.';
+        } else if (name === 'NotFoundError' || name === 'OverconstrainedError' || name === 'DevicesNotFoundError') {
+            msg = 'No camera was found on this device.';
+        } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+            msg = 'The camera is already in use by another app. Close it and try again.';
+        } else {
+            msg = 'Could not access the camera' + (e && e.message ? ': ' + e.message : '') + '.';
+        }
+        alert(msg + '\nYou can still use “Add photo(s)” to upload a picture.');
+        return;
+    }
+
+    _auditCamStream = stream;
+    let cam = document.getElementById('auditCameraModal');
+    if (!cam) {
+        cam = document.createElement('div');
+        cam.id = 'auditCameraModal';
+        cam.style.cssText = 'display:none; position:fixed; inset:0; z-index:4100; background:rgba(2,6,23,.92); flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:20px;';
+        cam.innerHTML =
+            '<video id="auditCamVideo" autoplay playsinline muted style="max-width:92vw; max-height:68vh; border-radius:12px; background:#000;"></video>' +
+            '<div style="display:flex; gap:12px;">' +
+              '<button id="auditCamShot" type="button" style="background:#16a34a; color:#fff; border:none; border-radius:10px; padding:12px 22px; font-size:14px; font-weight:800; cursor:pointer;">📸 Capture</button>' +
+              '<button id="auditCamCancel" type="button" style="background:#334155; color:#fff; border:none; border-radius:10px; padding:12px 22px; font-size:14px; font-weight:800; cursor:pointer;">Cancel</button>' +
+            '</div>';
+        document.body.appendChild(cam);
+    }
+    cam.querySelector('#auditCamCancel').onclick = () => closeAuditCamera();
+    cam.querySelector('#auditCamShot').onclick = () => captureAuditPhoto(sIdx);
+    cam.querySelector('#auditCamVideo').srcObject = _auditCamStream;
+    cam.style.display = 'flex';
+}
+
+function closeAuditCamera() {
+    const cam = document.getElementById('auditCameraModal');
+    if (_auditCamStream) { _auditCamStream.getTracks().forEach(t => t.stop()); _auditCamStream = null; }
+    if (cam) { const v = cam.querySelector('#auditCamVideo'); if (v) v.srcObject = null; cam.style.display = 'none'; }
+}
+
+function captureAuditPhoto(sIdx) {
+    const cam = document.getElementById('auditCameraModal');
+    const video = cam && cam.querySelector('#auditCamVideo');
+    if (!video || !video.videoWidth) return;
+    const title = _auSecTitle(sIdx);
+    if (!_auditEntryPhotos[title]) _auditEntryPhotos[title] = [];
+    if (_auditEntryPhotos[title].length >= 6) { alert('Up to 6 photos per section.'); closeAuditCamera(); return; }
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    canvas.toBlob((blob) => {
+        if (blob) {
+            const file = new File([blob], `audit_capture_${Date.now()}.jpg`, { type: 'image/jpeg' });
+            _auditEntryPhotos[title].push({ file, localUrl: URL.createObjectURL(blob), name: file.name });
+            renderAuditSectionPhotos(sIdx);
+        }
+        closeAuditCamera();
+    }, 'image/jpeg', 0.9);
+}
+
 // Upload one image to the audit-photos bucket; returns {url, path, name}.
 async function _uploadAuditPhoto(file) {
     const safeName = `${Date.now()}_${Math.round(Math.random() * 1e6)}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
@@ -10082,6 +10179,7 @@ function renderAuditEntry() {
                     📷 Add photo(s)
                     <input type="file" accept="image/*" multiple onchange="onAuditPhotoAdd(${sIdx}, this)" style="display:none;">
                 </label>
+                <button type="button" onclick="openAuditCamera(${sIdx})" style="display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:800; color:#475569; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:8px; padding:6px 11px; cursor:pointer;">📸 Take photo</button>
                 <span id="audit-photo-hint-${sIdx}" style="font-size:11px; color:#94a3b8; font-weight:700;"></span>
             </div>
             <div id="audit-photos-${sIdx}" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;"></div>
