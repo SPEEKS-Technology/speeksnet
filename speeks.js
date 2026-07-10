@@ -14437,7 +14437,7 @@ function _syncHotbarExtras(userRoleClass, userName) {
     const oldBar = document.getElementById('hotbarExtras');
     if (oldBar) oldBar.remove();
 
-    const extras = [];
+    const extras = []; // [{ a, barLabel }]
     stack.querySelectorAll('.hotbar-wrapper').forEach(wrap => {
         if (wrap.id === 'hotbarExtras') return;
         const links = Array.from(wrap.querySelectorAll('.hotbar-btn[data-feature]'));
@@ -14449,7 +14449,9 @@ function _syncHotbarExtras(userRoleClass, userName) {
             // the entire bar was granted → show it as itself
             wrap.style.setProperty('display', 'flex', 'important');
         } else {
-            extras.push(...enabled);
+            const labelEl = wrap.querySelector('.hotbar-label');
+            const barLabel = labelEl ? String(labelEl.textContent || '').trim() : '';
+            enabled.forEach(a => extras.push({ a, barLabel }));
         }
     });
     if (!extras.length) return;
@@ -14463,16 +14465,29 @@ function _syncHotbarExtras(userRoleClass, userName) {
             if (a.style.display !== 'none') visibleHrefs.add(a.getAttribute('href'));
         });
     });
-    const fresh = extras.filter(a => !visibleHrefs.has(a.getAttribute('href')));
+    const fresh = extras.filter(e => !visibleHrefs.has(e.a.getAttribute('href')));
     if (!fresh.length) return;
 
-    const makeClone = a => {
+    // Borrowed links from a DIFFERENT store's bar carry a small store badge
+    // (e.g. Nick at OVL borrowing WSP's Passwords sees "Passwords · WSP") so
+    // nobody opens another store's sheet thinking it's their own. Role-bar
+    // borrows (CEO/DM/TOM/MGR/ASM/Resources) are company links — no badge.
+    const STORE_BAR_LABELS = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    const userStore = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    const makeClone = ({ a, barLabel }) => {
         const clone = a.cloneNode(true);
         // the clone is display-only; the hidden original stays the canonical
         // override target, so strip the key to avoid double-processing
         clone.removeAttribute('data-feature');
         clone.style.removeProperty('display');
         clone.classList.add('hotbar-extra-clone');
+        const src = String(barLabel || '').toUpperCase();
+        if (STORE_BAR_LABELS.includes(src) && src !== userStore) {
+            const badge = document.createElement('span');
+            badge.className = 'hotbar-src-badge';
+            badge.textContent = src;
+            clone.appendChild(badge);
+        }
         return clone;
     };
 
@@ -14480,7 +14495,7 @@ function _syncHotbarExtras(userRoleClass, userName) {
     const host = visibleBars[0];
     const hostLinks = host ? host.querySelector('.hotbar-links') : null;
     if (hostLinks) {
-        fresh.forEach(a => hostLinks.appendChild(makeClone(a)));
+        fresh.forEach(e => hostLinks.appendChild(makeClone(e)));
         return;
     }
 
@@ -14496,7 +14511,7 @@ function _syncHotbarExtras(userRoleClass, userName) {
     label.textContent = 'EXTRAS';
     const linksDiv = document.createElement('div');
     linksDiv.className = 'hotbar-links';
-    fresh.forEach(a => linksDiv.appendChild(makeClone(a)));
+    fresh.forEach(e => linksDiv.appendChild(makeClone(e)));
     inner.appendChild(label);
     inner.appendChild(linksDiv);
     div.appendChild(inner);
