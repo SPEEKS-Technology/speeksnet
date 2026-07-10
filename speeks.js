@@ -56,6 +56,7 @@ const MONTHLY_BRIEF_URL = `${_BASE}/monthly-brief`;
 const B2B_URL           = `${_BASE}/b2b-deals`;
 const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
 const RECYCLE_URL       = `${_BASE}/recycle-requests`;
+const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -5836,7 +5837,7 @@ async function markListingGoalsChecklistComplete() {
 
     if (!targetTaskId) {
         try {
-            const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
+            const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}${_checklistPersonalParam()}&v=${Date.now()}`);
             const data = await res.json();
             if (data && data.daily) {
                 const task = data.daily.find(t => t.text.toLowerCase().includes('listing goals'));
@@ -7459,13 +7460,45 @@ function applyRoleBasedUI() {
             (userRoleClass === 'role-assistant-manager' && requiredRoles.includes('role-employee'));
         const passesStore = requiredStores.length === 0 || requiredStores.includes(userStoreClass);
 
-        if (passesRole && passesStore) {
+        let visible = passesRole && passesStore;
+        // Feature Access override (DM/CEO-managed, feature_overrides table):
+        // a user-level override beats a role-level override beats the default above.
+        const featureKey = module.getAttribute('data-feature');
+        if (featureKey) {
+            const ov = _featureOverrideFor(featureKey, userRoleClass, userName);
+            // mark cards an override removed (vs. hidden by design) so the
+            // dashboard rows know when to rebalance the remaining cards
+            if (ov === false && visible) module.setAttribute('data-fa-hidden', '1');
+            else module.removeAttribute('data-fa-hidden');
+            if (ov !== null) visible = ov;
+        }
+
+        if (visible) {
             let displayType = module.classList.contains('dynamic-module-flex') ? 'flex' : 'block';
             module.style.setProperty('display', displayType, 'important');
         } else {
             module.style.setProperty('display', 'none', 'important');
         }
     });
+
+    // Feature overrides on plain (non role-gated) elements — e.g. individual
+    // hotbar links, which normally just inherit their bar's visibility.
+    _applyFeatureOverridesToPlainEls(userRoleClass, userName);
+    // Force-enabled hotbar links from bars this user doesn't normally see:
+    // a fully-enabled bar shows up as itself; partial picks are collected into
+    // a synthetic EXTRAS bar so one borrowed link never drags in a whole
+    // foreign hotbar.
+    _syncHotbarExtras(userRoleClass, userName);
+    // Dashboard card rows where an override hid a card rebalance so the
+    // remaining cards fill the row instead of leaving an empty slot.
+    _rebalanceDashboardRows();
+    // Tools button / group visibility follows what's actually visible inside
+    // the panel, so overrides can add or remove tools for any role without the
+    // static role-class unions drifting out of sync.
+    _syncToolsPanelChrome();
+    // First call kicks off a background refresh of the overrides from Supabase
+    // (cached copy applies instantly; a change re-runs this function once).
+    _kickFeatureOverridesRefresh();
 
     if (userRole === 'employee' || userRole === 'assistant manager') {
         document.querySelectorAll('.manager-only').forEach(el => el.style.setProperty('display', 'none', 'important'));
@@ -11863,6 +11896,13 @@ function getChecklistUser() {
     return _resolveStoreManager(store) || userName;
 }
 
+// TOM gets a personal-only checklist: no store broadcasts or DM required
+// tasks — it starts blank until they (or a DM) add tasks for them directly.
+function _checklistPersonalParam() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return role === 'tom' ? '&personal=1' : '';
+}
+
 function switchChecklistTab(tab) {
     currentChecklistTab = tab;
     document.getElementById('cl-tab-daily').classList.toggle('active', tab === 'daily');
@@ -11914,7 +11954,7 @@ async function loadChecklist() {
     container.innerHTML = '<div class="status-message">Syncing Checklist...</div>';
 
     try {
-        const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
+        const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}${_checklistPersonalParam()}&v=${Date.now()}`);
         checklistDataCache = await res.json();
         _applyPendingToggles();
         renderChecklist();
@@ -12333,7 +12373,7 @@ async function _prefetchChecklistForChip() {
     }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     try {
-        const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
+        const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}${_checklistPersonalParam()}&v=${Date.now()}`);
         checklistDataCache = await res.json();
         _applyPendingToggles();
         updateChecklistChip();
@@ -12365,7 +12405,7 @@ function _startChecklistSync() {
         }
         const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
         try {
-            const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
+            const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}${_checklistPersonalParam()}&v=${Date.now()}`);
             checklistDataCache = await res.json();
             _applyPendingToggles();
             renderChecklist();
@@ -14224,5 +14264,581 @@ async function setRecycleReviewed(id, reviewed) {
     } catch (e) {
         alert('Could not update: ' + e.message);
         fetchRecycleOversight();
+    }
+}
+
+// ============================================================
+// FEATURE ACCESS (DM/CEO)
+// ============================================================
+// DB-driven show/hide overrides for SPEEKS Tools, hotbar links and dashboard
+// widgets — set per role or per user in the Feature Access tool, stored in
+// feature_overrides, and resolved as: user override > role override >
+// built-in default (the role-* classes in the HTML). Anything with a
+// data-feature attribute participates; to make a new element controllable,
+// add the attribute plus a FEATURE_CATALOG entry below (the catalog only
+// drives the settings UI — enforcement reads the DOM attributes).
+
+const FA_ROLES = [
+    { slug: 'ceo',               short: 'CEO', label: 'CEO' },
+    { slug: 'district-manager',  short: 'DM',  label: 'District Manager' },
+    { slug: 'owner-manager',     short: 'OM',  label: 'Owner (Manager)' },
+    { slug: 'manager',           short: 'MGR', label: 'Manager (incl. Multi-Store)' },
+    { slug: 'assistant-manager', short: 'ASM', label: 'Assistant Manager' },
+    { slug: 'employee',          short: 'EMP', label: 'Employee' },
+    { slug: 'training',          short: 'TRN', label: 'Training' },
+    { slug: 'tom',               short: 'TOM', label: 'TOM' },
+];
+
+const FEATURE_CATALOG = [
+    // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
+    { key: 'tool-claims-store',        label: 'Insurance Claims (store)',      tab: 'tools', group: '🛟 Claims & Refunds', def: ['manager', 'owner-manager'] },
+    { key: 'tool-claims-oversight',    label: 'Insurance Claims (oversight)',  tab: 'tools', group: '🛟 Claims & Refunds', def: ['district-manager', 'ceo'] },
+    { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: '📢 Content', def: ['district-manager', 'ceo', 'tom', 'owner-manager'] },
+    { key: 'tool-ticker',              label: 'Ticker Items',                  tab: 'tools', group: '📢 Content', def: ['district-manager'] },
+    { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: '📢 Content', def: ['district-manager'] },
+    { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: '🏪 Store Ops', def: ['district-manager', 'ceo'] },
+    { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: '🏪 Store Ops', def: ['district-manager'] },
+    { key: 'tool-variance-report',     label: 'Submit Variance Report',        tab: 'tools', group: '🏪 Store Ops', def: ['district-manager'] },
+    { key: 'tool-store-comment',       label: 'Send Store Comment',            tab: 'tools', group: '🏪 Store Ops', def: ['district-manager', 'ceo'] },
+    { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: '📦 Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
+    { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: '📦 Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'tool-recycle-oversight',   label: 'Recycle Requests (oversight)',  tab: 'tools', group: '📦 Orders', def: ['district-manager', 'ceo'] },
+    { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
+    { key: 'tool-feature-access',      label: 'Feature Access (this tool)',    tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo'] },
+    { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
+    { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
+    { key: 'tool-manage-policies',     label: 'Manage Policies',               tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
+    { key: 'tool-monthly-awards',      label: 'Monthly Awards',                tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
+    { key: 'tool-system-hotkeys',      label: 'System Hotkeys',                tab: 'tools', group: '⚙ System', def: ['district-manager'] },
+    // ---- Widgets & side panels (ASM inherits employee defaults; mirrored here) ----
+    { key: 'widget-goals-panel',       label: 'Goals & Initiatives (sidebar)', tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'employee', 'training', 'assistant-manager'] },
+    { key: 'widget-checklist-panel',   label: 'Checklist (sidebar)',           tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'district-manager', 'assistant-manager'] },
+    { key: 'widget-audit-panel',       label: 'Store Audit (sidebar)',         tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-scorecard-alerts',  label: 'Store Scorecard & Alerts row',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'widget-buying-selling',    label: 'Buying & Sales',                tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    { key: 'widget-emp-listing-goals', label: 'My Listing Goals (employee)',   tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'widget-listing-goals',     label: 'Listing Goals (manager)',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'widget-emp-weekly-kpis',   label: 'My Weekly KPIs (employee)',     tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'widget-variance-reports',  label: 'Live Variance Reports (manager)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    // ---- Hotbar links (index dashboard; keys generated from bar + label).
+    //      Store-bar links default to "all": the bar itself is store-scoped,
+    //      the link just inherits it. ----
+    { key: 'hb-ceo-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-store-passwords', label: 'Store Passwords', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-tom-folder', label: 'TOM Folder', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-paymore-google-drive', label: 'PayMore Google Drive', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-dm-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-store-passwords', label: 'Store Passwords', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-variance', label: 'Variance', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-paymore-google-drive', label: 'PayMore Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-tom-tom-folder', label: 'TOM Folder', tab: 'hotbar', group: 'TOM Hotbar', def: ['tom'] },
+    { key: 'hb-tom-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'TOM Hotbar', def: ['tom'] },
+    { key: 'hb-tom-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'TOM Hotbar', def: ['tom'] },
+    { key: 'hb-res-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'Resources Hotbar', def: ['district-manager'] },
+    { key: 'hb-res-training', label: 'Training', tab: 'hotbar', group: 'Resources Hotbar', def: ['district-manager'] },
+    { key: 'hb-mgr-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
+    { key: 'hb-mgr-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
+    { key: 'hb-mgr-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
+    { key: 'hb-mgr-location-visits', label: 'Location Visits', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
+    { key: 'hb-asm-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
+    { key: 'hb-asm-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
+    { key: 'hb-asm-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
+    { key: 'hb-lee-passwords', label: 'Passwords', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-lee-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-lee-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-lee-pc-inventory', label: 'PC Inventory', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-lee-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-lee-training', label: 'Training', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-ovl-passwords', label: 'Passwords', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-ovl-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-ovl-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-ovl-pc-inventory', label: 'PC Inventory', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-ovl-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-ovl-training', label: 'Training', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-wsp-passwords', label: 'Passwords', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
+    { key: 'hb-wsp-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
+    { key: 'hb-wsp-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
+    { key: 'hb-wsp-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
+    { key: 'hb-wsp-training', label: 'Training', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
+    { key: 'hb-mpl-passwords', label: 'Passwords', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
+    { key: 'hb-mpl-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
+    { key: 'hb-mpl-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
+    { key: 'hb-mpl-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
+    { key: 'hb-mpl-training', label: 'Training', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
+    { key: 'hb-bal-passwords', label: 'Passwords', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
+    { key: 'hb-bal-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
+    { key: 'hb-bal-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
+    { key: 'hb-bal-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
+    { key: 'hb-bal-training', label: 'Training', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
+];
+
+// ---- runtime override state ------------------------------------------------
+let _featureOv = { role: {}, user: {} };  // resolved lookup maps
+let _featureOvRaw = [];                    // raw rows (settings UI needs subjects)
+(function () {
+    try {
+        const cached = JSON.parse(localStorage.getItem('speeksFeatureOv') || 'null');
+        if (cached && cached.role && cached.user) _featureOv = cached;
+    } catch (e) { /* corrupt cache — defaults apply until the refresh lands */ }
+})();
+
+function _buildFeatureOvMaps(rows) {
+    const maps = { role: {}, user: {} };
+    (rows || []).forEach(r => {
+        const bucket = maps[r.subject_type];
+        if (!bucket) return;
+        (bucket[r.feature_key] = bucket[r.feature_key] || {})[String(r.subject).toLowerCase()] = !!r.enabled;
+    });
+    return maps;
+}
+
+function _featureOverrideFor(featureKey, userRoleClass, userName) {
+    // The Feature Access tool can never be hidden from a District Manager —
+    // it's the tool that undoes bad overrides (the backend blocks this too).
+    if (featureKey === 'tool-feature-access' && userRoleClass === 'role-district-manager') return null;
+    const byUser = _featureOv.user[featureKey];
+    const name = String(userName || '').trim().toLowerCase();
+    if (byUser && Object.prototype.hasOwnProperty.call(byUser, name)) return byUser[name];
+    const byRole = _featureOv.role[featureKey];
+    const roleSlug = String(userRoleClass || '').replace(/^role-/, '');
+    if (byRole && Object.prototype.hasOwnProperty.call(byRole, roleSlug)) return byRole[roleSlug];
+    return null;
+}
+
+// Overrides on plain (non role-gated) elements — e.g. individual hotbar links,
+// which normally just inherit their bar's visibility. Only "off" does work
+// here; "on" simply falls back to the inherited default.
+function _applyFeatureOverridesToPlainEls(userRoleClass, userName) {
+    document.querySelectorAll('[data-feature]').forEach(el => {
+        if (el.classList.contains('dynamic-module') || el.classList.contains('dynamic-module-flex') || el.classList.contains('dynamic-module-block')) return;
+        const ov = _featureOverrideFor(el.getAttribute('data-feature'), userRoleClass, userName);
+        if (ov === false) el.style.setProperty('display', 'none', 'important');
+        else el.style.removeProperty('display');
+    });
+}
+
+// Surface force-enabled hotbar links that live inside bars this user doesn't
+// see. Enabling EVERY link of a bar shows the real bar; enabling just some
+// appends those links to the user's main (first visible) hotbar — one
+// borrowed link never drags in a whole foreign hotbar. A standalone EXTRAS
+// bar is only created for users who have no visible hotbar to attach to.
+function _syncHotbarExtras(userRoleClass, userName) {
+    const stack = document.querySelector('.hotbars-stack');
+    if (!stack) return; // hotbars only exist on the dashboard
+    // rebuild from scratch on every apply
+    stack.querySelectorAll('.hotbar-extra-clone').forEach(c => c.remove());
+    const oldBar = document.getElementById('hotbarExtras');
+    if (oldBar) oldBar.remove();
+
+    const extras = [];
+    stack.querySelectorAll('.hotbar-wrapper').forEach(wrap => {
+        if (wrap.id === 'hotbarExtras') return;
+        const links = Array.from(wrap.querySelectorAll('.hotbar-btn[data-feature]'));
+        if (!links.length) return;
+        if (wrap.style.display !== 'none') return; // visible bars: the plain-els pass already handled their links
+        const enabled = links.filter(a => _featureOverrideFor(a.getAttribute('data-feature'), userRoleClass, userName) === true);
+        if (!enabled.length) return;
+        if (enabled.length === links.length) {
+            // the entire bar was granted → show it as itself
+            wrap.style.setProperty('display', 'flex', 'important');
+        } else {
+            extras.push(...enabled);
+        }
+    });
+    if (!extras.length) return;
+
+    // skip borrowed links whose URL is already visible in one of the user's bars
+    const visibleBars = Array.from(stack.querySelectorAll('.hotbar-wrapper'))
+        .filter(w => w.id !== 'hotbarExtras' && w.style.display !== 'none');
+    const visibleHrefs = new Set();
+    visibleBars.forEach(w => {
+        w.querySelectorAll('.hotbar-btn[data-feature]').forEach(a => {
+            if (a.style.display !== 'none') visibleHrefs.add(a.getAttribute('href'));
+        });
+    });
+    const fresh = extras.filter(a => !visibleHrefs.has(a.getAttribute('href')));
+    if (!fresh.length) return;
+
+    const makeClone = a => {
+        const clone = a.cloneNode(true);
+        // the clone is display-only; the hidden original stays the canonical
+        // override target, so strip the key to avoid double-processing
+        clone.removeAttribute('data-feature');
+        clone.style.removeProperty('display');
+        clone.classList.add('hotbar-extra-clone');
+        return clone;
+    };
+
+    // append to the user's main (first visible) hotbar
+    const host = visibleBars[0];
+    const hostLinks = host ? host.querySelector('.hotbar-links') : null;
+    if (hostLinks) {
+        fresh.forEach(a => hostLinks.appendChild(makeClone(a)));
+        return;
+    }
+
+    // no visible bar to attach to → standalone EXTRAS bar as a fallback
+    const div = document.createElement('div');
+    div.id = 'hotbarExtras';
+    div.className = 'hotbar-wrapper';
+    div.style.display = 'flex';
+    const inner = document.createElement('div');
+    inner.className = 'hotbar-container';
+    const label = document.createElement('span');
+    label.className = 'hotbar-label';
+    label.textContent = 'EXTRAS';
+    const linksDiv = document.createElement('div');
+    linksDiv.className = 'hotbar-links';
+    fresh.forEach(a => linksDiv.appendChild(makeClone(a)));
+    inner.appendChild(label);
+    inner.appendChild(linksDiv);
+    div.appendChild(inner);
+    stack.appendChild(div);
+}
+
+// Rebalance dashboard card rows where a Feature Access override hid a card
+// (marked data-fa-hidden in the module pass). Rows the overrides didn't touch
+// keep their designed layout — e.g. managers see two 33%-wide cards in the
+// main row by default, and that must not change. When an override DID remove
+// a card: 2 remaining cards split the row 50/50, a lone card sits centered at
+// half width, and a fully-emptied row disappears. The mobile media queries
+// use !important full-width rules, so phones stack cards exactly as before.
+function _rebalanceDashboardRows() {
+    document.querySelectorAll('.employee-dashboard-row, .top-alerts-row').forEach(row => {
+        const cards = Array.from(row.children).filter(c => c.classList && c.classList.contains('employee-widget-card'));
+        if (!cards.length) return;
+        // reset any previous rebalance before recomputing
+        cards.forEach(c => { c.style.removeProperty('flex'); c.style.removeProperty('max-width'); });
+        row.style.removeProperty('justify-content');
+        if (!cards.some(c => c.hasAttribute('data-fa-hidden'))) return;
+        const visible = cards.filter(c => c.style.display !== 'none');
+        if (!visible.length) { row.style.setProperty('display', 'none', 'important'); return; }
+        if (visible.length === 2) {
+            visible.forEach(c => {
+                c.style.setProperty('flex', '1 1 calc(50% - 15px)');
+                c.style.setProperty('max-width', 'calc(50% - 15px)');
+            });
+        } else if (visible.length === 1) {
+            visible[0].style.setProperty('flex', '0 1 50%');
+            visible[0].style.setProperty('max-width', '50%');
+            row.style.setProperty('justify-content', 'center');
+        }
+        // 3+ visible: the designed 33% layout already fits
+    });
+}
+
+// The SPEEKS Tools button/panel/groups follow whatever is actually visible
+// inside the panel, so overrides can add or remove tools for any role without
+// the static role-class unions drifting out of sync.
+function _syncToolsPanelChrome() {
+    const panel = document.getElementById('toolsSidePanel');
+    if (!panel) return;
+    let anyVisible = false;
+    panel.querySelectorAll('.tools-group').forEach(g => {
+        const vis = Array.from(g.querySelectorAll('.tools-item')).some(a => a.style.display !== 'none');
+        g.style.setProperty('display', vis ? 'block' : 'none', 'important');
+        if (vis) anyVisible = true;
+    });
+    panel.style.setProperty('display', anyVisible ? 'flex' : 'none', 'important');
+    const btn = document.getElementById('toolsNavBtn');
+    if (btn) btn.style.setProperty('display', anyVisible ? 'flex' : 'none', 'important');
+    if (!anyVisible && typeof _closeToolsPanel === 'function') _closeToolsPanel();
+}
+
+let _featureOvRefreshStarted = false;
+function _kickFeatureOverridesRefresh() {
+    if (_featureOvRefreshStarted) return;
+    _featureOvRefreshStarted = true;
+    fetch(`${FEATURE_ACCESS_URL}?v=${Date.now()}`).then(r => r.json()).then(json => {
+        if (!json || json.success === false) return;
+        _featureOvRaw = json.data || [];
+        const next = _buildFeatureOvMaps(_featureOvRaw);
+        const changed = JSON.stringify(next) !== JSON.stringify(_featureOv);
+        _featureOv = next;
+        localStorage.setItem('speeksFeatureOv', JSON.stringify(next));
+        if (changed) applyRoleBasedUI();
+    }).catch(() => {});
+}
+
+// ---- Feature Access settings modal ------------------------------------------
+let _faTab = 'tools';
+let _faUser = '';    // selected user (lowercased name) on the Per-User tab
+let _faUsers = [];   // [{name, role, store}] from the auth directory
+let _faFilter = '';
+
+function openFeatureAccess() {
+    toggleModal('featureAccessModal');
+    _faTab = 'tools';
+    _faFilter = '';
+    _faSyncTabButtons();
+    const body = document.getElementById('fa-body');
+    if (body) body.innerHTML = '<div class="status-message">Loading…</div>';
+    _faLoad();
+}
+
+async function _faLoad() {
+    try {
+        const [ovJson] = await Promise.all([
+            fetch(`${FEATURE_ACCESS_URL}?v=${Date.now()}`).then(r => r.json()),
+            _faLoadUsers(),
+        ]);
+        if (!ovJson || ovJson.success === false) throw new Error((ovJson && ovJson.error) || 'Load failed');
+        _featureOvRaw = ovJson.data || [];
+        _featureOv = _buildFeatureOvMaps(_featureOvRaw);
+        localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+        renderFaBody();
+        applyRoleBasedUI();
+    } catch (e) {
+        const body = document.getElementById('fa-body');
+        if (body) body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load feature settings.</div>';
+    }
+}
+
+async function _faLoadUsers() {
+    if (_faUsers.length) return _faUsers;
+    try {
+        let data = null;
+        try { data = JSON.parse(localStorage.getItem('speeksAuthCache') || 'null'); } catch (e) { /* refetch below */ }
+        if (!data || !Array.isArray(data.users)) {
+            const res = await fetch(`${AUTH_URL}?v=${Date.now()}`);
+            data = await res.json();
+        }
+        _faUsers = (data.users || []).filter(u => u && u.name)
+            .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    } catch (e) { _faUsers = []; }
+    return _faUsers;
+}
+
+function switchFaTab(tab) {
+    _faTab = tab;
+    _faSyncTabButtons();
+    renderFaBody();
+}
+
+function _faSyncTabButtons() {
+    ['tools', 'hotbar', 'widgets', 'user'].forEach(t => {
+        const b = document.getElementById('fa-tab-' + t);
+        if (b) b.classList.toggle('active', t === _faTab);
+    });
+}
+
+function _faDefaultFor(feat, roleSlug) {
+    return feat.def === 'all' ? true : feat.def.includes(roleSlug);
+}
+
+function _faRoleOverride(key, slug) {
+    const m = _featureOv.role[key];
+    return (m && Object.prototype.hasOwnProperty.call(m, slug)) ? m[slug] : null;
+}
+
+function _faUserOverride(key, name) {
+    const m = _featureOv.user[key];
+    return (m && Object.prototype.hasOwnProperty.call(m, name)) ? m[name] : null;
+}
+
+function renderFaBody() {
+    const body = document.getElementById('fa-body');
+    if (!body) return;
+    body.innerHTML = _faTab === 'user' ? _faUserTabHtml() : _faMatrixHtml(_faTab);
+}
+
+function _faMatrixHtml(tab) {
+    const feats = FEATURE_CATALOG.filter(f => f.tab === tab);
+    const hints = {
+        tools: 'Click a chip to force a tool on (✓) or off (✕) for that role — an amber ring means it\'s manually overridden; click again to flip it back (matching the default clears the override). Per-user exceptions on the Per-User tab beat these.',
+        hotbar: 'OFF always hides a link. Turning a link ON for a role/user that doesn\'t normally see its bar adds it to the end of their main hotbar — and if you enable every link of a bar, the whole bar shows up instead. Store-bar links (LEE…BAL) default to everyone in that store.',
+        widgets: 'Dashboard cards and sidebar panels. Same rules as tools: per-user exceptions beat these role settings.',
+    };
+    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:12px; line-height:1.5;">${hints[tab] || ''}</div>`;
+    const headerRow = `<div style="display:flex; align-items:center; gap:6px; padding:0 2px; margin-bottom:2px;">
+        <span style="flex:1;"></span>
+        ${FA_ROLES.map(r => `<span title="${r.label}" style="width:38px; text-align:center; font-size:9px; font-weight:800; color:#94a3b8; letter-spacing:.3px; flex-shrink:0;">${r.short}</span>`).join('')}
+    </div>`;
+    let lastGroup = '';
+    feats.forEach(f => {
+        if (f.group !== lastGroup) {
+            lastGroup = f.group;
+            html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:16px 2px 4px;">${f.group}</div>${headerRow}`;
+        }
+        html += `<div style="display:flex; align-items:center; gap:6px; padding:4px 2px; border-bottom:1px solid #f1f5f9;">
+            <span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${f.label}</span>
+            ${FA_ROLES.map(r => _faChipHtml(f, r)).join('')}
+        </div>`;
+    });
+    return html;
+}
+
+function _faChipHtml(f, role) {
+    const def = _faDefaultFor(f, role.slug);
+    const ovr = _faRoleOverride(f.key, role.slug);
+    const eff = ovr === null ? def : ovr;
+    const locked = f.key === 'tool-feature-access' && role.slug === 'district-manager';
+    const title = locked
+        ? 'Always on for District Managers (safety lock)'
+        : `${role.label}: ${eff ? 'visible' : 'hidden'}${ovr !== null ? ' (overridden)' : ' (default)'} — click to ${eff ? 'hide' : 'show'}`;
+    return `<button class="fa-chip ${eff ? 'fa-on' : 'fa-off'}${ovr !== null ? ' fa-ovr' : ''}"${locked ? ' disabled' : ''} onclick="faToggleRole('${f.key}', '${role.slug}')" title="${escapeHtml(title)}">${locked ? '🔒' : (eff ? '✓' : '✕')}</button>`;
+}
+
+async function faToggleRole(key, slug) {
+    const feat = FEATURE_CATALOG.find(f => f.key === key);
+    if (!feat) return;
+    const def = _faDefaultFor(feat, slug);
+    const cur = _faRoleOverride(key, slug);
+    const eff = cur === null ? def : cur;
+    const next = !eff;
+    const clearing = next === def; // back to default → remove the override row
+    const m = (_featureOv.role[key] = _featureOv.role[key] || {});
+    if (clearing) delete m[slug]; else m[slug] = next;
+    if (!Object.keys(m).length) delete _featureOv.role[key];
+    _featureOvRaw = _featureOvRaw.filter(r => !(r.subject_type === 'role' && r.feature_key === key && r.subject === slug));
+    if (!clearing) _featureOvRaw.push({ feature_key: key, subject_type: 'role', subject: slug, enabled: next });
+    localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+    renderFaBody();
+    applyRoleBasedUI(); // live-preview on this device
+    try {
+        const res = await fetch(FEATURE_ACCESS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'set_override', feature_key: key, subject_type: 'role', subject: slug,
+                enabled: clearing ? null : next,
+                updated_by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+    } catch (e) {
+        alert('Could not save: ' + e.message);
+        _faLoad(); // resync with the server's truth
+    }
+}
+
+function _faUserTabHtml() {
+    const ovCounts = {};
+    _featureOvRaw.filter(r => r.subject_type === 'user').forEach(r => {
+        const s = String(r.subject).toLowerCase();
+        ovCounts[s] = (ovCounts[s] || 0) + 1;
+    });
+    const names = _faUsers.map(u => u.name);
+    Object.keys(ovCounts).forEach(n => {
+        if (!names.some(x => x.toLowerCase() === n)) names.push(n); // keep orphaned overrides reachable
+    });
+    const opts = ['<option value="">Select a user…</option>'].concat(names.map(n => {
+        const low = n.toLowerCase();
+        const u = _faUsers.find(x => x.name.toLowerCase() === low);
+        const meta = u ? ` — ${u.role}${u.store ? ' · ' + u.store : ''}` : ' — (no longer in directory)';
+        const cnt = ovCounts[low] ? ` · ${ovCounts[low]} override${ovCounts[low] > 1 ? 's' : ''}` : '';
+        return `<option value="${escapeHtml(low)}" ${low === _faUser ? 'selected' : ''}>${escapeHtml(n + meta + cnt)}</option>`;
+    }));
+    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:12px; line-height:1.5;">
+        Per-user exceptions beat the role settings: force any tool, hotbar link or widget on or off for one person.
+        “Default” means the role rules decide.</div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
+        <select class="form-input-lg" style="flex:2; min-width:220px; margin-top:0;" onchange="_faUser=this.value; renderFaBody();">${opts.join('')}</select>
+        <input class="form-input-lg" style="flex:1; min-width:140px; margin-top:0;" placeholder="Filter features…" value="${escapeHtml(_faFilter)}" oninput="_faFilter=this.value; _faRenderUserRows();">
+    </div>`;
+    if (!_faUser) return html + '<div style="padding:20px; text-align:center; color:#94a3b8; font-weight:600;">Pick a user to manage their exceptions.</div>';
+    const cnt = ovCounts[_faUser] || 0;
+    if (cnt) {
+        html += `<div style="display:flex; justify-content:flex-end; margin-bottom:8px;">
+            <button class="btn-secondary" style="font-size:11.5px; padding:6px 12px;" onclick="faClearUser()">↺ Clear all ${cnt} override${cnt > 1 ? 's' : ''} for this user</button></div>`;
+    }
+    return html + `<div id="fa-user-rows">${_faUserRowsHtml()}</div>`;
+}
+
+function _faRenderUserRows() {
+    const wrap = document.getElementById('fa-user-rows');
+    if (wrap) wrap.innerHTML = _faUserRowsHtml();
+}
+
+function _faUserRowsHtml() {
+    const filter = _faFilter.trim().toLowerCase();
+    const u = _faUsers.find(x => x.name.toLowerCase() === _faUser);
+    // effective role slug (Multi-Store Manager logs in with role 'manager')
+    let roleSlug = u ? String(u.role || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-') : '';
+    if (roleSlug === 'multi-store-manager') roleSlug = 'manager';
+    let html = '', lastGroup = '';
+    FEATURE_CATALOG.forEach(f => {
+        if (filter && !(`${f.label} ${f.group}`).toLowerCase().includes(filter)) return;
+        if (f.group !== lastGroup) {
+            lastGroup = f.group;
+            html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:16px 2px 4px;">${f.group}</div>`;
+        }
+        const ovr = _faUserOverride(f.key, _faUser);
+        let inherited = null;
+        if (roleSlug) {
+            const roleOvr = _faRoleOverride(f.key, roleSlug);
+            inherited = roleOvr === null ? _faDefaultFor(f, roleSlug) : roleOvr;
+        }
+        const seg = (val, txt) => {
+            const active = (ovr === null && val === 'default') || (ovr === true && val === 'on') || (ovr === false && val === 'off');
+            const cls = active ? (val === 'on' ? ' fa-seg-active fa-seg-on' : (val === 'off' ? ' fa-seg-active fa-seg-off' : ' fa-seg-active')) : '';
+            return `<button class="fa-seg${cls}" onclick="faSetUser('${f.key}', '${val}')">${txt}</button>`;
+        };
+        html += `<div style="display:flex; align-items:center; gap:8px; padding:4px 2px; border-bottom:1px solid #f1f5f9;">
+            <span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${f.label}${inherited !== null ? `<span style="font-weight:600; color:#cbd5e1; font-size:11px;"> · role default: ${inherited ? 'visible' : 'hidden'}</span>` : ''}</span>
+            <div style="display:inline-flex; border:1.5px solid #e2e8f0; border-radius:8px; overflow:hidden; flex-shrink:0;">
+                ${seg('default', 'Default')}${seg('on', 'On')}${seg('off', 'Off')}
+            </div>
+        </div>`;
+    });
+    return html || '<div style="padding:16px; text-align:center; color:#94a3b8; font-weight:600;">No features match the filter.</div>';
+}
+
+async function faSetUser(key, val) {
+    if (!_faUser) return;
+    const enabled = val === 'default' ? null : (val === 'on');
+    const m = (_featureOv.user[key] = _featureOv.user[key] || {});
+    if (enabled === null) delete m[_faUser]; else m[_faUser] = enabled;
+    if (!Object.keys(m).length) delete _featureOv.user[key];
+    _featureOvRaw = _featureOvRaw.filter(r => !(r.subject_type === 'user' && r.feature_key === key && String(r.subject).toLowerCase() === _faUser));
+    if (enabled !== null) _featureOvRaw.push({ feature_key: key, subject_type: 'user', subject: _faUser, enabled });
+    localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+    renderFaBody();
+    applyRoleBasedUI();
+    try {
+        const res = await fetch(FEATURE_ACCESS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'set_override', feature_key: key, subject_type: 'user', subject: _faUser,
+                enabled,
+                updated_by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+    } catch (e) {
+        alert('Could not save: ' + e.message);
+        _faLoad();
+    }
+}
+
+async function faClearUser() {
+    if (!_faUser) return;
+    if (!confirm('Clear ALL feature overrides for this user? Their role settings will apply again.')) return;
+    Object.keys(_featureOv.user).forEach(k => {
+        delete _featureOv.user[k][_faUser];
+        if (!Object.keys(_featureOv.user[k]).length) delete _featureOv.user[k];
+    });
+    _featureOvRaw = _featureOvRaw.filter(r => !(r.subject_type === 'user' && String(r.subject).toLowerCase() === _faUser));
+    localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+    renderFaBody();
+    applyRoleBasedUI();
+    try {
+        const res = await fetch(FEATURE_ACCESS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'clear_user', subject: _faUser }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+    } catch (e) {
+        alert('Could not clear: ' + e.message);
+        _faLoad();
     }
 }

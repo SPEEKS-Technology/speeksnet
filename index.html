@@ -97,18 +97,18 @@
     <div class="ticker-track" id="tickerTrack"></div>
   </div>
   <div class="ticker-panel-buttons">
-    <button class="gi-nav-toggle dynamic-module-flex role-manager role-owner-manager role-employee role-training" onclick="toggleGoalsPanel()" title="Goals &amp; Initiatives">
+    <button class="gi-nav-toggle dynamic-module-flex role-manager role-owner-manager role-employee role-training" data-feature="widget-goals-panel" onclick="toggleGoalsPanel()" title="Goals &amp; Initiatives">
         <span style="font-size: 13px; line-height: 1;">🎯</span>
         <span>Goals &amp; Initiatives</span>
         <svg class="gi-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
-    <button class="cl-nav-toggle dynamic-module-flex role-manager role-owner-manager role-district-manager role-assistant-manager" onclick="toggleChecklistPanel(event); loadChecklist();" title="Checklist">
+    <button class="cl-nav-toggle dynamic-module-flex role-manager role-owner-manager role-district-manager role-assistant-manager" data-feature="widget-checklist-panel" onclick="toggleChecklistPanel(event); loadChecklist();" title="Checklist">
         <span style="font-size: 13px; line-height: 1;">📋</span>
         <span>Checklist</span>
         <span id="cl-progress-chip" class="cl-progress-chip"></span>
         <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
-    <button class="cl-nav-toggle audit-nav-toggle dynamic-module-flex role-manager role-owner-manager role-assistant-manager" onclick="toggleAuditPanel(event); loadAudit();" title="Store Audit">
+    <button class="cl-nav-toggle audit-nav-toggle dynamic-module-flex role-manager role-owner-manager role-assistant-manager" data-feature="widget-audit-panel" onclick="toggleAuditPanel(event); loadAudit();" title="Store Audit">
         <span style="font-size: 13px; line-height: 1;">🧹</span>
         <span>Store Audit</span>
         <span id="audit-progress-chip" class="cl-progress-chip"></span>
@@ -510,13 +510,13 @@
         <div class="hotbar-container">
           <span class="hotbar-label">CEO</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">📊 Sales Summary</a> 
-            <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn">🔑 Store Passwords</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn">📁 Store Manager Folder</a>
-            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn">📁 TOM Folder</a>
-            <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn">☁️ PayMore Google Drive</a> 
-            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn">☁️ SPEEKSNET Google Drive</a>  
+            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-ceo-sales-summary">📊 Sales Summary</a> 
+            <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-store-passwords">🔑 Store Passwords</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-b2b-records">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-store-manager-folder">📁 Store Manager Folder</a>
+            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-tom-folder">📁 TOM Folder</a>
+            <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-paymore-google-drive">☁️ PayMore Google Drive</a> 
+            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>  
         </div>
         </div>
       </div>
@@ -525,13 +525,13 @@
         <div class="hotbar-container">
           <span class="hotbar-label">DM</span>
           <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn">📁 Store Manager Folder</a>
-            <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn">🔑 Store Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">📊 Sales Summary</a>
-            <a href="https://drive.google.com/drive/folders/12Fjxp44sY6T-o6OlrG6n_YtrHow4bE2f?usp=sharing" target="_blank" class="hotbar-btn">⚖️ Variance</a>
-            <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn">⏳ Aging Inventory</a>
-            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn">☁️ SPEEKSNET Google Drive</a>
-            <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn">☁️ PayMore Google Drive</a> 
+            <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-store-manager-folder">📁 Store Manager Folder</a>
+            <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-store-passwords">🔑 Store Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-dm-sales-summary">📊 Sales Summary</a>
+            <a href="https://drive.google.com/drive/folders/12Fjxp44sY6T-o6OlrG6n_YtrHow4bE2f?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-variance">⚖️ Variance</a>
+            <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-aging-inventory">⏳ Aging Inventory</a>
+            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>
+            <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-paymore-google-drive">☁️ PayMore Google Drive</a> 
           </div>
         </div>
       </div>
@@ -540,9 +540,9 @@
         <div class="hotbar-container">
           <span class="hotbar-label">TOM</span>
           <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn">📁 TOM Folder</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>   
-            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn">☁️ SPEEKSNET Google Drive</a>  
+            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-tom-tom-folder">📁 TOM Folder</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-tom-b2b-records">🏢 B2B Records</a>   
+            <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-tom-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>  
         </div>
         </div>
       </div>
@@ -551,8 +551,8 @@
         <div class="hotbar-container">
           <span class="hotbar-label">Resources</span>
           <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">🎓 Training</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-res-b2b-records">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-res-training">🎓 Training</a>
           </div>
         </div>
       </div>
@@ -561,10 +561,10 @@
         <div class="hotbar-container">
           <span class="hotbar-label">MGR</span>
           <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn">📁 Store Manager Folder</a>
-            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">📊 Sales Summary</a>
-            <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn">⏳ Aging Inventory</a>
-            <a href="https://docs.google.com/spreadsheets/d/1ar3tabN-bUqkjWqgy25MCHzSup2jhiaAKaGxLwZTeJ8/edit?usp=sharing" target="_blank" class="hotbar-btn">🚗 Location Visits</a>
+            <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-mgr-store-manager-folder">📁 Store Manager Folder</a>
+            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-mgr-sales-summary">📊 Sales Summary</a>
+            <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-mgr-aging-inventory">⏳ Aging Inventory</a>
+            <a href="https://docs.google.com/spreadsheets/d/1ar3tabN-bUqkjWqgy25MCHzSup2jhiaAKaGxLwZTeJ8/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-mgr-location-visits">🚗 Location Visits</a>
           </div>
         </div>
       </div>
@@ -573,9 +573,9 @@
         <div class="hotbar-container">
           <span class="hotbar-label">ASM</span>
           <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn">📁 Store Manager Folder</a>
-            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn">📊 Sales Summary</a>
-            <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn">⏳ Aging Inventory</a>
+            <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-asm-store-manager-folder">📁 Store Manager Folder</a>
+            <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-asm-sales-summary">📊 Sales Summary</a>
+            <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-asm-aging-inventory">⏳ Aging Inventory</a>
           </div>
         </div>
       </div>
@@ -584,12 +584,12 @@
         <div class="hotbar-container">
           <span class="hotbar-label">LEE</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1BWWMPddxjoTTZL9ZRfgiH6-EiE5vaOczi-x_41Skaxk/edit?usp=sharing" target="_blank" class="hotbar-btn">🔑 Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/130-aH4s8pNeggrqVSXSJ0R0JDnWkskXUfhNPxSAlPRg/edit?usp=sharing" target="_blank" class="hotbar-btn">🛒 Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/1qExWuMZKBD3DCm_i9m5kNnN4WhouHeJuA3gYWXLihrA/edit?usp=sharing" target="_blank" class="hotbar-btn">🛍️ Employee Purchases</a>
-            <a href="https://docs.google.com/spreadsheets/d/1D9epYOeJ1OZADUniM4MovvUqaiPfoyKAnedCcbEeFbM/edit?usp=sharing" target="_blank" class="hotbar-btn">💻 PC Inventory</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">🎓 Training</a>
+            <a href="https://docs.google.com/spreadsheets/d/1BWWMPddxjoTTZL9ZRfgiH6-EiE5vaOczi-x_41Skaxk/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-lee-passwords">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/130-aH4s8pNeggrqVSXSJ0R0JDnWkskXUfhNPxSAlPRg/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-lee-marketplace">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/1qExWuMZKBD3DCm_i9m5kNnN4WhouHeJuA3gYWXLihrA/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-lee-employee-purchases">🛍️ Employee Purchases</a>
+            <a href="https://docs.google.com/spreadsheets/d/1D9epYOeJ1OZADUniM4MovvUqaiPfoyKAnedCcbEeFbM/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-lee-pc-inventory">💻 PC Inventory</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-lee-b2b-records">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-lee-training">🎓 Training</a>
           </div>
         </div>
       </div>
@@ -598,12 +598,12 @@
         <div class="hotbar-container">
           <span class="hotbar-label">OVL</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1Ze3z9iyDZZaXsOEjOekEEsrO7OqDpVeH6Bhk4t67K2I/edit" target="_blank" class="hotbar-btn">🔑 Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1r2UfB926QvaSDuO7_mqOE8z4u6IWjgbIqg_N6rfFV9c/edit" target="_blank" class="hotbar-btn">🛒 Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/1DhNRld28CSUKG-4B-dHU4o8gyREKtqLo2J2rI2IdT8M/edit" target="_blank" class="hotbar-btn">🛍️ Employee Purchases</a>
-            <a href="https://docs.google.com/spreadsheets/d/1RKMryoJ7BZgB5DjSUaTjCSvJQW8_OAkmnwXfBznlSX0/edit" target="_blank" class="hotbar-btn">💻 PC Inventory</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">🎓 Training</a>
+            <a href="https://docs.google.com/spreadsheets/d/1Ze3z9iyDZZaXsOEjOekEEsrO7OqDpVeH6Bhk4t67K2I/edit" target="_blank" class="hotbar-btn" data-feature="hb-ovl-passwords">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/1r2UfB926QvaSDuO7_mqOE8z4u6IWjgbIqg_N6rfFV9c/edit" target="_blank" class="hotbar-btn" data-feature="hb-ovl-marketplace">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/1DhNRld28CSUKG-4B-dHU4o8gyREKtqLo2J2rI2IdT8M/edit" target="_blank" class="hotbar-btn" data-feature="hb-ovl-employee-purchases">🛍️ Employee Purchases</a>
+            <a href="https://docs.google.com/spreadsheets/d/1RKMryoJ7BZgB5DjSUaTjCSvJQW8_OAkmnwXfBznlSX0/edit" target="_blank" class="hotbar-btn" data-feature="hb-ovl-pc-inventory">💻 PC Inventory</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ovl-b2b-records">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ovl-training">🎓 Training</a>
           </div>
         </div>
       </div>
@@ -612,11 +612,11 @@
         <div class="hotbar-container">
           <span class="hotbar-label">WSP</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/14AYsHQ0R1IEXqgKqrGEuyURHGi3fFKrAglgu0dVFJPE/edit" target="_blank" class="hotbar-btn">🔑 Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1V0TQ1cJXqUzt0mRnrjvPt_TLzlE8vE7MpxxIMQ9X2yE/edit" target="_blank" class="hotbar-btn">🛒 Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/1tp5E1yQhx0j776N-1WMhTzXA_ltvPOPiltsYo65fyc0/edit" target="_blank" class="hotbar-btn">🛍️ Employee Purchases</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">🎓 Training</a>
+            <a href="https://docs.google.com/spreadsheets/d/14AYsHQ0R1IEXqgKqrGEuyURHGi3fFKrAglgu0dVFJPE/edit" target="_blank" class="hotbar-btn" data-feature="hb-wsp-passwords">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/1V0TQ1cJXqUzt0mRnrjvPt_TLzlE8vE7MpxxIMQ9X2yE/edit" target="_blank" class="hotbar-btn" data-feature="hb-wsp-marketplace">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/1tp5E1yQhx0j776N-1WMhTzXA_ltvPOPiltsYo65fyc0/edit" target="_blank" class="hotbar-btn" data-feature="hb-wsp-employee-purchases">🛍️ Employee Purchases</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-wsp-b2b-records">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-wsp-training">🎓 Training</a>
           </div>
         </div>
       </div>
@@ -625,11 +625,11 @@
         <div class="hotbar-container">
           <span class="hotbar-label">MPL</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/18VeWgGjoIfKRlJUtj0PTU1-uJJavKaPu3W2o_A4vyFs/edit" target="_blank" class="hotbar-btn">🔑 Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/1xVJ_JJD-wZUbzFfer4fF50CH6RkZ-sqzxe4bYRGqDtE/edit" target="_blank" class="hotbar-btn">🛒 Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/10DiGbDO0tyHitLpltOiTix2TowoeMNzsp0a3MjOtTSY/edit" target="_blank" class="hotbar-btn">🛍️ Employee Purchases</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">🎓 Training</a>
+            <a href="https://docs.google.com/spreadsheets/d/18VeWgGjoIfKRlJUtj0PTU1-uJJavKaPu3W2o_A4vyFs/edit" target="_blank" class="hotbar-btn" data-feature="hb-mpl-passwords">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/1xVJ_JJD-wZUbzFfer4fF50CH6RkZ-sqzxe4bYRGqDtE/edit" target="_blank" class="hotbar-btn" data-feature="hb-mpl-marketplace">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/10DiGbDO0tyHitLpltOiTix2TowoeMNzsp0a3MjOtTSY/edit" target="_blank" class="hotbar-btn" data-feature="hb-mpl-employee-purchases">🛍️ Employee Purchases</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-mpl-b2b-records">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-mpl-training">🎓 Training</a>
           </div>
         </div>
       </div>
@@ -638,18 +638,18 @@
         <div class="hotbar-container">
           <span class="hotbar-label">BAL</span>
           <div class="hotbar-links">
-            <a href="https://docs.google.com/spreadsheets/d/1SuXAQc66OzKOfXkPcp7pCCsccWFB4RbHG2N6YGt3wf0/edit" target="_blank" class="hotbar-btn">🔑 Passwords</a>
-            <a href="https://docs.google.com/spreadsheets/d/192c0M5Mxe9oy5PR6JQelD_DPh4ebvJpCnK26kYGpnbk/edit" target="_blank" class="hotbar-btn">🛒 Marketplace</a>
-            <a href="https://docs.google.com/spreadsheets/d/1RHnw3rK9kvNvmQznMFr6qkg82j0GpWEwUhDOIPDGfts/edit" target="_blank" class="hotbar-btn">🛍️ Employee Purchases</a>
-            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn">🎓 Training</a>
+            <a href="https://docs.google.com/spreadsheets/d/1SuXAQc66OzKOfXkPcp7pCCsccWFB4RbHG2N6YGt3wf0/edit" target="_blank" class="hotbar-btn" data-feature="hb-bal-passwords">🔑 Passwords</a>
+            <a href="https://docs.google.com/spreadsheets/d/192c0M5Mxe9oy5PR6JQelD_DPh4ebvJpCnK26kYGpnbk/edit" target="_blank" class="hotbar-btn" data-feature="hb-bal-marketplace">🛒 Marketplace</a>
+            <a href="https://docs.google.com/spreadsheets/d/1RHnw3rK9kvNvmQznMFr6qkg82j0GpWEwUhDOIPDGfts/edit" target="_blank" class="hotbar-btn" data-feature="hb-bal-employee-purchases">🛍️ Employee Purchases</a>
+            <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-bal-b2b-records">🏢 B2B Records</a>  
+            <a href="https://drive.google.com/drive/folders/1DkfZtDlE2o8O4R4XPqC7cX_qsO-NstmM?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-bal-training">🎓 Training</a>
           </div>
         </div>
       </div>
   </div>
 
 
-  <div id="top-alerts-row" class="top-alerts-row dynamic-module-flex role-manager role-owner-manager">
+  <div id="top-alerts-row" class="top-alerts-row dynamic-module-flex role-manager role-owner-manager" data-feature="widget-scorecard-alerts">
     <div class="card district-master-panel employee-widget-card">
         <div class="district-kpi-header">
             <span id="scorecard-store-name" class="district-kpi-title">Store Scorecard</span>
@@ -669,7 +669,7 @@
 
   <div class="top-alerts-row dynamic-module-flex role-manager role-owner-manager role-employee employee-dashboard-row">
       
-      <div class="card district-master-panel employee-widget-card dynamic-module-block role-manager role-owner-manager role-employee buying-sales-module">
+      <div class="card district-master-panel employee-widget-card dynamic-module-block role-manager role-owner-manager role-employee buying-sales-module" data-feature="widget-buying-selling">
           <div class="district-kpi-header">
               <span class="district-kpi-title">Buying & Sales <span id="bs-last-updated" class="widget-date-display"></span></span>
               <span class="widget-date-display no-dash goal-strong">Goal: <span id="bs-goal"></span></span>
@@ -731,7 +731,7 @@
           </div>
       </div>
 
-      <div class="card dynamic-module-flex role-employee district-master-panel employee-widget-card">
+      <div class="card dynamic-module-flex role-employee district-master-panel employee-widget-card" data-feature="widget-emp-listing-goals">
           <div class="district-kpi-header">
               <div class="district-kpi-title-wrapper">
                   <span class="district-kpi-title">My Listing Goals <span id="emp-goals-date" class="widget-date-display"></span></span>
@@ -746,7 +746,7 @@
       </div>
 
 
-      <div class="card dynamic-module-flex role-manager role-owner-manager district-master-panel employee-widget-card flex-col-card">
+      <div class="card dynamic-module-flex role-manager role-owner-manager district-master-panel employee-widget-card flex-col-card" data-feature="widget-listing-goals">
           <div class="district-kpi-header">
               <div class="goals-title-wrapper">
                   <span class="district-kpi-title">Listing Goals <span id="goals-date-display" class="widget-date-display"></span></span>
@@ -776,7 +776,7 @@
           </div>
       </div>
 
-      <div class="card district-master-panel employee-widget-card dynamic-module-flex role-employee">
+      <div class="card district-master-panel employee-widget-card dynamic-module-flex role-employee" data-feature="widget-emp-weekly-kpis">
           <div class="district-kpi-header">
               <div class="district-kpi-title-wrapper">
                   <span class="district-kpi-title">My Weekly KPIs <span id="emp-kpi-period" class="widget-date-display"></span></span>
@@ -790,7 +790,7 @@
       
   </div>
 
-  <div class="dynamic-module-block role-district-manager role-ceo district-command-section">
+  <div class="dynamic-module-block role-district-manager role-ceo district-command-section" data-feature="widget-district-command">
     
       <div class="district-header-wrapper">
           <h3 class="district-command-title">🌐 District Command Center</h3>
@@ -913,7 +913,7 @@
           </div>
       </div>
 
-      <div class="card kpi-master-card district-master-panel employee-widget-card dynamic-module-flex role-manager role-owner-manager flex-col-card bottom-locked-card" style="margin-bottom: 0;">
+      <div class="card kpi-master-card district-master-panel employee-widget-card dynamic-module-flex role-manager role-owner-manager flex-col-card bottom-locked-card" data-feature="widget-variance-reports" style="margin-bottom: 0;">
           <div class="district-kpi-header" style="border-bottom: none;">
               <span class="district-kpi-title">Live Variance Reports <span id="variance-date-display" class="widget-date-display"></span></span>
               <div class="vw-controls">
@@ -1092,7 +1092,7 @@
     <div class="manage-content" id="audit-breakdown-body"></div>
 </div>
 
-<div id="goalsSidePanel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee role-training">
+<div id="goalsSidePanel" data-feature="widget-goals-panel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee role-training">
     <div class="gi-panel-header">
         <div class="gi-panel-header-row">
             <div style="display: flex; align-items: center; gap: 10px;">
@@ -1136,7 +1136,7 @@
     </div>
 </div>
 
-<div id="checklistSidePanel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-district-manager role-assistant-manager">
+<div id="checklistSidePanel" data-feature="widget-checklist-panel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-district-manager role-assistant-manager">
 
     <div class="cl-panel-header">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
@@ -1168,7 +1168,7 @@
     </div>
 </div>
 
-<div id="auditSidePanel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-assistant-manager">
+<div id="auditSidePanel" data-feature="widget-audit-panel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-assistant-manager">
     <div class="cl-panel-header">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
             <h3 style="margin: 0;">Store Audit Checklist</h3>
@@ -1491,6 +1491,24 @@
 </div>
 
 <!-- ===== SPEEKS TOOLS SIDE PANEL ===== -->
+<div class="modal-menu manage-menu" id="featureAccessModal">
+    <div class="modal-header">
+        <h3>🎛️ Feature Access</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div style="padding: 14px 18px 0;">
+        <div class="notif-tabs" style="display: inline-flex;">
+            <button id="fa-tab-tools" class="tab-btn active" onclick="switchFaTab('tools')">SPEEKS Tools</button>
+            <button id="fa-tab-hotbar" class="tab-btn" onclick="switchFaTab('hotbar')">Hotbar Links</button>
+            <button id="fa-tab-widgets" class="tab-btn" onclick="switchFaTab('widgets')">Widgets</button>
+            <button id="fa-tab-user" class="tab-btn" onclick="switchFaTab('user')">Per-User</button>
+        </div>
+    </div>
+    <div class="manage-content">
+        <div id="fa-body"><div class="status-message">Loading…</div></div>
+    </div>
+</div>
+
 <div class="tools-side-panel dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager role-manager role-assistant-manager" id="toolsSidePanel" style="flex-direction:column;">
   <div class="tools-panel-header">
     <div class="tools-panel-title">
@@ -1503,44 +1521,45 @@
 
     <div class="tools-group dynamic-module-block role-manager role-owner-manager role-district-manager role-ceo">
       <div class="tools-group-label">🛟 Claims &amp; Refunds</div>
-      <a class="tools-item dynamic-module-flex role-manager role-owner-manager" onclick="_closeToolsPanel(); openClaimsModal();"><span class="tools-item-icon">🛟</span>Insurance Claims</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" onclick="_closeToolsPanel(); openClaimsOversight();"><span class="tools-item-icon">📊</span>Insurance Claims</a>
+      <a class="tools-item dynamic-module-flex role-manager role-owner-manager" data-feature="tool-claims-store" onclick="_closeToolsPanel(); openClaimsModal();"><span class="tools-item-icon">🛟</span>Insurance Claims</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-claims-oversight" onclick="_closeToolsPanel(); openClaimsOversight();"><span class="tools-item-icon">📊</span>Insurance Claims</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-tom role-owner-manager">
       <div class="tools-group-label">📢 Content</div>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon">📣</span>Announcements</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageTicker();"><span class="tools-item-icon">📌</span>Ticker Items</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); togglePatchNotesManage();"><span class="tools-item-icon">📝</span>Patch Notes</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" data-feature="tool-announcements" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon">📣</span>Announcements</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-ticker" onclick="_closeToolsPanel(); toggleManageTicker();"><span class="tools-item-icon">📌</span>Ticker Items</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-patch-notes" onclick="_closeToolsPanel(); togglePatchNotesManage();"><span class="tools-item-icon">📝</span>Patch Notes</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo">
       <div class="tools-group-label">🏪 Store Ops</div>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon">🏆</span>Submit Scores</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManagerChecklist();"><span class="tools-item-icon">📋</span>Manager Checklist</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleVarianceInput();"><span class="tools-item-icon">📊</span>Submit Variance Report</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon">💬</span>Send Store Comment</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-submit-scores" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon">🏆</span>Submit Scores</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-manager-checklist" onclick="_closeToolsPanel(); toggleManagerChecklist();"><span class="tools-item-icon">📋</span>Manager Checklist</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-variance-report" onclick="_closeToolsPanel(); toggleVarianceInput();"><span class="tools-item-icon">📊</span>Submit Variance Report</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-store-comment" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon">💬</span>Send Store Comment</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager">
       <div class="tools-group-label">📦 Orders</div>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon">📦</span>Box Order</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon">♻️</span>Recycle Inventory</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" onclick="_closeToolsPanel(); openRecycleOversight();"><span class="tools-item-icon">📊</span>Recycle Requests</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" data-feature="tool-box-order" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon">📦</span>Box Order</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager" data-feature="tool-recycle-inventory" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon">♻️</span>Recycle Inventory</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-recycle-oversight" onclick="_closeToolsPanel(); openRecycleOversight();"><span class="tools-item-icon">📊</span>Recycle Requests</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-owner-manager">
       <div class="tools-group-label">👥 Admin</div>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-owner-manager" onclick="_closeToolsPanel(); toggleManageUsers();"><span class="tools-item-icon">👤</span>User Permissions</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageAlerts();"><span class="tools-item-icon">📈</span>Performance Metrics</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageRecords();"><span class="tools-item-icon">📁</span>Company Records</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageDocs();"><span class="tools-item-icon">📚</span>Manage Policies</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageAwards();"><span class="tools-item-icon">🏅</span>Monthly Awards</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-owner-manager" data-feature="tool-user-permissions" onclick="_closeToolsPanel(); toggleManageUsers();"><span class="tools-item-icon">👤</span>User Permissions</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-feature-access" onclick="_closeToolsPanel(); openFeatureAccess();"><span class="tools-item-icon">🎛️</span>Feature Access</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-performance-metrics" onclick="_closeToolsPanel(); toggleManageAlerts();"><span class="tools-item-icon">📈</span>Performance Metrics</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-company-records" onclick="_closeToolsPanel(); toggleManageRecords();"><span class="tools-item-icon">📁</span>Company Records</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-manage-policies" onclick="_closeToolsPanel(); toggleManageDocs();"><span class="tools-item-icon">📚</span>Manage Policies</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-monthly-awards" onclick="_closeToolsPanel(); toggleManageAwards();"><span class="tools-item-icon">🏅</span>Monthly Awards</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager">
       <div class="tools-group-label">⚙ System</div>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageHotkeys();"><span class="tools-item-icon">⌨️</span>System Hotkeys</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-system-hotkeys" onclick="_closeToolsPanel(); toggleManageHotkeys();"><span class="tools-item-icon">⌨️</span>System Hotkeys</a>
     </div>
 
   </div>

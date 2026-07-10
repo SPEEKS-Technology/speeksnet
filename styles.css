@@ -6721,6 +6721,30 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 #recycleOversightModal .manage-content { scrollbar-gutter: stable; }
 
 /* ============================================================================
+   FEATURE ACCESS TOOL — role-matrix chips + per-user segmented controls
+   ============================================================================ */
+#featureAccessModal .manage-content { scrollbar-gutter: stable; }
+.fa-chip {
+    width: 38px; height: 26px; flex-shrink: 0;
+    border-radius: 7px; border: 1.5px solid transparent;
+    font-size: 12px; font-weight: 900; cursor: pointer; line-height: 1;
+    transition: filter .12s ease;
+}
+.fa-chip.fa-on  { background: #d1fae5; color: #059669; }
+.fa-chip.fa-off { background: #f1f5f9; color: #cbd5e1; }
+.fa-chip.fa-ovr { border-color: #f59e0b; } /* amber ring = manual override */
+.fa-chip:disabled { cursor: not-allowed; opacity: .85; }
+.fa-chip:not(:disabled):hover { filter: brightness(.93); }
+.fa-seg {
+    padding: 5px 12px; font-size: 11px; font-weight: 800;
+    background: #fff; color: #94a3b8; border: none; cursor: pointer;
+}
+.fa-seg + .fa-seg { border-left: 1.5px solid #e2e8f0; }
+.fa-seg-active { background: #1e293b; color: #fff; }
+.fa-seg-active.fa-seg-on  { background: #059669; }
+.fa-seg-active.fa-seg-off { background: #dc2626; }
+
+/* ============================================================================
    WEEKLY-KPI REMINDER — guided breadcrumb (Analytics tab → Store KPIs → Edit)
    Active Sat 4pm → Sun midnight for managers. Red = "action needed".
    ============================================================================ */
