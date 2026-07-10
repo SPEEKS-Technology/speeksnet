@@ -55,6 +55,7 @@ const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
 const MONTHLY_BRIEF_URL = `${_BASE}/monthly-brief`;
 const B2B_URL           = `${_BASE}/b2b-deals`;
 const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
+const RECYCLE_URL       = `${_BASE}/recycle-requests`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -13831,27 +13832,30 @@ function copyBoxOrder(button) {
 // ============================================================
 // RECYCLE INVENTORY TOOL
 // ============================================================
-// Stores submit these when an item needs to be recycled out of inventory.
-// Mirrors the Box Order flow (two-page form → mailto + copy failsafe) but is a
-// free-text request that always routes to a single SPEEKS inbox.
+// Stores log items that need to be recycled out of inventory. Each submission
+// is saved to Supabase (recycle_requests) as a line item under the store — no
+// more emails — and the DM reconciles per-store recycled cost at month end
+// through the Recycle Requests oversight tool below.
 
-const RECYCLE_INV_EMAIL = 'ethan.kushnir@speekstechnology.com';
+const RECYCLE_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 
-// Corp roles (CEO/DM) pick a store; managers/ASM default to their own.
-function _recycleInvGetStoreCode() {
-    const selectorEl = document.getElementById('recycleInvStoreSelector');
-    const corpVisible = selectorEl && selectorEl.style.display !== 'none';
-    const sel = document.getElementById('recycleInvStoreSelect');
-    return (corpVisible && sel && sel.value) ? sel.value : (sessionStorage.getItem('speeksUserStore') || '');
+// Which store(s) this user can file/view recycle requests for.
+function _recycleStores() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (role === 'ceo' || role === 'district manager') return [...RECYCLE_STORES];
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        return [...MULTISTORE_MANAGER_STORES];
+    }
+    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
 
-function _recycleInvGetStore() {
-    const code = _recycleInvGetStoreCode();
-    return BOX_STORE_NAMES[code] || code || 'Store';
-}
+const _fmtRecycleMoney = v => (v == null || v === '') ? '—' :
+    '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// Keep money fields numeric: strip anything that isn't a digit or a decimal
-// point (so a typed "$" simply vanishes) and allow only one decimal point.
+// Keep money fields numeric as the user types: strip anything that isn't a
+// digit or a decimal point (a typed "$" or letter simply vanishes) and allow
+// only one decimal point.
 function recycleInvSanitizeMoney(input) {
     let v = (input.value || '').replace(/[^\d.]/g, '');
     const firstDot = v.indexOf('.');
@@ -13861,130 +13865,364 @@ function recycleInvSanitizeMoney(input) {
     input.value = v;
 }
 
-// Normalize a money field for the email: exactly one leading "$" plus thousands
-// separators ("12345" → "$12,345", "$25" → "$25", "1234.5" → "$1,234.5").
-// Decimals are kept only if typed, capped at two places. Empty stays empty.
-function _recycleInvFormatMoney(raw) {
-    const v = String(raw || '').replace(/[^\d.]/g, '');
-    if (!v) return '';
-    const firstDot = v.indexOf('.');
-    let intPart = firstDot === -1 ? v : v.slice(0, firstDot);
-    let decPart = firstDot === -1 ? '' : v.slice(firstDot + 1).replace(/\./g, '').slice(0, 2);
-    intPart = intPart.replace(/^0+(?=\d)/, '') || '0';   // trim leading zeros, keep one digit
-    const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    return decPart !== '' ? `$${grouped}.${decPart}` : `$${grouped}`;
+// Quantity is whole units only: digits, nothing else.
+function recycleInvSanitizeInt(input) {
+    input.value = (input.value || '').replace(/\D/g, '');
+}
+
+// cost is stored per unit; a line's recycled cost = cost × quantity.
+function _recycleLineTotal(r) {
+    if (r.cost == null || r.cost === '') return null;
+    return Number(r.cost) * (Number(r.quantity) || 1);
+}
+
+function _recycleMonthKey(dateStr) {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function _recycleMonthLabel(key) {
+    const [y, m] = String(key).split('-').map(Number);
+    if (!y || !m) return String(key);
+    return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+// Month dropdown options: every month present in `rows`, plus the current month.
+function _recycleMonthOptions(rows, selected) {
+    const keys = new Set(rows.map(r => _recycleMonthKey(r.created_at)).filter(Boolean));
+    keys.add(_recycleMonthKey(new Date()));
+    return [...keys].sort().reverse()
+        .map(k => `<option value="${k}" ${k === selected ? 'selected' : ''}>${_recycleMonthLabel(k)}</option>`).join('');
 }
 
 function toggleRecycleInventory() {
-    closeAllModals();
-    const modal = document.getElementById('recycleInvModal');
-    if (!modal) return;
-    // Reset to a blank page 1 every time.
+    toggleModal('recycleInvModal');
+    _buildRecycleStorePicker();
     ['recycleInvSku', 'recycleInvDescription', 'recycleInvValue', 'recycleInvCost'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
     });
-    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    const isCorpRole = role === 'ceo' || role === 'district manager';
-    const selectorEl = document.getElementById('recycleInvStoreSelector');
-    if (selectorEl) {
-        selectorEl.style.display = isCorpRole ? '' : 'none';
-        const sel = document.getElementById('recycleInvStoreSelect');
-        if (sel) sel.value = '';
-    }
-    document.getElementById('recycleInvPage1').style.display   = '';
-    document.getElementById('recycleInvFooter1').style.display = '';
-    document.getElementById('recycleInvPage2').style.display   = 'none';
-    document.getElementById('recycleInvFooter2').style.display = 'none';
-    modal.classList.add('show');
-    lockAndBlurScreen();
+    const qty = document.getElementById('recycleInvQty');
+    if (qty) qty.value = '1';
+    switchRecycleTab('new');
 }
 
-// Validate page 1: every field is required; corp roles must also pick a store.
-function _recycleInvEnsureValid() {
-    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    const isCorpRole = role === 'ceo' || role === 'district manager';
+function switchRecycleTab(tab) {
+    const nb = document.getElementById('recycle-tab-new');
+    const vb = document.getElementById('recycle-tab-view');
+    if (nb) nb.classList.toggle('active', tab === 'new');
+    if (vb) vb.classList.toggle('active', tab === 'view');
+    const np = document.getElementById('recycle-panel-new');
+    const vp = document.getElementById('recycle-panel-view');
+    if (np) np.style.display = tab === 'new' ? 'block' : 'none';
+    if (vp) vp.style.display = tab === 'view' ? 'block' : 'none';
+    const sb = document.getElementById('submitRecycleBtn');
+    if (sb) sb.style.display = tab === 'new' ? '' : 'none';
+    if (tab === 'view') fetchMyRecycleRequests();
+}
+
+// MSM / corp roles get a store chooser; a single-store manager is locked to theirs.
+function _buildRecycleStorePicker() {
+    const row = document.getElementById('recycle-store-row');
     const sel = document.getElementById('recycleInvStoreSelect');
-    if (isCorpRole && (!sel || !sel.value)) {
-        alert('Please select a store first.');
-        return false;
+    if (!sel) return;
+    const stores = _recycleStores();
+    sel.innerHTML = stores.map(s => `<option value="${s}">${s}</option>`).join('');
+    const multi = stores.length > 1;
+    sel.disabled = !multi;
+    sel.style.opacity = multi ? '1' : '0.7';
+    sel.style.cursor = multi ? 'pointer' : 'not-allowed';
+    if (row) row.style.display = stores.length ? 'block' : 'none';
+    if (sel.options.length) sel.selectedIndex = 0;
+}
+
+async function submitRecycleRequest() {
+    const val = id => (document.getElementById(id) || {}).value;
+    const store = (val('recycleInvStoreSelect') || '').toUpperCase();
+    const sku = (val('recycleInvSku') || '').trim();
+    const desc = (val('recycleInvDescription') || '').trim();
+    const qty = Math.floor(Number(val('recycleInvQty')));
+    const valueRaw = val('recycleInvValue');
+    const costRaw = val('recycleInvCost');
+
+    if (!store) { alert('Please select a store.'); return; }
+    if (!sku) { alert('Please enter the SKU.'); return; }
+    if (!Number.isFinite(qty) || qty < 1) { alert('Please enter a quantity of at least 1.'); return; }
+    if (costRaw === '' || costRaw == null || !Number.isFinite(Number(costRaw))) {
+        alert('Please enter the item cost (per unit).'); return;
     }
-    const sku  = document.getElementById('recycleInvSku')?.value.trim();
-    const desc = document.getElementById('recycleInvDescription')?.value.trim();
-    const val  = document.getElementById('recycleInvValue')?.value.trim();
-    const cost = document.getElementById('recycleInvCost')?.value.trim();
-    if (!sku || !desc || !val || !cost) {
-        alert('Please fill in the SKU, description, value, and cost before continuing.');
-        return false;
+    if (!desc) { alert('Please describe the item and why it is being recycled.'); return; }
+
+    const btn = document.getElementById('submitRecycleBtn');
+    const old = btn ? btn.innerText : '';
+    if (btn) { btn.disabled = true; btn.innerText = 'Submitting…'; }
+    try {
+        const res = await fetch(RECYCLE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'submit_request', store, sku, description: desc, quantity: qty,
+                value: valueRaw === '' ? null : Number(valueRaw),
+                cost: Number(costRaw),
+                created_by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+        // Stay on the New Request tab with a blank form (store selection kept)
+        // so several items can be logged back-to-back; flash the button as the
+        // confirmation instead of jumping to My Requests.
+        ['recycleInvSku', 'recycleInvDescription', 'recycleInvValue', 'recycleInvCost'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+        const qtyEl = document.getElementById('recycleInvQty');
+        if (qtyEl) qtyEl.value = '1';
+        const skuEl = document.getElementById('recycleInvSku');
+        if (skuEl) skuEl.focus();
+        if (btn) {
+            btn.innerText = '✓ Submitted';
+            setTimeout(() => { if (btn.innerText === '✓ Submitted') btn.innerText = old; }, 1500);
+        }
+    } catch (e) {
+        alert('Could not submit the request: ' + e.message);
+        if (btn) btn.innerText = old;
+    } finally {
+        if (btn) btn.disabled = false;
     }
-    return true;
 }
 
-function recycleInvNextPage() {
-    if (!_recycleInvEnsureValid()) return;
-    recycleInvUpdatePreview();
-    document.getElementById('recycleInvPage1').style.display   = 'none';
-    document.getElementById('recycleInvFooter1').style.display = 'none';
-    document.getElementById('recycleInvPage2').style.display   = '';
-    document.getElementById('recycleInvFooter2').style.display = '';
+let _recycleMine = []; // last fetched requests, so filter changes re-render without refetching
+
+async function fetchMyRecycleRequests() {
+    const wrap = document.getElementById('recycle-table-wrap');
+    if (!wrap) return;
+    const stores = _recycleStores();
+    if (!stores.length) {
+        wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">No store assigned to your account.</div>';
+        return;
+    }
+    wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading requests…</div>';
+    try {
+        const res = await fetch(`${RECYCLE_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        _recycleMine = json.data || [];
+        _buildRecycleViewFilters(stores);
+        renderMyRecycleTable();
+    } catch (e) {
+        wrap.innerHTML = '<div style="color:var(--red-alert); padding:24px; text-align:center; font-weight:700;">Error loading requests.</div>';
+    }
 }
 
-function recycleInvBackPage() {
-    document.getElementById('recycleInvPage2').style.display   = 'none';
-    document.getElementById('recycleInvFooter2').style.display = 'none';
-    document.getElementById('recycleInvPage1').style.display   = '';
-    document.getElementById('recycleInvFooter1').style.display = '';
+// Month filter always shows; the store filter only when the user spans multiple stores.
+function _buildRecycleViewFilters(stores) {
+    const mSel = document.getElementById('recycle-month-filter');
+    if (mSel) {
+        const current = mSel.value || _recycleMonthKey(new Date());
+        mSel.innerHTML = _recycleMonthOptions(_recycleMine, current);
+    }
+    const row = document.getElementById('recycle-view-filter-row');
+    const sel = document.getElementById('recycle-view-filter');
+    if (!row || !sel) return;
+    if (stores.length <= 1) { row.style.display = 'none'; return; }
+    row.style.display = 'block';
+    const current = sel.value;
+    sel.innerHTML = `<option value="">All stores</option>` +
+        stores.map(s => `<option value="${s}">${s}</option>`).join('');
+    if ([...sel.options].some(o => o.value === current)) sel.value = current;
 }
 
-// Build the request as plain text (real newlines) — shared by the email and the
-// copy failsafe so both always say exactly the same thing.
-function _recycleInvCompose() {
-    const store    = _recycleInvGetStore();
-    const userName = sessionStorage.getItem('speeksUserName') || '';
-    const sku  = document.getElementById('recycleInvSku')?.value.trim()         || '';
-    const desc = document.getElementById('recycleInvDescription')?.value.trim() || '';
-    const val  = _recycleInvFormatMoney(document.getElementById('recycleInvValue')?.value);
-    const cost = _recycleInvFormatMoney(document.getElementById('recycleInvCost')?.value);
-    const body =
-        `Hi,\n\nThe following item needs to be recycled out of inventory for ${store}:\n\n` +
-        `SKU: ${sku}\n` +
-        `Description: ${desc}\n` +
-        `Value: ${val}\n` +
-        `Cost: ${cost}\n\n` +
-        `Thank you,\n${userName}`;
-    return { email: RECYCLE_INV_EMAIL, subject: `${sku} - Recycle`, body };
+function renderMyRecycleTable() {
+    const wrap = document.getElementById('recycle-table-wrap');
+    if (!wrap) return;
+    const stores = _recycleStores();
+    const multi = stores.length > 1;
+    const month = (document.getElementById('recycle-month-filter') || {}).value || _recycleMonthKey(new Date());
+    const filterStore = (document.getElementById('recycle-view-filter') || {}).value || '';
+    let rows = _recycleMine.filter(r => _recycleMonthKey(r.created_at) === month);
+    if (filterStore) rows = rows.filter(r => (r.store || '').toUpperCase() === filterStore);
+    // Keep the Store column whenever the user spans multiple stores — even with
+    // a single store filtered — so columns don't jump around as filters change.
+    const showStore = multi;
+
+    if (!rows.length) {
+        wrap.innerHTML = `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No recycle requests for ${_recycleMonthLabel(month)}.</div>`;
+        return;
+    }
+    rows = [...rows].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const total = rows.reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+    const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+    const today = new Date().toDateString();
+
+    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
+    const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
+    let html = `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+        <thead><tr>${th('Date')}${showStore ? th('Store') : ''}${th('SKU')}${th('Description')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
+    rows.forEach(r => {
+        // Same-day typo-fix window: the store can pull a request back the day it
+        // was submitted; after that only a DM/CEO can remove it.
+        const canDelete = new Date(r.created_at).toDateString() === today;
+        const delBtn = canDelete
+            ? `<button onclick="deleteRecycleRequest('${r.id}', false)" title="Delete (same-day only)" style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:8px; cursor:pointer; font-size:15px; line-height:1;">🗑</button>`
+            : '';
+        html += `<tr>
+            ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
+            ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`) : ''}
+            ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.sku || '')}</span>`)}
+            ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>`)}
+            ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;')}
+            ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}
+            ${td(_fmtRecycleMoney(_recycleLineTotal(r)), 'white-space:nowrap; font-weight:800;')}
+            ${td(`<span style="color:#94a3b8; white-space:nowrap;">${escapeHtml(r.created_by || '—')}</span>`)}
+            ${td(delBtn, 'text-align:right;')}
+        </tr>`;
+    });
+    html += `</tbody><tfoot><tr>
+        <td colspan="${(showStore ? 1 : 0) + 5}" style="padding:11px 10px; font-weight:800; font-size:12px; color:#94a3b8; text-transform:uppercase; letter-spacing:.4px;">Total recycled cost · ${_recycleMonthLabel(month)}</td>
+        <td style="padding:11px 10px; font-weight:900; font-size:14px; color:#dc2626; white-space:nowrap;">${_fmtRecycleMoney(total)}</td>
+        <td colspan="2"></td>
+    </tr></tfoot></table></div>`;
+    wrap.innerHTML = html;
 }
 
-function recycleInvUpdatePreview() {
-    const preview = document.getElementById('recycleInvEmailPreview');
-    if (!preview) return;
-    const { email, subject, body } = _recycleInvCompose();
-    preview.textContent = `To: ${email}\nSubject: ${subject}\n\n${body}`;
+async function deleteRecycleRequest(id, fromOversight) {
+    if (!confirm('Delete this recycle request?')) return;
+    try {
+        const res = await fetch(RECYCLE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_request', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        if (fromOversight) fetchRecycleOversight(); else fetchMyRecycleRequests();
+    } catch (e) {
+        alert('Could not delete: ' + e.message);
+    }
 }
 
-function sendRecycleInventory() {
-    if (!_recycleInvEnsureValid()) return;
-    const { email, subject, body } = _recycleInvCompose();
-    window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+// =========================================================
+//  DM / CEO RECYCLE REQUESTS OVERSIGHT — month-end reconciliation.
+//  One month at a time: per-store line items with cost totals, a grand
+//  total, and a review tick per line to check off against inventory.
+// =========================================================
+let _recycleOvAll = [];
+let _recycleOvMonth = '';
+
+function openRecycleOversight() {
+    toggleModal('recycleOversightModal');
+    _recycleOvMonth = _recycleOvMonth || _recycleMonthKey(new Date());
+    fetchRecycleOversight();
 }
 
-// Failsafe for machines with no default mail client: copy the full request
-// (recipient, subject, body) to the clipboard to paste into any email.
-function copyRecycleInventory(button) {
-    if (!_recycleInvEnsureValid()) return;
-    const { email, subject, body } = _recycleInvCompose();
-    const text = `To: ${email}\nSubject: ${subject}\n\n${body}`;
-    navigator.clipboard.writeText(text).then(() => {
-        const originalText = button.innerText;
-        button.innerText = 'Copied!';
-        button.style.background = '#d1fae5';
-        button.style.color = '#065f46';
-        button.style.borderColor = '#34d399';
-        setTimeout(() => {
-            button.innerText = originalText;
-            button.style.background = '';
-            button.style.color = '';
-            button.style.borderColor = '';
-        }, 2000);
-    }).catch(() => alert('Could not copy automatically. Please select and copy the request manually.'));
+async function fetchRecycleOversight() {
+    const body = document.getElementById('recycle-oversight-body');
+    if (!body) return;
+    body.innerHTML = '<div class="status-message">Loading recycle requests…</div>';
+    try {
+        const res = await fetch(`${RECYCLE_URL}?v=${Date.now()}`); // no stores param → every store
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        _recycleOvAll = json.data || [];
+        renderRecycleOversight();
+    } catch (e) {
+        body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load recycle requests.</div>';
+    }
+}
+
+function renderRecycleOversight() {
+    const body = document.getElementById('recycle-oversight-body');
+    if (!body) return;
+    const month = _recycleOvMonth || _recycleMonthKey(new Date());
+    const rows = _recycleOvAll.filter(r => _recycleMonthKey(r.created_at) === month);
+
+    const grand = rows.reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+    const units = rows.reduce((a, r) => a + (Number(r.quantity) || 0), 0);
+    const reviewed = rows.filter(r => r.reviewed_at).length;
+    const allReviewed = rows.length > 0 && reviewed === rows.length;
+
+    const selStyle = 'padding:8px 12px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:13px; font-weight:700; background:#fff; cursor:pointer;';
+    let html = `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
+        <div style="font-size:12px; color:#64748b; font-weight:600;">Tick each line off as you reconcile it against what was actually recycled out of inventory.</div>
+        <select onchange="_recycleOvMonth=this.value; renderRecycleOversight();" style="${selStyle}">${_recycleMonthOptions(_recycleOvAll, month)}</select>
+    </div>`;
+
+    const card = (label, val, color) => `<div style="flex:1; min-width:110px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:13px 15px;">
+        <div style="font-size:26px; font-weight:900; color:${color}; line-height:1; white-space:nowrap;">${val}</div>
+        <div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; margin-top:4px;">${label}</div>
+    </div>`;
+    html += `<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px;">
+        ${card('Total Recycled Cost', _fmtRecycleMoney(grand), '#dc2626')}
+        ${card('Line Items', rows.length, '#1e293b')}
+        ${card('Units', units, '#1e293b')}
+        ${card('Reviewed', `${reviewed}/${rows.length}`, allReviewed ? '#059669' : (reviewed ? '#d97706' : '#94a3b8'))}
+    </div>`;
+
+    const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
+    const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
+
+    RECYCLE_STORES.forEach(s => {
+        const sRows = rows.filter(r => (r.store || '').toUpperCase() === s)
+            .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+        const sTotal = sRows.reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+        const sReviewed = sRows.filter(r => r.reviewed_at).length;
+        const sDone = sRows.length > 0 && sReviewed === sRows.length;
+
+        html += `<div style="margin-bottom:18px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px 14px; margin-bottom:${sRows.length ? '0' : '0'};">
+                <div style="font-weight:900; font-size:13px; color:var(--slate-charcoal);">${s} <span style="font-weight:600; color:#94a3b8;">· ${BOX_STORE_NAMES[s] || s}</span>
+                    ${sDone ? '<span style="font-size:10.5px; font-weight:800; color:#059669; margin-left:6px;">✓ reconciled</span>' : ''}
+                </div>
+                <div style="font-weight:900; font-size:14px; color:${sTotal ? '#dc2626' : '#cbd5e1'}; white-space:nowrap;">${_fmtRecycleMoney(sTotal)}</div>
+            </div>`;
+        if (!sRows.length) {
+            html += `<div style="padding:8px 14px; font-size:12px; color:#cbd5e1; font-weight:600;">No recycle requests this month.</div></div>`;
+            return;
+        }
+        html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+            <thead><tr>${th('✓')}${th('Date')}${th('SKU')}${th('Description')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
+        sRows.forEach(r => {
+            const done = !!r.reviewed_at;
+            html += `<tr style="${done ? 'background:#f0fdf4;' : ''}">
+                ${td(`<input type="checkbox" ${done ? 'checked' : ''} onchange="setRecycleReviewed('${r.id}', this.checked)" title="${done ? 'Reviewed' + (r.reviewed_by ? ' by ' + escapeHtml(r.reviewed_by) : '') : 'Mark reviewed'}" style="width:16px; height:16px; cursor:pointer; accent-color:#059669;">`, 'text-align:center;')}
+                ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
+                ${td(`<span style="font-weight:700; color:${done ? '#94a3b8' : 'var(--slate-charcoal)'};">${escapeHtml(r.sku || '')}</span>`)}
+                ${td(`<span style="color:${done ? '#cbd5e1' : '#64748b'};">${escapeHtml(r.description || '—')}</span>`)}
+                ${td(`<span style="font-weight:800; color:${done ? '#94a3b8' : 'var(--slate-charcoal)'};">${Number(r.quantity) || 1}</span>`, 'text-align:center;')}
+                ${td(_fmtRecycleMoney(r.cost), `white-space:nowrap; font-weight:700; color:${done ? '#cbd5e1' : '#64748b'};`)}
+                ${td(_fmtRecycleMoney(_recycleLineTotal(r)), `white-space:nowrap; font-weight:800; color:${done ? '#94a3b8' : 'var(--slate-charcoal)'};`)}
+                ${td(`<span style="color:#94a3b8; white-space:nowrap;">${escapeHtml(r.created_by || '—')}</span>`)}
+                ${td(`<button onclick="deleteRecycleRequest('${r.id}', true)" title="Delete this line" style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:8px; cursor:pointer; font-size:15px; line-height:1;">🗑</button>`, 'text-align:right;')}
+            </tr>`;
+        });
+        html += `</tbody></table></div></div>`;
+    });
+
+    body.innerHTML = html;
+}
+
+// Tick / untick a line during month-end reconciliation. Updates the local
+// cache and re-renders so the scroll position and month stay put.
+async function setRecycleReviewed(id, reviewed) {
+    try {
+        const res = await fetch(RECYCLE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'set_reviewed', id, reviewed,
+                reviewed_by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        const row = _recycleOvAll.find(r => r.id === id);
+        if (row) {
+            row.reviewed_at = reviewed ? new Date().toISOString() : null;
+            row.reviewed_by = reviewed ? (sessionStorage.getItem('speeksUserName') || null) : null;
+        }
+        renderRecycleOversight();
+    } catch (e) {
+        alert('Could not update: ' + e.message);
+        fetchRecycleOversight();
+    }
 }

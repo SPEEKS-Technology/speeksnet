@@ -6714,6 +6714,12 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 #boxOrderModal .manage-content,
 #recycleInvModal .manage-content { overflow-x: hidden !important; }
 
+/* Reserve the vertical-scrollbar gutter in the recycle views so the content
+   doesn't shift sideways when switching store/month filters toggles the
+   scrollbar (row counts differ per store). */
+#recycleInvModal .manage-content,
+#recycleOversightModal .manage-content { scrollbar-gutter: stable; }
+
 /* ============================================================================
    WEEKLY-KPI REMINDER — guided breadcrumb (Analytics tab → Store KPIs → Edit)
    Active Sat 4pm → Sun midnight for managers. Red = "action needed".

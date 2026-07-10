@@ -785,57 +785,73 @@
         <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
     </div>
 
-    <!-- PAGE 1: Item Details -->
-    <div class="manage-content" id="recycleInvPage1">
-        <!-- CORP store selector — shown for CEO / DM only -->
-        <div id="recycleInvStoreSelector" style="display:none; margin-bottom:14px;">
-            <label class="form-label-caps">Store <span style="font-weight:400;color:#ef4444;">*</span></label>
-            <select id="recycleInvStoreSelect" class="form-input-lg" onchange="recycleInvUpdatePreview()">
-                <option value="">Select a store…</option>
-                <option value="OVL">OVL</option>
-                <option value="LEE">LEE</option>
-                <option value="WSP">WSP</option>
-                <option value="MPL">MPL</option>
-                <option value="BAL">BAL</option>
-            </select>
-        </div>
-        <label class="form-label-caps">SKU <span style="font-weight:400;color:#ef4444;">*</span></label>
-        <input type="text" id="recycleInvSku" class="form-input-lg" placeholder="e.g. ABC-12345"
-            oninput="recycleInvUpdatePreview()">
-        <label class="form-label-caps" style="margin-top:16px;">
-            Item Description <span style="font-weight:400;color:#ef4444;">*</span>
-        </label>
-        <textarea id="recycleInvDescription" class="form-input-lg" rows="3"
-            placeholder="What is the item, and why is it being recycled out of inventory?"
-            oninput="recycleInvUpdatePreview()"></textarea>
-        <label class="form-label-caps" style="margin-top:16px;">Value <span style="font-weight:400;color:#ef4444;">*</span></label>
-        <input type="text" id="recycleInvValue" class="form-input-lg" placeholder="e.g. 50.00" inputmode="decimal"
-            oninput="recycleInvSanitizeMoney(this); recycleInvUpdatePreview()">
-        <label class="form-label-caps" style="margin-top:16px;">Cost <span style="font-weight:400;color:#ef4444;">*</span></label>
-        <input type="text" id="recycleInvCost" class="form-input-lg" placeholder="e.g. 20.00" inputmode="decimal"
-            oninput="recycleInvSanitizeMoney(this); recycleInvUpdatePreview()">
-        <div class="box-order-disclaimer">
-            This request is sent to SPEEKS for approval before the item is recycled out of inventory.
+    <div style="padding: 14px 18px 0;">
+        <div class="notif-tabs" style="display: inline-flex;">
+            <button id="recycle-tab-new" class="tab-btn active" onclick="switchRecycleTab('new')">New Request</button>
+            <button id="recycle-tab-view" class="tab-btn" onclick="switchRecycleTab('view')">My Requests</button>
         </div>
     </div>
 
-    <!-- PAGE 2: Email Preview -->
-    <div class="manage-content" id="recycleInvPage2" style="display:none;">
-        <div class="box-order-preview-label">Email Preview</div>
-        <div class="box-order-email-preview" id="recycleInvEmailPreview"></div>
+    <div class="manage-content">
+        <div id="recycle-panel-new">
+            <div id="recycle-store-row" style="margin-bottom:14px;">
+                <label class="form-label-caps">Store</label>
+                <select id="recycleInvStoreSelect" class="form-input-lg"></select>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px;">
+                <div>
+                    <label class="form-label-caps">SKU <span style="font-weight:400;color:#ef4444;">*</span></label>
+                    <input type="text" id="recycleInvSku" class="form-input-lg" placeholder="e.g. ABC-12345">
+                </div>
+                <div>
+                    <label class="form-label-caps">Quantity <span style="font-weight:400;color:#ef4444;">*</span></label>
+                    <input type="text" id="recycleInvQty" class="form-input-lg" inputmode="numeric" value="1" oninput="recycleInvSanitizeInt(this)">
+                </div>
+                <div>
+                    <label class="form-label-caps">Cost (per unit) <span style="font-weight:400;color:#ef4444;">*</span></label>
+                    <input type="text" id="recycleInvCost" class="form-input-lg" inputmode="decimal" placeholder="0.00" oninput="recycleInvSanitizeMoney(this)">
+                </div>
+                <div>
+                    <label class="form-label-caps">Value</label>
+                    <input type="text" id="recycleInvValue" class="form-input-lg" inputmode="decimal" placeholder="0.00" oninput="recycleInvSanitizeMoney(this)">
+                </div>
+            </div>
+            <label class="form-label-caps">Item Description <span style="font-weight:400;color:#ef4444;">*</span></label>
+            <textarea id="recycleInvDescription" class="form-input-lg" rows="3"
+                placeholder="What is the item, and why is it being recycled out of inventory?"></textarea>
+            <div class="box-order-disclaimer">
+                This request is logged under your store and reconciled by SPEEKS at the end of the month.
+                Make sure the SKU, cost, and quantity match what is actually recycled out of inventory.
+            </div>
+        </div>
+
+        <div id="recycle-panel-view" style="display:none;">
+            <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px;">
+                <div style="flex:1; min-width:150px;">
+                    <label class="form-label-caps">Month</label>
+                    <select id="recycle-month-filter" class="form-input-lg" onchange="renderMyRecycleTable()"></select>
+                </div>
+                <div id="recycle-view-filter-row" style="display:none; flex:1; min-width:150px;">
+                    <label class="form-label-caps">Store</label>
+                    <select id="recycle-view-filter" class="form-input-lg" onchange="renderMyRecycleTable()"></select>
+                </div>
+            </div>
+            <div id="recycle-table-wrap"></div>
+        </div>
     </div>
 
-    <!-- FOOTER PAGE 1 -->
-    <div class="manage-footer box-order-footer" id="recycleInvFooter1">
-        <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
-        <button class="btn-primary" onclick="recycleInvNextPage()">Next →</button>
+    <div class="manage-footer flex-end">
+        <button onclick="submitRecycleRequest()" class="btn-primary" id="submitRecycleBtn">Submit Request</button>
     </div>
+</div>
 
-    <!-- FOOTER PAGE 2 -->
-    <div class="manage-footer box-order-footer" id="recycleInvFooter2" style="display:none;">
-        <button class="btn-secondary" onclick="recycleInvBackPage()">← Back</button>
-        <button class="btn-secondary" onclick="copyRecycleInventory(this)">📋 Copy</button>
-        <button class="btn-primary" onclick="sendRecycleInventory()">Send Email →</button>
+<div class="modal-menu manage-menu" id="recycleOversightModal">
+    <div class="modal-header">
+        <h3>♻️ Recycle Requests</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div class="manage-content">
+        <div id="recycle-oversight-body"><div class="status-message">Loading…</div></div>
     </div>
 </div>
 
@@ -1027,6 +1043,7 @@
       <div class="tools-group-label">📦 Orders</div>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon">📦</span>Box Order</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon">♻️</span>Recycle Inventory</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" onclick="_closeToolsPanel(); openRecycleOversight();"><span class="tools-item-icon">📊</span>Recycle Requests</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-owner-manager">
