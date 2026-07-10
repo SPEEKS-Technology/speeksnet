@@ -481,7 +481,15 @@ function markAnnouncementRead(rowId) {
 
 function toggleNotifs() { toggleModal('notifDropdown', 'notifBadge'); }
 function toggleCalendar() { toggleModal('calendarDropdown'); }
-function toggleIdeaModal() { toggleModal('ideaModal'); }
+function toggleIdeaModal() {
+    // Pre-fill the submitter's name from their session so they don't retype it.
+    const nameEl = document.getElementById('ideaName');
+    if (nameEl) {
+        const u = sessionStorage.getItem('speeksUserName');
+        if (u && u.trim()) nameEl.value = u.trim();
+    }
+    toggleModal('ideaModal');
+}
 
 function switchAnnTab(tab) {
     const isRecent = tab === 'recent';
@@ -1774,6 +1782,15 @@ let _varianceSyncListener = null;
 let _weeklyGridResizeListener = null;
 function formatVariancePct(num) {
     return Math.abs(num) < 0.001 ? '0.00%' : `${num < 0 ? '-' : '+'}${Math.abs(num).toFixed(2)}%`; 
+}
+
+// Compact "Jun 1 – Jun 30" range for a variance report's dateFrom/dateTo.
+// Variance can be run weekly / bi-weekly / monthly, so its period is shown
+// wherever the variance number appears. Returns '' if either date is missing.
+function formatVarianceRange(dateFrom, dateTo) {
+    if (!dateFrom || !dateTo) return '';
+    const fmt = iso => new Date(iso + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return `${fmt(dateFrom)} – ${fmt(dateTo)}`;
 }
 
 function createVarianceStoreCard(sKey) {
@@ -4474,7 +4491,7 @@ function injectIdeaModal() {
                     <input type="hidden" name="_subject" id="ideaDynamicSubject" value="New SPEEKS Idea">
                     <div style="margin-bottom: 15px;">
                         <label class="idea-label">Your Name</label>
-                        <input type="text" id="ideaName" name="Name" class="idea-input" required placeholder="John Doe">
+                        <input type="text" id="ideaName" name="Name" class="idea-input" required readonly aria-readonly="true" title="Pulled from your account" style="background:#f1f5f9; color:#475569; cursor:not-allowed;">
                     </div>
                     <div style="margin-bottom: 15px;">
                         <label class="idea-label">Category</label>
@@ -5156,10 +5173,12 @@ async function fetchMasterDistrictDashboard() {
             const vColor = totalVar < 0 ? '#991b1b' : (totalVar > 0 ? '#065f46' : '#64748b');
             const vBg = totalVar < 0 ? '#fee2e2' : (totalVar > 0 ? '#d1fae5' : '#f1f5f9');
             const vSign = totalVar > 0 ? '+' : '';
+            const vRange = formatVarianceRange(sVar.dateFrom, sVar.dateTo);
 
             // 5. WEEKLY METRICS
             const sWeekData = weeklyResults.find(w => w.store === store);
             const wAvg = sWeekData?.sAvg || {};
+            const wPeriod = sWeekData?.periodLabel || '';
 
             const renderLineStat = (label, val, ruleType) => {
                 let isBad = false;
@@ -5221,12 +5240,15 @@ async function fetchMasterDistrictDashboard() {
                             <div class="master-stat-row dashed"><span class="master-stat-label">Sell Margin</span><span class="master-stat-val" style="color: ${sellMarginColor}; background: ${sellMarginBg};">${sellMarginNum > 0 ? sellMargin + '%' : '-'}</span></div>
                             <div class="master-stat-row"><span class="master-stat-label">Buy Tracking</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${buyProj.toLocaleString()}</span></div>
                             <div class="master-stat-row dashed"><span class="master-stat-label">Buy Margin</span><span class="master-stat-val" style="color: ${marginColor}; background: ${marginBg};">${buyMargin}%</span></div>
-                            <div class="master-stat-row"><span class="master-stat-label">Variance Total</span><span class="master-stat-val" style="color: ${vColor}; background: ${vBg};">${vSign}${totalVar.toFixed(2)}%</span></div>
+                            <div class="master-stat-row"><span class="master-stat-label">Variance Total${vRange ? `<span style="display:block; font-size:9px; font-weight:700; color:#94a3b8; text-transform:none; letter-spacing:0; margin-top:1px;">${vRange}</span>` : ''}</span><span class="master-stat-val" style="color: ${vColor}; background: ${vBg};" title="Variance period${vRange ? ': ' + vRange : ' not set'}">${vSign}${totalVar.toFixed(2)}%</span></div>
                         </div>
                     </div>
 
                     <div>
-                        <div class="master-section-title">Weekly Metrics</div>
+                        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px;">
+                            <div class="master-section-title" style="margin-bottom:0;min-width:0;">Weekly Metrics</div>
+                            ${wPeriod ? `<span class="master-section-title" style="margin-bottom:0;white-space:nowrap;">${escapeHtml(wPeriod)}</span>` : ''}
+                        </div>
                         <div class="master-stat-box">
                             ${renderLineStat('Conversion', wAvg.conversion, 'conversion')}
                             ${renderLineStat('Margin', wAvg.buyMargin, 'margin')}
@@ -5293,7 +5315,7 @@ async function fetchMasterDistrictDashboard() {
                 noDeals:    fmtN(t.no_deal_count),
                 listed:     fmtN(t.listed_count),
             };
-            return { store, sAvg };
+            return { store, sAvg, periodLabel: d.period_label || '' };
         });
 
         const weeklyResults = await Promise.all(weeklyPromises);
@@ -5798,6 +5820,16 @@ async function markListingGoalsChecklistComplete() {
         if (task) {
             targetTaskId = task.id;
             if (!task.checked) { task.checked = true; if (typeof renderChecklist === 'function') renderChecklist(); }
+        }
+    }
+
+    // Multi-Store Manager: the single-store cache is empty; tick the active store's copy.
+    if (_isMSMChecklist()) {
+        const msDaily = (checklistDataCacheMS[store] || {}).daily || [];
+        const msTask = msDaily.find(t => t.text.toLowerCase().includes('listing goals'));
+        if (msTask) {
+            targetTaskId = msTask.id;
+            if (!msTask.checked) { msTask.checked = true; renderChecklistMS(); }
         }
     }
 
@@ -6554,6 +6586,7 @@ async function fetchAndRenderEmployeeKPIs() {
         // --- NEW: ROBUST VARIANCE FETCH ---
         let formattedMyVar = '-';
         let formattedStoreVar = '-';
+        let varRange = '';
         
         let vData = typeof liveVarianceDataCache !== 'undefined' ? liveVarianceDataCache : null;
         
@@ -6577,7 +6610,8 @@ async function fetchAndRenderEmployeeKPIs() {
             };
 
             formattedStoreVar = safeFormatVar(sVar.total);
-            
+            varRange = formatVarianceRange(sVar.dateFrom, sVar.dateTo);
+
             const sessionName = String(userName).trim().toLowerCase();
             const sessionFirstName = sessionName.split(' ')[0];
             
@@ -6603,7 +6637,7 @@ async function fetchAndRenderEmployeeKPIs() {
             return;
         }
 
-        const buildStatGridItem = (title, myVal, storeVal, ruleStr, isPercent = false, prefixLabel = "Store:", showBubble = true) => {
+        const buildStatGridItem = (title, myVal, storeVal, ruleStr, isPercent = false, prefixLabel = "Store:", showBubble = true, noteText = '') => {
             const myIsBad = ruleStr ? checkRule(ruleStr, myVal) : false;
             
             let displayMyVal = myVal || '-';
@@ -6625,6 +6659,7 @@ async function fetchAndRenderEmployeeKPIs() {
                 <span style="font-size: 9px; font-weight: 900; color: var(--slate-charcoal); text-transform: uppercase; line-height: 1;">${title}</span>
                 ${centerHtml}
                 <span style="font-size: 8px; font-weight: 700; color: #a0aab2; text-transform: uppercase;">${prefixLabel} <strong>${displayStoreVal}</strong></span>
+                ${noteText ? `<span style="font-size: 8px; font-weight: 700; color: #b6bec6; text-transform: none; margin-top: 1px; line-height: 1.2;">${noteText}</span>` : ''}
             </div>`;
         };
 
@@ -6635,7 +6670,7 @@ async function fetchAndRenderEmployeeKPIs() {
                     ${buildStatGridItem('Buying Value', myData.buyVal, sAvg.buyVal, null, false, 'Store Total:', false)}
                     ${buildStatGridItem('Margin', myData.buyMargin, sAvg.buyMargin, 'margin', true, 'Store Avg:', true)}
                     ${buildStatGridItem('Conversion', myData.conversion, sAvg.conversion, 'conversion', true, 'Store Avg:', true)}
-                    ${buildStatGridItem('Variance', formattedMyVar, formattedStoreVar, 'variance', false, 'Store Total:', true)}
+                    ${buildStatGridItem('Variance', formattedMyVar, formattedStoreVar, 'variance', false, 'Store Total:', true, varRange)}
                 </div>
                 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; flex: 1;">
                     ${buildStatGridItem('No Deals', myData.noDeals, sAvg.noDeals, 'nodeals', false, 'Store Total:', true)}
@@ -7867,6 +7902,37 @@ document.addEventListener('click', async (e) => {
             if (currentMain && newMain) {
                 currentMain.innerHTML = newMain.innerHTML;
             }
+
+            // This swap only replaces .main-content, so the SPEEKS Tools chrome
+            // (button, side panel, tool modals) — which lives OUTSIDE .main-content —
+            // would otherwise stay frozen at whatever the first full page load had,
+            // and any tool modal a page authored INSIDE .main-content would be wiped.
+            // Sync it all from the fetched doc so every tool opens on every tab
+            // without a hard refresh.
+            const newBtn = newDoc.getElementById('toolsNavBtn');
+            const curBtn = document.getElementById('toolsNavBtn');
+            if (newBtn && curBtn) curBtn.className = newBtn.className;
+            const newPanel = newDoc.getElementById('toolsSidePanel');
+            const curPanel = document.getElementById('toolsSidePanel');
+            if (newPanel && curPanel) {
+                curPanel.className = newPanel.className;
+                curPanel.innerHTML = newPanel.innerHTML;
+            }
+            // Pull in any modal/overlay the fetched page keeps outside .main-content
+            // that the live DOM is now missing.
+            const nMain = newDoc.querySelector('.main-content');
+            newDoc.querySelectorAll('.modal-menu, .overlay').forEach(m => {
+                if (m.id && (!nMain || !nMain.contains(m)) && !document.getElementById(m.id)) {
+                    document.body.appendChild(document.importNode(m, true));
+                }
+            });
+            // De-dupe: a modal authored inside .main-content on this page can now
+            // coexist with a persistent copy carried over from the previous page.
+            const _seenModalIds = new Set();
+            document.querySelectorAll('.modal-menu, .overlay').forEach(el => {
+                if (!el.id) return;
+                if (_seenModalIds.has(el.id)) el.remove(); else _seenModalIds.add(el.id);
+            });
 
             document.querySelectorAll('.nav-link').forEach(nav => nav.classList.remove('active'));
             const newActiveLink = Array.from(document.querySelectorAll('.nav-link')).find(n => n.href === targetUrl);
@@ -9395,13 +9461,23 @@ function renderRequiredTasks(tasks) {
 
 // --- DM: view ONE store's full checklist — both the required tasks the DM set
 //     and the personal tasks that store's manager added themselves. Read-only.
+// Resolves the person whose checklist a store shares (its "owner"). Normal stores use
+// the owner/manager on file. BAL/MPL are run by a Multi-Store Manager whose DB `store`
+// is only their HOME store — so for those we match by role + the shared
+// MULTISTORE_MANAGER_STORES set, NOT by u.store. This is what lets a store's ASM (and the
+// DM Manager-Checklist viewer) sync to the MSM's checklist — for BAL now and a future MPL ASM.
 function _resolveStoreManager(store) {
+    const s = String(store || '').toUpperCase();
     try {
         const authCache = JSON.parse(localStorage.getItem('speeksAuthCache')) || {};
         const users = authCache.users || [];
+        if (typeof MULTISTORE_MANAGER_STORES !== 'undefined' && MULTISTORE_MANAGER_STORES.includes(s)) {
+            const msm = users.find(u => u.role && u.role.toLowerCase() === 'multi-store manager');
+            if (msm) return msm.name;
+        }
         for (const targetRole of ['owner (manager)', 'manager']) {
             const mgr = users.find(u =>
-                u.store && u.store.toUpperCase() === String(store).toUpperCase() &&
+                u.store && u.store.toUpperCase() === s &&
                 u.role && u.role.toLowerCase() === targetRole
             );
             if (mgr) return mgr.name;
@@ -9916,6 +9992,165 @@ function _selectedStoreAudit() {
     return entry && entry.audit ? entry.audit : null;
 }
 
+// Per-section notes + photo attachments captured while scoring a practice audit.
+// Notes: { [sectionTitle]: string }. Photos: { [sectionTitle]: [{file?,localUrl?,url?,path?,name}] }
+// New photos upload to the audit-photos bucket on save; a store's previous-audit
+// photos are cleared server-side once a new audit is scored.
+let _auditEntryNotes = {};
+let _auditEntryPhotos = {};
+
+function _auSecTitle(sIdx) { return (AUDIT_DEFINITION[sIdx] || {}).title || String(sIdx); }
+
+function onAuditNoteInput(sIdx) {
+    const el = document.getElementById(`audit-note-${sIdx}`);
+    _auditEntryNotes[_auSecTitle(sIdx)] = el ? el.value : '';
+}
+
+function onAuditPhotoAdd(sIdx, input) {
+    const title = _auSecTitle(sIdx);
+    if (!_auditEntryPhotos[title]) _auditEntryPhotos[title] = [];
+    const MAX = 6;
+    [...(input.files || [])].forEach(f => {
+        if (!f.type || !f.type.startsWith('image/')) return;
+        if (_auditEntryPhotos[title].length >= MAX) { return; }
+        _auditEntryPhotos[title].push({ file: f, localUrl: URL.createObjectURL(f), name: f.name });
+    });
+    input.value = '';
+    renderAuditSectionPhotos(sIdx);
+}
+
+function removeAuditPhoto(sIdx, idx) {
+    const arr = _auditEntryPhotos[_auSecTitle(sIdx)];
+    if (arr) { arr.splice(idx, 1); renderAuditSectionPhotos(sIdx); }
+}
+
+function renderAuditSectionPhotos(sIdx) {
+    const wrap = document.getElementById(`audit-photos-${sIdx}`);
+    if (!wrap) return;
+    const arr = _auditEntryPhotos[_auSecTitle(sIdx)] || [];
+    wrap.innerHTML = arr.map((p, i) => {
+        const src = p.url || p.localUrl;
+        return `<div style="position:relative; width:64px; height:64px; border-radius:8px; overflow:hidden; border:1px solid #e2e8f0;">
+            <img src="${src}" style="width:100%; height:100%; object-fit:cover; cursor:pointer;" onclick="openAuditPhotoLightbox('${src}')">
+            <button type="button" onclick="removeAuditPhoto(${sIdx}, ${i})" title="Remove" style="position:absolute; top:2px; right:2px; width:18px; height:18px; border:none; border-radius:50%; background:rgba(15,23,42,.78); color:#fff; font-size:12px; line-height:1; cursor:pointer;">&times;</button>
+        </div>`;
+    }).join('');
+    const hint = document.getElementById(`audit-photo-hint-${sIdx}`);
+    if (hint) hint.textContent = arr.length ? `${arr.length} attached` : '';
+}
+
+// Full-screen image viewer (created lazily; sits above any modal).
+function openAuditPhotoLightbox(src) {
+    let lb = document.getElementById('auditPhotoLightbox');
+    if (!lb) {
+        lb = document.createElement('div');
+        lb.id = 'auditPhotoLightbox';
+        lb.onclick = () => { lb.style.display = 'none'; };
+        lb.style.cssText = 'display:none; position:fixed; inset:0; z-index:4000; background:rgba(2,6,23,.85); align-items:center; justify-content:center; padding:30px; cursor:zoom-out;';
+        lb.innerHTML = '<img alt="" style="max-width:92vw; max-height:88vh; border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,.5);">';
+        document.body.appendChild(lb);
+    }
+    lb.querySelector('img').src = src;
+    lb.style.display = 'flex';
+}
+
+// Live camera capture (works on laptops with a webcam + phones) via getUserMedia,
+// so a photo can be taken in-app even where the file picker won't open a camera.
+// Uploading via "Add photo(s)" stays available alongside this.
+let _auditCamStream = null;
+
+async function openAuditCamera(sIdx) {
+    const md = navigator.mediaDevices;
+    if (!md || !md.getUserMedia) {
+        alert('Live camera is not available on this device/browser. Use "Add photo(s)" to upload instead.');
+        return;
+    }
+    // Acquire the camera BEFORE showing the modal, so a denied/failed request
+    // never leaves an empty black camera box on screen. Prefer the rear camera
+    // on phones; laptops fall back to their only/default camera.
+    let stream;
+    try {
+        stream = await md.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    } catch (e) {
+        const name = e && e.name;
+        let msg;
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+            msg = 'Camera access is blocked for this site. Click the camera (or lock) icon in your browser’s address bar, choose Allow for the camera, then tap “Take photo” again.';
+        } else if (name === 'NotFoundError' || name === 'OverconstrainedError' || name === 'DevicesNotFoundError') {
+            msg = 'No camera was found on this device.';
+        } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+            msg = 'The camera is already in use by another app. Close it and try again.';
+        } else {
+            msg = 'Could not access the camera' + (e && e.message ? ': ' + e.message : '') + '.';
+        }
+        alert(msg + '\nYou can still use “Add photo(s)” to upload a picture.');
+        return;
+    }
+
+    _auditCamStream = stream;
+    let cam = document.getElementById('auditCameraModal');
+    if (!cam) {
+        cam = document.createElement('div');
+        cam.id = 'auditCameraModal';
+        cam.style.cssText = 'display:none; position:fixed; inset:0; z-index:4100; background:rgba(2,6,23,.92); flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:20px;';
+        cam.innerHTML =
+            '<video id="auditCamVideo" autoplay playsinline muted style="max-width:92vw; max-height:68vh; border-radius:12px; background:#000;"></video>' +
+            '<div style="display:flex; gap:12px;">' +
+              '<button id="auditCamShot" type="button" style="background:#16a34a; color:#fff; border:none; border-radius:10px; padding:12px 22px; font-size:14px; font-weight:800; cursor:pointer;">📸 Capture</button>' +
+              '<button id="auditCamCancel" type="button" style="background:#334155; color:#fff; border:none; border-radius:10px; padding:12px 22px; font-size:14px; font-weight:800; cursor:pointer;">Cancel</button>' +
+            '</div>';
+        document.body.appendChild(cam);
+    }
+    cam.querySelector('#auditCamCancel').onclick = () => closeAuditCamera();
+    cam.querySelector('#auditCamShot').onclick = () => captureAuditPhoto(sIdx);
+    cam.querySelector('#auditCamVideo').srcObject = _auditCamStream;
+    cam.style.display = 'flex';
+}
+
+function closeAuditCamera() {
+    const cam = document.getElementById('auditCameraModal');
+    if (_auditCamStream) { _auditCamStream.getTracks().forEach(t => t.stop()); _auditCamStream = null; }
+    if (cam) { const v = cam.querySelector('#auditCamVideo'); if (v) v.srcObject = null; cam.style.display = 'none'; }
+}
+
+function captureAuditPhoto(sIdx) {
+    const cam = document.getElementById('auditCameraModal');
+    const video = cam && cam.querySelector('#auditCamVideo');
+    if (!video || !video.videoWidth) return;
+    const title = _auSecTitle(sIdx);
+    if (!_auditEntryPhotos[title]) _auditEntryPhotos[title] = [];
+    if (_auditEntryPhotos[title].length >= 6) { alert('Up to 6 photos per section.'); closeAuditCamera(); return; }
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    canvas.toBlob((blob) => {
+        if (blob) {
+            const file = new File([blob], `audit_capture_${Date.now()}.jpg`, { type: 'image/jpeg' });
+            _auditEntryPhotos[title].push({ file, localUrl: URL.createObjectURL(blob), name: file.name });
+            renderAuditSectionPhotos(sIdx);
+        }
+        closeAuditCamera();
+    }, 'image/jpeg', 0.9);
+}
+
+// Upload one image to the audit-photos bucket; returns {url, path, name}.
+async function _uploadAuditPhoto(file) {
+    const safeName = `${Date.now()}_${Math.round(Math.random() * 1e6)}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    const resp = await fetch(`${_SUPABASE_URL}/storage/v1/object/audit-photos/${safeName}`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${_SUPABASE_ANON_KEY}`,
+            'apikey': _SUPABASE_ANON_KEY,
+            'Content-Type': file.type || 'application/octet-stream',
+            'x-upsert': 'true',
+        },
+        body: file,
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return { url: `${_SUPABASE_URL}/storage/v1/object/public/audit-photos/${safeName}`, path: safeName, name: file.name };
+}
+
 // Build the collapsible audit checklist. If an audit already exists for the
 // selected store AND the chosen date matches it, pre-check its results (edit mode).
 function renderAuditEntry() {
@@ -9924,6 +10159,12 @@ function renderAuditEntry() {
     const dateVal = document.getElementById('dm-score-date')?.value || '';
     const existing = _selectedStoreAudit();
     const prefill = (existing && existing.date === dateVal && existing.results) ? existing.results : {};
+    const editingThis = !!(existing && existing.date === dateVal);
+    _auditEntryNotes = (editingThis && existing.notes && typeof existing.notes === 'object' && !Array.isArray(existing.notes)) ? { ...existing.notes } : {};
+    _auditEntryPhotos = {};
+    if (editingThis && existing.photos && typeof existing.photos === 'object') {
+        Object.entries(existing.photos).forEach(([k, arr]) => { if (Array.isArray(arr)) _auditEntryPhotos[k] = arr.slice(); });
+    }
     const auditorEl = document.getElementById('dm-audit-auditor');
     if (auditorEl) auditorEl.value = (existing && existing.date === dateVal && existing.auditor) ? existing.auditor : '';
 
@@ -9958,12 +10199,30 @@ function renderAuditEntry() {
                 <span style="flex-shrink:0; display:flex; align-items:center; justify-content:flex-end; gap:8px; width:100px;">${control}</span>
             </div>`;
         });
+        html += `<div style="margin-top:10px; padding-top:11px; border-top:1px dashed #e2e8f0;">
+            <label style="display:block; font-size:10.5px; font-weight:800; color:#94a3b8; text-transform:uppercase; letter-spacing:.4px; margin-bottom:5px;">Section notes</label>
+            <textarea id="audit-note-${sIdx}" oninput="onAuditNoteInput(${sIdx})" placeholder="Notes for this section (optional)…" style="width:100%; box-sizing:border-box; min-height:50px; resize:vertical; border:1px solid #cbd5e1; border-radius:8px; padding:8px 10px; font-size:12.5px; font-family:inherit; color:var(--slate-charcoal);"></textarea>
+            <div style="display:flex; align-items:center; gap:10px; margin-top:8px; flex-wrap:wrap;">
+                <label style="display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:800; color:#475569; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:8px; padding:6px 11px; cursor:pointer;">
+                    📷 Add photo(s)
+                    <input type="file" accept="image/*" multiple onchange="onAuditPhotoAdd(${sIdx}, this)" style="display:none;">
+                </label>
+                <button type="button" onclick="openAuditCamera(${sIdx})" style="display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:800; color:#475569; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:8px; padding:6px 11px; cursor:pointer;">📸 Take photo</button>
+                <span id="audit-photo-hint-${sIdx}" style="font-size:11px; color:#94a3b8; font-weight:700;"></span>
+            </div>
+            <div id="audit-photos-${sIdx}" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;"></div>
+        </div>`;
         html += `</div></div>`;
     });
     container.innerHTML = html;
 
-    // Refresh subtotals + running bar from the prefilled state.
-    AUDIT_DEFINITION.forEach((_s, sIdx) => onAuditEntryToggle(sIdx, true));
+    // Refresh subtotals + running bar; restore any per-section notes/photos.
+    AUDIT_DEFINITION.forEach((sec, sIdx) => {
+        onAuditEntryToggle(sIdx, true);
+        const ta = document.getElementById(`audit-note-${sIdx}`);
+        if (ta) ta.value = _auditEntryNotes[sec.title] || '';
+        renderAuditSectionPhotos(sIdx);
+    });
     updateAuditRunningBar();
 }
 
@@ -10037,7 +10296,7 @@ function updateAuditRunningBar() {
         <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:4px;">${verdict}</div>`;
 }
 
-function submitNewAudit() {
+async function submitNewAudit() {
     const store = document.getElementById('dm-store-select').value;
     const date = document.getElementById('dm-score-date').value;
     const auditor = (document.getElementById('dm-audit-auditor')?.value || '').trim()
@@ -10050,15 +10309,39 @@ function submitNewAudit() {
         results[el.getAttribute('data-itemid')] = _auditItemAward(el);
     });
 
-    btn.innerText = 'Saving...';
-    btn.style.opacity = '0.7';
-    btn.disabled = true;
+    // Per-section notes (skip blanks).
+    const sectionNotes = {};
+    Object.entries(_auditEntryNotes).forEach(([k, v]) => {
+        if (v && String(v).trim()) sectionNotes[k] = String(v).trim();
+    });
 
-    fetch(SCORECARD_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'submit_audit', store, date, auditor, results })
-    }).then(async res => {
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+
+    // Upload any newly-added photos; keep already-uploaded ones (edit mode) as-is.
+    const sectionPhotos = {};
+    try {
+        for (const [section, arr] of Object.entries(_auditEntryPhotos)) {
+            const out = [];
+            for (const p of (arr || [])) {
+                if (p.path && p.url) { out.push({ url: p.url, path: p.path, name: p.name || '' }); continue; }
+                if (p.file) { btn.innerText = 'Uploading photos…'; out.push(await _uploadAuditPhoto(p.file)); }
+            }
+            if (out.length) sectionPhotos[section] = out;
+        }
+    } catch (e) {
+        alert('Photo upload failed: ' + (e.message || e));
+        btn.innerText = 'Save Audit'; btn.style.opacity = ''; btn.disabled = false;
+        return;
+    }
+
+    btn.innerText = 'Saving...';
+    try {
+        const res = await fetch(SCORECARD_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'submit_audit', store, date, auditor, results, sectionNotes, sectionPhotos })
+        });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
         btn.innerText = `Saved — ${json.earned}/${json.possible} (${json.pct}%)`;
@@ -10072,13 +10355,13 @@ function submitNewAudit() {
             btn.style.opacity = '';
             btn.disabled = false;
         }, 1400);
-    }).catch(err => {
+    } catch (err) {
         alert('Error saving audit: ' + (err.message || err));
         btn.innerText = 'Save Audit';
         btn.style.background = '';
         btn.style.opacity = '';
         btn.disabled = false;
-    });
+    }
 }
 
 // ---- Read-only Audit Breakdown popout (reused by every display site) ----
@@ -10137,6 +10420,17 @@ function renderAuditBreakdown(store) {
                 <span style="font-size:11px; font-weight:800; color:${valColor}; flex-shrink:0;">${aw}/${item.pts}</span>
             </div>`;
         });
+        const secNote = (audit.notes && !Array.isArray(audit.notes)) ? audit.notes[sec.title] : null;
+        const secPhotos = (audit.photos && !Array.isArray(audit.photos)) ? audit.photos[sec.title] : null;
+        if (secNote && String(secNote).trim()) {
+            html += `<div style="margin-top:6px; background:#f8fafc; border:1px solid #e2e8f0; border-left:3px solid #94a3b8; border-radius:7px; padding:7px 10px; font-size:12px; color:var(--slate-charcoal); line-height:1.45;"><span style="font-weight:800; color:#64748b;">📝 </span>${escapeHtml(String(secNote))}</div>`;
+        }
+        if (Array.isArray(secPhotos) && secPhotos.length) {
+            html += `<div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">` + secPhotos.map(p => {
+                const src = (p && p.url) ? p.url : '';
+                return src ? `<img src="${src}" onclick="openAuditPhotoLightbox('${src}')" style="width:56px; height:56px; object-fit:cover; border-radius:6px; border:1px solid #e2e8f0; cursor:pointer;" alt="">` : '';
+            }).join('') + `</div>`;
+        }
         html += `</div>`;
     });
     body.innerHTML = html;
@@ -11034,6 +11328,10 @@ function _commentKey(c) {
     return `${String(c.store||'').trim()}|${String(c.date||'').trim()}|${String(c.author||'').trim()}|${String(c.message||'').trim()}`.slice(0, 120);
 }
 
+// Ids of the store comments currently shown in the bubble — marked read when
+// the user dismisses (X) the bubble. Accumulates across polls until dismissed.
+let _shownCommentIds = [];
+
 let _storeCommentPollingStarted = false;
 function startStoreCommentPolling() {
     if (_storeCommentPollingStarted) return;
@@ -11074,8 +11372,152 @@ window.openCEOStoreComment = function(targetStore) {
                 storeSelect.style.cursor = 'pointer';
             }
         }
+
+        // Two tabs: Send Message | Read Receipts (built once, then reset to Send).
+        _setupCommentModalTabs();
+        _commentReadsCache = null; // refetch reads each time the modal opens
+        switchCommentTab('send');
     }
 };
+
+// Adds the Send | Read Receipts tab bar + a reads panel to the send modal (once).
+function _setupCommentModalTabs() {
+    const modal = document.getElementById('sendCommentModal');
+    if (!modal || document.getElementById('commentTabBar')) return;
+    const header = modal.querySelector('.modal-header');
+    const content = modal.querySelector('.manage-content');
+    if (!header || !content) return;
+
+    const bar = document.createElement('div');
+    bar.id = 'commentTabBar';
+    bar.style.cssText = 'padding:14px 18px 0;';
+    bar.innerHTML = `<div class="notif-tabs" style="display:inline-flex;">
+        <button id="comment-tab-send" class="tab-btn active" onclick="switchCommentTab('send')">Send Message</button>
+        <button id="comment-tab-reads" class="tab-btn" onclick="switchCommentTab('reads')">Read Receipts</button>
+    </div>`;
+    header.insertAdjacentElement('afterend', bar);
+
+    const panel = document.createElement('div');
+    panel.id = 'commentReadsPanel';
+    panel.className = 'manage-content';
+    panel.style.display = 'none';
+    panel.innerHTML = `
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;">
+            <label class="form-label-caps" style="margin:0;">Store</label>
+            <select id="commentReadsStore" class="form-input-lg" style="max-width:220px;" onchange="renderStoreCommentReads()">
+                <option value="ALL">All Stores</option>
+                <option value="OVL">OVL</option>
+                <option value="LEE">LEE</option>
+                <option value="WSP">WSP</option>
+                <option value="MPL">MPL</option>
+                <option value="BAL">BAL</option>
+            </select>
+        </div>
+        <div id="commentReadsStats"></div>
+        <div id="commentReadsList"></div>`;
+    content.insertAdjacentElement('afterend', panel);
+}
+
+function switchCommentTab(tab) {
+    const isSend = tab !== 'reads';
+    const modal = document.getElementById('sendCommentModal');
+    if (!modal) return;
+    document.getElementById('comment-tab-send')?.classList.toggle('active', isSend);
+    document.getElementById('comment-tab-reads')?.classList.toggle('active', !isSend);
+    const form = modal.querySelector('.manage-content'); // the send form (first .manage-content)
+    const footer = modal.querySelector('.manage-footer');
+    const panel = document.getElementById('commentReadsPanel');
+    if (form) form.style.display = isSend ? '' : 'none';
+    if (footer) footer.style.display = isSend ? '' : 'none';
+    if (panel) panel.style.display = isSend ? 'none' : 'flex';
+    if (!isSend) loadStoreCommentReads();
+}
+
+let _commentReadsCache = null;
+
+// Fetch the last 30 days of comments + their reads (once per modal open), then render.
+async function loadStoreCommentReads() {
+    const listEl = document.getElementById('commentReadsList');
+    if (!listEl) return;
+    if (!_commentReadsCache) {
+        listEl.innerHTML = `<div style="color:#94a3b8; font-size:13px;">Loading…</div>`;
+        try {
+            const res = await fetch(`${STORE_COMMENT_URL}?mode=reads&v=${Date.now()}`);
+            const rows = await res.json();
+            _commentReadsCache = Array.isArray(rows) ? rows : [];
+        } catch (e) {
+            listEl.innerHTML = `<div style="color:var(--red-alert); font-size:13px;">Failed to load read counts.</div>`;
+            return;
+        }
+    }
+    renderStoreCommentReads();
+}
+
+function _crStat(label, val) {
+    return `<div style="flex:1; min-width:92px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:11px 14px;">
+        <div style="font-size:22px; font-weight:900; color:#1e293b; line-height:1;">${val}</div>
+        <div style="font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; margin-top:3px;">${label}</div>
+    </div>`;
+}
+
+// Render the cached reads filtered by the store dropdown, with stats + per-store breakdown.
+function renderStoreCommentReads() {
+    const statsEl = document.getElementById('commentReadsStats');
+    const listEl = document.getElementById('commentReadsList');
+    if (!listEl) return;
+    const all = _commentReadsCache || [];
+    const store = document.getElementById('commentReadsStore')?.value || 'ALL';
+    const rows = store === 'ALL' ? all : all.filter(r => String(r.store || '').toUpperCase() === store);
+
+    const msgs = rows.length;
+    const totalReads = rows.reduce((s, r) => s + (r.readCount || 0), 0);
+    const avg = msgs ? (totalReads / msgs) : 0;
+
+    let statsHtml = `<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
+        ${_crStat('Messages', msgs)}
+        ${_crStat('Total reads', totalReads)}
+        ${_crStat('Avg reads / msg', avg.toFixed(1))}
+    </div>`;
+
+    // Per-store breakdown (only meaningful on the All view).
+    if (store === 'ALL' && msgs) {
+        const byStore = {};
+        all.forEach(r => {
+            const s = String(r.store || '').toUpperCase() || '—';
+            (byStore[s] ||= { m: 0, reads: 0 });
+            byStore[s].m++; byStore[s].reads += (r.readCount || 0);
+        });
+        statsHtml += `<div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:4px 2px; margin-bottom:14px;">`
+            + Object.keys(byStore).sort().map(s => {
+                const v = byStore[s];
+                return `<div style="display:flex; justify-content:space-between; gap:10px; padding:6px 12px; font-size:12.5px; border-bottom:1px solid #f1f5f9;">
+                    <span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(s)}</span>
+                    <span style="color:#64748b;">${v.m} msg · ${v.reads} reads · ${(v.reads / v.m).toFixed(1)} avg</span>
+                </div>`;
+            }).join('')
+            + `</div>`;
+    }
+    if (statsEl) statsEl.innerHTML = statsHtml;
+
+    if (!msgs) {
+        listEl.innerHTML = `<div style="color:#94a3b8; font-size:13px;">No messages${store !== 'ALL' ? ' for ' + escapeHtml(store) : ''} in the last 30 days.</div>`;
+        return;
+    }
+    listEl.innerHTML = rows.slice(0, 80).map(r => {
+        const names = (r.readBy || []).map(escapeHtml).join(', ');
+        const msg = escapeHtml(String(r.message || '').slice(0, 160));
+        const cnt = r.readCount || 0;
+        const sentBy = r.author ? ` · <span style="font-weight:600; color:#64748b;">by ${escapeHtml(r.author)}</span>` : '';
+        return `<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:11px 13px; margin-bottom:8px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:5px;">
+                <span style="font-size:11px; font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')} · ${escapeHtml(r.date || '')}${sentBy}</span>
+                <span style="font-size:11px; font-weight:900; color:${cnt ? '#059669' : '#94a3b8'}; background:#fff; border:1px solid #e2e8f0; border-radius:20px; padding:3px 10px; white-space:nowrap;">👁 Read by ${cnt}</span>
+            </div>
+            <div style="font-size:12.5px; color:var(--slate-charcoal); line-height:1.4;${names ? ' margin-bottom:5px;' : ''}">${msg}</div>
+            ${names ? `<div style="font-size:11px; color:#64748b;"><strong style="color:#94a3b8;">Read by:</strong> ${names}</div>` : ''}
+        </div>`;
+    }).join('');
+}
 
 async function submitStoreComment() {
     const store = document.getElementById('commentStoreSelect').value;
@@ -11113,19 +11555,31 @@ async function submitStoreComment() {
     }
 }
 
-// Helper to close the bubble (comments already marked seen when bubble was shown)
+// Close the bubble AND log a read for each comment it was showing — dismissing
+// the message (X) is the "I saw this" signal DM/CEO see in the send tool.
 window.closeDailyCommentBubble = function() {
     const bubble = document.getElementById('dailyMessageBubble');
     if (bubble) bubble.style.display = 'none';
     if (typeof _positionClaimAlert === 'function') _positionClaimAlert(); // claim alert moves back up
+
+    if (_shownCommentIds.length) {
+        const user = sessionStorage.getItem('speeksUserName') || null;
+        const ids = _shownCommentIds.slice();
+        _shownCommentIds = [];
+        postWrite(STORE_COMMENT_URL, { type: 'mark_read', commentIds: ids, user })
+            .catch(err => console.warn('comment mark_read failed:', err.message));
+    }
 };
 
 async function fetchAndDisplayStoreComment() {
     const userStore = String(sessionStorage.getItem('speeksUserStore') || 'OVL').trim().toUpperCase();
+    const userName = String(sessionStorage.getItem('speeksUserName') || '').trim();
     const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
 
     try {
-        const res = await fetch(`${STORE_COMMENT_URL}?v=${Date.now()}`);
+        // reader= tells the fn which comments this user already dismissed, so a
+        // read (X) permanently suppresses the message across sign-outs.
+        const res = await fetch(`${STORE_COMMENT_URL}?reader=${encodeURIComponent(userName)}&v=${Date.now()}`);
         const comments = await res.json();
 
         const todayComments = comments.filter(c => {
@@ -11146,10 +11600,14 @@ async function fetchAndDisplayStoreComment() {
             return isToday && isForMe;
         }).reverse(); // Newest first
 
-        // Only show comments the user hasn't seen yet in this session
+        // Show only comments the user hasn't permanently dismissed (readByMe, from
+        // the server) and hasn't already seen this session.
         const seenKeys = _getSeenCommentKeys();
-        const newComments = todayComments.filter(c => !seenKeys.has(_commentKey(c)));
+        const newComments = todayComments.filter(c => !c.readByMe && !seenKeys.has(_commentKey(c)));
         if (newComments.length === 0) return;
+
+        // Remember which comments are on screen so the X (dismiss) can log a read.
+        newComments.forEach(c => { if (c.id && !_shownCommentIds.includes(c.id)) _shownCommentIds.push(c.id); });
 
         // Mark all today's comments seen now so repeat polls don't re-show the same ones
         todayComments.forEach(c => seenKeys.add(_commentKey(c)));
@@ -11369,6 +11827,14 @@ async function fetchChampions() {
 // ============================================================================
 let currentChecklistTab = 'daily';
 let checklistDataCache = { daily: [], weekly: [], monthly: [], quarterly: [] };
+// Multi-Store Manager (e.g. BAL + MPL): one checklist cache per managed store, so
+// both stores' lists render stacked in the same panel without switching dashboards.
+// { BAL: {daily,weekly,monthly,quarterly}, MPL: {...} }. Empty for everyone else.
+let checklistDataCacheMS = {};
+const _pendingTogglesMS = new Map();   // key: "STORE::id" -> { checked, expiresAt }
+function _isMSMChecklist() {
+    return typeof isMultiStoreManager === 'function' && isMultiStoreManager();
+}
 // Tracks optimistic toggle state for up to 20 seconds so a slow backend response
 // can't overwrite a locally-checked item before Apps Script persists it.
 const _pendingToggles = new Map(); // id -> { checked, expiresAt }
@@ -11384,28 +11850,16 @@ function _applyPendingToggles() {
     }
 }
 
-// For assistant managers, returns the store's primary manager name so both share the same checklist data.
-// All other roles return their own name, preserving existing behavior.
+// For assistant managers, returns the store's primary manager name so both share the same
+// checklist data (incl. BAL/MPL, whose manager is the Multi-Store Manager — see
+// _resolveStoreManager). All other roles return their own name, preserving existing behavior.
 function getChecklistUser() {
     const role = sessionStorage.getItem('speeksUserRole') || '';
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
 
     if (role !== 'assistant manager') return userName;
-
-    try {
-        const authCache = JSON.parse(localStorage.getItem('speeksAuthCache')) || {};
-        const users = authCache.users || [];
-        for (const targetRole of ['owner (manager)', 'manager']) {
-            const mgr = users.find(u =>
-                u.store && u.store.toUpperCase() === store &&
-                u.role && u.role.toLowerCase() === targetRole
-            );
-            if (mgr) return mgr.name;
-        }
-    } catch (e) {}
-
-    return userName;
+    return _resolveStoreManager(store) || userName;
 }
 
 function switchChecklistTab(tab) {
@@ -11417,8 +11871,8 @@ function switchChecklistTab(tab) {
     // Safety check just in case the button isn't on the screen
     const qTab = document.getElementById('cl-tab-quarterly');
     if (qTab) qTab.classList.toggle('active', tab === 'quarterly');
-    
-    renderChecklist();
+
+    if (_isMSMChecklist()) renderChecklistMS(); else renderChecklist();
 }
 
 async function loadChecklist() {
@@ -11427,6 +11881,9 @@ async function loadChecklist() {
     // overwrites the cache with stale (unchecked) data before the backend saves.
     const panel = document.getElementById('checklistSidePanel');
     if (!panel?.classList.contains('open')) return;
+
+    // Multi-Store Managers get both managed stores stacked in one panel.
+    if (_isMSMChecklist()) { await loadChecklistMS(); return; }
 
     const container = document.getElementById('checklistContent');
     const userName = getChecklistUser();
@@ -11508,6 +11965,227 @@ function renderChecklist() {
 
     container.innerHTML = html;
     updateChecklistChip();
+}
+
+// ============================================================================
+// MULTI-STORE MANAGER — dual-store checklist (both managed stores in one panel)
+// A MSM (Joseph: BAL + MPL) does everything a manager does, but for every store
+// they run. Rather than reload the dashboard to switch stores, we fetch each
+// managed store's checklist (user = the MSM) and render them as stacked, per-store
+// sections in the same panel, each with its own progress + add row. ASMs are
+// single-store and never hit this path, so their behavior is unchanged.
+// ============================================================================
+
+// Hide the single-store footer/add row in MSM mode — each store gets its own add row.
+function _setMSChecklistChrome(isMS) {
+    const inputArea = document.querySelector('#checklistSidePanel .cl-input-area');
+    const footer    = document.querySelector('#checklistSidePanel .cl-footer-row');
+    if (inputArea) inputArea.style.display = isMS ? 'none' : '';
+    if (footer)    footer.style.display    = isMS ? 'none' : '';
+}
+
+// Per-store accent color so the stacked sections/pills are distinguishable at a glance.
+// `solid` matches the site-wide store colors (`_storeColors`, used by the monthly-goals
+// banner & charts — BAL red, MPL orange, etc.); `soft` is a light tint for backgrounds.
+function _msStoreAccent(store) {
+    const map = {
+        OVL: { solid: '#7c3aed', soft: '#f5f3ff' },   // purple
+        LEE: { solid: '#2563eb', soft: '#eff6ff' },   // blue
+        WSP: { solid: '#5a8d3b', soft: '#f3f8ee' },   // green
+        MPL: { solid: '#ea580c', soft: '#fff7ed' },   // orange
+        BAL: { solid: '#dc2626', soft: '#fef2f2' },   // red
+    };
+    return map[String(store || '').toUpperCase()] || { solid: '#64748b', soft: '#f1f5f9' };
+}
+
+// Collapse duplicate GLOBAL/required tasks by text (mirrors renderChecklist).
+function _dedupeGlobals(rawItems) {
+    const seen = new Set();
+    return (rawItems || []).filter(it => {
+        if (it.isGlobal) {
+            const key = String(it.text || '').trim().toLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key);
+        }
+        return true;
+    });
+}
+
+function _applyPendingTogglesMS() {
+    const now = Date.now();
+    for (const [key, val] of _pendingTogglesMS) {
+        if (val.expiresAt < now) { _pendingTogglesMS.delete(key); continue; }
+        const [store, id] = key.split('::');
+        const cache = checklistDataCacheMS[store];
+        if (!cache) continue;
+        for (const tab of Object.keys(cache)) {
+            const item = (cache[tab] || []).find(i => i.id === id);
+            if (item) item.checked = val.checked;
+        }
+    }
+}
+
+async function loadChecklistMS() {
+    const container = document.getElementById('checklistContent');
+    const userName = getChecklistUser();
+    _setMSChecklistChrome(true);
+
+    // MSM effective role is manager: Daily/Weekly/Monthly apply; Quarterly is CORP/ALL-only.
+    document.getElementById('cl-tab-weekly')?.style && (document.getElementById('cl-tab-weekly').style.display = '');
+    document.getElementById('cl-tab-monthly')?.style && (document.getElementById('cl-tab-monthly').style.display = '');
+    const qTab = document.getElementById('cl-tab-quarterly');
+    if (qTab) {
+        qTab.style.display = 'none';
+        if (currentChecklistTab === 'quarterly') { currentChecklistTab = 'daily'; switchChecklistTab('daily'); return; }
+    }
+
+    if (container) container.innerHTML = '<div class="status-message">Syncing Checklist...</div>';
+    try {
+        const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+            fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${s}&v=${Date.now()}`).then(r => r.json())
+        ));
+        checklistDataCacheMS = {};
+        MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+            checklistDataCacheMS[s] = results[i] || { daily: [], weekly: [], monthly: [], quarterly: [] };
+        });
+        _applyPendingTogglesMS();
+        renderChecklistMS();
+    } catch (e) {
+        console.error('MSM Checklist Fetch Error', e);
+        if (container) container.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load checklist.</div>';
+    }
+}
+
+function renderChecklistMS() {
+    const container = document.getElementById('checklistContent');
+    if (!container) return;
+
+    let html = '';
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const cache = checklistDataCacheMS[store] || {};
+        const items = _dedupeGlobals(cache[currentChecklistTab] || []);
+        const total = items.length;
+        const done  = items.filter(i => i.checked).length;
+        const progTxt = total ? (done === total ? `✓ ${total}/${total}` : `${done}/${total}`) : '—';
+        const _ac = _msStoreAccent(store);
+        const _allDone = total && done === total;
+
+        html += `<div class="ms-store-section" style="border-left: 4px solid ${_ac.solid};">
+            <div class="ms-store-head" style="border-bottom-color: ${_ac.soft};">
+                <span class="ms-store-name" style="color: ${_ac.solid};">${escapeHtml(store)}</span>
+                <span class="ms-store-prog ${_allDone ? 'all-done' : ''}"${_allDone ? '' : ` style="background: ${_ac.soft}; color: ${_ac.solid};"`}>${progTxt}</span>
+            </div>`;
+
+        if (total === 0) {
+            html += `<div class="ms-empty">No tasks for this tab.</div>`;
+        } else {
+            items.forEach(item => {
+                const completedClass = item.checked ? 'completed' : '';
+                const deleteHtml = !item.isGlobal
+                    ? `<button class="cl-delete-btn" onclick="deleteChecklistItemMS('${store}','${item.id}')" title="Delete Task">✖</button>`
+                    : '';
+                html += `
+                <div class="cl-item ${completedClass}">
+                    <input type="checkbox" class="cl-checkbox" ${item.checked ? 'checked' : ''} onchange="toggleChecklistStateMS('${store}','${item.id}', this.checked)">
+                    <div class="cl-content-wrapper" style="justify-content: center;">
+                        <span class="cl-text">${escapeHtml(item.text)}</span>
+                    </div>
+                    ${deleteHtml}
+                </div>`;
+            });
+        }
+
+        html += `<div class="ms-add-row">
+                <input type="text" id="msNewTask_${store}" placeholder="Add a ${escapeHtml(store)} task..." onkeydown="if(event.key==='Enter')addChecklistItemMS('${store}')">
+                <button class="btn-primary cl-add-btn" onclick="addChecklistItemMS('${store}')">Add</button>
+            </div>
+        </div>`;
+    });
+
+    container.innerHTML = html;
+    updateChecklistChipMS();
+}
+
+function toggleChecklistStateMS(store, id, isChecked) {
+    const userName = getChecklistUser();
+    const cache = checklistDataCacheMS[store];
+    if (!cache) return;
+    const item = (cache[currentChecklistTab] || []).find(i => i.id === id);
+    if (item) item.checked = isChecked;
+    _pendingTogglesMS.set(store + '::' + id, { checked: isChecked, expiresAt: Date.now() + 20000 });
+    renderChecklistMS();
+
+    postWrite(CHECKLIST_URL, { action: 'toggle', id, checked: isChecked, tab: currentChecklistTab, user: userName, store })
+        .catch(err => {
+            const it = (cache[currentChecklistTab] || []).find(i => i.id === id);
+            if (it) it.checked = !isChecked;
+            _pendingTogglesMS.delete(store + '::' + id);
+            renderChecklistMS();
+            alert('Could not save that change: ' + err.message);
+        });
+}
+
+async function addChecklistItemMS(store) {
+    const input = document.getElementById('msNewTask_' + store);
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+
+    input.disabled = true;
+    const userName = getChecklistUser();
+    try {
+        const out = await postWrite(CHECKLIST_URL, { action: 'add', tab: currentChecklistTab, text, user: userName, store });
+        const cache = checklistDataCacheMS[store] || (checklistDataCacheMS[store] = { daily: [], weekly: [], monthly: [], quarterly: [] });
+        (cache[currentChecklistTab] ||= []).push({ id: out.id || ('temp_' + Date.now()), text, isGlobal: false, checked: false });
+        renderChecklistMS();
+    } catch (e) {
+        alert('Failed to add task: ' + (e.message || e));
+    } finally {
+        const el = document.getElementById('msNewTask_' + store);
+        if (el) { el.value = ''; el.disabled = false; el.focus(); }
+    }
+}
+
+function deleteChecklistItemMS(store, id) {
+    const userName = getChecklistUser();
+    const cache = checklistDataCacheMS[store];
+    if (!cache) return;
+    const list = cache[currentChecklistTab] || [];
+    const removed = list.find(i => i.id === id);
+    cache[currentChecklistTab] = list.filter(i => i.id !== id);
+    renderChecklistMS();
+
+    postWrite(CHECKLIST_URL, { action: 'delete', id, tab: currentChecklistTab, user: userName, store })
+        .catch(err => {
+            if (removed) { (cache[currentChecklistTab] ||= []).push(removed); renderChecklistMS(); }
+            alert('Could not delete task: ' + err.message);
+        });
+}
+
+// Combined nudge chip across both managed stores (based on the Daily list).
+function updateChecklistChipMS() {
+    const chip = document.getElementById('cl-progress-chip');
+    const btn = document.querySelector('.cl-nav-toggle');
+    if (!chip || !btn) return;
+
+    const segs = [];
+    let anyOutstanding = false, anyTasks = false;
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const items = _dedupeGlobals((checklistDataCacheMS[store] || {}).daily || []);
+        if (!items.length) return;
+        anyTasks = true;
+        const done = items.filter(i => i.checked).length;
+        const ac = _msStoreAccent(store);
+        const label = done === items.length ? `${store} ✓` : `${store} ${done}/${items.length}`;
+        segs.push(`<span class="ms-chip-seg" style="background: ${ac.solid};">${label}</span>`);
+        if (done < items.length) anyOutstanding = true;
+    });
+
+    if (!anyTasks) { chip.textContent = ''; chip.classList.remove('ms-chip'); }
+    else { chip.classList.add('ms-chip'); chip.innerHTML = segs.join(''); }
+    const panel = document.getElementById('checklistSidePanel');
+    const isOpen = panel && panel.classList.contains('open');
+    btn.classList.toggle('cl-needs-attention', anyOutstanding && !isOpen);
 }
 
 // --- API ACTIONS (POST to Apps Script) ---
@@ -11638,6 +12316,20 @@ function updateChecklistChip() {
 // Uses a separate path from loadChecklist() so the panel-open guard doesn't suppress it.
 async function _prefetchChecklistForChip() {
     const userName = getChecklistUser();
+    if (_isMSMChecklist()) {
+        try {
+            const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+                fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${s}&v=${Date.now()}`).then(r => r.json())
+            ));
+            checklistDataCacheMS = {};
+            MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+                checklistDataCacheMS[s] = results[i] || { daily: [], weekly: [], monthly: [], quarterly: [] };
+            });
+            _applyPendingTogglesMS();
+            updateChecklistChipMS();
+        } catch (_) {}
+        return;
+    }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     try {
         const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
@@ -11656,6 +12348,20 @@ function _startChecklistSync() {
         const panel = document.getElementById('checklistSidePanel');
         if (!panel?.classList.contains('open')) return;
         const userName = getChecklistUser();
+        if (_isMSMChecklist()) {
+            try {
+                const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+                    fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${s}&v=${Date.now()}`).then(r => r.json())
+                ));
+                checklistDataCacheMS = {};
+                MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+                    checklistDataCacheMS[s] = results[i] || { daily: [], weekly: [], monthly: [], quarterly: [] };
+                });
+                _applyPendingTogglesMS();
+                renderChecklistMS();
+            } catch (_) {}
+            return;
+        }
         const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
         try {
             const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
@@ -11739,6 +12445,8 @@ document.addEventListener('click', function(e) {
 let auditDataCache = { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
 let currentAuditTab = 'daily';
 let _auditSyncInterval = null;
+// Multi-Store Manager: one audit cache per managed store, rendered stacked. Empty for others.
+let auditDataCacheMS = {};   // { BAL: {daily,weekly}, MPL: {daily,weekly} }
 
 function _auditTab(tab) { return auditDataCache[tab] || { items: [], total: 0, completed: 0 }; }
 
@@ -11746,12 +12454,13 @@ function switchAuditTab(tab) {
     currentAuditTab = tab;
     document.getElementById('audit-tab-daily')?.classList.toggle('active', tab === 'daily');
     document.getElementById('audit-tab-weekly')?.classList.toggle('active', tab === 'weekly');
-    renderAudit();
+    if (_isMSMChecklist()) renderAuditMS(); else renderAudit();
 }
 
 async function loadAudit() {
     const panel = document.getElementById('auditSidePanel');
     if (!panel?.classList.contains('open')) return;   // only fetch when opening
+    if (_isMSMChecklist()) { await loadAuditMS(); return; }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     const container = document.getElementById('auditContent');
     if (container) container.innerHTML = '<div class="status-message">Syncing Audit...</div>';
@@ -11804,6 +12513,124 @@ function renderAudit() {
     updateAuditChip();
 }
 
+// ============================================================================
+// MULTI-STORE MANAGER — dual-store audit checklist (both stores stacked).
+// The audit checklist is shared per store; a MSM sees both managed stores in one
+// panel. ASMs (single store) and the DM overview are unaffected.
+// ============================================================================
+async function loadAuditMS() {
+    const container = document.getElementById('auditContent');
+    if (container) container.innerHTML = '<div class="status-message">Syncing Audit...</div>';
+    try {
+        const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+            fetch(`${STORE_AUDIT_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())
+        ));
+        auditDataCacheMS = {};
+        MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+            auditDataCacheMS[s] = results[i] || { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
+        });
+        renderAuditMS();
+    } catch (e) {
+        console.error('MSM Audit Fetch Error', e);
+        if (container) container.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load audit checklist.</div>';
+    }
+}
+
+function renderAuditMS() {
+    const container = document.getElementById('auditContent');
+    if (!container) return;
+
+    const label = document.getElementById('audit-week-label');
+    if (label) label.textContent = currentAuditTab === 'daily' ? 'Today · both stores' : 'This week · both stores';
+
+    let html = '';
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const data = (auditDataCacheMS[store] || {})[currentAuditTab] || { items: [], total: 0, completed: 0 };
+        const items = data.items || [];
+        const total = data.total || items.length;
+        const done  = (data.completed != null) ? data.completed : items.filter(i => i.checked).length;
+        const progTxt = total ? (done === total ? `✓ ${total}/${total}` : `${done}/${total}`) : '—';
+        const _ac = _msStoreAccent(store);
+        const _allDone = total && done === total;
+
+        html += `<div class="ms-store-section" style="border-left: 4px solid ${_ac.solid};">
+            <div class="ms-store-head" style="border-bottom-color: ${_ac.soft};">
+                <span class="ms-store-name" style="color: ${_ac.solid};">${escapeHtml(store)}</span>
+                <span class="ms-store-prog ${_allDone ? 'all-done' : ''}"${_allDone ? '' : ` style="background: ${_ac.soft}; color: ${_ac.solid};"`}>${progTxt}</span>
+            </div>`;
+
+        if (items.length === 0) {
+            html += `<div class="ms-empty">No ${currentAuditTab} audit items set up.</div>`;
+        } else {
+            let lastSection = null;
+            items.forEach(item => {
+                if (item.section !== lastSection) {
+                    html += `<div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: #94a3b8; margin: 12px 4px 6px;">${escapeHtml(item.section)}</div>`;
+                    lastSection = item.section;
+                }
+                const completedClass = item.checked ? 'completed' : '';
+                html += `
+                <div class="cl-item ${completedClass}">
+                    <input type="checkbox" class="cl-checkbox" ${item.checked ? 'checked' : ''} onchange="toggleAuditStateMS('${store}','${item.id}', this.checked)">
+                    <div class="cl-content-wrapper" style="justify-content: center;">
+                        <span class="cl-text">${escapeHtml(item.text)}</span>
+                    </div>
+                </div>`;
+            });
+        }
+        html += `</div>`;
+    });
+
+    container.innerHTML = html;
+    updateAuditChipMS();
+}
+
+function toggleAuditStateMS(store, id, isChecked) {
+    const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    const tab = currentAuditTab;
+    const data = (auditDataCacheMS[store] || {})[tab];
+    if (!data) return;
+
+    const item = (data.items || []).find(i => i.id === id);
+    if (item) item.checked = isChecked;
+    data.completed = (data.items || []).filter(i => i.checked).length;
+    renderAuditMS();
+
+    postWrite(STORE_AUDIT_URL, { action: 'toggle', id, checked: isChecked, store, user: userName, period: tab })
+        .catch(err => {
+            if (item) item.checked = !isChecked;
+            data.completed = (data.items || []).filter(i => i.checked).length;
+            renderAuditMS();
+            alert('Could not save that change: ' + err.message);
+        });
+}
+
+function updateAuditChipMS() {
+    const chip = document.getElementById('audit-progress-chip');
+    const btn = document.querySelector('.audit-nav-toggle');
+    if (!chip || !btn) return;
+
+    const segs = [];
+    let anyOutstanding = false, anyItems = false;
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const daily = (auditDataCacheMS[store] || {}).daily || { items: [], total: 0, completed: 0 };
+        const total = daily.total || (daily.items || []).length;
+        if (!total) return;
+        anyItems = true;
+        const done = (daily.completed != null) ? daily.completed : (daily.items || []).filter(i => i.checked).length;
+        const ac = _msStoreAccent(store);
+        const label = done === total ? `${store} ✓` : `${store} ${done}/${total}`;
+        segs.push(`<span class="ms-chip-seg" style="background: ${ac.solid};">${label}</span>`);
+        if (done < total) anyOutstanding = true;
+    });
+
+    if (!anyItems) { chip.textContent = ''; chip.classList.remove('ms-chip'); }
+    else { chip.classList.add('ms-chip'); chip.innerHTML = segs.join(''); }
+    const panel = document.getElementById('auditSidePanel');
+    const isOpen = panel && panel.classList.contains('open');
+    btn.classList.toggle('cl-needs-attention', anyOutstanding && !isOpen);
+}
+
 async function toggleAuditState(id, isChecked) {
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
@@ -11846,6 +12673,19 @@ function updateAuditChip() {
 }
 
 async function _prefetchAuditForChip() {
+    if (_isMSMChecklist()) {
+        try {
+            const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+                fetch(`${STORE_AUDIT_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())
+            ));
+            auditDataCacheMS = {};
+            MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+                auditDataCacheMS[s] = results[i] || { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
+            });
+            updateAuditChipMS();
+        } catch (_) {}
+        return;
+    }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     try {
         const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
@@ -11859,6 +12699,19 @@ function _startAuditSync() {
     _auditSyncInterval = setInterval(async () => {
         const panel = document.getElementById('auditSidePanel');
         if (!panel?.classList.contains('open')) return;
+        if (_isMSMChecklist()) {
+            try {
+                const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+                    fetch(`${STORE_AUDIT_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())
+                ));
+                auditDataCacheMS = {};
+                MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+                    auditDataCacheMS[s] = results[i] || { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
+                });
+                renderAuditMS();
+            } catch (_) {}
+            return;
+        }
         const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
         try {
             const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
