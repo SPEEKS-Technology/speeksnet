@@ -5823,6 +5823,16 @@ async function markListingGoalsChecklistComplete() {
         }
     }
 
+    // Multi-Store Manager: the single-store cache is empty; tick the active store's copy.
+    if (_isMSMChecklist()) {
+        const msDaily = (checklistDataCacheMS[store] || {}).daily || [];
+        const msTask = msDaily.find(t => t.text.toLowerCase().includes('listing goals'));
+        if (msTask) {
+            targetTaskId = msTask.id;
+            if (!msTask.checked) { msTask.checked = true; renderChecklistMS(); }
+        }
+    }
+
     if (!targetTaskId) {
         try {
             const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
@@ -9451,13 +9461,23 @@ function renderRequiredTasks(tasks) {
 
 // --- DM: view ONE store's full checklist — both the required tasks the DM set
 //     and the personal tasks that store's manager added themselves. Read-only.
+// Resolves the person whose checklist a store shares (its "owner"). Normal stores use
+// the owner/manager on file. BAL/MPL are run by a Multi-Store Manager whose DB `store`
+// is only their HOME store — so for those we match by role + the shared
+// MULTISTORE_MANAGER_STORES set, NOT by u.store. This is what lets a store's ASM (and the
+// DM Manager-Checklist viewer) sync to the MSM's checklist — for BAL now and a future MPL ASM.
 function _resolveStoreManager(store) {
+    const s = String(store || '').toUpperCase();
     try {
         const authCache = JSON.parse(localStorage.getItem('speeksAuthCache')) || {};
         const users = authCache.users || [];
+        if (typeof MULTISTORE_MANAGER_STORES !== 'undefined' && MULTISTORE_MANAGER_STORES.includes(s)) {
+            const msm = users.find(u => u.role && u.role.toLowerCase() === 'multi-store manager');
+            if (msm) return msm.name;
+        }
         for (const targetRole of ['owner (manager)', 'manager']) {
             const mgr = users.find(u =>
-                u.store && u.store.toUpperCase() === String(store).toUpperCase() &&
+                u.store && u.store.toUpperCase() === s &&
                 u.role && u.role.toLowerCase() === targetRole
             );
             if (mgr) return mgr.name;
@@ -11807,6 +11827,14 @@ async function fetchChampions() {
 // ============================================================================
 let currentChecklistTab = 'daily';
 let checklistDataCache = { daily: [], weekly: [], monthly: [], quarterly: [] };
+// Multi-Store Manager (e.g. BAL + MPL): one checklist cache per managed store, so
+// both stores' lists render stacked in the same panel without switching dashboards.
+// { BAL: {daily,weekly,monthly,quarterly}, MPL: {...} }. Empty for everyone else.
+let checklistDataCacheMS = {};
+const _pendingTogglesMS = new Map();   // key: "STORE::id" -> { checked, expiresAt }
+function _isMSMChecklist() {
+    return typeof isMultiStoreManager === 'function' && isMultiStoreManager();
+}
 // Tracks optimistic toggle state for up to 20 seconds so a slow backend response
 // can't overwrite a locally-checked item before Apps Script persists it.
 const _pendingToggles = new Map(); // id -> { checked, expiresAt }
@@ -11822,28 +11850,16 @@ function _applyPendingToggles() {
     }
 }
 
-// For assistant managers, returns the store's primary manager name so both share the same checklist data.
-// All other roles return their own name, preserving existing behavior.
+// For assistant managers, returns the store's primary manager name so both share the same
+// checklist data (incl. BAL/MPL, whose manager is the Multi-Store Manager — see
+// _resolveStoreManager). All other roles return their own name, preserving existing behavior.
 function getChecklistUser() {
     const role = sessionStorage.getItem('speeksUserRole') || '';
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
 
     if (role !== 'assistant manager') return userName;
-
-    try {
-        const authCache = JSON.parse(localStorage.getItem('speeksAuthCache')) || {};
-        const users = authCache.users || [];
-        for (const targetRole of ['owner (manager)', 'manager']) {
-            const mgr = users.find(u =>
-                u.store && u.store.toUpperCase() === store &&
-                u.role && u.role.toLowerCase() === targetRole
-            );
-            if (mgr) return mgr.name;
-        }
-    } catch (e) {}
-
-    return userName;
+    return _resolveStoreManager(store) || userName;
 }
 
 function switchChecklistTab(tab) {
@@ -11855,8 +11871,8 @@ function switchChecklistTab(tab) {
     // Safety check just in case the button isn't on the screen
     const qTab = document.getElementById('cl-tab-quarterly');
     if (qTab) qTab.classList.toggle('active', tab === 'quarterly');
-    
-    renderChecklist();
+
+    if (_isMSMChecklist()) renderChecklistMS(); else renderChecklist();
 }
 
 async function loadChecklist() {
@@ -11865,6 +11881,9 @@ async function loadChecklist() {
     // overwrites the cache with stale (unchecked) data before the backend saves.
     const panel = document.getElementById('checklistSidePanel');
     if (!panel?.classList.contains('open')) return;
+
+    // Multi-Store Managers get both managed stores stacked in one panel.
+    if (_isMSMChecklist()) { await loadChecklistMS(); return; }
 
     const container = document.getElementById('checklistContent');
     const userName = getChecklistUser();
@@ -11946,6 +11965,227 @@ function renderChecklist() {
 
     container.innerHTML = html;
     updateChecklistChip();
+}
+
+// ============================================================================
+// MULTI-STORE MANAGER — dual-store checklist (both managed stores in one panel)
+// A MSM (Joseph: BAL + MPL) does everything a manager does, but for every store
+// they run. Rather than reload the dashboard to switch stores, we fetch each
+// managed store's checklist (user = the MSM) and render them as stacked, per-store
+// sections in the same panel, each with its own progress + add row. ASMs are
+// single-store and never hit this path, so their behavior is unchanged.
+// ============================================================================
+
+// Hide the single-store footer/add row in MSM mode — each store gets its own add row.
+function _setMSChecklistChrome(isMS) {
+    const inputArea = document.querySelector('#checklistSidePanel .cl-input-area');
+    const footer    = document.querySelector('#checklistSidePanel .cl-footer-row');
+    if (inputArea) inputArea.style.display = isMS ? 'none' : '';
+    if (footer)    footer.style.display    = isMS ? 'none' : '';
+}
+
+// Per-store accent color so the stacked sections/pills are distinguishable at a glance.
+// `solid` matches the site-wide store colors (`_storeColors`, used by the monthly-goals
+// banner & charts — BAL red, MPL orange, etc.); `soft` is a light tint for backgrounds.
+function _msStoreAccent(store) {
+    const map = {
+        OVL: { solid: '#7c3aed', soft: '#f5f3ff' },   // purple
+        LEE: { solid: '#2563eb', soft: '#eff6ff' },   // blue
+        WSP: { solid: '#5a8d3b', soft: '#f3f8ee' },   // green
+        MPL: { solid: '#ea580c', soft: '#fff7ed' },   // orange
+        BAL: { solid: '#dc2626', soft: '#fef2f2' },   // red
+    };
+    return map[String(store || '').toUpperCase()] || { solid: '#64748b', soft: '#f1f5f9' };
+}
+
+// Collapse duplicate GLOBAL/required tasks by text (mirrors renderChecklist).
+function _dedupeGlobals(rawItems) {
+    const seen = new Set();
+    return (rawItems || []).filter(it => {
+        if (it.isGlobal) {
+            const key = String(it.text || '').trim().toLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key);
+        }
+        return true;
+    });
+}
+
+function _applyPendingTogglesMS() {
+    const now = Date.now();
+    for (const [key, val] of _pendingTogglesMS) {
+        if (val.expiresAt < now) { _pendingTogglesMS.delete(key); continue; }
+        const [store, id] = key.split('::');
+        const cache = checklistDataCacheMS[store];
+        if (!cache) continue;
+        for (const tab of Object.keys(cache)) {
+            const item = (cache[tab] || []).find(i => i.id === id);
+            if (item) item.checked = val.checked;
+        }
+    }
+}
+
+async function loadChecklistMS() {
+    const container = document.getElementById('checklistContent');
+    const userName = getChecklistUser();
+    _setMSChecklistChrome(true);
+
+    // MSM effective role is manager: Daily/Weekly/Monthly apply; Quarterly is CORP/ALL-only.
+    document.getElementById('cl-tab-weekly')?.style && (document.getElementById('cl-tab-weekly').style.display = '');
+    document.getElementById('cl-tab-monthly')?.style && (document.getElementById('cl-tab-monthly').style.display = '');
+    const qTab = document.getElementById('cl-tab-quarterly');
+    if (qTab) {
+        qTab.style.display = 'none';
+        if (currentChecklistTab === 'quarterly') { currentChecklistTab = 'daily'; switchChecklistTab('daily'); return; }
+    }
+
+    if (container) container.innerHTML = '<div class="status-message">Syncing Checklist...</div>';
+    try {
+        const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+            fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${s}&v=${Date.now()}`).then(r => r.json())
+        ));
+        checklistDataCacheMS = {};
+        MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+            checklistDataCacheMS[s] = results[i] || { daily: [], weekly: [], monthly: [], quarterly: [] };
+        });
+        _applyPendingTogglesMS();
+        renderChecklistMS();
+    } catch (e) {
+        console.error('MSM Checklist Fetch Error', e);
+        if (container) container.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load checklist.</div>';
+    }
+}
+
+function renderChecklistMS() {
+    const container = document.getElementById('checklistContent');
+    if (!container) return;
+
+    let html = '';
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const cache = checklistDataCacheMS[store] || {};
+        const items = _dedupeGlobals(cache[currentChecklistTab] || []);
+        const total = items.length;
+        const done  = items.filter(i => i.checked).length;
+        const progTxt = total ? (done === total ? `✓ ${total}/${total}` : `${done}/${total}`) : '—';
+        const _ac = _msStoreAccent(store);
+        const _allDone = total && done === total;
+
+        html += `<div class="ms-store-section" style="border-left: 4px solid ${_ac.solid};">
+            <div class="ms-store-head" style="border-bottom-color: ${_ac.soft};">
+                <span class="ms-store-name" style="color: ${_ac.solid};">${escapeHtml(store)}</span>
+                <span class="ms-store-prog ${_allDone ? 'all-done' : ''}"${_allDone ? '' : ` style="background: ${_ac.soft}; color: ${_ac.solid};"`}>${progTxt}</span>
+            </div>`;
+
+        if (total === 0) {
+            html += `<div class="ms-empty">No tasks for this tab.</div>`;
+        } else {
+            items.forEach(item => {
+                const completedClass = item.checked ? 'completed' : '';
+                const deleteHtml = !item.isGlobal
+                    ? `<button class="cl-delete-btn" onclick="deleteChecklistItemMS('${store}','${item.id}')" title="Delete Task">✖</button>`
+                    : '';
+                html += `
+                <div class="cl-item ${completedClass}">
+                    <input type="checkbox" class="cl-checkbox" ${item.checked ? 'checked' : ''} onchange="toggleChecklistStateMS('${store}','${item.id}', this.checked)">
+                    <div class="cl-content-wrapper" style="justify-content: center;">
+                        <span class="cl-text">${escapeHtml(item.text)}</span>
+                    </div>
+                    ${deleteHtml}
+                </div>`;
+            });
+        }
+
+        html += `<div class="ms-add-row">
+                <input type="text" id="msNewTask_${store}" placeholder="Add a ${escapeHtml(store)} task..." onkeydown="if(event.key==='Enter')addChecklistItemMS('${store}')">
+                <button class="btn-primary cl-add-btn" onclick="addChecklistItemMS('${store}')">Add</button>
+            </div>
+        </div>`;
+    });
+
+    container.innerHTML = html;
+    updateChecklistChipMS();
+}
+
+function toggleChecklistStateMS(store, id, isChecked) {
+    const userName = getChecklistUser();
+    const cache = checklistDataCacheMS[store];
+    if (!cache) return;
+    const item = (cache[currentChecklistTab] || []).find(i => i.id === id);
+    if (item) item.checked = isChecked;
+    _pendingTogglesMS.set(store + '::' + id, { checked: isChecked, expiresAt: Date.now() + 20000 });
+    renderChecklistMS();
+
+    postWrite(CHECKLIST_URL, { action: 'toggle', id, checked: isChecked, tab: currentChecklistTab, user: userName, store })
+        .catch(err => {
+            const it = (cache[currentChecklistTab] || []).find(i => i.id === id);
+            if (it) it.checked = !isChecked;
+            _pendingTogglesMS.delete(store + '::' + id);
+            renderChecklistMS();
+            alert('Could not save that change: ' + err.message);
+        });
+}
+
+async function addChecklistItemMS(store) {
+    const input = document.getElementById('msNewTask_' + store);
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+
+    input.disabled = true;
+    const userName = getChecklistUser();
+    try {
+        const out = await postWrite(CHECKLIST_URL, { action: 'add', tab: currentChecklistTab, text, user: userName, store });
+        const cache = checklistDataCacheMS[store] || (checklistDataCacheMS[store] = { daily: [], weekly: [], monthly: [], quarterly: [] });
+        (cache[currentChecklistTab] ||= []).push({ id: out.id || ('temp_' + Date.now()), text, isGlobal: false, checked: false });
+        renderChecklistMS();
+    } catch (e) {
+        alert('Failed to add task: ' + (e.message || e));
+    } finally {
+        const el = document.getElementById('msNewTask_' + store);
+        if (el) { el.value = ''; el.disabled = false; el.focus(); }
+    }
+}
+
+function deleteChecklistItemMS(store, id) {
+    const userName = getChecklistUser();
+    const cache = checklistDataCacheMS[store];
+    if (!cache) return;
+    const list = cache[currentChecklistTab] || [];
+    const removed = list.find(i => i.id === id);
+    cache[currentChecklistTab] = list.filter(i => i.id !== id);
+    renderChecklistMS();
+
+    postWrite(CHECKLIST_URL, { action: 'delete', id, tab: currentChecklistTab, user: userName, store })
+        .catch(err => {
+            if (removed) { (cache[currentChecklistTab] ||= []).push(removed); renderChecklistMS(); }
+            alert('Could not delete task: ' + err.message);
+        });
+}
+
+// Combined nudge chip across both managed stores (based on the Daily list).
+function updateChecklistChipMS() {
+    const chip = document.getElementById('cl-progress-chip');
+    const btn = document.querySelector('.cl-nav-toggle');
+    if (!chip || !btn) return;
+
+    const segs = [];
+    let anyOutstanding = false, anyTasks = false;
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const items = _dedupeGlobals((checklistDataCacheMS[store] || {}).daily || []);
+        if (!items.length) return;
+        anyTasks = true;
+        const done = items.filter(i => i.checked).length;
+        const ac = _msStoreAccent(store);
+        const label = done === items.length ? `${store} ✓` : `${store} ${done}/${items.length}`;
+        segs.push(`<span class="ms-chip-seg" style="background: ${ac.solid};">${label}</span>`);
+        if (done < items.length) anyOutstanding = true;
+    });
+
+    if (!anyTasks) { chip.textContent = ''; chip.classList.remove('ms-chip'); }
+    else { chip.classList.add('ms-chip'); chip.innerHTML = segs.join(''); }
+    const panel = document.getElementById('checklistSidePanel');
+    const isOpen = panel && panel.classList.contains('open');
+    btn.classList.toggle('cl-needs-attention', anyOutstanding && !isOpen);
 }
 
 // --- API ACTIONS (POST to Apps Script) ---
@@ -12076,6 +12316,20 @@ function updateChecklistChip() {
 // Uses a separate path from loadChecklist() so the panel-open guard doesn't suppress it.
 async function _prefetchChecklistForChip() {
     const userName = getChecklistUser();
+    if (_isMSMChecklist()) {
+        try {
+            const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+                fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${s}&v=${Date.now()}`).then(r => r.json())
+            ));
+            checklistDataCacheMS = {};
+            MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+                checklistDataCacheMS[s] = results[i] || { daily: [], weekly: [], monthly: [], quarterly: [] };
+            });
+            _applyPendingTogglesMS();
+            updateChecklistChipMS();
+        } catch (_) {}
+        return;
+    }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     try {
         const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
@@ -12094,6 +12348,20 @@ function _startChecklistSync() {
         const panel = document.getElementById('checklistSidePanel');
         if (!panel?.classList.contains('open')) return;
         const userName = getChecklistUser();
+        if (_isMSMChecklist()) {
+            try {
+                const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+                    fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${s}&v=${Date.now()}`).then(r => r.json())
+                ));
+                checklistDataCacheMS = {};
+                MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+                    checklistDataCacheMS[s] = results[i] || { daily: [], weekly: [], monthly: [], quarterly: [] };
+                });
+                _applyPendingTogglesMS();
+                renderChecklistMS();
+            } catch (_) {}
+            return;
+        }
         const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
         try {
             const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
@@ -12177,6 +12445,8 @@ document.addEventListener('click', function(e) {
 let auditDataCache = { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
 let currentAuditTab = 'daily';
 let _auditSyncInterval = null;
+// Multi-Store Manager: one audit cache per managed store, rendered stacked. Empty for others.
+let auditDataCacheMS = {};   // { BAL: {daily,weekly}, MPL: {daily,weekly} }
 
 function _auditTab(tab) { return auditDataCache[tab] || { items: [], total: 0, completed: 0 }; }
 
@@ -12184,12 +12454,13 @@ function switchAuditTab(tab) {
     currentAuditTab = tab;
     document.getElementById('audit-tab-daily')?.classList.toggle('active', tab === 'daily');
     document.getElementById('audit-tab-weekly')?.classList.toggle('active', tab === 'weekly');
-    renderAudit();
+    if (_isMSMChecklist()) renderAuditMS(); else renderAudit();
 }
 
 async function loadAudit() {
     const panel = document.getElementById('auditSidePanel');
     if (!panel?.classList.contains('open')) return;   // only fetch when opening
+    if (_isMSMChecklist()) { await loadAuditMS(); return; }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     const container = document.getElementById('auditContent');
     if (container) container.innerHTML = '<div class="status-message">Syncing Audit...</div>';
@@ -12242,6 +12513,124 @@ function renderAudit() {
     updateAuditChip();
 }
 
+// ============================================================================
+// MULTI-STORE MANAGER — dual-store audit checklist (both stores stacked).
+// The audit checklist is shared per store; a MSM sees both managed stores in one
+// panel. ASMs (single store) and the DM overview are unaffected.
+// ============================================================================
+async function loadAuditMS() {
+    const container = document.getElementById('auditContent');
+    if (container) container.innerHTML = '<div class="status-message">Syncing Audit...</div>';
+    try {
+        const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+            fetch(`${STORE_AUDIT_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())
+        ));
+        auditDataCacheMS = {};
+        MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+            auditDataCacheMS[s] = results[i] || { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
+        });
+        renderAuditMS();
+    } catch (e) {
+        console.error('MSM Audit Fetch Error', e);
+        if (container) container.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load audit checklist.</div>';
+    }
+}
+
+function renderAuditMS() {
+    const container = document.getElementById('auditContent');
+    if (!container) return;
+
+    const label = document.getElementById('audit-week-label');
+    if (label) label.textContent = currentAuditTab === 'daily' ? 'Today · both stores' : 'This week · both stores';
+
+    let html = '';
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const data = (auditDataCacheMS[store] || {})[currentAuditTab] || { items: [], total: 0, completed: 0 };
+        const items = data.items || [];
+        const total = data.total || items.length;
+        const done  = (data.completed != null) ? data.completed : items.filter(i => i.checked).length;
+        const progTxt = total ? (done === total ? `✓ ${total}/${total}` : `${done}/${total}`) : '—';
+        const _ac = _msStoreAccent(store);
+        const _allDone = total && done === total;
+
+        html += `<div class="ms-store-section" style="border-left: 4px solid ${_ac.solid};">
+            <div class="ms-store-head" style="border-bottom-color: ${_ac.soft};">
+                <span class="ms-store-name" style="color: ${_ac.solid};">${escapeHtml(store)}</span>
+                <span class="ms-store-prog ${_allDone ? 'all-done' : ''}"${_allDone ? '' : ` style="background: ${_ac.soft}; color: ${_ac.solid};"`}>${progTxt}</span>
+            </div>`;
+
+        if (items.length === 0) {
+            html += `<div class="ms-empty">No ${currentAuditTab} audit items set up.</div>`;
+        } else {
+            let lastSection = null;
+            items.forEach(item => {
+                if (item.section !== lastSection) {
+                    html += `<div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: #94a3b8; margin: 12px 4px 6px;">${escapeHtml(item.section)}</div>`;
+                    lastSection = item.section;
+                }
+                const completedClass = item.checked ? 'completed' : '';
+                html += `
+                <div class="cl-item ${completedClass}">
+                    <input type="checkbox" class="cl-checkbox" ${item.checked ? 'checked' : ''} onchange="toggleAuditStateMS('${store}','${item.id}', this.checked)">
+                    <div class="cl-content-wrapper" style="justify-content: center;">
+                        <span class="cl-text">${escapeHtml(item.text)}</span>
+                    </div>
+                </div>`;
+            });
+        }
+        html += `</div>`;
+    });
+
+    container.innerHTML = html;
+    updateAuditChipMS();
+}
+
+function toggleAuditStateMS(store, id, isChecked) {
+    const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    const tab = currentAuditTab;
+    const data = (auditDataCacheMS[store] || {})[tab];
+    if (!data) return;
+
+    const item = (data.items || []).find(i => i.id === id);
+    if (item) item.checked = isChecked;
+    data.completed = (data.items || []).filter(i => i.checked).length;
+    renderAuditMS();
+
+    postWrite(STORE_AUDIT_URL, { action: 'toggle', id, checked: isChecked, store, user: userName, period: tab })
+        .catch(err => {
+            if (item) item.checked = !isChecked;
+            data.completed = (data.items || []).filter(i => i.checked).length;
+            renderAuditMS();
+            alert('Could not save that change: ' + err.message);
+        });
+}
+
+function updateAuditChipMS() {
+    const chip = document.getElementById('audit-progress-chip');
+    const btn = document.querySelector('.audit-nav-toggle');
+    if (!chip || !btn) return;
+
+    const segs = [];
+    let anyOutstanding = false, anyItems = false;
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const daily = (auditDataCacheMS[store] || {}).daily || { items: [], total: 0, completed: 0 };
+        const total = daily.total || (daily.items || []).length;
+        if (!total) return;
+        anyItems = true;
+        const done = (daily.completed != null) ? daily.completed : (daily.items || []).filter(i => i.checked).length;
+        const ac = _msStoreAccent(store);
+        const label = done === total ? `${store} ✓` : `${store} ${done}/${total}`;
+        segs.push(`<span class="ms-chip-seg" style="background: ${ac.solid};">${label}</span>`);
+        if (done < total) anyOutstanding = true;
+    });
+
+    if (!anyItems) { chip.textContent = ''; chip.classList.remove('ms-chip'); }
+    else { chip.classList.add('ms-chip'); chip.innerHTML = segs.join(''); }
+    const panel = document.getElementById('auditSidePanel');
+    const isOpen = panel && panel.classList.contains('open');
+    btn.classList.toggle('cl-needs-attention', anyOutstanding && !isOpen);
+}
+
 async function toggleAuditState(id, isChecked) {
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
@@ -12284,6 +12673,19 @@ function updateAuditChip() {
 }
 
 async function _prefetchAuditForChip() {
+    if (_isMSMChecklist()) {
+        try {
+            const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+                fetch(`${STORE_AUDIT_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())
+            ));
+            auditDataCacheMS = {};
+            MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+                auditDataCacheMS[s] = results[i] || { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
+            });
+            updateAuditChipMS();
+        } catch (_) {}
+        return;
+    }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     try {
         const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
@@ -12297,6 +12699,19 @@ function _startAuditSync() {
     _auditSyncInterval = setInterval(async () => {
         const panel = document.getElementById('auditSidePanel');
         if (!panel?.classList.contains('open')) return;
+        if (_isMSMChecklist()) {
+            try {
+                const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+                    fetch(`${STORE_AUDIT_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())
+                ));
+                auditDataCacheMS = {};
+                MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+                    auditDataCacheMS[s] = results[i] || { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
+                });
+                renderAuditMS();
+            } catch (_) {}
+            return;
+        }
         const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
         try {
             const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
