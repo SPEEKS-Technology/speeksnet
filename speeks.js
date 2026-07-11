@@ -55,6 +55,8 @@ const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
 const MONTHLY_BRIEF_URL = `${_BASE}/monthly-brief`;
 const B2B_URL           = `${_BASE}/b2b-deals`;
 const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
+const RECYCLE_URL       = `${_BASE}/recycle-requests`;
+const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -5835,7 +5837,7 @@ async function markListingGoalsChecklistComplete() {
 
     if (!targetTaskId) {
         try {
-            const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
+            const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}${_checklistPersonalParam()}&v=${Date.now()}`);
             const data = await res.json();
             if (data && data.daily) {
                 const task = data.daily.find(t => t.text.toLowerCase().includes('listing goals'));
@@ -7458,13 +7460,45 @@ function applyRoleBasedUI() {
             (userRoleClass === 'role-assistant-manager' && requiredRoles.includes('role-employee'));
         const passesStore = requiredStores.length === 0 || requiredStores.includes(userStoreClass);
 
-        if (passesRole && passesStore) {
+        let visible = passesRole && passesStore;
+        // Feature Access override (DM/CEO-managed, feature_overrides table):
+        // a user-level override beats a role-level override beats the default above.
+        const featureKey = module.getAttribute('data-feature');
+        if (featureKey) {
+            const ov = _featureOverrideFor(featureKey, userRoleClass, userName);
+            // mark cards an override removed (vs. hidden by design) so the
+            // dashboard rows know when to rebalance the remaining cards
+            if (ov === false && visible) module.setAttribute('data-fa-hidden', '1');
+            else module.removeAttribute('data-fa-hidden');
+            if (ov !== null) visible = ov;
+        }
+
+        if (visible) {
             let displayType = module.classList.contains('dynamic-module-flex') ? 'flex' : 'block';
             module.style.setProperty('display', displayType, 'important');
         } else {
             module.style.setProperty('display', 'none', 'important');
         }
     });
+
+    // Feature overrides on plain (non role-gated) elements — e.g. individual
+    // hotbar links, which normally just inherit their bar's visibility.
+    _applyFeatureOverridesToPlainEls(userRoleClass, userName);
+    // Force-enabled hotbar links from bars this user doesn't normally see:
+    // a fully-enabled bar shows up as itself; partial picks are collected into
+    // a synthetic EXTRAS bar so one borrowed link never drags in a whole
+    // foreign hotbar.
+    _syncHotbarExtras(userRoleClass, userName);
+    // Dashboard card rows where an override hid a card rebalance so the
+    // remaining cards fill the row instead of leaving an empty slot.
+    _rebalanceDashboardRows();
+    // Tools button / group visibility follows what's actually visible inside
+    // the panel, so overrides can add or remove tools for any role without the
+    // static role-class unions drifting out of sync.
+    _syncToolsPanelChrome();
+    // First call kicks off a background refresh of the overrides from Supabase
+    // (cached copy applies instantly; a change re-runs this function once).
+    _kickFeatureOverridesRefresh();
 
     if (userRole === 'employee' || userRole === 'assistant manager') {
         document.querySelectorAll('.manager-only').forEach(el => el.style.setProperty('display', 'none', 'important'));
@@ -11862,6 +11896,13 @@ function getChecklistUser() {
     return _resolveStoreManager(store) || userName;
 }
 
+// TOM gets a personal-only checklist: no store broadcasts or DM required
+// tasks — it starts blank until they (or a DM) add tasks for them directly.
+function _checklistPersonalParam() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return role === 'tom' ? '&personal=1' : '';
+}
+
 function switchChecklistTab(tab) {
     currentChecklistTab = tab;
     document.getElementById('cl-tab-daily').classList.toggle('active', tab === 'daily');
@@ -11913,7 +11954,7 @@ async function loadChecklist() {
     container.innerHTML = '<div class="status-message">Syncing Checklist...</div>';
 
     try {
-        const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
+        const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}${_checklistPersonalParam()}&v=${Date.now()}`);
         checklistDataCache = await res.json();
         _applyPendingToggles();
         renderChecklist();
@@ -12332,7 +12373,7 @@ async function _prefetchChecklistForChip() {
     }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     try {
-        const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
+        const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}${_checklistPersonalParam()}&v=${Date.now()}`);
         checklistDataCache = await res.json();
         _applyPendingToggles();
         updateChecklistChip();
@@ -12364,7 +12405,7 @@ function _startChecklistSync() {
         }
         const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
         try {
-            const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
+            const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}${_checklistPersonalParam()}&v=${Date.now()}`);
             checklistDataCache = await res.json();
             _applyPendingToggles();
             renderChecklist();
@@ -13831,27 +13872,30 @@ function copyBoxOrder(button) {
 // ============================================================
 // RECYCLE INVENTORY TOOL
 // ============================================================
-// Stores submit these when an item needs to be recycled out of inventory.
-// Mirrors the Box Order flow (two-page form → mailto + copy failsafe) but is a
-// free-text request that always routes to a single SPEEKS inbox.
+// Stores log items that need to be recycled out of inventory. Each submission
+// is saved to Supabase (recycle_requests) as a line item under the store — no
+// more emails — and the DM reconciles per-store recycled cost at month end
+// through the Recycle Requests oversight tool below.
 
-const RECYCLE_INV_EMAIL = 'ethan.kushnir@speekstechnology.com';
+const RECYCLE_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 
-// Corp roles (CEO/DM) pick a store; managers/ASM default to their own.
-function _recycleInvGetStoreCode() {
-    const selectorEl = document.getElementById('recycleInvStoreSelector');
-    const corpVisible = selectorEl && selectorEl.style.display !== 'none';
-    const sel = document.getElementById('recycleInvStoreSelect');
-    return (corpVisible && sel && sel.value) ? sel.value : (sessionStorage.getItem('speeksUserStore') || '');
+// Which store(s) this user can file/view recycle requests for.
+function _recycleStores() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (role === 'ceo' || role === 'district manager') return [...RECYCLE_STORES];
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        return [...MULTISTORE_MANAGER_STORES];
+    }
+    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
 
-function _recycleInvGetStore() {
-    const code = _recycleInvGetStoreCode();
-    return BOX_STORE_NAMES[code] || code || 'Store';
-}
+const _fmtRecycleMoney = v => (v == null || v === '') ? '—' :
+    '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// Keep money fields numeric: strip anything that isn't a digit or a decimal
-// point (so a typed "$" simply vanishes) and allow only one decimal point.
+// Keep money fields numeric as the user types: strip anything that isn't a
+// digit or a decimal point (a typed "$" or letter simply vanishes) and allow
+// only one decimal point.
 function recycleInvSanitizeMoney(input) {
     let v = (input.value || '').replace(/[^\d.]/g, '');
     const firstDot = v.indexOf('.');
@@ -13861,130 +13905,940 @@ function recycleInvSanitizeMoney(input) {
     input.value = v;
 }
 
-// Normalize a money field for the email: exactly one leading "$" plus thousands
-// separators ("12345" → "$12,345", "$25" → "$25", "1234.5" → "$1,234.5").
-// Decimals are kept only if typed, capped at two places. Empty stays empty.
-function _recycleInvFormatMoney(raw) {
-    const v = String(raw || '').replace(/[^\d.]/g, '');
-    if (!v) return '';
-    const firstDot = v.indexOf('.');
-    let intPart = firstDot === -1 ? v : v.slice(0, firstDot);
-    let decPart = firstDot === -1 ? '' : v.slice(firstDot + 1).replace(/\./g, '').slice(0, 2);
-    intPart = intPart.replace(/^0+(?=\d)/, '') || '0';   // trim leading zeros, keep one digit
-    const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    return decPart !== '' ? `$${grouped}.${decPart}` : `$${grouped}`;
+// Quantity is whole units only: digits, nothing else.
+function recycleInvSanitizeInt(input) {
+    input.value = (input.value || '').replace(/\D/g, '');
+}
+
+// cost is stored per unit; a line's recycled cost = cost × quantity.
+function _recycleLineTotal(r) {
+    if (r.cost == null || r.cost === '') return null;
+    return Number(r.cost) * (Number(r.quantity) || 1);
+}
+
+function _recycleMonthKey(dateStr) {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function _recycleMonthLabel(key) {
+    const [y, m] = String(key).split('-').map(Number);
+    if (!y || !m) return String(key);
+    return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+// Month dropdown options: every month present in `rows`, plus the current month.
+function _recycleMonthOptions(rows, selected) {
+    const keys = new Set(rows.map(r => _recycleMonthKey(r.created_at)).filter(Boolean));
+    keys.add(_recycleMonthKey(new Date()));
+    return [...keys].sort().reverse()
+        .map(k => `<option value="${k}" ${k === selected ? 'selected' : ''}>${_recycleMonthLabel(k)}</option>`).join('');
 }
 
 function toggleRecycleInventory() {
-    closeAllModals();
-    const modal = document.getElementById('recycleInvModal');
-    if (!modal) return;
-    // Reset to a blank page 1 every time.
+    toggleModal('recycleInvModal');
+    _buildRecycleStorePicker();
     ['recycleInvSku', 'recycleInvDescription', 'recycleInvValue', 'recycleInvCost'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
     });
-    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    const isCorpRole = role === 'ceo' || role === 'district manager';
-    const selectorEl = document.getElementById('recycleInvStoreSelector');
-    if (selectorEl) {
-        selectorEl.style.display = isCorpRole ? '' : 'none';
-        const sel = document.getElementById('recycleInvStoreSelect');
-        if (sel) sel.value = '';
-    }
-    document.getElementById('recycleInvPage1').style.display   = '';
-    document.getElementById('recycleInvFooter1').style.display = '';
-    document.getElementById('recycleInvPage2').style.display   = 'none';
-    document.getElementById('recycleInvFooter2').style.display = 'none';
-    modal.classList.add('show');
-    lockAndBlurScreen();
+    const qty = document.getElementById('recycleInvQty');
+    if (qty) qty.value = '1';
+    switchRecycleTab('new');
 }
 
-// Validate page 1: every field is required; corp roles must also pick a store.
-function _recycleInvEnsureValid() {
-    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    const isCorpRole = role === 'ceo' || role === 'district manager';
+function switchRecycleTab(tab) {
+    const nb = document.getElementById('recycle-tab-new');
+    const vb = document.getElementById('recycle-tab-view');
+    if (nb) nb.classList.toggle('active', tab === 'new');
+    if (vb) vb.classList.toggle('active', tab === 'view');
+    const np = document.getElementById('recycle-panel-new');
+    const vp = document.getElementById('recycle-panel-view');
+    if (np) np.style.display = tab === 'new' ? 'block' : 'none';
+    if (vp) vp.style.display = tab === 'view' ? 'block' : 'none';
+    const sb = document.getElementById('submitRecycleBtn');
+    if (sb) sb.style.display = tab === 'new' ? '' : 'none';
+    if (tab === 'view') fetchMyRecycleRequests();
+}
+
+// MSM / corp roles get a store chooser; a single-store manager is locked to theirs.
+function _buildRecycleStorePicker() {
+    const row = document.getElementById('recycle-store-row');
     const sel = document.getElementById('recycleInvStoreSelect');
-    if (isCorpRole && (!sel || !sel.value)) {
-        alert('Please select a store first.');
-        return false;
+    if (!sel) return;
+    const stores = _recycleStores();
+    sel.innerHTML = stores.map(s => `<option value="${s}">${s}</option>`).join('');
+    const multi = stores.length > 1;
+    sel.disabled = !multi;
+    sel.style.opacity = multi ? '1' : '0.7';
+    sel.style.cursor = multi ? 'pointer' : 'not-allowed';
+    if (row) row.style.display = stores.length ? 'block' : 'none';
+    if (sel.options.length) sel.selectedIndex = 0;
+}
+
+async function submitRecycleRequest() {
+    const val = id => (document.getElementById(id) || {}).value;
+    const store = (val('recycleInvStoreSelect') || '').toUpperCase();
+    const sku = (val('recycleInvSku') || '').trim();
+    const desc = (val('recycleInvDescription') || '').trim();
+    const qty = Math.floor(Number(val('recycleInvQty')));
+    const valueRaw = val('recycleInvValue');
+    const costRaw = val('recycleInvCost');
+
+    if (!store) { alert('Please select a store.'); return; }
+    if (!sku) { alert('Please enter the SKU.'); return; }
+    if (!Number.isFinite(qty) || qty < 1) { alert('Please enter a quantity of at least 1.'); return; }
+    if (costRaw === '' || costRaw == null || !Number.isFinite(Number(costRaw))) {
+        alert('Please enter the item cost (per unit).'); return;
     }
-    const sku  = document.getElementById('recycleInvSku')?.value.trim();
-    const desc = document.getElementById('recycleInvDescription')?.value.trim();
-    const val  = document.getElementById('recycleInvValue')?.value.trim();
-    const cost = document.getElementById('recycleInvCost')?.value.trim();
-    if (!sku || !desc || !val || !cost) {
-        alert('Please fill in the SKU, description, value, and cost before continuing.');
-        return false;
+    if (!desc) { alert('Please describe the item and why it is being recycled.'); return; }
+
+    const btn = document.getElementById('submitRecycleBtn');
+    const old = btn ? btn.innerText : '';
+    if (btn) { btn.disabled = true; btn.innerText = 'Submitting…'; }
+    try {
+        const res = await fetch(RECYCLE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'submit_request', store, sku, description: desc, quantity: qty,
+                value: valueRaw === '' ? null : Number(valueRaw),
+                cost: Number(costRaw),
+                created_by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+        // Stay on the New Request tab with a blank form (store selection kept)
+        // so several items can be logged back-to-back; flash the button as the
+        // confirmation instead of jumping to My Requests.
+        ['recycleInvSku', 'recycleInvDescription', 'recycleInvValue', 'recycleInvCost'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+        const qtyEl = document.getElementById('recycleInvQty');
+        if (qtyEl) qtyEl.value = '1';
+        const skuEl = document.getElementById('recycleInvSku');
+        if (skuEl) skuEl.focus();
+        if (btn) {
+            btn.innerText = '✓ Submitted';
+            setTimeout(() => { if (btn.innerText === '✓ Submitted') btn.innerText = old; }, 1500);
+        }
+    } catch (e) {
+        alert('Could not submit the request: ' + e.message);
+        if (btn) btn.innerText = old;
+    } finally {
+        if (btn) btn.disabled = false;
     }
-    return true;
 }
 
-function recycleInvNextPage() {
-    if (!_recycleInvEnsureValid()) return;
-    recycleInvUpdatePreview();
-    document.getElementById('recycleInvPage1').style.display   = 'none';
-    document.getElementById('recycleInvFooter1').style.display = 'none';
-    document.getElementById('recycleInvPage2').style.display   = '';
-    document.getElementById('recycleInvFooter2').style.display = '';
+let _recycleMine = []; // last fetched requests, so filter changes re-render without refetching
+
+async function fetchMyRecycleRequests() {
+    const wrap = document.getElementById('recycle-table-wrap');
+    if (!wrap) return;
+    const stores = _recycleStores();
+    if (!stores.length) {
+        wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">No store assigned to your account.</div>';
+        return;
+    }
+    wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading requests…</div>';
+    try {
+        const res = await fetch(`${RECYCLE_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        _recycleMine = json.data || [];
+        _buildRecycleViewFilters(stores);
+        renderMyRecycleTable();
+    } catch (e) {
+        wrap.innerHTML = '<div style="color:var(--red-alert); padding:24px; text-align:center; font-weight:700;">Error loading requests.</div>';
+    }
 }
 
-function recycleInvBackPage() {
-    document.getElementById('recycleInvPage2').style.display   = 'none';
-    document.getElementById('recycleInvFooter2').style.display = 'none';
-    document.getElementById('recycleInvPage1').style.display   = '';
-    document.getElementById('recycleInvFooter1').style.display = '';
+// Month filter always shows; the store filter only when the user spans multiple stores.
+function _buildRecycleViewFilters(stores) {
+    const mSel = document.getElementById('recycle-month-filter');
+    if (mSel) {
+        const current = mSel.value || _recycleMonthKey(new Date());
+        mSel.innerHTML = _recycleMonthOptions(_recycleMine, current);
+    }
+    const row = document.getElementById('recycle-view-filter-row');
+    const sel = document.getElementById('recycle-view-filter');
+    if (!row || !sel) return;
+    if (stores.length <= 1) { row.style.display = 'none'; return; }
+    row.style.display = 'block';
+    const current = sel.value;
+    sel.innerHTML = `<option value="">All stores</option>` +
+        stores.map(s => `<option value="${s}">${s}</option>`).join('');
+    if ([...sel.options].some(o => o.value === current)) sel.value = current;
 }
 
-// Build the request as plain text (real newlines) — shared by the email and the
-// copy failsafe so both always say exactly the same thing.
-function _recycleInvCompose() {
-    const store    = _recycleInvGetStore();
-    const userName = sessionStorage.getItem('speeksUserName') || '';
-    const sku  = document.getElementById('recycleInvSku')?.value.trim()         || '';
-    const desc = document.getElementById('recycleInvDescription')?.value.trim() || '';
-    const val  = _recycleInvFormatMoney(document.getElementById('recycleInvValue')?.value);
-    const cost = _recycleInvFormatMoney(document.getElementById('recycleInvCost')?.value);
-    const body =
-        `Hi,\n\nThe following item needs to be recycled out of inventory for ${store}:\n\n` +
-        `SKU: ${sku}\n` +
-        `Description: ${desc}\n` +
-        `Value: ${val}\n` +
-        `Cost: ${cost}\n\n` +
-        `Thank you,\n${userName}`;
-    return { email: RECYCLE_INV_EMAIL, subject: `${sku} - Recycle`, body };
+function renderMyRecycleTable() {
+    const wrap = document.getElementById('recycle-table-wrap');
+    if (!wrap) return;
+    const stores = _recycleStores();
+    const multi = stores.length > 1;
+    const month = (document.getElementById('recycle-month-filter') || {}).value || _recycleMonthKey(new Date());
+    const filterStore = (document.getElementById('recycle-view-filter') || {}).value || '';
+    let rows = _recycleMine.filter(r => _recycleMonthKey(r.created_at) === month);
+    if (filterStore) rows = rows.filter(r => (r.store || '').toUpperCase() === filterStore);
+    // Keep the Store column whenever the user spans multiple stores — even with
+    // a single store filtered — so columns don't jump around as filters change.
+    const showStore = multi;
+
+    if (!rows.length) {
+        wrap.innerHTML = `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No recycle requests for ${_recycleMonthLabel(month)}.</div>`;
+        return;
+    }
+    rows = [...rows].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const total = rows.reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+    const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+    const today = new Date().toDateString();
+
+    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
+    const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
+    let html = `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+        <thead><tr>${th('Date')}${showStore ? th('Store') : ''}${th('SKU')}${th('Description')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
+    rows.forEach(r => {
+        // Same-day typo-fix window: the store can pull a request back the day it
+        // was submitted; after that only a DM/CEO can remove it.
+        const canDelete = new Date(r.created_at).toDateString() === today;
+        const delBtn = canDelete
+            ? `<button onclick="deleteRecycleRequest('${r.id}', false)" title="Delete (same-day only)" style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:8px; cursor:pointer; font-size:15px; line-height:1;">🗑</button>`
+            : '';
+        html += `<tr>
+            ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
+            ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`) : ''}
+            ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.sku || '')}</span>`)}
+            ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>`)}
+            ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;')}
+            ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}
+            ${td(_fmtRecycleMoney(_recycleLineTotal(r)), 'white-space:nowrap; font-weight:800;')}
+            ${td(`<span style="color:#94a3b8; white-space:nowrap;">${escapeHtml(r.created_by || '—')}</span>`)}
+            ${td(delBtn, 'text-align:right;')}
+        </tr>`;
+    });
+    html += `</tbody><tfoot><tr>
+        <td colspan="${(showStore ? 1 : 0) + 5}" style="padding:11px 10px; font-weight:800; font-size:12px; color:#94a3b8; text-transform:uppercase; letter-spacing:.4px;">Total recycled cost · ${_recycleMonthLabel(month)}</td>
+        <td style="padding:11px 10px; font-weight:900; font-size:14px; color:#dc2626; white-space:nowrap;">${_fmtRecycleMoney(total)}</td>
+        <td colspan="2"></td>
+    </tr></tfoot></table></div>`;
+    wrap.innerHTML = html;
 }
 
-function recycleInvUpdatePreview() {
-    const preview = document.getElementById('recycleInvEmailPreview');
-    if (!preview) return;
-    const { email, subject, body } = _recycleInvCompose();
-    preview.textContent = `To: ${email}\nSubject: ${subject}\n\n${body}`;
+async function deleteRecycleRequest(id, fromOversight) {
+    if (!confirm('Delete this recycle request?')) return;
+    try {
+        const res = await fetch(RECYCLE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_request', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        if (fromOversight) fetchRecycleOversight(); else fetchMyRecycleRequests();
+    } catch (e) {
+        alert('Could not delete: ' + e.message);
+    }
 }
 
-function sendRecycleInventory() {
-    if (!_recycleInvEnsureValid()) return;
-    const { email, subject, body } = _recycleInvCompose();
-    window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+// =========================================================
+//  DM / CEO RECYCLE REQUESTS OVERSIGHT — month-end reconciliation.
+//  One month at a time: per-store line items with cost totals, a grand
+//  total, and a review tick per line to check off against inventory.
+// =========================================================
+let _recycleOvAll = [];
+let _recycleOvMonth = '';
+
+function openRecycleOversight() {
+    toggleModal('recycleOversightModal');
+    _recycleOvMonth = _recycleOvMonth || _recycleMonthKey(new Date());
+    fetchRecycleOversight();
 }
 
-// Failsafe for machines with no default mail client: copy the full request
-// (recipient, subject, body) to the clipboard to paste into any email.
-function copyRecycleInventory(button) {
-    if (!_recycleInvEnsureValid()) return;
-    const { email, subject, body } = _recycleInvCompose();
-    const text = `To: ${email}\nSubject: ${subject}\n\n${body}`;
-    navigator.clipboard.writeText(text).then(() => {
-        const originalText = button.innerText;
-        button.innerText = 'Copied!';
-        button.style.background = '#d1fae5';
-        button.style.color = '#065f46';
-        button.style.borderColor = '#34d399';
-        setTimeout(() => {
-            button.innerText = originalText;
-            button.style.background = '';
-            button.style.color = '';
-            button.style.borderColor = '';
-        }, 2000);
-    }).catch(() => alert('Could not copy automatically. Please select and copy the request manually.'));
+async function fetchRecycleOversight() {
+    const body = document.getElementById('recycle-oversight-body');
+    if (!body) return;
+    body.innerHTML = '<div class="status-message">Loading recycle requests…</div>';
+    try {
+        const res = await fetch(`${RECYCLE_URL}?v=${Date.now()}`); // no stores param → every store
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        _recycleOvAll = json.data || [];
+        renderRecycleOversight();
+    } catch (e) {
+        body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load recycle requests.</div>';
+    }
+}
+
+function renderRecycleOversight() {
+    const body = document.getElementById('recycle-oversight-body');
+    if (!body) return;
+    const month = _recycleOvMonth || _recycleMonthKey(new Date());
+    const rows = _recycleOvAll.filter(r => _recycleMonthKey(r.created_at) === month);
+
+    const grand = rows.reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+    const units = rows.reduce((a, r) => a + (Number(r.quantity) || 0), 0);
+    const reviewed = rows.filter(r => r.reviewed_at).length;
+    const allReviewed = rows.length > 0 && reviewed === rows.length;
+
+    const selStyle = 'padding:8px 12px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:13px; font-weight:700; background:#fff; cursor:pointer;';
+    let html = `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
+        <div style="font-size:12px; color:#64748b; font-weight:600;">Tick each line off as you reconcile it against what was actually recycled out of inventory.</div>
+        <select onchange="_recycleOvMonth=this.value; renderRecycleOversight();" style="${selStyle}">${_recycleMonthOptions(_recycleOvAll, month)}</select>
+    </div>`;
+
+    const card = (label, val, color) => `<div style="flex:1; min-width:110px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:13px 15px;">
+        <div style="font-size:26px; font-weight:900; color:${color}; line-height:1; white-space:nowrap;">${val}</div>
+        <div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; margin-top:4px;">${label}</div>
+    </div>`;
+    html += `<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px;">
+        ${card('Total Recycled Cost', _fmtRecycleMoney(grand), '#dc2626')}
+        ${card('Line Items', rows.length, '#1e293b')}
+        ${card('Units', units, '#1e293b')}
+        ${card('Reviewed', `${reviewed}/${rows.length}`, allReviewed ? '#059669' : (reviewed ? '#d97706' : '#94a3b8'))}
+    </div>`;
+
+    const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
+    const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
+
+    RECYCLE_STORES.forEach(s => {
+        const sRows = rows.filter(r => (r.store || '').toUpperCase() === s)
+            .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+        const sTotal = sRows.reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+        const sReviewed = sRows.filter(r => r.reviewed_at).length;
+        const sDone = sRows.length > 0 && sReviewed === sRows.length;
+
+        html += `<div style="margin-bottom:18px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px 14px; margin-bottom:${sRows.length ? '0' : '0'};">
+                <div style="font-weight:900; font-size:13px; color:var(--slate-charcoal);">${s} <span style="font-weight:600; color:#94a3b8;">· ${BOX_STORE_NAMES[s] || s}</span>
+                    ${sDone ? '<span style="font-size:10.5px; font-weight:800; color:#059669; margin-left:6px;">✓ reconciled</span>' : ''}
+                </div>
+                <div style="font-weight:900; font-size:14px; color:${sTotal ? '#dc2626' : '#cbd5e1'}; white-space:nowrap;">${_fmtRecycleMoney(sTotal)}</div>
+            </div>`;
+        if (!sRows.length) {
+            html += `<div style="padding:8px 14px; font-size:12px; color:#cbd5e1; font-weight:600;">No recycle requests this month.</div></div>`;
+            return;
+        }
+        html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+            <thead><tr>${th('✓')}${th('Date')}${th('SKU')}${th('Description')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
+        sRows.forEach(r => {
+            const done = !!r.reviewed_at;
+            html += `<tr style="${done ? 'background:#f0fdf4;' : ''}">
+                ${td(`<input type="checkbox" ${done ? 'checked' : ''} onchange="setRecycleReviewed('${r.id}', this.checked)" title="${done ? 'Reviewed' + (r.reviewed_by ? ' by ' + escapeHtml(r.reviewed_by) : '') : 'Mark reviewed'}" style="width:16px; height:16px; cursor:pointer; accent-color:#059669;">`, 'text-align:center;')}
+                ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
+                ${td(`<span style="font-weight:700; color:${done ? '#94a3b8' : 'var(--slate-charcoal)'};">${escapeHtml(r.sku || '')}</span>`)}
+                ${td(`<span style="color:${done ? '#cbd5e1' : '#64748b'};">${escapeHtml(r.description || '—')}</span>`)}
+                ${td(`<span style="font-weight:800; color:${done ? '#94a3b8' : 'var(--slate-charcoal)'};">${Number(r.quantity) || 1}</span>`, 'text-align:center;')}
+                ${td(_fmtRecycleMoney(r.cost), `white-space:nowrap; font-weight:700; color:${done ? '#cbd5e1' : '#64748b'};`)}
+                ${td(_fmtRecycleMoney(_recycleLineTotal(r)), `white-space:nowrap; font-weight:800; color:${done ? '#94a3b8' : 'var(--slate-charcoal)'};`)}
+                ${td(`<span style="color:#94a3b8; white-space:nowrap;">${escapeHtml(r.created_by || '—')}</span>`)}
+                ${td(`<button onclick="deleteRecycleRequest('${r.id}', true)" title="Delete this line" style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:8px; cursor:pointer; font-size:15px; line-height:1;">🗑</button>`, 'text-align:right;')}
+            </tr>`;
+        });
+        html += `</tbody></table></div></div>`;
+    });
+
+    body.innerHTML = html;
+}
+
+// Tick / untick a line during month-end reconciliation. Updates the local
+// cache and re-renders so the scroll position and month stay put.
+async function setRecycleReviewed(id, reviewed) {
+    try {
+        const res = await fetch(RECYCLE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'set_reviewed', id, reviewed,
+                reviewed_by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        const row = _recycleOvAll.find(r => r.id === id);
+        if (row) {
+            row.reviewed_at = reviewed ? new Date().toISOString() : null;
+            row.reviewed_by = reviewed ? (sessionStorage.getItem('speeksUserName') || null) : null;
+        }
+        renderRecycleOversight();
+    } catch (e) {
+        alert('Could not update: ' + e.message);
+        fetchRecycleOversight();
+    }
+}
+
+// ============================================================
+// FEATURE ACCESS (DM/CEO)
+// ============================================================
+// DB-driven show/hide overrides for SPEEKS Tools, hotbar links and dashboard
+// widgets — set per role or per user in the Feature Access tool, stored in
+// feature_overrides, and resolved as: user override > role override >
+// built-in default (the role-* classes in the HTML). Anything with a
+// data-feature attribute participates; to make a new element controllable,
+// add the attribute plus a FEATURE_CATALOG entry below (the catalog only
+// drives the settings UI — enforcement reads the DOM attributes).
+
+const FA_ROLES = [
+    { slug: 'ceo',               short: 'CEO', label: 'CEO' },
+    { slug: 'district-manager',  short: 'DM',  label: 'District Manager' },
+    { slug: 'owner-manager',     short: 'OM',  label: 'Owner (Manager)' },
+    { slug: 'manager',           short: 'MGR', label: 'Manager (incl. Multi-Store)' },
+    { slug: 'assistant-manager', short: 'ASM', label: 'Assistant Manager' },
+    { slug: 'employee',          short: 'EMP', label: 'Employee' },
+    { slug: 'training',          short: 'TRN', label: 'Training' },
+    { slug: 'tom',               short: 'TOM', label: 'TOM' },
+];
+
+const FEATURE_CATALOG = [
+    // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
+    { key: 'tool-claims-store',        label: 'Insurance Claims (store)',      tab: 'tools', group: '🛟 Claims & Refunds', def: ['manager', 'owner-manager'] },
+    { key: 'tool-claims-oversight',    label: 'Insurance Claims (oversight)',  tab: 'tools', group: '🛟 Claims & Refunds', def: ['district-manager', 'ceo'] },
+    { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: '📢 Content', def: ['district-manager', 'ceo', 'tom', 'owner-manager'] },
+    { key: 'tool-ticker',              label: 'Ticker Items',                  tab: 'tools', group: '📢 Content', def: ['district-manager'] },
+    { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: '📢 Content', def: ['district-manager'] },
+    { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: '🏪 Store Ops', def: ['district-manager', 'ceo'] },
+    { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: '🏪 Store Ops', def: ['district-manager'] },
+    { key: 'tool-variance-report',     label: 'Submit Variance Report',        tab: 'tools', group: '🏪 Store Ops', def: ['district-manager'] },
+    { key: 'tool-store-comment',       label: 'Send Store Comment',            tab: 'tools', group: '🏪 Store Ops', def: ['district-manager', 'ceo'] },
+    { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: '📦 Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
+    { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: '📦 Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'tool-recycle-oversight',   label: 'Recycle Requests (oversight)',  tab: 'tools', group: '📦 Orders', def: ['district-manager', 'ceo'] },
+    { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
+    { key: 'tool-feature-access',      label: 'Feature Access (this tool)',    tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo'] },
+    { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
+    { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
+    { key: 'tool-manage-policies',     label: 'Manage Policies',               tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
+    { key: 'tool-monthly-awards',      label: 'Monthly Awards',                tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
+    { key: 'tool-system-hotkeys',      label: 'System Hotkeys',                tab: 'tools', group: '⚙ System', def: ['district-manager'] },
+    // ---- Widgets & side panels (ASM inherits employee defaults; mirrored here) ----
+    { key: 'widget-goals-panel',       label: 'Goals & Initiatives (sidebar)', tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'employee', 'training', 'assistant-manager'] },
+    { key: 'widget-checklist-panel',   label: 'Checklist (sidebar)',           tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'district-manager', 'assistant-manager'] },
+    { key: 'widget-audit-panel',       label: 'Store Audit (sidebar)',         tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-scorecard-alerts',  label: 'Store Scorecard & Alerts row',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'widget-buying-selling',    label: 'Buying & Sales',                tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    { key: 'widget-emp-listing-goals', label: 'My Listing Goals (employee)',   tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'widget-listing-goals',     label: 'Listing Goals (manager)',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'widget-emp-weekly-kpis',   label: 'My Weekly KPIs (employee)',     tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'widget-variance-reports',  label: 'Live Variance Reports (manager)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    // ---- Hotbar links (index dashboard; keys generated from bar + label).
+    //      Store-bar links default to "all": the bar itself is store-scoped,
+    //      the link just inherits it. ----
+    { key: 'hb-ceo-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-store-passwords', label: 'Store Passwords', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-tom-folder', label: 'TOM Folder', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-paymore-google-drive', label: 'PayMore Google Drive', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-dm-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-store-passwords', label: 'Store Passwords', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-variance', label: 'Variance', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-paymore-google-drive', label: 'PayMore Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-tom-tom-folder', label: 'TOM Folder', tab: 'hotbar', group: 'TOM Hotbar', def: ['tom'] },
+    { key: 'hb-tom-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'TOM Hotbar', def: ['tom'] },
+    { key: 'hb-tom-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'TOM Hotbar', def: ['tom'] },
+    { key: 'hb-res-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'Resources Hotbar', def: ['district-manager'] },
+    { key: 'hb-res-training', label: 'Training', tab: 'hotbar', group: 'Resources Hotbar', def: ['district-manager'] },
+    { key: 'hb-mgr-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
+    { key: 'hb-mgr-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
+    { key: 'hb-mgr-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
+    { key: 'hb-mgr-location-visits', label: 'Location Visits', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
+    { key: 'hb-asm-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
+    { key: 'hb-asm-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
+    { key: 'hb-asm-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
+    { key: 'hb-lee-passwords', label: 'Passwords', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-lee-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-lee-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-lee-pc-inventory', label: 'PC Inventory', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-lee-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-lee-training', label: 'Training', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-ovl-passwords', label: 'Passwords', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-ovl-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-ovl-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-ovl-pc-inventory', label: 'PC Inventory', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-ovl-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-ovl-training', label: 'Training', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-wsp-passwords', label: 'Passwords', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
+    { key: 'hb-wsp-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
+    { key: 'hb-wsp-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
+    { key: 'hb-wsp-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
+    { key: 'hb-wsp-training', label: 'Training', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
+    { key: 'hb-mpl-passwords', label: 'Passwords', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
+    { key: 'hb-mpl-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
+    { key: 'hb-mpl-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
+    { key: 'hb-mpl-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
+    { key: 'hb-mpl-training', label: 'Training', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
+    { key: 'hb-bal-passwords', label: 'Passwords', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
+    { key: 'hb-bal-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
+    { key: 'hb-bal-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
+    { key: 'hb-bal-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
+    { key: 'hb-bal-training', label: 'Training', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
+];
+
+// ---- runtime override state ------------------------------------------------
+let _featureOv = { role: {}, user: {} };  // resolved lookup maps
+let _featureOvRaw = [];                    // raw rows (settings UI needs subjects)
+(function () {
+    try {
+        const cached = JSON.parse(localStorage.getItem('speeksFeatureOv') || 'null');
+        if (cached && cached.role && cached.user) _featureOv = cached;
+    } catch (e) { /* corrupt cache — defaults apply until the refresh lands */ }
+})();
+
+function _buildFeatureOvMaps(rows) {
+    const maps = { role: {}, user: {} };
+    (rows || []).forEach(r => {
+        const bucket = maps[r.subject_type];
+        if (!bucket) return;
+        (bucket[r.feature_key] = bucket[r.feature_key] || {})[String(r.subject).toLowerCase()] = !!r.enabled;
+    });
+    return maps;
+}
+
+function _featureOverrideFor(featureKey, userRoleClass, userName) {
+    // The Feature Access tool can never be hidden from a District Manager —
+    // it's the tool that undoes bad overrides (the backend blocks this too).
+    if (featureKey === 'tool-feature-access' && userRoleClass === 'role-district-manager') return null;
+    const byUser = _featureOv.user[featureKey];
+    const name = String(userName || '').trim().toLowerCase();
+    if (byUser && Object.prototype.hasOwnProperty.call(byUser, name)) return byUser[name];
+    const byRole = _featureOv.role[featureKey];
+    const roleSlug = String(userRoleClass || '').replace(/^role-/, '');
+    if (byRole && Object.prototype.hasOwnProperty.call(byRole, roleSlug)) return byRole[roleSlug];
+    return null;
+}
+
+// Overrides on plain (non role-gated) elements — e.g. individual hotbar links,
+// which normally just inherit their bar's visibility. Only "off" does work
+// here; "on" simply falls back to the inherited default.
+function _applyFeatureOverridesToPlainEls(userRoleClass, userName) {
+    document.querySelectorAll('[data-feature]').forEach(el => {
+        if (el.classList.contains('dynamic-module') || el.classList.contains('dynamic-module-flex') || el.classList.contains('dynamic-module-block')) return;
+        const ov = _featureOverrideFor(el.getAttribute('data-feature'), userRoleClass, userName);
+        if (ov === false) el.style.setProperty('display', 'none', 'important');
+        else el.style.removeProperty('display');
+    });
+}
+
+// Surface force-enabled hotbar links that live inside bars this user doesn't
+// see. Enabling EVERY link of a bar shows the real bar; enabling just some
+// appends those links to the user's main (first visible) hotbar — one
+// borrowed link never drags in a whole foreign hotbar. A standalone EXTRAS
+// bar is only created for users who have no visible hotbar to attach to.
+function _syncHotbarExtras(userRoleClass, userName) {
+    const stack = document.querySelector('.hotbars-stack');
+    if (!stack) return; // hotbars only exist on the dashboard
+    // rebuild from scratch on every apply
+    stack.querySelectorAll('.hotbar-extra-clone').forEach(c => c.remove());
+    const oldBar = document.getElementById('hotbarExtras');
+    if (oldBar) oldBar.remove();
+
+    const extras = [];
+    stack.querySelectorAll('.hotbar-wrapper').forEach(wrap => {
+        if (wrap.id === 'hotbarExtras') return;
+        const links = Array.from(wrap.querySelectorAll('.hotbar-btn[data-feature]'));
+        if (!links.length) return;
+        if (wrap.style.display !== 'none') return; // visible bars: the plain-els pass already handled their links
+        const enabled = links.filter(a => _featureOverrideFor(a.getAttribute('data-feature'), userRoleClass, userName) === true);
+        if (!enabled.length) return;
+        if (enabled.length === links.length) {
+            // the entire bar was granted → show it as itself
+            wrap.style.setProperty('display', 'flex', 'important');
+        } else {
+            extras.push(...enabled);
+        }
+    });
+    if (!extras.length) return;
+
+    // skip borrowed links whose URL is already visible in one of the user's bars
+    const visibleBars = Array.from(stack.querySelectorAll('.hotbar-wrapper'))
+        .filter(w => w.id !== 'hotbarExtras' && w.style.display !== 'none');
+    const visibleHrefs = new Set();
+    visibleBars.forEach(w => {
+        w.querySelectorAll('.hotbar-btn[data-feature]').forEach(a => {
+            if (a.style.display !== 'none') visibleHrefs.add(a.getAttribute('href'));
+        });
+    });
+    const fresh = extras.filter(a => !visibleHrefs.has(a.getAttribute('href')));
+    if (!fresh.length) return;
+
+    const makeClone = a => {
+        const clone = a.cloneNode(true);
+        // the clone is display-only; the hidden original stays the canonical
+        // override target, so strip the key to avoid double-processing
+        clone.removeAttribute('data-feature');
+        clone.style.removeProperty('display');
+        clone.classList.add('hotbar-extra-clone');
+        return clone;
+    };
+
+    // append to the user's main (first visible) hotbar
+    const host = visibleBars[0];
+    const hostLinks = host ? host.querySelector('.hotbar-links') : null;
+    if (hostLinks) {
+        fresh.forEach(a => hostLinks.appendChild(makeClone(a)));
+        return;
+    }
+
+    // no visible bar to attach to → standalone EXTRAS bar as a fallback
+    const div = document.createElement('div');
+    div.id = 'hotbarExtras';
+    div.className = 'hotbar-wrapper';
+    div.style.display = 'flex';
+    const inner = document.createElement('div');
+    inner.className = 'hotbar-container';
+    const label = document.createElement('span');
+    label.className = 'hotbar-label';
+    label.textContent = 'EXTRAS';
+    const linksDiv = document.createElement('div');
+    linksDiv.className = 'hotbar-links';
+    fresh.forEach(a => linksDiv.appendChild(makeClone(a)));
+    inner.appendChild(label);
+    inner.appendChild(linksDiv);
+    div.appendChild(inner);
+    stack.appendChild(div);
+}
+
+// Rebalance dashboard card rows where a Feature Access override hid a card
+// (marked data-fa-hidden in the module pass). Rows the overrides didn't touch
+// keep their designed layout — e.g. managers see two 33%-wide cards in the
+// main row by default, and that must not change. When an override DID remove
+// a card: 2 remaining cards split the row 50/50, a lone card sits centered at
+// half width, and a fully-emptied row disappears. The mobile media queries
+// use !important full-width rules, so phones stack cards exactly as before.
+function _rebalanceDashboardRows() {
+    document.querySelectorAll('.employee-dashboard-row, .top-alerts-row').forEach(row => {
+        const cards = Array.from(row.children).filter(c => c.classList && c.classList.contains('employee-widget-card'));
+        if (!cards.length) return;
+        // reset any previous rebalance before recomputing
+        cards.forEach(c => { c.style.removeProperty('flex'); c.style.removeProperty('max-width'); });
+        row.style.removeProperty('justify-content');
+        if (!cards.some(c => c.hasAttribute('data-fa-hidden'))) return;
+        const visible = cards.filter(c => c.style.display !== 'none');
+        if (!visible.length) { row.style.setProperty('display', 'none', 'important'); return; }
+        if (visible.length === 2) {
+            visible.forEach(c => {
+                c.style.setProperty('flex', '1 1 calc(50% - 15px)');
+                c.style.setProperty('max-width', 'calc(50% - 15px)');
+            });
+        } else if (visible.length === 1) {
+            visible[0].style.setProperty('flex', '0 1 50%');
+            visible[0].style.setProperty('max-width', '50%');
+            row.style.setProperty('justify-content', 'center');
+        }
+        // 3+ visible: the designed 33% layout already fits
+    });
+}
+
+// The SPEEKS Tools button/panel/groups follow whatever is actually visible
+// inside the panel, so overrides can add or remove tools for any role without
+// the static role-class unions drifting out of sync.
+function _syncToolsPanelChrome() {
+    const panel = document.getElementById('toolsSidePanel');
+    if (!panel) return;
+    let anyVisible = false;
+    panel.querySelectorAll('.tools-group').forEach(g => {
+        const vis = Array.from(g.querySelectorAll('.tools-item')).some(a => a.style.display !== 'none');
+        g.style.setProperty('display', vis ? 'block' : 'none', 'important');
+        if (vis) anyVisible = true;
+    });
+    panel.style.setProperty('display', anyVisible ? 'flex' : 'none', 'important');
+    const btn = document.getElementById('toolsNavBtn');
+    if (btn) btn.style.setProperty('display', anyVisible ? 'flex' : 'none', 'important');
+    if (!anyVisible && typeof _closeToolsPanel === 'function') _closeToolsPanel();
+}
+
+let _featureOvRefreshStarted = false;
+function _kickFeatureOverridesRefresh() {
+    if (_featureOvRefreshStarted) return;
+    _featureOvRefreshStarted = true;
+    fetch(`${FEATURE_ACCESS_URL}?v=${Date.now()}`).then(r => r.json()).then(json => {
+        if (!json || json.success === false) return;
+        _featureOvRaw = json.data || [];
+        const next = _buildFeatureOvMaps(_featureOvRaw);
+        const changed = JSON.stringify(next) !== JSON.stringify(_featureOv);
+        _featureOv = next;
+        localStorage.setItem('speeksFeatureOv', JSON.stringify(next));
+        if (changed) applyRoleBasedUI();
+    }).catch(() => {});
+}
+
+// ---- Feature Access settings modal ------------------------------------------
+let _faTab = 'tools';
+let _faUser = '';    // selected user (lowercased name) on the Per-User tab
+let _faUsers = [];   // [{name, role, store}] from the auth directory
+let _faFilter = '';
+
+function openFeatureAccess() {
+    toggleModal('featureAccessModal');
+    _faTab = 'tools';
+    _faFilter = '';
+    _faSyncTabButtons();
+    const body = document.getElementById('fa-body');
+    if (body) body.innerHTML = '<div class="status-message">Loading…</div>';
+    _faLoad();
+}
+
+async function _faLoad() {
+    try {
+        const [ovJson] = await Promise.all([
+            fetch(`${FEATURE_ACCESS_URL}?v=${Date.now()}`).then(r => r.json()),
+            _faLoadUsers(),
+        ]);
+        if (!ovJson || ovJson.success === false) throw new Error((ovJson && ovJson.error) || 'Load failed');
+        _featureOvRaw = ovJson.data || [];
+        _featureOv = _buildFeatureOvMaps(_featureOvRaw);
+        localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+        renderFaBody();
+        applyRoleBasedUI();
+    } catch (e) {
+        const body = document.getElementById('fa-body');
+        if (body) body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load feature settings.</div>';
+    }
+}
+
+async function _faLoadUsers() {
+    if (_faUsers.length) return _faUsers;
+    try {
+        let data = null;
+        try { data = JSON.parse(localStorage.getItem('speeksAuthCache') || 'null'); } catch (e) { /* refetch below */ }
+        if (!data || !Array.isArray(data.users)) {
+            const res = await fetch(`${AUTH_URL}?v=${Date.now()}`);
+            data = await res.json();
+        }
+        _faUsers = (data.users || []).filter(u => u && u.name)
+            .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    } catch (e) { _faUsers = []; }
+    return _faUsers;
+}
+
+function switchFaTab(tab) {
+    _faTab = tab;
+    _faSyncTabButtons();
+    renderFaBody();
+}
+
+function _faSyncTabButtons() {
+    ['tools', 'hotbar', 'widgets', 'user'].forEach(t => {
+        const b = document.getElementById('fa-tab-' + t);
+        if (b) b.classList.toggle('active', t === _faTab);
+    });
+}
+
+function _faDefaultFor(feat, roleSlug) {
+    return feat.def === 'all' ? true : feat.def.includes(roleSlug);
+}
+
+function _faRoleOverride(key, slug) {
+    const m = _featureOv.role[key];
+    return (m && Object.prototype.hasOwnProperty.call(m, slug)) ? m[slug] : null;
+}
+
+function _faUserOverride(key, name) {
+    const m = _featureOv.user[key];
+    return (m && Object.prototype.hasOwnProperty.call(m, name)) ? m[name] : null;
+}
+
+function renderFaBody() {
+    const body = document.getElementById('fa-body');
+    if (!body) return;
+    body.innerHTML = _faTab === 'user' ? _faUserTabHtml() : _faMatrixHtml(_faTab);
+}
+
+function _faMatrixHtml(tab) {
+    const feats = FEATURE_CATALOG.filter(f => f.tab === tab);
+    const hints = {
+        tools: 'Click a chip to force a tool on (✓) or off (✕) for that role — an amber ring means it\'s manually overridden; click again to flip it back (matching the default clears the override). Per-user exceptions on the Per-User tab beat these.',
+        hotbar: 'OFF always hides a link. Turning a link ON for a role/user that doesn\'t normally see its bar adds it to the end of their main hotbar — and if you enable every link of a bar, the whole bar shows up instead. Store-bar links (LEE…BAL) default to everyone in that store.',
+        widgets: 'Dashboard cards and sidebar panels. Same rules as tools: per-user exceptions beat these role settings.',
+    };
+    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:12px; line-height:1.5;">${hints[tab] || ''}</div>`;
+    const headerRow = `<div style="display:flex; align-items:center; gap:6px; padding:0 2px; margin-bottom:2px;">
+        <span style="flex:1;"></span>
+        ${FA_ROLES.map(r => `<span title="${r.label}" style="width:38px; text-align:center; font-size:9px; font-weight:800; color:#94a3b8; letter-spacing:.3px; flex-shrink:0;">${r.short}</span>`).join('')}
+    </div>`;
+    let lastGroup = '';
+    feats.forEach(f => {
+        if (f.group !== lastGroup) {
+            lastGroup = f.group;
+            html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:16px 2px 4px;">${f.group}</div>${headerRow}`;
+        }
+        html += `<div style="display:flex; align-items:center; gap:6px; padding:4px 2px; border-bottom:1px solid #f1f5f9;">
+            <span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${f.label}</span>
+            ${FA_ROLES.map(r => _faChipHtml(f, r)).join('')}
+        </div>`;
+    });
+    return html;
+}
+
+function _faChipHtml(f, role) {
+    const def = _faDefaultFor(f, role.slug);
+    const ovr = _faRoleOverride(f.key, role.slug);
+    const eff = ovr === null ? def : ovr;
+    const locked = f.key === 'tool-feature-access' && role.slug === 'district-manager';
+    const title = locked
+        ? 'Always on for District Managers (safety lock)'
+        : `${role.label}: ${eff ? 'visible' : 'hidden'}${ovr !== null ? ' (overridden)' : ' (default)'} — click to ${eff ? 'hide' : 'show'}`;
+    return `<button class="fa-chip ${eff ? 'fa-on' : 'fa-off'}${ovr !== null ? ' fa-ovr' : ''}"${locked ? ' disabled' : ''} onclick="faToggleRole('${f.key}', '${role.slug}')" title="${escapeHtml(title)}">${locked ? '🔒' : (eff ? '✓' : '✕')}</button>`;
+}
+
+async function faToggleRole(key, slug) {
+    const feat = FEATURE_CATALOG.find(f => f.key === key);
+    if (!feat) return;
+    const def = _faDefaultFor(feat, slug);
+    const cur = _faRoleOverride(key, slug);
+    const eff = cur === null ? def : cur;
+    const next = !eff;
+    const clearing = next === def; // back to default → remove the override row
+    const m = (_featureOv.role[key] = _featureOv.role[key] || {});
+    if (clearing) delete m[slug]; else m[slug] = next;
+    if (!Object.keys(m).length) delete _featureOv.role[key];
+    _featureOvRaw = _featureOvRaw.filter(r => !(r.subject_type === 'role' && r.feature_key === key && r.subject === slug));
+    if (!clearing) _featureOvRaw.push({ feature_key: key, subject_type: 'role', subject: slug, enabled: next });
+    localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+    renderFaBody();
+    applyRoleBasedUI(); // live-preview on this device
+    try {
+        const res = await fetch(FEATURE_ACCESS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'set_override', feature_key: key, subject_type: 'role', subject: slug,
+                enabled: clearing ? null : next,
+                updated_by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+    } catch (e) {
+        alert('Could not save: ' + e.message);
+        _faLoad(); // resync with the server's truth
+    }
+}
+
+function _faUserTabHtml() {
+    const ovCounts = {};
+    _featureOvRaw.filter(r => r.subject_type === 'user').forEach(r => {
+        const s = String(r.subject).toLowerCase();
+        ovCounts[s] = (ovCounts[s] || 0) + 1;
+    });
+    const names = _faUsers.map(u => u.name);
+    Object.keys(ovCounts).forEach(n => {
+        if (!names.some(x => x.toLowerCase() === n)) names.push(n); // keep orphaned overrides reachable
+    });
+    const opts = ['<option value="">Select a user…</option>'].concat(names.map(n => {
+        const low = n.toLowerCase();
+        const u = _faUsers.find(x => x.name.toLowerCase() === low);
+        const meta = u ? ` — ${u.role}${u.store ? ' · ' + u.store : ''}` : ' — (no longer in directory)';
+        const cnt = ovCounts[low] ? ` · ${ovCounts[low]} override${ovCounts[low] > 1 ? 's' : ''}` : '';
+        return `<option value="${escapeHtml(low)}" ${low === _faUser ? 'selected' : ''}>${escapeHtml(n + meta + cnt)}</option>`;
+    }));
+    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:12px; line-height:1.5;">
+        Per-user exceptions beat the role settings: force any tool, hotbar link or widget on or off for one person.
+        “Default” means the role rules decide.</div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
+        <select class="form-input-lg" style="flex:2; min-width:220px; margin-top:0;" onchange="_faUser=this.value; renderFaBody();">${opts.join('')}</select>
+        <input class="form-input-lg" style="flex:1; min-width:140px; margin-top:0;" placeholder="Filter features…" value="${escapeHtml(_faFilter)}" oninput="_faFilter=this.value; _faRenderUserRows();">
+    </div>`;
+    if (!_faUser) return html + '<div style="padding:20px; text-align:center; color:#94a3b8; font-weight:600;">Pick a user to manage their exceptions.</div>';
+    const cnt = ovCounts[_faUser] || 0;
+    if (cnt) {
+        html += `<div style="display:flex; justify-content:flex-end; margin-bottom:8px;">
+            <button class="btn-secondary" style="font-size:11.5px; padding:6px 12px;" onclick="faClearUser()">↺ Clear all ${cnt} override${cnt > 1 ? 's' : ''} for this user</button></div>`;
+    }
+    return html + `<div id="fa-user-rows">${_faUserRowsHtml()}</div>`;
+}
+
+function _faRenderUserRows() {
+    const wrap = document.getElementById('fa-user-rows');
+    if (wrap) wrap.innerHTML = _faUserRowsHtml();
+}
+
+function _faUserRowsHtml() {
+    const filter = _faFilter.trim().toLowerCase();
+    const u = _faUsers.find(x => x.name.toLowerCase() === _faUser);
+    // effective role slug (Multi-Store Manager logs in with role 'manager')
+    let roleSlug = u ? String(u.role || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-') : '';
+    if (roleSlug === 'multi-store-manager') roleSlug = 'manager';
+    let html = '', lastGroup = '';
+    FEATURE_CATALOG.forEach(f => {
+        if (filter && !(`${f.label} ${f.group}`).toLowerCase().includes(filter)) return;
+        if (f.group !== lastGroup) {
+            lastGroup = f.group;
+            html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:16px 2px 4px;">${f.group}</div>`;
+        }
+        const ovr = _faUserOverride(f.key, _faUser);
+        let inherited = null;
+        if (roleSlug) {
+            const roleOvr = _faRoleOverride(f.key, roleSlug);
+            inherited = roleOvr === null ? _faDefaultFor(f, roleSlug) : roleOvr;
+        }
+        const seg = (val, txt) => {
+            const active = (ovr === null && val === 'default') || (ovr === true && val === 'on') || (ovr === false && val === 'off');
+            const cls = active ? (val === 'on' ? ' fa-seg-active fa-seg-on' : (val === 'off' ? ' fa-seg-active fa-seg-off' : ' fa-seg-active')) : '';
+            return `<button class="fa-seg${cls}" onclick="faSetUser('${f.key}', '${val}')">${txt}</button>`;
+        };
+        html += `<div style="display:flex; align-items:center; gap:8px; padding:4px 2px; border-bottom:1px solid #f1f5f9;">
+            <span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${f.label}${inherited !== null ? `<span style="font-weight:600; color:#cbd5e1; font-size:11px;"> · role default: ${inherited ? 'visible' : 'hidden'}</span>` : ''}</span>
+            <div style="display:inline-flex; border:1.5px solid #e2e8f0; border-radius:8px; overflow:hidden; flex-shrink:0;">
+                ${seg('default', 'Default')}${seg('on', 'On')}${seg('off', 'Off')}
+            </div>
+        </div>`;
+    });
+    return html || '<div style="padding:16px; text-align:center; color:#94a3b8; font-weight:600;">No features match the filter.</div>';
+}
+
+async function faSetUser(key, val) {
+    if (!_faUser) return;
+    const enabled = val === 'default' ? null : (val === 'on');
+    const m = (_featureOv.user[key] = _featureOv.user[key] || {});
+    if (enabled === null) delete m[_faUser]; else m[_faUser] = enabled;
+    if (!Object.keys(m).length) delete _featureOv.user[key];
+    _featureOvRaw = _featureOvRaw.filter(r => !(r.subject_type === 'user' && r.feature_key === key && String(r.subject).toLowerCase() === _faUser));
+    if (enabled !== null) _featureOvRaw.push({ feature_key: key, subject_type: 'user', subject: _faUser, enabled });
+    localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+    renderFaBody();
+    applyRoleBasedUI();
+    try {
+        const res = await fetch(FEATURE_ACCESS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'set_override', feature_key: key, subject_type: 'user', subject: _faUser,
+                enabled,
+                updated_by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+    } catch (e) {
+        alert('Could not save: ' + e.message);
+        _faLoad();
+    }
+}
+
+async function faClearUser() {
+    if (!_faUser) return;
+    if (!confirm('Clear ALL feature overrides for this user? Their role settings will apply again.')) return;
+    Object.keys(_featureOv.user).forEach(k => {
+        delete _featureOv.user[k][_faUser];
+        if (!Object.keys(_featureOv.user[k]).length) delete _featureOv.user[k];
+    });
+    _featureOvRaw = _featureOvRaw.filter(r => !(r.subject_type === 'user' && String(r.subject).toLowerCase() === _faUser));
+    localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+    renderFaBody();
+    applyRoleBasedUI();
+    try {
+        const res = await fetch(FEATURE_ACCESS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'clear_user', subject: _faUser }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+    } catch (e) {
+        alert('Could not clear: ' + e.message);
+        _faLoad();
+    }
 }

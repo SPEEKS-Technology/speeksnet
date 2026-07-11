@@ -82,18 +82,18 @@
     <div class="ticker-track" id="tickerTrack"></div>
   </div>
   <div class="ticker-panel-buttons">
-    <button class="gi-nav-toggle dynamic-module-flex role-manager role-owner-manager role-employee role-training" onclick="toggleGoalsPanel()" title="Goals &amp; Initiatives">
+    <button class="gi-nav-toggle dynamic-module-flex role-manager role-owner-manager role-employee role-training" data-feature="widget-goals-panel" onclick="toggleGoalsPanel()" title="Goals &amp; Initiatives">
         <span style="font-size: 13px; line-height: 1;">🎯</span>
         <span>Goals &amp; Initiatives</span>
         <svg class="gi-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
-    <button class="cl-nav-toggle dynamic-module-flex role-manager role-owner-manager role-district-manager role-assistant-manager" onclick="toggleChecklistPanel(event); loadChecklist();" title="Checklist">
+    <button class="cl-nav-toggle dynamic-module-flex role-manager role-owner-manager role-district-manager role-assistant-manager" data-feature="widget-checklist-panel" onclick="toggleChecklistPanel(event); loadChecklist();" title="Checklist">
         <span style="font-size: 13px; line-height: 1;">📋</span>
         <span>Checklist</span>
         <span id="cl-progress-chip" class="cl-progress-chip"></span>
         <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
-    <button class="cl-nav-toggle audit-nav-toggle dynamic-module-flex role-manager role-owner-manager role-assistant-manager" onclick="toggleAuditPanel(event); loadAudit();" title="Store Audit">
+    <button class="cl-nav-toggle audit-nav-toggle dynamic-module-flex role-manager role-owner-manager role-assistant-manager" data-feature="widget-audit-panel" onclick="toggleAuditPanel(event); loadAudit();" title="Store Audit">
         <span style="font-size: 13px; line-height: 1;">🧹</span>
         <span>Store Audit</span>
         <span id="audit-progress-chip" class="cl-progress-chip"></span>
@@ -563,7 +563,7 @@
     </div>
 </div>
 
-<div id="goalsSidePanel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee role-training">
+<div id="goalsSidePanel" data-feature="widget-goals-panel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee role-training">
     <div class="gi-panel-header">
         <div class="gi-panel-header-row">
             <div style="display: flex; align-items: center; gap: 10px;">
@@ -607,7 +607,7 @@
     </div>
 </div>
 
-<div id="checklistSidePanel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-district-manager">
+<div id="checklistSidePanel" data-feature="widget-checklist-panel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-district-manager role-assistant-manager">
 
     <div class="cl-panel-header">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
@@ -639,7 +639,7 @@
     </div>
 </div>
 
-<div id="auditSidePanel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-assistant-manager">
+<div id="auditSidePanel" data-feature="widget-audit-panel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-assistant-manager">
     <div class="cl-panel-header">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
             <h3 style="margin: 0;">Store Audit Checklist</h3>
@@ -785,57 +785,73 @@
         <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
     </div>
 
-    <!-- PAGE 1: Item Details -->
-    <div class="manage-content" id="recycleInvPage1">
-        <!-- CORP store selector — shown for CEO / DM only -->
-        <div id="recycleInvStoreSelector" style="display:none; margin-bottom:14px;">
-            <label class="form-label-caps">Store <span style="font-weight:400;color:#ef4444;">*</span></label>
-            <select id="recycleInvStoreSelect" class="form-input-lg" onchange="recycleInvUpdatePreview()">
-                <option value="">Select a store…</option>
-                <option value="OVL">OVL</option>
-                <option value="LEE">LEE</option>
-                <option value="WSP">WSP</option>
-                <option value="MPL">MPL</option>
-                <option value="BAL">BAL</option>
-            </select>
-        </div>
-        <label class="form-label-caps">SKU <span style="font-weight:400;color:#ef4444;">*</span></label>
-        <input type="text" id="recycleInvSku" class="form-input-lg" placeholder="e.g. ABC-12345"
-            oninput="recycleInvUpdatePreview()">
-        <label class="form-label-caps" style="margin-top:16px;">
-            Item Description <span style="font-weight:400;color:#ef4444;">*</span>
-        </label>
-        <textarea id="recycleInvDescription" class="form-input-lg" rows="3"
-            placeholder="What is the item, and why is it being recycled out of inventory?"
-            oninput="recycleInvUpdatePreview()"></textarea>
-        <label class="form-label-caps" style="margin-top:16px;">Value <span style="font-weight:400;color:#ef4444;">*</span></label>
-        <input type="text" id="recycleInvValue" class="form-input-lg" placeholder="e.g. 50.00" inputmode="decimal"
-            oninput="recycleInvSanitizeMoney(this); recycleInvUpdatePreview()">
-        <label class="form-label-caps" style="margin-top:16px;">Cost <span style="font-weight:400;color:#ef4444;">*</span></label>
-        <input type="text" id="recycleInvCost" class="form-input-lg" placeholder="e.g. 20.00" inputmode="decimal"
-            oninput="recycleInvSanitizeMoney(this); recycleInvUpdatePreview()">
-        <div class="box-order-disclaimer">
-            This request is sent to SPEEKS for approval before the item is recycled out of inventory.
+    <div style="padding: 14px 18px 0;">
+        <div class="notif-tabs" style="display: inline-flex;">
+            <button id="recycle-tab-new" class="tab-btn active" onclick="switchRecycleTab('new')">New Request</button>
+            <button id="recycle-tab-view" class="tab-btn" onclick="switchRecycleTab('view')">My Requests</button>
         </div>
     </div>
 
-    <!-- PAGE 2: Email Preview -->
-    <div class="manage-content" id="recycleInvPage2" style="display:none;">
-        <div class="box-order-preview-label">Email Preview</div>
-        <div class="box-order-email-preview" id="recycleInvEmailPreview"></div>
+    <div class="manage-content">
+        <div id="recycle-panel-new">
+            <div id="recycle-store-row" style="margin-bottom:14px;">
+                <label class="form-label-caps">Store</label>
+                <select id="recycleInvStoreSelect" class="form-input-lg"></select>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px;">
+                <div>
+                    <label class="form-label-caps">SKU <span style="font-weight:400;color:#ef4444;">*</span></label>
+                    <input type="text" id="recycleInvSku" class="form-input-lg" placeholder="e.g. ABC-12345">
+                </div>
+                <div>
+                    <label class="form-label-caps">Quantity <span style="font-weight:400;color:#ef4444;">*</span></label>
+                    <input type="text" id="recycleInvQty" class="form-input-lg" inputmode="numeric" value="1" oninput="recycleInvSanitizeInt(this)">
+                </div>
+                <div>
+                    <label class="form-label-caps">Cost (per unit) <span style="font-weight:400;color:#ef4444;">*</span></label>
+                    <input type="text" id="recycleInvCost" class="form-input-lg" inputmode="decimal" placeholder="0.00" oninput="recycleInvSanitizeMoney(this)">
+                </div>
+                <div>
+                    <label class="form-label-caps">Value</label>
+                    <input type="text" id="recycleInvValue" class="form-input-lg" inputmode="decimal" placeholder="0.00" oninput="recycleInvSanitizeMoney(this)">
+                </div>
+            </div>
+            <label class="form-label-caps">Item Description <span style="font-weight:400;color:#ef4444;">*</span></label>
+            <textarea id="recycleInvDescription" class="form-input-lg" rows="3"
+                placeholder="What is the item, and why is it being recycled out of inventory?"></textarea>
+            <div class="box-order-disclaimer">
+                This request is logged under your store and reconciled by SPEEKS at the end of the month.
+                Make sure the SKU, cost, and quantity match what is actually recycled out of inventory.
+            </div>
+        </div>
+
+        <div id="recycle-panel-view" style="display:none;">
+            <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px;">
+                <div style="flex:1; min-width:150px;">
+                    <label class="form-label-caps">Month</label>
+                    <select id="recycle-month-filter" class="form-input-lg" onchange="renderMyRecycleTable()"></select>
+                </div>
+                <div id="recycle-view-filter-row" style="display:none; flex:1; min-width:150px;">
+                    <label class="form-label-caps">Store</label>
+                    <select id="recycle-view-filter" class="form-input-lg" onchange="renderMyRecycleTable()"></select>
+                </div>
+            </div>
+            <div id="recycle-table-wrap"></div>
+        </div>
     </div>
 
-    <!-- FOOTER PAGE 1 -->
-    <div class="manage-footer box-order-footer" id="recycleInvFooter1">
-        <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
-        <button class="btn-primary" onclick="recycleInvNextPage()">Next →</button>
+    <div class="manage-footer flex-end">
+        <button onclick="submitRecycleRequest()" class="btn-primary" id="submitRecycleBtn">Submit Request</button>
     </div>
+</div>
 
-    <!-- FOOTER PAGE 2 -->
-    <div class="manage-footer box-order-footer" id="recycleInvFooter2" style="display:none;">
-        <button class="btn-secondary" onclick="recycleInvBackPage()">← Back</button>
-        <button class="btn-secondary" onclick="copyRecycleInventory(this)">📋 Copy</button>
-        <button class="btn-primary" onclick="sendRecycleInventory()">Send Email →</button>
+<div class="modal-menu manage-menu" id="recycleOversightModal">
+    <div class="modal-header">
+        <h3>♻️ Recycle Requests</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div class="manage-content">
+        <div id="recycle-oversight-body"><div class="status-message">Loading…</div></div>
     </div>
 </div>
 
@@ -992,6 +1008,24 @@
 </div>
 
 <!-- ===== SPEEKS TOOLS SIDE PANEL ===== -->
+<div class="modal-menu manage-menu" id="featureAccessModal">
+    <div class="modal-header">
+        <h3>🎛️ Feature Access</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div style="padding: 14px 18px 0;">
+        <div class="notif-tabs" style="display: inline-flex;">
+            <button id="fa-tab-tools" class="tab-btn active" onclick="switchFaTab('tools')">SPEEKS Tools</button>
+            <button id="fa-tab-hotbar" class="tab-btn" onclick="switchFaTab('hotbar')">Hotbar Links</button>
+            <button id="fa-tab-widgets" class="tab-btn" onclick="switchFaTab('widgets')">Widgets</button>
+            <button id="fa-tab-user" class="tab-btn" onclick="switchFaTab('user')">Per-User</button>
+        </div>
+    </div>
+    <div class="manage-content">
+        <div id="fa-body"><div class="status-message">Loading…</div></div>
+    </div>
+</div>
+
 <div class="tools-side-panel dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager role-manager role-assistant-manager" id="toolsSidePanel" style="flex-direction:column;">
   <div class="tools-panel-header">
     <div class="tools-panel-title">
@@ -1004,43 +1038,45 @@
 
     <div class="tools-group dynamic-module-block role-manager role-owner-manager role-district-manager role-ceo">
       <div class="tools-group-label">🛟 Claims &amp; Refunds</div>
-      <a class="tools-item dynamic-module-flex role-manager role-owner-manager" onclick="_closeToolsPanel(); openClaimsModal();"><span class="tools-item-icon">🛟</span>Insurance Claims</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" onclick="_closeToolsPanel(); openClaimsOversight();"><span class="tools-item-icon">📊</span>Insurance Claims</a>
+      <a class="tools-item dynamic-module-flex role-manager role-owner-manager" data-feature="tool-claims-store" onclick="_closeToolsPanel(); openClaimsModal();"><span class="tools-item-icon">🛟</span>Insurance Claims</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-claims-oversight" onclick="_closeToolsPanel(); openClaimsOversight();"><span class="tools-item-icon">📊</span>Insurance Claims</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-tom role-owner-manager">
       <div class="tools-group-label">📢 Content</div>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon">📣</span>Announcements</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageTicker();"><span class="tools-item-icon">📌</span>Ticker Items</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); togglePatchNotesManage();"><span class="tools-item-icon">📝</span>Patch Notes</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" data-feature="tool-announcements" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon">📣</span>Announcements</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-ticker" onclick="_closeToolsPanel(); toggleManageTicker();"><span class="tools-item-icon">📌</span>Ticker Items</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-patch-notes" onclick="_closeToolsPanel(); togglePatchNotesManage();"><span class="tools-item-icon">📝</span>Patch Notes</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo">
       <div class="tools-group-label">🏪 Store Ops</div>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon">🏆</span>Submit Scores</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManagerChecklist();"><span class="tools-item-icon">📋</span>Manager Checklist</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleVarianceInput();"><span class="tools-item-icon">📊</span>Submit Variance Report</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon">💬</span>Send Store Comment</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-submit-scores" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon">🏆</span>Submit Scores</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-manager-checklist" onclick="_closeToolsPanel(); toggleManagerChecklist();"><span class="tools-item-icon">📋</span>Manager Checklist</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-variance-report" onclick="_closeToolsPanel(); toggleVarianceInput();"><span class="tools-item-icon">📊</span>Submit Variance Report</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-store-comment" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon">💬</span>Send Store Comment</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager">
       <div class="tools-group-label">📦 Orders</div>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon">📦</span>Box Order</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon">♻️</span>Recycle Inventory</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" data-feature="tool-box-order" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon">📦</span>Box Order</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager" data-feature="tool-recycle-inventory" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon">♻️</span>Recycle Inventory</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-recycle-oversight" onclick="_closeToolsPanel(); openRecycleOversight();"><span class="tools-item-icon">📊</span>Recycle Requests</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-owner-manager">
       <div class="tools-group-label">👥 Admin</div>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-owner-manager" onclick="_closeToolsPanel(); toggleManageUsers();"><span class="tools-item-icon">👤</span>User Permissions</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageAlerts();"><span class="tools-item-icon">📈</span>Performance Metrics</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageRecords();"><span class="tools-item-icon">📁</span>Company Records</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageDocs();"><span class="tools-item-icon">📚</span>Manage Policies</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageAwards();"><span class="tools-item-icon">🏅</span>Monthly Awards</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-owner-manager" data-feature="tool-user-permissions" onclick="_closeToolsPanel(); toggleManageUsers();"><span class="tools-item-icon">👤</span>User Permissions</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-feature-access" onclick="_closeToolsPanel(); openFeatureAccess();"><span class="tools-item-icon">🎛️</span>Feature Access</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-performance-metrics" onclick="_closeToolsPanel(); toggleManageAlerts();"><span class="tools-item-icon">📈</span>Performance Metrics</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-company-records" onclick="_closeToolsPanel(); toggleManageRecords();"><span class="tools-item-icon">📁</span>Company Records</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-manage-policies" onclick="_closeToolsPanel(); toggleManageDocs();"><span class="tools-item-icon">📚</span>Manage Policies</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-monthly-awards" onclick="_closeToolsPanel(); toggleManageAwards();"><span class="tools-item-icon">🏅</span>Monthly Awards</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager">
       <div class="tools-group-label">⚙ System</div>
-      <a class="tools-item dynamic-module-flex role-district-manager" onclick="_closeToolsPanel(); toggleManageHotkeys();"><span class="tools-item-icon">⌨️</span>System Hotkeys</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-system-hotkeys" onclick="_closeToolsPanel(); toggleManageHotkeys();"><span class="tools-item-icon">⌨️</span>System Hotkeys</a>
     </div>
 
   </div>
