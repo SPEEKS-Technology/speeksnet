@@ -64,14 +64,16 @@ Deno.serve(async (req: Request) => {
 
       // ---- DM month-end reconciliation: review a line (or clear the review).
       //      Reviewing also classifies the line: "against" = truly recycled out
-      //      of inventory, "for" = recycled item was a tool for store use. ----
+      //      of inventory, "for" = recycled item was a tool for store use,
+      //      "ignore" = cost was consolidated into another SKU (excluded from
+      //      cost totals client-side). ----
       if (action === "set_reviewed") {
         const id = String(body.id || "");
         if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
         const reviewed = !!body.reviewed;
-        const verdict = body.verdict === "for" || body.verdict === "against" ? body.verdict : null;
+        const verdict = ["for", "against", "ignore"].includes(body.verdict) ? body.verdict : null;
         if (reviewed && !verdict) {
-          return jsonResponse({ success: false, error: "Verdict must be 'for' or 'against'" }, 400);
+          return jsonResponse({ success: false, error: "Verdict must be 'for', 'against' or 'ignore'" }, 400);
         }
         const { error } = await supabase.from("recycle_requests")
           .update({

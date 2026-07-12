@@ -14100,7 +14100,11 @@ function renderMyRecycleTable() {
         return;
     }
     rows = [...rows].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    const total = rows.reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+    // Lines reviewed as "ignore" had their cost consolidated into another SKU
+    // (e.g. 5 broken units merged into 1 rebuilt item) — they were never really
+    // recycled out, so their cost is excluded from every total.
+    const ignoredTotal = rows.filter(r => r.review_verdict === 'ignore').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+    const total = rows.filter(r => r.review_verdict !== 'ignore').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
     const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
     const today = new Date().toDateString();
 
@@ -14115,18 +14119,19 @@ function renderMyRecycleTable() {
         const delBtn = canDelete
             ? `<button onclick="deleteRecycleRequest('${r.id}')" title="${canReview ? 'Delete this line' : 'Delete (same-day only)'}" style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:8px; cursor:pointer; font-size:15px; line-height:1;">🗑</button>`
             : '';
-        const verdict = r.review_verdict === 'for' || r.review_verdict === 'against' ? r.review_verdict : '';
+        const verdict = ['for', 'against', 'ignore'].includes(r.review_verdict) ? r.review_verdict : '';
         let reviewCell = '';
         if (canReview) {
-            const vColor = verdict === 'against' ? '#dc2626' : verdict === 'for' ? '#059669' : '#94a3b8';
-            const vBorder = verdict === 'against' ? '#fecaca' : verdict === 'for' ? '#a7f3d0' : '#cbd5e1';
-            reviewCell = td(`<select onchange="setRecycleReviewed('${r.id}', this.value)" title="${r.reviewed_at ? 'Reviewed' + (r.reviewed_by ? ' by ' + escapeHtml(r.reviewed_by) : '') : 'Select For or Against Store to mark reviewed'}" style="padding:5px 6px; border:1.5px solid ${vBorder}; border-radius:8px; font-size:11px; font-weight:800; color:${vColor}; background:#fff; cursor:pointer;">
+            const vColor = verdict === 'against' ? '#dc2626' : verdict === 'for' ? '#059669' : verdict === 'ignore' ? '#475569' : '#94a3b8';
+            const vBorder = verdict === 'against' ? '#fecaca' : verdict === 'for' ? '#a7f3d0' : verdict === 'ignore' ? '#94a3b8' : '#cbd5e1';
+            reviewCell = td(`<select onchange="setRecycleReviewed('${r.id}', this.value)" title="${r.reviewed_at ? 'Reviewed' + (r.reviewed_by ? ' by ' + escapeHtml(r.reviewed_by) : '') : 'Against = out of inventory · For = store-use tool · Ignore = cost moved to another SKU, not counted'}" style="padding:5px 6px; border:1.5px solid ${vBorder}; border-radius:8px; font-size:11px; font-weight:800; color:${vColor}; background:#fff; cursor:pointer;">
                 <option value=""${verdict ? '' : ' selected'}>— Review —</option>
                 <option value="against"${verdict === 'against' ? ' selected' : ''}>Against Store</option>
                 <option value="for"${verdict === 'for' ? ' selected' : ''}>For Store</option>
+                <option value="ignore"${verdict === 'ignore' ? ' selected' : ''}>Ignore</option>
             </select>`, 'text-align:center; white-space:nowrap;');
         }
-        const rowBg = canReview && verdict ? `background:${verdict === 'against' ? '#fef2f2' : '#f0fdf4'};` : '';
+        const rowBg = canReview && verdict ? `background:${verdict === 'against' ? '#fef2f2' : verdict === 'for' ? '#f0fdf4' : '#f1f5f9'};` : '';
         html += `<tr style="${rowBg}">
             ${reviewCell}
             ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
@@ -14135,7 +14140,9 @@ function renderMyRecycleTable() {
             ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>`)}
             ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;')}
             ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}
-            ${td(_fmtRecycleMoney(_recycleLineTotal(r)), 'white-space:nowrap; font-weight:800;')}
+            ${td(verdict === 'ignore'
+                ? `<span style="text-decoration:line-through; color:#94a3b8;" title="Not counted — cost was moved into another SKU">${_fmtRecycleMoney(_recycleLineTotal(r))}</span>`
+                : _fmtRecycleMoney(_recycleLineTotal(r)), 'white-space:nowrap; font-weight:800;')}
             ${td(`<span style="color:#94a3b8; white-space:nowrap;">${escapeHtml(r.created_by || '—')}</span>`)}
             ${td(delBtn, 'text-align:right;')}
         </tr>`;
@@ -14154,6 +14161,11 @@ function renderMyRecycleTable() {
             html += `<tr>${footLabel('Against store (out of inventory)', true)}<td style="padding:4px 10px; font-weight:900; font-size:12px; color:#dc2626; white-space:nowrap;">${_fmtRecycleMoney(againstTotal)}</td><td colspan="2"></td></tr>
             <tr>${footLabel('For store (store-use tools)', true)}<td style="padding:4px 10px 11px; font-weight:900; font-size:12px; color:#059669; white-space:nowrap;">${_fmtRecycleMoney(forTotal)}</td><td colspan="2"></td></tr>`;
         }
+    }
+    if (ignoredTotal) {
+        // Shown to everyone so the month total visibly reconciles with the
+        // struck-through lines above it.
+        html += `<tr>${footLabel('Ignored (cost moved to another SKU)', true)}<td style="padding:4px 10px 11px; font-weight:900; font-size:12px; color:#94a3b8; white-space:nowrap; text-decoration:line-through;">${_fmtRecycleMoney(ignoredTotal)}</td><td colspan="2"></td></tr>`;
     }
     html += `</tfoot></table></div>`;
     wrap.innerHTML = html;
@@ -14175,11 +14187,12 @@ async function deleteRecycleRequest(id) {
 }
 
 // Review / clear a line (DM/CEO, from the My Requests tab). verdict is
-// 'against' (truly recycled out of inventory), 'for' (tool for store use)
-// or '' to clear the review. Updates the local cache and re-renders so the
+// 'against' (truly recycled out of inventory), 'for' (tool for store use),
+// 'ignore' (cost consolidated into another SKU — excluded from totals) or
+// '' to clear the review. Updates the local cache and re-renders so the
 // scroll position and month stay put.
 async function setRecycleReviewed(id, verdict) {
-    const reviewed = verdict === 'for' || verdict === 'against';
+    const reviewed = ['for', 'against', 'ignore'].includes(verdict);
     try {
         const res = await fetch(RECYCLE_URL, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
