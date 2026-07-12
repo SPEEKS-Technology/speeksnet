@@ -14110,11 +14110,10 @@ function renderMyRecycleTable() {
 
     const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
     const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
-    const btnStyle = 'padding:7px 12px; border:1.5px solid #cbd5e1; border-radius:8px; background:#fff; font-weight:800; font-size:12px; color:var(--slate-charcoal); cursor:pointer; white-space:nowrap;';
     let html = canReview
         ? `<div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
-            <button onclick="emailRecycleReport()" style="${btnStyle}">📧 Email Month-End Report</button>
-            <button onclick="copyRecycleReport(this)" style="${btnStyle}">⧉ Copy Report</button>
+            <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
+            <button class="btn-primary" onclick="emailRecycleReport()">Send Email →</button>
         </div>`
         : '';
     html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
@@ -14214,47 +14213,53 @@ function _recycleReportCompose() {
     const sections = RECYCLE_STORES.map(s => {
         const sRows = rows.filter(r => (r.store || '').toUpperCase() === s);
         const name = BOX_STORE_NAMES[s] || s;
-        if (!sRows.length) return `${s} — ${name}\n  No recycle requests this month.`;
+        if (!sRows.length) return `${s} - ${name}\n  No recycle requests this month.`;
         const counted = sum(sRows.filter(r => r.review_verdict !== 'ignore'));
         const against = sum(sRows.filter(r => r.review_verdict === 'against'));
         const forUse  = sum(sRows.filter(r => r.review_verdict === 'for'));
         const ignored = sum(sRows.filter(r => r.review_verdict === 'ignore'));
         unreviewed += sRows.filter(r => !r.reviewed_at).length;
         grandCounted += counted; grandAgainst += against; grandFor += forUse;
-        let block = `${s} — ${name}\n  Total Recycled Cost: ${_fmtRecycleMoney(counted)}\n` +
-            `    • Recycled out of inventory (against the store): ${_fmtRecycleMoney(against)}\n` +
-            `    • Repurposed for store use: ${_fmtRecycleMoney(forUse)}`;
-        if (ignored) block += `\n    • Not counted — cost consolidated into another SKU: ${_fmtRecycleMoney(ignored)}`;
+        let block = `${s} - ${name}\n  Total Recycled Cost: ${_fmtRecycleMoney(counted)}\n` +
+            `    - Recycled out of inventory (against the store): ${_fmtRecycleMoney(against)}\n` +
+            `    - Repurposed for store use: ${_fmtRecycleMoney(forUse)}`;
+        if (ignored) block += `\n    - Not counted (cost consolidated into another SKU): ${_fmtRecycleMoney(ignored)}`;
         return block;
     });
 
     const warn = unreviewed
-        ? `\n\n⚠ ${unreviewed} line item${unreviewed === 1 ? ' has' : 's have'} not been reviewed yet — ` +
+        ? `\n\nNOTE: ${unreviewed} line item${unreviewed === 1 ? ' has' : 's have'} not been reviewed yet - ` +
           `their cost is included in the store totals but not in the breakdowns.`
         : '';
     const body = `Hi,\n\nHere is the recycled inventory report for ${monthLabel}:\n\n` +
         sections.join('\n\n') +
         `\n\nAll Stores Combined: ${_fmtRecycleMoney(grandCounted)}\n` +
-        `    • Recycled out of inventory: ${_fmtRecycleMoney(grandAgainst)}\n` +
-        `    • Repurposed for store use: ${_fmtRecycleMoney(grandFor)}${warn}\n\n` +
+        `    - Recycled out of inventory: ${_fmtRecycleMoney(grandAgainst)}\n` +
+        `    - Repurposed for store use: ${_fmtRecycleMoney(grandFor)}${warn}\n\n` +
         `Thank you,\n${userName}`;
     return {
         email: RECYCLE_REPORT_EMAILS.join(','),
-        subject: `PayMore Recycle Report · ${monthLabel}`,
+        subject: `PayMore Recycle Report - ${monthLabel}`,
         body,
     };
 }
 
 function emailRecycleReport() {
     const { email, subject, body } = _recycleReportCompose();
-    window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    // Fire through a real anchor click rather than window.location — more
+    // reliably hands mailto: off to the OS mail handler across browsers.
+    const a = document.createElement('a');
+    a.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
 }
 
-// Same copy failsafe as the Box Order tool, same button flash.
+// Same copy failsafe as the Box Order tool, same button flash. Copies just
+// the report body — recipient and subject get filled in by hand.
 function copyRecycleReport(button) {
-    const { email, subject, body } = _recycleReportCompose();
-    const text = `To: ${email}\nSubject: ${subject}\n\n${body}`;
-    navigator.clipboard.writeText(text).then(() => {
+    const { body } = _recycleReportCompose();
+    navigator.clipboard.writeText(body).then(() => {
         const originalText = button.innerText;
         button.innerText = 'Copied!';
         button.style.background = '#d1fae5';
