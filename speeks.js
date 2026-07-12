@@ -14033,10 +14033,12 @@ async function submitRecycleRequest() {
 }
 
 let _recycleMine = []; // last fetched requests, so filter changes re-render without refetching
+let _recycleReportPreviewing = false; // true = My Requests tab is showing the report email preview
 
 async function fetchMyRecycleRequests() {
     const wrap = document.getElementById('recycle-table-wrap');
     if (!wrap) return;
+    _recycleReportPreviewing = false; // fresh entry to the tab always starts on the table
     const stores = _recycleStores();
     if (!stores.length) {
         wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">No store assigned to your account.</div>';
@@ -14110,10 +14112,25 @@ function renderMyRecycleTable() {
 
     const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
     const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
+    // Report preview "page" (DM/CEO) — mirrors the Box Order flow: Send Email
+    // first shows the composed email, and the actual send happens from there.
+    if (canReview && _recycleReportPreviewing) {
+        const { subject, body } = _recycleReportCompose();
+        wrap.innerHTML = `
+            <div class="box-order-preview-label">Email Preview</div>
+            <div class="box-order-email-preview">${escapeHtml(`To: ${RECYCLE_REPORT_EMAILS.join(', ')}\nSubject: ${subject}\n\n${body}`)}</div>
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
+                <button class="btn-secondary" onclick="_recycleReportPreviewing=false; renderMyRecycleTable();">← Back</button>
+                <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
+                <button class="btn-primary" onclick="sendRecycleReport(this)">Send Email →</button>
+            </div>`;
+        return;
+    }
+
     let html = canReview
         ? `<div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
             <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
-            <button class="btn-primary" onclick="emailRecycleReport(this)">Send Email →</button>
+            <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email →</button>
         </div>`
         : '';
     html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
@@ -14246,9 +14263,9 @@ function _recycleReportCompose() {
     };
 }
 
-async function emailRecycleReport(button) {
+// Actual send — reached only from the preview, so no extra confirm needed.
+async function sendRecycleReport(button) {
     const { subject, body } = _recycleReportCompose();
-    if (!confirm(`Send this report to ${RECYCLE_REPORT_EMAILS.join(', ')}?\n\nSubject: ${subject}`)) return;
     const old = button ? button.innerText : '';
     if (button) { button.disabled = true; button.innerText = 'Sending…'; }
     try {
@@ -14258,10 +14275,9 @@ async function emailRecycleReport(button) {
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Send failed');
-        if (button) {
-            button.innerText = '✓ Sent!';
-            setTimeout(() => { button.innerText = old; button.disabled = false; }, 2500);
-        }
+        if (button) button.innerText = '✓ Sent!';
+        // Linger on the confirmation for a beat, then drop back to the table.
+        setTimeout(() => { _recycleReportPreviewing = false; renderMyRecycleTable(); }, 1800);
     } catch (e) {
         alert('Could not send the report: ' + e.message);
         if (button) { button.innerText = old; button.disabled = false; }
