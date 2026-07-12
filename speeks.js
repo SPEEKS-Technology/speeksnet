@@ -14113,7 +14113,7 @@ function renderMyRecycleTable() {
     let html = canReview
         ? `<div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
             <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
-            <button class="btn-primary" onclick="emailRecycleReport()">Send Email →</button>
+            <button class="btn-primary" onclick="emailRecycleReport(this)">Send Email →</button>
         </div>`
         : '';
     html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
@@ -14195,11 +14195,13 @@ async function deleteRecycleRequest(id) {
 // =========================================================
 //  MONTH-END RECYCLE REPORT EMAIL (DM/CEO) — one email at the start of the
 //  month covering every store's total recycled cost for the selected month,
-//  broken down by verdict. Mirrors the Box Order tool: mailto compose plus a
-//  copy-to-clipboard failsafe for machines with no mail client.
+//  broken down by verdict. Sent server-side through the same Gmail relay as
+//  the weekly report (mailto: wouldn't open on some machines); the Copy
+//  button remains as a failsafe.
 // =========================================================
-// TESTING: goes to Ethan only for now — add the second recipient to this
-// list once the format is verified.
+// Display only — the ACTUAL recipients are hard-coded in the recycle-requests
+// edge fn (REPORT_RECIPIENTS); keep the two lists in sync. TESTING: Ethan
+// only for now — add the second recipient once the format is verified.
 const RECYCLE_REPORT_EMAILS = ['ethan.kushnir@gmail.com'];
 
 function _recycleReportCompose() {
@@ -14244,15 +14246,26 @@ function _recycleReportCompose() {
     };
 }
 
-function emailRecycleReport() {
-    const { email, subject, body } = _recycleReportCompose();
-    // Fire through a real anchor click rather than window.location — more
-    // reliably hands mailto: off to the OS mail handler across browsers.
-    const a = document.createElement('a');
-    a.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+async function emailRecycleReport(button) {
+    const { subject, body } = _recycleReportCompose();
+    if (!confirm(`Send this report to ${RECYCLE_REPORT_EMAILS.join(', ')}?\n\nSubject: ${subject}`)) return;
+    const old = button ? button.innerText : '';
+    if (button) { button.disabled = true; button.innerText = 'Sending…'; }
+    try {
+        const res = await fetch(RECYCLE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'send_report', subject, body }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Send failed');
+        if (button) {
+            button.innerText = '✓ Sent!';
+            setTimeout(() => { button.innerText = old; button.disabled = false; }, 2500);
+        }
+    } catch (e) {
+        alert('Could not send the report: ' + e.message);
+        if (button) { button.innerText = old; button.disabled = false; }
+    }
 }
 
 // Same copy failsafe as the Box Order tool, same button flash. Copies just
