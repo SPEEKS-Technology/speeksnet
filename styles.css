@@ -6717,8 +6717,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 /* Reserve the vertical-scrollbar gutter in the recycle views so the content
    doesn't shift sideways when switching store/month filters toggles the
    scrollbar (row counts differ per store). */
-#recycleInvModal .manage-content,
-#recycleOversightModal .manage-content { scrollbar-gutter: stable; }
+#recycleInvModal .manage-content { scrollbar-gutter: stable; }
 
 /* ============================================================================
    FEATURE ACCESS TOOL — role-matrix chips + per-user segmented controls
