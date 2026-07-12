@@ -14180,10 +14180,12 @@ function renderRecycleOversight() {
     const units = rows.reduce((a, r) => a + (Number(r.quantity) || 0), 0);
     const reviewed = rows.filter(r => r.reviewed_at).length;
     const allReviewed = rows.length > 0 && reviewed === rows.length;
+    const againstTotal = rows.filter(r => r.review_verdict === 'against').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+    const forTotal = rows.filter(r => r.review_verdict === 'for').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
 
     const selStyle = 'padding:8px 12px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:13px; font-weight:700; background:#fff; cursor:pointer;';
     let html = `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
-        <div style="font-size:12px; color:#64748b; font-weight:600;">Tick each line off as you reconcile it against what was actually recycled out of inventory.</div>
+        <div style="font-size:12px; color:#64748b; font-weight:600; max-width:560px;">Review each line as it comes in: <b style="color:#dc2626;">Against Store</b> = truly recycled out of inventory (counts against the store) · <b style="color:#059669;">For Store</b> = recycled because it's a tool for store use.</div>
         <select onchange="_recycleOvMonth=this.value; renderRecycleOversight();" style="${selStyle}">${_recycleMonthOptions(_recycleOvAll, month)}</select>
     </div>`;
 
@@ -14192,7 +14194,9 @@ function renderRecycleOversight() {
         <div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; margin-top:4px;">${label}</div>
     </div>`;
     html += `<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px;">
-        ${card('Total Recycled Cost', _fmtRecycleMoney(grand), '#dc2626')}
+        ${card('Total Recycled Cost', _fmtRecycleMoney(grand), '#1e293b')}
+        ${card('Against Store', _fmtRecycleMoney(againstTotal), againstTotal ? '#dc2626' : '#94a3b8')}
+        ${card('For Store', _fmtRecycleMoney(forTotal), forTotal ? '#059669' : '#94a3b8')}
         ${card('Line Items', rows.length, '#1e293b')}
         ${card('Units', units, '#1e293b')}
         ${card('Reviewed', `${reviewed}/${rows.length}`, allReviewed ? '#059669' : (reviewed ? '#d97706' : '#94a3b8'))}
@@ -14208,24 +14212,37 @@ function renderRecycleOversight() {
         const sTotal = sRows.reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
         const sReviewed = sRows.filter(r => r.reviewed_at).length;
         const sDone = sRows.length > 0 && sReviewed === sRows.length;
+        const sAgainst = sRows.filter(r => r.review_verdict === 'against').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+        const sFor = sRows.filter(r => r.review_verdict === 'for').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+        const sSplit = (sAgainst || sFor)
+            ? `<div style="font-size:10.5px; font-weight:800; white-space:nowrap; margin-top:2px;"><span style="color:#dc2626;">${_fmtRecycleMoney(sAgainst)} against</span> <span style="color:#cbd5e1;">·</span> <span style="color:#059669;">${_fmtRecycleMoney(sFor)} for</span></div>`
+            : '';
 
         html += `<div style="margin-bottom:18px;">
             <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px 14px; margin-bottom:${sRows.length ? '0' : '0'};">
                 <div style="font-weight:900; font-size:13px; color:var(--slate-charcoal);">${s} <span style="font-weight:600; color:#94a3b8;">· ${BOX_STORE_NAMES[s] || s}</span>
                     ${sDone ? '<span style="font-size:10.5px; font-weight:800; color:#059669; margin-left:6px;">✓ reconciled</span>' : ''}
                 </div>
-                <div style="font-weight:900; font-size:14px; color:${sTotal ? '#dc2626' : '#cbd5e1'}; white-space:nowrap;">${_fmtRecycleMoney(sTotal)}</div>
+                <div style="text-align:right;"><div style="font-weight:900; font-size:14px; color:${sTotal ? '#dc2626' : '#cbd5e1'}; white-space:nowrap;">${_fmtRecycleMoney(sTotal)}</div>${sSplit}</div>
             </div>`;
         if (!sRows.length) {
             html += `<div style="padding:8px 14px; font-size:12px; color:#cbd5e1; font-weight:600;">No recycle requests this month.</div></div>`;
             return;
         }
         html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
-            <thead><tr>${th('✓')}${th('Date')}${th('SKU')}${th('Description')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
+            <thead><tr>${th('Review')}${th('Date')}${th('SKU')}${th('Description')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
         sRows.forEach(r => {
             const done = !!r.reviewed_at;
-            html += `<tr style="${done ? 'background:#f0fdf4;' : ''}">
-                ${td(`<input type="checkbox" ${done ? 'checked' : ''} onchange="setRecycleReviewed('${r.id}', this.checked)" title="${done ? 'Reviewed' + (r.reviewed_by ? ' by ' + escapeHtml(r.reviewed_by) : '') : 'Mark reviewed'}" style="width:16px; height:16px; cursor:pointer; accent-color:#059669;">`, 'text-align:center;')}
+            const verdict = r.review_verdict === 'for' || r.review_verdict === 'against' ? r.review_verdict : '';
+            const vColor = verdict === 'against' ? '#dc2626' : verdict === 'for' ? '#059669' : '#94a3b8';
+            const vBorder = verdict === 'against' ? '#fecaca' : verdict === 'for' ? '#a7f3d0' : '#cbd5e1';
+            const rowBg = verdict === 'against' ? 'background:#fef2f2;' : verdict === 'for' ? 'background:#f0fdf4;' : '';
+            html += `<tr style="${rowBg}">
+                ${td(`<select onchange="setRecycleReviewed('${r.id}', this.value)" title="${done ? 'Reviewed' + (r.reviewed_by ? ' by ' + escapeHtml(r.reviewed_by) : '') : 'Select For or Against Store to mark reviewed'}" style="padding:5px 6px; border:1.5px solid ${vBorder}; border-radius:8px; font-size:11px; font-weight:800; color:${vColor}; background:#fff; cursor:pointer;">
+                    <option value=""${verdict ? '' : ' selected'}>— Review —</option>
+                    <option value="against"${verdict === 'against' ? ' selected' : ''}>Against Store</option>
+                    <option value="for"${verdict === 'for' ? ' selected' : ''}>For Store</option>
+                </select>`, 'text-align:center; white-space:nowrap;')}
                 ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
                 ${td(`<span style="font-weight:700; color:${done ? '#94a3b8' : 'var(--slate-charcoal)'};">${escapeHtml(r.sku || '')}</span>`)}
                 ${td(`<span style="color:${done ? '#cbd5e1' : '#64748b'};">${escapeHtml(r.description || '—')}</span>`)}
@@ -14242,14 +14259,18 @@ function renderRecycleOversight() {
     body.innerHTML = html;
 }
 
-// Tick / untick a line during month-end reconciliation. Updates the local
-// cache and re-renders so the scroll position and month stay put.
-async function setRecycleReviewed(id, reviewed) {
+// Review / clear a line during reconciliation. verdict is 'against' (truly
+// recycled out of inventory), 'for' (tool for store use) or '' to clear the
+// review. Updates the local cache and re-renders so the scroll position and
+// month stay put.
+async function setRecycleReviewed(id, verdict) {
+    const reviewed = verdict === 'for' || verdict === 'against';
     try {
         const res = await fetch(RECYCLE_URL, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 action: 'set_reviewed', id, reviewed,
+                verdict: reviewed ? verdict : null,
                 reviewed_by: sessionStorage.getItem('speeksUserName') || null,
             }),
         });
@@ -14259,6 +14280,7 @@ async function setRecycleReviewed(id, reviewed) {
         if (row) {
             row.reviewed_at = reviewed ? new Date().toISOString() : null;
             row.reviewed_by = reviewed ? (sessionStorage.getItem('speeksUserName') || null) : null;
+            row.review_verdict = reviewed ? verdict : null;
         }
         renderRecycleOversight();
     } catch (e) {

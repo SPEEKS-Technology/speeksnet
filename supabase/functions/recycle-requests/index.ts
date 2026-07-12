@@ -62,15 +62,22 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true, data });
       }
 
-      // ---- DM month-end reconciliation: tick a line as reviewed (or untick) ----
+      // ---- DM month-end reconciliation: review a line (or clear the review).
+      //      Reviewing also classifies the line: "against" = truly recycled out
+      //      of inventory, "for" = recycled item was a tool for store use. ----
       if (action === "set_reviewed") {
         const id = String(body.id || "");
         if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
         const reviewed = !!body.reviewed;
+        const verdict = body.verdict === "for" || body.verdict === "against" ? body.verdict : null;
+        if (reviewed && !verdict) {
+          return jsonResponse({ success: false, error: "Verdict must be 'for' or 'against'" }, 400);
+        }
         const { error } = await supabase.from("recycle_requests")
           .update({
             reviewed_at: reviewed ? new Date().toISOString() : null,
             reviewed_by: reviewed ? (body.reviewed_by ? String(body.reviewed_by).trim() : null) : null,
+            review_verdict: reviewed ? verdict : null,
           })
           .eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
