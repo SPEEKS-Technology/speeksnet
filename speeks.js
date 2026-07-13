@@ -10712,6 +10712,29 @@ function renderClaimsTable() {
     wrap.innerHTML = html;
 }
 
+// Tiny copy button next to a case number so the ID can be pasted straight into
+// Shopify / UPS / USPS status lookups. Flashes ✓ on success.
+function _claimCopyBtn(r) {
+    if (!r.case_number) return '';
+    return `<button onclick="copyClaimCase(this)" data-case="${escapeHtml(r.case_number)}" title="Copy case number" style="margin-left:5px; font-size:10px; padding:2px 5px; border:1px solid #e2e8f0; border-radius:5px; background:#f8fafc; color:#64748b; cursor:pointer; line-height:1; vertical-align:1px;">📋</button>`;
+}
+
+function copyClaimCase(btn) {
+    const num = btn.dataset.case || '';
+    if (!num) return;
+    navigator.clipboard.writeText(num).then(() => {
+        const old = btn.innerText;
+        btn.innerText = '✓';
+        btn.style.color = '#059669';
+        btn.style.borderColor = '#34d399';
+        btn.style.background = '#ecfdf5';
+        setTimeout(() => {
+            btn.innerText = old;
+            btn.style.color = ''; btn.style.borderColor = ''; btn.style.background = '';
+        }, 1200);
+    }).catch(() => alert('Could not copy — please select and copy the case number manually.'));
+}
+
 // One claim row. `isChild` nests it (indent + blue edge) under its parent INR ticket;
 // it's otherwise a full, normal claim row with its own status/value/cost/dates/actions.
 function _claimRowHtml(r, showStore, isChild, canEscalate, hasChild, num) {
@@ -10761,9 +10784,9 @@ function _claimRowHtml(r, showStore, isChild, canEscalate, hasChild, num) {
     if (aging) rowStyle = 'background:#fef2f2; box-shadow:inset 3px 0 0 #dc2626;';
     else if (isChild) rowStyle = 'background:#f0f7ff; box-shadow:inset 3px 0 0 #93c5fd;';
 
-    const caseCell = isChild
+    const caseCell = (isChild
         ? `<span style="color:#60a5fa; font-weight:900; margin-right:5px;">↳</span><span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`
-        : `<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`;
+        : `<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`) + _claimCopyBtn(r);
 
     return `<tr style="${rowStyle}">
         ${td(`<span style="font-weight:800; color:${isChild ? '#94a3b8' : 'var(--slate-charcoal)'};">${num}</span>`, 'white-space:nowrap;')}
@@ -11034,8 +11057,8 @@ function _ovRowHtml(r, byId, hasChild, num) {
     else if (isChild) rowStyle = 'background:#f0f7ff; box-shadow:inset 3px 0 0 #93c5fd;';
     const parent = isChild ? byId[r.parent_id] : null;
     const caseCell = isChild
-        ? `<span style="color:#60a5fa; font-weight:900; margin-right:5px;">↳</span><span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>${parent ? `<div style="font-size:10px; color:#94a3b8; font-weight:600;">claim on ${escapeHtml(parent.case_number || '')}</div>` : ''}`
-        : `<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`;
+        ? `<span style="color:#60a5fa; font-weight:900; margin-right:5px;">↳</span><span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>${_claimCopyBtn(r)}${parent ? `<div style="font-size:10px; color:#94a3b8; font-weight:600;">claim on ${escapeHtml(parent.case_number || '')}</div>` : ''}`
+        : `<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>${_claimCopyBtn(r)}`;
     return `<tr style="${rowStyle}">
         ${td(`<span style="font-weight:800; color:${isChild ? '#94a3b8' : 'var(--slate-charcoal)'};">${num}</span>`, 'white-space:nowrap;')}
         ${td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`)}
