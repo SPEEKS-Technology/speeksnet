@@ -14263,9 +14263,12 @@ function _recycleReportCompose() {
 
 // Open the machine's mail service with the report prefilled — same mechanism
 // as sendBoxOrder. Nothing sends until the DM hits send in their mail app.
+// Recipients are joined with ';' — Outlook rejects the whole mailto link when
+// multiple addresses are comma-separated (the RFC separator), so don't "fix"
+// this back to ','.
 function sendRecycleReport() {
     const { subject, body } = _recycleReportCompose();
-    const to = RECYCLE_REPORT_EMAILS.map(encodeURIComponent).join(',');
+    const to = RECYCLE_REPORT_EMAILS.join(';');
     window.location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
