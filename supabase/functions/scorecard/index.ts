@@ -190,9 +190,13 @@ Deno.serve(async (req: Request) => {
         const sectionPhotos = (body.sectionPhotos && typeof body.sectionPhotos === "object" && !Array.isArray(body.sectionPhotos))
           ? body.sectionPhotos : null;
 
+        // Optional time of the walkthrough, 'HH:MM' 24h.
+        const auditTime = /^([01]?\d|2[0-3]):[0-5]\d$/.test(String(body.time || "")) ? String(body.time) : null;
+
         const record = {
           store, date,
           auditor_name: body.auditor || null,
+          audit_time: auditTime,
           earned_points: earned,
           possible_points: possible,
           pct,
@@ -342,6 +346,7 @@ Deno.serve(async (req: Request) => {
       pct: latestAudit.pct,
       date: latestAudit.date,
       auditor: latestAudit.auditor_name,
+      time: latestAudit.audit_time || null,
       results: latestAudit.results || {},
       notes: latestAudit.section_notes || null,
       photos: latestAudit.section_photos || null,

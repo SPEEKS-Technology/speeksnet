@@ -10200,7 +10200,9 @@ function renderAuditEntry() {
         Object.entries(existing.photos).forEach(([k, arr]) => { if (Array.isArray(arr)) _auditEntryPhotos[k] = arr.slice(); });
     }
     const auditorEl = document.getElementById('dm-audit-auditor');
-    if (auditorEl) auditorEl.value = (existing && existing.date === dateVal && existing.auditor) ? existing.auditor : '';
+    if (auditorEl) auditorEl.value = (editingThis && existing.auditor) ? existing.auditor : '';
+    const timeEl = document.getElementById('dm-audit-time');
+    if (timeEl) timeEl.value = (editingThis && existing.time) ? existing.time : '';
 
     let html = '';
     AUDIT_DEFINITION.forEach((sec, sIdx) => {
@@ -10335,6 +10337,7 @@ async function submitNewAudit() {
     const date = document.getElementById('dm-score-date').value;
     const auditor = (document.getElementById('dm-audit-auditor')?.value || '').trim()
         || sessionStorage.getItem('speeksUserName') || null;
+    const time = document.getElementById('dm-audit-time')?.value || null; // HH:MM or null
     const btn = document.getElementById('submitAuditBtn');
     if (!store || !date) { alert('Pick a store and date.'); return; }
 
@@ -10374,7 +10377,7 @@ async function submitNewAudit() {
         const res = await fetch(SCORECARD_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'submit_audit', store, date, auditor, results, sectionNotes, sectionPhotos })
+            body: JSON.stringify({ action: 'submit_audit', store, date, auditor, time, results, sectionNotes, sectionPhotos })
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
@@ -10396,6 +10399,16 @@ async function submitNewAudit() {
         btn.style.opacity = '';
         btn.disabled = false;
     }
+}
+
+// 'HH:MM' (24h, as stored) → '2:30 PM' for display; '' when unset/invalid.
+function _fmtAuditTime(t) {
+    const m = /^(\d{1,2}):(\d{2})/.exec(String(t || ''));
+    if (!m) return '';
+    let h = parseInt(m[1], 10);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return `${h}:${m[2]} ${ampm}`;
 }
 
 // ---- Read-only Audit Breakdown popout (reused by every display site) ----
@@ -10426,7 +10439,7 @@ function renderAuditBreakdown(store) {
 
     let html = `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:${c.bg}; border-radius:10px; padding:12px 14px; margin-bottom:14px;">
         <div>
-            <div style="font-size:11px; font-weight:800; color:${c.fg}; text-transform:uppercase; letter-spacing:.4px;">PayMore Audit${dateStr ? ' · ' + dateStr : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
+            <div style="font-size:11px; font-weight:800; color:${c.fg}; text-transform:uppercase; letter-spacing:.4px;">PayMore Audit${dateStr ? ' · ' + dateStr : ''}${audit.time ? ' · ' + _fmtAuditTime(audit.time) : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
             <div style="font-size:11px; color:#64748b; font-weight:600; margin-top:2px;">Pass ${AUDIT_PASS_PCT}% · Target ${AUDIT_TARGET_PCT}%+${audit.prevPct != null ? ` · prev ${audit.prevPct}%` : ''}</div>
         </div>
         <div style="font-size:22px; font-weight:900; color:${c.fg};">${audit.earned}/${audit.possible} <span style="font-size:14px;">(${audit.pct}%)</span></div>
@@ -10491,7 +10504,7 @@ function buildAuditSummaryHtml(audit, store) {
     return `<div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
             <div>
                 <div class="scorecard-label" style="text-align:left; margin-bottom:2px;">PayMore Audit</div>
-                <div class="scorecard-date" style="font-size:11px;">${dateStr}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
+                <div class="scorecard-date" style="font-size:11px;">${dateStr}${audit.time ? ' · ' + _fmtAuditTime(audit.time) : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
             </div>
             <div style="display:flex; align-items:center; gap:8px;">
                 ${trend}

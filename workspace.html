@@ -309,7 +309,10 @@
         </div>
 
         <div id="sc-panel-audit" style="display: none;">
-            <input id="dm-audit-auditor" class="form-input-lg" placeholder="Auditor name (optional)" style="margin-top: 0; margin-bottom: 12px;">
+            <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+                <input id="dm-audit-auditor" class="form-input-lg" placeholder="Auditor name (optional)" style="margin-top: 0; flex: 1;">
+                <input type="time" id="dm-audit-time" class="form-input-lg" title="Time of the audit walkthrough" style="margin-top: 0; width: 140px; flex: none;">
+            </div>
             <div id="dm-audit-runningbar"></div>
             <div id="audit-entry-container" style="margin-top: 12px;"></div>
         </div>
