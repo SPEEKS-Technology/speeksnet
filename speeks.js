@@ -14097,8 +14097,16 @@ function renderMyRecycleTable() {
     // a single store filtered — so columns don't jump around as filters change.
     const showStore = multi;
 
-    if (!rows.length) {
-        wrap.innerHTML = `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No recycle requests for ${_recycleMonthLabel(month)}.</div>`;
+    if (!rows.length && !_recycleReportPreviewing) {
+        // Keep the report buttons visible for DM/CEO even on an empty month —
+        // a month with zero recycles can still be reported.
+        const emptyBtns = canReview
+            ? `<div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
+                <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
+                <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email →</button>
+            </div>`
+            : '';
+        wrap.innerHTML = `${emptyBtns}<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No recycle requests for ${_recycleMonthLabel(month)}.</div>`;
         return;
     }
     rows = [...rows].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
