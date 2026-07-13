@@ -14102,6 +14102,7 @@ function renderMyRecycleTable() {
         // a month with zero recycles can still be reported.
         const emptyBtns = canReview
             ? `<div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
+                ${RECYCLE_MAIL_TIP}
                 <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
                 <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email →</button>
             </div>`
@@ -14128,6 +14129,7 @@ function renderMyRecycleTable() {
             <div class="box-order-preview-label">Email Preview</div>
             <div class="box-order-email-preview">${escapeHtml(`To: ${RECYCLE_REPORT_EMAILS.join(', ')}\nSubject: ${subject}\n\n${body}`)}</div>
             <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
+                ${RECYCLE_MAIL_TIP}
                 <button class="btn-secondary" onclick="_recycleReportPreviewing=false; renderMyRecycleTable();">← Back</button>
                 <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
                 <button class="btn-primary" onclick="sendRecycleReport()">Send Email →</button>
@@ -14137,6 +14139,7 @@ function renderMyRecycleTable() {
 
     let html = canReview
         ? `<div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
+            ${RECYCLE_MAIL_TIP}
             <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
             <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email →</button>
         </div>`
@@ -14226,6 +14229,10 @@ async function deleteRecycleRequest(id) {
 //  them); the Copy button is the failsafe for machines with no mail client.
 // =========================================================
 const RECYCLE_REPORT_EMAILS = ['paul.kushnir@pikinvestments.com', 'dave.chaffin@pikinvestments.com'];
+
+// Hover "i" (site-standard goals-info-i tooltip) explaining what Send Email
+// does and how to fix a machine where mailto: links open nothing.
+const RECYCLE_MAIL_TIP = `<span class="goals-info-i" style="align-self:center;" data-tip-title="Send Email opens your mail app" data-tip-desc="Clicking Send Email opens your computer's default email app with the report pre-filled — nothing sends until you hit Send there. If nothing opens: go to Windows Settings → Apps → Default apps → scroll to Choose defaults by link type → set MAILTO to Outlook (or your mail app). Or click 📋 Copy and paste the report into any email.">i</span>`;
 
 function _recycleReportCompose() {
     const month = (document.getElementById('recycle-month-filter') || {}).value || _recycleMonthKey(new Date());
