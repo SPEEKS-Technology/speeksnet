@@ -14217,9 +14217,8 @@ async function deleteRecycleRequest(id) {
 //  button remains as a failsafe.
 // =========================================================
 // Display only — the ACTUAL recipients are hard-coded in the recycle-requests
-// edge fn (REPORT_RECIPIENTS); keep the two lists in sync. TESTING: Ethan
-// only for now — add the second recipient once the format is verified.
-const RECYCLE_REPORT_EMAILS = ['ethan.kushnir@gmail.com'];
+// edge fn (REPORT_RECIPIENTS); keep the two lists in sync.
+const RECYCLE_REPORT_EMAILS = ['paul.kushnir@pikinvestments.com', 'dave.chaffin@pikinvestments.com'];
 
 function _recycleReportCompose() {
     const month = (document.getElementById('recycle-month-filter') || {}).value || _recycleMonthKey(new Date());

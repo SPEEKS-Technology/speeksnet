@@ -12,8 +12,7 @@ const corsHeaders = {
 const GMAIL_RELAY = Deno.env.get("GMAIL_RELAY_URL") ||
   "https://script.google.com/macros/s/AKfycby4Y2l3DJ6fQCrpFuwTTXKeaD3QV5DbLhf7jmberZCUFx86VaaE6vb9Bs_CweNh3K9VtQ/exec";
 const RELAY_SECRET = "sp33ks-sync-k3y-2026-x9mq";
-// TESTING: Ethan only — add the second recipient once the format is verified.
-const REPORT_RECIPIENTS = ["ethan.kushnir@gmail.com"];
+const REPORT_RECIPIENTS = ["paul.kushnir@pikinvestments.com", "dave.chaffin@pikinvestments.com"];
 
 // Recycle-out-of-inventory requests. Replaces the old email flow: stores log
 // each recycled item here as a line item (SKU / qty / per-unit cost) and the
