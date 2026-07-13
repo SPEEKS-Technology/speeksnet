@@ -6,14 +6,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Month-end report email — same Gmail Apps Script relay the weekly-report fn
-// uses (sends via GmailApp, no DNS). Recipients are fixed server-side so the
-// open endpoint can't be pointed at arbitrary addresses.
-const GMAIL_RELAY = Deno.env.get("GMAIL_RELAY_URL") ||
-  "https://script.google.com/macros/s/AKfycby4Y2l3DJ6fQCrpFuwTTXKeaD3QV5DbLhf7jmberZCUFx86VaaE6vb9Bs_CweNh3K9VtQ/exec";
-const RELAY_SECRET = "sp33ks-sync-k3y-2026-x9mq";
-const REPORT_RECIPIENTS = ["paul.kushnir@pikinvestments.com", "dave.chaffin@pikinvestments.com"];
-
 // Recycle-out-of-inventory requests. Replaces the old email flow: stores log
 // each recycled item here as a line item (SKU / qty / per-unit cost) and the
 // DM reconciles per-store cost totals at month end, ticking lines as reviewed.
@@ -92,27 +84,6 @@ Deno.serve(async (req: Request) => {
           .eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         return jsonResponse({ success: true });
-      }
-
-      // ---- Send the month-end report email (DM/CEO button). The frontend
-      //      composes the plain-text report; recipients are fixed above. ----
-      if (action === "send_report") {
-        const subject = String(body.subject || "").trim();
-        const text = String(body.body || "").trim();
-        if (!subject || !text) {
-          return jsonResponse({ success: false, error: "Missing subject or body" }, 400);
-        }
-        const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        const html = `<pre style="font-family:Menlo,Consolas,monospace; font-size:13px; line-height:1.5; white-space:pre-wrap; margin:0;">${esc(text)}</pre>`;
-        const res = await fetch(GMAIL_RELAY, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ secret: RELAY_SECRET, to: REPORT_RECIPIENTS.join(","), subject, html }),
-        });
-        const txt = await res.text();
-        if (!res.ok) {
-          return jsonResponse({ success: false, error: `Relay failed: ${txt.slice(0, 200)}` }, 502);
-        }
-        return jsonResponse({ success: true, to: REPORT_RECIPIENTS });
       }
 
       // ---- Delete a line (frontend gates who sees the button: the submitting

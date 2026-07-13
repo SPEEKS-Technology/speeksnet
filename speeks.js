@@ -14122,7 +14122,7 @@ function renderMyRecycleTable() {
             <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
                 <button class="btn-secondary" onclick="_recycleReportPreviewing=false; renderMyRecycleTable();">← Back</button>
                 <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
-                <button class="btn-primary" onclick="sendRecycleReport(this)">Send Email →</button>
+                <button class="btn-primary" onclick="sendRecycleReport()">Send Email →</button>
             </div>`;
         return;
     }
@@ -14212,12 +14212,11 @@ async function deleteRecycleRequest(id) {
 // =========================================================
 //  MONTH-END RECYCLE REPORT EMAIL (DM/CEO) — one email at the start of the
 //  month covering every store's total recycled cost for the selected month,
-//  broken down by verdict. Sent server-side through the same Gmail relay as
-//  the weekly report (mailto: wouldn't open on some machines); the Copy
-//  button remains as a failsafe.
+//  broken down by verdict. Mimics the Box Order tool: Send Email opens the
+//  machine's mail service with the report prefilled (nothing auto-sends, so
+//  the email goes out from the DM's own mailbox and replies come back to
+//  them); the Copy button is the failsafe for machines with no mail client.
 // =========================================================
-// Display only — the ACTUAL recipients are hard-coded in the recycle-requests
-// edge fn (REPORT_RECIPIENTS); keep the two lists in sync.
 const RECYCLE_REPORT_EMAILS = ['paul.kushnir@pikinvestments.com', 'dave.chaffin@pikinvestments.com'];
 
 function _recycleReportCompose() {
@@ -14262,25 +14261,12 @@ function _recycleReportCompose() {
     };
 }
 
-// Actual send — reached only from the preview, so no extra confirm needed.
-async function sendRecycleReport(button) {
+// Open the machine's mail service with the report prefilled — same mechanism
+// as sendBoxOrder. Nothing sends until the DM hits send in their mail app.
+function sendRecycleReport() {
     const { subject, body } = _recycleReportCompose();
-    const old = button ? button.innerText : '';
-    if (button) { button.disabled = true; button.innerText = 'Sending…'; }
-    try {
-        const res = await fetch(RECYCLE_URL, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'send_report', subject, body }),
-        });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok || json.success === false) throw new Error(json.error || 'Send failed');
-        if (button) button.innerText = '✓ Sent!';
-        // Linger on the confirmation for a beat, then drop back to the table.
-        setTimeout(() => { _recycleReportPreviewing = false; renderMyRecycleTable(); }, 1800);
-    } catch (e) {
-        alert('Could not send the report: ' + e.message);
-        if (button) { button.innerText = old; button.disabled = false; }
-    }
+    const to = RECYCLE_REPORT_EMAILS.map(encodeURIComponent).join(',');
+    window.location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
 // Same copy failsafe as the Box Order tool, same button flash. Copies just
