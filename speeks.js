@@ -5487,8 +5487,10 @@ function normalizeGoalDate(s) {
 // Role dots offered in the goal widgets. Small teams get one lister, normal
 // teams two; past 4 people the lister lane keeps extending (L3, L4, …) so a
 // fully-staffed day can give everyone a role. Extra listers score like L1.
-function goalsAvailableRoles() {
-    const n = goalsRoster.length;
+// Pass a roster size for a specific store (MSM stacked widget); defaults to
+// the single-store global roster.
+function goalsAvailableRoles(count) {
+    const n = (count == null) ? goalsRoster.length : count;
     if (n <= 2) return ['B1', 'B2', 'L1'];
     const roles = ['B1', 'B2', 'L1', 'L2'];
     for (let i = 3; i <= n - 2; i++) roles.push('L' + i);
@@ -5525,6 +5527,7 @@ async function initListingGoals() {
 async function fetchLiveGoalsData() {
     const list = document.getElementById('goals-manager-body');
     if (!list) return;
+    if (isMultiStoreManager()) return fetchLiveGoalsDataMS();
     list.innerHTML = '<div class="status-message">Syncing Data...</div>';
 
     goalsTargetStore = sessionStorage.getItem('speeksUserStore') || 'OVL';
@@ -5810,6 +5813,7 @@ window.scheduleGoalsAutosave = function() {
 };
 
 async function saveGoalsData(silent = false) {
+    if (_msGoalsActive()) return saveGoalsDataMS(silent);
     const status = document.getElementById('goals-save-status');
     if (status && !silent) { status.textContent = 'Saving…'; status.className = 'goals-save-status saving'; }
 
@@ -5877,9 +5881,11 @@ async function saveGoalsData(silent = false) {
 }
 
 // Flip the manager's "Set Listing Goals" daily checklist task to done.
-async function markListingGoalsChecklistComplete() {
+// `storeArg` lets the MSM dual-store widget tick the right store's copy;
+// everyone else defaults to their session store.
+async function markListingGoalsChecklistComplete(storeArg) {
     const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
-    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+    const store = storeArg || sessionStorage.getItem('speeksUserStore') || 'OVL';
     let targetTaskId = null;
 
     if (checklistDataCache && checklistDataCache.daily && checklistDataCache.daily.length > 0) {
@@ -5938,6 +5944,7 @@ function getWeeklyResultFor(emp) {
 function renderManagerGoals() {
     const list = document.getElementById('goals-manager-body');
     if (!list) return;
+    if (isMultiStoreManager()) return renderManagerGoalsMS();
 
     const now = new Date();
     const dateDisplay = document.getElementById('goals-date-display');
@@ -5986,11 +5993,12 @@ function renderManagerGoals() {
 }
 
 // Sum of an employee's saved daily goals this week, excluding today (last record per day wins).
-function priorWeekGoal(emp, todayStr, startOfWeek) {
+// `data` defaults to the single-store cache; the MSM widget passes each store's own cache.
+function priorWeekGoal(emp, todayStr, startOfWeek, data = liveGoalsData) {
     const target = String(emp).trim().toLowerCase();
     const tFirst = target.split(' ')[0];
     const byDay = {};
-    liveGoalsData.forEach(r => {
+    data.forEach(r => {
         const n = String(r.employee).trim().toLowerCase();
         const nFirst = n.split(' ')[0];
         const match = n === target || (nFirst.length > 2 && tFirst.length > 2 && (nFirst.startsWith(tFirst) || tFirst.startsWith(nFirst)));
@@ -6000,6 +6008,244 @@ function priorWeekGoal(emp, todayStr, startOfWeek) {
         if (new Date(r.date) >= startOfWeek) byDay[dStr] = parseInt(r.goal) || 0;
     });
     return Object.values(byDay).reduce((s, g) => s + g, 0);
+}
+
+// ============================================================================
+// MULTI-STORE MANAGER — dual-store listing goals (both stores in one widget)
+// Mirrors the MSM checklist: instead of toggling the dashboard between stores,
+// the MSM's Listing Goals widget stacks a full per-store section (roster, role
+// dots, totals, level-up bars) for every store they run. Role locks, goal math
+// and autosave are all scoped per store, so BAL's B1 doesn't lock MPL's B1.
+// Single-store managers never reach this path.
+// ============================================================================
+let _goalsMS = {};             // store -> { roster: [], live: [], priorWeek: {idx: n}, history: [] }
+let _goalsChecklistDoneMS = {}; // store -> true once the "set listing goals" task was ticked
+
+// True while the stacked dual-store widget is on screen (its sections carry
+// data-goals-scope). Gates the shared save/recompute entry points.
+function _msGoalsActive() {
+    return isMultiStoreManager() && !!document.querySelector('#goals-manager-body [data-goals-scope]');
+}
+
+// Hide the widget's single-store footer (Total row + level-up bars) in MSM
+// mode — each store section renders its own copies.
+function _setMSGoalsChrome(isMS) {
+    const totalRow = document.querySelector('#goals-manager-body ~ .goals-total-row');
+    if (totalRow) totalRow.style.display = isMS ? 'none' : '';
+    const lu = document.getElementById('goals-levelup');
+    if (lu) lu.style.display = isMS ? 'none' : '';
+}
+
+async function fetchLiveGoalsDataMS() {
+    const list = document.getElementById('goals-manager-body');
+    if (!list) return;
+    list.innerHTML = '<div class="status-message">Syncing Data...</div>';
+    _setMSGoalsChrome(true);
+
+    try {
+        const authData = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
+        const excluded = ['ceo', 'district manager'];
+        _goalsMS = {};
+        MULTISTORE_MANAGER_STORES.forEach(s => {
+            const emps = (authData.users || [])
+                .filter(u => userInStore(u, s) && !excluded.includes((u.role || '').toLowerCase()))
+                .map(u => u.name)
+                .filter(Boolean);
+            _goalsMS[s] = { roster: emps.length ? emps : ['No Employees Found'], live: [], priorWeek: {}, history: [] };
+        });
+
+        const [goalsResults] = await Promise.all([
+            Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+                fetch(`${GOALS_API_URL}?store=${s}&v=${Date.now()}`).then(r => r.json()).catch(() => [])
+            )),
+            Promise.all(MULTISTORE_MANAGER_STORES.map(s => fetchStoreTarget(s))),
+        ]);
+        MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+            _goalsMS[s].live = Array.isArray(goalsResults[i]) ? goalsResults[i] : [];
+            _goalsMS[s].history = weeksFor(s);
+        });
+
+        renderManagerGoalsMS();
+    } catch (e) {
+        list.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; text-align: center; padding: 20px 0;">Error loading roster.</div>';
+    }
+}
+
+function renderManagerGoalsMS() {
+    const list = document.getElementById('goals-manager-body');
+    if (!list) return;
+    _setMSGoalsChrome(true);
+
+    const now = new Date();
+    const dateDisplay = document.getElementById('goals-date-display');
+    if (dateDisplay) dateDisplay.innerText = now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+
+    const todayStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    // Top-right chip shows both stores' weekly goals at a glance.
+    const storeTargetEl = document.getElementById('goals-store-target');
+    if (storeTargetEl) storeTargetEl.innerText = 'Goal: ' + MULTISTORE_MANAGER_STORES.map(s => `${s} ${targetFor(s)}`).join(' · ');
+
+    let html = '';
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const st = _goalsMS[store] || { roster: [], live: [], priorWeek: {}, history: [] };
+        const ac = _msStoreAccent(store);
+        const availableRoles = goalsAvailableRoles(st.roster.length);
+        st.priorWeek = {};
+
+        let rows = '';
+        st.roster.forEach((emp, idx) => {
+            const rec = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === todayStr) || { role: '' };
+
+            let rolesHtml = '';
+            availableRoles.forEach(r => {
+                const isActive = rec.role === r ? 'active' : '';
+                rolesHtml += `<button type="button" class="role-dot ${isActive}" onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
+            });
+
+            st.priorWeek[idx] = priorWeekGoal(emp, todayStr, startOfWeek, st.live);
+
+            rows += `
+            <div class="goals-mgr-row">
+                <div class="goals-mgr-emp">
+                    <span class="goals-roster-name">${emp}</span>
+                    <div class="goals-edit-roles" id="roles-${store}-${idx}">${rolesHtml}</div>
+                </div>
+                <div class="goal-auto-display" id="goal-display-${store}-${idx}">–</div>
+                <div class="goals-mgr-week" id="week-display-${store}-${idx}">–</div>
+            </div>`;
+        });
+
+        html += `
+        <div class="ms-store-section" data-goals-scope="${store}" style="border-left: 4px solid ${ac.solid};">
+            <div class="ms-store-head" style="border-bottom-color: ${ac.soft};">
+                <span class="ms-store-name" style="color: ${ac.solid};">${store}</span>
+                <span class="ms-store-prog" style="background: ${ac.soft}; color: ${ac.solid};">Goal: ${targetFor(store)} Listings</span>
+            </div>
+            ${rows}
+            <div class="goals-total-row">
+                <span class="goals-total-lbl">Total</span>
+                <span id="goals-total-target-${store}" class="goals-total-val target">0</span>
+                <span id="goals-total-actual-${store}" class="goals-total-val actual">0</span>
+            </div>
+            <div class="goals-levelup">${levelUpHtml(st.history, targetFor(store))}</div>
+        </div>`;
+    });
+
+    list.innerHTML = html;
+    setTimeout(() => { updateRoleLocks(); recomputeGoalDisplaysMS(); }, 30);
+}
+
+// MS twin of recomputeGoalDisplays: same math, run per store section.
+function recomputeGoalDisplaysMS() {
+    const dateStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const st = _goalsMS[store];
+        if (!st) return;
+
+        let staffedCount = 0;
+        st.roster.forEach((emp, idx) => {
+            const group = document.getElementById(`roles-${store}-${idx}`);
+            if (group && group.querySelector('.role-dot.active')) staffedCount++;
+        });
+        const rosterSize = effectiveTeamSize(store);
+
+        let todayTotal = 0;
+        let weekTotal = 0;
+        st.roster.forEach((emp, idx) => {
+            const group = document.getElementById(`roles-${store}-${idx}`);
+            const activeBtn = group?.querySelector('.role-dot.active');
+            const role = activeBtn ? activeBtn.innerText : '-';
+            const todayGoal = role !== '-' ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount) : 0;
+
+            const disp = document.getElementById(`goal-display-${store}-${idx}`);
+            if (disp) {
+                disp.innerText = role === '-' ? '–' : todayGoal;
+                disp.classList.toggle('goal-auto-set', role !== '-');
+            }
+            todayTotal += todayGoal;
+
+            const weekVal = (st.priorWeek[idx] || 0) + todayGoal;
+            const wkEl = document.getElementById(`week-display-${store}-${idx}`);
+            if (wkEl) wkEl.innerText = weekVal || '–';
+            weekTotal += weekVal;
+        });
+
+        const tEl = document.getElementById(`goals-total-target-${store}`);
+        if (tEl) tEl.innerText = todayTotal;
+        const wEl = document.getElementById(`goals-total-actual-${store}`);
+        if (wEl) wEl.innerText = weekTotal;
+    });
+}
+
+// MS twin of saveGoalsData: each store section re-saves its full day state
+// (same semantics as the single-store autosave — payload is what's on screen).
+async function saveGoalsDataMS(silent = false) {
+    const status = document.getElementById('goals-save-status');
+    if (status) { status.textContent = 'Saving…'; status.className = 'goals-save-status saving'; }
+
+    const now = new Date();
+    const targetDateStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+
+    const posts = MULTISTORE_MANAGER_STORES.map(async store => {
+        const st = _goalsMS[store];
+        if (!st) return true;
+
+        let staffedCount = 0;
+        st.roster.forEach((emp, idx) => {
+            const group = document.getElementById(`roles-${store}-${idx}`);
+            if (group && group.querySelector('.role-dot.active')) staffedCount++;
+        });
+        const rosterSize = effectiveTeamSize(store);
+
+        const payloadEmployees = [];
+        st.roster.forEach((emp, idx) => {
+            const group = document.getElementById(`roles-${store}-${idx}`);
+            const activeBtn = group?.querySelector('.role-dot.active');
+            const role = activeBtn ? activeBtn.innerText : '-';
+            const goal = role !== '-' ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount)) : '';
+            const existing = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
+            const result = existing && existing.result != null ? String(existing.result) : '';
+            if (role !== '-' || goal !== '' || result !== '') {
+                payloadEmployees.push({ employee: emp, role: role, goal: goal, result: result });
+            }
+        });
+
+        try {
+            const response = await fetch(GOALS_API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ store: store, date: targetDateStr, employees: payloadEmployees })
+            });
+            if (!response.ok) return false;
+
+            // Update this store's local cache so the UI reflects it instantly.
+            st.live = st.live.filter(r => !(normalizeGoalDate(r.date) === targetDateStr));
+            payloadEmployees.forEach(p => {
+                st.live.push({ date: targetDateStr, store: store, employee: p.employee, role: p.role, goal: p.goal, result: p.result });
+            });
+
+            // Tick THIS store's "set listing goals" checklist task — once per store per session.
+            if (payloadEmployees.length && !_goalsChecklistDoneMS[store]) {
+                _goalsChecklistDoneMS[store] = true;
+                markListingGoalsChecklistComplete(store);
+            }
+            return true;
+        } catch (e) { return false; }
+    });
+
+    const allOk = (await Promise.all(posts)).every(Boolean);
+    if (allOk) {
+        const pulse = document.getElementById('goals-pulse-dot');
+        if (pulse) pulse.style.display = 'none';
+        if (status) { status.textContent = 'Saved ✓'; status.className = 'goals-save-status saved'; }
+    } else {
+        if (status) { status.textContent = 'Save failed'; status.className = 'goals-save-status error'; }
+        else if (!silent) alert("Error saving goals to server.");
+    }
 }
 
 // Roster size for a store (from auth cache), used to pick the weekly target.
@@ -13100,33 +13346,41 @@ window.toggleAuditPanel = function(event) {
 const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1 };
 
 window.updateRoleLocks = function() {
-    // Count how many people currently hold each role.
-    const counts = {};
-    document.querySelectorAll('.role-dot.active').forEach(btn => {
-        const r = btn.innerText;
-        counts[r] = (counts[r] || 0) + 1;
-    });
+    // Role capacity is per STORE. Normally the page shows one store's dots, so the
+    // whole document is one scope; the MSM's stacked dual-store widget marks each
+    // store section with data-goals-scope so BAL's B1 doesn't lock MPL's B1.
+    const sections = document.querySelectorAll('[data-goals-scope]');
+    const scopes = sections.length ? Array.from(sections) : [document];
 
-    document.querySelectorAll('.role-dot').forEach(btn => {
-        if (btn.classList.contains('active')) {
-            // Active buttons always look fully visible.
-            if (!btn.hasAttribute('disabled')) { btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }
-            return;
-        }
-        const role = btn.innerText;
-        const cap = ROLE_CAP[role] || 1;
-        const isFull = (counts[role] || 0) >= cap;
-        if (isFull) {
-            // At capacity for this role. (L1 still allows a deliberate swap — see selectRole.)
-            btn.style.opacity = '0.3';
-            btn.style.cursor = 'not-allowed';
-            btn.dataset.roleTaken = 'true';
-        } else if (!btn.hasAttribute('disabled')) {
-            // Only restore if it isn't locked by the 10:30am cutoff.
-            btn.style.opacity = '1';
-            btn.style.cursor = 'pointer';
-            btn.dataset.roleTaken = 'false';
-        }
+    scopes.forEach(scope => {
+        // Count how many people currently hold each role within this scope.
+        const counts = {};
+        scope.querySelectorAll('.role-dot.active').forEach(btn => {
+            const r = btn.innerText;
+            counts[r] = (counts[r] || 0) + 1;
+        });
+
+        scope.querySelectorAll('.role-dot').forEach(btn => {
+            if (btn.classList.contains('active')) {
+                // Active buttons always look fully visible.
+                if (!btn.hasAttribute('disabled')) { btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }
+                return;
+            }
+            const role = btn.innerText;
+            const cap = ROLE_CAP[role] || 1;
+            const isFull = (counts[role] || 0) >= cap;
+            if (isFull) {
+                // At capacity for this role. (L1 still allows a deliberate swap — see selectRole.)
+                btn.style.opacity = '0.3';
+                btn.style.cursor = 'not-allowed';
+                btn.dataset.roleTaken = 'true';
+            } else if (!btn.hasAttribute('disabled')) {
+                // Only restore if it isn't locked by the 10:30am cutoff.
+                btn.style.opacity = '1';
+                btn.style.cursor = 'pointer';
+                btn.dataset.roleTaken = 'false';
+            }
+        });
     });
 };
 
@@ -13166,6 +13420,7 @@ window.selectRole = function(clickedBtn, emp, role) {
 
 // Recompute every visible auto-goal from the currently selected roles.
 window.recomputeGoalDisplays = function() {
+    if (_msGoalsActive()) return recomputeGoalDisplaysMS();
     if (!document.getElementById('goal-display-0') && !document.querySelector('.goal-auto-display')) return;
     let staffedCount = 0;
     goalsRoster.forEach((emp, idx) => {
