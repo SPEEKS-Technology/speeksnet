@@ -4568,6 +4568,10 @@ async function fetchScorecardData() {
         const json = await response.json();
         if (!json.success) throw new Error(json.error);
         window._scorecardAllData = json.data || [];
+        if (json.catalog) {
+            window._scCatalog = json.catalog.scorecard_items || [];
+            window._auCatalog = json.catalog.audit_items || [];
+        }
 
         const storeData = json.data.find(item => String(item.store).toUpperCase() === targetStore.toUpperCase());
 
@@ -9824,6 +9828,69 @@ const AUDIT_ITEM_MAP = (() => {
     return m;
 })();
 
+// ============================================================================
+// DB ITEM CATALOG — both instruments are editable from the Manage Items tab
+// (scorecard_items / paymore_audit_items via the scorecard fn). The GET
+// response carries the catalog; the hardcoded AUDIT_DEFINITION / SCORECARD_*
+// constants above are only the fallback until it loads.
+// ============================================================================
+
+// Audit catalog → AUDIT_DEFINITION-shaped sections. includeInactive for the
+// Manage tab; scoring/breakdown use active items only.
+function _auSections(includeInactive) {
+    const cat = window._auCatalog;
+    if (!cat || !cat.length) return AUDIT_DEFINITION;
+    const rows = (includeInactive ? cat : cat.filter(i => i.active))
+        .slice().sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    const sections = [], idx = {};
+    rows.forEach(i => {
+        if (!(i.section in idx)) { idx[i.section] = sections.length; sections.push({ title: i.section, items: [] }); }
+        sections[idx[i.section]].items.push({
+            id: i.item_id, pts: Number(i.points) || 0, text: i.item_text,
+            dbId: i.id, active: !!i.active,
+        });
+    });
+    return sections;
+}
+
+function _auditPossibleNow() {
+    const cat = window._auCatalog;
+    if (!cat || !cat.length) return AUDIT_POSSIBLE;
+    return cat.filter(i => i.active).reduce((a, i) => a + (Number(i.points) || 0), 0);
+}
+
+// Scorecard catalog → [{id?, item_key, label, max_score, active}] (0–5 selects).
+function _scCats(includeInactive) {
+    const cat = window._scCatalog;
+    if (!cat || !cat.length) {
+        const keys = ['online_store_pictures', 'facebook_listings', 'social_media_posts', 'paymore_sync'];
+        return SCORECARD_CATEGORIES.map((label, i) => ({ id: null, item_key: keys[i], label, max_score: 5, active: true }));
+    }
+    return (includeInactive ? cat : cat.filter(i => i.active))
+        .slice().sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+}
+
+// Fetch the catalog (plus fresh store data) if we don't have it yet — the
+// submit modal can open before the dashboard widget's fetch has run. Only
+// re-renders the entry forms while they're still untouched.
+let _scCatalogFetching = false;
+function _ensureScCatalog(force) {
+    if (window._scCatalog && window._auCatalog && !force) return;
+    if (_scCatalogFetching) return;
+    _scCatalogFetching = true;
+    fetch(`${SCORECARD_URL}?v=${Date.now()}`).then(r => r.json()).then(json => {
+        if (!json || !json.success) return;
+        window._scorecardAllData = json.data || window._scorecardAllData || [];
+        if (json.catalog) {
+            window._scCatalog = json.catalog.scorecard_items || [];
+            window._auCatalog = json.catalog.audit_items || [];
+        }
+        const untouched = !document.querySelector('.audit-entry-input') || _auditEntryTotals().earned === 0;
+        if (untouched) { _buildScorecardModalInputs(); renderAuditEntry(); }
+        if (currentScoreTab === 'manage') renderManageItems();
+    }).catch(() => {}).finally(() => { _scCatalogFetching = false; });
+}
+
 // Audit color by percentage: target 90+ green, pass 80+ amber, else red.
 function auditPctColor(pct) {
     if (pct >= AUDIT_TARGET_PCT) return { bg: '#d1fae5', fg: '#059669' };
@@ -9840,24 +9907,30 @@ function openScorecardModal() {
     switchScoreTab('scorecard');
     _buildScorecardModalInputs();
     renderAuditEntry();
+    _ensureScCatalog();
 }
 
-// ---- Submit-modal tab switching (Scorecard | SPEEKS Audit) ----
+// ---- Submit-modal tab switching (Scorecard | SPEEKS Audit | Manage Items) ----
 let currentScoreTab = 'scorecard';
 function switchScoreTab(tab) {
     currentScoreTab = tab;
     const scTab = document.getElementById('sc-tab-scorecard');
     const auTab = document.getElementById('sc-tab-audit');
+    const mgTab = document.getElementById('sc-tab-manage');
     if (scTab) scTab.classList.toggle('active', tab === 'scorecard');
     if (auTab) auTab.classList.toggle('active', tab === 'audit');
+    if (mgTab) mgTab.classList.toggle('active', tab === 'manage');
     const scPanel = document.getElementById('sc-panel-scorecard');
     const auPanel = document.getElementById('sc-panel-audit');
+    const mgPanel = document.getElementById('sc-panel-manage');
     if (scPanel) scPanel.style.display = tab === 'scorecard' ? 'block' : 'none';
     if (auPanel) auPanel.style.display = tab === 'audit' ? 'block' : 'none';
+    if (mgPanel) mgPanel.style.display = tab === 'manage' ? 'block' : 'none';
     const scBtn = document.getElementById('submitScorecardBtn');
     const auBtn = document.getElementById('submitAuditBtn');
     if (scBtn) scBtn.style.display = tab === 'scorecard' ? '' : 'none';
     if (auBtn) auBtn.style.display = tab === 'audit' ? '' : 'none';
+    if (tab === 'manage') renderManageItems();
 }
 
 function onScoreStoreChange() {
@@ -9875,40 +9948,30 @@ function _buildScorecardModalInputs() {
 
     const container = document.getElementById('dm-category-inputs');
     if (!container) return;
-    let html = '';
-    let catIndex = 0;
-    SCORECARD_BUCKETS.forEach((bucket, bIdx) => {
-        const existingBucket = existingEntry && existingEntry.buckets
-            ? existingEntry.buckets.find(b => b.name === bucket.label)
-            : null;
-        const existingNote = existingBucket && existingBucket.notes ? existingBucket.notes : '';
-        html += `<div style="grid-column: 1 / -1; margin-top: ${bIdx > 0 ? '8px' : '0'}; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0;">
-                <span style="font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">${bucket.label}</span>
-            </div>
-            <div id="section-inputs-${bIdx}" style="display: contents;">`;
-        for (let i = 0; i < bucket.count; i++) {
-            const cat = SCORECARD_CATEGORIES[catIndex];
-            html += `<div style="display: flex; flex-direction: column;">
-                    <label class="form-label-caps">${cat}</label>
-                    <select id="score-input-${catIndex}" class="form-input-lg" style="margin-top: 0; padding: 10px; font-size: 14px;">
-                        <option value="">--</option>
-                        <option value="5">5</option>
-                        <option value="4">4</option>
-                        <option value="3">3</option>
-                        <option value="2">2</option>
-                        <option value="1">1</option>
-                        <option value="0">0</option>
-                    </select>
-                </div>`;
-            catIndex++;
-        }
-        const escapedNote = existingNote.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-        html += `<div style="grid-column: 1 / -1; margin-top: 4px; margin-bottom: 2px;">
-                <label class="form-label-caps" style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">Section Notes <span style="font-weight: 400; text-transform: none; font-size: 10px; color: #94a3b8; letter-spacing: 0;">(optional)</span></label>
-                <textarea id="score-notes-${bIdx}" class="scorecard-notes-input" rows="2" placeholder="Leave a note for the manager about this section...">${escapedNote}</textarea>
+    // Categories come from the DB catalog (Manage Items tab); the hardcoded
+    // list is only the pre-load fallback. One section: Online & Marketing.
+    const cats = _scCats();
+    const existingBucket = existingEntry && existingEntry.buckets
+        ? existingEntry.buckets.find(b => b.name === 'Online & Marketing')
+        : null;
+    const existingNote = existingBucket && existingBucket.notes ? existingBucket.notes : '';
+    let html = `<div style="grid-column: 1 / -1; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0;">
+            <span style="font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">Online & Marketing</span>
+        </div>`;
+    cats.forEach(cat => {
+        let opts = '<option value="">--</option>';
+        const max = Math.max(1, Number(cat.max_score) || 5);
+        for (let p = max; p >= 0; p--) opts += `<option value="${p}">${p}</option>`;
+        html += `<div style="display: flex; flex-direction: column;">
+                <label class="form-label-caps">${escapeHtml(cat.label)}</label>
+                <select id="score-input-${cat.item_key}" class="form-input-lg" data-itemkey="${cat.item_key}" style="margin-top: 0; padding: 10px; font-size: 14px;">${opts}</select>
             </div>`;
-        html += `</div>`;
     });
+    const escapedNote = existingNote.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    html += `<div style="grid-column: 1 / -1; margin-top: 4px; margin-bottom: 2px;">
+            <label class="form-label-caps" style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">Section Notes <span style="font-weight: 400; text-transform: none; font-size: 10px; color: #94a3b8; letter-spacing: 0;">(optional)</span></label>
+            <textarea id="score-notes-0" class="scorecard-notes-input" rows="2" placeholder="Leave a note for the manager about this section...">${escapedNote}</textarea>
+        </div>`;
     container.innerHTML = html;
 }
 
@@ -9934,58 +9997,26 @@ function submitNewScorecard() {
     const date = document.getElementById('dm-score-date').value;
     const btn = document.getElementById('submitScorecardBtn');
 
-    // Determine which sections are enabled
-    const enabledSections = SCORECARD_BUCKETS.map((b, i) => {
-        const toggle = document.getElementById(`section-toggle-${i}`);
-        return toggle ? toggle.checked : true;
+    // Scores keyed by item_key (the fn's preferred shape) from the
+    // catalog-driven inputs; untouched categories stay null.
+    const scores = {};
+    document.querySelectorAll('#dm-category-inputs [data-itemkey]').forEach(el => {
+        const v = el.value;
+        scores[el.getAttribute('data-itemkey')] = v === '' ? null : parseFloat(v);
     });
-
-    const isPartial = !enabledSections.every(e => e);
-
-    if (!enabledSections.some(e => e)) {
-        alert("Please enable at least one section to update.");
-        return;
-    }
-
-    // Gather scores and notes per section
-    let catIndex = 0;
-    let sectionData = [];
-
-    SCORECARD_BUCKETS.forEach((bucket, bIdx) => {
-        const enabled = enabledSections[bIdx];
-        const scores = [];
-        for (let i = 0; i < bucket.count; i++) {
-            const val = document.getElementById(`score-input-${catIndex}`).value;
-            scores.push(val === '' ? null : parseFloat(val));
-            catIndex++;
-        }
-        const noteEl = document.getElementById(`score-notes-${bIdx}`);
-        const notes = noteEl ? noteEl.value.trim() : '';
-        if (enabled) sectionData.push({ bucketIndex: bIdx, scores: scores, notes: notes });
-    });
+    const noteEl = document.getElementById('score-notes-0');
 
     btn.innerText = "Saving...";
     btn.style.opacity = "0.7";
     btn.disabled = true;
 
-    let payload;
-    if (isPartial) {
-        payload = {
-            action: 'submit_scorecard',
-            store: store,
-            date: date,
-            partial: true,
-            sections: sectionData
-        };
-    } else {
-        payload = {
-            action: 'submit_scorecard',
-            store: store,
-            date: date,
-            scores: sectionData.flatMap(s => s.scores),
-            sectionNotes: sectionData.map(s => s.notes)
-        };
-    }
+    const payload = {
+        action: 'submit_scorecard',
+        store: store,
+        date: date,
+        scores,
+        notes: noteEl ? noteEl.value.trim() : '',
+    };
 
     fetch(SCORECARD_URL, {
         method: 'POST',
@@ -10033,7 +10064,7 @@ function _selectedStoreAudit() {
 let _auditEntryNotes = {};
 let _auditEntryPhotos = {};
 
-function _auSecTitle(sIdx) { return (AUDIT_DEFINITION[sIdx] || {}).title || String(sIdx); }
+function _auSecTitle(sIdx) { return (_auSections()[sIdx] || {}).title || String(sIdx); }
 
 function onAuditNoteInput(sIdx) {
     const el = document.getElementById(`audit-note-${sIdx}`);
@@ -10205,7 +10236,8 @@ function renderAuditEntry() {
     if (timeEl) timeEl.value = (editingThis && existing.time) ? existing.time : '';
 
     let html = '';
-    AUDIT_DEFINITION.forEach((sec, sIdx) => {
+    const sections = _auSections();
+    sections.forEach((sec, sIdx) => {
         const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
         html += `<div class="audit-entry-section" style="border:1px solid #e2e8f0; border-radius:10px; margin-bottom:10px; overflow:hidden;">
             <div onclick="toggleAuditEntrySection(${sIdx})" style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:11px 13px; background:#f8fafc; cursor:pointer;">
@@ -10218,11 +10250,9 @@ function renderAuditEntry() {
             <div id="audit-sec-body-${sIdx}" style="display:none; padding:6px 13px 11px;">`;
         sec.items.forEach(item => {
             const aw = _prefillAward(prefill[item.id], item.pts);
-            // Every item takes 0..max in HALF-POINT steps (partial credit),
-            // including 1-pt items (0 / 0.5 / 1).
-            let opts = '';
-            for (let p = 0; p <= item.pts; p += 0.5) opts += `<option value="${p}"${p === aw ? ' selected' : ''}>${p}</option>`;
-            const control = `<select class="audit-entry-input" data-section="${sIdx}" data-pts="${item.pts}" data-itemid="${item.id}" onchange="onAuditEntryToggle(${sIdx})" style="width:58px; padding:5px 6px; font-size:13px; font-weight:800; color:var(--slate-charcoal); border:1px solid #cbd5e1; border-radius:7px; cursor:pointer; background:#fff;">${opts}</select>
+            // Typed number entry, 0..max in half-point steps — quicker than a
+            // dropdown when an item is worth several points.
+            const control = `<input type="number" class="audit-entry-input" data-section="${sIdx}" data-pts="${item.pts}" data-itemid="${item.id}" value="${aw}" min="0" max="${item.pts}" step="0.5" inputmode="decimal" oninput="onAuditEntryToggle(${sIdx})" onblur="_auditSnapInput(this, ${sIdx})" style="width:58px; padding:5px 6px; font-size:13px; font-weight:800; color:var(--slate-charcoal); border:1px solid #cbd5e1; border-radius:7px; background:#fff; text-align:center;">
                 <span style="font-size:10px; font-weight:800; color:#94a3b8; width:26px; text-align:right;">/ ${item.pts}</span>`;
             html += `<div style="display:flex; align-items:center; gap:10px; padding:7px 2px; border-bottom:1px solid #f1f5f9;">
                 <span style="flex:1; font-size:12.5px; color:var(--slate-charcoal); line-height:1.4;">${escapeHtml(item.text)}</span>
@@ -10247,13 +10277,22 @@ function renderAuditEntry() {
     container.innerHTML = html;
 
     // Refresh subtotals + running bar; restore any per-section notes/photos.
-    AUDIT_DEFINITION.forEach((sec, sIdx) => {
+    sections.forEach((sec, sIdx) => {
         onAuditEntryToggle(sIdx, true);
         const ta = document.getElementById(`audit-note-${sIdx}`);
         if (ta) ta.value = _auditEntryNotes[sec.title] || '';
         renderAuditSectionPhotos(sIdx);
     });
     updateAuditRunningBar();
+}
+
+// Blur handler for the typed award: snap to the half-point grid and clamp to
+// the item's max, writing the cleaned value back into the box.
+function _auditSnapInput(el, sIdx) {
+    const pts = parseFloat(el.getAttribute('data-pts')) || 0;
+    const v = parseFloat(el.value);
+    el.value = Number.isFinite(v) ? Math.min(Math.max(Math.round(v * 2) / 2, 0), pts) : 0;
+    onAuditEntryToggle(sIdx);
 }
 
 // Clamp a stored result value (boolean legacy or number) to 0..pts, snapped
@@ -10289,7 +10328,8 @@ function toggleAuditEntrySection(sIdx) {
 
 // Recompute one section's subtotal; if not a silent refresh, also bump the running bar.
 function onAuditEntryToggle(sIdx, silent) {
-    const sec = AUDIT_DEFINITION[sIdx];
+    const sec = _auSections()[sIdx];
+    if (!sec) return;
     const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
     let earned = 0;
     document.querySelectorAll(`.audit-entry-input[data-section="${sIdx}"]`).forEach(el => { earned += _auditItemAward(el); });
@@ -10305,7 +10345,7 @@ function onAuditEntryToggle(sIdx, silent) {
 function _auditEntryTotals() {
     let earned = 0;
     document.querySelectorAll('.audit-entry-input').forEach(el => { earned += _auditItemAward(el); });
-    return { earned, possible: AUDIT_POSSIBLE };
+    return { earned, possible: _auditPossibleNow() };
 }
 
 function updateAuditRunningBar() {
@@ -10397,6 +10437,150 @@ async function submitNewAudit() {
     }
 }
 
+// ============================================================================
+// MANAGE ITEMS TAB (DM/CEO) — add / pause / delete catalog items for both
+// instruments. Pausing hides an item from scoring and the totals but keeps
+// history; deleting removes it from the checklist going forward (past audits
+// still render it via AUDIT_ITEM_MAP / stored results).
+// ============================================================================
+
+async function _scorecardAdminPost(payload) {
+    const res = await fetch(SCORECARD_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, role: sessionStorage.getItem('speeksUserRole') || '' }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.success === false) throw new Error(json.error || 'Request failed');
+    return json;
+}
+
+// Refetch the catalog after any change, then re-render everything that shows it.
+async function _refreshScCatalog() {
+    try {
+        const res = await fetch(`${SCORECARD_URL}?v=${Date.now()}`);
+        const json = await res.json();
+        if (json && json.success) {
+            window._scorecardAllData = json.data || [];
+            if (json.catalog) {
+                window._scCatalog = json.catalog.scorecard_items || [];
+                window._auCatalog = json.catalog.audit_items || [];
+            }
+        }
+    } catch (e) { /* keep whatever catalog we had */ }
+    renderManageItems();
+    _buildScorecardModalInputs();
+    renderAuditEntry();
+}
+
+function renderManageItems() {
+    const panel = document.getElementById('sc-panel-manage');
+    if (!panel) return;
+    if (!window._scCatalog || !window._auCatalog) {
+        panel.innerHTML = '<div class="status-message">Loading item catalog…</div>';
+        _ensureScCatalog();
+        return;
+    }
+    const scRows = _scCats(true);
+    const auSections = _auSections(true);
+    const activeAu = (window._auCatalog || []).filter(i => i.active);
+    const activePts = activeAu.reduce((a, i) => a + (Number(i.points) || 0), 0);
+
+    const secHdr = t => `<div style="font-size:11px; font-weight:900; color:#94a3b8; text-transform:uppercase; letter-spacing:.5px; margin:16px 0 6px;">${t}</div>`;
+    const inp = 'padding:8px 10px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:12.5px; font-weight:600; background:#fff; box-sizing:border-box;';
+    const rowStyle = active => `display:flex; align-items:center; gap:9px; padding:7px 4px; border-bottom:1px solid #f1f5f9; ${active ? '' : 'opacity:.45;'}`;
+    const delBtn = (fn, id, label) => `<button onclick="${fn}('${id}', this)" title="Delete ${label} — past scores keep their history" style="flex:none; display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:7px; cursor:pointer; font-size:13px; line-height:1;">🗑</button>`;
+    const pauseBox = (fn, id, active) => `<input type="checkbox" ${active ? 'checked' : ''} onchange="${fn}('${id}', this.checked, this)" title="${active ? 'Active — untick to pause (hidden from scoring, history kept)' : 'Paused — tick to reactivate'}" style="flex:none; width:16px; height:16px; cursor:pointer; accent-color:#059669;">`;
+
+    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:2px;">Tick = active. Unticking <b>pauses</b> an item — it disappears from scoring and the totals but keeps its history. 🗑 deletes it from the checklist going forward.</div>`;
+
+    // ---- Scorecard categories ----
+    html += secHdr(`Scorecard Categories (scored 0–5)`);
+    scRows.forEach(c => {
+        html += `<div style="${rowStyle(c.active)}">
+            ${pauseBox('scToggleItem', c.id, c.active)}
+            <span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${escapeHtml(c.label)}</span>
+            <span style="flex:none; font-size:10.5px; font-weight:800; color:#94a3b8;">/ ${Number(c.max_score) || 5}</span>
+            ${delBtn('scDeleteItem', c.id, 'this category')}
+        </div>`;
+    });
+    html += `<div style="display:flex; gap:8px; margin-top:8px;">
+        <input id="sc-add-label" placeholder="New category name" style="${inp} flex:1;">
+        <button class="btn-secondary" onclick="scAddItem(this)" style="flex:none;">+ Add</button>
+    </div>`;
+
+    // ---- Audit items ----
+    html += secHdr(`PayMore Audit Items — active: ${activeAu.length} items · ${activePts} pts`);
+    auSections.forEach(sec => {
+        html += `<div style="font-size:10.5px; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:.4px; margin:10px 0 2px;">${escapeHtml(sec.title)}</div>`;
+        sec.items.forEach(item => {
+            html += `<div style="${rowStyle(item.active !== false)}">
+                ${pauseBox('auToggleItem', item.dbId, item.active !== false)}
+                <span style="flex:1; font-size:12px; color:var(--slate-charcoal); line-height:1.35;">${escapeHtml(item.text)}</span>
+                <span style="flex:none; font-size:10.5px; font-weight:800; color:#94a3b8;">${item.pts} pt${item.pts === 1 ? '' : 's'}</span>
+                ${delBtn('auDeleteItem', item.dbId, 'this item')}
+            </div>`;
+        });
+    });
+    const secOpts = auSections.map(s => `<option value="${escapeHtml(s.title)}">${escapeHtml(s.title)}</option>`).join('')
+        + `<option value="__new">+ New section…</option>`;
+    html += `<div style="margin-top:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px;">
+        <div style="font-size:11px; font-weight:900; color:#64748b; text-transform:uppercase; letter-spacing:.4px; margin-bottom:8px;">Add an audit item</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <select id="au-add-section" onchange="document.getElementById('au-add-section-new').style.display = this.value === '__new' ? '' : 'none';" style="${inp} flex:1; min-width:140px; cursor:pointer;">${secOpts}</select>
+            <input id="au-add-section-new" placeholder="New section name" style="${inp} flex:1; min-width:140px; display:none;">
+        </div>
+        <div style="display:flex; gap:8px; margin-top:8px;">
+            <input id="au-add-text" placeholder="What is being checked?" style="${inp} flex:1;">
+            <input id="au-add-pts" type="number" min="1" step="1" value="1" title="Points" style="${inp} width:64px; flex:none; text-align:center;">
+            <button class="btn-secondary" onclick="auAddItem(this)" style="flex:none;">+ Add</button>
+        </div>
+    </div>`;
+
+    panel.innerHTML = html;
+}
+
+function _manageActionFail(e) {
+    alert('Could not save that change: ' + (e.message || e));
+    renderManageItems();
+}
+
+function scToggleItem(id, active) {
+    _scorecardAdminPost({ action: 'scorecard_item_upsert', id, active }).then(_refreshScCatalog).catch(_manageActionFail);
+}
+function scDeleteItem(id) {
+    const item = (window._scCatalog || []).find(c => String(c.id) === String(id));
+    if (!confirm(`Delete "${item ? item.label : 'this category'}"? Past scorecards keep their history; the category just stops being scored. To hide it temporarily, pause it instead.`)) return;
+    _scorecardAdminPost({ action: 'scorecard_item_delete', id }).then(_refreshScCatalog).catch(_manageActionFail);
+}
+function scAddItem(btn) {
+    const label = (document.getElementById('sc-add-label')?.value || '').trim();
+    if (!label) { alert('Enter a name for the new category.'); return; }
+    btn.disabled = true;
+    _scorecardAdminPost({ action: 'scorecard_item_upsert', label, max_score: 5 })
+        .then(_refreshScCatalog).catch(_manageActionFail).finally(() => { btn.disabled = false; });
+}
+
+function auToggleItem(id, active) {
+    _scorecardAdminPost({ action: 'audit_item_upsert', id, active }).then(_refreshScCatalog).catch(_manageActionFail);
+}
+function auDeleteItem(id) {
+    const item = (window._auCatalog || []).find(c => String(c.id) === String(id));
+    if (!confirm(`Delete "${item ? item.item_text : 'this item'}"? Past audits keep their history; the item just leaves the checklist. To hide it temporarily, pause it instead.`)) return;
+    _scorecardAdminPost({ action: 'audit_item_delete', id }).then(_refreshScCatalog).catch(_manageActionFail);
+}
+function auAddItem(btn) {
+    const selEl = document.getElementById('au-add-section');
+    let section = selEl ? selEl.value : '';
+    if (section === '__new') section = (document.getElementById('au-add-section-new')?.value || '').trim();
+    const text = (document.getElementById('au-add-text')?.value || '').trim();
+    const points = Math.max(1, parseInt(document.getElementById('au-add-pts')?.value) || 1);
+    if (!section) { alert('Pick or name a section.'); return; }
+    if (!text) { alert('Describe what the item checks.'); return; }
+    btn.disabled = true;
+    _scorecardAdminPost({ action: 'audit_item_upsert', section, item_text: text, points })
+        .then(_refreshScCatalog).catch(_manageActionFail).finally(() => { btn.disabled = false; });
+}
+
 // 'HH:MM' (24h, as stored) → '2:30 PM' for display; '' when unset/invalid.
 function _fmtAuditTime(t) {
     const m = /^(\d{1,2}):(\d{2})/.exec(String(t || ''));
@@ -10441,7 +10625,20 @@ function renderAuditBreakdown(store) {
         <div style="font-size:22px; font-weight:900; color:${c.fg};">${audit.earned}/${audit.possible} <span style="font-size:14px;">(${audit.pct}%)</span></div>
     </div>`;
 
-    AUDIT_DEFINITION.forEach(sec => {
+    // Sections from the live catalog, but keep any items this audit scored
+    // that were since paused/removed — history must still render.
+    const sections = _auSections().map(s => ({ title: s.title, items: s.items.slice() }));
+    const known = new Set();
+    sections.forEach(s => s.items.forEach(i => known.add(i.id)));
+    const orphans = Object.keys(results).filter(id => !known.has(id) && AUDIT_ITEM_MAP[id]);
+    orphans.forEach(id => {
+        const meta = AUDIT_ITEM_MAP[id];
+        let sec = sections.find(s => s.title === meta.section);
+        if (!sec) { sec = { title: meta.section, items: [] }; sections.push(sec); }
+        sec.items.push({ id, pts: meta.pts, text: meta.text });
+    });
+
+    sections.forEach(sec => {
         const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
         let secEarned = 0;
         sec.items.forEach(i => { secEarned += _prefillAward(results[i.id], i.pts); });
