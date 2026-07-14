@@ -179,6 +179,7 @@ Deno.serve(async (req: Request) => {
           const v = (results as any)[id];
           let a = v === true ? pts : Number(v);
           if (!Number.isFinite(a)) a = 0;
+          a = Math.round(a * 2) / 2; // snap to the half-point grid
           earned += Math.min(Math.max(a, 0), pts);
         }
         const pct = possible ? Math.round((earned / possible) * 1000) / 10 : 0;

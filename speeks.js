@@ -10218,18 +10218,12 @@ function renderAuditEntry() {
             <div id="audit-sec-body-${sIdx}" style="display:none; padding:6px 13px 11px;">`;
         sec.items.forEach(item => {
             const aw = _prefillAward(prefill[item.id], item.pts);
-            let control;
-            if (item.pts === 1) {
-                // 1-point item → checkbox (0 or 1).
-                control = `<input type="checkbox" class="audit-entry-input" data-section="${sIdx}" data-pts="1" data-itemid="${item.id}" ${aw >= 1 ? 'checked' : ''} onchange="onAuditEntryToggle(${sIdx})" style="width:18px; height:18px; cursor:pointer;">
-                    <span style="font-size:10px; font-weight:800; color:#94a3b8; width:26px; text-align:right;">/ 1</span>`;
-            } else {
-                // multi-point item → 0..max points dropdown (partial credit).
-                let opts = '';
-                for (let p = 0; p <= item.pts; p++) opts += `<option value="${p}"${p === aw ? ' selected' : ''}>${p}</option>`;
-                control = `<select class="audit-entry-input" data-section="${sIdx}" data-pts="${item.pts}" data-itemid="${item.id}" onchange="onAuditEntryToggle(${sIdx})" style="width:58px; padding:5px 6px; font-size:13px; font-weight:800; color:var(--slate-charcoal); border:1px solid #cbd5e1; border-radius:7px; cursor:pointer; background:#fff;">${opts}</select>
-                    <span style="font-size:10px; font-weight:800; color:#94a3b8; width:26px; text-align:right;">/ ${item.pts}</span>`;
-            }
+            // Every item takes 0..max in HALF-POINT steps (partial credit),
+            // including 1-pt items (0 / 0.5 / 1).
+            let opts = '';
+            for (let p = 0; p <= item.pts; p += 0.5) opts += `<option value="${p}"${p === aw ? ' selected' : ''}>${p}</option>`;
+            const control = `<select class="audit-entry-input" data-section="${sIdx}" data-pts="${item.pts}" data-itemid="${item.id}" onchange="onAuditEntryToggle(${sIdx})" style="width:58px; padding:5px 6px; font-size:13px; font-weight:800; color:var(--slate-charcoal); border:1px solid #cbd5e1; border-radius:7px; cursor:pointer; background:#fff;">${opts}</select>
+                <span style="font-size:10px; font-weight:800; color:#94a3b8; width:26px; text-align:right;">/ ${item.pts}</span>`;
             html += `<div style="display:flex; align-items:center; gap:10px; padding:7px 2px; border-bottom:1px solid #f1f5f9;">
                 <span style="flex:1; font-size:12.5px; color:var(--slate-charcoal); line-height:1.4;">${escapeHtml(item.text)}</span>
                 <span style="flex-shrink:0; display:flex; align-items:center; justify-content:flex-end; gap:8px; width:100px;">${control}</span>
@@ -10262,19 +10256,21 @@ function renderAuditEntry() {
     updateAuditRunningBar();
 }
 
-// Clamp a stored result value (boolean legacy or number) to 0..pts.
+// Clamp a stored result value (boolean legacy or number) to 0..pts, snapped
+// to the half-point grid.
 function _prefillAward(v, pts) {
     if (v === true) return pts;
     const num = Number(v);
-    return Number.isFinite(num) ? Math.min(Math.max(Math.round(num), 0), pts) : 0;
+    return Number.isFinite(num) ? Math.min(Math.max(Math.round(num * 2) / 2, 0), pts) : 0;
 }
 
 // Points awarded by one entry control (checkbox = 0|pts, select = its value).
+// Half-point values (e.g. 0.5, 2.5) are valid.
 function _auditItemAward(el) {
     const pts = parseInt(el.getAttribute('data-pts')) || 0;
     if (el.type === 'checkbox') return el.checked ? pts : 0;
-    const v = parseInt(el.value);
-    return Number.isFinite(v) ? Math.min(Math.max(v, 0), pts) : 0;
+    const v = parseFloat(el.value);
+    return Number.isFinite(v) ? Math.min(Math.max(Math.round(v * 2) / 2, 0), pts) : 0;
 }
 
 // One section open at a time — opening a section collapses the others.
