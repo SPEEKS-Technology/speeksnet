@@ -2374,6 +2374,37 @@ function _kpiEmpRowsHtml(entries, periodDate, isEditing, isAvg) {
     }).join('');
 }
 
+// DM/CEO aren't on any store roster (kpi-manage excludes corp roles), but when
+// they work a shift — buying, listing — the store's stats should include them.
+// While editing the current period, a corp user gets an "add me" row that
+// appends them as a one-off entry for THAT period only. The row is only
+// persisted if numbers are actually saved for it, and past periods are
+// historical snapshots, so they never appear on weeks they didn't work.
+function _kpiAddSelfRowHtml(p, isEditing) {
+    if (!isEditing || !p.is_editable) return '';
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (role !== 'ceo' && role !== 'district manager') return '';
+    const name = sessionStorage.getItem('speeksUserName');
+    if (!name || (p.entries || []).some(function(e) { return e.employee_name === name; })) return '';
+    const cols = 1 + _KPI_GRID_FIELDS.length;
+    const period = _kpiCurrentTab === 'weekly' ? 'week' : 'month';
+    const tag = role === 'ceo' ? 'CEO' : 'DM';
+    return '<tr><td colspan="' + cols + '" style="padding:8px 12px; background:#f8fafc; border-top:1px solid #f1f5f9;">' +
+        '<button type="button" onclick="_kpiAddSelf(\'' + p.period_end_date + '\')" title="Adds a row for you on this ' + period + ' only — use it when you helped the store with buying or listing" ' +
+        'style="font-size:12px; font-weight:800; color:#1d4ed8; background:#eff6ff; border:1.5px solid #bfdbfe; border-radius:8px; padding:6px 12px; cursor:pointer;">+ Add ' + escapeHtml(name) + ' (' + tag + ') — helped out this ' + period + '</button>' +
+        '</td></tr>';
+}
+
+function _kpiAddSelf(periodDate) {
+    const name = sessionStorage.getItem('speeksUserName');
+    if (!name) return;
+    const p = (_kpiPeriodsData || []).find(function(x) { return x.period_end_date === periodDate; });
+    if (!p || p.entries.some(function(e) { return e.employee_name === name; })) return;
+    p.entries.push({ employee_name: name });
+    if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
+    else _kpiRenderMonthly(_kpiPeriodsData);
+}
+
 function _kpiUpdateRow(pk, empIdx) {
     const g   = function(k) { var el = document.getElementById('kpi-' + pk + '-' + empIdx + '-' + k); return el ? (Number(el.value) || 0) : 0; };
     const bv  = g('buying_value'),        bc  = g('buying_cost');
@@ -2476,6 +2507,7 @@ function _kpiRenderWeekly(periods) {
             _kpiSectionControls(p.period_end_date, isEd, p.is_editable), '#3b82f6');
         tbody += _kpiHeaderRowsHtml();
         tbody += _kpiEmpRowsHtml(p.entries, p.period_end_date, isEd, false);
+        tbody += _kpiAddSelfRowHtml(p, isEd);
         const hasSavedData = p.entries.some(function(e) { return e.id; });
         if (hasSavedData) tbody += _kpiStoreTotalRowHtml(p.entries);
     });
@@ -3137,6 +3169,7 @@ function _kpiRenderMonthly(periods) {
             _kpiSectionControls(p.period_end_date, isEd, p.is_editable), '#7c3aed');
         tbody += _kpiHeaderRowsHtml();
         tbody += _kpiEmpRowsHtml(p.entries, p.period_end_date, isEd, false);
+        tbody += _kpiAddSelfRowHtml(p, isEd);
         const hasSavedData = p.entries.some(function(e) { return e.id; });
         if (hasSavedData) tbody += _kpiStoreTotalRowHtml(p.entries);
     });
