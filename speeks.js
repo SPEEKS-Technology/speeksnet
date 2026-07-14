@@ -5415,6 +5415,9 @@ const ListingGoalsEngine = {
     // Incremental: ±20 listings per person, anchored at 4 people = 190 (floor 150).
     // 2→150, 3→170, 4→190, 5→210, 6→230. Mirrors baseForSize() in the
     // store-targets edge function so the frontend and server stay in lock-step.
+    // The MSM boost (+15 on stores an MSM covers) is added OUTSIDE this formula
+    // (server msmBoost / frontend _msmTargetBoost) so scale() — and therefore
+    // per-person daily goals — stays unboosted: regular listers don't absorb it.
     weeklyTarget(size)       { return Math.max(150, 110 + 20 * size); },
     modelSize(rosterSize)    { return rosterSize >= 4 ? 4 : 3; },
 
@@ -5990,12 +5993,26 @@ function priorWeekGoal(emp, todayStr, startOfWeek) {
 function storeRosterSize(store) {
     try {
         const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
-        const excluded = ['ceo', 'district manager'];
+        // MSM excluded from the per-person ladder — they contribute via the
+        // flat _msmTargetBoost instead (mirrors rosterCount in store-targets fn).
+        const excluded = ['ceo', 'district manager', 'multi-store manager'];
         return (auth.users || []).filter(u =>
             userInStore(u, store) &&
             !excluded.includes((u.role || '').toLowerCase())
         ).length || 4;
     } catch (e) { return 4; }
+}
+
+// Flat listings boost for stores covered by a Multi-Store Manager (the MSM
+// doesn't count as a full ±20 person on either store's ladder). Mirrors
+// msmBoost() / MSM_TARGET_BOOST in the store-targets edge fn — keep in sync.
+function _msmTargetBoost(store) {
+    if (!MULTISTORE_MANAGER_STORES.includes(String(store || '').toUpperCase())) return 0;
+    try {
+        const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
+        const hasMsm = (auth.users || []).some(u => (u.role || '').toLowerCase() === 'multi-store manager');
+        return hasMsm ? 15 : 0;
+    } catch (e) { return 15; }
 }
 
 // Persisted per-store target + flag + last-4-week totals (server-side ratchet).
@@ -6017,7 +6034,8 @@ async function fetchAllStoreTargets() {
 }
 // Current weekly target for a store (server value; falls back to roster-derived base).
 function targetFor(store) {
-    return (_storeTargets[store] && _storeTargets[store].target) || ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
+    return (_storeTargets[store] && _storeTargets[store].target)
+        || (ListingGoalsEngine.weeklyTarget(storeRosterSize(store)) + _msmTargetBoost(store));
 }
 // Effective team size for goal math. Prefers the server's settled size, which
 // honors the timing rule (a subtraction shrinks the goal immediately, an addition
