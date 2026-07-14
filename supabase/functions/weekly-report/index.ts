@@ -60,7 +60,10 @@ const C = {
 };
 
 // The SPEEKS Scorecard is now just the "Online & Marketing" four categories.
-const SCORECARD_CATS: [string, string][] = [
+// NOTE: both lists below are FALLBACKS — loadReportCatalogs() overwrites them
+// from the scorecard_items / paymore_audit_items tables (the Manage Items tab)
+// at the start of every run, so catalog edits show up in the emails.
+let SCORECARD_CATS: [string, string][] = [
   ['online_store_pictures', 'Online Store Pictures'],
   ['facebook_listings', 'Facebook Listings'],
   ['social_media_posts', 'Social Media Posts'],
@@ -70,7 +73,7 @@ const SCORECARD_CATS: [string, string][] = [
 // PayMore Audit Playbook v3 — section → item points (id:pts). Used to show
 // per-section subtotals (where points were lost) in the manager email; the full
 // item-level breakdown lives in the dashboard popout. (Totals = 165.)
-const AUDIT_SECTIONS: { title: string; items: Record<string, number> }[] = [
+let AUDIT_SECTIONS: { title: string; items: Record<string, number> }[] = [
   { title: 'Exterior', items: { ex1:1, ex2:1, ex3:1 } },
   { title: 'Entry & Sales Floor', items: { ef1:1, ef2:1, ef3:1, ef4:1, ef5:1, ef6:2, ef7:1, ef8:1, ef9:1, ef10:2, ef11:1, ef12:1, ef13:1, ef14:3 } },
   { title: 'Display Cases & Merchandising', items: { dc1:1, dc2:1, dc3:1, dc4:2, dc5:1, dc6:2, dc7:2, dc8:2, dc9:3, dc10:2, dc11:3, dc12:2 } },
@@ -80,6 +83,41 @@ const AUDIT_SECTIONS: { title: string; items: Record<string, number> }[] = [
   { title: 'Personnel & Appearance', items: { pa1:1, pa2:1, pa3:1, pa4:1, pa5:1, pa6:1 } },
   { title: 'Safety & Security', items: { ss1:3, ss2:2, ss3:2, ss4:4, ss5:5, ss6:2, ss7:1, ss8:1, ss9:1, ss10:4, ss11:1, ss12:1, ss13:1 } },
 ];
+
+// Overwrite the hardcoded lists above from the DB item catalog (active items
+// only, catalog order). Any failure leaves the hardcoded fallbacks in place.
+async function loadReportCatalogs(sb: any) {
+  try {
+    const [{ data: sc }, { data: au }] = await Promise.all([
+      sb.from('scorecard_items').select('*').order('sort_order', { ascending: true }),
+      sb.from('paymore_audit_items').select('*').order('sort_order', { ascending: true }),
+    ]);
+    const scActive = (sc || []).filter((i: any) => i.active);
+    if (scActive.length) SCORECARD_CATS = scActive.map((i: any) => [i.item_key, i.label]);
+    const auActive = (au || []).filter((i: any) => i.active);
+    if (auActive.length) {
+      const secs: { title: string; items: Record<string, number> }[] = [];
+      const idx: Record<string, number> = {};
+      auActive.forEach((i: any) => {
+        if (!(i.section in idx)) { idx[i.section] = secs.length; secs.push({ title: i.section, items: {} }); }
+        secs[idx[i.section]].items[i.item_id] = Number(i.points) || 0;
+      });
+      AUDIT_SECTIONS = secs;
+    }
+  } catch (_e) { /* keep the hardcoded fallbacks */ }
+}
+
+// Scorecard category value from a scorecards row: prefer the `scores` jsonb
+// blob (catalog-added categories live only there), fall back to the legacy
+// per-category column for old rows.
+function cardVal(card: any, key: string): number | null {
+  if (!card) return null;
+  const blob = card.scores && typeof card.scores === 'object' ? card.scores : null;
+  const v = blob && blob[key] !== undefined ? blob[key] : card[key];
+  if (v === null || v === undefined || v === '') return null;
+  const x = Number(v);
+  return Number.isFinite(x) ? x : null;
+}
 
 // Per-section earned/total. results[id] is points awarded (0..pts);
 // legacy boolean true = full pts.
@@ -251,7 +289,7 @@ async function gather(sb: any, weekEnd: Date) {
   // lowest company scorecard category (avg across stores that scored it, ×2 /10)
   let lowestCat = ''; let lowestVal = 99;
   for (const [key, label] of SCORECARD_CATS) {
-    const vals = STORES.map(s => rows[s].card?.[key]).filter(v => v != null).map(v => n(v) * 2);
+    const vals = STORES.map(s => cardVal(rows[s].card, key)).filter(v => v != null).map(v => n(v) * 2);
     if (!vals.length) continue;
     const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
     if (avg < lowestVal) { lowestVal = avg; lowestCat = label; }
@@ -439,7 +477,7 @@ function flagsBlock(d: any) {
   for (const s of STORES) {
     if (!d.rows[s].card) continue;
     for (const [k, label] of SCORECARD_CATS) {
-      const cv = d.rows[s].card[k];
+      const cv = cardVal(d.rows[s].card, k);
       if (cv != null && n(cv) * 2 === 0) zeros.push(`${s} — ${label}`);
     }
   }
@@ -600,7 +638,10 @@ function buildManager(d: any, store: string) {
 
   // scorecard (scored cats, worst first) + Store Average total
   const scoredCats = r.card
-    ? SCORECARD_CATS.map(([k, label]) => ({ label, v: r.card[k] == null ? null : n(r.card[k]) * 2 })).filter(x => x.v != null).sort((a, b) => (a.v as number) - (b.v as number))
+    ? SCORECARD_CATS.map(([k, label]) => {
+        const cv = cardVal(r.card, k);
+        return { label, v: cv == null ? null : n(cv) * 2 };
+      }).filter(x => x.v != null).sort((a, b) => (a.v as number) - (b.v as number))
     : [];
   let scoreHtml = `<tr><td colspan="2" style="padding:11px 14px;color:${C.muted};font-size:12px;">No scorecard on file for this period.</td></tr>`;
   if (r.card) {
@@ -717,6 +758,7 @@ Deno.serve(async (req) => {
 
   try {
     const sb = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+    await loadReportCatalogs(sb);
     const weekEnd = q('weekEnd') ? parseYMD(q('weekEnd')!) : lastSundayCentral();
     const types = (q('types') || 'both').toLowerCase();
     const overrideTo = q('to');                       // test: send everything here
