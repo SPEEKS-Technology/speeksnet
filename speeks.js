@@ -5439,6 +5439,8 @@ const ListingGoalsEngine = {
     weightFor(role, staffedCount) {
         // On 2-person days the lister also covers the floor → reduced weight.
         if (role === 'L1' && staffedCount <= 2) return this.roleWeight.L1_SHARED;
+        // L3, L4, … (rosters past 4 people) score like a dedicated lister.
+        if (this.roleWeight[role] == null && /^L\d+$/.test(role)) return this.roleWeight.L1;
         return this.roleWeight[role] || 0;
     },
     scale(rosterSize) {
@@ -5480,6 +5482,17 @@ const ListingGoalsEngine = {
 function normalizeGoalDate(s) {
     const d = new Date(s);
     return isNaN(d.getTime()) ? String(s).trim() : d.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+}
+
+// Role dots offered in the goal widgets. Small teams get one lister, normal
+// teams two; past 4 people the lister lane keeps extending (L3, L4, …) so a
+// fully-staffed day can give everyone a role. Extra listers score like L1.
+function goalsAvailableRoles() {
+    const n = goalsRoster.length;
+    if (n <= 2) return ['B1', 'B2', 'L1'];
+    const roles = ['B1', 'B2', 'L1', 'L2'];
+    for (let i = 3; i <= n - 2; i++) roles.push('L' + i);
+    return roles;
 }
 
 function toggleEditDate(isYest) {
@@ -5733,7 +5746,7 @@ function buildGoalsEditForm() {
     }
     
     let html = '';
-    const availableRoles = goalsRoster.length <= 2 ? ['B1', 'B2', 'L1'] : ['B1', 'B2', 'L1', 'L2'];
+    const availableRoles = goalsAvailableRoles();
 
     // Inject the Toggle into the Header title space dynamically
     const titleEl = document.getElementById('goals-input-title');
@@ -5935,7 +5948,7 @@ function renderManagerGoals() {
     startOfWeek.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
     startOfWeek.setHours(0, 0, 0, 0);
 
-    const availableRoles = goalsRoster.length <= 2 ? ['B1', 'B2', 'L1'] : ['B1', 'B2', 'L1', 'L2'];
+    const availableRoles = goalsAvailableRoles();
 
     _priorWeekGoals = {};
     _weekTargetTotal = targetFor(goalsTargetStore);
@@ -13082,7 +13095,8 @@ window.toggleAuditPanel = function(event) {
 };
 
 // --- ROLE SELECTION LOGIC ---
-// Per-role capacity: most roles are 1-per-store, but a store can run TWO listers.
+// Per-role capacity: every role is 1-per-store. Extended lister roles (L3, L4, …
+// on big rosters) aren't listed here — the `|| 1` lookup below caps them too.
 const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1 };
 
 window.updateRoleLocks = function() {
