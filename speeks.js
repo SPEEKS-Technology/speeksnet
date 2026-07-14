@@ -2400,9 +2400,19 @@ function _kpiAddSelf(periodDate) {
     if (!name) return;
     const p = (_kpiPeriodsData || []).find(function(x) { return x.period_end_date === periodDate; });
     if (!p || p.entries.some(function(e) { return e.employee_name === name; })) return;
-    p.entries.push({ employee_name: name });
+    // _selfAdded marks the row as a local, not-yet-saved addition so cancelling
+    // the edit can remove it again (saved rows have an id and are kept).
+    p.entries.push({ employee_name: name, _selfAdded: true });
     if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
     else _kpiRenderMonthly(_kpiPeriodsData);
+}
+
+// Cancelling an edit discards self-added rows that were never saved — the DM
+// shouldn't linger in the grid after backing out.
+function _kpiStripUnsavedSelfRows() {
+    (_kpiPeriodsData || []).forEach(function(p) {
+        p.entries = (p.entries || []).filter(function(e) { return !(e._selfAdded && !e.id); });
+    });
 }
 
 function _kpiUpdateRow(pk, empIdx) {
@@ -3263,6 +3273,7 @@ function kpiHeaderSave() {
 
 function kpiHeaderCancel() {
     _kpiEditingPeriod = null;
+    _kpiStripUnsavedSelfRows();
     if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
     else _kpiRenderMonthly(_kpiPeriodsData);
 }
@@ -3426,6 +3437,7 @@ function _kpiStartEdit(periodDate) {
 
 function _kpiCancelEdit() {
     _kpiEditingPeriod = null;
+    _kpiStripUnsavedSelfRows();
     if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
     else _kpiRenderMonthly(_kpiPeriodsData);
 }
