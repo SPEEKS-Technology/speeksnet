@@ -8897,10 +8897,13 @@ const _storeColors = { OVL: '#7c3aed', LEE: '#2563eb', WSP: '#5a8d3b', MPL: '#ea
 
 function renderMonthlyGoalsBanner() {
     if (_selectedGoalDate) return; // viewing a past month — don't override
-    const store = sessionStorage.getItem('speeksUserStore') || '';
     const labelEl = document.getElementById('giGoalsLabel');
     if (labelEl) labelEl.textContent = _mgbMonthLabel() + ' Goals';
 
+    // Multi-Store Manager: both managed stores stacked, each with its own Edit.
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return renderMonthlyGoalsBannerMS();
+
+    const store = sessionStorage.getItem('speeksUserStore') || '';
     const data  = getMonthlyGoals(store);
     const goals = data?.goals || [];
     const listEl = document.getElementById('giGoalsList');
@@ -8918,6 +8921,46 @@ function renderMonthlyGoalsBanner() {
         </div>`;
     });
     if (listEl) listEl.innerHTML = html;
+}
+
+// --- Multi-Store Manager: stacked monthly goals (both stores, per-store Edit) ---
+// The synced cache already holds every store's goals (syncGoalsFromSheet does a
+// getAll), so this is render-only: one labeled block per managed store, each
+// with its own Edit button feeding openEditGoalsModal(store).
+
+function _giMsGoalItemsHtml(goals) {
+    if (!goals || !goals.length) return '<div class="status-message" style="padding: 4px 0 8px;">No goals set yet.</div>';
+    return goals.map(g => `<div class="mgb-goal-item">
+        <span class="mgb-goal-title">${escapeHtml(g.title)}</span>
+        ${g.description ? `<span class="mgb-goal-desc">${escapeHtml(g.description)}</span>` : ''}
+    </div>`).join('');
+}
+
+// Store-colored block header; pass editHtml only where editing is allowed
+// (current month — past months are read-only history).
+function _giMsStoreHeadHtml(store, editHtml) {
+    const ac = _msStoreAccent(store);
+    return `<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 0 4px;">
+        <span class="ms-store-name" style="color: ${ac.solid}; font-size: 12px;">${escapeHtml(store)}</span>${editHtml || ''}
+    </div>`;
+}
+
+function renderMonthlyGoalsBannerMS() {
+    const listEl = document.getElementById('giGoalsList');
+    if (!listEl) return;
+    // Per-store Edit buttons replace the single section-level one ('important'
+    // because _resetToCurrentMonth/selectGoalMonth re-show it the same way).
+    document.getElementById('giEditGoalsBtn')?.style.setProperty('display', 'none', 'important');
+
+    let html = '';
+    MULTISTORE_MANAGER_STORES.forEach((store, idx) => {
+        const goals = getMonthlyGoals(store)?.goals || [];
+        html += `<div style="${idx ? 'margin-top: 14px;' : ''}">
+            ${_giMsStoreHeadHtml(store, `<button class="mini-action-btn" onclick="openEditGoalsModal('${store}')">Edit ✏️</button>`)}
+            ${_giMsGoalItemsHtml(goals)}
+        </div>`;
+    });
+    listEl.innerHTML = html;
 }
 
 function toggleGoalsBanner() { toggleGoalsPanel(); }
@@ -9012,6 +9055,33 @@ window.selectGoalMonth = async function(ym) {
     if (!listEl) return;
     listEl.innerHTML = '<div class="status-message">Loading...</div>';
 
+    // Multi-Store Manager: past months show BOTH stores' goals, read-only.
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        const perStore = {};
+        MULTISTORE_MANAGER_STORES.forEach(s => {
+            try { const raw = localStorage.getItem(_mgbKey(s, _selectedGoalDate)); if (raw) perStore[s] = JSON.parse(raw)?.goals ?? []; } catch {}
+        });
+        if (MULTISTORE_MANAGER_STORES.some(s => perStore[s] == null)) {
+            try {
+                const res = await fetch(`${MONTHLY_GOALS_URL}?action=getAll&yearMonth=${ym}&t=${Date.now()}`);
+                const map = await res.json();
+                MULTISTORE_MANAGER_STORES.forEach(s => {
+                    const entry = map[s];
+                    if (entry) { localStorage.setItem(_mgbKey(s, _selectedGoalDate), JSON.stringify(entry)); perStore[s] = entry.goals || []; }
+                    else if (perStore[s] == null) perStore[s] = [];
+                });
+            } catch { /* stores left null render as could-not-load */ }
+        }
+        listEl.innerHTML = MULTISTORE_MANAGER_STORES.map((s, idx) => {
+            const goals = perStore[s];
+            const body = goals == null
+                ? '<div class="status-message" style="padding: 4px 0 8px;">Could not load.</div>'
+                : (goals.length ? _giMsGoalItemsHtml(goals) : '<div class="status-message" style="padding: 4px 0 8px;">No goals recorded for this month.</div>');
+            return `<div style="${idx ? 'margin-top: 14px;' : ''}">${_giMsStoreHeadHtml(s)}${body}</div>`;
+        }).join('');
+        return;
+    }
+
     const store    = sessionStorage.getItem('speeksUserStore') || '';
     const cacheKey = _mgbKey(store, _selectedGoalDate);
     let goals = null;
@@ -9053,9 +9123,16 @@ window.toggleGoalsPanel = function(event) {
 
 // --- Edit Modal ---
 
-function openEditGoalsModal() {
-    const store = sessionStorage.getItem('speeksUserStore') || '';
-    const goals = getMonthlyGoals(store)?.goals || [];
+// Which store the goals modal is editing. Normally the session store; the MSM's
+// stacked panel passes an explicit store per Edit button (same pattern as
+// _editingInitiativesForStore below).
+let _editingGoalsForStore = null;
+
+function openEditGoalsModal(storeOverride) {
+    _editingGoalsForStore = storeOverride || sessionStorage.getItem('speeksUserStore') || '';
+    const goals = getMonthlyGoals(_editingGoalsForStore)?.goals || [];
+    const titleEl = document.querySelector('#editMonthlyGoalsModal .modal-header h3');
+    if (titleEl) titleEl.textContent = storeOverride ? `🎯 Set ${_editingGoalsForStore} Monthly Goals` : '🎯 Set Monthly Team Goals';
     const list  = document.getElementById('editGoalsList');
     if (!list) return;
     list.innerHTML = '';
@@ -9086,7 +9163,7 @@ function _updateAddGoalBtn() {
 }
 
 function saveMonthlyGoals() {
-    const store    = sessionStorage.getItem('speeksUserStore') || '';
+    const store    = _editingGoalsForStore || sessionStorage.getItem('speeksUserStore') || '';
     const userName = sessionStorage.getItem('speeksUserName')  || 'Manager';
     const goals    = [];
     document.querySelectorAll('#editGoalsList .edit-goal-row').forEach(row => {
@@ -9178,14 +9255,25 @@ function putStoreInitiatives(store, data) {
 
 let _cpbExpanded = false;
 
+// One initiative/project row in the panel list.
+function _cpbItemHtml(item, extraClass) {
+    const badge = item.status === 'upcoming'
+        ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
+        : '<span class="si-status-badge si-status-badge--current">Current</span>';
+    return `<div class="cpb-project-item${extraClass ? ' ' + extraClass : ''}">
+        <div class="cpb-item-title-row"><span class="mgb-goal-title">${escapeHtml(item.title)}</span>${badge}</div>
+        ${item.description ? `<span class="mgb-goal-desc">${escapeHtml(item.description)}</span>` : ''}
+    </div>`;
+}
+
 function renderCompanyProjectsBanner() {
     const store       = sessionStorage.getItem('speeksUserStore') || '';
     const listEl      = document.getElementById('giInitiativesList');
     const projects    = getCompanyProjects()?.projects || [];
     const initiatives = getStoreInitiatives(store)?.initiatives || [];
-    const allItems    = [...projects, ...initiatives];
+    const isMS        = typeof isMultiStoreManager === 'function' && isMultiStoreManager();
 
-    if (!allItems.length) {
+    if (!isMS && !projects.length && !initiatives.length) {
         if (listEl) listEl.innerHTML = '<div class="status-message" style="padding: 8px 0;">No initiatives have been set yet.</div>';
         return;
     }
@@ -9194,27 +9282,22 @@ function renderCompanyProjectsBanner() {
         let html = '';
         if (projects.length) {
             html += '<div class="cpb-section-label">Company</div>';
-            projects.forEach(p => {
-                const badge = p.status === 'upcoming'
-                    ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
-                    : '<span class="si-status-badge si-status-badge--current">Current</span>';
-                html += `<div class="cpb-project-item">
-                    <div class="cpb-item-title-row"><span class="mgb-goal-title">${escapeHtml(p.title)}</span>${badge}</div>
-                    ${p.description ? `<span class="mgb-goal-desc">${escapeHtml(p.description)}</span>` : ''}
-                </div>`;
-            });
+            projects.forEach(p => { html += _cpbItemHtml(p); });
         }
-        if (initiatives.length) {
-            html += `<div class="cpb-section-label${projects.length ? ' cpb-section-label--spaced' : ''}">${escapeHtml(store)}</div>`;
-            initiatives.forEach(i => {
-                const badge = i.status === 'upcoming'
-                    ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
-                    : '<span class="si-status-badge si-status-badge--current">Current</span>';
-                html += `<div class="cpb-project-item cpb-initiative-item">
-                    <div class="cpb-item-title-row"><span class="mgb-goal-title">${escapeHtml(i.title)}</span>${badge}</div>
-                    ${i.description ? `<span class="mgb-goal-desc">${escapeHtml(i.description)}</span>` : ''}
-                </div>`;
+        if (isMS) {
+            // Multi-Store Manager: one labeled block per managed store (store
+            // colors match the checklist sections), always shown so an empty
+            // store is visibly empty rather than missing.
+            MULTISTORE_MANAGER_STORES.forEach((s, idx) => {
+                const items = getStoreInitiatives(s)?.initiatives || [];
+                const ac = _msStoreAccent(s);
+                html += `<div class="cpb-section-label${(projects.length || idx) ? ' cpb-section-label--spaced' : ''}" style="color: ${ac.solid};">${escapeHtml(s)}</div>`;
+                if (items.length) items.forEach(i => { html += _cpbItemHtml(i, 'cpb-initiative-item'); });
+                else html += '<div class="status-message" style="padding: 4px 0 8px;">No initiatives set.</div>';
             });
+        } else if (initiatives.length) {
+            html += `<div class="cpb-section-label${projects.length ? ' cpb-section-label--spaced' : ''}">${escapeHtml(store)}</div>`;
+            initiatives.forEach(i => { html += _cpbItemHtml(i, 'cpb-initiative-item'); });
         }
         listEl.innerHTML = html;
     }
