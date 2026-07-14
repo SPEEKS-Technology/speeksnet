@@ -11,7 +11,7 @@
   </style>
   <link rel="stylesheet" href="styles.css?v=20260709a">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <script src="speeks.js?v=20260714b" defer></script>
+  <script src="speeks.js?v=20260714c" defer></script>
 </head>
 <body class="preload">
 
@@ -1005,6 +1005,15 @@
 </div>
 
 <!-- ===== SPEEKS TOOLS SIDE PANEL ===== -->
+<!-- ===== EMAIL RECIPIENTS MODAL (DM/CEO) ===== -->
+<div class="modal-menu manage-menu" id="emailRecipientsModal">
+    <div class="modal-header">
+        <h3>📧 Email Recipients</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div class="manage-content" id="emailRecipientsBody"></div>
+</div>
+
 <div class="modal-menu manage-menu" id="featureAccessModal">
     <div class="modal-header">
         <h3>🎛️ Feature Access</h3>
@@ -1064,6 +1073,7 @@
       <div class="tools-group-label">👥 Admin</div>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-owner-manager" data-feature="tool-user-permissions" onclick="_closeToolsPanel(); toggleManageUsers();"><span class="tools-item-icon">👤</span>User Permissions</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-feature-access" onclick="_closeToolsPanel(); openFeatureAccess();"><span class="tools-item-icon">🎛️</span>Feature Access</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-email-recipients" onclick="_closeToolsPanel(); openEmailRecipients();"><span class="tools-item-icon">📧</span>Email Recipients</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-performance-metrics" onclick="_closeToolsPanel(); toggleManageAlerts();"><span class="tools-item-icon">📈</span>Performance Metrics</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-company-records" onclick="_closeToolsPanel(); toggleManageRecords();"><span class="tools-item-icon">📁</span>Company Records</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-manage-policies" onclick="_closeToolsPanel(); toggleManageDocs();"><span class="tools-item-icon">📚</span>Manage Policies</a>

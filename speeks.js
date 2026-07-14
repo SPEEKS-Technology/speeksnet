@@ -57,6 +57,7 @@ const B2B_URL           = `${_BASE}/b2b-deals`;
 const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
 const RECYCLE_URL       = `${_BASE}/recycle-requests`;
 const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
+const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -13991,10 +13992,14 @@ function _boxOrderGetStore() {
     return BOX_STORE_NAMES[code] || code || 'Store';
 }
 
-// Resolves the destination email from the selected store, falling back to the
-// configured primary email (and finally a placeholder) when no store maps.
+// Resolves the destination email(s) from the selected store: the DB-managed
+// list first (Email Recipients tool, key box_order_<STORE>; multiple addresses
+// join with ';' — the Outlook-safe mailto separator), then the hardcoded
+// per-store fallback, the configured primary email, and finally a placeholder.
 function _boxOrderGetEmail() {
     const code = _boxOrderGetStoreCode();
+    const dbList = _recipientsFor(`box_order_${code}`, []);
+    if (dbList.length) return dbList.join(';');
     return BOX_ORDER_STORE_EMAILS[code] || _boxOrderEmails.primary || 'orders@placeholder.com';
 }
 
@@ -14027,6 +14032,7 @@ async function toggleBoxOrder() {
     closeAllModals();
     const modal = document.getElementById('boxOrderModal');
     if (!modal) return;
+    _fetchEmailLists(); // warm the recipient cache for the supplier email
     // DM/CEO get a "Manage Items" tab to edit the catalog; managers just see the order flow.
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     const isCorpRole = role === 'ceo' || role === 'district manager';
@@ -14582,6 +14588,7 @@ function _recycleMonthOptions(rows, selected) {
 
 function toggleRecycleInventory() {
     toggleModal('recycleInvModal');
+    _fetchEmailLists(); // warm the recipient cache for the month-end report
     _buildRecycleStorePicker();
     ['recycleInvSku', 'recycleInvDescription', 'recycleInvValue', 'recycleInvCost'].forEach(id => {
         const el = document.getElementById(id);
@@ -14771,7 +14778,7 @@ function renderMyRecycleTable() {
         const { subject, body } = _recycleReportCompose();
         wrap.innerHTML = `
             <div class="box-order-preview-label">Email Preview</div>
-            <div class="box-order-email-preview">${escapeHtml(`To: ${RECYCLE_REPORT_EMAILS.join(', ')}\nSubject: ${subject}\n\n${body}`)}</div>
+            <div class="box-order-email-preview">${escapeHtml(`To: ${_recycleReportTo().join(', ')}\nSubject: ${subject}\n\n${body}`)}</div>
             <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
                 ${RECYCLE_MAIL_TIP}
                 <button class="btn-secondary" onclick="_recycleReportPreviewing=false; renderMyRecycleTable();">← Back</button>
@@ -14872,7 +14879,135 @@ async function deleteRecycleRequest(id) {
 //  the email goes out from the DM's own mailbox and replies come back to
 //  them); the Copy button is the failsafe for machines with no mail client.
 // =========================================================
+// =========================================================
+//  EMAIL RECIPIENTS (DB-driven, shared by every emailing tool)
+//  One cache for all recipient lists (email_recipients table via the
+//  email-recipients fn): the recycle month-end report, per-store box-order
+//  suppliers, and — server-side — the weekly SPEEKS report emails. Each tool
+//  keeps its hardcoded list as a fallback for when the fetch hasn't landed.
+//  DM/CEO manage the lists in the 📧 Email Recipients tool below.
+// =========================================================
+let _emailLists = null;
+
+async function _fetchEmailLists(force = false) {
+    if (_emailLists && !force) return _emailLists;
+    try {
+        const r = await fetch(`${EMAIL_RECIPIENTS_URL}?v=${Date.now()}`).then(x => x.json());
+        if (r && r.lists) _emailLists = r.lists;
+    } catch (e) { /* keep whatever we have — callers fall back */ }
+    return _emailLists;
+}
+
+function _recipientsFor(key, fallback) {
+    const list = _emailLists && _emailLists[key];
+    return (list && list.length) ? list.slice() : (fallback || []).slice();
+}
+
+// ---- the DM/CEO management tool ----
+const EMAIL_LIST_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+const EMAIL_LIST_GROUPS = [
+    {
+        title: '♻️ Recycle Month-End Report',
+        desc: 'Who the month-end recycle report email is addressed to.',
+        lists: [{ key: 'recycle_report', label: 'Recipients' }],
+    },
+    {
+        title: '📦 Box Orders',
+        desc: 'Supplier address each store\'s box order email opens to.',
+        lists: EMAIL_LIST_STORES.map(s => ({ key: `box_order_${s}`, label: s })),
+    },
+    {
+        title: '📈 Weekly SPEEKS Reports',
+        desc: 'Monday morning performance emails (sent automatically).',
+        lists: [
+            { key: 'weekly_leadership', label: 'Leadership report' },
+            ...EMAIL_LIST_STORES.map(s => ({ key: `weekly_store_${s}`, label: `${s} manager report` })),
+        ],
+    },
+];
+
+async function openEmailRecipients() {
+    closeAllModals();
+    toggleModal('emailRecipientsModal');
+    const body = document.getElementById('emailRecipientsBody');
+    if (body) body.innerHTML = '<div class="status-message">Loading recipients…</div>';
+    await _fetchEmailLists(true);
+    renderEmailRecipients();
+}
+
+function renderEmailRecipients() {
+    const body = document.getElementById('emailRecipientsBody');
+    if (!body) return;
+    if (!_emailLists) {
+        body.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; text-align: center; padding: 20px 0;">Could not load recipients. Close and try again.</div>';
+        return;
+    }
+
+    let html = `<p style="font-size: 12.5px; color: #64748b; margin: 0 0 14px;">
+        These lists control where each tool's emails go. Changes apply immediately —
+        the recycle report and box orders read them when composing, and the weekly
+        report reads them on every send.</p>`;
+
+    EMAIL_LIST_GROUPS.forEach(group => {
+        html += `<div style="margin-bottom: 18px;">
+            <div style="font-size: 13.5px; font-weight: 900; color: var(--slate-charcoal);">${group.title}</div>
+            <div style="font-size: 11.5px; color: #94a3b8; font-weight: 600; margin: 1px 0 8px;">${group.desc}</div>`;
+        group.lists.forEach(l => {
+            const emails = _recipientsFor(l.key, []);
+            const chips = emails.length
+                ? emails.map(e => `<span style="display: inline-flex; align-items: center; gap: 6px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 999px; padding: 3px 6px 3px 10px; font-size: 12px; font-weight: 700; color: var(--slate-charcoal); margin: 0 6px 6px 0;">
+                        ${escapeHtml(e)}
+                        <button data-key="${escapeHtml(l.key)}" data-email="${escapeHtml(e)}" onclick="emailRecipientRemove(this.dataset.key, this.dataset.email)" title="Remove" style="border: none; background: #e2e8f0; color: #64748b; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 900; cursor: pointer; line-height: 1;">✕</button>
+                    </span>`).join('')
+                : '<span style="font-size: 12px; color: #94a3b8; font-weight: 600; margin-right: 6px;">None — the built-in default applies.</span>';
+            const inputId = `email-add-${l.key}`;
+            html += `<div style="border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;">
+                <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; color: #64748b; margin-bottom: 7px;">${escapeHtml(l.label)}</div>
+                <div>${chips}</div>
+                <div style="display: flex; gap: 6px; margin-top: 6px;">
+                    <input type="email" id="${inputId}" placeholder="name@company.com" style="flex: 1; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 10px; font-size: 12.5px;"
+                        onkeydown="if(event.key==='Enter'){event.preventDefault(); emailRecipientAdd('${l.key}', '${inputId}', this.nextElementSibling);}">
+                    <button class="btn-secondary" style="padding: 6px 14px; font-size: 12px;" onclick="emailRecipientAdd('${l.key}', '${inputId}', this)">+ Add</button>
+                </div>
+            </div>`;
+        });
+        html += `</div>`;
+    });
+    body.innerHTML = html;
+}
+
+async function _emailRecipientsPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(EMAIL_RECIPIENTS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(payload),
+    });
+    return r.json();
+}
+
+async function emailRecipientAdd(listKey, inputId, btn) {
+    const input = document.getElementById(inputId);
+    const email = (input?.value || '').trim();
+    if (!email) return;
+    if (btn) btn.disabled = true;
+    const res = await _emailRecipientsPost({ action: 'add', list_key: listKey, email }).catch(() => null);
+    if (btn) btn.disabled = false;
+    if (res && res.success) { await _fetchEmailLists(true); renderEmailRecipients(); }
+    else alert((res && res.error) || 'Could not add — please try again.');
+}
+
+async function emailRecipientRemove(listKey, email) {
+    if (!confirm(`Remove ${email} from this list?`)) return;
+    const res = await _emailRecipientsPost({ action: 'remove', list_key: listKey, email }).catch(() => null);
+    if (res && res.success) { await _fetchEmailLists(true); renderEmailRecipients(); }
+    else alert((res && res.error) || 'Could not remove — please try again.');
+}
+
+// FALLBACK only — the live list comes from the email_recipients table (key
+// 'recycle_report'), editable in the DM's Email Recipients tool.
 const RECYCLE_REPORT_EMAILS = ['paul.kushnir@pikinvestments.com', 'dave.chaffin@pikinvestments.com'];
+function _recycleReportTo() { return _recipientsFor('recycle_report', RECYCLE_REPORT_EMAILS); }
 
 // Hover "i" (site-standard goals-info-i tooltip) explaining what Send Email
 // does and how to fix a machine where mailto: links open nothing.
@@ -14914,7 +15049,7 @@ function _recycleReportCompose() {
         `    - Repurposed for store use: ${_fmtRecycleMoney(grandFor)}${warn}\n\n` +
         `Thank you,\n${userName}`;
     return {
-        email: RECYCLE_REPORT_EMAILS.join(','),
+        email: _recycleReportTo().join(','),
         subject: `PayMore Recycle Report - ${monthLabel}`,
         body,
     };
@@ -14927,7 +15062,7 @@ function _recycleReportCompose() {
 // this back to ','.
 function sendRecycleReport() {
     const { subject, body } = _recycleReportCompose();
-    const to = RECYCLE_REPORT_EMAILS.join(';');
+    const to = _recycleReportTo().join(';');
     window.location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
@@ -15018,6 +15153,7 @@ const FEATURE_CATALOG = [
     { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: '📦 Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
     { key: 'tool-feature-access',      label: 'Feature Access (this tool)',    tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo'] },
+    { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
     { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
     { key: 'tool-manage-policies',     label: 'Manage Policies',               tab: 'tools', group: '👥 Admin', def: ['district-manager'] },

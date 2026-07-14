@@ -33,16 +33,35 @@ const GMAIL_RELAY  = Deno.env.get('GMAIL_RELAY_URL') || 'https://script.google.c
 const DEFAULT_TO   = 'ethan.kushnir@speekstechnology.com';
 
 // Leadership (DM/CEO) recipients.
-const LEADERSHIP_TO: string[] = ['ethan.kushnir@speekstechnology.com', 'paul.kushnir@pikinvestments.com'];
+// NOTE: both lists are FALLBACKS — loadRecipients() overwrites them from the
+// email_recipients table (managed via the DM's Email Recipients tool) on every
+// run. Editing recipients happens in that tool, not here.
+let LEADERSHIP_TO: string[] = ['ethan.kushnir@speekstechnology.com', 'paul.kushnir@pikinvestments.com'];
 // Per-store manager recipients. Falls back to DEFAULT_TO if a store is empty.
 // (Multi-store managers are listed under each store they run.)
-const STORE_TO: Record<string, string[]> = {
+let STORE_TO: Record<string, string[]> = {
   OVL: ['nickhett707@gmail.com'],
   LEE: ['jurellguild@outlook.com'],
   WSP: ['eli.kushnir@speekstechnology.com'],
   MPL: ['josephorte191@hotmail.com'],
   BAL: ['josephorte191@hotmail.com'],
 };
+
+// Overwrite the recipient lists from the email_recipients table (keys
+// weekly_leadership / weekly_store_<STORE>). Rows win over the constants
+// above; a list with no rows keeps its fallback.
+async function loadRecipients(sb: any) {
+  try {
+    const { data } = await sb.from('email_recipients').select('list_key, email');
+    if (!data?.length) return;
+    const lists: Record<string, string[]> = {};
+    data.forEach((r: any) => { (lists[r.list_key] = lists[r.list_key] || []).push(r.email); });
+    if (lists['weekly_leadership']?.length) LEADERSHIP_TO = lists['weekly_leadership'];
+    STORES.forEach((s) => {
+      if (lists[`weekly_store_${s}`]?.length) STORE_TO[s] = lists[`weekly_store_${s}`];
+    });
+  } catch (_e) { /* keep fallbacks */ }
+}
 
 const STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 const STORE_NAME: Record<string, string> = {
@@ -759,6 +778,7 @@ Deno.serve(async (req) => {
   try {
     const sb = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
     await loadReportCatalogs(sb);
+    await loadRecipients(sb);
     const weekEnd = q('weekEnd') ? parseYMD(q('weekEnd')!) : lastSundayCentral();
     const types = (q('types') || 'both').toLowerCase();
     const overrideTo = q('to');                       // test: send everything here
