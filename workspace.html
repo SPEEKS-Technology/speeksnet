@@ -14,6 +14,8 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
+  <!-- SheetJS: parses the DM's variance-report Excel upload client-side -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="speeks.js?v=20260709a" defer></script>
 </head>
 <body class="preload">
@@ -513,6 +515,7 @@
         -->
         <button class="ws-tab active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" id="ws-tab-brief" onclick="switchWorkspaceTab('brief')">📋 Monthly Breakdown</button>
         <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" id="ws-tab-kpis" onclick="switchWorkspaceTab('kpis')">📊 Weekly KPI's</button>
+        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager" data-feature="widget-variance-replies" id="ws-tab-vreplies" onclick="switchWorkspaceTab('vreplies')">📉 Variance Replies</button>
       </div>
 
       <div class="ws-panes">
@@ -601,6 +604,32 @@
           </div>
           <div class="b2b-board ws-scroll" id="b2bDealList">
               <div class="status-message">Syncing B2B Deals…</div>
+          </div>
+      </div>
+    </section>
+
+    <!-- ===== VARIANCE REPLIES PANE ===== -->
+    <section class="ws-pane" id="ws-pane-vreplies">
+      <div class="card kpi-master-card district-master-panel ws-panel">
+          <div class="district-kpi-header kpi-modal-header-tight">
+              <div class="align-center gap-15" style="flex-wrap:wrap;">
+                  <span class="district-kpi-title">Variance Replies</span>
+                  <select id="vr-store-select" class="kpi-select dynamic-module-block role-district-manager" onchange="vrOnStoreChange()" style="display:none;">
+                      <option value="OVL">OVL</option>
+                      <option value="LEE">LEE</option>
+                      <option value="WSP">WSP</option>
+                      <option value="MPL">MPL</option>
+                      <option value="BAL">BAL</option>
+                  </select>
+                  <select id="vr-period-select" class="kpi-select" onchange="vrOnPeriodChange()" style="display:none;"></select>
+                  <span id="vr-subtitle" style="font-size:11px;color:#888;font-weight:600;"></span>
+              </div>
+              <div class="align-center gap-8">
+                  <button id="vr-upload-btn" class="kpi-update-trigger-btn dynamic-module-flex role-district-manager" onclick="vrToggleUpload()" style="display:none;">⬆ Upload Report</button>
+              </div>
+          </div>
+          <div class="weekly-kpi-scroll-area ws-scroll" id="vr-body">
+              <div class="status-message">Loading variance replies…</div>
           </div>
       </div>
     </section>

@@ -57,6 +57,7 @@ const B2B_URL           = `${_BASE}/b2b-deals`;
 const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
 const RECYCLE_URL       = `${_BASE}/recycle-requests`;
 const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
+const VARIANCE_REPLIES_URL = `${_BASE}/variance-replies`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -3210,8 +3211,13 @@ function _kpiDecorateEditBtn(force) {
 // Steps 1 & 2: dots on the Analytics nav-link, the Store KPIs sub-tab, and the Weekly toggle
 function applyKpiReminder() {
     const on = _kpiReminderOn();
-    document.querySelectorAll('.nav-link[href="workspace.html"]').forEach(a => _kpiToggleDot(a, on));
+    // The workspace nav-link dot is shared with Variance Replies (both live on
+    // that page): it pulses if EITHER the weekly-KPI window is open or the
+    // manager has variance lines waiting on them.
+    const vrOn = typeof _vrDotNeeded === 'function' && _vrDotNeeded();
+    document.querySelectorAll('.nav-link[href="workspace.html"]').forEach(a => _kpiToggleDot(a, on || vrOn));
     _kpiToggleDot(document.getElementById('ws-tab-kpis'), on);
+    _kpiToggleDot(document.getElementById('ws-tab-vreplies'), vrOn);
     _kpiToggleDot(document.getElementById('kpi-tab-weekly'), on);
     _kpiDecorateEditBtn(on);
 }
@@ -3324,6 +3330,8 @@ function switchWorkspaceTab(name) {
         loadWorkspaceKpis();
     } else if (name === 'b2b') {
         fetchB2BDeals();
+    } else if (name === 'vreplies') {
+        loadVarianceReplies();
     }
     applyKpiReminder();
 }
@@ -3336,7 +3344,7 @@ function initWorkspace() {
     _wsKpiLoaded   = false;
     const hash = (window.location.hash || '').replace('#', '');
     // TEMP: B2B tab hidden — restore by putting 'b2b' back in the list and as the default.
-    const initial = ['brief', 'kpis'].includes(hash) ? hash : 'brief';
+    const initial = ['brief', 'kpis', 'vreplies'].includes(hash) ? hash : 'brief';
     switchWorkspaceTab(initial);
     applyKpiReminder();
 }
@@ -7684,7 +7692,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkVarianceReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -14321,6 +14329,7 @@ const FEATURE_CATALOG = [
     { key: 'widget-emp-weekly-kpis',   label: 'My Weekly KPIs (employee)',     tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-variance-reports',  label: 'Live Variance Reports (manager)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    { key: 'widget-variance-replies',  label: 'Variance Replies (workspace tab)', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
     //      the link just inherits it. ----
@@ -14841,4 +14850,475 @@ async function faClearUser() {
         alert('Could not clear: ' + e.message);
         _faLoad();
     }
+}
+
+// ============================================================
+// VARIANCE REPLIES (workspace tab)
+// ============================================================
+// The DM uploads the ≤ -10% variance line items per store per period (parsed
+// client-side from the Excel sheet via SheetJS on workspace.html); store
+// managers explain each line (GM Notes), the DM responds (DM Notes) within
+// the week, and managers reply back (Replies to DM Notes) — replacing the
+// shared spreadsheet. Pulsing dots + the shared red reminder bubble nudge
+// managers the day before the deadline and when DM notes land.
+
+const _VR_MANAGER_ROLES = new Set(['manager', 'owner (manager)', 'owner manager']);
+
+function _vrRole() { return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(); }
+function _vrIsDM() { return _vrRole() === 'district manager'; }
+function _vrIsManager() { return _VR_MANAGER_ROLES.has(_vrRole()); }
+
+// Stores whose periods the tab shows: DM browses via the store dropdown;
+// an MSM sees both managed stores; a manager is locked to their own.
+function _vrStores() {
+    if (_vrIsDM()) {
+        const sel = document.getElementById('vr-store-select');
+        return [(sel && sel.value ? sel.value : 'OVL').toUpperCase()];
+    }
+    return _vrMyStores();
+}
+
+// The manager's own store(s) — used for reminders/dots regardless of UI state.
+function _vrMyStores() {
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        return [...MULTISTORE_MANAGER_STORES];
+    }
+    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
+}
+
+let _vrPeriods = [];      // period summaries for the pickers
+let _vrCurrent = null;    // { period, items } currently open
+let _vrUploadOpen = false;
+let _vrParsed = null;     // parsed Excel rows awaiting confirm
+
+const _vrFmtPct = v => (v == null || v === '') ? '—'
+    : `${Number(v) > 0 ? '+' : ''}${Number(v).toFixed(Math.abs(Number(v)) % 1 ? 1 : 0)}%`;
+const _vrFmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+
+async function loadVarianceReplies() {
+    const body = document.getElementById('vr-body');
+    if (!body) return;
+    body.innerHTML = '<div class="status-message">Loading variance replies…</div>';
+    const stores = _vrStores();
+    if (!stores.length) {
+        body.innerHTML = '<div class="status-message">No store assigned to your account.</div>';
+        return;
+    }
+    try {
+        const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        _vrPeriods = json.data || [];
+        _vrBuildPeriodPicker();
+        const sel = document.getElementById('vr-period-select');
+        if (sel && sel.value) await vrOpenPeriod(sel.value);
+        else { _vrCurrent = null; renderVarianceReplies(); }
+    } catch (e) {
+        body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load variance replies.</div>';
+    }
+}
+
+function _vrBuildPeriodPicker() {
+    const sel = document.getElementById('vr-period-select');
+    if (!sel) return;
+    if (!_vrPeriods.length) { sel.style.display = 'none'; sel.innerHTML = ''; return; }
+    const current = sel.value;
+    const multi = _vrStores().length > 1;
+    sel.innerHTML = _vrPeriods.map(p => {
+        const label = `${multi || _vrIsDM() ? p.store + ' · ' : ''}${formatVarianceRange(p.date_from, p.date_to)}${p.timeframe ? ' · ' + p.timeframe : ''}`;
+        return `<option value="${p.id}">${escapeHtml(label)}</option>`;
+    }).join('');
+    sel.style.display = '';
+    if ([...sel.options].some(o => o.value === current)) sel.value = current;
+}
+
+function vrOnStoreChange() { _vrUploadOpen = false; _vrParsed = null; loadVarianceReplies(); }
+function vrOnPeriodChange() {
+    const sel = document.getElementById('vr-period-select');
+    if (sel && sel.value) vrOpenPeriod(sel.value);
+}
+
+async function vrOpenPeriod(pid) {
+    const body = document.getElementById('vr-body');
+    try {
+        const res = await fetch(`${VARIANCE_REPLIES_URL}?period_id=${encodeURIComponent(pid)}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        _vrCurrent = json;
+        renderVarianceReplies();
+    } catch (e) {
+        if (body) body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load that period.</div>';
+    }
+}
+
+function _vrSubtitleText() {
+    if (!_vrCurrent || !_vrCurrent.period) return '';
+    const p = _vrCurrent.period;
+    const items = _vrCurrent.items || [];
+    const answered = items.filter(i => i.gm_note).length;
+    const due = new Date(p.manager_due_at);
+    const overdue = Date.now() > due.getTime() && answered < items.length;
+    return `Replies due ${due.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}${overdue ? ' (overdue)' : ''} · ${answered}/${items.length} explained`;
+}
+
+function _vrUpdateProgressLine() {
+    const sub = document.getElementById('vr-subtitle');
+    if (sub) sub.textContent = _vrSubtitleText();
+}
+
+function renderVarianceReplies() {
+    const body = document.getElementById('vr-body');
+    if (!body) return;
+    let html = '';
+    if (_vrIsDM() && _vrUploadOpen) html += _vrUploadPanelHtml();
+
+    if (!_vrCurrent || !_vrCurrent.period) {
+        const hint = _vrIsDM()
+            ? 'No variance uploads for this store yet. Click “⬆ Upload Report” to add the first period.'
+            : 'No variance report has been uploaded for your store yet.';
+        body.innerHTML = html + `<div style="padding:36px 20px; text-align:center; color:#94a3b8; font-weight:600;">${hint}</div>`;
+        _vrUpdateProgressLine();
+        return;
+    }
+
+    const p = _vrCurrent.period;
+    const items = _vrCurrent.items || [];
+    const canGm = _vrIsManager();
+    const canDm = _vrIsDM();
+
+    html += `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
+        <div style="font-size:12px; color:#64748b; font-weight:600; line-height:1.5;">
+            <b>${escapeHtml(p.store)}</b> · ${formatVarianceRange(p.date_from, p.date_to)}${p.timeframe ? ' · ' + escapeHtml(p.timeframe) : ''}
+            · uploaded ${_vrFmtDate(p.uploaded_at)}${p.uploaded_by ? ' by ' + escapeHtml(p.uploaded_by) : ''}
+            <br>${canGm ? 'Explain how each item sold this far under projection, then check back for DM notes and reply where asked.' : 'Managers explain each line; add your DM notes and questions — managers are pinged to respond.'}
+        </div>
+        ${canDm ? `<button class="btn-secondary" style="font-size:11.5px; padding:6px 12px;" onclick="vrDeletePeriod('${p.id}')">🗑 Delete this upload</button>` : ''}
+    </div>`;
+
+    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 8px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
+    const td = (c, extra = '') => `<td style="padding:8px; border-bottom:1px solid #f1f5f9; vertical-align:top; font-size:12px; ${extra}">${c}</td>`;
+    html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; min-width:1080px;">
+        <thead><tr>${th('Order #')}${th('SKU')}${th('Item Title')}${th('Buyer')}${th('Lister')}${th('Var.')}${th('GM Notes')}${th('DM Notes')}${th('Replies to DM Notes')}</tr></thead><tbody>`;
+
+    items.forEach(it => {
+        const pct = it.variance_pct == null ? null : Number(it.variance_pct);
+        const sev = pct == null ? '#94a3b8' : (pct <= -50 ? '#dc2626' : (pct <= -25 ? '#ea580c' : '#d97706'));
+        html += `<tr>
+            ${td(`<span style="font-weight:700; white-space:nowrap;">${escapeHtml(it.order_number || '—')}</span>`)}
+            ${td(`<span style="white-space:nowrap; color:#64748b;">${escapeHtml(it.sku || '—')}</span>`)}
+            ${td(`<span style="color:var(--slate-charcoal);">${escapeHtml(it.item_title || '—')}</span>`, 'min-width:200px;')}
+            ${td(escapeHtml(it.buyer_name || '—'), 'white-space:nowrap;')}
+            ${td(escapeHtml(it.lister_name || '—'), 'white-space:nowrap;')}
+            ${td(`<span style="font-weight:900; color:${sev}; white-space:nowrap;">${_vrFmtPct(pct)}</span>`)}
+            ${td(_vrNoteCell(it, 'gm_note', canGm, 'Why did this sell so far under projection?'))}
+            ${td(_vrNoteCell(it, 'dm_note', canDm, 'Advice or a question for the manager…'))}
+            ${td(_vrNoteCell(it, 'mgr_reply', canGm && !!it.dm_note, it.dm_note ? 'Reply to the DM note…' : ''))}
+        </tr>`;
+    });
+    html += `</tbody></table></div>`;
+    body.innerHTML = html;
+    _vrUpdateProgressLine();
+}
+
+// One note cell: a textarea (autosaves on blur) for the side that owns the
+// column, read-only text + author/date caption for everyone else.
+function _vrNoteCell(it, field, editable, placeholder) {
+    const val = it[field] || '';
+    const by = it[field + '_by'];
+    const at = it[field + '_at'];
+    const caption = (val && (by || at))
+        ? `<div style="font-size:10px; color:#94a3b8; font-weight:700; margin-top:3px;">${escapeHtml(by || '')}${at ? ' · ' + _vrFmtDate(at) : ''}</div>` : '';
+    if (!editable) {
+        const txt = val ? escapeHtml(val) : `<span style="color:#cbd5e1;">${field === 'mgr_reply' && !it.dm_note ? '' : '—'}</span>`;
+        return `<div style="min-width:190px; line-height:1.45; color:#334155;">${txt}${caption}</div>`;
+    }
+    return `<div style="min-width:210px;">
+        <textarea rows="2" placeholder="${escapeHtml(placeholder || '')}"
+            style="width:100%; box-sizing:border-box; padding:7px 9px; border:1.5px solid #cbd5e1; border-radius:7px; font-size:12px; font-weight:500; font-family:inherit; line-height:1.4; resize:vertical; background:#fff; transition:border-color .3s;"
+            onblur="vrSaveNote('${it.id}', '${field}', this)">${escapeHtml(val)}</textarea>${caption}</div>`;
+}
+
+async function vrSaveNote(itemId, field, ta) {
+    const item = ((_vrCurrent && _vrCurrent.items) || []).find(i => i.id === itemId);
+    if (!item) return;
+    const text = ta.value.trim();
+    if ((item[field] || '') === text) return; // unchanged — no write
+    try {
+        const res = await fetch(VARIANCE_REPLIES_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'save_note', item_id: itemId, field, text,
+                by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+        const name = sessionStorage.getItem('speeksUserName') || null;
+        item[field] = text || null;
+        item[field + '_by'] = text ? name : null;
+        item[field + '_at'] = text ? new Date().toISOString() : null;
+        if (field === 'dm_note' && text && _vrCurrent.period && !_vrCurrent.period.dm_notes_at) {
+            _vrCurrent.period.dm_notes_at = new Date().toISOString();
+        }
+        ta.style.borderColor = '#34d399';
+        setTimeout(() => { ta.style.borderColor = ''; }, 1400);
+        _vrUpdateProgressLine();
+    } catch (e) {
+        ta.style.borderColor = '#dc2626';
+        alert('Could not save that note: ' + e.message);
+    }
+}
+
+async function vrDeletePeriod(id) {
+    if (!confirm('Delete this entire variance upload (all line items and replies)?')) return;
+    try {
+        const res = await fetch(VARIANCE_REPLIES_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_period', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        _vrCurrent = null;
+        loadVarianceReplies();
+    } catch (e) {
+        alert('Could not delete: ' + e.message);
+    }
+}
+
+// ---- DM upload flow (SheetJS parses the sheet in the browser) ---------------
+function vrToggleUpload() {
+    _vrUploadOpen = !_vrUploadOpen;
+    _vrParsed = null;
+    renderVarianceReplies();
+}
+
+function _vrUploadPanelHtml() {
+    const inp = 'padding:8px 10px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:12.5px; font-weight:600; background:#fff; box-sizing:border-box;';
+    const lbl = t => `<label style="display:block; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; margin-bottom:4px;">${t}</label>`;
+    const store = (document.getElementById('vr-store-select') || {}).value || 'OVL';
+    let preview = '';
+    if (_vrParsed) {
+        if (_vrParsed.items.length) {
+            const pcts = _vrParsed.items.map(i => i.variance_pct).filter(v => v != null);
+            preview = `<div style="margin-top:10px; font-size:12px; font-weight:600; color:#334155;">
+                ✅ Parsed <b>${_vrParsed.items.length}</b> line item${_vrParsed.items.length > 1 ? 's' : ''}${pcts.length ? ` · variance ${_vrFmtPct(Math.max(...pcts))} to ${_vrFmtPct(Math.min(...pcts))}` : ''}${_vrParsed.skipped ? ` · <span style="color:#d97706;">${_vrParsed.skipped} row${_vrParsed.skipped > 1 ? 's' : ''} skipped (no order # / SKU)</span>` : ''}
+                <button class="btn-primary" style="margin-left:12px; font-size:12px; padding:7px 16px;" onclick="vrConfirmUpload(this)">Upload ${_vrParsed.items.length} items to ${store} →</button>
+            </div>`;
+        } else {
+            preview = `<div style="margin-top:10px; font-size:12px; font-weight:700; color:#dc2626;">Couldn't find any line items — make sure the sheet has an "Order Number" and "SKU" header row.</div>`;
+        }
+    }
+    return `<div style="background:#f8fafc; border:1.5px solid #e2e8f0; border-radius:12px; padding:14px 16px; margin-bottom:16px;">
+        <div style="font-weight:800; font-size:13px; color:var(--slate-charcoal); margin-bottom:10px;">⬆ Upload variance report for <b>${store}</b> <span style="font-weight:600; color:#94a3b8;">(store is picked in the dropdown above)</span></div>
+        <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+            <div>${lbl('Timeframe')}<select id="vr-up-timeframe" style="${inp}"><option>Bi-Weekly</option><option>Monthly</option></select></div>
+            <div>${lbl('From')}<input type="date" id="vr-up-from" style="${inp}"></div>
+            <div>${lbl('To')}<input type="date" id="vr-up-to" style="${inp}"></div>
+            <div>${lbl('Excel file (.xlsx)')}<input type="file" id="vr-up-file" accept=".xlsx,.xls,.csv" style="${inp} padding:6px;" onchange="vrHandleFile(this)"></div>
+        </div>
+        <div style="font-size:11px; color:#94a3b8; font-weight:600; margin-top:8px;">Columns read: Order Number, SKU, Item Title, Buyer Name, Lister Employee, Variance — plus GM/DM Notes and Replies if the sheet already has them. Managers get 1 week from upload to reply.</div>
+        ${preview}
+    </div>`;
+}
+
+function vrHandleFile(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    if (typeof XLSX === 'undefined') { alert('The Excel parser has not loaded — refresh the page and try again.'); return; }
+    const reader = new FileReader();
+    reader.onload = e => {
+        try {
+            const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+            _vrParsed = _vrParseRows(rows);
+            renderVarianceReplies();
+        } catch (err) {
+            alert('Could not read that file: ' + err.message);
+        }
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+// Turns the raw sheet grid into line items. Finds the header row (a row that
+// mentions both "order" and "sku"), maps columns by header text, and reads
+// everything below it. Tolerant of the title/banner rows above the header.
+function _vrParseRows(rows) {
+    const norm = s => String(s || '').trim().toLowerCase();
+    let headerIdx = -1, colMap = {};
+    for (let i = 0; i < Math.min(rows.length, 15); i++) {
+        const joined = rows[i].map(norm).join('|');
+        if (joined.includes('order') && joined.includes('sku')) { headerIdx = i; break; }
+    }
+    if (headerIdx === -1) return { items: [], skipped: 0 };
+    rows[headerIdx].forEach((h, c) => {
+        const n = norm(h);
+        if (!n) return;
+        if (n.includes('order')) colMap.order_number = c;
+        else if (n === 'sku' || n.includes('sku')) colMap.sku = c;
+        else if (n.includes('title') || n.includes('description')) colMap.item_title = c;
+        else if (n.includes('buyer')) colMap.buyer_name = c;
+        else if (n.includes('lister')) colMap.lister_name = c;
+        else if (n.includes('variance')) colMap.variance_pct = c;
+        else if (n.includes('gm note')) colMap.gm_note = c;
+        else if (n.includes('repl')) colMap.mgr_reply = c;      // "Replies to DM Notes" — check before "dm note"
+        else if (n.includes('dm note')) colMap.dm_note = c;
+    });
+    const items = [];
+    let skipped = 0;
+    for (let i = headerIdx + 1; i < rows.length; i++) {
+        const row = rows[i] || [];
+        const get = k => colMap[k] === undefined ? '' : String(row[colMap[k]] || '').trim();
+        const orderNumber = get('order_number');
+        const sku = get('sku');
+        if (!orderNumber && !sku) {
+            if (row.some(c => String(c).trim() !== '')) skipped++;
+            continue;
+        }
+        items.push({
+            order_number: orderNumber || null,
+            sku: sku || null,
+            item_title: get('item_title') || null,
+            buyer_name: get('buyer_name') || null,
+            lister_name: get('lister_name') || null,
+            variance_pct: _vrParseVariance(get('variance_pct')),
+            gm_note: get('gm_note') || null,
+            dm_note: get('dm_note') || null,
+            mgr_reply: get('mgr_reply') || null,
+        });
+    }
+    return { items, skipped };
+}
+
+// "-25.00%" → -25; "-0.25" (an unformatted Excel percent) → -25; "-25" → -25.
+function _vrParseVariance(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return null;
+    const hadPct = s.includes('%');
+    const n = parseFloat(s.replace(/[%,\s]/g, ''));
+    if (!Number.isFinite(n)) return null;
+    if (!hadPct && Math.abs(n) <= 1.5) return Math.round(n * 10000) / 100;
+    return Math.round(n * 100) / 100;
+}
+
+async function vrConfirmUpload(btn) {
+    if (!_vrParsed || !_vrParsed.items.length) return;
+    const store = (document.getElementById('vr-store-select') || {}).value || '';
+    const timeframe = (document.getElementById('vr-up-timeframe') || {}).value || '';
+    const from = (document.getElementById('vr-up-from') || {}).value;
+    const to = (document.getElementById('vr-up-to') || {}).value;
+    if (!from || !to) { alert('Please set the From and To dates for this report period.'); return; }
+    if (from > to) { alert('The From date must be before the To date.'); return; }
+    const old = btn.innerText;
+    btn.disabled = true; btn.innerText = 'Uploading…';
+    try {
+        const res = await fetch(VARIANCE_REPLIES_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'upload_period', store, date_from: from, date_to: to, timeframe,
+                uploaded_by: sessionStorage.getItem('speeksUserName') || null,
+                items: _vrParsed.items,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Upload failed');
+        _vrUploadOpen = false;
+        _vrParsed = null;
+        loadVarianceReplies(); // newest period tops the picker and opens
+    } catch (e) {
+        alert('Upload failed: ' + e.message);
+        btn.disabled = false; btn.innerText = old;
+    }
+}
+
+// ---- reminders: pulsing dots + shared red bubble -----------------------------
+// Managers get a dot on the Analytics nav-link and the Variance Replies tab
+// while lines await their explanation, and again when DM notes await a reply.
+// The red bubble fires once per day per period: the day before the deadline
+// ("get this done before EOD tomorrow") and while DM notes sit unanswered.
+let _vrRemindersStarted = false;
+let _vrMyPeriodsCache = [];
+
+function _vrDotNeeded() {
+    return _vrMyPeriodsCache.some(p => (p.items - p.answered) > 0 || p.awaiting_reply > 0);
+}
+
+async function checkVarianceReminders() {
+    if (!_vrIsManager()) return;
+    const stores = _vrMyStores();
+    if (!stores.length) return;
+    if (!_vrRemindersStarted) {
+        _vrRemindersStarted = true;
+        setInterval(checkVarianceReminders, 10 * 60 * 1000);
+    }
+    try {
+        const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json || json.success === false) return;
+        // ignore stale periods so a forgotten upload can't pin the dot forever
+        const cutoff = Date.now() - 45 * 86400000;
+        _vrMyPeriodsCache = (json.data || []).filter(p => new Date(p.uploaded_at).getTime() > cutoff);
+        applyKpiReminder(); // re-evaluates the shared workspace nav dot + tab dot
+        _vrMaybePopup();
+    } catch (e) { /* next poll retries */ }
+}
+
+function _vrMaybePopup() {
+    const bubble = document.getElementById('claimAlertBubble');
+    if (!bubble) return;
+    // never clobber a claim reminder / aging alert already on screen — the
+    // 10-minute poll will get another chance once it's dismissed
+    if (bubble.style.display === 'flex') return;
+    const now = Date.now();
+    const today = new Date().toDateString();
+    for (const p of _vrMyPeriodsCache) {
+        const unanswered = p.items - p.answered;
+        const due = new Date(p.manager_due_at).getTime();
+        // 1) due tomorrow (last 24h before the deadline) and lines still open
+        if (unanswered > 0 && now < due && due - now < 24 * 3600 * 1000) {
+            const key = `speeksVRDueSeen_${p.id}_${today}`;
+            if (!localStorage.getItem(key)) {
+                localStorage.setItem(key, '1');
+                _vrRenderBubble('⏰', 'Variance replies due tomorrow',
+                    `${p.store} still has ${unanswered} variance line${unanswered > 1 ? 's' : ''} without an explanation for ${formatVarianceRange(p.date_from, p.date_to)}. Make sure they're done before EOD tomorrow.`);
+                return;
+            }
+        }
+        // 2) DM notes waiting on a manager reply (max one nudge per day)
+        if (p.awaiting_reply > 0) {
+            const key = `speeksVRDmSeen_${p.id}_${today}`;
+            if (!localStorage.getItem(key)) {
+                localStorage.setItem(key, '1');
+                _vrRenderBubble('💬', 'DM reviewed your variance replies',
+                    `${p.store}: ${p.awaiting_reply} line${p.awaiting_reply > 1 ? 's have' : ' has'} DM notes for ${formatVarianceRange(p.date_from, p.date_to)}. Review them and answer any questions.`);
+                return;
+            }
+        }
+    }
+}
+
+// Same shared red bubble as the claim reminders, with a button into the tab.
+function _vrRenderBubble(icon, title, bodyText) {
+    const bubble = document.getElementById('claimAlertBubble');
+    const textEl = document.getElementById('claimAlertBubbleText');
+    const iconEl = document.getElementById('claimAlertBubbleIcon');
+    if (!bubble || !textEl) return;
+    _reminderBubbleActive = true; // keep the aging-claims check from overwriting it
+    if (iconEl) { iconEl.textContent = icon; iconEl.style.display = ''; }
+    textEl.style.display = 'flex';
+    textEl.style.flexDirection = 'column';
+    textEl.style.gap = '7px';
+    textEl.innerHTML = `
+        <div style="line-height:1.4;"><strong>${escapeHtml(title)}</strong></div>
+        <div style="line-height:1.4; opacity:0.96;">${escapeHtml(bodyText)}</div>
+        <button onclick="closeClaimAlertBubble(); window.location.href='workspace.html#vreplies';"
+            style="align-self:flex-start; background:rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.5); color:#fff; font-weight:800; font-size:12px; border-radius:8px; padding:6px 12px; cursor:pointer;"
+            onmouseover="this.style.background='rgba(255,255,255,0.3)';" onmouseout="this.style.background='rgba(255,255,255,0.18)';">Open Variance Replies</button>`;
+    bubble.style.display = 'flex';
+    _positionClaimAlert();
+    bubble.animate([
+        { transform: 'scale(0.95) translateX(10px)', opacity: 0 },
+        { transform: 'scale(1) translateX(0)', opacity: 1 }
+    ], { duration: 400, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
 }
