@@ -58,6 +58,7 @@ const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
 const RECYCLE_URL       = `${_BASE}/recycle-requests`;
 const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
 const VARIANCE_REPLIES_URL = `${_BASE}/variance-replies`;
+const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -2375,6 +2376,47 @@ function _kpiEmpRowsHtml(entries, periodDate, isEditing, isAvg) {
     }).join('');
 }
 
+// DM/CEO aren't on any store roster (kpi-manage excludes corp roles), but when
+// they work a shift — buying, listing — the store's stats should include them.
+// While editing the current period, a corp user gets an "add me" row that
+// appends them as a one-off entry for THAT period only. The row is only
+// persisted if numbers are actually saved for it, and past periods are
+// historical snapshots, so they never appear on weeks they didn't work.
+function _kpiAddSelfRowHtml(p, isEditing) {
+    if (!isEditing || !p.is_editable) return '';
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (role !== 'ceo' && role !== 'district manager') return '';
+    const name = sessionStorage.getItem('speeksUserName');
+    if (!name || (p.entries || []).some(function(e) { return e.employee_name === name; })) return '';
+    const cols = 1 + _KPI_GRID_FIELDS.length;
+    const period = _kpiCurrentTab === 'weekly' ? 'week' : 'month';
+    const tag = role === 'ceo' ? 'CEO' : 'DM';
+    return '<tr><td colspan="' + cols + '" style="padding:8px 12px; background:#f8fafc; border-top:1px solid #f1f5f9;">' +
+        '<button type="button" onclick="_kpiAddSelf(\'' + p.period_end_date + '\')" title="Adds a row for you on this ' + period + ' only — use it when you helped the store with buying or listing" ' +
+        'style="font-size:12px; font-weight:800; color:#1d4ed8; background:#eff6ff; border:1.5px solid #bfdbfe; border-radius:8px; padding:6px 12px; cursor:pointer;">+ Add ' + escapeHtml(name) + ' (' + tag + ') — helped out this ' + period + '</button>' +
+        '</td></tr>';
+}
+
+function _kpiAddSelf(periodDate) {
+    const name = sessionStorage.getItem('speeksUserName');
+    if (!name) return;
+    const p = (_kpiPeriodsData || []).find(function(x) { return x.period_end_date === periodDate; });
+    if (!p || p.entries.some(function(e) { return e.employee_name === name; })) return;
+    // _selfAdded marks the row as a local, not-yet-saved addition so cancelling
+    // the edit can remove it again (saved rows have an id and are kept).
+    p.entries.push({ employee_name: name, _selfAdded: true });
+    if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
+    else _kpiRenderMonthly(_kpiPeriodsData);
+}
+
+// Cancelling an edit discards self-added rows that were never saved — the DM
+// shouldn't linger in the grid after backing out.
+function _kpiStripUnsavedSelfRows() {
+    (_kpiPeriodsData || []).forEach(function(p) {
+        p.entries = (p.entries || []).filter(function(e) { return !(e._selfAdded && !e.id); });
+    });
+}
+
 function _kpiUpdateRow(pk, empIdx) {
     const g   = function(k) { var el = document.getElementById('kpi-' + pk + '-' + empIdx + '-' + k); return el ? (Number(el.value) || 0) : 0; };
     const bv  = g('buying_value'),        bc  = g('buying_cost');
@@ -2477,6 +2519,7 @@ function _kpiRenderWeekly(periods) {
             _kpiSectionControls(p.period_end_date, isEd, p.is_editable), '#3b82f6');
         tbody += _kpiHeaderRowsHtml();
         tbody += _kpiEmpRowsHtml(p.entries, p.period_end_date, isEd, false);
+        tbody += _kpiAddSelfRowHtml(p, isEd);
         const hasSavedData = p.entries.some(function(e) { return e.id; });
         if (hasSavedData) tbody += _kpiStoreTotalRowHtml(p.entries);
     });
@@ -3138,6 +3181,7 @@ function _kpiRenderMonthly(periods) {
             _kpiSectionControls(p.period_end_date, isEd, p.is_editable), '#7c3aed');
         tbody += _kpiHeaderRowsHtml();
         tbody += _kpiEmpRowsHtml(p.entries, p.period_end_date, isEd, false);
+        tbody += _kpiAddSelfRowHtml(p, isEd);
         const hasSavedData = p.entries.some(function(e) { return e.id; });
         if (hasSavedData) tbody += _kpiStoreTotalRowHtml(p.entries);
     });
@@ -3236,6 +3280,7 @@ function kpiHeaderSave() {
 
 function kpiHeaderCancel() {
     _kpiEditingPeriod = null;
+    _kpiStripUnsavedSelfRows();
     if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
     else _kpiRenderMonthly(_kpiPeriodsData);
 }
@@ -3401,6 +3446,7 @@ function _kpiStartEdit(periodDate) {
 
 function _kpiCancelEdit() {
     _kpiEditingPeriod = null;
+    _kpiStripUnsavedSelfRows();
     if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
     else _kpiRenderMonthly(_kpiPeriodsData);
 }
@@ -3915,55 +3961,10 @@ function populateRecordsModal() {
     list.innerHTML = html;
 }
 
-function populateAlertsModal() {
-    const list = document.getElementById('manageAlertsList');
-    const STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-    
-    // Explicit conversion logic: Decimal to Percentage
-    const fmtInput = (val) => {
-        if (val === null || val === undefined || String(val).trim() === '') return '';
-        let str = String(val).trim();
-        if (str.includes('%')) {
-            return parseFloat(str.replace(/[^0-9.-]/g, '')).toFixed(2);
-        }
-        let num = parseFloat(str.replace(/[^0-9.-]/g, ''));
-        if (isNaN(num)) return str;
-        return (num * 100).toFixed(2);
-    };
-
-    let html = '';
-
-    STORES.forEach(storeName => {
-        let sData = globalAlertsData.find(s => s.store.toUpperCase() === storeName) || { 
-            store: storeName, currentHigh: '', currentVeryHigh: '', projectedHigh: '', projectedVeryHigh: '',
-            defectRate: '', lateShipment: '', casesClosed: '', tracking: '' 
-        };
-        
-        html += `
-            <div class="alert-manage-row" data-store="${storeName}" style="background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 15px;">
-                <div style="font-weight: 900; color: var(--slate-charcoal); font-size: 14px; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 5px;">${storeName}</div>
-                
-                <div style="font-size: 11px; font-weight: 800; color: #888; text-transform: uppercase; margin-bottom: 6px;">eBay Performance Metrics</div>
-                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px;">
-                    <input type="text" class="a-ch" placeholder="Cur. High" title="Current High" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${sData.currentHigh || ''}">
-                    <input type="text" class="a-cvh" placeholder="Cur. Very High" title="Current Very High" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${sData.currentVeryHigh || ''}">
-                    <input type="text" class="a-ph" placeholder="Proj. High" title="Projected High" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${sData.projectedHigh || ''}">
-                    <input type="text" class="a-pvh" placeholder="Proj. Very High" title="Projected Very High" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${sData.projectedVeryHigh || ''}">
-                </div>
-
-                <div style="font-size: 11px; font-weight: 800; color: #888; text-transform: uppercase; margin-bottom: 6px;">eBay Top Rated Metrics</div>
-                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">
-                    <input type="text" class="a-dr" placeholder="Defect Rate" title="Transaction Defect Rate" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${fmtInput(sData.defectRate)}">
-                    <input type="text" class="a-ls" placeholder="Late Shipment" title="Late Shipment Rate" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${fmtInput(sData.lateShipment)}">
-                    <input type="text" class="a-cc" placeholder="Cases Closed" title="Cases Closed w/o Resolution" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${fmtInput(sData.casesClosed)}">
-                    <input type="text" class="a-tr" placeholder="Tracking" title="Tracking Uploaded" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${fmtInput(sData.tracking)}">
-                </div>
-            </div>
-        `;
-    });
-
-    list.innerHTML = html;
-}
+// NOTE: populateAlertsModal lives with the rest of the alerts module (see the
+// definition further down, next to saveAlertsData). An older duplicate that
+// used decimal→percentage input conversion was removed from here — the alerts
+// API stores rate values as the percentage number itself.
 
 async function saveManageRecords() {
     const btn = document.getElementById('saveRecordsBtn');
@@ -4576,6 +4577,10 @@ async function fetchScorecardData() {
         const json = await response.json();
         if (!json.success) throw new Error(json.error);
         window._scorecardAllData = json.data || [];
+        if (json.catalog) {
+            window._scCatalog = json.catalog.scorecard_items || [];
+            window._auCatalog = json.catalog.audit_items || [];
+        }
 
         const storeData = json.data.find(item => String(item.store).toUpperCase() === targetStore.toUpperCase());
 
@@ -5374,6 +5379,9 @@ const ListingGoalsEngine = {
     // Incremental: ±20 listings per person, anchored at 4 people = 190 (floor 150).
     // 2→150, 3→170, 4→190, 5→210, 6→230. Mirrors baseForSize() in the
     // store-targets edge function so the frontend and server stay in lock-step.
+    // The MSM boost (+15 on stores an MSM covers) is added OUTSIDE this formula
+    // (server msmBoost / frontend _msmTargetBoost) so scale() — and therefore
+    // per-person daily goals — stays unboosted: regular listers don't absorb it.
     weeklyTarget(size)       { return Math.max(150, 110 + 20 * size); },
     modelSize(rosterSize)    { return rosterSize >= 4 ? 4 : 3; },
 
@@ -5395,6 +5403,8 @@ const ListingGoalsEngine = {
     weightFor(role, staffedCount) {
         // On 2-person days the lister also covers the floor → reduced weight.
         if (role === 'L1' && staffedCount <= 2) return this.roleWeight.L1_SHARED;
+        // L3, L4, … (rosters past 4 people) score like a dedicated lister.
+        if (this.roleWeight[role] == null && /^L\d+$/.test(role)) return this.roleWeight.L1;
         return this.roleWeight[role] || 0;
     },
     scale(rosterSize) {
@@ -5438,6 +5448,19 @@ function normalizeGoalDate(s) {
     return isNaN(d.getTime()) ? String(s).trim() : d.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
 }
 
+// Role dots offered in the goal widgets. Small teams get one lister, normal
+// teams two; past 4 people the lister lane keeps extending (L3, L4, …) so a
+// fully-staffed day can give everyone a role. Extra listers score like L1.
+// Pass a roster size for a specific store (MSM stacked widget); defaults to
+// the single-store global roster.
+function goalsAvailableRoles(count) {
+    const n = (count == null) ? goalsRoster.length : count;
+    if (n <= 2) return ['B1', 'B2', 'L1'];
+    const roles = ['B1', 'B2', 'L1', 'L2'];
+    for (let i = 3; i <= n - 2; i++) roles.push('L' + i);
+    return roles;
+}
+
 function toggleEditDate(isYest) {
     editingYesterday = isYest;
     buildGoalsEditForm(); // Re-render the form for the selected day
@@ -5468,6 +5491,7 @@ async function initListingGoals() {
 async function fetchLiveGoalsData() {
     const list = document.getElementById('goals-manager-body');
     if (!list) return;
+    if (isMultiStoreManager()) return fetchLiveGoalsDataMS();
     list.innerHTML = '<div class="status-message">Syncing Data...</div>';
 
     goalsTargetStore = sessionStorage.getItem('speeksUserStore') || 'OVL';
@@ -5689,7 +5713,7 @@ function buildGoalsEditForm() {
     }
     
     let html = '';
-    const availableRoles = goalsRoster.length <= 2 ? ['B1', 'B2', 'L1'] : ['B1', 'B2', 'L1', 'L2'];
+    const availableRoles = goalsAvailableRoles();
 
     // Inject the Toggle into the Header title space dynamically
     const titleEl = document.getElementById('goals-input-title');
@@ -5753,6 +5777,7 @@ window.scheduleGoalsAutosave = function() {
 };
 
 async function saveGoalsData(silent = false) {
+    if (_msGoalsActive()) return saveGoalsDataMS(silent);
     const status = document.getElementById('goals-save-status');
     if (status && !silent) { status.textContent = 'Saving…'; status.className = 'goals-save-status saving'; }
 
@@ -5820,9 +5845,11 @@ async function saveGoalsData(silent = false) {
 }
 
 // Flip the manager's "Set Listing Goals" daily checklist task to done.
-async function markListingGoalsChecklistComplete() {
+// `storeArg` lets the MSM dual-store widget tick the right store's copy;
+// everyone else defaults to their session store.
+async function markListingGoalsChecklistComplete(storeArg) {
     const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
-    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+    const store = storeArg || sessionStorage.getItem('speeksUserStore') || 'OVL';
     let targetTaskId = null;
 
     if (checklistDataCache && checklistDataCache.daily && checklistDataCache.daily.length > 0) {
@@ -5881,6 +5908,7 @@ function getWeeklyResultFor(emp) {
 function renderManagerGoals() {
     const list = document.getElementById('goals-manager-body');
     if (!list) return;
+    if (isMultiStoreManager()) return renderManagerGoalsMS();
 
     const now = new Date();
     const dateDisplay = document.getElementById('goals-date-display');
@@ -5891,7 +5919,7 @@ function renderManagerGoals() {
     startOfWeek.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
     startOfWeek.setHours(0, 0, 0, 0);
 
-    const availableRoles = goalsRoster.length <= 2 ? ['B1', 'B2', 'L1'] : ['B1', 'B2', 'L1', 'L2'];
+    const availableRoles = goalsAvailableRoles();
 
     _priorWeekGoals = {};
     _weekTargetTotal = targetFor(goalsTargetStore);
@@ -5929,11 +5957,12 @@ function renderManagerGoals() {
 }
 
 // Sum of an employee's saved daily goals this week, excluding today (last record per day wins).
-function priorWeekGoal(emp, todayStr, startOfWeek) {
+// `data` defaults to the single-store cache; the MSM widget passes each store's own cache.
+function priorWeekGoal(emp, todayStr, startOfWeek, data = liveGoalsData) {
     const target = String(emp).trim().toLowerCase();
     const tFirst = target.split(' ')[0];
     const byDay = {};
-    liveGoalsData.forEach(r => {
+    data.forEach(r => {
         const n = String(r.employee).trim().toLowerCase();
         const nFirst = n.split(' ')[0];
         const match = n === target || (nFirst.length > 2 && tFirst.length > 2 && (nFirst.startsWith(tFirst) || tFirst.startsWith(nFirst)));
@@ -5945,16 +5974,268 @@ function priorWeekGoal(emp, todayStr, startOfWeek) {
     return Object.values(byDay).reduce((s, g) => s + g, 0);
 }
 
+// ============================================================================
+// MULTI-STORE MANAGER — dual-store listing goals (both stores in one widget)
+// Mirrors the MSM checklist: instead of toggling the dashboard between stores,
+// the MSM's Listing Goals widget stacks a full per-store section (roster, role
+// dots, totals, level-up bars) for every store they run. Role locks, goal math
+// and autosave are all scoped per store, so BAL's B1 doesn't lock MPL's B1.
+// Single-store managers never reach this path.
+// ============================================================================
+let _goalsMS = {};             // store -> { roster: [], live: [], priorWeek: {idx: n}, history: [] }
+let _goalsChecklistDoneMS = {}; // store -> true once the "set listing goals" task was ticked
+
+// True while the stacked dual-store widget is on screen (its sections carry
+// data-goals-scope). Gates the shared save/recompute entry points.
+function _msGoalsActive() {
+    return isMultiStoreManager() && !!document.querySelector('#goals-manager-body [data-goals-scope]');
+}
+
+// Hide the widget's single-store footer (Total row + level-up bars) in MSM
+// mode — each store section renders its own copies.
+function _setMSGoalsChrome(isMS) {
+    const totalRow = document.querySelector('#goals-manager-body ~ .goals-total-row');
+    if (totalRow) totalRow.style.display = isMS ? 'none' : '';
+    const lu = document.getElementById('goals-levelup');
+    if (lu) lu.style.display = isMS ? 'none' : '';
+}
+
+async function fetchLiveGoalsDataMS() {
+    const list = document.getElementById('goals-manager-body');
+    if (!list) return;
+    list.innerHTML = '<div class="status-message">Syncing Data...</div>';
+    _setMSGoalsChrome(true);
+
+    try {
+        const authData = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
+        const excluded = ['ceo', 'district manager'];
+        _goalsMS = {};
+        MULTISTORE_MANAGER_STORES.forEach(s => {
+            const emps = (authData.users || [])
+                .filter(u => userInStore(u, s) && !excluded.includes((u.role || '').toLowerCase()))
+                .map(u => u.name)
+                .filter(Boolean);
+            _goalsMS[s] = { roster: emps.length ? emps : ['No Employees Found'], live: [], priorWeek: {}, history: [] };
+        });
+
+        const [goalsResults] = await Promise.all([
+            Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+                fetch(`${GOALS_API_URL}?store=${s}&v=${Date.now()}`).then(r => r.json()).catch(() => [])
+            )),
+            Promise.all(MULTISTORE_MANAGER_STORES.map(s => fetchStoreTarget(s))),
+        ]);
+        MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+            _goalsMS[s].live = Array.isArray(goalsResults[i]) ? goalsResults[i] : [];
+            _goalsMS[s].history = weeksFor(s);
+        });
+
+        renderManagerGoalsMS();
+    } catch (e) {
+        list.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; text-align: center; padding: 20px 0;">Error loading roster.</div>';
+    }
+}
+
+function renderManagerGoalsMS() {
+    const list = document.getElementById('goals-manager-body');
+    if (!list) return;
+    _setMSGoalsChrome(true);
+
+    const now = new Date();
+    const dateDisplay = document.getElementById('goals-date-display');
+    if (dateDisplay) dateDisplay.innerText = now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+
+    const todayStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    // Top-right chip shows both stores' weekly goals at a glance.
+    const storeTargetEl = document.getElementById('goals-store-target');
+    if (storeTargetEl) storeTargetEl.innerText = 'Goal: ' + MULTISTORE_MANAGER_STORES.map(s => `${s} ${targetFor(s)}`).join(' · ');
+
+    let html = '';
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const st = _goalsMS[store] || { roster: [], live: [], priorWeek: {}, history: [] };
+        const ac = _msStoreAccent(store);
+        const availableRoles = goalsAvailableRoles(st.roster.length);
+        st.priorWeek = {};
+
+        let rows = '';
+        st.roster.forEach((emp, idx) => {
+            const rec = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === todayStr) || { role: '' };
+
+            let rolesHtml = '';
+            availableRoles.forEach(r => {
+                const isActive = rec.role === r ? 'active' : '';
+                rolesHtml += `<button type="button" class="role-dot ${isActive}" onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
+            });
+
+            st.priorWeek[idx] = priorWeekGoal(emp, todayStr, startOfWeek, st.live);
+
+            rows += `
+            <div class="goals-mgr-row">
+                <div class="goals-mgr-emp">
+                    <span class="goals-roster-name">${emp}</span>
+                    <div class="goals-edit-roles" id="roles-${store}-${idx}">${rolesHtml}</div>
+                </div>
+                <div class="goal-auto-display" id="goal-display-${store}-${idx}">–</div>
+                <div class="goals-mgr-week" id="week-display-${store}-${idx}">–</div>
+            </div>`;
+        });
+
+        html += `
+        <div class="ms-store-section" data-goals-scope="${store}" style="border-left: 4px solid ${ac.solid};">
+            <div class="ms-store-head" style="border-bottom-color: ${ac.soft};">
+                <span class="ms-store-name" style="color: ${ac.solid};">${store}</span>
+                <span class="ms-store-prog" style="background: ${ac.soft}; color: ${ac.solid};">Goal: ${targetFor(store)} Listings</span>
+            </div>
+            ${rows}
+            <div class="goals-total-row">
+                <span class="goals-total-lbl">Total</span>
+                <span id="goals-total-target-${store}" class="goals-total-val target">0</span>
+                <span id="goals-total-actual-${store}" class="goals-total-val actual">0</span>
+            </div>
+            <div class="goals-levelup">${levelUpHtml(st.history, targetFor(store))}</div>
+        </div>`;
+    });
+
+    list.innerHTML = html;
+    setTimeout(() => { updateRoleLocks(); recomputeGoalDisplaysMS(); }, 30);
+}
+
+// MS twin of recomputeGoalDisplays: same math, run per store section.
+function recomputeGoalDisplaysMS() {
+    const dateStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const st = _goalsMS[store];
+        if (!st) return;
+
+        let staffedCount = 0;
+        st.roster.forEach((emp, idx) => {
+            const group = document.getElementById(`roles-${store}-${idx}`);
+            if (group && group.querySelector('.role-dot.active')) staffedCount++;
+        });
+        const rosterSize = effectiveTeamSize(store);
+
+        let todayTotal = 0;
+        let weekTotal = 0;
+        st.roster.forEach((emp, idx) => {
+            const group = document.getElementById(`roles-${store}-${idx}`);
+            const activeBtn = group?.querySelector('.role-dot.active');
+            const role = activeBtn ? activeBtn.innerText : '-';
+            const todayGoal = role !== '-' ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount) : 0;
+
+            const disp = document.getElementById(`goal-display-${store}-${idx}`);
+            if (disp) {
+                disp.innerText = role === '-' ? '–' : todayGoal;
+                disp.classList.toggle('goal-auto-set', role !== '-');
+            }
+            todayTotal += todayGoal;
+
+            const weekVal = (st.priorWeek[idx] || 0) + todayGoal;
+            const wkEl = document.getElementById(`week-display-${store}-${idx}`);
+            if (wkEl) wkEl.innerText = weekVal || '–';
+            weekTotal += weekVal;
+        });
+
+        const tEl = document.getElementById(`goals-total-target-${store}`);
+        if (tEl) tEl.innerText = todayTotal;
+        const wEl = document.getElementById(`goals-total-actual-${store}`);
+        if (wEl) wEl.innerText = weekTotal;
+    });
+}
+
+// MS twin of saveGoalsData: each store section re-saves its full day state
+// (same semantics as the single-store autosave — payload is what's on screen).
+async function saveGoalsDataMS(silent = false) {
+    const status = document.getElementById('goals-save-status');
+    if (status) { status.textContent = 'Saving…'; status.className = 'goals-save-status saving'; }
+
+    const now = new Date();
+    const targetDateStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+
+    const posts = MULTISTORE_MANAGER_STORES.map(async store => {
+        const st = _goalsMS[store];
+        if (!st) return true;
+
+        let staffedCount = 0;
+        st.roster.forEach((emp, idx) => {
+            const group = document.getElementById(`roles-${store}-${idx}`);
+            if (group && group.querySelector('.role-dot.active')) staffedCount++;
+        });
+        const rosterSize = effectiveTeamSize(store);
+
+        const payloadEmployees = [];
+        st.roster.forEach((emp, idx) => {
+            const group = document.getElementById(`roles-${store}-${idx}`);
+            const activeBtn = group?.querySelector('.role-dot.active');
+            const role = activeBtn ? activeBtn.innerText : '-';
+            const goal = role !== '-' ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount)) : '';
+            const existing = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
+            const result = existing && existing.result != null ? String(existing.result) : '';
+            if (role !== '-' || goal !== '' || result !== '') {
+                payloadEmployees.push({ employee: emp, role: role, goal: goal, result: result });
+            }
+        });
+
+        try {
+            const response = await fetch(GOALS_API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ store: store, date: targetDateStr, employees: payloadEmployees })
+            });
+            if (!response.ok) return false;
+
+            // Update this store's local cache so the UI reflects it instantly.
+            st.live = st.live.filter(r => !(normalizeGoalDate(r.date) === targetDateStr));
+            payloadEmployees.forEach(p => {
+                st.live.push({ date: targetDateStr, store: store, employee: p.employee, role: p.role, goal: p.goal, result: p.result });
+            });
+
+            // Tick THIS store's "set listing goals" checklist task — once per store per session.
+            if (payloadEmployees.length && !_goalsChecklistDoneMS[store]) {
+                _goalsChecklistDoneMS[store] = true;
+                markListingGoalsChecklistComplete(store);
+            }
+            return true;
+        } catch (e) { return false; }
+    });
+
+    const allOk = (await Promise.all(posts)).every(Boolean);
+    if (allOk) {
+        const pulse = document.getElementById('goals-pulse-dot');
+        if (pulse) pulse.style.display = 'none';
+        if (status) { status.textContent = 'Saved ✓'; status.className = 'goals-save-status saved'; }
+    } else {
+        if (status) { status.textContent = 'Save failed'; status.className = 'goals-save-status error'; }
+        else if (!silent) alert("Error saving goals to server.");
+    }
+}
+
 // Roster size for a store (from auth cache), used to pick the weekly target.
 function storeRosterSize(store) {
     try {
         const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
-        const excluded = ['ceo', 'district manager'];
+        // MSM excluded from the per-person ladder — they contribute via the
+        // flat _msmTargetBoost instead (mirrors rosterCount in store-targets fn).
+        const excluded = ['ceo', 'district manager', 'multi-store manager'];
         return (auth.users || []).filter(u =>
             userInStore(u, store) &&
             !excluded.includes((u.role || '').toLowerCase())
         ).length || 4;
     } catch (e) { return 4; }
+}
+
+// Flat listings boost for stores covered by a Multi-Store Manager (the MSM
+// doesn't count as a full ±20 person on either store's ladder). Mirrors
+// msmBoost() / MSM_TARGET_BOOST in the store-targets edge fn — keep in sync.
+function _msmTargetBoost(store) {
+    if (!MULTISTORE_MANAGER_STORES.includes(String(store || '').toUpperCase())) return 0;
+    try {
+        const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
+        const hasMsm = (auth.users || []).some(u => (u.role || '').toLowerCase() === 'multi-store manager');
+        return hasMsm ? 15 : 0;
+    } catch (e) { return 15; }
 }
 
 // Persisted per-store target + flag + last-4-week totals (server-side ratchet).
@@ -5976,7 +6257,8 @@ async function fetchAllStoreTargets() {
 }
 // Current weekly target for a store (server value; falls back to roster-derived base).
 function targetFor(store) {
-    return (_storeTargets[store] && _storeTargets[store].target) || ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
+    return (_storeTargets[store] && _storeTargets[store].target)
+        || (ListingGoalsEngine.weeklyTarget(storeRosterSize(store)) + _msmTargetBoost(store));
 }
 // Effective team size for goal math. Prefers the server's settled size, which
 // honors the timing rule (a subtraction shrinks the goal immediately, an addition
@@ -8579,10 +8861,13 @@ const _storeColors = { OVL: '#7c3aed', LEE: '#2563eb', WSP: '#5a8d3b', MPL: '#ea
 
 function renderMonthlyGoalsBanner() {
     if (_selectedGoalDate) return; // viewing a past month — don't override
-    const store = sessionStorage.getItem('speeksUserStore') || '';
     const labelEl = document.getElementById('giGoalsLabel');
     if (labelEl) labelEl.textContent = _mgbMonthLabel() + ' Goals';
 
+    // Multi-Store Manager: both managed stores stacked, each with its own Edit.
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return renderMonthlyGoalsBannerMS();
+
+    const store = sessionStorage.getItem('speeksUserStore') || '';
     const data  = getMonthlyGoals(store);
     const goals = data?.goals || [];
     const listEl = document.getElementById('giGoalsList');
@@ -8600,6 +8885,46 @@ function renderMonthlyGoalsBanner() {
         </div>`;
     });
     if (listEl) listEl.innerHTML = html;
+}
+
+// --- Multi-Store Manager: stacked monthly goals (both stores, per-store Edit) ---
+// The synced cache already holds every store's goals (syncGoalsFromSheet does a
+// getAll), so this is render-only: one labeled block per managed store, each
+// with its own Edit button feeding openEditGoalsModal(store).
+
+function _giMsGoalItemsHtml(goals) {
+    if (!goals || !goals.length) return '<div class="status-message" style="padding: 4px 0 8px;">No goals set yet.</div>';
+    return goals.map(g => `<div class="mgb-goal-item">
+        <span class="mgb-goal-title">${escapeHtml(g.title)}</span>
+        ${g.description ? `<span class="mgb-goal-desc">${escapeHtml(g.description)}</span>` : ''}
+    </div>`).join('');
+}
+
+// Store-colored block header; pass editHtml only where editing is allowed
+// (current month — past months are read-only history).
+function _giMsStoreHeadHtml(store, editHtml) {
+    const ac = _msStoreAccent(store);
+    return `<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 0 4px;">
+        <span class="ms-store-name" style="color: ${ac.solid}; font-size: 12px;">${escapeHtml(store)}</span>${editHtml || ''}
+    </div>`;
+}
+
+function renderMonthlyGoalsBannerMS() {
+    const listEl = document.getElementById('giGoalsList');
+    if (!listEl) return;
+    // Per-store Edit buttons replace the single section-level one ('important'
+    // because _resetToCurrentMonth/selectGoalMonth re-show it the same way).
+    document.getElementById('giEditGoalsBtn')?.style.setProperty('display', 'none', 'important');
+
+    let html = '';
+    MULTISTORE_MANAGER_STORES.forEach((store, idx) => {
+        const goals = getMonthlyGoals(store)?.goals || [];
+        html += `<div style="${idx ? 'margin-top: 14px;' : ''}">
+            ${_giMsStoreHeadHtml(store, `<button class="mini-action-btn" onclick="openEditGoalsModal('${store}')">Edit ✏️</button>`)}
+            ${_giMsGoalItemsHtml(goals)}
+        </div>`;
+    });
+    listEl.innerHTML = html;
 }
 
 function toggleGoalsBanner() { toggleGoalsPanel(); }
@@ -8694,6 +9019,33 @@ window.selectGoalMonth = async function(ym) {
     if (!listEl) return;
     listEl.innerHTML = '<div class="status-message">Loading...</div>';
 
+    // Multi-Store Manager: past months show BOTH stores' goals, read-only.
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        const perStore = {};
+        MULTISTORE_MANAGER_STORES.forEach(s => {
+            try { const raw = localStorage.getItem(_mgbKey(s, _selectedGoalDate)); if (raw) perStore[s] = JSON.parse(raw)?.goals ?? []; } catch {}
+        });
+        if (MULTISTORE_MANAGER_STORES.some(s => perStore[s] == null)) {
+            try {
+                const res = await fetch(`${MONTHLY_GOALS_URL}?action=getAll&yearMonth=${ym}&t=${Date.now()}`);
+                const map = await res.json();
+                MULTISTORE_MANAGER_STORES.forEach(s => {
+                    const entry = map[s];
+                    if (entry) { localStorage.setItem(_mgbKey(s, _selectedGoalDate), JSON.stringify(entry)); perStore[s] = entry.goals || []; }
+                    else if (perStore[s] == null) perStore[s] = [];
+                });
+            } catch { /* stores left null render as could-not-load */ }
+        }
+        listEl.innerHTML = MULTISTORE_MANAGER_STORES.map((s, idx) => {
+            const goals = perStore[s];
+            const body = goals == null
+                ? '<div class="status-message" style="padding: 4px 0 8px;">Could not load.</div>'
+                : (goals.length ? _giMsGoalItemsHtml(goals) : '<div class="status-message" style="padding: 4px 0 8px;">No goals recorded for this month.</div>');
+            return `<div style="${idx ? 'margin-top: 14px;' : ''}">${_giMsStoreHeadHtml(s)}${body}</div>`;
+        }).join('');
+        return;
+    }
+
     const store    = sessionStorage.getItem('speeksUserStore') || '';
     const cacheKey = _mgbKey(store, _selectedGoalDate);
     let goals = null;
@@ -8735,9 +9087,16 @@ window.toggleGoalsPanel = function(event) {
 
 // --- Edit Modal ---
 
-function openEditGoalsModal() {
-    const store = sessionStorage.getItem('speeksUserStore') || '';
-    const goals = getMonthlyGoals(store)?.goals || [];
+// Which store the goals modal is editing. Normally the session store; the MSM's
+// stacked panel passes an explicit store per Edit button (same pattern as
+// _editingInitiativesForStore below).
+let _editingGoalsForStore = null;
+
+function openEditGoalsModal(storeOverride) {
+    _editingGoalsForStore = storeOverride || sessionStorage.getItem('speeksUserStore') || '';
+    const goals = getMonthlyGoals(_editingGoalsForStore)?.goals || [];
+    const titleEl = document.querySelector('#editMonthlyGoalsModal .modal-header h3');
+    if (titleEl) titleEl.textContent = storeOverride ? `🎯 Set ${_editingGoalsForStore} Monthly Goals` : '🎯 Set Monthly Team Goals';
     const list  = document.getElementById('editGoalsList');
     if (!list) return;
     list.innerHTML = '';
@@ -8768,7 +9127,7 @@ function _updateAddGoalBtn() {
 }
 
 function saveMonthlyGoals() {
-    const store    = sessionStorage.getItem('speeksUserStore') || '';
+    const store    = _editingGoalsForStore || sessionStorage.getItem('speeksUserStore') || '';
     const userName = sessionStorage.getItem('speeksUserName')  || 'Manager';
     const goals    = [];
     document.querySelectorAll('#editGoalsList .edit-goal-row').forEach(row => {
@@ -8860,14 +9219,25 @@ function putStoreInitiatives(store, data) {
 
 let _cpbExpanded = false;
 
+// One initiative/project row in the panel list.
+function _cpbItemHtml(item, extraClass) {
+    const badge = item.status === 'upcoming'
+        ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
+        : '<span class="si-status-badge si-status-badge--current">Current</span>';
+    return `<div class="cpb-project-item${extraClass ? ' ' + extraClass : ''}">
+        <div class="cpb-item-title-row"><span class="mgb-goal-title">${escapeHtml(item.title)}</span>${badge}</div>
+        ${item.description ? `<span class="mgb-goal-desc">${escapeHtml(item.description)}</span>` : ''}
+    </div>`;
+}
+
 function renderCompanyProjectsBanner() {
     const store       = sessionStorage.getItem('speeksUserStore') || '';
     const listEl      = document.getElementById('giInitiativesList');
     const projects    = getCompanyProjects()?.projects || [];
     const initiatives = getStoreInitiatives(store)?.initiatives || [];
-    const allItems    = [...projects, ...initiatives];
+    const isMS        = typeof isMultiStoreManager === 'function' && isMultiStoreManager();
 
-    if (!allItems.length) {
+    if (!isMS && !projects.length && !initiatives.length) {
         if (listEl) listEl.innerHTML = '<div class="status-message" style="padding: 8px 0;">No initiatives have been set yet.</div>';
         return;
     }
@@ -8876,27 +9246,22 @@ function renderCompanyProjectsBanner() {
         let html = '';
         if (projects.length) {
             html += '<div class="cpb-section-label">Company</div>';
-            projects.forEach(p => {
-                const badge = p.status === 'upcoming'
-                    ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
-                    : '<span class="si-status-badge si-status-badge--current">Current</span>';
-                html += `<div class="cpb-project-item">
-                    <div class="cpb-item-title-row"><span class="mgb-goal-title">${escapeHtml(p.title)}</span>${badge}</div>
-                    ${p.description ? `<span class="mgb-goal-desc">${escapeHtml(p.description)}</span>` : ''}
-                </div>`;
-            });
+            projects.forEach(p => { html += _cpbItemHtml(p); });
         }
-        if (initiatives.length) {
-            html += `<div class="cpb-section-label${projects.length ? ' cpb-section-label--spaced' : ''}">${escapeHtml(store)}</div>`;
-            initiatives.forEach(i => {
-                const badge = i.status === 'upcoming'
-                    ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
-                    : '<span class="si-status-badge si-status-badge--current">Current</span>';
-                html += `<div class="cpb-project-item cpb-initiative-item">
-                    <div class="cpb-item-title-row"><span class="mgb-goal-title">${escapeHtml(i.title)}</span>${badge}</div>
-                    ${i.description ? `<span class="mgb-goal-desc">${escapeHtml(i.description)}</span>` : ''}
-                </div>`;
+        if (isMS) {
+            // Multi-Store Manager: one labeled block per managed store (store
+            // colors match the checklist sections), always shown so an empty
+            // store is visibly empty rather than missing.
+            MULTISTORE_MANAGER_STORES.forEach((s, idx) => {
+                const items = getStoreInitiatives(s)?.initiatives || [];
+                const ac = _msStoreAccent(s);
+                html += `<div class="cpb-section-label${(projects.length || idx) ? ' cpb-section-label--spaced' : ''}" style="color: ${ac.solid};">${escapeHtml(s)}</div>`;
+                if (items.length) items.forEach(i => { html += _cpbItemHtml(i, 'cpb-initiative-item'); });
+                else html += '<div class="status-message" style="padding: 4px 0 8px;">No initiatives set.</div>';
             });
+        } else if (initiatives.length) {
+            html += `<div class="cpb-section-label${projects.length ? ' cpb-section-label--spaced' : ''}">${escapeHtml(store)}</div>`;
+            initiatives.forEach(i => { html += _cpbItemHtml(i, 'cpb-initiative-item'); });
         }
         listEl.innerHTML = html;
     }
@@ -9832,6 +10197,69 @@ const AUDIT_ITEM_MAP = (() => {
     return m;
 })();
 
+// ============================================================================
+// DB ITEM CATALOG — both instruments are editable from the Manage Items tab
+// (scorecard_items / paymore_audit_items via the scorecard fn). The GET
+// response carries the catalog; the hardcoded AUDIT_DEFINITION / SCORECARD_*
+// constants above are only the fallback until it loads.
+// ============================================================================
+
+// Audit catalog → AUDIT_DEFINITION-shaped sections. includeInactive for the
+// Manage tab; scoring/breakdown use active items only.
+function _auSections(includeInactive) {
+    const cat = window._auCatalog;
+    if (!cat || !cat.length) return AUDIT_DEFINITION;
+    const rows = (includeInactive ? cat : cat.filter(i => i.active))
+        .slice().sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    const sections = [], idx = {};
+    rows.forEach(i => {
+        if (!(i.section in idx)) { idx[i.section] = sections.length; sections.push({ title: i.section, items: [] }); }
+        sections[idx[i.section]].items.push({
+            id: i.item_id, pts: Number(i.points) || 0, text: i.item_text,
+            dbId: i.id, active: !!i.active,
+        });
+    });
+    return sections;
+}
+
+function _auditPossibleNow() {
+    const cat = window._auCatalog;
+    if (!cat || !cat.length) return AUDIT_POSSIBLE;
+    return cat.filter(i => i.active).reduce((a, i) => a + (Number(i.points) || 0), 0);
+}
+
+// Scorecard catalog → [{id?, item_key, label, max_score, active}] (0–5 selects).
+function _scCats(includeInactive) {
+    const cat = window._scCatalog;
+    if (!cat || !cat.length) {
+        const keys = ['online_store_pictures', 'facebook_listings', 'social_media_posts', 'paymore_sync'];
+        return SCORECARD_CATEGORIES.map((label, i) => ({ id: null, item_key: keys[i], label, max_score: 5, active: true }));
+    }
+    return (includeInactive ? cat : cat.filter(i => i.active))
+        .slice().sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+}
+
+// Fetch the catalog (plus fresh store data) if we don't have it yet — the
+// submit modal can open before the dashboard widget's fetch has run. Only
+// re-renders the entry forms while they're still untouched.
+let _scCatalogFetching = false;
+function _ensureScCatalog(force) {
+    if (window._scCatalog && window._auCatalog && !force) return;
+    if (_scCatalogFetching) return;
+    _scCatalogFetching = true;
+    fetch(`${SCORECARD_URL}?v=${Date.now()}`).then(r => r.json()).then(json => {
+        if (!json || !json.success) return;
+        window._scorecardAllData = json.data || window._scorecardAllData || [];
+        if (json.catalog) {
+            window._scCatalog = json.catalog.scorecard_items || [];
+            window._auCatalog = json.catalog.audit_items || [];
+        }
+        const untouched = !document.querySelector('.audit-entry-input') || _auditEntryTotals().earned === 0;
+        if (untouched) { _buildScorecardModalInputs(); renderAuditEntry(); }
+        if (currentScoreTab === 'manage') renderManageItems();
+    }).catch(() => {}).finally(() => { _scCatalogFetching = false; });
+}
+
 // Audit color by percentage: target 90+ green, pass 80+ amber, else red.
 function auditPctColor(pct) {
     if (pct >= AUDIT_TARGET_PCT) return { bg: '#d1fae5', fg: '#059669' };
@@ -9848,24 +10276,30 @@ function openScorecardModal() {
     switchScoreTab('scorecard');
     _buildScorecardModalInputs();
     renderAuditEntry();
+    _ensureScCatalog();
 }
 
-// ---- Submit-modal tab switching (Scorecard | SPEEKS Audit) ----
+// ---- Submit-modal tab switching (Scorecard | SPEEKS Audit | Manage Items) ----
 let currentScoreTab = 'scorecard';
 function switchScoreTab(tab) {
     currentScoreTab = tab;
     const scTab = document.getElementById('sc-tab-scorecard');
     const auTab = document.getElementById('sc-tab-audit');
+    const mgTab = document.getElementById('sc-tab-manage');
     if (scTab) scTab.classList.toggle('active', tab === 'scorecard');
     if (auTab) auTab.classList.toggle('active', tab === 'audit');
+    if (mgTab) mgTab.classList.toggle('active', tab === 'manage');
     const scPanel = document.getElementById('sc-panel-scorecard');
     const auPanel = document.getElementById('sc-panel-audit');
+    const mgPanel = document.getElementById('sc-panel-manage');
     if (scPanel) scPanel.style.display = tab === 'scorecard' ? 'block' : 'none';
     if (auPanel) auPanel.style.display = tab === 'audit' ? 'block' : 'none';
+    if (mgPanel) mgPanel.style.display = tab === 'manage' ? 'block' : 'none';
     const scBtn = document.getElementById('submitScorecardBtn');
     const auBtn = document.getElementById('submitAuditBtn');
     if (scBtn) scBtn.style.display = tab === 'scorecard' ? '' : 'none';
     if (auBtn) auBtn.style.display = tab === 'audit' ? '' : 'none';
+    if (tab === 'manage') renderManageItems();
 }
 
 function onScoreStoreChange() {
@@ -9883,40 +10317,30 @@ function _buildScorecardModalInputs() {
 
     const container = document.getElementById('dm-category-inputs');
     if (!container) return;
-    let html = '';
-    let catIndex = 0;
-    SCORECARD_BUCKETS.forEach((bucket, bIdx) => {
-        const existingBucket = existingEntry && existingEntry.buckets
-            ? existingEntry.buckets.find(b => b.name === bucket.label)
-            : null;
-        const existingNote = existingBucket && existingBucket.notes ? existingBucket.notes : '';
-        html += `<div style="grid-column: 1 / -1; margin-top: ${bIdx > 0 ? '8px' : '0'}; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0;">
-                <span style="font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">${bucket.label}</span>
-            </div>
-            <div id="section-inputs-${bIdx}" style="display: contents;">`;
-        for (let i = 0; i < bucket.count; i++) {
-            const cat = SCORECARD_CATEGORIES[catIndex];
-            html += `<div style="display: flex; flex-direction: column;">
-                    <label class="form-label-caps">${cat}</label>
-                    <select id="score-input-${catIndex}" class="form-input-lg" style="margin-top: 0; padding: 10px; font-size: 14px;">
-                        <option value="">--</option>
-                        <option value="5">5</option>
-                        <option value="4">4</option>
-                        <option value="3">3</option>
-                        <option value="2">2</option>
-                        <option value="1">1</option>
-                        <option value="0">0</option>
-                    </select>
-                </div>`;
-            catIndex++;
-        }
-        const escapedNote = existingNote.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-        html += `<div style="grid-column: 1 / -1; margin-top: 4px; margin-bottom: 2px;">
-                <label class="form-label-caps" style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">Section Notes <span style="font-weight: 400; text-transform: none; font-size: 10px; color: #94a3b8; letter-spacing: 0;">(optional)</span></label>
-                <textarea id="score-notes-${bIdx}" class="scorecard-notes-input" rows="2" placeholder="Leave a note for the manager about this section...">${escapedNote}</textarea>
+    // Categories come from the DB catalog (Manage Items tab); the hardcoded
+    // list is only the pre-load fallback. One section: Online & Marketing.
+    const cats = _scCats();
+    const existingBucket = existingEntry && existingEntry.buckets
+        ? existingEntry.buckets.find(b => b.name === 'Online & Marketing')
+        : null;
+    const existingNote = existingBucket && existingBucket.notes ? existingBucket.notes : '';
+    let html = `<div style="grid-column: 1 / -1; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0;">
+            <span style="font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">Online & Marketing</span>
+        </div>`;
+    cats.forEach(cat => {
+        let opts = '<option value="">--</option>';
+        const max = Math.max(1, Number(cat.max_score) || 5);
+        for (let p = max; p >= 0; p--) opts += `<option value="${p}">${p}</option>`;
+        html += `<div style="display: flex; flex-direction: column;">
+                <label class="form-label-caps">${escapeHtml(cat.label)}</label>
+                <select id="score-input-${cat.item_key}" class="form-input-lg" data-itemkey="${cat.item_key}" style="margin-top: 0; padding: 10px; font-size: 14px;">${opts}</select>
             </div>`;
-        html += `</div>`;
     });
+    const escapedNote = existingNote.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    html += `<div style="grid-column: 1 / -1; margin-top: 4px; margin-bottom: 2px;">
+            <label class="form-label-caps" style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">Section Notes <span style="font-weight: 400; text-transform: none; font-size: 10px; color: #94a3b8; letter-spacing: 0;">(optional)</span></label>
+            <textarea id="score-notes-0" class="scorecard-notes-input" rows="2" placeholder="Leave a note for the manager about this section...">${escapedNote}</textarea>
+        </div>`;
     container.innerHTML = html;
 }
 
@@ -9942,58 +10366,26 @@ function submitNewScorecard() {
     const date = document.getElementById('dm-score-date').value;
     const btn = document.getElementById('submitScorecardBtn');
 
-    // Determine which sections are enabled
-    const enabledSections = SCORECARD_BUCKETS.map((b, i) => {
-        const toggle = document.getElementById(`section-toggle-${i}`);
-        return toggle ? toggle.checked : true;
+    // Scores keyed by item_key (the fn's preferred shape) from the
+    // catalog-driven inputs; untouched categories stay null.
+    const scores = {};
+    document.querySelectorAll('#dm-category-inputs [data-itemkey]').forEach(el => {
+        const v = el.value;
+        scores[el.getAttribute('data-itemkey')] = v === '' ? null : parseFloat(v);
     });
-
-    const isPartial = !enabledSections.every(e => e);
-
-    if (!enabledSections.some(e => e)) {
-        alert("Please enable at least one section to update.");
-        return;
-    }
-
-    // Gather scores and notes per section
-    let catIndex = 0;
-    let sectionData = [];
-
-    SCORECARD_BUCKETS.forEach((bucket, bIdx) => {
-        const enabled = enabledSections[bIdx];
-        const scores = [];
-        for (let i = 0; i < bucket.count; i++) {
-            const val = document.getElementById(`score-input-${catIndex}`).value;
-            scores.push(val === '' ? null : parseFloat(val));
-            catIndex++;
-        }
-        const noteEl = document.getElementById(`score-notes-${bIdx}`);
-        const notes = noteEl ? noteEl.value.trim() : '';
-        if (enabled) sectionData.push({ bucketIndex: bIdx, scores: scores, notes: notes });
-    });
+    const noteEl = document.getElementById('score-notes-0');
 
     btn.innerText = "Saving...";
     btn.style.opacity = "0.7";
     btn.disabled = true;
 
-    let payload;
-    if (isPartial) {
-        payload = {
-            action: 'submit_scorecard',
-            store: store,
-            date: date,
-            partial: true,
-            sections: sectionData
-        };
-    } else {
-        payload = {
-            action: 'submit_scorecard',
-            store: store,
-            date: date,
-            scores: sectionData.flatMap(s => s.scores),
-            sectionNotes: sectionData.map(s => s.notes)
-        };
-    }
+    const payload = {
+        action: 'submit_scorecard',
+        store: store,
+        date: date,
+        scores,
+        notes: noteEl ? noteEl.value.trim() : '',
+    };
 
     fetch(SCORECARD_URL, {
         method: 'POST',
@@ -10041,17 +10433,22 @@ function _selectedStoreAudit() {
 let _auditEntryNotes = {};
 let _auditEntryPhotos = {};
 
-function _auSecTitle(sIdx) { return (AUDIT_DEFINITION[sIdx] || {}).title || String(sIdx); }
+function _auSecTitle(sIdx) { return (_auSections()[sIdx] || {}).title || String(sIdx); }
 
 function onAuditNoteInput(sIdx) {
     const el = document.getElementById(`audit-note-${sIdx}`);
     _auditEntryNotes[_auSecTitle(sIdx)] = el ? el.value : '';
 }
 
+// Per-section photo cap. Photos land in the audit-photos bucket individually,
+// so this is just a sanity guard against accidental bulk-selects, not a
+// payload limit.
+const AUDIT_PHOTO_MAX = 20;
+
 function onAuditPhotoAdd(sIdx, input) {
     const title = _auSecTitle(sIdx);
     if (!_auditEntryPhotos[title]) _auditEntryPhotos[title] = [];
-    const MAX = 6;
+    const MAX = AUDIT_PHOTO_MAX;
     [...(input.files || [])].forEach(f => {
         if (!f.type || !f.type.startsWith('image/')) return;
         if (_auditEntryPhotos[title].length >= MAX) { return; }
@@ -10161,7 +10558,7 @@ function captureAuditPhoto(sIdx) {
     if (!video || !video.videoWidth) return;
     const title = _auSecTitle(sIdx);
     if (!_auditEntryPhotos[title]) _auditEntryPhotos[title] = [];
-    if (_auditEntryPhotos[title].length >= 6) { alert('Up to 6 photos per section.'); closeAuditCamera(); return; }
+    if (_auditEntryPhotos[title].length >= AUDIT_PHOTO_MAX) { alert(`Up to ${AUDIT_PHOTO_MAX} photos per section.`); closeAuditCamera(); return; }
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
@@ -10208,10 +10605,13 @@ function renderAuditEntry() {
         Object.entries(existing.photos).forEach(([k, arr]) => { if (Array.isArray(arr)) _auditEntryPhotos[k] = arr.slice(); });
     }
     const auditorEl = document.getElementById('dm-audit-auditor');
-    if (auditorEl) auditorEl.value = (existing && existing.date === dateVal && existing.auditor) ? existing.auditor : '';
+    if (auditorEl) auditorEl.value = (editingThis && existing.auditor) ? existing.auditor : '';
+    const timeEl = document.getElementById('dm-audit-time');
+    if (timeEl) timeEl.value = (editingThis && existing.time) ? existing.time : '';
 
     let html = '';
-    AUDIT_DEFINITION.forEach((sec, sIdx) => {
+    const sections = _auSections();
+    sections.forEach((sec, sIdx) => {
         const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
         html += `<div class="audit-entry-section" style="border:1px solid #e2e8f0; border-radius:10px; margin-bottom:10px; overflow:hidden;">
             <div onclick="toggleAuditEntrySection(${sIdx})" style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:11px 13px; background:#f8fafc; cursor:pointer;">
@@ -10224,18 +10624,10 @@ function renderAuditEntry() {
             <div id="audit-sec-body-${sIdx}" style="display:none; padding:6px 13px 11px;">`;
         sec.items.forEach(item => {
             const aw = _prefillAward(prefill[item.id], item.pts);
-            let control;
-            if (item.pts === 1) {
-                // 1-point item → checkbox (0 or 1).
-                control = `<input type="checkbox" class="audit-entry-input" data-section="${sIdx}" data-pts="1" data-itemid="${item.id}" ${aw >= 1 ? 'checked' : ''} onchange="onAuditEntryToggle(${sIdx})" style="width:18px; height:18px; cursor:pointer;">
-                    <span style="font-size:10px; font-weight:800; color:#94a3b8; width:26px; text-align:right;">/ 1</span>`;
-            } else {
-                // multi-point item → 0..max points dropdown (partial credit).
-                let opts = '';
-                for (let p = 0; p <= item.pts; p++) opts += `<option value="${p}"${p === aw ? ' selected' : ''}>${p}</option>`;
-                control = `<select class="audit-entry-input" data-section="${sIdx}" data-pts="${item.pts}" data-itemid="${item.id}" onchange="onAuditEntryToggle(${sIdx})" style="width:58px; padding:5px 6px; font-size:13px; font-weight:800; color:var(--slate-charcoal); border:1px solid #cbd5e1; border-radius:7px; cursor:pointer; background:#fff;">${opts}</select>
-                    <span style="font-size:10px; font-weight:800; color:#94a3b8; width:26px; text-align:right;">/ ${item.pts}</span>`;
-            }
+            // Typed number entry, 0..max in half-point steps — quicker than a
+            // dropdown when an item is worth several points.
+            const control = `<input type="number" class="audit-entry-input" data-section="${sIdx}" data-pts="${item.pts}" data-itemid="${item.id}" value="${aw}" min="0" max="${item.pts}" step="0.5" inputmode="decimal" oninput="onAuditEntryToggle(${sIdx})" onblur="_auditSnapInput(this, ${sIdx})" style="width:58px; padding:5px 6px; font-size:13px; font-weight:800; color:var(--slate-charcoal); border:1px solid #cbd5e1; border-radius:7px; background:#fff; text-align:center;">
+                <span style="font-size:10px; font-weight:800; color:#94a3b8; width:26px; text-align:right;">/ ${item.pts}</span>`;
             html += `<div style="display:flex; align-items:center; gap:10px; padding:7px 2px; border-bottom:1px solid #f1f5f9;">
                 <span style="flex:1; font-size:12.5px; color:var(--slate-charcoal); line-height:1.4;">${escapeHtml(item.text)}</span>
                 <span style="flex-shrink:0; display:flex; align-items:center; justify-content:flex-end; gap:8px; width:100px;">${control}</span>
@@ -10259,7 +10651,7 @@ function renderAuditEntry() {
     container.innerHTML = html;
 
     // Refresh subtotals + running bar; restore any per-section notes/photos.
-    AUDIT_DEFINITION.forEach((sec, sIdx) => {
+    sections.forEach((sec, sIdx) => {
         onAuditEntryToggle(sIdx, true);
         const ta = document.getElementById(`audit-note-${sIdx}`);
         if (ta) ta.value = _auditEntryNotes[sec.title] || '';
@@ -10268,19 +10660,30 @@ function renderAuditEntry() {
     updateAuditRunningBar();
 }
 
-// Clamp a stored result value (boolean legacy or number) to 0..pts.
+// Blur handler for the typed award: snap to the half-point grid and clamp to
+// the item's max, writing the cleaned value back into the box.
+function _auditSnapInput(el, sIdx) {
+    const pts = parseFloat(el.getAttribute('data-pts')) || 0;
+    const v = parseFloat(el.value);
+    el.value = Number.isFinite(v) ? Math.min(Math.max(Math.round(v * 2) / 2, 0), pts) : 0;
+    onAuditEntryToggle(sIdx);
+}
+
+// Clamp a stored result value (boolean legacy or number) to 0..pts, snapped
+// to the half-point grid.
 function _prefillAward(v, pts) {
     if (v === true) return pts;
     const num = Number(v);
-    return Number.isFinite(num) ? Math.min(Math.max(Math.round(num), 0), pts) : 0;
+    return Number.isFinite(num) ? Math.min(Math.max(Math.round(num * 2) / 2, 0), pts) : 0;
 }
 
 // Points awarded by one entry control (checkbox = 0|pts, select = its value).
+// Half-point values (e.g. 0.5, 2.5) are valid.
 function _auditItemAward(el) {
     const pts = parseInt(el.getAttribute('data-pts')) || 0;
     if (el.type === 'checkbox') return el.checked ? pts : 0;
-    const v = parseInt(el.value);
-    return Number.isFinite(v) ? Math.min(Math.max(v, 0), pts) : 0;
+    const v = parseFloat(el.value);
+    return Number.isFinite(v) ? Math.min(Math.max(Math.round(v * 2) / 2, 0), pts) : 0;
 }
 
 // One section open at a time — opening a section collapses the others.
@@ -10299,7 +10702,8 @@ function toggleAuditEntrySection(sIdx) {
 
 // Recompute one section's subtotal; if not a silent refresh, also bump the running bar.
 function onAuditEntryToggle(sIdx, silent) {
-    const sec = AUDIT_DEFINITION[sIdx];
+    const sec = _auSections()[sIdx];
+    if (!sec) return;
     const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
     let earned = 0;
     document.querySelectorAll(`.audit-entry-input[data-section="${sIdx}"]`).forEach(el => { earned += _auditItemAward(el); });
@@ -10315,7 +10719,7 @@ function onAuditEntryToggle(sIdx, silent) {
 function _auditEntryTotals() {
     let earned = 0;
     document.querySelectorAll('.audit-entry-input').forEach(el => { earned += _auditItemAward(el); });
-    return { earned, possible: AUDIT_POSSIBLE };
+    return { earned, possible: _auditPossibleNow() };
 }
 
 function updateAuditRunningBar() {
@@ -10343,6 +10747,7 @@ async function submitNewAudit() {
     const date = document.getElementById('dm-score-date').value;
     const auditor = (document.getElementById('dm-audit-auditor')?.value || '').trim()
         || sessionStorage.getItem('speeksUserName') || null;
+    const time = document.getElementById('dm-audit-time')?.value || null; // HH:MM or null
     const btn = document.getElementById('submitAuditBtn');
     if (!store || !date) { alert('Pick a store and date.'); return; }
 
@@ -10382,7 +10787,7 @@ async function submitNewAudit() {
         const res = await fetch(SCORECARD_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'submit_audit', store, date, auditor, results, sectionNotes, sectionPhotos })
+            body: JSON.stringify({ action: 'submit_audit', store, date, auditor, time, results, sectionNotes, sectionPhotos })
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
@@ -10406,6 +10811,160 @@ async function submitNewAudit() {
     }
 }
 
+// ============================================================================
+// MANAGE ITEMS TAB (DM/CEO) — add / pause / delete catalog items for both
+// instruments. Pausing hides an item from scoring and the totals but keeps
+// history; deleting removes it from the checklist going forward (past audits
+// still render it via AUDIT_ITEM_MAP / stored results).
+// ============================================================================
+
+async function _scorecardAdminPost(payload) {
+    const res = await fetch(SCORECARD_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, role: sessionStorage.getItem('speeksUserRole') || '' }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.success === false) throw new Error(json.error || 'Request failed');
+    return json;
+}
+
+// Refetch the catalog after any change, then re-render everything that shows it.
+async function _refreshScCatalog() {
+    try {
+        const res = await fetch(`${SCORECARD_URL}?v=${Date.now()}`);
+        const json = await res.json();
+        if (json && json.success) {
+            window._scorecardAllData = json.data || [];
+            if (json.catalog) {
+                window._scCatalog = json.catalog.scorecard_items || [];
+                window._auCatalog = json.catalog.audit_items || [];
+            }
+        }
+    } catch (e) { /* keep whatever catalog we had */ }
+    renderManageItems();
+    _buildScorecardModalInputs();
+    renderAuditEntry();
+}
+
+function renderManageItems() {
+    const panel = document.getElementById('sc-panel-manage');
+    if (!panel) return;
+    if (!window._scCatalog || !window._auCatalog) {
+        panel.innerHTML = '<div class="status-message">Loading item catalog…</div>';
+        _ensureScCatalog();
+        return;
+    }
+    const scRows = _scCats(true);
+    const auSections = _auSections(true);
+    const activeAu = (window._auCatalog || []).filter(i => i.active);
+    const activePts = activeAu.reduce((a, i) => a + (Number(i.points) || 0), 0);
+
+    const secHdr = t => `<div style="font-size:11px; font-weight:900; color:#94a3b8; text-transform:uppercase; letter-spacing:.5px; margin:16px 0 6px;">${t}</div>`;
+    const inp = 'padding:8px 10px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:12.5px; font-weight:600; background:#fff; box-sizing:border-box;';
+    const rowStyle = active => `display:flex; align-items:center; gap:9px; padding:7px 4px; border-bottom:1px solid #f1f5f9; ${active ? '' : 'opacity:.45;'}`;
+    const delBtn = (fn, id, label) => `<button onclick="${fn}('${id}', this)" title="Delete ${label} — past scores keep their history" style="flex:none; display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:7px; cursor:pointer; font-size:13px; line-height:1;">🗑</button>`;
+    const pauseBox = (fn, id, active) => `<input type="checkbox" ${active ? 'checked' : ''} onchange="${fn}('${id}', this.checked, this)" title="${active ? 'Active — untick to pause (hidden from scoring, history kept)' : 'Paused — tick to reactivate'}" style="flex:none; width:16px; height:16px; cursor:pointer; accent-color:#059669;">`;
+
+    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:2px;">Tick = active. Unticking <b>pauses</b> an item — it disappears from scoring and the totals but keeps its history. 🗑 deletes it from the checklist going forward.</div>`;
+
+    // ---- Scorecard categories ----
+    html += secHdr(`Scorecard Categories (scored 0–5)`);
+    scRows.forEach(c => {
+        html += `<div style="${rowStyle(c.active)}">
+            ${pauseBox('scToggleItem', c.id, c.active)}
+            <span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${escapeHtml(c.label)}</span>
+            <span style="flex:none; font-size:10.5px; font-weight:800; color:#94a3b8;">/ ${Number(c.max_score) || 5}</span>
+            ${delBtn('scDeleteItem', c.id, 'this category')}
+        </div>`;
+    });
+    html += `<div style="display:flex; gap:8px; margin-top:8px;">
+        <input id="sc-add-label" placeholder="New category name" style="${inp} flex:1;">
+        <button class="btn-secondary" onclick="scAddItem(this)" style="flex:none;">+ Add</button>
+    </div>`;
+
+    // ---- Audit items ----
+    html += secHdr(`PayMore Audit Items — active: ${activeAu.length} items · ${activePts} pts`);
+    auSections.forEach(sec => {
+        html += `<div style="font-size:10.5px; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:.4px; margin:10px 0 2px;">${escapeHtml(sec.title)}</div>`;
+        sec.items.forEach(item => {
+            html += `<div style="${rowStyle(item.active !== false)}">
+                ${pauseBox('auToggleItem', item.dbId, item.active !== false)}
+                <span style="flex:1; font-size:12px; color:var(--slate-charcoal); line-height:1.35;">${escapeHtml(item.text)}</span>
+                <span style="flex:none; font-size:10.5px; font-weight:800; color:#94a3b8;">${item.pts} pt${item.pts === 1 ? '' : 's'}</span>
+                ${delBtn('auDeleteItem', item.dbId, 'this item')}
+            </div>`;
+        });
+    });
+    const secOpts = auSections.map(s => `<option value="${escapeHtml(s.title)}">${escapeHtml(s.title)}</option>`).join('')
+        + `<option value="__new">+ New section…</option>`;
+    html += `<div style="margin-top:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px;">
+        <div style="font-size:11px; font-weight:900; color:#64748b; text-transform:uppercase; letter-spacing:.4px; margin-bottom:8px;">Add an audit item</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <select id="au-add-section" onchange="document.getElementById('au-add-section-new').style.display = this.value === '__new' ? '' : 'none';" style="${inp} flex:1; min-width:140px; cursor:pointer;">${secOpts}</select>
+            <input id="au-add-section-new" placeholder="New section name" style="${inp} flex:1; min-width:140px; display:none;">
+        </div>
+        <div style="display:flex; gap:8px; margin-top:8px;">
+            <input id="au-add-text" placeholder="What is being checked?" style="${inp} flex:1;">
+            <input id="au-add-pts" type="number" min="1" step="1" value="1" title="Points" style="${inp} width:64px; flex:none; text-align:center;">
+            <button class="btn-secondary" onclick="auAddItem(this)" style="flex:none;">+ Add</button>
+        </div>
+    </div>`;
+
+    panel.innerHTML = html;
+}
+
+function _manageActionFail(e) {
+    alert('Could not save that change: ' + (e.message || e));
+    renderManageItems();
+}
+
+function scToggleItem(id, active) {
+    _scorecardAdminPost({ action: 'scorecard_item_upsert', id, active }).then(_refreshScCatalog).catch(_manageActionFail);
+}
+function scDeleteItem(id) {
+    const item = (window._scCatalog || []).find(c => String(c.id) === String(id));
+    if (!confirm(`Delete "${item ? item.label : 'this category'}"? Past scorecards keep their history; the category just stops being scored. To hide it temporarily, pause it instead.`)) return;
+    _scorecardAdminPost({ action: 'scorecard_item_delete', id }).then(_refreshScCatalog).catch(_manageActionFail);
+}
+function scAddItem(btn) {
+    const label = (document.getElementById('sc-add-label')?.value || '').trim();
+    if (!label) { alert('Enter a name for the new category.'); return; }
+    btn.disabled = true;
+    _scorecardAdminPost({ action: 'scorecard_item_upsert', label, max_score: 5 })
+        .then(_refreshScCatalog).catch(_manageActionFail).finally(() => { btn.disabled = false; });
+}
+
+function auToggleItem(id, active) {
+    _scorecardAdminPost({ action: 'audit_item_upsert', id, active }).then(_refreshScCatalog).catch(_manageActionFail);
+}
+function auDeleteItem(id) {
+    const item = (window._auCatalog || []).find(c => String(c.id) === String(id));
+    if (!confirm(`Delete "${item ? item.item_text : 'this item'}"? Past audits keep their history; the item just leaves the checklist. To hide it temporarily, pause it instead.`)) return;
+    _scorecardAdminPost({ action: 'audit_item_delete', id }).then(_refreshScCatalog).catch(_manageActionFail);
+}
+function auAddItem(btn) {
+    const selEl = document.getElementById('au-add-section');
+    let section = selEl ? selEl.value : '';
+    if (section === '__new') section = (document.getElementById('au-add-section-new')?.value || '').trim();
+    const text = (document.getElementById('au-add-text')?.value || '').trim();
+    const points = Math.max(1, parseInt(document.getElementById('au-add-pts')?.value) || 1);
+    if (!section) { alert('Pick or name a section.'); return; }
+    if (!text) { alert('Describe what the item checks.'); return; }
+    btn.disabled = true;
+    _scorecardAdminPost({ action: 'audit_item_upsert', section, item_text: text, points })
+        .then(_refreshScCatalog).catch(_manageActionFail).finally(() => { btn.disabled = false; });
+}
+
+// 'HH:MM' (24h, as stored) → '2:30 PM' for display; '' when unset/invalid.
+function _fmtAuditTime(t) {
+    const m = /^(\d{1,2}):(\d{2})/.exec(String(t || ''));
+    if (!m) return '';
+    let h = parseInt(m[1], 10);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return `${h}:${m[2]} ${ampm}`;
+}
+
 // ---- Read-only Audit Breakdown popout (reused by every display site) ----
 function openAuditBreakdown(store) {
     renderAuditBreakdown(store);
@@ -10413,6 +10972,30 @@ function openAuditBreakdown(store) {
 }
 function closeAuditBreakdown() {
     closeAllModals();
+}
+
+// Render a saved section note for display: lines beginning with -, * or •
+// become real bullet points; other lines keep their line breaks. Notes are
+// stored as the raw textarea text, so this is display-only — editing an
+// audit still shows (and saves) exactly what was typed.
+function _auditNoteHtml(note) {
+    const lines = String(note).split(/\r?\n/);
+    let html = '';
+    let bullets = [];
+    const flush = () => {
+        if (!bullets.length) return;
+        html += `<ul style="margin:2px 0; padding-left:18px;">${bullets.map(t => `<li style="margin:1px 0;">${escapeHtml(t)}</li>`).join('')}</ul>`;
+        bullets = [];
+    };
+    lines.forEach(raw => {
+        const line = raw.trim();
+        if (!line) { flush(); return; }
+        const m = line.match(/^[-*•]\s*(.*)$/);
+        if (m) bullets.push(m[1]);
+        else { flush(); html += `<div>${escapeHtml(line)}</div>`; }
+    });
+    flush();
+    return html;
 }
 
 function renderAuditBreakdown(store) {
@@ -10434,13 +11017,26 @@ function renderAuditBreakdown(store) {
 
     let html = `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:${c.bg}; border-radius:10px; padding:12px 14px; margin-bottom:14px;">
         <div>
-            <div style="font-size:11px; font-weight:800; color:${c.fg}; text-transform:uppercase; letter-spacing:.4px;">PayMore Audit${dateStr ? ' · ' + dateStr : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
+            <div style="font-size:11px; font-weight:800; color:${c.fg}; text-transform:uppercase; letter-spacing:.4px;">PayMore Audit${dateStr ? ' · ' + dateStr : ''}${audit.time ? ' · ' + _fmtAuditTime(audit.time) : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
             <div style="font-size:11px; color:#64748b; font-weight:600; margin-top:2px;">Pass ${AUDIT_PASS_PCT}% · Target ${AUDIT_TARGET_PCT}%+${audit.prevPct != null ? ` · prev ${audit.prevPct}%` : ''}</div>
         </div>
         <div style="font-size:22px; font-weight:900; color:${c.fg};">${audit.earned}/${audit.possible} <span style="font-size:14px;">(${audit.pct}%)</span></div>
     </div>`;
 
-    AUDIT_DEFINITION.forEach(sec => {
+    // Sections from the live catalog, but keep any items this audit scored
+    // that were since paused/removed — history must still render.
+    const sections = _auSections().map(s => ({ title: s.title, items: s.items.slice() }));
+    const known = new Set();
+    sections.forEach(s => s.items.forEach(i => known.add(i.id)));
+    const orphans = Object.keys(results).filter(id => !known.has(id) && AUDIT_ITEM_MAP[id]);
+    orphans.forEach(id => {
+        const meta = AUDIT_ITEM_MAP[id];
+        let sec = sections.find(s => s.title === meta.section);
+        if (!sec) { sec = { title: meta.section, items: [] }; sections.push(sec); }
+        sec.items.push({ id, pts: meta.pts, text: meta.text });
+    });
+
+    sections.forEach(sec => {
         const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
         let secEarned = 0;
         sec.items.forEach(i => { secEarned += _prefillAward(results[i.id], i.pts); });
@@ -10465,7 +11061,7 @@ function renderAuditBreakdown(store) {
         const secNote = (audit.notes && !Array.isArray(audit.notes)) ? audit.notes[sec.title] : null;
         const secPhotos = (audit.photos && !Array.isArray(audit.photos)) ? audit.photos[sec.title] : null;
         if (secNote && String(secNote).trim()) {
-            html += `<div style="margin-top:6px; background:#f8fafc; border:1px solid #e2e8f0; border-left:3px solid #94a3b8; border-radius:7px; padding:7px 10px; font-size:12px; color:var(--slate-charcoal); line-height:1.45;"><span style="font-weight:800; color:#64748b;">📝 </span>${escapeHtml(String(secNote))}</div>`;
+            html += `<div style="margin-top:6px; background:#f8fafc; border:1px solid #e2e8f0; border-left:3px solid #94a3b8; border-radius:7px; padding:7px 10px; font-size:12px; color:var(--slate-charcoal); line-height:1.45;"><div style="font-weight:800; color:#64748b; font-size:11px; margin-bottom:2px;">📝 Notes</div>${_auditNoteHtml(secNote)}</div>`;
         }
         if (Array.isArray(secPhotos) && secPhotos.length) {
             html += `<div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">` + secPhotos.map(p => {
@@ -10499,7 +11095,7 @@ function buildAuditSummaryHtml(audit, store) {
     return `<div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
             <div>
                 <div class="scorecard-label" style="text-align:left; margin-bottom:2px;">PayMore Audit</div>
-                <div class="scorecard-date" style="font-size:11px;">${dateStr}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
+                <div class="scorecard-date" style="font-size:11px;">${dateStr}${audit.time ? ' · ' + _fmtAuditTime(audit.time) : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
             </div>
             <div style="display:flex; align-items:center; gap:8px;">
                 ${trend}
@@ -10707,6 +11303,29 @@ function renderClaimsTable() {
     wrap.innerHTML = html;
 }
 
+// Tiny copy button next to a case number so the ID can be pasted straight into
+// Shopify / UPS / USPS status lookups. Flashes ✓ on success.
+function _claimCopyBtn(r) {
+    if (!r.case_number) return '';
+    return `<button onclick="copyClaimCase(this)" data-case="${escapeHtml(r.case_number)}" title="Copy case number" style="margin-left:5px; font-size:10px; padding:2px 5px; border:1px solid #e2e8f0; border-radius:5px; background:#f8fafc; color:#64748b; cursor:pointer; line-height:1; vertical-align:1px;">📋</button>`;
+}
+
+function copyClaimCase(btn) {
+    const num = btn.dataset.case || '';
+    if (!num) return;
+    navigator.clipboard.writeText(num).then(() => {
+        const old = btn.innerText;
+        btn.innerText = '✓';
+        btn.style.color = '#059669';
+        btn.style.borderColor = '#34d399';
+        btn.style.background = '#ecfdf5';
+        setTimeout(() => {
+            btn.innerText = old;
+            btn.style.color = ''; btn.style.borderColor = ''; btn.style.background = '';
+        }, 1200);
+    }).catch(() => alert('Could not copy — please select and copy the case number manually.'));
+}
+
 // One claim row. `isChild` nests it (indent + blue edge) under its parent INR ticket;
 // it's otherwise a full, normal claim row with its own status/value/cost/dates/actions.
 function _claimRowHtml(r, showStore, isChild, canEscalate, hasChild, num) {
@@ -10756,9 +11375,9 @@ function _claimRowHtml(r, showStore, isChild, canEscalate, hasChild, num) {
     if (aging) rowStyle = 'background:#fef2f2; box-shadow:inset 3px 0 0 #dc2626;';
     else if (isChild) rowStyle = 'background:#f0f7ff; box-shadow:inset 3px 0 0 #93c5fd;';
 
-    const caseCell = isChild
+    const caseCell = (isChild
         ? `<span style="color:#60a5fa; font-weight:900; margin-right:5px;">↳</span><span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`
-        : `<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`;
+        : `<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`) + _claimCopyBtn(r);
 
     return `<tr style="${rowStyle}">
         ${td(`<span style="font-weight:800; color:${isChild ? '#94a3b8' : 'var(--slate-charcoal)'};">${num}</span>`, 'white-space:nowrap;')}
@@ -11029,8 +11648,8 @@ function _ovRowHtml(r, byId, hasChild, num) {
     else if (isChild) rowStyle = 'background:#f0f7ff; box-shadow:inset 3px 0 0 #93c5fd;';
     const parent = isChild ? byId[r.parent_id] : null;
     const caseCell = isChild
-        ? `<span style="color:#60a5fa; font-weight:900; margin-right:5px;">↳</span><span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>${parent ? `<div style="font-size:10px; color:#94a3b8; font-weight:600;">claim on ${escapeHtml(parent.case_number || '')}</div>` : ''}`
-        : `<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`;
+        ? `<span style="color:#60a5fa; font-weight:900; margin-right:5px;">↳</span><span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>${_claimCopyBtn(r)}${parent ? `<div style="font-size:10px; color:#94a3b8; font-weight:600;">claim on ${escapeHtml(parent.case_number || '')}</div>` : ''}`
+        : `<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>${_claimCopyBtn(r)}`;
     return `<tr style="${rowStyle}">
         ${td(`<span style="font-weight:800; color:${isChild ? '#94a3b8' : 'var(--slate-charcoal)'};">${num}</span>`, 'white-space:nowrap;')}
         ${td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`)}
@@ -12798,37 +13417,46 @@ window.toggleAuditPanel = function(event) {
 };
 
 // --- ROLE SELECTION LOGIC ---
-// Per-role capacity: most roles are 1-per-store, but a store can run TWO listers.
+// Per-role capacity: every role is 1-per-store. Extended lister roles (L3, L4, …
+// on big rosters) aren't listed here — the `|| 1` lookup below caps them too.
 const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1 };
 
 window.updateRoleLocks = function() {
-    // Count how many people currently hold each role.
-    const counts = {};
-    document.querySelectorAll('.role-dot.active').forEach(btn => {
-        const r = btn.innerText;
-        counts[r] = (counts[r] || 0) + 1;
-    });
+    // Role capacity is per STORE. Normally the page shows one store's dots, so the
+    // whole document is one scope; the MSM's stacked dual-store widget marks each
+    // store section with data-goals-scope so BAL's B1 doesn't lock MPL's B1.
+    const sections = document.querySelectorAll('[data-goals-scope]');
+    const scopes = sections.length ? Array.from(sections) : [document];
 
-    document.querySelectorAll('.role-dot').forEach(btn => {
-        if (btn.classList.contains('active')) {
-            // Active buttons always look fully visible.
-            if (!btn.hasAttribute('disabled')) { btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }
-            return;
-        }
-        const role = btn.innerText;
-        const cap = ROLE_CAP[role] || 1;
-        const isFull = (counts[role] || 0) >= cap;
-        if (isFull) {
-            // At capacity for this role. (L1 still allows a deliberate swap — see selectRole.)
-            btn.style.opacity = '0.3';
-            btn.style.cursor = 'not-allowed';
-            btn.dataset.roleTaken = 'true';
-        } else if (!btn.hasAttribute('disabled')) {
-            // Only restore if it isn't locked by the 10:30am cutoff.
-            btn.style.opacity = '1';
-            btn.style.cursor = 'pointer';
-            btn.dataset.roleTaken = 'false';
-        }
+    scopes.forEach(scope => {
+        // Count how many people currently hold each role within this scope.
+        const counts = {};
+        scope.querySelectorAll('.role-dot.active').forEach(btn => {
+            const r = btn.innerText;
+            counts[r] = (counts[r] || 0) + 1;
+        });
+
+        scope.querySelectorAll('.role-dot').forEach(btn => {
+            if (btn.classList.contains('active')) {
+                // Active buttons always look fully visible.
+                if (!btn.hasAttribute('disabled')) { btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }
+                return;
+            }
+            const role = btn.innerText;
+            const cap = ROLE_CAP[role] || 1;
+            const isFull = (counts[role] || 0) >= cap;
+            if (isFull) {
+                // At capacity for this role. (L1 still allows a deliberate swap — see selectRole.)
+                btn.style.opacity = '0.3';
+                btn.style.cursor = 'not-allowed';
+                btn.dataset.roleTaken = 'true';
+            } else if (!btn.hasAttribute('disabled')) {
+                // Only restore if it isn't locked by the 10:30am cutoff.
+                btn.style.opacity = '1';
+                btn.style.cursor = 'pointer';
+                btn.dataset.roleTaken = 'false';
+            }
+        });
     });
 };
 
@@ -12868,6 +13496,7 @@ window.selectRole = function(clickedBtn, emp, role) {
 
 // Recompute every visible auto-goal from the currently selected roles.
 window.recomputeGoalDisplays = function() {
+    if (_msGoalsActive()) return recomputeGoalDisplaysMS();
     if (!document.getElementById('goal-display-0') && !document.querySelector('.goal-auto-display')) return;
     let staffedCount = 0;
     goalsRoster.forEach((emp, idx) => {
@@ -13355,10 +13984,14 @@ function _boxOrderGetStore() {
     return BOX_STORE_NAMES[code] || code || 'Store';
 }
 
-// Resolves the destination email from the selected store, falling back to the
-// configured primary email (and finally a placeholder) when no store maps.
+// Resolves the destination email(s) from the selected store: the DB-managed
+// list first (Email Recipients tool, key box_order_<STORE>; multiple addresses
+// join with ';' — the Outlook-safe mailto separator), then the hardcoded
+// per-store fallback, the configured primary email, and finally a placeholder.
 function _boxOrderGetEmail() {
     const code = _boxOrderGetStoreCode();
+    const dbList = _recipientsFor(`box_order_${code}`, []);
+    if (dbList.length) return dbList.join(';');
     return BOX_ORDER_STORE_EMAILS[code] || _boxOrderEmails.primary || 'orders@placeholder.com';
 }
 
@@ -13391,6 +14024,7 @@ async function toggleBoxOrder() {
     closeAllModals();
     const modal = document.getElementById('boxOrderModal');
     if (!modal) return;
+    _fetchEmailLists(); // warm the recipient cache for the supplier email
     // DM/CEO get a "Manage Items" tab to edit the catalog; managers just see the order flow.
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     const isCorpRole = role === 'ceo' || role === 'district manager';
@@ -13946,6 +14580,7 @@ function _recycleMonthOptions(rows, selected) {
 
 function toggleRecycleInventory() {
     toggleModal('recycleInvModal');
+    _fetchEmailLists(); // warm the recipient cache for the month-end report
     _buildRecycleStorePicker();
     ['recycleInvSku', 'recycleInvDescription', 'recycleInvValue', 'recycleInvCost'].forEach(id => {
         const el = document.getElementById(id);
@@ -14041,10 +14676,12 @@ async function submitRecycleRequest() {
 }
 
 let _recycleMine = []; // last fetched requests, so filter changes re-render without refetching
+let _recycleReportPreviewing = false; // true = My Requests tab is showing the report email preview
 
 async function fetchMyRecycleRequests() {
     const wrap = document.getElementById('recycle-table-wrap');
     if (!wrap) return;
+    _recycleReportPreviewing = false; // fresh entry to the tab always starts on the table
     const stores = _recycleStores();
     if (!stores.length) {
         wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">No store assigned to your account.</div>';
@@ -14081,11 +14718,20 @@ function _buildRecycleViewFilters(stores) {
     if ([...sel.options].some(o => o.value === current)) sel.value = current;
 }
 
+// DM/CEO review lines right in the My Requests tab (same verdicts as the
+// oversight modal): against = truly recycled out of inventory, for = tool
+// for store use.
+function _recycleCanReview() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return role === 'ceo' || role === 'district manager';
+}
+
 function renderMyRecycleTable() {
     const wrap = document.getElementById('recycle-table-wrap');
     if (!wrap) return;
     const stores = _recycleStores();
     const multi = stores.length > 1;
+    const canReview = _recycleCanReview();
     const month = (document.getElementById('recycle-month-filter') || {}).value || _recycleMonthKey(new Date());
     const filterStore = (document.getElementById('recycle-view-filter') || {}).value || '';
     let rows = _recycleMine.filter(r => _recycleMonthKey(r.created_at) === month);
@@ -14094,47 +14740,115 @@ function renderMyRecycleTable() {
     // a single store filtered — so columns don't jump around as filters change.
     const showStore = multi;
 
-    if (!rows.length) {
-        wrap.innerHTML = `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No recycle requests for ${_recycleMonthLabel(month)}.</div>`;
+    if (!rows.length && !_recycleReportPreviewing) {
+        // Keep the report buttons visible for DM/CEO even on an empty month —
+        // a month with zero recycles can still be reported.
+        const emptyBtns = canReview
+            ? `<div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
+                ${RECYCLE_MAIL_TIP}
+                <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
+                <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email →</button>
+            </div>`
+            : '';
+        wrap.innerHTML = `${emptyBtns}<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No recycle requests for ${_recycleMonthLabel(month)}.</div>`;
         return;
     }
     rows = [...rows].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    const total = rows.reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+    // Lines reviewed as "ignore" had their cost consolidated into another SKU
+    // (e.g. 5 broken units merged into 1 rebuilt item) — they were never really
+    // recycled out, so their cost is excluded from every total.
+    const ignoredTotal = rows.filter(r => r.review_verdict === 'ignore').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+    const total = rows.filter(r => r.review_verdict !== 'ignore').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
     const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
     const today = new Date().toDateString();
 
     const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
     const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
-    let html = `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
-        <thead><tr>${th('Date')}${showStore ? th('Store') : ''}${th('SKU')}${th('Description')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
+    // Report preview "page" (DM/CEO) — mirrors the Box Order flow: Send Email
+    // first shows the composed email, and the actual send happens from there.
+    if (canReview && _recycleReportPreviewing) {
+        const { subject, body } = _recycleReportCompose();
+        wrap.innerHTML = `
+            <div class="box-order-preview-label">Email Preview</div>
+            <div class="box-order-email-preview">${escapeHtml(`To: ${_recycleReportTo().join(', ')}\nSubject: ${subject}\n\n${body}`)}</div>
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
+                ${RECYCLE_MAIL_TIP}
+                <button class="btn-secondary" onclick="_recycleReportPreviewing=false; renderMyRecycleTable();">← Back</button>
+                <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
+                <button class="btn-primary" onclick="sendRecycleReport()">Send Email →</button>
+            </div>`;
+        return;
+    }
+
+    let html = canReview
+        ? `<div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
+            ${RECYCLE_MAIL_TIP}
+            <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
+            <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email →</button>
+        </div>`
+        : '';
+    html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+        <thead><tr>${canReview ? th('Review') : ''}${th('Date')}${showStore ? th('Store') : ''}${th('SKU')}${th('Description')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
     rows.forEach(r => {
         // Same-day typo-fix window: the store can pull a request back the day it
         // was submitted; after that only a DM/CEO can remove it.
-        const canDelete = new Date(r.created_at).toDateString() === today;
+        const canDelete = canReview || new Date(r.created_at).toDateString() === today;
         const delBtn = canDelete
-            ? `<button onclick="deleteRecycleRequest('${r.id}', false)" title="Delete (same-day only)" style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:8px; cursor:pointer; font-size:15px; line-height:1;">🗑</button>`
+            ? `<button onclick="deleteRecycleRequest('${r.id}')" title="${canReview ? 'Delete this line' : 'Delete (same-day only)'}" style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:8px; cursor:pointer; font-size:15px; line-height:1;">🗑</button>`
             : '';
-        html += `<tr>
+        const verdict = ['for', 'against', 'ignore'].includes(r.review_verdict) ? r.review_verdict : '';
+        let reviewCell = '';
+        if (canReview) {
+            const vColor = verdict === 'against' ? '#dc2626' : verdict === 'for' ? '#059669' : verdict === 'ignore' ? '#475569' : '#94a3b8';
+            const vBorder = verdict === 'against' ? '#fecaca' : verdict === 'for' ? '#a7f3d0' : verdict === 'ignore' ? '#94a3b8' : '#cbd5e1';
+            reviewCell = td(`<select onchange="setRecycleReviewed('${r.id}', this.value)" title="${r.reviewed_at ? 'Reviewed' + (r.reviewed_by ? ' by ' + escapeHtml(r.reviewed_by) : '') : 'Against = out of inventory · For = store-use tool · Ignore = cost moved to another SKU, not counted'}" style="padding:5px 6px; border:1.5px solid ${vBorder}; border-radius:8px; font-size:11px; font-weight:800; color:${vColor}; background:#fff; cursor:pointer;">
+                <option value=""${verdict ? '' : ' selected'}>— Review —</option>
+                <option value="against"${verdict === 'against' ? ' selected' : ''}>Against Store</option>
+                <option value="for"${verdict === 'for' ? ' selected' : ''}>For Store</option>
+                <option value="ignore"${verdict === 'ignore' ? ' selected' : ''}>Ignore</option>
+            </select>`, 'text-align:center; white-space:nowrap;');
+        }
+        const rowBg = canReview && verdict ? `background:${verdict === 'against' ? '#fef2f2' : verdict === 'for' ? '#f0fdf4' : '#f1f5f9'};` : '';
+        html += `<tr style="${rowBg}">
+            ${reviewCell}
             ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
             ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`) : ''}
             ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.sku || '')}</span>`)}
             ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>`)}
             ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;')}
             ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}
-            ${td(_fmtRecycleMoney(_recycleLineTotal(r)), 'white-space:nowrap; font-weight:800;')}
+            ${td(verdict === 'ignore'
+                ? `<span style="text-decoration:line-through; color:#94a3b8;" title="Not counted — cost was moved into another SKU">${_fmtRecycleMoney(_recycleLineTotal(r))}</span>`
+                : _fmtRecycleMoney(_recycleLineTotal(r)), 'white-space:nowrap; font-weight:800;')}
             ${td(`<span style="color:#94a3b8; white-space:nowrap;">${escapeHtml(r.created_by || '—')}</span>`)}
             ${td(delBtn, 'text-align:right;')}
         </tr>`;
     });
+    const labelSpan = (canReview ? 1 : 0) + (showStore ? 1 : 0) + 5;
+    const footLabel = (t, c) => `<td colspan="${labelSpan}" style="padding:${c ? '4px' : '11px'} 10px; font-weight:800; font-size:${c ? '10.5px' : '12px'}; color:#94a3b8; text-transform:uppercase; letter-spacing:.4px;">${t}</td>`;
     html += `</tbody><tfoot><tr>
-        <td colspan="${(showStore ? 1 : 0) + 5}" style="padding:11px 10px; font-weight:800; font-size:12px; color:#94a3b8; text-transform:uppercase; letter-spacing:.4px;">Total recycled cost · ${_recycleMonthLabel(month)}</td>
+        ${footLabel(`Total recycled cost · ${_recycleMonthLabel(month)}`)}
         <td style="padding:11px 10px; font-weight:900; font-size:14px; color:#dc2626; white-space:nowrap;">${_fmtRecycleMoney(total)}</td>
         <td colspan="2"></td>
-    </tr></tfoot></table></div>`;
+    </tr>`;
+    if (canReview) {
+        const againstTotal = rows.filter(r => r.review_verdict === 'against').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+        const forTotal = rows.filter(r => r.review_verdict === 'for').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+        if (againstTotal || forTotal) {
+            html += `<tr>${footLabel('Against store (out of inventory)', true)}<td style="padding:4px 10px; font-weight:900; font-size:12px; color:#dc2626; white-space:nowrap;">${_fmtRecycleMoney(againstTotal)}</td><td colspan="2"></td></tr>
+            <tr>${footLabel('For store (store-use tools)', true)}<td style="padding:4px 10px 11px; font-weight:900; font-size:12px; color:#059669; white-space:nowrap;">${_fmtRecycleMoney(forTotal)}</td><td colspan="2"></td></tr>`;
+        }
+    }
+    if (ignoredTotal) {
+        // Shown to everyone so the month total visibly reconciles with the
+        // struck-through lines above it.
+        html += `<tr>${footLabel('Ignored (cost moved to another SKU)', true)}<td style="padding:4px 10px 11px; font-weight:900; font-size:12px; color:#94a3b8; white-space:nowrap; text-decoration:line-through;">${_fmtRecycleMoney(ignoredTotal)}</td><td colspan="2"></td></tr>`;
+    }
+    html += `</tfoot></table></div>`;
     wrap.innerHTML = html;
 }
 
-async function deleteRecycleRequest(id, fromOversight) {
+async function deleteRecycleRequest(id) {
     if (!confirm('Delete this recycle request?')) return;
     try {
         const res = await fetch(RECYCLE_URL, {
@@ -14143,135 +14857,254 @@ async function deleteRecycleRequest(id, fromOversight) {
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
-        if (fromOversight) fetchRecycleOversight(); else fetchMyRecycleRequests();
+        fetchMyRecycleRequests();
     } catch (e) {
         alert('Could not delete: ' + e.message);
     }
 }
 
 // =========================================================
-//  DM / CEO RECYCLE REQUESTS OVERSIGHT — month-end reconciliation.
-//  One month at a time: per-store line items with cost totals, a grand
-//  total, and a review tick per line to check off against inventory.
+//  MONTH-END RECYCLE REPORT EMAIL (DM/CEO) — one email at the start of the
+//  month covering every store's total recycled cost for the selected month,
+//  broken down by verdict. Mimics the Box Order tool: Send Email opens the
+//  machine's mail service with the report prefilled (nothing auto-sends, so
+//  the email goes out from the DM's own mailbox and replies come back to
+//  them); the Copy button is the failsafe for machines with no mail client.
 // =========================================================
-let _recycleOvAll = [];
-let _recycleOvMonth = '';
+// =========================================================
+//  EMAIL RECIPIENTS (DB-driven, shared by every emailing tool)
+//  One cache for all recipient lists (email_recipients table via the
+//  email-recipients fn): the recycle month-end report, per-store box-order
+//  suppliers, and — server-side — the weekly SPEEKS report emails. Each tool
+//  keeps its hardcoded list as a fallback for when the fetch hasn't landed.
+//  DM/CEO manage the lists in the 📧 Email Recipients tool below.
+// =========================================================
+let _emailLists = null;
 
-function openRecycleOversight() {
-    toggleModal('recycleOversightModal');
-    _recycleOvMonth = _recycleOvMonth || _recycleMonthKey(new Date());
-    fetchRecycleOversight();
-}
-
-async function fetchRecycleOversight() {
-    const body = document.getElementById('recycle-oversight-body');
-    if (!body) return;
-    body.innerHTML = '<div class="status-message">Loading recycle requests…</div>';
+async function _fetchEmailLists(force = false) {
+    if (_emailLists && !force) return _emailLists;
     try {
-        const res = await fetch(`${RECYCLE_URL}?v=${Date.now()}`); // no stores param → every store
-        const json = await res.json();
-        if (!json.success) throw new Error(json.error);
-        _recycleOvAll = json.data || [];
-        renderRecycleOversight();
-    } catch (e) {
-        body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load recycle requests.</div>';
-    }
+        const r = await fetch(`${EMAIL_RECIPIENTS_URL}?v=${Date.now()}`).then(x => x.json());
+        if (r && r.lists) _emailLists = r.lists;
+    } catch (e) { /* keep whatever we have — callers fall back */ }
+    return _emailLists;
 }
 
-function renderRecycleOversight() {
-    const body = document.getElementById('recycle-oversight-body');
+function _recipientsFor(key, fallback) {
+    const list = _emailLists && _emailLists[key];
+    return (list && list.length) ? list.slice() : (fallback || []).slice();
+}
+
+// ---- the DM/CEO management tool ----
+const EMAIL_LIST_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+const EMAIL_LIST_GROUPS = [
+    {
+        title: '♻️ Recycle Month-End Report',
+        desc: 'Who the month-end recycle report email is addressed to.',
+        lists: [{ key: 'recycle_report', label: 'Recipients' }],
+    },
+    {
+        title: '📦 Box Orders',
+        desc: 'Supplier address each store\'s box order email opens to.',
+        lists: EMAIL_LIST_STORES.map(s => ({ key: `box_order_${s}`, label: s })),
+    },
+    {
+        title: '📈 Weekly SPEEKS Reports',
+        desc: 'Monday morning performance emails (sent automatically).',
+        lists: [
+            { key: 'weekly_leadership', label: 'Leadership report' },
+            ...EMAIL_LIST_STORES.map(s => ({ key: `weekly_store_${s}`, label: `${s} manager report` })),
+        ],
+    },
+];
+
+async function openEmailRecipients() {
+    closeAllModals();
+    toggleModal('emailRecipientsModal');
+    const body = document.getElementById('emailRecipientsBody');
+    if (body) body.innerHTML = '<div class="status-message">Loading recipients…</div>';
+    await _fetchEmailLists(true);
+    renderEmailRecipients();
+}
+
+function renderEmailRecipients() {
+    const body = document.getElementById('emailRecipientsBody');
     if (!body) return;
-    const month = _recycleOvMonth || _recycleMonthKey(new Date());
-    const rows = _recycleOvAll.filter(r => _recycleMonthKey(r.created_at) === month);
+    if (!_emailLists) {
+        body.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; text-align: center; padding: 20px 0;">Could not load recipients. Close and try again.</div>';
+        return;
+    }
 
-    const grand = rows.reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
-    const units = rows.reduce((a, r) => a + (Number(r.quantity) || 0), 0);
-    const reviewed = rows.filter(r => r.reviewed_at).length;
-    const allReviewed = rows.length > 0 && reviewed === rows.length;
+    let html = `<p style="font-size: 12.5px; color: #64748b; margin: 0 0 14px;">
+        These lists control where each tool's emails go. Changes apply immediately —
+        the recycle report and box orders read them when composing, and the weekly
+        report reads them on every send.</p>`;
 
-    const selStyle = 'padding:8px 12px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:13px; font-weight:700; background:#fff; cursor:pointer;';
-    let html = `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
-        <div style="font-size:12px; color:#64748b; font-weight:600;">Tick each line off as you reconcile it against what was actually recycled out of inventory.</div>
-        <select onchange="_recycleOvMonth=this.value; renderRecycleOversight();" style="${selStyle}">${_recycleMonthOptions(_recycleOvAll, month)}</select>
-    </div>`;
-
-    const card = (label, val, color) => `<div style="flex:1; min-width:110px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:13px 15px;">
-        <div style="font-size:26px; font-weight:900; color:${color}; line-height:1; white-space:nowrap;">${val}</div>
-        <div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; margin-top:4px;">${label}</div>
-    </div>`;
-    html += `<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px;">
-        ${card('Total Recycled Cost', _fmtRecycleMoney(grand), '#dc2626')}
-        ${card('Line Items', rows.length, '#1e293b')}
-        ${card('Units', units, '#1e293b')}
-        ${card('Reviewed', `${reviewed}/${rows.length}`, allReviewed ? '#059669' : (reviewed ? '#d97706' : '#94a3b8'))}
-    </div>`;
-
-    const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
-    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
-    const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
-
-    RECYCLE_STORES.forEach(s => {
-        const sRows = rows.filter(r => (r.store || '').toUpperCase() === s)
-            .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-        const sTotal = sRows.reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
-        const sReviewed = sRows.filter(r => r.reviewed_at).length;
-        const sDone = sRows.length > 0 && sReviewed === sRows.length;
-
-        html += `<div style="margin-bottom:18px;">
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px 14px; margin-bottom:${sRows.length ? '0' : '0'};">
-                <div style="font-weight:900; font-size:13px; color:var(--slate-charcoal);">${s} <span style="font-weight:600; color:#94a3b8;">· ${BOX_STORE_NAMES[s] || s}</span>
-                    ${sDone ? '<span style="font-size:10.5px; font-weight:800; color:#059669; margin-left:6px;">✓ reconciled</span>' : ''}
+    EMAIL_LIST_GROUPS.forEach(group => {
+        html += `<div style="margin-bottom: 18px;">
+            <div style="font-size: 13.5px; font-weight: 900; color: var(--slate-charcoal);">${group.title}</div>
+            <div style="font-size: 11.5px; color: #94a3b8; font-weight: 600; margin: 1px 0 8px;">${group.desc}</div>`;
+        group.lists.forEach(l => {
+            const emails = _recipientsFor(l.key, []);
+            const chips = emails.length
+                ? emails.map(e => `<span style="display: inline-flex; align-items: center; gap: 6px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 999px; padding: 3px 6px 3px 10px; font-size: 12px; font-weight: 700; color: var(--slate-charcoal); margin: 0 6px 6px 0;">
+                        ${escapeHtml(e)}
+                        <button data-key="${escapeHtml(l.key)}" data-email="${escapeHtml(e)}" onclick="emailRecipientRemove(this.dataset.key, this.dataset.email)" title="Remove" style="border: none; background: #e2e8f0; color: #64748b; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 900; cursor: pointer; line-height: 1;">✕</button>
+                    </span>`).join('')
+                : '<span style="font-size: 12px; color: #94a3b8; font-weight: 600; margin-right: 6px;">None — the built-in default applies.</span>';
+            const inputId = `email-add-${l.key}`;
+            html += `<div style="border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;">
+                <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; color: #64748b; margin-bottom: 7px;">${escapeHtml(l.label)}</div>
+                <div>${chips}</div>
+                <div style="display: flex; gap: 6px; margin-top: 6px;">
+                    <input type="email" id="${inputId}" placeholder="name@company.com" style="flex: 1; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 10px; font-size: 12.5px;"
+                        onkeydown="if(event.key==='Enter'){event.preventDefault(); emailRecipientAdd('${l.key}', '${inputId}', this.nextElementSibling);}">
+                    <button class="btn-secondary" style="padding: 6px 14px; font-size: 12px;" onclick="emailRecipientAdd('${l.key}', '${inputId}', this)">+ Add</button>
                 </div>
-                <div style="font-weight:900; font-size:14px; color:${sTotal ? '#dc2626' : '#cbd5e1'}; white-space:nowrap;">${_fmtRecycleMoney(sTotal)}</div>
             </div>`;
-        if (!sRows.length) {
-            html += `<div style="padding:8px 14px; font-size:12px; color:#cbd5e1; font-weight:600;">No recycle requests this month.</div></div>`;
-            return;
-        }
-        html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
-            <thead><tr>${th('✓')}${th('Date')}${th('SKU')}${th('Description')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
-        sRows.forEach(r => {
-            const done = !!r.reviewed_at;
-            html += `<tr style="${done ? 'background:#f0fdf4;' : ''}">
-                ${td(`<input type="checkbox" ${done ? 'checked' : ''} onchange="setRecycleReviewed('${r.id}', this.checked)" title="${done ? 'Reviewed' + (r.reviewed_by ? ' by ' + escapeHtml(r.reviewed_by) : '') : 'Mark reviewed'}" style="width:16px; height:16px; cursor:pointer; accent-color:#059669;">`, 'text-align:center;')}
-                ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
-                ${td(`<span style="font-weight:700; color:${done ? '#94a3b8' : 'var(--slate-charcoal)'};">${escapeHtml(r.sku || '')}</span>`)}
-                ${td(`<span style="color:${done ? '#cbd5e1' : '#64748b'};">${escapeHtml(r.description || '—')}</span>`)}
-                ${td(`<span style="font-weight:800; color:${done ? '#94a3b8' : 'var(--slate-charcoal)'};">${Number(r.quantity) || 1}</span>`, 'text-align:center;')}
-                ${td(_fmtRecycleMoney(r.cost), `white-space:nowrap; font-weight:700; color:${done ? '#cbd5e1' : '#64748b'};`)}
-                ${td(_fmtRecycleMoney(_recycleLineTotal(r)), `white-space:nowrap; font-weight:800; color:${done ? '#94a3b8' : 'var(--slate-charcoal)'};`)}
-                ${td(`<span style="color:#94a3b8; white-space:nowrap;">${escapeHtml(r.created_by || '—')}</span>`)}
-                ${td(`<button onclick="deleteRecycleRequest('${r.id}', true)" title="Delete this line" style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:8px; cursor:pointer; font-size:15px; line-height:1;">🗑</button>`, 'text-align:right;')}
-            </tr>`;
         });
-        html += `</tbody></table></div></div>`;
+        html += `</div>`;
     });
-
     body.innerHTML = html;
 }
 
-// Tick / untick a line during month-end reconciliation. Updates the local
-// cache and re-renders so the scroll position and month stay put.
-async function setRecycleReviewed(id, reviewed) {
+async function _emailRecipientsPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(EMAIL_RECIPIENTS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(payload),
+    });
+    return r.json();
+}
+
+async function emailRecipientAdd(listKey, inputId, btn) {
+    const input = document.getElementById(inputId);
+    const email = (input?.value || '').trim();
+    if (!email) return;
+    if (btn) btn.disabled = true;
+    const res = await _emailRecipientsPost({ action: 'add', list_key: listKey, email }).catch(() => null);
+    if (btn) btn.disabled = false;
+    if (res && res.success) { await _fetchEmailLists(true); renderEmailRecipients(); }
+    else alert((res && res.error) || 'Could not add — please try again.');
+}
+
+async function emailRecipientRemove(listKey, email) {
+    if (!confirm(`Remove ${email} from this list?`)) return;
+    const res = await _emailRecipientsPost({ action: 'remove', list_key: listKey, email }).catch(() => null);
+    if (res && res.success) { await _fetchEmailLists(true); renderEmailRecipients(); }
+    else alert((res && res.error) || 'Could not remove — please try again.');
+}
+
+// FALLBACK only — the live list comes from the email_recipients table (key
+// 'recycle_report'), editable in the DM's Email Recipients tool.
+const RECYCLE_REPORT_EMAILS = ['paul.kushnir@pikinvestments.com', 'dave.chaffin@pikinvestments.com'];
+function _recycleReportTo() { return _recipientsFor('recycle_report', RECYCLE_REPORT_EMAILS); }
+
+// Hover "i" (site-standard goals-info-i tooltip) explaining what Send Email
+// does and how to fix a machine where mailto: links open nothing.
+const RECYCLE_MAIL_TIP = `<span class="goals-info-i" style="align-self:center;" data-tip-title="Send Email opens your mail app" data-tip-desc="Clicking Send Email opens your computer's default email app with the report pre-filled — nothing sends until you hit Send there. If nothing opens: go to Windows Settings → Apps → Default apps → scroll to Choose defaults by link type → set MAILTO to Outlook (or your mail app). Or click 📋 Copy and paste the report into any email.">i</span>`;
+
+function _recycleReportCompose() {
+    const month = (document.getElementById('recycle-month-filter') || {}).value || _recycleMonthKey(new Date());
+    const monthLabel = _recycleMonthLabel(month);
+    const rows = _recycleMine.filter(r => _recycleMonthKey(r.created_at) === month);
+    const userName = sessionStorage.getItem('speeksUserName') || '';
+    const sum = list => list.reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+
+    let unreviewed = 0, grandCounted = 0, grandAgainst = 0, grandFor = 0;
+    const sections = RECYCLE_STORES.map(s => {
+        const sRows = rows.filter(r => (r.store || '').toUpperCase() === s);
+        const name = BOX_STORE_NAMES[s] || s;
+        if (!sRows.length) return `${s} - ${name}\n  No recycle requests this month.`;
+        const counted = sum(sRows.filter(r => r.review_verdict !== 'ignore'));
+        const against = sum(sRows.filter(r => r.review_verdict === 'against'));
+        const forUse  = sum(sRows.filter(r => r.review_verdict === 'for'));
+        const ignored = sum(sRows.filter(r => r.review_verdict === 'ignore'));
+        unreviewed += sRows.filter(r => !r.reviewed_at).length;
+        grandCounted += counted; grandAgainst += against; grandFor += forUse;
+        let block = `${s} - ${name}\n  Total Recycled Cost: ${_fmtRecycleMoney(counted)}\n` +
+            `    - Recycled out of inventory (against the store): ${_fmtRecycleMoney(against)}\n` +
+            `    - Repurposed for store use: ${_fmtRecycleMoney(forUse)}`;
+        if (ignored) block += `\n    - Not counted (cost consolidated into another SKU): ${_fmtRecycleMoney(ignored)}`;
+        return block;
+    });
+
+    const warn = unreviewed
+        ? `\n\nNOTE: ${unreviewed} line item${unreviewed === 1 ? ' has' : 's have'} not been reviewed yet - ` +
+          `their cost is included in the store totals but not in the breakdowns.`
+        : '';
+    const body = `Hi,\n\nHere is the recycled inventory report for ${monthLabel}:\n\n` +
+        sections.join('\n\n') +
+        `\n\nAll Stores Combined: ${_fmtRecycleMoney(grandCounted)}\n` +
+        `    - Recycled out of inventory: ${_fmtRecycleMoney(grandAgainst)}\n` +
+        `    - Repurposed for store use: ${_fmtRecycleMoney(grandFor)}${warn}\n\n` +
+        `Thank you,\n${userName}`;
+    return {
+        email: _recycleReportTo().join(','),
+        subject: `PayMore Recycle Report - ${monthLabel}`,
+        body,
+    };
+}
+
+// Open the machine's mail service with the report prefilled — same mechanism
+// as sendBoxOrder. Nothing sends until the DM hits send in their mail app.
+// Recipients are joined with ';' — Outlook rejects the whole mailto link when
+// multiple addresses are comma-separated (the RFC separator), so don't "fix"
+// this back to ','.
+function sendRecycleReport() {
+    const { subject, body } = _recycleReportCompose();
+    const to = _recycleReportTo().join(';');
+    window.location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+// Same copy failsafe as the Box Order tool, same button flash. Copies just
+// the report body — recipient and subject get filled in by hand.
+function copyRecycleReport(button) {
+    const { body } = _recycleReportCompose();
+    navigator.clipboard.writeText(body).then(() => {
+        const originalText = button.innerText;
+        button.innerText = 'Copied!';
+        button.style.background = '#d1fae5';
+        button.style.color = '#065f46';
+        button.style.borderColor = '#34d399';
+        setTimeout(() => {
+            button.innerText = originalText;
+            button.style.background = '';
+            button.style.color = '';
+            button.style.borderColor = '';
+        }, 2000);
+    }).catch(() => alert('Could not copy automatically. Please select and copy the report manually.'));
+}
+
+// Review / clear a line (DM/CEO, from the My Requests tab). verdict is
+// 'against' (truly recycled out of inventory), 'for' (tool for store use),
+// 'ignore' (cost consolidated into another SKU — excluded from totals) or
+// '' to clear the review. Updates the local cache and re-renders so the
+// scroll position and month stay put.
+async function setRecycleReviewed(id, verdict) {
+    const reviewed = ['for', 'against', 'ignore'].includes(verdict);
     try {
         const res = await fetch(RECYCLE_URL, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 action: 'set_reviewed', id, reviewed,
+                verdict: reviewed ? verdict : null,
                 reviewed_by: sessionStorage.getItem('speeksUserName') || null,
             }),
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
-        const row = _recycleOvAll.find(r => r.id === id);
+        const row = _recycleMine.find(r => r.id === id);
         if (row) {
             row.reviewed_at = reviewed ? new Date().toISOString() : null;
             row.reviewed_by = reviewed ? (sessionStorage.getItem('speeksUserName') || null) : null;
+            row.review_verdict = reviewed ? verdict : null;
         }
-        renderRecycleOversight();
+        renderMyRecycleTable();
     } catch (e) {
         alert('Could not update: ' + e.message);
-        fetchRecycleOversight();
+        fetchMyRecycleRequests();
     }
 }
 
@@ -14310,9 +15143,9 @@ const FEATURE_CATALOG = [
     { key: 'tool-store-comment',       label: 'Send Store Comment',            tab: 'tools', group: '🏪 Store Ops', def: ['district-manager', 'ceo'] },
     { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: '📦 Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
     { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: '📦 Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'tool-recycle-oversight',   label: 'Recycle Requests (oversight)',  tab: 'tools', group: '📦 Orders', def: ['district-manager', 'ceo'] },
     { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
     { key: 'tool-feature-access',      label: 'Feature Access (this tool)',    tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo'] },
+    { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
     { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
     { key: 'tool-manage-policies',     label: 'Manage Policies',               tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
@@ -14446,7 +15279,7 @@ function _syncHotbarExtras(userRoleClass, userName) {
     const oldBar = document.getElementById('hotbarExtras');
     if (oldBar) oldBar.remove();
 
-    const extras = [];
+    const extras = []; // [{ a, barLabel }]
     stack.querySelectorAll('.hotbar-wrapper').forEach(wrap => {
         if (wrap.id === 'hotbarExtras') return;
         const links = Array.from(wrap.querySelectorAll('.hotbar-btn[data-feature]'));
@@ -14458,7 +15291,9 @@ function _syncHotbarExtras(userRoleClass, userName) {
             // the entire bar was granted → show it as itself
             wrap.style.setProperty('display', 'flex', 'important');
         } else {
-            extras.push(...enabled);
+            const labelEl = wrap.querySelector('.hotbar-label');
+            const barLabel = labelEl ? String(labelEl.textContent || '').trim() : '';
+            enabled.forEach(a => extras.push({ a, barLabel }));
         }
     });
     if (!extras.length) return;
@@ -14472,16 +15307,29 @@ function _syncHotbarExtras(userRoleClass, userName) {
             if (a.style.display !== 'none') visibleHrefs.add(a.getAttribute('href'));
         });
     });
-    const fresh = extras.filter(a => !visibleHrefs.has(a.getAttribute('href')));
+    const fresh = extras.filter(e => !visibleHrefs.has(e.a.getAttribute('href')));
     if (!fresh.length) return;
 
-    const makeClone = a => {
+    // Borrowed links from a DIFFERENT store's bar carry a small store badge
+    // (e.g. Nick at OVL borrowing WSP's Passwords sees "Passwords · WSP") so
+    // nobody opens another store's sheet thinking it's their own. Role-bar
+    // borrows (CEO/DM/TOM/MGR/ASM/Resources) are company links — no badge.
+    const STORE_BAR_LABELS = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    const userStore = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    const makeClone = ({ a, barLabel }) => {
         const clone = a.cloneNode(true);
         // the clone is display-only; the hidden original stays the canonical
         // override target, so strip the key to avoid double-processing
         clone.removeAttribute('data-feature');
         clone.style.removeProperty('display');
         clone.classList.add('hotbar-extra-clone');
+        const src = String(barLabel || '').toUpperCase();
+        if (STORE_BAR_LABELS.includes(src) && src !== userStore) {
+            const badge = document.createElement('span');
+            badge.className = 'hotbar-src-badge';
+            badge.textContent = src;
+            clone.appendChild(badge);
+        }
         return clone;
     };
 
@@ -14489,7 +15337,7 @@ function _syncHotbarExtras(userRoleClass, userName) {
     const host = visibleBars[0];
     const hostLinks = host ? host.querySelector('.hotbar-links') : null;
     if (hostLinks) {
-        fresh.forEach(a => hostLinks.appendChild(makeClone(a)));
+        fresh.forEach(e => hostLinks.appendChild(makeClone(e)));
         return;
     }
 
@@ -14505,7 +15353,7 @@ function _syncHotbarExtras(userRoleClass, userName) {
     label.textContent = 'EXTRAS';
     const linksDiv = document.createElement('div');
     linksDiv.className = 'hotbar-links';
-    fresh.forEach(a => linksDiv.appendChild(makeClone(a)));
+    fresh.forEach(e => linksDiv.appendChild(makeClone(e)));
     inner.appendChild(label);
     inner.appendChild(linksDiv);
     div.appendChild(inner);
