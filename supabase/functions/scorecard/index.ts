@@ -6,48 +6,45 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// The SPEEKS Scorecard is now a single section: "Online & Marketing" (the
-// former Media and Markets four categories). The other legacy columns remain
-// in the table but are no longer written or surfaced.
-const BUCKET = {
-  name: "Online & Marketing",
-  cols: [
-    ["online_store_pictures", "Online Store Pictures"],
-    ["facebook_listings", "Facebook Listings"],
-    ["social_media_posts", "Social Media Posts"],
-    ["paymore_sync", "PayMore Sync"],
-  ] as [string, string][],
-};
-
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 
-// PayMore Audit Playbook v3 — id → points (165 total). Server recomputes the
-// score from this map so the percentage can't be spoofed by the client.
-const AUDIT_POINTS: Record<string, number> = {
-  ex1:1, ex2:1, ex3:1,
-  ef1:1, ef2:1, ef3:1, ef4:1, ef5:1, ef6:2, ef7:1, ef8:1, ef9:1, ef10:2, ef11:1, ef12:1, ef13:1, ef14:3,
-  dc1:1, dc2:1, dc3:1, dc4:2, dc5:1, dc6:2, dc7:2, dc8:2, dc9:3, dc10:2, dc11:3, dc12:2,
-  rc1:1, rc2:1, rc3:1, rc4:1, rc5:1, rc6:1, rc7:2, rc8:1,
-  bt1:3, bt2:1, bt3:2, bt4:2, bt5:1, bt6:1, bt7:2, bt8:3, bt9:7, bt10:3, bt11:3, bt12:4,
-  bh1:1, bh2:2, bh3:1, bh4:2, bh5:1, bh6:1, bh7:1, bh8:1, bh9:2, bh10:1, bh11:2, bh12:2, bh13:1, bh14:3,
-  bh15:1, bh16:3, bh17:3, bh18:1, bh19:2, bh20:2, bh21:5, bh22:2, bh23:4, bh24:1, bh25:1, bh26:1,
-  pa1:1, pa2:1, pa3:1, pa4:1, pa5:1, pa6:1,
-  ss1:3, ss2:2, ss3:2, ss4:4, ss5:5, ss6:2, ss7:1, ss8:1, ss9:1, ss10:4, ss11:1, ss12:1, ss13:1,
-};
-const AUDIT_POSSIBLE = Object.values(AUDIT_POINTS).reduce((a, b) => a + b, 0); // 165
+// The 4 original scorecard categories have dedicated numeric columns on
+// `scorecards`. Newer/added categories live only in the `scores` jsonb blob.
+// We mirror these known keys into their columns on write for back-compat.
+const LEGACY_SCORECARD_COLS = new Set([
+  "online_store_pictures", "facebook_listings", "social_media_posts", "paymore_sync",
+]);
 
-// results[id] is points awarded (0..pts); legacy boolean true = full pts.
-function scoreAudit(results: Record<string, unknown>) {
-  let earned = 0;
-  for (const [id, pts] of Object.entries(AUDIT_POINTS)) {
-    const v = results ? (results as any)[id] : 0;
-    let a = v === true ? pts : Number(v);
-    if (!Number.isFinite(a)) a = 0;
-    earned += Math.min(Math.max(a, 0), pts);
-  }
-  const possible = AUDIT_POSSIBLE;
-  const pct = possible ? Math.round((earned / possible) * 1000) / 10 : 0;
-  return { earned, possible, pct };
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+// Catalog management (add/remove/pause items) is DM/CEO only. Submitting
+// scores/audits stays open (matches prior behavior); only the catalog mutates here.
+function isManagerRole(role?: string): boolean {
+  const r = (role || "").toLowerCase().trim();
+  return r === "district manager" || r === "district-manager" || r === "ceo";
+}
+
+function slugify(s: string): string {
+  return String(s || "")
+    .toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 60) || "item";
+}
+
+// Read the score for a scorecard item from a row: prefer the jsonb blob, fall
+// back to the legacy per-category column (old rows predate `scores`).
+function scoreFromRow(row: any, key: string): number | null {
+  const blob = row && row.scores && typeof row.scores === "object" ? row.scores : null;
+  let v = blob && blob[key] !== undefined ? blob[key] : (row ? row[key] : undefined);
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 Deno.serve(async (req: Request) => {
@@ -58,99 +55,259 @@ Deno.serve(async (req: Request) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
+  // Load both catalogs up front — used by GET and by score/audit submits.
+  async function loadCatalogs() {
+    const [{ data: sc }, { data: au }] = await Promise.all([
+      supabase.from("scorecard_items").select("*").order("sort_order", { ascending: true }),
+      supabase.from("paymore_audit_items").select("*").order("sort_order", { ascending: true }),
+    ]);
+    return { scItems: sc || [], auItems: au || [] };
+  }
+
   if (req.method === "POST") {
     try {
       const body = JSON.parse(await req.text());
       const action = body.action;
 
-      // ---- Submit a practice (PayMore) audit ----
+      // ============ CATALOG MANAGEMENT (DM / CEO only) ============
+      if (
+        action === "scorecard_item_upsert" || action === "scorecard_item_delete" ||
+        action === "audit_item_upsert" || action === "audit_item_delete"
+      ) {
+        if (!isManagerRole(body.role)) return json({ success: false, error: "Not authorized" }, 403);
+
+        if (action === "scorecard_item_delete") {
+          if (!body.id) return json({ success: false, error: "Missing id" }, 400);
+          const { error } = await supabase.from("scorecard_items").delete().eq("id", body.id);
+          if (error) return json({ success: false, error: error.message }, 500);
+          return json({ success: true });
+        }
+
+        if (action === "audit_item_delete") {
+          if (!body.id) return json({ success: false, error: "Missing id" }, 400);
+          const { error } = await supabase.from("paymore_audit_items").delete().eq("id", body.id);
+          if (error) return json({ success: false, error: error.message }, 500);
+          return json({ success: true });
+        }
+
+        if (action === "scorecard_item_upsert") {
+          if (body.id) {
+            const patch: Record<string, unknown> = {};
+            if (typeof body.label === "string" && body.label.trim()) patch.label = body.label.trim();
+            if (body.max_score !== undefined) patch.max_score = Number(body.max_score) || 5;
+            if (body.active !== undefined) patch.active = !!body.active;
+            if (body.sort_order !== undefined) patch.sort_order = parseInt(body.sort_order) || 0;
+            if (!Object.keys(patch).length) return json({ success: false, error: "Nothing to update" }, 400);
+            const { error } = await supabase.from("scorecard_items").update(patch).eq("id", body.id);
+            if (error) return json({ success: false, error: error.message }, 500);
+            return json({ success: true });
+          }
+          const label = String(body.label || "").trim();
+          if (!label) return json({ success: false, error: "Label is required" }, 400);
+          let key = body.item_key ? slugify(body.item_key) : slugify(label);
+          // Ensure the key is unique.
+          const { data: existing } = await supabase.from("scorecard_items").select("item_key");
+          const taken = new Set((existing || []).map((r: any) => r.item_key));
+          if (taken.has(key)) { let i = 2; while (taken.has(`${key}_${i}`)) i++; key = `${key}_${i}`; }
+          const { data: maxRow } = await supabase.from("scorecard_items")
+            .select("sort_order").order("sort_order", { ascending: false }).limit(1).maybeSingle();
+          const record = {
+            item_key: key,
+            label,
+            max_score: Number(body.max_score) || 5,
+            active: body.active === undefined ? true : !!body.active,
+            sort_order: ((maxRow?.sort_order) || 0) + 10,
+          };
+          const { error } = await supabase.from("scorecard_items").insert(record);
+          if (error) return json({ success: false, error: error.message }, 500);
+          return json({ success: true, item_key: key });
+        }
+
+        if (action === "audit_item_upsert") {
+          if (body.id) {
+            const patch: Record<string, unknown> = {};
+            if (typeof body.section === "string" && body.section.trim()) patch.section = body.section.trim();
+            if (typeof body.item_text === "string" && body.item_text.trim()) patch.item_text = body.item_text.trim();
+            if (body.points !== undefined) patch.points = Math.max(0, parseInt(body.points) || 0);
+            if (body.active !== undefined) patch.active = !!body.active;
+            if (body.sort_order !== undefined) patch.sort_order = parseInt(body.sort_order) || 0;
+            if (!Object.keys(patch).length) return json({ success: false, error: "Nothing to update" }, 400);
+            const { error } = await supabase.from("paymore_audit_items").update(patch).eq("id", body.id);
+            if (error) return json({ success: false, error: error.message }, 500);
+            return json({ success: true });
+          }
+          const section = String(body.section || "").trim();
+          const text = String(body.item_text || "").trim();
+          const points = Math.max(0, parseInt(body.points) || 0);
+          if (!section || !text) return json({ success: false, error: "Section and text are required" }, 400);
+          // Generate a stable custom item_id (kept out of the ex/ef/... namespace).
+          const { data: existing } = await supabase.from("paymore_audit_items").select("item_id");
+          const taken = new Set((existing || []).map((r: any) => r.item_id));
+          let n = (existing || []).length + 1;
+          let itemId = `cst${n}`;
+          while (taken.has(itemId)) { n++; itemId = `cst${n}`; }
+          const { data: maxRow } = await supabase.from("paymore_audit_items")
+            .select("sort_order").order("sort_order", { ascending: false }).limit(1).maybeSingle();
+          const record = {
+            item_id: itemId,
+            section,
+            item_text: text,
+            points,
+            active: body.active === undefined ? true : !!body.active,
+            sort_order: ((maxRow?.sort_order) || 0) + 1,
+          };
+          const { error } = await supabase.from("paymore_audit_items").insert(record);
+          if (error) return json({ success: false, error: error.message }, 500);
+          return json({ success: true, item_id: itemId });
+        }
+      }
+
+      // ============ Submit a practice (PayMore) audit ============
       if (action === "submit_audit") {
         const store = String(body.store || "").toUpperCase();
         const date = body.date;
-        if (!store || !date) {
-          return new Response(JSON.stringify({ success: false, error: "Missing store or date" }),
-            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-        }
+        if (!store || !date) return json({ success: false, error: "Missing store or date" }, 400);
+
+        const { auItems } = await loadCatalogs();
+        const activePoints: Record<string, number> = {};
+        auItems.forEach((it: any) => { if (it.active) activePoints[it.item_id] = it.points; });
+        const possible = Object.values(activePoints).reduce((a, b) => a + b, 0);
+
         const results = (body.results && typeof body.results === "object") ? body.results : {};
-        const { earned, possible, pct } = scoreAudit(results);
+        let earned = 0;
+        for (const [id, pts] of Object.entries(activePoints)) {
+          const v = (results as any)[id];
+          let a = v === true ? pts : Number(v);
+          if (!Number.isFinite(a)) a = 0;
+          a = Math.round(a * 2) / 2; // snap to the half-point grid
+          earned += Math.min(Math.max(a, 0), pts);
+        }
+        const pct = possible ? Math.round((earned / possible) * 1000) / 10 : 0;
+
+        // Per-section notes (object keyed by section title) and photos (object keyed
+        // by section title -> array of {url, path, name}). Both optional.
+        const sectionNotes = (body.sectionNotes && typeof body.sectionNotes === "object" && !Array.isArray(body.sectionNotes))
+          ? body.sectionNotes : null;
+        const sectionPhotos = (body.sectionPhotos && typeof body.sectionPhotos === "object" && !Array.isArray(body.sectionPhotos))
+          ? body.sectionPhotos : null;
+
+        // Optional time of the walkthrough, 'HH:MM' 24h.
+        const auditTime = /^([01]?\d|2[0-3]):[0-5]\d$/.test(String(body.time || "")) ? String(body.time) : null;
+
         const record = {
-          store,
-          date,
+          store, date,
           auditor_name: body.auditor || null,
+          audit_time: auditTime,
           earned_points: earned,
           possible_points: possible,
           pct,
           results,
-          section_notes: body.sectionNotes || null,
+          section_notes: sectionNotes,
+          section_photos: sectionPhotos,
         };
         await supabase.from("audit_scores").delete().eq("store", store).eq("date", date);
         const { error } = await supabase.from("audit_scores").insert(record);
-        if (error) {
-          return new Response(JSON.stringify({ success: false, error: error.message }),
-            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-        }
-        return new Response(JSON.stringify({ success: true, earned, possible, pct }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        if (error) return json({ success: false, error: error.message }, 500);
+
+        // A fresh audit supersedes older ones for this store: delete the previous
+        // audits' section photos from storage and clear their references (the scores
+        // and history rows are kept). Keeps the bucket to just the latest walkthrough.
+        try {
+          const { data: priorRows } = await supabase.from("audit_scores")
+            .select("id, section_photos").eq("store", store).neq("date", date);
+          const paths: string[] = [];
+          (priorRows || []).forEach((r: any) => {
+            const sp = r.section_photos;
+            if (sp && typeof sp === "object") {
+              Object.values(sp).forEach((arr: any) => {
+                if (Array.isArray(arr)) arr.forEach((p: any) => { if (p && p.path) paths.push(p.path); });
+              });
+            }
+          });
+          if (paths.length) {
+            await supabase.storage.from("audit-photos").remove(paths);
+            await supabase.from("audit_scores").update({ section_photos: null })
+              .eq("store", store).neq("date", date);
+          }
+        } catch (_e) { /* best-effort cleanup — never fail the submit over it */ }
+
+        return json({ success: true, earned, possible, pct });
       }
 
-      // ---- Submit the Online & Marketing scorecard ----
+      // ============ Submit the scorecard ============
       if (action === "submit_scorecard") {
         const store = String(body.store || "").toUpperCase();
         const date = body.date;
-        if (!store || !date) {
-          return new Response(JSON.stringify({ success: false, error: "Invalid payload" }),
-            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        if (!store || !date) return json({ success: false, error: "Invalid payload" }, 400);
+
+        const { scItems } = await loadCatalogs();
+        const activeKeys = scItems.filter((i: any) => i.active).map((i: any) => i.item_key);
+
+        // Preferred: body.scores is an object keyed by item_key. Legacy: a
+        // positional array aligned to the active items (kept for old clients).
+        const scoresObj: Record<string, number | null> = {};
+        if (body.scores && typeof body.scores === "object" && !Array.isArray(body.scores)) {
+          for (const k of activeKeys) {
+            const v = (body.scores as any)[k];
+            scoresObj[k] = (v === null || v === "" || v === undefined) ? null : Number(v);
+          }
+        } else if (Array.isArray(body.scores)) {
+          activeKeys.forEach((k: string, i: number) => {
+            const v = (body.scores as any[])[i];
+            scoresObj[k] = (v === null || v === "" || v === undefined) ? null : Number(v);
+          });
         }
 
-        // scores aligns positionally to BUCKET.cols; sectionNotes[0] is the note.
-        const rawScores: any[] = Array.isArray(body.scores) ? body.scores : [];
         const note = Array.isArray(body.sectionNotes) ? body.sectionNotes[0] : (body.notes || null);
+        const provided = Object.values(scoresObj).filter((v) => v !== null) as number[];
+        const storeAverage = provided.length ? provided.reduce((a, b) => a + b, 0) / provided.length : null;
 
-        const scoreValues: (number | null)[] = BUCKET.cols.map((_c, i) => {
-          const v = rawScores[i];
-          return (v === null || v === "" || v === undefined) ? null : Number(v);
-        });
-
-        const valid = scoreValues.filter((v) => v !== null) as number[];
-        const storeAverage = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : null;
+        // Persist only non-null scores in the jsonb blob.
+        const blob: Record<string, number> = {};
+        Object.entries(scoresObj).forEach(([k, v]) => { if (v !== null) blob[k] = v as number; });
 
         const dateObj = new Date(date + "T00:00:00Z");
         const record: Record<string, any> = {
-          store,
-          date,
+          store, date,
           month: dateObj.getUTCMonth() + 1,
           year: dateObj.getUTCFullYear(),
           store_average: storeAverage,
+          scores: blob,
           section_0_date: date,
           section_0_notes: (note && String(note).trim()) ? String(note).trim() : null,
         };
-        BUCKET.cols.forEach(([col], i) => { record[col] = scoreValues[i]; });
+        // Mirror the 4 known keys into their legacy columns (null-clears the rest).
+        LEGACY_SCORECARD_COLS.forEach((col) => { record[col] = scoresObj[col] ?? null; });
 
         await supabase.from("scorecards").delete().eq("store", store).eq("date", date);
         const { error } = await supabase.from("scorecards").insert(record);
-        if (error) {
-          return new Response(JSON.stringify({ success: false, error: error.message }),
-            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-        }
-        return new Response(JSON.stringify({ success: true }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        if (error) return json({ success: false, error: error.message }, 500);
+        return json({ success: true });
       }
 
-      return new Response(JSON.stringify({ success: false, error: "Unknown action" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return json({ success: false, error: "Unknown action" }, 400);
     } catch (err: any) {
-      return new Response(JSON.stringify({ success: false, error: err.message }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return json({ success: false, error: err.message }, 500);
     }
   }
 
-  // ---- GET: latest scorecard + latest/previous practice audit per store ----
+  // ============ GET: catalog + latest scorecard/audit per store ============
+  const { scItems, auItems } = await loadCatalogs();
+  const catalog = {
+    scorecard_items: scItems.map((i: any) => ({
+      id: i.id, item_key: i.item_key, label: i.label,
+      max_score: Number(i.max_score), active: !!i.active, sort_order: i.sort_order,
+    })),
+    audit_items: auItems.map((i: any) => ({
+      id: i.id, item_id: i.item_id, section: i.section, item_text: i.item_text,
+      points: i.points, active: !!i.active, sort_order: i.sort_order,
+    })),
+  };
+  const activeScItems = scItems.filter((i: any) => i.active);
+
   const { data: cards, error: cardErr } = await supabase
     .from("scorecards").select("*").order("date", { ascending: false });
-  if (cardErr) {
-    return new Response(JSON.stringify({ success: false, error: cardErr.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-  }
+  if (cardErr) return json({ success: false, error: cardErr.message }, 500);
 
   const { data: audits } = await supabase
     .from("audit_scores").select("*").order("date", { ascending: false });
@@ -162,24 +319,21 @@ Deno.serve(async (req: Request) => {
     let score = 0;
     let date: string | null = null;
     if (latest) {
-      const categories = BUCKET.cols
-        .filter(([col]) => latest[col] !== null && latest[col] !== undefined)
-        .map(([col, name]) => ({ name, score: latest[col] }));
+      const categories = activeScItems
+        .map((it: any) => ({ name: it.label, score: scoreFromRow(latest, it.item_key) }))
+        .filter((c: any) => c.score !== null);
       const avg = categories.length
-        ? categories.reduce((s: number, c: any) => s + parseFloat(c.score), 0) / categories.length
+        ? categories.reduce((s: number, c: any) => s + c.score, 0) / categories.length
         : 0;
       if (categories.length) {
         buckets = [{
-          name: BUCKET.name,
+          name: "Online & Marketing",
           avg,
           sectionDate: latest.date,
           notes: latest.section_0_notes || null,
           categories,
         }];
       }
-      // Headline score is the average of the 4 Online & Marketing categories
-      // only — NOT latest.store_average, which on legacy rows still reflects the
-      // removed In-Store Operations / Store Reviews sections.
       score = avg;
       date = latest.date;
     }
@@ -193,7 +347,10 @@ Deno.serve(async (req: Request) => {
       pct: latestAudit.pct,
       date: latestAudit.date,
       auditor: latestAudit.auditor_name,
+      time: latestAudit.audit_time || null,
       results: latestAudit.results || {},
+      notes: latestAudit.section_notes || null,
+      photos: latestAudit.section_photos || null,
       prevPct: prevAudit ? prevAudit.pct : null,
     } : null;
 
@@ -201,6 +358,5 @@ Deno.serve(async (req: Request) => {
     return { store, score, date, buckets, breakdown: [], audit };
   }).filter(Boolean);
 
-  return new Response(JSON.stringify({ success: true, data: storeData }),
-    { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+  return json({ success: true, data: storeData, catalog });
 });

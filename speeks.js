@@ -55,6 +55,9 @@ const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
 const MONTHLY_BRIEF_URL = `${_BASE}/monthly-brief`;
 const B2B_URL           = `${_BASE}/b2b-deals`;
 const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
+const RECYCLE_URL       = `${_BASE}/recycle-requests`;
+const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
+const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -481,7 +484,15 @@ function markAnnouncementRead(rowId) {
 
 function toggleNotifs() { toggleModal('notifDropdown', 'notifBadge'); }
 function toggleCalendar() { toggleModal('calendarDropdown'); }
-function toggleIdeaModal() { toggleModal('ideaModal'); }
+function toggleIdeaModal() {
+    // Pre-fill the submitter's name from their session so they don't retype it.
+    const nameEl = document.getElementById('ideaName');
+    if (nameEl) {
+        const u = sessionStorage.getItem('speeksUserName');
+        if (u && u.trim()) nameEl.value = u.trim();
+    }
+    toggleModal('ideaModal');
+}
 
 function switchAnnTab(tab) {
     const isRecent = tab === 'recent';
@@ -1776,6 +1787,15 @@ function formatVariancePct(num) {
     return Math.abs(num) < 0.001 ? '0.00%' : `${num < 0 ? '-' : '+'}${Math.abs(num).toFixed(2)}%`; 
 }
 
+// Compact "Jun 1 – Jun 30" range for a variance report's dateFrom/dateTo.
+// Variance can be run weekly / bi-weekly / monthly, so its period is shown
+// wherever the variance number appears. Returns '' if either date is missing.
+function formatVarianceRange(dateFrom, dateTo) {
+    if (!dateFrom || !dateTo) return '';
+    const fmt = iso => new Date(iso + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return `${fmt(dateFrom)} – ${fmt(dateTo)}`;
+}
+
 function createVarianceStoreCard(sKey) {
     if (sKey === "NONE" || !liveVarianceDataCache[sKey]?.employees) return '';
 
@@ -2355,6 +2375,47 @@ function _kpiEmpRowsHtml(entries, periodDate, isEditing, isAvg) {
     }).join('');
 }
 
+// DM/CEO aren't on any store roster (kpi-manage excludes corp roles), but when
+// they work a shift — buying, listing — the store's stats should include them.
+// While editing the current period, a corp user gets an "add me" row that
+// appends them as a one-off entry for THAT period only. The row is only
+// persisted if numbers are actually saved for it, and past periods are
+// historical snapshots, so they never appear on weeks they didn't work.
+function _kpiAddSelfRowHtml(p, isEditing) {
+    if (!isEditing || !p.is_editable) return '';
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (role !== 'ceo' && role !== 'district manager') return '';
+    const name = sessionStorage.getItem('speeksUserName');
+    if (!name || (p.entries || []).some(function(e) { return e.employee_name === name; })) return '';
+    const cols = 1 + _KPI_GRID_FIELDS.length;
+    const period = _kpiCurrentTab === 'weekly' ? 'week' : 'month';
+    const tag = role === 'ceo' ? 'CEO' : 'DM';
+    return '<tr><td colspan="' + cols + '" style="padding:8px 12px; background:#f8fafc; border-top:1px solid #f1f5f9;">' +
+        '<button type="button" onclick="_kpiAddSelf(\'' + p.period_end_date + '\')" title="Adds a row for you on this ' + period + ' only — use it when you helped the store with buying or listing" ' +
+        'style="font-size:12px; font-weight:800; color:#1d4ed8; background:#eff6ff; border:1.5px solid #bfdbfe; border-radius:8px; padding:6px 12px; cursor:pointer;">+ Add ' + escapeHtml(name) + ' (' + tag + ') — helped out this ' + period + '</button>' +
+        '</td></tr>';
+}
+
+function _kpiAddSelf(periodDate) {
+    const name = sessionStorage.getItem('speeksUserName');
+    if (!name) return;
+    const p = (_kpiPeriodsData || []).find(function(x) { return x.period_end_date === periodDate; });
+    if (!p || p.entries.some(function(e) { return e.employee_name === name; })) return;
+    // _selfAdded marks the row as a local, not-yet-saved addition so cancelling
+    // the edit can remove it again (saved rows have an id and are kept).
+    p.entries.push({ employee_name: name, _selfAdded: true });
+    if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
+    else _kpiRenderMonthly(_kpiPeriodsData);
+}
+
+// Cancelling an edit discards self-added rows that were never saved — the DM
+// shouldn't linger in the grid after backing out.
+function _kpiStripUnsavedSelfRows() {
+    (_kpiPeriodsData || []).forEach(function(p) {
+        p.entries = (p.entries || []).filter(function(e) { return !(e._selfAdded && !e.id); });
+    });
+}
+
 function _kpiUpdateRow(pk, empIdx) {
     const g   = function(k) { var el = document.getElementById('kpi-' + pk + '-' + empIdx + '-' + k); return el ? (Number(el.value) || 0) : 0; };
     const bv  = g('buying_value'),        bc  = g('buying_cost');
@@ -2457,6 +2518,7 @@ function _kpiRenderWeekly(periods) {
             _kpiSectionControls(p.period_end_date, isEd, p.is_editable), '#3b82f6');
         tbody += _kpiHeaderRowsHtml();
         tbody += _kpiEmpRowsHtml(p.entries, p.period_end_date, isEd, false);
+        tbody += _kpiAddSelfRowHtml(p, isEd);
         const hasSavedData = p.entries.some(function(e) { return e.id; });
         if (hasSavedData) tbody += _kpiStoreTotalRowHtml(p.entries);
     });
@@ -3118,6 +3180,7 @@ function _kpiRenderMonthly(periods) {
             _kpiSectionControls(p.period_end_date, isEd, p.is_editable), '#7c3aed');
         tbody += _kpiHeaderRowsHtml();
         tbody += _kpiEmpRowsHtml(p.entries, p.period_end_date, isEd, false);
+        tbody += _kpiAddSelfRowHtml(p, isEd);
         const hasSavedData = p.entries.some(function(e) { return e.id; });
         if (hasSavedData) tbody += _kpiStoreTotalRowHtml(p.entries);
     });
@@ -3211,6 +3274,7 @@ function kpiHeaderSave() {
 
 function kpiHeaderCancel() {
     _kpiEditingPeriod = null;
+    _kpiStripUnsavedSelfRows();
     if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
     else _kpiRenderMonthly(_kpiPeriodsData);
 }
@@ -3374,6 +3438,7 @@ function _kpiStartEdit(periodDate) {
 
 function _kpiCancelEdit() {
     _kpiEditingPeriod = null;
+    _kpiStripUnsavedSelfRows();
     if (_kpiCurrentTab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
     else _kpiRenderMonthly(_kpiPeriodsData);
 }
@@ -3888,55 +3953,10 @@ function populateRecordsModal() {
     list.innerHTML = html;
 }
 
-function populateAlertsModal() {
-    const list = document.getElementById('manageAlertsList');
-    const STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-    
-    // Explicit conversion logic: Decimal to Percentage
-    const fmtInput = (val) => {
-        if (val === null || val === undefined || String(val).trim() === '') return '';
-        let str = String(val).trim();
-        if (str.includes('%')) {
-            return parseFloat(str.replace(/[^0-9.-]/g, '')).toFixed(2);
-        }
-        let num = parseFloat(str.replace(/[^0-9.-]/g, ''));
-        if (isNaN(num)) return str;
-        return (num * 100).toFixed(2);
-    };
-
-    let html = '';
-
-    STORES.forEach(storeName => {
-        let sData = globalAlertsData.find(s => s.store.toUpperCase() === storeName) || { 
-            store: storeName, currentHigh: '', currentVeryHigh: '', projectedHigh: '', projectedVeryHigh: '',
-            defectRate: '', lateShipment: '', casesClosed: '', tracking: '' 
-        };
-        
-        html += `
-            <div class="alert-manage-row" data-store="${storeName}" style="background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 15px;">
-                <div style="font-weight: 900; color: var(--slate-charcoal); font-size: 14px; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 5px;">${storeName}</div>
-                
-                <div style="font-size: 11px; font-weight: 800; color: #888; text-transform: uppercase; margin-bottom: 6px;">eBay Performance Metrics</div>
-                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px;">
-                    <input type="text" class="a-ch" placeholder="Cur. High" title="Current High" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${sData.currentHigh || ''}">
-                    <input type="text" class="a-cvh" placeholder="Cur. Very High" title="Current Very High" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${sData.currentVeryHigh || ''}">
-                    <input type="text" class="a-ph" placeholder="Proj. High" title="Projected High" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${sData.projectedHigh || ''}">
-                    <input type="text" class="a-pvh" placeholder="Proj. Very High" title="Projected Very High" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${sData.projectedVeryHigh || ''}">
-                </div>
-
-                <div style="font-size: 11px; font-weight: 800; color: #888; text-transform: uppercase; margin-bottom: 6px;">eBay Top Rated Metrics</div>
-                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">
-                    <input type="text" class="a-dr" placeholder="Defect Rate" title="Transaction Defect Rate" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${fmtInput(sData.defectRate)}">
-                    <input type="text" class="a-ls" placeholder="Late Shipment" title="Late Shipment Rate" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${fmtInput(sData.lateShipment)}">
-                    <input type="text" class="a-cc" placeholder="Cases Closed" title="Cases Closed w/o Resolution" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${fmtInput(sData.casesClosed)}">
-                    <input type="text" class="a-tr" placeholder="Tracking" title="Tracking Uploaded" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none;" value="${fmtInput(sData.tracking)}">
-                </div>
-            </div>
-        `;
-    });
-
-    list.innerHTML = html;
-}
+// NOTE: populateAlertsModal lives with the rest of the alerts module (see the
+// definition further down, next to saveAlertsData). An older duplicate that
+// used decimal→percentage input conversion was removed from here — the alerts
+// API stores rate values as the percentage number itself.
 
 async function saveManageRecords() {
     const btn = document.getElementById('saveRecordsBtn');
@@ -4474,7 +4494,7 @@ function injectIdeaModal() {
                     <input type="hidden" name="_subject" id="ideaDynamicSubject" value="New SPEEKS Idea">
                     <div style="margin-bottom: 15px;">
                         <label class="idea-label">Your Name</label>
-                        <input type="text" id="ideaName" name="Name" class="idea-input" required placeholder="John Doe">
+                        <input type="text" id="ideaName" name="Name" class="idea-input" required readonly aria-readonly="true" title="Pulled from your account" style="background:#f1f5f9; color:#475569; cursor:not-allowed;">
                     </div>
                     <div style="margin-bottom: 15px;">
                         <label class="idea-label">Category</label>
@@ -4549,6 +4569,10 @@ async function fetchScorecardData() {
         const json = await response.json();
         if (!json.success) throw new Error(json.error);
         window._scorecardAllData = json.data || [];
+        if (json.catalog) {
+            window._scCatalog = json.catalog.scorecard_items || [];
+            window._auCatalog = json.catalog.audit_items || [];
+        }
 
         const storeData = json.data.find(item => String(item.store).toUpperCase() === targetStore.toUpperCase());
 
@@ -5156,10 +5180,12 @@ async function fetchMasterDistrictDashboard() {
             const vColor = totalVar < 0 ? '#991b1b' : (totalVar > 0 ? '#065f46' : '#64748b');
             const vBg = totalVar < 0 ? '#fee2e2' : (totalVar > 0 ? '#d1fae5' : '#f1f5f9');
             const vSign = totalVar > 0 ? '+' : '';
+            const vRange = formatVarianceRange(sVar.dateFrom, sVar.dateTo);
 
             // 5. WEEKLY METRICS
             const sWeekData = weeklyResults.find(w => w.store === store);
             const wAvg = sWeekData?.sAvg || {};
+            const wPeriod = sWeekData?.periodLabel || '';
 
             const renderLineStat = (label, val, ruleType) => {
                 let isBad = false;
@@ -5221,12 +5247,15 @@ async function fetchMasterDistrictDashboard() {
                             <div class="master-stat-row dashed"><span class="master-stat-label">Sell Margin</span><span class="master-stat-val" style="color: ${sellMarginColor}; background: ${sellMarginBg};">${sellMarginNum > 0 ? sellMargin + '%' : '-'}</span></div>
                             <div class="master-stat-row"><span class="master-stat-label">Buy Tracking</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${buyProj.toLocaleString()}</span></div>
                             <div class="master-stat-row dashed"><span class="master-stat-label">Buy Margin</span><span class="master-stat-val" style="color: ${marginColor}; background: ${marginBg};">${buyMargin}%</span></div>
-                            <div class="master-stat-row"><span class="master-stat-label">Variance Total</span><span class="master-stat-val" style="color: ${vColor}; background: ${vBg};">${vSign}${totalVar.toFixed(2)}%</span></div>
+                            <div class="master-stat-row"><span class="master-stat-label">Variance Total${vRange ? `<span style="display:block; font-size:9px; font-weight:700; color:#94a3b8; text-transform:none; letter-spacing:0; margin-top:1px;">${vRange}</span>` : ''}</span><span class="master-stat-val" style="color: ${vColor}; background: ${vBg};" title="Variance period${vRange ? ': ' + vRange : ' not set'}">${vSign}${totalVar.toFixed(2)}%</span></div>
                         </div>
                     </div>
 
                     <div>
-                        <div class="master-section-title">Weekly Metrics</div>
+                        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px;">
+                            <div class="master-section-title" style="margin-bottom:0;min-width:0;">Weekly Metrics</div>
+                            ${wPeriod ? `<span class="master-section-title" style="margin-bottom:0;white-space:nowrap;">${escapeHtml(wPeriod)}</span>` : ''}
+                        </div>
                         <div class="master-stat-box">
                             ${renderLineStat('Conversion', wAvg.conversion, 'conversion')}
                             ${renderLineStat('Margin', wAvg.buyMargin, 'margin')}
@@ -5293,7 +5322,7 @@ async function fetchMasterDistrictDashboard() {
                 noDeals:    fmtN(t.no_deal_count),
                 listed:     fmtN(t.listed_count),
             };
-            return { store, sAvg };
+            return { store, sAvg, periodLabel: d.period_label || '' };
         });
 
         const weeklyResults = await Promise.all(weeklyPromises);
@@ -5342,6 +5371,9 @@ const ListingGoalsEngine = {
     // Incremental: ±20 listings per person, anchored at 4 people = 190 (floor 150).
     // 2→150, 3→170, 4→190, 5→210, 6→230. Mirrors baseForSize() in the
     // store-targets edge function so the frontend and server stay in lock-step.
+    // The MSM boost (+15 on stores an MSM covers) is added OUTSIDE this formula
+    // (server msmBoost / frontend _msmTargetBoost) so scale() — and therefore
+    // per-person daily goals — stays unboosted: regular listers don't absorb it.
     weeklyTarget(size)       { return Math.max(150, 110 + 20 * size); },
     modelSize(rosterSize)    { return rosterSize >= 4 ? 4 : 3; },
 
@@ -5363,6 +5395,8 @@ const ListingGoalsEngine = {
     weightFor(role, staffedCount) {
         // On 2-person days the lister also covers the floor → reduced weight.
         if (role === 'L1' && staffedCount <= 2) return this.roleWeight.L1_SHARED;
+        // L3, L4, … (rosters past 4 people) score like a dedicated lister.
+        if (this.roleWeight[role] == null && /^L\d+$/.test(role)) return this.roleWeight.L1;
         return this.roleWeight[role] || 0;
     },
     scale(rosterSize) {
@@ -5406,6 +5440,19 @@ function normalizeGoalDate(s) {
     return isNaN(d.getTime()) ? String(s).trim() : d.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
 }
 
+// Role dots offered in the goal widgets. Small teams get one lister, normal
+// teams two; past 4 people the lister lane keeps extending (L3, L4, …) so a
+// fully-staffed day can give everyone a role. Extra listers score like L1.
+// Pass a roster size for a specific store (MSM stacked widget); defaults to
+// the single-store global roster.
+function goalsAvailableRoles(count) {
+    const n = (count == null) ? goalsRoster.length : count;
+    if (n <= 2) return ['B1', 'B2', 'L1'];
+    const roles = ['B1', 'B2', 'L1', 'L2'];
+    for (let i = 3; i <= n - 2; i++) roles.push('L' + i);
+    return roles;
+}
+
 function toggleEditDate(isYest) {
     editingYesterday = isYest;
     buildGoalsEditForm(); // Re-render the form for the selected day
@@ -5436,6 +5483,7 @@ async function initListingGoals() {
 async function fetchLiveGoalsData() {
     const list = document.getElementById('goals-manager-body');
     if (!list) return;
+    if (isMultiStoreManager()) return fetchLiveGoalsDataMS();
     list.innerHTML = '<div class="status-message">Syncing Data...</div>';
 
     goalsTargetStore = sessionStorage.getItem('speeksUserStore') || 'OVL';
@@ -5657,7 +5705,7 @@ function buildGoalsEditForm() {
     }
     
     let html = '';
-    const availableRoles = goalsRoster.length <= 2 ? ['B1', 'B2', 'L1'] : ['B1', 'B2', 'L1', 'L2'];
+    const availableRoles = goalsAvailableRoles();
 
     // Inject the Toggle into the Header title space dynamically
     const titleEl = document.getElementById('goals-input-title');
@@ -5721,6 +5769,7 @@ window.scheduleGoalsAutosave = function() {
 };
 
 async function saveGoalsData(silent = false) {
+    if (_msGoalsActive()) return saveGoalsDataMS(silent);
     const status = document.getElementById('goals-save-status');
     if (status && !silent) { status.textContent = 'Saving…'; status.className = 'goals-save-status saving'; }
 
@@ -5788,9 +5837,11 @@ async function saveGoalsData(silent = false) {
 }
 
 // Flip the manager's "Set Listing Goals" daily checklist task to done.
-async function markListingGoalsChecklistComplete() {
+// `storeArg` lets the MSM dual-store widget tick the right store's copy;
+// everyone else defaults to their session store.
+async function markListingGoalsChecklistComplete(storeArg) {
     const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
-    const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
+    const store = storeArg || sessionStorage.getItem('speeksUserStore') || 'OVL';
     let targetTaskId = null;
 
     if (checklistDataCache && checklistDataCache.daily && checklistDataCache.daily.length > 0) {
@@ -5801,9 +5852,19 @@ async function markListingGoalsChecklistComplete() {
         }
     }
 
+    // Multi-Store Manager: the single-store cache is empty; tick the active store's copy.
+    if (_isMSMChecklist()) {
+        const msDaily = (checklistDataCacheMS[store] || {}).daily || [];
+        const msTask = msDaily.find(t => t.text.toLowerCase().includes('listing goals'));
+        if (msTask) {
+            targetTaskId = msTask.id;
+            if (!msTask.checked) { msTask.checked = true; renderChecklistMS(); }
+        }
+    }
+
     if (!targetTaskId) {
         try {
-            const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
+            const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}${_checklistPersonalParam()}&v=${Date.now()}`);
             const data = await res.json();
             if (data && data.daily) {
                 const task = data.daily.find(t => t.text.toLowerCase().includes('listing goals'));
@@ -5839,6 +5900,7 @@ function getWeeklyResultFor(emp) {
 function renderManagerGoals() {
     const list = document.getElementById('goals-manager-body');
     if (!list) return;
+    if (isMultiStoreManager()) return renderManagerGoalsMS();
 
     const now = new Date();
     const dateDisplay = document.getElementById('goals-date-display');
@@ -5849,7 +5911,7 @@ function renderManagerGoals() {
     startOfWeek.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
     startOfWeek.setHours(0, 0, 0, 0);
 
-    const availableRoles = goalsRoster.length <= 2 ? ['B1', 'B2', 'L1'] : ['B1', 'B2', 'L1', 'L2'];
+    const availableRoles = goalsAvailableRoles();
 
     _priorWeekGoals = {};
     _weekTargetTotal = targetFor(goalsTargetStore);
@@ -5887,11 +5949,12 @@ function renderManagerGoals() {
 }
 
 // Sum of an employee's saved daily goals this week, excluding today (last record per day wins).
-function priorWeekGoal(emp, todayStr, startOfWeek) {
+// `data` defaults to the single-store cache; the MSM widget passes each store's own cache.
+function priorWeekGoal(emp, todayStr, startOfWeek, data = liveGoalsData) {
     const target = String(emp).trim().toLowerCase();
     const tFirst = target.split(' ')[0];
     const byDay = {};
-    liveGoalsData.forEach(r => {
+    data.forEach(r => {
         const n = String(r.employee).trim().toLowerCase();
         const nFirst = n.split(' ')[0];
         const match = n === target || (nFirst.length > 2 && tFirst.length > 2 && (nFirst.startsWith(tFirst) || tFirst.startsWith(nFirst)));
@@ -5903,16 +5966,268 @@ function priorWeekGoal(emp, todayStr, startOfWeek) {
     return Object.values(byDay).reduce((s, g) => s + g, 0);
 }
 
+// ============================================================================
+// MULTI-STORE MANAGER — dual-store listing goals (both stores in one widget)
+// Mirrors the MSM checklist: instead of toggling the dashboard between stores,
+// the MSM's Listing Goals widget stacks a full per-store section (roster, role
+// dots, totals, level-up bars) for every store they run. Role locks, goal math
+// and autosave are all scoped per store, so BAL's B1 doesn't lock MPL's B1.
+// Single-store managers never reach this path.
+// ============================================================================
+let _goalsMS = {};             // store -> { roster: [], live: [], priorWeek: {idx: n}, history: [] }
+let _goalsChecklistDoneMS = {}; // store -> true once the "set listing goals" task was ticked
+
+// True while the stacked dual-store widget is on screen (its sections carry
+// data-goals-scope). Gates the shared save/recompute entry points.
+function _msGoalsActive() {
+    return isMultiStoreManager() && !!document.querySelector('#goals-manager-body [data-goals-scope]');
+}
+
+// Hide the widget's single-store footer (Total row + level-up bars) in MSM
+// mode — each store section renders its own copies.
+function _setMSGoalsChrome(isMS) {
+    const totalRow = document.querySelector('#goals-manager-body ~ .goals-total-row');
+    if (totalRow) totalRow.style.display = isMS ? 'none' : '';
+    const lu = document.getElementById('goals-levelup');
+    if (lu) lu.style.display = isMS ? 'none' : '';
+}
+
+async function fetchLiveGoalsDataMS() {
+    const list = document.getElementById('goals-manager-body');
+    if (!list) return;
+    list.innerHTML = '<div class="status-message">Syncing Data...</div>';
+    _setMSGoalsChrome(true);
+
+    try {
+        const authData = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
+        const excluded = ['ceo', 'district manager'];
+        _goalsMS = {};
+        MULTISTORE_MANAGER_STORES.forEach(s => {
+            const emps = (authData.users || [])
+                .filter(u => userInStore(u, s) && !excluded.includes((u.role || '').toLowerCase()))
+                .map(u => u.name)
+                .filter(Boolean);
+            _goalsMS[s] = { roster: emps.length ? emps : ['No Employees Found'], live: [], priorWeek: {}, history: [] };
+        });
+
+        const [goalsResults] = await Promise.all([
+            Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+                fetch(`${GOALS_API_URL}?store=${s}&v=${Date.now()}`).then(r => r.json()).catch(() => [])
+            )),
+            Promise.all(MULTISTORE_MANAGER_STORES.map(s => fetchStoreTarget(s))),
+        ]);
+        MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+            _goalsMS[s].live = Array.isArray(goalsResults[i]) ? goalsResults[i] : [];
+            _goalsMS[s].history = weeksFor(s);
+        });
+
+        renderManagerGoalsMS();
+    } catch (e) {
+        list.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; text-align: center; padding: 20px 0;">Error loading roster.</div>';
+    }
+}
+
+function renderManagerGoalsMS() {
+    const list = document.getElementById('goals-manager-body');
+    if (!list) return;
+    _setMSGoalsChrome(true);
+
+    const now = new Date();
+    const dateDisplay = document.getElementById('goals-date-display');
+    if (dateDisplay) dateDisplay.innerText = now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+
+    const todayStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    // Top-right chip shows both stores' weekly goals at a glance.
+    const storeTargetEl = document.getElementById('goals-store-target');
+    if (storeTargetEl) storeTargetEl.innerText = 'Goal: ' + MULTISTORE_MANAGER_STORES.map(s => `${s} ${targetFor(s)}`).join(' · ');
+
+    let html = '';
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const st = _goalsMS[store] || { roster: [], live: [], priorWeek: {}, history: [] };
+        const ac = _msStoreAccent(store);
+        const availableRoles = goalsAvailableRoles(st.roster.length);
+        st.priorWeek = {};
+
+        let rows = '';
+        st.roster.forEach((emp, idx) => {
+            const rec = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === todayStr) || { role: '' };
+
+            let rolesHtml = '';
+            availableRoles.forEach(r => {
+                const isActive = rec.role === r ? 'active' : '';
+                rolesHtml += `<button type="button" class="role-dot ${isActive}" onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
+            });
+
+            st.priorWeek[idx] = priorWeekGoal(emp, todayStr, startOfWeek, st.live);
+
+            rows += `
+            <div class="goals-mgr-row">
+                <div class="goals-mgr-emp">
+                    <span class="goals-roster-name">${emp}</span>
+                    <div class="goals-edit-roles" id="roles-${store}-${idx}">${rolesHtml}</div>
+                </div>
+                <div class="goal-auto-display" id="goal-display-${store}-${idx}">–</div>
+                <div class="goals-mgr-week" id="week-display-${store}-${idx}">–</div>
+            </div>`;
+        });
+
+        html += `
+        <div class="ms-store-section" data-goals-scope="${store}" style="border-left: 4px solid ${ac.solid};">
+            <div class="ms-store-head" style="border-bottom-color: ${ac.soft};">
+                <span class="ms-store-name" style="color: ${ac.solid};">${store}</span>
+                <span class="ms-store-prog" style="background: ${ac.soft}; color: ${ac.solid};">Goal: ${targetFor(store)} Listings</span>
+            </div>
+            ${rows}
+            <div class="goals-total-row">
+                <span class="goals-total-lbl">Total</span>
+                <span id="goals-total-target-${store}" class="goals-total-val target">0</span>
+                <span id="goals-total-actual-${store}" class="goals-total-val actual">0</span>
+            </div>
+            <div class="goals-levelup">${levelUpHtml(st.history, targetFor(store))}</div>
+        </div>`;
+    });
+
+    list.innerHTML = html;
+    setTimeout(() => { updateRoleLocks(); recomputeGoalDisplaysMS(); }, 30);
+}
+
+// MS twin of recomputeGoalDisplays: same math, run per store section.
+function recomputeGoalDisplaysMS() {
+    const dateStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const st = _goalsMS[store];
+        if (!st) return;
+
+        let staffedCount = 0;
+        st.roster.forEach((emp, idx) => {
+            const group = document.getElementById(`roles-${store}-${idx}`);
+            if (group && group.querySelector('.role-dot.active')) staffedCount++;
+        });
+        const rosterSize = effectiveTeamSize(store);
+
+        let todayTotal = 0;
+        let weekTotal = 0;
+        st.roster.forEach((emp, idx) => {
+            const group = document.getElementById(`roles-${store}-${idx}`);
+            const activeBtn = group?.querySelector('.role-dot.active');
+            const role = activeBtn ? activeBtn.innerText : '-';
+            const todayGoal = role !== '-' ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount) : 0;
+
+            const disp = document.getElementById(`goal-display-${store}-${idx}`);
+            if (disp) {
+                disp.innerText = role === '-' ? '–' : todayGoal;
+                disp.classList.toggle('goal-auto-set', role !== '-');
+            }
+            todayTotal += todayGoal;
+
+            const weekVal = (st.priorWeek[idx] || 0) + todayGoal;
+            const wkEl = document.getElementById(`week-display-${store}-${idx}`);
+            if (wkEl) wkEl.innerText = weekVal || '–';
+            weekTotal += weekVal;
+        });
+
+        const tEl = document.getElementById(`goals-total-target-${store}`);
+        if (tEl) tEl.innerText = todayTotal;
+        const wEl = document.getElementById(`goals-total-actual-${store}`);
+        if (wEl) wEl.innerText = weekTotal;
+    });
+}
+
+// MS twin of saveGoalsData: each store section re-saves its full day state
+// (same semantics as the single-store autosave — payload is what's on screen).
+async function saveGoalsDataMS(silent = false) {
+    const status = document.getElementById('goals-save-status');
+    if (status) { status.textContent = 'Saving…'; status.className = 'goals-save-status saving'; }
+
+    const now = new Date();
+    const targetDateStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+
+    const posts = MULTISTORE_MANAGER_STORES.map(async store => {
+        const st = _goalsMS[store];
+        if (!st) return true;
+
+        let staffedCount = 0;
+        st.roster.forEach((emp, idx) => {
+            const group = document.getElementById(`roles-${store}-${idx}`);
+            if (group && group.querySelector('.role-dot.active')) staffedCount++;
+        });
+        const rosterSize = effectiveTeamSize(store);
+
+        const payloadEmployees = [];
+        st.roster.forEach((emp, idx) => {
+            const group = document.getElementById(`roles-${store}-${idx}`);
+            const activeBtn = group?.querySelector('.role-dot.active');
+            const role = activeBtn ? activeBtn.innerText : '-';
+            const goal = role !== '-' ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount)) : '';
+            const existing = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
+            const result = existing && existing.result != null ? String(existing.result) : '';
+            if (role !== '-' || goal !== '' || result !== '') {
+                payloadEmployees.push({ employee: emp, role: role, goal: goal, result: result });
+            }
+        });
+
+        try {
+            const response = await fetch(GOALS_API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ store: store, date: targetDateStr, employees: payloadEmployees })
+            });
+            if (!response.ok) return false;
+
+            // Update this store's local cache so the UI reflects it instantly.
+            st.live = st.live.filter(r => !(normalizeGoalDate(r.date) === targetDateStr));
+            payloadEmployees.forEach(p => {
+                st.live.push({ date: targetDateStr, store: store, employee: p.employee, role: p.role, goal: p.goal, result: p.result });
+            });
+
+            // Tick THIS store's "set listing goals" checklist task — once per store per session.
+            if (payloadEmployees.length && !_goalsChecklistDoneMS[store]) {
+                _goalsChecklistDoneMS[store] = true;
+                markListingGoalsChecklistComplete(store);
+            }
+            return true;
+        } catch (e) { return false; }
+    });
+
+    const allOk = (await Promise.all(posts)).every(Boolean);
+    if (allOk) {
+        const pulse = document.getElementById('goals-pulse-dot');
+        if (pulse) pulse.style.display = 'none';
+        if (status) { status.textContent = 'Saved ✓'; status.className = 'goals-save-status saved'; }
+    } else {
+        if (status) { status.textContent = 'Save failed'; status.className = 'goals-save-status error'; }
+        else if (!silent) alert("Error saving goals to server.");
+    }
+}
+
 // Roster size for a store (from auth cache), used to pick the weekly target.
 function storeRosterSize(store) {
     try {
         const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
-        const excluded = ['ceo', 'district manager'];
+        // MSM excluded from the per-person ladder — they contribute via the
+        // flat _msmTargetBoost instead (mirrors rosterCount in store-targets fn).
+        const excluded = ['ceo', 'district manager', 'multi-store manager'];
         return (auth.users || []).filter(u =>
             userInStore(u, store) &&
             !excluded.includes((u.role || '').toLowerCase())
         ).length || 4;
     } catch (e) { return 4; }
+}
+
+// Flat listings boost for stores covered by a Multi-Store Manager (the MSM
+// doesn't count as a full ±20 person on either store's ladder). Mirrors
+// msmBoost() / MSM_TARGET_BOOST in the store-targets edge fn — keep in sync.
+function _msmTargetBoost(store) {
+    if (!MULTISTORE_MANAGER_STORES.includes(String(store || '').toUpperCase())) return 0;
+    try {
+        const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
+        const hasMsm = (auth.users || []).some(u => (u.role || '').toLowerCase() === 'multi-store manager');
+        return hasMsm ? 15 : 0;
+    } catch (e) { return 15; }
 }
 
 // Persisted per-store target + flag + last-4-week totals (server-side ratchet).
@@ -5934,7 +6249,8 @@ async function fetchAllStoreTargets() {
 }
 // Current weekly target for a store (server value; falls back to roster-derived base).
 function targetFor(store) {
-    return (_storeTargets[store] && _storeTargets[store].target) || ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
+    return (_storeTargets[store] && _storeTargets[store].target)
+        || (ListingGoalsEngine.weeklyTarget(storeRosterSize(store)) + _msmTargetBoost(store));
 }
 // Effective team size for goal math. Prefers the server's settled size, which
 // honors the timing rule (a subtraction shrinks the goal immediately, an addition
@@ -6554,6 +6870,7 @@ async function fetchAndRenderEmployeeKPIs() {
         // --- NEW: ROBUST VARIANCE FETCH ---
         let formattedMyVar = '-';
         let formattedStoreVar = '-';
+        let varRange = '';
         
         let vData = typeof liveVarianceDataCache !== 'undefined' ? liveVarianceDataCache : null;
         
@@ -6577,7 +6894,8 @@ async function fetchAndRenderEmployeeKPIs() {
             };
 
             formattedStoreVar = safeFormatVar(sVar.total);
-            
+            varRange = formatVarianceRange(sVar.dateFrom, sVar.dateTo);
+
             const sessionName = String(userName).trim().toLowerCase();
             const sessionFirstName = sessionName.split(' ')[0];
             
@@ -6603,7 +6921,7 @@ async function fetchAndRenderEmployeeKPIs() {
             return;
         }
 
-        const buildStatGridItem = (title, myVal, storeVal, ruleStr, isPercent = false, prefixLabel = "Store:", showBubble = true) => {
+        const buildStatGridItem = (title, myVal, storeVal, ruleStr, isPercent = false, prefixLabel = "Store:", showBubble = true, noteText = '') => {
             const myIsBad = ruleStr ? checkRule(ruleStr, myVal) : false;
             
             let displayMyVal = myVal || '-';
@@ -6625,6 +6943,7 @@ async function fetchAndRenderEmployeeKPIs() {
                 <span style="font-size: 9px; font-weight: 900; color: var(--slate-charcoal); text-transform: uppercase; line-height: 1;">${title}</span>
                 ${centerHtml}
                 <span style="font-size: 8px; font-weight: 700; color: #a0aab2; text-transform: uppercase;">${prefixLabel} <strong>${displayStoreVal}</strong></span>
+                ${noteText ? `<span style="font-size: 8px; font-weight: 700; color: #b6bec6; text-transform: none; margin-top: 1px; line-height: 1.2;">${noteText}</span>` : ''}
             </div>`;
         };
 
@@ -6635,7 +6954,7 @@ async function fetchAndRenderEmployeeKPIs() {
                     ${buildStatGridItem('Buying Value', myData.buyVal, sAvg.buyVal, null, false, 'Store Total:', false)}
                     ${buildStatGridItem('Margin', myData.buyMargin, sAvg.buyMargin, 'margin', true, 'Store Avg:', true)}
                     ${buildStatGridItem('Conversion', myData.conversion, sAvg.conversion, 'conversion', true, 'Store Avg:', true)}
-                    ${buildStatGridItem('Variance', formattedMyVar, formattedStoreVar, 'variance', false, 'Store Total:', true)}
+                    ${buildStatGridItem('Variance', formattedMyVar, formattedStoreVar, 'variance', false, 'Store Total:', true, varRange)}
                 </div>
                 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; flex: 1;">
                     ${buildStatGridItem('No Deals', myData.noDeals, sAvg.noDeals, 'nodeals', false, 'Store Total:', true)}
@@ -7423,13 +7742,45 @@ function applyRoleBasedUI() {
             (userRoleClass === 'role-assistant-manager' && requiredRoles.includes('role-employee'));
         const passesStore = requiredStores.length === 0 || requiredStores.includes(userStoreClass);
 
-        if (passesRole && passesStore) {
+        let visible = passesRole && passesStore;
+        // Feature Access override (DM/CEO-managed, feature_overrides table):
+        // a user-level override beats a role-level override beats the default above.
+        const featureKey = module.getAttribute('data-feature');
+        if (featureKey) {
+            const ov = _featureOverrideFor(featureKey, userRoleClass, userName);
+            // mark cards an override removed (vs. hidden by design) so the
+            // dashboard rows know when to rebalance the remaining cards
+            if (ov === false && visible) module.setAttribute('data-fa-hidden', '1');
+            else module.removeAttribute('data-fa-hidden');
+            if (ov !== null) visible = ov;
+        }
+
+        if (visible) {
             let displayType = module.classList.contains('dynamic-module-flex') ? 'flex' : 'block';
             module.style.setProperty('display', displayType, 'important');
         } else {
             module.style.setProperty('display', 'none', 'important');
         }
     });
+
+    // Feature overrides on plain (non role-gated) elements — e.g. individual
+    // hotbar links, which normally just inherit their bar's visibility.
+    _applyFeatureOverridesToPlainEls(userRoleClass, userName);
+    // Force-enabled hotbar links from bars this user doesn't normally see:
+    // a fully-enabled bar shows up as itself; partial picks are collected into
+    // a synthetic EXTRAS bar so one borrowed link never drags in a whole
+    // foreign hotbar.
+    _syncHotbarExtras(userRoleClass, userName);
+    // Dashboard card rows where an override hid a card rebalance so the
+    // remaining cards fill the row instead of leaving an empty slot.
+    _rebalanceDashboardRows();
+    // Tools button / group visibility follows what's actually visible inside
+    // the panel, so overrides can add or remove tools for any role without the
+    // static role-class unions drifting out of sync.
+    _syncToolsPanelChrome();
+    // First call kicks off a background refresh of the overrides from Supabase
+    // (cached copy applies instantly; a change re-runs this function once).
+    _kickFeatureOverridesRefresh();
 
     if (userRole === 'employee' || userRole === 'assistant manager') {
         document.querySelectorAll('.manager-only').forEach(el => el.style.setProperty('display', 'none', 'important'));
@@ -7867,6 +8218,37 @@ document.addEventListener('click', async (e) => {
             if (currentMain && newMain) {
                 currentMain.innerHTML = newMain.innerHTML;
             }
+
+            // This swap only replaces .main-content, so the SPEEKS Tools chrome
+            // (button, side panel, tool modals) — which lives OUTSIDE .main-content —
+            // would otherwise stay frozen at whatever the first full page load had,
+            // and any tool modal a page authored INSIDE .main-content would be wiped.
+            // Sync it all from the fetched doc so every tool opens on every tab
+            // without a hard refresh.
+            const newBtn = newDoc.getElementById('toolsNavBtn');
+            const curBtn = document.getElementById('toolsNavBtn');
+            if (newBtn && curBtn) curBtn.className = newBtn.className;
+            const newPanel = newDoc.getElementById('toolsSidePanel');
+            const curPanel = document.getElementById('toolsSidePanel');
+            if (newPanel && curPanel) {
+                curPanel.className = newPanel.className;
+                curPanel.innerHTML = newPanel.innerHTML;
+            }
+            // Pull in any modal/overlay the fetched page keeps outside .main-content
+            // that the live DOM is now missing.
+            const nMain = newDoc.querySelector('.main-content');
+            newDoc.querySelectorAll('.modal-menu, .overlay').forEach(m => {
+                if (m.id && (!nMain || !nMain.contains(m)) && !document.getElementById(m.id)) {
+                    document.body.appendChild(document.importNode(m, true));
+                }
+            });
+            // De-dupe: a modal authored inside .main-content on this page can now
+            // coexist with a persistent copy carried over from the previous page.
+            const _seenModalIds = new Set();
+            document.querySelectorAll('.modal-menu, .overlay').forEach(el => {
+                if (!el.id) return;
+                if (_seenModalIds.has(el.id)) el.remove(); else _seenModalIds.add(el.id);
+            });
 
             document.querySelectorAll('.nav-link').forEach(nav => nav.classList.remove('active'));
             const newActiveLink = Array.from(document.querySelectorAll('.nav-link')).find(n => n.href === targetUrl);
@@ -8471,10 +8853,13 @@ const _storeColors = { OVL: '#7c3aed', LEE: '#2563eb', WSP: '#5a8d3b', MPL: '#ea
 
 function renderMonthlyGoalsBanner() {
     if (_selectedGoalDate) return; // viewing a past month — don't override
-    const store = sessionStorage.getItem('speeksUserStore') || '';
     const labelEl = document.getElementById('giGoalsLabel');
     if (labelEl) labelEl.textContent = _mgbMonthLabel() + ' Goals';
 
+    // Multi-Store Manager: both managed stores stacked, each with its own Edit.
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return renderMonthlyGoalsBannerMS();
+
+    const store = sessionStorage.getItem('speeksUserStore') || '';
     const data  = getMonthlyGoals(store);
     const goals = data?.goals || [];
     const listEl = document.getElementById('giGoalsList');
@@ -8492,6 +8877,46 @@ function renderMonthlyGoalsBanner() {
         </div>`;
     });
     if (listEl) listEl.innerHTML = html;
+}
+
+// --- Multi-Store Manager: stacked monthly goals (both stores, per-store Edit) ---
+// The synced cache already holds every store's goals (syncGoalsFromSheet does a
+// getAll), so this is render-only: one labeled block per managed store, each
+// with its own Edit button feeding openEditGoalsModal(store).
+
+function _giMsGoalItemsHtml(goals) {
+    if (!goals || !goals.length) return '<div class="status-message" style="padding: 4px 0 8px;">No goals set yet.</div>';
+    return goals.map(g => `<div class="mgb-goal-item">
+        <span class="mgb-goal-title">${escapeHtml(g.title)}</span>
+        ${g.description ? `<span class="mgb-goal-desc">${escapeHtml(g.description)}</span>` : ''}
+    </div>`).join('');
+}
+
+// Store-colored block header; pass editHtml only where editing is allowed
+// (current month — past months are read-only history).
+function _giMsStoreHeadHtml(store, editHtml) {
+    const ac = _msStoreAccent(store);
+    return `<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 0 4px;">
+        <span class="ms-store-name" style="color: ${ac.solid}; font-size: 12px;">${escapeHtml(store)}</span>${editHtml || ''}
+    </div>`;
+}
+
+function renderMonthlyGoalsBannerMS() {
+    const listEl = document.getElementById('giGoalsList');
+    if (!listEl) return;
+    // Per-store Edit buttons replace the single section-level one ('important'
+    // because _resetToCurrentMonth/selectGoalMonth re-show it the same way).
+    document.getElementById('giEditGoalsBtn')?.style.setProperty('display', 'none', 'important');
+
+    let html = '';
+    MULTISTORE_MANAGER_STORES.forEach((store, idx) => {
+        const goals = getMonthlyGoals(store)?.goals || [];
+        html += `<div style="${idx ? 'margin-top: 14px;' : ''}">
+            ${_giMsStoreHeadHtml(store, `<button class="mini-action-btn" onclick="openEditGoalsModal('${store}')">Edit ✏️</button>`)}
+            ${_giMsGoalItemsHtml(goals)}
+        </div>`;
+    });
+    listEl.innerHTML = html;
 }
 
 function toggleGoalsBanner() { toggleGoalsPanel(); }
@@ -8586,6 +9011,33 @@ window.selectGoalMonth = async function(ym) {
     if (!listEl) return;
     listEl.innerHTML = '<div class="status-message">Loading...</div>';
 
+    // Multi-Store Manager: past months show BOTH stores' goals, read-only.
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        const perStore = {};
+        MULTISTORE_MANAGER_STORES.forEach(s => {
+            try { const raw = localStorage.getItem(_mgbKey(s, _selectedGoalDate)); if (raw) perStore[s] = JSON.parse(raw)?.goals ?? []; } catch {}
+        });
+        if (MULTISTORE_MANAGER_STORES.some(s => perStore[s] == null)) {
+            try {
+                const res = await fetch(`${MONTHLY_GOALS_URL}?action=getAll&yearMonth=${ym}&t=${Date.now()}`);
+                const map = await res.json();
+                MULTISTORE_MANAGER_STORES.forEach(s => {
+                    const entry = map[s];
+                    if (entry) { localStorage.setItem(_mgbKey(s, _selectedGoalDate), JSON.stringify(entry)); perStore[s] = entry.goals || []; }
+                    else if (perStore[s] == null) perStore[s] = [];
+                });
+            } catch { /* stores left null render as could-not-load */ }
+        }
+        listEl.innerHTML = MULTISTORE_MANAGER_STORES.map((s, idx) => {
+            const goals = perStore[s];
+            const body = goals == null
+                ? '<div class="status-message" style="padding: 4px 0 8px;">Could not load.</div>'
+                : (goals.length ? _giMsGoalItemsHtml(goals) : '<div class="status-message" style="padding: 4px 0 8px;">No goals recorded for this month.</div>');
+            return `<div style="${idx ? 'margin-top: 14px;' : ''}">${_giMsStoreHeadHtml(s)}${body}</div>`;
+        }).join('');
+        return;
+    }
+
     const store    = sessionStorage.getItem('speeksUserStore') || '';
     const cacheKey = _mgbKey(store, _selectedGoalDate);
     let goals = null;
@@ -8627,9 +9079,16 @@ window.toggleGoalsPanel = function(event) {
 
 // --- Edit Modal ---
 
-function openEditGoalsModal() {
-    const store = sessionStorage.getItem('speeksUserStore') || '';
-    const goals = getMonthlyGoals(store)?.goals || [];
+// Which store the goals modal is editing. Normally the session store; the MSM's
+// stacked panel passes an explicit store per Edit button (same pattern as
+// _editingInitiativesForStore below).
+let _editingGoalsForStore = null;
+
+function openEditGoalsModal(storeOverride) {
+    _editingGoalsForStore = storeOverride || sessionStorage.getItem('speeksUserStore') || '';
+    const goals = getMonthlyGoals(_editingGoalsForStore)?.goals || [];
+    const titleEl = document.querySelector('#editMonthlyGoalsModal .modal-header h3');
+    if (titleEl) titleEl.textContent = storeOverride ? `🎯 Set ${_editingGoalsForStore} Monthly Goals` : '🎯 Set Monthly Team Goals';
     const list  = document.getElementById('editGoalsList');
     if (!list) return;
     list.innerHTML = '';
@@ -8660,7 +9119,7 @@ function _updateAddGoalBtn() {
 }
 
 function saveMonthlyGoals() {
-    const store    = sessionStorage.getItem('speeksUserStore') || '';
+    const store    = _editingGoalsForStore || sessionStorage.getItem('speeksUserStore') || '';
     const userName = sessionStorage.getItem('speeksUserName')  || 'Manager';
     const goals    = [];
     document.querySelectorAll('#editGoalsList .edit-goal-row').forEach(row => {
@@ -8752,14 +9211,25 @@ function putStoreInitiatives(store, data) {
 
 let _cpbExpanded = false;
 
+// One initiative/project row in the panel list.
+function _cpbItemHtml(item, extraClass) {
+    const badge = item.status === 'upcoming'
+        ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
+        : '<span class="si-status-badge si-status-badge--current">Current</span>';
+    return `<div class="cpb-project-item${extraClass ? ' ' + extraClass : ''}">
+        <div class="cpb-item-title-row"><span class="mgb-goal-title">${escapeHtml(item.title)}</span>${badge}</div>
+        ${item.description ? `<span class="mgb-goal-desc">${escapeHtml(item.description)}</span>` : ''}
+    </div>`;
+}
+
 function renderCompanyProjectsBanner() {
     const store       = sessionStorage.getItem('speeksUserStore') || '';
     const listEl      = document.getElementById('giInitiativesList');
     const projects    = getCompanyProjects()?.projects || [];
     const initiatives = getStoreInitiatives(store)?.initiatives || [];
-    const allItems    = [...projects, ...initiatives];
+    const isMS        = typeof isMultiStoreManager === 'function' && isMultiStoreManager();
 
-    if (!allItems.length) {
+    if (!isMS && !projects.length && !initiatives.length) {
         if (listEl) listEl.innerHTML = '<div class="status-message" style="padding: 8px 0;">No initiatives have been set yet.</div>';
         return;
     }
@@ -8768,27 +9238,22 @@ function renderCompanyProjectsBanner() {
         let html = '';
         if (projects.length) {
             html += '<div class="cpb-section-label">Company</div>';
-            projects.forEach(p => {
-                const badge = p.status === 'upcoming'
-                    ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
-                    : '<span class="si-status-badge si-status-badge--current">Current</span>';
-                html += `<div class="cpb-project-item">
-                    <div class="cpb-item-title-row"><span class="mgb-goal-title">${escapeHtml(p.title)}</span>${badge}</div>
-                    ${p.description ? `<span class="mgb-goal-desc">${escapeHtml(p.description)}</span>` : ''}
-                </div>`;
-            });
+            projects.forEach(p => { html += _cpbItemHtml(p); });
         }
-        if (initiatives.length) {
-            html += `<div class="cpb-section-label${projects.length ? ' cpb-section-label--spaced' : ''}">${escapeHtml(store)}</div>`;
-            initiatives.forEach(i => {
-                const badge = i.status === 'upcoming'
-                    ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
-                    : '<span class="si-status-badge si-status-badge--current">Current</span>';
-                html += `<div class="cpb-project-item cpb-initiative-item">
-                    <div class="cpb-item-title-row"><span class="mgb-goal-title">${escapeHtml(i.title)}</span>${badge}</div>
-                    ${i.description ? `<span class="mgb-goal-desc">${escapeHtml(i.description)}</span>` : ''}
-                </div>`;
+        if (isMS) {
+            // Multi-Store Manager: one labeled block per managed store (store
+            // colors match the checklist sections), always shown so an empty
+            // store is visibly empty rather than missing.
+            MULTISTORE_MANAGER_STORES.forEach((s, idx) => {
+                const items = getStoreInitiatives(s)?.initiatives || [];
+                const ac = _msStoreAccent(s);
+                html += `<div class="cpb-section-label${(projects.length || idx) ? ' cpb-section-label--spaced' : ''}" style="color: ${ac.solid};">${escapeHtml(s)}</div>`;
+                if (items.length) items.forEach(i => { html += _cpbItemHtml(i, 'cpb-initiative-item'); });
+                else html += '<div class="status-message" style="padding: 4px 0 8px;">No initiatives set.</div>';
             });
+        } else if (initiatives.length) {
+            html += `<div class="cpb-section-label${projects.length ? ' cpb-section-label--spaced' : ''}">${escapeHtml(store)}</div>`;
+            initiatives.forEach(i => { html += _cpbItemHtml(i, 'cpb-initiative-item'); });
         }
         listEl.innerHTML = html;
     }
@@ -9395,13 +9860,23 @@ function renderRequiredTasks(tasks) {
 
 // --- DM: view ONE store's full checklist — both the required tasks the DM set
 //     and the personal tasks that store's manager added themselves. Read-only.
+// Resolves the person whose checklist a store shares (its "owner"). Normal stores use
+// the owner/manager on file. BAL/MPL are run by a Multi-Store Manager whose DB `store`
+// is only their HOME store — so for those we match by role + the shared
+// MULTISTORE_MANAGER_STORES set, NOT by u.store. This is what lets a store's ASM (and the
+// DM Manager-Checklist viewer) sync to the MSM's checklist — for BAL now and a future MPL ASM.
 function _resolveStoreManager(store) {
+    const s = String(store || '').toUpperCase();
     try {
         const authCache = JSON.parse(localStorage.getItem('speeksAuthCache')) || {};
         const users = authCache.users || [];
+        if (typeof MULTISTORE_MANAGER_STORES !== 'undefined' && MULTISTORE_MANAGER_STORES.includes(s)) {
+            const msm = users.find(u => u.role && u.role.toLowerCase() === 'multi-store manager');
+            if (msm) return msm.name;
+        }
         for (const targetRole of ['owner (manager)', 'manager']) {
             const mgr = users.find(u =>
-                u.store && u.store.toUpperCase() === String(store).toUpperCase() &&
+                u.store && u.store.toUpperCase() === s &&
                 u.role && u.role.toLowerCase() === targetRole
             );
             if (mgr) return mgr.name;
@@ -9714,6 +10189,69 @@ const AUDIT_ITEM_MAP = (() => {
     return m;
 })();
 
+// ============================================================================
+// DB ITEM CATALOG — both instruments are editable from the Manage Items tab
+// (scorecard_items / paymore_audit_items via the scorecard fn). The GET
+// response carries the catalog; the hardcoded AUDIT_DEFINITION / SCORECARD_*
+// constants above are only the fallback until it loads.
+// ============================================================================
+
+// Audit catalog → AUDIT_DEFINITION-shaped sections. includeInactive for the
+// Manage tab; scoring/breakdown use active items only.
+function _auSections(includeInactive) {
+    const cat = window._auCatalog;
+    if (!cat || !cat.length) return AUDIT_DEFINITION;
+    const rows = (includeInactive ? cat : cat.filter(i => i.active))
+        .slice().sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    const sections = [], idx = {};
+    rows.forEach(i => {
+        if (!(i.section in idx)) { idx[i.section] = sections.length; sections.push({ title: i.section, items: [] }); }
+        sections[idx[i.section]].items.push({
+            id: i.item_id, pts: Number(i.points) || 0, text: i.item_text,
+            dbId: i.id, active: !!i.active,
+        });
+    });
+    return sections;
+}
+
+function _auditPossibleNow() {
+    const cat = window._auCatalog;
+    if (!cat || !cat.length) return AUDIT_POSSIBLE;
+    return cat.filter(i => i.active).reduce((a, i) => a + (Number(i.points) || 0), 0);
+}
+
+// Scorecard catalog → [{id?, item_key, label, max_score, active}] (0–5 selects).
+function _scCats(includeInactive) {
+    const cat = window._scCatalog;
+    if (!cat || !cat.length) {
+        const keys = ['online_store_pictures', 'facebook_listings', 'social_media_posts', 'paymore_sync'];
+        return SCORECARD_CATEGORIES.map((label, i) => ({ id: null, item_key: keys[i], label, max_score: 5, active: true }));
+    }
+    return (includeInactive ? cat : cat.filter(i => i.active))
+        .slice().sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+}
+
+// Fetch the catalog (plus fresh store data) if we don't have it yet — the
+// submit modal can open before the dashboard widget's fetch has run. Only
+// re-renders the entry forms while they're still untouched.
+let _scCatalogFetching = false;
+function _ensureScCatalog(force) {
+    if (window._scCatalog && window._auCatalog && !force) return;
+    if (_scCatalogFetching) return;
+    _scCatalogFetching = true;
+    fetch(`${SCORECARD_URL}?v=${Date.now()}`).then(r => r.json()).then(json => {
+        if (!json || !json.success) return;
+        window._scorecardAllData = json.data || window._scorecardAllData || [];
+        if (json.catalog) {
+            window._scCatalog = json.catalog.scorecard_items || [];
+            window._auCatalog = json.catalog.audit_items || [];
+        }
+        const untouched = !document.querySelector('.audit-entry-input') || _auditEntryTotals().earned === 0;
+        if (untouched) { _buildScorecardModalInputs(); renderAuditEntry(); }
+        if (currentScoreTab === 'manage') renderManageItems();
+    }).catch(() => {}).finally(() => { _scCatalogFetching = false; });
+}
+
 // Audit color by percentage: target 90+ green, pass 80+ amber, else red.
 function auditPctColor(pct) {
     if (pct >= AUDIT_TARGET_PCT) return { bg: '#d1fae5', fg: '#059669' };
@@ -9730,24 +10268,30 @@ function openScorecardModal() {
     switchScoreTab('scorecard');
     _buildScorecardModalInputs();
     renderAuditEntry();
+    _ensureScCatalog();
 }
 
-// ---- Submit-modal tab switching (Scorecard | SPEEKS Audit) ----
+// ---- Submit-modal tab switching (Scorecard | SPEEKS Audit | Manage Items) ----
 let currentScoreTab = 'scorecard';
 function switchScoreTab(tab) {
     currentScoreTab = tab;
     const scTab = document.getElementById('sc-tab-scorecard');
     const auTab = document.getElementById('sc-tab-audit');
+    const mgTab = document.getElementById('sc-tab-manage');
     if (scTab) scTab.classList.toggle('active', tab === 'scorecard');
     if (auTab) auTab.classList.toggle('active', tab === 'audit');
+    if (mgTab) mgTab.classList.toggle('active', tab === 'manage');
     const scPanel = document.getElementById('sc-panel-scorecard');
     const auPanel = document.getElementById('sc-panel-audit');
+    const mgPanel = document.getElementById('sc-panel-manage');
     if (scPanel) scPanel.style.display = tab === 'scorecard' ? 'block' : 'none';
     if (auPanel) auPanel.style.display = tab === 'audit' ? 'block' : 'none';
+    if (mgPanel) mgPanel.style.display = tab === 'manage' ? 'block' : 'none';
     const scBtn = document.getElementById('submitScorecardBtn');
     const auBtn = document.getElementById('submitAuditBtn');
     if (scBtn) scBtn.style.display = tab === 'scorecard' ? '' : 'none';
     if (auBtn) auBtn.style.display = tab === 'audit' ? '' : 'none';
+    if (tab === 'manage') renderManageItems();
 }
 
 function onScoreStoreChange() {
@@ -9765,40 +10309,30 @@ function _buildScorecardModalInputs() {
 
     const container = document.getElementById('dm-category-inputs');
     if (!container) return;
-    let html = '';
-    let catIndex = 0;
-    SCORECARD_BUCKETS.forEach((bucket, bIdx) => {
-        const existingBucket = existingEntry && existingEntry.buckets
-            ? existingEntry.buckets.find(b => b.name === bucket.label)
-            : null;
-        const existingNote = existingBucket && existingBucket.notes ? existingBucket.notes : '';
-        html += `<div style="grid-column: 1 / -1; margin-top: ${bIdx > 0 ? '8px' : '0'}; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0;">
-                <span style="font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">${bucket.label}</span>
-            </div>
-            <div id="section-inputs-${bIdx}" style="display: contents;">`;
-        for (let i = 0; i < bucket.count; i++) {
-            const cat = SCORECARD_CATEGORIES[catIndex];
-            html += `<div style="display: flex; flex-direction: column;">
-                    <label class="form-label-caps">${cat}</label>
-                    <select id="score-input-${catIndex}" class="form-input-lg" style="margin-top: 0; padding: 10px; font-size: 14px;">
-                        <option value="">--</option>
-                        <option value="5">5</option>
-                        <option value="4">4</option>
-                        <option value="3">3</option>
-                        <option value="2">2</option>
-                        <option value="1">1</option>
-                        <option value="0">0</option>
-                    </select>
-                </div>`;
-            catIndex++;
-        }
-        const escapedNote = existingNote.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-        html += `<div style="grid-column: 1 / -1; margin-top: 4px; margin-bottom: 2px;">
-                <label class="form-label-caps" style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">Section Notes <span style="font-weight: 400; text-transform: none; font-size: 10px; color: #94a3b8; letter-spacing: 0;">(optional)</span></label>
-                <textarea id="score-notes-${bIdx}" class="scorecard-notes-input" rows="2" placeholder="Leave a note for the manager about this section...">${escapedNote}</textarea>
+    // Categories come from the DB catalog (Manage Items tab); the hardcoded
+    // list is only the pre-load fallback. One section: Online & Marketing.
+    const cats = _scCats();
+    const existingBucket = existingEntry && existingEntry.buckets
+        ? existingEntry.buckets.find(b => b.name === 'Online & Marketing')
+        : null;
+    const existingNote = existingBucket && existingBucket.notes ? existingBucket.notes : '';
+    let html = `<div style="grid-column: 1 / -1; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0;">
+            <span style="font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">Online & Marketing</span>
+        </div>`;
+    cats.forEach(cat => {
+        let opts = '<option value="">--</option>';
+        const max = Math.max(1, Number(cat.max_score) || 5);
+        for (let p = max; p >= 0; p--) opts += `<option value="${p}">${p}</option>`;
+        html += `<div style="display: flex; flex-direction: column;">
+                <label class="form-label-caps">${escapeHtml(cat.label)}</label>
+                <select id="score-input-${cat.item_key}" class="form-input-lg" data-itemkey="${cat.item_key}" style="margin-top: 0; padding: 10px; font-size: 14px;">${opts}</select>
             </div>`;
-        html += `</div>`;
     });
+    const escapedNote = existingNote.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    html += `<div style="grid-column: 1 / -1; margin-top: 4px; margin-bottom: 2px;">
+            <label class="form-label-caps" style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">Section Notes <span style="font-weight: 400; text-transform: none; font-size: 10px; color: #94a3b8; letter-spacing: 0;">(optional)</span></label>
+            <textarea id="score-notes-0" class="scorecard-notes-input" rows="2" placeholder="Leave a note for the manager about this section...">${escapedNote}</textarea>
+        </div>`;
     container.innerHTML = html;
 }
 
@@ -9824,58 +10358,26 @@ function submitNewScorecard() {
     const date = document.getElementById('dm-score-date').value;
     const btn = document.getElementById('submitScorecardBtn');
 
-    // Determine which sections are enabled
-    const enabledSections = SCORECARD_BUCKETS.map((b, i) => {
-        const toggle = document.getElementById(`section-toggle-${i}`);
-        return toggle ? toggle.checked : true;
+    // Scores keyed by item_key (the fn's preferred shape) from the
+    // catalog-driven inputs; untouched categories stay null.
+    const scores = {};
+    document.querySelectorAll('#dm-category-inputs [data-itemkey]').forEach(el => {
+        const v = el.value;
+        scores[el.getAttribute('data-itemkey')] = v === '' ? null : parseFloat(v);
     });
-
-    const isPartial = !enabledSections.every(e => e);
-
-    if (!enabledSections.some(e => e)) {
-        alert("Please enable at least one section to update.");
-        return;
-    }
-
-    // Gather scores and notes per section
-    let catIndex = 0;
-    let sectionData = [];
-
-    SCORECARD_BUCKETS.forEach((bucket, bIdx) => {
-        const enabled = enabledSections[bIdx];
-        const scores = [];
-        for (let i = 0; i < bucket.count; i++) {
-            const val = document.getElementById(`score-input-${catIndex}`).value;
-            scores.push(val === '' ? null : parseFloat(val));
-            catIndex++;
-        }
-        const noteEl = document.getElementById(`score-notes-${bIdx}`);
-        const notes = noteEl ? noteEl.value.trim() : '';
-        if (enabled) sectionData.push({ bucketIndex: bIdx, scores: scores, notes: notes });
-    });
+    const noteEl = document.getElementById('score-notes-0');
 
     btn.innerText = "Saving...";
     btn.style.opacity = "0.7";
     btn.disabled = true;
 
-    let payload;
-    if (isPartial) {
-        payload = {
-            action: 'submit_scorecard',
-            store: store,
-            date: date,
-            partial: true,
-            sections: sectionData
-        };
-    } else {
-        payload = {
-            action: 'submit_scorecard',
-            store: store,
-            date: date,
-            scores: sectionData.flatMap(s => s.scores),
-            sectionNotes: sectionData.map(s => s.notes)
-        };
-    }
+    const payload = {
+        action: 'submit_scorecard',
+        store: store,
+        date: date,
+        scores,
+        notes: noteEl ? noteEl.value.trim() : '',
+    };
 
     fetch(SCORECARD_URL, {
         method: 'POST',
@@ -9916,6 +10418,170 @@ function _selectedStoreAudit() {
     return entry && entry.audit ? entry.audit : null;
 }
 
+// Per-section notes + photo attachments captured while scoring a practice audit.
+// Notes: { [sectionTitle]: string }. Photos: { [sectionTitle]: [{file?,localUrl?,url?,path?,name}] }
+// New photos upload to the audit-photos bucket on save; a store's previous-audit
+// photos are cleared server-side once a new audit is scored.
+let _auditEntryNotes = {};
+let _auditEntryPhotos = {};
+
+function _auSecTitle(sIdx) { return (_auSections()[sIdx] || {}).title || String(sIdx); }
+
+function onAuditNoteInput(sIdx) {
+    const el = document.getElementById(`audit-note-${sIdx}`);
+    _auditEntryNotes[_auSecTitle(sIdx)] = el ? el.value : '';
+}
+
+// Per-section photo cap. Photos land in the audit-photos bucket individually,
+// so this is just a sanity guard against accidental bulk-selects, not a
+// payload limit.
+const AUDIT_PHOTO_MAX = 20;
+
+function onAuditPhotoAdd(sIdx, input) {
+    const title = _auSecTitle(sIdx);
+    if (!_auditEntryPhotos[title]) _auditEntryPhotos[title] = [];
+    const MAX = AUDIT_PHOTO_MAX;
+    [...(input.files || [])].forEach(f => {
+        if (!f.type || !f.type.startsWith('image/')) return;
+        if (_auditEntryPhotos[title].length >= MAX) { return; }
+        _auditEntryPhotos[title].push({ file: f, localUrl: URL.createObjectURL(f), name: f.name });
+    });
+    input.value = '';
+    renderAuditSectionPhotos(sIdx);
+}
+
+function removeAuditPhoto(sIdx, idx) {
+    const arr = _auditEntryPhotos[_auSecTitle(sIdx)];
+    if (arr) { arr.splice(idx, 1); renderAuditSectionPhotos(sIdx); }
+}
+
+function renderAuditSectionPhotos(sIdx) {
+    const wrap = document.getElementById(`audit-photos-${sIdx}`);
+    if (!wrap) return;
+    const arr = _auditEntryPhotos[_auSecTitle(sIdx)] || [];
+    wrap.innerHTML = arr.map((p, i) => {
+        const src = p.url || p.localUrl;
+        return `<div style="position:relative; width:64px; height:64px; border-radius:8px; overflow:hidden; border:1px solid #e2e8f0;">
+            <img src="${src}" style="width:100%; height:100%; object-fit:cover; cursor:pointer;" onclick="openAuditPhotoLightbox('${src}')">
+            <button type="button" onclick="removeAuditPhoto(${sIdx}, ${i})" title="Remove" style="position:absolute; top:2px; right:2px; width:18px; height:18px; border:none; border-radius:50%; background:rgba(15,23,42,.78); color:#fff; font-size:12px; line-height:1; cursor:pointer;">&times;</button>
+        </div>`;
+    }).join('');
+    const hint = document.getElementById(`audit-photo-hint-${sIdx}`);
+    if (hint) hint.textContent = arr.length ? `${arr.length} attached` : '';
+}
+
+// Full-screen image viewer (created lazily; sits above any modal).
+function openAuditPhotoLightbox(src) {
+    let lb = document.getElementById('auditPhotoLightbox');
+    if (!lb) {
+        lb = document.createElement('div');
+        lb.id = 'auditPhotoLightbox';
+        lb.onclick = () => { lb.style.display = 'none'; };
+        lb.style.cssText = 'display:none; position:fixed; inset:0; z-index:4000; background:rgba(2,6,23,.85); align-items:center; justify-content:center; padding:30px; cursor:zoom-out;';
+        lb.innerHTML = '<img alt="" style="max-width:92vw; max-height:88vh; border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,.5);">';
+        document.body.appendChild(lb);
+    }
+    lb.querySelector('img').src = src;
+    lb.style.display = 'flex';
+}
+
+// Live camera capture (works on laptops with a webcam + phones) via getUserMedia,
+// so a photo can be taken in-app even where the file picker won't open a camera.
+// Uploading via "Add photo(s)" stays available alongside this.
+let _auditCamStream = null;
+
+async function openAuditCamera(sIdx) {
+    const md = navigator.mediaDevices;
+    if (!md || !md.getUserMedia) {
+        alert('Live camera is not available on this device/browser. Use "Add photo(s)" to upload instead.');
+        return;
+    }
+    // Acquire the camera BEFORE showing the modal, so a denied/failed request
+    // never leaves an empty black camera box on screen. Prefer the rear camera
+    // on phones; laptops fall back to their only/default camera.
+    let stream;
+    try {
+        stream = await md.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    } catch (e) {
+        const name = e && e.name;
+        let msg;
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+            msg = 'Camera access is blocked for this site. Click the camera (or lock) icon in your browser’s address bar, choose Allow for the camera, then tap “Take photo” again.';
+        } else if (name === 'NotFoundError' || name === 'OverconstrainedError' || name === 'DevicesNotFoundError') {
+            msg = 'No camera was found on this device.';
+        } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+            msg = 'The camera is already in use by another app. Close it and try again.';
+        } else {
+            msg = 'Could not access the camera' + (e && e.message ? ': ' + e.message : '') + '.';
+        }
+        alert(msg + '\nYou can still use “Add photo(s)” to upload a picture.');
+        return;
+    }
+
+    _auditCamStream = stream;
+    let cam = document.getElementById('auditCameraModal');
+    if (!cam) {
+        cam = document.createElement('div');
+        cam.id = 'auditCameraModal';
+        cam.style.cssText = 'display:none; position:fixed; inset:0; z-index:4100; background:rgba(2,6,23,.92); flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:20px;';
+        cam.innerHTML =
+            '<video id="auditCamVideo" autoplay playsinline muted style="max-width:92vw; max-height:68vh; border-radius:12px; background:#000;"></video>' +
+            '<div style="display:flex; gap:12px;">' +
+              '<button id="auditCamShot" type="button" style="background:#16a34a; color:#fff; border:none; border-radius:10px; padding:12px 22px; font-size:14px; font-weight:800; cursor:pointer;">📸 Capture</button>' +
+              '<button id="auditCamCancel" type="button" style="background:#334155; color:#fff; border:none; border-radius:10px; padding:12px 22px; font-size:14px; font-weight:800; cursor:pointer;">Cancel</button>' +
+            '</div>';
+        document.body.appendChild(cam);
+    }
+    cam.querySelector('#auditCamCancel').onclick = () => closeAuditCamera();
+    cam.querySelector('#auditCamShot').onclick = () => captureAuditPhoto(sIdx);
+    cam.querySelector('#auditCamVideo').srcObject = _auditCamStream;
+    cam.style.display = 'flex';
+}
+
+function closeAuditCamera() {
+    const cam = document.getElementById('auditCameraModal');
+    if (_auditCamStream) { _auditCamStream.getTracks().forEach(t => t.stop()); _auditCamStream = null; }
+    if (cam) { const v = cam.querySelector('#auditCamVideo'); if (v) v.srcObject = null; cam.style.display = 'none'; }
+}
+
+function captureAuditPhoto(sIdx) {
+    const cam = document.getElementById('auditCameraModal');
+    const video = cam && cam.querySelector('#auditCamVideo');
+    if (!video || !video.videoWidth) return;
+    const title = _auSecTitle(sIdx);
+    if (!_auditEntryPhotos[title]) _auditEntryPhotos[title] = [];
+    if (_auditEntryPhotos[title].length >= AUDIT_PHOTO_MAX) { alert(`Up to ${AUDIT_PHOTO_MAX} photos per section.`); closeAuditCamera(); return; }
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    canvas.toBlob((blob) => {
+        if (blob) {
+            const file = new File([blob], `audit_capture_${Date.now()}.jpg`, { type: 'image/jpeg' });
+            _auditEntryPhotos[title].push({ file, localUrl: URL.createObjectURL(blob), name: file.name });
+            renderAuditSectionPhotos(sIdx);
+        }
+        closeAuditCamera();
+    }, 'image/jpeg', 0.9);
+}
+
+// Upload one image to the audit-photos bucket; returns {url, path, name}.
+async function _uploadAuditPhoto(file) {
+    const safeName = `${Date.now()}_${Math.round(Math.random() * 1e6)}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    const resp = await fetch(`${_SUPABASE_URL}/storage/v1/object/audit-photos/${safeName}`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${_SUPABASE_ANON_KEY}`,
+            'apikey': _SUPABASE_ANON_KEY,
+            'Content-Type': file.type || 'application/octet-stream',
+            'x-upsert': 'true',
+        },
+        body: file,
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return { url: `${_SUPABASE_URL}/storage/v1/object/public/audit-photos/${safeName}`, path: safeName, name: file.name };
+}
+
 // Build the collapsible audit checklist. If an audit already exists for the
 // selected store AND the chosen date matches it, pre-check its results (edit mode).
 function renderAuditEntry() {
@@ -9924,11 +10590,20 @@ function renderAuditEntry() {
     const dateVal = document.getElementById('dm-score-date')?.value || '';
     const existing = _selectedStoreAudit();
     const prefill = (existing && existing.date === dateVal && existing.results) ? existing.results : {};
+    const editingThis = !!(existing && existing.date === dateVal);
+    _auditEntryNotes = (editingThis && existing.notes && typeof existing.notes === 'object' && !Array.isArray(existing.notes)) ? { ...existing.notes } : {};
+    _auditEntryPhotos = {};
+    if (editingThis && existing.photos && typeof existing.photos === 'object') {
+        Object.entries(existing.photos).forEach(([k, arr]) => { if (Array.isArray(arr)) _auditEntryPhotos[k] = arr.slice(); });
+    }
     const auditorEl = document.getElementById('dm-audit-auditor');
-    if (auditorEl) auditorEl.value = (existing && existing.date === dateVal && existing.auditor) ? existing.auditor : '';
+    if (auditorEl) auditorEl.value = (editingThis && existing.auditor) ? existing.auditor : '';
+    const timeEl = document.getElementById('dm-audit-time');
+    if (timeEl) timeEl.value = (editingThis && existing.time) ? existing.time : '';
 
     let html = '';
-    AUDIT_DEFINITION.forEach((sec, sIdx) => {
+    const sections = _auSections();
+    sections.forEach((sec, sIdx) => {
         const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
         html += `<div class="audit-entry-section" style="border:1px solid #e2e8f0; border-radius:10px; margin-bottom:10px; overflow:hidden;">
             <div onclick="toggleAuditEntrySection(${sIdx})" style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:11px 13px; background:#f8fafc; cursor:pointer;">
@@ -9941,45 +10616,66 @@ function renderAuditEntry() {
             <div id="audit-sec-body-${sIdx}" style="display:none; padding:6px 13px 11px;">`;
         sec.items.forEach(item => {
             const aw = _prefillAward(prefill[item.id], item.pts);
-            let control;
-            if (item.pts === 1) {
-                // 1-point item → checkbox (0 or 1).
-                control = `<input type="checkbox" class="audit-entry-input" data-section="${sIdx}" data-pts="1" data-itemid="${item.id}" ${aw >= 1 ? 'checked' : ''} onchange="onAuditEntryToggle(${sIdx})" style="width:18px; height:18px; cursor:pointer;">
-                    <span style="font-size:10px; font-weight:800; color:#94a3b8; width:26px; text-align:right;">/ 1</span>`;
-            } else {
-                // multi-point item → 0..max points dropdown (partial credit).
-                let opts = '';
-                for (let p = 0; p <= item.pts; p++) opts += `<option value="${p}"${p === aw ? ' selected' : ''}>${p}</option>`;
-                control = `<select class="audit-entry-input" data-section="${sIdx}" data-pts="${item.pts}" data-itemid="${item.id}" onchange="onAuditEntryToggle(${sIdx})" style="width:58px; padding:5px 6px; font-size:13px; font-weight:800; color:var(--slate-charcoal); border:1px solid #cbd5e1; border-radius:7px; cursor:pointer; background:#fff;">${opts}</select>
-                    <span style="font-size:10px; font-weight:800; color:#94a3b8; width:26px; text-align:right;">/ ${item.pts}</span>`;
-            }
+            // Typed number entry, 0..max in half-point steps — quicker than a
+            // dropdown when an item is worth several points.
+            const control = `<input type="number" class="audit-entry-input" data-section="${sIdx}" data-pts="${item.pts}" data-itemid="${item.id}" value="${aw}" min="0" max="${item.pts}" step="0.5" inputmode="decimal" oninput="onAuditEntryToggle(${sIdx})" onblur="_auditSnapInput(this, ${sIdx})" style="width:58px; padding:5px 6px; font-size:13px; font-weight:800; color:var(--slate-charcoal); border:1px solid #cbd5e1; border-radius:7px; background:#fff; text-align:center;">
+                <span style="font-size:10px; font-weight:800; color:#94a3b8; width:26px; text-align:right;">/ ${item.pts}</span>`;
             html += `<div style="display:flex; align-items:center; gap:10px; padding:7px 2px; border-bottom:1px solid #f1f5f9;">
                 <span style="flex:1; font-size:12.5px; color:var(--slate-charcoal); line-height:1.4;">${escapeHtml(item.text)}</span>
                 <span style="flex-shrink:0; display:flex; align-items:center; justify-content:flex-end; gap:8px; width:100px;">${control}</span>
             </div>`;
         });
+        html += `<div style="margin-top:10px; padding-top:11px; border-top:1px dashed #e2e8f0;">
+            <label style="display:block; font-size:10.5px; font-weight:800; color:#94a3b8; text-transform:uppercase; letter-spacing:.4px; margin-bottom:5px;">Section notes</label>
+            <textarea id="audit-note-${sIdx}" oninput="onAuditNoteInput(${sIdx})" placeholder="Notes for this section (optional)…" style="width:100%; box-sizing:border-box; min-height:50px; resize:vertical; border:1px solid #cbd5e1; border-radius:8px; padding:8px 10px; font-size:12.5px; font-family:inherit; color:var(--slate-charcoal);"></textarea>
+            <div style="display:flex; align-items:center; gap:10px; margin-top:8px; flex-wrap:wrap;">
+                <label style="display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:800; color:#475569; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:8px; padding:6px 11px; cursor:pointer;">
+                    📷 Add photo(s)
+                    <input type="file" accept="image/*" multiple onchange="onAuditPhotoAdd(${sIdx}, this)" style="display:none;">
+                </label>
+                <button type="button" onclick="openAuditCamera(${sIdx})" style="display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:800; color:#475569; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:8px; padding:6px 11px; cursor:pointer;">📸 Take photo</button>
+                <span id="audit-photo-hint-${sIdx}" style="font-size:11px; color:#94a3b8; font-weight:700;"></span>
+            </div>
+            <div id="audit-photos-${sIdx}" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;"></div>
+        </div>`;
         html += `</div></div>`;
     });
     container.innerHTML = html;
 
-    // Refresh subtotals + running bar from the prefilled state.
-    AUDIT_DEFINITION.forEach((_s, sIdx) => onAuditEntryToggle(sIdx, true));
+    // Refresh subtotals + running bar; restore any per-section notes/photos.
+    sections.forEach((sec, sIdx) => {
+        onAuditEntryToggle(sIdx, true);
+        const ta = document.getElementById(`audit-note-${sIdx}`);
+        if (ta) ta.value = _auditEntryNotes[sec.title] || '';
+        renderAuditSectionPhotos(sIdx);
+    });
     updateAuditRunningBar();
 }
 
-// Clamp a stored result value (boolean legacy or number) to 0..pts.
+// Blur handler for the typed award: snap to the half-point grid and clamp to
+// the item's max, writing the cleaned value back into the box.
+function _auditSnapInput(el, sIdx) {
+    const pts = parseFloat(el.getAttribute('data-pts')) || 0;
+    const v = parseFloat(el.value);
+    el.value = Number.isFinite(v) ? Math.min(Math.max(Math.round(v * 2) / 2, 0), pts) : 0;
+    onAuditEntryToggle(sIdx);
+}
+
+// Clamp a stored result value (boolean legacy or number) to 0..pts, snapped
+// to the half-point grid.
 function _prefillAward(v, pts) {
     if (v === true) return pts;
     const num = Number(v);
-    return Number.isFinite(num) ? Math.min(Math.max(Math.round(num), 0), pts) : 0;
+    return Number.isFinite(num) ? Math.min(Math.max(Math.round(num * 2) / 2, 0), pts) : 0;
 }
 
 // Points awarded by one entry control (checkbox = 0|pts, select = its value).
+// Half-point values (e.g. 0.5, 2.5) are valid.
 function _auditItemAward(el) {
     const pts = parseInt(el.getAttribute('data-pts')) || 0;
     if (el.type === 'checkbox') return el.checked ? pts : 0;
-    const v = parseInt(el.value);
-    return Number.isFinite(v) ? Math.min(Math.max(v, 0), pts) : 0;
+    const v = parseFloat(el.value);
+    return Number.isFinite(v) ? Math.min(Math.max(Math.round(v * 2) / 2, 0), pts) : 0;
 }
 
 // One section open at a time — opening a section collapses the others.
@@ -9998,7 +10694,8 @@ function toggleAuditEntrySection(sIdx) {
 
 // Recompute one section's subtotal; if not a silent refresh, also bump the running bar.
 function onAuditEntryToggle(sIdx, silent) {
-    const sec = AUDIT_DEFINITION[sIdx];
+    const sec = _auSections()[sIdx];
+    if (!sec) return;
     const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
     let earned = 0;
     document.querySelectorAll(`.audit-entry-input[data-section="${sIdx}"]`).forEach(el => { earned += _auditItemAward(el); });
@@ -10014,7 +10711,7 @@ function onAuditEntryToggle(sIdx, silent) {
 function _auditEntryTotals() {
     let earned = 0;
     document.querySelectorAll('.audit-entry-input').forEach(el => { earned += _auditItemAward(el); });
-    return { earned, possible: AUDIT_POSSIBLE };
+    return { earned, possible: _auditPossibleNow() };
 }
 
 function updateAuditRunningBar() {
@@ -10037,11 +10734,12 @@ function updateAuditRunningBar() {
         <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:4px;">${verdict}</div>`;
 }
 
-function submitNewAudit() {
+async function submitNewAudit() {
     const store = document.getElementById('dm-store-select').value;
     const date = document.getElementById('dm-score-date').value;
     const auditor = (document.getElementById('dm-audit-auditor')?.value || '').trim()
         || sessionStorage.getItem('speeksUserName') || null;
+    const time = document.getElementById('dm-audit-time')?.value || null; // HH:MM or null
     const btn = document.getElementById('submitAuditBtn');
     if (!store || !date) { alert('Pick a store and date.'); return; }
 
@@ -10050,15 +10748,39 @@ function submitNewAudit() {
         results[el.getAttribute('data-itemid')] = _auditItemAward(el);
     });
 
-    btn.innerText = 'Saving...';
-    btn.style.opacity = '0.7';
-    btn.disabled = true;
+    // Per-section notes (skip blanks).
+    const sectionNotes = {};
+    Object.entries(_auditEntryNotes).forEach(([k, v]) => {
+        if (v && String(v).trim()) sectionNotes[k] = String(v).trim();
+    });
 
-    fetch(SCORECARD_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'submit_audit', store, date, auditor, results })
-    }).then(async res => {
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+
+    // Upload any newly-added photos; keep already-uploaded ones (edit mode) as-is.
+    const sectionPhotos = {};
+    try {
+        for (const [section, arr] of Object.entries(_auditEntryPhotos)) {
+            const out = [];
+            for (const p of (arr || [])) {
+                if (p.path && p.url) { out.push({ url: p.url, path: p.path, name: p.name || '' }); continue; }
+                if (p.file) { btn.innerText = 'Uploading photos…'; out.push(await _uploadAuditPhoto(p.file)); }
+            }
+            if (out.length) sectionPhotos[section] = out;
+        }
+    } catch (e) {
+        alert('Photo upload failed: ' + (e.message || e));
+        btn.innerText = 'Save Audit'; btn.style.opacity = ''; btn.disabled = false;
+        return;
+    }
+
+    btn.innerText = 'Saving...';
+    try {
+        const res = await fetch(SCORECARD_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'submit_audit', store, date, auditor, time, results, sectionNotes, sectionPhotos })
+        });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
         btn.innerText = `Saved — ${json.earned}/${json.possible} (${json.pct}%)`;
@@ -10072,13 +10794,167 @@ function submitNewAudit() {
             btn.style.opacity = '';
             btn.disabled = false;
         }, 1400);
-    }).catch(err => {
+    } catch (err) {
         alert('Error saving audit: ' + (err.message || err));
         btn.innerText = 'Save Audit';
         btn.style.background = '';
         btn.style.opacity = '';
         btn.disabled = false;
+    }
+}
+
+// ============================================================================
+// MANAGE ITEMS TAB (DM/CEO) — add / pause / delete catalog items for both
+// instruments. Pausing hides an item from scoring and the totals but keeps
+// history; deleting removes it from the checklist going forward (past audits
+// still render it via AUDIT_ITEM_MAP / stored results).
+// ============================================================================
+
+async function _scorecardAdminPost(payload) {
+    const res = await fetch(SCORECARD_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, role: sessionStorage.getItem('speeksUserRole') || '' }),
     });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.success === false) throw new Error(json.error || 'Request failed');
+    return json;
+}
+
+// Refetch the catalog after any change, then re-render everything that shows it.
+async function _refreshScCatalog() {
+    try {
+        const res = await fetch(`${SCORECARD_URL}?v=${Date.now()}`);
+        const json = await res.json();
+        if (json && json.success) {
+            window._scorecardAllData = json.data || [];
+            if (json.catalog) {
+                window._scCatalog = json.catalog.scorecard_items || [];
+                window._auCatalog = json.catalog.audit_items || [];
+            }
+        }
+    } catch (e) { /* keep whatever catalog we had */ }
+    renderManageItems();
+    _buildScorecardModalInputs();
+    renderAuditEntry();
+}
+
+function renderManageItems() {
+    const panel = document.getElementById('sc-panel-manage');
+    if (!panel) return;
+    if (!window._scCatalog || !window._auCatalog) {
+        panel.innerHTML = '<div class="status-message">Loading item catalog…</div>';
+        _ensureScCatalog();
+        return;
+    }
+    const scRows = _scCats(true);
+    const auSections = _auSections(true);
+    const activeAu = (window._auCatalog || []).filter(i => i.active);
+    const activePts = activeAu.reduce((a, i) => a + (Number(i.points) || 0), 0);
+
+    const secHdr = t => `<div style="font-size:11px; font-weight:900; color:#94a3b8; text-transform:uppercase; letter-spacing:.5px; margin:16px 0 6px;">${t}</div>`;
+    const inp = 'padding:8px 10px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:12.5px; font-weight:600; background:#fff; box-sizing:border-box;';
+    const rowStyle = active => `display:flex; align-items:center; gap:9px; padding:7px 4px; border-bottom:1px solid #f1f5f9; ${active ? '' : 'opacity:.45;'}`;
+    const delBtn = (fn, id, label) => `<button onclick="${fn}('${id}', this)" title="Delete ${label} — past scores keep their history" style="flex:none; display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:7px; cursor:pointer; font-size:13px; line-height:1;">🗑</button>`;
+    const pauseBox = (fn, id, active) => `<input type="checkbox" ${active ? 'checked' : ''} onchange="${fn}('${id}', this.checked, this)" title="${active ? 'Active — untick to pause (hidden from scoring, history kept)' : 'Paused — tick to reactivate'}" style="flex:none; width:16px; height:16px; cursor:pointer; accent-color:#059669;">`;
+
+    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:2px;">Tick = active. Unticking <b>pauses</b> an item — it disappears from scoring and the totals but keeps its history. 🗑 deletes it from the checklist going forward.</div>`;
+
+    // ---- Scorecard categories ----
+    html += secHdr(`Scorecard Categories (scored 0–5)`);
+    scRows.forEach(c => {
+        html += `<div style="${rowStyle(c.active)}">
+            ${pauseBox('scToggleItem', c.id, c.active)}
+            <span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${escapeHtml(c.label)}</span>
+            <span style="flex:none; font-size:10.5px; font-weight:800; color:#94a3b8;">/ ${Number(c.max_score) || 5}</span>
+            ${delBtn('scDeleteItem', c.id, 'this category')}
+        </div>`;
+    });
+    html += `<div style="display:flex; gap:8px; margin-top:8px;">
+        <input id="sc-add-label" placeholder="New category name" style="${inp} flex:1;">
+        <button class="btn-secondary" onclick="scAddItem(this)" style="flex:none;">+ Add</button>
+    </div>`;
+
+    // ---- Audit items ----
+    html += secHdr(`PayMore Audit Items — active: ${activeAu.length} items · ${activePts} pts`);
+    auSections.forEach(sec => {
+        html += `<div style="font-size:10.5px; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:.4px; margin:10px 0 2px;">${escapeHtml(sec.title)}</div>`;
+        sec.items.forEach(item => {
+            html += `<div style="${rowStyle(item.active !== false)}">
+                ${pauseBox('auToggleItem', item.dbId, item.active !== false)}
+                <span style="flex:1; font-size:12px; color:var(--slate-charcoal); line-height:1.35;">${escapeHtml(item.text)}</span>
+                <span style="flex:none; font-size:10.5px; font-weight:800; color:#94a3b8;">${item.pts} pt${item.pts === 1 ? '' : 's'}</span>
+                ${delBtn('auDeleteItem', item.dbId, 'this item')}
+            </div>`;
+        });
+    });
+    const secOpts = auSections.map(s => `<option value="${escapeHtml(s.title)}">${escapeHtml(s.title)}</option>`).join('')
+        + `<option value="__new">+ New section…</option>`;
+    html += `<div style="margin-top:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px;">
+        <div style="font-size:11px; font-weight:900; color:#64748b; text-transform:uppercase; letter-spacing:.4px; margin-bottom:8px;">Add an audit item</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <select id="au-add-section" onchange="document.getElementById('au-add-section-new').style.display = this.value === '__new' ? '' : 'none';" style="${inp} flex:1; min-width:140px; cursor:pointer;">${secOpts}</select>
+            <input id="au-add-section-new" placeholder="New section name" style="${inp} flex:1; min-width:140px; display:none;">
+        </div>
+        <div style="display:flex; gap:8px; margin-top:8px;">
+            <input id="au-add-text" placeholder="What is being checked?" style="${inp} flex:1;">
+            <input id="au-add-pts" type="number" min="1" step="1" value="1" title="Points" style="${inp} width:64px; flex:none; text-align:center;">
+            <button class="btn-secondary" onclick="auAddItem(this)" style="flex:none;">+ Add</button>
+        </div>
+    </div>`;
+
+    panel.innerHTML = html;
+}
+
+function _manageActionFail(e) {
+    alert('Could not save that change: ' + (e.message || e));
+    renderManageItems();
+}
+
+function scToggleItem(id, active) {
+    _scorecardAdminPost({ action: 'scorecard_item_upsert', id, active }).then(_refreshScCatalog).catch(_manageActionFail);
+}
+function scDeleteItem(id) {
+    const item = (window._scCatalog || []).find(c => String(c.id) === String(id));
+    if (!confirm(`Delete "${item ? item.label : 'this category'}"? Past scorecards keep their history; the category just stops being scored. To hide it temporarily, pause it instead.`)) return;
+    _scorecardAdminPost({ action: 'scorecard_item_delete', id }).then(_refreshScCatalog).catch(_manageActionFail);
+}
+function scAddItem(btn) {
+    const label = (document.getElementById('sc-add-label')?.value || '').trim();
+    if (!label) { alert('Enter a name for the new category.'); return; }
+    btn.disabled = true;
+    _scorecardAdminPost({ action: 'scorecard_item_upsert', label, max_score: 5 })
+        .then(_refreshScCatalog).catch(_manageActionFail).finally(() => { btn.disabled = false; });
+}
+
+function auToggleItem(id, active) {
+    _scorecardAdminPost({ action: 'audit_item_upsert', id, active }).then(_refreshScCatalog).catch(_manageActionFail);
+}
+function auDeleteItem(id) {
+    const item = (window._auCatalog || []).find(c => String(c.id) === String(id));
+    if (!confirm(`Delete "${item ? item.item_text : 'this item'}"? Past audits keep their history; the item just leaves the checklist. To hide it temporarily, pause it instead.`)) return;
+    _scorecardAdminPost({ action: 'audit_item_delete', id }).then(_refreshScCatalog).catch(_manageActionFail);
+}
+function auAddItem(btn) {
+    const selEl = document.getElementById('au-add-section');
+    let section = selEl ? selEl.value : '';
+    if (section === '__new') section = (document.getElementById('au-add-section-new')?.value || '').trim();
+    const text = (document.getElementById('au-add-text')?.value || '').trim();
+    const points = Math.max(1, parseInt(document.getElementById('au-add-pts')?.value) || 1);
+    if (!section) { alert('Pick or name a section.'); return; }
+    if (!text) { alert('Describe what the item checks.'); return; }
+    btn.disabled = true;
+    _scorecardAdminPost({ action: 'audit_item_upsert', section, item_text: text, points })
+        .then(_refreshScCatalog).catch(_manageActionFail).finally(() => { btn.disabled = false; });
+}
+
+// 'HH:MM' (24h, as stored) → '2:30 PM' for display; '' when unset/invalid.
+function _fmtAuditTime(t) {
+    const m = /^(\d{1,2}):(\d{2})/.exec(String(t || ''));
+    if (!m) return '';
+    let h = parseInt(m[1], 10);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return `${h}:${m[2]} ${ampm}`;
 }
 
 // ---- Read-only Audit Breakdown popout (reused by every display site) ----
@@ -10088,6 +10964,30 @@ function openAuditBreakdown(store) {
 }
 function closeAuditBreakdown() {
     closeAllModals();
+}
+
+// Render a saved section note for display: lines beginning with -, * or •
+// become real bullet points; other lines keep their line breaks. Notes are
+// stored as the raw textarea text, so this is display-only — editing an
+// audit still shows (and saves) exactly what was typed.
+function _auditNoteHtml(note) {
+    const lines = String(note).split(/\r?\n/);
+    let html = '';
+    let bullets = [];
+    const flush = () => {
+        if (!bullets.length) return;
+        html += `<ul style="margin:2px 0; padding-left:18px;">${bullets.map(t => `<li style="margin:1px 0;">${escapeHtml(t)}</li>`).join('')}</ul>`;
+        bullets = [];
+    };
+    lines.forEach(raw => {
+        const line = raw.trim();
+        if (!line) { flush(); return; }
+        const m = line.match(/^[-*•]\s*(.*)$/);
+        if (m) bullets.push(m[1]);
+        else { flush(); html += `<div>${escapeHtml(line)}</div>`; }
+    });
+    flush();
+    return html;
 }
 
 function renderAuditBreakdown(store) {
@@ -10109,13 +11009,26 @@ function renderAuditBreakdown(store) {
 
     let html = `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:${c.bg}; border-radius:10px; padding:12px 14px; margin-bottom:14px;">
         <div>
-            <div style="font-size:11px; font-weight:800; color:${c.fg}; text-transform:uppercase; letter-spacing:.4px;">PayMore Audit${dateStr ? ' · ' + dateStr : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
+            <div style="font-size:11px; font-weight:800; color:${c.fg}; text-transform:uppercase; letter-spacing:.4px;">PayMore Audit${dateStr ? ' · ' + dateStr : ''}${audit.time ? ' · ' + _fmtAuditTime(audit.time) : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
             <div style="font-size:11px; color:#64748b; font-weight:600; margin-top:2px;">Pass ${AUDIT_PASS_PCT}% · Target ${AUDIT_TARGET_PCT}%+${audit.prevPct != null ? ` · prev ${audit.prevPct}%` : ''}</div>
         </div>
         <div style="font-size:22px; font-weight:900; color:${c.fg};">${audit.earned}/${audit.possible} <span style="font-size:14px;">(${audit.pct}%)</span></div>
     </div>`;
 
-    AUDIT_DEFINITION.forEach(sec => {
+    // Sections from the live catalog, but keep any items this audit scored
+    // that were since paused/removed — history must still render.
+    const sections = _auSections().map(s => ({ title: s.title, items: s.items.slice() }));
+    const known = new Set();
+    sections.forEach(s => s.items.forEach(i => known.add(i.id)));
+    const orphans = Object.keys(results).filter(id => !known.has(id) && AUDIT_ITEM_MAP[id]);
+    orphans.forEach(id => {
+        const meta = AUDIT_ITEM_MAP[id];
+        let sec = sections.find(s => s.title === meta.section);
+        if (!sec) { sec = { title: meta.section, items: [] }; sections.push(sec); }
+        sec.items.push({ id, pts: meta.pts, text: meta.text });
+    });
+
+    sections.forEach(sec => {
         const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
         let secEarned = 0;
         sec.items.forEach(i => { secEarned += _prefillAward(results[i.id], i.pts); });
@@ -10137,6 +11050,17 @@ function renderAuditBreakdown(store) {
                 <span style="font-size:11px; font-weight:800; color:${valColor}; flex-shrink:0;">${aw}/${item.pts}</span>
             </div>`;
         });
+        const secNote = (audit.notes && !Array.isArray(audit.notes)) ? audit.notes[sec.title] : null;
+        const secPhotos = (audit.photos && !Array.isArray(audit.photos)) ? audit.photos[sec.title] : null;
+        if (secNote && String(secNote).trim()) {
+            html += `<div style="margin-top:6px; background:#f8fafc; border:1px solid #e2e8f0; border-left:3px solid #94a3b8; border-radius:7px; padding:7px 10px; font-size:12px; color:var(--slate-charcoal); line-height:1.45;"><div style="font-weight:800; color:#64748b; font-size:11px; margin-bottom:2px;">📝 Notes</div>${_auditNoteHtml(secNote)}</div>`;
+        }
+        if (Array.isArray(secPhotos) && secPhotos.length) {
+            html += `<div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">` + secPhotos.map(p => {
+                const src = (p && p.url) ? p.url : '';
+                return src ? `<img src="${src}" onclick="openAuditPhotoLightbox('${src}')" style="width:56px; height:56px; object-fit:cover; border-radius:6px; border:1px solid #e2e8f0; cursor:pointer;" alt="">` : '';
+            }).join('') + `</div>`;
+        }
         html += `</div>`;
     });
     body.innerHTML = html;
@@ -10163,7 +11087,7 @@ function buildAuditSummaryHtml(audit, store) {
     return `<div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
             <div>
                 <div class="scorecard-label" style="text-align:left; margin-bottom:2px;">PayMore Audit</div>
-                <div class="scorecard-date" style="font-size:11px;">${dateStr}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
+                <div class="scorecard-date" style="font-size:11px;">${dateStr}${audit.time ? ' · ' + _fmtAuditTime(audit.time) : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
             </div>
             <div style="display:flex; align-items:center; gap:8px;">
                 ${trend}
@@ -10371,6 +11295,29 @@ function renderClaimsTable() {
     wrap.innerHTML = html;
 }
 
+// Tiny copy button next to a case number so the ID can be pasted straight into
+// Shopify / UPS / USPS status lookups. Flashes ✓ on success.
+function _claimCopyBtn(r) {
+    if (!r.case_number) return '';
+    return `<button onclick="copyClaimCase(this)" data-case="${escapeHtml(r.case_number)}" title="Copy case number" style="margin-left:5px; font-size:10px; padding:2px 5px; border:1px solid #e2e8f0; border-radius:5px; background:#f8fafc; color:#64748b; cursor:pointer; line-height:1; vertical-align:1px;">📋</button>`;
+}
+
+function copyClaimCase(btn) {
+    const num = btn.dataset.case || '';
+    if (!num) return;
+    navigator.clipboard.writeText(num).then(() => {
+        const old = btn.innerText;
+        btn.innerText = '✓';
+        btn.style.color = '#059669';
+        btn.style.borderColor = '#34d399';
+        btn.style.background = '#ecfdf5';
+        setTimeout(() => {
+            btn.innerText = old;
+            btn.style.color = ''; btn.style.borderColor = ''; btn.style.background = '';
+        }, 1200);
+    }).catch(() => alert('Could not copy — please select and copy the case number manually.'));
+}
+
 // One claim row. `isChild` nests it (indent + blue edge) under its parent INR ticket;
 // it's otherwise a full, normal claim row with its own status/value/cost/dates/actions.
 function _claimRowHtml(r, showStore, isChild, canEscalate, hasChild, num) {
@@ -10420,9 +11367,9 @@ function _claimRowHtml(r, showStore, isChild, canEscalate, hasChild, num) {
     if (aging) rowStyle = 'background:#fef2f2; box-shadow:inset 3px 0 0 #dc2626;';
     else if (isChild) rowStyle = 'background:#f0f7ff; box-shadow:inset 3px 0 0 #93c5fd;';
 
-    const caseCell = isChild
+    const caseCell = (isChild
         ? `<span style="color:#60a5fa; font-weight:900; margin-right:5px;">↳</span><span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`
-        : `<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`;
+        : `<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`) + _claimCopyBtn(r);
 
     return `<tr style="${rowStyle}">
         ${td(`<span style="font-weight:800; color:${isChild ? '#94a3b8' : 'var(--slate-charcoal)'};">${num}</span>`, 'white-space:nowrap;')}
@@ -10693,8 +11640,8 @@ function _ovRowHtml(r, byId, hasChild, num) {
     else if (isChild) rowStyle = 'background:#f0f7ff; box-shadow:inset 3px 0 0 #93c5fd;';
     const parent = isChild ? byId[r.parent_id] : null;
     const caseCell = isChild
-        ? `<span style="color:#60a5fa; font-weight:900; margin-right:5px;">↳</span><span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>${parent ? `<div style="font-size:10px; color:#94a3b8; font-weight:600;">claim on ${escapeHtml(parent.case_number || '')}</div>` : ''}`
-        : `<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>`;
+        ? `<span style="color:#60a5fa; font-weight:900; margin-right:5px;">↳</span><span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>${_claimCopyBtn(r)}${parent ? `<div style="font-size:10px; color:#94a3b8; font-weight:600;">claim on ${escapeHtml(parent.case_number || '')}</div>` : ''}`
+        : `<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.case_number || '')}</span>${_claimCopyBtn(r)}`;
     return `<tr style="${rowStyle}">
         ${td(`<span style="font-weight:800; color:${isChild ? '#94a3b8' : 'var(--slate-charcoal)'};">${num}</span>`, 'white-space:nowrap;')}
         ${td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`)}
@@ -11034,6 +11981,10 @@ function _commentKey(c) {
     return `${String(c.store||'').trim()}|${String(c.date||'').trim()}|${String(c.author||'').trim()}|${String(c.message||'').trim()}`.slice(0, 120);
 }
 
+// Ids of the store comments currently shown in the bubble — marked read when
+// the user dismisses (X) the bubble. Accumulates across polls until dismissed.
+let _shownCommentIds = [];
+
 let _storeCommentPollingStarted = false;
 function startStoreCommentPolling() {
     if (_storeCommentPollingStarted) return;
@@ -11074,8 +12025,152 @@ window.openCEOStoreComment = function(targetStore) {
                 storeSelect.style.cursor = 'pointer';
             }
         }
+
+        // Two tabs: Send Message | Read Receipts (built once, then reset to Send).
+        _setupCommentModalTabs();
+        _commentReadsCache = null; // refetch reads each time the modal opens
+        switchCommentTab('send');
     }
 };
+
+// Adds the Send | Read Receipts tab bar + a reads panel to the send modal (once).
+function _setupCommentModalTabs() {
+    const modal = document.getElementById('sendCommentModal');
+    if (!modal || document.getElementById('commentTabBar')) return;
+    const header = modal.querySelector('.modal-header');
+    const content = modal.querySelector('.manage-content');
+    if (!header || !content) return;
+
+    const bar = document.createElement('div');
+    bar.id = 'commentTabBar';
+    bar.style.cssText = 'padding:14px 18px 0;';
+    bar.innerHTML = `<div class="notif-tabs" style="display:inline-flex;">
+        <button id="comment-tab-send" class="tab-btn active" onclick="switchCommentTab('send')">Send Message</button>
+        <button id="comment-tab-reads" class="tab-btn" onclick="switchCommentTab('reads')">Read Receipts</button>
+    </div>`;
+    header.insertAdjacentElement('afterend', bar);
+
+    const panel = document.createElement('div');
+    panel.id = 'commentReadsPanel';
+    panel.className = 'manage-content';
+    panel.style.display = 'none';
+    panel.innerHTML = `
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;">
+            <label class="form-label-caps" style="margin:0;">Store</label>
+            <select id="commentReadsStore" class="form-input-lg" style="max-width:220px;" onchange="renderStoreCommentReads()">
+                <option value="ALL">All Stores</option>
+                <option value="OVL">OVL</option>
+                <option value="LEE">LEE</option>
+                <option value="WSP">WSP</option>
+                <option value="MPL">MPL</option>
+                <option value="BAL">BAL</option>
+            </select>
+        </div>
+        <div id="commentReadsStats"></div>
+        <div id="commentReadsList"></div>`;
+    content.insertAdjacentElement('afterend', panel);
+}
+
+function switchCommentTab(tab) {
+    const isSend = tab !== 'reads';
+    const modal = document.getElementById('sendCommentModal');
+    if (!modal) return;
+    document.getElementById('comment-tab-send')?.classList.toggle('active', isSend);
+    document.getElementById('comment-tab-reads')?.classList.toggle('active', !isSend);
+    const form = modal.querySelector('.manage-content'); // the send form (first .manage-content)
+    const footer = modal.querySelector('.manage-footer');
+    const panel = document.getElementById('commentReadsPanel');
+    if (form) form.style.display = isSend ? '' : 'none';
+    if (footer) footer.style.display = isSend ? '' : 'none';
+    if (panel) panel.style.display = isSend ? 'none' : 'flex';
+    if (!isSend) loadStoreCommentReads();
+}
+
+let _commentReadsCache = null;
+
+// Fetch the last 30 days of comments + their reads (once per modal open), then render.
+async function loadStoreCommentReads() {
+    const listEl = document.getElementById('commentReadsList');
+    if (!listEl) return;
+    if (!_commentReadsCache) {
+        listEl.innerHTML = `<div style="color:#94a3b8; font-size:13px;">Loading…</div>`;
+        try {
+            const res = await fetch(`${STORE_COMMENT_URL}?mode=reads&v=${Date.now()}`);
+            const rows = await res.json();
+            _commentReadsCache = Array.isArray(rows) ? rows : [];
+        } catch (e) {
+            listEl.innerHTML = `<div style="color:var(--red-alert); font-size:13px;">Failed to load read counts.</div>`;
+            return;
+        }
+    }
+    renderStoreCommentReads();
+}
+
+function _crStat(label, val) {
+    return `<div style="flex:1; min-width:92px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:11px 14px;">
+        <div style="font-size:22px; font-weight:900; color:#1e293b; line-height:1;">${val}</div>
+        <div style="font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; margin-top:3px;">${label}</div>
+    </div>`;
+}
+
+// Render the cached reads filtered by the store dropdown, with stats + per-store breakdown.
+function renderStoreCommentReads() {
+    const statsEl = document.getElementById('commentReadsStats');
+    const listEl = document.getElementById('commentReadsList');
+    if (!listEl) return;
+    const all = _commentReadsCache || [];
+    const store = document.getElementById('commentReadsStore')?.value || 'ALL';
+    const rows = store === 'ALL' ? all : all.filter(r => String(r.store || '').toUpperCase() === store);
+
+    const msgs = rows.length;
+    const totalReads = rows.reduce((s, r) => s + (r.readCount || 0), 0);
+    const avg = msgs ? (totalReads / msgs) : 0;
+
+    let statsHtml = `<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
+        ${_crStat('Messages', msgs)}
+        ${_crStat('Total reads', totalReads)}
+        ${_crStat('Avg reads / msg', avg.toFixed(1))}
+    </div>`;
+
+    // Per-store breakdown (only meaningful on the All view).
+    if (store === 'ALL' && msgs) {
+        const byStore = {};
+        all.forEach(r => {
+            const s = String(r.store || '').toUpperCase() || '—';
+            (byStore[s] ||= { m: 0, reads: 0 });
+            byStore[s].m++; byStore[s].reads += (r.readCount || 0);
+        });
+        statsHtml += `<div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:4px 2px; margin-bottom:14px;">`
+            + Object.keys(byStore).sort().map(s => {
+                const v = byStore[s];
+                return `<div style="display:flex; justify-content:space-between; gap:10px; padding:6px 12px; font-size:12.5px; border-bottom:1px solid #f1f5f9;">
+                    <span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(s)}</span>
+                    <span style="color:#64748b;">${v.m} msg · ${v.reads} reads · ${(v.reads / v.m).toFixed(1)} avg</span>
+                </div>`;
+            }).join('')
+            + `</div>`;
+    }
+    if (statsEl) statsEl.innerHTML = statsHtml;
+
+    if (!msgs) {
+        listEl.innerHTML = `<div style="color:#94a3b8; font-size:13px;">No messages${store !== 'ALL' ? ' for ' + escapeHtml(store) : ''} in the last 30 days.</div>`;
+        return;
+    }
+    listEl.innerHTML = rows.slice(0, 80).map(r => {
+        const names = (r.readBy || []).map(escapeHtml).join(', ');
+        const msg = escapeHtml(String(r.message || '').slice(0, 160));
+        const cnt = r.readCount || 0;
+        const sentBy = r.author ? ` · <span style="font-weight:600; color:#64748b;">by ${escapeHtml(r.author)}</span>` : '';
+        return `<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:11px 13px; margin-bottom:8px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:5px;">
+                <span style="font-size:11px; font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')} · ${escapeHtml(r.date || '')}${sentBy}</span>
+                <span style="font-size:11px; font-weight:900; color:${cnt ? '#059669' : '#94a3b8'}; background:#fff; border:1px solid #e2e8f0; border-radius:20px; padding:3px 10px; white-space:nowrap;">👁 Read by ${cnt}</span>
+            </div>
+            <div style="font-size:12.5px; color:var(--slate-charcoal); line-height:1.4;${names ? ' margin-bottom:5px;' : ''}">${msg}</div>
+            ${names ? `<div style="font-size:11px; color:#64748b;"><strong style="color:#94a3b8;">Read by:</strong> ${names}</div>` : ''}
+        </div>`;
+    }).join('');
+}
 
 async function submitStoreComment() {
     const store = document.getElementById('commentStoreSelect').value;
@@ -11113,19 +12208,31 @@ async function submitStoreComment() {
     }
 }
 
-// Helper to close the bubble (comments already marked seen when bubble was shown)
+// Close the bubble AND log a read for each comment it was showing — dismissing
+// the message (X) is the "I saw this" signal DM/CEO see in the send tool.
 window.closeDailyCommentBubble = function() {
     const bubble = document.getElementById('dailyMessageBubble');
     if (bubble) bubble.style.display = 'none';
     if (typeof _positionClaimAlert === 'function') _positionClaimAlert(); // claim alert moves back up
+
+    if (_shownCommentIds.length) {
+        const user = sessionStorage.getItem('speeksUserName') || null;
+        const ids = _shownCommentIds.slice();
+        _shownCommentIds = [];
+        postWrite(STORE_COMMENT_URL, { type: 'mark_read', commentIds: ids, user })
+            .catch(err => console.warn('comment mark_read failed:', err.message));
+    }
 };
 
 async function fetchAndDisplayStoreComment() {
     const userStore = String(sessionStorage.getItem('speeksUserStore') || 'OVL').trim().toUpperCase();
+    const userName = String(sessionStorage.getItem('speeksUserName') || '').trim();
     const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
 
     try {
-        const res = await fetch(`${STORE_COMMENT_URL}?v=${Date.now()}`);
+        // reader= tells the fn which comments this user already dismissed, so a
+        // read (X) permanently suppresses the message across sign-outs.
+        const res = await fetch(`${STORE_COMMENT_URL}?reader=${encodeURIComponent(userName)}&v=${Date.now()}`);
         const comments = await res.json();
 
         const todayComments = comments.filter(c => {
@@ -11146,10 +12253,14 @@ async function fetchAndDisplayStoreComment() {
             return isToday && isForMe;
         }).reverse(); // Newest first
 
-        // Only show comments the user hasn't seen yet in this session
+        // Show only comments the user hasn't permanently dismissed (readByMe, from
+        // the server) and hasn't already seen this session.
         const seenKeys = _getSeenCommentKeys();
-        const newComments = todayComments.filter(c => !seenKeys.has(_commentKey(c)));
+        const newComments = todayComments.filter(c => !c.readByMe && !seenKeys.has(_commentKey(c)));
         if (newComments.length === 0) return;
+
+        // Remember which comments are on screen so the X (dismiss) can log a read.
+        newComments.forEach(c => { if (c.id && !_shownCommentIds.includes(c.id)) _shownCommentIds.push(c.id); });
 
         // Mark all today's comments seen now so repeat polls don't re-show the same ones
         todayComments.forEach(c => seenKeys.add(_commentKey(c)));
@@ -11369,6 +12480,14 @@ async function fetchChampions() {
 // ============================================================================
 let currentChecklistTab = 'daily';
 let checklistDataCache = { daily: [], weekly: [], monthly: [], quarterly: [] };
+// Multi-Store Manager (e.g. BAL + MPL): one checklist cache per managed store, so
+// both stores' lists render stacked in the same panel without switching dashboards.
+// { BAL: {daily,weekly,monthly,quarterly}, MPL: {...} }. Empty for everyone else.
+let checklistDataCacheMS = {};
+const _pendingTogglesMS = new Map();   // key: "STORE::id" -> { checked, expiresAt }
+function _isMSMChecklist() {
+    return typeof isMultiStoreManager === 'function' && isMultiStoreManager();
+}
 // Tracks optimistic toggle state for up to 20 seconds so a slow backend response
 // can't overwrite a locally-checked item before Apps Script persists it.
 const _pendingToggles = new Map(); // id -> { checked, expiresAt }
@@ -11384,28 +12503,23 @@ function _applyPendingToggles() {
     }
 }
 
-// For assistant managers, returns the store's primary manager name so both share the same checklist data.
-// All other roles return their own name, preserving existing behavior.
+// For assistant managers, returns the store's primary manager name so both share the same
+// checklist data (incl. BAL/MPL, whose manager is the Multi-Store Manager — see
+// _resolveStoreManager). All other roles return their own name, preserving existing behavior.
 function getChecklistUser() {
     const role = sessionStorage.getItem('speeksUserRole') || '';
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
 
     if (role !== 'assistant manager') return userName;
+    return _resolveStoreManager(store) || userName;
+}
 
-    try {
-        const authCache = JSON.parse(localStorage.getItem('speeksAuthCache')) || {};
-        const users = authCache.users || [];
-        for (const targetRole of ['owner (manager)', 'manager']) {
-            const mgr = users.find(u =>
-                u.store && u.store.toUpperCase() === store &&
-                u.role && u.role.toLowerCase() === targetRole
-            );
-            if (mgr) return mgr.name;
-        }
-    } catch (e) {}
-
-    return userName;
+// TOM gets a personal-only checklist: no store broadcasts or DM required
+// tasks — it starts blank until they (or a DM) add tasks for them directly.
+function _checklistPersonalParam() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return role === 'tom' ? '&personal=1' : '';
 }
 
 function switchChecklistTab(tab) {
@@ -11417,8 +12531,8 @@ function switchChecklistTab(tab) {
     // Safety check just in case the button isn't on the screen
     const qTab = document.getElementById('cl-tab-quarterly');
     if (qTab) qTab.classList.toggle('active', tab === 'quarterly');
-    
-    renderChecklist();
+
+    if (_isMSMChecklist()) renderChecklistMS(); else renderChecklist();
 }
 
 async function loadChecklist() {
@@ -11427,6 +12541,9 @@ async function loadChecklist() {
     // overwrites the cache with stale (unchecked) data before the backend saves.
     const panel = document.getElementById('checklistSidePanel');
     if (!panel?.classList.contains('open')) return;
+
+    // Multi-Store Managers get both managed stores stacked in one panel.
+    if (_isMSMChecklist()) { await loadChecklistMS(); return; }
 
     const container = document.getElementById('checklistContent');
     const userName = getChecklistUser();
@@ -11456,7 +12573,7 @@ async function loadChecklist() {
     container.innerHTML = '<div class="status-message">Syncing Checklist...</div>';
 
     try {
-        const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
+        const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}${_checklistPersonalParam()}&v=${Date.now()}`);
         checklistDataCache = await res.json();
         _applyPendingToggles();
         renderChecklist();
@@ -11508,6 +12625,227 @@ function renderChecklist() {
 
     container.innerHTML = html;
     updateChecklistChip();
+}
+
+// ============================================================================
+// MULTI-STORE MANAGER — dual-store checklist (both managed stores in one panel)
+// A MSM (Joseph: BAL + MPL) does everything a manager does, but for every store
+// they run. Rather than reload the dashboard to switch stores, we fetch each
+// managed store's checklist (user = the MSM) and render them as stacked, per-store
+// sections in the same panel, each with its own progress + add row. ASMs are
+// single-store and never hit this path, so their behavior is unchanged.
+// ============================================================================
+
+// Hide the single-store footer/add row in MSM mode — each store gets its own add row.
+function _setMSChecklistChrome(isMS) {
+    const inputArea = document.querySelector('#checklistSidePanel .cl-input-area');
+    const footer    = document.querySelector('#checklistSidePanel .cl-footer-row');
+    if (inputArea) inputArea.style.display = isMS ? 'none' : '';
+    if (footer)    footer.style.display    = isMS ? 'none' : '';
+}
+
+// Per-store accent color so the stacked sections/pills are distinguishable at a glance.
+// `solid` matches the site-wide store colors (`_storeColors`, used by the monthly-goals
+// banner & charts — BAL red, MPL orange, etc.); `soft` is a light tint for backgrounds.
+function _msStoreAccent(store) {
+    const map = {
+        OVL: { solid: '#7c3aed', soft: '#f5f3ff' },   // purple
+        LEE: { solid: '#2563eb', soft: '#eff6ff' },   // blue
+        WSP: { solid: '#5a8d3b', soft: '#f3f8ee' },   // green
+        MPL: { solid: '#ea580c', soft: '#fff7ed' },   // orange
+        BAL: { solid: '#dc2626', soft: '#fef2f2' },   // red
+    };
+    return map[String(store || '').toUpperCase()] || { solid: '#64748b', soft: '#f1f5f9' };
+}
+
+// Collapse duplicate GLOBAL/required tasks by text (mirrors renderChecklist).
+function _dedupeGlobals(rawItems) {
+    const seen = new Set();
+    return (rawItems || []).filter(it => {
+        if (it.isGlobal) {
+            const key = String(it.text || '').trim().toLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key);
+        }
+        return true;
+    });
+}
+
+function _applyPendingTogglesMS() {
+    const now = Date.now();
+    for (const [key, val] of _pendingTogglesMS) {
+        if (val.expiresAt < now) { _pendingTogglesMS.delete(key); continue; }
+        const [store, id] = key.split('::');
+        const cache = checklistDataCacheMS[store];
+        if (!cache) continue;
+        for (const tab of Object.keys(cache)) {
+            const item = (cache[tab] || []).find(i => i.id === id);
+            if (item) item.checked = val.checked;
+        }
+    }
+}
+
+async function loadChecklistMS() {
+    const container = document.getElementById('checklistContent');
+    const userName = getChecklistUser();
+    _setMSChecklistChrome(true);
+
+    // MSM effective role is manager: Daily/Weekly/Monthly apply; Quarterly is CORP/ALL-only.
+    document.getElementById('cl-tab-weekly')?.style && (document.getElementById('cl-tab-weekly').style.display = '');
+    document.getElementById('cl-tab-monthly')?.style && (document.getElementById('cl-tab-monthly').style.display = '');
+    const qTab = document.getElementById('cl-tab-quarterly');
+    if (qTab) {
+        qTab.style.display = 'none';
+        if (currentChecklistTab === 'quarterly') { currentChecklistTab = 'daily'; switchChecklistTab('daily'); return; }
+    }
+
+    if (container) container.innerHTML = '<div class="status-message">Syncing Checklist...</div>';
+    try {
+        const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+            fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${s}&v=${Date.now()}`).then(r => r.json())
+        ));
+        checklistDataCacheMS = {};
+        MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+            checklistDataCacheMS[s] = results[i] || { daily: [], weekly: [], monthly: [], quarterly: [] };
+        });
+        _applyPendingTogglesMS();
+        renderChecklistMS();
+    } catch (e) {
+        console.error('MSM Checklist Fetch Error', e);
+        if (container) container.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load checklist.</div>';
+    }
+}
+
+function renderChecklistMS() {
+    const container = document.getElementById('checklistContent');
+    if (!container) return;
+
+    let html = '';
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const cache = checklistDataCacheMS[store] || {};
+        const items = _dedupeGlobals(cache[currentChecklistTab] || []);
+        const total = items.length;
+        const done  = items.filter(i => i.checked).length;
+        const progTxt = total ? (done === total ? `✓ ${total}/${total}` : `${done}/${total}`) : '—';
+        const _ac = _msStoreAccent(store);
+        const _allDone = total && done === total;
+
+        html += `<div class="ms-store-section" style="border-left: 4px solid ${_ac.solid};">
+            <div class="ms-store-head" style="border-bottom-color: ${_ac.soft};">
+                <span class="ms-store-name" style="color: ${_ac.solid};">${escapeHtml(store)}</span>
+                <span class="ms-store-prog ${_allDone ? 'all-done' : ''}"${_allDone ? '' : ` style="background: ${_ac.soft}; color: ${_ac.solid};"`}>${progTxt}</span>
+            </div>`;
+
+        if (total === 0) {
+            html += `<div class="ms-empty">No tasks for this tab.</div>`;
+        } else {
+            items.forEach(item => {
+                const completedClass = item.checked ? 'completed' : '';
+                const deleteHtml = !item.isGlobal
+                    ? `<button class="cl-delete-btn" onclick="deleteChecklistItemMS('${store}','${item.id}')" title="Delete Task">✖</button>`
+                    : '';
+                html += `
+                <div class="cl-item ${completedClass}">
+                    <input type="checkbox" class="cl-checkbox" ${item.checked ? 'checked' : ''} onchange="toggleChecklistStateMS('${store}','${item.id}', this.checked)">
+                    <div class="cl-content-wrapper" style="justify-content: center;">
+                        <span class="cl-text">${escapeHtml(item.text)}</span>
+                    </div>
+                    ${deleteHtml}
+                </div>`;
+            });
+        }
+
+        html += `<div class="ms-add-row">
+                <input type="text" id="msNewTask_${store}" placeholder="Add a ${escapeHtml(store)} task..." onkeydown="if(event.key==='Enter')addChecklistItemMS('${store}')">
+                <button class="btn-primary cl-add-btn" onclick="addChecklistItemMS('${store}')">Add</button>
+            </div>
+        </div>`;
+    });
+
+    container.innerHTML = html;
+    updateChecklistChipMS();
+}
+
+function toggleChecklistStateMS(store, id, isChecked) {
+    const userName = getChecklistUser();
+    const cache = checklistDataCacheMS[store];
+    if (!cache) return;
+    const item = (cache[currentChecklistTab] || []).find(i => i.id === id);
+    if (item) item.checked = isChecked;
+    _pendingTogglesMS.set(store + '::' + id, { checked: isChecked, expiresAt: Date.now() + 20000 });
+    renderChecklistMS();
+
+    postWrite(CHECKLIST_URL, { action: 'toggle', id, checked: isChecked, tab: currentChecklistTab, user: userName, store })
+        .catch(err => {
+            const it = (cache[currentChecklistTab] || []).find(i => i.id === id);
+            if (it) it.checked = !isChecked;
+            _pendingTogglesMS.delete(store + '::' + id);
+            renderChecklistMS();
+            alert('Could not save that change: ' + err.message);
+        });
+}
+
+async function addChecklistItemMS(store) {
+    const input = document.getElementById('msNewTask_' + store);
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+
+    input.disabled = true;
+    const userName = getChecklistUser();
+    try {
+        const out = await postWrite(CHECKLIST_URL, { action: 'add', tab: currentChecklistTab, text, user: userName, store });
+        const cache = checklistDataCacheMS[store] || (checklistDataCacheMS[store] = { daily: [], weekly: [], monthly: [], quarterly: [] });
+        (cache[currentChecklistTab] ||= []).push({ id: out.id || ('temp_' + Date.now()), text, isGlobal: false, checked: false });
+        renderChecklistMS();
+    } catch (e) {
+        alert('Failed to add task: ' + (e.message || e));
+    } finally {
+        const el = document.getElementById('msNewTask_' + store);
+        if (el) { el.value = ''; el.disabled = false; el.focus(); }
+    }
+}
+
+function deleteChecklistItemMS(store, id) {
+    const userName = getChecklistUser();
+    const cache = checklistDataCacheMS[store];
+    if (!cache) return;
+    const list = cache[currentChecklistTab] || [];
+    const removed = list.find(i => i.id === id);
+    cache[currentChecklistTab] = list.filter(i => i.id !== id);
+    renderChecklistMS();
+
+    postWrite(CHECKLIST_URL, { action: 'delete', id, tab: currentChecklistTab, user: userName, store })
+        .catch(err => {
+            if (removed) { (cache[currentChecklistTab] ||= []).push(removed); renderChecklistMS(); }
+            alert('Could not delete task: ' + err.message);
+        });
+}
+
+// Combined nudge chip across both managed stores (based on the Daily list).
+function updateChecklistChipMS() {
+    const chip = document.getElementById('cl-progress-chip');
+    const btn = document.querySelector('.cl-nav-toggle');
+    if (!chip || !btn) return;
+
+    const segs = [];
+    let anyOutstanding = false, anyTasks = false;
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const items = _dedupeGlobals((checklistDataCacheMS[store] || {}).daily || []);
+        if (!items.length) return;
+        anyTasks = true;
+        const done = items.filter(i => i.checked).length;
+        const ac = _msStoreAccent(store);
+        const label = done === items.length ? `${store} ✓` : `${store} ${done}/${items.length}`;
+        segs.push(`<span class="ms-chip-seg" style="background: ${ac.solid};">${label}</span>`);
+        if (done < items.length) anyOutstanding = true;
+    });
+
+    if (!anyTasks) { chip.textContent = ''; chip.classList.remove('ms-chip'); }
+    else { chip.classList.add('ms-chip'); chip.innerHTML = segs.join(''); }
+    const panel = document.getElementById('checklistSidePanel');
+    const isOpen = panel && panel.classList.contains('open');
+    btn.classList.toggle('cl-needs-attention', anyOutstanding && !isOpen);
 }
 
 // --- API ACTIONS (POST to Apps Script) ---
@@ -11638,9 +12976,23 @@ function updateChecklistChip() {
 // Uses a separate path from loadChecklist() so the panel-open guard doesn't suppress it.
 async function _prefetchChecklistForChip() {
     const userName = getChecklistUser();
+    if (_isMSMChecklist()) {
+        try {
+            const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+                fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${s}&v=${Date.now()}`).then(r => r.json())
+            ));
+            checklistDataCacheMS = {};
+            MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+                checklistDataCacheMS[s] = results[i] || { daily: [], weekly: [], monthly: [], quarterly: [] };
+            });
+            _applyPendingTogglesMS();
+            updateChecklistChipMS();
+        } catch (_) {}
+        return;
+    }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     try {
-        const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
+        const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}${_checklistPersonalParam()}&v=${Date.now()}`);
         checklistDataCache = await res.json();
         _applyPendingToggles();
         updateChecklistChip();
@@ -11656,9 +13008,23 @@ function _startChecklistSync() {
         const panel = document.getElementById('checklistSidePanel');
         if (!panel?.classList.contains('open')) return;
         const userName = getChecklistUser();
+        if (_isMSMChecklist()) {
+            try {
+                const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+                    fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${s}&v=${Date.now()}`).then(r => r.json())
+                ));
+                checklistDataCacheMS = {};
+                MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+                    checklistDataCacheMS[s] = results[i] || { daily: [], weekly: [], monthly: [], quarterly: [] };
+                });
+                _applyPendingTogglesMS();
+                renderChecklistMS();
+            } catch (_) {}
+            return;
+        }
         const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
         try {
-            const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}&v=${Date.now()}`);
+            const res = await fetch(`${CHECKLIST_URL}?user=${encodeURIComponent(userName)}&store=${store}${_checklistPersonalParam()}&v=${Date.now()}`);
             checklistDataCache = await res.json();
             _applyPendingToggles();
             renderChecklist();
@@ -11739,6 +13105,8 @@ document.addEventListener('click', function(e) {
 let auditDataCache = { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
 let currentAuditTab = 'daily';
 let _auditSyncInterval = null;
+// Multi-Store Manager: one audit cache per managed store, rendered stacked. Empty for others.
+let auditDataCacheMS = {};   // { BAL: {daily,weekly}, MPL: {daily,weekly} }
 
 function _auditTab(tab) { return auditDataCache[tab] || { items: [], total: 0, completed: 0 }; }
 
@@ -11746,12 +13114,13 @@ function switchAuditTab(tab) {
     currentAuditTab = tab;
     document.getElementById('audit-tab-daily')?.classList.toggle('active', tab === 'daily');
     document.getElementById('audit-tab-weekly')?.classList.toggle('active', tab === 'weekly');
-    renderAudit();
+    if (_isMSMChecklist()) renderAuditMS(); else renderAudit();
 }
 
 async function loadAudit() {
     const panel = document.getElementById('auditSidePanel');
     if (!panel?.classList.contains('open')) return;   // only fetch when opening
+    if (_isMSMChecklist()) { await loadAuditMS(); return; }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     const container = document.getElementById('auditContent');
     if (container) container.innerHTML = '<div class="status-message">Syncing Audit...</div>';
@@ -11804,6 +13173,124 @@ function renderAudit() {
     updateAuditChip();
 }
 
+// ============================================================================
+// MULTI-STORE MANAGER — dual-store audit checklist (both stores stacked).
+// The audit checklist is shared per store; a MSM sees both managed stores in one
+// panel. ASMs (single store) and the DM overview are unaffected.
+// ============================================================================
+async function loadAuditMS() {
+    const container = document.getElementById('auditContent');
+    if (container) container.innerHTML = '<div class="status-message">Syncing Audit...</div>';
+    try {
+        const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+            fetch(`${STORE_AUDIT_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())
+        ));
+        auditDataCacheMS = {};
+        MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+            auditDataCacheMS[s] = results[i] || { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
+        });
+        renderAuditMS();
+    } catch (e) {
+        console.error('MSM Audit Fetch Error', e);
+        if (container) container.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load audit checklist.</div>';
+    }
+}
+
+function renderAuditMS() {
+    const container = document.getElementById('auditContent');
+    if (!container) return;
+
+    const label = document.getElementById('audit-week-label');
+    if (label) label.textContent = currentAuditTab === 'daily' ? 'Today · both stores' : 'This week · both stores';
+
+    let html = '';
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const data = (auditDataCacheMS[store] || {})[currentAuditTab] || { items: [], total: 0, completed: 0 };
+        const items = data.items || [];
+        const total = data.total || items.length;
+        const done  = (data.completed != null) ? data.completed : items.filter(i => i.checked).length;
+        const progTxt = total ? (done === total ? `✓ ${total}/${total}` : `${done}/${total}`) : '—';
+        const _ac = _msStoreAccent(store);
+        const _allDone = total && done === total;
+
+        html += `<div class="ms-store-section" style="border-left: 4px solid ${_ac.solid};">
+            <div class="ms-store-head" style="border-bottom-color: ${_ac.soft};">
+                <span class="ms-store-name" style="color: ${_ac.solid};">${escapeHtml(store)}</span>
+                <span class="ms-store-prog ${_allDone ? 'all-done' : ''}"${_allDone ? '' : ` style="background: ${_ac.soft}; color: ${_ac.solid};"`}>${progTxt}</span>
+            </div>`;
+
+        if (items.length === 0) {
+            html += `<div class="ms-empty">No ${currentAuditTab} audit items set up.</div>`;
+        } else {
+            let lastSection = null;
+            items.forEach(item => {
+                if (item.section !== lastSection) {
+                    html += `<div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: #94a3b8; margin: 12px 4px 6px;">${escapeHtml(item.section)}</div>`;
+                    lastSection = item.section;
+                }
+                const completedClass = item.checked ? 'completed' : '';
+                html += `
+                <div class="cl-item ${completedClass}">
+                    <input type="checkbox" class="cl-checkbox" ${item.checked ? 'checked' : ''} onchange="toggleAuditStateMS('${store}','${item.id}', this.checked)">
+                    <div class="cl-content-wrapper" style="justify-content: center;">
+                        <span class="cl-text">${escapeHtml(item.text)}</span>
+                    </div>
+                </div>`;
+            });
+        }
+        html += `</div>`;
+    });
+
+    container.innerHTML = html;
+    updateAuditChipMS();
+}
+
+function toggleAuditStateMS(store, id, isChecked) {
+    const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
+    const tab = currentAuditTab;
+    const data = (auditDataCacheMS[store] || {})[tab];
+    if (!data) return;
+
+    const item = (data.items || []).find(i => i.id === id);
+    if (item) item.checked = isChecked;
+    data.completed = (data.items || []).filter(i => i.checked).length;
+    renderAuditMS();
+
+    postWrite(STORE_AUDIT_URL, { action: 'toggle', id, checked: isChecked, store, user: userName, period: tab })
+        .catch(err => {
+            if (item) item.checked = !isChecked;
+            data.completed = (data.items || []).filter(i => i.checked).length;
+            renderAuditMS();
+            alert('Could not save that change: ' + err.message);
+        });
+}
+
+function updateAuditChipMS() {
+    const chip = document.getElementById('audit-progress-chip');
+    const btn = document.querySelector('.audit-nav-toggle');
+    if (!chip || !btn) return;
+
+    const segs = [];
+    let anyOutstanding = false, anyItems = false;
+    MULTISTORE_MANAGER_STORES.forEach(store => {
+        const daily = (auditDataCacheMS[store] || {}).daily || { items: [], total: 0, completed: 0 };
+        const total = daily.total || (daily.items || []).length;
+        if (!total) return;
+        anyItems = true;
+        const done = (daily.completed != null) ? daily.completed : (daily.items || []).filter(i => i.checked).length;
+        const ac = _msStoreAccent(store);
+        const label = done === total ? `${store} ✓` : `${store} ${done}/${total}`;
+        segs.push(`<span class="ms-chip-seg" style="background: ${ac.solid};">${label}</span>`);
+        if (done < total) anyOutstanding = true;
+    });
+
+    if (!anyItems) { chip.textContent = ''; chip.classList.remove('ms-chip'); }
+    else { chip.classList.add('ms-chip'); chip.innerHTML = segs.join(''); }
+    const panel = document.getElementById('auditSidePanel');
+    const isOpen = panel && panel.classList.contains('open');
+    btn.classList.toggle('cl-needs-attention', anyOutstanding && !isOpen);
+}
+
 async function toggleAuditState(id, isChecked) {
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     const userName = sessionStorage.getItem('speeksUserName') || 'Unknown';
@@ -11846,6 +13333,19 @@ function updateAuditChip() {
 }
 
 async function _prefetchAuditForChip() {
+    if (_isMSMChecklist()) {
+        try {
+            const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+                fetch(`${STORE_AUDIT_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())
+            ));
+            auditDataCacheMS = {};
+            MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+                auditDataCacheMS[s] = results[i] || { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
+            });
+            updateAuditChipMS();
+        } catch (_) {}
+        return;
+    }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     try {
         const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
@@ -11859,6 +13359,19 @@ function _startAuditSync() {
     _auditSyncInterval = setInterval(async () => {
         const panel = document.getElementById('auditSidePanel');
         if (!panel?.classList.contains('open')) return;
+        if (_isMSMChecklist()) {
+            try {
+                const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
+                    fetch(`${STORE_AUDIT_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())
+                ));
+                auditDataCacheMS = {};
+                MULTISTORE_MANAGER_STORES.forEach((s, i) => {
+                    auditDataCacheMS[s] = results[i] || { daily: { items: [], total: 0, completed: 0 }, weekly: { items: [], total: 0, completed: 0 } };
+                });
+                renderAuditMS();
+            } catch (_) {}
+            return;
+        }
         const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
         try {
             const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
@@ -11896,37 +13409,46 @@ window.toggleAuditPanel = function(event) {
 };
 
 // --- ROLE SELECTION LOGIC ---
-// Per-role capacity: most roles are 1-per-store, but a store can run TWO listers.
+// Per-role capacity: every role is 1-per-store. Extended lister roles (L3, L4, …
+// on big rosters) aren't listed here — the `|| 1` lookup below caps them too.
 const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1 };
 
 window.updateRoleLocks = function() {
-    // Count how many people currently hold each role.
-    const counts = {};
-    document.querySelectorAll('.role-dot.active').forEach(btn => {
-        const r = btn.innerText;
-        counts[r] = (counts[r] || 0) + 1;
-    });
+    // Role capacity is per STORE. Normally the page shows one store's dots, so the
+    // whole document is one scope; the MSM's stacked dual-store widget marks each
+    // store section with data-goals-scope so BAL's B1 doesn't lock MPL's B1.
+    const sections = document.querySelectorAll('[data-goals-scope]');
+    const scopes = sections.length ? Array.from(sections) : [document];
 
-    document.querySelectorAll('.role-dot').forEach(btn => {
-        if (btn.classList.contains('active')) {
-            // Active buttons always look fully visible.
-            if (!btn.hasAttribute('disabled')) { btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }
-            return;
-        }
-        const role = btn.innerText;
-        const cap = ROLE_CAP[role] || 1;
-        const isFull = (counts[role] || 0) >= cap;
-        if (isFull) {
-            // At capacity for this role. (L1 still allows a deliberate swap — see selectRole.)
-            btn.style.opacity = '0.3';
-            btn.style.cursor = 'not-allowed';
-            btn.dataset.roleTaken = 'true';
-        } else if (!btn.hasAttribute('disabled')) {
-            // Only restore if it isn't locked by the 10:30am cutoff.
-            btn.style.opacity = '1';
-            btn.style.cursor = 'pointer';
-            btn.dataset.roleTaken = 'false';
-        }
+    scopes.forEach(scope => {
+        // Count how many people currently hold each role within this scope.
+        const counts = {};
+        scope.querySelectorAll('.role-dot.active').forEach(btn => {
+            const r = btn.innerText;
+            counts[r] = (counts[r] || 0) + 1;
+        });
+
+        scope.querySelectorAll('.role-dot').forEach(btn => {
+            if (btn.classList.contains('active')) {
+                // Active buttons always look fully visible.
+                if (!btn.hasAttribute('disabled')) { btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }
+                return;
+            }
+            const role = btn.innerText;
+            const cap = ROLE_CAP[role] || 1;
+            const isFull = (counts[role] || 0) >= cap;
+            if (isFull) {
+                // At capacity for this role. (L1 still allows a deliberate swap — see selectRole.)
+                btn.style.opacity = '0.3';
+                btn.style.cursor = 'not-allowed';
+                btn.dataset.roleTaken = 'true';
+            } else if (!btn.hasAttribute('disabled')) {
+                // Only restore if it isn't locked by the 10:30am cutoff.
+                btn.style.opacity = '1';
+                btn.style.cursor = 'pointer';
+                btn.dataset.roleTaken = 'false';
+            }
+        });
     });
 };
 
@@ -11966,6 +13488,7 @@ window.selectRole = function(clickedBtn, emp, role) {
 
 // Recompute every visible auto-goal from the currently selected roles.
 window.recomputeGoalDisplays = function() {
+    if (_msGoalsActive()) return recomputeGoalDisplaysMS();
     if (!document.getElementById('goal-display-0') && !document.querySelector('.goal-auto-display')) return;
     let staffedCount = 0;
     goalsRoster.forEach((emp, idx) => {
@@ -12453,10 +13976,14 @@ function _boxOrderGetStore() {
     return BOX_STORE_NAMES[code] || code || 'Store';
 }
 
-// Resolves the destination email from the selected store, falling back to the
-// configured primary email (and finally a placeholder) when no store maps.
+// Resolves the destination email(s) from the selected store: the DB-managed
+// list first (Email Recipients tool, key box_order_<STORE>; multiple addresses
+// join with ';' — the Outlook-safe mailto separator), then the hardcoded
+// per-store fallback, the configured primary email, and finally a placeholder.
 function _boxOrderGetEmail() {
     const code = _boxOrderGetStoreCode();
+    const dbList = _recipientsFor(`box_order_${code}`, []);
+    if (dbList.length) return dbList.join(';');
     return BOX_ORDER_STORE_EMAILS[code] || _boxOrderEmails.primary || 'orders@placeholder.com';
 }
 
@@ -12489,6 +14016,7 @@ async function toggleBoxOrder() {
     closeAllModals();
     const modal = document.getElementById('boxOrderModal');
     if (!modal) return;
+    _fetchEmailLists(); // warm the recipient cache for the supplier email
     // DM/CEO get a "Manage Items" tab to edit the catalog; managers just see the order flow.
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     const isCorpRole = role === 'ceo' || role === 'district manager';
@@ -12978,27 +14506,30 @@ function copyBoxOrder(button) {
 // ============================================================
 // RECYCLE INVENTORY TOOL
 // ============================================================
-// Stores submit these when an item needs to be recycled out of inventory.
-// Mirrors the Box Order flow (two-page form → mailto + copy failsafe) but is a
-// free-text request that always routes to a single SPEEKS inbox.
+// Stores log items that need to be recycled out of inventory. Each submission
+// is saved to Supabase (recycle_requests) as a line item under the store — no
+// more emails — and the DM reconciles per-store recycled cost at month end
+// through the Recycle Requests oversight tool below.
 
-const RECYCLE_INV_EMAIL = 'ethan.kushnir@speekstechnology.com';
+const RECYCLE_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 
-// Corp roles (CEO/DM) pick a store; managers/ASM default to their own.
-function _recycleInvGetStoreCode() {
-    const selectorEl = document.getElementById('recycleInvStoreSelector');
-    const corpVisible = selectorEl && selectorEl.style.display !== 'none';
-    const sel = document.getElementById('recycleInvStoreSelect');
-    return (corpVisible && sel && sel.value) ? sel.value : (sessionStorage.getItem('speeksUserStore') || '');
+// Which store(s) this user can file/view recycle requests for.
+function _recycleStores() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (role === 'ceo' || role === 'district manager') return [...RECYCLE_STORES];
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        return [...MULTISTORE_MANAGER_STORES];
+    }
+    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
 
-function _recycleInvGetStore() {
-    const code = _recycleInvGetStoreCode();
-    return BOX_STORE_NAMES[code] || code || 'Store';
-}
+const _fmtRecycleMoney = v => (v == null || v === '') ? '—' :
+    '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// Keep money fields numeric: strip anything that isn't a digit or a decimal
-// point (so a typed "$" simply vanishes) and allow only one decimal point.
+// Keep money fields numeric as the user types: strip anything that isn't a
+// digit or a decimal point (a typed "$" or letter simply vanishes) and allow
+// only one decimal point.
 function recycleInvSanitizeMoney(input) {
     let v = (input.value || '').replace(/[^\d.]/g, '');
     const firstDot = v.indexOf('.');
@@ -13008,120 +14539,522 @@ function recycleInvSanitizeMoney(input) {
     input.value = v;
 }
 
-// Normalize a money field for the email: exactly one leading "$" plus thousands
-// separators ("12345" → "$12,345", "$25" → "$25", "1234.5" → "$1,234.5").
-// Decimals are kept only if typed, capped at two places. Empty stays empty.
-function _recycleInvFormatMoney(raw) {
-    const v = String(raw || '').replace(/[^\d.]/g, '');
-    if (!v) return '';
-    const firstDot = v.indexOf('.');
-    let intPart = firstDot === -1 ? v : v.slice(0, firstDot);
-    let decPart = firstDot === -1 ? '' : v.slice(firstDot + 1).replace(/\./g, '').slice(0, 2);
-    intPart = intPart.replace(/^0+(?=\d)/, '') || '0';   // trim leading zeros, keep one digit
-    const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    return decPart !== '' ? `$${grouped}.${decPart}` : `$${grouped}`;
+// Quantity is whole units only: digits, nothing else.
+function recycleInvSanitizeInt(input) {
+    input.value = (input.value || '').replace(/\D/g, '');
+}
+
+// cost is stored per unit; a line's recycled cost = cost × quantity.
+function _recycleLineTotal(r) {
+    if (r.cost == null || r.cost === '') return null;
+    return Number(r.cost) * (Number(r.quantity) || 1);
+}
+
+function _recycleMonthKey(dateStr) {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function _recycleMonthLabel(key) {
+    const [y, m] = String(key).split('-').map(Number);
+    if (!y || !m) return String(key);
+    return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+// Month dropdown options: every month present in `rows`, plus the current month.
+function _recycleMonthOptions(rows, selected) {
+    const keys = new Set(rows.map(r => _recycleMonthKey(r.created_at)).filter(Boolean));
+    keys.add(_recycleMonthKey(new Date()));
+    return [...keys].sort().reverse()
+        .map(k => `<option value="${k}" ${k === selected ? 'selected' : ''}>${_recycleMonthLabel(k)}</option>`).join('');
 }
 
 function toggleRecycleInventory() {
-    closeAllModals();
-    const modal = document.getElementById('recycleInvModal');
-    if (!modal) return;
-    // Reset to a blank page 1 every time.
+    toggleModal('recycleInvModal');
+    _fetchEmailLists(); // warm the recipient cache for the month-end report
+    _buildRecycleStorePicker();
     ['recycleInvSku', 'recycleInvDescription', 'recycleInvValue', 'recycleInvCost'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
     });
-    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    const isCorpRole = role === 'ceo' || role === 'district manager';
-    const selectorEl = document.getElementById('recycleInvStoreSelector');
-    if (selectorEl) {
-        selectorEl.style.display = isCorpRole ? '' : 'none';
-        const sel = document.getElementById('recycleInvStoreSelect');
-        if (sel) sel.value = '';
-    }
-    document.getElementById('recycleInvPage1').style.display   = '';
-    document.getElementById('recycleInvFooter1').style.display = '';
-    document.getElementById('recycleInvPage2').style.display   = 'none';
-    document.getElementById('recycleInvFooter2').style.display = 'none';
-    modal.classList.add('show');
-    lockAndBlurScreen();
+    const qty = document.getElementById('recycleInvQty');
+    if (qty) qty.value = '1';
+    switchRecycleTab('new');
 }
 
-// Validate page 1: every field is required; corp roles must also pick a store.
-function _recycleInvEnsureValid() {
-    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    const isCorpRole = role === 'ceo' || role === 'district manager';
+function switchRecycleTab(tab) {
+    const nb = document.getElementById('recycle-tab-new');
+    const vb = document.getElementById('recycle-tab-view');
+    if (nb) nb.classList.toggle('active', tab === 'new');
+    if (vb) vb.classList.toggle('active', tab === 'view');
+    const np = document.getElementById('recycle-panel-new');
+    const vp = document.getElementById('recycle-panel-view');
+    if (np) np.style.display = tab === 'new' ? 'block' : 'none';
+    if (vp) vp.style.display = tab === 'view' ? 'block' : 'none';
+    const sb = document.getElementById('submitRecycleBtn');
+    if (sb) sb.style.display = tab === 'new' ? '' : 'none';
+    if (tab === 'view') fetchMyRecycleRequests();
+}
+
+// MSM / corp roles get a store chooser; a single-store manager is locked to theirs.
+function _buildRecycleStorePicker() {
+    const row = document.getElementById('recycle-store-row');
     const sel = document.getElementById('recycleInvStoreSelect');
-    if (isCorpRole && (!sel || !sel.value)) {
-        alert('Please select a store first.');
-        return false;
+    if (!sel) return;
+    const stores = _recycleStores();
+    sel.innerHTML = stores.map(s => `<option value="${s}">${s}</option>`).join('');
+    const multi = stores.length > 1;
+    sel.disabled = !multi;
+    sel.style.opacity = multi ? '1' : '0.7';
+    sel.style.cursor = multi ? 'pointer' : 'not-allowed';
+    if (row) row.style.display = stores.length ? 'block' : 'none';
+    if (sel.options.length) sel.selectedIndex = 0;
+}
+
+async function submitRecycleRequest() {
+    const val = id => (document.getElementById(id) || {}).value;
+    const store = (val('recycleInvStoreSelect') || '').toUpperCase();
+    const sku = (val('recycleInvSku') || '').trim();
+    const desc = (val('recycleInvDescription') || '').trim();
+    const qty = Math.floor(Number(val('recycleInvQty')));
+    const valueRaw = val('recycleInvValue');
+    const costRaw = val('recycleInvCost');
+
+    if (!store) { alert('Please select a store.'); return; }
+    if (!sku) { alert('Please enter the SKU.'); return; }
+    if (!Number.isFinite(qty) || qty < 1) { alert('Please enter a quantity of at least 1.'); return; }
+    if (costRaw === '' || costRaw == null || !Number.isFinite(Number(costRaw))) {
+        alert('Please enter the item cost (per unit).'); return;
     }
-    const sku  = document.getElementById('recycleInvSku')?.value.trim();
-    const desc = document.getElementById('recycleInvDescription')?.value.trim();
-    const val  = document.getElementById('recycleInvValue')?.value.trim();
-    const cost = document.getElementById('recycleInvCost')?.value.trim();
-    if (!sku || !desc || !val || !cost) {
-        alert('Please fill in the SKU, description, value, and cost before continuing.');
-        return false;
+    if (!desc) { alert('Please describe the item and why it is being recycled.'); return; }
+
+    const btn = document.getElementById('submitRecycleBtn');
+    const old = btn ? btn.innerText : '';
+    if (btn) { btn.disabled = true; btn.innerText = 'Submitting…'; }
+    try {
+        const res = await fetch(RECYCLE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'submit_request', store, sku, description: desc, quantity: qty,
+                value: valueRaw === '' ? null : Number(valueRaw),
+                cost: Number(costRaw),
+                created_by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+        // Stay on the New Request tab with a blank form (store selection kept)
+        // so several items can be logged back-to-back; flash the button as the
+        // confirmation instead of jumping to My Requests.
+        ['recycleInvSku', 'recycleInvDescription', 'recycleInvValue', 'recycleInvCost'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+        const qtyEl = document.getElementById('recycleInvQty');
+        if (qtyEl) qtyEl.value = '1';
+        const skuEl = document.getElementById('recycleInvSku');
+        if (skuEl) skuEl.focus();
+        if (btn) {
+            btn.innerText = '✓ Submitted';
+            setTimeout(() => { if (btn.innerText === '✓ Submitted') btn.innerText = old; }, 1500);
+        }
+    } catch (e) {
+        alert('Could not submit the request: ' + e.message);
+        if (btn) btn.innerText = old;
+    } finally {
+        if (btn) btn.disabled = false;
     }
-    return true;
 }
 
-function recycleInvNextPage() {
-    if (!_recycleInvEnsureValid()) return;
-    recycleInvUpdatePreview();
-    document.getElementById('recycleInvPage1').style.display   = 'none';
-    document.getElementById('recycleInvFooter1').style.display = 'none';
-    document.getElementById('recycleInvPage2').style.display   = '';
-    document.getElementById('recycleInvFooter2').style.display = '';
+let _recycleMine = []; // last fetched requests, so filter changes re-render without refetching
+let _recycleReportPreviewing = false; // true = My Requests tab is showing the report email preview
+
+async function fetchMyRecycleRequests() {
+    const wrap = document.getElementById('recycle-table-wrap');
+    if (!wrap) return;
+    _recycleReportPreviewing = false; // fresh entry to the tab always starts on the table
+    const stores = _recycleStores();
+    if (!stores.length) {
+        wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">No store assigned to your account.</div>';
+        return;
+    }
+    wrap.innerHTML = '<div style="padding:24px; text-align:center; color:#94a3b8; font-weight:600;">Loading requests…</div>';
+    try {
+        const res = await fetch(`${RECYCLE_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        _recycleMine = json.data || [];
+        _buildRecycleViewFilters(stores);
+        renderMyRecycleTable();
+    } catch (e) {
+        wrap.innerHTML = '<div style="color:var(--red-alert); padding:24px; text-align:center; font-weight:700;">Error loading requests.</div>';
+    }
 }
 
-function recycleInvBackPage() {
-    document.getElementById('recycleInvPage2').style.display   = 'none';
-    document.getElementById('recycleInvFooter2').style.display = 'none';
-    document.getElementById('recycleInvPage1').style.display   = '';
-    document.getElementById('recycleInvFooter1').style.display = '';
+// Month filter always shows; the store filter only when the user spans multiple stores.
+function _buildRecycleViewFilters(stores) {
+    const mSel = document.getElementById('recycle-month-filter');
+    if (mSel) {
+        const current = mSel.value || _recycleMonthKey(new Date());
+        mSel.innerHTML = _recycleMonthOptions(_recycleMine, current);
+    }
+    const row = document.getElementById('recycle-view-filter-row');
+    const sel = document.getElementById('recycle-view-filter');
+    if (!row || !sel) return;
+    if (stores.length <= 1) { row.style.display = 'none'; return; }
+    row.style.display = 'block';
+    const current = sel.value;
+    sel.innerHTML = `<option value="">All stores</option>` +
+        stores.map(s => `<option value="${s}">${s}</option>`).join('');
+    if ([...sel.options].some(o => o.value === current)) sel.value = current;
 }
 
-// Build the request as plain text (real newlines) — shared by the email and the
-// copy failsafe so both always say exactly the same thing.
-function _recycleInvCompose() {
-    const store    = _recycleInvGetStore();
+// DM/CEO review lines right in the My Requests tab (same verdicts as the
+// oversight modal): against = truly recycled out of inventory, for = tool
+// for store use.
+function _recycleCanReview() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return role === 'ceo' || role === 'district manager';
+}
+
+function renderMyRecycleTable() {
+    const wrap = document.getElementById('recycle-table-wrap');
+    if (!wrap) return;
+    const stores = _recycleStores();
+    const multi = stores.length > 1;
+    const canReview = _recycleCanReview();
+    const month = (document.getElementById('recycle-month-filter') || {}).value || _recycleMonthKey(new Date());
+    const filterStore = (document.getElementById('recycle-view-filter') || {}).value || '';
+    let rows = _recycleMine.filter(r => _recycleMonthKey(r.created_at) === month);
+    if (filterStore) rows = rows.filter(r => (r.store || '').toUpperCase() === filterStore);
+    // Keep the Store column whenever the user spans multiple stores — even with
+    // a single store filtered — so columns don't jump around as filters change.
+    const showStore = multi;
+
+    if (!rows.length && !_recycleReportPreviewing) {
+        // Keep the report buttons visible for DM/CEO even on an empty month —
+        // a month with zero recycles can still be reported.
+        const emptyBtns = canReview
+            ? `<div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
+                ${RECYCLE_MAIL_TIP}
+                <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
+                <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email →</button>
+            </div>`
+            : '';
+        wrap.innerHTML = `${emptyBtns}<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No recycle requests for ${_recycleMonthLabel(month)}.</div>`;
+        return;
+    }
+    rows = [...rows].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    // Lines reviewed as "ignore" had their cost consolidated into another SKU
+    // (e.g. 5 broken units merged into 1 rebuilt item) — they were never really
+    // recycled out, so their cost is excluded from every total.
+    const ignoredTotal = rows.filter(r => r.review_verdict === 'ignore').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+    const total = rows.filter(r => r.review_verdict !== 'ignore').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+    const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+    const today = new Date().toDateString();
+
+    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
+    const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
+    // Report preview "page" (DM/CEO) — mirrors the Box Order flow: Send Email
+    // first shows the composed email, and the actual send happens from there.
+    if (canReview && _recycleReportPreviewing) {
+        const { subject, body } = _recycleReportCompose();
+        wrap.innerHTML = `
+            <div class="box-order-preview-label">Email Preview</div>
+            <div class="box-order-email-preview">${escapeHtml(`To: ${_recycleReportTo().join(', ')}\nSubject: ${subject}\n\n${body}`)}</div>
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
+                ${RECYCLE_MAIL_TIP}
+                <button class="btn-secondary" onclick="_recycleReportPreviewing=false; renderMyRecycleTable();">← Back</button>
+                <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
+                <button class="btn-primary" onclick="sendRecycleReport()">Send Email →</button>
+            </div>`;
+        return;
+    }
+
+    let html = canReview
+        ? `<div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
+            ${RECYCLE_MAIL_TIP}
+            <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
+            <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email →</button>
+        </div>`
+        : '';
+    html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+        <thead><tr>${canReview ? th('Review') : ''}${th('Date')}${showStore ? th('Store') : ''}${th('SKU')}${th('Description')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
+    rows.forEach(r => {
+        // Same-day typo-fix window: the store can pull a request back the day it
+        // was submitted; after that only a DM/CEO can remove it.
+        const canDelete = canReview || new Date(r.created_at).toDateString() === today;
+        const delBtn = canDelete
+            ? `<button onclick="deleteRecycleRequest('${r.id}')" title="${canReview ? 'Delete this line' : 'Delete (same-day only)'}" style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:8px; cursor:pointer; font-size:15px; line-height:1;">🗑</button>`
+            : '';
+        const verdict = ['for', 'against', 'ignore'].includes(r.review_verdict) ? r.review_verdict : '';
+        let reviewCell = '';
+        if (canReview) {
+            const vColor = verdict === 'against' ? '#dc2626' : verdict === 'for' ? '#059669' : verdict === 'ignore' ? '#475569' : '#94a3b8';
+            const vBorder = verdict === 'against' ? '#fecaca' : verdict === 'for' ? '#a7f3d0' : verdict === 'ignore' ? '#94a3b8' : '#cbd5e1';
+            reviewCell = td(`<select onchange="setRecycleReviewed('${r.id}', this.value)" title="${r.reviewed_at ? 'Reviewed' + (r.reviewed_by ? ' by ' + escapeHtml(r.reviewed_by) : '') : 'Against = out of inventory · For = store-use tool · Ignore = cost moved to another SKU, not counted'}" style="padding:5px 6px; border:1.5px solid ${vBorder}; border-radius:8px; font-size:11px; font-weight:800; color:${vColor}; background:#fff; cursor:pointer;">
+                <option value=""${verdict ? '' : ' selected'}>— Review —</option>
+                <option value="against"${verdict === 'against' ? ' selected' : ''}>Against Store</option>
+                <option value="for"${verdict === 'for' ? ' selected' : ''}>For Store</option>
+                <option value="ignore"${verdict === 'ignore' ? ' selected' : ''}>Ignore</option>
+            </select>`, 'text-align:center; white-space:nowrap;');
+        }
+        const rowBg = canReview && verdict ? `background:${verdict === 'against' ? '#fef2f2' : verdict === 'for' ? '#f0fdf4' : '#f1f5f9'};` : '';
+        html += `<tr style="${rowBg}">
+            ${reviewCell}
+            ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
+            ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`) : ''}
+            ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.sku || '')}</span>`)}
+            ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>`)}
+            ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;')}
+            ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}
+            ${td(verdict === 'ignore'
+                ? `<span style="text-decoration:line-through; color:#94a3b8;" title="Not counted — cost was moved into another SKU">${_fmtRecycleMoney(_recycleLineTotal(r))}</span>`
+                : _fmtRecycleMoney(_recycleLineTotal(r)), 'white-space:nowrap; font-weight:800;')}
+            ${td(`<span style="color:#94a3b8; white-space:nowrap;">${escapeHtml(r.created_by || '—')}</span>`)}
+            ${td(delBtn, 'text-align:right;')}
+        </tr>`;
+    });
+    const labelSpan = (canReview ? 1 : 0) + (showStore ? 1 : 0) + 5;
+    const footLabel = (t, c) => `<td colspan="${labelSpan}" style="padding:${c ? '4px' : '11px'} 10px; font-weight:800; font-size:${c ? '10.5px' : '12px'}; color:#94a3b8; text-transform:uppercase; letter-spacing:.4px;">${t}</td>`;
+    html += `</tbody><tfoot><tr>
+        ${footLabel(`Total recycled cost · ${_recycleMonthLabel(month)}`)}
+        <td style="padding:11px 10px; font-weight:900; font-size:14px; color:#dc2626; white-space:nowrap;">${_fmtRecycleMoney(total)}</td>
+        <td colspan="2"></td>
+    </tr>`;
+    if (canReview) {
+        const againstTotal = rows.filter(r => r.review_verdict === 'against').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+        const forTotal = rows.filter(r => r.review_verdict === 'for').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+        if (againstTotal || forTotal) {
+            html += `<tr>${footLabel('Against store (out of inventory)', true)}<td style="padding:4px 10px; font-weight:900; font-size:12px; color:#dc2626; white-space:nowrap;">${_fmtRecycleMoney(againstTotal)}</td><td colspan="2"></td></tr>
+            <tr>${footLabel('For store (store-use tools)', true)}<td style="padding:4px 10px 11px; font-weight:900; font-size:12px; color:#059669; white-space:nowrap;">${_fmtRecycleMoney(forTotal)}</td><td colspan="2"></td></tr>`;
+        }
+    }
+    if (ignoredTotal) {
+        // Shown to everyone so the month total visibly reconciles with the
+        // struck-through lines above it.
+        html += `<tr>${footLabel('Ignored (cost moved to another SKU)', true)}<td style="padding:4px 10px 11px; font-weight:900; font-size:12px; color:#94a3b8; white-space:nowrap; text-decoration:line-through;">${_fmtRecycleMoney(ignoredTotal)}</td><td colspan="2"></td></tr>`;
+    }
+    html += `</tfoot></table></div>`;
+    wrap.innerHTML = html;
+}
+
+async function deleteRecycleRequest(id) {
+    if (!confirm('Delete this recycle request?')) return;
+    try {
+        const res = await fetch(RECYCLE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_request', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        fetchMyRecycleRequests();
+    } catch (e) {
+        alert('Could not delete: ' + e.message);
+    }
+}
+
+// =========================================================
+//  MONTH-END RECYCLE REPORT EMAIL (DM/CEO) — one email at the start of the
+//  month covering every store's total recycled cost for the selected month,
+//  broken down by verdict. Mimics the Box Order tool: Send Email opens the
+//  machine's mail service with the report prefilled (nothing auto-sends, so
+//  the email goes out from the DM's own mailbox and replies come back to
+//  them); the Copy button is the failsafe for machines with no mail client.
+// =========================================================
+// =========================================================
+//  EMAIL RECIPIENTS (DB-driven, shared by every emailing tool)
+//  One cache for all recipient lists (email_recipients table via the
+//  email-recipients fn): the recycle month-end report, per-store box-order
+//  suppliers, and — server-side — the weekly SPEEKS report emails. Each tool
+//  keeps its hardcoded list as a fallback for when the fetch hasn't landed.
+//  DM/CEO manage the lists in the 📧 Email Recipients tool below.
+// =========================================================
+let _emailLists = null;
+
+async function _fetchEmailLists(force = false) {
+    if (_emailLists && !force) return _emailLists;
+    try {
+        const r = await fetch(`${EMAIL_RECIPIENTS_URL}?v=${Date.now()}`).then(x => x.json());
+        if (r && r.lists) _emailLists = r.lists;
+    } catch (e) { /* keep whatever we have — callers fall back */ }
+    return _emailLists;
+}
+
+function _recipientsFor(key, fallback) {
+    const list = _emailLists && _emailLists[key];
+    return (list && list.length) ? list.slice() : (fallback || []).slice();
+}
+
+// ---- the DM/CEO management tool ----
+const EMAIL_LIST_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+const EMAIL_LIST_GROUPS = [
+    {
+        title: '♻️ Recycle Month-End Report',
+        desc: 'Who the month-end recycle report email is addressed to.',
+        lists: [{ key: 'recycle_report', label: 'Recipients' }],
+    },
+    {
+        title: '📦 Box Orders',
+        desc: 'Supplier address each store\'s box order email opens to.',
+        lists: EMAIL_LIST_STORES.map(s => ({ key: `box_order_${s}`, label: s })),
+    },
+    {
+        title: '📈 Weekly SPEEKS Reports',
+        desc: 'Monday morning performance emails (sent automatically).',
+        lists: [
+            { key: 'weekly_leadership', label: 'Leadership report' },
+            ...EMAIL_LIST_STORES.map(s => ({ key: `weekly_store_${s}`, label: `${s} manager report` })),
+        ],
+    },
+];
+
+async function openEmailRecipients() {
+    closeAllModals();
+    toggleModal('emailRecipientsModal');
+    const body = document.getElementById('emailRecipientsBody');
+    if (body) body.innerHTML = '<div class="status-message">Loading recipients…</div>';
+    await _fetchEmailLists(true);
+    renderEmailRecipients();
+}
+
+function renderEmailRecipients() {
+    const body = document.getElementById('emailRecipientsBody');
+    if (!body) return;
+    if (!_emailLists) {
+        body.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; text-align: center; padding: 20px 0;">Could not load recipients. Close and try again.</div>';
+        return;
+    }
+
+    let html = `<p style="font-size: 12.5px; color: #64748b; margin: 0 0 14px;">
+        These lists control where each tool's emails go. Changes apply immediately —
+        the recycle report and box orders read them when composing, and the weekly
+        report reads them on every send.</p>`;
+
+    EMAIL_LIST_GROUPS.forEach(group => {
+        html += `<div style="margin-bottom: 18px;">
+            <div style="font-size: 13.5px; font-weight: 900; color: var(--slate-charcoal);">${group.title}</div>
+            <div style="font-size: 11.5px; color: #94a3b8; font-weight: 600; margin: 1px 0 8px;">${group.desc}</div>`;
+        group.lists.forEach(l => {
+            const emails = _recipientsFor(l.key, []);
+            const chips = emails.length
+                ? emails.map(e => `<span style="display: inline-flex; align-items: center; gap: 6px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 999px; padding: 3px 6px 3px 10px; font-size: 12px; font-weight: 700; color: var(--slate-charcoal); margin: 0 6px 6px 0;">
+                        ${escapeHtml(e)}
+                        <button data-key="${escapeHtml(l.key)}" data-email="${escapeHtml(e)}" onclick="emailRecipientRemove(this.dataset.key, this.dataset.email)" title="Remove" style="border: none; background: #e2e8f0; color: #64748b; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 900; cursor: pointer; line-height: 1;">✕</button>
+                    </span>`).join('')
+                : '<span style="font-size: 12px; color: #94a3b8; font-weight: 600; margin-right: 6px;">None — the built-in default applies.</span>';
+            const inputId = `email-add-${l.key}`;
+            html += `<div style="border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;">
+                <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; color: #64748b; margin-bottom: 7px;">${escapeHtml(l.label)}</div>
+                <div>${chips}</div>
+                <div style="display: flex; gap: 6px; margin-top: 6px;">
+                    <input type="email" id="${inputId}" placeholder="name@company.com" style="flex: 1; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 10px; font-size: 12.5px;"
+                        onkeydown="if(event.key==='Enter'){event.preventDefault(); emailRecipientAdd('${l.key}', '${inputId}', this.nextElementSibling);}">
+                    <button class="btn-secondary" style="padding: 6px 14px; font-size: 12px;" onclick="emailRecipientAdd('${l.key}', '${inputId}', this)">+ Add</button>
+                </div>
+            </div>`;
+        });
+        html += `</div>`;
+    });
+    body.innerHTML = html;
+}
+
+async function _emailRecipientsPost(payload) {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const r = await fetch(EMAIL_RECIPIENTS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(payload),
+    });
+    return r.json();
+}
+
+async function emailRecipientAdd(listKey, inputId, btn) {
+    const input = document.getElementById(inputId);
+    const email = (input?.value || '').trim();
+    if (!email) return;
+    if (btn) btn.disabled = true;
+    const res = await _emailRecipientsPost({ action: 'add', list_key: listKey, email }).catch(() => null);
+    if (btn) btn.disabled = false;
+    if (res && res.success) { await _fetchEmailLists(true); renderEmailRecipients(); }
+    else alert((res && res.error) || 'Could not add — please try again.');
+}
+
+async function emailRecipientRemove(listKey, email) {
+    if (!confirm(`Remove ${email} from this list?`)) return;
+    const res = await _emailRecipientsPost({ action: 'remove', list_key: listKey, email }).catch(() => null);
+    if (res && res.success) { await _fetchEmailLists(true); renderEmailRecipients(); }
+    else alert((res && res.error) || 'Could not remove — please try again.');
+}
+
+// FALLBACK only — the live list comes from the email_recipients table (key
+// 'recycle_report'), editable in the DM's Email Recipients tool.
+const RECYCLE_REPORT_EMAILS = ['paul.kushnir@pikinvestments.com', 'dave.chaffin@pikinvestments.com'];
+function _recycleReportTo() { return _recipientsFor('recycle_report', RECYCLE_REPORT_EMAILS); }
+
+// Hover "i" (site-standard goals-info-i tooltip) explaining what Send Email
+// does and how to fix a machine where mailto: links open nothing.
+const RECYCLE_MAIL_TIP = `<span class="goals-info-i" style="align-self:center;" data-tip-title="Send Email opens your mail app" data-tip-desc="Clicking Send Email opens your computer's default email app with the report pre-filled — nothing sends until you hit Send there. If nothing opens: go to Windows Settings → Apps → Default apps → scroll to Choose defaults by link type → set MAILTO to Outlook (or your mail app). Or click 📋 Copy and paste the report into any email.">i</span>`;
+
+function _recycleReportCompose() {
+    const month = (document.getElementById('recycle-month-filter') || {}).value || _recycleMonthKey(new Date());
+    const monthLabel = _recycleMonthLabel(month);
+    const rows = _recycleMine.filter(r => _recycleMonthKey(r.created_at) === month);
     const userName = sessionStorage.getItem('speeksUserName') || '';
-    const sku  = document.getElementById('recycleInvSku')?.value.trim()         || '';
-    const desc = document.getElementById('recycleInvDescription')?.value.trim() || '';
-    const val  = _recycleInvFormatMoney(document.getElementById('recycleInvValue')?.value);
-    const cost = _recycleInvFormatMoney(document.getElementById('recycleInvCost')?.value);
-    const body =
-        `Hi,\n\nThe following item needs to be recycled out of inventory for ${store}:\n\n` +
-        `SKU: ${sku}\n` +
-        `Description: ${desc}\n` +
-        `Value: ${val}\n` +
-        `Cost: ${cost}\n\n` +
+    const sum = list => list.reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+
+    let unreviewed = 0, grandCounted = 0, grandAgainst = 0, grandFor = 0;
+    const sections = RECYCLE_STORES.map(s => {
+        const sRows = rows.filter(r => (r.store || '').toUpperCase() === s);
+        const name = BOX_STORE_NAMES[s] || s;
+        if (!sRows.length) return `${s} - ${name}\n  No recycle requests this month.`;
+        const counted = sum(sRows.filter(r => r.review_verdict !== 'ignore'));
+        const against = sum(sRows.filter(r => r.review_verdict === 'against'));
+        const forUse  = sum(sRows.filter(r => r.review_verdict === 'for'));
+        const ignored = sum(sRows.filter(r => r.review_verdict === 'ignore'));
+        unreviewed += sRows.filter(r => !r.reviewed_at).length;
+        grandCounted += counted; grandAgainst += against; grandFor += forUse;
+        let block = `${s} - ${name}\n  Total Recycled Cost: ${_fmtRecycleMoney(counted)}\n` +
+            `    - Recycled out of inventory (against the store): ${_fmtRecycleMoney(against)}\n` +
+            `    - Repurposed for store use: ${_fmtRecycleMoney(forUse)}`;
+        if (ignored) block += `\n    - Not counted (cost consolidated into another SKU): ${_fmtRecycleMoney(ignored)}`;
+        return block;
+    });
+
+    const warn = unreviewed
+        ? `\n\nNOTE: ${unreviewed} line item${unreviewed === 1 ? ' has' : 's have'} not been reviewed yet - ` +
+          `their cost is included in the store totals but not in the breakdowns.`
+        : '';
+    const body = `Hi,\n\nHere is the recycled inventory report for ${monthLabel}:\n\n` +
+        sections.join('\n\n') +
+        `\n\nAll Stores Combined: ${_fmtRecycleMoney(grandCounted)}\n` +
+        `    - Recycled out of inventory: ${_fmtRecycleMoney(grandAgainst)}\n` +
+        `    - Repurposed for store use: ${_fmtRecycleMoney(grandFor)}${warn}\n\n` +
         `Thank you,\n${userName}`;
-    return { email: RECYCLE_INV_EMAIL, subject: `${sku} - Recycle`, body };
+    return {
+        email: _recycleReportTo().join(','),
+        subject: `PayMore Recycle Report - ${monthLabel}`,
+        body,
+    };
 }
 
-function recycleInvUpdatePreview() {
-    const preview = document.getElementById('recycleInvEmailPreview');
-    if (!preview) return;
-    const { email, subject, body } = _recycleInvCompose();
-    preview.textContent = `To: ${email}\nSubject: ${subject}\n\n${body}`;
+// Open the machine's mail service with the report prefilled — same mechanism
+// as sendBoxOrder. Nothing sends until the DM hits send in their mail app.
+// Recipients are joined with ';' — Outlook rejects the whole mailto link when
+// multiple addresses are comma-separated (the RFC separator), so don't "fix"
+// this back to ','.
+function sendRecycleReport() {
+    const { subject, body } = _recycleReportCompose();
+    const to = _recycleReportTo().join(';');
+    window.location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
-function sendRecycleInventory() {
-    if (!_recycleInvEnsureValid()) return;
-    const { email, subject, body } = _recycleInvCompose();
-    window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-}
-
-// Failsafe for machines with no default mail client: copy the full request
-// (recipient, subject, body) to the clipboard to paste into any email.
-function copyRecycleInventory(button) {
-    if (!_recycleInvEnsureValid()) return;
-    const { email, subject, body } = _recycleInvCompose();
-    const text = `To: ${email}\nSubject: ${subject}\n\n${body}`;
-    navigator.clipboard.writeText(text).then(() => {
+// Same copy failsafe as the Box Order tool, same button flash. Copies just
+// the report body — recipient and subject get filled in by hand.
+function copyRecycleReport(button) {
+    const { body } = _recycleReportCompose();
+    navigator.clipboard.writeText(body).then(() => {
         const originalText = button.innerText;
         button.innerText = 'Copied!';
         button.style.background = '#d1fae5';
@@ -13133,5 +15066,627 @@ function copyRecycleInventory(button) {
             button.style.color = '';
             button.style.borderColor = '';
         }, 2000);
-    }).catch(() => alert('Could not copy automatically. Please select and copy the request manually.'));
+    }).catch(() => alert('Could not copy automatically. Please select and copy the report manually.'));
+}
+
+// Review / clear a line (DM/CEO, from the My Requests tab). verdict is
+// 'against' (truly recycled out of inventory), 'for' (tool for store use),
+// 'ignore' (cost consolidated into another SKU — excluded from totals) or
+// '' to clear the review. Updates the local cache and re-renders so the
+// scroll position and month stay put.
+async function setRecycleReviewed(id, verdict) {
+    const reviewed = ['for', 'against', 'ignore'].includes(verdict);
+    try {
+        const res = await fetch(RECYCLE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'set_reviewed', id, reviewed,
+                verdict: reviewed ? verdict : null,
+                reviewed_by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        const row = _recycleMine.find(r => r.id === id);
+        if (row) {
+            row.reviewed_at = reviewed ? new Date().toISOString() : null;
+            row.reviewed_by = reviewed ? (sessionStorage.getItem('speeksUserName') || null) : null;
+            row.review_verdict = reviewed ? verdict : null;
+        }
+        renderMyRecycleTable();
+    } catch (e) {
+        alert('Could not update: ' + e.message);
+        fetchMyRecycleRequests();
+    }
+}
+
+// ============================================================
+// FEATURE ACCESS (DM/CEO)
+// ============================================================
+// DB-driven show/hide overrides for SPEEKS Tools, hotbar links and dashboard
+// widgets — set per role or per user in the Feature Access tool, stored in
+// feature_overrides, and resolved as: user override > role override >
+// built-in default (the role-* classes in the HTML). Anything with a
+// data-feature attribute participates; to make a new element controllable,
+// add the attribute plus a FEATURE_CATALOG entry below (the catalog only
+// drives the settings UI — enforcement reads the DOM attributes).
+
+const FA_ROLES = [
+    { slug: 'ceo',               short: 'CEO', label: 'CEO' },
+    { slug: 'district-manager',  short: 'DM',  label: 'District Manager' },
+    { slug: 'owner-manager',     short: 'OM',  label: 'Owner (Manager)' },
+    { slug: 'manager',           short: 'MGR', label: 'Manager (incl. Multi-Store)' },
+    { slug: 'assistant-manager', short: 'ASM', label: 'Assistant Manager' },
+    { slug: 'employee',          short: 'EMP', label: 'Employee' },
+    { slug: 'training',          short: 'TRN', label: 'Training' },
+    { slug: 'tom',               short: 'TOM', label: 'TOM' },
+];
+
+const FEATURE_CATALOG = [
+    // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
+    { key: 'tool-claims-store',        label: 'Insurance Claims (store)',      tab: 'tools', group: '🛟 Claims & Refunds', def: ['manager', 'owner-manager'] },
+    { key: 'tool-claims-oversight',    label: 'Insurance Claims (oversight)',  tab: 'tools', group: '🛟 Claims & Refunds', def: ['district-manager', 'ceo'] },
+    { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: '📢 Content', def: ['district-manager', 'ceo', 'tom', 'owner-manager'] },
+    { key: 'tool-ticker',              label: 'Ticker Items',                  tab: 'tools', group: '📢 Content', def: ['district-manager'] },
+    { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: '📢 Content', def: ['district-manager'] },
+    { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: '🏪 Store Ops', def: ['district-manager', 'ceo'] },
+    { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: '🏪 Store Ops', def: ['district-manager'] },
+    { key: 'tool-variance-report',     label: 'Submit Variance Report',        tab: 'tools', group: '🏪 Store Ops', def: ['district-manager'] },
+    { key: 'tool-store-comment',       label: 'Send Store Comment',            tab: 'tools', group: '🏪 Store Ops', def: ['district-manager', 'ceo'] },
+    { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: '📦 Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
+    { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: '📦 Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
+    { key: 'tool-feature-access',      label: 'Feature Access (this tool)',    tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo'] },
+    { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo'] },
+    { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
+    { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
+    { key: 'tool-manage-policies',     label: 'Manage Policies',               tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
+    { key: 'tool-monthly-awards',      label: 'Monthly Awards',                tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
+    { key: 'tool-system-hotkeys',      label: 'System Hotkeys',                tab: 'tools', group: '⚙ System', def: ['district-manager'] },
+    // ---- Widgets & side panels (ASM inherits employee defaults; mirrored here) ----
+    { key: 'widget-goals-panel',       label: 'Goals & Initiatives (sidebar)', tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'employee', 'training', 'assistant-manager'] },
+    { key: 'widget-checklist-panel',   label: 'Checklist (sidebar)',           tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'district-manager', 'assistant-manager'] },
+    { key: 'widget-audit-panel',       label: 'Store Audit (sidebar)',         tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-scorecard-alerts',  label: 'Store Scorecard & Alerts row',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'widget-buying-selling',    label: 'Buying & Sales',                tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    { key: 'widget-emp-listing-goals', label: 'My Listing Goals (employee)',   tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'widget-listing-goals',     label: 'Listing Goals (manager)',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'widget-emp-weekly-kpis',   label: 'My Weekly KPIs (employee)',     tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'widget-variance-reports',  label: 'Live Variance Reports (manager)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    // ---- Hotbar links (index dashboard; keys generated from bar + label).
+    //      Store-bar links default to "all": the bar itself is store-scoped,
+    //      the link just inherits it. ----
+    { key: 'hb-ceo-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-store-passwords', label: 'Store Passwords', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-tom-folder', label: 'TOM Folder', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-paymore-google-drive', label: 'PayMore Google Drive', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-dm-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-store-passwords', label: 'Store Passwords', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-variance', label: 'Variance', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-dm-paymore-google-drive', label: 'PayMore Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
+    { key: 'hb-tom-tom-folder', label: 'TOM Folder', tab: 'hotbar', group: 'TOM Hotbar', def: ['tom'] },
+    { key: 'hb-tom-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'TOM Hotbar', def: ['tom'] },
+    { key: 'hb-tom-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'TOM Hotbar', def: ['tom'] },
+    { key: 'hb-res-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'Resources Hotbar', def: ['district-manager'] },
+    { key: 'hb-res-training', label: 'Training', tab: 'hotbar', group: 'Resources Hotbar', def: ['district-manager'] },
+    { key: 'hb-mgr-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
+    { key: 'hb-mgr-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
+    { key: 'hb-mgr-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
+    { key: 'hb-mgr-location-visits', label: 'Location Visits', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
+    { key: 'hb-asm-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
+    { key: 'hb-asm-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
+    { key: 'hb-asm-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
+    { key: 'hb-lee-passwords', label: 'Passwords', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-lee-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-lee-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-lee-pc-inventory', label: 'PC Inventory', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-lee-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-lee-training', label: 'Training', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
+    { key: 'hb-ovl-passwords', label: 'Passwords', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-ovl-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-ovl-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-ovl-pc-inventory', label: 'PC Inventory', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-ovl-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-ovl-training', label: 'Training', tab: 'hotbar', group: 'OVL Hotbar', def: 'all' },
+    { key: 'hb-wsp-passwords', label: 'Passwords', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
+    { key: 'hb-wsp-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
+    { key: 'hb-wsp-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
+    { key: 'hb-wsp-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
+    { key: 'hb-wsp-training', label: 'Training', tab: 'hotbar', group: 'WSP Hotbar', def: 'all' },
+    { key: 'hb-mpl-passwords', label: 'Passwords', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
+    { key: 'hb-mpl-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
+    { key: 'hb-mpl-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
+    { key: 'hb-mpl-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
+    { key: 'hb-mpl-training', label: 'Training', tab: 'hotbar', group: 'MPL Hotbar', def: 'all' },
+    { key: 'hb-bal-passwords', label: 'Passwords', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
+    { key: 'hb-bal-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
+    { key: 'hb-bal-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
+    { key: 'hb-bal-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
+    { key: 'hb-bal-training', label: 'Training', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
+];
+
+// ---- runtime override state ------------------------------------------------
+let _featureOv = { role: {}, user: {} };  // resolved lookup maps
+let _featureOvRaw = [];                    // raw rows (settings UI needs subjects)
+(function () {
+    try {
+        const cached = JSON.parse(localStorage.getItem('speeksFeatureOv') || 'null');
+        if (cached && cached.role && cached.user) _featureOv = cached;
+    } catch (e) { /* corrupt cache — defaults apply until the refresh lands */ }
+})();
+
+function _buildFeatureOvMaps(rows) {
+    const maps = { role: {}, user: {} };
+    (rows || []).forEach(r => {
+        const bucket = maps[r.subject_type];
+        if (!bucket) return;
+        (bucket[r.feature_key] = bucket[r.feature_key] || {})[String(r.subject).toLowerCase()] = !!r.enabled;
+    });
+    return maps;
+}
+
+function _featureOverrideFor(featureKey, userRoleClass, userName) {
+    // The Feature Access tool can never be hidden from a District Manager —
+    // it's the tool that undoes bad overrides (the backend blocks this too).
+    if (featureKey === 'tool-feature-access' && userRoleClass === 'role-district-manager') return null;
+    const byUser = _featureOv.user[featureKey];
+    const name = String(userName || '').trim().toLowerCase();
+    if (byUser && Object.prototype.hasOwnProperty.call(byUser, name)) return byUser[name];
+    const byRole = _featureOv.role[featureKey];
+    const roleSlug = String(userRoleClass || '').replace(/^role-/, '');
+    if (byRole && Object.prototype.hasOwnProperty.call(byRole, roleSlug)) return byRole[roleSlug];
+    return null;
+}
+
+// Overrides on plain (non role-gated) elements — e.g. individual hotbar links,
+// which normally just inherit their bar's visibility. Only "off" does work
+// here; "on" simply falls back to the inherited default.
+function _applyFeatureOverridesToPlainEls(userRoleClass, userName) {
+    document.querySelectorAll('[data-feature]').forEach(el => {
+        if (el.classList.contains('dynamic-module') || el.classList.contains('dynamic-module-flex') || el.classList.contains('dynamic-module-block')) return;
+        const ov = _featureOverrideFor(el.getAttribute('data-feature'), userRoleClass, userName);
+        if (ov === false) el.style.setProperty('display', 'none', 'important');
+        else el.style.removeProperty('display');
+    });
+}
+
+// Surface force-enabled hotbar links that live inside bars this user doesn't
+// see. Enabling EVERY link of a bar shows the real bar; enabling just some
+// appends those links to the user's main (first visible) hotbar — one
+// borrowed link never drags in a whole foreign hotbar. A standalone EXTRAS
+// bar is only created for users who have no visible hotbar to attach to.
+function _syncHotbarExtras(userRoleClass, userName) {
+    const stack = document.querySelector('.hotbars-stack');
+    if (!stack) return; // hotbars only exist on the dashboard
+    // rebuild from scratch on every apply
+    stack.querySelectorAll('.hotbar-extra-clone').forEach(c => c.remove());
+    const oldBar = document.getElementById('hotbarExtras');
+    if (oldBar) oldBar.remove();
+
+    const extras = []; // [{ a, barLabel }]
+    stack.querySelectorAll('.hotbar-wrapper').forEach(wrap => {
+        if (wrap.id === 'hotbarExtras') return;
+        const links = Array.from(wrap.querySelectorAll('.hotbar-btn[data-feature]'));
+        if (!links.length) return;
+        if (wrap.style.display !== 'none') return; // visible bars: the plain-els pass already handled their links
+        const enabled = links.filter(a => _featureOverrideFor(a.getAttribute('data-feature'), userRoleClass, userName) === true);
+        if (!enabled.length) return;
+        if (enabled.length === links.length) {
+            // the entire bar was granted → show it as itself
+            wrap.style.setProperty('display', 'flex', 'important');
+        } else {
+            const labelEl = wrap.querySelector('.hotbar-label');
+            const barLabel = labelEl ? String(labelEl.textContent || '').trim() : '';
+            enabled.forEach(a => extras.push({ a, barLabel }));
+        }
+    });
+    if (!extras.length) return;
+
+    // skip borrowed links whose URL is already visible in one of the user's bars
+    const visibleBars = Array.from(stack.querySelectorAll('.hotbar-wrapper'))
+        .filter(w => w.id !== 'hotbarExtras' && w.style.display !== 'none');
+    const visibleHrefs = new Set();
+    visibleBars.forEach(w => {
+        w.querySelectorAll('.hotbar-btn[data-feature]').forEach(a => {
+            if (a.style.display !== 'none') visibleHrefs.add(a.getAttribute('href'));
+        });
+    });
+    const fresh = extras.filter(e => !visibleHrefs.has(e.a.getAttribute('href')));
+    if (!fresh.length) return;
+
+    // Borrowed links from a DIFFERENT store's bar carry a small store badge
+    // (e.g. Nick at OVL borrowing WSP's Passwords sees "Passwords · WSP") so
+    // nobody opens another store's sheet thinking it's their own. Role-bar
+    // borrows (CEO/DM/TOM/MGR/ASM/Resources) are company links — no badge.
+    const STORE_BAR_LABELS = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    const userStore = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    const makeClone = ({ a, barLabel }) => {
+        const clone = a.cloneNode(true);
+        // the clone is display-only; the hidden original stays the canonical
+        // override target, so strip the key to avoid double-processing
+        clone.removeAttribute('data-feature');
+        clone.style.removeProperty('display');
+        clone.classList.add('hotbar-extra-clone');
+        const src = String(barLabel || '').toUpperCase();
+        if (STORE_BAR_LABELS.includes(src) && src !== userStore) {
+            const badge = document.createElement('span');
+            badge.className = 'hotbar-src-badge';
+            badge.textContent = src;
+            clone.appendChild(badge);
+        }
+        return clone;
+    };
+
+    // append to the user's main (first visible) hotbar
+    const host = visibleBars[0];
+    const hostLinks = host ? host.querySelector('.hotbar-links') : null;
+    if (hostLinks) {
+        fresh.forEach(e => hostLinks.appendChild(makeClone(e)));
+        return;
+    }
+
+    // no visible bar to attach to → standalone EXTRAS bar as a fallback
+    const div = document.createElement('div');
+    div.id = 'hotbarExtras';
+    div.className = 'hotbar-wrapper';
+    div.style.display = 'flex';
+    const inner = document.createElement('div');
+    inner.className = 'hotbar-container';
+    const label = document.createElement('span');
+    label.className = 'hotbar-label';
+    label.textContent = 'EXTRAS';
+    const linksDiv = document.createElement('div');
+    linksDiv.className = 'hotbar-links';
+    fresh.forEach(e => linksDiv.appendChild(makeClone(e)));
+    inner.appendChild(label);
+    inner.appendChild(linksDiv);
+    div.appendChild(inner);
+    stack.appendChild(div);
+}
+
+// Rebalance dashboard card rows where a Feature Access override hid a card
+// (marked data-fa-hidden in the module pass). Rows the overrides didn't touch
+// keep their designed layout — e.g. managers see two 33%-wide cards in the
+// main row by default, and that must not change. When an override DID remove
+// a card: 2 remaining cards split the row 50/50, a lone card sits centered at
+// half width, and a fully-emptied row disappears. The mobile media queries
+// use !important full-width rules, so phones stack cards exactly as before.
+function _rebalanceDashboardRows() {
+    document.querySelectorAll('.employee-dashboard-row, .top-alerts-row').forEach(row => {
+        const cards = Array.from(row.children).filter(c => c.classList && c.classList.contains('employee-widget-card'));
+        if (!cards.length) return;
+        // reset any previous rebalance before recomputing
+        cards.forEach(c => { c.style.removeProperty('flex'); c.style.removeProperty('max-width'); });
+        row.style.removeProperty('justify-content');
+        if (!cards.some(c => c.hasAttribute('data-fa-hidden'))) return;
+        const visible = cards.filter(c => c.style.display !== 'none');
+        if (!visible.length) { row.style.setProperty('display', 'none', 'important'); return; }
+        if (visible.length === 2) {
+            visible.forEach(c => {
+                c.style.setProperty('flex', '1 1 calc(50% - 15px)');
+                c.style.setProperty('max-width', 'calc(50% - 15px)');
+            });
+        } else if (visible.length === 1) {
+            visible[0].style.setProperty('flex', '0 1 50%');
+            visible[0].style.setProperty('max-width', '50%');
+            row.style.setProperty('justify-content', 'center');
+        }
+        // 3+ visible: the designed 33% layout already fits
+    });
+}
+
+// The SPEEKS Tools button/panel/groups follow whatever is actually visible
+// inside the panel, so overrides can add or remove tools for any role without
+// the static role-class unions drifting out of sync.
+function _syncToolsPanelChrome() {
+    const panel = document.getElementById('toolsSidePanel');
+    if (!panel) return;
+    let anyVisible = false;
+    panel.querySelectorAll('.tools-group').forEach(g => {
+        const vis = Array.from(g.querySelectorAll('.tools-item')).some(a => a.style.display !== 'none');
+        g.style.setProperty('display', vis ? 'block' : 'none', 'important');
+        if (vis) anyVisible = true;
+    });
+    panel.style.setProperty('display', anyVisible ? 'flex' : 'none', 'important');
+    const btn = document.getElementById('toolsNavBtn');
+    if (btn) btn.style.setProperty('display', anyVisible ? 'flex' : 'none', 'important');
+    if (!anyVisible && typeof _closeToolsPanel === 'function') _closeToolsPanel();
+}
+
+let _featureOvRefreshStarted = false;
+function _kickFeatureOverridesRefresh() {
+    if (_featureOvRefreshStarted) return;
+    _featureOvRefreshStarted = true;
+    fetch(`${FEATURE_ACCESS_URL}?v=${Date.now()}`).then(r => r.json()).then(json => {
+        if (!json || json.success === false) return;
+        _featureOvRaw = json.data || [];
+        const next = _buildFeatureOvMaps(_featureOvRaw);
+        const changed = JSON.stringify(next) !== JSON.stringify(_featureOv);
+        _featureOv = next;
+        localStorage.setItem('speeksFeatureOv', JSON.stringify(next));
+        if (changed) applyRoleBasedUI();
+    }).catch(() => {});
+}
+
+// ---- Feature Access settings modal ------------------------------------------
+let _faTab = 'tools';
+let _faUser = '';    // selected user (lowercased name) on the Per-User tab
+let _faUsers = [];   // [{name, role, store}] from the auth directory
+let _faFilter = '';
+
+function openFeatureAccess() {
+    toggleModal('featureAccessModal');
+    _faTab = 'tools';
+    _faFilter = '';
+    _faSyncTabButtons();
+    const body = document.getElementById('fa-body');
+    if (body) body.innerHTML = '<div class="status-message">Loading…</div>';
+    _faLoad();
+}
+
+async function _faLoad() {
+    try {
+        const [ovJson] = await Promise.all([
+            fetch(`${FEATURE_ACCESS_URL}?v=${Date.now()}`).then(r => r.json()),
+            _faLoadUsers(),
+        ]);
+        if (!ovJson || ovJson.success === false) throw new Error((ovJson && ovJson.error) || 'Load failed');
+        _featureOvRaw = ovJson.data || [];
+        _featureOv = _buildFeatureOvMaps(_featureOvRaw);
+        localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+        renderFaBody();
+        applyRoleBasedUI();
+    } catch (e) {
+        const body = document.getElementById('fa-body');
+        if (body) body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load feature settings.</div>';
+    }
+}
+
+async function _faLoadUsers() {
+    if (_faUsers.length) return _faUsers;
+    try {
+        let data = null;
+        try { data = JSON.parse(localStorage.getItem('speeksAuthCache') || 'null'); } catch (e) { /* refetch below */ }
+        if (!data || !Array.isArray(data.users)) {
+            const res = await fetch(`${AUTH_URL}?v=${Date.now()}`);
+            data = await res.json();
+        }
+        _faUsers = (data.users || []).filter(u => u && u.name)
+            .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    } catch (e) { _faUsers = []; }
+    return _faUsers;
+}
+
+function switchFaTab(tab) {
+    _faTab = tab;
+    _faSyncTabButtons();
+    renderFaBody();
+}
+
+function _faSyncTabButtons() {
+    ['tools', 'hotbar', 'widgets', 'user'].forEach(t => {
+        const b = document.getElementById('fa-tab-' + t);
+        if (b) b.classList.toggle('active', t === _faTab);
+    });
+}
+
+function _faDefaultFor(feat, roleSlug) {
+    return feat.def === 'all' ? true : feat.def.includes(roleSlug);
+}
+
+function _faRoleOverride(key, slug) {
+    const m = _featureOv.role[key];
+    return (m && Object.prototype.hasOwnProperty.call(m, slug)) ? m[slug] : null;
+}
+
+function _faUserOverride(key, name) {
+    const m = _featureOv.user[key];
+    return (m && Object.prototype.hasOwnProperty.call(m, name)) ? m[name] : null;
+}
+
+function renderFaBody() {
+    const body = document.getElementById('fa-body');
+    if (!body) return;
+    body.innerHTML = _faTab === 'user' ? _faUserTabHtml() : _faMatrixHtml(_faTab);
+}
+
+function _faMatrixHtml(tab) {
+    const feats = FEATURE_CATALOG.filter(f => f.tab === tab);
+    const hints = {
+        tools: 'Click a chip to force a tool on (✓) or off (✕) for that role — an amber ring means it\'s manually overridden; click again to flip it back (matching the default clears the override). Per-user exceptions on the Per-User tab beat these.',
+        hotbar: 'OFF always hides a link. Turning a link ON for a role/user that doesn\'t normally see its bar adds it to the end of their main hotbar — and if you enable every link of a bar, the whole bar shows up instead. Store-bar links (LEE…BAL) default to everyone in that store.',
+        widgets: 'Dashboard cards and sidebar panels. Same rules as tools: per-user exceptions beat these role settings.',
+    };
+    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:12px; line-height:1.5;">${hints[tab] || ''}</div>`;
+    const headerRow = `<div style="display:flex; align-items:center; gap:6px; padding:0 2px; margin-bottom:2px;">
+        <span style="flex:1;"></span>
+        ${FA_ROLES.map(r => `<span title="${r.label}" style="width:38px; text-align:center; font-size:9px; font-weight:800; color:#94a3b8; letter-spacing:.3px; flex-shrink:0;">${r.short}</span>`).join('')}
+    </div>`;
+    let lastGroup = '';
+    feats.forEach(f => {
+        if (f.group !== lastGroup) {
+            lastGroup = f.group;
+            html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:16px 2px 4px;">${f.group}</div>${headerRow}`;
+        }
+        html += `<div style="display:flex; align-items:center; gap:6px; padding:4px 2px; border-bottom:1px solid #f1f5f9;">
+            <span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${f.label}</span>
+            ${FA_ROLES.map(r => _faChipHtml(f, r)).join('')}
+        </div>`;
+    });
+    return html;
+}
+
+function _faChipHtml(f, role) {
+    const def = _faDefaultFor(f, role.slug);
+    const ovr = _faRoleOverride(f.key, role.slug);
+    const eff = ovr === null ? def : ovr;
+    const locked = f.key === 'tool-feature-access' && role.slug === 'district-manager';
+    const title = locked
+        ? 'Always on for District Managers (safety lock)'
+        : `${role.label}: ${eff ? 'visible' : 'hidden'}${ovr !== null ? ' (overridden)' : ' (default)'} — click to ${eff ? 'hide' : 'show'}`;
+    return `<button class="fa-chip ${eff ? 'fa-on' : 'fa-off'}${ovr !== null ? ' fa-ovr' : ''}"${locked ? ' disabled' : ''} onclick="faToggleRole('${f.key}', '${role.slug}')" title="${escapeHtml(title)}">${locked ? '🔒' : (eff ? '✓' : '✕')}</button>`;
+}
+
+async function faToggleRole(key, slug) {
+    const feat = FEATURE_CATALOG.find(f => f.key === key);
+    if (!feat) return;
+    const def = _faDefaultFor(feat, slug);
+    const cur = _faRoleOverride(key, slug);
+    const eff = cur === null ? def : cur;
+    const next = !eff;
+    const clearing = next === def; // back to default → remove the override row
+    const m = (_featureOv.role[key] = _featureOv.role[key] || {});
+    if (clearing) delete m[slug]; else m[slug] = next;
+    if (!Object.keys(m).length) delete _featureOv.role[key];
+    _featureOvRaw = _featureOvRaw.filter(r => !(r.subject_type === 'role' && r.feature_key === key && r.subject === slug));
+    if (!clearing) _featureOvRaw.push({ feature_key: key, subject_type: 'role', subject: slug, enabled: next });
+    localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+    renderFaBody();
+    applyRoleBasedUI(); // live-preview on this device
+    try {
+        const res = await fetch(FEATURE_ACCESS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'set_override', feature_key: key, subject_type: 'role', subject: slug,
+                enabled: clearing ? null : next,
+                updated_by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+    } catch (e) {
+        alert('Could not save: ' + e.message);
+        _faLoad(); // resync with the server's truth
+    }
+}
+
+function _faUserTabHtml() {
+    const ovCounts = {};
+    _featureOvRaw.filter(r => r.subject_type === 'user').forEach(r => {
+        const s = String(r.subject).toLowerCase();
+        ovCounts[s] = (ovCounts[s] || 0) + 1;
+    });
+    const names = _faUsers.map(u => u.name);
+    Object.keys(ovCounts).forEach(n => {
+        if (!names.some(x => x.toLowerCase() === n)) names.push(n); // keep orphaned overrides reachable
+    });
+    const opts = ['<option value="">Select a user…</option>'].concat(names.map(n => {
+        const low = n.toLowerCase();
+        const u = _faUsers.find(x => x.name.toLowerCase() === low);
+        const meta = u ? ` — ${u.role}${u.store ? ' · ' + u.store : ''}` : ' — (no longer in directory)';
+        const cnt = ovCounts[low] ? ` · ${ovCounts[low]} override${ovCounts[low] > 1 ? 's' : ''}` : '';
+        return `<option value="${escapeHtml(low)}" ${low === _faUser ? 'selected' : ''}>${escapeHtml(n + meta + cnt)}</option>`;
+    }));
+    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:12px; line-height:1.5;">
+        Per-user exceptions beat the role settings: force any tool, hotbar link or widget on or off for one person.
+        “Default” means the role rules decide.</div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
+        <select class="form-input-lg" style="flex:2; min-width:220px; margin-top:0;" onchange="_faUser=this.value; renderFaBody();">${opts.join('')}</select>
+        <input class="form-input-lg" style="flex:1; min-width:140px; margin-top:0;" placeholder="Filter features…" value="${escapeHtml(_faFilter)}" oninput="_faFilter=this.value; _faRenderUserRows();">
+    </div>`;
+    if (!_faUser) return html + '<div style="padding:20px; text-align:center; color:#94a3b8; font-weight:600;">Pick a user to manage their exceptions.</div>';
+    const cnt = ovCounts[_faUser] || 0;
+    if (cnt) {
+        html += `<div style="display:flex; justify-content:flex-end; margin-bottom:8px;">
+            <button class="btn-secondary" style="font-size:11.5px; padding:6px 12px;" onclick="faClearUser()">↺ Clear all ${cnt} override${cnt > 1 ? 's' : ''} for this user</button></div>`;
+    }
+    return html + `<div id="fa-user-rows">${_faUserRowsHtml()}</div>`;
+}
+
+function _faRenderUserRows() {
+    const wrap = document.getElementById('fa-user-rows');
+    if (wrap) wrap.innerHTML = _faUserRowsHtml();
+}
+
+function _faUserRowsHtml() {
+    const filter = _faFilter.trim().toLowerCase();
+    const u = _faUsers.find(x => x.name.toLowerCase() === _faUser);
+    // effective role slug (Multi-Store Manager logs in with role 'manager')
+    let roleSlug = u ? String(u.role || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-') : '';
+    if (roleSlug === 'multi-store-manager') roleSlug = 'manager';
+    let html = '', lastGroup = '';
+    FEATURE_CATALOG.forEach(f => {
+        if (filter && !(`${f.label} ${f.group}`).toLowerCase().includes(filter)) return;
+        if (f.group !== lastGroup) {
+            lastGroup = f.group;
+            html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:16px 2px 4px;">${f.group}</div>`;
+        }
+        const ovr = _faUserOverride(f.key, _faUser);
+        let inherited = null;
+        if (roleSlug) {
+            const roleOvr = _faRoleOverride(f.key, roleSlug);
+            inherited = roleOvr === null ? _faDefaultFor(f, roleSlug) : roleOvr;
+        }
+        const seg = (val, txt) => {
+            const active = (ovr === null && val === 'default') || (ovr === true && val === 'on') || (ovr === false && val === 'off');
+            const cls = active ? (val === 'on' ? ' fa-seg-active fa-seg-on' : (val === 'off' ? ' fa-seg-active fa-seg-off' : ' fa-seg-active')) : '';
+            return `<button class="fa-seg${cls}" onclick="faSetUser('${f.key}', '${val}')">${txt}</button>`;
+        };
+        html += `<div style="display:flex; align-items:center; gap:8px; padding:4px 2px; border-bottom:1px solid #f1f5f9;">
+            <span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${f.label}${inherited !== null ? `<span style="font-weight:600; color:#cbd5e1; font-size:11px;"> · role default: ${inherited ? 'visible' : 'hidden'}</span>` : ''}</span>
+            <div style="display:inline-flex; border:1.5px solid #e2e8f0; border-radius:8px; overflow:hidden; flex-shrink:0;">
+                ${seg('default', 'Default')}${seg('on', 'On')}${seg('off', 'Off')}
+            </div>
+        </div>`;
+    });
+    return html || '<div style="padding:16px; text-align:center; color:#94a3b8; font-weight:600;">No features match the filter.</div>';
+}
+
+async function faSetUser(key, val) {
+    if (!_faUser) return;
+    const enabled = val === 'default' ? null : (val === 'on');
+    const m = (_featureOv.user[key] = _featureOv.user[key] || {});
+    if (enabled === null) delete m[_faUser]; else m[_faUser] = enabled;
+    if (!Object.keys(m).length) delete _featureOv.user[key];
+    _featureOvRaw = _featureOvRaw.filter(r => !(r.subject_type === 'user' && r.feature_key === key && String(r.subject).toLowerCase() === _faUser));
+    if (enabled !== null) _featureOvRaw.push({ feature_key: key, subject_type: 'user', subject: _faUser, enabled });
+    localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+    renderFaBody();
+    applyRoleBasedUI();
+    try {
+        const res = await fetch(FEATURE_ACCESS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'set_override', feature_key: key, subject_type: 'user', subject: _faUser,
+                enabled,
+                updated_by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+    } catch (e) {
+        alert('Could not save: ' + e.message);
+        _faLoad();
+    }
+}
+
+async function faClearUser() {
+    if (!_faUser) return;
+    if (!confirm('Clear ALL feature overrides for this user? Their role settings will apply again.')) return;
+    Object.keys(_featureOv.user).forEach(k => {
+        delete _featureOv.user[k][_faUser];
+        if (!Object.keys(_featureOv.user[k]).length) delete _featureOv.user[k];
+    });
+    _featureOvRaw = _featureOvRaw.filter(r => !(r.subject_type === 'user' && String(r.subject).toLowerCase() === _faUser));
+    localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+    renderFaBody();
+    applyRoleBasedUI();
+    try {
+        const res = await fetch(FEATURE_ACCESS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'clear_user', subject: _faUser }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+    } catch (e) {
+        alert('Could not clear: ' + e.message);
+        _faLoad();
+    }
 }
