@@ -10432,10 +10432,15 @@ function onAuditNoteInput(sIdx) {
     _auditEntryNotes[_auSecTitle(sIdx)] = el ? el.value : '';
 }
 
+// Per-section photo cap. Photos land in the audit-photos bucket individually,
+// so this is just a sanity guard against accidental bulk-selects, not a
+// payload limit.
+const AUDIT_PHOTO_MAX = 20;
+
 function onAuditPhotoAdd(sIdx, input) {
     const title = _auSecTitle(sIdx);
     if (!_auditEntryPhotos[title]) _auditEntryPhotos[title] = [];
-    const MAX = 6;
+    const MAX = AUDIT_PHOTO_MAX;
     [...(input.files || [])].forEach(f => {
         if (!f.type || !f.type.startsWith('image/')) return;
         if (_auditEntryPhotos[title].length >= MAX) { return; }
@@ -10545,7 +10550,7 @@ function captureAuditPhoto(sIdx) {
     if (!video || !video.videoWidth) return;
     const title = _auSecTitle(sIdx);
     if (!_auditEntryPhotos[title]) _auditEntryPhotos[title] = [];
-    if (_auditEntryPhotos[title].length >= 6) { alert('Up to 6 photos per section.'); closeAuditCamera(); return; }
+    if (_auditEntryPhotos[title].length >= AUDIT_PHOTO_MAX) { alert(`Up to ${AUDIT_PHOTO_MAX} photos per section.`); closeAuditCamera(); return; }
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
@@ -10961,6 +10966,30 @@ function closeAuditBreakdown() {
     closeAllModals();
 }
 
+// Render a saved section note for display: lines beginning with -, * or •
+// become real bullet points; other lines keep their line breaks. Notes are
+// stored as the raw textarea text, so this is display-only — editing an
+// audit still shows (and saves) exactly what was typed.
+function _auditNoteHtml(note) {
+    const lines = String(note).split(/\r?\n/);
+    let html = '';
+    let bullets = [];
+    const flush = () => {
+        if (!bullets.length) return;
+        html += `<ul style="margin:2px 0; padding-left:18px;">${bullets.map(t => `<li style="margin:1px 0;">${escapeHtml(t)}</li>`).join('')}</ul>`;
+        bullets = [];
+    };
+    lines.forEach(raw => {
+        const line = raw.trim();
+        if (!line) { flush(); return; }
+        const m = line.match(/^[-*•]\s*(.*)$/);
+        if (m) bullets.push(m[1]);
+        else { flush(); html += `<div>${escapeHtml(line)}</div>`; }
+    });
+    flush();
+    return html;
+}
+
 function renderAuditBreakdown(store) {
     const body = document.getElementById('audit-breakdown-body');
     const title = document.getElementById('audit-breakdown-title');
@@ -11024,7 +11053,7 @@ function renderAuditBreakdown(store) {
         const secNote = (audit.notes && !Array.isArray(audit.notes)) ? audit.notes[sec.title] : null;
         const secPhotos = (audit.photos && !Array.isArray(audit.photos)) ? audit.photos[sec.title] : null;
         if (secNote && String(secNote).trim()) {
-            html += `<div style="margin-top:6px; background:#f8fafc; border:1px solid #e2e8f0; border-left:3px solid #94a3b8; border-radius:7px; padding:7px 10px; font-size:12px; color:var(--slate-charcoal); line-height:1.45;"><span style="font-weight:800; color:#64748b;">📝 </span>${escapeHtml(String(secNote))}</div>`;
+            html += `<div style="margin-top:6px; background:#f8fafc; border:1px solid #e2e8f0; border-left:3px solid #94a3b8; border-radius:7px; padding:7px 10px; font-size:12px; color:var(--slate-charcoal); line-height:1.45;"><div style="font-weight:800; color:#64748b; font-size:11px; margin-bottom:2px;">📝 Notes</div>${_auditNoteHtml(secNote)}</div>`;
         }
         if (Array.isArray(secPhotos) && secPhotos.length) {
             html += `<div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">` + secPhotos.map(p => {
