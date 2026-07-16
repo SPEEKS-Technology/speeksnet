@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260714d">
+  <link rel="stylesheet" href="styles.css?v=20260716c">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260714e" defer></script>
+  <script src="speeks.js?v=20260716d" defer></script>
 </head>
 
 <body class="preload">
@@ -108,9 +108,9 @@
         <span id="cl-progress-chip" class="cl-progress-chip"></span>
         <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
-    <button class="cl-nav-toggle audit-nav-toggle dynamic-module-flex role-manager role-owner-manager role-assistant-manager" data-feature="widget-audit-panel" onclick="toggleAuditPanel(event); loadAudit();" title="Store Audit">
+    <button class="cl-nav-toggle audit-nav-toggle dynamic-module-flex role-manager role-owner-manager role-assistant-manager" data-feature="widget-audit-panel" onclick="toggleAuditPanel(event); loadAudit();" title="Cleaning Checklist">
         <span style="font-size: 13px; line-height: 1;">🧹</span>
-        <span>Store Audit</span>
+        <span>Cleaning Checklist</span>
         <span id="audit-progress-chip" class="cl-progress-chip"></span>
         <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
@@ -829,7 +829,7 @@
           <div class="flex-col-gap-30">
               <div class="card district-master-panel district-kpi-panel">
                   <div class="district-kpi-header">
-                      <span class="district-kpi-title">Audit Readiness <span class="widget-date-display no-dash">All Stores</span></span>
+                      <span class="district-kpi-title">Cleaning Checklist <span class="widget-date-display no-dash">All Stores</span></span>
                       <div class="notif-tabs dm-audit-tabs" style="margin:0;">
                           <button id="dm-audit-tab-daily" class="tab-btn active" onclick="switchDmAuditTab('daily')">Daily</button>
                           <button id="dm-audit-tab-weekly" class="tab-btn" onclick="switchDmAuditTab('weekly')">Weekly</button>
@@ -1177,7 +1177,7 @@
 <div id="auditSidePanel" data-feature="widget-audit-panel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-assistant-manager">
     <div class="cl-panel-header">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <h3 style="margin: 0;">Store Audit Checklist</h3>
+            <h3 style="margin: 0;">Cleaning Checklist</h3>
             <button class="modal-close-btn" onclick="toggleAuditPanel(event)" style="width: 28px; height: 28px; font-size: 14px; background: #f1f5f9; color: #64748b;">✖</button>
         </div>
         <div class="notif-tabs">

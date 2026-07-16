@@ -9,14 +9,15 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260714d">
+  <link rel="stylesheet" href="styles.css?v=20260716c">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <!-- SheetJS: parses the DM's variance-report Excel upload client-side -->
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="speeks.js?v=20260714e" defer></script>
+  <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
+       Vendored locally — the CDN copy kept getting blocked on some networks. -->
+  <script src="xlsx.full.min.js?v=0.18.5"></script>
+  <script src="speeks.js?v=20260716d" defer></script>
 </head>
 <body class="preload">
 
@@ -98,9 +99,9 @@
         <span id="cl-progress-chip" class="cl-progress-chip"></span>
         <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
-    <button class="cl-nav-toggle audit-nav-toggle dynamic-module-flex role-manager role-owner-manager role-assistant-manager" data-feature="widget-audit-panel" onclick="toggleAuditPanel(event); loadAudit();" title="Store Audit">
+    <button class="cl-nav-toggle audit-nav-toggle dynamic-module-flex role-manager role-owner-manager role-assistant-manager" data-feature="widget-audit-panel" onclick="toggleAuditPanel(event); loadAudit();" title="Cleaning Checklist">
         <span style="font-size: 13px; line-height: 1;">🧹</span>
-        <span>Store Audit</span>
+        <span>Cleaning Checklist</span>
         <span id="audit-progress-chip" class="cl-progress-chip"></span>
         <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
@@ -631,7 +632,11 @@
                   <span id="vr-subtitle" style="font-size:11px;color:#888;font-weight:600;"></span>
               </div>
               <div class="align-center gap-8">
-                  <button id="vr-upload-btn" class="kpi-update-trigger-btn dynamic-module-flex role-district-manager" onclick="vrToggleUpload()" style="display:none;">⬆ Upload Report</button>
+                  <button id="vr-edit-btn" class="kpi-update-trigger-btn" style="display:none;" onclick="vrStartEdit()">✏️ Edit</button>
+                  <button id="vr-save-btn" class="kpi-save-section-btn" style="display:none;" onclick="vrSaveEdits(this)">Save</button>
+                  <button id="vr-edit-cancel-btn" class="kpi-cancel-btn" style="display:none;" onclick="vrCancelEdit()">Cancel</button>
+                  <button id="vr-cancel-upload-btn" class="vr-cancel-btn" onclick="vrCancelUpload()" style="display:none;">Cancel</button>
+                  <button id="vr-upload-btn" class="kpi-update-trigger-btn dynamic-module-flex role-district-manager" onclick="vrToggleUpload()" style="display:none;">Upload Report</button>
               </div>
           </div>
           <div class="weekly-kpi-scroll-area ws-scroll" id="vr-body">
@@ -752,7 +757,7 @@
 <div id="auditSidePanel" data-feature="widget-audit-panel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-assistant-manager">
     <div class="cl-panel-header">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <h3 style="margin: 0;">Store Audit Checklist</h3>
+            <h3 style="margin: 0;">Cleaning Checklist</h3>
             <button class="modal-close-btn" onclick="toggleAuditPanel(event)" style="width: 28px; height: 28px; font-size: 14px; background: #f1f5f9; color: #64748b;">✖</button>
         </div>
         <div class="notif-tabs">
