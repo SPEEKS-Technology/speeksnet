@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260714d">
+  <link rel="stylesheet" href="styles.css?v=20260716e">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260714e" defer></script>
+  <script src="speeks.js?v=20260717q" defer></script>
 </head>
 
 <body class="preload">
@@ -85,7 +85,7 @@
     <div class="greeting-stack">
         <h2 id="userGreeting">Welcome!</h2>
         <div class="version-signout-row">
-            <span class="version-tag">v2.2.1</span>
+            <span class="version-tag">v2.2.2</span>
             <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
         </div>
       </div>
@@ -108,9 +108,9 @@
         <span id="cl-progress-chip" class="cl-progress-chip"></span>
         <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
-    <button class="cl-nav-toggle audit-nav-toggle dynamic-module-flex role-manager role-owner-manager role-assistant-manager" data-feature="widget-audit-panel" onclick="toggleAuditPanel(event); loadAudit();" title="Store Audit">
+    <button class="cl-nav-toggle audit-nav-toggle dynamic-module-flex role-manager role-owner-manager role-assistant-manager" data-feature="widget-audit-panel" onclick="toggleAuditPanel(event); loadAudit();" title="Cleaning Checklist">
         <span style="font-size: 13px; line-height: 1;">🧹</span>
-        <span>Store Audit</span>
+        <span>Cleaning Checklist</span>
         <span id="audit-progress-chip" class="cl-progress-chip"></span>
         <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
@@ -528,7 +528,6 @@
             <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-store-manager-folder">📁 Store Manager Folder</a>
             <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-store-passwords">🔑 Store Passwords</a>
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-dm-sales-summary">📊 Sales Summary</a>
-            <a href="https://drive.google.com/drive/folders/12Fjxp44sY6T-o6OlrG6n_YtrHow4bE2f?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-variance">⚖️ Variance</a>
             <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-aging-inventory">⏳ Aging Inventory</a>
             <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>
             <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-paymore-google-drive">☁️ PayMore Google Drive</a> 
@@ -564,7 +563,6 @@
             <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-mgr-store-manager-folder">📁 Store Manager Folder</a>
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-mgr-sales-summary">📊 Sales Summary</a>
             <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-mgr-aging-inventory">⏳ Aging Inventory</a>
-            <a href="https://docs.google.com/spreadsheets/d/1ar3tabN-bUqkjWqgy25MCHzSup2jhiaAKaGxLwZTeJ8/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-mgr-location-visits">🚗 Location Visits</a>
           </div>
         </div>
       </div>
@@ -829,7 +827,7 @@
           <div class="flex-col-gap-30">
               <div class="card district-master-panel district-kpi-panel">
                   <div class="district-kpi-header">
-                      <span class="district-kpi-title">Audit Readiness <span class="widget-date-display no-dash">All Stores</span></span>
+                      <span class="district-kpi-title">Cleaning Checklist <span class="widget-date-display no-dash">All Stores</span></span>
                       <div class="notif-tabs dm-audit-tabs" style="margin:0;">
                           <button id="dm-audit-tab-daily" class="tab-btn active" onclick="switchDmAuditTab('daily')">Daily</button>
                           <button id="dm-audit-tab-weekly" class="tab-btn" onclick="switchDmAuditTab('weekly')">Weekly</button>
@@ -910,38 +908,6 @@
                   <div class="status-message">Syncing Data...</div>
               </div>
               <canvas id="mainKpiChart"></canvas>
-          </div>
-      </div>
-
-      <div class="card kpi-master-card district-master-panel employee-widget-card dynamic-module-flex role-manager role-owner-manager flex-col-card bottom-locked-card" data-feature="widget-variance-reports" style="margin-bottom: 0;">
-          <div class="district-kpi-header" style="border-bottom: none;">
-              <span class="district-kpi-title">Live Variance Reports <span id="variance-date-display" class="widget-date-display"></span></span>
-              <div class="vw-controls">
-                  <select id="vw-primary" class="kpi-select" onchange="renderVariance()">
-                      <option value="OVL">OVL</option>
-                      <option value="LEE">LEE</option>
-                      <option value="WSP">WSP</option>
-                      <option value="MPL">MPL</option>
-                      <option value="BAL">BAL</option>
-                  </select>
-                  <span class="vw-vs-text">vs</span>
-                  <select id="vw-compare" class="kpi-select" onchange="renderVariance()">
-                      <option value="NONE">None</option>
-                      <option value="OVL">OVL</option>
-                      <option value="LEE">LEE</option>
-                      <option value="WSP">WSP</option>
-                      <option value="MPL">MPL</option>
-                      <option value="BAL">BAL</option>
-                  </select>
-              </div>
-          </div>
-          
-          <div class="vw-dashboard" id="vw-dashboard-container">
-              <div class="status-message">Syncing Variance Data...</div>
-          </div>
-
-          <div class="vw-footer">
-              <a href="https://drive.google.com/drive/folders/12Fjxp44sY6T-o6OlrG6n_YtrHow4bE2f?usp=sharing" target="_blank" class="quick-link-pill vw-footer-btn">📁 Variance Replies</a>
           </div>
       </div>
 
@@ -1177,7 +1143,7 @@
 <div id="auditSidePanel" data-feature="widget-audit-panel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-assistant-manager">
     <div class="cl-panel-header">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <h3 style="margin: 0;">Store Audit Checklist</h3>
+            <h3 style="margin: 0;">Cleaning Checklist</h3>
             <button class="modal-close-btn" onclick="toggleAuditPanel(event)" style="width: 28px; height: 28px; font-size: 14px; background: #f1f5f9; color: #64748b;">✖</button>
         </div>
         <div class="notif-tabs">
@@ -1508,6 +1474,7 @@
             <button id="fa-tab-hotbar" class="tab-btn" onclick="switchFaTab('hotbar')">Hotbar Links</button>
             <button id="fa-tab-widgets" class="tab-btn" onclick="switchFaTab('widgets')">Widgets</button>
             <button id="fa-tab-user" class="tab-btn" onclick="switchFaTab('user')">Per-User</button>
+            <button id="fa-tab-coverage" class="tab-btn" onclick="switchFaTab('coverage')">Delegation</button>
         </div>
     </div>
     <div class="manage-content">

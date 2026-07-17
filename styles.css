@@ -3275,11 +3275,15 @@ body:not(.is-authenticated) .main-content {
 }
 
 .district-kpi-header, .master-card-header {
-    background: var(--slate-charcoal) !important; padding: 15px 20px !important; 
-    min-height: 75px !important; height: auto !important; box-sizing: border-box !important; 
-    display: flex !important; justify-content: space-between !important; align-items: center !important; 
-    flex-wrap: wrap !important; gap: 15px !important; border-top-left-radius: 16px !important; 
-    border-top-right-radius: 16px !important; border-bottom: none !important; margin: 0 !important;
+    background: var(--slate-charcoal) !important; padding: 15px 20px !important;
+    min-height: 75px !important; height: auto !important; box-sizing: border-box !important;
+    display: flex !important; justify-content: space-between !important; align-items: center !important;
+    flex-wrap: wrap !important; gap: 15px !important; border-top-left-radius: 16px !important;
+    border-top-right-radius: 16px !important; border-bottom: none !important;
+    /* Overlap the card's 1px border: a 16px inner radius can't nest inside a
+       16px outer radius + border, which left a white hairline peeking through
+       on the left/right edges of every dark header. */
+    margin: -1px -1px 0 !important;
 }
 
 .kpi-header-controls { 
@@ -5383,6 +5387,170 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 }
 .kpi-update-trigger-btn:hover { background: #4a7a2f; }
 
+/* Variance Replies upload button — polished pill (overrides shared trigger style) */
+#vr-upload-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 30px;
+    padding: 0 14px;
+    background: linear-gradient(180deg, #6b9d4a 0%, var(--sage-professional) 100%);
+    border: none;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    box-shadow: 0 2px 5px rgba(74, 122, 47, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+    transition: transform 0.12s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+#vr-upload-btn:hover {
+    background: linear-gradient(180deg, #6b9d4a 0%, var(--sage-professional) 100%);
+    filter: brightness(1.06);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(74, 122, 47, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+#vr-upload-btn:active {
+    transform: translateY(0);
+    box-shadow: 0 1px 3px rgba(74, 122, 47, 0.3);
+}
+
+/* Variance Replies upload panel — fields standardized to match site selects */
+.vr-up-field { display: flex; flex-direction: column; }
+.vr-up-label {
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #94a3b8;
+    margin-bottom: 5px;
+}
+.vr-up-input {
+    height: 34px;
+    padding: 0 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-family: 'Inter', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--slate-charcoal);
+    background: #fff;
+    box-sizing: border-box;
+    outline: none;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.vr-up-input:focus {
+    border-color: var(--sage-professional);
+    box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.1);
+}
+input.vr-up-input[type="file"] {
+    height: auto;
+    min-height: 34px;
+    padding: 6px 10px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+}
+
+/* Combined "From → To" date-range pill — two native pickers that read as one field */
+.vr-daterange {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 34px;
+    padding: 0 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    background: #fff;
+    box-sizing: border-box;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.vr-daterange:focus-within {
+    border-color: var(--sage-professional);
+    box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.1);
+}
+.vr-daterange-input {
+    border: none;
+    outline: none;
+    background: transparent;
+    padding: 0;
+    font-family: 'Inter', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--slate-charcoal);
+}
+.vr-daterange-arrow {
+    color: #94a3b8;
+    font-weight: 800;
+    font-size: 13px;
+    user-select: none;
+}
+
+/* Parsed-file chip — replaces the file input once a file is loaded */
+.vr-file-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    height: 34px;
+    padding: 0 6px 0 12px;
+    border: 1px solid #b5cba3;
+    border-radius: 8px;
+    background: #f6fbf2;
+    box-sizing: border-box;
+}
+.vr-file-chip span {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--slate-charcoal);
+    white-space: nowrap;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.vr-file-chip button {
+    border: none;
+    background: transparent;
+    color: #94a3b8;
+    font-size: 13px;
+    font-weight: 800;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 6px;
+    line-height: 1;
+}
+.vr-file-chip button:hover { background: #fee2e2; color: #dc2626; }
+
+/* Inline pulsing "new" dot for recycle requests — marks exactly what changed
+   (a whole line vs a specific note). Same ripple as the KPI due-dot. */
+.recycle-new-dot {
+    position: relative;
+    display: inline-block;
+    width: 10px; height: 10px;
+    margin: 0 6px 0 1px;
+    vertical-align: middle;
+    flex-shrink: 0;
+    pointer-events: none;
+}
+.recycle-new-dot::before,
+.recycle-new-dot::after {
+    content: ""; position: absolute; inset: 0;
+    border-radius: 50%; box-sizing: border-box;
+}
+.recycle-new-dot::before {
+    background: #dc2626;
+    transform-origin: center center;
+    animation: kpiDueRipple 1.8s ease-out infinite;
+}
+.recycle-new-dot::after {
+    background: #dc2626;
+    border: 2px solid #fff;
+    transform: translateZ(0);
+}
+@media (prefers-reduced-motion: reduce) {
+    .recycle-new-dot::before { animation: none; }
+}
+
 /* =========================================================
    KPI ENTRY MODAL
    ========================================================= */
@@ -5765,14 +5933,18 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .kpi-edit-section-btn:hover { background: #f9fafb; border-color: var(--sage-professional); }
 
 .kpi-save-section-btn {
-    height: 28px;
-    padding: 0 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 30px;
+    padding: 0 16px;
     background: var(--sage-professional);
     color: white;
-    border: none;
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: 800;
+    border: 1px solid var(--sage-professional);
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
     cursor: pointer;
     font-family: 'Inter', sans-serif;
     transition: background 0.12s;
@@ -5803,14 +5975,18 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .kpi-total-row td.kpi-cell-red,   .kpi-total-row:hover td.kpi-cell-red   { background: #fee2e2 !important; color: #c81e1e !important; }
 
 .kpi-cancel-btn {
-    height: 38px;
-    padding: 0 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 30px;
+    padding: 0 16px;
     background: white;
     color: #374151;
     border: 1px solid #d1d5db;
-    border-radius: 8px;
-    font-size: 13px;
+    border-radius: 7px;
+    font-size: 12px;
     font-weight: 700;
+    line-height: 1;
     cursor: pointer;
     font-family: 'Inter', sans-serif;
     transition: background 0.15s, border-color 0.15s;

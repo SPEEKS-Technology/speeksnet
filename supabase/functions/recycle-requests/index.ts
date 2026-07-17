@@ -62,18 +62,19 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true, data });
       }
 
-      // ---- DM month-end reconciliation: review a line (or clear the review).
-      //      Reviewing also classifies the line: "against" = truly recycled out
-      //      of inventory, "for" = recycled item was a tool for store use,
-      //      "ignore" = cost was consolidated into another SKU (excluded from
-      //      cost totals client-side). ----
+      // ---- DM review: approve/classify a line (or clear the review).
+      //      "against" = truly recycled out of inventory, "for" = recycled item
+      //      was a tool for store use, "ignore" = cost was consolidated into
+      //      another SKU (excluded from cost totals client-side), "denied" =
+      //      the DM rejected the request — do NOT recycle the item. Any verdict
+      //      other than "denied" reads as approved on the manager's side. ----
       if (action === "set_reviewed") {
         const id = String(body.id || "");
         if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
         const reviewed = !!body.reviewed;
-        const verdict = ["for", "against", "ignore"].includes(body.verdict) ? body.verdict : null;
+        const verdict = ["for", "against", "ignore", "denied"].includes(body.verdict) ? body.verdict : null;
         if (reviewed && !verdict) {
-          return jsonResponse({ success: false, error: "Verdict must be 'for', 'against' or 'ignore'" }, 400);
+          return jsonResponse({ success: false, error: "Verdict must be 'for', 'against', 'ignore' or 'denied'" }, 400);
         }
         const { error } = await supabase.from("recycle_requests")
           .update({
@@ -86,8 +87,110 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true });
       }
 
-      // ---- Delete a line (frontend gates who sees the button: the submitting
-      //      store same-day for typo fixes, DM/CEO any time) ----
+      // ---- DM note on a line (empty note clears it). The note timestamp also
+      //      drives the manager-side "new activity" alert. ----
+      if (action === "save_dm_note") {
+        const id = String(body.id || "");
+        if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
+        const note = body.note ? String(body.note).trim() : "";
+        const { error } = await supabase.from("recycle_requests")
+          .update({
+            dm_note: note || null,
+            dm_note_by: note ? (body.by ? String(body.by).trim() : null) : null,
+            dm_note_at: note ? new Date().toISOString() : null,
+          })
+          .eq("id", id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        return jsonResponse({ success: true });
+      }
+
+      // ---- Append a note to a line's back-and-forth thread (DM or manager).
+      //      Notes are never overwritten: each message is a thread entry. The
+      //      latest message per side is mirrored into dm_note*/mgr_reply* so
+      //      the alert logic (dm_note_at / mgr_reply_at) keeps working. ----
+      if (action === "add_note") {
+        const id = String(body.id || "");
+        const text = body.text ? String(body.text).trim() : "";
+        const role = body.role === "dm" ? "dm" : "mgr";
+        if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
+        if (!text) return jsonResponse({ success: false, error: "Empty note" }, 400);
+        const { data: row, error: selErr } = await supabase.from("recycle_requests")
+          .select("note_thread").eq("id", id).single();
+        if (selErr) return jsonResponse({ success: false, error: selErr.message }, 500);
+        const thread = Array.isArray(row?.note_thread) ? row.note_thread : [];
+        const at = new Date().toISOString();
+        const by = body.by ? String(body.by).trim() : null;
+        thread.push({ role, text, by, at });
+        const patch: Record<string, unknown> = { note_thread: thread };
+        if (role === "dm") { patch.dm_note = text; patch.dm_note_by = by; patch.dm_note_at = at; }
+        else { patch.mgr_reply = text; patch.mgr_reply_by = by; patch.mgr_reply_at = at; }
+        const { error } = await supabase.from("recycle_requests").update(patch).eq("id", id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        return jsonResponse({ success: true, entry: { role, text, by, at } });
+      }
+
+      // ---- Manager replies to the DM's note (empty reply clears it). The
+      //      reply timestamp drives the DM-side "manager replied" alert. ----
+      if (action === "save_mgr_reply") {
+        const id = String(body.id || "");
+        if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
+        const reply = body.reply ? String(body.reply).trim() : "";
+        const { error } = await supabase.from("recycle_requests")
+          .update({
+            mgr_reply: reply || null,
+            mgr_reply_by: reply ? (body.by ? String(body.by).trim() : null) : null,
+            mgr_reply_at: reply ? new Date().toISOString() : null,
+          })
+          .eq("id", id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        return jsonResponse({ success: true });
+      }
+
+      // ---- Viewer opened their requests: stamp the lines as seen so the
+      //      NEW dots / alerts stop for them. role 'dm' stamps the DM's side;
+      //      anything else stamps the manager's (backward compatible). ----
+      if (action === "mark_seen") {
+        const ids = Array.isArray(body.ids) ? body.ids.map((x: unknown) => String(x)).filter(Boolean) : [];
+        if (!ids.length) return jsonResponse({ success: true });
+        const patch = body.role === "dm"
+          ? { dm_seen_at: new Date().toISOString() }
+          : { manager_seen_at: new Date().toISOString() };
+        const { error } = await supabase.from("recycle_requests")
+          .update(patch)
+          .in("id", ids);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        return jsonResponse({ success: true });
+      }
+
+      // ---- Manager asks for a line to be removed. Nothing is deleted here —
+      //      the flag puts it in the DM/CEO approval queue (same model as the
+      //      insurance-claims delete requests). ----
+      if (action === "request_delete") {
+        const id = String(body.id || "");
+        if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
+        const { error } = await supabase.from("recycle_requests")
+          .update({
+            delete_requested_at: new Date().toISOString(),
+            delete_requested_by: body.requested_by ? String(body.requested_by).trim() : null,
+          })
+          .eq("id", id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        return jsonResponse({ success: true });
+      }
+
+      // ---- DM/CEO denies a pending delete request: keep the line, clear the flag. ----
+      if (action === "deny_delete") {
+        const id = String(body.id || "");
+        if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
+        const { error } = await supabase.from("recycle_requests")
+          .update({ delete_requested_at: null, delete_requested_by: null })
+          .eq("id", id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        return jsonResponse({ success: true });
+      }
+
+      // ---- Actually delete a line — DM/CEO only (frontend-gated): directly
+      //      via their trash button, or by approving a manager's request. ----
       if (action === "delete_request") {
         const id = String(body.id || "");
         if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
