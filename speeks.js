@@ -7807,6 +7807,11 @@ function applyRoleBasedUI() {
     // Feature overrides on plain (non role-gated) elements — e.g. individual
     // hotbar links, which normally just inherit their bar's visibility.
     _applyFeatureOverridesToPlainEls(userRoleClass, userName);
+    // Section nav links (Workspace, Operations) have no toggle of their own —
+    // they're derived: show whenever the user can see at least one sub-tab
+    // inside, so granting just one tab (e.g. Variance Replies) reveals the
+    // section with only that tab in it.
+    _applySectionNavVisibility(userRoleClass, userName);
     // Force-enabled hotbar links from bars this user doesn't normally see:
     // a fully-enabled bar shows up as itself; partial picks are collected into
     // a synthetic EXTRAS bar so one borrowed link never drags in a whole
@@ -15615,11 +15620,9 @@ const FEATURE_CATALOG = [
     { key: 'widget-listing-goals',     label: 'Listing Goals (manager)',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'widget-emp-weekly-kpis',   label: 'My Weekly KPIs (employee)',     tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
-    { key: 'nav-workspace',            label: 'Workspace (nav link)',          tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown (tab)',     tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-weekly-kpis',    label: 'Weekly KPIs (tab)',             tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies (tab)',        tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
-    { key: 'nav-operations',           label: 'Operations (nav link)',         tab: 'widgets', group: 'Operations', def: 'all' },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
@@ -15790,6 +15793,37 @@ function _featureOverrideFor(featureKey, userRoleClass, userName) {
     const roleSlug = String(userRoleClass || '').replace(/^role-/, '');
     if (byRole && Object.prototype.hasOwnProperty.call(byRole, roleSlug)) return byRole[roleSlug];
     return null;
+}
+
+// Effective visibility of a feature key for this user: an override wins, else
+// the catalog default for their role (mirroring enforcement, incl. the
+// ASM-inherits-employee rule). Used to derive section nav visibility.
+function _featureEffectiveVisible(featureKey, userRoleClass, userName) {
+    const ov = _featureOverrideFor(featureKey, userRoleClass, userName);
+    if (ov !== null) return ov;
+    const feat = FEATURE_CATALOG.find(f => f.key === featureKey);
+    if (!feat) return false;
+    if (feat.def === 'all') return true;
+    const slug = String(userRoleClass || '').replace(/^role-/, '');
+    if (feat.def.includes(slug)) return true;
+    if (slug === 'assistant-manager' && feat.def.includes('employee')) return true;
+    return false;
+}
+
+// Tabbed sections keyed by their nav-link href → the sub-tab feature keys they
+// contain. A section's nav link shows if ANY of its sub-tabs is visible.
+const _SECTION_TABS = {
+    'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies'],
+    'operations.html': ['widget-ops-callbacks'],
+};
+
+function _applySectionNavVisibility(userRoleClass, userName) {
+    Object.keys(_SECTION_TABS).forEach(href => {
+        const link = document.querySelector(`.nav-bar a.nav-link[href="${href}"]`);
+        if (!link) return;
+        const vis = _SECTION_TABS[href].some(k => _featureEffectiveVisible(k, userRoleClass, userName));
+        link.style.setProperty('display', vis ? 'flex' : 'none', 'important');
+    });
 }
 
 // Overrides on plain (non role-gated) elements — e.g. individual hotbar links,
