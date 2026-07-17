@@ -16351,21 +16351,13 @@ function renderVarianceReplies() {
             ${showGmCol ? td((() => {
                 // Once the DM has responded to an explanation it locks — the
                 // conversation moved on, rewriting history would orphan replies.
-                const gmLocked = !!it.dm_note;
-                let cell = _vrNoteCell(it, 'gm_note', canGm && _vrEditing && !gmLocked, 'Why did this sell so far under projection?');
-                if (canGm && _vrEditing && gmLocked && it.gm_note) {
-                    cell += `<div style="margin-top:3px; font-size:9.5px; font-weight:700; color:#94a3b8;">🔒 Locked — the DM responded to this</div>`;
-                }
-                return cell;
+                return _vrNoteCell(it, 'gm_note', canGm && _vrEditing && !it.dm_note, 'Why did this sell so far under projection?');
             })(), (showDmCol || showReplyCol ? '' : 'width:45%;') + (missedGm ? ' background:#fee2e2;' : '')) : ''}
             ${showDmCol ? td((() => {
                 // Same lock the other way: a DM note the manager already
                 // replied to can't be edited out from under the reply.
                 const dmEditing = canDm && dmNotesOpen && _vrEditing && !!it.gm_note && !it.mgr_reply;
                 let cell = _vrNoteCell(it, 'dm_note', dmEditing, 'Advice or a question for the manager…');
-                if (canDm && dmNotesOpen && _vrEditing && it.mgr_reply && it.dm_note) {
-                    cell += `<div style="margin-top:3px; font-size:9.5px; font-weight:700; color:#94a3b8;">🔒 Locked — the manager replied to this</div>`;
-                }
                 // Read-only views get a chip that says whether this note wants
                 // an answer or is FYI-only — that's how the manager tells what
                 // to respond to vs what's just for them to read.
