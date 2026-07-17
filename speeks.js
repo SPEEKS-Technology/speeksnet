@@ -15623,6 +15623,7 @@ const FEATURE_CATALOG = [
     { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown (tab)',     tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-weekly-kpis',    label: 'Weekly KPIs (tab)',             tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies (tab)',        tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
+    { key: 'cap-variance-dm',          label: 'Variance Replies (DM)',         tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
@@ -16161,16 +16162,17 @@ async function faToggleRole(key, slug) {
 // on/off — the "End coverage" buttons revoke. Nothing expires on its own.
 const _FA_COVER_ROLES = new Set(['manager', 'owner (manager)', 'owner manager', 'multi-store manager']);
 
-// Features offered for delegation: the DM-side ones a manager doesn't already
-// have (so no point listing regular Insurance Claims / Box Order / Recycle,
-// which managers get by default), never the Feature Access tool itself. Covers
-// SPEEKS Tools plus DM-only Workspace/Operations sub-tabs (so a DM-special
-// version of one of those is lendable too).
+// Features offered for delegation: every DM-side feature a manager doesn't
+// already have — SPEEKS Tools + widgets/tabs (any group), minus the Feature
+// Access tool itself. Because it's built off _faCatalog() (curated + live DOM +
+// other-page scan), any tool/tab/group we add later shows up here automatically,
+// the same way the main Feature Access tabs self-update. Regular tools managers
+// already have (Insurance Claims store / Box Order / Recycle) are filtered out.
 function _faCoverageTools() {
     return _faCatalog().filter(f =>
         f.key !== 'tool-feature-access'
-        && f.def !== 'all' && !f.def.includes('manager')
-        && (f.tab === 'tools' || (f.tab === 'widgets' && ['Workspace', 'Operations'].includes(f.group))));
+        && (f.tab === 'tools' || f.tab === 'widgets')
+        && f.def !== 'all' && !f.def.includes('manager'));
 }
 function _faCoverageDefaultChecked() {
     return new Set(); // always start with everything unchecked
@@ -16454,8 +16456,19 @@ async function faClearUser() {
 const _VR_MANAGER_ROLES = new Set(['manager', 'owner (manager)', 'owner manager']);
 
 function _vrRole() { return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(); }
-function _vrIsDM() { return _vrRole() === 'district manager'; }
-function _vrIsManager() { return _VR_MANAGER_ROLES.has(_vrRole()); }
+// A manager can be delegated the DM side of Variance Replies (Feature Access →
+// Delegation → "Variance Replies (DM)"), which flips them to the DM experience
+// here: store dropdown across all 5 stores, upload panel, DM notes, DM popups.
+function _vrHasDmDelegation() {
+    if (typeof _featureOverrideFor !== 'function') return false;
+    const roleClass = 'role-' + _vrRole().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+    const name = sessionStorage.getItem('speeksUserName') || '';
+    return _featureOverrideFor('cap-variance-dm', roleClass, name) === true;
+}
+function _vrIsDM() { return _vrRole() === 'district manager' || _vrHasDmDelegation(); }
+// A delegated manager wears the DM hat here, not their own GM hat, so the two
+// stay mutually exclusive and the render logic doesn't get both at once.
+function _vrIsManager() { return _VR_MANAGER_ROLES.has(_vrRole()) && !_vrHasDmDelegation(); }
 
 // Stores whose periods the tab loads: the DM gets every store at once (they
 // pick a date range first, then flip between stores within it); an MSM sees
