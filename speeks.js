@@ -16710,6 +16710,23 @@ function _vrMaybePopup() {
     for (const p of _vrMyPeriodsCache) {
         const unanswered = p.items - p.answered;
         const due = new Date(p.manager_due_at).getTime();
+        // 0) a report was just uploaded — announce it once per period so the
+        //    manager doesn't have to spot the pulsing dot on their own.
+        if (unanswered > 0) {
+            const upKey = `speeksVRUpSeen_${p.id}`;
+            if (!localStorage.getItem(upKey)) {
+                localStorage.setItem(upKey, '1');
+                // only announce fresh uploads — an old period surfacing on a new
+                // device gets swallowed silently (the due/overdue nudges cover it)
+                if (Date.now() - new Date(p.uploaded_at).getTime() < 7 * 86400000) {
+                    const dueTxt = p.manager_due_at
+                        ? ` by ${new Date(p.manager_due_at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}` : '';
+                    _vrRenderBubble('📊', 'New variance report uploaded',
+                        `${p.store}: a variance report for ${formatVarianceRange(p.date_from, p.date_to)} was uploaded — ${unanswered} line${unanswered > 1 ? 's need' : ' needs'} an explanation${dueTxt}.`);
+                    return;
+                }
+            }
+        }
         // 1) due tomorrow (last 24h before the deadline) and lines still open
         if (unanswered > 0 && now < due && due - now < 24 * 3600 * 1000) {
             const key = `speeksVRDueSeen_${p.id}_${today}`;
