@@ -15236,15 +15236,18 @@ function _recycleBubbleEl() {
 // Stack under the store comment and/or claim bubble when they're visible.
 function _positionRecycleAlert() {
     const b = document.getElementById('recycleAlertBubble');
-    if (!b) return;
-    let top = 116;
-    ['dailyMessageBubble', 'claimAlertBubble'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el && getComputedStyle(el).display !== 'none' && el.offsetHeight > 0) {
-            top = Math.max(top, el.getBoundingClientRect().bottom + 12);
-        }
-    });
-    b.style.top = top + 'px';
+    if (b) {
+        let top = 116;
+        ['dailyMessageBubble', 'claimAlertBubble'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el && getComputedStyle(el).display !== 'none' && el.offsetHeight > 0) {
+                top = Math.max(top, el.getBoundingClientRect().bottom + 12);
+            }
+        });
+        b.style.top = top + 'px';
+    }
+    // The variance bubble sits below this one — re-flow it whenever this moves.
+    if (typeof _positionVarianceAlert === 'function') _positionVarianceAlert();
 }
 
 function closeRecycleAlertBubble() {
@@ -16771,8 +16774,6 @@ async function checkVarianceDmReminders() {
         if (!json || json.success === false) return;
         const cutoff = Date.now() - 45 * 86400000;
         const periods = (json.data || []).filter(p => new Date(p.uploaded_at).getTime() > cutoff);
-        const bubble = document.getElementById('claimAlertBubble');
-        if (!bubble || bubble.style.display === 'flex') return; // next poll retries
         for (const p of periods) {
             if (!p.items) continue;
             if (!p.dm_notes_at) {
@@ -16808,11 +16809,8 @@ async function checkVarianceDmReminders() {
 let _vrDmRemindersStarted = false;
 
 function _vrMaybePopup() {
-    const bubble = document.getElementById('claimAlertBubble');
-    if (!bubble) return;
-    // never clobber a claim reminder / aging alert already on screen — the
-    // 10-minute poll will get another chance once it's dismissed
-    if (bubble.style.display === 'flex') return;
+    // Variance has its own bubble that stacks below the claim/store-comment
+    // ones, so no need to wait for the shared bubble to be free anymore.
     const now = Date.now();
     const today = new Date().toDateString();
     for (const p of _vrMyPeriodsCache) {
@@ -16884,25 +16882,67 @@ function _vrMaybePopup() {
 }
 
 // Same shared red bubble as the claim reminders, with a button into the tab.
+// Variance's own bubble — amber, created on demand next to the shared claim
+// bubble so it inherits the same header stacking context. Like the recycle
+// bubble, it stacks below whatever other bubbles are showing instead of
+// fighting them for the shared red one.
+function _vrBubbleEl() {
+    let b = document.getElementById('varianceAlertBubble');
+    if (b) return b;
+    const claim = document.getElementById('claimAlertBubble');
+    if (!claim || !claim.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'varianceAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #d97706, #92400e); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(120, 53, 15, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = `<span id="varianceAlertBubbleIcon" style="font-size:16px; flex-shrink:0; margin-top:2px;">📊</span>
+        <span id="varianceAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>
+        <button onclick="closeVarianceAlertBubble()" class="daily-bubble-close" title="Dismiss">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>`;
+    claim.parentElement.appendChild(b);
+    return b;
+}
+
+// Bottom of the stack: below the store comment, claim alert and recycle bubble.
+function _positionVarianceAlert() {
+    const b = document.getElementById('varianceAlertBubble');
+    if (!b) return;
+    let top = 116;
+    ['dailyMessageBubble', 'claimAlertBubble', 'recycleAlertBubble'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el && getComputedStyle(el).display !== 'none' && el.offsetHeight > 0) {
+            top = Math.max(top, el.getBoundingClientRect().bottom + 12);
+        }
+    });
+    b.style.top = top + 'px';
+}
+
+function closeVarianceAlertBubble() {
+    const b = document.getElementById('varianceAlertBubble');
+    if (b) b.style.display = 'none';
+}
+
 function _vrRenderBubble(icon, title, bodyText) {
-    const bubble = document.getElementById('claimAlertBubble');
-    const textEl = document.getElementById('claimAlertBubbleText');
-    const iconEl = document.getElementById('claimAlertBubbleIcon');
-    if (!bubble || !textEl) return;
-    _reminderBubbleActive = true; // keep the aging-claims check from overwriting it
-    if (iconEl) { iconEl.textContent = icon; iconEl.style.display = ''; }
+    const b = _vrBubbleEl();
+    if (!b) return;
+    const iconEl = document.getElementById('varianceAlertBubbleIcon');
+    const textEl = document.getElementById('varianceAlertBubbleText');
+    if (iconEl) iconEl.textContent = icon;
     textEl.style.display = 'flex';
     textEl.style.flexDirection = 'column';
     textEl.style.gap = '7px';
     textEl.innerHTML = `
         <div style="line-height:1.4;"><strong>${escapeHtml(title)}</strong></div>
         <div style="line-height:1.4; opacity:0.96;">${escapeHtml(bodyText)}</div>
-        <button onclick="closeClaimAlertBubble(); window.location.href='workspace.html#vreplies';"
+        <button onclick="closeVarianceAlertBubble(); window.location.href='workspace.html#vreplies';"
             style="align-self:flex-start; background:rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.5); color:#fff; font-weight:800; font-size:12px; border-radius:8px; padding:6px 12px; cursor:pointer;"
             onmouseover="this.style.background='rgba(255,255,255,0.3)';" onmouseout="this.style.background='rgba(255,255,255,0.18)';">Open Variance Replies</button>`;
-    bubble.style.display = 'flex';
-    _positionClaimAlert();
-    bubble.animate([
+    b.style.display = 'flex';
+    _positionVarianceAlert();
+    // Re-stack shortly after: the store comment fades in on its own 1.5s timer
+    // and the claim/recycle bubbles may land on later checks.
+    setTimeout(_positionVarianceAlert, 2200);
+    b.animate([
         { transform: 'scale(0.95) translateX(10px)', opacity: 0 },
         { transform: 'scale(1) translateX(0)', opacity: 1 }
     ], { duration: 400, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
