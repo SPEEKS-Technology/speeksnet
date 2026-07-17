@@ -16391,21 +16391,28 @@ function _vrNoteCell(it, field, editable, placeholder) {
         return `<div style="min-width:190px; line-height:1.45; color:#334155;">${txt}${caption}</div>`;
     }
     const draft = _vrDrafts[it.id + '|' + field];
+    const shownText = draft !== undefined ? draft : val;
     // The DM flags each note as needing a manager reply or FYI-only — that's
-    // what decides whether the manager gets a reply box + nudges for it.
+    // what decides whether the manager gets a reply box + nudges for it. The
+    // flag only means something WITH a note, so the box stays disabled until
+    // there's text (a tick on an empty note used to be silently dropped).
     let rrBox = '';
     if (field === 'dm_note') {
         const rrDraft = _vrDrafts['rr|' + it.id];
         const checked = rrDraft !== undefined ? rrDraft : !!it.dm_reply_requested;
-        rrBox = `<label style="display:flex; align-items:center; gap:5px; margin-top:4px; font-size:10.5px; font-weight:700; color:#64748b; cursor:pointer; user-select:none;">
-            <input type="checkbox" data-vr-rr="${it.id}"${checked ? ' checked' : ''} style="width:13px; height:13px; cursor:pointer;"> Needs a reply from the manager
+        const hasText = String(shownText || '').trim() !== '';
+        rrBox = `<label title="${hasText ? 'The manager gets a reply box + reminders for this note' : 'Write the note first — then you can request a reply'}" style="display:flex; align-items:center; gap:5px; margin-top:4px; font-size:10.5px; font-weight:700; color:#64748b; cursor:pointer; user-select:none;${hasText ? '' : ' opacity:0.45;'}">
+            <input type="checkbox" data-vr-rr="${it.id}"${checked && hasText ? ' checked' : ''}${hasText ? '' : ' disabled'} style="width:13px; height:13px; cursor:pointer;"> Needs a reply from the manager
         </label>`;
     }
+    const rrSync = field === 'dm_note'
+        ? ` oninput="const c=this.parentElement.querySelector('input[data-vr-rr]'); if(c){const t=!!this.value.trim(); c.disabled=!t; if(!t)c.checked=false; c.parentElement.style.opacity=t?'':'0.45';}"`
+        : '';
     return `<div style="min-width:210px;">
         <textarea rows="2" placeholder="${escapeHtml(placeholder || '')}"
-            data-vr-item="${it.id}" data-vr-field="${field}"
+            data-vr-item="${it.id}" data-vr-field="${field}"${rrSync}
             style="width:100%; box-sizing:border-box; padding:7px 9px; border:1.5px solid #cbd5e1; border-radius:7px; font-size:12px; font-weight:500; font-family:inherit; line-height:1.4; resize:vertical; background:#fff; transition:border-color .3s;"
-        >${escapeHtml(draft !== undefined ? draft : val)}</textarea>${rrBox}${caption}</div>`;
+        >${escapeHtml(shownText)}</textarea>${rrBox}${caption}</div>`;
 }
 
 function vrStartEdit() { _vrEditing = true; _vrDrafts = {}; renderVarianceReplies(); }
