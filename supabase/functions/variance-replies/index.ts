@@ -27,6 +27,47 @@ function parseNum(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// The DM uploads the ≤-10% line items (this tool) and the team variance report
+// (the "Submit Variance Report" tool → variance_entries) at the same time for
+// the same store + date range. Pull that matching team-variance entry so it can
+// be shown as context above the reply lines. Prefers an exact store+range match
+// (both uploaded together); otherwise the store's closest entry within ~3 weeks.
+async function getTeamVariance(supabase: any, period: any) {
+  const { data: exact } = await supabase.from("variance_entries")
+    .select("id, store_pct, date_from, date_to")
+    .eq("store", period.store)
+    .eq("date_from", period.date_from)
+    .eq("date_to", period.date_to)
+    .order("created_at", { ascending: false })
+    .limit(1).maybeSingle();
+
+  let entry = exact;
+  if (!entry) {
+    const { data: near } = await supabase.from("variance_entries")
+      .select("id, store_pct, date_from, date_to")
+      .eq("store", period.store)
+      .order("date_to", { ascending: false });
+    const target = new Date(period.date_to).getTime();
+    const WINDOW = 21 * 86400000;
+    entry = (near || [])
+      .map((e: any) => ({ e, d: Math.abs(new Date(e.date_to).getTime() - target) }))
+      .filter((x: any) => x.d <= WINDOW)
+      .sort((a: any, b: any) => a.d - b.d)
+      .map((x: any) => x.e)[0] || null;
+  }
+  if (!entry) return null;
+
+  const { data: emps } = await supabase.from("variance_employee_entries")
+    .select("employee_name, variance_pct").eq("entry_id", entry.id).order("employee_name");
+  return {
+    total: entry.store_pct,
+    date_from: entry.date_from,
+    date_to: entry.date_to,
+    exact: !!exact, // false → dates differ from the reply period; show its own range
+    employees: (emps || []).map((e: any) => ({ name: e.employee_name, val: e.variance_pct })),
+  };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -150,7 +191,8 @@ Deno.serve(async (req: Request) => {
     const { data: items, error: iErr } = await supabase.from("variance_reply_items")
       .select("*").eq("period_id", periodId).order("sort_order", { ascending: true });
     if (iErr) return jsonResponse({ success: false, error: iErr.message }, 500);
-    return jsonResponse({ success: true, period, items: items || [] });
+    const teamVariance = await getTeamVariance(supabase, period);
+    return jsonResponse({ success: true, period, items: items || [], team_variance: teamVariance });
   }
 
   // [?stores=A,B] → period list (newest first) with reply-progress counts,
