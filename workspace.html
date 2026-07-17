@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260716c">
+  <link rel="stylesheet" href="styles.css?v=20260716e">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20260716d" defer></script>
+  <script src="speeks.js?v=20260716e" defer></script>
 </head>
 <body class="preload">
 
@@ -635,7 +635,7 @@
                   <button id="vr-edit-btn" class="kpi-update-trigger-btn" style="display:none;" onclick="vrStartEdit()">✏️ Edit</button>
                   <button id="vr-save-btn" class="kpi-save-section-btn" style="display:none;" onclick="vrSaveEdits(this)">Save</button>
                   <button id="vr-edit-cancel-btn" class="kpi-cancel-btn" style="display:none;" onclick="vrCancelEdit()">Cancel</button>
-                  <button id="vr-cancel-upload-btn" class="vr-cancel-btn" onclick="vrCancelUpload()" style="display:none;">Cancel</button>
+                  <button id="vr-cancel-upload-btn" class="kpi-cancel-btn" onclick="vrCancelUpload()" style="display:none;">Cancel</button>
                   <button id="vr-upload-btn" class="kpi-update-trigger-btn dynamic-module-flex role-district-manager" onclick="vrToggleUpload()" style="display:none;">Upload Report</button>
               </div>
           </div>

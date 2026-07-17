@@ -5551,26 +5551,6 @@ input.vr-up-input[type="file"] {
     .recycle-new-dot::before { animation: none; }
 }
 
-/* Cancel / clear the parsed upload — muted secondary button */
-.vr-cancel-btn {
-    height: 30px;
-    padding: 0 14px;
-    background: #fff;
-    color: #64748b;
-    border: 1px solid #cbd5e1;
-    border-radius: 7px;
-    font-family: 'Inter', sans-serif;
-    font-size: 12px;
-    font-weight: 700;
-    cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-}
-.vr-cancel-btn:hover {
-    background: #fef2f2;
-    color: #dc2626;
-    border-color: #fecaca;
-}
-
 /* =========================================================
    KPI ENTRY MODAL
    ========================================================= */
