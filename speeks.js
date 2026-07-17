@@ -16159,20 +16159,23 @@ async function faToggleRole(key, slug) {
 // the tools to lend them, Grant → writes user overrides (enabled=true) in bulk.
 // Their own tools stay (overrides only add), so they see both versions. Manual
 // on/off — the "End coverage" buttons revoke. Nothing expires on its own.
-const _FA_COVER_ROLES = new Set(['manager', 'owner (manager)', 'owner manager', 'multi-store manager', 'assistant manager']);
+const _FA_COVER_ROLES = new Set(['manager', 'owner (manager)', 'owner manager', 'multi-store manager']);
 
-// Tools offered for coverage: every SPEEKS Tool except the access tool itself
-// (never lend the keys to the kingdom). Remembered tick set lives in localStorage.
+// Tools offered for delegation: only the DM-side tools a manager doesn't already
+// have (so no point listing regular Insurance Claims / Box Order / Recycle, which
+// managers get by default), and never the Feature Access tool itself. Remembered
+// tick set lives in localStorage.
 function _faCoverageTools() {
-    return _faCatalog().filter(f => f.tab === 'tools' && f.key !== 'tool-feature-access');
+    return _faCatalog().filter(f => f.tab === 'tools'
+        && f.key !== 'tool-feature-access'
+        && f.def !== 'all' && !f.def.includes('manager'));
 }
 function _faCoverageDefaultChecked() {
-    // remembered set, else the DM-only tools (ones a manager doesn't get by default)
     try {
         const saved = JSON.parse(localStorage.getItem('speeksFaCoverageTools') || 'null');
         if (Array.isArray(saved) && saved.length) return new Set(saved);
-    } catch (e) { /* fall through to the sensible default */ }
-    return new Set(_faCoverageTools().filter(f => f.def !== 'all' && !f.def.includes('manager')).map(f => f.key));
+    } catch (e) { /* fall through */ }
+    return new Set(_faCoverageTools().map(f => f.key)); // first time: all DM tools ticked
 }
 
 // The users who currently hold a granted tool (enabled user override on a tool),
@@ -16193,10 +16196,10 @@ function _faCoverageHtml() {
     const labelFor = key => (_faCatalog().find(f => f.key === key) || {}).label || key;
 
     let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:14px; line-height:1.5;">
-        Going out of town? Tick the people covering and the tools to lend them, then <b>Grant coverage</b>. They keep their own tools and gain yours on top — so they see both. This stays on until you <b>End coverage</b> (nothing expires by itself).</div>`;
+        Hand your DM tools to a manager while you're away. Tick who's filling in and which tools to lend, then <b>Delegate tools</b>. They keep their own tools and gain yours on top — so they see both. This stays on until you <b>End delegation</b> (nothing expires by itself).</div>`;
 
     // 1) recipients
-    html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:4px 2px 6px;">Who's covering</div>`;
+    html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:4px 2px 6px;">Delegate to</div>`;
     if (!covering.length) {
         html += `<div style="font-size:12px; color:#94a3b8; padding:6px 2px;">No manager-level users found in the directory.</div>`;
     } else {
@@ -16217,12 +16220,12 @@ function _faCoverageHtml() {
             ${escapeHtml(f.label)}
         </label>`).join('') + `</div>`;
 
-    html += `<button class="btn-primary" style="font-size:13px; padding:9px 18px;" onclick="faGrantCoverage(this)">Grant coverage</button>`;
+    html += `<button class="btn-primary" style="font-size:13px; padding:9px 18px;" onclick="faGrantCoverage(this)">Delegate tools</button>`;
 
-    // 3) active coverage
+    // 3) active delegations
     const active = _faActiveCoverage();
     const users = Object.keys(active).sort();
-    html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:22px 2px 6px;">Active coverage</div>`;
+    html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:22px 2px 6px;">Active delegations</div>`;
     if (!users.length) {
         html += `<div style="font-size:12px; color:#94a3b8; padding:6px 2px;">No one currently has borrowed tools.</div>`;
     } else {
@@ -16232,7 +16235,7 @@ function _faCoverageHtml() {
             const chips = active[low].map(k => `<span style="display:inline-flex; align-items:center; gap:6px; background:#eef2ff; color:#3730a3; font-size:11.5px; font-weight:700; border-radius:7px; padding:3px 8px;">${escapeHtml(labelFor(k))}<button title="Remove this tool" onclick="faRevokeCoverage('${escapeHtml(low)}','${k}')" style="border:none; background:none; color:#6366f1; cursor:pointer; font-weight:800; font-size:13px; line-height:1;">×</button></span>`).join(' ');
             return `<div style="display:flex; align-items:flex-start; gap:10px; justify-content:space-between; padding:8px 2px; border-bottom:1px solid #f1f5f9;">
                 <div style="flex:1;"><div style="font-size:12.5px; font-weight:800; color:var(--slate-charcoal); margin-bottom:5px;">${escapeHtml(disp)}${u ? '' : ' <span style=\"font-weight:600;color:#cbd5e1;\">(not in directory)</span>'}</div><div style="display:flex; flex-wrap:wrap; gap:6px;">${chips}</div></div>
-                <button class="btn-secondary" style="height:28px; font-size:11.5px; padding:0 11px; border-radius:7px; flex-shrink:0;" onclick="faEndCoverage('${escapeHtml(low)}')">End coverage</button>
+                <button class="btn-secondary" style="height:28px; font-size:11.5px; padding:0 11px; border-radius:7px; flex-shrink:0;" onclick="faEndCoverage('${escapeHtml(low)}')">End delegation</button>
             </div>`;
         }).join('');
     }
@@ -16258,7 +16261,7 @@ async function faGrantCoverage(btn) {
     const body = document.getElementById('fa-body');
     const users = Array.from(body.querySelectorAll('.fa-cover-user:checked')).map(c => c.value);
     const tools = Array.from(body.querySelectorAll('.fa-cover-tool:checked')).map(c => c.value);
-    if (!users.length) { alert('Pick at least one person to cover for you.'); return; }
+    if (!users.length) { alert('Pick at least one manager to delegate to.'); return; }
     if (!tools.length) { alert('Tick at least one tool to lend.'); return; }
     localStorage.setItem('speeksFaCoverageTools', JSON.stringify(tools)); // remember the set
     const old = btn.textContent;
