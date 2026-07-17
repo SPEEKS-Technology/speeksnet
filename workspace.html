@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20260717f" defer></script>
+  <script src="speeks.js?v=20260717g" defer></script>
 </head>
 <body class="preload">
 
@@ -30,8 +30,8 @@
 
   <nav class="nav-bar">
     <a href="index.html" class="nav-link"><i>⚡</i><span>QuickPortal</span></a>
-    <a href="operations.html" class="nav-link"><i>🛠️</i><span>Operations</span></a>
-    <a href="workspace.html" class="nav-link active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager"><i>📈</i><span>Workspace</span></a>
+    <a href="operations.html" data-feature="nav-operations" class="nav-link"><i>🛠️</i><span>Operations</span></a>
+    <a href="workspace.html" data-feature="nav-workspace" class="nav-link active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager"><i>📈</i><span>Workspace</span></a>
     <a href="docs.html" class="nav-link"><i>📚</i><span>Processes & Policies</span></a>
     <a href="stats.html" class="nav-link"><i>🏆</i><span>Stats & Awards</span></a>
   </nav>
@@ -520,8 +520,8 @@
         <!-- TEMP HIDDEN: restore by uncommenting this button, moving `active` back to it (tab + #ws-pane-b2b), and re-adding 'b2b' to initWorkspace() in speeks.js
         <button class="ws-tab active dynamic-module-flex role-district-manager role-ceo role-tom role-manager role-owner-manager role-assistant-manager" id="ws-tab-b2b" onclick="switchWorkspaceTab('b2b')">🏢 B2B</button>
         -->
-        <button class="ws-tab active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" id="ws-tab-brief" onclick="switchWorkspaceTab('brief')">📋 Monthly Breakdown</button>
-        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" id="ws-tab-kpis" onclick="switchWorkspaceTab('kpis')">📊 Weekly KPI's</button>
+        <button class="ws-tab active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" data-feature="widget-ws-monthly-breakdown" id="ws-tab-brief" onclick="switchWorkspaceTab('brief')">📋 Monthly Breakdown</button>
+        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" data-feature="widget-ws-weekly-kpis" id="ws-tab-kpis" onclick="switchWorkspaceTab('kpis')">📊 Weekly KPI's</button>
         <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager" data-feature="widget-variance-replies" id="ws-tab-vreplies" onclick="switchWorkspaceTab('vreplies')">📉 Variance Replies</button>
       </div>
 

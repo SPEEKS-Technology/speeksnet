@@ -3413,7 +3413,16 @@ function initWorkspace() {
     _wsKpiLoaded   = false;
     const hash = (window.location.hash || '').replace('#', '');
     // TEMP: B2B tab hidden — restore by putting 'b2b' back in the list and as the default.
-    const initial = ['brief', 'kpis', 'vreplies'].includes(hash) ? hash : 'brief';
+    let initial = ['brief', 'kpis', 'vreplies'].includes(hash) ? hash : 'brief';
+    // A tab can be hidden by its role gate or a Feature Access override
+    // (applyRoleBasedUI already ran), so never land on one the user can't see —
+    // fall back to the first visible tab.
+    const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
+    if (!tabVisible('ws-tab-' + initial)) {
+        const firstVisible = Array.from(document.querySelectorAll('[id^="ws-tab-"]'))
+            .find(b => b.style.display !== 'none' && !b.hidden);
+        if (firstVisible) initial = firstVisible.id.replace('ws-tab-', '');
+    }
     switchWorkspaceTab(initial);
     applyKpiReminder();
 }
@@ -15606,7 +15615,12 @@ const FEATURE_CATALOG = [
     { key: 'widget-listing-goals',     label: 'Listing Goals (manager)',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'widget-emp-weekly-kpis',   label: 'My Weekly KPIs (employee)',     tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
-    { key: 'widget-variance-replies',  label: 'Variance Replies (workspace tab)', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
+    { key: 'nav-workspace',            label: 'Workspace (nav link)',          tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown (tab)',     tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-ws-weekly-kpis',    label: 'Weekly KPIs (tab)',             tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-variance-replies',  label: 'Variance Replies (tab)',        tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
+    { key: 'nav-operations',           label: 'Operations (nav link)',         tab: 'widgets', group: 'Operations', def: 'all' },
+    { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
     //      the link just inherits it. ----
@@ -15662,6 +15676,52 @@ const FEATURE_CATALOG = [
     { key: 'hb-bal-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
     { key: 'hb-bal-training', label: 'Training', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
 ];
+
+// The settings UI only lets you toggle a feature that's in the list above — but
+// enforcement is DOM-driven, so ANY element tagged data-feature is already
+// controllable in effect. To keep the two from drifting (and so a newly-tagged
+// element shows up in this tool automatically, without anyone editing the
+// catalog), the tool renders from _faCatalog(): the curated list above merged
+// with every data-feature found in the live DOM. Curated entries win (nice
+// label/group/defaults); anything else is auto-derived into an "Uncatalogued"
+// group so it's still togglable the moment it's added to the page.
+function _faCatalog() {
+    const byKey = {};
+    FEATURE_CATALOG.forEach(f => { byKey[f.key] = true; });
+    const merged = FEATURE_CATALOG.slice();
+    const discovered = [];
+    document.querySelectorAll('[data-feature]').forEach(el => {
+        const key = el.getAttribute('data-feature');
+        if (!key || byKey[key]) return;
+        byKey[key] = true; // dedupe repeats of the same key across the page
+        merged.push(_faDeriveEntry(key, el));
+        discovered.push(key);
+    });
+    if (discovered.length) {
+        console.warn('[Feature Access] auto-added un-catalogued feature(s) — add FEATURE_CATALOG entries for tidy labels/grouping:', discovered);
+    }
+    return merged;
+}
+
+// Best-effort metadata for a data-feature key that isn't in FEATURE_CATALOG:
+// bucket by key prefix, default visibility from the element's own role-* classes
+// (exactly what enforcement reads when there's no override), label from its text.
+function _faDeriveEntry(key, el) {
+    let tab = 'widgets';
+    if (key.startsWith('tool-')) tab = 'tools';
+    else if (key.startsWith('hb-')) tab = 'hotbar';
+    const roles = Array.from(el.classList)
+        .filter(c => c.startsWith('role-')).map(c => c.slice(5));
+    // ASM inherits the employee default the same way enforcement does
+    if (roles.includes('employee') && !roles.includes('assistant-manager')) roles.push('assistant-manager');
+    const def = roles.length ? roles : 'all';
+    let label = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!label || label.length > 44) {
+        label = key.replace(/^(tool|hb|widget|nav)-/, '').replace(/-/g, ' ')
+            .replace(/\b\w/g, c => c.toUpperCase());
+    }
+    return { key, label, tab, group: '✨ Uncatalogued', def, _auto: true };
+}
 
 // ---- runtime override state ------------------------------------------------
 let _featureOv = { role: {}, user: {} };  // resolved lookup maps
@@ -15949,7 +16009,7 @@ function renderFaBody() {
 }
 
 function _faMatrixHtml(tab) {
-    const feats = FEATURE_CATALOG.filter(f => f.tab === tab);
+    const feats = _faCatalog().filter(f => f.tab === tab);
     const hints = {
         tools: 'Click a chip to force a tool on (✓) or off (✕) for that role — an amber ring means it\'s manually overridden; click again to flip it back (matching the default clears the override). Per-user exceptions on the Per-User tab beat these.',
         hotbar: 'OFF always hides a link. Turning a link ON for a role/user that doesn\'t normally see its bar adds it to the end of their main hotbar — and if you enable every link of a bar, the whole bar shows up instead. Store-bar links (LEE…BAL) default to everyone in that store.',
@@ -15986,7 +16046,7 @@ function _faChipHtml(f, role) {
 }
 
 async function faToggleRole(key, slug) {
-    const feat = FEATURE_CATALOG.find(f => f.key === key);
+    const feat = _faCatalog().find(f => f.key === key);
     if (!feat) return;
     const def = _faDefaultFor(feat, slug);
     const cur = _faRoleOverride(key, slug);
@@ -16063,7 +16123,7 @@ function _faUserRowsHtml() {
     let roleSlug = u ? String(u.role || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-') : '';
     if (roleSlug === 'multi-store-manager') roleSlug = 'manager';
     let html = '', lastGroup = '';
-    FEATURE_CATALOG.forEach(f => {
+    _faCatalog().forEach(f => {
         if (filter && !(`${f.label} ${f.group}`).toLowerCase().includes(filter)) return;
         if (f.group !== lastGroup) {
             lastGroup = f.group;
