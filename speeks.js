@@ -16162,17 +16162,21 @@ async function faToggleRole(key, slug) {
 // on/off — the "End coverage" buttons revoke. Nothing expires on its own.
 const _FA_COVER_ROLES = new Set(['manager', 'owner (manager)', 'owner manager', 'multi-store manager']);
 
-// Features offered for delegation: every DM-side feature a manager doesn't
-// already have — SPEEKS Tools + widgets/tabs (any group), minus the Feature
-// Access tool itself. Because it's built off _faCatalog() (curated + live DOM +
-// other-page scan), any tool/tab/group we add later shows up here automatically,
-// the same way the main Feature Access tabs self-update. Regular tools managers
-// already have (Insurance Claims store / Box Order / Recycle) are filtered out.
+// Features offered for delegation: DM-only SPEEKS Tools + DM-only
+// workspace/operations-style section actions (tabs). Explicitly NOT dashboard
+// cards or sidebar panels (e.g. District Command Center) — those aren't "DM
+// actions" to hand off. Built off _faCatalog() (curated + live DOM + other-page
+// scan) and it excludes groups by NAME rather than allow-listing, so a new
+// section/group we add later shows up here automatically like the main FA tabs.
+// Regular tools managers already have (Insurance Claims store / Box Order /
+// Recycle) are filtered out by the manager-default check.
+const _FA_NON_DELEGABLE_WIDGET_GROUPS = ['Dashboard', 'Side Panels'];
 function _faCoverageTools() {
     return _faCatalog().filter(f =>
         f.key !== 'tool-feature-access'
-        && (f.tab === 'tools' || f.tab === 'widgets')
-        && f.def !== 'all' && !f.def.includes('manager'));
+        && f.def !== 'all' && !f.def.includes('manager')
+        && (f.tab === 'tools'
+            || (f.tab === 'widgets' && !_FA_NON_DELEGABLE_WIDGET_GROUPS.includes(f.group))));
 }
 function _faCoverageDefaultChecked() {
     return new Set(); // always start with everything unchecked
