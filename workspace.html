@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20260716l" defer></script>
+  <script src="speeks.js?v=20260717f" defer></script>
 </head>
 <body class="preload">
 
@@ -621,6 +621,7 @@
           <div class="district-kpi-header kpi-modal-header-tight">
               <div class="align-center gap-15" style="flex-wrap:wrap;">
                   <span class="district-kpi-title">Variance Replies</span>
+                  <select id="vr-period-select" class="kpi-select" onchange="vrOnPeriodChange()" style="display:none;"></select>
                   <select id="vr-store-select" class="kpi-select dynamic-module-block role-district-manager" onchange="vrOnStoreChange()" style="display:none;">
                       <option value="OVL">OVL</option>
                       <option value="LEE">LEE</option>
@@ -628,7 +629,6 @@
                       <option value="MPL">MPL</option>
                       <option value="BAL">BAL</option>
                   </select>
-                  <select id="vr-period-select" class="kpi-select" onchange="vrOnPeriodChange()" style="display:none;"></select>
                   <span id="vr-subtitle" style="font-size:11px;color:#888;font-weight:600;"></span>
               </div>
               <div class="align-center gap-8">

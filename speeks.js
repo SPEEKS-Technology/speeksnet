@@ -16151,13 +16151,11 @@ function _vrRole() { return (sessionStorage.getItem('speeksUserRole') || '').toL
 function _vrIsDM() { return _vrRole() === 'district manager'; }
 function _vrIsManager() { return _VR_MANAGER_ROLES.has(_vrRole()); }
 
-// Stores whose periods the tab shows: DM browses via the store dropdown;
-// an MSM sees both managed stores; a manager is locked to their own.
+// Stores whose periods the tab loads: the DM gets every store at once (they
+// pick a date range first, then flip between stores within it); an MSM sees
+// both managed stores; a manager is locked to their own.
 function _vrStores() {
-    if (_vrIsDM()) {
-        const sel = document.getElementById('vr-store-select');
-        return [(sel && sel.value ? sel.value : 'OVL').toUpperCase()];
-    }
+    if (_vrIsDM()) return ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
     return _vrMyStores();
 }
 
@@ -16198,8 +16196,8 @@ async function loadVarianceReplies() {
         if (!json.success) throw new Error(json.error);
         _vrPeriods = json.data || [];
         _vrBuildPeriodPicker();
-        const sel = document.getElementById('vr-period-select');
-        if (sel && sel.value) await vrOpenPeriod(sel.value);
+        const pid = _vrSelectedPeriodId();
+        if (pid) await vrOpenPeriod(pid);
         else { _vrCurrent = null; renderVarianceReplies(); }
     } catch (e) {
         body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load variance replies.</div>';
@@ -16211,19 +16209,54 @@ function _vrBuildPeriodPicker() {
     if (!sel) return;
     if (!_vrPeriods.length) { sel.style.display = 'none'; sel.innerHTML = ''; return; }
     const current = sel.value;
-    const multi = _vrStores().length > 1;
-    sel.innerHTML = _vrPeriods.map(p => {
-        const label = `${multi || _vrIsDM() ? p.store + ' · ' : ''}${formatVarianceRange(p.date_from, p.date_to)}${p.timeframe ? ' · ' + p.timeframe : ''}`;
-        return `<option value="${p.id}">${escapeHtml(label)}</option>`;
-    }).join('');
+    if (_vrIsDM()) {
+        // The DM picks the DATE RANGE first (uploads share a range across
+        // stores), then flips between stores with the store dropdown.
+        const seen = new Set();
+        sel.innerHTML = _vrPeriods.map(p => {
+            const key = `${p.date_from}|${p.date_to}`;
+            if (seen.has(key)) return '';
+            seen.add(key);
+            return `<option value="${key}">${escapeHtml(formatVarianceRange(p.date_from, p.date_to))}</option>`;
+        }).join('');
+    } else {
+        const multi = _vrStores().length > 1;
+        sel.innerHTML = _vrPeriods.map(p => {
+            const label = `${multi ? p.store + ' · ' : ''}${formatVarianceRange(p.date_from, p.date_to)}${p.timeframe ? ' · ' + p.timeframe : ''}`;
+            return `<option value="${p.id}">${escapeHtml(label)}</option>`;
+        }).join('');
+    }
     sel.style.display = '';
     if ([...sel.options].some(o => o.value === current)) sel.value = current;
 }
 
-function vrOnStoreChange() { _vrUploadOpen = false; _vrParsed = null; _vrEditing = false; _vrDrafts = {}; loadVarianceReplies(); }
-function vrOnPeriodChange() {
+// The open period: managers' picker holds period ids directly; the DM's
+// holds a date-range key that combines with the store dropdown.
+function _vrSelectedPeriodId() {
     const sel = document.getElementById('vr-period-select');
-    if (sel && sel.value) vrOpenPeriod(sel.value);
+    if (!sel || !sel.value) return '';
+    if (!_vrIsDM()) return sel.value;
+    const [from, to] = sel.value.split('|');
+    const store = ((document.getElementById('vr-store-select') || {}).value || '').toUpperCase();
+    const p = _vrPeriods.find(p => p.date_from === from && p.date_to === to && p.store === store);
+    return p ? p.id : '';
+}
+
+function vrOnStoreChange() {
+    _vrUploadOpen = false; _vrParsed = null; _vrEditing = false; _vrDrafts = {};
+    if (_vrIsDM() && _vrPeriods.length) {
+        // all stores are already loaded — just resolve within the picked range
+        const pid = _vrSelectedPeriodId();
+        if (pid) vrOpenPeriod(pid);
+        else { _vrCurrent = null; renderVarianceReplies(); }
+        return;
+    }
+    loadVarianceReplies();
+}
+function vrOnPeriodChange() {
+    const pid = _vrSelectedPeriodId();
+    if (pid) vrOpenPeriod(pid);
+    else { _vrCurrent = null; renderVarianceReplies(); }
 }
 
 async function vrOpenPeriod(pid) {
@@ -16258,6 +16291,37 @@ function _vrUpdateProgressLine() {
     if (sub) sub.textContent = _vrSubtitleText();
 }
 
+// The team variance summary card shown above the reply lines — mirrors the
+// numbers on the manager variance widget (store total % + each person's %).
+// `tv` is the backend's matched Submit-Variance-Report entry (may be null).
+function _vrTeamVarianceHtml(tv, period) {
+    if (!tv) return '';
+    const badge = v => {
+        const n = Number(v);
+        const cls = n < 0 ? 'delta-neg' : (n > 0 ? 'delta-pos' : 'delta-neutral');
+        return `<span class="delta-badge ${cls}">${formatVariancePct(n)}</span>`;
+    };
+    // If the matched team-variance entry's dates differ from this reply
+    // period's, show its own range so it's clear which report it came from.
+    const rangeDiffers = !tv.exact && tv.date_from && tv.date_to
+        && (tv.date_from !== period.date_from || tv.date_to !== period.date_to);
+    const rangeNote = rangeDiffers
+        ? `<span style="font-weight:600; color:#94a3b8; text-transform:none; letter-spacing:0; margin-left:8px;">${formatVarianceRange(tv.date_from, tv.date_to)}</span>`
+        : '';
+    const emps = (tv.employees || []).map(e => `
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:7px 14px; border-top:1px solid #f1f5f9;">
+            <span style="font-size:12px; font-weight:600; color:#334155;">${escapeHtml(e.name)}</span>
+            ${badge(e.val)}
+        </div>`).join('');
+    return `<details open style="border:1px solid #e2e8f0; border-radius:12px; background:#fff; overflow:hidden; margin-bottom:16px;">
+        <summary style="list-style:none; cursor:pointer; display:flex; align-items:center; justify-content:space-between; gap:10px; background:#f8fafc; padding:12px 16px; border-bottom:1px solid #e2e8f0;">
+            <span style="font-size:12px; font-weight:800; color:var(--slate-charcoal); text-transform:uppercase; letter-spacing:.4px;">Team Variance${rangeNote}</span>
+            <span style="display:flex; align-items:center; gap:10px;"><span style="font-size:10px; font-weight:700; color:#94a3b8; text-transform:uppercase;">Store Total</span>${badge(tv.total)}</span>
+        </summary>
+        <div>${emps || '<div style="padding:12px 16px; font-size:12px; color:#94a3b8;">No per-person variance recorded.</div>'}</div>
+    </details>`;
+}
+
 function renderVarianceReplies() {
     const body = document.getElementById('vr-body');
     if (!body) return;
@@ -16284,7 +16348,7 @@ function renderVarianceReplies() {
             if (b) b.style.display = 'none';
         });
         const hint = _vrIsDM()
-            ? 'No variance uploads for this store yet.'
+            ? (_vrPeriods.length ? 'No upload for this store in the selected date range.' : 'No variance uploads yet.')
             : 'No variance report has been uploaded for your store yet.';
         body.innerHTML = html + `<div style="padding:36px 20px; text-align:center; color:#94a3b8; font-weight:600;">${hint}</div>`;
         _vrUpdateProgressLine();
@@ -16315,7 +16379,12 @@ function renderVarianceReplies() {
     // while editing, only Save/Cancel show (Upload Report is hidden so it
     // can't wipe unsaved notes); while the upload panel is open, only its
     // Cancel + Upload Report show.
-    const canEditNow = items.length > 0 && (canGm || (canDm && dmNotesOpen)) && !_vrUploadOpen;
+    // Once every note the DM flagged has its manager reply, the round trip is
+    // over — the DM's Edit button goes away entirely (nothing left that needs
+    // them). Managers keep theirs while any flagged note still wants a reply.
+    const flaggedNotes = items.filter(i => i.dm_note && i.dm_reply_requested);
+    const dmCycleDone = flaggedNotes.length > 0 && flaggedNotes.every(i => i.mgr_reply);
+    const canEditNow = items.length > 0 && (canGm || (canDm && dmNotesOpen && !dmCycleDone)) && !_vrUploadOpen;
     const editBtn = document.getElementById('vr-edit-btn');
     const saveBtn = document.getElementById('vr-save-btn');
     const cancelEditBtn = document.getElementById('vr-edit-cancel-btn');
@@ -16331,6 +16400,12 @@ function renderVarianceReplies() {
         </div>
         ${canDm ? `<button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px; margin-right:14px;" onclick="vrDeletePeriod('${p.id}')">Delete this upload</button>` : ''}
     </div>`;
+
+    // Team variance for this period (store total % + per-person %), the same
+    // numbers the manager variance widget shows — surfaced here as context for
+    // the lines being explained. Pulled by the backend from the matching
+    // Submit-Variance-Report entry (both uploaded together).
+    html += _vrTeamVarianceHtml(_vrCurrent.team_variance, p);
 
     const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 14px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
     const td = (c, extra = '') => `<td style="padding:8px 14px; border-bottom:1px solid #f1f5f9; vertical-align:top; font-size:12px; ${extra}">${c}</td>`;
@@ -16719,7 +16794,15 @@ async function vrConfirmUpload(btn) {
         _vrUploadOpen = false;
         _vrParsed = null;
         _vrFileName = '';
-        loadVarianceReplies(); // newest period tops the picker and opens
+        await loadVarianceReplies();
+        // jump the pickers straight to the period we just uploaded
+        const rSel = document.getElementById('vr-period-select');
+        const sSel = document.getElementById('vr-store-select');
+        const key = `${from}|${to}`;
+        if (rSel && [...rSel.options].some(o => o.value === key)) rSel.value = key;
+        if (sSel) sSel.value = store;
+        const pid = _vrSelectedPeriodId();
+        if (pid && (!_vrCurrent || !_vrCurrent.period || _vrCurrent.period.id !== pid)) vrOpenPeriod(pid);
     } catch (e) {
         alert('Upload failed: ' + e.message);
         btn.disabled = false; btn.innerText = old;
@@ -16784,10 +16867,10 @@ async function checkVarianceDmReminders() {
                 const key = `speeksVRDmTurnSeen_${p.id}`;
                 if (localStorage.getItem(key)) continue;
                 localStorage.setItem(key, '1');
-                _vrRenderBubble('📝', 'Variance replies are ready for your review',
-                    `${p.store} ${formatVarianceRange(p.date_from, p.date_to)}: ${allDone
-                        ? `all ${p.items} lines are explained`
-                        : `the managers' deadline has passed (${p.answered}/${p.items} explained)`} — time to add your DM notes.`);
+                // Ethan wants this one lightweight — no store names or counts,
+                // just a same-day nudge that reviews are waiting on him.
+                _vrRenderBubble('📝', 'Variance replies are ready for review',
+                    'Manager explanations are in — review them and add your DM notes today.');
                 return;
             }
             // Wrap-up: managers get 2 days to review the DM's notes and answer
@@ -16798,10 +16881,10 @@ async function checkVarianceDmReminders() {
             const wrapKey = `speeksVRWrapSeen_${p.id}`;
             if (localStorage.getItem(wrapKey)) continue;
             localStorage.setItem(wrapKey, '1');
+            // Same lightweight treatment as the "ready for review" nudge —
+            // no store names or counts, just tell the DM to go look.
             _vrRenderBubble('📬', 'Variance reply window closed',
-                `${p.store} ${formatVarianceRange(p.date_from, p.date_to)}: the managers' 2-day response window has ended${p.awaiting_reply > 0
-                    ? ` — ${p.awaiting_reply} note${p.awaiting_reply > 1 ? 's you flagged still have' : ' you flagged still has'} no reply`
-                    : ' and every note you flagged got a reply'}. Give it a final look.`);
+                'The managers’ response window has ended — give the replies a final review today.');
             return;
         }
     } catch (e) { /* next poll retries */ }
