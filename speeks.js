@@ -16259,10 +16259,14 @@ function renderVarianceReplies() {
     const body = document.getElementById('vr-body');
     if (!body) return;
     // Rebuilding the table destroys the textareas — stash what's typed so an
-    // unexpected re-render mid-edit can never delete someone's notes.
+    // unexpected re-render mid-edit can never delete someone's notes. The
+    // "needs a reply" checkboxes ride along the same way.
     if (_vrEditing) {
         body.querySelectorAll('textarea[data-vr-item]').forEach(ta => {
             _vrDrafts[ta.dataset.vrItem + '|' + ta.dataset.vrField] = ta.value;
+        });
+        body.querySelectorAll('input[data-vr-rr]').forEach(cb => {
+            _vrDrafts['rr|' + cb.dataset.vrRr] = cb.checked;
         });
     }
     // The header Cancel button only shows while the upload panel is open.
@@ -16345,8 +16349,22 @@ function renderVarianceReplies() {
             ${td(escapeHtml(it.lister_name || '—'), 'white-space:nowrap; padding-right:22px;')}
             ${td(`<span style="font-weight:900; color:${pct == null ? '#94a3b8' : '#dc2626'}; white-space:nowrap;">${_vrFmtPct(pct)}</span>`, 'padding-right:22px;')}
             ${showGmCol ? td(_vrNoteCell(it, 'gm_note', canGm && _vrEditing, 'Why did this sell so far under projection?'), (showDmCol || showReplyCol ? '' : 'width:45%;') + (missedGm ? ' background:#fee2e2;' : '')) : ''}
-            ${showDmCol ? td(_vrNoteCell(it, 'dm_note', canDm && dmNotesOpen && _vrEditing && !!it.gm_note, 'Advice or a question for the manager…')) : ''}
-            ${showReplyCol ? td(_vrNoteCell(it, 'mgr_reply', canGm && !!it.dm_note && _vrEditing, it.dm_note ? 'Reply to the DM note…' : '')) : ''}
+            ${showDmCol ? td((() => {
+                const dmEditing = canDm && dmNotesOpen && _vrEditing && !!it.gm_note;
+                let cell = _vrNoteCell(it, 'dm_note', dmEditing, 'Advice or a question for the manager…');
+                // Read-only views get a chip that says whether this note wants
+                // an answer or is FYI-only — that's how the manager tells what
+                // to respond to vs what's just for them to read.
+                if (it.dm_note && !dmEditing) {
+                    cell += it.dm_reply_requested
+                        ? (it.mgr_reply
+                            ? `<span style="display:inline-block; margin-top:4px; font-size:9.5px; font-weight:800; color:#166534; background:#dcfce7; border:1px solid #a7f3d0; border-radius:20px; padding:2px 8px; white-space:nowrap;">✓ Replied</span>`
+                            : `<span style="display:inline-block; margin-top:4px; font-size:9.5px; font-weight:800; color:#b91c1c; background:#fee2e2; border:1px solid #fca5a5; border-radius:20px; padding:2px 8px; white-space:nowrap;">↩ Response requested</span>`)
+                        : `<span style="display:inline-block; margin-top:4px; font-size:9.5px; font-weight:800; color:#64748b; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:20px; padding:2px 8px; white-space:nowrap;">FYI — no reply needed</span>`;
+                }
+                return cell;
+            })()) : ''}
+            ${showReplyCol ? td(_vrNoteCell(it, 'mgr_reply', canGm && !!it.dm_note && !!it.dm_reply_requested && _vrEditing, it.dm_note && it.dm_reply_requested ? 'Reply to the DM note…' : '')) : ''}
         </tr>`;
     });
     html += `</tbody></table></div>`;
@@ -16373,11 +16391,21 @@ function _vrNoteCell(it, field, editable, placeholder) {
         return `<div style="min-width:190px; line-height:1.45; color:#334155;">${txt}${caption}</div>`;
     }
     const draft = _vrDrafts[it.id + '|' + field];
+    // The DM flags each note as needing a manager reply or FYI-only — that's
+    // what decides whether the manager gets a reply box + nudges for it.
+    let rrBox = '';
+    if (field === 'dm_note') {
+        const rrDraft = _vrDrafts['rr|' + it.id];
+        const checked = rrDraft !== undefined ? rrDraft : !!it.dm_reply_requested;
+        rrBox = `<label style="display:flex; align-items:center; gap:5px; margin-top:4px; font-size:10.5px; font-weight:700; color:#64748b; cursor:pointer; user-select:none;">
+            <input type="checkbox" data-vr-rr="${it.id}"${checked ? ' checked' : ''} style="width:13px; height:13px; cursor:pointer;"> Needs a reply from the manager
+        </label>`;
+    }
     return `<div style="min-width:210px;">
         <textarea rows="2" placeholder="${escapeHtml(placeholder || '')}"
             data-vr-item="${it.id}" data-vr-field="${field}"
             style="width:100%; box-sizing:border-box; padding:7px 9px; border:1.5px solid #cbd5e1; border-radius:7px; font-size:12px; font-weight:500; font-family:inherit; line-height:1.4; resize:vertical; background:#fff; transition:border-color .3s;"
-        >${escapeHtml(draft !== undefined ? draft : val)}</textarea>${caption}</div>`;
+        >${escapeHtml(draft !== undefined ? draft : val)}</textarea>${rrBox}${caption}</div>`;
 }
 
 function vrStartEdit() { _vrEditing = true; _vrDrafts = {}; renderVarianceReplies(); }
@@ -16392,7 +16420,16 @@ async function vrSaveEdits(btn) {
         if (!it) return;
         const field = ta.dataset.vrField;
         const text = ta.value.trim();
-        if ((it[field] || '') !== text) changes.push({ it, field, text, ta });
+        // DM notes carry the "needs a reply" flag — a flag flip alone (text
+        // unchanged) still needs saving.
+        let rr;
+        if (field === 'dm_note') {
+            const cb = document.querySelector(`#vr-body input[data-vr-rr="${it.id}"]`);
+            rr = cb ? cb.checked : !!it.dm_reply_requested;
+        }
+        const textChanged = (it[field] || '') !== text;
+        const rrChanged = field === 'dm_note' && !!text && rr !== !!it.dm_reply_requested;
+        if (textChanged || rrChanged) changes.push({ it, field, text, ta, rr });
     });
     if (!changes.length) { _vrEditing = false; renderVarianceReplies(); return; }
 
@@ -16404,15 +16441,21 @@ async function vrSaveEdits(btn) {
         try {
             const res = await fetch(VARIANCE_REPLIES_URL, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'save_note', item_id: c.it.id, field: c.field, text: c.text, by: name }),
+                body: JSON.stringify({
+                    action: 'save_note', item_id: c.it.id, field: c.field, text: c.text, by: name,
+                    ...(c.field === 'dm_note' ? { reply_requested: !!c.rr } : {}),
+                }),
             });
             const json = await res.json().catch(() => ({}));
             if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
             c.it[c.field] = c.text || null;
             c.it[c.field + '_by'] = c.text ? name : null;
             c.it[c.field + '_at'] = c.text ? new Date().toISOString() : null;
-            if (c.field === 'dm_note' && c.text && _vrCurrent.period && !_vrCurrent.period.dm_notes_at) {
-                _vrCurrent.period.dm_notes_at = new Date().toISOString();
+            if (c.field === 'dm_note') {
+                c.it.dm_reply_requested = c.text ? !!c.rr : false;
+                if (c.text && _vrCurrent.period && !_vrCurrent.period.dm_notes_at) {
+                    _vrCurrent.period.dm_notes_at = new Date().toISOString();
+                }
             }
         } catch (e) {
             failed++;
@@ -16718,18 +16761,33 @@ async function checkVarianceDmReminders() {
         const bubble = document.getElementById('claimAlertBubble');
         if (!bubble || bubble.style.display === 'flex') return; // next poll retries
         for (const p of periods) {
-            if (p.dm_notes_at) continue; // DM already responded to this period
             if (!p.items) continue;
-            const allDone = p.answered >= p.items;
-            const duePassed = Date.now() > new Date(p.manager_due_at).getTime();
-            if (!allDone && !duePassed) continue;
-            const key = `speeksVRDmTurnSeen_${p.id}`;
-            if (localStorage.getItem(key)) continue;
-            localStorage.setItem(key, '1');
-            _vrRenderBubble('📝', 'Variance replies are ready for your review',
-                `${p.store} ${formatVarianceRange(p.date_from, p.date_to)}: ${allDone
-                    ? `all ${p.items} lines are explained`
-                    : `the managers' deadline has passed (${p.answered}/${p.items} explained)`} — time to add your DM notes.`);
+            if (!p.dm_notes_at) {
+                // Their turn to start: managers' window closed, no DM notes yet.
+                const allDone = p.answered >= p.items;
+                const duePassed = Date.now() > new Date(p.manager_due_at).getTime();
+                if (!allDone && !duePassed) continue;
+                const key = `speeksVRDmTurnSeen_${p.id}`;
+                if (localStorage.getItem(key)) continue;
+                localStorage.setItem(key, '1');
+                _vrRenderBubble('📝', 'Variance replies are ready for your review',
+                    `${p.store} ${formatVarianceRange(p.date_from, p.date_to)}: ${allDone
+                        ? `all ${p.items} lines are explained`
+                        : `the managers' deadline has passed (${p.answered}/${p.items} explained)`} — time to add your DM notes.`);
+                return;
+            }
+            // Wrap-up: managers get 2 days to review the DM's notes and answer
+            // the flagged ones — measured from whichever came later, the reply
+            // deadline or the DM actually leaving notes.
+            const replyDue = Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()) + 2 * 86400000;
+            if (Date.now() < replyDue) continue;
+            const wrapKey = `speeksVRWrapSeen_${p.id}`;
+            if (localStorage.getItem(wrapKey)) continue;
+            localStorage.setItem(wrapKey, '1');
+            _vrRenderBubble('📬', 'Variance reply window closed',
+                `${p.store} ${formatVarianceRange(p.date_from, p.date_to)}: the managers' 2-day response window has ended${p.awaiting_reply > 0
+                    ? ` — ${p.awaiting_reply} note${p.awaiting_reply > 1 ? 's you flagged still have' : ' you flagged still has'} no reply`
+                    : ' and every note you flagged got a reply'}. Give it a final look.`);
             return;
         }
     } catch (e) { /* next poll retries */ }

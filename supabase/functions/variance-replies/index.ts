@@ -102,6 +102,11 @@ Deno.serve(async (req: Request) => {
           [`${field}_by`]: text ? by : null,
           [`${field}_at`]: text ? now : null,
         };
+        // A DM note carries a "needs a manager reply" flag; FYI-only notes
+        // (flag off) don't count toward awaiting_reply nudges.
+        if (field === "dm_note") {
+          patch.dm_reply_requested = text ? !!body.reply_requested : false;
+        }
         const { data: item, error } = await supabase.from("variance_reply_items")
           .update(patch).eq("id", id).select("period_id").single();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
@@ -162,13 +167,15 @@ Deno.serve(async (req: Request) => {
   const counts: Record<string, { items: number; answered: number; awaiting_reply: number }> = {};
   if (ids.length) {
     const { data: items, error: iErr } = await supabase.from("variance_reply_items")
-      .select("period_id, gm_note, dm_note, mgr_reply").in("period_id", ids);
+      .select("period_id, gm_note, dm_note, mgr_reply, dm_reply_requested").in("period_id", ids);
     if (iErr) return jsonResponse({ success: false, error: iErr.message }, 500);
     (items || []).forEach((it: any) => {
       const c = (counts[it.period_id] = counts[it.period_id] || { items: 0, answered: 0, awaiting_reply: 0 });
       c.items++;
       if (it.gm_note) c.answered++;
-      if (it.dm_note && !it.mgr_reply) c.awaiting_reply++; // DM asked / advised, manager hasn't replied
+      // only notes the DM flagged as needing a response nag the manager;
+      // FYI-only notes are just for their review
+      if (it.dm_note && it.dm_reply_requested && !it.mgr_reply) c.awaiting_reply++;
     });
   }
   const data = (periods || []).map((p: any) => ({
