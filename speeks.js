@@ -16348,10 +16348,24 @@ function renderVarianceReplies() {
             ${td(escapeHtml(it.buyer_name || '—'), 'white-space:nowrap; padding-right:22px;')}
             ${td(escapeHtml(it.lister_name || '—'), 'white-space:nowrap; padding-right:22px;')}
             ${td(`<span style="font-weight:900; color:${pct == null ? '#94a3b8' : '#dc2626'}; white-space:nowrap;">${_vrFmtPct(pct)}</span>`, 'padding-right:22px;')}
-            ${showGmCol ? td(_vrNoteCell(it, 'gm_note', canGm && _vrEditing, 'Why did this sell so far under projection?'), (showDmCol || showReplyCol ? '' : 'width:45%;') + (missedGm ? ' background:#fee2e2;' : '')) : ''}
+            ${showGmCol ? td((() => {
+                // Once the DM has responded to an explanation it locks — the
+                // conversation moved on, rewriting history would orphan replies.
+                const gmLocked = !!it.dm_note;
+                let cell = _vrNoteCell(it, 'gm_note', canGm && _vrEditing && !gmLocked, 'Why did this sell so far under projection?');
+                if (canGm && _vrEditing && gmLocked && it.gm_note) {
+                    cell += `<div style="margin-top:3px; font-size:9.5px; font-weight:700; color:#94a3b8;">🔒 Locked — the DM responded to this</div>`;
+                }
+                return cell;
+            })(), (showDmCol || showReplyCol ? '' : 'width:45%;') + (missedGm ? ' background:#fee2e2;' : '')) : ''}
             ${showDmCol ? td((() => {
-                const dmEditing = canDm && dmNotesOpen && _vrEditing && !!it.gm_note;
+                // Same lock the other way: a DM note the manager already
+                // replied to can't be edited out from under the reply.
+                const dmEditing = canDm && dmNotesOpen && _vrEditing && !!it.gm_note && !it.mgr_reply;
                 let cell = _vrNoteCell(it, 'dm_note', dmEditing, 'Advice or a question for the manager…');
+                if (canDm && dmNotesOpen && _vrEditing && it.mgr_reply && it.dm_note) {
+                    cell += `<div style="margin-top:3px; font-size:9.5px; font-weight:700; color:#94a3b8;">🔒 Locked — the manager replied to this</div>`;
+                }
                 // Read-only views get a chip that says whether this note wants
                 // an answer or is FYI-only — that's how the manager tells what
                 // to respond to vs what's just for them to read.
@@ -16849,14 +16863,29 @@ function _vrMaybePopup() {
                 return;
             }
         }
-        // 2) DM notes waiting on a manager reply (max one nudge per day)
-        if (p.awaiting_reply > 0) {
-            const key = `speeksVRDmSeen_${p.id}_${today}`;
-            if (!localStorage.getItem(key)) {
-                localStorage.setItem(key, '1');
-                _vrRenderBubble('💬', 'DM reviewed your variance replies',
-                    `${p.store}: ${p.awaiting_reply} line${p.awaiting_reply > 1 ? 's have' : ' has'} DM notes for ${formatVarianceRange(p.date_from, p.date_to)}. Review them and answer any questions.`);
-                return;
+        // 2) DM notes waiting on a manager reply. Managers get 2 days from the
+        //    DM's notes (or the original deadline, whichever is later) to
+        //    answer the flagged lines — announce that window, then escalate
+        //    once it's missed. Max one nudge of each per day.
+        if (p.awaiting_reply > 0 && p.dm_notes_at) {
+            const replyDue = Math.max(due, new Date(p.dm_notes_at).getTime()) + 2 * 86400000;
+            const replyDueTxt = new Date(replyDue).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+            if (now > replyDue) {
+                const key = `speeksVRReplyOverdueSeen_${p.id}_${today}`;
+                if (!localStorage.getItem(key)) {
+                    localStorage.setItem(key, '1');
+                    _vrRenderBubble('🚨', 'DM note replies overdue',
+                        `${p.store}: ${p.awaiting_reply} flagged DM note${p.awaiting_reply > 1 ? 's' : ''} for ${formatVarianceRange(p.date_from, p.date_to)} ${p.awaiting_reply > 1 ? 'are' : 'is'} still unanswered and the reply deadline (${replyDueTxt}) has passed. Answer them now.`);
+                    return;
+                }
+            } else {
+                const key = `speeksVRDmSeen_${p.id}_${today}`;
+                if (!localStorage.getItem(key)) {
+                    localStorage.setItem(key, '1');
+                    _vrRenderBubble('💬', 'DM reviewed your variance replies',
+                        `${p.store}: ${p.awaiting_reply} line${p.awaiting_reply > 1 ? 's have' : ' has'} DM notes for ${formatVarianceRange(p.date_from, p.date_to)}. Reply to the flagged one${p.awaiting_reply > 1 ? 's' : ''} by ${replyDueTxt}.`);
+                    return;
+                }
             }
         }
     }
