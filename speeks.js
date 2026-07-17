@@ -16161,17 +16161,37 @@ async function faToggleRole(key, slug) {
 // on/off — the "End coverage" buttons revoke. Nothing expires on its own.
 const _FA_COVER_ROLES = new Set(['manager', 'owner (manager)', 'owner manager', 'multi-store manager']);
 
-// Tools offered for delegation: only the DM-side tools a manager doesn't already
-// have (so no point listing regular Insurance Claims / Box Order / Recycle, which
-// managers get by default), and never the Feature Access tool itself. Remembered
-// tick set lives in localStorage.
+// Features offered for delegation: the DM-side ones a manager doesn't already
+// have (so no point listing regular Insurance Claims / Box Order / Recycle,
+// which managers get by default), never the Feature Access tool itself. Covers
+// SPEEKS Tools plus DM-only Workspace/Operations sub-tabs (so a DM-special
+// version of one of those is lendable too).
 function _faCoverageTools() {
-    return _faCatalog().filter(f => f.tab === 'tools'
-        && f.key !== 'tool-feature-access'
-        && f.def !== 'all' && !f.def.includes('manager'));
+    return _faCatalog().filter(f =>
+        f.key !== 'tool-feature-access'
+        && f.def !== 'all' && !f.def.includes('manager')
+        && (f.tab === 'tools' || (f.tab === 'widgets' && ['Workspace', 'Operations'].includes(f.group))));
 }
 function _faCoverageDefaultChecked() {
     return new Set(); // always start with everything unchecked
+}
+
+// A feature is the "DM version" of something managers also have if a sibling
+// feature shares its key stem (e.g. tool-claims-oversight ↔ tool-claims-store)
+// and that sibling is visible to managers by default. Used to append "(DM)" in
+// Delegation so it's clear which version you're lending. Auto-detected (3+ key
+// segments), so new DM/manager pairs get the tag with no extra wiring.
+function _faManagerCounterpart(f) {
+    const parts = f.key.split('-');
+    if (parts.length < 3) return null; // need a shared stem like tool-claims-*
+    const stem = parts.slice(0, -1).join('-') + '-';
+    return _faCatalog().find(o => o.key !== f.key && o.key.startsWith(stem)
+        && (o.def === 'all' || (Array.isArray(o.def) && o.def.includes('manager')))) || null;
+}
+function _faDelegationLabel(f) {
+    if (!_faManagerCounterpart(f)) return f.label;
+    const base = f.label.replace(/\s*\([^)]*\)\s*$/, '').trim(); // drop a trailing "(...)"
+    return `${base} (DM)`;
 }
 
 // The users who currently hold a granted tool (enabled user override on a tool),
@@ -16189,7 +16209,7 @@ function _faCoverageHtml() {
     const covering = _faUsers
         .filter(u => _FA_COVER_ROLES.has(String(u.role || '').toLowerCase().trim()))
         .sort((a, b) => a.name.localeCompare(b.name));
-    const labelFor = key => (_faCatalog().find(f => f.key === key) || {}).label || key;
+    const labelFor = key => { const f = _faCatalog().find(x => x.key === key); return f ? _faDelegationLabel(f) : key; };
 
     let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:14px; line-height:1.5;">
         Let a manager use your DM tools — while you're away or just need a hand. Pick who and which tools, then <b>Delegate tools</b>. Their own tools stay; it lasts until you <b>End delegation</b>.</div>`;
@@ -16213,7 +16233,7 @@ function _faCoverageHtml() {
     html += `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:6px 14px; margin-bottom:16px;">` + _faCoverageTools().map(f => `
         <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; font-weight:600; color:var(--slate-charcoal); cursor:pointer; padding:3px 0;">
             <input type="checkbox" class="fa-cover-tool" value="${f.key}" ${checked.has(f.key) ? 'checked' : ''} style="width:15px; height:15px; cursor:pointer;">
-            ${escapeHtml(f.label)}
+            ${escapeHtml(_faDelegationLabel(f))}
         </label>`).join('') + `</div>`;
 
     html += `<button class="btn-primary" style="font-size:13px; padding:9px 18px;" onclick="faGrantCoverage(this)">Delegate tools</button>`;
