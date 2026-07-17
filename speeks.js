@@ -15689,18 +15689,54 @@ function _faCatalog() {
     const byKey = {};
     FEATURE_CATALOG.forEach(f => { byKey[f.key] = true; });
     const merged = FEATURE_CATALOG.slice();
-    const discovered = [];
+    // 1) anything tagged on THIS page
     document.querySelectorAll('[data-feature]').forEach(el => {
         const key = el.getAttribute('data-feature');
         if (!key || byKey[key]) return;
         byKey[key] = true; // dedupe repeats of the same key across the page
         merged.push(_faDeriveEntry(key, el));
-        discovered.push(key);
     });
-    if (discovered.length) {
-        console.warn('[Feature Access] auto-added un-catalogued feature(s) — add FEATURE_CATALOG entries for tidy labels/grouping:', discovered);
-    }
+    // 2) anything tagged on the OTHER shell pages (scanned by _faScanPages when
+    //    the tool opens) so you see the whole site's features from any page
+    _faRemoteFeatures.forEach(entry => {
+        if (byKey[entry.key]) return;
+        byKey[entry.key] = true;
+        merged.push(entry);
+    });
     return merged;
+}
+
+// The tool can be opened from any of the 5 shells, but the DOM only holds the
+// current page's features. So when it loads, fetch the sibling shells (static,
+// same-origin) and read their data-feature tags directly — that's how a feature
+// living only on Operations shows up while you're on QuickPortal. Runs once per
+// open; results feed _faCatalog() via _faRemoteFeatures.
+const _FA_SHELLS = ['index.html', 'workspace.html', 'operations.html', 'docs.html', 'stats.html'];
+let _faRemoteFeatures = [];
+let _faScanned = false;
+
+async function _faScanPages() {
+    const here = (location.pathname.split('/').pop() || 'index.html').toLowerCase() || 'index.html';
+    const known = {};
+    FEATURE_CATALOG.forEach(f => { known[f.key] = true; });
+    document.querySelectorAll('[data-feature]').forEach(el => { known[el.getAttribute('data-feature')] = true; });
+    const found = {};
+    await Promise.all(_FA_SHELLS.filter(p => p !== here).map(async page => {
+        try {
+            const html = await fetch(`${page}?v=${Date.now()}`).then(r => r.text());
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            doc.querySelectorAll('[data-feature]').forEach(el => {
+                const key = el.getAttribute('data-feature');
+                if (!key || known[key] || found[key]) return;
+                found[key] = _faDeriveEntry(key, el);
+            });
+        } catch (_) { /* a page that won't load just contributes no features */ }
+    }));
+    _faRemoteFeatures = Object.values(found);
+    _faScanned = true;
+    if (_faRemoteFeatures.length) {
+        console.info('[Feature Access] discovered un-catalogued feature(s) on other pages — add FEATURE_CATALOG entries for tidy labels:', _faRemoteFeatures.map(f => f.key));
+    }
 }
 
 // Best-effort metadata for a data-feature key that isn't in FEATURE_CATALOG:
@@ -15954,6 +15990,10 @@ async function _faLoad() {
         localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
         renderFaBody();
         applyRoleBasedUI();
+        // Pull in features that live on the other shell pages, then re-render so
+        // they appear no matter which page the tool was opened from. Cached for
+        // the session so re-opening is instant.
+        if (!_faScanned) { await _faScanPages(); renderFaBody(); }
     } catch (e) {
         const body = document.getElementById('fa-body');
         if (body) body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load feature settings.</div>';
