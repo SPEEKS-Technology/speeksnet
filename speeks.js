@@ -12288,6 +12288,9 @@ window.closeDailyCommentBubble = function() {
 };
 
 async function fetchAndDisplayStoreComment() {
+    // TOM works out of a store but isn't part of its team, so store comments
+    // aren't meant for them.
+    if ((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'tom') return;
     const userStore = String(sessionStorage.getItem('speeksUserStore') || 'OVL').trim().toUpperCase();
     const userName = String(sessionStorage.getItem('speeksUserName') || '').trim();
     const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
