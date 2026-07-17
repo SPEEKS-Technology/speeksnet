@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260716l" defer></script>
+  <script src="speeks.js?v=20260717f" defer></script>
 </head>
 
 <body class="preload">
@@ -528,7 +528,6 @@
             <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-store-manager-folder">📁 Store Manager Folder</a>
             <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-store-passwords">🔑 Store Passwords</a>
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-dm-sales-summary">📊 Sales Summary</a>
-            <a href="https://drive.google.com/drive/folders/12Fjxp44sY6T-o6OlrG6n_YtrHow4bE2f?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-variance">⚖️ Variance</a>
             <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-aging-inventory">⏳ Aging Inventory</a>
             <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>
             <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-paymore-google-drive">☁️ PayMore Google Drive</a> 
@@ -564,7 +563,6 @@
             <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-mgr-store-manager-folder">📁 Store Manager Folder</a>
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-mgr-sales-summary">📊 Sales Summary</a>
             <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-mgr-aging-inventory">⏳ Aging Inventory</a>
-            <a href="https://docs.google.com/spreadsheets/d/1ar3tabN-bUqkjWqgy25MCHzSup2jhiaAKaGxLwZTeJ8/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-mgr-location-visits">🚗 Location Visits</a>
           </div>
         </div>
       </div>
@@ -910,38 +908,6 @@
                   <div class="status-message">Syncing Data...</div>
               </div>
               <canvas id="mainKpiChart"></canvas>
-          </div>
-      </div>
-
-      <div class="card kpi-master-card district-master-panel employee-widget-card dynamic-module-flex role-manager role-owner-manager flex-col-card bottom-locked-card" data-feature="widget-variance-reports" style="margin-bottom: 0;">
-          <div class="district-kpi-header" style="border-bottom: none;">
-              <span class="district-kpi-title">Live Variance Reports <span id="variance-date-display" class="widget-date-display"></span></span>
-              <div class="vw-controls">
-                  <select id="vw-primary" class="kpi-select" onchange="renderVariance()">
-                      <option value="OVL">OVL</option>
-                      <option value="LEE">LEE</option>
-                      <option value="WSP">WSP</option>
-                      <option value="MPL">MPL</option>
-                      <option value="BAL">BAL</option>
-                  </select>
-                  <span class="vw-vs-text">vs</span>
-                  <select id="vw-compare" class="kpi-select" onchange="renderVariance()">
-                      <option value="NONE">None</option>
-                      <option value="OVL">OVL</option>
-                      <option value="LEE">LEE</option>
-                      <option value="WSP">WSP</option>
-                      <option value="MPL">MPL</option>
-                      <option value="BAL">BAL</option>
-                  </select>
-              </div>
-          </div>
-          
-          <div class="vw-dashboard" id="vw-dashboard-container">
-              <div class="status-message">Syncing Variance Data...</div>
-          </div>
-
-          <div class="vw-footer">
-              <a href="https://drive.google.com/drive/folders/12Fjxp44sY6T-o6OlrG6n_YtrHow4bE2f?usp=sharing" target="_blank" class="quick-link-pill vw-footer-btn">📁 Variance Replies</a>
           </div>
       </div>
 

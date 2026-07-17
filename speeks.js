@@ -1929,11 +1929,21 @@ function toggleVarianceInput() {
     loadVarianceStoreEmployees();
 }
 
-function loadVarianceStoreEmployees() {
+async function loadVarianceStoreEmployees() {
     const store = document.getElementById('vi-store')?.value;
     const container = document.getElementById('vi-employees');
     if (!container || !store) return;
     container.innerHTML = '';
+
+    // The manager variance widget used to keep liveVarianceDataCache warm; with
+    // it gone, fetch on demand so this tool can still pre-fill the last report's
+    // %s. Best-effort — a blank pre-fill is fine if the fetch fails.
+    if (!liveVarianceDataCache || Object.keys(liveVarianceDataCache).length === 0) {
+        try {
+            const r = await fetch(`${VARIANCE_API_URL}?v=${Date.now()}`);
+            liveVarianceDataCache = await r.json();
+        } catch (_) { /* pre-fill is optional */ }
+    }
 
     // Get users for this store from auth cache
     let storeUsers = [];
@@ -15595,7 +15605,6 @@ const FEATURE_CATALOG = [
     { key: 'widget-emp-listing-goals', label: 'My Listing Goals (employee)',   tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-listing-goals',     label: 'Listing Goals (manager)',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'widget-emp-weekly-kpis',   label: 'My Weekly KPIs (employee)',     tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
-    { key: 'widget-variance-reports',  label: 'Live Variance Reports (manager)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies (workspace tab)', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
@@ -15611,7 +15620,6 @@ const FEATURE_CATALOG = [
     { key: 'hb-dm-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-store-passwords', label: 'Store Passwords', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
-    { key: 'hb-dm-variance', label: 'Variance', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-paymore-google-drive', label: 'PayMore Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
@@ -15623,7 +15631,6 @@ const FEATURE_CATALOG = [
     { key: 'hb-mgr-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
     { key: 'hb-mgr-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
     { key: 'hb-mgr-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
-    { key: 'hb-mgr-location-visits', label: 'Location Visits', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
     { key: 'hb-asm-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
     { key: 'hb-asm-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
     { key: 'hb-asm-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
