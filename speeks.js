@@ -1538,6 +1538,10 @@ async function checkPIN() {
                 _loginStore = MULTISTORE_MANAGER_STORES[0];
             } else {
                 sessionStorage.removeItem('speeksMultiStore');
+                // TOM is homed at OVL rather than CORP (Ethan 2026-07-17). Their
+                // corp-wide powers are role-gated, not store-gated, so this only
+                // changes their default store, not their access.
+                if (_loginRole === 'tom') _loginStore = 'OVL';
             }
             sessionStorage.setItem('speeksUserRole', _loginRole);
             sessionStorage.setItem('speeksUserStore', _loginStore);
