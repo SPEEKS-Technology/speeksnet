@@ -16171,11 +16171,7 @@ function _faCoverageTools() {
         && f.def !== 'all' && !f.def.includes('manager'));
 }
 function _faCoverageDefaultChecked() {
-    try {
-        const saved = JSON.parse(localStorage.getItem('speeksFaCoverageTools') || 'null');
-        if (Array.isArray(saved) && saved.length) return new Set(saved);
-    } catch (e) { /* fall through */ }
-    return new Set(_faCoverageTools().map(f => f.key)); // first time: all DM tools ticked
+    return new Set(); // always start with everything unchecked
 }
 
 // The users who currently hold a granted tool (enabled user override on a tool),
@@ -16196,7 +16192,7 @@ function _faCoverageHtml() {
     const labelFor = key => (_faCatalog().find(f => f.key === key) || {}).label || key;
 
     let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:14px; line-height:1.5;">
-        Hand your DM tools to a manager while you're away. Tick who's filling in and which tools to lend, then <b>Delegate tools</b>. They keep their own tools and gain yours on top — so they see both. This stays on until you <b>End delegation</b> (nothing expires by itself).</div>`;
+        Let a manager use your DM tools — while you're away or just need a hand. Pick who and which tools, then <b>Delegate tools</b>. Their own tools stay; it lasts until you <b>End delegation</b>.</div>`;
 
     // 1) recipients
     html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:4px 2px 6px;">Delegate to</div>`;
@@ -16263,7 +16259,6 @@ async function faGrantCoverage(btn) {
     const tools = Array.from(body.querySelectorAll('.fa-cover-tool:checked')).map(c => c.value);
     if (!users.length) { alert('Pick at least one manager to delegate to.'); return; }
     if (!tools.length) { alert('Tick at least one tool to lend.'); return; }
-    localStorage.setItem('speeksFaCoverageTools', JSON.stringify(tools)); // remember the set
     const old = btn.textContent;
     btn.disabled = true; btn.textContent = 'Granting…';
     try {
