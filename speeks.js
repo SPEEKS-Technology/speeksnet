@@ -16056,7 +16056,7 @@ function switchFaTab(tab) {
 }
 
 function _faSyncTabButtons() {
-    ['tools', 'hotbar', 'widgets', 'user'].forEach(t => {
+    ['tools', 'hotbar', 'widgets', 'user', 'coverage'].forEach(t => {
         const b = document.getElementById('fa-tab-' + t);
         if (b) b.classList.toggle('active', t === _faTab);
     });
@@ -16079,7 +16079,9 @@ function _faUserOverride(key, name) {
 function renderFaBody() {
     const body = document.getElementById('fa-body');
     if (!body) return;
-    body.innerHTML = _faTab === 'user' ? _faUserTabHtml() : _faMatrixHtml(_faTab);
+    body.innerHTML = _faTab === 'user' ? _faUserTabHtml()
+        : _faTab === 'coverage' ? _faCoverageHtml()
+        : _faMatrixHtml(_faTab);
 }
 
 function _faMatrixHtml(tab) {
@@ -16150,6 +16152,151 @@ async function faToggleRole(key, slug) {
         alert('Could not save: ' + e.message);
         _faLoad(); // resync with the server's truth
     }
+}
+
+// ---- Coverage tab: hand your tools to whoever's covering while you're out ---
+// A convenience layer over per-user overrides: pick the managers covering, tick
+// the tools to lend them, Grant → writes user overrides (enabled=true) in bulk.
+// Their own tools stay (overrides only add), so they see both versions. Manual
+// on/off — the "End coverage" buttons revoke. Nothing expires on its own.
+const _FA_COVER_ROLES = new Set(['manager', 'owner (manager)', 'owner manager', 'multi-store manager', 'assistant manager']);
+
+// Tools offered for coverage: every SPEEKS Tool except the access tool itself
+// (never lend the keys to the kingdom). Remembered tick set lives in localStorage.
+function _faCoverageTools() {
+    return _faCatalog().filter(f => f.tab === 'tools' && f.key !== 'tool-feature-access');
+}
+function _faCoverageDefaultChecked() {
+    // remembered set, else the DM-only tools (ones a manager doesn't get by default)
+    try {
+        const saved = JSON.parse(localStorage.getItem('speeksFaCoverageTools') || 'null');
+        if (Array.isArray(saved) && saved.length) return new Set(saved);
+    } catch (e) { /* fall through to the sensible default */ }
+    return new Set(_faCoverageTools().filter(f => f.def !== 'all' && !f.def.includes('manager')).map(f => f.key));
+}
+
+// The users who currently hold a granted tool (enabled user override on a tool),
+// grouped by subject → [feature keys]. Powers the "active coverage" list.
+function _faActiveCoverage() {
+    const byUser = {};
+    const toolKeys = new Set(_faCoverageTools().map(f => f.key));
+    _featureOvRaw.filter(r => r.subject_type === 'user' && r.enabled === true && toolKeys.has(r.feature_key))
+        .forEach(r => { (byUser[String(r.subject).toLowerCase()] = byUser[String(r.subject).toLowerCase()] || []).push(r.feature_key); });
+    return byUser;
+}
+
+function _faCoverageHtml() {
+    const checked = _faCoverageDefaultChecked();
+    const covering = _faUsers
+        .filter(u => _FA_COVER_ROLES.has(String(u.role || '').toLowerCase().trim()))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    const labelFor = key => (_faCatalog().find(f => f.key === key) || {}).label || key;
+
+    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:14px; line-height:1.5;">
+        Going out of town? Tick the people covering and the tools to lend them, then <b>Grant coverage</b>. They keep their own tools and gain yours on top — so they see both. This stays on until you <b>End coverage</b> (nothing expires by itself).</div>`;
+
+    // 1) recipients
+    html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:4px 2px 6px;">Who's covering</div>`;
+    if (!covering.length) {
+        html += `<div style="font-size:12px; color:#94a3b8; padding:6px 2px;">No manager-level users found in the directory.</div>`;
+    } else {
+        html += `<div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px;">` + covering.map(u => {
+            const low = u.name.toLowerCase();
+            return `<label class="fa-cover-pick" style="display:inline-flex; align-items:center; gap:7px; border:1.5px solid #e2e8f0; border-radius:9px; padding:7px 11px; font-size:12.5px; font-weight:700; color:var(--slate-charcoal); cursor:pointer;">
+                <input type="checkbox" class="fa-cover-user" value="${escapeHtml(low)}" style="width:15px; height:15px; cursor:pointer;">
+                ${escapeHtml(u.name)} <span style="font-weight:600; color:#94a3b8;">${escapeHtml(u.store || u.role || '')}</span>
+            </label>`;
+        }).join('') + `</div>`;
+    }
+
+    // 2) tools to lend
+    html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:4px 2px 6px;">Tools to lend</div>`;
+    html += `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:6px 14px; margin-bottom:16px;">` + _faCoverageTools().map(f => `
+        <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; font-weight:600; color:var(--slate-charcoal); cursor:pointer; padding:3px 0;">
+            <input type="checkbox" class="fa-cover-tool" value="${f.key}" ${checked.has(f.key) ? 'checked' : ''} style="width:15px; height:15px; cursor:pointer;">
+            ${escapeHtml(f.label)}
+        </label>`).join('') + `</div>`;
+
+    html += `<button class="btn-primary" style="font-size:13px; padding:9px 18px;" onclick="faGrantCoverage(this)">Grant coverage</button>`;
+
+    // 3) active coverage
+    const active = _faActiveCoverage();
+    const users = Object.keys(active).sort();
+    html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:22px 2px 6px;">Active coverage</div>`;
+    if (!users.length) {
+        html += `<div style="font-size:12px; color:#94a3b8; padding:6px 2px;">No one currently has borrowed tools.</div>`;
+    } else {
+        html += users.map(low => {
+            const u = _faUsers.find(x => x.name.toLowerCase() === low);
+            const disp = u ? u.name : low;
+            const chips = active[low].map(k => `<span style="display:inline-flex; align-items:center; gap:6px; background:#eef2ff; color:#3730a3; font-size:11.5px; font-weight:700; border-radius:7px; padding:3px 8px;">${escapeHtml(labelFor(k))}<button title="Remove this tool" onclick="faRevokeCoverage('${escapeHtml(low)}','${k}')" style="border:none; background:none; color:#6366f1; cursor:pointer; font-weight:800; font-size:13px; line-height:1;">×</button></span>`).join(' ');
+            return `<div style="display:flex; align-items:flex-start; gap:10px; justify-content:space-between; padding:8px 2px; border-bottom:1px solid #f1f5f9;">
+                <div style="flex:1;"><div style="font-size:12.5px; font-weight:800; color:var(--slate-charcoal); margin-bottom:5px;">${escapeHtml(disp)}${u ? '' : ' <span style=\"font-weight:600;color:#cbd5e1;\">(not in directory)</span>'}</div><div style="display:flex; flex-wrap:wrap; gap:6px;">${chips}</div></div>
+                <button class="btn-secondary" style="height:28px; font-size:11.5px; padding:0 11px; border-radius:7px; flex-shrink:0;" onclick="faEndCoverage('${escapeHtml(low)}')">End coverage</button>
+            </div>`;
+        }).join('');
+    }
+    return html;
+}
+
+// Apply one user override locally + persist to the server. Shared by grant/revoke.
+async function _faSetUserOverride(key, userLow, enabled) {
+    const m = (_featureOv.user[key] = _featureOv.user[key] || {});
+    if (enabled === null) delete m[userLow]; else m[userLow] = enabled;
+    if (!Object.keys(m).length) delete _featureOv.user[key];
+    _featureOvRaw = _featureOvRaw.filter(r => !(r.subject_type === 'user' && r.feature_key === key && String(r.subject).toLowerCase() === userLow));
+    if (enabled !== null) _featureOvRaw.push({ feature_key: key, subject_type: 'user', subject: userLow, enabled });
+    const res = await fetch(FEATURE_ACCESS_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set_override', feature_key: key, subject_type: 'user', subject: userLow, enabled, updated_by: sessionStorage.getItem('speeksUserName') || null }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.success === false) throw new Error((json && json.error) || 'Save failed');
+}
+
+async function faGrantCoverage(btn) {
+    const body = document.getElementById('fa-body');
+    const users = Array.from(body.querySelectorAll('.fa-cover-user:checked')).map(c => c.value);
+    const tools = Array.from(body.querySelectorAll('.fa-cover-tool:checked')).map(c => c.value);
+    if (!users.length) { alert('Pick at least one person to cover for you.'); return; }
+    if (!tools.length) { alert('Tick at least one tool to lend.'); return; }
+    localStorage.setItem('speeksFaCoverageTools', JSON.stringify(tools)); // remember the set
+    const old = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Granting…';
+    try {
+        for (const userLow of users) {
+            for (const key of tools) await _faSetUserOverride(key, userLow, true);
+        }
+        localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+        renderFaBody();
+        applyRoleBasedUI();
+    } catch (e) {
+        alert('Could not grant coverage: ' + e.message);
+        _faLoad();
+    } finally {
+        btn.disabled = false; btn.textContent = old;
+    }
+}
+
+async function faRevokeCoverage(userLow, key) {
+    try {
+        await _faSetUserOverride(key, userLow, null);
+        localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+        renderFaBody();
+        applyRoleBasedUI();
+    } catch (e) { alert('Could not revoke: ' + e.message); _faLoad(); }
+}
+
+async function faEndCoverage(userLow) {
+    const keys = (_faActiveCoverage()[userLow] || []).slice();
+    if (!keys.length) return;
+    if (!confirm(`Remove all ${keys.length} borrowed tool(s) from this person?`)) return;
+    try {
+        for (const key of keys) await _faSetUserOverride(key, userLow, null);
+        localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+        renderFaBody();
+        applyRoleBasedUI();
+    } catch (e) { alert('Could not end coverage: ' + e.message); _faLoad(); }
 }
 
 function _faUserTabHtml() {
