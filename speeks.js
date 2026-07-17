@@ -7988,7 +7988,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkVarianceReminders(); checkRecycleReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -16698,6 +16698,43 @@ async function checkVarianceReminders() {
         _vrMaybePopup();
     } catch (e) { /* next poll retries */ }
 }
+
+// DM-side reminder: fires once per period when the managers' reply window
+// closes — the deadline passes, or every line gets explained early — and the
+// DM hasn't left any notes yet. The manager-side popups above don't apply to
+// the DM, so this is their "your turn" ping.
+async function checkVarianceDmReminders() {
+    if (!_vrIsDM()) return;
+    if (!_vrDmRemindersStarted) {
+        _vrDmRemindersStarted = true;
+        setInterval(checkVarianceDmReminders, 10 * 60 * 1000);
+    }
+    try {
+        const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=OVL,LEE,WSP,MPL,BAL&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json || json.success === false) return;
+        const cutoff = Date.now() - 45 * 86400000;
+        const periods = (json.data || []).filter(p => new Date(p.uploaded_at).getTime() > cutoff);
+        const bubble = document.getElementById('claimAlertBubble');
+        if (!bubble || bubble.style.display === 'flex') return; // next poll retries
+        for (const p of periods) {
+            if (p.dm_notes_at) continue; // DM already responded to this period
+            if (!p.items) continue;
+            const allDone = p.answered >= p.items;
+            const duePassed = Date.now() > new Date(p.manager_due_at).getTime();
+            if (!allDone && !duePassed) continue;
+            const key = `speeksVRDmTurnSeen_${p.id}`;
+            if (localStorage.getItem(key)) continue;
+            localStorage.setItem(key, '1');
+            _vrRenderBubble('📝', 'Variance replies are ready for your review',
+                `${p.store} ${formatVarianceRange(p.date_from, p.date_to)}: ${allDone
+                    ? `all ${p.items} lines are explained`
+                    : `the managers' deadline has passed (${p.answered}/${p.items} explained)`} — time to add your DM notes.`);
+            return;
+        }
+    } catch (e) { /* next poll retries */ }
+}
+let _vrDmRemindersStarted = false;
 
 function _vrMaybePopup() {
     const bubble = document.getElementById('claimAlertBubble');
