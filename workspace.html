@@ -9,12 +9,15 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260714d">
+  <link rel="stylesheet" href="styles.css?v=20260716e">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260714e" defer></script>
+  <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
+       Vendored locally — the CDN copy kept getting blocked on some networks. -->
+  <script src="xlsx.full.min.js?v=0.18.5"></script>
+  <script src="speeks.js?v=20260717q" defer></script>
 </head>
 <body class="preload">
 
@@ -73,7 +76,7 @@
       <div class="greeting-stack">
         <h2 id="userGreeting">Welcome!</h2>
         <div class="version-signout-row">
-            <span class="version-tag">v2.2.1</span>
+            <span class="version-tag">v2.2.2</span>
             <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
         </div>
       </div>
@@ -96,9 +99,9 @@
         <span id="cl-progress-chip" class="cl-progress-chip"></span>
         <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
-    <button class="cl-nav-toggle audit-nav-toggle dynamic-module-flex role-manager role-owner-manager role-assistant-manager" data-feature="widget-audit-panel" onclick="toggleAuditPanel(event); loadAudit();" title="Store Audit">
+    <button class="cl-nav-toggle audit-nav-toggle dynamic-module-flex role-manager role-owner-manager role-assistant-manager" data-feature="widget-audit-panel" onclick="toggleAuditPanel(event); loadAudit();" title="Cleaning Checklist">
         <span style="font-size: 13px; line-height: 1;">🧹</span>
-        <span>Store Audit</span>
+        <span>Cleaning Checklist</span>
         <span id="audit-progress-chip" class="cl-progress-chip"></span>
         <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
     </button>
@@ -517,8 +520,9 @@
         <!-- TEMP HIDDEN: restore by uncommenting this button, moving `active` back to it (tab + #ws-pane-b2b), and re-adding 'b2b' to initWorkspace() in speeks.js
         <button class="ws-tab active dynamic-module-flex role-district-manager role-ceo role-tom role-manager role-owner-manager role-assistant-manager" id="ws-tab-b2b" onclick="switchWorkspaceTab('b2b')">🏢 B2B</button>
         -->
-        <button class="ws-tab active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" id="ws-tab-brief" onclick="switchWorkspaceTab('brief')">📋 Monthly Breakdown</button>
-        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" id="ws-tab-kpis" onclick="switchWorkspaceTab('kpis')">📊 Weekly KPI's</button>
+        <button class="ws-tab active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" data-feature="widget-ws-monthly-breakdown" id="ws-tab-brief" onclick="switchWorkspaceTab('brief')">📋 Monthly Breakdown</button>
+        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" data-feature="widget-ws-weekly-kpis" id="ws-tab-kpis" onclick="switchWorkspaceTab('kpis')">📊 Weekly KPI's</button>
+        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager" data-feature="widget-variance-replies" id="ws-tab-vreplies" onclick="switchWorkspaceTab('vreplies')">📉 Variance Replies</button>
       </div>
 
       <div class="ws-panes">
@@ -607,6 +611,36 @@
           </div>
           <div class="b2b-board ws-scroll" id="b2bDealList">
               <div class="status-message">Syncing B2B Deals…</div>
+          </div>
+      </div>
+    </section>
+
+    <!-- ===== VARIANCE REPLIES PANE ===== -->
+    <section class="ws-pane" id="ws-pane-vreplies">
+      <div class="card kpi-master-card district-master-panel ws-panel">
+          <div class="district-kpi-header kpi-modal-header-tight">
+              <div class="align-center gap-15" style="flex-wrap:wrap;">
+                  <span class="district-kpi-title">Variance Replies</span>
+                  <select id="vr-period-select" class="kpi-select" onchange="vrOnPeriodChange()" style="display:none;"></select>
+                  <select id="vr-store-select" class="kpi-select dynamic-module-block role-district-manager" onchange="vrOnStoreChange()" style="display:none;">
+                      <option value="OVL">OVL</option>
+                      <option value="LEE">LEE</option>
+                      <option value="WSP">WSP</option>
+                      <option value="MPL">MPL</option>
+                      <option value="BAL">BAL</option>
+                  </select>
+                  <span id="vr-subtitle" style="font-size:11px;color:#888;font-weight:600;"></span>
+              </div>
+              <div class="align-center gap-8">
+                  <button id="vr-edit-btn" class="kpi-update-trigger-btn" style="display:none;" onclick="vrStartEdit()">✏️ Edit</button>
+                  <button id="vr-save-btn" class="kpi-save-section-btn" style="display:none;" onclick="vrSaveEdits(this)">Save</button>
+                  <button id="vr-edit-cancel-btn" class="kpi-cancel-btn" style="display:none;" onclick="vrCancelEdit()">Cancel</button>
+                  <button id="vr-cancel-upload-btn" class="kpi-cancel-btn" onclick="vrCancelUpload()" style="display:none;">Cancel</button>
+                  <button id="vr-upload-btn" class="kpi-update-trigger-btn dynamic-module-flex role-district-manager" onclick="vrToggleUpload()" style="display:none;">Upload Report</button>
+              </div>
+          </div>
+          <div class="weekly-kpi-scroll-area ws-scroll" id="vr-body">
+              <div class="status-message">Loading variance replies…</div>
           </div>
       </div>
     </section>
@@ -723,7 +757,7 @@
 <div id="auditSidePanel" data-feature="widget-audit-panel" class="checklist-side-panel dynamic-module-flex role-manager role-owner-manager role-assistant-manager">
     <div class="cl-panel-header">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <h3 style="margin: 0;">Store Audit Checklist</h3>
+            <h3 style="margin: 0;">Cleaning Checklist</h3>
             <button class="modal-close-btn" onclick="toggleAuditPanel(event)" style="width: 28px; height: 28px; font-size: 14px; background: #f1f5f9; color: #64748b;">✖</button>
         </div>
         <div class="notif-tabs">
@@ -1100,6 +1134,7 @@
             <button id="fa-tab-hotbar" class="tab-btn" onclick="switchFaTab('hotbar')">Hotbar Links</button>
             <button id="fa-tab-widgets" class="tab-btn" onclick="switchFaTab('widgets')">Widgets</button>
             <button id="fa-tab-user" class="tab-btn" onclick="switchFaTab('user')">Per-User</button>
+            <button id="fa-tab-coverage" class="tab-btn" onclick="switchFaTab('coverage')">Delegation</button>
         </div>
     </div>
     <div class="manage-content">

@@ -57,6 +57,7 @@ const B2B_URL           = `${_BASE}/b2b-deals`;
 const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
 const RECYCLE_URL       = `${_BASE}/recycle-requests`;
 const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
+const VARIANCE_REPLIES_URL = `${_BASE}/variance-replies`;
 const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
@@ -189,6 +190,13 @@ function lockAndBlurScreen() {
 }
 
 function closeAllModals() {
+    // An audit in progress is easy to nuke by accident (Escape, overlay click,
+    // the ✖) — ask first while unsaved entries exist.
+    const scModal = document.getElementById('scorecardSubmitModal');
+    if (typeof _auditDirty !== 'undefined' && _auditDirty && scModal && scModal.classList.contains('show')) {
+        if (!confirm("Close Submit Scores? Your audit entries haven't been saved yet.")) return;
+        _auditDirty = false;
+    }
     document.body.classList.remove('no-scroll');
     document.body.style.overflow = '';
     document.body.style.position = '';
@@ -587,8 +595,15 @@ window.addEventListener('click', (e) => {
     if (e.target === document.getElementById('globalOverlay')) closeAllModals(); 
 });
 
-document.addEventListener('keydown', (e) => { 
-    if (e.key === 'Escape') closeAllModals(); 
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    // Escape peels one layer at a time: photo viewer, then camera, then modals —
+    // dismissing a picture must never take the audit down with it.
+    const lb = document.getElementById('auditPhotoLightbox');
+    if (lb && lb.style.display === 'flex') { lb.style.display = 'none'; return; }
+    const cam = document.getElementById('auditCameraModal');
+    if (cam && cam.style.display === 'flex') { closeAuditCamera(); return; }
+    closeAllModals();
 });
 
 
@@ -1523,6 +1538,10 @@ async function checkPIN() {
                 _loginStore = MULTISTORE_MANAGER_STORES[0];
             } else {
                 sessionStorage.removeItem('speeksMultiStore');
+                // TOM is homed at OVL rather than CORP (Ethan 2026-07-17). Their
+                // corp-wide powers are role-gated, not store-gated, so this only
+                // changes their default store, not their access.
+                if (_loginRole === 'tom') _loginStore = 'OVL';
             }
             sessionStorage.setItem('speeksUserRole', _loginRole);
             sessionStorage.setItem('speeksUserStore', _loginStore);
@@ -1914,11 +1933,21 @@ function toggleVarianceInput() {
     loadVarianceStoreEmployees();
 }
 
-function loadVarianceStoreEmployees() {
+async function loadVarianceStoreEmployees() {
     const store = document.getElementById('vi-store')?.value;
     const container = document.getElementById('vi-employees');
     if (!container || !store) return;
     container.innerHTML = '';
+
+    // The manager variance widget used to keep liveVarianceDataCache warm; with
+    // it gone, fetch on demand so this tool can still pre-fill the last report's
+    // %s. Best-effort — a blank pre-fill is fine if the fetch fails.
+    if (!liveVarianceDataCache || Object.keys(liveVarianceDataCache).length === 0) {
+        try {
+            const r = await fetch(`${VARIANCE_API_URL}?v=${Date.now()}`);
+            liveVarianceDataCache = await r.json();
+        } catch (_) { /* pre-fill is optional */ }
+    }
 
     // Get users for this store from auth cache
     let storeUsers = [];
@@ -3254,8 +3283,13 @@ function _kpiDecorateEditBtn(force) {
 // Steps 1 & 2: dots on the Analytics nav-link, the Store KPIs sub-tab, and the Weekly toggle
 function applyKpiReminder() {
     const on = _kpiReminderOn();
-    document.querySelectorAll('.nav-link[href="workspace.html"]').forEach(a => _kpiToggleDot(a, on));
+    // The workspace nav-link dot is shared with Variance Replies (both live on
+    // that page): it pulses if EITHER the weekly-KPI window is open or the
+    // manager has variance lines waiting on them.
+    const vrOn = typeof _vrDotNeeded === 'function' && _vrDotNeeded();
+    document.querySelectorAll('.nav-link[href="workspace.html"]').forEach(a => _kpiToggleDot(a, on || vrOn));
     _kpiToggleDot(document.getElementById('ws-tab-kpis'), on);
+    _kpiToggleDot(document.getElementById('ws-tab-vreplies'), vrOn);
     _kpiToggleDot(document.getElementById('kpi-tab-weekly'), on);
     _kpiDecorateEditBtn(on);
 }
@@ -3369,6 +3403,8 @@ function switchWorkspaceTab(name) {
         loadWorkspaceKpis();
     } else if (name === 'b2b') {
         fetchB2BDeals();
+    } else if (name === 'vreplies') {
+        loadVarianceReplies();
     }
     applyKpiReminder();
 }
@@ -3381,7 +3417,16 @@ function initWorkspace() {
     _wsKpiLoaded   = false;
     const hash = (window.location.hash || '').replace('#', '');
     // TEMP: B2B tab hidden — restore by putting 'b2b' back in the list and as the default.
-    const initial = ['brief', 'kpis'].includes(hash) ? hash : 'brief';
+    let initial = ['brief', 'kpis', 'vreplies'].includes(hash) ? hash : 'brief';
+    // A tab can be hidden by its role gate or a Feature Access override
+    // (applyRoleBasedUI already ran), so never land on one the user can't see —
+    // fall back to the first visible tab.
+    const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
+    if (!tabVisible('ws-tab-' + initial)) {
+        const firstVisible = Array.from(document.querySelectorAll('[id^="ws-tab-"]'))
+            .find(b => b.style.display !== 'none' && !b.hidden);
+        if (firstVisible) initial = firstVisible.id.replace('ws-tab-', '');
+    }
     switchWorkspaceTab(initial);
     applyKpiReminder();
 }
@@ -7766,6 +7811,11 @@ function applyRoleBasedUI() {
     // Feature overrides on plain (non role-gated) elements — e.g. individual
     // hotbar links, which normally just inherit their bar's visibility.
     _applyFeatureOverridesToPlainEls(userRoleClass, userName);
+    // Section nav links (Workspace, Operations) have no toggle of their own —
+    // they're derived: show whenever the user can see at least one sub-tab
+    // inside, so granting just one tab (e.g. Variance Replies) reveals the
+    // section with only that tab in it.
+    _applySectionNavVisibility(userRoleClass, userName);
     // Force-enabled hotbar links from bars this user doesn't normally see:
     // a fully-enabled bar shows up as itself; partial picks are collected into
     // a synthetic EXTRAS bar so one borrowed link never drags in a whole
@@ -7966,7 +8016,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -10424,12 +10474,14 @@ function _selectedStoreAudit() {
 // photos are cleared server-side once a new audit is scored.
 let _auditEntryNotes = {};
 let _auditEntryPhotos = {};
+let _auditDirty = false; // unsaved audit work — closeAllModals asks before discarding
 
 function _auSecTitle(sIdx) { return (_auSections()[sIdx] || {}).title || String(sIdx); }
 
 function onAuditNoteInput(sIdx) {
     const el = document.getElementById(`audit-note-${sIdx}`);
     _auditEntryNotes[_auSecTitle(sIdx)] = el ? el.value : '';
+    _auditDirty = true;
 }
 
 // Per-section photo cap. Photos land in the audit-photos bucket individually,
@@ -10445,6 +10497,7 @@ function onAuditPhotoAdd(sIdx, input) {
         if (!f.type || !f.type.startsWith('image/')) return;
         if (_auditEntryPhotos[title].length >= MAX) { return; }
         _auditEntryPhotos[title].push({ file: f, localUrl: URL.createObjectURL(f), name: f.name });
+        _auditDirty = true;
     });
     input.value = '';
     renderAuditSectionPhotos(sIdx);
@@ -10452,7 +10505,7 @@ function onAuditPhotoAdd(sIdx, input) {
 
 function removeAuditPhoto(sIdx, idx) {
     const arr = _auditEntryPhotos[_auSecTitle(sIdx)];
-    if (arr) { arr.splice(idx, 1); renderAuditSectionPhotos(sIdx); }
+    if (arr) { arr.splice(idx, 1); _auditDirty = true; renderAuditSectionPhotos(sIdx); }
 }
 
 function renderAuditSectionPhotos(sIdx) {
@@ -10476,9 +10529,13 @@ function openAuditPhotoLightbox(src) {
     if (!lb) {
         lb = document.createElement('div');
         lb.id = 'auditPhotoLightbox';
+        // Closes itself only — never the audit modal underneath. Backdrop
+        // click, the ✕, or Escape (handled by the global keydown) all work.
         lb.onclick = () => { lb.style.display = 'none'; };
         lb.style.cssText = 'display:none; position:fixed; inset:0; z-index:4000; background:rgba(2,6,23,.85); align-items:center; justify-content:center; padding:30px; cursor:zoom-out;';
-        lb.innerHTML = '<img alt="" style="max-width:92vw; max-height:88vh; border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,.5);">';
+        lb.innerHTML = '<img alt="" onclick="event.stopPropagation();" style="max-width:92vw; max-height:88vh; border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,.5); cursor:default;">' +
+            '<button type="button" title="Close photo" onclick="event.stopPropagation(); document.getElementById(\'auditPhotoLightbox\').style.display=\'none\';" ' +
+            'style="position:absolute; top:16px; right:20px; width:38px; height:38px; border:none; border-radius:50%; background:rgba(255,255,255,0.14); color:#fff; font-size:17px; font-weight:800; line-height:1; cursor:pointer;">✕</button>';
         document.body.appendChild(lb);
     }
     lb.querySelector('img').src = src;
@@ -10559,6 +10616,7 @@ function captureAuditPhoto(sIdx) {
         if (blob) {
             const file = new File([blob], `audit_capture_${Date.now()}.jpg`, { type: 'image/jpeg' });
             _auditEntryPhotos[title].push({ file, localUrl: URL.createObjectURL(blob), name: file.name });
+            _auditDirty = true;
             renderAuditSectionPhotos(sIdx);
         }
         closeAuditCamera();
@@ -10650,6 +10708,7 @@ function renderAuditEntry() {
         renderAuditSectionPhotos(sIdx);
     });
     updateAuditRunningBar();
+    _auditDirty = false; // a fresh render is a clean slate
 }
 
 // Blur handler for the typed award: snap to the half-point grid and clamp to
@@ -10696,6 +10755,7 @@ function toggleAuditEntrySection(sIdx) {
 function onAuditEntryToggle(sIdx, silent) {
     const sec = _auSections()[sIdx];
     if (!sec) return;
+    if (!silent) _auditDirty = true; // silent = programmatic refresh, not typing
     const secTotal = sec.items.reduce((a, i) => a + i.pts, 0);
     let earned = 0;
     document.querySelectorAll(`.audit-entry-input[data-section="${sIdx}"]`).forEach(el => { earned += _auditItemAward(el); });
@@ -10785,6 +10845,7 @@ async function submitNewAudit() {
         if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
         btn.innerText = `Saved — ${json.earned}/${json.possible} (${json.pct}%)`;
         btn.style.background = 'var(--sage-professional)';
+        _auditDirty = false; // saved — nothing left to lose on close
         setTimeout(() => {
             if (typeof fetchScorecardData === 'function') fetchScorecardData();
             if (typeof fetchMasterDistrictDashboard === 'function') fetchMasterDistrictDashboard();
@@ -11914,6 +11975,8 @@ function _positionClaimAlert() {
     const daily = document.getElementById('dailyMessageBubble');
     const dailyVisible = daily && getComputedStyle(daily).display !== 'none' && daily.offsetHeight > 0;
     bubble.style.top = dailyVisible ? (daily.getBoundingClientRect().bottom + 12) + 'px' : '116px';
+    // The recycle bubble stacks below this one — re-flow it whenever this moves.
+    if (typeof _positionRecycleAlert === 'function') _positionRecycleAlert();
 }
 
 // A general red reminder — it does NOT name specific cases; the My Cases tab
@@ -12225,6 +12288,9 @@ window.closeDailyCommentBubble = function() {
 };
 
 async function fetchAndDisplayStoreComment() {
+    // TOM works out of a store but isn't part of its team, so store comments
+    // aren't meant for them.
+    if ((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'tom') return;
     const userStore = String(sessionStorage.getItem('speeksUserStore') || 'OVL').trim().toUpperCase();
     const userName = String(sessionStorage.getItem('speeksUserName') || '').trim();
     const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
@@ -13123,14 +13189,14 @@ async function loadAudit() {
     if (_isMSMChecklist()) { await loadAuditMS(); return; }
     const store = sessionStorage.getItem('speeksUserStore') || 'OVL';
     const container = document.getElementById('auditContent');
-    if (container) container.innerHTML = '<div class="status-message">Syncing Audit...</div>';
+    if (container) container.innerHTML = '<div class="status-message">Syncing checklist...</div>';
     try {
         const res = await fetch(`${STORE_AUDIT_URL}?store=${store}&v=${Date.now()}`);
         auditDataCache = await res.json();
         renderAudit();
     } catch (e) {
         console.error('Audit Fetch Error', e);
-        if (container) container.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load audit checklist.</div>';
+        if (container) container.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load the cleaning checklist.</div>';
     }
 }
 
@@ -13180,7 +13246,7 @@ function renderAudit() {
 // ============================================================================
 async function loadAuditMS() {
     const container = document.getElementById('auditContent');
-    if (container) container.innerHTML = '<div class="status-message">Syncing Audit...</div>';
+    if (container) container.innerHTML = '<div class="status-message">Syncing checklist...</div>';
     try {
         const results = await Promise.all(MULTISTORE_MANAGER_STORES.map(s =>
             fetch(`${STORE_AUDIT_URL}?store=${s}&v=${Date.now()}`).then(r => r.json())
@@ -13192,7 +13258,7 @@ async function loadAuditMS() {
         renderAuditMS();
     } catch (e) {
         console.error('MSM Audit Fetch Error', e);
-        if (container) container.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load audit checklist.</div>';
+        if (container) container.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load the cleaning checklist.</div>';
     }
 }
 
@@ -14669,6 +14735,20 @@ async function submitRecycleRequest() {
 
 let _recycleMine = []; // last fetched requests, so filter changes re-render without refetching
 let _recycleReportPreviewing = false; // true = My Requests tab is showing the report email preview
+let _recycleNoteOpen = new Set();  // line ids with the DM note editor expanded
+let _recycleSeenBefore = {};       // id → ms this viewer had seen up to, snapshotted pre-stamp (drives NEW dots)
+
+// A line needs the manager's attention when the DM's latest review or note is
+// newer than the last time the manager opened their requests.
+function _recycleNeedsAttention(r) {
+    const act = Math.max(
+        r.reviewed_at ? new Date(r.reviewed_at).getTime() : 0,
+        r.dm_note_at ? new Date(r.dm_note_at).getTime() : 0,
+    );
+    if (!act) return false;
+    const seen = r.manager_seen_at ? new Date(r.manager_seen_at).getTime() : 0;
+    return act > seen;
+}
 
 async function fetchMyRecycleRequests() {
     const wrap = document.getElementById('recycle-table-wrap');
@@ -14685,6 +14765,29 @@ async function fetchMyRecycleRequests() {
         const json = await res.json();
         if (!json.success) throw new Error(json.error);
         _recycleMine = json.data || [];
+        // Snapshot what this viewer had already seen per line (drives the
+        // pulsing NEW dots), then stamp the fresh lines seen for their side —
+        // managers track review/note activity, the DM tracks new submissions,
+        // delete requests and manager replies.
+        const isReviewer = _recycleCanReview();
+        const getT = v => (v ? new Date(v).getTime() : 0);
+        const seenField = isReviewer ? 'dm_seen_at' : 'manager_seen_at';
+        _recycleSeenBefore = {};
+        _recycleMine.forEach(r => { _recycleSeenBefore[r.id] = getT(r[seenField]); });
+        const fresh = _recycleMine.filter(r => {
+            const seen = _recycleSeenBefore[r.id];
+            return isReviewer
+                ? (getT(r.created_at) > seen || getT(r.mgr_reply_at) > seen || getT(r.delete_requested_at) > seen)
+                : (getT(r.reviewed_at) > seen || getT(r.dm_note_at) > seen);
+        });
+        if (fresh.length) {
+            fetch(RECYCLE_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'mark_seen', ids: fresh.map(r => r.id), role: isReviewer ? 'dm' : 'mgr' }),
+            }).catch(() => {});
+            const now = new Date().toISOString();
+            fresh.forEach(r => { r[seenField] = now; });
+        }
         _buildRecycleViewFilters(stores);
         renderMyRecycleTable();
     } catch (e) {
@@ -14742,17 +14845,18 @@ function renderMyRecycleTable() {
                 <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email →</button>
             </div>`
             : '';
-        wrap.innerHTML = `${emptyBtns}<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No recycle requests for ${_recycleMonthLabel(month)}.</div>`;
+        wrap.innerHTML = `${emptyBtns}${_recycleDeleteReqPanel(canReview)}<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No recycle requests for ${_recycleMonthLabel(month)}.</div>`;
         return;
     }
     rows = [...rows].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     // Lines reviewed as "ignore" had their cost consolidated into another SKU
     // (e.g. 5 broken units merged into 1 rebuilt item) — they were never really
-    // recycled out, so their cost is excluded from every total.
+    // recycled out, so their cost is excluded from every total. "denied" lines
+    // were rejected by the DM (item is NOT to be recycled) — excluded too.
     const ignoredTotal = rows.filter(r => r.review_verdict === 'ignore').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
-    const total = rows.filter(r => r.review_verdict !== 'ignore').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+    const deniedTotal = rows.filter(r => r.review_verdict === 'denied').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
+    const total = rows.filter(r => r.review_verdict !== 'ignore' && r.review_verdict !== 'denied').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
     const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
-    const today = new Date().toDateString();
 
     const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
     const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
@@ -14779,44 +14883,123 @@ function renderMyRecycleTable() {
             <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email →</button>
         </div>`
         : '';
+    html += _recycleDeleteReqPanel(canReview);
+    const colCount = 9 + (showStore ? 1 : 0);
     html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
-        <thead><tr>${canReview ? th('Review') : ''}${th('Date')}${showStore ? th('Store') : ''}${th('SKU')}${th('Description')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
+        <thead><tr>${canReview ? th('Review') : th('Status')}${th('Date')}${showStore ? th('Store') : ''}${th('SKU')}${th('Description')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
     rows.forEach(r => {
-        // Same-day typo-fix window: the store can pull a request back the day it
-        // was submitted; after that only a DM/CEO can remove it.
-        const canDelete = canReview || new Date(r.created_at).toDateString() === today;
-        const delBtn = canDelete
-            ? `<button onclick="deleteRecycleRequest('${r.id}')" title="${canReview ? 'Delete this line' : 'Delete (same-day only)'}" style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:8px; cursor:pointer; font-size:15px; line-height:1;">🗑</button>`
-            : '';
-        const verdict = ['for', 'against', 'ignore'].includes(r.review_verdict) ? r.review_verdict : '';
-        let reviewCell = '';
+        // A line with a pending delete request is LOCKED — no reviewing, no
+        // notes, no replies — until the DM approves/denies it or the manager
+        // cancels their own request.
+        const delPending = !!r.delete_requested_at;
+        // Managers never delete directly — the trash button files a delete
+        // request that the DM/CEO approves or denies (same model as claims).
+        let delBtn = '';
+        if (delPending) {
+            delBtn = canReview
+                ? `<span title="Delete request pending — approve or deny it in the panel above" style="display:inline-flex; align-items:center; gap:4px; font-size:10px; font-weight:800; color:#b45309; background:#fffbeb; border:1.5px solid #fde68a; border-radius:8px; padding:6px 8px; white-space:nowrap;">🗑 Requested</span>`
+                : `<button onclick="cancelRecycleDeleteRequest('${r.id}')" title="Waiting on DM/CEO approval — click to cancel your delete request and unlock the line" style="display:inline-flex; align-items:center; gap:4px; font-size:10px; font-weight:800; color:#b45309; background:#fffbeb; border:1.5px solid #fde68a; border-radius:8px; padding:6px 8px; white-space:nowrap; cursor:pointer;">🗑 Requested — Cancel?</button>`;
+        } else if (canReview) {
+            delBtn = `<button onclick="deleteRecycleRequest('${r.id}')" title="Delete this line" style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:8px; cursor:pointer; font-size:15px; line-height:1;">🗑</button>`;
+        } else {
+            delBtn = `<button onclick="requestRecycleDelete('${r.id}')" title="Request deletion (a DM or CEO must approve)" style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; background:#fff5f5; border:1.5px solid #fecaca; border-radius:8px; cursor:pointer; font-size:15px; line-height:1;">🗑</button>`;
+        }
+        // DM gets the note button on every line; a manager gets a reply button
+        // once there's a DM note to respond to (answer a question, push back
+        // before the verdict, etc.). Both disappear while the line is locked.
+        const noteBtn = delPending ? '' : (canReview
+            ? `<button onclick="toggleRecycleNote('${r.id}')" title="${r.dm_note ? 'Edit your note' : 'Leave a note for the store'}" style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; background:${r.dm_note ? '#eff6ff' : '#f8fafc'}; border:1.5px solid ${r.dm_note ? '#bfdbfe' : '#e2e8f0'}; border-radius:8px; cursor:pointer; font-size:14px; line-height:1; margin-right:6px;">💬</button>`
+            : (r.dm_note
+                ? `<button onclick="toggleRecycleNote('${r.id}')" title="${r.mgr_reply ? 'Edit your reply' : "Reply to the DM's note"}" style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; background:${r.mgr_reply ? '#f0fdf4' : '#eff6ff'}; border:1.5px solid ${r.mgr_reply ? '#a7f3d0' : '#bfdbfe'}; border-radius:8px; cursor:pointer; font-size:14px; line-height:1; margin-right:6px;">↩</button>`
+                : ''));
+        const verdict = ['for', 'against', 'ignore', 'denied'].includes(r.review_verdict) ? r.review_verdict : '';
+        // Pulsing dots pinpoint exactly what's new for THIS viewer: on the line
+        // when the line itself changed (new verdict for a manager, a newly
+        // submitted line for the DM), on a specific note when that note is new.
+        const seenB = _recycleSeenBefore[r.id] || 0;
+        const tOf = v => (v ? new Date(v).getTime() : 0);
+        const NEW_DOT = '<span class="recycle-new-dot" title="New since you last looked"></span>';
+        const lineIsNew = canReview ? tOf(r.created_at) > seenB : tOf(r.reviewed_at) > seenB;
+        let firstCell = '';
         if (canReview) {
-            const vColor = verdict === 'against' ? '#dc2626' : verdict === 'for' ? '#059669' : verdict === 'ignore' ? '#475569' : '#94a3b8';
-            const vBorder = verdict === 'against' ? '#fecaca' : verdict === 'for' ? '#a7f3d0' : verdict === 'ignore' ? '#94a3b8' : '#cbd5e1';
-            reviewCell = td(`<select onchange="setRecycleReviewed('${r.id}', this.value)" title="${r.reviewed_at ? 'Reviewed' + (r.reviewed_by ? ' by ' + escapeHtml(r.reviewed_by) : '') : 'Against = out of inventory · For = store-use tool · Ignore = cost moved to another SKU, not counted'}" style="padding:5px 6px; border:1.5px solid ${vBorder}; border-radius:8px; font-size:11px; font-weight:800; color:${vColor}; background:#fff; cursor:pointer;">
+            const vColor = verdict === 'against' ? '#dc2626' : verdict === 'for' ? '#059669' : verdict === 'ignore' ? '#475569' : verdict === 'denied' ? '#b91c1c' : '#94a3b8';
+            const vBorder = verdict === 'against' ? '#fecaca' : verdict === 'for' ? '#a7f3d0' : verdict === 'ignore' ? '#94a3b8' : verdict === 'denied' ? '#fca5a5' : '#cbd5e1';
+            firstCell = td(`${lineIsNew ? NEW_DOT : ''}<select ${delPending ? 'disabled' : ''} onchange="setRecycleReviewed('${r.id}', this.value)" title="${delPending ? 'Locked — a delete request is pending on this line' : r.reviewed_at ? 'Reviewed' + (r.reviewed_by ? ' by ' + escapeHtml(r.reviewed_by) : '') : 'Against = out of inventory · For = store-use tool · Ignore = cost moved to another SKU · Deny = do not recycle'}" style="padding:5px 6px; border:1.5px solid ${vBorder}; border-radius:8px; font-size:11px; font-weight:800; color:${vColor}; background:#fff; cursor:${delPending ? 'not-allowed' : 'pointer'};${delPending ? ' opacity:0.55;' : ''}">
                 <option value=""${verdict ? '' : ' selected'}>— Review —</option>
                 <option value="against"${verdict === 'against' ? ' selected' : ''}>Against Store</option>
                 <option value="for"${verdict === 'for' ? ' selected' : ''}>For Store</option>
                 <option value="ignore"${verdict === 'ignore' ? ' selected' : ''}>Ignore</option>
+                <option value="denied"${verdict === 'denied' ? ' selected' : ''}>Deny</option>
             </select>`, 'text-align:center; white-space:nowrap;');
+        } else {
+            // Manager-facing status: any verdict except "denied" means the DM
+            // approved the recycle; no verdict yet = pending.
+            const chip = verdict === 'denied'
+                ? `<span style="display:inline-block; font-size:10.5px; font-weight:800; color:#b91c1c; background:#fee2e2; border:1px solid #fca5a5; border-radius:20px; padding:3px 10px; white-space:nowrap;">✕ Denied</span>`
+                : verdict
+                ? `<span style="display:inline-block; font-size:10.5px; font-weight:800; color:#166534; background:#dcfce7; border:1px solid #a7f3d0; border-radius:20px; padding:3px 10px; white-space:nowrap;">✓ Approved</span>`
+                : `<span style="display:inline-block; font-size:10.5px; font-weight:800; color:#64748b; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:20px; padding:3px 10px; white-space:nowrap;">⏳ Pending</span>`;
+            firstCell = td((lineIsNew ? NEW_DOT : '') + chip, 'white-space:nowrap;');
         }
-        const rowBg = canReview && verdict ? `background:${verdict === 'against' ? '#fef2f2' : verdict === 'for' ? '#f0fdf4' : '#f1f5f9'};` : '';
+        const struck = verdict === 'ignore' || verdict === 'denied';
+        const struckTitle = verdict === 'ignore' ? 'Not counted — cost was moved into another SKU' : 'Not counted — the request was denied, item stays in inventory';
+        const rowBg = delPending ? 'background:#fffbeb;' // locked amber while awaiting approve/deny/cancel
+            : verdict === 'denied' ? 'background:#fee2e2;'
+            : (canReview && verdict ? `background:${verdict === 'against' ? '#fef2f2' : verdict === 'for' ? '#f0fdf4' : '#f1f5f9'};` : '');
+        // Full back-and-forth thread, in order — DM notes in blue, manager
+        // replies indented in green. Nothing is ever overwritten by a new note.
+        const thread = Array.isArray(r.note_thread) && r.note_thread.length
+            ? r.note_thread
+            : [ // legacy rows from before threading
+                ...(r.dm_note ? [{ role: 'dm', text: r.dm_note, by: r.dm_note_by }] : []),
+                ...(r.mgr_reply ? [{ role: 'mgr', text: r.mgr_reply, by: r.mgr_reply_by }] : []),
+            ];
+        // A dot lands on the specific note that's new — only for messages from
+        // the OTHER side (your own notes are never "new" to you).
+        const otherRole = canReview ? 'mgr' : 'dm';
+        const noteLine = thread.map(n => {
+            const noteDot = (n.role === otherRole && tOf(n.at) > seenB) ? NEW_DOT : '';
+            return n.role === 'dm'
+                ? `<div style="margin-top:4px; font-size:11.5px; font-weight:600; color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; border-radius:7px; padding:4px 8px;">${noteDot}💬 ${escapeHtml(n.text || '')}${n.by ? ` <span style="color:#94a3b8;">— ${escapeHtml(n.by)}</span>` : ''}</div>`
+                : `<div style="margin-top:3px; margin-left:14px; font-size:11.5px; font-weight:600; color:#047857; background:#f0fdf4; border:1px solid #a7f3d0; border-radius:7px; padding:4px 8px;">${noteDot}↩ ${escapeHtml(n.text || '')}${n.by ? ` <span style="color:#94a3b8;">— ${escapeHtml(n.by)}</span>` : ''}</div>`;
+        }).join('');
         html += `<tr style="${rowBg}">
-            ${reviewCell}
+            ${firstCell}
             ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
             ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`) : ''}
             ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.sku || '')}</span>`)}
-            ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>`)}
+            ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>${noteLine}`)}
             ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;')}
             ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}
-            ${td(verdict === 'ignore'
-                ? `<span style="text-decoration:line-through; color:#94a3b8;" title="Not counted — cost was moved into another SKU">${_fmtRecycleMoney(_recycleLineTotal(r))}</span>`
+            ${td(struck
+                ? `<span style="text-decoration:line-through; color:#94a3b8;" title="${struckTitle}">${_fmtRecycleMoney(_recycleLineTotal(r))}</span>`
                 : _fmtRecycleMoney(_recycleLineTotal(r)), 'white-space:nowrap; font-weight:800;')}
             ${td(`<span style="color:#94a3b8; white-space:nowrap;">${escapeHtml(r.created_by || '—')}</span>`)}
-            ${td(delBtn, 'text-align:right;')}
+            ${td(noteBtn + delBtn, 'text-align:right; white-space:nowrap;')}
         </tr>`;
+        if (_recycleNoteOpen.has(r.id) && !delPending) {
+            // Appends a NEW message to the thread — earlier notes are never
+            // touched, so a longer back-and-forth can't override anything.
+            if (canReview) {
+                html += `<tr><td colspan="${colCount}" style="padding:4px 10px 12px; background:#f8fafc; border-bottom:1px solid #f1f5f9;">
+                    <div style="display:flex; gap:8px; align-items:flex-start;">
+                        <textarea id="recycle-note-ta-${r.id}" rows="2" placeholder="${r.dm_note ? 'Add another note for the store…' : 'Note for the store (e.g. why it\'s denied, what to do instead)…'}" style="flex:1; box-sizing:border-box; padding:7px 9px; border:1.5px solid #bfdbfe; border-radius:7px; font-size:12px; font-family:inherit; resize:vertical;"></textarea>
+                        <button class="btn-primary" style="font-size:12px; padding:7px 14px;" onclick="saveRecycleNote('${r.id}', this)">Add note</button>
+                        <button class="kpi-cancel-btn" onclick="toggleRecycleNote('${r.id}')">Cancel</button>
+                    </div>
+                </td></tr>`;
+            } else if (r.dm_note) {
+                html += `<tr><td colspan="${colCount}" style="padding:4px 10px 12px; background:#f8fafc; border-bottom:1px solid #f1f5f9;">
+                    <div style="display:flex; gap:8px; align-items:flex-start;">
+                        <textarea id="recycle-reply-ta-${r.id}" rows="2" placeholder="Reply to the DM's note…" style="flex:1; box-sizing:border-box; padding:7px 9px; border:1.5px solid #a7f3d0; border-radius:7px; font-size:12px; font-family:inherit; resize:vertical;"></textarea>
+                        <button class="btn-primary" style="font-size:12px; padding:7px 14px;" onclick="saveRecycleReply('${r.id}', this)">Add reply</button>
+                        <button class="kpi-cancel-btn" onclick="toggleRecycleNote('${r.id}')">Cancel</button>
+                    </div>
+                </td></tr>`;
+            }
+        }
     });
-    const labelSpan = (canReview ? 1 : 0) + (showStore ? 1 : 0) + 5;
+    const labelSpan = 1 + (showStore ? 1 : 0) + 5;
     const footLabel = (t, c) => `<td colspan="${labelSpan}" style="padding:${c ? '4px' : '11px'} 10px; font-weight:800; font-size:${c ? '10.5px' : '12px'}; color:#94a3b8; text-transform:uppercase; letter-spacing:.4px;">${t}</td>`;
     html += `</tbody><tfoot><tr>
         ${footLabel(`Total recycled cost · ${_recycleMonthLabel(month)}`)}
@@ -14836,8 +15019,297 @@ function renderMyRecycleTable() {
         // struck-through lines above it.
         html += `<tr>${footLabel('Ignored (cost moved to another SKU)', true)}<td style="padding:4px 10px 11px; font-weight:900; font-size:12px; color:#94a3b8; white-space:nowrap; text-decoration:line-through;">${_fmtRecycleMoney(ignoredTotal)}</td><td colspan="2"></td></tr>`;
     }
+    if (deniedTotal) {
+        html += `<tr>${footLabel('Denied (not recycled — stays in inventory)', true)}<td style="padding:4px 10px 11px; font-weight:900; font-size:12px; color:#b91c1c; white-space:nowrap; text-decoration:line-through;">${_fmtRecycleMoney(deniedTotal)}</td><td colspan="2"></td></tr>`;
+    }
     html += `</tfoot></table></div>`;
     wrap.innerHTML = html;
+}
+
+// Pending delete requests (DM/CEO) — pulled from every fetched month, not just
+// the filtered one, so a request can't hide behind the month filter. Mirrors
+// the insurance-claims approval queue.
+function _recycleDeleteReqPanel(canReview) {
+    if (!canReview) return '';
+    const delReqs = _recycleMine.filter(r => r.delete_requested_at)
+        .sort((a, b) => new Date(a.delete_requested_at) - new Date(b.delete_requested_at));
+    if (!delReqs.length) return '';
+    return `<div style="background:#fffbeb; border:1.5px solid #fde68a; border-radius:12px; padding:14px 16px; margin-bottom:14px;">
+        <div style="font-weight:800; font-size:13px; color:#92400e; margin-bottom:10px;">🗑 Delete requests (${delReqs.length}) — approval needed</div>
+        <div style="display:flex; flex-direction:column; gap:8px;">` +
+        delReqs.map(r => `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:#fff; border:1px solid #fde68a; border-radius:9px; padding:9px 12px;">
+            <div style="font-size:12.5px; color:var(--slate-charcoal);">
+                <span style="font-weight:800;">${escapeHtml(r.store || '')}</span>
+                · <span style="font-weight:700;">${escapeHtml(r.sku || '')}</span>
+                <span style="color:#94a3b8;"> — ${escapeHtml(r.description || '')} · qty ${Number(r.quantity) || 1} · ${_fmtRecycleMoney(_recycleLineTotal(r))}</span>
+                <span style="color:#b45309; font-weight:700;"> · requested by ${escapeHtml(r.delete_requested_by || 'Manager')}</span>
+            </div>
+            <div style="display:flex; gap:8px;">
+                <button onclick="approveRecycleDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Approve delete</button>
+                <button onclick="denyRecycleDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#f1f5f9; border:1.5px solid #cbd5e1; color:#475569;">Deny</button>
+            </div>
+        </div>`).join('') +
+        `</div></div>`;
+}
+
+// Manager-side: request removal. Recycle lines are never deleted directly by a
+// manager — a DM/CEO must approve, so nothing quietly disappears.
+async function requestRecycleDelete(id) {
+    if (!confirm('Request deletion of this recycle request?\n\nA DM or CEO must approve it before the line is removed.')) return;
+    try {
+        const res = await fetch(RECYCLE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'request_delete', id, requested_by: sessionStorage.getItem('speeksUserName') || null }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Request failed');
+        const row = _recycleMine.find(r => r.id === id);
+        if (row) {
+            row.delete_requested_at = new Date().toISOString();
+            row.delete_requested_by = sessionStorage.getItem('speeksUserName') || null;
+        }
+        renderMyRecycleTable();
+        alert('Delete request sent. A DM or CEO will review it.');
+    } catch (e) {
+        alert('Could not send the request: ' + (e.message || e));
+    }
+}
+
+// DM/CEO-side: approve → permanently removes the line.
+async function approveRecycleDelete(id) {
+    if (!confirm('Approve deletion? This permanently removes the line and cannot be undone.')) return;
+    try {
+        const res = await fetch(RECYCLE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_request', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Delete failed');
+        fetchMyRecycleRequests();
+    } catch (e) {
+        alert('Could not delete: ' + (e.message || e));
+    }
+}
+
+// Manager-side: cancel their own pending delete request — unlocks the line.
+// Same server action as the DM's deny (both just clear the request flag).
+async function cancelRecycleDeleteRequest(id) {
+    if (!confirm('Cancel your delete request? The line stays and unlocks for notes/replies again.')) return;
+    try {
+        const res = await fetch(RECYCLE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'deny_delete', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        const row = _recycleMine.find(r => r.id === id);
+        if (row) { row.delete_requested_at = null; row.delete_requested_by = null; }
+        renderMyRecycleTable();
+    } catch (e) {
+        alert('Could not cancel the request: ' + (e.message || e));
+    }
+}
+
+// DM/CEO-side: deny → keeps the line, clears the request flag.
+async function denyRecycleDelete(id) {
+    try {
+        const res = await fetch(RECYCLE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'deny_delete', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        const row = _recycleMine.find(r => r.id === id);
+        if (row) { row.delete_requested_at = null; row.delete_requested_by = null; }
+        renderMyRecycleTable();
+    } catch (e) {
+        alert('Could not deny: ' + (e.message || e));
+    }
+}
+
+function toggleRecycleNote(id) {
+    if (_recycleNoteOpen.has(id)) _recycleNoteOpen.delete(id); else _recycleNoteOpen.add(id);
+    renderMyRecycleTable();
+}
+
+// Both sides append to the same per-line thread via add_note — the edge fn
+// also mirrors the latest message per side into dm_note*/mgr_reply* so the
+// alert timestamps keep working.
+async function _recycleAddThreadNote(id, role, taId, btn, oldLabel) {
+    const ta = document.getElementById(taId);
+    if (!ta) return;
+    const text = ta.value.trim();
+    if (!text) { alert('Type a note first.'); return; }
+    const name = sessionStorage.getItem('speeksUserName') || null;
+    btn.disabled = true; btn.innerText = 'Saving…';
+    try {
+        const res = await fetch(RECYCLE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'add_note', id, text, role, by: name }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        const row = _recycleMine.find(r => r.id === id);
+        if (row) {
+            if (!Array.isArray(row.note_thread)) row.note_thread = [];
+            row.note_thread.push(json.entry || { role, text, by: name, at: new Date().toISOString() });
+            if (role === 'dm') { row.dm_note = text; row.dm_note_by = name; row.dm_note_at = new Date().toISOString(); }
+            else { row.mgr_reply = text; row.mgr_reply_by = name; row.mgr_reply_at = new Date().toISOString(); }
+        }
+        _recycleNoteOpen.delete(id);
+        renderMyRecycleTable();
+    } catch (e) {
+        btn.disabled = false; btn.innerText = oldLabel;
+        alert('Could not save: ' + e.message);
+    }
+}
+
+function saveRecycleNote(id, btn) { _recycleAddThreadNote(id, 'dm', `recycle-note-ta-${id}`, btn, 'Add note'); }
+function saveRecycleReply(id, btn) { _recycleAddThreadNote(id, 'mgr', `recycle-reply-ta-${id}`, btn, 'Add reply'); }
+
+// ---- recycle alerts ----------------------------------------------------------
+// Managers: popup when the DM reviews or notes their requests (opening the My
+// Requests tab marks lines seen, which stops it re-firing on other devices).
+// DM/CEO: popup when a manager replies to one of their notes.
+// The popup lives in its OWN bubble so it never fights with the claims/variance
+// red bubble or the green store comment — they stack vertically instead.
+let _recycleRemindersStarted = false;
+
+async function checkRecycleReminders() {
+    const isReviewer = _recycleCanReview();
+    if (!isReviewer && !_vrIsManager()) return;
+    const stores = _recycleStores();
+    if (!stores.length) return;
+    if (!_recycleRemindersStarted) {
+        _recycleRemindersStarted = true;
+        setInterval(checkRecycleReminders, 10 * 60 * 1000);
+    }
+    try {
+        const res = await fetch(`${RECYCLE_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json || json.success === false) return;
+        const rows = json.data || [];
+
+        if (isReviewer) {
+            // DM/CEO: anything that arrived since the last alert on this device —
+            // new submissions (the old email flow's trigger), delete requests
+            // awaiting approval, and manager replies to notes.
+            const getT = v => (v ? new Date(v).getTime() : 0);
+            const sNew = Number(localStorage.getItem('speeksRecycleNewSeen') || 0);
+            const sDel = Number(localStorage.getItem('speeksRecycleDelSeen') || 0);
+            const sRep = Number(localStorage.getItem('speeksRecycleReplySeen') || 0);
+
+            const freshNew = rows.filter(r => !r.reviewed_at && getT(r.created_at) > sNew);
+            const freshDel = rows.filter(r => getT(r.delete_requested_at) > sDel);
+            const freshRep = rows.filter(r => getT(r.mgr_reply_at) > sRep);
+            if (!freshNew.length && !freshDel.length && !freshRep.length) return;
+
+            const bump = (key, list, f) => { if (list.length) localStorage.setItem(key, String(Math.max(...list.map(f)))); };
+            bump('speeksRecycleNewSeen', freshNew, r => getT(r.created_at));
+            bump('speeksRecycleDelSeen', freshDel, r => getT(r.delete_requested_at));
+            bump('speeksRecycleReplySeen', freshRep, r => getT(r.mgr_reply_at));
+
+            const storeList = list => [...new Set(list.map(r => (r.store || '').toUpperCase()))].join(', ');
+            const parts = [];
+            if (freshNew.length) parts.push(`${freshNew.length} new request${freshNew.length > 1 ? 's' : ''} from ${storeList(freshNew)}`);
+            if (freshDel.length) parts.push(`${freshDel.length} delete request${freshDel.length > 1 ? 's' : ''} awaiting approval`);
+            if (freshRep.length) parts.push(`${freshRep.length} ${freshRep.length > 1 ? 'replies' : 'reply'} to your notes`);
+            _recycleRenderBubble('♻️', 'Recycle requests need your review', parts.join(' · ') + '.');
+            return;
+        }
+
+        // Manager: reviews / notes on my store's requests I haven't seen yet.
+        const fresh = rows.filter(_recycleNeedsAttention);
+        if (!fresh.length) return;
+        // One popup per batch of activity: remember the newest activity stamp we
+        // alerted on, so the same reviews don't re-popup every poll — but a NEWER
+        // review/note after that fires again.
+        const latest = Math.max(...fresh.map(r => Math.max(
+            r.reviewed_at ? new Date(r.reviewed_at).getTime() : 0,
+            r.dm_note_at ? new Date(r.dm_note_at).getTime() : 0,
+        )));
+        if (Number(localStorage.getItem('speeksRecycleAlertSeen') || 0) >= latest) return;
+        localStorage.setItem('speeksRecycleAlertSeen', String(latest));
+
+        const approved = fresh.filter(r => r.review_verdict && r.review_verdict !== 'denied').length;
+        const denied = fresh.filter(r => r.review_verdict === 'denied').length;
+        const noted = fresh.filter(r => r.dm_note).length;
+        const parts = [];
+        if (approved) parts.push(`${approved} approved`);
+        if (denied) parts.push(`${denied} denied`);
+        const summary = parts.length ? ` — ${parts.join(', ')}` : '';
+        const noteTxt = noted ? ` ${noted === 1 ? '1 has' : noted + ' have'} a note for you.` : '';
+        _recycleRenderBubble('♻️', 'Your recycle requests were reviewed',
+            `${fresh.length} of your recycle request${fresh.length > 1 ? 's' : ''} ${fresh.length > 1 ? 'have' : 'has'} new activity from the DM${summary}.${noteTxt}`);
+    } catch (e) { /* next poll retries */ }
+}
+
+// Recycle's own bubble — created on demand next to the shared claim bubble so
+// it inherits the same header stacking context (over the dashboard, under the
+// side panels/modals). Positioned below whichever other bubbles are showing.
+function _recycleBubbleEl() {
+    let b = document.getElementById('recycleAlertBubble');
+    if (b) return b;
+    const claim = document.getElementById('claimAlertBubble');
+    if (!claim || !claim.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'recycleAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #2563eb, #1e40af); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(30, 64, 175, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:999;';
+    b.innerHTML = `<span id="recycleAlertBubbleIcon" style="font-size:16px; flex-shrink:0; margin-top:2px;">♻️</span>
+        <span id="recycleAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>
+        <button onclick="closeRecycleAlertBubble()" class="daily-bubble-close" title="Dismiss">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>`;
+    claim.parentElement.appendChild(b);
+    return b;
+}
+
+// Stack under the store comment and/or claim bubble when they're visible.
+function _positionRecycleAlert() {
+    const b = document.getElementById('recycleAlertBubble');
+    if (b) {
+        let top = 116;
+        ['dailyMessageBubble', 'claimAlertBubble'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el && getComputedStyle(el).display !== 'none' && el.offsetHeight > 0) {
+                top = Math.max(top, el.getBoundingClientRect().bottom + 12);
+            }
+        });
+        b.style.top = top + 'px';
+    }
+    // The variance bubble sits below this one — re-flow it whenever this moves.
+    if (typeof _positionVarianceAlert === 'function') _positionVarianceAlert();
+}
+
+function closeRecycleAlertBubble() {
+    const b = document.getElementById('recycleAlertBubble');
+    if (b) b.style.display = 'none';
+}
+
+function _recycleRenderBubble(icon, title, bodyText) {
+    const b = _recycleBubbleEl();
+    if (!b) return;
+    const iconEl = document.getElementById('recycleAlertBubbleIcon');
+    const textEl = document.getElementById('recycleAlertBubbleText');
+    if (iconEl) iconEl.textContent = icon;
+    textEl.style.display = 'flex';
+    textEl.style.flexDirection = 'column';
+    textEl.style.gap = '7px';
+    textEl.innerHTML = `
+        <div style="line-height:1.4;"><strong>${escapeHtml(title)}</strong></div>
+        <div style="line-height:1.4; opacity:0.96;">${escapeHtml(bodyText)}</div>
+        <button onclick="closeRecycleAlertBubble(); toggleRecycleInventory(); switchRecycleTab('view');"
+            style="align-self:flex-start; background:rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.5); color:#fff; font-weight:800; font-size:12px; border-radius:8px; padding:6px 12px; cursor:pointer;"
+            onmouseover="this.style.background='rgba(255,255,255,0.3)';" onmouseout="this.style.background='rgba(255,255,255,0.18)';">Open Recycle Requests</button>`;
+    b.style.display = 'flex';
+    _positionRecycleAlert();
+    // Re-stack shortly after: the store-comment bubble fades in on its own
+    // 1.5s timer and the claim bubble may land on a later check.
+    setTimeout(_positionRecycleAlert, 2200);
+    b.animate([
+        { transform: 'scale(0.95) translateX(10px)', opacity: 0 },
+        { transform: 'scale(1) translateX(0)', opacity: 1 }
+    ], { duration: 400, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
 }
 
 async function deleteRecycleRequest(id) {
@@ -15009,16 +15481,18 @@ function _recycleReportCompose() {
         const sRows = rows.filter(r => (r.store || '').toUpperCase() === s);
         const name = BOX_STORE_NAMES[s] || s;
         if (!sRows.length) return `${s} - ${name}\n  No recycle requests this month.`;
-        const counted = sum(sRows.filter(r => r.review_verdict !== 'ignore'));
+        const counted = sum(sRows.filter(r => r.review_verdict !== 'ignore' && r.review_verdict !== 'denied'));
         const against = sum(sRows.filter(r => r.review_verdict === 'against'));
         const forUse  = sum(sRows.filter(r => r.review_verdict === 'for'));
         const ignored = sum(sRows.filter(r => r.review_verdict === 'ignore'));
+        const denied  = sum(sRows.filter(r => r.review_verdict === 'denied'));
         unreviewed += sRows.filter(r => !r.reviewed_at).length;
         grandCounted += counted; grandAgainst += against; grandFor += forUse;
         let block = `${s} - ${name}\n  Total Recycled Cost: ${_fmtRecycleMoney(counted)}\n` +
             `    - Recycled out of inventory (against the store): ${_fmtRecycleMoney(against)}\n` +
             `    - Repurposed for store use: ${_fmtRecycleMoney(forUse)}`;
         if (ignored) block += `\n    - Not counted (cost consolidated into another SKU): ${_fmtRecycleMoney(ignored)}`;
+        if (denied) block += `\n    - Not counted (request denied, item kept in inventory): ${_fmtRecycleMoney(denied)}`;
         return block;
     });
 
@@ -15075,7 +15549,7 @@ function copyRecycleReport(button) {
 // '' to clear the review. Updates the local cache and re-renders so the
 // scroll position and month stay put.
 async function setRecycleReviewed(id, verdict) {
-    const reviewed = ['for', 'against', 'ignore'].includes(verdict);
+    const reviewed = ['for', 'against', 'ignore', 'denied'].includes(verdict);
     try {
         const res = await fetch(RECYCLE_URL, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -15146,14 +15620,18 @@ const FEATURE_CATALOG = [
     // ---- Widgets & side panels (ASM inherits employee defaults; mirrored here) ----
     { key: 'widget-goals-panel',       label: 'Goals & Initiatives (sidebar)', tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'employee', 'training', 'assistant-manager'] },
     { key: 'widget-checklist-panel',   label: 'Checklist (sidebar)',           tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'district-manager', 'assistant-manager'] },
-    { key: 'widget-audit-panel',       label: 'Store Audit (sidebar)',         tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-audit-panel',       label: 'Cleaning Checklist (sidebar)',  tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-scorecard-alerts',  label: 'Store Scorecard & Alerts row',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'widget-buying-selling',    label: 'Buying & Sales',                tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     { key: 'widget-emp-listing-goals', label: 'My Listing Goals (employee)',   tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-listing-goals',     label: 'Listing Goals (manager)',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'widget-emp-weekly-kpis',   label: 'My Weekly KPIs (employee)',     tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
-    { key: 'widget-variance-reports',  label: 'Live Variance Reports (manager)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown (tab)',     tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-ws-weekly-kpis',    label: 'Weekly KPIs (tab)',             tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-variance-replies',  label: 'Variance Replies (tab)',        tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
+    { key: 'cap-variance-dm',          label: 'Variance Replies (DM)',         tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
+    { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
     //      the link just inherits it. ----
@@ -15167,7 +15645,6 @@ const FEATURE_CATALOG = [
     { key: 'hb-dm-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-store-passwords', label: 'Store Passwords', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
-    { key: 'hb-dm-variance', label: 'Variance', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-paymore-google-drive', label: 'PayMore Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
@@ -15179,7 +15656,6 @@ const FEATURE_CATALOG = [
     { key: 'hb-mgr-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
     { key: 'hb-mgr-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
     { key: 'hb-mgr-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
-    { key: 'hb-mgr-location-visits', label: 'Location Visits', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
     { key: 'hb-asm-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
     { key: 'hb-asm-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
     { key: 'hb-asm-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
@@ -15212,6 +15688,88 @@ const FEATURE_CATALOG = [
     { key: 'hb-bal-training', label: 'Training', tab: 'hotbar', group: 'BAL Hotbar', def: 'all' },
 ];
 
+// The settings UI only lets you toggle a feature that's in the list above — but
+// enforcement is DOM-driven, so ANY element tagged data-feature is already
+// controllable in effect. To keep the two from drifting (and so a newly-tagged
+// element shows up in this tool automatically, without anyone editing the
+// catalog), the tool renders from _faCatalog(): the curated list above merged
+// with every data-feature found in the live DOM. Curated entries win (nice
+// label/group/defaults); anything else is auto-derived into an "Uncatalogued"
+// group so it's still togglable the moment it's added to the page.
+function _faCatalog() {
+    const byKey = {};
+    FEATURE_CATALOG.forEach(f => { byKey[f.key] = true; });
+    const merged = FEATURE_CATALOG.slice();
+    // 1) anything tagged on THIS page
+    document.querySelectorAll('[data-feature]').forEach(el => {
+        const key = el.getAttribute('data-feature');
+        if (!key || byKey[key]) return;
+        byKey[key] = true; // dedupe repeats of the same key across the page
+        merged.push(_faDeriveEntry(key, el));
+    });
+    // 2) anything tagged on the OTHER shell pages (scanned by _faScanPages when
+    //    the tool opens) so you see the whole site's features from any page
+    _faRemoteFeatures.forEach(entry => {
+        if (byKey[entry.key]) return;
+        byKey[entry.key] = true;
+        merged.push(entry);
+    });
+    return merged;
+}
+
+// The tool can be opened from any of the 5 shells, but the DOM only holds the
+// current page's features. So when it loads, fetch the sibling shells (static,
+// same-origin) and read their data-feature tags directly — that's how a feature
+// living only on Operations shows up while you're on QuickPortal. Runs once per
+// open; results feed _faCatalog() via _faRemoteFeatures.
+const _FA_SHELLS = ['index.html', 'workspace.html', 'operations.html', 'docs.html', 'stats.html'];
+let _faRemoteFeatures = [];
+let _faScanned = false;
+
+async function _faScanPages() {
+    const here = (location.pathname.split('/').pop() || 'index.html').toLowerCase() || 'index.html';
+    const known = {};
+    FEATURE_CATALOG.forEach(f => { known[f.key] = true; });
+    document.querySelectorAll('[data-feature]').forEach(el => { known[el.getAttribute('data-feature')] = true; });
+    const found = {};
+    await Promise.all(_FA_SHELLS.filter(p => p !== here).map(async page => {
+        try {
+            const html = await fetch(`${page}?v=${Date.now()}`).then(r => r.text());
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            doc.querySelectorAll('[data-feature]').forEach(el => {
+                const key = el.getAttribute('data-feature');
+                if (!key || known[key] || found[key]) return;
+                found[key] = _faDeriveEntry(key, el);
+            });
+        } catch (_) { /* a page that won't load just contributes no features */ }
+    }));
+    _faRemoteFeatures = Object.values(found);
+    _faScanned = true;
+    if (_faRemoteFeatures.length) {
+        console.info('[Feature Access] discovered un-catalogued feature(s) on other pages — add FEATURE_CATALOG entries for tidy labels:', _faRemoteFeatures.map(f => f.key));
+    }
+}
+
+// Best-effort metadata for a data-feature key that isn't in FEATURE_CATALOG:
+// bucket by key prefix, default visibility from the element's own role-* classes
+// (exactly what enforcement reads when there's no override), label from its text.
+function _faDeriveEntry(key, el) {
+    let tab = 'widgets';
+    if (key.startsWith('tool-')) tab = 'tools';
+    else if (key.startsWith('hb-')) tab = 'hotbar';
+    const roles = Array.from(el.classList)
+        .filter(c => c.startsWith('role-')).map(c => c.slice(5));
+    // ASM inherits the employee default the same way enforcement does
+    if (roles.includes('employee') && !roles.includes('assistant-manager')) roles.push('assistant-manager');
+    const def = roles.length ? roles : 'all';
+    let label = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!label || label.length > 44) {
+        label = key.replace(/^(tool|hb|widget|nav)-/, '').replace(/-/g, ' ')
+            .replace(/\b\w/g, c => c.toUpperCase());
+    }
+    return { key, label, tab, group: '✨ Uncatalogued', def, _auto: true };
+}
+
 // ---- runtime override state ------------------------------------------------
 let _featureOv = { role: {}, user: {} };  // resolved lookup maps
 let _featureOvRaw = [];                    // raw rows (settings UI needs subjects)
@@ -15243,6 +15801,37 @@ function _featureOverrideFor(featureKey, userRoleClass, userName) {
     const roleSlug = String(userRoleClass || '').replace(/^role-/, '');
     if (byRole && Object.prototype.hasOwnProperty.call(byRole, roleSlug)) return byRole[roleSlug];
     return null;
+}
+
+// Effective visibility of a feature key for this user: an override wins, else
+// the catalog default for their role (mirroring enforcement, incl. the
+// ASM-inherits-employee rule). Used to derive section nav visibility.
+function _featureEffectiveVisible(featureKey, userRoleClass, userName) {
+    const ov = _featureOverrideFor(featureKey, userRoleClass, userName);
+    if (ov !== null) return ov;
+    const feat = FEATURE_CATALOG.find(f => f.key === featureKey);
+    if (!feat) return false;
+    if (feat.def === 'all') return true;
+    const slug = String(userRoleClass || '').replace(/^role-/, '');
+    if (feat.def.includes(slug)) return true;
+    if (slug === 'assistant-manager' && feat.def.includes('employee')) return true;
+    return false;
+}
+
+// Tabbed sections keyed by their nav-link href → the sub-tab feature keys they
+// contain. A section's nav link shows if ANY of its sub-tabs is visible.
+const _SECTION_TABS = {
+    'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies'],
+    'operations.html': ['widget-ops-callbacks'],
+};
+
+function _applySectionNavVisibility(userRoleClass, userName) {
+    Object.keys(_SECTION_TABS).forEach(href => {
+        const link = document.querySelector(`.nav-bar a.nav-link[href="${href}"]`);
+        if (!link) return;
+        const vis = _SECTION_TABS[href].some(k => _featureEffectiveVisible(k, userRoleClass, userName));
+        link.style.setProperty('display', vis ? 'flex' : 'none', 'important');
+    });
 }
 
 // Overrides on plain (non role-gated) elements — e.g. individual hotbar links,
@@ -15443,6 +16032,10 @@ async function _faLoad() {
         localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
         renderFaBody();
         applyRoleBasedUI();
+        // Pull in features that live on the other shell pages, then re-render so
+        // they appear no matter which page the tool was opened from. Cached for
+        // the session so re-opening is instant.
+        if (!_faScanned) { await _faScanPages(); renderFaBody(); }
     } catch (e) {
         const body = document.getElementById('fa-body');
         if (body) body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load feature settings.</div>';
@@ -15471,7 +16064,7 @@ function switchFaTab(tab) {
 }
 
 function _faSyncTabButtons() {
-    ['tools', 'hotbar', 'widgets', 'user'].forEach(t => {
+    ['tools', 'hotbar', 'widgets', 'user', 'coverage'].forEach(t => {
         const b = document.getElementById('fa-tab-' + t);
         if (b) b.classList.toggle('active', t === _faTab);
     });
@@ -15494,11 +16087,13 @@ function _faUserOverride(key, name) {
 function renderFaBody() {
     const body = document.getElementById('fa-body');
     if (!body) return;
-    body.innerHTML = _faTab === 'user' ? _faUserTabHtml() : _faMatrixHtml(_faTab);
+    body.innerHTML = _faTab === 'user' ? _faUserTabHtml()
+        : _faTab === 'coverage' ? _faCoverageHtml()
+        : _faMatrixHtml(_faTab);
 }
 
 function _faMatrixHtml(tab) {
-    const feats = FEATURE_CATALOG.filter(f => f.tab === tab);
+    const feats = _faCatalog().filter(f => f.tab === tab);
     const hints = {
         tools: 'Click a chip to force a tool on (✓) or off (✕) for that role — an amber ring means it\'s manually overridden; click again to flip it back (matching the default clears the override). Per-user exceptions on the Per-User tab beat these.',
         hotbar: 'OFF always hides a link. Turning a link ON for a role/user that doesn\'t normally see its bar adds it to the end of their main hotbar — and if you enable every link of a bar, the whole bar shows up instead. Store-bar links (LEE…BAL) default to everyone in that store.',
@@ -15535,7 +16130,7 @@ function _faChipHtml(f, role) {
 }
 
 async function faToggleRole(key, slug) {
-    const feat = FEATURE_CATALOG.find(f => f.key === key);
+    const feat = _faCatalog().find(f => f.key === key);
     if (!feat) return;
     const def = _faDefaultFor(feat, slug);
     const cur = _faRoleOverride(key, slug);
@@ -15565,6 +16160,174 @@ async function faToggleRole(key, slug) {
         alert('Could not save: ' + e.message);
         _faLoad(); // resync with the server's truth
     }
+}
+
+// ---- Coverage tab: hand your tools to whoever's covering while you're out ---
+// A convenience layer over per-user overrides: pick the managers covering, tick
+// the tools to lend them, Grant → writes user overrides (enabled=true) in bulk.
+// Their own tools stay (overrides only add), so they see both versions. Manual
+// on/off — the "End coverage" buttons revoke. Nothing expires on its own.
+const _FA_COVER_ROLES = new Set(['manager', 'owner (manager)', 'owner manager', 'multi-store manager']);
+
+// Features offered for delegation: DM-only SPEEKS Tools + DM-only
+// workspace/operations-style section actions (tabs). Explicitly NOT dashboard
+// cards or sidebar panels (e.g. District Command Center) — those aren't "DM
+// actions" to hand off. Built off _faCatalog() (curated + live DOM + other-page
+// scan) and it excludes groups by NAME rather than allow-listing, so a new
+// section/group we add later shows up here automatically like the main FA tabs.
+// Regular tools managers already have (Insurance Claims store / Box Order /
+// Recycle) are filtered out by the manager-default check.
+const _FA_NON_DELEGABLE_WIDGET_GROUPS = ['Dashboard', 'Side Panels'];
+function _faCoverageTools() {
+    return _faCatalog().filter(f =>
+        f.key !== 'tool-feature-access'
+        && f.def !== 'all' && !f.def.includes('manager')
+        && (f.tab === 'tools'
+            || (f.tab === 'widgets' && !_FA_NON_DELEGABLE_WIDGET_GROUPS.includes(f.group))));
+}
+function _faCoverageDefaultChecked() {
+    return new Set(); // always start with everything unchecked
+}
+
+// A feature is the "DM version" of something managers also have if a sibling
+// feature shares its key stem (e.g. tool-claims-oversight ↔ tool-claims-store)
+// and that sibling is visible to managers by default. Used to append "(DM)" in
+// Delegation so it's clear which version you're lending. Auto-detected (3+ key
+// segments), so new DM/manager pairs get the tag with no extra wiring.
+function _faManagerCounterpart(f) {
+    const parts = f.key.split('-');
+    if (parts.length < 3) return null; // need a shared stem like tool-claims-*
+    const stem = parts.slice(0, -1).join('-') + '-';
+    return _faCatalog().find(o => o.key !== f.key && o.key.startsWith(stem)
+        && (o.def === 'all' || (Array.isArray(o.def) && o.def.includes('manager')))) || null;
+}
+function _faDelegationLabel(f) {
+    if (!_faManagerCounterpart(f)) return f.label;
+    const base = f.label.replace(/\s*\([^)]*\)\s*$/, '').trim(); // drop a trailing "(...)"
+    return `${base} (DM)`;
+}
+
+// The users who currently hold a granted tool (enabled user override on a tool),
+// grouped by subject → [feature keys]. Powers the "active coverage" list.
+function _faActiveCoverage() {
+    const byUser = {};
+    const toolKeys = new Set(_faCoverageTools().map(f => f.key));
+    _featureOvRaw.filter(r => r.subject_type === 'user' && r.enabled === true && toolKeys.has(r.feature_key))
+        .forEach(r => { (byUser[String(r.subject).toLowerCase()] = byUser[String(r.subject).toLowerCase()] || []).push(r.feature_key); });
+    return byUser;
+}
+
+function _faCoverageHtml() {
+    const checked = _faCoverageDefaultChecked();
+    const covering = _faUsers
+        .filter(u => _FA_COVER_ROLES.has(String(u.role || '').toLowerCase().trim()))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    const labelFor = key => { const f = _faCatalog().find(x => x.key === key); return f ? _faDelegationLabel(f) : key; };
+
+    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:14px; line-height:1.5;">
+        Let a manager use your DM tools — while you're away or just need a hand. Pick who and which tools, then <b>Delegate tools</b>. Their own tools stay; it lasts until you <b>End delegation</b>.</div>`;
+
+    // 1) recipients
+    html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:4px 2px 6px;">Delegate to</div>`;
+    if (!covering.length) {
+        html += `<div style="font-size:12px; color:#94a3b8; padding:6px 2px;">No manager-level users found in the directory.</div>`;
+    } else {
+        html += `<div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px;">` + covering.map(u => {
+            const low = u.name.toLowerCase();
+            return `<label class="fa-cover-pick" style="display:inline-flex; align-items:center; gap:7px; border:1.5px solid #e2e8f0; border-radius:9px; padding:7px 11px; font-size:12.5px; font-weight:700; color:var(--slate-charcoal); cursor:pointer;">
+                <input type="checkbox" class="fa-cover-user" value="${escapeHtml(low)}" style="width:15px; height:15px; cursor:pointer;">
+                ${escapeHtml(u.name)} <span style="font-weight:600; color:#94a3b8;">${escapeHtml(u.store || u.role || '')}</span>
+            </label>`;
+        }).join('') + `</div>`;
+    }
+
+    // 2) tools to lend
+    html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:4px 2px 6px;">Tools to lend</div>`;
+    html += `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:6px 14px; margin-bottom:16px;">` + _faCoverageTools().map(f => `
+        <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; font-weight:600; color:var(--slate-charcoal); cursor:pointer; padding:3px 0;">
+            <input type="checkbox" class="fa-cover-tool" value="${f.key}" ${checked.has(f.key) ? 'checked' : ''} style="width:15px; height:15px; cursor:pointer;">
+            ${escapeHtml(_faDelegationLabel(f))}
+        </label>`).join('') + `</div>`;
+
+    html += `<button class="btn-primary" style="font-size:13px; padding:9px 18px;" onclick="faGrantCoverage(this)">Delegate tools</button>`;
+
+    // 3) active delegations
+    const active = _faActiveCoverage();
+    const users = Object.keys(active).sort();
+    html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:22px 2px 6px;">Active delegations</div>`;
+    if (!users.length) {
+        html += `<div style="font-size:12px; color:#94a3b8; padding:6px 2px;">No one currently has borrowed tools.</div>`;
+    } else {
+        html += users.map(low => {
+            const u = _faUsers.find(x => x.name.toLowerCase() === low);
+            const disp = u ? u.name : low;
+            const chips = active[low].map(k => `<span style="display:inline-flex; align-items:center; gap:6px; background:#eef2ff; color:#3730a3; font-size:11.5px; font-weight:700; border-radius:7px; padding:3px 8px;">${escapeHtml(labelFor(k))}<button title="Remove this tool" onclick="faRevokeCoverage('${escapeHtml(low)}','${k}')" style="border:none; background:none; color:#6366f1; cursor:pointer; font-weight:800; font-size:13px; line-height:1;">×</button></span>`).join(' ');
+            return `<div style="display:flex; align-items:flex-start; gap:10px; justify-content:space-between; padding:8px 2px; border-bottom:1px solid #f1f5f9;">
+                <div style="flex:1;"><div style="font-size:12.5px; font-weight:800; color:var(--slate-charcoal); margin-bottom:5px;">${escapeHtml(disp)}${u ? '' : ' <span style=\"font-weight:600;color:#cbd5e1;\">(not in directory)</span>'}</div><div style="display:flex; flex-wrap:wrap; gap:6px;">${chips}</div></div>
+                <button class="btn-secondary" style="height:28px; font-size:11.5px; padding:0 11px; border-radius:7px; flex-shrink:0;" onclick="faEndCoverage('${escapeHtml(low)}')">End delegation</button>
+            </div>`;
+        }).join('');
+    }
+    return html;
+}
+
+// Apply one user override locally + persist to the server. Shared by grant/revoke.
+async function _faSetUserOverride(key, userLow, enabled) {
+    const m = (_featureOv.user[key] = _featureOv.user[key] || {});
+    if (enabled === null) delete m[userLow]; else m[userLow] = enabled;
+    if (!Object.keys(m).length) delete _featureOv.user[key];
+    _featureOvRaw = _featureOvRaw.filter(r => !(r.subject_type === 'user' && r.feature_key === key && String(r.subject).toLowerCase() === userLow));
+    if (enabled !== null) _featureOvRaw.push({ feature_key: key, subject_type: 'user', subject: userLow, enabled });
+    const res = await fetch(FEATURE_ACCESS_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set_override', feature_key: key, subject_type: 'user', subject: userLow, enabled, updated_by: sessionStorage.getItem('speeksUserName') || null }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.success === false) throw new Error((json && json.error) || 'Save failed');
+}
+
+async function faGrantCoverage(btn) {
+    const body = document.getElementById('fa-body');
+    const users = Array.from(body.querySelectorAll('.fa-cover-user:checked')).map(c => c.value);
+    const tools = Array.from(body.querySelectorAll('.fa-cover-tool:checked')).map(c => c.value);
+    if (!users.length) { alert('Pick at least one manager to delegate to.'); return; }
+    if (!tools.length) { alert('Tick at least one tool to lend.'); return; }
+    const old = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Granting…';
+    try {
+        for (const userLow of users) {
+            for (const key of tools) await _faSetUserOverride(key, userLow, true);
+        }
+        localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+        renderFaBody();
+        applyRoleBasedUI();
+    } catch (e) {
+        alert('Could not grant coverage: ' + e.message);
+        _faLoad();
+    } finally {
+        btn.disabled = false; btn.textContent = old;
+    }
+}
+
+async function faRevokeCoverage(userLow, key) {
+    try {
+        await _faSetUserOverride(key, userLow, null);
+        localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+        renderFaBody();
+        applyRoleBasedUI();
+    } catch (e) { alert('Could not revoke: ' + e.message); _faLoad(); }
+}
+
+async function faEndCoverage(userLow) {
+    const keys = (_faActiveCoverage()[userLow] || []).slice();
+    if (!keys.length) return;
+    if (!confirm(`Remove all ${keys.length} borrowed tool(s) from this person?`)) return;
+    try {
+        for (const key of keys) await _faSetUserOverride(key, userLow, null);
+        localStorage.setItem('speeksFeatureOv', JSON.stringify(_featureOv));
+        renderFaBody();
+        applyRoleBasedUI();
+    } catch (e) { alert('Could not end coverage: ' + e.message); _faLoad(); }
 }
 
 function _faUserTabHtml() {
@@ -15612,7 +16375,7 @@ function _faUserRowsHtml() {
     let roleSlug = u ? String(u.role || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-') : '';
     if (roleSlug === 'multi-store-manager') roleSlug = 'manager';
     let html = '', lastGroup = '';
-    FEATURE_CATALOG.forEach(f => {
+    _faCatalog().forEach(f => {
         if (filter && !(`${f.label} ${f.group}`).toLowerCase().includes(filter)) return;
         if (f.group !== lastGroup) {
             lastGroup = f.group;
@@ -15689,4 +16452,911 @@ async function faClearUser() {
         alert('Could not clear: ' + e.message);
         _faLoad();
     }
+}
+
+// ============================================================
+// VARIANCE REPLIES (workspace tab)
+// ============================================================
+// The DM uploads the ≤ -10% variance line items per store per period (parsed
+// client-side from the Excel sheet via SheetJS on workspace.html); store
+// managers explain each line (GM Notes), the DM responds (DM Notes) within
+// the week, and managers reply back (Replies to DM Notes) — replacing the
+// shared spreadsheet. Pulsing dots + the shared red reminder bubble nudge
+// managers the day before the deadline and when DM notes land.
+
+const _VR_MANAGER_ROLES = new Set(['manager', 'owner (manager)', 'owner manager']);
+
+function _vrRole() { return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(); }
+// A manager can be delegated the DM side of Variance Replies (Feature Access →
+// Delegation → "Variance Replies (DM)"), which flips them to the DM experience
+// here: store dropdown across all 5 stores, upload panel, DM notes, DM popups.
+function _vrHasDmDelegation() {
+    if (typeof _featureOverrideFor !== 'function') return false;
+    const roleClass = 'role-' + _vrRole().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+    const name = sessionStorage.getItem('speeksUserName') || '';
+    return _featureOverrideFor('cap-variance-dm', roleClass, name) === true;
+}
+function _vrIsDM() { return _vrRole() === 'district manager' || _vrHasDmDelegation(); }
+// A delegated manager wears the DM hat here, not their own GM hat, so the two
+// stay mutually exclusive and the render logic doesn't get both at once.
+function _vrIsManager() { return _VR_MANAGER_ROLES.has(_vrRole()) && !_vrHasDmDelegation(); }
+
+// Stores whose periods the tab loads: the DM gets every store at once (they
+// pick a date range first, then flip between stores within it); an MSM sees
+// both managed stores; a manager is locked to their own.
+function _vrStores() {
+    if (_vrIsDM()) return ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    return _vrMyStores();
+}
+
+// The manager's own store(s) — used for reminders/dots regardless of UI state.
+function _vrMyStores() {
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        return [...MULTISTORE_MANAGER_STORES];
+    }
+    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
+}
+
+let _vrPeriods = [];      // period summaries for the pickers
+let _vrCurrent = null;    // { period, items } currently open
+let _vrUploadOpen = false;
+let _vrParsed = null;     // parsed Excel rows awaiting confirm
+let _vrFileName = '';     // name of the parsed file (the <input> can't keep it across re-renders)
+let _vrEditing = false;   // notes are locked until ✏️ Edit is clicked (KPI-style)
+let _vrDrafts = {};       // "itemId|field" → unsaved textarea text, survives re-renders
+const _VR_VARIANCE_CUTOFF = -10; // only lines at this variance % or worse are imported
+
+const _vrFmtPct = v => (v == null || v === '') ? '—'
+    : `${Number(v) > 0 ? '+' : ''}${Number(v).toFixed(1)}%`;
+const _vrFmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+
+async function loadVarianceReplies() {
+    const body = document.getElementById('vr-body');
+    if (!body) return;
+    body.innerHTML = '<div class="status-message">Loading variance replies…</div>';
+    const stores = _vrStores();
+    if (!stores.length) {
+        body.innerHTML = '<div class="status-message">No store assigned to your account.</div>';
+        return;
+    }
+    try {
+        const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        _vrPeriods = json.data || [];
+        _vrBuildPeriodPicker();
+        const pid = _vrSelectedPeriodId();
+        if (pid) await vrOpenPeriod(pid);
+        else { _vrCurrent = null; renderVarianceReplies(); }
+    } catch (e) {
+        body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load variance replies.</div>';
+    }
+}
+
+function _vrBuildPeriodPicker() {
+    const sel = document.getElementById('vr-period-select');
+    if (!sel) return;
+    if (!_vrPeriods.length) { sel.style.display = 'none'; sel.innerHTML = ''; return; }
+    const current = sel.value;
+    if (_vrIsDM()) {
+        // The DM picks the DATE RANGE first (uploads share a range across
+        // stores), then flips between stores with the store dropdown.
+        const seen = new Set();
+        sel.innerHTML = _vrPeriods.map(p => {
+            const key = `${p.date_from}|${p.date_to}`;
+            if (seen.has(key)) return '';
+            seen.add(key);
+            return `<option value="${key}">${escapeHtml(formatVarianceRange(p.date_from, p.date_to))}</option>`;
+        }).join('');
+    } else {
+        const multi = _vrStores().length > 1;
+        sel.innerHTML = _vrPeriods.map(p => {
+            const label = `${multi ? p.store + ' · ' : ''}${formatVarianceRange(p.date_from, p.date_to)}${p.timeframe ? ' · ' + p.timeframe : ''}`;
+            return `<option value="${p.id}">${escapeHtml(label)}</option>`;
+        }).join('');
+    }
+    sel.style.display = '';
+    if ([...sel.options].some(o => o.value === current)) sel.value = current;
+}
+
+// The open period: managers' picker holds period ids directly; the DM's
+// holds a date-range key that combines with the store dropdown.
+function _vrSelectedPeriodId() {
+    const sel = document.getElementById('vr-period-select');
+    if (!sel || !sel.value) return '';
+    if (!_vrIsDM()) return sel.value;
+    const [from, to] = sel.value.split('|');
+    const store = ((document.getElementById('vr-store-select') || {}).value || '').toUpperCase();
+    const p = _vrPeriods.find(p => p.date_from === from && p.date_to === to && p.store === store);
+    return p ? p.id : '';
+}
+
+function vrOnStoreChange() {
+    _vrUploadOpen = false; _vrParsed = null; _vrEditing = false; _vrDrafts = {};
+    if (_vrIsDM() && _vrPeriods.length) {
+        // all stores are already loaded — just resolve within the picked range
+        const pid = _vrSelectedPeriodId();
+        if (pid) vrOpenPeriod(pid);
+        else { _vrCurrent = null; renderVarianceReplies(); }
+        return;
+    }
+    loadVarianceReplies();
+}
+function vrOnPeriodChange() {
+    const pid = _vrSelectedPeriodId();
+    if (pid) vrOpenPeriod(pid);
+    else { _vrCurrent = null; renderVarianceReplies(); }
+}
+
+async function vrOpenPeriod(pid) {
+    const body = document.getElementById('vr-body');
+    try {
+        const res = await fetch(`${VARIANCE_REPLIES_URL}?period_id=${encodeURIComponent(pid)}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        _vrCurrent = json;
+        _vrEditing = false;
+        _vrDrafts = {};
+        renderVarianceReplies();
+    } catch (e) {
+        if (body) body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load that period.</div>';
+    }
+}
+
+function _vrSubtitleText() {
+    if (!_vrCurrent || !_vrCurrent.period) return '';
+    const p = _vrCurrent.period;
+    const items = _vrCurrent.items || [];
+    const answered = items.filter(i => i.gm_note).length;
+    const due = new Date(p.manager_due_at);
+    const overdue = Date.now() > due.getTime() && answered < items.length;
+    // The n/n-explained scoreboard is for managers; the DM just gets the date.
+    const progress = _vrIsDM() ? '' : ` · ${answered}/${items.length} explained`;
+    return `Replies due ${due.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}${overdue ? ' (overdue)' : ''}${progress}`;
+}
+
+function _vrUpdateProgressLine() {
+    const sub = document.getElementById('vr-subtitle');
+    if (sub) sub.textContent = _vrSubtitleText();
+}
+
+// The team variance summary card shown above the reply lines — mirrors the
+// numbers on the manager variance widget (store total % + each person's %).
+// `tv` is the backend's matched Submit-Variance-Report entry (may be null).
+function _vrTeamVarianceHtml(tv, period) {
+    if (!tv) return '';
+    const badge = v => {
+        const n = Number(v);
+        const cls = n < 0 ? 'delta-neg' : (n > 0 ? 'delta-pos' : 'delta-neutral');
+        return `<span class="delta-badge ${cls}">${formatVariancePct(n)}</span>`;
+    };
+    // If the matched team-variance entry's dates differ from this reply
+    // period's, show its own range so it's clear which report it came from.
+    const rangeDiffers = !tv.exact && tv.date_from && tv.date_to
+        && (tv.date_from !== period.date_from || tv.date_to !== period.date_to);
+    const rangeNote = rangeDiffers
+        ? `<span style="font-weight:600; color:#94a3b8; text-transform:none; letter-spacing:0; margin-left:8px;">${formatVarianceRange(tv.date_from, tv.date_to)}</span>`
+        : '';
+    const emps = (tv.employees || []).map(e => `
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:7px 14px; border-top:1px solid #f1f5f9;">
+            <span style="font-size:12px; font-weight:600; color:#334155;">${escapeHtml(e.name)}</span>
+            ${badge(e.val)}
+        </div>`).join('');
+    return `<details open style="border:1px solid #e2e8f0; border-radius:12px; background:#fff; overflow:hidden; margin-bottom:16px;">
+        <summary style="list-style:none; cursor:pointer; display:flex; align-items:center; justify-content:space-between; gap:10px; background:#f8fafc; padding:12px 16px; border-bottom:1px solid #e2e8f0;">
+            <span style="font-size:12px; font-weight:800; color:var(--slate-charcoal); text-transform:uppercase; letter-spacing:.4px;">Team Variance${rangeNote}</span>
+            <span style="display:flex; align-items:center; gap:10px;"><span style="font-size:10px; font-weight:700; color:#94a3b8; text-transform:uppercase;">Store Total</span>${badge(tv.total)}</span>
+        </summary>
+        <div>${emps || '<div style="padding:12px 16px; font-size:12px; color:#94a3b8;">No per-person variance recorded.</div>'}</div>
+    </details>`;
+}
+
+function renderVarianceReplies() {
+    const body = document.getElementById('vr-body');
+    if (!body) return;
+    // Rebuilding the table destroys the textareas — stash what's typed so an
+    // unexpected re-render mid-edit can never delete someone's notes. The
+    // "needs a reply" checkboxes ride along the same way.
+    if (_vrEditing) {
+        body.querySelectorAll('textarea[data-vr-item]').forEach(ta => {
+            _vrDrafts[ta.dataset.vrItem + '|' + ta.dataset.vrField] = ta.value;
+        });
+        body.querySelectorAll('input[data-vr-rr]').forEach(cb => {
+            _vrDrafts['rr|' + cb.dataset.vrRr] = cb.checked;
+        });
+    }
+    // The header Cancel button only shows while the upload panel is open.
+    const cancelBtn = document.getElementById('vr-cancel-upload-btn');
+    if (cancelBtn) cancelBtn.style.display = (_vrIsDM() && _vrUploadOpen) ? 'inline-flex' : 'none';
+    let html = '';
+    if (_vrIsDM() && _vrUploadOpen) html += _vrUploadPanelHtml();
+
+    if (!_vrCurrent || !_vrCurrent.period) {
+        ['vr-edit-btn', 'vr-save-btn', 'vr-edit-cancel-btn'].forEach(id => {
+            const b = document.getElementById(id);
+            if (b) b.style.display = 'none';
+        });
+        const hint = _vrIsDM()
+            ? (_vrPeriods.length ? 'No upload for this store in the selected date range.' : 'No variance uploads yet.')
+            : 'No variance report has been uploaded for your store yet.';
+        body.innerHTML = html + `<div style="padding:36px 20px; text-align:center; color:#94a3b8; font-weight:600;">${hint}</div>`;
+        _vrUpdateProgressLine();
+        return;
+    }
+
+    const p = _vrCurrent.period;
+    const items = _vrCurrent.items || [];
+    const canGm = _vrIsManager();
+    const canDm = _vrIsDM();
+
+    // The reply cycle reveals columns as each side takes its turn:
+    //   1. Managers fill GM Notes (extra-wide while it's the only note column);
+    //      the DM sees only the line items during this phase.
+    //   2. GM Notes + DM Notes appear for the DM once every line is explained
+    //      or the managers' deadline passes — whichever comes first.
+    //   3. All note columns (incl. Replies) appear for everyone once the DM
+    //      has actually written a note.
+    const anyDmNote = items.some(i => i.dm_note);
+    const dmNotesOpen = _vrDmNotesOpen(p) || (items.length > 0 && items.every(i => i.gm_note));
+    const showGmCol = canGm || dmNotesOpen || anyDmNote;
+    const showDmCol = canDm ? (dmNotesOpen || anyDmNote) : anyDmNote;
+    const showReplyCol = anyDmNote;
+
+    // Notes are locked behind the KPI-style ✏️ Edit / Save / Cancel header
+    // buttons; canEditNow decides whether the viewer has anything to unlock.
+    // Edit mode and the upload panel are mutually exclusive in the header:
+    // while editing, only Save/Cancel show (Upload Report is hidden so it
+    // can't wipe unsaved notes); while the upload panel is open, only its
+    // Cancel + Upload Report show.
+    // Once every note the DM flagged has its manager reply, the round trip is
+    // over — the DM's Edit button goes away entirely (nothing left that needs
+    // them). Managers keep theirs while any flagged note still wants a reply.
+    const flaggedNotes = items.filter(i => i.dm_note && i.dm_reply_requested);
+    const dmCycleDone = flaggedNotes.length > 0 && flaggedNotes.every(i => i.mgr_reply);
+    const canEditNow = items.length > 0 && (canGm || (canDm && dmNotesOpen && !dmCycleDone)) && !_vrUploadOpen;
+    const editBtn = document.getElementById('vr-edit-btn');
+    const saveBtn = document.getElementById('vr-save-btn');
+    const cancelEditBtn = document.getElementById('vr-edit-cancel-btn');
+    const uploadBtn = document.getElementById('vr-upload-btn');
+    if (editBtn) editBtn.style.display = (canEditNow && !_vrEditing) ? 'inline-block' : 'none';
+    if (saveBtn) saveBtn.style.display = (canEditNow && _vrEditing) ? 'inline-block' : 'none';
+    if (cancelEditBtn) cancelEditBtn.style.display = (canEditNow && _vrEditing) ? 'inline-block' : 'none';
+    if (uploadBtn && canDm) uploadBtn.style.display = _vrEditing ? 'none' : 'inline-flex';
+
+    html += `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin:12px 0 16px;">
+        <div style="font-size:12px; color:#64748b; font-weight:600; line-height:1.5; padding-left:14px;">
+            <b>${escapeHtml(p.store)}</b> · ${formatVarianceRange(p.date_from, p.date_to)}${p.timeframe ? ' · ' + escapeHtml(p.timeframe) : ''}
+        </div>
+        ${canDm ? `<button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px; margin-right:14px;" onclick="vrDeletePeriod('${p.id}')">Delete this upload</button>` : ''}
+    </div>`;
+
+    // Team variance for this period (store total % + per-person %), the same
+    // numbers the manager variance widget shows — surfaced here as context for
+    // the lines being explained. Pulled by the backend from the matching
+    // Submit-Variance-Report entry (both uploaded together).
+    html += _vrTeamVarianceHtml(_vrCurrent.team_variance, p);
+
+    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 14px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
+    const td = (c, extra = '') => `<td style="padding:8px 14px; border-bottom:1px solid #f1f5f9; vertical-align:top; font-size:12px; ${extra}">${c}</td>`;
+    html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; min-width:${680 + (showGmCol ? 220 : 0) + (showDmCol ? 220 : 0) + (showReplyCol ? 220 : 0)}px;">
+        <thead><tr>${th('Order #')}${th('SKU')}${th('Item Title')}${th('Buyer')}${th('Lister')}${th('Var.')}${showGmCol ? th('GM Notes') : ''}${showDmCol ? th('DM Notes') : ''}${showReplyCol ? th('Replies to DM Notes') : ''}</tr></thead><tbody>`;
+
+    // Empty GM-note boxes turn light red once the managers' deadline has
+    // passed — a visible mark on exactly which lines were missed.
+    const pastDue = p.manager_due_at && Date.now() > new Date(p.manager_due_at).getTime();
+
+    items.forEach(it => {
+        const pct = it.variance_pct == null ? null : Number(it.variance_pct);
+        const missedGm = pastDue && !it.gm_note;
+        html += `<tr>
+            ${td(`<span style="font-weight:700; white-space:nowrap;">${escapeHtml(it.order_number || '—')}</span>`)}
+            ${td(`<span style="white-space:nowrap; color:#64748b;">${escapeHtml(it.sku || '—')}</span>`)}
+            ${td(`<span style="color:var(--slate-charcoal);">${escapeHtml(it.item_title || '—')}</span>`, 'min-width:200px;')}
+            ${td(escapeHtml(it.buyer_name || '—'), 'white-space:nowrap; padding-right:22px;')}
+            ${td(escapeHtml(it.lister_name || '—'), 'white-space:nowrap; padding-right:22px;')}
+            ${td(`<span style="font-weight:900; color:${pct == null ? '#94a3b8' : '#dc2626'}; white-space:nowrap;">${_vrFmtPct(pct)}</span>`, 'padding-right:22px;')}
+            ${showGmCol ? td((() => {
+                // Once the DM has responded to an explanation it locks — the
+                // conversation moved on, rewriting history would orphan replies.
+                return _vrNoteCell(it, 'gm_note', canGm && _vrEditing && !it.dm_note, 'Why did this sell so far under projection?');
+            })(), (showDmCol || showReplyCol ? '' : 'width:45%;') + (missedGm ? ' background:#fee2e2;' : '')) : ''}
+            ${showDmCol ? td((() => {
+                // Same lock the other way: a DM note the manager already
+                // replied to can't be edited out from under the reply.
+                const dmEditing = canDm && dmNotesOpen && _vrEditing && !!it.gm_note && !it.mgr_reply;
+                let cell = _vrNoteCell(it, 'dm_note', dmEditing, 'Advice or a question for the manager…');
+                // Read-only views get a chip that says whether this note wants
+                // an answer or is FYI-only — that's how the manager tells what
+                // to respond to vs what's just for them to read.
+                if (it.dm_note && !dmEditing) {
+                    cell += it.dm_reply_requested
+                        ? (it.mgr_reply
+                            ? `<span style="display:inline-block; margin-top:4px; font-size:9.5px; font-weight:800; color:#166534; background:#dcfce7; border:1px solid #a7f3d0; border-radius:20px; padding:2px 8px; white-space:nowrap;">✓ Replied</span>`
+                            : `<span style="display:inline-block; margin-top:4px; font-size:9.5px; font-weight:800; color:#b91c1c; background:#fee2e2; border:1px solid #fca5a5; border-radius:20px; padding:2px 8px; white-space:nowrap;">↩ Response requested</span>`)
+                        : `<span style="display:inline-block; margin-top:4px; font-size:9.5px; font-weight:800; color:#64748b; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:20px; padding:2px 8px; white-space:nowrap;">FYI — no reply needed</span>`;
+                }
+                return cell;
+            })()) : ''}
+            ${showReplyCol ? td(_vrNoteCell(it, 'mgr_reply', canGm && !!it.dm_note && !!it.dm_reply_requested && _vrEditing, it.dm_note && it.dm_reply_requested ? 'Reply to the DM note…' : '')) : ''}
+        </tr>`;
+    });
+    html += `</tbody></table></div>`;
+    body.innerHTML = html;
+    _vrUpdateProgressLine();
+}
+
+// DM notes stay locked until the managers' reply window closes — managers
+// explain first, then the DM weighs in.
+function _vrDmNotesOpen(p) {
+    return !p.manager_due_at || new Date(p.manager_due_at) <= new Date();
+}
+
+// One note cell: read-only text + author/date caption normally; a textarea
+// while the viewer is in ✏️ Edit mode (saved in bulk by vrSaveEdits).
+function _vrNoteCell(it, field, editable, placeholder) {
+    const val = it[field] || '';
+    const by = it[field + '_by'];
+    const at = it[field + '_at'];
+    const caption = (val && (by || at))
+        ? `<div style="font-size:10px; color:#94a3b8; font-weight:700; margin-top:3px;">${escapeHtml(by || '')}${at ? ' · ' + _vrFmtDate(at) : ''}</div>` : '';
+    if (!editable) {
+        const txt = val ? escapeHtml(val) : `<span style="color:#cbd5e1;">${field === 'mgr_reply' && !it.dm_note ? '' : '—'}</span>`;
+        return `<div style="min-width:190px; line-height:1.45; color:#334155;">${txt}${caption}</div>`;
+    }
+    const draft = _vrDrafts[it.id + '|' + field];
+    const shownText = draft !== undefined ? draft : val;
+    // The DM flags each note as needing a manager reply or FYI-only — that's
+    // what decides whether the manager gets a reply box + nudges for it. The
+    // flag only means something WITH a note, so the box stays disabled until
+    // there's text (a tick on an empty note used to be silently dropped).
+    let rrBox = '';
+    if (field === 'dm_note') {
+        const rrDraft = _vrDrafts['rr|' + it.id];
+        const checked = rrDraft !== undefined ? rrDraft : !!it.dm_reply_requested;
+        const hasText = String(shownText || '').trim() !== '';
+        rrBox = `<label title="${hasText ? 'The manager gets a reply box + reminders for this note' : 'Write the note first — then you can request a reply'}" style="display:flex; align-items:center; gap:5px; margin-top:4px; font-size:10.5px; font-weight:700; color:#64748b; cursor:pointer; user-select:none;${hasText ? '' : ' opacity:0.45;'}">
+            <input type="checkbox" data-vr-rr="${it.id}"${checked && hasText ? ' checked' : ''}${hasText ? '' : ' disabled'} style="width:13px; height:13px; cursor:pointer;"> Needs a reply from the manager
+        </label>`;
+    }
+    const rrSync = field === 'dm_note'
+        ? ` oninput="const c=this.parentElement.querySelector('input[data-vr-rr]'); if(c){const t=!!this.value.trim(); c.disabled=!t; if(!t)c.checked=false; c.parentElement.style.opacity=t?'':'0.45';}"`
+        : '';
+    return `<div style="min-width:210px;">
+        <textarea rows="2" placeholder="${escapeHtml(placeholder || '')}"
+            data-vr-item="${it.id}" data-vr-field="${field}"${rrSync}
+            style="width:100%; box-sizing:border-box; padding:7px 9px; border:1.5px solid #cbd5e1; border-radius:7px; font-size:12px; font-weight:500; font-family:inherit; line-height:1.4; resize:vertical; background:#fff; transition:border-color .3s;"
+        >${escapeHtml(shownText)}</textarea>${rrBox}${caption}</div>`;
+}
+
+function vrStartEdit() { _vrEditing = true; _vrDrafts = {}; renderVarianceReplies(); }
+function vrCancelEdit() { _vrEditing = false; _vrDrafts = {}; renderVarianceReplies(); }
+
+// Saves every changed textarea in one pass, then locks the notes again.
+async function vrSaveEdits(btn) {
+    const items = (_vrCurrent && _vrCurrent.items) || [];
+    const changes = [];
+    document.querySelectorAll('#vr-body textarea[data-vr-item]').forEach(ta => {
+        const it = items.find(i => i.id === ta.dataset.vrItem);
+        if (!it) return;
+        const field = ta.dataset.vrField;
+        const text = ta.value.trim();
+        // DM notes carry the "needs a reply" flag — a flag flip alone (text
+        // unchanged) still needs saving.
+        let rr;
+        if (field === 'dm_note') {
+            const cb = document.querySelector(`#vr-body input[data-vr-rr="${it.id}"]`);
+            rr = cb ? cb.checked : !!it.dm_reply_requested;
+        }
+        const textChanged = (it[field] || '') !== text;
+        const rrChanged = field === 'dm_note' && !!text && rr !== !!it.dm_reply_requested;
+        if (textChanged || rrChanged) changes.push({ it, field, text, ta, rr });
+    });
+    if (!changes.length) { _vrEditing = false; renderVarianceReplies(); return; }
+
+    const old = btn.innerText;
+    btn.disabled = true; btn.innerText = 'Saving…';
+    const name = sessionStorage.getItem('speeksUserName') || null;
+    let failed = 0;
+    await Promise.all(changes.map(async c => {
+        try {
+            const res = await fetch(VARIANCE_REPLIES_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'save_note', item_id: c.it.id, field: c.field, text: c.text, by: name,
+                    ...(c.field === 'dm_note' ? { reply_requested: !!c.rr } : {}),
+                }),
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+            c.it[c.field] = c.text || null;
+            c.it[c.field + '_by'] = c.text ? name : null;
+            c.it[c.field + '_at'] = c.text ? new Date().toISOString() : null;
+            if (c.field === 'dm_note') {
+                c.it.dm_reply_requested = c.text ? !!c.rr : false;
+                if (c.text && _vrCurrent.period && !_vrCurrent.period.dm_notes_at) {
+                    _vrCurrent.period.dm_notes_at = new Date().toISOString();
+                }
+            }
+        } catch (e) {
+            failed++;
+            c.ta.style.borderColor = '#dc2626';
+        }
+    }));
+    btn.disabled = false; btn.innerText = old;
+    if (failed) {
+        alert(`${failed} note${failed > 1 ? 's' : ''} failed to save — outlined in red. Click Save to retry.`);
+        return; // stay in edit mode so nothing typed is lost
+    }
+    _vrEditing = false;
+    _vrDrafts = {};
+    renderVarianceReplies();
+}
+
+async function vrDeletePeriod(id) {
+    if (!confirm('Delete this entire variance upload (all line items and replies)?')) return;
+    try {
+        const res = await fetch(VARIANCE_REPLIES_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_period', id }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        _vrCurrent = null;
+        loadVarianceReplies();
+    } catch (e) {
+        alert('Could not delete: ' + e.message);
+    }
+}
+
+// ---- DM upload flow (SheetJS parses the sheet in the browser) ---------------
+function vrToggleUpload() {
+    _vrUploadOpen = !_vrUploadOpen;
+    _vrParsed = null;
+    _vrFileName = '';
+    renderVarianceReplies();
+}
+
+function _vrUploadPanelHtml() {
+    const lbl = t => `<label class="vr-up-label">${t}</label>`;
+    const store = (document.getElementById('vr-store-select') || {}).value || 'OVL';
+    // The panel is rebuilt on every render (e.g. right after a file is parsed),
+    // which recreates the date inputs — carry their values over so dates typed
+    // before picking the file aren't wiped.
+    const curFrom = (document.getElementById('vr-up-from') || {}).value || '';
+    const curTo = (document.getElementById('vr-up-to') || {}).value || '';
+    let preview = '';
+    if (_vrParsed) {
+        if (_vrParsed.items.length) {
+            const pcts = _vrParsed.items.map(i => i.variance_pct).filter(v => v != null);
+            preview = `<div style="margin-top:10px; font-size:12px; font-weight:600; color:#334155;">
+                ✅ Parsed <b>${_vrParsed.items.length}</b> line item${_vrParsed.items.length > 1 ? 's' : ''} at ${_VR_VARIANCE_CUTOFF}% or worse${pcts.length ? ` · variance ${_vrFmtPct(Math.max(...pcts))} to ${_vrFmtPct(Math.min(...pcts))}` : ''}${_vrParsed.aboveCutoff ? ` · <span style="color:#94a3b8;">${_vrParsed.aboveCutoff} line${_vrParsed.aboveCutoff > 1 ? 's' : ''} above the cutoff left out</span>` : ''}${_vrParsed.skipped ? ` · <span style="color:#d97706;">${_vrParsed.skipped} row${_vrParsed.skipped > 1 ? 's' : ''} skipped (no order # / SKU)</span>` : ''}
+                <button class="btn-primary" style="margin-left:12px; font-size:12px; padding:7px 16px;" onclick="vrConfirmUpload(this)">Upload ${_vrParsed.items.length} items to ${store} →</button>
+            </div>`;
+        } else if (_vrParsed.aboveCutoff) {
+            preview = `<div style="margin-top:10px; font-size:12px; font-weight:700; color:#d97706;">No line items at ${_VR_VARIANCE_CUTOFF}% variance or worse in this file — nothing needs a manager reply. (${_vrParsed.aboveCutoff} line${_vrParsed.aboveCutoff > 1 ? 's' : ''} above the cutoff.)</div>`;
+        } else {
+            preview = `<div style="margin-top:10px; font-size:12px; font-weight:700; color:#dc2626;">Couldn't find any line items — make sure the workbook has a sheet (e.g. "Detail") with an Order ID and SKU header row.</div>`;
+        }
+    }
+    return `<div style="background:#f8fafc; border:1.5px solid #e2e8f0; border-radius:12px; padding:14px 16px; margin-bottom:16px;">
+        <div style="font-weight:800; font-size:13px; color:var(--slate-charcoal); margin-bottom:10px;">Upload variance report for <b>${store}</b> <span style="font-weight:600; color:#94a3b8;">(store is picked in the dropdown above)</span></div>
+        <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+            <div class="vr-up-field">${lbl('Date range')}<div class="vr-daterange"><input type="date" id="vr-up-from" class="vr-daterange-input" value="${curFrom}"><span class="vr-daterange-arrow">→</span><input type="date" id="vr-up-to" class="vr-daterange-input" value="${curTo}"></div></div>
+            <div class="vr-up-field">${lbl('Excel file (.xlsx)')}${_vrParsed && _vrFileName
+                ? `<div class="vr-file-chip"><span>📄 ${escapeHtml(_vrFileName)}</span><button type="button" title="Choose a different file" onclick="vrClearFile()">✕</button></div>`
+                : `<input type="file" id="vr-up-file" accept=".xlsx,.xls,.csv" class="vr-up-input" onchange="vrHandleFile(this)">`}</div>
+        </div>
+        ${preview}
+    </div>`;
+}
+
+// SheetJS is loaded from a CDN at page load, but that request can fail (blip,
+// ad-blocker, offline moment). Rather than telling the user to refresh, fetch
+// it on demand when a file is picked, falling back across mirrors.
+let _vrXlsxLoading = null;
+function _vrEnsureXlsx() {
+    if (typeof XLSX !== 'undefined') return Promise.resolve();
+    if (_vrXlsxLoading) return _vrXlsxLoading;
+    const srcs = [
+        'xlsx.full.min.js?v=0.18.5', // vendored copy — same origin, can't be CDN-blocked
+        'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+        'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js',
+        'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
+    ];
+    _vrXlsxLoading = new Promise((resolve, reject) => {
+        const tryNext = i => {
+            if (i >= srcs.length) {
+                _vrXlsxLoading = null; // allow a retry on the next file pick
+                return reject(new Error('parser unavailable'));
+            }
+            const s = document.createElement('script');
+            s.src = srcs[i];
+            s.onload = () => (typeof XLSX !== 'undefined') ? resolve() : tryNext(i + 1);
+            s.onerror = () => { s.remove(); tryNext(i + 1); };
+            document.head.appendChild(s);
+        };
+        tryNext(0);
+    });
+    return _vrXlsxLoading;
+}
+
+async function vrHandleFile(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    try {
+        await _vrEnsureXlsx();
+    } catch (e) {
+        alert('Could not load the Excel parser — check your internet connection and pick the file again.');
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = e => {
+        try {
+            const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+            // The report often has a summary sheet before the line-item "Detail"
+            // sheet, so scan every sheet and keep whichever one actually parses.
+            let best = { items: [], skipped: 0, aboveCutoff: 0 };
+            for (const name of wb.SheetNames) {
+                const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false, defval: '' });
+                const parsed = _vrParseRows(rows);
+                // Most importable items wins; tie-break on lines seen above the
+                // cutoff so an all-filtered sheet still beats an unparsed one.
+                if (parsed.items.length > best.items.length ||
+                    (parsed.items.length === best.items.length && parsed.aboveCutoff > best.aboveCutoff)) best = parsed;
+            }
+            _vrParsed = best;
+            _vrFileName = file.name;
+            renderVarianceReplies();
+        } catch (err) {
+            alert('Could not read that file: ' + err.message);
+        }
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+// Turns the raw sheet grid into line items. Finds the header row (a row that
+// mentions both "order" and "sku"), maps columns by header text, and reads
+// everything below it. Tolerant of the title/banner rows above the header.
+function _vrParseRows(rows) {
+    const norm = s => String(s || '').trim().toLowerCase();
+    let headerIdx = -1, colMap = {};
+    for (let i = 0; i < Math.min(rows.length, 15); i++) {
+        const joined = rows[i].map(norm).join('|');
+        if (joined.includes('order') && joined.includes('sku')) { headerIdx = i; break; }
+    }
+    if (headerIdx === -1) return { items: [], skipped: 0 };
+    // First match wins, so when two headers could match one field the left-most
+    // (primary) column is kept — e.g. "Shopify Order ID" over "eBay Order ID",
+    // "Buyer" over "Buyer Est (unit)".
+    const set = (k, c) => { if (colMap[k] === undefined) colMap[k] = c; };
+    rows[headerIdx].forEach((h, c) => {
+        const n = norm(h);
+        if (!n) return;
+        if (n.includes('order') && !n.includes('ebay')) set('order_number', c);   // "Shopify Order ID", not "eBay Order ID"
+        else if (n.includes('sku')) set('sku', c);
+        else if (n.includes('title') || n.includes('description') || n.includes('product')) set('item_title', c);
+        else if (n.includes('buyer') && !n.includes('est')) set('buyer_name', c);  // "Buyer", not "Buyer Est (unit)"
+        else if (n.includes('lister')) set('lister_name', c);
+        else if (n.includes('variance')) set('variance_pct', c);
+        else if (n.includes('gm note')) set('gm_note', c);
+        else if (n.includes('repl')) set('mgr_reply', c);       // "Replies to DM Notes" — check before "dm note"
+        else if (n.includes('dm note')) set('dm_note', c);
+    });
+    const items = [];
+    let skipped = 0, aboveCutoff = 0;
+    for (let i = headerIdx + 1; i < rows.length; i++) {
+        const row = rows[i] || [];
+        const get = k => colMap[k] === undefined ? '' : String(row[colMap[k]] || '').trim();
+        const orderNumber = get('order_number');
+        const sku = get('sku');
+        if (!orderNumber && !sku) {
+            if (row.some(c => String(c).trim() !== '')) skipped++;
+            continue;
+        }
+        const variancePct = _vrParseVariance(get('variance_pct'));
+        // Only lines at -10% or worse need a manager explanation — the rest of
+        // the report is noise here, so drop them at parse time.
+        if (variancePct == null || variancePct > _VR_VARIANCE_CUTOFF) { aboveCutoff++; continue; }
+        items.push({
+            order_number: orderNumber || null,
+            sku: sku || null,
+            item_title: get('item_title') || null,
+            buyer_name: get('buyer_name') || null,
+            lister_name: get('lister_name') || null,
+            variance_pct: variancePct,
+            gm_note: get('gm_note') || null,
+            dm_note: get('dm_note') || null,
+            mgr_reply: get('mgr_reply') || null,
+        });
+    }
+    return { items, skipped, aboveCutoff };
+}
+
+// "-25.00%" → -25; "-0.25" (an unformatted Excel percent) → -25; "-25" → -25.
+function _vrParseVariance(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return null;
+    const hadPct = s.includes('%');
+    const n = parseFloat(s.replace(/[%,\s]/g, ''));
+    if (!Number.isFinite(n)) return null;
+    if (!hadPct && Math.abs(n) <= 1.5) return Math.round(n * 10000) / 100;
+    return Math.round(n * 100) / 100;
+}
+
+// Cancels the whole upload process: closes the panel and discards any parsed
+// file. The file <input> lives inside the panel and is removed on re-render.
+function vrCancelUpload() {
+    _vrUploadOpen = false;
+    _vrParsed = null;
+    _vrFileName = '';
+    renderVarianceReplies();
+}
+
+// Swaps the parsed file out for the picker again (panel stays open).
+function vrClearFile() {
+    _vrParsed = null;
+    _vrFileName = '';
+    renderVarianceReplies();
+}
+
+async function vrConfirmUpload(btn) {
+    if (!_vrParsed || !_vrParsed.items.length) return;
+    const store = (document.getElementById('vr-store-select') || {}).value || '';
+    const timeframe = '';
+    const from = (document.getElementById('vr-up-from') || {}).value;
+    const to = (document.getElementById('vr-up-to') || {}).value;
+    if (!from || !to) { alert('Please set the From and To dates for this report period.'); return; }
+    if (from > to) { alert('The From date must be before the To date.'); return; }
+    const old = btn.innerText;
+    btn.disabled = true; btn.innerText = 'Uploading…';
+    try {
+        const res = await fetch(VARIANCE_REPLIES_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'upload_period', store, date_from: from, date_to: to, timeframe,
+                uploaded_by: sessionStorage.getItem('speeksUserName') || null,
+                items: _vrParsed.items,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Upload failed');
+        _vrUploadOpen = false;
+        _vrParsed = null;
+        _vrFileName = '';
+        await loadVarianceReplies();
+        // jump the pickers straight to the period we just uploaded
+        const rSel = document.getElementById('vr-period-select');
+        const sSel = document.getElementById('vr-store-select');
+        const key = `${from}|${to}`;
+        if (rSel && [...rSel.options].some(o => o.value === key)) rSel.value = key;
+        if (sSel) sSel.value = store;
+        const pid = _vrSelectedPeriodId();
+        if (pid && (!_vrCurrent || !_vrCurrent.period || _vrCurrent.period.id !== pid)) vrOpenPeriod(pid);
+    } catch (e) {
+        alert('Upload failed: ' + e.message);
+        btn.disabled = false; btn.innerText = old;
+    }
+}
+
+// ---- reminders: pulsing dots + shared red bubble -----------------------------
+// Managers get a dot on the Analytics nav-link and the Variance Replies tab
+// while lines await their explanation, and again when DM notes await a reply.
+// The red bubble fires once per day per period: the day before the deadline
+// ("get this done before EOD tomorrow") and while DM notes sit unanswered.
+let _vrRemindersStarted = false;
+let _vrMyPeriodsCache = [];
+
+function _vrDotNeeded() {
+    return _vrMyPeriodsCache.some(p => (p.items - p.answered) > 0 || p.awaiting_reply > 0);
+}
+
+async function checkVarianceReminders() {
+    if (!_vrIsManager()) return;
+    const stores = _vrMyStores();
+    if (!stores.length) return;
+    if (!_vrRemindersStarted) {
+        _vrRemindersStarted = true;
+        setInterval(checkVarianceReminders, 10 * 60 * 1000);
+    }
+    try {
+        const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json || json.success === false) return;
+        // ignore stale periods so a forgotten upload can't pin the dot forever
+        const cutoff = Date.now() - 45 * 86400000;
+        _vrMyPeriodsCache = (json.data || []).filter(p => new Date(p.uploaded_at).getTime() > cutoff);
+        applyKpiReminder(); // re-evaluates the shared workspace nav dot + tab dot
+        _vrMaybePopup();
+    } catch (e) { /* next poll retries */ }
+}
+
+// DM-side reminder: fires once per period when the managers' reply window
+// closes — the deadline passes, or every line gets explained early — and the
+// DM hasn't left any notes yet. The manager-side popups above don't apply to
+// the DM, so this is their "your turn" ping.
+async function checkVarianceDmReminders() {
+    if (!_vrIsDM()) return;
+    if (!_vrDmRemindersStarted) {
+        _vrDmRemindersStarted = true;
+        setInterval(checkVarianceDmReminders, 10 * 60 * 1000);
+    }
+    try {
+        const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=OVL,LEE,WSP,MPL,BAL&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json || json.success === false) return;
+        const cutoff = Date.now() - 45 * 86400000;
+        const periods = (json.data || []).filter(p => new Date(p.uploaded_at).getTime() > cutoff);
+        for (const p of periods) {
+            if (!p.items) continue;
+            if (!p.dm_notes_at) {
+                // Their turn to start: managers' window closed, no DM notes yet.
+                const allDone = p.answered >= p.items;
+                const duePassed = Date.now() > new Date(p.manager_due_at).getTime();
+                if (!allDone && !duePassed) continue;
+                const key = `speeksVRDmTurnSeen_${p.id}`;
+                if (localStorage.getItem(key)) continue;
+                localStorage.setItem(key, '1');
+                // Ethan wants this one lightweight — no store names or counts,
+                // just a same-day nudge that reviews are waiting on him.
+                _vrRenderBubble('📝', 'Variance replies are ready for review',
+                    'Manager explanations are in — review them and add your DM notes today.');
+                return;
+            }
+            // Wrap-up: managers get 2 days to review the DM's notes and answer
+            // the flagged ones — measured from whichever came later, the reply
+            // deadline or the DM actually leaving notes.
+            const replyDue = Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()) + 2 * 86400000;
+            if (Date.now() < replyDue) continue;
+            const wrapKey = `speeksVRWrapSeen_${p.id}`;
+            if (localStorage.getItem(wrapKey)) continue;
+            localStorage.setItem(wrapKey, '1');
+            // Same lightweight treatment as the "ready for review" nudge —
+            // no store names or counts, just tell the DM to go look.
+            _vrRenderBubble('📬', 'Variance reply window closed',
+                'The managers’ response window has ended — give the replies a final review today.');
+            return;
+        }
+    } catch (e) { /* next poll retries */ }
+}
+let _vrDmRemindersStarted = false;
+
+function _vrMaybePopup() {
+    // Variance has its own bubble that stacks below the claim/store-comment
+    // ones, so no need to wait for the shared bubble to be free anymore.
+    const now = Date.now();
+    const today = new Date().toDateString();
+    for (const p of _vrMyPeriodsCache) {
+        const unanswered = p.items - p.answered;
+        const due = new Date(p.manager_due_at).getTime();
+        // 0) a report was just uploaded — announce it once per period so the
+        //    manager doesn't have to spot the pulsing dot on their own.
+        if (unanswered > 0) {
+            const upKey = `speeksVRUpSeen_${p.id}`;
+            if (!localStorage.getItem(upKey)) {
+                localStorage.setItem(upKey, '1');
+                // only announce fresh uploads — an old period surfacing on a new
+                // device gets swallowed silently (the due/overdue nudges cover it)
+                if (Date.now() - new Date(p.uploaded_at).getTime() < 7 * 86400000) {
+                    const dueTxt = p.manager_due_at
+                        ? ` by ${new Date(p.manager_due_at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}` : '';
+                    _vrRenderBubble('📊', 'New variance report uploaded',
+                        `${p.store}: a variance report for ${formatVarianceRange(p.date_from, p.date_to)} was uploaded — ${unanswered} line${unanswered > 1 ? 's need' : ' needs'} an explanation${dueTxt}.`);
+                    return;
+                }
+            }
+        }
+        // 1) due tomorrow (last 24h before the deadline) and lines still open
+        if (unanswered > 0 && now < due && due - now < 24 * 3600 * 1000) {
+            const key = `speeksVRDueSeen_${p.id}_${today}`;
+            if (!localStorage.getItem(key)) {
+                localStorage.setItem(key, '1');
+                _vrRenderBubble('⏰', 'Variance replies due tomorrow',
+                    `${p.store} still has ${unanswered} variance line${unanswered > 1 ? 's' : ''} without an explanation for ${formatVarianceRange(p.date_from, p.date_to)}. Make sure they're done before EOD tomorrow.`);
+                return;
+            }
+        }
+        // 1b) deadline missed with lines still unexplained (max one nudge per day)
+        if (unanswered > 0 && now > due) {
+            const key = `speeksVROverdueSeen_${p.id}_${today}`;
+            if (!localStorage.getItem(key)) {
+                localStorage.setItem(key, '1');
+                _vrRenderBubble('🚨', 'Variance reply deadline missed',
+                    `${p.store}: the reply deadline for ${formatVarianceRange(p.date_from, p.date_to)} has passed and ${unanswered} line${unanswered > 1 ? 's are' : ' is'} still unexplained. Get them answered as soon as possible.`);
+                return;
+            }
+        }
+        // 2) DM notes waiting on a manager reply. Managers get 2 days from the
+        //    DM's notes (or the original deadline, whichever is later) to
+        //    answer the flagged lines — announce that window, then escalate
+        //    once it's missed. Max one nudge of each per day.
+        if (p.awaiting_reply > 0 && p.dm_notes_at) {
+            const replyDue = Math.max(due, new Date(p.dm_notes_at).getTime()) + 2 * 86400000;
+            const replyDueTxt = new Date(replyDue).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+            if (now > replyDue) {
+                const key = `speeksVRReplyOverdueSeen_${p.id}_${today}`;
+                if (!localStorage.getItem(key)) {
+                    localStorage.setItem(key, '1');
+                    _vrRenderBubble('🚨', 'DM note replies overdue',
+                        `${p.store}: ${p.awaiting_reply} flagged DM note${p.awaiting_reply > 1 ? 's' : ''} for ${formatVarianceRange(p.date_from, p.date_to)} ${p.awaiting_reply > 1 ? 'are' : 'is'} still unanswered and the reply deadline (${replyDueTxt}) has passed. Answer them now.`);
+                    return;
+                }
+            } else {
+                const key = `speeksVRDmSeen_${p.id}_${today}`;
+                if (!localStorage.getItem(key)) {
+                    localStorage.setItem(key, '1');
+                    _vrRenderBubble('💬', 'DM reviewed your variance replies',
+                        `${p.store}: ${p.awaiting_reply} line${p.awaiting_reply > 1 ? 's have' : ' has'} DM notes for ${formatVarianceRange(p.date_from, p.date_to)}. Reply to the flagged one${p.awaiting_reply > 1 ? 's' : ''} by ${replyDueTxt}.`);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// Same shared red bubble as the claim reminders, with a button into the tab.
+// Variance's own bubble — amber, created on demand next to the shared claim
+// bubble so it inherits the same header stacking context. Like the recycle
+// bubble, it stacks below whatever other bubbles are showing instead of
+// fighting them for the shared red one.
+function _vrBubbleEl() {
+    let b = document.getElementById('varianceAlertBubble');
+    if (b) return b;
+    const claim = document.getElementById('claimAlertBubble');
+    if (!claim || !claim.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'varianceAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #d97706, #92400e); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(120, 53, 15, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = `<span id="varianceAlertBubbleIcon" style="font-size:16px; flex-shrink:0; margin-top:2px;">📊</span>
+        <span id="varianceAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>
+        <button onclick="closeVarianceAlertBubble()" class="daily-bubble-close" title="Dismiss">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>`;
+    claim.parentElement.appendChild(b);
+    return b;
+}
+
+// Bottom of the stack: below the store comment, claim alert and recycle bubble.
+function _positionVarianceAlert() {
+    const b = document.getElementById('varianceAlertBubble');
+    if (!b) return;
+    let top = 116;
+    ['dailyMessageBubble', 'claimAlertBubble', 'recycleAlertBubble'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el && getComputedStyle(el).display !== 'none' && el.offsetHeight > 0) {
+            top = Math.max(top, el.getBoundingClientRect().bottom + 12);
+        }
+    });
+    b.style.top = top + 'px';
+}
+
+function closeVarianceAlertBubble() {
+    const b = document.getElementById('varianceAlertBubble');
+    if (b) b.style.display = 'none';
+}
+
+function _vrRenderBubble(icon, title, bodyText) {
+    const b = _vrBubbleEl();
+    if (!b) return;
+    const iconEl = document.getElementById('varianceAlertBubbleIcon');
+    const textEl = document.getElementById('varianceAlertBubbleText');
+    if (iconEl) iconEl.textContent = icon;
+    textEl.style.display = 'flex';
+    textEl.style.flexDirection = 'column';
+    textEl.style.gap = '7px';
+    textEl.innerHTML = `
+        <div style="line-height:1.4;"><strong>${escapeHtml(title)}</strong></div>
+        <div style="line-height:1.4; opacity:0.96;">${escapeHtml(bodyText)}</div>
+        <button onclick="closeVarianceAlertBubble(); window.location.href='workspace.html#vreplies';"
+            style="align-self:flex-start; background:rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.5); color:#fff; font-weight:800; font-size:12px; border-radius:8px; padding:6px 12px; cursor:pointer;"
+            onmouseover="this.style.background='rgba(255,255,255,0.3)';" onmouseout="this.style.background='rgba(255,255,255,0.18)';">Open Variance Replies</button>`;
+    b.style.display = 'flex';
+    _positionVarianceAlert();
+    // Re-stack shortly after: the store comment fades in on its own 1.5s timer
+    // and the claim/recycle bubbles may land on later checks.
+    setTimeout(_positionVarianceAlert, 2200);
+    b.animate([
+        { transform: 'scale(0.95) translateX(10px)', opacity: 0 },
+        { transform: 'scale(1) translateX(0)', opacity: 1 }
+    ], { duration: 400, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
 }
