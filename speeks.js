@@ -16595,9 +16595,6 @@ async function loadVarianceReplies() {
         _vrPeriods = json.data || [];
         _vrStoreStatus = json.store_status || {};
         _vrClearedTV = json.cleared_team_variance || {};
-        // A cleared store's managers don't work its line items, so keep those
-        // periods out of the picker entirely — they see the summary panel below.
-        if (_vrIsManager()) _vrPeriods = _vrPeriods.filter(p => !_vrStoreCleared(p.store));
         _vrBuildPeriodPicker();
         const pid = _vrSelectedPeriodId();
         if (pid) await vrOpenPeriod(pid);
@@ -16680,6 +16677,8 @@ async function vrOpenPeriod(pid) {
 function _vrSubtitleText() {
     if (!_vrCurrent || !_vrCurrent.period) return '';
     const p = _vrCurrent.period;
+    // Cleared managers have no reply deadline — don't nag them with one.
+    if (_vrIsManager() && _vrStoreCleared(p.store)) return 'In the clear — replies optional';
     const items = _vrCurrent.items || [];
     const answered = items.filter(i => i.gm_note).length;
     const due = new Date(p.manager_due_at);
@@ -16750,18 +16749,28 @@ function _vrClearedPanelHtml(store, tv) {
     </div>`;
 }
 
+// Slim banner atop a cleared store's report (when uploads exist): the manager
+// can read it, switch date ranges and download it, but owes no replies.
+function _vrMgrClearedBannerHtml(store) {
+    return `<div style="background:linear-gradient(135deg,#ecfdf5,#d1fae5); border:1.5px solid #a7f3d0; border-radius:12px; padding:12px 16px; margin-bottom:14px; font-size:12.5px; font-weight:700; color:#065f46; line-height:1.5;">
+        ✅ <b>${escapeHtml(store)}</b> is in the clear — you don't need to reply to these lines. They're here for reference: check your team variance below, switch date ranges with the dropdown, and download the full report anytime.
+    </div>`;
+}
+
 function renderVarianceReplies() {
     const body = document.getElementById('vr-body');
     if (!body) return;
     _vrClearedPanelsPending = '';
-    // A manager whose store(s) are "in the clear" gets the summary panel instead
-    // of the reply sheet. With multiple managed stores, cleared ones show the
-    // panel and the rest fall through to the normal flow below.
+    // "In the clear" managers still see their reports — read-only, switchable by
+    // date range, with team variance + the download button — they just have no
+    // reply obligation. The only time we fall back to the standalone summary
+    // panel is a cleared store that has NO uploads yet (nothing to show a
+    // report for). With multiple managed stores, that panel is prepended above
+    // whatever active/other store's report is open.
     if (_vrIsManager()) {
-        const cleared = _vrMyStores().filter(s => _vrStoreCleared(s));
-        if (cleared.length) {
-            const panels = cleared.map(s => _vrClearedPanelHtml(s, _vrClearedTV[s])).join('');
-            // No active (non-cleared) periods left → the panel IS the whole view.
+        const clearedNoUploads = _vrMyStores().filter(s => _vrStoreCleared(s) && !_vrPeriods.some(p => p.store === s));
+        if (clearedNoUploads.length) {
+            const panels = clearedNoUploads.map(s => _vrClearedPanelHtml(s, _vrClearedTV[s])).join('');
             if (!_vrPeriods.length) {
                 ['vr-edit-btn', 'vr-save-btn', 'vr-edit-cancel-btn'].forEach(id => {
                     const b = document.getElementById(id); if (b) b.style.display = 'none';
@@ -16770,10 +16779,7 @@ function renderVarianceReplies() {
                 body.innerHTML = panels;
                 return;
             }
-            // Otherwise stash the panels to prepend above the active store's sheet.
             _vrClearedPanelsPending = panels;
-        } else {
-            _vrClearedPanelsPending = '';
         }
     }
     // Rebuilding the table destroys the textareas — stash what's typed so an
@@ -16815,7 +16821,12 @@ function renderVarianceReplies() {
 
     const p = _vrCurrent.period;
     const items = _vrCurrent.items || [];
-    const canGm = _vrIsManager();
+    // A manager whose store is "in the clear" views the report read-only — no
+    // reply obligation — so they can't edit notes (canGm off) but still see the
+    // line items, team variance and download. A banner explains it.
+    const mgrCleared = _vrIsManager() && _vrStoreCleared(p.store);
+    if (mgrCleared) html += _vrMgrClearedBannerHtml(p.store);
+    const canGm = _vrIsManager() && !mgrCleared;
     const canDm = _vrIsDM();
 
     // The reply cycle reveals columns as each side takes its turn:
@@ -17379,7 +17390,8 @@ let _vrRemindersStarted = false;
 let _vrMyPeriodsCache = [];
 
 function _vrDotNeeded() {
-    return _vrMyPeriodsCache.some(p => (p.items - p.answered) > 0 || p.awaiting_reply > 0);
+    // Cleared stores owe no replies, so they never light the action dot.
+    return _vrMyPeriodsCache.some(p => !_vrStoreCleared(p.store) && ((p.items - p.answered) > 0 || p.awaiting_reply > 0));
 }
 
 async function checkVarianceReminders() {
@@ -17395,11 +17407,11 @@ async function checkVarianceReminders() {
         const json = await res.json();
         if (!json || json.success === false) return;
         _vrStoreStatus = json.store_status || {};
-        // ignore stale periods so a forgotten upload can't pin the dot forever,
-        // and drop any store the DM has marked "in the clear" — no dots/popups.
+        // ignore stale periods so a forgotten upload can't pin the dot forever.
+        // Cleared stores stay in the cache (they still get the "report is live"
+        // announcement) — the dot + reply nags are gated on cleared separately.
         const cutoff = Date.now() - 45 * 86400000;
-        _vrMyPeriodsCache = (json.data || []).filter(p =>
-            new Date(p.uploaded_at).getTime() > cutoff && !_vrStoreCleared(p.store));
+        _vrMyPeriodsCache = (json.data || []).filter(p => new Date(p.uploaded_at).getTime() > cutoff);
         applyKpiReminder(); // re-evaluates the shared workspace nav dot + tab dot
         _vrMaybePopup();
     } catch (e) { /* next poll retries */ }
@@ -17464,25 +17476,36 @@ function _vrMaybePopup() {
     const now = Date.now();
     const today = new Date().toDateString();
     for (const p of _vrMyPeriodsCache) {
+        const cleared = _vrStoreCleared(p.store);
         const unanswered = p.items - p.answered;
         const due = new Date(p.manager_due_at).getTime();
         // 0) a report was just uploaded — announce it once per period so the
-        //    manager doesn't have to spot the pulsing dot on their own.
-        if (unanswered > 0) {
+        //    manager doesn't have to spot the pulsing dot on their own. Cleared
+        //    stores get this too (they still review + download) but with a "no
+        //    replies needed" message.
+        if (unanswered > 0 || cleared) {
             const upKey = `speeksVRUpSeen_${p.id}`;
             if (!localStorage.getItem(upKey)) {
                 localStorage.setItem(upKey, '1');
                 // only announce fresh uploads — an old period surfacing on a new
                 // device gets swallowed silently (the due/overdue nudges cover it)
                 if (Date.now() - new Date(p.uploaded_at).getTime() < 7 * 86400000) {
-                    const dueTxt = p.manager_due_at
-                        ? ` by ${new Date(p.manager_due_at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}` : '';
-                    _vrRenderBubble('📊', 'New variance report uploaded',
-                        `${p.store}: a variance report for ${formatVarianceRange(p.date_from, p.date_to)} was uploaded — ${unanswered} line${unanswered > 1 ? 's need' : ' needs'} an explanation${dueTxt}.`);
+                    if (cleared) {
+                        _vrRenderBubble('📊', 'New variance report is live',
+                            `${p.store}: a variance report for ${formatVarianceRange(p.date_from, p.date_to)} is available. You're in the clear — no replies needed, but you can review it and download the full report.`);
+                    } else {
+                        const dueTxt = p.manager_due_at
+                            ? ` by ${new Date(p.manager_due_at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}` : '';
+                        _vrRenderBubble('📊', 'New variance report uploaded',
+                            `${p.store}: a variance report for ${formatVarianceRange(p.date_from, p.date_to)} was uploaded — ${unanswered} line${unanswered > 1 ? 's need' : ' needs'} an explanation${dueTxt}.`);
+                    }
                     return;
                 }
             }
         }
+        // Cleared stores owe no replies — the announcement above is all they get,
+        // none of the due/overdue/reply nags below.
+        if (cleared) continue;
         // 1) due tomorrow (last 24h before the deadline) and lines still open
         if (unanswered > 0 && now < due && due - now < 24 * 3600 * 1000) {
             const key = `speeksVRDueSeen_${p.id}_${today}`;
