@@ -16562,7 +16562,18 @@ let _vrParsed = null;     // parsed Excel rows awaiting confirm
 let _vrFileName = '';     // name of the parsed file (the <input> can't keep it across re-renders)
 let _vrEditing = false;   // notes are locked until ✏️ Edit is clicked (KPI-style)
 let _vrDrafts = {};       // "itemId|field" → unsaved textarea text, survives re-renders
+let _vrStoreStatus = {};  // store → { in_the_clear, updated_by, updated_at } (DM control)
+let _vrClearedTV = {};    // store → latest team variance summary (for cleared stores)
+let _vrRawFileB64 = '';   // base64 of the raw uploaded workbook, kept for storage
+let _vrClearedPanelsPending = ''; // cleared-store summary panels to prepend (MSM mix)
 const _VR_VARIANCE_CUTOFF = -10; // only lines at this variance % or worse are imported
+
+// A store the DM has marked "in the clear": its managers stop seeing/answering
+// line items and get no dots/popups — they just see their team + store total.
+function _vrStoreCleared(store) {
+    const s = _vrStoreStatus[(store || '').toUpperCase()];
+    return !!(s && s.in_the_clear);
+}
 
 const _vrFmtPct = v => (v == null || v === '') ? '—'
     : `${Number(v) > 0 ? '+' : ''}${Number(v).toFixed(1)}%`;
@@ -16582,6 +16593,11 @@ async function loadVarianceReplies() {
         const json = await res.json();
         if (!json.success) throw new Error(json.error);
         _vrPeriods = json.data || [];
+        _vrStoreStatus = json.store_status || {};
+        _vrClearedTV = json.cleared_team_variance || {};
+        // A cleared store's managers don't work its line items, so keep those
+        // periods out of the picker entirely — they see the summary panel below.
+        if (_vrIsManager()) _vrPeriods = _vrPeriods.filter(p => !_vrStoreCleared(p.store));
         _vrBuildPeriodPicker();
         const pid = _vrSelectedPeriodId();
         if (pid) await vrOpenPeriod(pid);
@@ -16709,9 +16725,57 @@ function _vrTeamVarianceHtml(tv, period) {
     </details>`;
 }
 
+// What a manager of an "in the clear" store sees instead of the reply sheet:
+// a friendly heads-up plus their team + store-total variance summary. No line
+// items, no reply obligation — the DM flips them back if things slip.
+function _vrClearedPanelHtml(store, tv) {
+    const rangeTxt = (tv && tv.date_from && tv.date_to)
+        ? `<div style="font-size:11px; font-weight:600; color:#94a3b8; margin-top:4px;">Latest variance · ${escapeHtml(formatVarianceRange(tv.date_from, tv.date_to))}</div>`
+        : '';
+    const summary = tv
+        ? _vrTeamVarianceHtml(tv, { date_from: tv.date_from, date_to: tv.date_to })
+        : `<div style="padding:14px 16px; font-size:12px; color:#94a3b8; background:#fff; border:1px solid #e2e8f0; border-radius:12px;">No team variance recorded yet.</div>`;
+    return `<div style="margin-bottom:16px;">
+        <div style="background:linear-gradient(135deg,#ecfdf5,#d1fae5); border:1.5px solid #a7f3d0; border-radius:14px; padding:18px 20px; margin-bottom:16px;">
+            <div style="display:flex; align-items:center; gap:10px;">
+                <span style="font-size:22px;">✅</span>
+                <span style="font-size:15px; font-weight:800; color:#065f46;">${escapeHtml(store)} is in the clear</span>
+            </div>
+            <div style="font-size:12.5px; font-weight:600; color:#047857; line-height:1.5; margin-top:8px;">
+                Your variance is in a great place — there are no line items to explain right now. Just keep an eye on your team and store totals below. If things start to slip, the DM will switch replies back on.
+            </div>
+            ${rangeTxt}
+        </div>
+        ${summary}
+    </div>`;
+}
+
 function renderVarianceReplies() {
     const body = document.getElementById('vr-body');
     if (!body) return;
+    _vrClearedPanelsPending = '';
+    // A manager whose store(s) are "in the clear" gets the summary panel instead
+    // of the reply sheet. With multiple managed stores, cleared ones show the
+    // panel and the rest fall through to the normal flow below.
+    if (_vrIsManager()) {
+        const cleared = _vrMyStores().filter(s => _vrStoreCleared(s));
+        if (cleared.length) {
+            const panels = cleared.map(s => _vrClearedPanelHtml(s, _vrClearedTV[s])).join('');
+            // No active (non-cleared) periods left → the panel IS the whole view.
+            if (!_vrPeriods.length) {
+                ['vr-edit-btn', 'vr-save-btn', 'vr-edit-cancel-btn'].forEach(id => {
+                    const b = document.getElementById(id); if (b) b.style.display = 'none';
+                });
+                const sub = document.getElementById('vr-subtitle'); if (sub) sub.textContent = '';
+                body.innerHTML = panels;
+                return;
+            }
+            // Otherwise stash the panels to prepend above the active store's sheet.
+            _vrClearedPanelsPending = panels;
+        } else {
+            _vrClearedPanelsPending = '';
+        }
+    }
     // Rebuilding the table destroys the textareas — stash what's typed so an
     // unexpected re-render mid-edit can never delete someone's notes. The
     // "needs a reply" checkboxes ride along the same way.
@@ -16726,7 +16790,14 @@ function renderVarianceReplies() {
     // The header Cancel button only shows while the upload panel is open.
     const cancelBtn = document.getElementById('vr-cancel-upload-btn');
     if (cancelBtn) cancelBtn.style.display = (_vrIsDM() && _vrUploadOpen) ? 'inline-flex' : 'none';
-    let html = '';
+    // DM "In the Clear" toggle: reflects the currently selected store's status.
+    _vrSyncStatusButton();
+    let html = _vrClearedPanelsPending || '';
+    // DM banner: remind them this store is in the clear (managers aren't replying).
+    if (_vrIsDM()) {
+        const dmStore = ((document.getElementById('vr-store-select') || {}).value || '').toUpperCase();
+        if (_vrStoreCleared(dmStore)) html += _vrDmClearedBannerHtml(dmStore);
+    }
     if (_vrIsDM() && _vrUploadOpen) html += _vrUploadPanelHtml();
 
     if (!_vrCurrent || !_vrCurrent.period) {
@@ -16781,11 +16852,20 @@ function renderVarianceReplies() {
     if (cancelEditBtn) cancelEditBtn.style.display = (canEditNow && _vrEditing) ? 'inline-block' : 'none';
     if (uploadBtn && canDm) uploadBtn.style.display = _vrEditing ? 'none' : 'inline-flex';
 
+    // The raw workbook the DM uploaded is downloadable by anyone who can see the
+    // period (managers + DM) so they can pull the full breakdown, including the
+    // lines below the -10% cutoff that we don't import as reply rows.
+    const dlBtn = p.raw_file_path
+        ? `<button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px;" onclick="vrDownloadRaw('${p.id}', this)">⬇ Download full report</button>`
+        : '';
     html += `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin:12px 0 16px;">
         <div style="font-size:12px; color:#64748b; font-weight:600; line-height:1.5; padding-left:14px;">
             <b>${escapeHtml(p.store)}</b> · ${formatVarianceRange(p.date_from, p.date_to)}${p.timeframe ? ' · ' + escapeHtml(p.timeframe) : ''}
         </div>
-        ${canDm ? `<button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px; margin-right:14px;" onclick="vrDeletePeriod('${p.id}')">Delete this upload</button>` : ''}
+        <div class="align-center gap-8" style="margin-right:14px;">
+            ${dlBtn}
+            ${canDm ? `<button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px;" onclick="vrDeletePeriod('${p.id}')">Delete this upload</button>` : ''}
+        </div>
     </div>`;
 
     // Team variance for this period (store total % + per-person %), the same
@@ -16966,11 +17046,91 @@ async function vrDeletePeriod(id) {
     }
 }
 
+// ---- "In the Clear" store status (DM only) ----------------------------------
+// Keeps the header toggle in sync with the selected store's status.
+function _vrSyncStatusButton() {
+    const btn = document.getElementById('vr-status-btn');
+    if (!btn) return;
+    if (!_vrIsDM() || _vrUploadOpen || _vrEditing) { btn.style.display = 'none'; return; }
+    const store = ((document.getElementById('vr-store-select') || {}).value || '').toUpperCase();
+    if (!store) { btn.style.display = 'none'; return; }
+    const cleared = _vrStoreCleared(store);
+    btn.style.display = 'inline-flex';
+    btn.disabled = false; // clear the "Saving…" lock after a reload re-syncs it
+    btn.textContent = cleared ? '↩ Reactivate replies' : '✅ Mark in the clear';
+    btn.title = cleared
+        ? `${store} is in the clear — click to require variance replies again`
+        : `Mark ${store} as in the clear — its managers stop replying to variance lines`;
+}
+
+// The DM's reminder banner shown above a cleared store's sheet/empty state.
+function _vrDmClearedBannerHtml(store) {
+    const s = _vrStoreStatus[store] || {};
+    const who = s.updated_by ? ` by ${escapeHtml(s.updated_by)}` : '';
+    return `<div style="background:linear-gradient(135deg,#ecfdf5,#d1fae5); border:1.5px solid #a7f3d0; border-radius:12px; padding:12px 16px; margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+        <div style="font-size:12.5px; font-weight:700; color:#065f46; line-height:1.5;">
+            ✅ <b>${escapeHtml(store)}</b> is in the clear — its managers aren't being asked to reply to variance lines${who}. They just see their team + store total.
+        </div>
+        <button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px; flex-shrink:0;" onclick="vrToggleStoreStatus(this)">↩ Reactivate replies</button>
+    </div>`;
+}
+
+async function vrToggleStoreStatus(btn) {
+    if (!_vrIsDM()) return;
+    const store = ((document.getElementById('vr-store-select') || {}).value || '').toUpperCase();
+    if (!store) { alert('Pick a store first.'); return; }
+    const cleared = _vrStoreCleared(store);
+    const next = !cleared;
+    const msg = next
+        ? `Mark ${store} as in the clear?\n\nIts managers will stop seeing and replying to variance line items (and get no reminders) — they'll just see their team + store total. You can reactivate this anytime.`
+        : `Reactivate variance replies for ${store}?\n\nIts managers will start seeing and replying to variance line items again.`;
+    if (!confirm(msg)) return;
+    const old = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    try {
+        const res = await fetch(VARIANCE_REPLIES_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'set_store_status', store, in_the_clear: next,
+                by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        await loadVarianceReplies();
+    } catch (e) {
+        alert('Could not update the store status: ' + (e.message || e));
+        if (btn) { btn.disabled = false; btn.textContent = old; }
+    }
+}
+
+// Fetches a short-lived signed URL for the period's raw workbook and downloads it.
+async function vrDownloadRaw(periodId, btn) {
+    const old = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Preparing…'; }
+    try {
+        const res = await fetch(`${VARIANCE_REPLIES_URL}?file=${encodeURIComponent(periodId)}&v=${Date.now()}`);
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false || !json.url) throw new Error(json.error || 'No file');
+        const a = document.createElement('a');
+        a.href = json.url;
+        if (json.name) a.download = json.name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    } catch (e) {
+        alert('Could not download the report: ' + (e.message || e));
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = old; }
+    }
+}
+
 // ---- DM upload flow (SheetJS parses the sheet in the browser) ---------------
 function vrToggleUpload() {
     _vrUploadOpen = !_vrUploadOpen;
     _vrParsed = null;
     _vrFileName = '';
+    _vrRawFileB64 = '';
     renderVarianceReplies();
 }
 
@@ -17050,7 +17210,16 @@ async function vrHandleFile(input) {
     const reader = new FileReader();
     reader.onload = e => {
         try {
-            const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+            const bytes = new Uint8Array(e.target.result);
+            // Keep the original file (base64) so it can be stored for managers to
+            // download the full breakdown later. Chunked to avoid a call-stack
+            // blow-up on String.fromCharCode with a big spread.
+            let bin = '';
+            for (let i = 0; i < bytes.length; i += 8192) {
+                bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+            }
+            _vrRawFileB64 = btoa(bin);
+            const wb = XLSX.read(bytes, { type: 'array' });
             // The report often has a summary sheet before the line-item "Detail"
             // sheet, so scan every sheet and keep whichever one actually parses.
             let best = { items: [], skipped: 0, aboveCutoff: 0 };
@@ -17147,6 +17316,7 @@ function vrCancelUpload() {
     _vrUploadOpen = false;
     _vrParsed = null;
     _vrFileName = '';
+    _vrRawFileB64 = '';
     renderVarianceReplies();
 }
 
@@ -17154,6 +17324,7 @@ function vrCancelUpload() {
 function vrClearFile() {
     _vrParsed = null;
     _vrFileName = '';
+    _vrRawFileB64 = '';
     renderVarianceReplies();
 }
 
@@ -17174,6 +17345,8 @@ async function vrConfirmUpload(btn) {
                 action: 'upload_period', store, date_from: from, date_to: to, timeframe,
                 uploaded_by: sessionStorage.getItem('speeksUserName') || null,
                 items: _vrParsed.items,
+                raw_file_b64: _vrRawFileB64 || null,
+                raw_file_name: _vrFileName || null,
             }),
         });
         const json = await res.json().catch(() => ({}));
@@ -17181,6 +17354,7 @@ async function vrConfirmUpload(btn) {
         _vrUploadOpen = false;
         _vrParsed = null;
         _vrFileName = '';
+        _vrRawFileB64 = '';
         await loadVarianceReplies();
         // jump the pickers straight to the period we just uploaded
         const rSel = document.getElementById('vr-period-select');
@@ -17220,9 +17394,12 @@ async function checkVarianceReminders() {
         const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
         const json = await res.json();
         if (!json || json.success === false) return;
-        // ignore stale periods so a forgotten upload can't pin the dot forever
+        _vrStoreStatus = json.store_status || {};
+        // ignore stale periods so a forgotten upload can't pin the dot forever,
+        // and drop any store the DM has marked "in the clear" — no dots/popups.
         const cutoff = Date.now() - 45 * 86400000;
-        _vrMyPeriodsCache = (json.data || []).filter(p => new Date(p.uploaded_at).getTime() > cutoff);
+        _vrMyPeriodsCache = (json.data || []).filter(p =>
+            new Date(p.uploaded_at).getTime() > cutoff && !_vrStoreCleared(p.store));
         applyKpiReminder(); // re-evaluates the shared workspace nav dot + tab dot
         _vrMaybePopup();
     } catch (e) { /* next poll retries */ }
@@ -17242,8 +17419,11 @@ async function checkVarianceDmReminders() {
         const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=OVL,LEE,WSP,MPL,BAL&v=${Date.now()}`);
         const json = await res.json();
         if (!json || json.success === false) return;
+        _vrStoreStatus = json.store_status || {};
         const cutoff = Date.now() - 45 * 86400000;
-        const periods = (json.data || []).filter(p => new Date(p.uploaded_at).getTime() > cutoff);
+        // Skip stores the DM has marked "in the clear" — no review nudges for them.
+        const periods = (json.data || []).filter(p =>
+            new Date(p.uploaded_at).getTime() > cutoff && !_vrStoreCleared(p.store));
         for (const p of periods) {
             if (!p.items) continue;
             if (!p.dm_notes_at) {

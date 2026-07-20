@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20260720a" defer></script>
+  <script src="speeks.js?v=20260720b" defer></script>
 </head>
 <body class="preload">
 
@@ -637,6 +637,7 @@
                   <button id="vr-save-btn" class="kpi-save-section-btn" style="display:none;" onclick="vrSaveEdits(this)">Save</button>
                   <button id="vr-edit-cancel-btn" class="kpi-cancel-btn" style="display:none;" onclick="vrCancelEdit()">Cancel</button>
                   <button id="vr-cancel-upload-btn" class="kpi-cancel-btn" onclick="vrCancelUpload()" style="display:none;">Cancel</button>
+                  <button id="vr-status-btn" class="kpi-update-trigger-btn dynamic-module-flex role-district-manager" onclick="vrToggleStoreStatus(this)" style="display:none;"></button>
                   <button id="vr-upload-btn" class="kpi-update-trigger-btn dynamic-module-flex role-district-manager" onclick="vrToggleUpload()" style="display:none;">Upload Report</button>
               </div>
           </div>
