@@ -16678,7 +16678,7 @@ function _vrSubtitleText() {
     if (!_vrCurrent || !_vrCurrent.period) return '';
     const p = _vrCurrent.period;
     // Cleared managers have no reply deadline — don't nag them with one.
-    if (_vrIsManager() && _vrStoreCleared(p.store)) return 'In the clear — replies optional';
+    if (_vrIsManager() && _vrStoreCleared(p.store)) return 'In the clear';
     const items = _vrCurrent.items || [];
     const answered = items.filter(i => i.gm_note).length;
     const due = new Date(p.manager_due_at);
