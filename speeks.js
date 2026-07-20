@@ -14185,9 +14185,9 @@ function renderBoxAdminList() {
         el.innerHTML = '<div style="color:#a0aab2;font-size:13px;padding:6px 0;">No items yet.</div>';
         return;
     }
-    const cats = ['Common Box', 'Rare Box', 'Very Rare Box', 'Shipping Supplies', 'White Storage Box', 'Bubble Mailer'];
+    const cats = ['Small Box', 'Medium Box', 'Large Box', 'Shipping Supplies', 'White Storage Box', 'Bubble Mailer'];
     const label = {
-        'Common Box': 'Common Boxes', 'Rare Box': 'Rare Boxes', 'Very Rare Box': 'Very Rare Boxes',
+        'Small Box': 'Small Boxes', 'Medium Box': 'Medium Boxes', 'Large Box': 'Large Boxes',
         'Shipping Supplies': 'Shipping Supplies', 'White Storage Box': 'White Storage Boxes', 'Bubble Mailer': 'Bubble Mailers'
     };
     let html = '';
@@ -14316,9 +14316,9 @@ function _renderBoxOrderItems(container, items) {
         return true;
     });
     const BUCKETS = [
-        { key: 'Common Box',       label: 'Common Boxes' },
-        { key: 'Rare Box',         label: 'Rare Boxes' },
-        { key: 'Very Rare Box',    label: 'Very Rare Boxes' },
+        { key: 'Small Box',        label: 'Small Boxes' },
+        { key: 'Medium Box',       label: 'Medium Boxes' },
+        { key: 'Large Box',        label: 'Large Boxes' },
         { key: 'Shipping Supplies',  label: 'Shipping Supplies' },
         { key: 'White Storage Box', label: 'White Storage Boxes' },
         { key: 'Bubble Mailer',     label: 'Bubble Mailers' },
@@ -14343,7 +14343,7 @@ function _renderBoxOrderItems(container, items) {
 
     BUCKETS.forEach(({ key, label }) => {
         const group = items.filter(i => i.category === key);
-        if (group.length) html += buildSection(label, group, key === 'Rare Box');
+        if (group.length) html += buildSection(label, group, key === 'Large Box');
     });
 
     container.innerHTML = html || '<div style="color:#a0aab2;font-size:13px;">No items found.</div>';
@@ -14445,7 +14445,7 @@ function boxOrderToggleSection(labelEl) {
 }
 
 function _buildBoxRow(item) {
-    const displayCat = item.category.replace(/^(?:Common |Rare |Very Rare )/, '');
+    const displayCat = item.category.replace(/^(?:Small |Medium |Large |Common |Rare |Very Rare )/, '');
     const label      = escapeHtml(`${item.name} ${displayCat}`);
     const nameHtml   = escapeHtml(item.name);
     const catHtml    = escapeHtml(item.category || '');
@@ -14531,7 +14531,7 @@ function boxOrderBackPage() {
 // vendor email keeps reading in bundles (qty ÷ bundle size).
 function _boxOrderLine(o) {
     const displayCat = (o.category || '')
-        .replace(/^(?:Common |Rare |Very Rare )/, '')
+        .replace(/^(?:Small |Medium |Large |Common |Rare |Very Rare )/, '')
         .replace(/\bShipping Supplies\b/i, '')
         .replace(/\bBox(?:es)?\b/i, '')
         .replace(/\s+/g, ' ').trim();
