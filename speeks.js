@@ -58,6 +58,7 @@ const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
 const RECYCLE_URL       = `${_BASE}/recycle-requests`;
 const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
 const VARIANCE_REPLIES_URL = `${_BASE}/variance-replies`;
+const AGING_INV_URL     = `${_BASE}/aging-inventory`;
 const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
@@ -2404,29 +2405,54 @@ function _kpiEmpRowsHtml(entries, periodDate, isEditing, isAvg) {
     }).join('');
 }
 
-// DM/CEO aren't on any store roster (kpi-manage excludes corp roles), but when
-// they work a shift — buying, listing — the store's stats should include them.
-// While editing the current period, a corp user gets an "add me" row that
-// appends them as a one-off entry for THAT period only. The row is only
-// persisted if numbers are actually saved for it, and past periods are
-// historical snapshots, so they never appear on weeks they didn't work.
+// The district manager isn't on any store roster (kpi-manage excludes corp
+// roles), but they regularly help a store with buying/listing, so their numbers
+// should be creditable on that period. While editing the current period:
+//   - the DM/CEO themselves get an "add me" row;
+//   - a store's own editors (manager / owner-manager / ASM) get an "add the DM"
+//     row — whoever fills the KPIs can credit the DM for the shift he worked.
+// Either way it's a one-off entry for THAT period only, persisted only if
+// numbers are actually saved for it; past periods are historical snapshots.
+const _KPI_STORE_EDIT_ROLES = new Set(['manager', 'owner (manager)', 'owner manager', 'assistant manager']);
+
+// The DM's name, pulled from the auth directory (role "district manager") so it
+// isn't hardcoded. null if the directory hasn't cached yet or there's no DM.
+function _kpiDmName() {
+    try {
+        const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
+        const dm = (auth.users || []).find(function(u) { return (u.role || '').toLowerCase().trim() === 'district manager'; });
+        return dm && dm.name ? dm.name : null;
+    } catch (e) { return null; }
+}
+
 function _kpiAddSelfRowHtml(p, isEditing) {
     if (!isEditing || !p.is_editable) return '';
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    if (role !== 'ceo' && role !== 'district manager') return '';
-    const name = sessionStorage.getItem('speeksUserName');
-    if (!name || (p.entries || []).some(function(e) { return e.employee_name === name; })) return '';
+    const inEntries = function(nm) { return (p.entries || []).some(function(e) { return e.employee_name === nm; }); };
+
+    // Who this button adds, and how it's labelled.
+    let name, tag, who;
+    if (role === 'ceo' || role === 'district manager') {
+        name = sessionStorage.getItem('speeksUserName'); tag = role === 'ceo' ? 'CEO' : 'DM'; who = 'self';
+    } else if (_KPI_STORE_EDIT_ROLES.has(role)) {
+        name = _kpiDmName(); tag = 'DM'; who = 'dm';
+    } else {
+        return '';
+    }
+    if (!name || inEntries(name)) return '';
+
     const cols = 1 + _KPI_GRID_FIELDS.length;
     const period = _kpiCurrentTab === 'weekly' ? 'week' : 'month';
-    const tag = role === 'ceo' ? 'CEO' : 'DM';
+    const helped = who === 'self' ? 'you helped' : 'they helped';
     return '<tr><td colspan="' + cols + '" style="padding:8px 12px; background:#f8fafc; border-top:1px solid #f1f5f9;">' +
-        '<button type="button" onclick="_kpiAddSelf(\'' + p.period_end_date + '\')" title="Adds a row for you on this ' + period + ' only — use it when you helped the store with buying or listing" ' +
+        '<button type="button" onclick="_kpiAddSelf(\'' + p.period_end_date + '\', \'' + who + '\')" title="Adds a row for ' + escapeHtml(name) + ' on this ' + period + ' only — use it when ' + helped + ' the store with buying or listing" ' +
         'style="font-size:12px; font-weight:800; color:#1d4ed8; background:#eff6ff; border:1.5px solid #bfdbfe; border-radius:8px; padding:6px 12px; cursor:pointer;">+ Add ' + escapeHtml(name) + ' (' + tag + ') — helped out this ' + period + '</button>' +
         '</td></tr>';
 }
 
-function _kpiAddSelf(periodDate) {
-    const name = sessionStorage.getItem('speeksUserName');
+// who: 'self' (DM/CEO adds themselves) or 'dm' (a store editor adds the DM).
+function _kpiAddSelf(periodDate, who) {
+    const name = who === 'dm' ? _kpiDmName() : sessionStorage.getItem('speeksUserName');
     if (!name) return;
     const p = (_kpiPeriodsData || []).find(function(x) { return x.period_end_date === periodDate; });
     if (!p || p.entries.some(function(e) { return e.employee_name === name; })) return;
@@ -3287,9 +3313,11 @@ function applyKpiReminder() {
     // that page): it pulses if EITHER the weekly-KPI window is open or the
     // manager has variance lines waiting on them.
     const vrOn = typeof _vrDotNeeded === 'function' && _vrDotNeeded();
-    document.querySelectorAll('.nav-link[href="workspace.html"]').forEach(a => _kpiToggleDot(a, on || vrOn));
+    const agOn = typeof _agDotNeeded === 'function' && _agDotNeeded();
+    document.querySelectorAll('.nav-link[href="workspace.html"]').forEach(a => _kpiToggleDot(a, on || vrOn || agOn));
     _kpiToggleDot(document.getElementById('ws-tab-kpis'), on);
     _kpiToggleDot(document.getElementById('ws-tab-vreplies'), vrOn);
+    _kpiToggleDot(document.getElementById('ws-tab-aging'), agOn);
     _kpiToggleDot(document.getElementById('kpi-tab-weekly'), on);
     _kpiDecorateEditBtn(on);
 }
@@ -3405,6 +3433,8 @@ function switchWorkspaceTab(name) {
         fetchB2BDeals();
     } else if (name === 'vreplies') {
         loadVarianceReplies();
+    } else if (name === 'aging') {
+        loadAgingInventory();
     }
     applyKpiReminder();
 }
@@ -3417,7 +3447,7 @@ function initWorkspace() {
     _wsKpiLoaded   = false;
     const hash = (window.location.hash || '').replace('#', '');
     // TEMP: B2B tab hidden — restore by putting 'b2b' back in the list and as the default.
-    let initial = ['brief', 'kpis', 'vreplies'].includes(hash) ? hash : 'brief';
+    let initial = ['brief', 'kpis', 'vreplies', 'aging'].includes(hash) ? hash : 'brief';
     // A tab can be hidden by its role gate or a Feature Access override
     // (applyRoleBasedUI already ran), so never land on one the user can't see —
     // fall back to the first visible tab.
@@ -8016,7 +8046,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -11862,16 +11892,40 @@ window.closeClaimAlertBubble = function () {
     const b = document.getElementById('claimAlertBubble');
     if (b) b.style.display = 'none';
     _reminderBubbleActive = false; // free the bubble for a later aging alert
+    // Acknowledging the bubble (the ✕ OR the "Review claims" button, which calls
+    // this first) marks whatever DM/CEO reminder it's showing as read. Persisted
+    // SERVER-SIDE via ack_reminder so it never returns — localStorage alone
+    // couldn't survive clearing browsing data or a different device — plus a
+    // local copy so it hides instantly without waiting on the round-trip.
+    if (_shownReminderIds.length) {
+        const ids = _shownReminderIds.slice();
+        _shownReminderIds = [];
+        const acked = _ackedReminders();
+        ids.forEach(id => acked.add(id));
+        _saveAckedReminders(acked);
+        fetch(CLAIMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'ack_reminder', ids, by: sessionStorage.getItem('speeksUserName') || null }),
+        }).catch(() => { /* local copy still suppresses it on this device */ });
+    }
 };
 
 // --- DM/CEO-pushed review reminders (delivered to the manager as the same RED bubble) ---
-function _seenReminders() {
-    try { return new Set(JSON.parse(sessionStorage.getItem('speeksSeenClaimReminders') || '[]')); }
+// Read state persists across sessions in localStorage: once a manager dismisses
+// or reviews a reminder it stays read. (This used to live in sessionStorage,
+// which is wiped on every new browser session, so each fresh login re-fired an
+// already-handled reminder — the "popup keeps coming back after opening the
+// claims" bug.)
+function _ackedReminders() {
+    try { return new Set(JSON.parse(localStorage.getItem('speeksReadClaimReminders') || '[]')); }
     catch (e) { return new Set(); }
 }
-function _saveSeenReminders(keys) {
-    sessionStorage.setItem('speeksSeenClaimReminders', JSON.stringify([...keys]));
+function _saveAckedReminders(keys) {
+    // The API only ever returns the last 20 reminders, so keep the read list
+    // bounded rather than letting it grow forever.
+    localStorage.setItem('speeksReadClaimReminders', JSON.stringify([...keys].slice(-200)));
 }
+let _shownReminderIds = []; // reminder ids the on-screen bubble covers, acked together on close
 
 async function checkClaimReminders() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
@@ -11882,11 +11936,12 @@ async function checkClaimReminders() {
         const res = await fetch(`${CLAIMS_URL}?reminders=1&stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
         const json = await res.json();
         if (!json.success) return;
-        const seen = _seenReminders();
-        const fresh = (json.data || []).filter(r => !seen.has(r.id)); // newest first from API
+        const acked = _ackedReminders();
+        const fresh = (json.data || []).filter(r => !acked.has(r.id)); // newest first from API
         if (!fresh.length) return;
-        fresh.forEach(r => seen.add(r.id));
-        _saveSeenReminders(seen);
+        // Already showing this batch (newest id unchanged) — don't re-animate on
+        // the 30s poll. A newer reminder arriving changes fresh[0] and re-shows.
+        if (_shownReminderIds.length && _shownReminderIds[0] === fresh[0].id) return;
 
         // Compute the manager's CURRENT open / over-7-day counts so the reminder
         // reflects what actually still needs review (not a stale number).
@@ -11903,6 +11958,9 @@ async function checkClaimReminders() {
                 agingINRCount = agingRows.filter(_isINRTicket).length;
             }
         } catch (e) { /* counts stay 0 */ }
+        // Remember which reminders this bubble represents; closing it marks them
+        // all read (newest supersedes any older unread ones it stacks over).
+        _shownReminderIds = fresh.map(r => r.id);
         _showClaimReminder(fresh[0], openCount, agingCount, agingINRCount);
     } catch (e) { /* silent */ }
 }
@@ -15631,6 +15689,8 @@ const FEATURE_CATALOG = [
     { key: 'widget-ws-weekly-kpis',    label: 'Weekly KPIs (tab)',             tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies (tab)',        tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
     { key: 'cap-variance-dm',          label: 'Variance Replies (DM)',         tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
+    { key: 'widget-aging-inventory',   label: 'Aging Inventory (tab)',         tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'cap-aging-dm',             label: 'Aging Inventory (DM)',          tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
@@ -15645,7 +15705,6 @@ const FEATURE_CATALOG = [
     { key: 'hb-dm-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-store-passwords', label: 'Store Passwords', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
-    { key: 'hb-dm-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-paymore-google-drive', label: 'PayMore Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-tom-tom-folder', label: 'TOM Folder', tab: 'hotbar', group: 'TOM Hotbar', def: ['tom'] },
@@ -15655,10 +15714,8 @@ const FEATURE_CATALOG = [
     { key: 'hb-res-training', label: 'Training', tab: 'hotbar', group: 'Resources Hotbar', def: ['district-manager'] },
     { key: 'hb-mgr-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
     { key: 'hb-mgr-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
-    { key: 'hb-mgr-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
     { key: 'hb-asm-store-manager-folder', label: 'Store Manager Folder', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
     { key: 'hb-asm-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
-    { key: 'hb-asm-aging-inventory', label: 'Aging Inventory', tab: 'hotbar', group: 'ASM Hotbar', def: ['assistant-manager'] },
     { key: 'hb-lee-passwords', label: 'Passwords', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
     { key: 'hb-lee-marketplace', label: 'Marketplace', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
     { key: 'hb-lee-employee-purchases', label: 'Employee Purchases', tab: 'hotbar', group: 'LEE Hotbar', def: 'all' },
@@ -15821,7 +15878,7 @@ function _featureEffectiveVisible(featureKey, userRoleClass, userName) {
 // Tabbed sections keyed by their nav-link href → the sub-tab feature keys they
 // contain. A section's nav link shows if ANY of its sub-tabs is visible.
 const _SECTION_TABS = {
-    'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies'],
+    'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
     'operations.html': ['widget-ops-callbacks'],
 };
 
@@ -17328,6 +17385,8 @@ function _positionVarianceAlert() {
         }
     });
     b.style.top = top + 'px';
+    // The aging-inventory bubble sits below this one — re-flow it when this moves.
+    if (typeof _positionAgingAlert === 'function') _positionAgingAlert();
 }
 
 function closeVarianceAlertBubble() {
@@ -17355,6 +17414,867 @@ function _vrRenderBubble(icon, title, bodyText) {
     // Re-stack shortly after: the store comment fades in on its own 1.5s timer
     // and the claim/recycle bubbles may land on later checks.
     setTimeout(_positionVarianceAlert, 2200);
+    b.animate([
+        { transform: 'scale(0.95) translateX(10px)', opacity: 0 },
+        { transform: 'scale(1) translateX(0)', opacity: 1 }
+    ], { duration: 400, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
+}
+
+// ============================================================
+// AGING INVENTORY (workspace tab)
+// ============================================================
+// Each week the DM hand-picks the most valuable 30-day-plus items from the POS
+// and adds them here with an opening note (fix the listing / answer a question).
+// The store (manager or ASM) has one week to reply; every DM follow-up restarts
+// that clock. Notes are an unlimited alternating thread per item — replacing
+// the per-store aging spreadsheet. Row colors match the old sheet: purple = new
+// item awaiting the store's first reply, yellow = DM follow-up awaiting a reply,
+// white = ball in the DM's court, green = sold (closed), red = recycled (closed).
+
+const _AG_STORE_ROLES = new Set(['manager', 'owner (manager)', 'owner manager', 'assistant manager']);
+
+function _agRole() { return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(); }
+// A manager can be delegated the DM side (Feature Access → Delegation →
+// "Aging Inventory (DM)") — same pattern as cap-variance-dm: they wear the DM
+// hat exclusively (all-store dropdown, add form, close buttons, DM popups).
+function _agHasDmDelegation() {
+    if (typeof _featureOverrideFor !== 'function') return false;
+    const roleClass = 'role-' + _agRole().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+    const name = sessionStorage.getItem('speeksUserName') || '';
+    return _featureOverrideFor('cap-aging-dm', roleClass, name) === true;
+}
+function _agIsDM() { return _agRole() === 'district manager' || _agHasDmDelegation(); }
+function _agIsStoreUser() { return _AG_STORE_ROLES.has(_agRole()) && !_agHasDmDelegation(); }
+
+// The store user's own store(s) — an MSM sees both, stacked in one list.
+function _agMyStores() {
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        return [...MULTISTORE_MANAGER_STORES];
+    }
+    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
+}
+
+let _agItems = [];        // everything the GET returned (all my stores / all 5 for DM)
+let _agAddOpen = false;   // DM add-item panel
+let _agEditItem = null;   // item id whose info fields are being edited (DM typo fix)
+let _agDrafts = {};       // "itemId|side" → unsaved reply text, survives re-renders
+let _agJustAdded = '';    // "✓ Added …" chip in the add panel after an add
+let _agStoreEdit = null;  // note id the store user is re-editing (their latest reply)
+let _agClosedOpen = {};   // store → whether its "Closed Items" section is expanded (kept across re-renders)
+
+const _agMoney = v => (v == null || v === '') ? '—'
+    : '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// The "Date listed" field is typed by hand as DD/MM/YYYY (Ethan's preference —
+// hunting through a picker for a months-old date is slow). Lenient parse:
+// -, . or / separators, 2-digit years, and a US-style month-first entry is
+// auto-swapped when the day slot can only be a month (e.g. 16/03 vs 03/16).
+function _agParseDMY(s) {
+    const m = String(s || '').trim().match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+    if (!m) return null;
+    let d = +m[1], mo = +m[2], y = +m[3];
+    if (y < 100) y += 2000;
+    if (mo > 12 && d <= 12) { const t = d; d = mo; mo = t; }
+    if (d < 1 || d > 31 || mo < 1 || mo > 12 || y < 2000 || y > 2100) return null;
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+    return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+function _agFmtDMY(iso) {
+    if (!iso) return '';
+    const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : '';
+}
+// Shared oninput mask for the DD/MM/YYYY fields: digits only, the slashes are
+// inserted automatically, capped at ##/##/####.
+const _AG_DATE_MASK = "const d=this.value.replace(/\\D/g,'').slice(0,8); this.value=d.length>4?d.slice(0,2)+'/'+d.slice(2,4)+'/'+d.slice(4):(d.length>2?d.slice(0,2)+'/'+d.slice(2):d);";
+const _agFmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+const _agFmtDue = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }); };
+
+// Where an open item sits in the cycle, from its note thread:
+//   purple  — the store has never replied (brand-new DM pick)
+//   yellow  — the DM followed up and is waiting on the store again
+//   dm      — the store replied last; the DM reviews next
+function _agState(it) {
+    if (it.status !== 'open') return it.status; // 'sold' | 'recycled'
+    const notes = it.notes || [];
+    const last = notes[notes.length - 1];
+    if (!last || last.author_side === 'dm') {
+        return notes.some(n => n.author_side === 'store') ? 'yellow' : 'purple';
+    }
+    return 'dm';
+}
+const _agAwaitingStore = it => ['purple', 'yellow'].includes(_agState(it));
+const _agOverdue = it => _agAwaitingStore(it) && it.due_at && Date.now() > new Date(it.due_at).getTime();
+
+// Row-edit mode enter/leave — in-progress note-edit drafts don't outlive it.
+function _agClearNeDrafts() {
+    Object.keys(_agDrafts).forEach(k => { if (k.startsWith('ne|')) delete _agDrafts[k]; });
+}
+function agStartItemEdit(id) { _agEditItem = id; _agClearNeDrafts(); renderAgingInventory(); }
+function agCancelItemEdit() { _agEditItem = null; _agClearNeDrafts(); renderAgingInventory(); }
+
+// ---- load & render -----------------------------------------------------------
+async function loadAgingInventory() {
+    const body = document.getElementById('ag-body');
+    if (!body) return;
+    body.innerHTML = '<div class="status-message">Loading aging inventory…</div>';
+    const stores = _agIsDM() ? ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'] : _agMyStores();
+    if (!stores.length) {
+        body.innerHTML = '<div class="status-message">No store assigned to your account.</div>';
+        return;
+    }
+    try {
+        const res = await fetch(`${AGING_INV_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        _agItems = json.data || [];
+        // Keep the reminder cache in step so the dots clear the moment a reply
+        // is visible here (instead of waiting for the next 10-minute poll).
+        if (_agIsStoreUser()) {
+            _agMyItemsCache = _agItems.filter(it => it.status === 'open');
+            if (typeof applyKpiReminder === 'function') applyKpiReminder();
+        }
+        // NOTE: don't touch ag-store-select's display here — applyRoleBasedUI
+        // owns it (dynamic-module-block + role-district-manager); clearing the
+        // inline style it set would re-hide the dropdown.
+        renderAgingInventory();
+    } catch (e) {
+        body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load the aging inventory report.</div>';
+    }
+}
+
+function agOnStoreChange() {
+    _agAddOpen = false; _agEditItem = null; _agDrafts = {}; _agJustAdded = ''; _agStoreEdit = null;
+    renderAgingInventory(); // all stores are already loaded — just re-filter
+}
+
+// The stores the current render shows (the DM flips with the dropdown; a store
+// user gets their own store(s), an MSM both at once).
+function _agVisibleStores() {
+    if (!_agIsDM()) return _agMyStores();
+    return [((document.getElementById('ag-store-select') || {}).value || 'OVL').toUpperCase()];
+}
+
+function _agSubtitleText() {
+    const open = _agItems.filter(it => it.status === 'open');
+    if (_agIsDM()) {
+        const waiting = open.filter(it => _agState(it) === 'dm').length;
+        return waiting ? `${waiting} repl${waiting > 1 ? 'ies' : 'y'} waiting on your review` : '';
+    }
+    const mine = open.filter(_agAwaitingStore);
+    if (!mine.length) return '';
+    const overdue = mine.filter(_agOverdue).length;
+    return `${mine.length} item${mine.length > 1 ? 's' : ''} need${mine.length > 1 ? '' : 's'} your reply${overdue ? ` · ${overdue} overdue` : ''}`;
+}
+
+function renderAgingInventory() {
+    const body = document.getElementById('ag-body');
+    if (!body) return;
+    // Stash any typed replies / in-progress note edits so no re-render can
+    // delete them.
+    body.querySelectorAll('textarea[data-ag-reply]').forEach(ta => { _agDrafts[ta.dataset.agReply] = ta.value; });
+    body.querySelectorAll('textarea[data-ag-noteedit]').forEach(ta => { _agDrafts['ne|' + ta.dataset.agNoteedit] = ta.value; });
+    body.querySelectorAll('textarea[data-ag-storeedit]').forEach(ta => { _agDrafts['se|' + ta.dataset.agStoreedit] = ta.value; });
+    // Remember which "Closed Items" sections are expanded so a re-render (e.g.
+    // deleting one closed item) doesn't collapse them mid-cleanup.
+    body.querySelectorAll('details[data-ag-closed]').forEach(d => { _agClosedOpen[d.dataset.agClosed] = d.open; });
+
+    const canDm = _agIsDM();
+    const addBtn = document.getElementById('ag-add-btn');
+    const addCancelBtn = document.getElementById('ag-add-cancel-btn');
+    if (addBtn && canDm) addBtn.style.display = 'inline-flex';
+    if (addCancelBtn) addCancelBtn.style.display = (canDm && _agAddOpen) ? 'inline-flex' : 'none';
+
+    let html = '';
+    if (canDm && _agAddOpen) html += _agAddPanelHtml();
+
+    const stores = _agVisibleStores();
+    const multi = stores.length > 1;
+    stores.forEach(store => {
+        const storeItems = _agItems.filter(it => it.store === store);
+        if (multi) html += `<div style="font-size:13px; font-weight:800; color:var(--slate-charcoal); text-transform:uppercase; letter-spacing:.5px; margin:18px 14px 6px;">🏬 ${escapeHtml(store)}</div>`;
+        html += _agStoreSectionHtml(store, storeItems, canDm);
+    });
+    if (!stores.length) html += `<div style="padding:36px 20px; text-align:center; color:#94a3b8; font-weight:600;">No store assigned to your account.</div>`;
+    body.innerHTML = html;
+
+    const sub = document.getElementById('ag-subtitle');
+    if (sub) sub.textContent = _agSubtitleText();
+}
+
+function _agStoreSectionHtml(store, storeItems, canDm) {
+    const active = storeItems.filter(it => it.status === 'open');
+    const closed = storeItems.filter(it => it.status !== 'open');
+    // Items waiting on the store float to the top (overdue first, then by
+    // deadline); items waiting on the DM sit below them.
+    const stateRank = { purple: 0, yellow: 0, dm: 1 };
+    active.sort((a, b) => {
+        const r = stateRank[_agState(a)] - stateRank[_agState(b)];
+        if (r) return r;
+        const od = (_agOverdue(b) ? 1 : 0) - (_agOverdue(a) ? 1 : 0);
+        if (od) return od;
+        return new Date(a.due_at || a.created_at) - new Date(b.due_at || b.created_at);
+    });
+    closed.sort((a, b) => new Date(b.closed_at || 0) - new Date(a.closed_at || 0));
+
+    let html = '';
+    if (!active.length) {
+        html += `<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">${canDm ? 'No open aging items for this store — add the week’s picks with ＋ Add Item.' : 'No open aging items for your store right now. 🎉'}</div>`;
+    } else {
+        html += _agTableHtml(active, canDm);
+    }
+    if (closed.length) {
+        html += `<details data-ag-closed="${store}"${_agClosedOpen[store] ? ' open' : ''} style="margin:14px 14px 6px;">
+            <summary style="cursor:pointer; font-size:12px; font-weight:800; color:#64748b;">Closed Items — Sold or Recycled (${closed.length})</summary>
+            <div style="margin-top:10px;">${_agTableHtml(closed, canDm)}</div>
+        </details>`;
+    }
+    return html;
+}
+
+// Row tints matching the old spreadsheet's color key.
+const _AG_ROW_BG = { purple: '#f3e8ff', yellow: '#fef9c3', dm: '#ffffff', sold: '#dcfce7', recycled: '#fee2e2' };
+
+function _agStatusChip(it) {
+    const s = _agState(it);
+    const chip = (txt, fg, bg, bd) => `<span style="display:inline-block; font-size:9.5px; font-weight:800; color:${fg}; background:${bg}; border:1px solid ${bd}; border-radius:20px; padding:2px 8px; white-space:nowrap;">${txt}</span>`;
+    if (s === 'sold') return chip('✓ Sold', '#166534', '#dcfce7', '#a7f3d0');
+    if (s === 'recycled') return chip('♻ Recycled', '#b91c1c', '#fee2e2', '#fca5a5');
+    const due = it.due_at ? ` · by ${_agFmtDue(it.due_at)}` : '';
+    const overdue = _agOverdue(it) ? `<div style="margin-top:5px;">${chip('⚠ Overdue', '#b91c1c', '#fee2e2', '#fca5a5')}</div>` : '';
+    if (s === 'purple') return chip(`🆕 New — Reply Needed${due}`, '#6d28d9', '#ede9fe', '#c4b5fd') + overdue;
+    if (s === 'yellow') return chip(`↩ Follow-Up — Reply Needed${due}`, '#a16207', '#fef9c3', '#fde047') + overdue;
+    return chip('⏳ Waiting on the DM', '#475569', '#f1f5f9', '#e2e8f0');
+}
+
+function _agTableHtml(items, canDm) {
+    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 14px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
+    let html = `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; min-width:${canDm ? 1020 : 940}px;">
+        <thead><tr>${th('Status')}${th('SKU')}${th('Item')}${th('Listed')}${th('Est. Value')}${th('Cost')}${th('Notes & Replies')}${canDm ? th('') : ''}</tr></thead><tbody>`;
+    items.forEach(it => { html += _agRowHtml(it, canDm); });
+    return html + `</tbody></table></div>`;
+}
+
+function _agRowHtml(it, canDm) {
+    const bg = _AG_ROW_BG[_agState(it)] || '#ffffff';
+    const td = (c, extra = '') => `<td style="padding:10px 14px; border-bottom:1px solid #f1f5f9; vertical-align:top; font-size:12px; background:${bg}; ${extra}">${c}</td>`;
+    const days = it.date_created ? Math.max(0, Math.floor((Date.now() - new Date(it.date_created).getTime()) / 86400000)) : null;
+    if (_agEditItem === it.id) {
+        const inp = (f, v, type = 'text', w = '110px', extra = '') => `<input type="${type}" data-ag-edit="${f}" value="${escapeHtml(v == null ? '' : String(v))}" class="vr-up-input" style="width:${w}; font-size:12px;"${extra}>`;
+        return `<tr data-ag-item-row="${it.id}">
+            ${td(_agStatusChip(it))}
+            ${td(inp('sku', it.sku, 'text', '140px'))}
+            ${td(inp('title', it.title, 'text', '240px'))}
+            ${td(inp('date_created', _agFmtDMY(it.date_created), 'text', '105px', ` placeholder="DD/MM/YYYY" maxlength="10" oninput="${_AG_DATE_MASK}"`))}
+            ${td(inp('est_value', it.est_value, 'number', '90px'))}
+            ${td(inp('cost', it.cost, 'number', '90px'))}
+            ${td(_agThreadHtml(it, canDm, true))}
+            ${td(`<div style="display:flex; flex-direction:column; gap:5px;">
+                <button class="btn-primary" style="font-size:11px; padding:4px 10px;" onclick="agSaveItemEdit(this, '${it.id}')">Save</button>
+                <button class="btn-secondary" style="font-size:11px; padding:4px 10px;" onclick="agCancelItemEdit()">Cancel</button>
+            </div>`, 'white-space:nowrap;')}
+        </tr>`;
+    }
+    const actions = !canDm ? '' : td(`<div style="display:flex; flex-direction:column; gap:5px; align-items:stretch;">${
+        it.status === 'open'
+            ? `<button title="Item sold — close it (green)" style="font-size:11px; font-weight:800; color:#166534; background:#dcfce7; border:1px solid #a7f3d0; border-radius:7px; padding:4px 10px; cursor:pointer; white-space:nowrap;" onclick="agSetStatus('${it.id}', 'sold')">✓ Sold</button>
+               <button title="Item recycled out of inventory — close it (red)" style="font-size:11px; font-weight:800; color:#b91c1c; background:#fee2e2; border:1px solid #fca5a5; border-radius:7px; padding:4px 10px; cursor:pointer; white-space:nowrap;" onclick="agSetStatus('${it.id}', 'recycled')">♻ Recycled</button>
+               <button title="Edit the item details and your notes" style="font-size:11px; font-weight:700; color:#475569; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:7px; padding:4px 10px; cursor:pointer; white-space:nowrap;" onclick="agStartItemEdit('${it.id}')">✎ Edit</button>`
+            : `<button title="Put this item back on the open list" style="font-size:11px; font-weight:700; color:#475569; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:7px; padding:4px 10px; cursor:pointer; white-space:nowrap;" onclick="agSetStatus('${it.id}', 'open')">↩ Reopen</button>`
+        }<button title="Delete this item and its whole thread" style="font-size:11px; font-weight:700; color:#475569; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:7px; padding:4px 10px; cursor:pointer; white-space:nowrap;" onclick="agDeleteItem('${it.id}')">🗑 Delete</button>
+    </div>`, 'white-space:nowrap;');
+    return `<tr>
+        ${td(_agStatusChip(it), 'min-width:150px;')}
+        ${td(`<span style="font-weight:700; white-space:nowrap; color:#64748b;">${escapeHtml(it.sku || '—')}</span>`)}
+        ${td(`<span style="color:var(--slate-charcoal); font-weight:600;">${escapeHtml(it.title || '—')}</span>`, 'min-width:200px;')}
+        ${td(it.date_created ? `<span style="white-space:nowrap;">${_agFmtDMY(it.date_created)}${days != null ? ` <span style="color:#94a3b8; font-weight:700;">· ${days}d</span>` : ''}</span>` : '—')}
+        ${td(`<span style="font-weight:800; white-space:nowrap;">${_agMoney(it.est_value)}</span>`)}
+        ${td(`<span style="white-space:nowrap; color:#64748b;">${_agMoney(it.cost)}</span>`)}
+        ${td(_agThreadHtml(it, canDm), 'min-width:300px; width:38%;')}
+        ${actions}
+    </tr>`;
+}
+
+// The alternating DM ↔ store note thread, plus a reply box for whichever side
+// the viewer is on (open items only) — strictly turn-based:
+//   - The store's reply box only shows while the DM's note is the last word;
+//     once they post, the reply locks, with an "✎ Edit your reply" button on
+//     it until the deadline passes (any store user can edit it — a manager
+//     can fix up or add to an ASM's reply and vice versa).
+//   - The DM only gets the box when the store spoke last (or the thread is
+//     empty and the opening note still needs writing).
+//   - In DM row-edit mode (`editing`) the DM's notes become editable
+//     textareas, but ONLY the ones the store hasn't answered yet — history
+//     the conversation moved past is locked.
+function _agThreadHtml(it, canDm, editing) {
+    const notes = it.notes || [];
+    const last = notes[notes.length - 1];
+    const lastStoreIdx = notes.map(n => n.author_side).lastIndexOf('store');
+    const isStore = !canDm && _agIsStoreUser();
+    const beforeDue = !it.due_at || Date.now() < new Date(it.due_at).getTime();
+    let html = `<div style="display:flex; flex-direction:column; gap:6px;">`;
+    notes.forEach((n, idx) => {
+        const dm = n.author_side === 'dm';
+        const cap = `<div style="font-size:10px; font-weight:800; color:${dm ? '#6d28d9' : '#475569'};">${dm ? 'DM' : 'Store'}${n.author_name ? ' · ' + escapeHtml(n.author_name) : ''} · ${_agFmtDate(n.created_at)}</div>`;
+        if (editing && canDm && dm && idx > lastStoreIdx) {
+            const neDraft = _agDrafts['ne|' + n.id];
+            html += `<div style="border-left:3px solid #8b5cf6; background:rgba(139,92,246,0.08); border-radius:0 8px 8px 0; padding:6px 10px;">
+                ${cap}
+                <textarea rows="2" data-ag-noteedit="${n.id}"
+                    style="width:100%; box-sizing:border-box; margin-top:4px; padding:6px 8px; border:1.5px solid #cbd5e1; border-radius:7px; font-size:12px; font-weight:500; font-family:inherit; line-height:1.4; resize:vertical; background:#fff;">${escapeHtml(neDraft !== undefined ? neDraft : n.body)}</textarea>
+            </div>`;
+            return;
+        }
+        if (isStore && _agStoreEdit === n.id) {
+            const seDraft = _agDrafts['se|' + n.id];
+            html += `<div style="border-left:3px solid #94a3b8; background:rgba(148,163,184,0.10); border-radius:0 8px 8px 0; padding:6px 10px;">
+                ${cap}
+                <textarea rows="2" data-ag-storeedit="${n.id}"
+                    style="width:100%; box-sizing:border-box; margin-top:4px; padding:6px 8px; border:1.5px solid #cbd5e1; border-radius:7px; font-size:12px; font-weight:500; font-family:inherit; line-height:1.4; resize:vertical; background:#fff;">${escapeHtml(seDraft !== undefined ? seDraft : n.body)}</textarea>
+                <div style="display:flex; gap:6px; margin-top:6px;">
+                    <button class="btn-primary" style="font-size:11px; padding:5px 13px;" onclick="agSaveStoreEdit(this, '${it.id}', '${n.id}')">Save</button>
+                    <button class="btn-secondary" style="font-size:11px; padding:5px 13px;" onclick="agCancelStoreEdit()">Cancel</button>
+                </div>
+            </div>`;
+            return;
+        }
+        // Show who last edited a note when it wasn't the original author — e.g.
+        // a manager tidying up an ASM's reply (or vice versa).
+        const editedTag = (n.edited_by && n.edited_by !== n.author_name)
+            ? `<div style="font-size:9.5px; font-style:italic; color:#94a3b8; margin-top:3px;">~ edited by ${escapeHtml(n.edited_by)}${n.edited_at ? ' · ' + _agFmtDate(n.edited_at) : ''}</div>`
+            : '';
+        html += `<div style="border-left:3px solid ${dm ? '#8b5cf6' : '#94a3b8'}; background:${dm ? 'rgba(139,92,246,0.08)' : 'rgba(148,163,184,0.10)'}; border-radius:0 8px 8px 0; padding:6px 10px;">
+            ${cap}
+            <div style="font-size:12px; color:#334155; line-height:1.45; white-space:pre-wrap;">${escapeHtml(n.body)}</div>
+            ${editedTag}
+        </div>`;
+        // The store's latest reply stays editable until the deadline passes
+        // (or the DM moves the conversation on).
+        if (isStore && it.status === 'open' && !dm && idx === notes.length - 1 && !_agStoreEdit && beforeDue) {
+            html += `<div><button style="font-size:11px; font-weight:700; color:#475569; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:7px; padding:4px 10px; cursor:pointer;" onclick="agStartStoreEdit('${n.id}')">✎ Edit Your Reply</button></div>`;
+        }
+    });
+    if (it.status === 'open' && !editing) {
+        let side = canDm ? 'dm' : (isStore ? 'store' : null);
+        // Not the DM's turn while their own note is the one awaiting a reply;
+        // not the store's turn unless a DM note is the last word.
+        if (side === 'dm' && last && last.author_side === 'dm') side = null;
+        if (side === 'store' && (!last || last.author_side !== 'dm')) side = null;
+        if (side) {
+            const key = `${it.id}|${side}`;
+            const draft = _agDrafts[key] || '';
+            const ph = side === 'dm'
+                ? (notes.length
+                    ? 'Follow-up question or instruction… (restarts their 1-week clock)'
+                    : 'Your note to the store — what to fix, or your question…')
+                : 'Reply to the DM — answer the question, or confirm it’s fixed…';
+            html += `<div style="display:flex; gap:6px; align-items:flex-end; margin-top:2px;">
+                <textarea rows="2" placeholder="${escapeHtml(ph)}" data-ag-reply="${key}"
+                    style="flex:1; box-sizing:border-box; padding:7px 9px; border:1.5px solid #cbd5e1; border-radius:7px; font-size:12px; font-weight:500; font-family:inherit; line-height:1.4; resize:vertical; background:#fff;">${escapeHtml(draft)}</textarea>
+                <button class="btn-primary" style="font-size:11.5px; padding:7px 13px; white-space:nowrap;" onclick="agPostNote(this, '${it.id}', '${side}')">Post</button>
+            </div>`;
+        }
+    }
+    return html + `</div>`;
+}
+
+// ---- store-side "edit your reply" (until the deadline) ------------------------
+function agStartStoreEdit(noteId) { _agStoreEdit = noteId; renderAgingInventory(); }
+function agCancelStoreEdit() {
+    if (_agStoreEdit) delete _agDrafts['se|' + _agStoreEdit];
+    _agStoreEdit = null;
+    renderAgingInventory();
+}
+async function agSaveStoreEdit(btn, itemId, noteId) {
+    const ta = document.querySelector(`#ag-body textarea[data-ag-storeedit="${noteId}"]`);
+    const text = ta ? ta.value.trim() : '';
+    if (!text) { if (ta) ta.focus(); return; }
+    const old = btn.innerText;
+    btn.disabled = true; btn.innerText = 'Saving…';
+    const by = sessionStorage.getItem('speeksUserName') || null;
+    try {
+        const res = await fetch(AGING_INV_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'update_note', note_id: noteId, body: text, by }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+        const it = _agItems.find(i => i.id === itemId);
+        const note = it && (it.notes || []).find(n => n.id === noteId);
+        if (note) { note.body = text; note.edited_by = by; note.edited_at = json.edited_at || new Date().toISOString(); }
+        if (ta) ta.value = '';
+        delete _agDrafts['se|' + noteId];
+        _agStoreEdit = null;
+        renderAgingInventory();
+    } catch (e) {
+        alert('Could not save the reply: ' + e.message);
+        btn.disabled = false; btn.innerText = old;
+    }
+}
+
+// ---- actions -----------------------------------------------------------------
+async function agPostNote(btn, itemId, side) {
+    const ta = document.querySelector(`#ag-body textarea[data-ag-reply="${itemId}|${side}"]`);
+    const text = ta ? ta.value.trim() : '';
+    if (!text) { if (ta) ta.focus(); return; }
+    const old = btn.innerText;
+    btn.disabled = true; btn.innerText = 'Posting…';
+    try {
+        const res = await fetch(AGING_INV_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'add_note', item_id: itemId, side, body: text,
+                by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Post failed');
+        const it = _agItems.find(i => i.id === itemId);
+        if (it) {
+            (it.notes = it.notes || []).push({
+                id: json.note_id, item_id: itemId, author_side: side,
+                author_name: sessionStorage.getItem('speeksUserName') || null,
+                body: text, created_at: new Date().toISOString(),
+            });
+            if (side === 'dm') it.due_at = new Date(Date.now() + 7 * 86400000).toISOString();
+        }
+        // blank the box BEFORE the re-render — the draft stash reads the live
+        // DOM, so a still-filled textarea would resurrect the posted text as a
+        // draft the next time the box appears
+        if (ta) ta.value = '';
+        delete _agDrafts[`${itemId}|${side}`];
+        if (_agIsStoreUser()) {
+            _agMyItemsCache = _agItems.filter(i => i.status === 'open');
+            if (typeof applyKpiReminder === 'function') applyKpiReminder();
+        }
+        renderAgingInventory();
+    } catch (e) {
+        alert('Could not post the note: ' + e.message);
+        btn.disabled = false; btn.innerText = old;
+    }
+}
+
+async function agSetStatus(itemId, status) {
+    const q = { sold: 'Mark this item as SOLD and close it out (green)?',
+                recycled: 'Mark this item as RECYCLED out of inventory and close it (red)?',
+                open: 'Reopen this item and put it back on the report?' }[status];
+    if (!confirm(q)) return;
+    try {
+        const res = await fetch(AGING_INV_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'set_status', item_id: itemId, status, by: sessionStorage.getItem('speeksUserName') || null }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        const it = _agItems.find(i => i.id === itemId);
+        if (it) {
+            it.status = status;
+            it.closed_at = status === 'open' ? null : new Date().toISOString();
+        }
+        renderAgingInventory();
+    } catch (e) {
+        alert('Could not update the status: ' + e.message);
+    }
+}
+
+async function agDeleteItem(itemId) {
+    if (!confirm('Delete this item and its entire note thread? (Use ✓ Sold or ♻ Recycled to close items normally — delete is for mistakes.)')) return;
+    try {
+        const res = await fetch(AGING_INV_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_item', item_id: itemId }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
+        _agItems = _agItems.filter(i => i.id !== itemId);
+        renderAgingInventory();
+    } catch (e) {
+        alert('Could not delete: ' + e.message);
+    }
+}
+
+// Saves the item info fields plus any of the DM's own notes edited in the row
+// (the thread renders them as textareas in edit mode — store notes never).
+async function agSaveItemEdit(btn, itemId) {
+    const row = document.querySelector(`#ag-body tr[data-ag-item-row="${itemId}"]`);
+    const it = _agItems.find(i => i.id === itemId);
+    if (!row || !it) return;
+    const get = f => { const el = row.querySelector(`input[data-ag-edit="${f}"]`); return el ? el.value.trim() : ''; };
+    const dateRaw = get('date_created');
+    let dateIso = '';
+    if (dateRaw) {
+        dateIso = _agParseDMY(dateRaw);
+        if (!dateIso) { alert('Enter the listed date as DD/MM/YYYY (e.g. 16/03/2026).'); return; }
+    }
+    // Changed DM notes (an emptied box means "no change" — notes are edited,
+    // not deleted, from here).
+    const noteEdits = [];
+    row.querySelectorAll('textarea[data-ag-noteedit]').forEach(ta => {
+        const note = (it.notes || []).find(n => n.id === ta.dataset.agNoteedit);
+        const text = ta.value.trim();
+        if (note && text && text !== note.body) noteEdits.push({ note, text });
+    });
+    const old = btn.innerText;
+    btn.disabled = true; btn.innerText = 'Saving…';
+    try {
+        const patch = { sku: get('sku'), title: get('title'), date_created: dateIso, est_value: get('est_value'), cost: get('cost') };
+        const res = await fetch(AGING_INV_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'update_item', item_id: itemId, ...patch }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+        const editor = sessionStorage.getItem('speeksUserName') || null;
+        await Promise.all(noteEdits.map(async ne => {
+            const r = await fetch(AGING_INV_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'update_note', note_id: ne.note.id, body: ne.text, by: editor }),
+            });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || j.success === false) throw new Error(j.error || 'Note save failed');
+            ne.note.body = ne.text; ne.note.edited_by = editor; ne.note.edited_at = j.edited_at || new Date().toISOString();
+        }));
+        it.sku = patch.sku || null; it.title = patch.title || null;
+        it.date_created = patch.date_created || null;
+        it.est_value = patch.est_value === '' ? null : Number(patch.est_value);
+        it.cost = patch.cost === '' ? null : Number(patch.cost);
+        _agEditItem = null;
+        _agClearNeDrafts();
+        renderAgingInventory();
+    } catch (e) {
+        alert('Could not save: ' + e.message);
+        btn.disabled = false; btn.innerText = old;
+    }
+}
+
+// ---- DM add-item panel --------------------------------------------------------
+function agToggleAdd() {
+    _agAddOpen = !_agAddOpen;
+    _agJustAdded = '';
+    renderAgingInventory();
+}
+function agCancelAdd() {
+    _agAddOpen = false;
+    _agJustAdded = '';
+    renderAgingInventory();
+}
+
+function _agAddPanelHtml() {
+    const store = (document.getElementById('ag-store-select') || {}).value || 'OVL';
+    const lbl = t => `<label class="vr-up-label">${t}</label>`;
+    const keep = id => { const el = document.getElementById(id); return el ? escapeHtml(el.value) : ''; };
+    return `<div style="background:#f8fafc; border:1.5px solid #e2e8f0; border-radius:12px; padding:14px 16px; margin-bottom:16px;">
+        <div style="font-weight:800; font-size:13px; color:var(--slate-charcoal); margin-bottom:10px;">Add an aging item for <b>${escapeHtml(store)}</b> <span style="font-weight:600; color:#94a3b8;">(store is picked in the dropdown above)</span></div>
+        <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+            <div class="vr-up-field">${lbl('SKU')}<input type="text" id="ag-add-sku" class="vr-up-input" style="width:160px;" placeholder="KS01-…" value="${keep('ag-add-sku')}"></div>
+            <div class="vr-up-field">${lbl('Item title')}<input type="text" id="ag-add-title" class="vr-up-input" style="width:280px;" placeholder="What is it?" value="${keep('ag-add-title')}"></div>
+            <div class="vr-up-field">${lbl('Date listed')}<input type="text" id="ag-add-date" class="vr-up-input" style="width:120px;" placeholder="DD/MM/YYYY" maxlength="10" oninput="${_AG_DATE_MASK}" value="${keep('ag-add-date')}"></div>
+            <div class="vr-up-field">${lbl('Estimated value ($)')}<input type="number" step="0.01" id="ag-add-value" class="vr-up-input" style="width:120px;" value="${keep('ag-add-value')}"></div>
+            <div class="vr-up-field">${lbl('Cost ($)')}<input type="number" step="0.01" id="ag-add-cost" class="vr-up-input" style="width:110px;" value="${keep('ag-add-cost')}"></div>
+        </div>
+        <div class="vr-up-field" style="margin-top:10px;">${lbl('Your note to the store (optional — you can post it in the item’s thread anytime)')}
+            <textarea id="ag-add-note" rows="2" placeholder="e.g. Pictures need to be better and the price looks high — is $1,499 still right for this market?"
+                style="width:100%; box-sizing:border-box; padding:8px 10px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:12.5px; font-family:inherit; line-height:1.4; resize:vertical; background:#fff;">${keep('ag-add-note')}</textarea>
+        </div>
+        <div style="margin-top:10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <button class="btn-primary" style="font-size:12px; padding:8px 18px;" onclick="agConfirmAdd(this)">Add to the ${escapeHtml(store)} report →</button>
+            ${_agJustAdded ? `<span style="font-size:12px; font-weight:800; color:#166534;">✓ Added ${escapeHtml(_agJustAdded)}</span>` : ''}
+        </div>
+    </div>`;
+}
+
+// Adding always rolls straight into the next entry: post the item, clear the
+// form, keep the panel open (header Cancel closes it after the last one) —
+// Ethan enters the week's items back-to-back first and posts the notes into
+// each thread afterwards, which is also why the note is optional.
+async function agConfirmAdd(btn) {
+    const val = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+    const store = (document.getElementById('ag-store-select') || {}).value || '';
+    const sku = val('ag-add-sku'), title = val('ag-add-title'), note = val('ag-add-note');
+    if (!sku && !title) { alert('Give the item at least a SKU or a title.'); return; }
+    const dateRaw = val('ag-add-date');
+    let dateIso = null;
+    if (dateRaw) {
+        dateIso = _agParseDMY(dateRaw);
+        if (!dateIso) { alert('Enter the listed date as DD/MM/YYYY (e.g. 16/03/2026).'); return; }
+    }
+    const old = btn.innerText;
+    btn.disabled = true; btn.innerText = 'Adding…';
+    try {
+        const res = await fetch(AGING_INV_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'add_item', store, sku, title, note,
+                date_created: dateIso,
+                est_value: val('ag-add-value') || null,
+                cost: val('ag-add-cost') || null,
+                by: sessionStorage.getItem('speeksUserName') || null,
+            }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Add failed');
+        // blank the live inputs BEFORE the re-render — the rebuilt panel
+        // carries current DOM values over, so this is what clears the form
+        ['ag-add-sku', 'ag-add-title', 'ag-add-date', 'ag-add-value', 'ag-add-cost', 'ag-add-note'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+        _agJustAdded = sku || title;
+        await loadAgingInventory();
+        document.getElementById('ag-add-sku')?.focus();
+    } catch (e) {
+        alert('Could not add the item: ' + e.message);
+        btn.disabled = false; btn.innerText = old;
+    }
+}
+
+// ---- reminders: pulsing dots + purple bubble ----------------------------------
+// Store side: a dot on the workspace nav-link + tab while any item awaits their
+// reply, plus one generic purple bubble. DM side: the same bubble when a store
+// has replied and it's the DM's turn. ("Inv" in the names keeps these clear of
+// checkAgingClaims, which is the CLAIMS aging alert.)
+//
+// The bubble NAGS UNTIL ACKNOWLEDGED, then STAYS dismissed: while work is
+// pending it re-appears on every sign-in until the user dismisses it (the ✕ or
+// the Open button — both route through closeAgingAlertBubble). Once dismissed it
+// does NOT return on sign-out/in or the next day — only genuinely NEW activity
+// brings it back: a new item, or a new DM follow-up on an item. This works by
+// remembering, per item, the exact pending state that was acknowledged
+// (`itemId:lastRelevantNoteId`); the popup fires only when some currently
+// pending item wasn't in the acknowledged set. `_agPopShownThisSession`
+// (in-memory, resets on a fresh page load) stops the 10-min poll from
+// re-animating a bubble already up this session.
+let _agRemindersStarted = false;
+let _agDmRemindersStarted = false;
+let _agMyItemsCache = [];
+let _agPopShownThisSession = false; // a popup is already up this session (poll guard)
+let _agCurrentAckKey = null;        // localStorage key to update when the current bubble is acknowledged
+let _agCurrentAckMembers = null;    // pending-state members the current bubble represents
+
+// The pending "members" the popup is about: one token per item that still
+// needs the given side's attention, stamped with the last note from the OTHER
+// side so a fresh follow-up (new note id) counts as new, unacknowledged work.
+//   side 'store' → items awaiting the store, stamped with the last DM note
+//   side 'dm'    → items the store replied to, stamped with the last store note
+// Urgency tier of a store-awaiting item — folded into the member id so an
+// ESCALATION (needs-replies → due-soon → overdue) counts as new work and gives
+// one fresh nudge even after the earlier tier was acknowledged. Within a tier it
+// stays quiet across sign-ins/days.
+function _agTier(it) {
+    if (_agOverdue(it)) return 'over';
+    if (it.due_at) {
+        const d = new Date(it.due_at).getTime();
+        if (Date.now() < d && d - Date.now() < 24 * 3600 * 1000) return 'soon';
+    }
+    return 'new';
+}
+// Is this item past its opening exchange for the given side? The FIRST prompt
+// each side gets is descriptive ("review your replies" / "reply needed"); once
+// a thread is a back-and-forth, further notes are just a simple "new reply".
+//   side 'store' (manager waiting) → they've replied at least once already, so a
+//                                    new DM note is a follow-up in the chain
+//   side 'dm' (DM waiting)         → the DM has already followed up once, so a
+//                                    new store reply is a subsequent one
+function _agIsFollowUp(it, side) {
+    const notes = it.notes || [];
+    const dmCount = notes.filter(n => n.author_side === 'dm').length;
+    const storeCount = notes.filter(n => n.author_side === 'store').length;
+    return side === 'store' ? storeCount >= 1 : dmCount >= 2;
+}
+function _agPendingMembers(items, side) {
+    const rel = side === 'store'
+        ? (items || []).filter(_agAwaitingStore)
+        : (items || []).filter(it => it.status === 'open' && _agState(it) === 'dm');
+    const wantSide = side === 'store' ? 'dm' : 'store';
+    return rel.map(it => {
+        const notes = it.notes || [];
+        let lastId = 'new';
+        for (let i = notes.length - 1; i >= 0; i--) { if (notes[i].author_side === wantSide) { lastId = notes[i].id; break; } }
+        // store side stamps the urgency tier so escalations re-nag; the DM side
+        // only fires once the window closes, so it needs no tier.
+        return it.id + ':' + lastId + (side === 'store' ? ':' + _agTier(it) : '');
+    });
+}
+function _agAckedSet(key) {
+    try { return new Set(JSON.parse(localStorage.getItem(key) || '[]')); }
+    catch (e) { return new Set(); }
+}
+
+function _agDotNeeded() {
+    return _agMyItemsCache.some(_agAwaitingStore);
+}
+
+async function checkAgingInvReminders() {
+    if (!_agIsStoreUser()) return;
+    const stores = _agMyStores();
+    if (!stores.length) return;
+    if (!_agRemindersStarted) {
+        _agRemindersStarted = true;
+        setInterval(checkAgingInvReminders, 10 * 60 * 1000);
+    }
+    try {
+        const res = await fetch(`${AGING_INV_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json || json.success === false) return;
+        _agMyItemsCache = (json.data || []).filter(it => it.status === 'open');
+        applyKpiReminder();
+        _agMaybePopup();
+    } catch (e) { /* next poll retries */ }
+}
+
+// Store-side popup: ONE generic nudge — no store names, no counts, no per-item
+// spam (Ethan's rule). Shows on every sign-in until acknowledged; the most
+// urgent state wins the message: overdue > due within 24h > replies waiting.
+function _agMaybePopup() {
+    const mine = _agMyItemsCache.filter(_agAwaitingStore);
+    if (!mine.length) return;
+    const members = _agPendingMembers(_agMyItemsCache, 'store');
+    const acked = _agAckedSet('speeksAGAckStore');
+    if (members.every(m => acked.has(m))) return; // all pending work already acknowledged
+    if (_agPopShownThisSession) return;            // already up this session (poll guard)
+    _agPopShownThisSession = true;
+    _agCurrentAckKey = 'speeksAGAckStore';
+    _agCurrentAckMembers = members;
+    const now = Date.now();
+    const dueSoon = it => {
+        if (!it.due_at) return false;
+        const d = new Date(it.due_at).getTime();
+        return now < d && d - now < 24 * 3600 * 1000;
+    };
+    if (mine.some(_agOverdue)) {
+        _agRenderBubble('🚨', 'Aging Inventory Replies Overdue',
+            'The reply deadline has passed on the aging report — get your replies submitted as soon as possible.');
+    } else if (mine.some(it => _agIsFollowUp(it, 'store'))) {
+        // The DM added a note to a thread the store already replied to — a
+        // simple "new reply" nudge, not the first-time "needs replies" prompt.
+        _agRenderBubble('📬', 'New Reply in Aging Inventory',
+            'The DM added a new note on the aging report — take a look and reply.');
+    } else if (mine.some(dueSoon)) {
+        _agRenderBubble('⏰', 'Aging Inventory Replies Due Soon',
+            'Aging report replies are due within the next day — make sure they’re submitted in time.');
+    } else {
+        _agRenderBubble('📦', 'Aging Inventory Needs Replies',
+            'The aging report has items waiting on a reply from your store.');
+    }
+}
+
+// DM side: same treatment — nags until acknowledged while any store reply sits
+// waiting on the DM's review. Kept off the store users' cache so their nav dot
+// logic is untouched.
+async function checkAgingInvDmReminders() {
+    if (!_agIsDM()) return;
+    if (!_agDmRemindersStarted) {
+        _agDmRemindersStarted = true;
+        setInterval(checkAgingInvDmReminders, 10 * 60 * 1000);
+    }
+    try {
+        const res = await fetch(`${AGING_INV_URL}?stores=OVL,LEE,WSP,MPL,BAL&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json || json.success === false) return;
+        // Hold the DM's "review" nudge until the store's reply window (due_at)
+        // has actually closed — give the store the full deadline to submit, then
+        // remind the DM to review whatever came in. A store reply that lands
+        // early won't ping the DM until the deadline passes.
+        const reviewable = (json.data || []).filter(it => {
+            if (it.status !== 'open' || _agState(it) !== 'dm') return false;
+            // Ongoing back-and-forth: ping the DM as soon as the store replies —
+            // the deadline gate is only for the store's initial reply window.
+            if (_agIsFollowUp(it, 'dm')) return true;
+            // First review of the batch: hold until the reply deadline passes.
+            return it.due_at && new Date(it.due_at).getTime() <= Date.now();
+        });
+        const members = _agPendingMembers(reviewable, 'dm');
+        if (!members.length) return;
+        const acked = _agAckedSet('speeksAGAckDm');
+        if (members.every(m => acked.has(m))) return; // all replies already reviewed/acknowledged
+        if (_agPopShownThisSession) return;            // already up this session (poll guard)
+        _agPopShownThisSession = true;
+        _agCurrentAckKey = 'speeksAGAckDm';
+        _agCurrentAckMembers = members;
+        // First batch review after the deadline gets the descriptive prompt; a
+        // later reply in an ongoing thread is just a simple "new reply".
+        if (reviewable.some(it => !_agIsFollowUp(it, 'dm'))) {
+            _agRenderBubble('📬', 'Aging Inventory Replies To Review',
+                'Stores have replied on the aging report — review the replies and follow up or close the items out.');
+        } else {
+            _agRenderBubble('📬', 'New Reply in Aging Inventory',
+                'A store added a new reply on the aging report — take a look.');
+        }
+    } catch (e) { /* next poll retries */ }
+}
+
+// Aging Inventory's own PURPLE bubble — created on demand next to the shared
+// claim bubble (same header stacking context) and positioned at the very
+// bottom of the stack: store comment → claims → recycle → variance → aging.
+function _agBubbleEl() {
+    let b = document.getElementById('agingAlertBubble');
+    if (b) return b;
+    const claim = document.getElementById('claimAlertBubble');
+    if (!claim || !claim.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'agingAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #7c3aed, #4c1d95); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(76, 29, 149, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = `<span id="agingAlertBubbleIcon" style="font-size:16px; flex-shrink:0; margin-top:2px;">⏳</span>
+        <span id="agingAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>
+        <button onclick="closeAgingAlertBubble()" class="daily-bubble-close" title="Dismiss">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>`;
+    claim.parentElement.appendChild(b);
+    return b;
+}
+
+function _positionAgingAlert() {
+    const b = document.getElementById('agingAlertBubble');
+    if (!b) return;
+    let top = 116;
+    ['dailyMessageBubble', 'claimAlertBubble', 'recycleAlertBubble', 'varianceAlertBubble'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el && getComputedStyle(el).display !== 'none' && el.offsetHeight > 0) {
+            top = Math.max(top, el.getBoundingClientRect().bottom + 12);
+        }
+    });
+    b.style.top = top + 'px';
+}
+
+function closeAgingAlertBubble() {
+    const b = document.getElementById('agingAlertBubble');
+    if (b) b.style.display = 'none';
+    // Acknowledged (the ✕ OR the "Open Aging Inventory" button both route here):
+    // record every pending item this bubble covered so it won't return on
+    // sign-out/in or the next day. It comes back only for NEW work (a new item
+    // or a new DM follow-up produces a member not in this set). If it's never
+    // acknowledged, a fresh page load resets _agPopShownThisSession and it nags
+    // again next sign-in.
+    if (_agCurrentAckKey && _agCurrentAckMembers) {
+        const acked = _agAckedSet(_agCurrentAckKey);
+        _agCurrentAckMembers.forEach(m => acked.add(m));
+        localStorage.setItem(_agCurrentAckKey, JSON.stringify([...acked].slice(-500)));
+        _agCurrentAckKey = null;
+        _agCurrentAckMembers = null;
+    }
+    _agPopShownThisSession = false;
+}
+
+function _agRenderBubble(icon, title, bodyText) {
+    const b = _agBubbleEl();
+    if (!b) return;
+    const iconEl = document.getElementById('agingAlertBubbleIcon');
+    const textEl = document.getElementById('agingAlertBubbleText');
+    if (iconEl) iconEl.textContent = icon;
+    textEl.style.display = 'flex';
+    textEl.style.flexDirection = 'column';
+    textEl.style.gap = '7px';
+    textEl.innerHTML = `
+        <div style="line-height:1.4;"><strong>${escapeHtml(title)}</strong></div>
+        <div style="line-height:1.4; opacity:0.96;">${escapeHtml(bodyText)}</div>
+        <button onclick="closeAgingAlertBubble(); window.location.href='workspace.html#aging';"
+            style="align-self:flex-start; background:rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.5); color:#fff; font-weight:800; font-size:12px; border-radius:8px; padding:6px 12px; cursor:pointer;"
+            onmouseover="this.style.background='rgba(255,255,255,0.3)';" onmouseout="this.style.background='rgba(255,255,255,0.18)';">Open Aging Inventory</button>`;
+    b.style.display = 'flex';
+    _positionAgingAlert();
+    // Re-stack shortly after: the other bubbles land on their own timers.
+    setTimeout(_positionAgingAlert, 2200);
     b.animate([
         { transform: 'scale(0.95) translateX(10px)', opacity: 0 },
         { transform: 'scale(1) translateX(0)', opacity: 1 }

@@ -5387,10 +5387,13 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 }
 .kpi-update-trigger-btn:hover { background: #4a7a2f; }
 
-/* Variance Replies upload button — polished pill (overrides shared trigger style) */
-#vr-upload-btn {
+/* Variance Replies upload / Aging Inventory add buttons — polished pill
+   (overrides shared trigger style) */
+#vr-upload-btn,
+#ag-add-btn {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 7px;
     height: 30px;
     padding: 0 14px;
@@ -5403,13 +5406,15 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     box-shadow: 0 2px 5px rgba(74, 122, 47, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.15);
     transition: transform 0.12s ease, box-shadow 0.15s ease, filter 0.15s ease;
 }
-#vr-upload-btn:hover {
+#vr-upload-btn:hover,
+#ag-add-btn:hover {
     background: linear-gradient(180deg, #6b9d4a 0%, var(--sage-professional) 100%);
     filter: brightness(1.06);
     transform: translateY(-1px);
     box-shadow: 0 4px 10px rgba(74, 122, 47, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
-#vr-upload-btn:active {
+#vr-upload-btn:active,
+#ag-add-btn:active {
     transform: translateY(0);
     box-shadow: 0 1px 3px rgba(74, 122, 47, 0.3);
 }
