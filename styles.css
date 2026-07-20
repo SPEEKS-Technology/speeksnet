@@ -5419,6 +5419,32 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     box-shadow: 0 1px 3px rgba(74, 122, 47, 0.3);
 }
 
+/* Variance Replies "In the Clear" toggle — a neutral pill so it reads as a
+   secondary mode switch, distinct from the green primary Upload button. */
+#vr-status-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 30px;
+    padding: 0 14px;
+    background: #fff;
+    color: #475569;
+    border: 1.5px solid #cbd5e1;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+#vr-status-btn:hover {
+    background: #f8fafc;
+    border-color: #94a3b8;
+    color: #334155;
+}
+#vr-status-btn:disabled { opacity: 0.6; cursor: default; }
+
 /* Variance Replies upload panel — fields standardized to match site selects */
 .vr-up-field { display: flex; flex-direction: column; }
 .vr-up-label {

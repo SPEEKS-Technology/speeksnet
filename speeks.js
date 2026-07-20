@@ -17057,7 +17057,7 @@ function _vrSyncStatusButton() {
     const cleared = _vrStoreCleared(store);
     btn.style.display = 'inline-flex';
     btn.disabled = false; // clear the "Saving…" lock after a reload re-syncs it
-    btn.textContent = cleared ? '↩ Reactivate replies' : '✅ Mark in the clear';
+    btn.textContent = cleared ? 'Reactivate replies' : 'Mark in the clear';
     btn.title = cleared
         ? `${store} is in the clear — click to require variance replies again`
         : `Mark ${store} as in the clear — its managers stop replying to variance lines`;
@@ -17071,7 +17071,7 @@ function _vrDmClearedBannerHtml(store) {
         <div style="font-size:12.5px; font-weight:700; color:#065f46; line-height:1.5;">
             ✅ <b>${escapeHtml(store)}</b> is in the clear — its managers aren't being asked to reply to variance lines${who}. They just see their team + store total.
         </div>
-        <button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px; flex-shrink:0;" onclick="vrToggleStoreStatus(this)">↩ Reactivate replies</button>
+        <button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px; flex-shrink:0;" onclick="vrToggleStoreStatus(this)">Reactivate replies</button>
     </div>`;
 }
 
