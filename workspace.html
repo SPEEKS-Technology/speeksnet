@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260716e">
+  <link rel="stylesheet" href="styles.css?v=20260720c">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20260717q" defer></script>
+  <script src="speeks.js?v=20260720e" defer></script>
 </head>
 <body class="preload">
 
@@ -523,6 +523,7 @@
         <button class="ws-tab active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" data-feature="widget-ws-monthly-breakdown" id="ws-tab-brief" onclick="switchWorkspaceTab('brief')">📋 Monthly Breakdown</button>
         <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" data-feature="widget-ws-weekly-kpis" id="ws-tab-kpis" onclick="switchWorkspaceTab('kpis')">📊 Weekly KPI's</button>
         <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager" data-feature="widget-variance-replies" id="ws-tab-vreplies" onclick="switchWorkspaceTab('vreplies')">📉 Variance Replies</button>
+        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager" data-feature="widget-aging-inventory" id="ws-tab-aging" onclick="switchWorkspaceTab('aging')">⏳ Aging Inventory</button>
       </div>
 
       <div class="ws-panes">
@@ -636,11 +637,38 @@
                   <button id="vr-save-btn" class="kpi-save-section-btn" style="display:none;" onclick="vrSaveEdits(this)">Save</button>
                   <button id="vr-edit-cancel-btn" class="kpi-cancel-btn" style="display:none;" onclick="vrCancelEdit()">Cancel</button>
                   <button id="vr-cancel-upload-btn" class="kpi-cancel-btn" onclick="vrCancelUpload()" style="display:none;">Cancel</button>
+                  <button id="vr-status-btn" class="kpi-update-trigger-btn dynamic-module-flex role-district-manager" onclick="vrToggleStoreStatus(this)" style="display:none;"></button>
                   <button id="vr-upload-btn" class="kpi-update-trigger-btn dynamic-module-flex role-district-manager" onclick="vrToggleUpload()" style="display:none;">Upload Report</button>
               </div>
           </div>
           <div class="weekly-kpi-scroll-area ws-scroll" id="vr-body">
               <div class="status-message">Loading variance replies…</div>
+          </div>
+      </div>
+    </section>
+
+    <!-- ===== AGING INVENTORY PANE ===== -->
+    <section class="ws-pane" id="ws-pane-aging">
+      <div class="card kpi-master-card district-master-panel ws-panel">
+          <div class="district-kpi-header kpi-modal-header-tight">
+              <div class="align-center gap-15" style="flex-wrap:wrap;">
+                  <span class="district-kpi-title">Aging Inventory</span>
+                  <select id="ag-store-select" class="kpi-select dynamic-module-block role-district-manager" onchange="agOnStoreChange()" style="display:none;">
+                      <option value="OVL">OVL</option>
+                      <option value="LEE">LEE</option>
+                      <option value="WSP">WSP</option>
+                      <option value="MPL">MPL</option>
+                      <option value="BAL">BAL</option>
+                  </select>
+                  <span id="ag-subtitle" style="font-size:11px;color:#888;font-weight:600;"></span>
+              </div>
+              <div class="align-center gap-8">
+                  <button id="ag-add-cancel-btn" class="kpi-cancel-btn" onclick="agCancelAdd()" style="display:none;">Cancel</button>
+                  <button id="ag-add-btn" class="kpi-update-trigger-btn dynamic-module-flex role-district-manager" onclick="agToggleAdd()" style="display:none;">＋ Add Item</button>
+              </div>
+          </div>
+          <div class="weekly-kpi-scroll-area ws-scroll" id="ag-body">
+              <div class="status-message">Loading aging inventory…</div>
           </div>
       </div>
     </section>

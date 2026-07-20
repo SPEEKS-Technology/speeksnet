@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260716e">
+  <link rel="stylesheet" href="styles.css?v=20260720c">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260717q" defer></script>
+  <script src="speeks.js?v=20260720e" defer></script>
 </head>
 
 <body class="preload">
@@ -528,7 +528,6 @@
             <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-store-manager-folder">📁 Store Manager Folder</a>
             <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-store-passwords">🔑 Store Passwords</a>
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-dm-sales-summary">📊 Sales Summary</a>
-            <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-aging-inventory">⏳ Aging Inventory</a>
             <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>
             <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-dm-paymore-google-drive">☁️ PayMore Google Drive</a> 
           </div>
@@ -562,7 +561,6 @@
           <div class="hotbar-links">
             <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-mgr-store-manager-folder">📁 Store Manager Folder</a>
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-mgr-sales-summary">📊 Sales Summary</a>
-            <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-mgr-aging-inventory">⏳ Aging Inventory</a>
           </div>
         </div>
       </div>
@@ -573,7 +571,6 @@
           <div class="hotbar-links">
             <a href="https://drive.google.com/drive/folders/1nO9KTRU6Kb9Mv-cTAPp-kffV4DVESdC8?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-asm-store-manager-folder">📁 Store Manager Folder</a>
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-asm-sales-summary">📊 Sales Summary</a>
-            <a href="https://docs.google.com/spreadsheets/d/1KdQNDYfJT-Gt6wal6cgCbh6aqOUOHxey3PEsoeyztzQ/edit?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-asm-aging-inventory">⏳ Aging Inventory</a>
           </div>
         </div>
       </div>
@@ -1325,9 +1322,9 @@
         <label class="form-label-caps" style="margin-top:12px;">Section <span style="font-weight:400;color:#ef4444;">*</span></label>
         <select id="boxAdminCategory" class="form-input-lg">
             <option value="Shipping Supplies">Shipping Supplies</option>
-            <option value="Common Box">Common Boxes</option>
-            <option value="Rare Box">Rare Boxes</option>
-            <option value="Very Rare Box">Very Rare Boxes</option>
+            <option value="Small Box">Small Boxes</option>
+            <option value="Medium Box">Medium Boxes</option>
+            <option value="Large Box">Large Boxes</option>
             <option value="White Storage Box">White Storage Boxes</option>
             <option value="Bubble Mailer">Bubble Mailers</option>
         </select>

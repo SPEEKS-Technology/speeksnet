@@ -68,6 +68,38 @@ async function getTeamVariance(supabase: any, period: any) {
   };
 }
 
+// The store's most recent team-variance entry (store total % + per-person %),
+// not tied to any reply period. Used for a store that's "in the clear": its
+// managers no longer answer line items, they just see this summary.
+async function getLatestTeamVariance(supabase: any, store: string) {
+  const { data: entry } = await supabase.from("variance_entries")
+    .select("id, store_pct, date_from, date_to")
+    .eq("store", store)
+    .order("date_to", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(1).maybeSingle();
+  if (!entry) return null;
+  const { data: emps } = await supabase.from("variance_employee_entries")
+    .select("employee_name, variance_pct").eq("entry_id", entry.id).order("employee_name");
+  return {
+    total: entry.store_pct,
+    date_from: entry.date_from,
+    date_to: entry.date_to,
+    employees: (emps || []).map((e: any) => ({ name: e.employee_name, val: e.variance_pct })),
+  };
+}
+
+// Base64 (from the browser's FileReader) → bytes for a Storage upload.
+function b64ToBytes(b64: string): Uint8Array {
+  const clean = b64.includes(",") ? b64.slice(b64.indexOf(",") + 1) : b64;
+  const bin = atob(clean);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+const RAW_BUCKET = "variance-reports";
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -125,6 +157,27 @@ Deno.serve(async (req: Request) => {
           await supabase.from("variance_reply_periods").delete().eq("id", period.id);
           return jsonResponse({ success: false, error: iErr.message }, 500);
         }
+
+        // Stash the original workbook so managers can download the full report
+        // (every line, incl. the ones below the -10% cutoff we didn't import).
+        // A storage hiccup shouldn't fail the whole upload — the notes matter
+        // more than the download, so we just skip the file on error.
+        if (body.raw_file_b64) {
+          try {
+            const rawName = body.raw_file_name ? String(body.raw_file_name) : "variance-report.xlsx";
+            const path = `${period.id}/${rawName}`;
+            const bytes = b64ToBytes(String(body.raw_file_b64));
+            const ct = rawName.toLowerCase().endsWith(".csv")
+              ? "text/csv"
+              : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+            const { error: upErr } = await supabase.storage.from(RAW_BUCKET)
+              .upload(path, bytes, { contentType: ct, upsert: true });
+            if (!upErr) {
+              await supabase.from("variance_reply_periods")
+                .update({ raw_file_name: rawName, raw_file_path: path }).eq("id", period.id);
+            }
+          } catch (_e) { /* keep the upload; the file is a bonus */ }
+        }
         return jsonResponse({ success: true, period_id: period.id, count: rows.length });
       }
 
@@ -163,10 +216,34 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true });
       }
 
+      // ---- DM marks a store "in the clear" (or reactivates it) ----
+      // A cleared store's managers stop seeing/answering line items and get no
+      // dots/popups; they just see their team + store-total variance. The DM
+      // flips this back on the moment the store starts slipping again.
+      if (action === "set_store_status") {
+        const store = String(body.store || "").toUpperCase();
+        if (!store) return jsonResponse({ success: false, error: "store is required" }, 400);
+        const by = body.by ? String(body.by).trim() : null;
+        const { error } = await supabase.from("variance_store_status").upsert({
+          store,
+          in_the_clear: !!body.in_the_clear,
+          updated_by: by,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "store" });
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        return jsonResponse({ success: true });
+      }
+
       // ---- DM deletes an upload (mistake fix; items cascade) ----
       if (action === "delete_period") {
         const id = String(body.id || "");
         if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
+        // Clear the stored raw file too so deleted uploads don't orphan blobs.
+        const { data: period } = await supabase.from("variance_reply_periods")
+          .select("raw_file_path").eq("id", id).maybeSingle();
+        if (period?.raw_file_path) {
+          try { await supabase.storage.from(RAW_BUCKET).remove([period.raw_file_path]); } catch (_e) { /* best effort */ }
+        }
         const { error } = await supabase.from("variance_reply_periods").delete().eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         return jsonResponse({ success: true });
@@ -180,6 +257,21 @@ Deno.serve(async (req: Request) => {
 
   // ---- GET ----
   const url = new URL(req.url);
+
+  // ?file=<period_id> → a short-lived signed URL to download the raw upload.
+  const fileId = url.searchParams.get("file");
+  if (fileId) {
+    const { data: period, error } = await supabase.from("variance_reply_periods")
+      .select("raw_file_path, raw_file_name").eq("id", fileId).maybeSingle();
+    if (error) return jsonResponse({ success: false, error: error.message }, 500);
+    if (!period || !period.raw_file_path) {
+      return jsonResponse({ success: false, error: "No file on this upload" }, 404);
+    }
+    const { data: signed, error: sErr } = await supabase.storage.from(RAW_BUCKET)
+      .createSignedUrl(period.raw_file_path, 300, { download: period.raw_file_name || true });
+    if (sErr) return jsonResponse({ success: false, error: sErr.message }, 500);
+    return jsonResponse({ success: true, url: signed?.signedUrl, name: period.raw_file_name });
+  }
 
   // ?period_id=… → the period header + every line item
   const periodId = url.searchParams.get("period_id");
@@ -224,5 +316,21 @@ Deno.serve(async (req: Request) => {
     ...p,
     ...(counts[p.id] || { items: 0, answered: 0, awaiting_reply: 0 }),
   }));
-  return jsonResponse({ success: true, data });
+
+  // Per-store "in the clear" status for the requested stores, plus the latest
+  // team-variance summary for any store that IS cleared (so its managers can
+  // render their summary panel without a second round trip).
+  const storeStatus: Record<string, { in_the_clear: boolean; updated_by: string | null; updated_at: string | null }> = {};
+  const clearedTeamVariance: Record<string, unknown> = {};
+  let sq = supabase.from("variance_store_status").select("*");
+  if (stores.length) sq = sq.in("store", stores);
+  const { data: statuses } = await sq;
+  for (const s of (statuses || [])) {
+    storeStatus[s.store] = { in_the_clear: !!s.in_the_clear, updated_by: s.updated_by, updated_at: s.updated_at };
+  }
+  const clearedStores = Object.keys(storeStatus).filter((s) => storeStatus[s].in_the_clear);
+  for (const s of clearedStores) {
+    clearedTeamVariance[s] = await getLatestTeamVariance(supabase, s);
+  }
+  return jsonResponse({ success: true, data, store_status: storeStatus, cleared_team_variance: clearedTeamVariance });
 });

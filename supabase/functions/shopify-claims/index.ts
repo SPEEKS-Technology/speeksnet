@@ -142,6 +142,25 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true });
       }
 
+      // ---- Manager acknowledges a pushed reminder (the ✕ or "Review claims"
+      //      button) — persists read state server-side so it never re-fires,
+      //      even after clearing browsing data or on another device. Client
+      //      localStorage alone couldn't survive that. ----
+      if (action === "ack_reminder") {
+        const ids = Array.isArray(body.ids)
+          ? body.ids.map((x: unknown) => String(x)).filter(Boolean)
+          : (body.id ? [String(body.id)] : []);
+        if (!ids.length) return jsonResponse({ success: false, error: "Missing reminder id(s)" }, 400);
+        const { error } = await supabase.from("claim_reminders")
+          .update({
+            acknowledged_at: new Date().toISOString(),
+            acknowledged_by: body.by ? String(body.by).trim() : null,
+          })
+          .in("id", ids);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        return jsonResponse({ success: true });
+      }
+
       // ---- Manager requests deletion — does NOT delete. Flags the claim as
       //      pending so a DM/CEO can approve or deny it (managers can't quietly
       //      remove claims). Stamps who asked + when. ----
@@ -190,9 +209,11 @@ Deno.serve(async (req: Request) => {
   const storesParam = url.searchParams.get("stores") || url.searchParams.get("store") || "";
   const stores = storesParam.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
 
-  // ?reminders=1[&stores=BAL,MPL] → recent review reminders for the store(s)
+  // ?reminders=1[&stores=BAL,MPL] → UNACKNOWLEDGED review reminders for the
+  // store(s). Once a manager acknowledges one it's filtered out here for good,
+  // so it can't re-pop on a new session / device / after clearing browser data.
   if (url.searchParams.has("reminders")) {
-    let rq = supabase.from("claim_reminders").select("*").order("created_at", { ascending: false }).limit(20);
+    let rq = supabase.from("claim_reminders").select("*").is("acknowledged_at", null).order("created_at", { ascending: false }).limit(20);
     if (stores.length) rq = rq.in("store", stores);
     const { data, error } = await rq;
     if (error) return jsonResponse({ success: false, error: error.message }, 500);
