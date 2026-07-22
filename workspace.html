@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260720c">
+  <link rel="stylesheet" href="styles.css?v=20260722a">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20260720e" defer></script>
+  <script src="speeks.js?v=20260722j" defer></script>
 </head>
 <body class="preload">
 
@@ -29,11 +29,11 @@
   </div>
 
   <nav class="nav-bar">
-    <a href="index.html" class="nav-link"><i>⚡</i><span>QuickPortal</span></a>
-    <a href="operations.html" class="nav-link"><i>🛠️</i><span>Operations</span></a>
-    <a href="workspace.html" class="nav-link active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager"><i>📈</i><span>Workspace</span></a>
-    <a href="docs.html" class="nav-link"><i>📚</i><span>Processes & Policies</span></a>
-    <a href="stats.html" class="nav-link"><i>🏆</i><span>Stats & Awards</span></a>
+    <a href="index.html" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></i><span>QuickPortal</span></a>
+    <a href="operations.html" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></i><span>Operations</span></a>
+    <a href="workspace.html" class="nav-link active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></i><span>Workspace</span></a>
+    <a href="docs.html" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></i><span>Processes & Policies</span></a>
+    <a href="stats.html" class="nav-link"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg></i><span>Stats & Awards</span></a>
   </nav>
 
   <div class="nav-right">
@@ -65,10 +65,10 @@
         <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
     </button>
 </div>
-        <a href="#" onclick="toggleIdeaModal(); return false;" class="idea-btn action-btn" title="Have an Idea?">💡</a>
-        <div class="action-btn" onclick="toggleModal('quickMsgDropdown'); loadQuickMessages();" title="Quick Messages">💬</div>
-        <div class="action-btn" onclick="toggleModal('hotkeysDropdown')" title="Hotkeys & Commands">🚀</div>
-        <div class="action-btn" onclick="toggleCalendar()" title="Strategic Calendar">📅</div>
+        <a href="#" onclick="toggleIdeaModal(); return false;" class="idea-btn action-btn" data-tip="Have an Idea?"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1V17h6v-.2c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2z"/></svg></a>
+        <div class="action-btn" onclick="toggleModal('quickMsgDropdown'); loadQuickMessages();" data-tip="Quick Messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+        <div class="action-btn" onclick="toggleModal('hotkeysDropdown')" data-tip="Hotkeys &amp; Commands"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 0 0 3-3z"/></svg></div>
+        <div class="action-btn" onclick="toggleCalendar()" data-tip="Strategic Calendar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div>
         <div class="action-btn" onclick="toggleNotifs()" title="Announcements">
           🔔 <div class="notif-dot" id="notifBadge"></div>
         </div>
@@ -155,26 +155,35 @@
     </div>
 </div>
 
-<div class="modal-menu notif-menu" id="notifDropdown">
-    <div class="modal-header ann-modal-header">
-        <div class="ann-header-row">
-            <h3>SPEEKS Announcements Hub</h3>
-            <div class="align-center gap-15">
-                <div class="notif-tabs">
-                    <button id="tab-recent" class="tab-btn active" onclick="switchAnnTab('recent')">Recent</button>
-                    <button id="tab-archive" class="tab-btn" onclick="switchAnnTab('archive')">Archived</button>
-                </div>
-                <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+<!-- SPEEKS Feed Hub — one filterable reader (announcements + comments + deadlines
+     + patch notes). Rendered by renderHubFeed(); announcements keep reactions /
+     mark-as-read / read receipts / doc attachments. -->
+<div class="modal-menu notif-menu hub-modal" id="notifDropdown">
+    <div class="hub-head">
+        <div class="hub-head-row">
+            <div class="hub-title-wrap">
+                <span class="hub-hi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"></path></svg></span>
+                <div><h3>SPEEKS Feed</h3><div class="hub-sub">Everything from your team, in one place</div></div>
             </div>
+            <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
         </div>
-        <p class="ann-mission">Mission Statement: To become the #1 trusted source for electronics buy back, resale and recycle in all communities that we serve!</p>
+        <div class="hub-filter">
+            <label>Show</label>
+            <div class="hub-select-wrap">
+                <select id="hubFilter" onchange="setHubFilter(this.value)">
+                    <option value="all">All updates</option>
+                    <option value="ann">Announcements</option>
+                    <option value="note">Comments</option>
+                    <option value="due">Deadlines</option>
+                    <option value="patch">Patch notes</option>
+                    <option value="arch">Archived</option>
+                </select>
+                <span class="hub-chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
+            </div>
+            <span class="hub-count" id="hubCount"></span>
+        </div>
     </div>
-    <div id="ann-container" class="notif-content">
-        <div class="status-message">Syncing Data...</div>
-    </div>
-    <div id="archive-container" class="notif-content hidden">
-        <div class="status-message">Syncing Data...</div>
-    </div>
+    <div id="hubFeed" class="hub-feed"><div class="status-message">Syncing your feed...</div></div>
 </div>
 
 <div class="modal-menu calendar-menu" id="calendarDropdown">
@@ -734,9 +743,7 @@
                 <div style="display:flex;align-items:center;gap:7px;min-width:0;">
                     <span class="gi-section-title" id="giGoalsLabel">Monthly Goals</span>
                     <div class="gi-prev-wrapper">
-                        <button class="gi-prev-toggle" id="giPrevToggleBtn" onclick="togglePrevMonths(event)">
-                            📅
-                            <svg class="gi-prev-chevron" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="10" height="10"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                        <button class="gi-prev-toggle" id="giPrevToggleBtn" onclick="togglePrevMonths(event)"><svg class="gi-cal-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg><svg class="gi-prev-chevron" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="10" height="10"><polyline points="6 9 12 15 18 9"></polyline></svg>
                         </button>
                         <div id="giPrevMonthsList" class="gi-months-dropdown"></div>
                     </div>
@@ -1181,46 +1188,46 @@
   <div class="tools-panel-body">
 
     <div class="tools-group dynamic-module-block role-manager role-owner-manager role-district-manager role-ceo">
-      <div class="tools-group-label">🛟 Claims &amp; Refunds</div>
-      <a class="tools-item dynamic-module-flex role-manager role-owner-manager" data-feature="tool-claims-store" onclick="_closeToolsPanel(); openClaimsModal();"><span class="tools-item-icon">🛟</span>Insurance Claims</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-claims-oversight" onclick="_closeToolsPanel(); openClaimsOversight();"><span class="tools-item-icon">📊</span>Insurance Claims</a>
+      <div class="tools-group-label">Claims &amp; Refunds</div>
+      <a class="tools-item dynamic-module-flex role-manager role-owner-manager" data-feature="tool-claims-store" onclick="_closeToolsPanel(); openClaimsModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><line x1="4.93" y1="4.93" x2="9.17" y2="9.17"/><line x1="14.83" y1="14.83" x2="19.07" y2="19.07"/><line x1="14.83" y1="9.17" x2="19.07" y2="4.93"/><line x1="9.17" y1="14.83" x2="4.93" y2="19.07"/></span>Insurance Claims</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-claims-oversight" onclick="_closeToolsPanel(); openClaimsOversight();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></span>Insurance Claims</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-tom role-owner-manager">
-      <div class="tools-group-label">📢 Content</div>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" data-feature="tool-announcements" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon">📣</span>Announcements</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-ticker" onclick="_closeToolsPanel(); toggleManageTicker();"><span class="tools-item-icon">📌</span>Ticker Items</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-patch-notes" onclick="_closeToolsPanel(); togglePatchNotesManage();"><span class="tools-item-icon">📝</span>Patch Notes</a>
+      <div class="tools-group-label">Content</div>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" data-feature="tool-announcements" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"/></span>Announcements</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-ticker" onclick="_closeToolsPanel(); toggleManageTicker();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></span>Ticker Items</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-patch-notes" onclick="_closeToolsPanel(); togglePatchNotesManage();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></span>Patch Notes</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo">
-      <div class="tools-group-label">🏪 Store Ops</div>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-submit-scores" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon">🏆</span>Submit Scores</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-manager-checklist" onclick="_closeToolsPanel(); toggleManagerChecklist();"><span class="tools-item-icon">📋</span>Manager Checklist</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-variance-report" onclick="_closeToolsPanel(); toggleVarianceInput();"><span class="tools-item-icon">📊</span>Submit Variance Report</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-store-comment" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon">💬</span>Send Store Comment</a>
+      <div class="tools-group-label">Store Ops</div>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-submit-scores" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></span>Submit Scores</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-manager-checklist" onclick="_closeToolsPanel(); toggleManagerChecklist();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></span>Manager Checklist</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-variance-report" onclick="_closeToolsPanel(); toggleVarianceInput();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></span>Submit Variance Report</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-store-comment" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></span>Send Store Comment</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager">
-      <div class="tools-group-label">📦 Orders</div>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" data-feature="tool-box-order" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon">📦</span>Box Order</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager" data-feature="tool-recycle-inventory" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon">♻️</span>Recycle Inventory</a>
+      <div class="tools-group-label">Orders</div>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" data-feature="tool-box-order" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></span>Box Order</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager" data-feature="tool-recycle-inventory" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></span>Recycle Inventory</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-owner-manager">
-      <div class="tools-group-label">👥 Admin</div>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-owner-manager" data-feature="tool-user-permissions" onclick="_closeToolsPanel(); toggleManageUsers();"><span class="tools-item-icon">👤</span>User Permissions</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-feature-access" onclick="_closeToolsPanel(); openFeatureAccess();"><span class="tools-item-icon">🎛️</span>Feature Access</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-email-recipients" onclick="_closeToolsPanel(); openEmailRecipients();"><span class="tools-item-icon">📧</span>Email Recipients</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-performance-metrics" onclick="_closeToolsPanel(); toggleManageAlerts();"><span class="tools-item-icon">📈</span>Performance Metrics</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-company-records" onclick="_closeToolsPanel(); toggleManageRecords();"><span class="tools-item-icon">📁</span>Company Records</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-manage-policies" onclick="_closeToolsPanel(); toggleManageDocs();"><span class="tools-item-icon">📚</span>Manage Policies</a>
-      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-monthly-awards" onclick="_closeToolsPanel(); toggleManageAwards();"><span class="tools-item-icon">🏅</span>Monthly Awards</a>
+      <div class="tools-group-label">Admin</div>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-owner-manager" data-feature="tool-user-permissions" onclick="_closeToolsPanel(); toggleManageUsers();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></span>User Permissions</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-feature-access" onclick="_closeToolsPanel(); openFeatureAccess();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></span>Feature Access</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-email-recipients" onclick="_closeToolsPanel(); openEmailRecipients();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></span>Email Recipients</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-performance-metrics" onclick="_closeToolsPanel(); toggleManageAlerts();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></span>Performance Metrics</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-company-records" onclick="_closeToolsPanel(); toggleManageRecords();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></span>Company Records</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-manage-policies" onclick="_closeToolsPanel(); toggleManageDocs();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></span>Manage Policies</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-monthly-awards" onclick="_closeToolsPanel(); toggleManageAwards();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></span>Monthly Awards</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager">
-      <div class="tools-group-label">⚙ System</div>
-      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-system-hotkeys" onclick="_closeToolsPanel(); toggleManageHotkeys();"><span class="tools-item-icon">⌨️</span>System Hotkeys</a>
+      <div class="tools-group-label">System</div>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-system-hotkeys" onclick="_closeToolsPanel(); toggleManageHotkeys();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 0 0 3-3z"/></span>System Hotkeys</a>
     </div>
 
   </div>

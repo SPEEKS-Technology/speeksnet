@@ -216,6 +216,36 @@ function closeAllModals() {
     modals.forEach(modal => {
         modal.classList.remove('show');
     });
+
+    // Side panels (Checklist / Goals / Cleaning) live outside .modal-menu, so
+    // opening any modal (e.g. Listing Goals) must collapse them too.
+    _closeSidePanels();
+}
+
+// Mutually-exclusive right-side panels. Closing every panel except `exceptId`
+// keeps Checklist / Goals & Initiatives / Cleaning / SPEEKS Tools from
+// overlapping, and lets modals collapse them. Also stops each panel's sync.
+// SPEEKS Tools belongs in this list, not in its own hand-rolled close: it used
+// to clear Checklist and Goals by hand and silently miss Cleaning (and never
+// closed at all when a side panel opened over it). One list, both directions.
+// `cls` covers Tools marking its button with `panel-open` rather than
+// `panel-active`.
+function _closeSidePanels(exceptId) {
+    const panels = [
+        { id: 'checklistSidePanel', toggle: '.cl-nav-toggle',    stop: () => _stopChecklistSync?.() },
+        { id: 'goalsSidePanel',     toggle: '.gi-nav-toggle',    stop: () => _resetToCurrentMonth?.() },
+        { id: 'auditSidePanel',     toggle: '.audit-nav-toggle', stop: () => _stopAuditSync?.() },
+        { id: 'toolsSidePanel',     toggle: '#toolsNavBtn',      cls: 'panel-open' },
+    ];
+    panels.forEach(p => {
+        if (p.id === exceptId) return;
+        const el = document.getElementById(p.id);
+        if (el && el.classList.contains('open')) {
+            el.classList.remove('open');
+            document.querySelector(p.toggle)?.classList.remove(p.cls || 'panel-active');
+            try { p.stop?.(); } catch (_) {}
+        }
+    });
 }
 
 function toggleModal(modalId, badgeId = null) {
@@ -239,207 +269,152 @@ async function loadCMS() {
         const response = await fetch(`${CMS_URL}?v=${Date.now()}`);
         const data = await response.json();
         
-        const annContainer = document.getElementById('ann-container');
-        if (annContainer) {
-            let showBadge = false;
-            let recentHtml = "";
-            let archiveHtml = "";
-            let recentCount = 0;
-            let archiveCount = 0;
-            
-            const currentUser = sessionStorage.getItem('speeksUserName');
-            const cleanUser = currentUser ? String(currentUser).trim().toLowerCase() : null;
-            const userRole = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
-            const isPrivileged = userRole === 'ceo' || userRole === 'district manager';
+        // ---- Announcements: compute read state, build calm hub cards ----
+        let showBadge = false;
+        const hubAnn = [];
+        const currentUser = sessionStorage.getItem('speeksUserName');
+        const cleanUser = currentUser ? String(currentUser).trim().toLowerCase() : null;
+        const userRole = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
+        const isPrivileged = userRole === 'ceo' || userRole === 'district manager';
 
-            _annDocsCache = (data.announcements || []).filter(a => a.docUrl).reverse();
+        _annDocsCache = (data.announcements || []).filter(a => a.docUrl).reverse();
 
-            // New hires only see announcements from their onboarding day onward in the
-            // recent feed; anything older is auto-archived. Cutoff = start of that day.
-            // Blank (pre-existing users) means no filtering — they behave as before.
-            let onboardCutoff = null;
-            const onboardedRaw = sessionStorage.getItem('speeksUserOnboardedAt');
-            if (onboardedRaw) {
-                const od = new Date(onboardedRaw);
-                if (!isNaN(od.getTime())) {
-                    onboardCutoff = new Date(od.getFullYear(), od.getMonth(), od.getDate());
+        // New hires only see announcements from their onboarding day onward; older
+        // ones auto-archive so a new hire isn't flooded (archive still shows them).
+        let onboardCutoff = null;
+        const onboardedRaw = sessionStorage.getItem('speeksUserOnboardedAt');
+        if (onboardedRaw) {
+            const od = new Date(onboardedRaw);
+            if (!isNaN(od.getTime())) onboardCutoff = new Date(od.getFullYear(), od.getMonth(), od.getDate());
+        }
+
+        if (data.announcements && data.announcements.length > 0) {
+            const sortedAnns = [...data.announcements].reverse();
+            const now = new Date();
+
+            sortedAnns.forEach((item, index) => {
+                // isRead  = the user has read it (stays visible in the hub, just dimmed;
+                //           only this removes it from the dashboard live feed).
+                // isHidden = intentionally kept out of the hub's default view (new-hire
+                //           onboarding cutoff, or stale-for-logged-out) — Archived only.
+                let displayDate = "", displayTime = "", isRead = false, isHidden = false, unreadHtmlAttr = "", dateMs = 0;
+
+                if (item.date) {
+                    const annDate = new Date(item.date);
+                    if (!isNaN(annDate.getTime())) {
+                        dateMs = annDate.getTime();
+                        displayDate = annDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+                        const h = annDate.getHours(), min = annDate.getMinutes();
+                        if (h !== 0 || min !== 0) { const ampm = h >= 12 ? 'pm' : 'am'; displayTime = `${h % 12 || 12}:${String(min).padStart(2, '0')}${ampm}`; }
+                    }
                 }
-            }
 
-            if (data.announcements && data.announcements.length > 0) {
-                const sortedAnns = [...data.announcements].reverse();
-                const now = new Date();
-
-                sortedAnns.forEach((item, index) => {
-                    let displayDate = "";
-                    let displayTime = "";
-                    let isArchived = false;
-                    let unreadHtmlAttr = "";
-
-                    if (item.date) {
-                        const annDate = new Date(item.date);
-                        if (!isNaN(annDate.getTime())) {
-                            displayDate = annDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-                            const h = annDate.getHours(), min = annDate.getMinutes();
-                            if (h !== 0 || min !== 0) {
-                                const ampm = h >= 12 ? 'pm' : 'am';
-                                displayTime = `${h % 12 || 12}:${String(min).padStart(2, '0')}${ampm}`;
-                            }
-                        }
+                if (cleanUser) {
+                    const localReadKey = 'speeksLocalRead_' + cleanUser;
+                    const localRead = new Set(JSON.parse(localStorage.getItem(localReadKey) || '[]'));
+                    const inReadBy = !!(item.readBy && item.readBy.some(u => String(u).trim().toLowerCase() === cleanUser));
+                    if (inReadBy && localRead.has(item.rowId)) { localRead.delete(item.rowId); localStorage.setItem(localReadKey, JSON.stringify([...localRead])); }
+                    isRead = inReadBy || localRead.has(item.rowId);
+                    if (!isRead && onboardCutoff && item.date) {
+                        const aDate = new Date(item.date);
+                        if (!isNaN(aDate.getTime()) && aDate < onboardCutoff) isHidden = true;
                     }
+                    if (!isRead && !isHidden) { showBadge = true; unreadHtmlAttr = ` data-ann-id="${item.rowId}"`; }
+                } else if (item.date) {
+                    const annDate = new Date(item.date);
+                    if (!isNaN(annDate.getTime())) isHidden = (now - annDate) / (1000 * 60 * 60) > 48;
+                }
 
-                    if (cleanUser) {
-                        const localReadKey = 'speeksLocalRead_' + cleanUser;
-                        const localRead = new Set(JSON.parse(localStorage.getItem(localReadKey) || '[]'));
-                        const inReadBy = !!(item.readBy && item.readBy.some(u => String(u).trim().toLowerCase() === cleanUser));
-                        if (inReadBy && localRead.has(item.rowId)) {
-                            localRead.delete(item.rowId);
-                            localStorage.setItem(localReadKey, JSON.stringify([...localRead]));
-                        }
-                        isArchived = inReadBy || localRead.has(item.rowId);
-                        // Auto-archive anything posted before this user joined, so a new
-                        // hire isn't flooded with the whole backlog (archive still shows it).
-                        if (!isArchived && onboardCutoff && item.date) {
-                            const aDate = new Date(item.date);
-                            if (!isNaN(aDate.getTime()) && aDate < onboardCutoff) {
-                                isArchived = true;
-                            }
-                        }
-                        if (!isArchived) {
-                            showBadge = true;
-                            unreadHtmlAttr = `data-ann-id="${item.rowId}"`;
-                        }
-                    } else if (item.date) {
-                        const annDate = new Date(item.date);
-                        if (!isNaN(annDate.getTime())) {
-                            isArchived = (now - annDate) / (1000 * 60 * 60) > 48;
-                        }
+                const annId = item.rowId || index;
+                const rData = item.reactions || {};
+                const availableEmojis = ['👍', '🎉', '👀', '🔥', '🫡', '💵'];
+
+                let reactionsHtml = `<div class="ann-reactions" id="reactions_${annId}">`;
+                availableEmojis.forEach((emoji, eIdx) => {
+                    let count = 0, hasReacted = false, usersList = [];
+                    if (rData[emoji] && Array.isArray(rData[emoji])) {
+                        usersList = rData[emoji]; count = usersList.length;
+                        if (cleanUser) hasReacted = usersList.some(u => String(u).trim().toLowerCase() === cleanUser);
                     }
+                    const displayStyle = count > 0 ? 'flex' : 'none';
+                    const activeClass = hasReacted ? 'reacted' : '';
+                    const tooltipText = usersList.length > 0 ? `data-tip="Reacted by: ${usersList.join(', ')}"` : '';
+                    reactionsHtml += `<button class="reaction-btn ${activeClass}" id="btn_${annId}_${eIdx}" data-emoji="${emoji}" style="display: ${displayStyle};" onclick="toggleReaction('${annId}', '${emoji}')" ${tooltipText}><span style="pointer-events: none;">${emoji}</span> <span class="count" style="pointer-events: none;">${count}</span></button>`;
+                });
+                reactionsHtml += `
+                    <div class="reaction-picker-wrapper" style="position: relative;">
+                        <button class="add-reaction-btn" onclick="toggleReactionPicker('${annId}')">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 14s1.5 2 4 2 4-2 4-2"></path><line x1="9" y1="9" x2="9.01" y2="9"></line><line x1="15" y1="9" x2="15.01" y2="9"></line></svg>
+                            <span style="font-size: 14px; margin-left: -4px;">+</span>
+                        </button>
+                        <div class="reaction-picker-popover" id="picker_${annId}">
+                            ${availableEmojis.map(emoji => `<button type="button" onclick="toggleReaction('${annId}', '${emoji}'); toggleReactionPicker('${annId}')">${emoji}</button>`).join('')}
+                        </div>
+                    </div>`;
+                reactionsHtml += `</div>`;
 
-                    const annId = item.rowId || index;
-                    const rData = item.reactions || {};
-                    const availableEmojis = ['👍', '🎉', '👀', '🔥', '🫡', '💵'];
-                    
-                    let reactionsHtml = `<div class="ann-reactions" id="reactions_${annId}">`;
-                    
-                    availableEmojis.forEach((emoji, eIdx) => {
-                        let count = 0;
-                        let hasReacted = false;
-                        let usersList = [];
-                        
-                        if (rData[emoji] && Array.isArray(rData[emoji])) {
-                            usersList = rData[emoji];
-                            count = usersList.length;
-                            
-                            if (cleanUser) {
-                                hasReacted = usersList.some(u => String(u).trim().toLowerCase() === cleanUser);
-                            }
-                        }
+                const markReadBtn = (!isRead && !isHidden && cleanUser) ? `<button class="hub-markread" onclick="hubMarkRead('${annId}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>Mark as read</button>` : '';
 
-                        let displayStyle = count > 0 ? 'flex' : 'none';
-                        let activeClass = hasReacted ? 'reacted' : '';
-                        let tooltipText = usersList.length > 0 ? `title="Reacted by: ${usersList.join(', ')}"` : '';
+                const readBy = item.readBy || [];
+                const readReceiptHtml = isPrivileged ? `
+                    <div class="read-receipt" id="receipt_${annId}">
+                        <button class="read-receipt-btn" onclick="toggleReadReceipt('${annId}')">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                            ${readBy.length} read
+                        </button>
+                        <div class="read-receipt-popover" id="receipt-popover_${annId}">
+                            <div class="rr-title">Read by</div>
+                            ${readBy.length === 0 ? '<div class="rr-empty">No reads yet</div>' : readBy.map(u => `<div class="rr-name">${u}</div>`).join('')}
+                        </div>
+                    </div>` : '';
 
-                        reactionsHtml += `<button class="reaction-btn ${activeClass}" id="btn_${annId}_${eIdx}" data-emoji="${emoji}" style="display: ${displayStyle};" onclick="toggleReaction('${annId}', '${emoji}')" ${tooltipText}><span style="pointer-events: none;">${emoji}</span> <span class="count" style="pointer-events: none;">${count}</span></button>`;
-                    });
+                const docLinkHtml = item.docUrl ? `<a href="${item.docUrl}" target="_blank" rel="noopener" class="hub-doclink"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>${item.docName || 'Attached document'}</a>` : '';
 
-                    reactionsHtml += `
-                        <div class="reaction-picker-wrapper" style="position: relative;">
-                            <button class="add-reaction-btn" onclick="toggleReactionPicker('${annId}')">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 14s1.5 2 4 2 4-2 4-2"></path><line x1="9" y1="9" x2="9.01" y2="9"></line><line x1="15" y1="9" x2="15.01" y2="9"></line></svg>
-                                <span style="font-size: 14px; margin-left: -4px;">+</span>
-                            </button>
-                            <div class="reaction-picker-popover" id="picker_${annId}">
-                                ${availableEmojis.map(emoji => `<button type="button" onclick="toggleReaction('${annId}', '${emoji}'); toggleReactionPicker('${annId}')">${emoji}</button>`).join('')}
+                const parsed = _hubParseAnn(item);
+                const kindLabel = isRead ? 'Read · Announcement' : isHidden ? 'Archived · Announcement' : 'Announcement';
+                const metaR = displayDate ? `${displayDate}${displayTime ? ' · ' + displayTime : ''}` : '';
+
+                const cardHtml = `
+                    <div class="hub-item t-ann${parsed.priority ? ' prio' : ''}${(isRead || isHidden) ? ' read' : ''}" data-t="ann" data-hub-id="ann-${annId}"${unreadHtmlAttr}>
+                        <div class="hub-row">
+                            <span class="hub-tico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"></path></svg></span>
+                            <div class="hub-col">
+                                <div class="hub-item-top">${parsed.priority ? '<span class="hub-prio-pill">Priority</span>' : ''}<span class="hub-item-title">${escapeHtml(parsed.title)}</span><span class="hub-meta-r">${metaR}</span></div>
+                                <div class="hub-kind-meta"><span class="hub-kind">${kindLabel}</span>${item.author ? ' · ' + escapeHtml(item.author) : ''}</div>
+                                <div class="hub-item-body">${parsed.bodyHtml}</div>
+                                ${docLinkHtml}
+                                <div class="hub-foot">${reactionsHtml}${readReceiptHtml}${markReadBtn}</div>
                             </div>
                         </div>
-                    `;
-                    reactionsHtml += `</div>`;
+                    </div>`;
 
-                    const markReadBtn = (!isArchived && cleanUser) ? `
-                        <button class="mark-read-btn" onclick="markAnnouncementRead('${annId}')">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-                            Mark as Read
-                        </button>` : '';
+                hubAnn.push({ kind: 'ann', read: isRead, hidden: isHidden, priority: parsed.priority, dateMs, html: cardHtml });
+            });
 
-                    const readBy = item.readBy || [];
-                    const readReceiptHtml = isPrivileged ? `
-                        <div class="read-receipt" id="receipt_${annId}">
-                            <button class="read-receipt-btn" onclick="toggleReadReceipt('${annId}')">
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-                                ${readBy.length} read
-                            </button>
-                            <div class="read-receipt-popover" id="receipt-popover_${annId}">
-                                <div class="rr-title">Read by</div>
-                                ${readBy.length === 0
-                                    ? '<div class="rr-empty">No reads yet</div>'
-                                    : readBy.map(u => `<div class="rr-name">${u}</div>`).join('')}
-                            </div>
-                        </div>` : '';
+            feedAnnouncementsToTicker(showBadge ? sortedAnns.slice(0, 2) : []);
+            _tickerSourceDone('cms');
+        } else {
+            _tickerSourceDone('cms');
+        }
 
-                    const docLinkHtml = item.docUrl ? `
-                        <a href="${item.docUrl}" target="_blank" rel="noopener" class="ann-doc-link">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
-                            ${item.docName || 'Attached Document'}
-                        </a>` : '';
+        window._hubAnnItems = hubAnn;
 
-                    const html = `
-                        <div class="notif-item"${unreadHtmlAttr ? ` ${unreadHtmlAttr}` : ''}>
-                            <div class="ann-header">
-                                <span class="ann-author">${item.author || 'Announcement'}</span>
-                                <div class="ann-header-right">
-                                    ${readReceiptHtml}
-                                    ${displayDate ? `<small class="ann-date">${displayDate}${displayTime ? ` · ${displayTime}` : ''}</small>` : ''}
-                                </div>
-                            </div>
-                            <hr />
-                            <div class="ann-text">${item.text || ''}</div>
-                            ${docLinkHtml}
-                            <div class="ann-card-footer">
-                                ${reactionsHtml}
-                                ${markReadBtn}
-                            </div>
-                        </div>`;
-
-                    if (isArchived) {
-                        archiveHtml += html;
-                        archiveCount++;
-                    } else {
-                        recentHtml += html;
-                        recentCount++;
-                    }
-                });
-
-                recentHtml = recentCount === 0 ? '<div style="padding: 20px; color:#999; text-align:center;">No recent announcements</div>' : recentHtml;
-                archiveHtml = archiveCount === 0 ? '<div style="padding: 20px; color:#999; text-align:center;">No archived announcements</div>' : archiveHtml;
-                feedAnnouncementsToTicker(showBadge ? sortedAnns.slice(0, 2) : []);
-                _tickerSourceDone('cms');
+        const badge = document.getElementById('notifBadge');
+        if (badge) {
+            if (showBadge) {
+                if (currentUser) localStorage.setItem('speeksUnreadAnnouncements_' + currentUser, 'true');
+                badge.style.display = 'block';
+                badge.classList.add('active');
             } else {
-                recentHtml = archiveHtml = '<div style="padding: 20px; color:#999; text-align:center;">No announcements</div>';
-                _tickerSourceDone('cms');
-            }
-
-            annContainer.innerHTML = recentHtml;
-            const archiveContainer = document.getElementById('archive-container');
-            if (archiveContainer) archiveContainer.innerHTML = archiveHtml;
-
-            const badge = document.getElementById('notifBadge');
-            if (badge) {
-                if (showBadge) {
-                    if (currentUser) localStorage.setItem('speeksUnreadAnnouncements_' + currentUser, 'true');
-                    badge.style.display = 'block';
-                    badge.classList.add('active');
-                } else {
-                    if (currentUser) localStorage.removeItem('speeksUnreadAnnouncements_' + currentUser);
-                    updateMainBadge(); // keep dot alive if patch notes are also unseen
-                }
-            }
-            const recentBadge = document.getElementById('recentBadge');
-            if (recentBadge) {
-                recentBadge.style.display = showBadge ? 'block' : 'none';
-                recentBadge.classList.toggle('active', showBadge);
+                if (currentUser) localStorage.removeItem('speeksUnreadAnnouncements_' + currentUser);
+                updateMainBadge(); // keep dot alive if patch notes are also unseen
             }
         }
+
+        // Feed the Action Menu deck + the hub from the same data (no extra fetch).
+        window._samAnnData = data.announcements || [];
+        try { if (typeof renderActionFeed === 'function') renderActionFeed(); } catch (e) { console.warn('Action Menu feed failed:', e); }
+        try { if (typeof renderHubFeed === 'function') renderHubFeed(); } catch (e) { console.warn('Hub feed failed:', e); }
 
         const activeContainer = document.getElementById('active-container');
         if (activeContainer) {
@@ -491,7 +466,20 @@ function markAnnouncementRead(rowId) {
     }
 }
 
-function toggleNotifs() { toggleModal('notifDropdown', 'notifBadge'); }
+function toggleNotifs() {
+    toggleModal('notifDropdown', 'notifBadge');
+    if (document.getElementById('notifDropdown')?.classList.contains('show')) {
+        // Always open on "All updates". The filter used to persist for the life of
+        // the page, so someone who last looked at (say) Patch notes would re-open
+        // to a near-empty hub and think their announcements had vanished.
+        // openHubToPatch() sets its own filter after this and is unaffected.
+        window._hubFilter = 'all';
+        const sel = document.getElementById('hubFilter');
+        if (sel) sel.value = 'all';
+        renderHubFeed();     // show announcements/notes/deadlines immediately
+        loadPatchNotes();    // fetch patch notes, mark seen, re-render
+    }
+}
 function toggleCalendar() { toggleModal('calendarDropdown'); }
 function toggleIdeaModal() {
     // Pre-fill the submitter's name from their session so they don't retype it.
@@ -568,12 +556,7 @@ window.toggleToolsPanel = function(e) {
     const isOpen = panel.classList.toggle('open');
     const btn = document.getElementById('toolsNavBtn');
     if (btn) btn.classList.toggle('panel-open', isOpen);
-    if (isOpen) {
-        document.getElementById('checklistSidePanel')?.classList.remove('open');
-        document.querySelector('.cl-nav-toggle')?.classList.remove('panel-active');
-        document.getElementById('goalsSidePanel')?.classList.remove('open');
-        document.querySelector('.gi-nav-toggle')?.classList.remove('panel-active');
-    }
+    if (isOpen) _closeSidePanels('toolsSidePanel');
 };
 
 function _closeToolsPanel() {
@@ -720,10 +703,14 @@ async function pollReactions() {
                 btn.style.display = count > 0 ? 'flex' : 'none';
                 btn.classList.toggle('reacted', hasReacted);
 
+                // Keep the styled tooltip (data-tip) and never re-add a native
+                // title — the poll used to overwrite data-tip with title, which
+                // brought back the raw browser tooltip.
+                btn.removeAttribute('title');
                 if (usersList.length > 0) {
-                    btn.setAttribute('title', `Reacted by: ${usersList.join(', ')}`);
+                    btn.setAttribute('data-tip', `Reacted by: ${usersList.join(', ')}`);
                 } else {
-                    btn.removeAttribute('title');
+                    btn.removeAttribute('data-tip');
                 }
             });
         });
@@ -781,7 +768,12 @@ function _syncLayout() {
     const ticker = document.getElementById('infoTicker');
     if (!nav) return;
     const navH = Math.round(nav.getBoundingClientRect().height);
-    const tickerH = document.body.classList.contains('is-authenticated') ? 32 : 0;
+    // Only reserve the ticker's strip when it's actually showing. The Action Menu
+    // hides it (body.sam-active) for managers, so on those pages the side panels
+    // should sit flush under the nav instead of leaving a 32px gap.
+    const tickerVisible = !!ticker && document.body.classList.contains('is-authenticated')
+        && window.getComputedStyle(ticker).display !== 'none';
+    const tickerH = tickerVisible ? 32 : 0;
     const totalTop = navH + tickerH;
     if (ticker) ticker.style.top = navH + 'px';
     document.documentElement.style.setProperty('--panel-top', totalTop + 'px');
@@ -4531,6 +4523,11 @@ function injectGlobalAuth() {
 }
 
 function handleSignOut() {
+    // Same reasoning as the comment tracker below: the aging-claim alert fires once
+    // per session, so a fresh login should surface it again. Cleared BEFORE the
+    // name is dropped, since the key is scoped to the signing-out user.
+    try { sessionStorage.removeItem(_seenAgingKey()); } catch (e) { /* non-fatal */ }
+
     // Remove the login state
     sessionStorage.removeItem('speeksUnlocked');
     sessionStorage.removeItem('speeksUserName');
@@ -5435,6 +5432,19 @@ let _weekTargetTotal = 0;      // store's weekly goal target (shown in the Week 
 // daily goal = role weight × store scale × day factor (stable; overtime-proof).
 // Reference + visual sandbox: prototypes/listing-goals-prototype.html
 // ----------------------------------------------------------------------------
+// Read a role dot's role. MUST NOT use innerText: that returns *rendered* text,
+// which is "" for anything inside a hidden container. Listing Goals now lives in
+// a modal, and renderManagerGoals() kicks off recomputeGoalDisplays() on a 30ms
+// timer while that modal is still display:none — so every role came back as "",
+// scored a weight of 0, and the whole TODAY column rendered as 0 even though the
+// roles were set and the saved goals were correct. The dots carry data-role, which
+// is layout-independent; textContent is the fallback.
+function _roleOf(btn) {
+    if (!btn) return '-';
+    const r = (btn.dataset && btn.dataset.role) || btn.textContent || '';
+    return String(r).trim().toUpperCase() || '-';
+}
+
 const ListingGoalsEngine = {
     roleWeight: { B1: 5, B2: 8, L1: 25, L2: 25, L1_SHARED: 15 },
     saturdayFactor: 0.5,
@@ -5510,8 +5520,26 @@ const ListingGoalsEngine = {
     }
 };
 
+// Parse a listing-goal date into a LOCAL calendar day.
+//
+// listing_goals.date is a Postgres `date`. The edge function currently hand-formats
+// it to "7/21/2026" before returning it, and that non-ISO form parses as LOCAL
+// midnight — which is what every comparison here assumes.
+//
+// The guard is for the day someone "simplifies" that mapping to return the raw
+// column. A bare "2026-07-21" parses as UTC midnight per spec, i.e. 7pm the
+// PREVIOUS day in America/Chicago — so every goal would read one day early and
+// Monday's rows would fall before startOfWeek and vanish from weekly totals and
+// the DM widget, with no error anywhere. Accepting both forms costs nothing.
+function goalDateObj(s) {
+    const str = String(s || '').trim();
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str);
+    if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+    return new Date(str);
+}
+
 function normalizeGoalDate(s) {
-    const d = new Date(s);
+    const d = goalDateObj(s);
     return isNaN(d.getTime()) ? String(s).trim() : d.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
 }
 
@@ -5633,7 +5661,7 @@ function renderGoalsScoreboard(viewType = 'daily') {
 
         empRecords.forEach(record => {
             const isToday = normalizeGoalDate(record.date) === todayStr;
-            const recDate = new Date(record.date);
+            const recDate = goalDateObj(record.date);
             const isThisWeek = recDate >= startOfWeek;
 
             if (viewType === 'daily' && isToday) {
@@ -5813,7 +5841,7 @@ function buildGoalsEditForm() {
             const isActive = targetRecord.role === r ? 'active' : '';
             // If the goal is locked, we also lock the role from being changed
             const disableRole = lockGoal ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : '';
-            rolesHtml += `<button type="button" class="role-dot ${isActive}" ${disableRole} onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
+            rolesHtml += `<button type="button" class="role-dot ${isActive}" data-role="${r}" ${disableRole} onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
         });
 
         // If the goal is locked, we make the input unclickable and gray it out
@@ -5864,7 +5892,7 @@ async function saveGoalsData(silent = false) {
     goalsRoster.forEach((emp, idx) => {
         const roleGroup = document.getElementById(`roles-${idx}`);
         const activeBtn = roleGroup?.querySelector('.role-dot.active');
-        const role = activeBtn ? activeBtn.innerText : '-';
+        const role = _roleOf(activeBtn);
 
         // Goal is derived from the role — never typed.
         const goal = role !== '-' ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount)) : '';
@@ -6000,7 +6028,7 @@ function renderManagerGoals() {
         let rolesHtml = '';
         availableRoles.forEach(r => {
             const isActive = rec.role === r ? 'active' : '';
-            rolesHtml += `<button type="button" class="role-dot ${isActive}" onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
+            rolesHtml += `<button type="button" class="role-dot ${isActive}" data-role="${r}" onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
         });
 
         // Weekly goal = this week's saved daily goals, excluding today (today is added live).
@@ -6036,7 +6064,7 @@ function priorWeekGoal(emp, todayStr, startOfWeek, data = liveGoalsData) {
         if (!match) return;
         const dStr = normalizeGoalDate(r.date);
         if (dStr === todayStr) return;
-        if (new Date(r.date) >= startOfWeek) byDay[dStr] = parseInt(r.goal) || 0;
+        if (goalDateObj(r.date) >= startOfWeek) byDay[dStr] = parseInt(r.goal) || 0;
     });
     return Object.values(byDay).reduce((s, g) => s + g, 0);
 }
@@ -6134,7 +6162,7 @@ function renderManagerGoalsMS() {
             let rolesHtml = '';
             availableRoles.forEach(r => {
                 const isActive = rec.role === r ? 'active' : '';
-                rolesHtml += `<button type="button" class="role-dot ${isActive}" onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
+                rolesHtml += `<button type="button" class="role-dot ${isActive}" data-role="${r}" onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
             });
 
             st.priorWeek[idx] = priorWeekGoal(emp, todayStr, startOfWeek, st.live);
@@ -6189,7 +6217,7 @@ function recomputeGoalDisplaysMS() {
         st.roster.forEach((emp, idx) => {
             const group = document.getElementById(`roles-${store}-${idx}`);
             const activeBtn = group?.querySelector('.role-dot.active');
-            const role = activeBtn ? activeBtn.innerText : '-';
+            const role = _roleOf(activeBtn);
             const todayGoal = role !== '-' ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount) : 0;
 
             const disp = document.getElementById(`goal-display-${store}-${idx}`);
@@ -6236,7 +6264,7 @@ async function saveGoalsDataMS(silent = false) {
         st.roster.forEach((emp, idx) => {
             const group = document.getElementById(`roles-${store}-${idx}`);
             const activeBtn = group?.querySelector('.role-dot.active');
-            const role = activeBtn ? activeBtn.innerText : '-';
+            const role = _roleOf(activeBtn);
             const goal = role !== '-' ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount)) : '';
             const existing = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
             const result = existing && existing.result != null ? String(existing.result) : '';
@@ -6454,7 +6482,7 @@ function renderCompactDmGoals() {
         // Per-employee today + weekly goals (last record per day wins). Read-only.
         const emps = {};
         storeData.forEach(r => {
-            if (new Date(r.date) < startOfWeek) return;
+            if (goalDateObj(r.date) < startOfWeek) return;
             const dStr = normalizeGoalDate(r.date);
             if (!emps[r.employee]) emps[r.employee] = { role: '-', byDay: {} };
             emps[r.employee].byDay[dStr] = parseInt(r.goal) || 0;
@@ -6632,7 +6660,7 @@ function _dmLegacyGoalsUnused() {
 
         const storeDedup = {};
         storeData.forEach(r => {
-            const recDate = new Date(r.date);
+            const recDate = goalDateObj(r.date);
             const isToday = r.date === todayStr;
             const isThisWeek = recDate >= startOfWeek;
 
@@ -6678,7 +6706,7 @@ function _dmLegacyGoalsUnused() {
 
             const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
             empRecords.forEach(r => {
-                const recDate = new Date(r.date);
+                const recDate = goalDateObj(r.date);
                 if ((currentDmGoalView === 'daily' && r.date === todayStr) || (currentDmGoalView === 'weekly' && recDate >= startOfWeek)) {
                     const rG = parseInt(r.goal) || 0;
                     const rR = parseInt(r.result) || 0;
@@ -6797,7 +6825,7 @@ async function fetchAndRenderEmployeeGoals() {
         let dailyStats = {};
 
         myRecords.forEach(r => {
-            const recDate = new Date(r.date);
+            const recDate = goalDateObj(r.date);
             const g = parseInt(r.goal) || 0;
             const resVal = parseInt(r.result) || 0;
 
@@ -7862,6 +7890,9 @@ function applyRoleBasedUI() {
     // (cached copy applies instantly; a change re-runs this function once).
     _kickFeatureOverridesRefresh();
 
+    // Render/refresh the SPEEKS Action Menu deck now the role is known.
+    try { if (typeof samInit === 'function') samInit(); } catch (e) { console.warn('Action Menu init failed:', e); }
+
     if (userRole === 'employee' || userRole === 'assistant manager') {
         document.querySelectorAll('.manager-only').forEach(el => el.style.setProperty('display', 'none', 'important'));
     }
@@ -7915,13 +7946,13 @@ function initMultiStoreSwitcher() {
     const sw = document.querySelector('.msm-store-switch');
     if (!sw) return;
     if (!isMultiStoreManager()) { sw.style.display = 'none'; return; }
-    const sel = sw.querySelector('#msmStoreSelect');
     const current = (sessionStorage.getItem('speeksUserStore') || MULTISTORE_MANAGER_STORES[0]).toUpperCase();
-    if (sel) {
-        sel.innerHTML = MULTISTORE_MANAGER_STORES
-            .map(s => `<option value="${s}" ${s === current ? 'selected' : ''}>${s}</option>`)
-            .join('');
-    }
+    // Segmented toggle instead of a native <select>: the OS-drawn option list
+    // can't be styled to match the nav, and with only two stores a toggle is
+    // one click instead of two. setMultiStore() still does the actual switch.
+    sw.innerHTML = MULTISTORE_MANAGER_STORES.map(s =>
+        `<button type="button" class="msm-seg${s === current ? ' active' : ''}" data-tip="Switch to ${s}" onclick="setMultiStore('${s}')">${s}</button>`
+    ).join('');
     sw.style.display = 'flex';
 }
 
@@ -7969,6 +8000,8 @@ function checkPatchNotesBadge() {
     } else {
         updateMainBadge();
     }
+    // Refresh the Action Menu feed so the compact "new patch notes" row appears/clears.
+    try { if (typeof renderActionFeed === 'function') renderActionFeed(); } catch (_) {}
 }
 
 // Lightweight background fetch — just checks if there's a new patch notes version
@@ -8046,7 +8079,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -8157,6 +8190,16 @@ customTooltip.className = 'speeks-tooltip';
 document.body.appendChild(customTooltip);
 
 document.addEventListener('mouseover', function(e) {
+    // Generic styled tooltip: any element with data-tip gets the site tooltip
+    // instead of the plain browser title box. Used by the Action Menu + panels.
+    const genTip = e.target.closest('[data-tip]');
+    if (genTip) {
+        customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
+        customTooltip.innerHTML = `<span style="font-size: 12.5px; font-weight: 600; color: var(--slate-charcoal); white-space: normal;">${genTip.getAttribute('data-tip')}</span>`;
+        customTooltip.classList.add('show');
+        return;
+    }
+
     // Call Backs sheet: any element carrying data-cb-tip gets the standard site tooltip
     const cbTip = e.target.closest('[data-cb-tip]');
     if (cbTip) {
@@ -8203,6 +8246,7 @@ document.addEventListener('mouseover', function(e) {
         }
     }
 
+    // Goal / initiative hover text — rendered in the redesigned clean tooltip.
     const panelItem = e.target.closest('.cpb-project-item, .mgb-goal-item');
     if (panelItem) {
         const titleEl = panelItem.querySelector('.mgb-goal-title');
@@ -8210,13 +8254,9 @@ document.addEventListener('mouseover', function(e) {
         const titleText = titleEl ? titleEl.innerText.trim() : '';
         const descText  = descEl  ? descEl.innerText.trim()  : '';
         if (titleText || descText) {
-            const color = panelItem.classList.contains('cpb-initiative-item') ? '#f59e0b'
-                        : panelItem.classList.contains('mgb-goal-item')       ? '#5a8d3b'
-                        : '#3b82f6';
-            customTooltip.style.setProperty('--tip-color', color);
             customTooltip.innerHTML = `
-                <strong style="display:block; margin-bottom: 6px; font-size: 13px; color: var(--slate-charcoal);">${titleText}</strong>
-                ${descText ? `<span style="font-size: 12px; color: #64748b; line-height: 1.4;">${descText}</span>` : ''}`;
+                <strong style="display:block; font-size: 12.5px; color: var(--slate-charcoal);">${titleText}</strong>
+                ${descText ? `<span style="display:block; margin-top: 4px; font-size: 12px; color: #647082; line-height: 1.45;">${descText}</span>` : ''}`;
             customTooltip.classList.add('show');
             return;
         }
@@ -8881,7 +8921,12 @@ function putMonthlyGoals(store, data) {
     localStorage.setItem(_mgbKey(store), JSON.stringify(data));
 }
 
-const MONTHLY_GOALS_URL = 'https://script.google.com/macros/s/AKfycbyytrXgeMLoFMqxKBqW2SfLoXk-8SnoKQoKVmhgPkW84ffuj5sgMumekFdZN1CsJcpMJQ/exec';
+// Goals & Initiatives / Company Projects. Ported off the Google Apps Script sheet
+// (2026-07-21) — it was the last dataset still living outside Supabase. The edge
+// function deliberately speaks the old script's exact protocol (getAll,
+// getAllInitiatives, and the three POST bodies), so every call site below is
+// unchanged. Data lives in public.goals; see supabase/functions/monthly-goals.
+const MONTHLY_GOALS_URL = `${_BASE}/monthly-goals`;
 
 function _mgbYearMonth(date) {
     const d = date || new Date();
@@ -9151,10 +9196,7 @@ window.toggleGoalsPanel = function(event) {
     const toggle = document.querySelector('.gi-nav-toggle');
     if (toggle) toggle.classList.toggle('panel-active', isOpen);
     if (!isOpen) _closePrevMonths();
-    if (isOpen) {
-        document.getElementById('checklistSidePanel')?.classList.remove('open');
-        document.querySelector('.cl-nav-toggle')?.classList.remove('panel-active');
-    }
+    if (isOpen) _closeSidePanels('goalsSidePanel');
 };
 
 // --- Edit Modal ---
@@ -11520,6 +11562,9 @@ async function ackClaim(id) {
         if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
         const seen = _seenAgingClaims(); seen.delete(id); _saveSeenAgingClaims(seen);
         fetchMyClaims();
+        // Re-run the aging check now rather than leaving the alert up until the next
+        // 10-minute poll — the manager just did the work, so the nag should go with it.
+        if (typeof checkAgingClaims === 'function') checkAgingClaims();
     } catch (e) {
         alert('Could not update: ' + e.message);
     }
@@ -11547,6 +11592,9 @@ async function saveEscalation(id) {
         if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
         const seen = _seenAgingClaims(); seen.delete(id); _saveSeenAgingClaims(seen);
         fetchMyClaims();
+        // Re-run the aging check now rather than leaving the alert up until the next
+        // 10-minute poll — the manager just did the work, so the nag should go with it.
+        if (typeof checkAgingClaims === 'function') checkAgingClaims();
     } catch (e) {
         alert('Could not save: ' + e.message);
     }
@@ -11557,7 +11605,25 @@ async function saveEscalation(id) {
 // =========================================================
 const _CLAIMS_OVERSIGHT_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 let _oversightAll = [];
+let _oversightReminders = [];
 let _ovStore = '', _ovStatus = ''; // oversight "All claims" filters
+
+// A reminder is a nudge, not a nag: once sent, that store's button locks until the
+// manager acknowledges it or the cooldown lapses. Without this a DM could stack up
+// reminders faster than anyone could act on them.
+const CLAIM_REMINDER_COOLDOWN_DAYS = 3;
+
+// Newest UNACKNOWLEDGED reminder for a store that's still inside the cooldown, or
+// null. Acknowledging (the manager hit "Review claims") frees the button early.
+function _claimReminderLock(store) {
+    const s = String(store || '').toUpperCase();
+    const cutoff = Date.now() - CLAIM_REMINDER_COOLDOWN_DAYS * 86400000;
+    return _oversightReminders
+        .filter(r => String(r.store || '').toUpperCase() === s
+            && !r.acknowledged_at
+            && new Date(r.created_at).getTime() > cutoff)
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0] || null;
+}
 
 function openClaimsOversight() {
     toggleModal('claimsOversightModal');
@@ -11573,6 +11639,13 @@ async function fetchAllClaims() {
         const json = await res.json();
         if (!json.success) throw new Error(json.error);
         _oversightAll = json.data || [];
+        // Drives the per-store reminder cooldown. Non-fatal: if it fails the buttons
+        // simply stay unlocked rather than blocking the whole oversight view.
+        try {
+            const rr = await fetch(`${CLAIMS_URL}?reminders=1&stores=${_CLAIMS_OVERSIGHT_STORES.join(',')}&v=${Date.now()}`);
+            const rj = await rr.json();
+            _oversightReminders = rj.success ? (rj.data || []) : [];
+        } catch (_) { _oversightReminders = []; }
         renderClaimsOversight();
     } catch (e) {
         body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load claims.</div>';
@@ -11649,9 +11722,22 @@ function renderClaimsOversight() {
         // A reminder is only warranted for claims over 7 days that haven't been
         // reviewed or escalated to a claim — i.e. the store's aging count. If a
         // store is caught up (or only has fresh/reviewed claims), no button.
-        const ping = d.aging
-            ? `<button onclick="pingStoreClaims('${s}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:5px 11px; cursor:pointer; background:#eff6ff; border:1.5px solid #bfdbfe; color:#1d4ed8;">🔔 Send reminder</button>`
-            : `<span style="color:#cbd5e1; font-size:11px;">—</span>`;
+        // Already reminded and still inside the cooldown → show when it unlocks
+        // instead of the button, so the DM can see the nudge landed and isn't
+        // left wondering whether the click registered.
+        const lock = d.aging ? _claimReminderLock(s) : null;
+        let ping;
+        if (!d.aging) {
+            ping = `<span style="color:#cbd5e1; font-size:11px;">—</span>`;
+        } else if (lock) {
+            const sentDays = Math.floor((Date.now() - new Date(lock.created_at).getTime()) / 86400000);
+            const backIn = Math.max(1, CLAIM_REMINDER_COOLDOWN_DAYS - sentDays);
+            const sentTxt = sentDays === 0 ? 'today' : sentDays === 1 ? 'yesterday' : `${sentDays}d ago`;
+            ping = `<span title="Reminder sent ${sentTxt} and not yet reviewed. You can send another in ${backIn} day${backIn === 1 ? '' : 's'}, or sooner if the manager reviews it."
+                style="display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:800; color:#94a3b8; background:#f8fafc; border:1.5px solid #e2e8f0; border-radius:7px; padding:5px 11px; cursor:default;">🔔 Reminded ${sentTxt}</span>`;
+        } else {
+            ping = `<button onclick="pingStoreClaims('${s}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:5px 11px; cursor:pointer; background:#eff6ff; border:1.5px solid #bfdbfe; color:#1d4ed8;">🔔 Send reminder</button>`;
+        }
         html += `<tr>
             ${td(`<span style="font-weight:800; color:var(--slate-charcoal);">${s}</span>`)}
             ${td(`<span style="font-weight:700;">${d.open}</span>`)}
@@ -11763,6 +11849,15 @@ async function pingStoreClaims(store) {
         alert(`${store} has no claims over 7 days awaiting review — nothing to remind about.`);
         return;
     }
+    // Belt-and-braces: the button is already hidden during the cooldown, but a stale
+    // render (or a second tab) shouldn't be able to stack reminders.
+    const lock = _claimReminderLock(store);
+    if (lock) {
+        const backIn = Math.max(1, CLAIM_REMINDER_COOLDOWN_DAYS
+            - Math.floor((Date.now() - new Date(lock.created_at).getTime()) / 86400000));
+        alert(`${store} was already reminded and hasn't reviewed yet.\n\nYou can send another in ${backIn} day${backIn === 1 ? '' : 's'}, or as soon as they review it.`);
+        return;
+    }
     if (!confirm(`Send ${store} a reminder to review ${aging.length} claim${aging.length === 1 ? '' : 's'} open over 7 days without a review?`)) return;
     // Message is generic — the manager's popup computes the live over-7-day count.
     try {
@@ -11777,6 +11872,7 @@ async function pingStoreClaims(store) {
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
         alert(`Reminder sent to ${store}.`);
+        fetchAllClaims(); // re-read reminders so the button flips to its locked state
     } catch (e) {
         alert('Could not send the reminder: ' + (e.message || e));
     }
@@ -11790,7 +11886,11 @@ async function updateClaimStatus(id, status) {
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Update failed');
+        // Resolving is the other way a claim leaves the aging set — clear the alert
+        // straight away instead of waiting on the 10-minute poll.
+        const seen = _seenAgingClaims(); seen.delete(id); _saveSeenAgingClaims(seen);
         fetchMyClaims();
+        if (typeof checkAgingClaims === 'function') checkAgingClaims();
     } catch (e) {
         alert('Could not update status: ' + e.message);
         fetchMyClaims();
@@ -11877,17 +11977,38 @@ function _isClaimAging(r) {
     return !isNaN(t) && t < Date.now() - CLAIM_AGE_DAYS * 86400000;
 }
 
+// Both claim suppression lists are per-USER, not per-browser. Without the name in
+// the key, one account's dismissal silences the alert for whoever logs in next on
+// the same machine — a shared store computer, or a sign-out/sign-in into a
+// different role, would land on an already-"seen" id set and render nothing.
+function _seenAgingKey() {
+    const u = (sessionStorage.getItem('speeksUserName') || 'anon').trim().toLowerCase();
+    return 'speeksSeenAgingClaims_' + u;
+}
 function _seenAgingClaims() {
-    try { return new Set(JSON.parse(sessionStorage.getItem('speeksSeenAgingClaims') || '[]')); }
+    try { return new Set(JSON.parse(sessionStorage.getItem(_seenAgingKey()) || '[]')); }
     catch (e) { return new Set(); }
 }
 function _saveSeenAgingClaims(keys) {
-    sessionStorage.setItem('speeksSeenAgingClaims', JSON.stringify([...keys]));
+    sessionStorage.setItem(_seenAgingKey(), JSON.stringify([...keys]));
 }
 
 // True while a DM/CEO-pushed reminder currently owns the shared red bubble, so the
 // generic aging alert won't overwrite it (avoids the login flicker of two firing).
 let _reminderBubbleActive = false;
+// Mark reminders read locally + server-side. Shared by the ✕ / "Review claims"
+// button and by the silent ack when a reminder turns out to have nothing overdue.
+function _ackClaimReminders(ids) {
+    if (!ids || !ids.length) return;
+    const acked = _ackedReminders();
+    ids.forEach(id => acked.add(id));
+    _saveAckedReminders(acked);
+    fetch(CLAIMS_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'ack_reminder', ids, by: sessionStorage.getItem('speeksUserName') || null }),
+    }).catch(() => { /* local copy still suppresses it on this device */ });
+}
+
 window.closeClaimAlertBubble = function () {
     const b = document.getElementById('claimAlertBubble');
     if (b) b.style.display = 'none';
@@ -11900,13 +12021,7 @@ window.closeClaimAlertBubble = function () {
     if (_shownReminderIds.length) {
         const ids = _shownReminderIds.slice();
         _shownReminderIds = [];
-        const acked = _ackedReminders();
-        ids.forEach(id => acked.add(id));
-        _saveAckedReminders(acked);
-        fetch(CLAIMS_URL, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'ack_reminder', ids, by: sessionStorage.getItem('speeksUserName') || null }),
-        }).catch(() => { /* local copy still suppresses it on this device */ });
+        _ackClaimReminders(ids);
     }
 };
 
@@ -11916,14 +12031,18 @@ window.closeClaimAlertBubble = function () {
 // which is wiped on every new browser session, so each fresh login re-fired an
 // already-handled reminder — the "popup keeps coming back after opening the
 // claims" bug.)
+function _ackedRemindersKey() {
+    const u = (sessionStorage.getItem('speeksUserName') || 'anon').trim().toLowerCase();
+    return 'speeksReadClaimReminders_' + u;
+}
 function _ackedReminders() {
-    try { return new Set(JSON.parse(localStorage.getItem('speeksReadClaimReminders') || '[]')); }
+    try { return new Set(JSON.parse(localStorage.getItem(_ackedRemindersKey()) || '[]')); }
     catch (e) { return new Set(); }
 }
 function _saveAckedReminders(keys) {
     // The API only ever returns the last 20 reminders, so keep the read list
     // bounded rather than letting it grow forever.
-    localStorage.setItem('speeksReadClaimReminders', JSON.stringify([...keys].slice(-200)));
+    localStorage.setItem(_ackedRemindersKey(), JSON.stringify([...keys].slice(-200)));
 }
 let _shownReminderIds = []; // reminder ids the on-screen bubble covers, acked together on close
 
@@ -11945,7 +12064,7 @@ async function checkClaimReminders() {
 
         // Compute the manager's CURRENT open / over-7-day counts so the reminder
         // reflects what actually still needs review (not a stale number).
-        let openCount = 0, agingCount = 0, agingINRCount = 0;
+        let openCount = 0, agingCount = 0, agingINRCount = 0, breakdown = '';
         try {
             const cRes = await fetch(`${CLAIMS_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
             const cj = await cRes.json();
@@ -11956,22 +12075,39 @@ async function checkClaimReminders() {
                 const agingRows = op.filter(_isClaimAging);
                 agingCount = agingRows.length;
                 agingINRCount = agingRows.filter(_isINRTicket).length;
+                // Same reasoning as the aging alert: a Multi-Store Manager's reminder
+                // spans both stores, so a bare total doesn't say where to look.
+                if (stores.length > 1) {
+                    const byStore = {};
+                    agingRows.forEach(r => { const s = (r.store || '?').toUpperCase(); byStore[s] = (byStore[s] || 0) + 1; });
+                    breakdown = Object.keys(byStore).sort().map(s => `${s} ${byStore[s]}`).join(' · ');
+                }
             }
         } catch (e) { /* counts stay 0 */ }
+        // Nothing is actually overdue, so there is nothing to act on. The feed is a
+        // list of work, and this row is styled as a red "Insurance claims aging"
+        // deadline — showing "you're all caught up" under that badge contradicts
+        // itself and can only be snoozed, never cleared. The DM's nudge was to get
+        // overdue claims reviewed; with none overdue it's already satisfied, so ack
+        // it silently instead of parking a no-op in the feed. (The DM still has
+        // their own oversight view of every store.)
+        if (!agingCount) { _ackClaimReminders(fresh.map(r => r.id)); return; }
+
         // Remember which reminders this bubble represents; closing it marks them
         // all read (newest supersedes any older unread ones it stacks over).
         _shownReminderIds = fresh.map(r => r.id);
-        _showClaimReminder(fresh[0], openCount, agingCount, agingINRCount);
+        _showClaimReminder(fresh[0], openCount, agingCount, agingINRCount, breakdown);
     } catch (e) { /* silent */ }
 }
 
-function _showClaimReminder(rem, openCount, agingCount, agingINRCount = 0) {
+function _showClaimReminder(rem, openCount, agingCount, agingINRCount = 0, breakdown = '') {
     const from = rem.from_name ? escapeHtml(rem.from_name) : 'Leadership';
     let body;
     if (agingCount) {
         body = (agingCount === 1
             ? '1 claim has been open over 7 days. Please review it.'
             : `${agingCount} claims have been open over 7 days. Please review them.`)
+            + (breakdown ? ` <b>${escapeHtml(breakdown)}</b>` : '')
             + _inrGuidanceHtml(agingINRCount);
     } else if (openCount) {
         body = "You're all caught up on aging claims.";
@@ -11979,7 +12115,18 @@ function _showClaimReminder(rem, openCount, agingCount, agingINRCount = 0) {
         body = 'All your claims are resolved — nice work!';
     }
     _reminderBubbleActive = true; // claims the shared bubble so the aging alert won't clobber it
-    _renderClaimBubble('🛟', `${from} — Claims Review`, body);
+    // With a breakdown the full sentence would run past the feed's ~100-char cap and
+    // clip exactly the store split the MSM needs, so lead with counts + stores and
+    // demote the INR flag to a short tag (matches _showClaimAlert).
+    const summary = agingCount
+        ? `${from}: ` + (breakdown
+            ? `${agingCount} open over 7 days · ${breakdown}` + (agingINRCount ? ` · ${agingINRCount} Item Not Received` : '')
+            : _claimFeedSummary(agingCount, agingINRCount))
+        : `${from}: ` + (openCount ? 'all caught up on aging claims.' : 'all your claims are resolved.');
+    // Keyed to the actual reminder id(s): every new push is a new escalation and
+    // gets past any snooze the manager already had in place.
+    _renderClaimBubble('🛟', `${from} — Claims Review`, body, summary,
+        'rem:' + (_shownReminderIds.length ? _shownReminderIds.join(',') : (rem && rem.id) || ''));
 }
 
 let _claimAlertPollStarted = false;
@@ -12004,7 +12151,20 @@ async function checkAgingClaims() {
         const data = json.data || [];
         const sup = new Set(data.filter(r => r.parent_id).map(r => r.parent_id)); // exclude escalated INRs
         const aging = data.filter(r => !sup.has(r.id) && _isClaimAging(r));
-        if (!aging.length) return;
+        if (!aging.length) {
+            // Nothing is aging any more (reviewed via "Still in progress", resolved,
+            // or escalated). This used to just `return`, leaving a stale "claims are
+            // aging" bubble — and therefore a stale feed row — on screen for the rest
+            // of the session after the manager had already done the work. Clear it so
+            // the row actually disappears, as the Snooze tooltip promises.
+            const b = document.getElementById('claimAlertBubble');
+            if (b && getComputedStyle(b).display !== 'none') {
+                b.style.display = 'none';
+                _reminderBubbleActive = false; // any DM reminder it showed is moot now
+                if (typeof _positionClaimAlert === 'function') _positionClaimAlert(); // re-flow the stack
+            }
+            return;
+        }
 
         // A DM/CEO reminder already owns the bubble — don't clobber it (it already
         // conveys the aging count). The aging alert can show once that's dismissed.
@@ -12018,9 +12178,83 @@ async function checkAgingClaims() {
         aging.forEach(r => seen.add(r.id));
         _saveSeenAgingClaims(seen);
 
-        _showClaimAlert(aging.length, aging.filter(_isINRTicket).length);
+        // A Multi-Store Manager covers two stores at once, so "2 claims are aging"
+        // doesn't tell them where to look. Break it down by store whenever the
+        // user's claim scope spans more than one; single-store managers are
+        // unaffected and keep the plain wording.
+        const byStore = {};
+        aging.forEach(r => { const s = (r.store || '?').toUpperCase(); byStore[s] = (byStore[s] || 0) + 1; });
+        const breakdown = stores.length > 1
+            ? Object.keys(byStore).sort().map(s => `${s} ${byStore[s]}`).join(' · ')
+            : '';
+        _showClaimAlert(aging.length, aging.filter(_isINRTicket).length, breakdown);
     } catch (e) {
         console.error('Aging claim check failed:', e);
+    }
+}
+
+// --- DM: claims aging ACROSS ALL STORES -------------------------------------
+// The manager-side check is store-scoped, and _claimStores() returns [] for a DM
+// (their store is ALL), so they were never told about overdue claims anywhere.
+// This is the district view: one row covering every store, with the per-store
+// breakdown, mirroring the oversight modal's all-stores fetch (no stores param).
+// CEO is deliberately excluded — they keep tool access without the notifications.
+let _dmClaimAlertPollStarted = false;
+async function checkAgingClaimsDM() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (role !== 'district manager') return;
+
+    if (!_dmClaimAlertPollStarted) {
+        _dmClaimAlertPollStarted = true;
+        setInterval(checkAgingClaimsDM, 10 * 60 * 1000);
+    }
+
+    try {
+        const res = await fetch(`${CLAIMS_URL}?v=${Date.now()}`);   // no stores param → every store
+        const json = await res.json();
+        if (!json.success) return;
+        const data = json.data || [];
+        // An INR ticket escalated to a loss claim is no longer open itself — the
+        // child claim is. Same exclusion the oversight table uses.
+        const sup = new Set(data.filter(r => r.parent_id).map(r => r.parent_id));
+        const aging = data.filter(r => !sup.has(r.id) && _isClaimAging(r));
+        if (!aging.length) {
+            // Nothing is aging any more (reviewed via "Still in progress", resolved,
+            // or escalated). This used to just `return`, leaving a stale "claims are
+            // aging" bubble — and therefore a stale feed row — on screen for the rest
+            // of the session after the manager had already done the work. Clear it so
+            // the row actually disappears, as the Snooze tooltip promises.
+            const b = document.getElementById('claimAlertBubble');
+            if (b && getComputedStyle(b).display !== 'none') {
+                b.style.display = 'none';
+                _reminderBubbleActive = false; // any DM reminder it showed is moot now
+                if (typeof _positionClaimAlert === 'function') _positionClaimAlert(); // re-flow the stack
+            }
+            return;
+        }
+
+        // Same once-per-session rule as the manager alert.
+        const seen = _seenAgingClaims();
+        if (!aging.some(r => !seen.has(r.id))) return;
+        aging.forEach(r => seen.add(r.id));
+        _saveSeenAgingClaims(seen);
+
+        const byStore = {};
+        aging.forEach(r => { const s = (r.store || '?').toUpperCase(); byStore[s] = (byStore[s] || 0) + 1; });
+        const stores = Object.keys(byStore).sort();
+        const breakdown = stores.map(s => `${s} ${byStore[s]}`).join(' · ');
+        const inrCount = aging.filter(_isINRTicket).length;
+
+        const head = aging.length === 1
+            ? '1 claim has been open over 7 days.'
+            : `${aging.length} claims have been open over 7 days.`;
+        const body = `${head} Across ${stores.length === 1 ? '1 store' : stores.length + ' stores'} — ${breakdown}.`
+            + _inrGuidanceHtml(inrCount);
+
+        const summary = `${aging.length} open over 7 days · ${breakdown}`;
+        _renderClaimBubble('⚠️', 'Claims Review — District', body, summary);
+    } catch (e) {
+        console.error('DM aging claim check failed:', e);
     }
 }
 
@@ -12041,11 +12275,24 @@ function _positionClaimAlert() {
 // highlights the actual aging case(s) in red. A button jumps straight there.
 // Shared red-bubble renderer (same size/format as the green store-comment bubble:
 // emoji in the icon slot, title + body in the text slot), with a Review button.
-function _renderClaimBubble(icon, titleHtml, bodyHtml) {
+// `summary` is the compact one-liner the Action Menu feed shows (see
+// _samGatherReminders). The bubble keeps the full instructional copy; the feed
+// gets a short version instead of a truncated scrape of it.
+function _renderClaimBubble(icon, titleHtml, bodyHtml, summary, sig) {
     const bubble = document.getElementById('claimAlertBubble');
     const textEl = document.getElementById('claimAlertBubbleText');
     const iconEl = document.getElementById('claimAlertBubbleIcon');
     if (!bubble || !textEl) return;
+    if (summary) textEl.dataset.summary = summary;
+    else delete textEl.dataset.summary;
+    // Optional snooze IDENTITY, separate from the displayed text. A DM-pushed
+    // reminder is a deliberate escalation, so it must break through an existing
+    // snooze even when its wording happens to match what was snoozed (same DM,
+    // same counts, sent again after the manager acked the previous one). Without
+    // this the second nudge would be silently swallowed. Falls back to the
+    // summary, which is the right behaviour for the generic aging alert.
+    if (sig) textEl.dataset.sig = sig;
+    else delete textEl.dataset.sig;
     if (iconEl) { iconEl.textContent = icon; iconEl.style.display = ''; }
     textEl.style.display = 'flex';
     textEl.style.flexDirection = 'column';
@@ -12076,17 +12323,82 @@ function _inrGuidanceHtml(inrCount) {
     return `<div style="line-height:1.4; opacity:0.96; margin-top:2px;">That includes ${noun} — check tracking first: if it's since been delivered, call eBay for the refund and mark it <b>Recovered</b>. If it's still lost, open a claim on the ticket.</div>`;
 }
 
-function _showClaimAlert(count, inrCount = 0) {
+function _showClaimAlert(count, inrCount = 0, breakdown = '') {
     const body = (count === 1
         ? '1 claim has been open over 7 days. Please review it.'
         : `${count} claims have been open over 7 days. Please review them.`)
+        + (breakdown ? ` <b>${escapeHtml(breakdown)}</b>` : '')
         + _inrGuidanceHtml(inrCount);
-    _renderClaimBubble('⚠️', 'Claims Review', body);
+    // With a per-store breakdown the full sentence runs close to the feed's
+    // 100-char cap, and the breakdown is last — so an overflow would cut exactly
+    // the store info a multi-store manager needs. Lead with counts + stores and
+    // demote the INR flag to a short tag; the guidance is in the tool anyway.
+    const summary = breakdown
+        ? `${count} open over 7 days · ${breakdown}` + (inrCount ? ` · ${inrCount} Item Not Received` : '')
+        : _claimFeedSummary(count, inrCount);
+    _renderClaimBubble('⚠️', 'Claims Review', body, summary);
+}
+
+// One line for the feed: the counts, and a flag that some are Item Not Received.
+// The full "check tracking first…" guidance stays in the claims tool, which is
+// where the row's click takes you anyway.
+function _claimFeedSummary(count, inrCount) {
+    const base = count === 1 ? '1 claim open over 7 days' : `${count} claims open over 7 days`;
+    if (!inrCount) return base + '.';
+    return `${base}, including ${inrCount === 1 ? '1 Item Not Received' : inrCount + ' Item Not Received'} — check tracking first.`;
 }
 
 // Console preview of the red aging-claim bubble (no need to wait 7 days):
 // open DevTools → console and run:  _previewClaimAlert()
 window._previewClaimAlert = function () { _showClaimAlert(2, 1); };
+
+// Console diagnostic for "why is there no claim row in the feed?". Walks the whole
+// chain in order and reports the first link that would suppress it, so a silent
+// alert can be traced without guessing. Run:  _dbgClaims()
+window._dbgClaims = async function () {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
+    const stores = _claimStores();
+    const out = {
+        buildVersion: (document.querySelector('script[src*="speeks.js"]') || {}).src || '?',
+        user: sessionStorage.getItem('speeksUserName'),
+        role, isMSM: isMultiStoreManager(), stores,
+        roleAllowed: _CLAIM_ALERT_ROLES.has(role),
+    };
+    if (!out.roleAllowed) { out.VERDICT = 'BLOCKED: role not in _CLAIM_ALERT_ROLES'; console.table(out); return out; }
+    if (!stores.length) { out.VERDICT = 'BLOCKED: no store scope'; console.table(out); return out; }
+
+    const q = `stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`;
+    try {
+        const rj = await (await fetch(`${CLAIMS_URL}?reminders=1&${q}`)).json();
+        const acked = _ackedReminders();
+        out.remindersFromApi = (rj.data || []).length;
+        out.remindersFresh = (rj.data || []).filter(r => !acked.has(r.id)).length;
+        out.ackedKey = _ackedRemindersKey();
+
+        const cj = await (await fetch(`${CLAIMS_URL}?${q}`)).json();
+        const sup = new Set((cj.data || []).filter(r => r.parent_id).map(r => r.parent_id));
+        const aging = (cj.data || []).filter(r => !sup.has(r.id) && _isClaimAging(r));
+        const seen = _seenAgingClaims();
+        out.agingCount = aging.length;
+        out.agingUnseen = aging.filter(r => !seen.has(r.id)).length;
+        out.seenKey = _seenAgingKey();
+    } catch (e) { out.VERDICT = 'BLOCKED: fetch failed (ad blocker?) — ' + e.message; console.table(out); return out; }
+
+    const el = document.getElementById('claimAlertBubble');
+    out.bubbleDisplay = el ? getComputedStyle(el).display : 'MISSING';
+    out.feedSummary = (document.getElementById('claimAlertBubbleText') || {}).dataset?.summary || '(none)';
+    out.dismissedToday = Object.keys(_samGetDismissedRem()).join(', ') || '(none)';
+    out.claimsInFeed = _samGatherReminders().some(r => r.key === 'claims');
+    out.reminderOwnsBubble = _reminderBubbleActive;
+
+    out.VERDICT = out.bubbleDisplay === 'flex'
+        ? (out.claimsInFeed ? 'Bubble is live — row IS in the feed' : 'Bubble is live but snoozed at this exact wording')
+        : (out.remindersFresh === 0 && out.agingUnseen === 0
+            ? 'BLOCKED: everything already acked/seen for this user'
+            : 'BLOCKED: checks have not run yet or errored — reload and wait ~2s');
+    console.table(out);
+    return out;
+};
 
 // --- STORE COMMENTS LOGIC ---
 
@@ -12340,16 +12652,68 @@ window.closeDailyCommentBubble = function() {
         const user = sessionStorage.getItem('speeksUserName') || null;
         const ids = _shownCommentIds.slice();
         _shownCommentIds = [];
+        ids.forEach(_addLocalNoteRead);   // survive a re-fetch before the POST lands
         postWrite(STORE_COMMENT_URL, { type: 'mark_read', commentIds: ids, user })
             .catch(err => console.warn('comment mark_read failed:', err.message));
     }
 };
 
+// Local read-cache for store comments, mirroring speeksLocalRead_ for announcements.
+// Marking a comment read is a fire-and-forget POST; until the server has recorded
+// it, every re-fetch (the 30s poll, a new announcement landing, a page change)
+// returns readByMe:false and the comment springs back as unread. Announcements,
+// reminders and patch notes all already keep a local copy of the read — comments
+// were the one type that trusted the round-trip. Entries are dropped once the
+// server confirms, so this never masks a genuinely-unread comment.
+// Which stores' comments belong to this user. A Multi-Store Manager covers both
+// their stores at once — the checklist, audit and listing-goals widgets all
+// already fan out over MULTISTORE_MANAGER_STORES, but comments were still
+// matching the single active store, so an MSM sitting on BAL could not see MPL's
+// comments at all (and vice versa) no matter which dashboard they switched to.
+function _commentStoresForUser() {
+    try {
+        if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+            return MULTISTORE_MANAGER_STORES.map(s => String(s).toUpperCase());
+        }
+    } catch (_) {}
+    // NO 'OVL' fallback here. Everywhere else in the app that default is harmless
+    // (it picks which store you're acting on, and by then the store is known), but
+    // this decides which store's comments you're allowed to SEE. During sign-in
+    // there's a window where speeksUnlocked is set before speeksUserStore is, and
+    // a poll landing in that window served OVL's comments to whoever was logging
+    // in — they flashed up and vanished on the next poll once the store resolved.
+    // Unknown store means show nothing, never someone else's store.
+    const s = String(sessionStorage.getItem('speeksUserStore') || '').trim().toUpperCase();
+    return s ? [s] : [];
+}
+
+function _noteReadKey() {
+    const u = (sessionStorage.getItem('speeksUserName') || 'anon').trim().toLowerCase();
+    return 'speeksLocalNoteRead_' + u;
+}
+function _getLocalNoteReads() {
+    try { return new Set(JSON.parse(localStorage.getItem(_noteReadKey()) || '[]')); } catch (_) { return new Set(); }
+}
+function _addLocalNoteRead(id) {
+    if (!id) return;
+    const s = _getLocalNoteReads();
+    s.add(String(id));
+    try { localStorage.setItem(_noteReadKey(), JSON.stringify([...s])); } catch (_) {}
+}
+
 async function fetchAndDisplayStoreComment() {
     // TOM works out of a store but isn't part of its team, so store comments
     // aren't meant for them.
     if ((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'tom') return;
-    const userStore = String(sessionStorage.getItem('speeksUserStore') || 'OVL').trim().toUpperCase();
+    const userStore = String(sessionStorage.getItem('speeksUserStore') || '').trim().toUpperCase();
+    // Set, not a single value — an MSM matches both of their stores at once, so the
+    // same comments show on either dashboard rather than following the switcher.
+    const myStores = new Set(_commentStoresForUser());
+    // Store not resolved yet (mid sign-in): bail rather than fall back to a real
+    // store. ALL/CORP comments are withheld for one poll too, which is the right
+    // trade — they arrive a few seconds later instead of leaking another store's.
+    if (!myStores.size) return;
+    const isMyStore = cStore => myStores.has(cStore) || cStore === 'ALL' || cStore === 'CORP';
     const userName = String(sessionStorage.getItem('speeksUserName') || '').trim();
     const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
 
@@ -12358,6 +12722,29 @@ async function fetchAndDisplayStoreComment() {
         // read (X) permanently suppresses the message across sign-outs.
         const res = await fetch(`${STORE_COMMENT_URL}?reader=${encodeURIComponent(userName)}&v=${Date.now()}`);
         const comments = await res.json();
+
+        // A comment is read if the server says so OR we recorded it locally and the
+        // server hasn't caught up yet. Once the server confirms, drop the local copy
+        // so the cache can't grow without bound or outlive the record it shadows.
+        const localReads = _getLocalNoteReads();
+        let localDirty = false;
+        comments.forEach(c => {
+            if (c.readByMe && localReads.delete(String(c.id))) localDirty = true;
+        });
+        if (localDirty) { try { localStorage.setItem(_noteReadKey(), JSON.stringify([...localReads])); } catch (_) {} }
+        const isNoteRead = c => !!c.readByMe || localReads.has(String(c.id));
+
+        // Persistent hub archive: every comment for this store, any date, newest
+        // first. Store comments no longer expire at midnight — they live in the
+        // announcements hub. (The transient bubble + dashboard stay today-only.)
+        const forMeComments = comments.filter(c => {
+            const cStore = String(c.store || '').trim().toUpperCase();
+            return isMyStore(cStore);
+        }).reverse();
+        window._hubStoreNotes = forMeComments.map(c => ({
+            author: c.author, text: c.message || c.text || '', date: c.date, store: c.store, id: c.id, read: isNoteRead(c)
+        }));
+        try { if (typeof renderHubFeed === 'function') renderHubFeed(); } catch (_) {}
 
         const todayComments = comments.filter(c => {
             const cStore = String(c.store || '').trim().toUpperCase();
@@ -12372,15 +12759,23 @@ async function fetchAndDisplayStoreComment() {
             } catch(e) {}
 
             const isToday = (parsedDateStr === todayStr || rawDateStr.includes(todayStr));
-            const isForMe = (cStore === userStore || cStore === 'ALL' || cStore === 'CORP');
+            const isForMe = isMyStore(cStore);
 
             return isToday && isForMe;
         }).reverse(); // Newest first
 
+        // Surface today's store notes in the Action Menu feed. Exclude ones the
+        // user already marked read (readByMe, from the server) so a dismissed note
+        // doesn't reappear on the next sign-in — same rule the bubble uses.
+        window._samStoreNotes = todayComments.filter(c => !isNoteRead(c)).map(c => ({
+            author: c.author, text: c.message || c.text || '', date: c.date, store: c.store, id: c.id
+        }));
+        try { if (typeof renderActionFeed === 'function') renderActionFeed(); } catch (e) { console.warn('Action Menu feed failed:', e); }
+
         // Show only comments the user hasn't permanently dismissed (readByMe, from
         // the server) and hasn't already seen this session.
         const seenKeys = _getSeenCommentKeys();
-        const newComments = todayComments.filter(c => !c.readByMe && !seenKeys.has(_commentKey(c)));
+        const newComments = todayComments.filter(c => !isNoteRead(c) && !seenKeys.has(_commentKey(c)));
         if (newComments.length === 0) return;
 
         // Remember which comments are on screen so the X (dismiss) can log a read.
@@ -12735,7 +13130,7 @@ function renderChecklist() {
         
         // Only allow deletion of personal items
         const deleteHtml = !item.isGlobal ? 
-            `<button class="cl-delete-btn" onclick="deleteChecklistItem('${item.id}')" title="Delete Task">✖</button>` : '';
+            `<button class="cl-delete-btn" onclick="deleteChecklistItem('${item.id}')" data-tip="Delete Task">✖</button>` : '';
 
         html += `
         <div class="cl-item ${completedClass}">
@@ -12866,7 +13261,7 @@ function renderChecklistMS() {
             items.forEach(item => {
                 const completedClass = item.checked ? 'completed' : '';
                 const deleteHtml = !item.isGlobal
-                    ? `<button class="cl-delete-btn" onclick="deleteChecklistItemMS('${store}','${item.id}')" title="Delete Task">✖</button>`
+                    ? `<button class="cl-delete-btn" onclick="deleteChecklistItemMS('${store}','${item.id}')" data-tip="Delete Task">✖</button>`
                     : '';
                 html += `
                 <div class="cl-item ${completedClass}">
@@ -12948,22 +13343,25 @@ function deleteChecklistItemMS(store, id) {
 
 // Combined nudge chip across both managed stores (based on the Daily list).
 function updateChecklistChipMS() {
-    const chip = document.getElementById('cl-progress-chip');
-    const btn = document.querySelector('.cl-nav-toggle');
-    if (!chip || !btn) return;
-
     const segs = [];
+    const samStores = [];
     let anyOutstanding = false, anyTasks = false;
     MULTISTORE_MANAGER_STORES.forEach(store => {
         const items = _dedupeGlobals((checklistDataCacheMS[store] || {}).daily || []);
         if (!items.length) return;
         anyTasks = true;
         const done = items.filter(i => i.checked).length;
+        samStores.push({ store, done, total: items.length });
         const ac = _msStoreAccent(store);
         const label = done === items.length ? `${store} ✓` : `${store} ${done}/${items.length}`;
         segs.push(`<span class="ms-chip-seg" style="background: ${ac.solid};">${label}</span>`);
         if (done < items.length) anyOutstanding = true;
     });
+    if (typeof samSetProgress === 'function') samSetProgress('cl', samStores.length ? { stores: samStores } : { done: 0, total: 0 });
+
+    const chip = document.getElementById('cl-progress-chip');
+    const btn = document.querySelector('.cl-nav-toggle');
+    if (!chip || !btn) return;
 
     if (!anyTasks) { chip.textContent = ''; chip.classList.remove('ms-chip'); }
     else { chip.classList.add('ms-chip'); chip.innerHTML = segs.join(''); }
@@ -13076,19 +13474,21 @@ function clearChecklistTab() {
 
 // --- CHECKLIST NUDGE HELPERS ---
 function updateChecklistChip() {
+    const dailyItems = checklistDataCache['daily'] || [];
+    const total = dailyItems.length;
+    const done = dailyItems.filter(i => i.checked).length;
+    if (typeof samSetProgress === 'function') samSetProgress('cl', { done, total });
+
     const chip = document.getElementById('cl-progress-chip');
     const btn = document.querySelector('.cl-nav-toggle');
     if (!chip || !btn) return;
 
-    const dailyItems = checklistDataCache['daily'] || [];
-    const total = dailyItems.length;
     if (total === 0) {
         chip.textContent = '';
         btn.classList.remove('cl-needs-attention');
         return;
     }
 
-    const done = dailyItems.filter(i => i.checked).length;
     chip.textContent = done === total ? '✓ All done' : `${done}/${total} done`;
 
     const panel = document.getElementById('checklistSidePanel');
@@ -13171,12 +13571,7 @@ window.toggleChecklistPanel = function(event) {
         if (isOpen) toggle.classList.remove('cl-needs-attention');
     }
     if (isOpen) {
-        document.getElementById('goalsSidePanel')?.classList.remove('open');
-        document.querySelector('.gi-nav-toggle')?.classList.remove('panel-active');
-        document.getElementById('auditSidePanel')?.classList.remove('open');
-        document.querySelector('.audit-nav-toggle')?.classList.remove('panel-active');
-        _stopAuditSync?.();
-        _resetToCurrentMonth?.();
+        _closeSidePanels('checklistSidePanel');
         _startChecklistSync();
     } else {
         _stopChecklistSync();
@@ -13390,11 +13785,8 @@ function toggleAuditStateMS(store, id, isChecked) {
 }
 
 function updateAuditChipMS() {
-    const chip = document.getElementById('audit-progress-chip');
-    const btn = document.querySelector('.audit-nav-toggle');
-    if (!chip || !btn) return;
-
     const segs = [];
+    const samStores = [];
     let anyOutstanding = false, anyItems = false;
     MULTISTORE_MANAGER_STORES.forEach(store => {
         const daily = (auditDataCacheMS[store] || {}).daily || { items: [], total: 0, completed: 0 };
@@ -13402,11 +13794,17 @@ function updateAuditChipMS() {
         if (!total) return;
         anyItems = true;
         const done = (daily.completed != null) ? daily.completed : (daily.items || []).filter(i => i.checked).length;
+        samStores.push({ store, done, total });
         const ac = _msStoreAccent(store);
         const label = done === total ? `${store} ✓` : `${store} ${done}/${total}`;
         segs.push(`<span class="ms-chip-seg" style="background: ${ac.solid};">${label}</span>`);
         if (done < total) anyOutstanding = true;
     });
+    if (typeof samSetProgress === 'function') samSetProgress('audit', samStores.length ? { stores: samStores } : { done: 0, total: 0 });
+
+    const chip = document.getElementById('audit-progress-chip');
+    const btn = document.querySelector('.audit-nav-toggle');
+    if (!chip || !btn) return;
 
     if (!anyItems) { chip.textContent = ''; chip.classList.remove('ms-chip'); }
     else { chip.classList.add('ms-chip'); chip.innerHTML = segs.join(''); }
@@ -13436,19 +13834,21 @@ async function toggleAuditState(id, isChecked) {
 }
 
 function updateAuditChip() {
+    // Chip reflects the DAILY list (the everyday cadence).
+    const daily = _auditTab('daily');
+    const total = daily.total || (daily.items || []).length;
+    const done = (daily.completed != null) ? daily.completed : (daily.items || []).filter(i => i.checked).length;
+    if (typeof samSetProgress === 'function') samSetProgress('audit', { done, total });
+
     const chip = document.getElementById('audit-progress-chip');
     const btn = document.querySelector('.audit-nav-toggle');
     if (!chip || !btn) return;
 
-    // Chip reflects the DAILY list (the everyday cadence).
-    const daily = _auditTab('daily');
-    const total = daily.total || (daily.items || []).length;
     if (total === 0) {
         chip.textContent = '';
         btn.classList.remove('cl-needs-attention');
         return;
     }
-    const done = (daily.completed != null) ? daily.completed : (daily.items || []).filter(i => i.checked).length;
     chip.textContent = done === total ? '✓ All done' : `${done}/${total} today`;
 
     const panel = document.getElementById('auditSidePanel');
@@ -13521,11 +13921,7 @@ window.toggleAuditPanel = function(event) {
     }
     if (isOpen) {
         // mutually exclusive with the other side panels
-        document.getElementById('checklistSidePanel')?.classList.remove('open');
-        document.querySelector('.cl-nav-toggle')?.classList.remove('panel-active');
-        _stopChecklistSync?.();
-        document.getElementById('goalsSidePanel')?.classList.remove('open');
-        document.querySelector('.gi-nav-toggle')?.classList.remove('panel-active');
+        _closeSidePanels('auditSidePanel');
         _startAuditSync();
     } else {
         _stopAuditSync();
@@ -13548,7 +13944,7 @@ window.updateRoleLocks = function() {
         // Count how many people currently hold each role within this scope.
         const counts = {};
         scope.querySelectorAll('.role-dot.active').forEach(btn => {
-            const r = btn.innerText;
+            const r = _roleOf(btn);
             counts[r] = (counts[r] || 0) + 1;
         });
 
@@ -13558,7 +13954,7 @@ window.updateRoleLocks = function() {
                 if (!btn.hasAttribute('disabled')) { btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }
                 return;
             }
-            const role = btn.innerText;
+            const role = _roleOf(btn);
             const cap = ROLE_CAP[role] || 1;
             const isFull = (counts[role] || 0) >= cap;
             if (isFull) {
@@ -13627,7 +14023,7 @@ window.recomputeGoalDisplays = function() {
     goalsRoster.forEach((emp, idx) => {
         const group = document.getElementById(`roles-${idx}`);
         const activeBtn = group?.querySelector('.role-dot.active');
-        const role = activeBtn ? activeBtn.innerText : '-';
+        const role = _roleOf(activeBtn);
         const todayGoal = role !== '-' ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount) : 0;
 
         const disp = document.getElementById(`goal-display-${idx}`);
@@ -13724,16 +14120,20 @@ function buildPatchCardHTML(group, isLatest) {
 }
 
 async function loadPatchNotes() {
-    const listEl = document.getElementById('patchNotesList');
-    if (listEl) listEl.innerHTML = '<div class="pn-loading">Loading patch notes...</div>';
-
     try {
         const response = await fetch(`${PATCH_NOTES_URL}?v=${Date.now()}`);
         const data = await response.json();
-        renderPatchNotes(data);
-    } catch (e) {
-        if (listEl) listEl.innerHTML = '<div class="pn-loading">Failed to load patch notes.</div>';
-    }
+        window._hubPatchData = data;
+        // Opening the hub is NOT reading. This used to call markLatestPatchSeen(),
+        // which cleared the badge and the "New patch notes" row the instant the
+        // popup opened — so patch notes could never actually be read, only
+        // dismissed by walking past them. Record the latest version so the card can
+        // tell unread from history, and let the explicit Mark-as-read button do the
+        // marking (hubMarkPatchRead).
+        const _pg = (data && data.entries) ? buildPatchGroups(data.entries) : [];
+        if (_pg.length) _latestPatchKey = _pg[0].title + '|' + _pg[0].date;
+        renderHubFeed();
+    } catch (e) { /* leave existing hub content */ }
 }
 
 function renderPatchNotes(data) {
@@ -13749,24 +14149,30 @@ function renderPatchNotes(data) {
     const sorted = buildPatchGroups(entries);
     listEl.innerHTML = sorted.map((g, i) => buildPatchCardHTML(g, i === 0)).join('');
 
-    // User is now viewing the patch notes — mark latest version as seen
-    if (sorted.length > 0) {
-        _latestPatchKey = sorted[0].title + '|' + sorted[0].date;
-        const currentUser = sessionStorage.getItem('speeksUserName');
-        const cleanUser   = currentUser ? String(currentUser).trim().toLowerCase() : null;
-        if (cleanUser) {
-            localStorage.setItem('speeksPatchNotesSeen_'   + cleanUser, _latestPatchKey);
-            localStorage.removeItem('speeksUnseenPatchNotes_' + cleanUser);
-            // Persist read state server-side so it survives browser data clearing
-            fetch(PATCH_NOTES_URL, {
-                method: 'POST',
-                body: JSON.stringify({ action: 'markPatchRead', user: cleanUser, lastSeenKey: _latestPatchKey })
-            }).catch(() => {});
-        }
-        const pnBadge = document.getElementById('patchNotesBadge');
-        if (pnBadge) { pnBadge.style.display = 'none'; pnBadge.classList.remove('active'); }
-        updateMainBadge();
-    }
+    // Opening the hub used to mark the latest version read on the spot, so patch
+    // notes cleared themselves whether or not anyone read a word — the same
+    // "click it to skip it" problem that got Mark-all-as-read removed. Reading is
+    // now a deliberate act: hubMarkPatchRead() runs off an explicit button.
+    if (sorted.length > 0) _latestPatchKey = sorted[0].title + '|' + sorted[0].date;
+}
+
+// Explicit "Mark as read" for patch notes (button lives on the hub card).
+// Mirrors _samMarkAnnRead: record locally first so the read survives a failed or
+// slow POST, then tell the server, then re-render both feeds.
+function hubMarkPatchRead() {
+    const currentUser = sessionStorage.getItem('speeksUserName');
+    const cleanUser = currentUser ? String(currentUser).trim().toLowerCase() : null;
+    if (!cleanUser || !_latestPatchKey) return;
+    localStorage.setItem('speeksPatchNotesSeen_' + cleanUser, _latestPatchKey);
+    localStorage.removeItem('speeksUnseenPatchNotes_' + cleanUser);
+    try {
+        postWrite(PATCH_NOTES_URL, { action: 'markPatchRead', user: cleanUser, lastSeenKey: _latestPatchKey }).catch(() => {});
+    } catch (_) {}
+    const pnBadge = document.getElementById('patchNotesBadge');
+    if (pnBadge) { pnBadge.style.display = 'none'; pnBadge.classList.remove('active'); }
+    if (typeof updateMainBadge === 'function') updateMainBadge();
+    try { renderHubFeed(); } catch (_) {}
+    try { if (typeof renderActionFeed === 'function') renderActionFeed(); } catch (_) {}
 }
 
 function togglePatchNotes() {
@@ -15233,9 +15639,29 @@ function saveRecycleReply(id, btn) { _recycleAddThreadNote(id, 'mgr', `recycle-r
 // red bubble or the green store comment — they stack vertically instead.
 let _recycleRemindersStarted = false;
 
+// Roles that get the SUBMITTER-side recycle alert ("your request was reviewed").
+// ASMs can open the tool and file requests (see the tools-panel role list), so they
+// need to hear back about them — the check used to borrow Variance's manager set,
+// which has no ASM, leaving them able to submit but never told the outcome.
+const _RECYCLE_ALERT_ROLES = new Set(['manager', 'owner (manager)', 'owner manager', 'assistant manager']);
+
+// Alert seen-stamps are per-USER. Browser-global keys meant one person's alert
+// silenced the next login on a shared store computer — the same bug we hit twice
+// on claims. See the feed-suppression notes.
+function _recycleSeenKey(name) {
+    const u = (sessionStorage.getItem('speeksUserName') || 'anon').trim().toLowerCase();
+    return name + '_' + u;
+}
+
 async function checkRecycleReminders() {
     const isReviewer = _recycleCanReview();
-    if (!isReviewer && !_vrIsManager()) return;
+    const role = _vrRole();
+    // CEO is deliberately excluded: they keep full approve/deny authority inside the
+    // tool (_recycleCanReview still returns true for them, so the reviewer UI is
+    // unchanged) but receive no notifications — the same rule we applied to claims,
+    // access without the nagging. Only the DM is actually on the hook for reviews.
+    const wantsAlert = isReviewer ? role === 'district manager' : _RECYCLE_ALERT_ROLES.has(role);
+    if (!wantsAlert) return;
     const stores = _recycleStores();
     if (!stores.length) return;
     if (!_recycleRemindersStarted) {
@@ -15253,9 +15679,33 @@ async function checkRecycleReminders() {
             // new submissions (the old email flow's trigger), delete requests
             // awaiting approval, and manager replies to notes.
             const getT = v => (v ? new Date(v).getTime() : 0);
-            const sNew = Number(localStorage.getItem('speeksRecycleNewSeen') || 0);
-            const sDel = Number(localStorage.getItem('speeksRecycleDelSeen') || 0);
-            const sRep = Number(localStorage.getItem('speeksRecycleReplySeen') || 0);
+
+            // Is anything still WAITING on this reviewer? dm_seen_at is stamped
+            // server-side when they open the tool, mirroring manager_seen_at on the
+            // store side — so unlike the localStorage marks below (which are bumped
+            // the instant the alert renders, and therefore say nothing about whether
+            // the work got done) this reflects real outstanding work. Used only to
+            // decide whether a live alert should still be on screen.
+            const outstanding = r => {
+                const seen = getT(r.dm_seen_at);
+                return (!r.reviewed_at && getT(r.created_at) > seen)
+                    || getT(r.delete_requested_at) > seen
+                    || getT(r.mgr_reply_at) > seen;
+            };
+            if (!rows.some(outstanding)) {
+                // Queue is clear — drop the bubble so the feed row goes with it,
+                // rather than leaving a stale "N need your review" for the session.
+                const rb = document.getElementById('recycleAlertBubble');
+                if (rb && getComputedStyle(rb).display !== 'none') {
+                    rb.style.display = 'none';
+                    if (typeof _positionRecycleAlert === 'function') _positionRecycleAlert();
+                }
+                return;
+            }
+
+            const sNew = Number(localStorage.getItem(_recycleSeenKey('speeksRecycleNewSeen')) || 0);
+            const sDel = Number(localStorage.getItem(_recycleSeenKey('speeksRecycleDelSeen')) || 0);
+            const sRep = Number(localStorage.getItem(_recycleSeenKey('speeksRecycleReplySeen')) || 0);
 
             const freshNew = rows.filter(r => !r.reviewed_at && getT(r.created_at) > sNew);
             const freshDel = rows.filter(r => getT(r.delete_requested_at) > sDel);
@@ -15263,9 +15713,9 @@ async function checkRecycleReminders() {
             if (!freshNew.length && !freshDel.length && !freshRep.length) return;
 
             const bump = (key, list, f) => { if (list.length) localStorage.setItem(key, String(Math.max(...list.map(f)))); };
-            bump('speeksRecycleNewSeen', freshNew, r => getT(r.created_at));
-            bump('speeksRecycleDelSeen', freshDel, r => getT(r.delete_requested_at));
-            bump('speeksRecycleReplySeen', freshRep, r => getT(r.mgr_reply_at));
+            bump(_recycleSeenKey('speeksRecycleNewSeen'), freshNew, r => getT(r.created_at));
+            bump(_recycleSeenKey('speeksRecycleDelSeen'), freshDel, r => getT(r.delete_requested_at));
+            bump(_recycleSeenKey('speeksRecycleReplySeen'), freshRep, r => getT(r.mgr_reply_at));
 
             const storeList = list => [...new Set(list.map(r => (r.store || '').toUpperCase()))].join(', ');
             const parts = [];
@@ -15276,9 +15726,24 @@ async function checkRecycleReminders() {
             return;
         }
 
-        // Manager: reviews / notes on my store's requests I haven't seen yet.
+        // Manager/ASM: reviews + notes on this store's requests the STORE hasn't
+        // picked up yet. Read state is deliberately shared via manager_seen_at —
+        // the manager and ASM work the same queue, so once either one opens it the
+        // other doesn't need to be told again. (Per-user tracking was tried and
+        // reverted: it made both of them action the same review.)
         const fresh = rows.filter(_recycleNeedsAttention);
-        if (!fresh.length) return;
+        if (!fresh.length) {
+            // Someone at the store opened the tool, so the queue is acknowledged.
+            // Returning without hiding left a stale "3 reviewed by the DM" row sitting
+            // in the feed for the rest of the session after the work was done — the
+            // same trap fixed on the claims aging alert.
+            const rb = document.getElementById('recycleAlertBubble');
+            if (rb && getComputedStyle(rb).display !== 'none') {
+                rb.style.display = 'none';
+                if (typeof _positionRecycleAlert === 'function') _positionRecycleAlert();
+            }
+            return;
+        }
         // One popup per batch of activity: remember the newest activity stamp we
         // alerted on, so the same reviews don't re-popup every poll — but a NEWER
         // review/note after that fires again.
@@ -15286,8 +15751,8 @@ async function checkRecycleReminders() {
             r.reviewed_at ? new Date(r.reviewed_at).getTime() : 0,
             r.dm_note_at ? new Date(r.dm_note_at).getTime() : 0,
         )));
-        if (Number(localStorage.getItem('speeksRecycleAlertSeen') || 0) >= latest) return;
-        localStorage.setItem('speeksRecycleAlertSeen', String(latest));
+        if (Number(localStorage.getItem(_recycleSeenKey('speeksRecycleAlertSeen')) || 0) >= latest) return;
+        localStorage.setItem(_recycleSeenKey('speeksRecycleAlertSeen'), String(latest));
 
         const approved = fresh.filter(r => r.review_verdict && r.review_verdict !== 'denied').length;
         const denied = fresh.filter(r => r.review_verdict === 'denied').length;
@@ -15298,7 +15763,9 @@ async function checkRecycleReminders() {
         const summary = parts.length ? ` — ${parts.join(', ')}` : '';
         const noteTxt = noted ? ` ${noted === 1 ? '1 has' : noted + ' have'} a note for you.` : '';
         _recycleRenderBubble('♻️', 'Your recycle requests were reviewed',
-            `${fresh.length} of your recycle request${fresh.length > 1 ? 's' : ''} ${fresh.length > 1 ? 'have' : 'has'} new activity from the DM${summary}.${noteTxt}`);
+            `${fresh.length} of your recycle request${fresh.length > 1 ? 's' : ''} ${fresh.length > 1 ? 'have' : 'has'} new activity from the DM${summary}.${noteTxt}`,
+            // Compact feed line — counts first, so nothing useful is lost to the cap.
+            `${fresh.length} reviewed by the DM${summary}` + (noted ? ` · ${noted} with a note` : ''));
     } catch (e) { /* next poll retries */ }
 }
 
@@ -15344,11 +15811,15 @@ function closeRecycleAlertBubble() {
     if (b) b.style.display = 'none';
 }
 
-function _recycleRenderBubble(icon, title, bodyText) {
+function _recycleRenderBubble(icon, title, bodyText, summary) {
     const b = _recycleBubbleEl();
     if (!b) return;
     const iconEl = document.getElementById('recycleAlertBubbleIcon');
     const textEl = document.getElementById('recycleAlertBubbleText');
+    // Feed one-liner. Without this the Action Menu scrapes the bubble and repeats
+    // the title, which is already the feed row's own title ("Recycle review").
+    // The body alone is the useful part.
+    textEl.dataset.summary = String(summary || bodyText).replace(/\s+/g, ' ').trim();
     if (iconEl) iconEl.textContent = icon;
     textEl.style.display = 'flex';
     textEl.style.flexDirection = 'column';
@@ -18483,3 +18954,747 @@ function _agRenderBubble(icon, title, bodyText) {
         { transform: 'scale(1) translateX(0)', opacity: 1 }
     ], { duration: 400, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
 }
+
+
+/* =========================================================
+   SPEEKS ACTION MENU  (Priority-Hero briefing deck)
+   Renders the QuickPortal action deck: announcements + store
+   notes feed, priority hero, and the Reminders & Due card.
+   The action-item cards themselves trigger the existing
+   panels/modals directly from the HTML (toggleChecklistPanel,
+   toggleAuditPanel, toggleGoalsPanel, toggleNotifs). Progress
+   numbers are pushed in from the existing chip updaters via
+   samSetProgress(). Data sources are the same fetches the app
+   already runs -- no extra network calls. Realtime is phase 3.
+   ========================================================= */
+
+function _samEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function _samFmtDate(d) {
+    if (!d || isNaN(d.getTime())) return '';
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) {
+        let h = d.getHours(), m = d.getMinutes();
+        const ap = h >= 12 ? 'pm' : 'am';
+        return `${h % 12 || 12}:${String(m).padStart(2, '0')}${ap}`;
+    }
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// Pull a clean title + snippet + priority flag out of an announcement's HTML body.
+function _samParseAnn(item) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = item.text || '';
+    let priority = !!item.high_priority || /HIGH PRIORITY|🚨/.test(item.text || '');
+    // Drop the "🚨 HIGH PRIORITY" marker span BEFORE pulling the title out.
+    // Leaving it in pushed the title off index 0, so the old "does the body
+    // start with the title" test failed and the title got repeated at the head
+    // of the snippet ("July 2026 Store GoalsJuly's here…") on priority posts.
+    tmp.querySelectorAll('span').forEach(s => {
+        if (/HIGH PRIORITY/i.test(s.textContent || '')) { priority = true; s.remove(); }
+    });
+    // Remove the title node itself so the body can never repeat it, rather than
+    // relying on string matching (whitespace differences broke that too).
+    const strong = tmp.querySelector('strong');
+    let title = strong ? (strong.textContent || '').trim() : '';
+    if (strong) strong.remove();
+    let snippet = (tmp.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!title) {                       // no explicit title — borrow the opening words
+        title = snippet.slice(0, 70);
+        snippet = snippet.slice(title.length).trim();
+    }
+    const stripPr = s => s.replace(/^\s*🚨?\s*HIGH PRIORITY\s*/i, '').trim();
+    return { title: stripPr(title) || 'Announcement', snippet: stripPr(snippet), priority };
+}
+
+function _samAnnRead(item) {
+    const currentUser = sessionStorage.getItem('speeksUserName');
+    const cleanUser = currentUser ? String(currentUser).trim().toLowerCase() : null;
+    if (!cleanUser) return false;
+    const localRead = new Set(JSON.parse(localStorage.getItem('speeksLocalRead_' + cleanUser) || '[]'));
+    const inReadBy = !!(item.readBy && item.readBy.some(u => String(u).trim().toLowerCase() === cleanUser));
+    return inReadBy || localRead.has(item.rowId);
+}
+
+function _samIsMSM() {
+    try { return typeof _isMSMChecklist === 'function' && _isMSMChecklist(); } catch (_) { return false; }
+}
+
+// --- UNIFIED FEED (announcements + store notes + reminders/due dates) ---
+// One "everything" feed. Announcements + store notes get a permanent read;
+// reminders get a per-day dismiss (they re-surface tomorrow if still due). The
+// header's Mark-all-read clears whatever is currently active.
+function renderActionFeed() {
+    const feed = document.getElementById('samFeed');
+    if (!feed) return; // not a manager / menu not present
+
+    const anns = (window._samAnnData || []).map(it => {
+        const p = _samParseAnn(it);
+        const d = it.date ? new Date(it.date) : null;
+        return {
+            type: 'ann', rowId: it.rowId, title: p.title, snippet: p.snippet, priority: p.priority,
+            author: it.author || 'Announcement',
+            dateObj: d, dateMs: (d && !isNaN(d.getTime())) ? d.getTime() : 0,
+            read: _samAnnRead(it)
+        };
+    });
+
+    const notes = (window._samStoreNotes || []).map(n => {
+        const d = n.date ? new Date(n.date) : null;
+        const tmp = document.createElement('div'); tmp.innerHTML = n.text || '';
+        return {
+            type: 'note', title: 'Message from ' + (n.author || 'your team'),
+            snippet: (tmp.textContent || '').replace(/\s+/g, ' ').trim(),
+            store: String(n.store || '').toUpperCase(), id: n.id || null,
+            dateObj: d, dateMs: (d && !isNaN(d.getTime())) ? d.getTime() : Date.now(), read: false
+        };
+    });
+
+    const rems = _samGatherReminders();
+
+    // Priority hero = newest unread high-priority announcement (kept above feed).
+    // Whatever lands in the hero is REMOVED from the feed below — a high-priority
+    // item shows in exactly one place, at the top, so it can't read as duplicated.
+    // Only the hero item is excluded; a second unread priority announcement still
+    // falls through to the feed rather than disappearing entirely.
+    let heroRowId = null;
+    const hero = document.getElementById('samHero');
+    if (hero) {
+        const prio = anns.filter(a => a.priority && !a.read).sort((a, b) => b.dateMs - a.dateMs)[0];
+        if (prio) {
+            document.getElementById('samHeroTitle').textContent = prio.title;
+            document.getElementById('samHeroSnip').textContent = prio.snippet;
+            heroRowId = prio.rowId;
+            hero.hidden = false;
+            _samSyncHero(prio);          // must run after unhiding — hidden = 0 width
+        } else {
+            hero.hidden = true;
+        }
+    }
+
+    // Read announcements leave the feed entirely (they live in the Archived tab of
+    // the announcements modal). Everything else is ordered purely newest-first.
+    // Grouping by type first used to bury a brand-new announcement under week-old
+    // ones of a "higher" type, which reads as broken once there are a lot unread.
+    // Reminders still surface at the top on their own merit — their dateMs is
+    // Date.now(), so they're always the newest thing in the list.
+    const all = rems.concat(notes, anns.filter(a => !a.read && a.rowId !== heroRowId))
+        .sort((a, b) => (b.dateMs || 0) - (a.dateMs || 0));
+    const items = all.slice(0, 8);
+
+    // Compact "new patch notes" row — patch notes collapse to one entry in the
+    // main feed (the full notes live in the hub). Only when there are unseen ones.
+    const _cu = sessionStorage.getItem('speeksUserName');
+    const _clu = _cu ? String(_cu).trim().toLowerCase() : null;
+    const patchUnseen = !!(_clu && localStorage.getItem('speeksUnseenPatchNotes_' + _clu) === 'true');
+    const patchVer = (typeof _latestPatchKey === 'string' && _latestPatchKey) ? _latestPatchKey.split('|')[0] : '';
+    // The patch title already carries its own "v" (e.g. "v2.2.2"), so blindly
+    // prefixing another one rendered "vv2.2.2". Normalise to exactly one.
+    const patchLabel = patchVer ? 'v' + patchVer.replace(/^\s*v/i, '').trim() : '';
+    const patchRow = patchUnseen ? `<div class="sam-ann sam-patchrow" onclick="openHubToPatch()">
+            <span class="sam-adot" style="background:#8b5cf6;box-shadow:0 0 0 4px #f1edfb"></span>
+            <div class="sam-a-body"><div class="sam-a-top"><span class="sam-a-title">New patch notes</span><span class="sam-a-flag" style="color:#8b5cf6;background:#f1edfb">New</span></div><div class="sam-a-snip">${patchLabel ? _samEsc(patchLabel) + ' — click for what changed' : 'Click for details'}</div></div>
+        </div>` : '';
+
+    // "Active" = anything not a read announcement (drives the pip). No bulk
+    // mark-all — each item must be read individually.
+    const activeCount = rems.length + notes.length + anns.filter(a => !a.read).length + (patchUnseen ? 1 : 0);
+    const pip = document.getElementById('samAnnPip');
+    if (pip) { pip.textContent = activeCount; pip.style.display = activeCount > 0 ? 'inline-grid' : 'none'; }
+
+    if (!items.length && !patchRow) {
+        feed.innerHTML = '<div class="sam-empty">You\'re all caught up.</div>';
+        return;
+    }
+
+    const showStoreChip = _samIsMSM();
+    // Each item gets an explicit "Mark read" button (no bulk skip) — a checkmark
+    // + label so reading is a deliberate action, not a reflex ✕.
+    const readBtn = onclick => `<button class="sam-markread-btn" onclick="${onclick}"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Mark read</button>`;
+    // Reminders are live task-nags, so theirs is a "Snooze" (quiets today, returns
+    // tomorrow if still outstanding, auto-clears for good once the work is done).
+    const snoozeBtn = onclick => `<button class="sam-markread-btn sam-snooze-btn" data-tip="Snoozes for today — comes back tomorrow if it's still outstanding, and disappears for good once the work is done." onclick="${onclick}"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>Snooze</button>`;
+
+    feed.innerHTML = patchRow + items.map(it => {
+        if (it.type === 'rem') {
+            const dotcls = it.dueCls === 'sam-due-red' ? 'urgent' : 'warn';
+            const remClick = it.action ? ` onclick="${it.action}" style="cursor:pointer"` : '';
+            return `<div class="sam-ann rem"${remClick}>
+                <span class="sam-adot ${dotcls}"></span>
+                <div class="sam-a-body">
+                    <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span><span class="sam-r-due ${it.dueCls}">${_samEsc(it.due)}</span></div>
+                    <div class="sam-a-snip">${_samEsc(it.snippet)}</div>
+                </div>
+                ${snoozeBtn(`samDismissItem(event,'rem','${_samEsc(it.key)}')`)}
+            </div>`;
+        }
+        if (it.type === 'note') {
+            const chip = (showStoreChip && it.store) ? `<span class="sam-schip">${_samEsc(it.store)}</span>` : '';
+            return `<div class="sam-ann note" data-hub-target="note-${_samEsc(String(it.id || ''))}" onclick="openHubTo('note-${_samEsc(String(it.id || ''))}')">
+                <span class="sam-adot"></span>
+                <div class="sam-a-body">
+                    <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span>${chip}<span class="sam-a-flag gold">Store note</span></div>
+                    <div class="sam-a-snip">${_samEsc(it.snippet)}</div>
+                    <div class="sam-a-meta">${it.dateObj ? _samFmtDate(it.dateObj) : 'Store note'}</div>
+                </div>
+                ${readBtn(`samDismissItem(event,'note','${it.id ? _samEsc(it.id) : ''}')`)}
+            </div>`;
+        }
+        const flag = it.priority ? '<span class="sam-a-flag">Priority</span>' : '';
+        const tgt = 'ann-' + _samEsc(String(it.rowId || ''));
+        return `<div class="sam-ann" data-hub-target="${tgt}" onclick="openHubTo('${tgt}')">
+            <span class="sam-adot"></span>
+            <div class="sam-a-body">
+                <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span>${flag}</div>
+                <div class="sam-a-snip">${_samEsc(it.snippet)}</div>
+                <div class="sam-a-meta">${it.dateObj ? _samFmtDate(it.dateObj) + ' &middot; ' : ''}${_samEsc(it.author)}</div>
+            </div>
+            ${readBtn(`samDismissItem(event,'ann','${it.rowId ? _samEsc(it.rowId) : ''}')`)}
+        </div>`;
+    }).join('');
+
+    _samAddReadFull();
+}
+
+// ONE RULE, everywhere: you may only mark something read if you can actually read
+// all of it. Snippets are clamped, so a message is either
+//   fully visible  -> keep "Mark read"
+//   clipped        -> swap it for "Read full", which opens the hub
+// Truncation can't be known until after layout, so this measures post-render.
+// Reminders are skipped: they snooze rather than read, and their row already
+// carries its own open-the-tool action.
+function _samAddReadFull() {
+    document.querySelectorAll('#samFeed .sam-ann:not(.rem)').forEach(row => {
+        const el = row.querySelector('.sam-a-snip');
+        if (!el) return;
+        if (el.scrollHeight - el.clientHeight <= 1) return;   // fits; nothing hidden
+        // Clipped: the row's own "Mark read" would let someone clear a message
+        // they've only seen the first line of, so it goes away entirely.
+        const mr = row.querySelector('.sam-markread-btn');
+        if (mr) mr.remove();
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'sam-readfull';
+        btn.innerHTML = 'Read full <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
+        btn.onclick = ev => {
+            ev.stopPropagation();   // don't double-fire the row's own handler
+            openHubTo(row.dataset.hubTarget || '');
+        };
+        el.insertAdjacentElement('afterend', btn);
+    });
+}
+
+// Open the hub and jump straight to one item. Landing at the top of a 29-item
+// list and expecting someone to re-find the thing they just clicked is the whole
+// problem this solves. Falls back to a plain open when the target isn't in view
+// (e.g. an archived item while the filter is "All").
+// Target we're trying to land on, and how long we'll keep re-anchoring to it.
+// toggleNotifs() renders the hub synchronously and THEN fires loadPatchNotes(),
+// whose fetch re-renders #hubFeed a few hundred ms later — mid smooth-scroll —
+// inserting patch rows above the target and sliding it out from under the
+// animation, so you landed on a neighbouring announcement. renderHubFeed() calls
+// _hubScrollToPending() on every rebuild so the jump survives any late re-render.
+let _hubPendingTarget = null;
+let _hubPendingUntil = 0;
+
+function openHubTo(targetId) {
+    const hub = document.getElementById('notifDropdown');
+    if (!hub || !hub.classList.contains('show')) toggleNotifs();
+    if (!targetId) return;
+    _hubPendingTarget = targetId;
+    _hubPendingUntil = Date.now() + 2500; // long enough for the patch-notes fetch
+    _hubScrollToPending();
+}
+
+function _hubScrollToPending() {
+    const targetId = _hubPendingTarget;
+    if (!targetId || Date.now() > _hubPendingUntil) return;
+    // renderHubFeed() has already run synchronously inside toggleNotifs, but the
+    // modal's open transition hasn't settled, so measure on the next frame.
+    requestAnimationFrame(() => setTimeout(() => {
+        if (_hubPendingTarget !== targetId) return; // superseded by a newer jump
+        const card = document.querySelector(`#hubFeed [data-hub-id="${CSS.escape(targetId)}"]`);
+        if (!card) return;
+        // 'start', not 'center'. Centring a card taller than the viewport cuts off
+        // BOTH ends — you land mid-announcement, with the footer (reactions, read
+        // receipts and Mark as read) below the fold, so a long post looked like it
+        // had no way to mark it read. Aligning the top also means you start reading
+        // at the beginning, which is the point of jumping to it.
+        card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        card.classList.remove('hub-jump');
+        void card.offsetWidth;          // restart the highlight if it's re-clicked
+        card.classList.add('hub-jump');
+        setTimeout(() => card.classList.remove('hub-jump'), 2200);
+    }, 60));
+}
+
+// Same rule for the priority hero: its snippet is a single ellipsised line, so
+// "Mark read" only appears when the whole message actually fits. The two CTAs are
+// mutually exclusive — clicking the bar anywhere already opens the hub, so once
+// the text is fully readable "Read now" is just noise next to "Mark read".
+function _samSyncHero(ann) {
+    const btn = document.getElementById('samHeroRead');
+    const snip = document.getElementById('samHeroSnip');
+    const cta = document.getElementById('samHeroCta');
+    if (!btn || !snip) return;
+    const clipped = snip.scrollWidth - snip.clientWidth > 1;
+    btn.hidden = clipped || !ann.rowId;
+    if (cta) cta.hidden = !btn.hidden;   // exactly one of the two is ever visible
+    // Assigning .onclick replaces the markup's inline toggleNotifs(), so the bar
+    // deep-links to its own announcement like every other row.
+    const heroEl = document.getElementById('samHero');
+    if (heroEl) heroEl.onclick = () => openHubTo('ann-' + (ann.rowId || ''));
+    if (btn.hidden) return;
+    btn.onclick = ev => {
+        ev.stopPropagation();       // the hero itself opens the hub
+        samDismissItem(ev, 'ann', ann.rowId);
+    };
+}
+
+// Permanent read for one announcement (local set + server), no DOM animation.
+function _samMarkAnnRead(rowId) {
+    const user = sessionStorage.getItem('speeksUserName');
+    if (!user || !rowId) return;
+    const clean = String(user).trim().toLowerCase();
+    const key = 'speeksLocalRead_' + clean;
+    const set = new Set(JSON.parse(localStorage.getItem(key) || '[]'));
+    set.add(rowId);
+    localStorage.setItem(key, JSON.stringify([...set]));
+    try { postWrite(CMS_URL, { type: 'mark_read', user, rowIds: [rowId] }).catch(() => {}); } catch (_) {}
+    if (typeof updateMainBadge === 'function') updateMainBadge();
+}
+
+function samDismissItem(ev, kind, key) {
+    if (ev) ev.stopPropagation();
+    const row = ev && ev.target ? ev.target.closest('.sam-ann') : null;
+    if (kind === 'rem') {
+        // Record WHAT was snoozed, not just that it was — see _samGetDismissedRem.
+        const cur = _samGatherReminders().find(r => r.key === key);
+        const map = _samGetDismissedRem();
+        map[key] = cur ? cur.sig : '';
+        _samSetDismissedRem(map);
+    } else if (kind === 'note') {
+        // Record locally FIRST, so the read survives the next re-fetch even if the
+        // POST below is slow, fails, or races a poll.
+        _addLocalNoteRead(key);
+        if (key && Array.isArray(window._samStoreNotes)) {
+            window._samStoreNotes = window._samStoreNotes.filter(n => String(n.id) !== String(key));
+        }
+        // Mirror the read into the hub archive copy so it dims there immediately
+        // (rather than waiting for the next 30s comment poll).
+        if (key && Array.isArray(window._hubStoreNotes)) {
+            window._hubStoreNotes.forEach(n => { if (String(n.id) === String(key)) n.read = true; });
+            try { if (typeof renderHubFeed === 'function') renderHubFeed(); } catch (_) {}
+        }
+        if (key) { try { postWrite(STORE_COMMENT_URL, { type: 'mark_read', commentIds: [key], user: sessionStorage.getItem('speeksUserName') }).catch(() => {}); } catch (_) {} }
+    } else if (kind === 'ann') {
+        _samMarkAnnRead(key);
+    }
+    if (row) row.remove();
+    renderActionFeed();
+}
+
+// Clear the whole feed: read every announcement, mark notes read, dismiss the
+// day's reminders. Lets the user zero out their feed when caught up.
+function samMarkAllRead() {
+    const user = sessionStorage.getItem('speeksUserName');
+    const unreadIds = (window._samAnnData || []).filter(a => !_samAnnRead(a)).map(a => a.rowId).filter(Boolean);
+    if (unreadIds.length && user) {
+        const clean = String(user).trim().toLowerCase();
+        const kk = 'speeksLocalRead_' + clean;
+        const set = new Set(JSON.parse(localStorage.getItem(kk) || '[]'));
+        unreadIds.forEach(id => set.add(id));
+        localStorage.setItem(kk, JSON.stringify([...set]));
+        try { postWrite(CMS_URL, { type: 'mark_read', user, rowIds: unreadIds }).catch(() => {}); } catch (_) {}
+    }
+    const noteIds = (window._samStoreNotes || []).map(n => n.id).filter(Boolean);
+    noteIds.forEach(_addLocalNoteRead);
+    if (noteIds.length && user) { try { postWrite(STORE_COMMENT_URL, { type: 'mark_read', commentIds: noteIds, user }).catch(() => {}); } catch (_) {} }
+    window._samStoreNotes = [];
+    // Only dismiss reminders that are ON SCREEN right now. This used to blanket-add
+    // every configured key, which silently pre-dismissed reminders that hadn't fired
+    // yet: clearing the feed in the morning meant a claim that aged out at noon never
+    // showed for the rest of the day. You can't "read" something that doesn't exist,
+    // so use the same liveness test the feed itself uses (_samGatherReminders).
+    const map = _samGetDismissedRem();
+    _samGatherReminders().forEach(r => { map[r.key] = r.sig; });
+    _samSetDismissedRem(map);
+    if (typeof updateMainBadge === 'function') updateMainBadge();
+    renderActionFeed();
+}
+
+// --- PROGRESS MIRRORS (called from the existing chip updaters) ---
+function samSetProgress(kind, data) {
+    const map = {
+        cl: ['samClVal', 'samClFill', 'samClSub', 'Open your daily tasks'],
+        audit: ['samAuditVal', 'samAuditFill', 'samAuditSub', "Open today's cleaning list"],
+        list: ['samListVal', 'samListFill', 'samListSub', "This week's listing target"]
+    }[kind];
+    if (!map) return;
+    const val = document.getElementById(map[0]), fill = document.getElementById(map[1]), sub = document.getElementById(map[2]);
+    if (!val || !fill || !sub) return;
+
+    if (data && data.stores) {
+        const tot = data.stores.reduce((a, s) => a + s.total, 0);
+        const dn = data.stores.reduce((a, s) => a + s.done, 0);
+        val.textContent = '';
+        fill.style.width = (tot ? dn / tot * 100 : 0) + '%';
+        sub.innerHTML = '<span class="sam-storestats">' + data.stores.map(s =>
+            `<span class="sam-storestat"><span class="sam-schip">${_samEsc(s.store)}</span> ${s.done}/${s.total}</span>`).join('') + '</span>';
+        return;
+    }
+    const done = (data && data.done) || 0, total = (data && data.total) || 0;
+    if (!total) { val.textContent = ''; fill.style.width = '0%'; sub.textContent = map[3]; return; }
+    val.textContent = `${done}/${total}`;
+    fill.style.width = (done / total * 100) + '%';
+    sub.textContent = done >= total ? 'All done for today' : `${total - done} left today`;
+}
+
+// --- LISTING GOALS (mirror the widget's headline) ---
+// Mirror the Listing Goals modal's weekly numbers onto the rail card.
+//
+// This used to scrape #goals-store-target for a "done/target" pair, but that
+// element only ever reads "Goal: 190 Listings" — no slash — so the match always
+// failed and the bar and value silently stayed blank. Read the same elements the
+// modal itself fills instead: #goals-total-actual is the week's summed goals, and
+// the weekly target comes from targetFor(). MSM stacks two stores, so its totals
+// live in per-store elements and both sides get summed.
+function samRefreshListing() {
+    const val = document.getElementById('samListVal'), fill = document.getElementById('samListFill'), sub = document.getElementById('samListSub');
+    if (!val || !fill || !sub) return;
+
+    const num = el => {
+        const n = parseInt(String((el && el.textContent) || '').replace(/[^\d-]/g, ''), 10);
+        return isNaN(n) ? 0 : n;
+    };
+    const targetOf = s => { try { return targetFor(s) || 0; } catch (_) { return 0; } };
+
+    let done = 0, target = 0, label = '';
+
+    if (_samIsMSM()) {
+        MULTISTORE_MANAGER_STORES.forEach(s => {
+            done += num(document.getElementById(`goals-total-actual-${s}`));
+            target += targetOf(s);
+        });
+        label = MULTISTORE_MANAGER_STORES.map(s => `${s} ${targetOf(s)}`).join(' · ');
+    } else {
+        done = num(document.getElementById('goals-total-actual'));
+        target = (typeof _weekTargetTotal === 'number' && _weekTargetTotal)
+            ? _weekTargetTotal
+            : targetOf(sessionStorage.getItem('speeksUserStore'));
+        label = target ? `Goal: ${target} listings this week` : '';
+    }
+
+    // Nothing loaded yet — leave the card's default subtitle rather than flashing 0/0.
+    if (!target) return;
+
+    val.textContent = `${done}/${target}`;
+    fill.style.width = Math.max(0, Math.min(100, done / target * 100)) + '%';
+    sub.textContent = label;
+}
+
+// Strip the leading emoji from hotbar chips at runtime (keeps the source markup
+// untouched and avoids editing every link / risking encoding mojibake).
+function samCleanHotbar() {
+    document.querySelectorAll('.hotbar-btn').forEach(a => {
+        if (a.dataset.samCleaned) return;
+        const cleaned = (a.textContent || '').replace(/^[^\w(]+/, '').trim();
+        if (cleaned) a.textContent = cleaned;
+        a.dataset.samCleaned = '1';
+    });
+    // Flatten visible role/store wrappers into the one chip row. applyRoleBasedUI
+    // stamps their display inline (flex/none), so CSS can't; override the visible
+    // ones to `contents` here (runs right after applyRoleBasedUI). Hidden wrappers
+    // keep their inline `none`.
+    document.querySelectorAll('.hotbars-stack .hotbar-wrapper').forEach(w => {
+        if (window.getComputedStyle(w).display !== 'none') {
+            w.style.setProperty('display', 'contents', 'important');
+        }
+    });
+}
+
+// --- REMINDERS & DUE (aggregate the existing alert bubbles, into the feed) ---
+// Each reminder backs a live outstanding task, read out of the alert bubble the
+// app already computes. Dismissing hides it for TODAY only; if it's still due
+// tomorrow the bubble is still showing and it re-appears.
+// One row per built-out deadline/reminder tool. `action` is the same "open the
+// tool" logic the old alert bubble ran on click — the hub + dashboard cards now
+// carry it so clicking a reminder jumps straight to its tool.
+function _samReminderCfg() {
+    return [
+        { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText', title: 'Variance replies due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#vreplies'" },
+        // A DM has no store-scoped claims tool — send them to the all-stores
+        // oversight view instead, which is where they can actually act.
+        { key: 'claims', id: 'claimAlertBubble', text: 'claimAlertBubbleText', title: 'Insurance claims aging', urgency: 2, due: 'Aging', cls: 'sam-due-red',
+          action: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'district manager'
+              ? "openClaimsOversight()"
+              : "openClaimsModal(); switchClaimsTab('view')" },
+        { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "toggleRecycleInventory(); switchRecycleTab('view')" },
+        { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging inventory review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" }
+    ];
+}
+
+function _samDismKey() {
+    const u = (sessionStorage.getItem('speeksUserName') || 'anon').trim().toLowerCase();
+    const day = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+    return 'samRemDismissed_' + u + '_' + day;
+}
+// Dismissals are stored as { key: snippetAtSnoozeTime }, NOT a bare list of keys.
+// A snooze must quiet the reminder AS IT READ WHEN SNOOZED — with a plain key list
+// it also swallowed every later update that same day, so a DM could send a fresh
+// claim reminder and the manager's feed would silently drop it until tomorrow.
+// Comparing against the snippet means new content (new count, new sender) resurfaces.
+function _samGetDismissedRem() {
+    try {
+        const raw = JSON.parse(localStorage.getItem(_samDismKey()) || '{}');
+        // Legacy array format carried no signature, so it can only mean "hide all
+        // day" — the exact bug above. Drop it rather than honouring it.
+        return (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+    } catch (_) { return {}; }
+}
+function _samSetDismissedRem(map) { try { localStorage.setItem(_samDismKey(), JSON.stringify(map || {})); } catch (_) {} }
+
+function _samGatherReminders() {
+    const dismissed = _samGetDismissedRem();
+    const out = [];
+    _samReminderCfg().forEach(c => {
+        const el = document.getElementById(c.id);
+        if (!el) return;
+        // The alert elements are position:fixed, and offsetParent is ALWAYS null
+        // for fixed elements — the old `offsetParent !== null` test could never
+        // pass, so no reminder ever reached the feed. Computed display is the
+        // real signal: the check functions flip it to flex when a reminder is
+        // live and back to none when it clears.
+        if (window.getComputedStyle(el).display === 'none') return;
+        const t = document.getElementById(c.text);
+        let sub = '';
+        if (t) {
+            // A bubble can author its own one-line feed summary via data-summary.
+            // Preferred, because scraping the bubble is lossy: the bubble repeats its
+            // title (already the row title here), and long instructional text gets
+            // truncated to nothing useful. The bubble keeps the full copy for the
+            // place the user actually acts.
+            if (t.dataset && t.dataset.summary) {
+                sub = t.dataset.summary.replace(/\s+/g, ' ').trim();
+            } else {
+                // Fallback scrape. Drop the "Open …" CTA button, and join block
+                // children with a space — textContent runs them together, which
+                // produced "…review them.That includes…".
+                const clone = t.cloneNode(true);
+                clone.querySelectorAll('button').forEach(b => b.remove());
+                const blocks = Array.from(clone.children)
+                    .map(el => (el.textContent || '').trim())
+                    .filter(Boolean);
+                sub = (blocks.length ? blocks.join(' ') : (clone.textContent || ''))
+                    .replace(/\s+/g, ' ').trim();
+            }
+        }
+        if (sub.length > 100) sub = sub.slice(0, 98) + '…';
+        // Snoozed — but only while it's still the SAME reminder. A bubble may supply
+        // an explicit identity via data-sig (see _renderClaimBubble); otherwise the
+        // displayed text is the identity, so any change in wording — a moved count,
+        // a new sender — counts as new information and breaks through the snooze
+        // rather than staying buried until tomorrow.
+        const sig = (t && t.dataset && t.dataset.sig) ? t.dataset.sig : sub;
+        if (Object.prototype.hasOwnProperty.call(dismissed, c.key) && dismissed[c.key] === sig) return;
+        out.push({
+            type: 'rem', key: c.key, sig, title: c.title, snippet: sub || 'Needs your attention',
+            due: c.due, dueCls: c.cls, urgency: c.urgency, read: false, dateMs: Date.now() + c.urgency,
+            action: c.action || ''
+        });
+    });
+    return out;
+}
+
+// --- INIT ---
+function samInit() {
+    const menu = document.getElementById('speeksActionMenu');
+    if (!menu) return;
+    // Only users who actually see the deck lose the old ticker + bell (they're
+    // re-homed here). Everyone else — employees, other pages — keeps them.
+    const visible = window.getComputedStyle(menu).display !== 'none';
+    document.body.classList.toggle('sam-active', visible);
+    if (typeof _syncLayout === 'function') _syncLayout();
+    if (!visible) return;
+    // Roles with none of the action items (CEO / TOM) would get an empty rail
+    // card — drop the rail and let the feed run full width instead.
+    const rail = menu.querySelector('.sam-rail');
+    if (rail) {
+        const anyItem = Array.from(rail.querySelectorAll('.sam-mini'))
+            .some(b => window.getComputedStyle(b).display !== 'none');
+        menu.classList.toggle('sam-norail', !anyItem);
+    }
+    renderActionFeed();
+    samRefreshListing();
+    samCleanHotbar();
+    if (window._samInited) return;
+    window._samInited = true;
+    // The alert bubbles and listing widget populate asynchronously and from many
+    // code paths; a light interval keeps the deck in sync without wiring every
+    // one. Cheap DOM reads only. (Realtime replaces this in phase 3.)
+    setInterval(() => { renderActionFeed(); samRefreshListing(); }, 5000);
+}
+
+
+/* =========================================================
+   SPEEKS FEED HUB  (#notifDropdown) — unified filterable reader.
+   Announcements are pre-built in loadCMS (window._hubAnnItems) with
+   their reactions / receipts / docs preserved; store notes, deadlines
+   and patch notes are built here. renderHubFeed() merges + filters.
+   ========================================================= */
+
+// Pull a clean title + formatted body + priority flag out of an announcement.
+// item.text = optional "HIGH PRIORITY" span + <strong>title</strong> + body html.
+function _hubParseAnn(item) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = item.text || '';
+    let priority = !!item.high_priority;
+    tmp.querySelectorAll('span').forEach(s => { if (/HIGH PRIORITY/i.test(s.textContent || '')) { priority = true; s.remove(); } });
+    let title = '';
+    const strong = tmp.querySelector('strong');
+    if (strong) { title = (strong.textContent || '').trim(); strong.remove(); }
+    let bodyHtml = tmp.innerHTML.replace(/^(\s*<br\s*\/?>\s*)+/i, '').trim();
+    if (!title) title = ((tmp.textContent || '').trim().slice(0, 80)) || 'Announcement';
+    return { title, bodyHtml, priority };
+}
+
+function _hubNoteItem(n) {
+    const d = n.date ? new Date(n.date) : null;
+    const dateMs = (d && !isNaN(d.getTime())) ? d.getTime() : Date.now();
+    const tmp = document.createElement('div'); tmp.innerHTML = n.text || '';
+    const body = (tmp.textContent || '').replace(/\s+/g, ' ').trim();
+    const store = String(n.store || '').toUpperCase();
+    const metaR = (d && !isNaN(d.getTime())) ? _samFmtDate(d) : '';
+    const isRead = !!n.read;   // read store notes stay in the hub, just dimmed
+    const kindLabel = isRead ? 'Read · Store note' : 'Store note';
+    const html = `
+        <div class="hub-item t-note${isRead ? ' read' : ''}" data-t="note" data-hub-id="note-${escapeHtml(String(n.id || ''))}">
+            <div class="hub-row">
+                <span class="hub-tico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></span>
+                <div class="hub-col">
+                    <div class="hub-item-top"><span class="hub-item-title">Message from ${escapeHtml(n.author || 'your team')}</span><span class="hub-meta-r">${metaR}</span></div>
+                    <div class="hub-kind-meta"><span class="hub-kind">${kindLabel}</span>${store ? ' · ' + escapeHtml(store) : ''}</div>
+                    <div class="hub-item-body">${escapeHtml(body)}</div>
+                </div>
+            </div>
+        </div>`;
+    return { kind: 'note', archived: false, read: isRead, priority: false, dateMs, html };
+}
+
+function _hubDueItem(r) {
+    const amber = r.dueCls === 'sam-due-amber';
+    // Clicking the card closes the hub and runs the tool's own open-action.
+    const clickAttr = r.action ? ` onclick="closeAllModals(); ${r.action}" style="cursor:pointer"` : '';
+    const openHint = r.action ? '<span class="hub-open-hint">Open →</span>' : '';
+    const html = `
+        <div class="hub-item t-due${amber ? ' amber' : ''}" data-t="due"${clickAttr}>
+            <div class="hub-row">
+                <span class="hub-tico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg></span>
+                <div class="hub-col">
+                    <div class="hub-item-top"><span class="hub-item-title">${escapeHtml(r.title)}</span><span class="hub-due-badge ${amber ? 'hub-due-amber' : 'hub-due-red'}">${escapeHtml(r.due)}</span></div>
+                    <div class="hub-kind-meta"><span class="hub-kind">Deadline</span> · ${escapeHtml(r.snippet)}${openHint}</div>
+                </div>
+            </div>
+        </div>`;
+    return { kind: 'due', archived: false, priority: false, dateMs: Date.now() + (r.urgency || 0), html };
+}
+
+function _hubPatchItems() {
+    const data = window._hubPatchData;
+    if (!data || !data.entries || !data.entries.length) return [];
+    const groups = buildPatchGroups(data.entries);
+    const catOrder = ['New Features', 'Improvements', 'Bug Fixes'];
+    const catDot = { 'New Features': 'pd-feat', 'Improvements': 'pd-imp', 'Bug Fixes': 'pd-fix' };
+    const toLis = summary => (summary || '').split('\n').map(l => l.replace(/^[-•]\s*/, '').trim()).filter(Boolean).map(l => `<li>${escapeHtml(l)}</li>`).join('');
+    // Only the newest group counts as unread, and only while the user's unseen
+    // flag is set — otherwise every historical version would sit in "Unread".
+    const _pu = sessionStorage.getItem('speeksUserName');
+    const _pcu = _pu ? String(_pu).trim().toLowerCase() : null;
+    const patchUnseen = !!(_pcu && localStorage.getItem('speeksUnseenPatchNotes_' + _pcu) === 'true');
+    return groups.map((g, i) => {
+        const sections = catOrder.map(cat => {
+            const items = g.items.filter(it => it.category === cat);
+            if (!items.length) return '';
+            return `<div class="hub-patch-sec"><div class="hub-psec-title"><span class="hub-pdot ${catDot[cat]}"></span>${cat}</div><ul>${items.map(it => toLis(it.summary)).join('')}</ul></div>`;
+        }).join('');
+        const d = (typeof parsePatchDate === 'function') ? parsePatchDate(g.date) : null;
+        const dateMs = (d && !isNaN(d.getTime())) ? d.getTime() : (Date.now() - i);
+        // Only the newest unread version gets the button — older groups are history.
+        const isUnread = patchUnseen && i === 0;
+        const markReadBtn = isUnread
+            ? `<div class="hub-foot"><button class="hub-markread" onclick="hubMarkPatchRead()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>Mark as read</button></div>`
+            : '';
+        const html = `
+            <div class="hub-item t-patch hub-patch${isUnread ? '' : ' read'}" data-t="patch" data-hub-id="patch-${escapeHtml(g.title)}">
+                <div class="hub-row">
+                    <span class="hub-tico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg></span>
+                    <div class="hub-col">
+                        <div class="hub-patch-head"><span class="hub-kind">Patch Notes</span><span class="hub-patch-ver">${escapeHtml(g.title)}</span>${i === 0 ? '<span class="hub-latest">Latest</span>' : ''}<span class="hub-meta-r">${formatPatchDate(g.date)}</span></div>
+                        ${sections}
+                        ${markReadBtn}
+                    </div>
+                </div>
+            </div>`;
+        return { kind: 'patch', archived: false, priority: false, read: !(patchUnseen && i === 0), dateMs, html };
+    });
+}
+
+function renderHubFeed() {
+    const feed = document.getElementById('hubFeed');
+    if (!feed) return;
+    const filter = window._hubFilter || 'all';
+
+    let items = [];
+    (window._hubAnnItems || []).forEach(a => items.push(a));
+    // Hub keeps the full store-comment history (they no longer expire at midnight);
+    // the dashboard feed still uses the today-only _samStoreNotes briefing.
+    (window._hubStoreNotes || window._samStoreNotes || []).forEach(n => { try { items.push(_hubNoteItem(n)); } catch (_) {} });
+    try { (typeof _samGatherReminders === 'function' ? _samGatherReminders() : []).forEach(r => items.push(_hubDueItem(r))); } catch (_) {}
+    try { _hubPatchItems().forEach(p => items.push(p)); } catch (_) {}
+
+    // "All" shows everything readable — unread AND read announcements — hiding only
+    // onboarding-cutoff/stale items. "Archived" is the history view (read + hidden).
+    // Reading an announcement dims it in the hub but does NOT drop it from "All".
+    // "Unread" = still needs your attention: unread announcements and comments,
+    // plus outstanding deadlines (which are unread by nature). Patch note groups
+    // carry their own read flag, so only genuinely-new ones qualify.
+    const shown = items.filter(it =>
+        filter === 'all' ? !it.hidden
+        : filter === 'unread' ? (!it.read && !it.hidden)
+        : filter === 'arch' ? (it.read || it.hidden)
+        : it.kind === filter
+    ).sort((a, b) => (b.dateMs || 0) - (a.dateMs || 0));
+
+    const labels = { all: 'updates', unread: 'unread', ann: 'announcements', note: 'comments', due: 'deadlines', patch: 'patch notes', arch: 'archived' };
+    const countEl = document.getElementById('hubCount');
+    if (countEl) countEl.textContent = `${shown.length} ${labels[filter] || 'updates'}`;
+
+    feed.innerHTML = shown.length ? shown.map(it => it.html).join('') : '<div class="hub-empty">Nothing here right now.</div>';
+    // A rebuild throws away the card a pending jump was scrolling to (and can add
+    // rows above it), so re-anchor. No-ops unless a jump is actually in flight.
+    _hubScrollToPending();
+}
+
+function setHubFilter(v) { window._hubFilter = v; renderHubFeed(); }
+
+// Mark one announcement read from the hub, then rebuild (loadCMS re-derives read
+// state + re-renders the hub and the Action Menu feed).
+function hubMarkRead(rowId) {
+    if (typeof _samMarkAnnRead === 'function') _samMarkAnnRead(rowId);
+    if (typeof loadCMS === 'function') loadCMS();
+}
+
+// Open the hub straight to the patch-notes filter (from the main feed's row).
+function openHubToPatch() {
+    window._hubFilter = 'patch';
+    const sel = document.getElementById('hubFilter'); if (sel) sel.value = 'patch';
+    const modal = document.getElementById('notifDropdown');
+    if (modal && !modal.classList.contains('show')) toggleModal('notifDropdown', 'notifBadge');
+    renderHubFeed();
+    if (typeof loadPatchNotes === 'function') loadPatchNotes();
+}
+
+// Record the latest patch version as seen (clears the "new patch" row + badge).
+

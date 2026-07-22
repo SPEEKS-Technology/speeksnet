@@ -31,7 +31,7 @@
 }
 
 body { 
-    font-family: 'Inter', -apple-system, sans-serif; 
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; 
     background: var(--bg-app); 
     color: var(--text-dark); 
     line-height: 1.6; 
@@ -355,7 +355,7 @@ input, textarea, select,
     font-weight: 900 !important;
     text-transform: uppercase !important;
     letter-spacing: 0.5px !important;
-    font-family: 'Inter', sans-serif !important;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif !important;
     white-space: nowrap !important; 
 }
 
@@ -656,7 +656,7 @@ input, textarea, select,
     border: 1px solid #ddd; 
     border-radius: 10px; 
     font-size: 13px; 
-    font-family: 'Inter', sans-serif; 
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; 
     transition: 0.2s; 
     outline: none; 
     background: white;
@@ -1237,7 +1237,7 @@ select.bs-hidden-select {
     border: 1px solid #d1d5db !important;
     border-radius: 8px !important;
     padding: 0 32px 0 12px !important;
-    font-family: 'Inter', sans-serif !important;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif !important;
     font-size: 12px !important;
     font-weight: 800 !important;
     outline: none !important;
@@ -1272,7 +1272,7 @@ select.bs-hidden-select:focus {
     padding: 0 !important;
     border: none !important;
     white-space: nowrap !important;
-    font-family: 'Inter', sans-serif !important;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif !important;
 }
 
 .widget-date-display:not(:empty)::before {
@@ -2010,7 +2010,7 @@ select.bs-hidden-select:focus {
    COMPONENTS (Search, Bubbles, Tables, etc.)
    ========================================================= */
 .kb-search-bar { display: flex; gap: 10px; margin-bottom: 20px; }
-.kb-search-input { flex-grow: 1; padding: 12px 20px; border-radius: 10px; border: 1px solid #ddd; outline: none; font-family: 'Inter', sans-serif; font-size: 14px; transition: 0.2s; }
+.kb-search-input { flex-grow: 1; padding: 12px 20px; border-radius: 10px; border: 1px solid #ddd; outline: none; font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; font-size: 14px; transition: 0.2s; }
 .kb-search-input:focus { border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.1); }
 .kb-table-container { height: 400px; overflow-y: auto; border-bottom: 1px solid var(--gen-border); }
 .kb-table-container::-webkit-scrollbar { width: 6px; }
@@ -2078,7 +2078,7 @@ select.bs-hidden-select:focus {
 
 .idea-menu { width: 550px; max-width: 90vw; }
 .idea-label { display: block; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; color: var(--slate-charcoal); }
-.idea-input { width: 100%; padding: 14px 16px; border-radius: 10px; border: 1px solid #ddd; outline: none; font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 500; transition: 0.2s; background: #f9fafb; color: var(--slate-charcoal); }
+.idea-input { width: 100%; padding: 14px 16px; border-radius: 10px; border: 1px solid #ddd; outline: none; font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; font-size: 14px; font-weight: 500; transition: 0.2s; background: #f9fafb; color: var(--slate-charcoal); }
 .idea-input:focus { border-color: var(--sage-professional); background: white; box-shadow: 0 0 0 4px rgba(90, 141, 59, 0.1); }
 /* Chrome leaves faint vertical caret/paint trails for a textarea sitting inside a
    transform-centered modal (.modal-menu uses translate(-50%,-50%)). Promoting the
@@ -2271,7 +2271,7 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
     font-weight: 600;
     color: var(--slate-charcoal);
     cursor: pointer;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
 }
 .hotbar-kpi-dropdown button:hover { background: #f0fdf4; color: var(--sage-professional); }
 
@@ -2397,8 +2397,8 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
 .qm-item-message { display: none; margin-top: 12px; font-size: 13px; color: #555; background: #f8fafc; padding: 15px; border-radius: 6px; border: 1px dashed #cbd5e1; line-height: 1.5; }
 .qm-item-message.open { display: block; }
 
-#quickMsgDropdown { width: 650px; max-width: 95vw; }
-#quickMsgDropdown .modal-body { max-height: 70vh; }
+/* size now comes from the STANDARD POPUP SIZE rule at the end of this file */
+#quickMsgDropdown .modal-body { max-height: none; }
 
 /* =========================================================
    CONSOLIDATED WIDGETS
@@ -3078,41 +3078,38 @@ body.is-authenticated .info-ticker { display: flex; }
 /* =========================================================
    TOOLTIPS
    ========================================================= */
+/* Redesigned to match the Action Menu look: clean white pill, subtle border +
+   soft shadow, no heavy coloured accent bar. Multi-line tooltips (title + desc)
+   still work — they set their own inner text colours on this white ground. */
 .speeks-tooltip {
     position: absolute;
-    background: #ffffff; 
-    color: var(--slate-charcoal, #334155); 
-    padding: 12px 16px 12px 20px; 
-    border-radius: 8px;
-    font-size: 13px;
+    background: #ffffff;
+    color: var(--slate-charcoal, #1c1f23);
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-size: 12.5px;
     font-weight: 600;
-    pointer-events: none !important; 
+    pointer-events: none !important;
     z-index: 999999;
     opacity: 0;
     visibility: hidden;
-    transition: opacity 0.15s ease;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.15); 
-    max-width: 500px; 
-    width: max-content; 
+    transform: translateY(3px);
+    transition: opacity .14s ease, transform .14s ease;
+    box-shadow: 0 8px 24px rgba(16,24,40,.14), 0 1px 2px rgba(16,24,40,.08);
+    max-width: 340px;
+    width: max-content;
     white-space: normal;
     line-height: 1.5;
-    border: 1px solid #e2e8f0; 
-    overflow: hidden; 
+    border: 1px solid #e3e8ee;
+    overflow: hidden;
 }
 
-.speeks-tooltip::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 4px;
-    background: var(--tip-color, #22c55e);
-}
+.speeks-tooltip::before { display: none !important; }
 
 .speeks-tooltip.show {
     opacity: 1;
     visibility: visible;
+    transform: translateY(0);
 }
 
 .top-nav {
@@ -3220,7 +3217,7 @@ body.is-authenticated .info-ticker { display: flex; }
 
 .hotkey-manage-row input {
     width: 100%; padding: 10px 14px; border: 1px solid #ddd; border-radius: 10px; 
-    font-size: 13px; font-family: 'Inter', sans-serif; transition: 0.2s; outline: none; background: white;
+    font-size: 13px; font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; transition: 0.2s; outline: none; background: white;
 }
 
 .hotkey-manage-row input:focus {
@@ -3297,7 +3294,7 @@ body:not(.is-authenticated) .main-content {
 .alert-store-name,
 .alert-card-header span {
     font-size: 16px !important; font-weight: 900 !important; text-transform: uppercase !important; 
-    letter-spacing: 0.5px !important; font-family: 'Inter', sans-serif !important; 
+    letter-spacing: 0.5px !important; font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif !important; 
     white-space: normal !important; line-height: 1.3 !important; word-break: break-word !important;
 }
 
@@ -3460,7 +3457,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 /* ── Monthly Performance Brief ── */
 .mb-brief-header { flex-wrap: wrap; gap: 8px; }
 .mb-brief-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.mb-table { width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 0; font-family: 'Inter', sans-serif; font-size: 12.5px; }
+.mb-table { width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 0; font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; font-size: 12.5px; }
 .mb-table thead th {
     position: sticky; top: 0; z-index: 5;
     background: #f8f9fb; color: #475569;
@@ -3534,7 +3531,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     width: 92px; height: 26px; box-sizing: border-box;
     padding: 2px 6px; border: 1px solid #cbd5e1; border-radius: 5px;
     font-size: 12px; font-weight: 600; text-align: center; color: var(--slate-charcoal); outline: none;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
     /* 26px fits inside the 34px row cell, so the row height never changes. */
     -moz-appearance: textfield; appearance: textfield;
 }
@@ -4202,7 +4199,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     border: none;
     outline: none;
     font-size: 13px;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
     background: transparent;
     color: var(--slate-charcoal);
 }
@@ -4258,7 +4255,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 }
 .ms-add-row input {
     flex-grow: 1; border: none; outline: none; font-size: 13px;
-    font-family: 'Inter', sans-serif; background: transparent; color: var(--slate-charcoal);
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; background: transparent; color: var(--slate-charcoal);
 }
 
 /* Version Number Styling */
@@ -4267,7 +4264,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 }
 
 .version-tag {
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
     font-size: 10px;
     font-weight: 500;
     color: var(--gen-text);
@@ -5383,7 +5380,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     cursor: pointer;
     white-space: nowrap;
     transition: background 0.15s;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
 }
 .kpi-update-trigger-btn:hover { background: #4a7a2f; }
 
@@ -5460,7 +5457,7 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     padding: 0 12px;
     border: 1px solid #d1d5db;
     border-radius: 8px;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
     font-size: 12px;
     font-weight: 700;
     color: var(--slate-charcoal);
@@ -5506,7 +5503,7 @@ input.vr-up-input[type="file"] {
     outline: none;
     background: transparent;
     padding: 0;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
     font-size: 12px;
     font-weight: 700;
     color: var(--slate-charcoal);
@@ -5664,7 +5661,7 @@ input.vr-up-input[type="file"] {
     width: 100%;
     table-layout: fixed;
     font-size: 11px;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
     border-top: 1px solid #e2e6ea;
     border-left: 1px solid #e2e6ea;
 }
@@ -5800,7 +5797,7 @@ input.vr-up-input[type="file"] {
        center aligned, so the value doesn't shift when it becomes editable). */
     text-align: center;
     color: var(--slate-charcoal);
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
     background: white;
     transition: border-color 0.1s;
     display: block;
@@ -5874,7 +5871,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     font-size: 13px;
     font-weight: 800;
     cursor: pointer;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
     transition: background 0.15s;
     letter-spacing: 0.2px;
 }
@@ -5892,7 +5889,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     font-size: 11px;
     font-weight: 700;
     cursor: pointer;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
     transition: background 0.12s, border-color 0.12s;
 }
 .kpi-export-btn:hover { background: #f0fdf4; border-color: var(--sage-professional); color: var(--sage-professional); }
@@ -5958,7 +5955,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     font-size: 11px;
     font-weight: 700;
     cursor: pointer;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
     transition: background 0.12s, border-color 0.12s;
 }
 .kpi-edit-section-btn:hover { background: #f9fafb; border-color: var(--sage-professional); }
@@ -5977,7 +5974,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     font-weight: 700;
     line-height: 1;
     cursor: pointer;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
     transition: background 0.12s;
 }
 .kpi-save-section-btn:hover    { background: #4a7a2f; }
@@ -6019,7 +6016,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     font-weight: 700;
     line-height: 1;
     cursor: pointer;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
     transition: background 0.15s, border-color 0.15s;
 }
 .kpi-cancel-btn:hover { background: #f9fafb; border-color: #9ca3af; }
@@ -6035,7 +6032,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     background: white;
     color: var(--slate-charcoal);
     cursor: pointer;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
     max-width: 230px;
 }
 .kpi-period-select:focus { outline: none; border-color: var(--sage-professional); }
@@ -6132,7 +6129,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     font-size: 13px;
     font-weight: 700;
     color: var(--slate-charcoal);
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
     width: 100%;
     text-align: right;
     transition: border-color 0.15s;
@@ -7073,7 +7070,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     border: 1px solid #d1d5db;
     border-radius: 8px;
     padding: 0 32px 0 12px;
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
     font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.5px;
@@ -7087,3 +7084,1162 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .msm-store-select:hover { border-color: #cbd5e1; }
 .msm-store-select:focus { border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.15); }
 .msm-store-select option { color: #1a1c1e; background: #fff; font-weight: 700; }
+
+/* =========================================================
+   SPEEKS ACTION MENU  (Priority-Hero briefing deck)
+   Replaces the info-ticker + nav bell. Sits at the top of
+   QuickPortal main content, above the hotbars and widgets.
+   Light styles only -- the global html filter handles dark.
+   ========================================================= */
+.speeks-action-menu {
+    --sam-line: #e3e8ee;
+    --sam-line-2: #eef1f5;
+    --sam-panel: #ffffff;
+    --sam-panel-2: #f6f8fa;
+    --sam-muted: #647082;
+    --sam-faint: #8a94a3;
+    --sam-chip: #f1f5f9;
+    --sam-red-tint: #fcecec;
+    --sam-gold-tint: #fdf3e1;
+    --sam-sage-tint: #eef4e9;
+    --sam-blue: #3b82f6;
+    --sam-violet: #8b5cf6;
+    --sam-shadow-sm: 0 1px 2px rgba(16,24,40,.06);
+    /* No `display` here on purpose: this is a .dynamic-module-flex, so
+       applyRoleBasedUI() sets display:flex !important (or none) inline once the
+       role is known. Declaring flex here would flash it for signed-out/wrong-role
+       users before JS runs. flex-direction/gap still apply once flex is set. */
+    flex-direction: column;
+    gap: 13px;
+    margin-bottom: 22px;
+}
+.speeks-action-menu .sam-card {
+    background: var(--sam-panel);
+    border: 1px solid var(--sam-line);
+    border-radius: 14px;
+    box-shadow: var(--sam-shadow-sm);
+    overflow: hidden;
+}
+.speeks-action-menu .sam-card-h {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 15px; border-bottom: 1px solid var(--sam-line-2);
+}
+.speeks-action-menu .sam-card-h .sam-ttl {
+    display: flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 700; color: var(--text-dark);
+}
+.speeks-action-menu .sam-hico {
+    width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center;
+    background: var(--sam-sage-tint); color: var(--sage-professional);
+}
+.speeks-action-menu .sam-hico svg,
+.speeks-action-menu .sam-mico svg,
+.speeks-action-menu .sam-hero-ico svg { width: 16px; height: 16px; stroke-width: 2; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+.speeks-action-menu .sam-viewall {
+    font-size: 12px; font-weight: 700; color: var(--sage-professional);
+    display: flex; align-items: center; gap: 5px; cursor: pointer; background: none; border: 0; font-family: inherit;
+}
+.speeks-action-menu .sam-viewall:hover { text-decoration: underline; }
+.speeks-action-menu .sam-viewall svg { width: 14px; height: 14px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.speeks-action-menu .sam-pip {
+    min-width: 18px; height: 18px; padding: 0 5px; border-radius: 20px;
+    background: var(--red-alert); color: #fff; font-size: 10.5px; font-weight: 800;
+    display: inline-grid; place-items: center;
+}
+
+/* --- priority hero --- */
+.speeks-action-menu .sam-hero {
+    display: flex; align-items: center; gap: 14px; padding: 15px 18px; border-radius: 14px;
+    background: var(--sam-red-tint); border: 1px solid rgba(239,68,68,.30);
+    position: relative; overflow: hidden; cursor: pointer;
+}
+.speeks-action-menu .sam-hero::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--red-alert); }
+.speeks-action-menu .sam-hero-ico { flex: 0 0 auto; width: 38px; height: 38px; border-radius: 10px; background: var(--red-alert); color: #fff; display: grid; place-items: center; }
+.speeks-action-menu .sam-hero-body { flex: 1; min-width: 0; }
+.speeks-action-menu .sam-hero-lab { font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--red-alert); font-weight: 800; }
+.speeks-action-menu .sam-hero-t { font-weight: 700; font-size: 15px; color: var(--text-dark); }
+.speeks-action-menu .sam-hero-s { font-size: 12.5px; color: var(--sam-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.speeks-action-menu .sam-hero-cta { flex: 0 0 auto; font-size: 12px; font-weight: 700; color: var(--red-alert); border: 1px solid rgba(239,68,68,.40); background: var(--sam-panel); padding: 8px 13px; border-radius: 8px; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.speeks-action-menu .sam-hero-cta svg { width: 14px; height: 14px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+/* Shown only when the hero message isn't truncated (see _samSyncHero). */
+.speeks-action-menu .sam-hero-read { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; font-family: inherit; font-size: 12px; font-weight: 700; color: var(--sam-muted); background: var(--sam-panel); border: 1px solid var(--sam-line); border-radius: 8px; padding: 8px 11px; cursor: pointer; white-space: nowrap; transition: .14s; }
+.speeks-action-menu .sam-hero-read:hover { color: var(--sage-professional, #5a8d3b); border-color: var(--sage-professional, #5a8d3b); }
+.speeks-action-menu .sam-hero-read svg { width: 13px; height: 13px; stroke: currentColor; stroke-width: 2.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+/* `hidden` loses to the display above without this (same trap as .sam-hero). */
+.speeks-action-menu .sam-hero-read[hidden] { display: none; }
+.speeks-action-menu .sam-hero-cta[hidden] { display: none; }
+
+/* --- layout --- */
+/* stretch so the feed card matches the action-items rail height; the feed fills
+   the card (empty state centers) and scrolls internally if it ever overflows. */
+/* minmax(0,…) not plain fr: a `1fr` track floors at the item's min-content
+   width, so one long announcement line pushes the whole deck past the page. */
+.speeks-action-menu .sam-board { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 13px; align-items: stretch; }
+.speeks-action-menu .sam-board > * { min-width: 0; }
+.speeks-action-menu .sam-rail { display: flex; flex-direction: column; gap: 13px; }
+.speeks-action-menu .sam-card { display: flex; flex-direction: column; }
+
+/* --- feed --- */
+.speeks-action-menu .sam-feed { padding: 5px; flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.speeks-action-menu .sam-feed .sam-empty { padding: 22px 14px; text-align: center; color: var(--sam-faint); font-size: 13px; margin: auto; }
+.speeks-action-menu .sam-ann { display: flex; gap: 12px; padding: 11px 12px; border-radius: 10px; cursor: pointer; position: relative; }
+.speeks-action-menu .sam-ann:hover { background: var(--sam-panel-2); }
+.speeks-action-menu .sam-ann + .sam-ann { border-top: 1px solid var(--sam-line-2); }
+.speeks-action-menu .sam-adot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; background: var(--sage-professional); }
+.speeks-action-menu .sam-ann.read .sam-adot { background: var(--sam-faint); }
+.speeks-action-menu .sam-ann.note .sam-adot { background: var(--idea-gold); box-shadow: 0 0 0 4px var(--sam-gold-tint); }
+.speeks-action-menu .sam-a-body { min-width: 0; flex: 1; }
+.speeks-action-menu .sam-a-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.speeks-action-menu .sam-a-title { font-size: 13px; font-weight: 700; color: var(--text-dark); }
+.speeks-action-menu .sam-a-flag { font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--red-alert); background: var(--sam-red-tint); padding: 2px 6px; border-radius: 5px; }
+.speeks-action-menu .sam-a-flag.gold { color: var(--idea-gold); background: var(--sam-gold-tint); }
+.speeks-action-menu .sam-a-snip { font-size: 12px; color: var(--sam-muted); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
+/* "Read full" — injected by _samAddReadFull() only on rows whose snippet is
+   actually clipped, so a complete short message never gets a pointless link. */
+.speeks-action-menu .sam-readfull { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; padding: 0; font-family: inherit; font-size: 11px; font-weight: 700; color: var(--sage-professional, #5a8d3b); background: none; border: 0; cursor: pointer; }
+.speeks-action-menu .sam-readfull svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; transition: transform .14s; }
+.speeks-action-menu .sam-readfull:hover { text-decoration: underline; }
+.speeks-action-menu .sam-readfull:hover svg { transform: translateX(2px); }
+.speeks-action-menu .sam-a-meta { font-size: 11px; color: var(--sam-faint); margin-top: 2px; }
+.speeks-action-menu .sam-schip { font-size: 9px; font-weight: 800; letter-spacing: .04em; padding: 2px 6px; border-radius: 5px; background: var(--sam-chip); color: var(--sam-muted); }
+/* explicit per-item "Mark read" button (replaces the ✕; no bulk mark-all) */
+.speeks-action-menu .sam-markread-btn { align-self: center; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; font-family: inherit; font-size: 11px; font-weight: 700; color: var(--sam-faint); background: var(--sam-panel-2); border: 1px solid var(--sam-line); border-radius: 8px; padding: 5px 9px; cursor: pointer; white-space: nowrap; opacity: .85; transition: .14s; }
+.speeks-action-menu .sam-ann:hover .sam-markread-btn { opacity: 1; }
+.speeks-action-menu .sam-markread-btn:hover { color: var(--sage-professional); border-color: var(--sage-professional); background: var(--sam-sage-tint); }
+.speeks-action-menu .sam-markread-btn svg { width: 12px; height: 12px; stroke: currentColor; stroke-width: 2.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.speeks-action-menu .sam-ann.rem { cursor: default; }
+.speeks-action-menu .sam-adot.urgent { background: var(--red-alert); box-shadow: 0 0 0 4px var(--sam-red-tint); }
+.speeks-action-menu .sam-adot.warn { background: var(--idea-gold); box-shadow: 0 0 0 4px var(--sam-gold-tint); }
+
+/* feed header actions */
+.speeks-action-menu .sam-h-actions { display: flex; align-items: center; gap: 8px; }
+.speeks-action-menu .sam-ann.rem .sam-a-title { flex: 1 1 auto; }
+.speeks-action-menu .sam-ann.rem .sam-r-due { flex: 0 0 auto; margin-left: auto; }
+/* Pills/flags live on the title line, but Mark read / Snooze was centred over the
+   WHOLE row (title + snippet + meta), so the two never shared a centreline — the
+   taller the row, the further off it looked. Give the title line a fixed 22px band
+   and pin the button to it: the button and the due pill fill the band exactly, and
+   the smaller flags/chips stay their natural size but centre within it (sam-a-top
+   is already align-items:center), so everything lines up. */
+.speeks-action-menu .sam-a-top { min-height: 22px; }
+.speeks-action-menu .sam-ann .sam-markread-btn,
+.speeks-action-menu .sam-ann .sam-r-due {
+    box-sizing: border-box;
+    height: 22px;
+    padding-top: 0;
+    padding-bottom: 0;
+    display: inline-flex;
+    align-items: center;
+}
+.speeks-action-menu .sam-ann .sam-markread-btn { align-self: flex-start; }
+
+/* --- reminders --- */
+.speeks-action-menu .sam-rem { display: flex; align-items: center; gap: 11px; padding: 11px 13px; }
+.speeks-action-menu .sam-rem + .sam-rem { border-top: 1px solid var(--sam-line-2); }
+.speeks-action-menu .sam-rdot { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 auto; }
+.speeks-action-menu .sam-r-body { flex: 1; min-width: 0; }
+.speeks-action-menu .sam-r-t { font-size: 12.5px; font-weight: 650; color: var(--text-dark); display: flex; align-items: center; gap: 7px; }
+.speeks-action-menu .sam-r-s { font-size: 11px; color: var(--sam-faint); }
+.speeks-action-menu .sam-r-due { font-size: 10.5px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; padding: 3px 8px; border-radius: 20px; white-space: nowrap; }
+.speeks-action-menu .sam-due-red { background: var(--sam-red-tint); color: var(--red-alert); }
+.speeks-action-menu .sam-due-amber { background: var(--sam-gold-tint); color: var(--idea-gold); }
+.speeks-action-menu .sam-due-grey { background: var(--sam-chip); color: var(--sam-muted); }
+.speeks-action-menu .sam-rem-empty { padding: 16px 14px; text-align: center; color: var(--sam-faint); font-size: 12.5px; }
+
+/* --- mini action rows --- */
+.speeks-action-menu .sam-mini { display: flex; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer; width: 100%; background: none; border: 0; font-family: inherit; text-align: left; }
+.speeks-action-menu .sam-mini + .sam-mini { border-top: 1px solid var(--sam-line-2); }
+.speeks-action-menu .sam-mini:hover { background: var(--sam-panel-2); }
+.speeks-action-menu .sam-mico { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; flex: 0 0 auto; }
+.speeks-action-menu .sam-mico.blue { background: rgba(59,130,246,.13); color: var(--sam-blue); }
+.speeks-action-menu .sam-mico.violet { background: rgba(139,92,246,.13); color: var(--sam-violet); }
+.speeks-action-menu .sam-mico.amber { background: var(--sam-gold-tint); color: var(--idea-gold); }
+.speeks-action-menu .sam-mico.sage { background: var(--sam-sage-tint); color: var(--sage-professional); }
+.speeks-action-menu .sam-m-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.speeks-action-menu .sam-m-t { font-size: 12.5px; font-weight: 700; color: var(--text-dark); }
+.speeks-action-menu .sam-m-s { font-size: 11px; color: var(--sam-faint); }
+.speeks-action-menu .sam-m-bar { height: 5px; border-radius: 5px; background: var(--sam-line-2); margin-top: 6px; overflow: hidden; max-width: 220px; }
+.speeks-action-menu .sam-m-bar > i { display: block; height: 100%; background: var(--sage-professional); border-radius: 5px; transition: width .3s ease; }
+.speeks-action-menu .sam-m-val { font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--sam-muted); }
+.speeks-action-menu .sam-m-chev { color: var(--sam-faint); flex: 0 0 auto; }
+.speeks-action-menu .sam-m-chev svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.speeks-action-menu .sam-storestats { display: flex; gap: 10px; margin-top: 5px; flex-wrap: wrap; }
+.speeks-action-menu .sam-storestat { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; color: var(--sam-muted); font-variant-numeric: tabular-nums; }
+
+/* --- condensed hotbar (wraps the existing hotbars-stack) --- */
+.speeks-action-menu .sam-hotbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 4px 2px; }
+
+/* hide the priority hero until JS confirms a live high-priority announcement */
+.speeks-action-menu .sam-hero[hidden] { display: none; }
+
+/* =========================================================
+   Listing Goals popup — redesigned to match the Action Menu:
+   light + clean, sage accent, subtle dividers, no black widget
+   header. All scoped to #listingGoalsModal so the render markup
+   (renderManagerGoals) stays untouched; we only restyle it.
+   ========================================================= */
+#listingGoalsModal { width: 1200px; max-width: 95vw; }
+#listingGoalsModal .modal-header { border-bottom: 1px solid #e3e8ee; }
+#listingGoalsModal .modal-header h3 { font-size: 17px; letter-spacing: -.01em; }
+#listingGoalsModal .manage-content { padding: 20px 24px 24px; height: auto; max-height: 84vh; background: #ffffff; gap: 0; }
+#listingGoalsModal .lg-modal-card {
+    border: 0 !important; box-shadow: none !important; background: transparent !important;
+    padding: 0 !important; margin: 0 !important; width: 100%;
+}
+#listingGoalsModal .employee-kpi-body {
+    height: auto !important; max-height: 62vh; padding: 0; background: transparent;
+}
+#listingGoalsModal .goals-roster-container { min-height: 200px; }
+#listingGoalsModal #goals-pulse-dot { display: none !important; }
+
+/* goal summary strip (replaces the dark widget header) */
+#listingGoalsModal .district-kpi-header {
+    background: #eef4e9 !important; border: 1px solid rgba(90,141,59,.25) !important;
+    border-radius: 12px !important; padding: 15px 18px !important; margin-bottom: 18px !important;
+    min-height: 0 !important; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+#listingGoalsModal #goals-store-target {
+    order: 1; color: #1c1f23 !important; font-size: 19px !important; font-weight: 800 !important;
+    text-transform: none !important; letter-spacing: -.01em !important;
+}
+#listingGoalsModal .goals-title-wrapper {
+    order: 2; display: inline-flex; align-items: center;
+    background: #ffffff; border: 1px solid rgba(90,141,59,.35); border-radius: 20px; padding: 5px 13px;
+    box-shadow: 0 1px 2px rgba(16,24,40,.06);
+}
+#listingGoalsModal .district-kpi-title {
+    color: #3d6822 !important; font-size: 12px !important; font-weight: 800 !important;
+    letter-spacing: .05em !important; opacity: 1 !important;
+}
+#listingGoalsModal #goals-date-display {
+    color: #3d6822 !important; font-weight: 800 !important; font-size: 12px !important;
+    text-transform: uppercase; letter-spacing: .05em; opacity: 1 !important;
+}
+#listingGoalsModal #goals-date-display::before { content: "" !important; margin: 0 !important; }
+
+/* column header + roster rows share one grid so columns line up */
+#listingGoalsModal .goals-header-row.goals-mgr-header,
+#listingGoalsModal .goals-mgr-row,
+#listingGoalsModal .goals-total-row {
+    display: grid !important; grid-template-columns: 1fr 92px 92px; align-items: center;
+}
+#listingGoalsModal .goals-header-row.goals-mgr-header {
+    padding: 0 8px 9px !important; border-bottom: 1px solid #eef1f5; margin-bottom: 2px;
+}
+#listingGoalsModal .goals-header-lbl {
+    font-size: 10.5px !important; font-weight: 800 !important; letter-spacing: .08em;
+    text-transform: uppercase; color: #8a94a3 !important;
+}
+#listingGoalsModal .goals-header-lbl.center { text-align: center; }
+
+#listingGoalsModal .goals-mgr-row {
+    padding: 13px 8px !important; border-bottom: 1px solid #eef1f5 !important;
+    background: transparent !important; margin: 0 !important; border-radius: 8px;
+}
+#listingGoalsModal .goals-mgr-row:hover { background: #f6f8fa !important; }
+#listingGoalsModal .goals-mgr-emp { display: flex; flex-direction: column; gap: 8px; }
+#listingGoalsModal .goals-roster-name { font-size: 13.5px !important; font-weight: 700 !important; color: #1c1f23 !important; }
+#listingGoalsModal .goals-edit-roles { display: flex; gap: 5px; flex-wrap: wrap; }
+#listingGoalsModal .role-dot {
+    font-size: 10px !important; font-weight: 700 !important; color: #647082 !important;
+    background: #f1f5f9 !important; border: 1px solid #e3e8ee !important; border-radius: 6px !important;
+    min-width: 26px; width: auto !important; height: 22px !important; padding: 0 7px !important;
+    display: inline-flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: none !important;
+}
+#listingGoalsModal .role-dot:hover { border-color: #5a8d3b !important; color: #4a7530 !important; }
+#listingGoalsModal .role-dot.active {
+    background: #5a8d3b !important; border-color: #5a8d3b !important; color: #fff !important;
+}
+#listingGoalsModal .goal-auto-display,
+#listingGoalsModal .goals-mgr-week {
+    text-align: center; font-weight: 800 !important; font-variant-numeric: tabular-nums; font-size: 14px !important;
+}
+#listingGoalsModal .goal-auto-display {
+    background: #eef4e9 !important; color: #4a7530 !important; border-radius: 8px !important;
+    padding: 8px 0 !important; width: 60px; margin: 0 auto !important; border: 1px solid rgba(90,141,59,.2);
+}
+#listingGoalsModal .goals-mgr-week { color: #647082 !important; }
+
+/* total row */
+#listingGoalsModal .goals-total-row {
+    padding: 13px 8px 4px !important; margin-top: 6px !important; border-top: 2px solid #e3e8ee !important;
+    background: transparent !important;
+}
+#listingGoalsModal .goals-total-lbl {
+    font-size: 12px !important; font-weight: 800 !important; text-transform: uppercase;
+    letter-spacing: .06em; color: #647082 !important;
+}
+#listingGoalsModal .goals-total-val {
+    text-align: center; font-weight: 800 !important; font-variant-numeric: tabular-nums; font-size: 15px !important;
+    background: #f1f5f9 !important; border: 1px solid #e3e8ee !important; border-radius: 8px !important;
+    padding: 7px 0 !important; width: 60px; margin: 0 auto !important; box-shadow: none !important;
+}
+#listingGoalsModal .goals-total-val.target { color: #647082 !important; }
+#listingGoalsModal .goals-total-val.actual {
+    background: #eef4e9 !important; color: #4a7530 !important; border-color: rgba(90,141,59,.25) !important;
+}
+
+/* last 4 weeks — softened tinted chips instead of solid red bars */
+#listingGoalsModal .goals-levelup { margin-top: 20px; padding-top: 16px; border-top: 1px solid #eef1f5; }
+#listingGoalsModal .lu-head { margin-bottom: 11px; }
+#listingGoalsModal .lu-title {
+    font-size: 10.5px !important; font-weight: 800 !important; letter-spacing: .08em;
+    text-transform: uppercase; color: #8a94a3 !important;
+}
+#listingGoalsModal .lu-weeks { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+#listingGoalsModal .lu-week {
+    border-radius: 11px !important; padding: 16px 0 !important; text-align: center;
+    font-weight: 900; border: 1px solid transparent !important;
+    box-shadow: 0 1px 2px rgba(16,24,40,.06) !important;
+}
+#listingGoalsModal .lu-week.green { background: #d9ecc9 !important; border-color: rgba(90,141,59,.5) !important; }
+#listingGoalsModal .lu-week.red { background: #fbd5d5 !important; border-color: rgba(229,72,77,.5) !important; }
+#listingGoalsModal .lu-week.empty { background: #eef1f5 !important; border-color: #e3e8ee !important; }
+/* Explicit per-state number colour — the old solid-bar style left this light,
+   which washed out against the new tinted fills. */
+#listingGoalsModal .lu-week-num { font-size: 21px !important; font-weight: 900 !important; letter-spacing: -.01em; }
+#listingGoalsModal .lu-week.green .lu-week-num { color: #3d6822 !important; }
+#listingGoalsModal .lu-week.red .lu-week-num { color: #b02a2f !important; }
+#listingGoalsModal .lu-week.empty .lu-week-num { color: #8a94a3 !important; }
+
+/* When the Action Menu is live for this user (managers/ASMs), it re-homes the
+   ticker's toggles and the announcements bell -- so hide both. Everyone else
+   (employees, DM, other pages) keeps them until the deck rolls out to them. */
+body.sam-active #infoTicker { display: none !important; }
+body.sam-active #notifBellBtn { display: none !important; }
+
+/* Condensed one-line hotbar for Action Menu users: the whole stack becomes one
+   sleek chip bar (labels hidden, buttons no longer stretch full-width). */
+body.sam-active .hotbars-stack {
+    flex-direction: row; flex-wrap: wrap; align-items: stretch; gap: 8px;
+    background: #ffffff; border: 1px solid #e3e8ee; border-radius: 14px;
+    padding: 10px 14px; margin: -6px 0 22px; box-shadow: 0 1px 2px rgba(16,24,40,.06);
+}
+body.sam-active .hotbars-stack::before {
+    content: "Quick Links"; font-size: 11px; font-weight: 800; letter-spacing: .05em;
+    text-transform: uppercase; color: #647082; padding-right: 11px; margin-right: 3px;
+    border-right: 1px solid #e3e8ee; white-space: nowrap; align-self: center;
+}
+/* Flatten the role/store groups so every chip shares one flex row and sizes
+   equally. Wrappers are role-gated (.dynamic-module-flex) and get an inline
+   display from applyRoleBasedUI, so samCleanHotbar() forces the visible ones to
+   `contents` too; these rules cover the inner boxes (not role-gated). */
+body.sam-active .hotbar-wrapper,
+body.sam-active .hotbar-container,
+body.sam-active .hotbar-links { display: contents; }
+body.sam-active .hotbar-label { display: none; }
+body.sam-active .hotbar-btn {
+    flex: 1 1 130px !important; min-width: 0 !important; width: auto !important;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    white-space: normal !important; text-align: center;
+    font-size: 12px; font-weight: 600; color: var(--text-dark);
+    background: #f6f8fa; border: 1px solid #e3e8ee; border-radius: 8px;
+    padding: 8px 12px; line-height: 1.2; box-shadow: none;
+}
+body.sam-active .hotbar-btn:hover {
+    border-color: var(--sage-professional); color: var(--sage-professional);
+    background: #eef4e9; transform: none;
+}
+
+@media (max-width: 900px) {
+    .speeks-action-menu .sam-board { grid-template-columns: 1fr; }
+}
+
+/* =========================================================
+   Checklist / Cleaning / Goals side-panels — restyled to match
+   the Action Menu + Listing Goals popup. Scoped to the panel
+   classes so shared bits (.tab-btn, .notif-tabs) used in other
+   modals are untouched. Render markup (renderChecklist / renderAudit
+   / the gi-* renders) is unchanged — CSS only.
+   ========================================================= */
+
+/* ---------- Manager Checklist + Cleaning Checklist ---------- */
+.checklist-side-panel { background: #ffffff; }
+.checklist-side-panel .cl-panel-header {
+    padding: 16px 16px 12px !important; border-bottom: 1px solid #e3e8ee; background: #ffffff;
+}
+.checklist-side-panel .cl-panel-header h3 { font-size: 15px !important; font-weight: 800 !important; color: #1c1f23 !important; }
+#audit-week-label { color: #647082 !important; }
+
+/* segmented tabs */
+.checklist-side-panel .notif-tabs {
+    display: inline-flex; gap: 3px; background: #f1f5f9; padding: 3px; border-radius: 9px; border: 0;
+}
+.checklist-side-panel .notif-tabs .tab-btn {
+    border: 0 !important; background: none !important; font-family: inherit; font-size: 12px !important;
+    font-weight: 700 !important; color: #647082 !important; padding: 6px 13px !important; border-radius: 6px !important;
+    cursor: pointer; box-shadow: none !important;
+}
+.checklist-side-panel .notif-tabs .tab-btn.active {
+    background: #ffffff !important; color: #1c1f23 !important; box-shadow: 0 1px 2px rgba(16,24,40,.10) !important;
+}
+
+/* items */
+.checklist-side-panel .cl-scroll-area { padding: 6px 8px; }
+.checklist-side-panel .cl-item {
+    display: flex; align-items: center; gap: 11px; padding: 11px 10px !important;
+    border-radius: 9px !important; border: 0 !important; border-bottom: 1px solid #eef1f5 !important;
+    background: transparent !important; margin: 0 !important;
+}
+.checklist-side-panel .cl-item:hover { background: #f6f8fa !important; }
+.checklist-side-panel .cl-checkbox {
+    appearance: none !important; -webkit-appearance: none !important; -moz-appearance: none !important;
+    width: 20px !important; height: 20px !important; min-width: 20px; border: 2px solid #d5dbe3 !important;
+    border-radius: 6px !important; cursor: pointer; flex: 0 0 auto; position: relative; margin: 0 !important;
+    background: #fff !important; transition: .15s; box-shadow: none !important;
+}
+.checklist-side-panel .cl-checkbox:checked { background: #5a8d3b !important; border-color: #5a8d3b !important; }
+/* The tick was placed with hard-coded left/top offsets, which only line up for one
+   exact box size — the 2px border and border-box sizing pushed it high and right.
+   Centre it off the box itself instead, so it stays put whatever the size is.
+   The -58% (rather than -50%) is optical: rotating the L puts its visual weight
+   low, so a mathematically centred tick reads as sitting too far down. */
+.checklist-side-panel .cl-checkbox:checked::after {
+    content: ""; position: absolute; left: 50%; top: 50%;
+    width: 5px; height: 9px;
+    border: solid #fff; border-width: 0 2.5px 2.5px 0;
+    transform: translate(-50%, -58%) rotate(45deg);
+}
+.checklist-side-panel .cl-text { font-size: 13px !important; color: #1c1f23 !important; line-height: 1.4; }
+.checklist-side-panel .cl-item.completed .cl-text { color: #8a94a3 !important; text-decoration: line-through; }
+.checklist-side-panel .cl-delete-btn {
+    background: none !important; border: 0 !important; color: #b0b8c1 !important; cursor: pointer;
+    font-size: 12px; padding: 4px; line-height: 1;
+}
+.checklist-side-panel .cl-delete-btn:hover { color: #e5484d !important; }
+
+/* footer + add row */
+.checklist-side-panel .cl-footer-row { padding: 8px 12px 4px; }
+.checklist-side-panel .cl-clear-btn {
+    font-size: 12px !important; font-weight: 700 !important; color: #647082 !important;
+    background: #f1f5f9 !important; border: 1px solid #e3e8ee !important; border-radius: 8px !important;
+    padding: 7px 14px !important; cursor: pointer;
+}
+.checklist-side-panel .cl-clear-btn:hover { border-color: #cbd5e1 !important; }
+.checklist-side-panel .cl-input-area {
+    padding: 12px !important; border-top: 1px solid #eef1f5; gap: 8px; display: flex;
+}
+.checklist-side-panel .cl-input-area input {
+    flex: 1; border: 1px solid #e3e8ee !important; background: #f6f8fa !important; border-radius: 8px !important;
+    padding: 9px 12px !important; font-family: inherit; font-size: 13px; color: #1c1f23 !important;
+}
+.checklist-side-panel .cl-input-area input:focus {
+    outline: none; border-color: #5a8d3b !important; box-shadow: 0 0 0 3px rgba(90,141,59,.12) !important;
+}
+.checklist-side-panel .cl-add-btn {
+    border: 0 !important; background: #5a8d3b !important; color: #fff !important; font-weight: 700 !important;
+    font-size: 13px !important; padding: 9px 16px !important; border-radius: 8px !important; cursor: pointer;
+}
+.checklist-side-panel .cl-add-btn:hover { background: #4a7530 !important; }
+
+/* ---------- Goals & Initiatives ---------- */
+.goals-side-panel { background: #ffffff; }
+.goals-side-panel .gi-panel-header {
+    padding: 16px !important; border-bottom: 1px solid #e3e8ee; background: #ffffff;
+}
+.goals-side-panel .gi-panel-header h3 { font-size: 15px !important; font-weight: 800 !important; color: #1c1f23 !important; }
+.goals-side-panel .gi-panel-body { padding: 16px !important; }
+.goals-side-panel .gi-section + .gi-section { margin-top: 20px; }
+.goals-side-panel .gi-section-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px !important;
+}
+.goals-side-panel .gi-section-title {
+    font-size: 11px !important; font-weight: 800 !important; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3 !important;
+}
+.goals-side-panel .mini-action-btn {
+    font-size: 11.5px !important; font-weight: 700 !important; color: #4a7530 !important;
+    background: #eef4e9 !important; border: 1px solid transparent !important; border-radius: 7px !important;
+    padding: 5px 10px !important; cursor: pointer;
+}
+.goals-side-panel .mini-action-btn:hover { border-color: #5a8d3b !important; }
+.goals-side-panel .gi-items-list { display: flex; flex-direction: column; gap: 8px; }
+.goals-side-panel .mgb-goal-item,
+.goals-side-panel .cpb-project-item {
+    background: #f6f8fa !important; border: 1px solid #eef1f5 !important; border-radius: 10px !important;
+    padding: 12px 13px !important; display: flex; flex-direction: column; gap: 4px;
+}
+.goals-side-panel .cpb-item-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.goals-side-panel .mgb-goal-title { font-size: 13px !important; font-weight: 700 !important; color: #1c1f23 !important; }
+.goals-side-panel .mgb-goal-desc { font-size: 12px !important; color: #647082 !important; line-height: 1.5; }
+.goals-side-panel .cpb-section-label {
+    font-size: 11px !important; font-weight: 800 !important; letter-spacing: .06em; text-transform: uppercase;
+    color: #8a94a3 !important; margin: 2px 0 7px !important;
+}
+.goals-side-panel .cpb-section-label--spaced { margin-top: 14px !important; }
+.goals-side-panel .si-status-badge {
+    font-size: 9.5px !important; font-weight: 800 !important; letter-spacing: .04em; text-transform: uppercase;
+    padding: 2px 7px !important; border-radius: 5px !important; border: 0 !important;
+}
+.goals-side-panel .si-status-badge--current { background: #eef4e9 !important; color: #4a7530 !important; }
+.goals-side-panel .si-status-badge--upcoming { background: #fdf3e1 !important; color: #f59e0b !important; }
+/* Past-months picker. Was a rounded emoji pill left over from the old design;
+   now a calm icon chip that matches the nav / deck buttons. */
+.goals-side-panel .gi-prev-toggle {
+    display: inline-flex !important; align-items: center; gap: 4px;
+    background: #f6f8fa !important; border: 1px solid #e3e8ee !important; border-radius: 8px !important;
+    padding: 4px 6px !important; color: #647082 !important; cursor: pointer;
+    transition: background .16s ease, border-color .16s ease, color .16s ease;
+}
+.goals-side-panel .gi-prev-toggle:hover {
+    background: #eef4e9 !important; border-color: var(--sage-professional, #5a8d3b) !important;
+    color: var(--sage-professional, #5a8d3b) !important;
+}
+.goals-side-panel .gi-prev-toggle.active {
+    background: var(--sage-professional, #5a8d3b) !important;
+    border-color: var(--sage-professional, #5a8d3b) !important; color: #fff !important;
+}
+.goals-side-panel .gi-prev-toggle .gi-cal-ico { width: 13px; height: 13px; flex: 0 0 auto; }
+.goals-side-panel .gi-prev-toggle .gi-prev-chevron { width: 9px; height: 9px; flex: 0 0 auto; }
+/* The old rule hard-coded a white chevron for the active state; colour now just
+   follows the button's own text colour in every state. */
+.goals-side-panel .gi-prev-toggle .gi-prev-chevron,
+.goals-side-panel .gi-prev-toggle.active .gi-prev-chevron { stroke: currentColor; }
+
+/* =========================================================
+   SPEEKS FEED HUB  (#notifDropdown) — calm classification.
+   One filterable reader: announcements + comments + deadlines
+   + patch notes. Light-only; global html filter handles dark.
+   Scoped to #notifDropdown so nothing else is affected.
+   ========================================================= */
+#notifDropdown.hub-modal {
+    width: 1200px; max-width: 95vw; max-height: 84vh;
+    padding: 0 !important; display: flex; flex-direction: column; overflow: hidden;
+    background: #fff; border-radius: 16px;
+}
+#notifDropdown .hub-head { padding: 18px 22px 0; border-bottom: 1px solid #eef1f5; flex: 0 0 auto; }
+#notifDropdown .hub-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+#notifDropdown .hub-title-wrap { display: flex; align-items: center; gap: 11px; }
+#notifDropdown .hub-hi { width: 34px; height: 34px; border-radius: 10px; background: #eef4e9; color: var(--sage-professional); display: grid; place-items: center; flex: 0 0 auto; }
+#notifDropdown .hub-hi svg { width: 17px; height: 17px; }
+#notifDropdown .hub-title-wrap h3 { margin: 0; font-size: 18px; letter-spacing: -.01em; color: var(--text-dark); }
+#notifDropdown .hub-sub { font-size: 12px; color: #8a94a3; }
+#notifDropdown .modal-close-btn { width: 32px; height: 32px; border-radius: 8px; background: #f1f5f9; color: #647082; }
+
+#notifDropdown .hub-filter { display: flex; align-items: center; gap: 10px; padding: 15px 0 14px; }
+#notifDropdown .hub-filter label { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #8a94a3; }
+#notifDropdown .hub-select-wrap { position: relative; display: inline-flex; align-items: center; }
+#notifDropdown .hub-select-wrap select {
+    appearance: none; -webkit-appearance: none; font-family: inherit; font-size: 13px; font-weight: 650; color: var(--text-dark);
+    background: #f6f8fa; border: 1px solid #e3e8ee; border-radius: 10px; padding: 9px 36px 9px 13px; cursor: pointer; min-width: 200px;
+}
+#notifDropdown .hub-select-wrap select:focus { outline: none; border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(90,141,59,.16); }
+#notifDropdown .hub-chev { position: absolute; right: 12px; pointer-events: none; color: #647082; display: inline-flex; }
+#notifDropdown .hub-chev svg { width: 15px; height: 15px; }
+#notifDropdown .hub-count { font-size: 12px; color: #8a94a3; margin-left: 2px; }
+
+#notifDropdown .hub-feed { overflow-y: auto; padding: 14px 16px 20px; display: flex; flex-direction: column; gap: 10px; background: #eef1f5; flex: 1 1 auto; }
+#notifDropdown .hub-empty { padding: 40px 14px; text-align: center; color: #8a94a3; font-size: 13.5px; }
+
+/* item (calm) */
+#notifDropdown .hub-item { flex: 0 0 auto; background: #fff; border: 1px solid #e3e8ee; border-radius: 14px; box-shadow: 0 1px 2px rgba(16,24,40,.06); overflow: hidden; }
+#notifDropdown .hub-row { display: flex; gap: 13px; padding: 14px 16px; }
+#notifDropdown .hub-tico { width: 34px; height: 34px; border-radius: 10px; flex: 0 0 auto; display: grid; place-items: center; background: #f1f5f9; color: #647082; }
+#notifDropdown .hub-tico svg { width: 17px; height: 17px; }
+#notifDropdown .t-ann  .hub-tico { background: #eef4e9; color: var(--sage-deep, #4a7530); }
+#notifDropdown .t-note .hub-tico { background: #fdf3e1; color: var(--idea-gold); }
+#notifDropdown .t-due  .hub-tico { background: #fcecec; color: var(--red-alert); }
+#notifDropdown .t-due.amber .hub-tico { background: #fdf3e1; color: var(--idea-gold); }
+#notifDropdown .t-patch .hub-tico { background: #f1edfb; color: #8b5cf6; }
+#notifDropdown .t-arch .hub-tico { background: #f1f5f9; color: #8a94a3; }
+
+#notifDropdown .hub-col { flex: 1; min-width: 0; }
+/* Landing highlight for a card opened via "Read full" (openHubTo). Fades out on
+   its own so it never looks like a permanent state. */
+/* Breathing room when openHubTo() aligns a card to the top of the scroller,
+   so the jumped-to card doesn't sit flush against the filter bar. */
+#notifDropdown .hub-item { scroll-margin-top: 12px; }
+#notifDropdown .hub-item.hub-jump { animation: hubJump 2.2s ease-out; }
+@keyframes hubJump {
+    0%, 22% { border-color: var(--sage-professional, #5a8d3b); box-shadow: 0 0 0 3px rgba(90,141,59,.20); }
+    100%    { border-color: #e3e8ee; box-shadow: 0 1px 2px rgba(16,24,40,.06); }
+}
+#notifDropdown .hub-item-top { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+#notifDropdown .hub-item-title { font-size: 14.5px; font-weight: 750; letter-spacing: -.01em; color: var(--text-dark); }
+#notifDropdown .hub-meta-r { font-size: 11.5px; color: #8a94a3; margin-left: auto; white-space: nowrap; }
+#notifDropdown .hub-kind-meta { font-size: 11.5px; color: #8a94a3; margin-top: 2px; }
+#notifDropdown .hub-kind { font-weight: 700; text-transform: uppercase; letter-spacing: .05em; font-size: 10.5px; color: #647082; }
+#notifDropdown .hub-item-body { font-size: 13.5px; color: #4b5563; line-height: 1.6; margin-top: 8px; }
+#notifDropdown .hub-item-body ul { margin: 6px 0; padding-left: 20px; }
+#notifDropdown .hub-item-body a { color: var(--sage-deep, #4a7530); }
+
+/* the only loud signals */
+#notifDropdown .hub-prio-pill { font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; background: var(--red-alert); color: #fff; padding: 2px 7px; border-radius: 5px; }
+#notifDropdown .hub-item.prio { box-shadow: inset 3px 0 0 var(--red-alert), 0 1px 2px rgba(16,24,40,.06); }
+#notifDropdown .hub-due-badge { font-size: 10.5px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; padding: 4px 9px; border-radius: 20px; margin-left: auto; white-space: nowrap; }
+#notifDropdown .hub-due-red { background: #fcecec; color: var(--red-alert); }
+#notifDropdown .hub-due-amber { background: #fdf3e1; color: var(--idea-gold); }
+/* deadline/reminder cards jump to their tool on click */
+#notifDropdown .hub-item.t-due[onclick] { transition: box-shadow .15s ease, transform .15s ease; }
+#notifDropdown .hub-item.t-due[onclick]:hover { box-shadow: 0 6px 18px rgba(16,24,40,.12); transform: translateY(-1px); }
+#notifDropdown .hub-open-hint { color: var(--sage-deep, #4a7530); font-weight: 700; margin-left: 5px; white-space: nowrap; }
+
+#notifDropdown .hub-item.read { opacity: .72; }
+#notifDropdown .hub-item.read .hub-item-title { color: #647082; }
+
+/* announcement footer (reactions + actions) */
+#notifDropdown .hub-foot { display: flex; align-items: center; gap: 8px; margin-top: 13px; padding-top: 12px; border-top: 1px solid #eef1f5; flex-wrap: wrap; }
+#notifDropdown .hub-foot .ann-reactions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+#notifDropdown .hub-markread { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--sage-deep, #4a7530); background: none; border: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-family: inherit; }
+#notifDropdown .hub-markread:hover { color: var(--sage-professional); }
+#notifDropdown .hub-doclink { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--sage-deep, #4a7530); text-decoration: none; margin-top: 10px; }
+#notifDropdown .read-receipt { position: relative; }
+
+/* patch note card */
+#notifDropdown .hub-patch-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+#notifDropdown .hub-patch-ver { font-size: 14.5px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -.01em; color: var(--text-dark); }
+#notifDropdown .hub-latest { font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #fff; background: var(--sage-professional); padding: 2px 8px; border-radius: 20px; }
+#notifDropdown .hub-patch-sec { margin-top: 13px; }
+#notifDropdown .hub-psec-title { display: flex; align-items: center; gap: 8px; font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3; margin-bottom: 7px; }
+#notifDropdown .hub-pdot { width: 7px; height: 7px; border-radius: 3px; }
+#notifDropdown .hub-pdot.pd-feat { background: var(--sage-professional); }
+#notifDropdown .hub-pdot.pd-imp { background: #3b82f6; }
+#notifDropdown .hub-pdot.pd-fix { background: var(--idea-gold); }
+#notifDropdown .hub-patch ul { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+#notifDropdown .hub-patch li { position: relative; padding-left: 17px; font-size: 13px; color: var(--text-dark); line-height: 1.5; }
+#notifDropdown .hub-patch li::before { content: ""; position: absolute; left: 3px; top: 8px; width: 5px; height: 5px; border-radius: 50%; background: #d5dbe3; }
+
+@media (max-width: 560px) {
+    #notifDropdown.hub-modal { width: 96vw; }
+    #notifDropdown .hub-select-wrap select { min-width: 150px; }
+}
+
+/* =========================================================
+   REFINED TOP NAV (calm / dark) — 2026-07-21
+   Modernizes the dark slate bar into the sage/slate system:
+   SVG line icons (no emoji), slimmer chip utilities, a softer
+   sage active pill, cleaner greeting. Keeps the dark ground so
+   the existing logo still reads. All scoped to .top-nav; the
+   global html filter still handles dark mode.
+   ========================================================= */
+.top-nav {
+    padding: 0 26px !important;
+    min-height: 64px;
+    gap: 22px;
+    box-shadow: inset 0 -1px 0 rgba(255,255,255,.05), 0 6px 22px rgba(16,24,40,.12);
+}
+.top-nav .brand-logo { height: 26px; }
+
+/* --- page links --- */
+.top-nav .nav-bar { gap: 4px; }
+.top-nav .nav-link {
+    color: #98a2ad;
+    height: 38px;
+    padding: 0 14px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .01em;
+    border-radius: 9px;
+    gap: 8px;
+    transition: background .16s ease, color .16s ease;
+}
+.top-nav .nav-link:hover { background: rgba(255,255,255,.06); color: #fff; transform: none; }
+.top-nav .nav-link.active { background: var(--sage-professional); color: #fff; box-shadow: 0 2px 8px rgba(90,141,59,.28); }
+.top-nav .nav-link i { width: auto; font-size: 0; display: inline-flex; align-items: center; }
+.top-nav .nav-link svg { width: 17px; height: 17px; stroke-width: 1.9; opacity: .92; }
+.top-nav .nav-link.active svg { opacity: 1; }
+
+/* --- utility chip buttons (idea / messages / hotkeys / calendar / bell) --- */
+.top-nav .user-profile-nav { gap: 10px; border-right-color: rgba(255,255,255,.08); padding-right: 16px; }
+.top-nav .action-btn {
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    font-size: 0;
+    background: rgba(255,255,255,.05);
+    border: 1px solid rgba(255,255,255,.08);
+    color: #c4cbd3;
+    box-shadow: none;
+    transition: background .16s ease, border-color .16s ease, color .16s ease;
+}
+.top-nav .action-btn:hover {
+    background: rgba(90,141,59,.16);
+    border-color: rgba(90,141,59,.55);
+    color: #fff;
+    transform: none;
+    box-shadow: none;
+}
+.top-nav .action-btn svg { width: 19px; height: 19px; stroke-width: 1.9; flex: 0 0 auto; }
+/* The idea button is the one nav chip that's also an .idea-btn, so it still
+   carries sidebar-era geometry the chip rules never reset. `padding: 0 13px`
+   left only a 14px content box inside the 40px chip, and the icon — a flex
+   item, shrinkable by default — was squeezed below the 19px the other three
+   render at. Reset the geometry here; `flex: 0 0 auto` above is the backstop. */
+.top-nav .idea-btn { padding: 0; gap: 0; justify-content: center; }
+.top-nav .notif-dot { top: -3px; right: -3px; width: 10px; height: 10px; }
+
+/* --- Tools button --- */
+.top-nav .tools-nav-btn {
+    height: 40px; border-radius: 10px; gap: 7px; padding: 0 14px;
+    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08);
+}
+.top-nav .tools-nav-btn:hover { background: rgba(90,141,59,.16); border-color: rgba(90,141,59,.55); }
+.top-nav .tools-nav-btn.panel-open { background: rgba(90,141,59,.24); border-color: rgba(90,141,59,.6); box-shadow: none; }
+.top-nav .tools-nav-btn .lock-icon { width: 15px; height: 15px; }
+.top-nav .tools-nav-label { font-size: 12.5px; font-weight: 700; text-transform: none; letter-spacing: .01em; }
+
+/* --- MSM store switcher (chip to match) --- */
+.top-nav .msm-store-select {
+    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08); color: #e6eaee;
+    border-radius: 10px; height: 40px; padding: 0 12px; font-weight: 650; font-size: 12.5px;
+}
+
+/* --- greeting / sign out --- */
+.top-nav #userGreeting { font-size: 13.5px; font-weight: 700; letter-spacing: -.01em; }
+.top-nav .version-signout-row { gap: 8px; }
+.top-nav .version-tag { color: rgba(255,255,255,.4); }
+.top-nav .sign-out-mini {
+    border: 1px solid rgba(255,255,255,.16); color: #aeb6bf; background: transparent;
+    padding: 3px 11px; border-radius: 7px; text-transform: none; letter-spacing: .01em; font-weight: 700;
+}
+.top-nav .sign-out-mini:hover { background: var(--red-alert); border-color: var(--red-alert); color: #fff; box-shadow: none; }
+
+/* =========================================================
+   STANDARD POPUP SIZE — 2026-07-21
+   Every .modal-menu popup (calendar, hotkeys, quick messages,
+   listing goals, the manage tools, …) now shares one footprint,
+   matching the Listing Goals popup. The modal is a flex column so
+   the header pins to the top, the footer pins to the bottom, and
+   the body scrolls — instead of each modal sizing to its content.
+   Exceptions further down: #ideaModal (smaller) and
+   #scorecardSubmitModal (wider data grid, keeps its own width).
+   ========================================================= */
+.modal-menu {
+    width: 1200px;
+    max-width: 95vw;
+    height: 84vh;
+    max-height: 84vh;
+    display: flex;
+    flex-direction: column;
+}
+/* header + footer stay put, body takes the rest and scrolls */
+.modal-menu > .modal-header,
+.modal-menu > .manage-footer,
+.modal-menu > .modal-footer { flex: 0 0 auto; }
+.modal-menu > .manage-content,
+.modal-menu > .modal-content,
+.modal-menu > .modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    /* older per-container caps (.modal-body was 60vh) left dead space at the
+       bottom of the taller standard popup — the flex row owns the height now */
+    max-height: none;
+    overflow-y: auto;
+}
+/* a hidden modal must not reserve layout space */
+.modal-menu:not(.show) { pointer-events: none; }
+
+/* --- exception: Submit an Idea (compact form, but roomier than before) --- */
+#ideaModal {
+    width: 720px;
+    max-width: 95vw;
+    height: auto;
+    max-height: 88vh;
+}
+#ideaModal .modal-content { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+#ideaModal #ideaDesc { min-height: 190px; resize: vertical; }
+
+/* --- exception: Submit Scores keeps its wider grid --- */
+#scorecardSubmitModal { height: 84vh; max-height: 84vh; }
+
+@media (max-width: 768px) {
+    .modal-menu { height: 88vh; max-height: 88vh; }
+    #ideaModal { height: auto; }
+}
+
+/* --- popups whose inner scroll area had a hard-coded height ---------------
+   These kept their old fixed height inside the new taller standard popup,
+   leaving dead space at the bottom. Let the inner area flex to the bottom
+   and keep its own scroll. */
+#hotkeysDropdown > .modal-body { display: flex; flex-direction: column; overflow: hidden; }
+#hotkeysDropdown .kb-search-bar { flex: 0 0 auto; }
+#hotkeysDropdown .kb-table-container { flex: 1 1 auto; height: auto; min-height: 0; }
+
+#calendarDropdown > .calendar-content { flex: 1 1 auto; min-height: 0; height: auto; overflow: hidden; }
+
+/* =========================================================
+   UTILITY POPUP REDESIGN (calm) — 2026-07-21
+   The four popups opened from the top-nav utility buttons:
+   Have an Idea, Quick Messages, Hotkeys & Commands, Calendar.
+   Restyled to the Action-Menu / Listing-Goals system: white
+   grounds, sage accents, uppercase eyebrows, soft dividers.
+   Scoped by modal id so no other modal is affected.
+   ========================================================= */
+
+/* --- shared chrome for the four --- */
+#ideaModal > .modal-header,
+#quickMsgDropdown > .modal-header,
+#hotkeysDropdown > .modal-header,
+#calendarDropdown > .modal-header {
+    padding: 17px 22px;
+    background: #ffffff;
+    border-bottom: 1px solid #eef1f5;
+}
+#ideaModal > .modal-header h3,
+#quickMsgDropdown > .modal-header h3,
+#hotkeysDropdown > .modal-header h3,
+#calendarDropdown > .modal-header h3 {
+    font-size: 17px; font-weight: 800; letter-spacing: -.01em; color: #1c1f23;
+}
+#ideaModal .modal-close-btn,
+#quickMsgDropdown .modal-close-btn,
+#hotkeysDropdown .modal-close-btn,
+#calendarDropdown .modal-close-btn {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: #f1f5f9; color: #647082; font-size: 14px;
+}
+#ideaModal .modal-close-btn:hover,
+#quickMsgDropdown .modal-close-btn:hover,
+#hotkeysDropdown .modal-close-btn:hover,
+#calendarDropdown .modal-close-btn:hover { background: #fcecec; color: var(--red-alert); }
+
+/* --- 1. HOTKEYS & COMMANDS ------------------------------------------- */
+#hotkeysDropdown > .modal-body { padding: 16px 20px 20px !important; background: #ffffff; }
+#hotkeysDropdown .kb-search-bar { margin-bottom: 14px; }
+#hotkeysDropdown .kb-search-input {
+    padding: 11px 15px; border-radius: 10px; border: 1px solid #e3e8ee;
+    background: #f6f8fa; font-family: inherit; font-size: 13.5px; color: #1c1f23;
+}
+#hotkeysDropdown .kb-search-input::placeholder { color: #8a94a3; }
+#hotkeysDropdown .kb-search-input:focus {
+    border-color: var(--sage-professional); background: #ffffff;
+    box-shadow: 0 0 0 3px rgba(90,141,59,.14);
+}
+#hotkeysDropdown .kb-table-container {
+    border: 1px solid #e3e8ee; border-radius: 12px; background: #ffffff;
+}
+/* the old header was a solid black bar — far too loud for the calm system */
+#hotkeysDropdown .kb-table th {
+    background: #f6f8fa; color: #647082;
+    font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    padding: 12px 15px; border-bottom: 1px solid #e3e8ee;
+}
+#hotkeysDropdown .kb-table td {
+    padding: 13px 15px; border-bottom: 1px solid #eef1f5;
+    font-size: 13px; color: #2d2d2d;
+}
+#hotkeysDropdown .kb-table tr:hover { background: #f6f8fa; }
+#hotkeysDropdown .kb-table .bubble {
+    background: #eef4e9; color: var(--sage-deep, #4a7530); border: 0;
+    font-size: 10.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+    padding: 4px 10px; border-radius: 20px; display: inline-block;
+}
+#hotkeysDropdown .kb-table-container::-webkit-scrollbar-thumb { background: #d5dbe3; }
+
+/* --- 2. QUICK MESSAGES ------------------------------------------------ */
+#quickMsgDropdown .notif-tabs { background: #f1f5f9; padding: 4px; border-radius: 10px; gap: 4px; }
+#quickMsgDropdown .tab-btn {
+    font-size: 12px; font-weight: 700; color: #647082;
+    border-radius: 7px; padding: 7px 14px; font-family: inherit;
+}
+#quickMsgDropdown .tab-btn:hover { color: #1c1f23; }
+#quickMsgDropdown .tab-btn.active { background: #ffffff; color: #1c1f23; box-shadow: 0 1px 2px rgba(16,24,40,.10); }
+#quickMsgDropdown > .modal-body { padding: 16px 18px 20px !important; background: #eef1f5; }
+#quickMsgDropdown .qm-category {
+    background: #ffffff; border: 1px solid #e3e8ee; border-radius: 11px;
+    padding: 12px 15px; font-size: 12px; font-weight: 800;
+    letter-spacing: .05em; text-transform: uppercase; color: #647082;
+    box-shadow: 0 1px 2px rgba(16,24,40,.05);
+}
+#quickMsgDropdown .qm-category:hover { border-color: #cbd5e1; background: #ffffff; }
+#quickMsgDropdown .qm-category.open { color: var(--sage-deep, #4a7530); border-color: rgba(90,141,59,.35); background: #eef4e9; }
+#quickMsgDropdown .qm-category-items { padding-top: 10px; }
+#quickMsgDropdown .qm-item {
+    border: 1px solid #e3e8ee; border-radius: 12px; padding: 13px 15px;
+    box-shadow: 0 1px 2px rgba(16,24,40,.06); margin-bottom: 9px;
+}
+#quickMsgDropdown .qm-item-name { font-size: 13px; font-weight: 750; color: #1c1f23; }
+#quickMsgDropdown .qm-item-name:hover { color: var(--sage-deep, #4a7530); }
+#quickMsgDropdown .qm-copy-btn {
+    background: #eef4e9; color: var(--sage-deep, #4a7530); border: 1px solid transparent;
+    border-radius: 8px; font-weight: 700; font-size: 11.5px; padding: 6px 12px;
+    text-transform: none; letter-spacing: .01em; box-shadow: none;
+}
+#quickMsgDropdown .qm-copy-btn:hover {
+    background: var(--sage-professional); color: #ffffff; border-color: var(--sage-professional);
+    transform: none; box-shadow: none;
+}
+#quickMsgDropdown .qm-item-message {
+    background: #f6f8fa; border: 1px solid #eef1f5; border-style: solid;
+    border-radius: 10px; color: #4b5563; font-size: 13px; line-height: 1.6; padding: 13px 15px;
+}
+
+/* --- 3. SUBMIT AN IDEA ------------------------------------------------ */
+#ideaModal > .modal-content { padding: 22px 24px 24px !important; background: #ffffff; }
+#ideaModal .idea-label {
+    font-size: 11px; font-weight: 800; letter-spacing: .06em;
+    text-transform: uppercase; color: #8a94a3; margin-bottom: 7px;
+}
+#ideaModal .idea-input {
+    border: 1px solid #e3e8ee; background: #f6f8fa; border-radius: 10px;
+    padding: 12px 14px; font-family: inherit; font-size: 13.5px; font-weight: 500; color: #1c1f23;
+}
+#ideaModal .idea-input::placeholder { color: #8a94a3; }
+#ideaModal .idea-input:focus {
+    border-color: var(--sage-professional); background: #ffffff;
+    box-shadow: 0 0 0 3px rgba(90,141,59,.14);
+}
+#ideaModal select.idea-input { cursor: pointer; }
+#ideaModal .btn-primary,
+#ideaModal .btn-secondary {
+    padding: 11px 20px; border-radius: 10px; font-size: 12.5px; font-weight: 800;
+    letter-spacing: .01em; text-transform: none; box-shadow: none;
+}
+#ideaModal .btn-primary { background: var(--sage-professional); }
+#ideaModal .btn-primary:hover { background: var(--sage-deep, #4a7530); transform: none; box-shadow: none; }
+#ideaModal .btn-secondary { background: #f1f5f9; color: #647082; }
+#ideaModal .btn-secondary:hover { background: #e3e8ee; color: #1c1f23; transform: none; box-shadow: none; }
+
+/* --- 4. STRATEGIC CALENDAR ------------------------------------------- */
+#calendarDropdown > .calendar-content { padding: 16px 18px 18px; background: #ffffff; }
+#calendarDropdown .calendar-content iframe {
+    border: 1px solid #e3e8ee; border-radius: 12px; background: #ffffff;
+}
+
+/* --- popup title typography (standard across all popups) -----------------
+   The old .modal-header h3 was 16px/800 near-black — heavier than anything
+   else in the calm system. Dropped to 700 with tighter tracking so it reads
+   as a confident title without shouting. */
+.modal-menu > .modal-header h3,
+#ideaModal > .modal-header h3,
+#quickMsgDropdown > .modal-header h3,
+#hotkeysDropdown > .modal-header h3,
+#calendarDropdown > .modal-header h3 {
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: -.015em;
+    color: #1c1f23;
+}
+
+/* --- Submit an Idea: primary/secondary actions ---------------------------
+   Was uppercase, 800-weight, with a lifted drop shadow — the last of the old
+   "chunky" button language. Now a calm solid sage with a soft shadow. */
+#ideaModal .btn-primary,
+#ideaModal .btn-secondary {
+    padding: 11px 22px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0;
+    text-transform: none;
+    font-family: inherit;
+    transition: background .16s ease, color .16s ease;
+}
+#ideaModal .btn-primary {
+    background: var(--sage-professional);
+    color: #ffffff;
+    box-shadow: 0 1px 2px rgba(16,24,40,.10);
+}
+#ideaModal .btn-primary:hover { background: var(--sage-deep, #4a7530); transform: none; box-shadow: 0 1px 2px rgba(16,24,40,.14); }
+#ideaModal .btn-primary:active { transform: none; }
+#ideaModal .btn-secondary { background: #f1f5f9; color: #647082; box-shadow: none; }
+#ideaModal .btn-secondary:hover { background: #e6ebf1; color: #1c1f23; transform: none; box-shadow: none; }
+
+/* the raw native file input was the other leftover */
+#ideaModal input[type="file"].idea-input { padding: 9px 12px; font-size: 12.5px; color: #647082; cursor: pointer; }
+#ideaModal input[type="file"].idea-input::file-selector-button {
+    font-family: inherit; font-size: 12px; font-weight: 700; color: var(--sage-deep, #4a7530);
+    background: #eef4e9; border: 0; border-radius: 8px; padding: 7px 13px; margin-right: 11px; cursor: pointer;
+}
+#ideaModal input[type="file"].idea-input:hover::file-selector-button { background: #e2eddb; }
+
+/* =========================================================
+   SPEEKS TOOLS PANEL — calm redesign (2026-07-21)
+   Look only; every item keeps its existing onclick, role
+   gating and data-feature hooks. Emoji swapped for SVG line
+   icons in the markup; this restyles the panel around them.
+   ========================================================= */
+.tools-side-panel { width: 300px; }
+
+/* header: was a dark #1f2937 bar — now white like the other calm surfaces */
+.tools-panel-header {
+    background: #ffffff;
+    border-bottom: 1px solid #eef1f5;
+    padding: 15px 16px;
+}
+.tools-panel-title {
+    font-size: 13.5px;
+    font-weight: 700;
+    text-transform: none;
+    letter-spacing: -.01em;
+    color: #1c1f23;
+    gap: 10px;
+}
+/* the lock becomes a sage tile instead of a bare white glyph */
+.tools-panel-title .lock-icon {
+    width: 30px; height: 30px;
+    padding: 7px;
+    box-sizing: border-box;
+    border-radius: 8px;
+    background: #eef4e9;
+    stroke: var(--sage-professional);
+    flex-shrink: 0;
+}
+.tools-panel-close {
+    background: #f1f5f9;
+    color: #647082;
+    width: 28px; height: 28px;
+    border-radius: 8px;
+    font-size: 13px;
+}
+.tools-panel-close:hover { background: #fcecec; color: var(--red-alert); }
+
+.tools-panel-body { padding: 14px 10px 22px; }
+
+/* groups: quiet eyebrow labels, no hard rule underneath */
+.tools-group { margin-bottom: 18px; }
+.tools-group-label {
+    font-size: 10px;
+    font-weight: 800;
+    color: #8a94a3;
+    letter-spacing: .09em;
+    padding: 0 9px 7px;
+    border-bottom: 0;
+    margin-bottom: 2px;
+}
+
+/* items: icon tile + label, sage on hover */
+.tools-item {
+    gap: 11px;
+    padding: 8px 9px;
+    border-radius: 10px;
+    color: #2d2d2d;
+    font-size: 12.5px;
+    font-weight: 650;
+}
+.tools-item:hover { background: #eef4e9; color: var(--sage-deep, #4a7530); }
+.tools-item:active { background: #e2eddb; }
+.tools-item-icon {
+    width: 28px; height: 28px;
+    border-radius: 8px;
+    background: #f1f5f9;
+    color: #647082;
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    font-size: 0;
+    transition: background .14s ease, color .14s ease;
+}
+.tools-item-icon svg {
+    width: 15px; height: 15px;
+    stroke: currentColor; stroke-width: 2; fill: none;
+    stroke-linecap: round; stroke-linejoin: round;
+}
+.tools-item:hover .tools-item-icon { background: #ffffff; color: var(--sage-professional); }
+
+/* =========================================================
+   RETIRED FLOATING ALERT TOASTS (2026-07-21)
+   Store comments, claims, recycle, variance and aging used to
+   pop up as floating toasts. That content now lives in the
+   SPEEKS Feed / announcements hub, so the toasts never show.
+
+   They are hidden with visibility (NOT display:none) on purpose:
+   _samGatherReminders() reads each element's computed display to
+   know whether that reminder is currently live, so the elements
+   must stay display:flex while being invisible. Removing them
+   from the DOM would silently kill the feed's deadline cards.
+   ========================================================= */
+#dailyMessageBubble,
+#claimAlertBubble,
+#recycleAlertBubble,
+#varianceAlertBubble,
+#agingAlertBubble {
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
+/* --- MSM store switcher (BAL / MPL) in the dark nav ----------------------
+   The nav restyle used the `background` shorthand, which wiped the select's
+   background-image — so the chevron vanished and the dark base arrow would
+   have been invisible anyway. Use background-color + a light chevron, and
+   put the right padding back so the arrow has room. */
+.top-nav .msm-store-select {
+    background-color: rgba(255,255,255,.05);
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%23c4cbd3" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>');
+    background-repeat: no-repeat;
+    background-position: right 11px center;
+    background-size: 13px;
+    border: 1px solid rgba(255,255,255,.08);
+    color: #e6eaee;
+    border-radius: 10px;
+    height: 40px;
+    min-width: 92px;
+    padding: 0 32px 0 13px;
+    font-size: 12.5px;
+    font-weight: 700;
+    letter-spacing: .02em;
+    box-shadow: none;
+}
+.top-nav .msm-store-select:hover {
+    background-color: rgba(90,141,59,.16);
+    border-color: rgba(90,141,59,.55);
+}
+.top-nav .msm-store-select:focus {
+    border-color: var(--sage-professional);
+    box-shadow: 0 0 0 3px rgba(90,141,59,.20);
+}
+/* the open list renders on the OS surface — keep it dark-on-white, readable */
+.top-nav .msm-store-select option { color: #1c1f23; background: #ffffff; font-weight: 700; }
+
+/* --- MSM store switcher: segmented toggle (BAL | MPL) --------------------
+   Replaces the native <select>. A browser draws the option list with OS
+   chrome (that blue highlight) which CSS can't reach — with two stores a
+   segmented control is both better looking and one click instead of two. */
+.top-nav .msm-store-switch {
+    background: rgba(255,255,255,.05);
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 10px;
+    padding: 3px;
+    gap: 3px;
+    height: 40px;
+    margin-right: 10px;
+    box-sizing: border-box;
+}
+.top-nav .msm-seg {
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: .04em;
+    color: #98a2ad;
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
+    padding: 0 13px;
+    height: 100%;
+    cursor: pointer;
+    transition: background .14s ease, color .14s ease;
+}
+.top-nav .msm-seg:hover { color: #fff; background: rgba(255,255,255,.06); }
+.top-nav .msm-seg.active {
+    background: var(--sage-professional);
+    color: #fff;
+    box-shadow: 0 1px 3px rgba(90,141,59,.35);
+}
+.top-nav .msm-seg.active:hover { background: var(--sage-professional); }
+
+/* --- Action Menu with no applicable action items (CEO / TOM) ------------- */
+.speeks-action-menu.sam-norail .sam-rail { display: none !important; }
+.speeks-action-menu.sam-norail .sam-board { grid-template-columns: minmax(0, 1fr); }
+
+/* --- feed size is the same for every role --------------------------------
+   Roles with fewer action items (DM = 1) or none (CEO/TOM) were collapsing
+   the feed to the rail's height. Give the feed card a floor matching the
+   manager layout (4 rail items) so the deck reads identically everywhere,
+   and let the rail hug its own content instead of stretching to match. */
+/* Floor AND ceiling: without a ceiling a busy feed (CEO sees every
+   announcement) grew the card to ~900px. The ceiling sits just above the
+   manager rail height, so every role gets the same deck and the feed
+   scrolls inside it — the full list lives in "All announcements". */
+.speeks-action-menu .sam-board > .sam-card { min-height: 270px; max-height: 300px; }
+.speeks-action-menu .sam-rail { align-self: start; }
+
+/* belt-and-braces: the feed never scrolls the page sideways */
+.speeks-action-menu .sam-feed { overflow-x: hidden; }
+
+/* --- page can never be wider than the viewport ---------------------------
+   body is display:flex, so .main-content is a flex item and its default
+   min-width:auto refuses to shrink below the content's min-content width.
+   Paired with body{overflow-x:hidden} that lays content out past the right
+   edge with NO way to scroll to it — you could only see it by zooming out.
+   min-width:0 lets the column shrink so the deck fits the screen. */
+.main-content { min-width: 0; }
+.speeks-action-menu { min-width: 0; max-width: 100%; }
+.speeks-action-menu .sam-ann { min-width: 0; }
