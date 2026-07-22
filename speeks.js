@@ -15248,6 +15248,11 @@ async function fetchMyRecycleRequests() {
             fetch(RECYCLE_URL, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action: 'mark_seen', ids: fresh.map(r => r.id), role: isReviewer ? 'dm' : 'mgr' }),
+            }).then(() => {
+                // Opening the tool IS the acknowledgement, so re-run the check now
+                // instead of leaving the alert up until the next 10-minute poll.
+                // Chained off the POST so the re-fetch sees the new seen stamps.
+                if (typeof checkRecycleReminders === 'function') checkRecycleReminders();
             }).catch(() => {});
             const now = new Date().toISOString();
             fresh.forEach(r => { r[seenField] = now; });
