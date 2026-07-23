@@ -503,94 +503,194 @@ input, textarea, select,
     font-size: 18px; 
 }
 
-.category-section { margin-bottom: 50px; }
-
-.category-title { 
-    font-size: 16px; 
-    font-weight: 800; 
-    text-transform: uppercase; 
-    color: var(--slate-charcoal); 
-    margin-bottom: 20px; 
-    letter-spacing: 0.5px; 
-    border-bottom: 2px solid #eaeaea; 
-    padding-bottom: 10px; 
+/* ---------------------------------------------------------
+   PROCESSES & POLICIES — document library (calm redesign,
+   2026-07-23). Restyled into the sage/slate system used by the
+   Action Menu, Feed Hub and top nav: white cards on hairline
+   borders, SVG line icons (renderDocs maps the sheet's emoji to
+   one), uppercase section eyebrows, sage hover. Look only —
+   search (filterDocs), pinning and the manage-docs tool are
+   untouched. Light styles only; the global html filter handles
+   dark mode.
+   --------------------------------------------------------- */
+:root {
+    --dp-line: #e3e8ee;
+    --dp-line-2: #eef1f5;
+    --dp-muted: #647082;
+    --dp-faint: #8a94a3;
+    --dp-sage-tint: #eef4e9;
 }
 
-.docs-grid { 
-    display: grid; 
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); 
-    gap: 20px; 
+.category-section { margin-bottom: 34px; }
+
+/* Section eyebrow: a quiet label + count over a hairline, instead of the old
+   heavy 16px/800 uppercase title on a 2px rule. */
+.category-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--dp-muted);
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--dp-line-2);
 }
 
-.doc-card { 
-    background: white; 
-    border-radius: 12px; 
-    padding: 15px 20px; 
-    display: flex; 
-    align-items: center; 
-    gap: 15px; 
-    text-decoration: none; 
-    border: 1px solid #ddd; 
-    box-shadow: 0 2px 5px rgba(0,0,0,0.01); 
-    transition: all 0.2s ease; 
-    cursor: pointer; 
-    height: 105px !important; 
-    overflow: hidden; 
+.category-title .cat-count {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    color: var(--dp-faint);
+    background: #f1f5f9;
+    border-radius: 20px;
+    padding: 2px 7px;
+}
+
+.category-title .cat-ico { display: grid; place-items: center; color: var(--sage-professional); }
+.category-title .cat-ico svg { width: 13px; height: 13px; }
+
+.category-title.pinned { color: var(--sage-professional); border-bottom-color: rgba(90, 141, 59, 0.22); }
+.category-title.pinned .cat-count { color: var(--sage-professional); background: var(--dp-sage-tint); }
+
+.docs-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+}
+
+.doc-card {
+    position: relative;
+    background: white;
+    border-radius: 14px;
+    padding: 14px 15px;
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    text-decoration: none;
+    border: 1px solid var(--dp-line);
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+    cursor: pointer;
+    height: 96px;
+    overflow: hidden;
     box-sizing: border-box;
 }
 
-.doc-card:hover { 
-    transform: translateY(-3px); 
-    box-shadow: 0 6px 15px rgba(0,0,0,0.05); 
-    border-color: var(--sage-professional); 
+.doc-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(16, 24, 40, 0.08);
+    border-color: var(--sage-professional);
 }
 
-.doc-icon { 
-    font-size: 28px; 
-    background: var(--bg-app); 
-    width: 50px; 
-    height: 50px; 
-    display: flex; 
-    align-items: center; 
-    justify-content: center; 
-    border-radius: 10px; 
-    flex-shrink: 0; 
+.doc-card.pinned { border-color: rgba(90, 141, 59, 0.35); }
+
+.doc-icon {
+    width: 42px;
+    height: 42px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    border-radius: 11px;
+    background: var(--dp-sage-tint);
+    color: var(--sage-professional);
+}
+.doc-icon svg {
+    width: 19px; height: 19px;
+    fill: none; stroke: currentColor; stroke-width: 1.9;
+    stroke-linecap: round; stroke-linejoin: round;
 }
 
-.doc-info { 
-    display: flex; 
-    flex-direction: column; 
-    justify-content: center; 
-    min-width: 0; 
-    width: 100%; 
+/* Pin marker sits top-right; the hover arrow is vertically centred, so on a
+   96px card the two never overlap. */
+.doc-pin { position: absolute; top: 10px; right: 12px; display: grid; place-items: center; color: var(--sage-professional); opacity: 0.5; }
+.doc-pin svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+.doc-info {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 0;
+    flex: 1;
 }
 
-.doc-title { 
-    font-size: 15px; 
-    font-weight: 700; 
-    color: var(--slate-charcoal); 
-    margin-bottom: 4px; 
-    white-space: nowrap; 
-    overflow: hidden; 
-    text-overflow: ellipsis; 
-    line-height: 1.2;
+.doc-title {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--slate-charcoal);
+    margin-bottom: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.25;
 }
 
-.doc-desc { 
-    font-size: 12px; 
-    color: #888; 
-    font-weight: 500; 
-    line-height: 1.4; 
+.doc-desc {
+    font-size: 12px;
+    color: var(--dp-muted);
+    font-weight: 500;
+    line-height: 1.45;
     display: -webkit-box;
-    -webkit-line-clamp: 2; 
+    -webkit-line-clamp: 2;
     line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
     margin: 0;
 }
 
+/* Every card is an external link (target=_blank) — the arrow says so on hover.
+   It keeps its box while invisible so the title never reflows underneath it. */
+.doc-go {
+    flex: 0 0 auto;
+    width: 24px; height: 24px;
+    display: grid; place-items: center;
+    color: var(--dp-faint);
+    opacity: 0;
+    transform: translateX(-3px);
+    transition: opacity 0.16s ease, transform 0.16s ease, color 0.16s ease;
+}
+.doc-card:hover .doc-go { opacity: 1; transform: none; color: var(--sage-professional); }
+.doc-go svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+@media (prefers-reduced-motion: reduce) {
+    .doc-card, .doc-go { transition: none; }
+    .doc-card:hover { transform: none; }
+}
+
 .hidden { display: none !important; }
-.empty-state { text-align: center; padding: 50px; color: #888; font-weight: 600; font-size: 16px; background: white; border-radius: 12px; border: 1px dashed #ccc; }
+.empty-state { text-align: center; padding: 46px 20px; color: var(--dp-faint); font-weight: 600; font-size: 13.5px; background: white; border-radius: 14px; border: 1px dashed #dfe5ec; }
+
+/* ---- sidebar navigation (category jump-rail + scroll-spy) ---- */
+.dp-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 30px; align-items: start; }
+.dp-main { min-width: 0; }
+/* The fixed top nav is ~64px; stick the rail just below it. Its containing block
+   is .main-content, so it stays pinned while the sections scroll past. */
+.dp-rail { position: sticky; top: 88px; display: flex; flex-direction: column; gap: 2px; }
+.dp-rail-btn {
+    display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+    font-family: inherit; font-size: 13px; font-weight: 600; color: var(--dp-muted);
+    background: none; border: 0; border-radius: 9px; padding: 9px 11px; cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
+}
+.dp-rail-btn:hover { background: var(--dp-line-2); color: var(--slate-charcoal); }
+.dp-rail-btn.active { background: var(--dp-sage-tint); color: #4a7530; }
+.dp-rail-btn:focus-visible { outline: 2px solid var(--sage-professional); outline-offset: 2px; }
+.dp-rail-btn .dp-rail-ico { flex: 0 0 auto; display: grid; place-items: center; color: currentColor; opacity: 0.85; }
+.dp-rail-btn .dp-rail-ico svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.dp-rail-btn .dp-rail-lbl { flex: 1 1 auto; min-width: 0; line-height: 1.3; }
+.dp-rail-btn .dp-rail-n { flex: 0 0 auto; font-size: 10px; font-weight: 800; color: var(--dp-faint); }
+.dp-rail-btn.active .dp-rail-n { color: #4a7530; }
+
+/* Sections clear the fixed nav when a rail link jumps to them. */
+.category-section { scroll-margin-top: 96px; }
+
+@media (max-width: 900px) {
+    .dp-layout { grid-template-columns: 1fr; gap: 6px; }
+    .dp-rail { position: static; flex-direction: row; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .dp-rail-btn { width: auto; }
+}
 
 /* MANAGE FAB & ROW STYLES */
 .manage-fab { 
@@ -1924,7 +2024,7 @@ select.bs-hidden-select:focus {
 }
     
     .docs-grid { grid-template-columns: 1fr !important; }
-    .doc-card { height: auto !important; min-height: 105px; }
+    .doc-card { height: auto !important; min-height: 92px; }
     
     .hotbar-container { flex-direction: column; align-items: stretch; padding: 15px 10px; }
     .hotbar-label { margin-bottom: 10px; text-align: center; border-bottom: 1px solid #eee; padding-bottom: 8px; }
@@ -8283,3 +8383,49 @@ body.sam-active .hotbar-btn:hover {
 .main-content { min-width: 0; }
 .speeks-action-menu { min-width: 0; max-width: 100%; }
 .speeks-action-menu .sam-ann { min-width: 0; }
+
+/* =========================================================
+   PROCESSES & POLICIES — page header + search (2026-07-23)
+   The calm counterpart to the restyled document cards further
+   up. Scoped to .dp-header / .dp-search because .page-header is
+   shared by every page and .doc-search-* is reused by the Box
+   Order search on all 5 shells.
+   ========================================================= */
+.dp-header .dp-eyebrow {
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--sage-professional);
+    margin-bottom: 7px;
+}
+.dp-header h2 { letter-spacing: -0.8px; }
+.dp-header p { color: var(--dp-muted, #647082); }
+
+/* The magnifier is an SVG now; font-size:0 kills the stray text node spacing
+   the old emoji span relied on. */
+.dp-search .doc-search-icon {
+    left: 15px;
+    font-size: 0;
+    display: grid;
+    place-items: center;
+    color: #97a1ae;
+    transition: color 0.16s ease;
+}
+.dp-search .doc-search-icon svg { width: 16px; height: 16px; }
+.dp-search:focus-within .doc-search-icon { color: var(--sage-professional); }
+
+.dp-search .doc-search-input {
+    padding: 11px 16px 11px 42px !important;
+    border-radius: 11px;
+    border: 1px solid var(--dp-line, #e3e8ee);
+    background: #ffffff;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+    font-size: 13.5px;
+    color: var(--slate-charcoal);
+}
+.dp-search .doc-search-input::placeholder { color: var(--dp-faint, #8a94a3); }
+.dp-search .doc-search-input:focus {
+    border-color: var(--sage-professional);
+    box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.12);
+}

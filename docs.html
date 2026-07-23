@@ -9,9 +9,9 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260723a">
+  <link rel="stylesheet" href="styles.css?v=20260723c">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <script src="speeks.js?v=20260723j" defer></script>
+  <script src="speeks.js?v=20260723l" defer></script>
 </head>
 <body class="preload">
 
@@ -357,13 +357,16 @@
 </div>
 
 <main class="main-content">
-  <div class="page-header mb-40">
+  <div class="page-header mb-40 dp-header">
     <div class="w-full-max-500">
-        <h2>Processes & Policies</h2>
+        <div class="dp-eyebrow">SPEEKS Library</div>
+        <h2>Processes &amp; Policies</h2>
         <p class="mb-20">Your central library for company guidelines, procedures, and manuals.</p>
-        
-        <div class="kb-search-bar doc-search-wrapper">
-            <span class="doc-search-icon">🔍</span>
+
+        <!-- .dp-search scopes the restyle here: .doc-search-* is shared with the
+             Box Order search on every shell, so it must not be restyled globally. -->
+        <div class="kb-search-bar doc-search-wrapper dp-search">
+            <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
             <input type="text" id="docSearch" class="kb-search-input doc-search-input" placeholder="Search for documents..." onkeyup="filterDocs()">
         </div>
     </div>
