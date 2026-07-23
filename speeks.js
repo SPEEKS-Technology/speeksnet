@@ -3490,6 +3490,10 @@ function switchWorkspaceTab(name) {
     } else if (name === 'vreplies') {
         loadVarianceReplies();
     } else if (name === 'aging') {
+        // Resolve which store the aging view shows ONCE per open (a single-store
+        // alert override wins, else the active dashboard store), so the repeated
+        // re-renders after adding items/notes don't re-consume the override.
+        _agViewStore = _msmToolStore();
         loadAgingInventory();
     }
     applyKpiReminder();
@@ -8021,6 +8025,24 @@ function _msmDefaultStore() {
     return MULTISTORE_MANAGER_STORES.includes(s) ? s : '';
 }
 
+// One-time store override set by clicking a SINGLE-store MSM alert (e.g. an MPL-only
+// variance row while on the BAL dashboard): the tool opens on that store instead of
+// the active dashboard, WITHOUT switching the dashboard. Stored in sessionStorage so
+// it survives the navigation to workspace.html, and consumed (cleared) on read so
+// the next normal open reverts to the active-store default. A both-store alert sets
+// nothing, so the active-store default applies. Returns '' for non-MSM users.
+function _consumeMsmAlertStore() {
+    const s = sessionStorage.getItem('speeksMsmToolStore');
+    if (s) sessionStorage.removeItem('speeksMsmToolStore');
+    return isMultiStoreManager() && MULTISTORE_MANAGER_STORES.includes((s || '').toUpperCase())
+        ? (s || '').toUpperCase() : '';
+}
+// The store a store-specific tool should OPEN on for an MSM: a pending single-store
+// alert override wins (cleared after use), else the active dashboard store.
+function _msmToolStore() {
+    return _consumeMsmAlertStore() || _msmDefaultStore();
+}
+
 function setMultiStore(store) {
     const next = String(store || '').toUpperCase();
     if (!next || !MULTISTORE_MANAGER_STORES.includes(next)) return;
@@ -11383,9 +11405,10 @@ function _buildClaimStorePicker() {
     sel.style.opacity = multi ? '1' : '0.7';
     sel.style.cursor = multi ? 'pointer' : 'not-allowed';
     if (row) row.style.display = stores.length ? 'block' : 'none';
-    // Default to the MSM's active dashboard store; everyone else keeps the first
-    // (their only) option. Still switchable via the dropdown when multi-store.
-    const def = _msmDefaultStore();
+    // Default to the store this open targets for an MSM — a single-store alert
+    // override if pending, else the active dashboard store; everyone else keeps
+    // their only option. Still switchable via the dropdown when multi-store.
+    const def = _msmToolStore();
     if (def && [...sel.options].some(o => o.value === def)) sel.value = def;
     else if (sel.options.length) sel.selectedIndex = 0;
 }
@@ -12155,7 +12178,7 @@ async function checkClaimReminders() {
 
         // Compute the manager's CURRENT open / over-7-day counts so the reminder
         // reflects what actually still needs review (not a stale number).
-        let openCount = 0, agingCount = 0, agingINRCount = 0, breakdown = '';
+        let openCount = 0, agingCount = 0, agingINRCount = 0, breakdown = '', agingStores = [];
         try {
             const cRes = await fetch(`${CLAIMS_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
             const cj = await cRes.json();
@@ -12166,6 +12189,7 @@ async function checkClaimReminders() {
                 const agingRows = op.filter(_isClaimAging);
                 agingCount = agingRows.length;
                 agingINRCount = agingRows.filter(_isINRTicket).length;
+                agingStores = [...new Set(agingRows.map(r => (r.store || '').toUpperCase()).filter(Boolean))];
                 // Same reasoning as the aging alert: a Multi-Store Manager's reminder
                 // spans both stores, so a bare total doesn't say where to look.
                 if (stores.length > 1) {
@@ -12187,11 +12211,11 @@ async function checkClaimReminders() {
         // Remember which reminders this bubble represents; closing it marks them
         // all read (newest supersedes any older unread ones it stacks over).
         _shownReminderIds = fresh.map(r => r.id);
-        _showClaimReminder(fresh[0], openCount, agingCount, agingINRCount, breakdown);
+        _showClaimReminder(fresh[0], openCount, agingCount, agingINRCount, breakdown, agingStores);
     } catch (e) { /* silent */ }
 }
 
-function _showClaimReminder(rem, openCount, agingCount, agingINRCount = 0, breakdown = '') {
+function _showClaimReminder(rem, openCount, agingCount, agingINRCount = 0, breakdown = '', agingStores = null) {
     const from = rem.from_name ? escapeHtml(rem.from_name) : 'Leadership';
     let body;
     if (agingCount) {
@@ -12217,7 +12241,8 @@ function _showClaimReminder(rem, openCount, agingCount, agingINRCount = 0, break
     // Keyed to the actual reminder id(s): every new push is a new escalation and
     // gets past any snooze the manager already had in place.
     _renderClaimBubble('🛟', `${from} — Claims Review`, body, summary,
-        'rem:' + (_shownReminderIds.length ? _shownReminderIds.join(',') : (rem && rem.id) || ''));
+        'rem:' + (_shownReminderIds.length ? _shownReminderIds.join(',') : (rem && rem.id) || ''),
+        agingStores);
 }
 
 let _claimAlertPollStarted = false;
@@ -12278,7 +12303,7 @@ async function checkAgingClaims() {
         const breakdown = stores.length > 1
             ? Object.keys(byStore).sort().map(s => `${s} ${byStore[s]}`).join(' · ')
             : '';
-        _showClaimAlert(aging.length, aging.filter(_isINRTicket).length, breakdown);
+        _showClaimAlert(aging.length, aging.filter(_isINRTicket).length, breakdown, Object.keys(byStore));
     } catch (e) {
         console.error('Aging claim check failed:', e);
     }
@@ -12388,13 +12413,17 @@ function _positionClaimAlert() {
 // `summary` is the compact one-liner the Action Menu feed shows (see
 // _samGatherReminders). The bubble keeps the full instructional copy; the feed
 // gets a short version instead of a truncated scrape of it.
-function _renderClaimBubble(icon, titleHtml, bodyHtml, summary, sig) {
+function _renderClaimBubble(icon, titleHtml, bodyHtml, summary, sig, stores) {
     const bubble = document.getElementById('claimAlertBubble');
     const textEl = document.getElementById('claimAlertBubbleText');
     const iconEl = document.getElementById('claimAlertBubbleIcon');
     if (!bubble || !textEl) return;
     if (summary) textEl.dataset.summary = summary;
     else delete textEl.dataset.summary;
+    // Stores this alert covers → routes an MSM single-store click (see
+    // _samGatherReminders). Cleared when only one/none so it doesn't go stale.
+    if (stores && stores.length) textEl.dataset.stores = [...new Set(stores.map(s => String(s).toUpperCase()))].join(',');
+    else delete textEl.dataset.stores;
     // Optional snooze IDENTITY, separate from the displayed text. A DM-pushed
     // reminder is a deliberate escalation, so it must break through an existing
     // snooze even when its wording happens to match what was snoozed (same DM,
@@ -12433,7 +12462,7 @@ function _inrGuidanceHtml(inrCount) {
     return `<div style="line-height:1.4; opacity:0.96; margin-top:2px;">That includes ${noun} — check tracking first: if it's since been delivered, call eBay for the refund and mark it <b>Recovered</b>. If it's still lost, open a claim on the ticket.</div>`;
 }
 
-function _showClaimAlert(count, inrCount = 0, breakdown = '') {
+function _showClaimAlert(count, inrCount = 0, breakdown = '', stores = null) {
     const body = (count === 1
         ? '1 claim has been open over 7 days. Please review it.'
         : `${count} claims have been open over 7 days. Please review them.`)
@@ -12446,7 +12475,7 @@ function _showClaimAlert(count, inrCount = 0, breakdown = '') {
     const summary = breakdown
         ? `${count} open over 7 days · ${breakdown}` + (inrCount ? ` · ${inrCount} Item Not Received` : '')
         : _claimFeedSummary(count, inrCount);
-    _renderClaimBubble('⚠️', 'Claims Review', body, summary);
+    _renderClaimBubble('⚠️', 'Claims Review', body, summary, null, stores);
 }
 
 // One line for the feed: the counts, and a flag that some are Item Not Received.
@@ -12844,35 +12873,28 @@ async function fetchAndDisplayStoreComment() {
         if (localDirty) { try { localStorage.setItem(_noteReadKey(), JSON.stringify([...localReads])); } catch (_) {} }
         const isNoteRead = c => !!c.readByMe || localReads.has(String(c.id));
 
-        // Persistent hub archive: every comment for this store, any date, newest
-        // first. Store comments no longer expire at midnight — they live in the
-        // announcements hub. (The transient bubble + dashboard stay today-only.)
-        const forMeComments = comments.filter(c => {
-            const cStore = String(c.store || '').trim().toUpperCase();
-            return isMyStore(cStore);
-        }).reverse();
+        // Store comments expire OFF THE DASHBOARD at midnight but stay in the hub
+        // ("All updates") as a permanent archive: one from before today is just
+        // auto-marked read there (dimmed, out of Unread, no nag) — the system reads
+        // it for them once the day passes. Today's follow the real read state, so a
+        // user can Mark as read to clear it off their feed early. The dashboard feed
+        // shows only today's UNREAD. Auto-read is display-only — it posts nothing, so
+        // it never fabricates a read in the DM/CEO read receipts.
+        const isCommentToday = c => {
+            const rawDateStr = String(c.date || '').trim();
+            let parsedDateStr = "";
+            try { const parsed = new Date(c.date); if (!isNaN(parsed.getTime())) parsedDateStr = parsed.toLocaleDateString('en-US', { timeZone: 'America/Chicago' }); } catch (e) {}
+            return parsedDateStr === todayStr || rawDateStr.includes(todayStr);
+        };
+        const forMeComments = comments.filter(c => isMyStore(String(c.store || '').trim().toUpperCase())).reverse(); // newest first
+
         window._hubStoreNotes = forMeComments.map(c => ({
-            author: c.author, text: c.message || c.text || '', date: c.date, store: c.store, id: c.id, read: isNoteRead(c)
+            author: c.author, text: c.message || c.text || '', date: c.date, store: c.store, id: c.id,
+            read: isNoteRead(c) || !isCommentToday(c)   // older-than-today auto-reads
         }));
         try { if (typeof renderHubFeed === 'function') renderHubFeed(); } catch (_) {}
 
-        const todayComments = comments.filter(c => {
-            const cStore = String(c.store || '').trim().toUpperCase();
-            let rawDateStr = String(c.date || '').trim();
-            let parsedDateStr = "";
-
-            try {
-                const parsed = new Date(c.date);
-                if (!isNaN(parsed.getTime())) {
-                    parsedDateStr = parsed.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-                }
-            } catch(e) {}
-
-            const isToday = (parsedDateStr === todayStr || rawDateStr.includes(todayStr));
-            const isForMe = isMyStore(cStore);
-
-            return isToday && isForMe;
-        }).reverse(); // Newest first
+        const todayComments = forMeComments.filter(isCommentToday);
 
         // Surface today's store notes in the Action Menu feed. Exclude ones the
         // user already marked read (readByMe, from the server) so a dismissed note
@@ -15249,9 +15271,10 @@ function _buildRecycleStorePicker() {
     sel.style.opacity = multi ? '1' : '0.7';
     sel.style.cursor = multi ? 'pointer' : 'not-allowed';
     if (row) row.style.display = stores.length ? 'block' : 'none';
-    // Default to the MSM's active dashboard store; everyone else keeps the first
-    // (their only) option. Still switchable via the dropdown when multi-store.
-    const def = _msmDefaultStore();
+    // Default to the store this open targets for an MSM — a single-store alert
+    // override if pending, else the active dashboard store; everyone else keeps
+    // their only option. Still switchable via the dropdown when multi-store.
+    const def = _msmToolStore();
     if (def && [...sel.options].some(o => o.value === def)) sel.value = def;
     else if (sel.options.length) sel.selectedIndex = 0;
 }
@@ -15886,7 +15909,8 @@ async function checkRecycleReminders() {
         _recycleRenderBubble('♻️', 'Your recycle requests were reviewed',
             `${fresh.length} of your recycle request${fresh.length > 1 ? 's' : ''} ${fresh.length > 1 ? 'have' : 'has'} new activity from the DM${summary}.${noteTxt}`,
             // Compact feed line — counts first, so nothing useful is lost to the cap.
-            `${fresh.length} reviewed by the DM${summary}` + (noted ? ` · ${noted} with a note` : ''));
+            `${fresh.length} reviewed by the DM${summary}` + (noted ? ` · ${noted} with a note` : ''),
+            fresh.map(r => r.store));
     } catch (e) { /* next poll retries */ }
 }
 
@@ -15932,7 +15956,7 @@ function closeRecycleAlertBubble() {
     if (b) b.style.display = 'none';
 }
 
-function _recycleRenderBubble(icon, title, bodyText, summary) {
+function _recycleRenderBubble(icon, title, bodyText, summary, stores) {
     const b = _recycleBubbleEl();
     if (!b) return;
     const iconEl = document.getElementById('recycleAlertBubbleIcon');
@@ -15941,6 +15965,10 @@ function _recycleRenderBubble(icon, title, bodyText, summary) {
     // the title, which is already the feed row's own title ("Recycle review").
     // The body alone is the useful part.
     textEl.dataset.summary = String(summary || bodyText).replace(/\s+/g, ' ').trim();
+    // Stores this alert covers → routes an MSM single-store click (see
+    // _samGatherReminders).
+    if (stores && stores.length) textEl.dataset.stores = [...new Set(stores.map(s => String(s).toUpperCase()))].join(',');
+    else delete textEl.dataset.stores;
     if (iconEl) iconEl.textContent = icon;
     textEl.style.display = 'flex';
     textEl.style.flexDirection = 'column';
@@ -17241,10 +17269,11 @@ function _vrBuildPeriodPicker() {
     if (current && [...sel.options].some(o => o.value === current)) {
         sel.value = current; // keep the user's current pick across re-renders
     } else if (!_vrIsDM()) {
-        // First load for a manager/MSM: default to a period for the active
-        // dashboard store rather than the first in the list (always the first
-        // managed store). Single-store managers resolve to their only store.
-        const def = _msmDefaultStore();
+        // First load for a manager/MSM: default to a period for the store this open
+        // is meant to show — a single-store alert override if one is pending, else
+        // the active dashboard store — rather than the first in the list. Re-renders
+        // preserve the current pick (the `current` branch above).
+        const def = _msmToolStore();
         const match = def && _vrPeriods.find(p => (p.store || '').toUpperCase() === def);
         if (match) sel.value = match.id;
     }
@@ -18189,13 +18218,14 @@ function _vrMaybePopup() {
     }
     const summary = parts.join(' · ');
     const overdue = explainOverdue || replyOverdue;
+    const coveredStores = [...explainStores, ...replyStores, ...reviewedStores];
     // Three tiers: overdue → dueSoon → normal. The bubble itself is invisible
     // (retired toast); only the summary reaches the feed, which drives both the row
     // text and — since no data-sig is set — the snooze signature, so a changed
     // count OR a changed urgency tag re-surfaces a snoozed row.
     _vrRenderBubble(overdue ? '🚨' : (explainDueSoon ? '⏰' : '📊'),
         overdue ? 'Variance replies overdue' : (explainDueSoon ? 'Variance replies due tomorrow' : 'Variance replies needed'),
-        summary + '.', summary);
+        summary + '.', summary, coveredStores);
 }
 
 // Same shared red bubble as the claim reminders, with a button into the tab.
@@ -18241,14 +18271,20 @@ function closeVarianceAlertBubble() {
     if (b) b.style.display = 'none';
 }
 
-function _vrRenderBubble(icon, title, bodyText, summary) {
+function _vrRenderBubble(icon, title, bodyText, summary, stores) {
     const b = _vrBubbleEl();
     if (!b) return;
     const iconEl = document.getElementById('varianceAlertBubbleIcon');
     const textEl = document.getElementById('varianceAlertBubbleText');
     // Feed one-liner — without it the Action Menu scrapes the bubble and repeats
     // its title (already the feed row's own title). The body/summary is the point.
-    if (textEl) textEl.dataset.summary = String(summary || bodyText).replace(/\s+/g, ' ').trim();
+    if (textEl) {
+        textEl.dataset.summary = String(summary || bodyText).replace(/\s+/g, ' ').trim();
+        // Stores this alert covers → the feed uses it to route an MSM single-store
+        // click to that store (see _samGatherReminders).
+        if (stores && stores.length) textEl.dataset.stores = [...new Set(stores)].join(',');
+        else delete textEl.dataset.stores;
+    }
     if (iconEl) iconEl.textContent = icon;
     textEl.style.display = 'flex';
     textEl.style.flexDirection = 'column';
@@ -18407,13 +18443,16 @@ function agOnStoreChange() {
 
 // The stores the current render shows (the DM flips with the dropdown; a store
 // user gets their own store(s), an MSM both at once).
+let _agViewStore = null; // MSM aging view store, resolved once per tab-open (see switchWorkspaceTab)
 function _agVisibleStores() {
     if (_agIsDM()) return [((document.getElementById('ag-store-select') || {}).value || 'OVL').toUpperCase()];
-    // MSM: show the active dashboard store only (switch dashboards for the other),
-    // instead of stacking both. The reminder still covers every managed store via
-    // _agMyStores(), and _agItems is fetched for all of them — this only scopes the
-    // on-screen view. Single-store managers are unaffected.
-    const def = _msmDefaultStore();
+    // MSM: show one store's items (switch dashboards for the other) instead of
+    // stacking both. _agViewStore is resolved at tab-open — a single-store alert
+    // override if one was pending, else the active dashboard store. The reminder
+    // still covers every managed store via _agMyStores(), and _agItems is fetched
+    // for all of them — this only scopes the on-screen view. Single-store managers
+    // are unaffected.
+    const def = _agViewStore || _msmDefaultStore();
     return def ? [def] : _agMyStores();
 }
 
@@ -19028,6 +19067,13 @@ function _agMaybePopup() {
     } else {
         _agRenderBubble('📦', 'Aging Inventory Needs Replies',
             'The aging report has items waiting on a reply from your store.');
+    }
+    // Stores this alert covers → routes an MSM single-store click to that store
+    // (see _samGatherReminders). Set after the bubble exists.
+    const agTextEl = document.getElementById('agingAlertBubbleText');
+    if (agTextEl) {
+        const ss = [...new Set(mine.map(it => (it.store || '').toUpperCase()).filter(Boolean))];
+        if (ss.length) agTextEl.dataset.stores = ss.join(','); else delete agTextEl.dataset.stores;
     }
 }
 
@@ -19697,10 +19743,20 @@ function _samGatherReminders() {
         // rather than staying buried until tomorrow.
         const sig = (t && t.dataset && t.dataset.sig) ? t.dataset.sig : sub;
         if (Object.prototype.hasOwnProperty.call(dismissed, c.key) && dismissed[c.key] === sig) return;
+        // For an MSM: if this alert covers exactly ONE store (the bubble stamps the
+        // covered stores on data-stores), clicking it opens that store's tool even
+        // while he's on the other store's dashboard — without switching dashboards.
+        // A both-store alert stamps two, so nothing is set and the tool opens on the
+        // active dashboard store (the user's chosen rule).
+        let action = c.action || '';
+        if (action && isMultiStoreManager() && t && t.dataset && t.dataset.stores) {
+            const stores = t.dataset.stores.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+            if (stores.length === 1) action = `sessionStorage.setItem('speeksMsmToolStore','${stores[0]}');` + action;
+        }
         out.push({
             type: 'rem', key: c.key, sig, title: c.title, snippet: sub || 'Needs your attention',
             due: c.due, dueCls: c.cls, urgency: c.urgency, read: false, dateMs: Date.now() + c.urgency,
-            action: c.action || ''
+            action
         });
     });
     return out;
@@ -19767,6 +19823,12 @@ function _hubNoteItem(n) {
     const metaR = (d && !isNaN(d.getTime())) ? _samFmtDate(d) : '';
     const isRead = !!n.read;   // read store notes stay in the hub, just dimmed
     const kindLabel = isRead ? 'Read · Store note' : 'Store note';
+    // Store comments live in the hub permanently now (they no longer expire off the
+    // dashboard), so an unread one needs a way to be cleared FROM the hub — without
+    // this, old comments piled up in the Unread filter with no affordance.
+    const markReadBtn = (!isRead && n.id)
+        ? `<div class="hub-foot"><button class="hub-markread" onclick="hubMarkNoteRead('${escapeHtml(String(n.id))}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>Mark as read</button></div>`
+        : '';
     const html = `
         <div class="hub-item t-note${isRead ? ' read' : ''}" data-t="note" data-hub-id="note-${escapeHtml(String(n.id || ''))}">
             <div class="hub-row">
@@ -19775,10 +19837,26 @@ function _hubNoteItem(n) {
                     <div class="hub-item-top"><span class="hub-item-title">Message from ${escapeHtml(n.author || 'your team')}</span><span class="hub-meta-r">${metaR}</span></div>
                     <div class="hub-kind-meta"><span class="hub-kind">${kindLabel}</span>${store ? ' · ' + escapeHtml(store) : ''}</div>
                     <div class="hub-item-body">${escapeHtml(body)}</div>
+                    ${markReadBtn}
                 </div>
             </div>
         </div>`;
     return { kind: 'note', archived: false, read: isRead, priority: false, dateMs, html };
+}
+
+// Mark a store comment read from the hub (the dashboard feed's ✕ does the same via
+// samDismissItem). Local read first so it survives a re-fetch, mirror both feeds,
+// then persist server-side so it stays read across devices/sign-outs.
+function hubMarkNoteRead(id) {
+    if (!id) return;
+    const key = String(id);
+    _addLocalNoteRead(key);
+    if (Array.isArray(window._hubStoreNotes)) window._hubStoreNotes.forEach(n => { if (String(n.id) === key) n.read = true; });
+    if (Array.isArray(window._samStoreNotes)) window._samStoreNotes = window._samStoreNotes.filter(n => String(n.id) !== key);
+    try { postWrite(STORE_COMMENT_URL, { type: 'mark_read', commentIds: [key], user: sessionStorage.getItem('speeksUserName') }).catch(() => {}); } catch (_) {}
+    try { if (typeof renderHubFeed === 'function') renderHubFeed(); } catch (_) {}
+    try { if (typeof renderActionFeed === 'function') renderActionFeed(); } catch (_) {}
+    if (typeof updateMainBadge === 'function') updateMainBadge();
 }
 
 function _hubDueItem(r) {
