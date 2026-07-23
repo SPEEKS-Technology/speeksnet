@@ -13,6 +13,23 @@ const corsHeaders = {
 // so the Documents section keeps every attachment forever regardless of age.
 const ROLLING_DAYS = 30;
 
+// Realtime "ping": after a successful write, tell signed-in clients this tool
+// changed so they re-run their check (which re-fetches through the edge fn — no
+// table data travels over realtime). Wrapped so it can never break the write.
+async function broadcastChange(tool: string, store: string | null) {
+  try {
+    const url = Deno.env.get("SUPABASE_URL")!;
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: key, Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        messages: [{ topic: "speeks-notify", event: "changed", payload: { tool, store: store ? String(store).toUpperCase() : null, ts: Date.now() } }],
+      }),
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -247,6 +264,7 @@ Deno.serve(async (req: Request) => {
         }
       }
 
+      await broadcastChange("announcements", null);
       return new Response(JSON.stringify({ success: true, id: inserted?.id }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });

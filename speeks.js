@@ -12903,7 +12903,7 @@ async function fetchAndDisplayStoreComment() {
         const forMeComments = comments.filter(c => isMyStore(String(c.store || '').trim().toUpperCase())).reverse(); // newest first
 
         window._hubStoreNotes = forMeComments.map(c => ({
-            author: c.author, text: c.message || c.text || '', date: c.date, store: c.store, id: c.id,
+            author: c.author, text: c.message || c.text || '', date: c.date, created_at: c.created_at, store: c.store, id: c.id,
             read: isNoteRead(c) || !isCommentToday(c)   // older-than-today auto-reads
         }));
         try { if (typeof renderHubFeed === 'function') renderHubFeed(); } catch (_) {}
@@ -12914,7 +12914,7 @@ async function fetchAndDisplayStoreComment() {
         // user already marked read (readByMe, from the server) so a dismissed note
         // doesn't reappear on the next sign-in — same rule the bubble uses.
         window._samStoreNotes = todayComments.filter(c => !isNoteRead(c)).map(c => ({
-            author: c.author, text: c.message || c.text || '', date: c.date, store: c.store, id: c.id
+            author: c.author, text: c.message || c.text || '', date: c.date, created_at: c.created_at, store: c.store, id: c.id
         }));
         try { if (typeof renderActionFeed === 'function') renderActionFeed(); } catch (e) { console.warn('Action Menu feed failed:', e); }
 
@@ -19422,7 +19422,9 @@ function renderActionFeed() {
     });
 
     const notes = (window._samStoreNotes || []).map(n => {
-        const d = n.date ? new Date(n.date) : null;
+        // Prefer the real send time (created_at) — n.date is date-only, so it
+        // rendered as 12:00am and sorted same-day notes by an identical value.
+        const d = n.created_at ? new Date(n.created_at) : (n.date ? new Date(n.date) : null);
         const tmp = document.createElement('div'); tmp.innerHTML = n.text || '';
         return {
             type: 'note', title: 'Message from ' + (n.author || 'your team'),
@@ -19527,7 +19529,7 @@ function renderActionFeed() {
         }
         if (it.type === 'note') {
             const chip = (showStoreChip && it.store) ? `<span class="sam-schip">${_samEsc(it.store)}</span>` : '';
-            desired.push({ key: 'note:' + (it.id || ('d' + it.dateMs)), html: `<div class="sam-ann note" data-hub-target="note-${_samEsc(String(it.id || ''))}" onclick="openHubTo('note-${_samEsc(String(it.id || ''))}')">
+            desired.push({ key: 'note:' + (it.id || ('d' + it.dateMs)), html: `<div class="sam-ann note" data-hub-target="note-${_samEsc(String(it.id || ''))}" onclick="openHubTo('note-${_samEsc(String(it.id || ''))}','unread')">
                 <span class="sam-adot"></span>
                 <div class="sam-a-body">
                     <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span>${chip}<span class="sam-a-flag gold">Store note</span></div>
@@ -19540,7 +19542,7 @@ function renderActionFeed() {
         }
         const flag = it.priority ? '<span class="sam-a-flag">Priority</span>' : '';
         const tgt = 'ann-' + _samEsc(String(it.rowId || ''));
-        desired.push({ key: 'ann:' + (it.rowId || ('d' + it.dateMs)), html: `<div class="sam-ann" data-hub-target="${tgt}" onclick="openHubTo('${tgt}')">
+        desired.push({ key: 'ann:' + (it.rowId || ('d' + it.dateMs)), html: `<div class="sam-ann" data-hub-target="${tgt}" onclick="openHubTo('${tgt}','unread')">
             <span class="sam-adot"></span>
             <div class="sam-a-body">
                 <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span>${flag}</div>
@@ -19643,9 +19645,18 @@ function _samAddReadFull() {
 let _hubPendingTarget = null;
 let _hubPendingUntil = 0;
 
-function openHubTo(targetId) {
+function openHubTo(targetId, filter) {
     const hub = document.getElementById('notifDropdown');
     if (!hub || !hub.classList.contains('show')) toggleNotifs();
+    // Opening from a notification lands on a filter (announcements/comments open
+    // "Unread") so reading one drops it off and the remaining unread items stay
+    // in view — no exit-and-reopen to clear the next one.
+    if (filter) {
+        window._hubFilter = filter;
+        const sel = document.getElementById('hubFilter');
+        if (sel) sel.value = filter;
+        if (typeof renderHubFeed === 'function') renderHubFeed();
+    }
     if (!targetId) return;
     _hubPendingTarget = targetId;
     _hubPendingUntil = Date.now() + 2500; // long enough for the patch-notes fetch
@@ -19689,7 +19700,7 @@ function _samSyncHero(ann) {
     // Assigning .onclick replaces the markup's inline toggleNotifs(), so the bar
     // deep-links to its own announcement like every other row.
     const heroEl = document.getElementById('samHero');
-    if (heroEl) heroEl.onclick = () => openHubTo('ann-' + (ann.rowId || ''));
+    if (heroEl) heroEl.onclick = () => openHubTo('ann-' + (ann.rowId || ''), 'unread');
     if (btn.hidden) return;
     btn.onclick = ev => {
         ev.stopPropagation();       // the hero itself opens the hub
@@ -19970,6 +19981,115 @@ function _samGatherReminders() {
 }
 
 // --- INIT ---
+/* =========================================================
+   REALTIME NOTIFICATIONS  (broadcast-as-ping)
+   The notification tables are RLS-locked with no policies, so
+   postgres_changes would deliver nothing to the anon client
+   (and adding SELECT policies would expose the tables — the app
+   deliberately routes every read through the edge fns). Instead
+   each tool's edge fn broadcasts a tiny "changed" ping after a
+   successful write; we re-run that tool's existing check*()
+   function, which re-fetches through the trusted fn. No table
+   data ever travels over realtime. The 10-min polls stay as a
+   safety net (to be slowed once every tool broadcasts).
+   ========================================================= */
+const _RT_CHANNEL = 'speeks-notify';
+let _rtClient = null, _rtChannel = null, _rtLoading = null, _rtStarted = false;
+let _rtLastStatus = 'not started', _rtLastPing = null, _rtPingCount = 0, _rtEverConnected = false;
+const _rtDebounce = {}; // tool -> timer, so a burst of pings collapses to one re-check
+// Console check: _rtDebug() → is the socket subscribed, and what was the last ping?
+window._rtDebug = () => ({ started: _rtStarted, clientLoaded: !!_rtClient, status: _rtLastStatus, pings: _rtPingCount, lastPing: _rtLastPing });
+
+// Registry: ping name → the check/loader function(s) to re-run for that tool,
+// in order. THIS is the single place to wire a notification into realtime — add
+// a line here and have that tool's edge fn broadcast the same name (see
+// broadcastChange in the edge fns). Subscribe, debounce, reconnect-sweep and the
+// feed repaint are all automatic, so a future notification is a one-line add.
+// Functions are looked up on window (top-level declarations) and may be absent
+// on a given page — missing/failing ones are skipped.
+const _RT_TOOL_CHECKS = {
+    aging:         ['checkAgingInvReminders', 'checkAgingInvDmReminders', '_agRefreshStorePopup'],
+    claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM'],
+    recycle:       ['checkRecycleReminders'],
+    variance:      ['checkVarianceReminders', 'checkVarianceDmReminders'],
+    comments:      ['fetchAndDisplayStoreComment'],
+    announcements: ['loadCMS'],
+    patch:         ['loadPatchNotes'],
+};
+
+// Re-run a tool's checks (sequentially, so any UI-refresh step runs after its
+// fetch), then repaint the feed. Wrapped so nothing can kill the channel.
+async function _rtRunCheck(tool) {
+    try {
+        const fns = _RT_TOOL_CHECKS[tool] || [];
+        for (const name of fns) {
+            try { if (typeof window[name] === 'function') await window[name](); }
+            catch (_) { /* skip this one, keep going */ }
+        }
+        if (typeof renderActionFeed === 'function') renderActionFeed();
+    } catch (e) { /* keep the channel alive */ }
+}
+// Re-check every tool on RECONNECT so a change made while the socket was down
+// still surfaces. (The first connect is skipped — the login sweep already ran.)
+function _rtSweepAll() { Object.keys(_RT_TOOL_CHECKS).forEach(_rtRunCheck); }
+
+function _rtHandlePing(payload) {
+    const tool = payload && payload.tool;
+    if (!tool) return;
+    _rtLastPing = payload; _rtPingCount++;
+    clearTimeout(_rtDebounce[tool]);
+    _rtDebounce[tool] = setTimeout(() => _rtRunCheck(tool), 400);
+}
+
+// Lazy-load supabase-js from CDN (mirrors the XLSX loader), then make one client.
+function _rtEnsureClient() {
+    if (_rtClient) return Promise.resolve(_rtClient);
+    if (_rtLoading) return _rtLoading;
+    const ready = () => (window.supabase && typeof window.supabase.createClient === 'function');
+    const srcs = [
+        'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2',
+        'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js',
+        'https://unpkg.com/@supabase/supabase-js@2',
+    ];
+    _rtLoading = new Promise((resolve, reject) => {
+        if (ready()) return resolve(window.supabase);
+        const tryNext = i => {
+            if (i >= srcs.length) { _rtLoading = null; return reject(new Error('supabase-js unavailable')); }
+            const s = document.createElement('script');
+            s.src = srcs[i];
+            s.onload = () => ready() ? resolve(window.supabase) : tryNext(i + 1);
+            s.onerror = () => { s.remove(); tryNext(i + 1); };
+            document.head.appendChild(s);
+        };
+        tryNext(0);
+    }).then(sb => {
+        // NOTE: don't reassign window.supabase — it holds the library namespace.
+        _rtClient = sb.createClient(_SUPABASE_URL, _SUPABASE_ANON_KEY);
+        return _rtClient;
+    });
+    return _rtLoading;
+}
+
+// Subscribe once per page load (feed users only — samInit gates it). On failure
+// we fall back to the polls, which are still running.
+function initRealtimeNotifications() {
+    if (_rtStarted) return;
+    _rtStarted = true;
+    _rtEnsureClient().then(client => {
+        _rtChannel = client.channel(_RT_CHANNEL);
+        _rtChannel.on('broadcast', { event: 'changed' }, msg => _rtHandlePing(msg && msg.payload));
+        _rtChannel.subscribe(status => {
+            _rtLastStatus = status;
+            if (status === 'SUBSCRIBED') {
+                if (_rtEverConnected) _rtSweepAll(); // reconnect → catch up on missed changes
+                _rtEverConnected = true;             // first connect: the login sweep already ran
+            }
+        });
+    }).catch(() => {
+        _rtStarted = false; // let a later samInit retry; polling covers us meanwhile
+    });
+}
+
 function samInit() {
     const menu = document.getElementById('speeksActionMenu');
     if (!menu) return;
@@ -19994,8 +20114,11 @@ function samInit() {
     window._samInited = true;
     // The alert bubbles and listing widget populate asynchronously and from many
     // code paths; a light interval keeps the deck in sync without wiring every
-    // one. Cheap DOM reads only. (Realtime replaces this in phase 3.)
+    // one. Cheap DOM reads only.
     setInterval(() => { renderActionFeed(); samRefreshListing(); }, 5000);
+    // Realtime: push notifications the moment a write lands, instead of waiting
+    // for the tool's 10-min poll. Feed users only (we're past the visible gate).
+    initRealtimeNotifications();
 }
 
 

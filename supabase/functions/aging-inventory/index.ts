@@ -34,6 +34,35 @@ function replyDue(): string {
   return d.toISOString();
 }
 
+// Realtime "ping": after a successful write, tell any signed-in client that this
+// tool changed so it can re-run its check (which re-fetches through THIS function
+// — no table data ever travels over realtime, so the RLS-locked tables stay
+// closed to the anon client). The store is a hint for client-side filtering.
+// Wrapped so a broadcast failure can never break the write it follows.
+async function broadcastChange(tool: string, store: string | null) {
+  try {
+    const url = Deno.env.get("SUPABASE_URL")!;
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        messages: [{
+          topic: "speeks-notify",
+          event: "changed",
+          payload: { tool, store: store ? String(store).toUpperCase() : null, ts: Date.now() },
+        }],
+      }),
+    });
+  } catch (_) {
+    // swallow — the write already succeeded; realtime is best-effort
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -76,6 +105,7 @@ Deno.serve(async (req: Request) => {
             return jsonResponse({ success: false, error: nErr.message }, 500);
           }
         }
+        await broadcastChange("aging", store);
         return jsonResponse({ success: true, item_id: item.id });
       }
 
@@ -88,7 +118,7 @@ Deno.serve(async (req: Request) => {
           return jsonResponse({ success: false, error: "item_id, side (dm|store) and body are required" }, 400);
         }
         const { data: item, error: gErr } = await supabase.from("aging_items")
-          .select("id, status").eq("id", itemId).maybeSingle();
+          .select("id, status, store").eq("id", itemId).maybeSingle();
         if (gErr) return jsonResponse({ success: false, error: gErr.message }, 500);
         if (!item) return jsonResponse({ success: false, error: "Item not found" }, 404);
         if (item.status !== "open") {
@@ -105,6 +135,7 @@ Deno.serve(async (req: Request) => {
         if (side === "dm") {
           await supabase.from("aging_items").update({ due_at: replyDue() }).eq("id", itemId);
         }
+        await broadcastChange("aging", item.store);
         return jsonResponse({ success: true, note_id: note.id });
       }
 
@@ -116,12 +147,13 @@ Deno.serve(async (req: Request) => {
           return jsonResponse({ success: false, error: "item_id and status (open|sold|recycled) required" }, 400);
         }
         const closed = status !== "open";
-        const { error } = await supabase.from("aging_items").update({
+        const { data: row, error } = await supabase.from("aging_items").update({
           status,
           closed_by: closed ? (body.by ? String(body.by).trim() : null) : null,
           closed_at: closed ? new Date().toISOString() : null,
-        }).eq("id", itemId);
+        }).eq("id", itemId).select("store").maybeSingle();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("aging", row?.store ?? null);
         return jsonResponse({ success: true });
       }
 
@@ -136,6 +168,7 @@ Deno.serve(async (req: Request) => {
           .update({ body: text, edited_by: by, edited_at: new Date().toISOString() })
           .eq("id", noteId).select("edited_at").single();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("aging", null); // store not looked up for a typo edit
         return jsonResponse({ success: true, edited_at: note?.edited_at });
       }
 
@@ -150,8 +183,9 @@ Deno.serve(async (req: Request) => {
         if ("est_value" in body) patch.est_value = parseNum(body.est_value);
         if ("cost" in body) patch.cost = parseNum(body.cost);
         if (!Object.keys(patch).length) return jsonResponse({ success: false, error: "Nothing to update" }, 400);
-        const { error } = await supabase.from("aging_items").update(patch).eq("id", itemId);
+        const { data: row, error } = await supabase.from("aging_items").update(patch).eq("id", itemId).select("store").maybeSingle();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("aging", row?.store ?? null);
         return jsonResponse({ success: true });
       }
 
@@ -159,8 +193,9 @@ Deno.serve(async (req: Request) => {
       if (action === "delete_item") {
         const itemId = String(body.item_id || "");
         if (!itemId) return jsonResponse({ success: false, error: "item_id required" }, 400);
-        const { error } = await supabase.from("aging_items").delete().eq("id", itemId);
+        const { data: row, error } = await supabase.from("aging_items").delete().eq("id", itemId).select("store").maybeSingle();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("aging", row?.store ?? null);
         return jsonResponse({ success: true });
       }
 

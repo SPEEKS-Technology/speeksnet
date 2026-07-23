@@ -27,6 +27,23 @@ function parseNum(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// Realtime "ping": after a successful write, tell signed-in clients this tool
+// changed so they re-run their check (which re-fetches through the edge fn — no
+// table data travels over realtime). Wrapped so it can never break the write.
+async function broadcastChange(tool: string, store: string | null) {
+  try {
+    const url = Deno.env.get("SUPABASE_URL")!;
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: key, Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        messages: [{ topic: "speeks-notify", event: "changed", payload: { tool, store: store ? String(store).toUpperCase() : null, ts: Date.now() } }],
+      }),
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 // The DM uploads the ≤-10% line items (this tool) and the team variance report
 // (the "Submit Variance Report" tool → variance_entries) at the same time for
 // the same store + date range. Pull that matching team-variance entry so it can
@@ -178,6 +195,7 @@ Deno.serve(async (req: Request) => {
             }
           } catch (_e) { /* keep the upload; the file is a bonus */ }
         }
+        await broadcastChange("variance", store);
         return jsonResponse({ success: true, period_id: period.id, count: rows.length });
       }
 
@@ -213,6 +231,7 @@ Deno.serve(async (req: Request) => {
               .update({ dm_notes_at: now }).eq("id", item.period_id);
           }
         }
+        await broadcastChange("variance", null);
         return jsonResponse({ success: true });
       }
 
@@ -231,6 +250,7 @@ Deno.serve(async (req: Request) => {
           updated_at: new Date().toISOString(),
         }, { onConflict: "store" });
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("variance", store);
         return jsonResponse({ success: true });
       }
 
@@ -246,6 +266,7 @@ Deno.serve(async (req: Request) => {
         }
         const { error } = await supabase.from("variance_reply_periods").delete().eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("variance", null);
         return jsonResponse({ success: true });
       }
 
