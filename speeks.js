@@ -15555,6 +15555,7 @@ async function approveRecycleDelete(id) {
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Delete failed');
         fetchMyRecycleRequests();
+        if (typeof checkRecycleReminders === 'function') checkRecycleReminders();
     } catch (e) {
         alert('Could not delete: ' + (e.message || e));
     }
@@ -15591,6 +15592,7 @@ async function denyRecycleDelete(id) {
         const row = _recycleMine.find(r => r.id === id);
         if (row) { row.delete_requested_at = null; row.delete_requested_by = null; }
         renderMyRecycleTable();
+        if (typeof checkRecycleReminders === 'function') checkRecycleReminders();
     } catch (e) {
         alert('Could not deny: ' + (e.message || e));
     }
@@ -15680,26 +15682,32 @@ async function checkRecycleReminders() {
         const rows = json.data || [];
 
         if (isReviewer) {
-            // DM/CEO: anything that arrived since the last alert on this device —
-            // new submissions (the old email flow's trigger), delete requests
-            // awaiting approval, and manager replies to notes.
             const getT = v => (v ? new Date(v).getTime() : 0);
 
-            // Is anything still WAITING on this reviewer? dm_seen_at is stamped
-            // server-side when they open the tool, mirroring manager_seen_at on the
-            // store side — so unlike the localStorage marks below (which are bumped
-            // the instant the alert renders, and therefore say nothing about whether
-            // the work got done) this reflects real outstanding work. Used only to
-            // decide whether a live alert should still be on screen.
-            const outstanding = r => {
-                const seen = getT(r.dm_seen_at);
-                return (!r.reviewed_at && getT(r.created_at) > seen)
-                    || getT(r.delete_requested_at) > seen
-                    || getT(r.mgr_reply_at) > seen;
-            };
-            if (!rows.some(outstanding)) {
-                // Queue is clear — drop the bubble so the feed row goes with it,
-                // rather than leaving a stale "N need your review" for the session.
+            // Two kinds of DM signal, handled differently on purpose:
+            //
+            //  • ACTION items block a store: a manager can't recycle until you review
+            //    their submission or approve/deny a delete request. These are
+            //    STATE-based — opening the tool does NOT clear them, only actually
+            //    reviewing/resolving does. That's the check-and-balance: a glance
+            //    can't dismiss work a manager is waiting on, and it keeps surfacing
+            //    (and re-fires next login) until it's genuinely done. Review one of
+            //    several and the count drops but the row stays for the rest — and
+            //    since the summary changed, it even breaks a prior snooze.
+            //    (This replaced a dm_seen_at "seen on open" model that let a glance
+            //    silence unreviewed work the manager was still blocked on.)
+            //
+            //  • A manager REPLY to your note blocks nobody, so it stays seen-based:
+            //    surface it once, then the high-water mark hides it.
+            const needsReview   = rows.filter(r => !r.reviewed_at && !r.delete_requested_at);
+            const pendingDelete = rows.filter(r => r.delete_requested_at);
+
+            const sRep = Number(localStorage.getItem(_recycleSeenKey('speeksRecycleReplySeen')) || 0);
+            const freshRep = rows.filter(r => getT(r.mgr_reply_at) > sRep);
+
+            if (!needsReview.length && !pendingDelete.length && !freshRep.length) {
+                // Nothing waiting and no new reply — drop the bubble so the feed row
+                // goes with it, rather than leaving a stale "N need your review" up.
                 const rb = document.getElementById('recycleAlertBubble');
                 if (rb && getComputedStyle(rb).display !== 'none') {
                     rb.style.display = 'none';
@@ -15708,26 +15716,20 @@ async function checkRecycleReminders() {
                 return;
             }
 
-            const sNew = Number(localStorage.getItem(_recycleSeenKey('speeksRecycleNewSeen')) || 0);
-            const sDel = Number(localStorage.getItem(_recycleSeenKey('speeksRecycleDelSeen')) || 0);
-            const sRep = Number(localStorage.getItem(_recycleSeenKey('speeksRecycleReplySeen')) || 0);
-
-            const freshNew = rows.filter(r => !r.reviewed_at && getT(r.created_at) > sNew);
-            const freshDel = rows.filter(r => getT(r.delete_requested_at) > sDel);
-            const freshRep = rows.filter(r => getT(r.mgr_reply_at) > sRep);
-            if (!freshNew.length && !freshDel.length && !freshRep.length) return;
-
-            const bump = (key, list, f) => { if (list.length) localStorage.setItem(key, String(Math.max(...list.map(f)))); };
-            bump(_recycleSeenKey('speeksRecycleNewSeen'), freshNew, r => getT(r.created_at));
-            bump(_recycleSeenKey('speeksRecycleDelSeen'), freshDel, r => getT(r.delete_requested_at));
-            bump(_recycleSeenKey('speeksRecycleReplySeen'), freshRep, r => getT(r.mgr_reply_at));
+            // Replies are the only seen-based part, so advance their mark now that
+            // we're surfacing them; the action items intentionally have no mark.
+            if (freshRep.length) {
+                localStorage.setItem(_recycleSeenKey('speeksRecycleReplySeen'),
+                    String(Math.max(...freshRep.map(r => getT(r.mgr_reply_at)))));
+            }
 
             const storeList = list => [...new Set(list.map(r => (r.store || '').toUpperCase()))].join(', ');
             const parts = [];
-            if (freshNew.length) parts.push(`${freshNew.length} new request${freshNew.length > 1 ? 's' : ''} from ${storeList(freshNew)}`);
-            if (freshDel.length) parts.push(`${freshDel.length} delete request${freshDel.length > 1 ? 's' : ''} awaiting approval`);
-            if (freshRep.length) parts.push(`${freshRep.length} ${freshRep.length > 1 ? 'replies' : 'reply'} to your notes`);
-            _recycleRenderBubble('♻️', 'Recycle requests need your review', parts.join(' · ') + '.');
+            if (needsReview.length)   parts.push(`${needsReview.length} awaiting your review from ${storeList(needsReview)}`);
+            if (pendingDelete.length) parts.push(`${pendingDelete.length} delete request${pendingDelete.length > 1 ? 's' : ''} awaiting approval`);
+            if (freshRep.length)      parts.push(`${freshRep.length} ${freshRep.length > 1 ? 'replies' : 'reply'} to your notes`);
+            const summary = parts.join(' · ');
+            _recycleRenderBubble('♻️', 'Recycle requests need your review', summary + '.', summary);
             return;
         }
 
@@ -16102,6 +16104,9 @@ async function setRecycleReviewed(id, verdict) {
             row.review_verdict = reviewed ? verdict : null;
         }
         renderMyRecycleTable();
+        // Reviewing IS the work the DM alert nags about, so recompute it now: the
+        // row drops when the last one's done, or updates its count if some remain.
+        if (typeof checkRecycleReminders === 'function') checkRecycleReminders();
     } catch (e) {
         alert('Could not update: ' + e.message);
         fetchMyRecycleRequests();
