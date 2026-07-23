@@ -2183,6 +2183,23 @@ select.bs-hidden-select:focus {
 
 .tools-panel-body { flex: 1; overflow-y: auto; padding: 10px 8px 20px; }
 
+/* Tools search box — sits between the header and the scrolling list. */
+.tools-search {
+    display: flex; align-items: center; gap: 8px;
+    margin: 4px 10px 8px; padding: 8px 11px;
+    background: var(--sam-panel-2, #f1f5f9); border: 1px solid var(--sam-line, #e2e8f0);
+    border-radius: 10px;
+}
+.tools-search svg { width: 15px; height: 15px; flex: 0 0 auto; stroke: var(--sam-faint, #94a3b8); fill: none; }
+.tools-search input {
+    flex: 1; min-width: 0; border: 0; background: transparent; outline: none;
+    font-family: inherit; font-size: 13px; font-weight: 600; color: var(--slate-charcoal, #1e293b);
+}
+.tools-search input::placeholder { color: var(--sam-faint, #94a3b8); font-weight: 500; }
+/* Search hides non-matches via inline display (set in _toolsSearch) because role
+   gating uses inline !important, which no stylesheet rule can override. */
+.tools-search-empty { padding: 22px 14px; text-align: center; color: var(--sam-faint, #94a3b8); font-size: 12.5px; font-weight: 600; }
+
 .tools-group { margin-bottom: 14px; }
 .tools-group:last-child { margin-bottom: 0; }
 .tools-group-label {
@@ -7193,6 +7210,10 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .speeks-action-menu .sam-a-flag { font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--red-alert); background: var(--sam-red-tint); padding: 2px 6px; border-radius: 5px; }
 .speeks-action-menu .sam-a-flag.gold { color: var(--idea-gold); background: var(--sam-gold-tint); }
 .speeks-action-menu .sam-a-snip { font-size: 12px; color: var(--sam-muted); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
+/* Reminder rows have no separate "read full" view — the summary IS the content —
+   so let them show up to 3 lines instead of clipping to one, so a multi-store MSM
+   can actually read what's outstanding for each store. */
+.speeks-action-menu .sam-ann.rem .sam-a-snip { -webkit-line-clamp: 3; white-space: normal; }
 /* "Read full" — injected by _samAddReadFull() only on rows whose snippet is
    actually clipped, so a complete short message never gets a pointless link. */
 .speeks-action-menu .sam-readfull { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; padding: 0; font-family: inherit; font-size: 11px; font-weight: 700; color: var(--sage-professional, #5a8d3b); background: none; border: 0; cursor: pointer; }
@@ -7939,13 +7960,27 @@ body.sam-active .hotbar-btn:hover {
     box-shadow: 0 1px 2px rgba(16,24,40,.05);
 }
 #quickMsgDropdown .qm-category:hover { border-color: #cbd5e1; background: #ffffff; }
-#quickMsgDropdown .qm-category.open { color: var(--sage-deep, #4a7530); border-color: rgba(90,141,59,.35); background: #eef4e9; }
-#quickMsgDropdown .qm-category-items { padding-top: 10px; }
-#quickMsgDropdown .qm-item {
-    border: 1px solid #e3e8ee; border-radius: 12px; padding: 13px 15px;
-    box-shadow: 0 1px 2px rgba(16,24,40,.06); margin-bottom: 9px;
+/* Keep the open header a fully-rounded pill in this modal (items below are their
+   own cards). The base .qm-category.open squares the bottom + drops the border to
+   fuse with a bordered items box — but this modal has no such box, so undo that. */
+#quickMsgDropdown .qm-category.open {
+    color: var(--sage-deep, #4a7530); border-color: rgba(90,141,59,.35); background: #eef4e9;
+    border-radius: 11px; border-bottom: 1px solid rgba(90,141,59,.35);
 }
-#quickMsgDropdown .qm-item-name { font-size: 13px; font-weight: 750; color: #1c1f23; }
+/* The base items container is a bordered, square-topped box; here the items are
+   standalone cards, so strip its box so it stops poking out behind the rounded
+   header ("the square bubble underneath"). Inset the items a touch so they read as
+   children of the open category now that there's no box grouping them. */
+#quickMsgDropdown .qm-category-items {
+    padding: 8px 14px 2px; border: none; background: transparent; border-radius: 0;
+}
+/* Slightly smaller than the category headers to signal these are the options
+   inside the open dropdown (no background box groups them anymore). */
+#quickMsgDropdown .qm-item {
+    border: 1px solid #e3e8ee; border-radius: 10px; padding: 10px 13px;
+    box-shadow: 0 1px 2px rgba(16,24,40,.06); margin-bottom: 7px;
+}
+#quickMsgDropdown .qm-item-name { font-size: 12.5px; font-weight: 750; color: #1c1f23; }
 #quickMsgDropdown .qm-item-name:hover { color: var(--sage-deep, #4a7530); }
 #quickMsgDropdown .qm-copy-btn {
     background: #eef4e9; color: var(--sage-deep, #4a7530); border: 1px solid transparent;

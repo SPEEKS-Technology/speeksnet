@@ -476,7 +476,15 @@ function toggleNotifs() {
         window._hubFilter = 'all';
         const sel = document.getElementById('hubFilter');
         if (sel) sel.value = 'all';
-        renderHubFeed();     // show announcements/notes/deadlines immediately
+        // A fresh open always starts at the TOP on "All updates". Clear any pending
+        // deep-link jump (openHubTo re-sets its own right after this), so reopening
+        // the hub after clicking into one announcement doesn't reopen mid-list.
+        _hubPendingTarget = null;
+        renderHubFeed();
+        const feed = document.getElementById('hubFeed');
+        if (feed) feed.scrollTop = 0;
+        const dd = document.getElementById('notifDropdown');
+        if (dd) dd.scrollTop = 0;
         loadPatchNotes();    // fetch patch notes, mark seen, re-render
     }
 }
@@ -556,8 +564,64 @@ window.toggleToolsPanel = function(e) {
     const isOpen = panel.classList.toggle('open');
     const btn = document.getElementById('toolsNavBtn');
     if (btn) btn.classList.toggle('panel-open', isOpen);
-    if (isOpen) _closeSidePanels('toolsSidePanel');
+    if (isOpen) {
+        _closeSidePanels('toolsSidePanel');
+        // Fresh open starts with an empty search so a stale filter doesn't hide tools.
+        const s = document.getElementById('toolsSearchInput');
+        if (s) { s.value = ''; _toolsSearch(''); }
+    }
 };
+
+// Filter the SPEEKS Tools list by name, like the docs-page search. Role gating
+// (applyRoleBasedUI) stamps display INLINE with !important, which beats any
+// stylesheet rule — so a class-based hide can't win. We therefore hide non-matches
+// by writing inline display:none !important too, caching the role-intended value so
+// clearing the box restores exactly what the user's role is allowed to see. Empty
+// groups (label and all) collapse with the same mechanism.
+function _toolsSearch(q) {
+    const query = (q || '').trim().toLowerCase();
+    const panel = document.getElementById('toolsSidePanel');
+    if (!panel) return;
+
+    const restore = el => {
+        if (el.dataset.searchHid === '1') {
+            el.style.setProperty('display', el.dataset.searchDisp || 'flex', 'important');
+            delete el.dataset.searchHid; delete el.dataset.searchDisp;
+        }
+    };
+    const hide = (el, fallback) => {
+        if (el.dataset.searchHid !== '1') { el.dataset.searchDisp = el.style.display || fallback; el.dataset.searchHid = '1'; }
+        el.style.setProperty('display', 'none', 'important');
+    };
+
+    panel.querySelectorAll('.tools-item').forEach(a => {
+        const match = !query || (a.textContent || '').toLowerCase().includes(query);
+        if (match) restore(a);
+        // Only hide items the role actually shows (inline display !== 'none'); never
+        // reveal a role-hidden one.
+        else if (a.style.display !== 'none') hide(a, 'flex');
+    });
+
+    panel.querySelectorAll('.tools-group').forEach(g => {
+        const anyVisible = [...g.querySelectorAll('.tools-item')].some(a => a.style.display !== 'none');
+        if (query && !anyVisible) hide(g, 'block');
+        else restore(g);
+    });
+
+    const body = panel.querySelector('.tools-panel-body');
+    if (body) {
+        let empty = document.getElementById('toolsSearchEmpty');
+        if (!empty) {
+            empty = document.createElement('div');
+            empty.id = 'toolsSearchEmpty';
+            empty.className = 'tools-search-empty';
+            empty.textContent = 'No tools match your search.';
+            body.appendChild(empty);
+        }
+        const anyItem = [...panel.querySelectorAll('.tools-item')].some(a => a.style.display !== 'none');
+        empty.style.display = (query && !anyItem) ? 'block' : 'none';
+    }
+}
 
 function _closeToolsPanel() {
     const panel = document.getElementById('toolsSidePanel');
@@ -4356,6 +4420,17 @@ function switchQMTab(tab) {
     renderQMTab(tab);
 }
 
+// Accordion: opening one category collapses the rest, so only one is open at a time.
+function qmToggleCategory(el) {
+    const wasOpen = el.classList.contains('open');
+    const scope = document.getElementById('qmContent') || document;
+    scope.querySelectorAll('.qm-category.open, .qm-category-items.open').forEach(n => n.classList.remove('open'));
+    if (!wasOpen) {
+        el.classList.add('open');
+        el.nextElementSibling?.classList.add('open');
+    }
+}
+
 function renderQMTab(tab) {
     const contentDiv = document.getElementById('qmContent');
     if (!quickMsgCache) return;
@@ -4391,7 +4466,7 @@ function renderQMTab(tab) {
         for (const [category, items] of Object.entries(groupedData)) {
             html += `
             <div class="qm-category-wrapper">
-                <div class="qm-category" onclick="this.classList.toggle('open'); this.nextElementSibling.classList.toggle('open')">
+                <div class="qm-category" onclick="qmToggleCategory(this)">
                     <span> 🗂️ ${escapeHtml(category)}</span>
                     <span class="qm-caret" style="font-size:10px; color:#a0aab2; transition: transform 0.3s;">▼</span>
                 </div>
@@ -7934,6 +8009,18 @@ function isMultiStoreManager() {
     return sessionStorage.getItem('speeksMultiStore') === 'true';
 }
 
+// The store a freshly-opened store-specific TOOL should default to for a
+// Multi-Store Manager: the store whose dashboard they're currently on
+// (speeksUserStore). Store tools used to default to the first store in the list
+// (always BAL), so on the MPL dashboard they'd wrongly populate BAL. Callers keep
+// the dropdown switchable — this only sets the INITIAL selection. Returns '' for
+// everyone else, whose single store already wins, so callers can `|| fallback`.
+function _msmDefaultStore() {
+    if (!isMultiStoreManager()) return '';
+    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return MULTISTORE_MANAGER_STORES.includes(s) ? s : '';
+}
+
 function setMultiStore(store) {
     const next = String(store || '').toUpperCase();
     if (!next || !MULTISTORE_MANAGER_STORES.includes(next)) return;
@@ -11296,7 +11383,11 @@ function _buildClaimStorePicker() {
     sel.style.opacity = multi ? '1' : '0.7';
     sel.style.cursor = multi ? 'pointer' : 'not-allowed';
     if (row) row.style.display = stores.length ? 'block' : 'none';
-    if (sel.options.length) sel.selectedIndex = 0;
+    // Default to the MSM's active dashboard store; everyone else keeps the first
+    // (their only) option. Still switchable via the dropdown when multi-store.
+    const def = _msmDefaultStore();
+    if (def && [...sel.options].some(o => o.value === def)) sel.value = def;
+    else if (sel.options.length) sel.selectedIndex = 0;
 }
 
 async function submitClaim() {
@@ -12217,7 +12308,26 @@ async function checkAgingClaimsDM() {
         // An INR ticket escalated to a loss claim is no longer open itself — the
         // child claim is. Same exclusion the oversight table uses.
         const sup = new Set(data.filter(r => r.parent_id).map(r => r.parent_id));
-        const aging = data.filter(r => !sup.has(r.id) && _isClaimAging(r));
+        let aging = data.filter(r => !sup.has(r.id) && _isClaimAging(r));
+
+        // A store the DM has already nudged (active, unacknowledged reminder still
+        // inside the cooldown) is the manager's court now — don't keep nagging the
+        // DM about it. It returns to the district alert once the reminder is acked
+        // (the manager reviewed, which also clears the aging) or the cooldown lapses
+        // so the DM can re-nudge. Without this, sending a reminder left the same
+        // aging row on the DM's own feed indefinitely.
+        try {
+            const rr = await fetch(`${CLAIMS_URL}?reminders=1&stores=OVL,LEE,WSP,MPL,BAL&v=${Date.now()}`);
+            const rj = await rr.json();
+            if (rj.success) {
+                const cutoff = Date.now() - CLAIM_REMINDER_COOLDOWN_DAYS * 86400000;
+                const nudged = new Set((rj.data || [])
+                    .filter(r => !r.acknowledged_at && new Date(r.created_at).getTime() > cutoff)
+                    .map(r => (r.store || '').toUpperCase()));
+                if (nudged.size) aging = aging.filter(r => !nudged.has((r.store || '').toUpperCase()));
+            }
+        } catch (_) { /* if reminders fail to load, show everything rather than hide */ }
+
         if (!aging.length) {
             // Nothing is aging any more (reviewed via "Still in progress", resolved,
             // or escalated). This used to just `return`, leaving a stale "claims are
@@ -15139,7 +15249,11 @@ function _buildRecycleStorePicker() {
     sel.style.opacity = multi ? '1' : '0.7';
     sel.style.cursor = multi ? 'pointer' : 'not-allowed';
     if (row) row.style.display = stores.length ? 'block' : 'none';
-    if (sel.options.length) sel.selectedIndex = 0;
+    // Default to the MSM's active dashboard store; everyone else keeps the first
+    // (their only) option. Still switchable via the dropdown when multi-store.
+    const def = _msmDefaultStore();
+    if (def && [...sel.options].some(o => o.value === def)) sel.value = def;
+    else if (sel.options.length) sel.selectedIndex = 0;
 }
 
 async function submitRecycleRequest() {
@@ -17076,6 +17190,22 @@ async function loadVarianceReplies() {
         _vrPeriods = json.data || [];
         _vrStoreStatus = json.store_status || {};
         _vrClearedTV = json.cleared_team_variance || {};
+        // Opening the tool is the manager reviewing the DM's notes, so clear the
+        // "DM reviewed your replies" FYI for the store(s) visible here — the active
+        // store only for an MSM (they switch dashboards for the other), all periods
+        // for a single-store manager. The reply-REQUESTED nag is untouched (it's
+        // state-based and clears only when they actually answer).
+        if (!_vrIsDM()) {
+            const active = _msmDefaultStore();
+            const seen = _vrGetReviewSeen();
+            _vrPeriods.forEach(p => {
+                if (p.dm_notes_at && (!active || (p.store || '').toUpperCase() === active)) {
+                    seen[p.id] = new Date(p.dm_notes_at).getTime();
+                }
+            });
+            _vrSetReviewSeen(seen);
+            if (typeof checkVarianceReminders === 'function') checkVarianceReminders();
+        }
         _vrBuildPeriodPicker();
         const pid = _vrSelectedPeriodId();
         if (pid) await vrOpenPeriod(pid);
@@ -17108,7 +17238,16 @@ function _vrBuildPeriodPicker() {
         }).join('');
     }
     sel.style.display = '';
-    if ([...sel.options].some(o => o.value === current)) sel.value = current;
+    if (current && [...sel.options].some(o => o.value === current)) {
+        sel.value = current; // keep the user's current pick across re-renders
+    } else if (!_vrIsDM()) {
+        // First load for a manager/MSM: default to a period for the active
+        // dashboard store rather than the first in the list (always the first
+        // managed store). Single-store managers resolve to their only store.
+        const def = _msmDefaultStore();
+        const match = def && _vrPeriods.find(p => (p.store || '').toUpperCase() === def);
+        if (match) sel.value = match.id;
+    }
 }
 
 // The open period: managers' picker holds period ids directly; the DM's
@@ -17334,7 +17473,14 @@ function renderVarianceReplies() {
     // them). Managers keep theirs while any flagged note still wants a reply.
     const flaggedNotes = items.filter(i => i.dm_note && i.dm_reply_requested);
     const dmCycleDone = flaggedNotes.length > 0 && flaggedNotes.every(i => i.mgr_reply);
-    const canEditNow = items.length > 0 && (canGm || (canDm && dmNotesOpen && !dmCycleDone)) && !_vrUploadOpen;
+    // A manager only needs Edit while there's actually something for them to do:
+    // still explaining lines before the DM reviews (phase 1), or a flagged note
+    // awaiting their reply. Once the DM has reviewed and requested no reply, the
+    // report is review-only — hide Edit so it doesn't imply an action is pending.
+    const gmUnexplained = items.some(i => !i.gm_note);
+    const replyPending = items.some(i => i.dm_note && i.dm_reply_requested && !i.mgr_reply);
+    const mgrHasWork = !anyDmNote || gmUnexplained || replyPending;
+    const canEditNow = items.length > 0 && ((canGm && mgrHasWork) || (canDm && dmNotesOpen && !dmCycleDone)) && !_vrUploadOpen;
     const editBtn = document.getElementById('vr-edit-btn');
     const saveBtn = document.getElementById('vr-save-btn');
     const cancelEditBtn = document.getElementById('vr-edit-cancel-btn');
@@ -17913,126 +18059,143 @@ async function checkVarianceDmReminders() {
         const json = await res.json();
         if (!json || json.success === false) return;
         _vrStoreStatus = json.store_status || {};
-        const cutoff = Date.now() - 45 * 86400000;
+        const now = Date.now();
+        const cutoff = now - 45 * 86400000;
         // Skip stores the DM has marked "in the clear" — no review nudges for them.
         const periods = (json.data || []).filter(p =>
             new Date(p.uploaded_at).getTime() > cutoff && !_vrStoreCleared(p.store));
+        // State-based, like the manager side: persists until the DM acts, then
+        // clears — no one-shot localStorage that vanished on navigation.
+        let readyForReview = false; // managers done / deadline passed, no DM notes yet
+        let windowClosed = false;   // reply window fully closed → final review
         for (const p of periods) {
             if (!p.items) continue;
             if (!p.dm_notes_at) {
-                // Their turn to start: managers' window closed, no DM notes yet.
                 const allDone = p.answered >= p.items;
-                const duePassed = Date.now() > new Date(p.manager_due_at).getTime();
-                if (!allDone && !duePassed) continue;
-                const key = `speeksVRDmTurnSeen_${p.id}`;
-                if (localStorage.getItem(key)) continue;
-                localStorage.setItem(key, '1');
-                // Ethan wants this one lightweight — no store names or counts,
-                // just a same-day nudge that reviews are waiting on him.
-                _vrRenderBubble('📝', 'Variance replies are ready for review',
-                    'Manager explanations are in — review them and add your DM notes today.');
-                return;
+                const duePassed = now > new Date(p.manager_due_at).getTime();
+                if (allDone || duePassed) readyForReview = true;
+            } else {
+                const replyDue = Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()) + 2 * 86400000;
+                if (now >= replyDue) windowClosed = true;
             }
-            // Wrap-up: managers get 2 days to review the DM's notes and answer
-            // the flagged ones — measured from whichever came later, the reply
-            // deadline or the DM actually leaving notes.
-            const replyDue = Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()) + 2 * 86400000;
-            if (Date.now() < replyDue) continue;
-            const wrapKey = `speeksVRWrapSeen_${p.id}`;
-            if (localStorage.getItem(wrapKey)) continue;
-            localStorage.setItem(wrapKey, '1');
-            // Same lightweight treatment as the "ready for review" nudge —
-            // no store names or counts, just tell the DM to go look.
+        }
+        // Ethan wants these lightweight — no store names or counts, just a nudge
+        // to go look. "Ready for review" (their turn) outranks the wrap-up.
+        if (readyForReview) {
+            _vrRenderBubble('📝', 'Variance replies are ready for review',
+                'Manager explanations are in — review them and add your DM notes.',
+                'Manager explanations are in — review and add your DM notes.');
+        } else if (windowClosed) {
             _vrRenderBubble('📬', 'Variance reply window closed',
-                'The managers’ response window has ended — give the replies a final review today.');
-            return;
+                'The managers’ response window has ended — give the replies a final review.',
+                'Reply window closed — give the replies a final review.');
+        } else {
+            const b = document.getElementById('varianceAlertBubble');
+            if (b && getComputedStyle(b).display !== 'none') {
+                b.style.display = 'none';
+                if (typeof _positionVarianceAlert === 'function') _positionVarianceAlert();
+            }
         }
     } catch (e) { /* next poll retries */ }
 }
 let _vrDmRemindersStarted = false;
 
+// "DM reviewed your replies" is an FYI (no reply requested), so it clears once the
+// manager opens the tool — tracked per user as { periodId: dm_notes_at_ms }. A
+// reply-REQUESTED note is different: that's state-based and nags until answered.
+function _vrReviewSeenKey() {
+    const u = (sessionStorage.getItem('speeksUserName') || 'anon').trim().toLowerCase();
+    return 'speeksVRReviewSeen_' + u;
+}
+function _vrGetReviewSeen() {
+    try { return JSON.parse(localStorage.getItem(_vrReviewSeenKey()) || '{}') || {}; } catch (_) { return {}; }
+}
+function _vrSetReviewSeen(m) { try { localStorage.setItem(_vrReviewSeenKey(), JSON.stringify(m || {})); } catch (_) {} }
+
+// Combine a store list into "BAL", "BAL and MPL", "OVL, LEE, and WSP".
+function _vrFmtStores(stores) {
+    const u = [...new Set(stores.map(s => (s || '').toUpperCase()).filter(Boolean))];
+    if (u.length <= 1) return u[0] || '';
+    if (u.length === 2) return `${u[0]} and ${u[1]}`;
+    return `${u.slice(0, -1).join(', ')}, and ${u[u.length - 1]}`;
+}
+
+// Manager / MSM variance feed row. STATE-based, NOT one-shot: it reflects the
+// actual outstanding work and re-derives every poll, so it survives navigating
+// into the tool and only leaves when the work is done (or the user snoozes it in
+// the feed). The old version fired a one-time toast per period gated by a
+// localStorage "seen" key — so clicking through to the tool set the key and the
+// row vanished even with nothing answered. An MSM covers two stores and the DM
+// normally uploads all five the same day (so BAL + MPL arrive together), hence
+// ONE combined row that lists the stores ("BAL and MPL: …") rather than a
+// separate popup per store. Cleared stores owe nothing, so they add no row.
 function _vrMaybePopup() {
-    // Variance has its own bubble that stacks below the claim/store-comment
-    // ones, so no need to wait for the shared bubble to be free anymore.
     const now = Date.now();
-    const today = new Date().toDateString();
+    const reviewSeen = _vrGetReviewSeen();
+    const explainStores = [];   // stores with unexplained lines
+    let explainCount = 0, explainOverdue = false, explainDueSoon = false;
+    const replyStores = [];     // stores with DM notes still awaiting a reply
+    let replyCount = 0, replyOverdue = false;
+    const reviewedStores = [];  // DM reviewed, no reply needed — FYI until they look
+
     for (const p of _vrMyPeriodsCache) {
-        const cleared = _vrStoreCleared(p.store);
-        const unanswered = p.items - p.answered;
+        if (_vrStoreCleared(p.store)) continue;
+        const store = (p.store || '').toUpperCase();
+        const unanswered = (p.items || 0) - (p.answered || 0);
         const due = new Date(p.manager_due_at).getTime();
-        // 0) a report was just uploaded — announce it once per period so the
-        //    manager doesn't have to spot the pulsing dot on their own. Cleared
-        //    stores get this too (they still review + download) but with a "no
-        //    replies needed" message.
-        if (unanswered > 0 || cleared) {
-            const upKey = `speeksVRUpSeen_${p.id}`;
-            if (!localStorage.getItem(upKey)) {
-                localStorage.setItem(upKey, '1');
-                // only announce fresh uploads — an old period surfacing on a new
-                // device gets swallowed silently (the due/overdue nudges cover it)
-                if (Date.now() - new Date(p.uploaded_at).getTime() < 7 * 86400000) {
-                    if (cleared) {
-                        _vrRenderBubble('📊', 'New variance report is live',
-                            `${p.store}: a variance report for ${formatVarianceRange(p.date_from, p.date_to)} is available. You're in the clear — no replies needed, but you can review it and download the full report.`);
-                    } else {
-                        const dueTxt = p.manager_due_at
-                            ? ` by ${new Date(p.manager_due_at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}` : '';
-                        _vrRenderBubble('📊', 'New variance report uploaded',
-                            `${p.store}: a variance report for ${formatVarianceRange(p.date_from, p.date_to)} was uploaded — ${unanswered} line${unanswered > 1 ? 's need' : ' needs'} an explanation${dueTxt}.`);
-                    }
-                    return;
-                }
-            }
+        if (unanswered > 0) {
+            explainStores.push(store);
+            explainCount += unanswered;
+            if (now > due) explainOverdue = true;
+            else if (due - now < 24 * 3600 * 1000) explainDueSoon = true; // last day before the deadline
         }
-        // Cleared stores owe no replies — the announcement above is all they get,
-        // none of the due/overdue/reply nags below.
-        if (cleared) continue;
-        // 1) due tomorrow (last 24h before the deadline) and lines still open
-        if (unanswered > 0 && now < due && due - now < 24 * 3600 * 1000) {
-            const key = `speeksVRDueSeen_${p.id}_${today}`;
-            if (!localStorage.getItem(key)) {
-                localStorage.setItem(key, '1');
-                _vrRenderBubble('⏰', 'Variance replies due tomorrow',
-                    `${p.store} still has ${unanswered} variance line${unanswered > 1 ? 's' : ''} without an explanation for ${formatVarianceRange(p.date_from, p.date_to)}. Make sure they're done before EOD tomorrow.`);
-                return;
-            }
-        }
-        // 1b) deadline missed with lines still unexplained (max one nudge per day)
-        if (unanswered > 0 && now > due) {
-            const key = `speeksVROverdueSeen_${p.id}_${today}`;
-            if (!localStorage.getItem(key)) {
-                localStorage.setItem(key, '1');
-                _vrRenderBubble('🚨', 'Variance reply deadline missed',
-                    `${p.store}: the reply deadline for ${formatVarianceRange(p.date_from, p.date_to)} has passed and ${unanswered} line${unanswered > 1 ? 's are' : ' is'} still unexplained. Get them answered as soon as possible.`);
-                return;
-            }
-        }
-        // 2) DM notes waiting on a manager reply. Managers get 2 days from the
-        //    DM's notes (or the original deadline, whichever is later) to
-        //    answer the flagged lines — announce that window, then escalate
-        //    once it's missed. Max one nudge of each per day.
-        if (p.awaiting_reply > 0 && p.dm_notes_at) {
-            const replyDue = Math.max(due, new Date(p.dm_notes_at).getTime()) + 2 * 86400000;
-            const replyDueTxt = new Date(replyDue).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-            if (now > replyDue) {
-                const key = `speeksVRReplyOverdueSeen_${p.id}_${today}`;
-                if (!localStorage.getItem(key)) {
-                    localStorage.setItem(key, '1');
-                    _vrRenderBubble('🚨', 'DM note replies overdue',
-                        `${p.store}: ${p.awaiting_reply} flagged DM note${p.awaiting_reply > 1 ? 's' : ''} for ${formatVarianceRange(p.date_from, p.date_to)} ${p.awaiting_reply > 1 ? 'are' : 'is'} still unanswered and the reply deadline (${replyDueTxt}) has passed. Answer them now.`);
-                    return;
-                }
+        if (p.dm_notes_at) {
+            if (p.awaiting_reply > 0) {
+                // Reply REQUESTED → action, nags until answered.
+                replyStores.push(store);
+                replyCount += p.awaiting_reply;
+                const replyDue = Math.max(due, new Date(p.dm_notes_at).getTime()) + 2 * 86400000;
+                if (now > replyDue) replyOverdue = true;
             } else {
-                const key = `speeksVRDmSeen_${p.id}_${today}`;
-                if (!localStorage.getItem(key)) {
-                    localStorage.setItem(key, '1');
-                    _vrRenderBubble('💬', 'DM reviewed your variance replies',
-                        `${p.store}: ${p.awaiting_reply} line${p.awaiting_reply > 1 ? 's have' : ' has'} DM notes for ${formatVarianceRange(p.date_from, p.date_to)}. Reply to the flagged one${p.awaiting_reply > 1 ? 's' : ''} by ${replyDueTxt}.`);
-                    return;
-                }
+                // DM reviewed with NO reply requested (or all replies already in) →
+                // one-time FYI so the manager reads the notes. Clears when they open
+                // the tool (loadVarianceReplies stamps the seen map).
+                const notesMs = new Date(p.dm_notes_at).getTime();
+                if (notesMs > (reviewSeen[p.id] || 0)) reviewedStores.push(store);
             }
         }
     }
+
+    if (!explainStores.length && !replyStores.length && !reviewedStores.length) {
+        // Nothing outstanding — drop the row so it clears once the work's done.
+        const b = document.getElementById('varianceAlertBubble');
+        if (b && getComputedStyle(b).display !== 'none') {
+            b.style.display = 'none';
+            if (typeof _positionVarianceAlert === 'function') _positionVarianceAlert();
+        }
+        return;
+    }
+
+    const parts = [];
+    if (explainStores.length) {
+        const tag = explainOverdue ? ' (overdue)' : (explainDueSoon ? ' (due tomorrow)' : '');
+        parts.push(`${_vrFmtStores(explainStores)}: ${explainCount} variance line${explainCount > 1 ? 's need' : ' needs'} an explanation${tag}`);
+    }
+    if (replyStores.length) {
+        parts.push(`${_vrFmtStores(replyStores)}: reply to ${replyCount} DM note${replyCount > 1 ? 's' : ''}${replyOverdue ? ' (overdue)' : ''}`);
+    }
+    if (reviewedStores.length) {
+        parts.push(`${_vrFmtStores(reviewedStores)}: DM reviewed your replies — take a look`);
+    }
+    const summary = parts.join(' · ');
+    const overdue = explainOverdue || replyOverdue;
+    // Three tiers: overdue → dueSoon → normal. The bubble itself is invisible
+    // (retired toast); only the summary reaches the feed, which drives both the row
+    // text and — since no data-sig is set — the snooze signature, so a changed
+    // count OR a changed urgency tag re-surfaces a snoozed row.
+    _vrRenderBubble(overdue ? '🚨' : (explainDueSoon ? '⏰' : '📊'),
+        overdue ? 'Variance replies overdue' : (explainDueSoon ? 'Variance replies due tomorrow' : 'Variance replies needed'),
+        summary + '.', summary);
 }
 
 // Same shared red bubble as the claim reminders, with a button into the tab.
@@ -18078,11 +18241,14 @@ function closeVarianceAlertBubble() {
     if (b) b.style.display = 'none';
 }
 
-function _vrRenderBubble(icon, title, bodyText) {
+function _vrRenderBubble(icon, title, bodyText, summary) {
     const b = _vrBubbleEl();
     if (!b) return;
     const iconEl = document.getElementById('varianceAlertBubbleIcon');
     const textEl = document.getElementById('varianceAlertBubbleText');
+    // Feed one-liner — without it the Action Menu scrapes the bubble and repeats
+    // its title (already the feed row's own title). The body/summary is the point.
+    if (textEl) textEl.dataset.summary = String(summary || bodyText).replace(/\s+/g, ' ').trim();
     if (iconEl) iconEl.textContent = icon;
     textEl.style.display = 'flex';
     textEl.style.flexDirection = 'column';
@@ -18182,12 +18348,18 @@ const _agFmtDue = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' :
 function _agState(it) {
     if (it.status !== 'open') return it.status; // 'sold' | 'recycled'
     const notes = it.notes || [];
+    // No DM note yet → the DM posted the line but hasn't written the note telling
+    // the store what to do, so it's NOT the store's turn and no nudge fires. (A DM
+    // always leaves a note; this just holds the alert until they do.)
+    if (!notes.some(n => n.author_side === 'dm')) return 'new';
     const last = notes[notes.length - 1];
-    if (!last || last.author_side === 'dm') {
+    if (last.author_side === 'dm') {
         return notes.some(n => n.author_side === 'store') ? 'yellow' : 'purple';
     }
     return 'dm';
 }
+// 'new' (no DM note) is deliberately excluded — the store isn't nagged until the
+// DM has actually left their note.
 const _agAwaitingStore = it => ['purple', 'yellow'].includes(_agState(it));
 const _agOverdue = it => _agAwaitingStore(it) && it.due_at && Date.now() > new Date(it.due_at).getTime();
 
@@ -18236,8 +18408,13 @@ function agOnStoreChange() {
 // The stores the current render shows (the DM flips with the dropdown; a store
 // user gets their own store(s), an MSM both at once).
 function _agVisibleStores() {
-    if (!_agIsDM()) return _agMyStores();
-    return [((document.getElementById('ag-store-select') || {}).value || 'OVL').toUpperCase()];
+    if (_agIsDM()) return [((document.getElementById('ag-store-select') || {}).value || 'OVL').toUpperCase()];
+    // MSM: show the active dashboard store only (switch dashboards for the other),
+    // instead of stacking both. The reminder still covers every managed store via
+    // _agMyStores(), and _agItems is fetched for all of them — this only scopes the
+    // on-screen view. Single-store managers are unaffected.
+    const def = _msmDefaultStore();
+    return def ? [def] : _agMyStores();
 }
 
 function _agSubtitleText() {
@@ -18327,7 +18504,9 @@ function _agStatusChip(it) {
     if (s === 'recycled') return chip('♻ Recycled', '#b91c1c', '#fee2e2', '#fca5a5');
     const due = it.due_at ? ` · by ${_agFmtDue(it.due_at)}` : '';
     const overdue = _agOverdue(it) ? `<div style="margin-top:5px;">${chip('⚠ Overdue', '#b91c1c', '#fee2e2', '#fca5a5')}</div>` : '';
-    if (s === 'purple') return chip(`🆕 New — Reply Needed${due}`, '#6d28d9', '#ede9fe', '#c4b5fd') + overdue;
+    // DM posted the line but hasn't left their note yet — not the store's turn.
+    if (s === 'new') return chip('🆕 New — Awaiting DM note', '#6d28d9', '#ede9fe', '#c4b5fd');
+    if (s === 'purple') return chip(`📩 Reply Needed${due}`, '#6d28d9', '#ede9fe', '#c4b5fd') + overdue;
     if (s === 'yellow') return chip(`↩ Follow-Up — Reply Needed${due}`, '#a16207', '#fef9c3', '#fde047') + overdue;
     return chip('⏳ Waiting on the DM', '#475569', '#f1f5f9', '#e2e8f0');
 }
@@ -18634,6 +18813,15 @@ async function agSaveItemEdit(btn, itemId) {
 
 // ---- DM add-item panel --------------------------------------------------------
 function agToggleAdd() {
+    // If the panel is already open with something typed, the top button submits the
+    // item (people reach for "Add Item" expecting it to add) rather than toggling
+    // the panel shut — which looked like the entry just vanished.
+    if (_agAddOpen) {
+        const hasData = ['ag-add-sku', 'ag-add-title'].some(id => {
+            const el = document.getElementById(id); return el && el.value.trim();
+        });
+        if (hasData) { document.getElementById('ag-confirm-btn')?.click(); return; }
+    }
     _agAddOpen = !_agAddOpen;
     _agJustAdded = '';
     renderAgingInventory();
@@ -18662,7 +18850,7 @@ function _agAddPanelHtml() {
                 style="width:100%; box-sizing:border-box; padding:8px 10px; border:1.5px solid #cbd5e1; border-radius:8px; font-size:12.5px; font-family:inherit; line-height:1.4; resize:vertical; background:#fff;">${keep('ag-add-note')}</textarea>
         </div>
         <div style="margin-top:10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-            <button class="btn-primary" style="font-size:12px; padding:8px 18px;" onclick="agConfirmAdd(this)">Add to the ${escapeHtml(store)} report →</button>
+            <button id="ag-confirm-btn" class="btn-primary" style="font-size:12px; padding:8px 18px;" onclick="agConfirmAdd(this)">Add to the ${escapeHtml(store)} report →</button>
             ${_agJustAdded ? `<span style="font-size:12px; font-weight:800; color:#166534;">✓ Added ${escapeHtml(_agJustAdded)}</span>` : ''}
         </div>
     </div>`;
@@ -19501,7 +19689,7 @@ function _samGatherReminders() {
                     .replace(/\s+/g, ' ').trim();
             }
         }
-        if (sub.length > 100) sub = sub.slice(0, 98) + '…';
+        if (sub.length > 160) sub = sub.slice(0, 158) + '…'; // 3-line clamp in CSS shows the rest
         // Snoozed — but only while it's still the SAME reminder. A bubble may supply
         // an explicit identity via data-sig (see _renderClaimBubble); otherwise the
         // displayed text is the identity, so any change in wording — a moved count,
@@ -19671,7 +19859,7 @@ function renderHubFeed() {
     // plus outstanding deadlines (which are unread by nature). Patch note groups
     // carry their own read flag, so only genuinely-new ones qualify.
     const shown = items.filter(it =>
-        filter === 'all' ? !it.hidden
+        filter === 'all' ? (!it.hidden && it.kind !== 'due')
         : filter === 'unread' ? (!it.read && !it.hidden)
         : filter === 'arch' ? (it.read || it.hidden)
         : it.kind === filter
