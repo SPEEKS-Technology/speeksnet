@@ -24,6 +24,23 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+// Realtime "ping": after a successful write, tell signed-in clients this tool
+// changed so they re-run their check (which re-fetches through the edge fn — no
+// table data travels over realtime). Wrapped so it can never break the write.
+async function broadcastChange(tool: string, store: string | null) {
+  try {
+    const url = Deno.env.get("SUPABASE_URL")!;
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: key, Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        messages: [{ topic: "speeks-notify", event: "changed", payload: { tool, store: store ? String(store).toUpperCase() : null, ts: Date.now() } }],
+      }),
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -61,6 +78,7 @@ Deno.serve(async (req: Request) => {
         };
         const { error } = await supabase.from("shopify_claims").insert(record);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("claims", store);
         return jsonResponse({ success: true });
       }
 
@@ -84,6 +102,7 @@ Deno.serve(async (req: Request) => {
           .update({ status: body.status, resolved_at: resolvedAt, updated_at: now })
           .eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("claims", null);
         return jsonResponse({ success: true });
       }
 
@@ -96,6 +115,7 @@ Deno.serve(async (req: Request) => {
         const { error } = await supabase.from("shopify_claims")
           .update({ last_checked_at: now, updated_at: now }).eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("claims", null);
         return jsonResponse({ success: true });
       }
 
@@ -126,6 +146,7 @@ Deno.serve(async (req: Request) => {
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await supabase.from("shopify_claims")
           .update({ last_checked_at: now, updated_at: now }).eq("id", parentId);
+        await broadcastChange("claims", parent.store);
         return jsonResponse({ success: true });
       }
 
@@ -139,6 +160,7 @@ Deno.serve(async (req: Request) => {
           from_name: body.from ? String(body.from).trim() : null,
         });
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("claims", store);
         return jsonResponse({ success: true });
       }
 
@@ -158,6 +180,7 @@ Deno.serve(async (req: Request) => {
           })
           .in("id", ids);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("claims", null);
         return jsonResponse({ success: true });
       }
 
@@ -174,6 +197,7 @@ Deno.serve(async (req: Request) => {
           })
           .eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("claims", null);
         return jsonResponse({ success: true });
       }
 
@@ -185,6 +209,7 @@ Deno.serve(async (req: Request) => {
           .update({ delete_requested_at: null, delete_requested_by: null })
           .eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("claims", null);
         return jsonResponse({ success: true });
       }
 
@@ -195,6 +220,7 @@ Deno.serve(async (req: Request) => {
         if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
         const { error } = await supabase.from("shopify_claims").delete().eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("claims", null);
         return jsonResponse({ success: true });
       }
 

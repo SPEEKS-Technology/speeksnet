@@ -19,6 +19,24 @@ function isoToLocale(iso: string): string {
   });
 }
 
+// Realtime "ping": after a successful write, tell signed-in clients this tool
+// changed so they re-run their check (which re-fetches through the edge fn — no
+// table data travels over realtime, so the RLS-locked tables stay closed to the
+// anon client). Wrapped so a broadcast failure can never break the write.
+async function broadcastChange(tool: string, store: string | null) {
+  try {
+    const url = Deno.env.get("SUPABASE_URL")!;
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: key, Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        messages: [{ topic: "speeks-notify", event: "changed", payload: { tool, store: store ? String(store).toUpperCase() : null, ts: Date.now() } }],
+      }),
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -80,7 +98,7 @@ Deno.serve(async (req: Request) => {
     // ── Normal poll: today's comments for the bubble (now includes id) ─
     const { data, error } = await supabase
       .from("store_comments")
-      .select("id, date, store, author, message")
+      .select("id, date, store, author, message, created_at")
       .gte("date", sinceStr)
       .order("created_at", { ascending: false });
 
@@ -116,6 +134,7 @@ Deno.serve(async (req: Request) => {
     const result = (data || []).map((r: any) => ({
       id: r.id,
       date: isoToLocale(r.date),
+      created_at: r.created_at, // real send time, so the feed can show/sort by it
       store: r.store,
       author: r.author,
       message: r.message,
@@ -203,6 +222,7 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    await broadcastChange("comments", store);
     return new Response(JSON.stringify({ success: true }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
