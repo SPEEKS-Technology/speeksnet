@@ -3490,10 +3490,22 @@ function switchWorkspaceTab(name) {
     } else if (name === 'vreplies') {
         loadVarianceReplies();
     } else if (name === 'aging') {
-        // Resolve which store the aging view shows ONCE per open (a single-store
-        // alert override wins, else the active dashboard store), so the repeated
-        // re-renders after adding items/notes don't re-consume the override.
-        _agViewStore = _msmToolStore();
+        // Resolve which store the aging view shows ONCE per open (a single-store /
+        // DM-routed alert override wins, else the active dashboard store), so the
+        // repeated re-renders after adding items/notes don't re-consume it.
+        const agOverride = _consumeMsmAlertStore();
+        if (_agIsDM()) {
+            // The DM's aging view is driven by the store dropdown, not _agViewStore.
+            // Point the dropdown at the routed store so clicking the "replies to
+            // review" alert lands on a store that actually replied.
+            _agViewStore = null;
+            const sel = document.getElementById('ag-store-select');
+            if (agOverride && sel && [...sel.options].some(o => o.value.toUpperCase() === agOverride)) {
+                sel.value = agOverride;
+            }
+        } else {
+            _agViewStore = agOverride || _msmDefaultStore();
+        }
         loadAgingInventory();
     }
     applyKpiReminder();
@@ -18777,10 +18789,30 @@ async function agPostNote(btn, itemId, side) {
             if (typeof applyKpiReminder === 'function') applyKpiReminder();
         }
         renderAgingInventory();
+        // The reply/note that just posted may have cleared or narrowed the work the
+        // aging bubble is nagging about. Update it live instead of leaving it stale
+        // until the next sign-in: the store side re-renders (dropping a finished
+        // store, hiding when nothing's left); the DM side hides once review is done.
+        _agRefreshStorePopup();
+        _agRetractBubbleIfDone();
+        if (typeof renderActionFeed === 'function') renderActionFeed();
     } catch (e) {
         alert('Could not post the note: ' + e.message);
         btn.disabled = false; btn.innerText = old;
     }
+}
+
+// DM side only (the store side is handled live by _agRefreshStorePopup): once a
+// DM reply clears the last item sitting in the 'dm' review state, hide the nag.
+function _agRetractBubbleIfDone() {
+    if (_agCurrentAckKey !== 'speeksAGAckDm') return;
+    const b = document.getElementById('agingAlertBubble');
+    if (!b || b.style.display === 'none') return;
+    if (_agItems.some(it => it.status === 'open' && _agState(it) === 'dm')) return;
+    b.style.display = 'none';
+    _agPopShownThisSession = false;
+    _agCurrentAckKey = null;
+    _agCurrentAckMembers = null;
 }
 
 async function agSetStatus(itemId, status) {
@@ -18801,6 +18833,15 @@ async function agSetStatus(itemId, status) {
             it.closed_at = status === 'open' ? null : new Date().toISOString();
         }
         renderAgingInventory();
+        // Closing an item (sold/recycled) clears its nag; reopening may bring one
+        // back. Keep the live alert + feed in step, same as posting a reply does.
+        if (_agIsStoreUser()) {
+            _agMyItemsCache = _agItems.filter(i => i.status === 'open');
+            if (typeof applyKpiReminder === 'function') applyKpiReminder();
+        }
+        _agRefreshStorePopup();
+        _agRetractBubbleIfDone();
+        if (typeof renderActionFeed === 'function') renderActionFeed();
     } catch (e) {
         alert('Could not update the status: ' + e.message);
     }
@@ -19060,9 +19101,72 @@ async function checkAgingInvReminders() {
     } catch (e) { /* next poll retries */ }
 }
 
-// Store-side popup: ONE generic nudge — no store names, no counts, no per-item
-// spam (Ethan's rule). Shows on every sign-in until acknowledged; the most
-// urgent state wins the message: overdue > due within 24h > replies waiting.
+// The store-side tiers, most urgent first. A store's tier is the worst of its
+// awaiting items: overdue > follow-up (DM re-noted) > due within 24h > plain.
+const _AG_TIER_RANK = { over: 3, followup: 2, soon: 1, plain: 0 };
+const _AG_TIER_HEAD = {
+    over:     ['🚨', 'Aging Inventory Replies Overdue'],
+    followup: ['📬', 'New Reply in Aging Inventory'],
+    soon:     ['⏰', 'Aging Inventory Replies Due Soon'],
+    plain:    ['📦', 'Aging Inventory Needs Replies'],
+};
+// Full single-store sentence (kept for single-store managers).
+const _AG_TIER_BODY = {
+    over:     'The reply deadline has passed on the aging report — get your replies submitted as soon as possible.',
+    followup: 'The DM added a new note on the aging report — take a look and reply.',
+    soon:     'Aging report replies are due within the next day — make sure they’re submitted in time.',
+    plain:    'The aging report has items waiting on a reply from your store.',
+};
+// Short per-store phrase (used in the multi-store breakdown).
+const _AG_TIER_PHRASE = {
+    over: 'reply overdue', followup: 'new DM note to answer', soon: 'due within a day', plain: 'needs your reply',
+};
+function _agStoreTierOf(items) {
+    const now = Date.now();
+    const dueSoon = it => it.due_at && (() => { const d = new Date(it.due_at).getTime(); return now < d && d - now < 24 * 3600 * 1000; })();
+    if (items.some(_agOverdue)) return 'over';
+    if (items.some(it => _agIsFollowUp(it, 'store'))) return 'followup';
+    if (items.some(dueSoon)) return 'soon';
+    return 'plain';
+}
+
+// Render the store-side aging bubble for the given awaiting items. A single-store
+// manager gets the tier's full sentence; a multi-store manager gets a per-store
+// breakdown ("BAL: due within a day • MPL: new DM note to answer") so both stores'
+// progress is visible at once, and finishing one store drops it (see
+// _agRefreshStorePopup). Stamps the covered stores for MSM click-routing. No
+// guards here — callers own the session/ack gates.
+function _agBuildStoreBubble(mine) {
+    const byStore = {};
+    mine.forEach(it => { const s = (it.store || '').toUpperCase(); (byStore[s] = byStore[s] || []).push(it); });
+    const stores = Object.keys(byStore);
+    const multi = _agMyStores().length > 1;
+    // Overall tier = worst across every pending store → drives the title/icon.
+    let top = 'plain';
+    stores.forEach(s => { const t = _agStoreTierOf(byStore[s]); if (_AG_TIER_RANK[t] > _AG_TIER_RANK[top]) top = t; });
+    const [icon, title] = _AG_TIER_HEAD[top];
+    let body;
+    if (multi && stores.length > 1) {
+        const ordered = stores.slice().sort((a, b) => _AG_TIER_RANK[_agStoreTierOf(byStore[b])] - _AG_TIER_RANK[_agStoreTierOf(byStore[a])]);
+        body = ordered.map(s => `${s}: ${_AG_TIER_PHRASE[_agStoreTierOf(byStore[s])]}`).join('  •  ');
+    } else if (multi && stores.length === 1) {
+        body = `${stores[0]}: ${_AG_TIER_BODY[top]}`;
+    } else {
+        body = _AG_TIER_BODY[top];
+    }
+    _agRenderBubble(icon, title, body);
+    const agTextEl = document.getElementById('agingAlertBubbleText');
+    if (agTextEl) {
+        // Clean one-liner for the feed (else it scrapes title+body together).
+        agTextEl.dataset.summary = body;
+        const ss = [...new Set(stores.filter(Boolean))];
+        if (ss.length) agTextEl.dataset.stores = ss.join(','); else delete agTextEl.dataset.stores;
+    }
+}
+
+// Store-side popup: shows on every sign-in until acknowledged. Single-store users
+// see the most-urgent tier's message; a multi-store manager sees a per-store
+// breakdown (see _agBuildStoreBubble).
 function _agMaybePopup() {
     const mine = _agMyItemsCache.filter(_agAwaitingStore);
     if (!mine.length) return;
@@ -19073,34 +19177,27 @@ function _agMaybePopup() {
     _agPopShownThisSession = true;
     _agCurrentAckKey = 'speeksAGAckStore';
     _agCurrentAckMembers = members;
-    const now = Date.now();
-    const dueSoon = it => {
-        if (!it.due_at) return false;
-        const d = new Date(it.due_at).getTime();
-        return now < d && d - now < 24 * 3600 * 1000;
-    };
-    if (mine.some(_agOverdue)) {
-        _agRenderBubble('🚨', 'Aging Inventory Replies Overdue',
-            'The reply deadline has passed on the aging report — get your replies submitted as soon as possible.');
-    } else if (mine.some(it => _agIsFollowUp(it, 'store'))) {
-        // The DM added a note to a thread the store already replied to — a
-        // simple "new reply" nudge, not the first-time "needs replies" prompt.
-        _agRenderBubble('📬', 'New Reply in Aging Inventory',
-            'The DM added a new note on the aging report — take a look and reply.');
-    } else if (mine.some(dueSoon)) {
-        _agRenderBubble('⏰', 'Aging Inventory Replies Due Soon',
-            'Aging report replies are due within the next day — make sure they’re submitted in time.');
-    } else {
-        _agRenderBubble('📦', 'Aging Inventory Needs Replies',
-            'The aging report has items waiting on a reply from your store.');
+    _agBuildStoreBubble(mine);
+}
+
+// After a store posts a reply, keep the live store bubble in step: drop a store
+// that just finished (so an MSM who clears BAL still gets nagged for MPL), and
+// hide the bubble once nothing is left awaiting. Only touches a store bubble that
+// is currently up — an acked/hidden one is not resurrected.
+function _agRefreshStorePopup() {
+    if (!_agIsStoreUser()) return;
+    const b = document.getElementById('agingAlertBubble');
+    if (!b || b.style.display === 'none' || _agCurrentAckKey !== 'speeksAGAckStore') return;
+    const mine = _agMyItemsCache.filter(_agAwaitingStore);
+    if (!mine.length) {
+        b.style.display = 'none';
+        _agPopShownThisSession = false;
+        _agCurrentAckKey = null;
+        _agCurrentAckMembers = null;
+        return;
     }
-    // Stores this alert covers → routes an MSM single-store click to that store
-    // (see _samGatherReminders). Set after the bubble exists.
-    const agTextEl = document.getElementById('agingAlertBubbleText');
-    if (agTextEl) {
-        const ss = [...new Set(mine.map(it => (it.store || '').toUpperCase()).filter(Boolean))];
-        if (ss.length) agTextEl.dataset.stores = ss.join(','); else delete agTextEl.dataset.stores;
-    }
+    _agBuildStoreBubble(mine); // re-render with the remaining store(s)
+    _agCurrentAckMembers = _agPendingMembers(_agMyItemsCache, 'store');
 }
 
 // DM side: same treatment — nags until acknowledged while any store reply sits
@@ -19144,6 +19241,19 @@ async function checkAgingInvDmReminders() {
         } else {
             _agRenderBubble('📬', 'New Reply in Aging Inventory',
                 'A store added a new reply on the aging report — take a look.');
+        }
+        // Stores whose replies need review → route a DM click to the first one.
+        // Ordered longest-waiting-first (oldest closed window) so the click lands
+        // on the store that's been sitting the longest. Mirrors variance DM routing.
+        const agTextEl = document.getElementById('agingAlertBubbleText');
+        if (agTextEl) {
+            const ordered = reviewable.slice().sort((a, b) => {
+                const da = a.due_at ? new Date(a.due_at).getTime() : Infinity;
+                const db = b.due_at ? new Date(b.due_at).getTime() : Infinity;
+                return da - db;
+            });
+            const ss = [...new Set(ordered.map(it => (it.store || '').toUpperCase()).filter(Boolean))];
+            if (ss.length) agTextEl.dataset.stores = ss.join(','); else delete agTextEl.dataset.stores;
         }
     } catch (e) { /* next poll retries */ }
 }
@@ -19382,7 +19492,7 @@ function renderActionFeed() {
     if (pip) { pip.textContent = activeCount; pip.style.display = activeCount > 0 ? 'inline-grid' : 'none'; }
 
     if (!items.length && !patchRow) {
-        feed.innerHTML = '<div class="sam-empty">You\'re all caught up.</div>';
+        _samReconcileFeed(feed, [{ key: 'empty', html: '<div class="sam-empty">You\'re all caught up.</div>' }]);
         return;
     }
 
@@ -19394,22 +19504,30 @@ function renderActionFeed() {
     // tomorrow if still outstanding, auto-clears for good once the work is done).
     const snoozeBtn = onclick => `<button class="sam-markread-btn sam-snooze-btn" data-tip="Snoozes for today — comes back tomorrow if it's still outstanding, and disappears for good once the work is done." onclick="${onclick}"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>Snooze</button>`;
 
-    feed.innerHTML = patchRow + items.map(it => {
+    // Build a keyed list of cards, then reconcile in place (see
+    // _samReconcileFeed). renderActionFeed used to blow away and rebuild the whole
+    // list on every call — and it's called after every data fetch resolves AND on
+    // a 5s interval — so cards flickered as data streamed in and churned forever.
+    // Now unchanged cards are left untouched; only new/changed ones touch the DOM.
+    const desired = [];
+    if (patchRow) desired.push({ key: 'patch', html: patchRow });
+    items.forEach(it => {
         if (it.type === 'rem') {
             const dotcls = it.dueCls === 'sam-due-red' ? 'urgent' : 'warn';
             const remClick = it.action ? ` onclick="${it.action}" style="cursor:pointer"` : '';
-            return `<div class="sam-ann rem"${remClick}>
+            desired.push({ key: 'rem:' + it.key, html: `<div class="sam-ann rem"${remClick}>
                 <span class="sam-adot ${dotcls}"></span>
                 <div class="sam-a-body">
                     <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span><span class="sam-r-due ${it.dueCls}">${_samEsc(it.due)}</span></div>
                     <div class="sam-a-snip">${_samEsc(it.snippet)}</div>
                 </div>
                 ${snoozeBtn(`samDismissItem(event,'rem','${_samEsc(it.key)}')`)}
-            </div>`;
+            </div>` });
+            return;
         }
         if (it.type === 'note') {
             const chip = (showStoreChip && it.store) ? `<span class="sam-schip">${_samEsc(it.store)}</span>` : '';
-            return `<div class="sam-ann note" data-hub-target="note-${_samEsc(String(it.id || ''))}" onclick="openHubTo('note-${_samEsc(String(it.id || ''))}')">
+            desired.push({ key: 'note:' + (it.id || ('d' + it.dateMs)), html: `<div class="sam-ann note" data-hub-target="note-${_samEsc(String(it.id || ''))}" onclick="openHubTo('note-${_samEsc(String(it.id || ''))}')">
                 <span class="sam-adot"></span>
                 <div class="sam-a-body">
                     <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span>${chip}<span class="sam-a-flag gold">Store note</span></div>
@@ -19417,11 +19535,12 @@ function renderActionFeed() {
                     <div class="sam-a-meta">${it.dateObj ? _samFmtDate(it.dateObj) : 'Store note'}</div>
                 </div>
                 ${readBtn(`samDismissItem(event,'note','${it.id ? _samEsc(it.id) : ''}')`)}
-            </div>`;
+            </div>` });
+            return;
         }
         const flag = it.priority ? '<span class="sam-a-flag">Priority</span>' : '';
         const tgt = 'ann-' + _samEsc(String(it.rowId || ''));
-        return `<div class="sam-ann" data-hub-target="${tgt}" onclick="openHubTo('${tgt}')">
+        desired.push({ key: 'ann:' + (it.rowId || ('d' + it.dateMs)), html: `<div class="sam-ann" data-hub-target="${tgt}" onclick="openHubTo('${tgt}')">
             <span class="sam-adot"></span>
             <div class="sam-a-body">
                 <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span>${flag}</div>
@@ -19429,10 +19548,57 @@ function renderActionFeed() {
                 <div class="sam-a-meta">${it.dateObj ? _samFmtDate(it.dateObj) + ' &middot; ' : ''}${_samEsc(it.author)}</div>
             </div>
             ${readBtn(`samDismissItem(event,'ann','${it.rowId ? _samEsc(it.rowId) : ''}')`)}
-        </div>`;
-    }).join('');
+        </div>` });
+    });
 
+    _samReconcileFeed(feed, desired);
     _samAddReadFull();
+}
+
+// Keyed, in-place reconcile of the action feed. Cards are matched by a stable key
+// (rem/note/ann + id) and a content signature; an unchanged card is left exactly
+// where it is, a changed one is swapped silently, and a genuinely new one fades
+// in via .sam-enter. This is what stops the feed flickering as data streams in on
+// login and on every 5s refresh — the old code rebuilt every card each time.
+function _samMakeSamCard(d) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = d.html.trim();
+    const el = tmp.firstElementChild;
+    el.dataset.samKey = d.key;
+    el._samSig = d.html;
+    return el;
+}
+function _samPlaceCard(feed, el, prev) {
+    if (prev) { if (prev.nextElementSibling !== el) prev.after(el); }
+    else if (feed.firstElementChild !== el) feed.prepend(el);
+}
+function _samReconcileFeed(feed, desired) {
+    const wantSet = new Set(desired.map(d => d.key));
+    // Drop cards no longer present (including the "all caught up" placeholder).
+    Array.from(feed.children).forEach(el => {
+        if (!el.dataset || !wantSet.has(el.dataset.samKey)) el.remove();
+    });
+    let prev = null;
+    desired.forEach(d => {
+        let el = null;
+        for (let i = 0; i < feed.children.length; i++) {
+            if (feed.children[i].dataset.samKey === d.key) { el = feed.children[i]; break; }
+        }
+        if (!el) {
+            el = _samMakeSamCard(d);
+            el.classList.add('sam-enter');
+            el.addEventListener('animationend', () => el.classList.remove('sam-enter'), { once: true });
+            _samPlaceCard(feed, el, prev);
+        } else if (el._samSig !== d.html) {
+            const fresh = _samMakeSamCard(d); // content changed → swap silently, no flash
+            el.replaceWith(fresh);
+            el = fresh;
+            _samPlaceCard(feed, el, prev);
+        } else {
+            _samPlaceCard(feed, el, prev); // unchanged → just keep it in order
+        }
+        prev = el;
+    });
 }
 
 // ONE RULE, everywhere: you may only mark something read if you can actually read
@@ -19444,6 +19610,7 @@ function renderActionFeed() {
 // carries its own open-the-tool action.
 function _samAddReadFull() {
     document.querySelectorAll('#samFeed .sam-ann:not(.rem)').forEach(row => {
+        if (row.querySelector('.sam-readfull')) return;       // already converted (reused card)
         const el = row.querySelector('.sam-a-snip');
         if (!el) return;
         if (el.scrollHeight - el.clientHeight <= 1) return;   // fits; nothing hidden

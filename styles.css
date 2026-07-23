@@ -7200,6 +7200,11 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .speeks-action-menu .sam-feed .sam-empty { padding: 22px 14px; text-align: center; color: var(--sam-faint); font-size: 13px; margin: auto; }
 .speeks-action-menu .sam-ann { display: flex; gap: 12px; padding: 11px 12px; border-radius: 10px; cursor: pointer; position: relative; }
 .speeks-action-menu .sam-ann:hover { background: var(--sam-panel-2); }
+/* Only genuinely-new cards animate in (see _samReconcileFeed) — existing cards
+   are reused in place, so the feed no longer flickers as data streams in. */
+#samFeed > .sam-enter { animation: samCardIn 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+@keyframes samCardIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { #samFeed > .sam-enter { animation: none; } }
 .speeks-action-menu .sam-ann + .sam-ann { border-top: 1px solid var(--sam-line-2); }
 .speeks-action-menu .sam-adot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; background: var(--sage-professional); }
 .speeks-action-menu .sam-ann.read .sam-adot { background: var(--sam-faint); }
