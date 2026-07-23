@@ -298,23 +298,25 @@ Deno.serve(async (req: Request) => {
   if (pErr) return jsonResponse({ success: false, error: pErr.message }, 500);
 
   const ids = (periods || []).map((p: any) => p.id);
-  const counts: Record<string, { items: number; answered: number; awaiting_reply: number }> = {};
+  const counts: Record<string, { items: number; answered: number; awaiting_reply: number; mgr_replied: number }> = {};
   if (ids.length) {
     const { data: items, error: iErr } = await supabase.from("variance_reply_items")
       .select("period_id, gm_note, dm_note, mgr_reply, dm_reply_requested").in("period_id", ids);
     if (iErr) return jsonResponse({ success: false, error: iErr.message }, 500);
     (items || []).forEach((it: any) => {
-      const c = (counts[it.period_id] = counts[it.period_id] || { items: 0, answered: 0, awaiting_reply: 0 });
+      const c = (counts[it.period_id] = counts[it.period_id] || { items: 0, answered: 0, awaiting_reply: 0, mgr_replied: 0 });
       c.items++;
       if (it.gm_note) c.answered++;
       // only notes the DM flagged as needing a response nag the manager;
       // FYI-only notes are just for their review
       if (it.dm_note && it.dm_reply_requested && !it.mgr_reply) c.awaiting_reply++;
+      // a flagged note the manager HAS answered — a reply for the DM to read
+      if (it.dm_note && it.dm_reply_requested && it.mgr_reply) c.mgr_replied++;
     });
   }
   const data = (periods || []).map((p: any) => ({
     ...p,
-    ...(counts[p.id] || { items: 0, answered: 0, awaiting_reply: 0 }),
+    ...(counts[p.id] || { items: 0, answered: 0, awaiting_reply: 0, mgr_replied: 0 }),
   }));
 
   // Per-store "in the clear" status for the requested stores, plus the latest

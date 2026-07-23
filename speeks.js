@@ -8034,8 +8034,10 @@ function _msmDefaultStore() {
 function _consumeMsmAlertStore() {
     const s = sessionStorage.getItem('speeksMsmToolStore');
     if (s) sessionStorage.removeItem('speeksMsmToolStore');
-    return isMultiStoreManager() && MULTISTORE_MANAGER_STORES.includes((s || '').toUpperCase())
-        ? (s || '').toUpperCase() : '';
+    // Validated against every store (not just the MSM's two) so a DM alert can also
+    // route to a specific store that needs review, using the same override.
+    const up = (s || '').toUpperCase();
+    return B2B_STORE_LIST.includes(up) ? up : '';
 }
 // The store a store-specific tool should OPEN on for an MSM: a pending single-store
 // alert override wins (cleared after use), else the active dashboard store.
@@ -17235,6 +17237,15 @@ async function loadVarianceReplies() {
             if (typeof checkVarianceReminders === 'function') checkVarianceReminders();
         }
         _vrBuildPeriodPicker();
+        // DM: an alert can ask us to land on a specific store that needs review
+        // (set as the tool-store override). The DM picks store via vr-store-select,
+        // so point it there before resolving the period. One-time — normal opens
+        // keep the DM's current store.
+        if (_vrIsDM()) {
+            const target = _consumeMsmAlertStore();
+            const sSel = document.getElementById('vr-store-select');
+            if (target && sSel && [...sSel.options].some(o => o.value === target)) sSel.value = target;
+        }
         const pid = _vrSelectedPeriodId();
         if (pid) await vrOpenPeriod(pid);
         else { _vrCurrent = null; renderVarianceReplies(); }
@@ -18095,29 +18106,44 @@ async function checkVarianceDmReminders() {
             new Date(p.uploaded_at).getTime() > cutoff && !_vrStoreCleared(p.store));
         // State-based, like the manager side: persists until the DM acts, then
         // clears — no one-shot localStorage that vanished on navigation.
-        let readyForReview = false; // managers done / deadline passed, no DM notes yet
-        let windowClosed = false;   // reply window fully closed → final review
+        // Track WHICH stores need the DM's eyes, so clicking the alert lands on one
+        // that actually needs review (not a default/empty store). Stores where a
+        // manager has replied to a flagged note sort first — that's the "see the
+        // manager's replies" case the DM cares about.
+        const readyStores = []; // managers done / deadline passed, no DM notes yet
+        const closedStores = []; // reply window fully closed → final review
+        const repliedClosed = new Set(); // closed stores where a mgr reply came in
         for (const p of periods) {
             if (!p.items) continue;
+            const store = (p.store || '').toUpperCase();
             if (!p.dm_notes_at) {
                 const allDone = p.answered >= p.items;
                 const duePassed = now > new Date(p.manager_due_at).getTime();
-                if (allDone || duePassed) readyForReview = true;
+                if (allDone || duePassed) readyStores.push(store);
             } else {
                 const replyDue = Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()) + 2 * 86400000;
-                if (now >= replyDue) windowClosed = true;
+                if (now >= replyDue) {
+                    closedStores.push(store);
+                    // A flagged note the manager HAS answered (mgr_replied, from the
+                    // edge fn) means there's a reply here for the DM to read.
+                    if (p.mgr_replied > 0) repliedClosed.add(store);
+                }
             }
         }
+        // Put stores with actual manager replies first so the click lands there.
+        const closedOrdered = [...closedStores].sort((a, b) => (repliedClosed.has(b) ? 1 : 0) - (repliedClosed.has(a) ? 1 : 0));
+        const readyForReview = readyStores.length > 0;
+        const windowClosed = closedStores.length > 0;
         // Ethan wants these lightweight — no store names or counts, just a nudge
         // to go look. "Ready for review" (their turn) outranks the wrap-up.
         if (readyForReview) {
             _vrRenderBubble('📝', 'Variance replies are ready for review',
                 'Manager explanations are in — review them and add your DM notes.',
-                'Manager explanations are in — review and add your DM notes.');
+                'Manager explanations are in — review and add your DM notes.', readyStores);
         } else if (windowClosed) {
             _vrRenderBubble('📬', 'Variance reply window closed',
                 'The managers’ response window has ended — give the replies a final review.',
-                'Reply window closed — give the replies a final review.');
+                'Reply window closed — give the replies a final review.', closedOrdered);
         } else {
             const b = document.getElementById('varianceAlertBubble');
             if (b && getComputedStyle(b).display !== 'none') {
@@ -19306,7 +19332,11 @@ function renderActionFeed() {
     let heroRowId = null;
     const hero = document.getElementById('samHero');
     if (hero) {
-        const prio = anns.filter(a => a.priority && !a.read).sort((a, b) => b.dateMs - a.dateMs)[0];
+        // Only ONE high-priority announcement is surfaced at a time, in the hero.
+        // Pick the OLDEST unread priority so the one that's already been up there
+        // stays put; a newer priority queues behind it (hidden — see the feed
+        // filter below) and only takes the hero once the current one is read.
+        const prio = anns.filter(a => a.priority && !a.read).sort((a, b) => a.dateMs - b.dateMs)[0];
         if (prio) {
             document.getElementById('samHeroTitle').textContent = prio.title;
             document.getElementById('samHeroSnip').textContent = prio.snippet;
@@ -19324,7 +19354,10 @@ function renderActionFeed() {
     // ones of a "higher" type, which reads as broken once there are a lot unread.
     // Reminders still surface at the top on their own merit — their dateMs is
     // Date.now(), so they're always the newest thing in the list.
-    const all = rems.concat(notes, anns.filter(a => !a.read && a.rowId !== heroRowId))
+    // Priority announcements never go in the feed list — the one active hero shows
+    // up top, and any additional unread priority ones wait their turn for the hero
+    // (rather than stacking in the feed). Non-priority announcements flow normally.
+    const all = rems.concat(notes, anns.filter(a => !a.read && a.rowId !== heroRowId && !a.priority))
         .sort((a, b) => (b.dateMs || 0) - (a.dateMs || 0));
     const items = all.slice(0, 8);
 
@@ -19339,7 +19372,7 @@ function renderActionFeed() {
     const patchLabel = patchVer ? 'v' + patchVer.replace(/^\s*v/i, '').trim() : '';
     const patchRow = patchUnseen ? `<div class="sam-ann sam-patchrow" onclick="openHubToPatch()">
             <span class="sam-adot" style="background:#8b5cf6;box-shadow:0 0 0 4px #f1edfb"></span>
-            <div class="sam-a-body"><div class="sam-a-top"><span class="sam-a-title">New patch notes</span><span class="sam-a-flag" style="color:#8b5cf6;background:#f1edfb">New</span></div><div class="sam-a-snip">${patchLabel ? _samEsc(patchLabel) + ' — click for what changed' : 'Click for details'}</div></div>
+            <div class="sam-a-body"><div class="sam-a-top"><span class="sam-a-title">New Patch Notes</span><span class="sam-a-flag" style="color:#8b5cf6;background:#f1edfb">New</span></div><div class="sam-a-snip">${patchLabel ? _samEsc(patchLabel) + ' — click for what changed' : 'Click for details'}</div></div>
         </div>` : '';
 
     // "Active" = anything not a read announcement (drives the pip). No bulk
@@ -19668,15 +19701,15 @@ function samCleanHotbar() {
 // carry it so clicking a reminder jumps straight to its tool.
 function _samReminderCfg() {
     return [
-        { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText', title: 'Variance replies due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#vreplies'" },
+        { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText', title: 'Variance Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#vreplies'" },
         // A DM has no store-scoped claims tool — send them to the all-stores
         // oversight view instead, which is where they can actually act.
-        { key: 'claims', id: 'claimAlertBubble', text: 'claimAlertBubbleText', title: 'Insurance claims aging', urgency: 2, due: 'Aging', cls: 'sam-due-red',
+        { key: 'claims', id: 'claimAlertBubble', text: 'claimAlertBubbleText', title: 'Insurance Claims Aging', urgency: 2, due: 'Aging', cls: 'sam-due-red',
           action: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'district manager'
               ? "openClaimsOversight()"
               : "openClaimsModal(); switchClaimsTab('view')" },
-        { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "toggleRecycleInventory(); switchRecycleTab('view')" },
-        { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging inventory review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" }
+        { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "toggleRecycleInventory(); switchRecycleTab('view')" },
+        { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging Inventory Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" }
     ];
 }
 
@@ -19749,9 +19782,16 @@ function _samGatherReminders() {
         // A both-store alert stamps two, so nothing is set and the tool opens on the
         // active dashboard store (the user's chosen rule).
         let action = c.action || '';
-        if (action && isMultiStoreManager() && t && t.dataset && t.dataset.stores) {
+        if (action && t && t.dataset && t.dataset.stores) {
             const stores = t.dataset.stores.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-            if (stores.length === 1) action = `sessionStorage.setItem('speeksMsmToolStore','${stores[0]}');` + action;
+            const roleLc = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+            let target = '';
+            // MSM: only route a single-store alert; a both-store one opens the active
+            // dashboard store. DM: land on the first store that needs review (the
+            // bubble lists them attention-first).
+            if (isMultiStoreManager()) { if (stores.length === 1) target = stores[0]; }
+            else if (roleLc === 'district manager' && stores.length) target = stores[0];
+            if (target) action = `sessionStorage.setItem('speeksMsmToolStore','${target}');` + action;
         }
         out.push({
             type: 'rem', key: c.key, sig, title: c.title, snippet: sub || 'Needs your attention',
