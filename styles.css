@@ -813,54 +813,7 @@ input, textarea, select,
     transition: 0.2s;
 }
 
-.ticker-manage-row { grid-template-columns: auto 1fr 40px; }
-
-.t-icon-wrap { position: relative; flex-shrink: 0; }
-
-.t-icon-btn {
-    width: 52px;
-    height: 38px;
-    font-size: 20px;
-    border: 1px solid #ddd;
-    border-radius: 10px;
-    background: white;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: 0.2s;
-}
-.t-icon-btn:hover { border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(90,141,59,0.1); }
-
-.emoji-picker-panel {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    background: white;
-    border: 1px solid #e5e7eb;
-    border-radius: 12px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
-    padding: 10px;
-    z-index: 500;
-    width: 236px;
-    display: none;
-}
-.emoji-picker-panel.show { display: block; }
-
-.emoji-picker-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
-
-.emoji-option {
-    font-size: 18px;
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    border-radius: 6px;
-    transition: background 0.1s;
-    user-select: none;
-}
-.emoji-option:hover { background: #f3f4f6; }
+/* Manage Ticker Items tool (row + emoji picker) removed 2026-07-23 with the ticker. */
 
 /* =========================================================
    OVERLAYS, MODALS & NOTIFICATIONS
@@ -2626,74 +2579,7 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
     flex-wrap: nowrap;
 }
 
-/* INFO TICKER */
-.info-ticker {
-    position: fixed;
-    top: 72px;
-    left: 0;
-    right: 0;
-    height: 32px;
-    background: var(--sage-professional);
-    z-index: 99;
-    display: none;
-    align-items: center;
-    user-select: none;
-}
-body.is-authenticated .info-ticker { display: flex; }
-
-.ticker-scroll-area {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    height: 100%;
-    display: flex;
-    align-items: center;
-}
-
-.ticker-panel-buttons {
-    display: flex;
-    align-items: center;
-    height: 100%;
-    flex-shrink: 0;
-    gap: 4px;
-    padding: 0 6px;
-}
-
-.ticker-track {
-    display: flex;
-    align-items: center;
-    white-space: nowrap;
-    animation: ticker-scroll 55s linear infinite;
-    will-change: transform;
-}
-
-@keyframes ticker-scroll {
-    0%   { transform: translateX(0); }
-    100% { transform: translateX(-50%); }
-}
-
-
-.ticker-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    padding: 0 30px;
-    font-size: 12px;
-    font-weight: 700;
-    color: rgba(255,255,255,0.95);
-    letter-spacing: 0.2px;
-    white-space: nowrap;
-}
-.ticker-item .t-icon { font-size: 13px; line-height: 1; flex-shrink: 0; }
-.ticker-sep {
-    color: rgba(255,255,255,0.3);
-    font-size: 9px;
-    flex-shrink: 0;
-}
-
-@media (max-width: 768px) {
-    .info-ticker { position: relative; top: 0; }
-}
+/* INFO TICKER — removed 2026-07-23 (green carousel bar retired site-wide). */
 
 .nav-left {
     display: flex;
@@ -6648,177 +6534,281 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 
 /* =========================================================
    CUSTOMER CALL BACKS (operations.html)
+   Calm redesign — matches the SPEEKS Action Menu aesthetic:
+   light card, sage accent, soft dividers, SVG line icons.
+   The global <html> filter handles dark mode, so light only.
    ========================================================= */
-.cb-scroll { padding: 14px 16px; }
+.cb-panel {
+    --cb-line: #e3e8ee;
+    --cb-line-2: #eef1f5;
+    --cb-panel-2: #f6f8fa;
+    --cb-muted: #647082;
+    --cb-faint: #8a94a3;
+    --cb-sage: #5a8d3b;
+    --cb-sage-tint: #eef4e9;
+    --cb-gold-tint: #fdf3e1;
+    --cb-red-tint: #fcecec;
+    --cb-blue-tint: #e8f0fb;
+    border: 1px solid var(--cb-line) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06) !important;
+    background: #fff !important;
+    overflow: hidden;
+}
 
-/* Quick-add bar — pinned above the table */
+/* Operations page hero — reuses the Processes & Policies .dp-header look.
+   .page-header carries a 40px bottom margin and .ops-wrap already gaps 16px,
+   so drop the margin and let the wrap's gap do the spacing. */
+.ops-wrap .ops-header { margin-bottom: 0; }
+/* Single tool-tab icon */
+.ops-wrap .ws-tab svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Shared: every line icon inside the panel picks up its parent's colour */
+.cb-panel svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* --- Calm card header (replaces the old dark district header) --- */
+.cb-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+    padding: 15px 18px;
+    border-bottom: 1px solid var(--cb-line-2);
+    background: #fff;
+}
+.cb-head-main { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.cb-head-ico {
+    flex: 0 0 auto; width: 40px; height: 40px; border-radius: 11px;
+    background: var(--cb-sage-tint); color: var(--cb-sage);
+    display: grid; place-items: center;
+}
+.cb-head-ico svg { width: 20px; height: 20px; }
+.cb-head-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.cb-eyebrow { font-size: 10px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; color: var(--cb-faint); }
+.cb-head-title { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; color: var(--slate-charcoal); line-height: 1.2; }
+.cb-head-sub { font-size: 12px; font-weight: 600; color: var(--cb-muted); }
+.cb-head-sub:empty { display: none; }
+.cb-head-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+/* View toggle (reuses .mb-view-toggle) — add icons */
+.cb-view-toggle .mb-view-btn { display: inline-flex; align-items: center; gap: 6px; }
+.cb-view-toggle .mb-view-btn svg { width: 14px; height: 14px; }
+
+.cb-store-filter { height: 34px; }
+
+.cb-completed-toggle {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 12px; font-weight: 600; color: var(--cb-muted);
+    cursor: pointer; user-select: none; white-space: nowrap;
+}
+.cb-completed-toggle input { width: 15px; height: 15px; accent-color: var(--cb-sage); cursor: pointer; }
+
+/* --- Scroll body --- */
+.cb-scroll { padding: 16px 18px; overflow-y: auto; }
+.cb-scroll::-webkit-scrollbar { width: 8px; }
+.cb-scroll::-webkit-scrollbar-track { background: transparent; }
+.cb-scroll::-webkit-scrollbar-thumb { background: #d5dbe3; border-radius: 10px; }
+
+/* --- Quick-add bar — pinned above the table --- */
 .cb-quickadd {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    background: #f6fbf2;
-    border: 1.5px solid #d8e8cc;
-    border-radius: 10px;
-    padding: 10px 12px;
-    margin-bottom: 14px;
+    display: flex; gap: 9px; align-items: center;
+    background: var(--cb-panel-2);
+    border: 1px solid var(--cb-line);
+    border-radius: 12px;
+    padding: 11px 12px;
+    margin-bottom: 16px;
 }
 .cb-quickadd input {
-    flex: 1;
-    min-width: 0;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    padding: 8px 10px;
+    flex: 1; min-width: 0;
+    border: 1px solid var(--cb-line);
+    border-radius: 8px;
+    padding: 9px 11px;
     font-size: 13px;
     font-family: inherit;
     background: #fff;
+    color: var(--slate-charcoal);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.cb-quickadd input:focus { outline: none; border-color: var(--sage-professional); }
+.cb-quickadd input::placeholder { color: var(--cb-faint); }
+.cb-quickadd input:focus { outline: none; border-color: var(--cb-sage); box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.15); }
 .cb-quickadd .cb-add-item { flex: 1.6; }
 .cb-add-store { flex: 0 0 auto; width: auto; }
-.cb-add-btn { padding: 8px 18px; font-size: 13px; white-space: nowrap; flex-shrink: 0; }
+.cb-add-btn {
+    padding: 9px 15px; font-size: 12.5px; font-weight: 700;
+    letter-spacing: 0.02em; text-transform: none;
+    white-space: nowrap; flex-shrink: 0; border-radius: 9px;
+    box-shadow: 0 1px 2px rgba(90, 141, 59, 0.18);
+    gap: 6px;
+}
+.cb-add-btn:hover { transform: none; box-shadow: 0 2px 8px rgba(90, 141, 59, 0.24); }
+.cb-add-btn svg { width: 15px; height: 15px; stroke-width: 2.4; }
 
-/* Table — fixed layout so changing chip/badge text never reflows the columns */
+/* --- Table — fixed layout so changing chip/badge text never reflows columns --- */
 .cb-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
 .cb-col-store    { width: 88px; }
 .cb-col-customer { width: 150px; }
 .cb-col-phone    { width: 128px; }
 /* .cb-col-item takes the remaining width */
 .cb-col-status   { width: 150px; }
-.cb-col-timer    { width: 122px; }  /* wide enough for the archived "purges in NNd" badge */
+.cb-col-timer    { width: 150px; }  /* fits the "purges in NNd" badge AND the inline date <input> in edit mode */
 .cb-col-notes    { width: 46px; }
-.cb-col-logged   { width: 130px; }
+.cb-col-logged   { width: 132px; }
 /* Status + Timer headers and cells center together so chips sit under their titles */
 .cb-table th.cb-col-status, .cb-cell-status,
 .cb-table th.cb-col-timer,  .cb-cell-timer { text-align: center; }
 .cb-table th {
     text-align: left;
-    background: #f3f4f6;
-    color: #6b7280;
-    font-size: 11px;
+    background: var(--cb-panel-2);
+    color: var(--cb-faint);
+    font-size: 10px;
+    font-weight: 800;
     text-transform: uppercase;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.07em;
     padding: 10px 12px;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--cb-line);
     position: sticky;
     top: 0;
     z-index: 1;
 }
-.cb-table td { padding: 9px 12px; border-bottom: 1px solid #f3f4f6; vertical-align: middle; }
+.cb-table th.cb-col-notes svg { width: 14px; height: 14px; stroke: var(--cb-faint); vertical-align: middle; }
+.cb-table td { padding: 11px 12px; border-bottom: 1px solid var(--cb-line-2); vertical-align: middle; }
+.cb-table tbody tr:last-child td { border-bottom: none; }
 .cb-row { cursor: pointer; transition: background 0.12s ease; }
-.cb-row:hover { background: #f8fafc; }
-.cb-row-open { background: #f6fbf2; }
+.cb-row:hover { background: var(--cb-panel-2); }
+.cb-row-open { background: var(--cb-sage-tint); }
+.cb-row-open:hover { background: #e7f0df; }
 .cb-row-done { opacity: 0.55; }
-.cb-col-store { white-space: nowrap; font-weight: 700; }
+.cb-col-store { white-space: nowrap; font-weight: 800; color: var(--cb-muted); font-size: 11.5px; letter-spacing: 0.02em; }
 .cb-customer { font-weight: 700; color: var(--slate-charcoal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cb-item { font-weight: 600; font-size: 13.5px; overflow-wrap: break-word; }
-.cb-phone { color: #2563eb; text-decoration: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cb-item { font-weight: 600; font-size: 13.5px; color: var(--slate-charcoal); overflow-wrap: break-word; }
+.cb-phone { color: #3167b8; text-decoration: none; white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
 .cb-phone:hover { text-decoration: underline; }
-.cb-logged { color: #9ca3af; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Logged: date on top (always visible) + who below (truncates instead of
+   eating the date when the name is long). */
+.cb-logged { color: var(--cb-faint); font-size: 11px; overflow: hidden; line-height: 1.35; }
+.cb-logged-date { display: block; font-size: 11.5px; font-weight: 700; color: var(--cb-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cb-logged-by { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cb-col-notes { text-align: center; }
-.cb-note-count { font-size: 11.5px; color: #6b7280; white-space: nowrap; }
+.cb-note-count { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 700; color: var(--cb-muted); white-space: nowrap; }
+.cb-note-count svg { width: 13px; height: 13px; stroke: var(--cb-faint); }
 .cb-col-actions { text-align: right; white-space: nowrap; width: 70px; }
 
-/* Status chips — fixed min-width + centered so cycling text doesn't shift anything */
+/* --- Status chips — fixed min-width + centered so cycling text doesn't shift anything --- */
 .cb-chip {
     display: inline-block;
-    font-size: 10.5px;
+    font-size: 10px;
     font-weight: 800;
     text-transform: uppercase;
-    letter-spacing: 0.4px;
-    padding: 3px 10px;
+    letter-spacing: 0.05em;
+    padding: 4px 11px;
     border-radius: 999px;
     white-space: nowrap;
     user-select: none;
-    min-width: 88px;
+    min-width: 92px;
     box-sizing: border-box;
     text-align: center;
 }
 .cb-status-by {
     font-size: 10.5px;
-    color: #9ca3af;
-    margin-top: 2px;
+    color: var(--cb-faint);
+    margin-top: 3px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.cb-chip-open      { background: #dbeafe; color: #1e40af; }
-.cb-chip-contacted { background: #fef3c7; color: #92400e; }
-.cb-chip-completed { background: #dcfce7; color: #166534; }
-.cb-chip-expired   { background: #e5e7eb; color: #4b5563; }
+.cb-chip-open      { background: var(--cb-blue-tint); color: #2563a8; }
+.cb-chip-contacted { background: var(--cb-gold-tint); color: #b7791f; }
+.cb-chip-completed { background: var(--cb-sage-tint); color: #4a7530; }
+.cb-chip-expired   { background: var(--cb-line-2); color: var(--cb-muted); }
 .cb-chip-clickable { cursor: pointer; transition: transform 0.1s ease, box-shadow 0.1s ease; }
-.cb-chip-clickable:hover { transform: scale(1.06); box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+.cb-chip-clickable:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(16, 24, 40, 0.12); }
 
-/* 30-day countdown badges */
+/* --- 30-day countdown badges --- */
 .cb-days {
     display: inline-block;
-    font-size: 11px;
+    font-size: 10.5px;
     font-weight: 800;
-    padding: 2px 8px;
-    border-radius: 6px;
+    letter-spacing: 0.02em;
+    padding: 3px 10px;
+    border-radius: 999px;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
 }
-.cb-days-ok       { background: #f3f4f6; color: #6b7280; }
-.cb-days-warn     { background: #fef3c7; color: #92400e; }
-.cb-days-urgent   { background: #fee2e2; color: #b91c1c; }
-.cb-days-archived { background: #f3f4f6; color: #9ca3af; font-weight: 600; }
+.cb-days-ok       { background: var(--cb-line-2); color: var(--cb-muted); }
+.cb-days-warn     { background: var(--cb-gold-tint); color: #b7791f; }
+.cb-days-urgent   { background: var(--cb-red-tint); color: #d1443b; }
+.cb-days-archived { background: var(--cb-line-2); color: var(--cb-faint); font-weight: 700; }
 
-/* Row actions + inline edit */
+/* --- Row actions + inline edit --- */
 .cb-icon-btn {
     border: none;
     background: transparent;
     cursor: pointer;
-    font-size: 13px;
-    padding: 3px 5px;
-    border-radius: 6px;
-    opacity: 0.45;
-    transition: opacity 0.12s ease, background 0.12s ease;
+    padding: 5px;
+    border-radius: 7px;
+    color: var(--cb-faint);
+    opacity: 0.5;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.14s ease, background 0.14s ease, color 0.14s ease;
 }
+.cb-icon-btn svg { width: 15px; height: 15px; }
 .cb-row:hover .cb-icon-btn, .cb-row-editing .cb-icon-btn { opacity: 1; }
-.cb-icon-btn:hover { background: #e5e7eb; }
+.cb-icon-btn:hover { background: var(--cb-line-2); color: var(--cb-muted); }
+.cb-icon-btn.cb-btn-danger:hover { background: var(--cb-red-tint); color: #d1443b; }
+.cb-icon-btn.cb-btn-save:hover { background: var(--cb-sage-tint); color: var(--cb-sage); }
 .cb-edit-input {
     width: 100%;
     box-sizing: border-box;
-    border: 1px solid var(--sage-professional);
-    border-radius: 6px;
-    padding: 6px 8px;
+    border: 1px solid var(--cb-sage);
+    border-radius: 8px;
+    padding: 7px 9px;
     font-size: 13px;
     font-family: inherit;
+    background: #fff;
 }
-.cb-edit-date { max-width: 140px; }
+.cb-edit-input:focus { outline: none; box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.15); }
+/* The date <input> lives in the (narrow, centered) Timer column, so trim its
+   padding/font so the full date + calendar picker never clip. */
+.cb-edit-date { width: 100%; max-width: 100%; padding: 6px 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cb-cell-timer .cb-edit-date { text-align: left; }
 
-/* Expanded notes strip */
+/* --- Expanded notes strip --- */
 .cb-row-detail td {
-    background: #f6fbf2;
-    border-bottom: 1px solid #e5e7eb;
-    padding: 12px 16px 14px;
+    background: var(--cb-panel-2);
+    border-bottom: 1px solid var(--cb-line);
+    padding: 14px 16px 16px;
 }
-.cb-notes-thread { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.cb-notes-thread { display: flex; flex-direction: column; gap: 7px; margin-bottom: 11px; }
 .cb-note { font-size: 12.5px; color: var(--slate-charcoal); line-height: 1.5; }
-.cb-note-meta { color: #9ca3af; font-size: 11.5px; }
-.cb-note-none { color: #9ca3af; font-style: italic; }
+.cb-note-meta { color: var(--cb-faint); font-size: 11.5px; }
+.cb-note-none { color: var(--cb-faint); font-style: italic; }
 .cb-note-add { display: flex; gap: 8px; }
 .cb-note-input {
     flex: 1;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    padding: 7px 10px;
+    border: 1px solid var(--cb-line);
+    border-radius: 8px;
+    padding: 8px 11px;
     font-size: 12.5px;
     font-family: inherit;
+    background: #fff;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.cb-note-input:focus { outline: none; border-color: var(--sage-professional); }
-.cb-note-btn { padding: 6px 14px; font-size: 12px; white-space: nowrap; }
+.cb-note-input:focus { outline: none; border-color: var(--cb-sage); box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.15); }
+.cb-note-btn { padding: 7px 15px; font-size: 12px; font-weight: 700; white-space: nowrap; border-radius: 8px; }
 
-/* Empty state */
+/* --- Empty state --- */
 .cb-empty {
     text-align: center;
-    color: #9ca3af;
-    font-size: 14px;
+    color: var(--cb-faint);
+    font-size: 13.5px;
     font-weight: 600;
-    padding: 60px 20px;
+    line-height: 1.6;
+    padding: 60px 24px;
 }
 
 @media (max-width: 768px) {
+    .cb-head { align-items: flex-start; }
+    .cb-head-controls { width: 100%; }
     .cb-quickadd { flex-wrap: wrap; }
     .cb-quickadd input { flex-basis: 45%; }
     .cb-logged, .cb-col-notes { display: none; }

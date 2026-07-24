@@ -1012,127 +1012,9 @@ function _loadCachedChampions() {
 }
 
 async function loadTickerItems() {
-    const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 8000);
-    let loaded = false;
-    try {
-        const res = await fetch(`${TICKER_URL}?v=${Date.now()}`, { signal: controller.signal });
-        const data = await res.json();
-        if (data.items && data.items.length > 0) {
-            localStorage.setItem('_tickerStaticCache', JSON.stringify(data.items));
-            _tickerStatic = data.items.map(item => ({ icon: item.icon || '📌', text: item.text, _type: 'static' }));
-            loaded = true;
-        }
-    } catch (e) { console.warn('[Ticker] AppScript fetch failed — using cache:', e); }
-    if (!loaded) {
-        try {
-            const cached = JSON.parse(localStorage.getItem('_tickerStaticCache') || '[]');
-            if (cached.length > 0) {
-                _tickerStatic = cached.map(item => ({ icon: item.icon || '📌', text: item.text, _type: 'static' }));
-            }
-        } catch (_) {}
-    }
-    clearTimeout(tid);
+    // Ticker was removed from the site (2026-07-23). No bar to populate — kept as
+    // a resolved no-op so initTicker()'s source-await still settles cleanly.
     _tickerSourceDone('static');
-}
-
-const TICKER_EMOJIS = [
-    '⭐','🌟','🏆','🥇','🎯','🔥','💡','📣',
-    '📋','📦','💬','📊','📈','📉','🔔','📌',
-    '✅','❌','⚠️','ℹ️','🚨','💰','💳','🛒',
-    '📱','💻','🖥️','📷','🎮','🔧','⚡','🔑',
-    '📝','🗓️','⏰','🚀','💪','👍','🤝','💼',
-    '🎖️','🏅','🎁','🎉','👀','📢','🔍','💎',
-    '🌐','🛍️','🧩','🏠','🎵','🎬','📚','🎪'
-];
-
-let _tickerPickerListenerAdded = false;
-
-async function toggleManageTicker() {
-    const dropdown = document.getElementById('manageTickerDropdown');
-    if (!dropdown) return;
-    const isOpen = dropdown.classList.contains('show');
-    closeAllModals();
-    if (!isOpen) {
-        dropdown.classList.add('show');
-        lockAndBlurScreen();
-        if (!_tickerPickerListenerAdded) {
-            _tickerPickerListenerAdded = true;
-            document.addEventListener('click', function(e) {
-                if (!e.target.closest('.t-icon-wrap')) {
-                    document.querySelectorAll('.emoji-picker-panel.show').forEach(p => p.classList.remove('show'));
-                }
-            });
-        }
-        const list = document.getElementById('manageTickerList');
-        list.innerHTML = '<div class="status-message">Loading...</div>';
-        try {
-            const res = await fetch(`${TICKER_URL}?v=${Date.now()}`);
-            const data = await res.json();
-            list.innerHTML = '';
-            const items = data.items || [];
-            if (items.length === 0) { addTickerRow(); } else { items.forEach(addTickerRow); }
-        } catch (e) {
-            list.innerHTML = '<div style="color:var(--red-alert); padding:20px; text-align:center;">Failed to load ticker items.</div>';
-        }
-    }
-}
-
-function addTickerRow(item = { icon: '📌', text: '' }) {
-    const row = document.createElement('div');
-    row.className = 'manage-row ticker-manage-row';
-    const icon = item.icon || '📌';
-    const text = item.text || '';
-    const emojiGrid = TICKER_EMOJIS.map(e =>
-        `<span class="emoji-option" data-emoji="${e}" onclick="selectTickerEmoji(this)">${e}</span>`
-    ).join('');
-    row.innerHTML = `
-        <div class="t-icon-wrap">
-            <button type="button" class="t-icon-btn" onclick="toggleEmojiPicker(this)" title="Pick emoji">${icon}</button>
-            <input type="hidden" class="t-icon" value="${escapeHtml(icon)}">
-            <div class="emoji-picker-panel"><div class="emoji-picker-grid">${emojiGrid}</div></div>
-        </div>
-        <input type="text" class="t-text" placeholder="Ticker message..." value="${escapeHtml(text)}">
-        <button class="del-btn" onclick="this.closest('.manage-row').remove()" title="Remove">✖</button>
-    `;
-    document.getElementById('manageTickerList').appendChild(row);
-}
-
-function toggleEmojiPicker(btn) {
-    const panel = btn.parentElement.querySelector('.emoji-picker-panel');
-    const isOpen = panel.classList.contains('show');
-    document.querySelectorAll('.emoji-picker-panel.show').forEach(p => p.classList.remove('show'));
-    if (!isOpen) panel.classList.add('show');
-}
-
-function selectTickerEmoji(span) {
-    const emoji = span.dataset.emoji;
-    const wrap = span.closest('.t-icon-wrap');
-    wrap.querySelector('.t-icon-btn').textContent = emoji;
-    wrap.querySelector('.t-icon').value = emoji;
-    wrap.querySelector('.emoji-picker-panel').classList.remove('show');
-}
-
-async function saveTickerItems() {
-    const btn = document.getElementById('saveTickerBtn');
-    const items = [];
-    document.querySelectorAll('#manageTickerList .manage-row').forEach(row => {
-        const text = row.querySelector('.t-text').value.trim();
-        if (text) items.push({ icon: row.querySelector('.t-icon').value.trim() || '📌', text });
-    });
-    btn.textContent = 'Saving...';
-    btn.style.opacity = '0.7';
-    try {
-        await postWrite(TICKER_URL, { items });
-        _tickerStatic = items.length ? items.map(item => ({ icon: item.icon, text: item.text, _type: 'static' })) : [..._TICKER_DEFAULTS];
-        if (_tickerShown) _applyTickerContent();
-        closeAllModals();
-    } catch (e) {
-        alert('Failed to save ticker items: ' + (e.message || e));
-    } finally {
-        btn.textContent = 'Save Changes';
-        btn.style.opacity = '1';
-    }
 }
 
 // --- 5. MODULE: USER MANAGEMENT ---
@@ -7788,6 +7670,18 @@ const CB_STATUS_META = {
     completed: { label: 'Completed', next: 'open' }
 };
 
+// Calm SVG line icons (Feather) — replace the old emoji in the table markup so
+// Call Backs matches the Action-Menu aesthetic. Styling comes from `.cb-panel svg`.
+const CB_ICONS = {
+    plus:    '<svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+    note:    '<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    edit:    '<svg viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>',
+    trash:   '<svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+    restore: '<svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>',
+    save:    '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>',
+    cancel:  '<svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+};
+
 function _cbIsCorpRole() {
     return CB_CORP_ROLES.includes((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
 }
@@ -7878,7 +7772,7 @@ function cbRender() {
     html += `<table class="cb-table"><thead><tr>
         ${showStore ? '<th class="cb-col-store">Store</th>' : ''}
         <th class="cb-col-customer">Customer</th><th class="cb-col-phone">Phone</th><th class="cb-col-item">Item Wanted</th>
-        <th class="cb-col-status">Status</th><th class="cb-col-timer">Timer</th><th class="cb-col-notes">💬</th><th class="cb-col-logged">Logged</th><th class="cb-col-actions"></th>
+        <th class="cb-col-status">Status</th><th class="cb-col-timer">Timer</th><th class="cb-col-notes">${CB_ICONS.note}</th><th class="cb-col-logged">Logged</th><th class="cb-col-actions"></th>
     </tr></thead><tbody>`;
     entries.forEach(e => { html += cbRowHtml(e, showStore); });
     html += '</tbody></table>';
@@ -7898,7 +7792,7 @@ function _cbQuickAddHtml() {
         <input type="tel"  id="cbAddPhone" placeholder="Phone" inputmode="numeric" oninput="cbPhoneInput(this)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
         <input type="text" id="cbAddItem"  placeholder="Item they're looking for" class="cb-add-item" onkeydown="if(event.key==='Enter')cbQuickAdd()">
         <input type="text" id="cbAddNoteTxt" placeholder="Notes (optional)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
-        <button class="btn-primary cb-add-btn" onclick="cbQuickAdd()">+ Add</button>
+        <button class="btn-primary cb-add-btn" onclick="cbQuickAdd()">${CB_ICONS.plus}Add</button>
     </div>`;
 }
 
@@ -7923,15 +7817,15 @@ function cbRowHtml(e, showStore) {
     let actions = '';
     if (canAct && !editing) {
         actions = isArchived
-            ? `<button class="cb-icon-btn" data-cb-tip="Restore to active" onclick="event.stopPropagation();cbRestoreEntry('${e.id}')">♻️</button>`
-            : `<button class="cb-icon-btn" data-cb-tip="Edit" onclick="event.stopPropagation();cbEditEntry('${e.id}')">✏️</button>`;
-        actions += `<button class="cb-icon-btn" data-cb-tip="Delete" onclick="event.stopPropagation();cbDeleteEntry('${e.id}')">🗑️</button>`;
+            ? `<button class="cb-icon-btn" data-cb-tip="Restore to active" onclick="event.stopPropagation();cbRestoreEntry('${e.id}')">${CB_ICONS.restore}</button>`
+            : `<button class="cb-icon-btn" data-cb-tip="Edit" onclick="event.stopPropagation();cbEditEntry('${e.id}')">${CB_ICONS.edit}</button>`;
+        actions += `<button class="cb-icon-btn cb-btn-danger" data-cb-tip="Delete" onclick="event.stopPropagation();cbDeleteEntry('${e.id}')">${CB_ICONS.trash}</button>`;
     }
 
     let row;
     if (editing) {
         row = `<tr class="cb-row cb-row-editing" data-id="${e.id}">
-            ${showStore ? `<td class="cb-col-store">${b2bStoreLabel(e.store)}</td>` : ''}
+            ${showStore ? `<td class="cb-col-store">${escapeHtml(e.store)}</td>` : ''}
             <td><input class="cb-edit-input" id="cbEditName" value="${escapeHtml(e.customer_name)}"></td>
             <td><input class="cb-edit-input" id="cbEditPhone" type="tel" inputmode="numeric" oninput="cbPhoneInput(this)" value="${escapeHtml(String(e.phone || '').replace(/\D/g, '').slice(0, 10))}"></td>
             <td class="cb-col-item"><input class="cb-edit-input" id="cbEditItem" value="${escapeHtml(e.item)}"></td>
@@ -7940,20 +7834,20 @@ function cbRowHtml(e, showStore) {
             <td class="cb-col-notes"></td>
             <td class="cb-logged"></td>
             <td class="cb-col-actions">
-                <button class="cb-icon-btn" data-cb-tip="Save" onclick="event.stopPropagation();cbSaveEdit('${e.id}')">✅</button>
-                <button class="cb-icon-btn" data-cb-tip="Cancel" onclick="event.stopPropagation();cbCancelEdit()">✖</button>
+                <button class="cb-icon-btn cb-btn-save" data-cb-tip="Save" onclick="event.stopPropagation();cbSaveEdit('${e.id}')">${CB_ICONS.save}</button>
+                <button class="cb-icon-btn cb-btn-danger" data-cb-tip="Cancel" onclick="event.stopPropagation();cbCancelEdit()">${CB_ICONS.cancel}</button>
             </td>
         </tr>`;
     } else {
         row = `<tr class="cb-row ${expanded ? 'cb-row-open' : ''} ${e.status === 'completed' ? 'cb-row-done' : ''}" data-id="${e.id}" onclick="cbToggleRow('${e.id}')">
-            ${showStore ? `<td class="cb-col-store">${b2bStoreLabel(e.store)}</td>` : ''}
+            ${showStore ? `<td class="cb-col-store">${escapeHtml(e.store)}</td>` : ''}
             <td class="cb-customer">${escapeHtml(e.customer_name)}</td>
             <td>${phone}</td>
             <td class="cb-col-item cb-item">${escapeHtml(e.item)}</td>
             <td class="cb-cell-status">${chip}</td>
             <td class="cb-cell-timer">${_cbDaysBadge(e)}</td>
-            <td class="cb-col-notes">${e.notes.length ? `<span class="cb-note-count">💬 ${e.notes.length}</span>` : ''}</td>
-            <td class="cb-logged">${escapeHtml(e.created_by)} · ${_cbShortDate(e.date_of_call)}</td>
+            <td class="cb-col-notes">${e.notes.length ? `<span class="cb-note-count">${CB_ICONS.note}${e.notes.length}</span>` : ''}</td>
+            <td class="cb-logged"><span class="cb-logged-date">${_cbShortDate(e.date_of_call)}</span><span class="cb-logged-by">${escapeHtml(e.created_by)}</span></td>
             <td class="cb-col-actions">${actions}</td>
         </tr>`;
     }
@@ -8102,9 +7996,6 @@ function applyRoleBasedUI() {
     const firstName = userName.split(' ')[0];
     const wsTitleEl = document.getElementById('wsTitle');
     if (wsTitleEl) wsTitleEl.innerHTML = `<span>📈</span> ${firstName}'s Workspace`;
-
-    const opsTitleEl = document.getElementById('opsTitle');
-    if (opsTitleEl) opsTitleEl.innerHTML = `<span>🛠️</span> ${firstName}'s Operational Tools`;
 
     const userRoleClass = `role-${userRole.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-')}`;
     const userStoreClass = `store-${userStore.toLowerCase()}`;
@@ -16479,7 +16370,6 @@ const FEATURE_CATALOG = [
     { key: 'tool-claims-store',        label: 'Insurance Claims (store)',      tab: 'tools', group: '🛟 Claims & Refunds', def: ['manager', 'owner-manager'] },
     { key: 'tool-claims-oversight',    label: 'Insurance Claims (oversight)',  tab: 'tools', group: '🛟 Claims & Refunds', def: ['district-manager', 'ceo'] },
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: '📢 Content', def: ['district-manager', 'ceo', 'tom', 'owner-manager'] },
-    { key: 'tool-ticker',              label: 'Ticker Items',                  tab: 'tools', group: '📢 Content', def: ['district-manager'] },
     { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: '📢 Content', def: ['district-manager'] },
     { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: '🏪 Store Ops', def: ['district-manager', 'ceo'] },
     { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: '🏪 Store Ops', def: ['district-manager'] },
