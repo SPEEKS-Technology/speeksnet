@@ -9,9 +9,9 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260723a">
+  <link rel="stylesheet" href="styles.css?v=20260723g">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <script src="speeks.js?v=20260723j" defer></script>
+  <script src="speeks.js?v=20260723p" defer></script>
 </head>
 <body class="preload">
 
@@ -75,31 +75,6 @@
       </div>
     </div>
 </header>
-
-<div id="infoTicker" class="info-ticker">
-  <div class="ticker-scroll-area">
-    <div class="ticker-track" id="tickerTrack"></div>
-  </div>
-  <div class="ticker-panel-buttons">
-    <button class="gi-nav-toggle dynamic-module-flex role-manager role-owner-manager role-employee role-training" data-feature="widget-goals-panel" onclick="toggleGoalsPanel()" title="Goals &amp; Initiatives">
-        <span style="font-size: 13px; line-height: 1;">🎯</span>
-        <span>Goals &amp; Initiatives</span>
-        <svg class="gi-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-    </button>
-    <button class="cl-nav-toggle dynamic-module-flex role-manager role-owner-manager role-district-manager role-assistant-manager" data-feature="widget-checklist-panel" onclick="toggleChecklistPanel(event); loadChecklist();" title="Checklist">
-        <span style="font-size: 13px; line-height: 1;">📋</span>
-        <span>Checklist</span>
-        <span id="cl-progress-chip" class="cl-progress-chip"></span>
-        <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-    </button>
-    <button class="cl-nav-toggle audit-nav-toggle dynamic-module-flex role-manager role-owner-manager role-assistant-manager" data-feature="widget-audit-panel" onclick="toggleAuditPanel(event); loadAudit();" title="Cleaning Checklist">
-        <span style="font-size: 13px; line-height: 1;">🧹</span>
-        <span>Cleaning Checklist</span>
-        <span id="audit-progress-chip" class="cl-progress-chip"></span>
-        <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-    </button>
-  </div>
-</div>
 
 <!-- ===== FIRST-LOGIN TUTORIAL ===== -->
 
@@ -1029,18 +1004,6 @@
 
     <div class="manage-footer flex-end">
         <button onclick="submitRecycleRequest()" class="btn-primary" id="submitRecycleBtn">Submit Request</button>
-    </div>
-</div>
-
-<div class="modal-menu manage-menu" id="manageTickerDropdown">
-    <div class="modal-header">
-        <h3>Manage Ticker Items</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
-    </div>
-    <div class="manage-content" id="manageTickerList"></div>
-    <div class="manage-footer">
-        <button class="btn-secondary" onclick="addTickerRow()">+ Add Item</button>
-        <button id="saveTickerBtn" class="btn-primary" onclick="saveTickerItems()">Save Changes</button>
     </div>
 </div>
 
