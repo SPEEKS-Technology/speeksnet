@@ -8848,6 +8848,15 @@ function _anchorTipBelow(el) {
 document.addEventListener('mouseover', function(e) {
     // Reset the anchored state each pass; the top-nav branch re-arms it below.
     customTooltip.classList.remove('anchored'); _tipAnchored = false;
+    // Inside the redesigned tool modals (and the Tools side panel), upgrade any
+    // native title="" tooltip to the white styled one: move it to data-tip (once)
+    // so the branch below renders it, and drop title so the black OS box never
+    // shows. Future re-renders recreate title and get re-upgraded on next hover.
+    const titledInTool = e.target.closest('.modal-menu.manage-menu [title], .tools-side-panel [title]');
+    if (titledInTool) {
+        const t = titledInTool.getAttribute('title');
+        if (t) { titledInTool.setAttribute('data-tip', t); titledInTool.removeAttribute('title'); }
+    }
     // Generic styled tooltip: any element with data-tip gets the site tooltip
     // instead of the plain browser title box. Used by the Action Menu + panels.
     const genTip = e.target.closest('[data-tip]');
@@ -15480,7 +15489,7 @@ function boxOrderRenderReceipt() {
             <button class="box-receipt-x" title="Remove" onclick="boxReceiptRemove('${p.id}')">×</button>
         </div>`).join('');
     panel.innerHTML =
-        `<div class="box-receipt-head">🧾 Your order · ${picked.length} item${picked.length === 1 ? '' : 's'}</div>` +
+        `<div class="box-receipt-head">Your order · ${picked.length} item${picked.length === 1 ? '' : 's'}</div>` +
         `<div class="box-receipt-list">${lines}</div>`;
     panel.style.display = '';
 }
