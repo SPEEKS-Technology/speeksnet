@@ -9,9 +9,9 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260724t">
+  <link rel="stylesheet" href="styles.css?v=20260725d">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <script src="speeks.js?v=20260724u" defer></script>
+  <script src="speeks.js?v=20260725d" defer></script>
 </head>
 <body class="preload">
 
@@ -411,72 +411,90 @@
   </div>
 
   <div id="pane-records" class="tab-pane active">
-      
-      <div style="display: flex; flex-direction: row; justify-content: center; align-items: flex-end; width: 100%; margin-bottom: 70px; flex-wrap: wrap; gap: 150px;">
-          
-          <div style="display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 420px;">
-              <div style="text-align: center; margin-bottom: 35px; width: 100%; display: flex; flex-direction: column; align-items: center;">
-                  <h3 style="font-size: 19px; font-weight: 900; color: var(--slate-charcoal); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 8px;">
-                      🏆 Weekly Lister Champion
-                  </h3>
-                  <div id="lister-champions-date" style="font-size: 13px; font-weight: 800; color: #888; text-transform: uppercase; letter-spacing: 1px; text-align: center;"></div>
-              </div>
-              <div id="lister-champions-body" style="display: flex; justify-content: center; align-items: flex-end; gap: 15px; width: 100%; min-height: 250px;">
-                  <div class="status-message">Syncing Listers...</div>
-              </div>
-          </div>
-          
-          <div style="display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 420px;">
-              <div style="text-align: center; margin-bottom: 35px; width: 100%; display: flex; flex-direction: column; align-items: center;">
-                  <h3 style="font-size: 19px; font-weight: 900; color: var(--slate-charcoal); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 8px;">
-                      ⭐ Monthly Google Review Champion
-                  </h3>
-                  <div id="google-review-champions-date" style="font-size: 13px; font-weight: 800; color: #888; text-transform: uppercase; letter-spacing: 1px; text-align: center;"></div>
-              </div>
-              <div id="google-review-champions-body" style="display: flex; justify-content: center; align-items: flex-end; gap: 15px; width: 100%; min-height: 250px;">
-                  <div class="status-message">Syncing Reviews...</div>
-              </div>
-          </div>
 
-          <div style="display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 420px;">
-              <div style="text-align: center; margin-bottom: 35px; width: 100%; display: flex; flex-direction: column; align-items: center;">
-                  <h3 style="font-size: 19px; font-weight: 900; color: var(--slate-charcoal); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 8px;">
-                      🏆 Weekly Buyer Champion
-                      <span class="goals-info-i" data-tip-title="Weekly Buyer Champion" data-tip-desc="Based on a Proprietary Buying Metric Formula.">i</span>
-                  </h3>
-                  <div id="buyer-champions-date" style="font-size: 13px; font-weight: 800; color: #888; text-transform: uppercase; letter-spacing: 1px; text-align: center;"></div>
-              </div>
-              <div id="buyer-champions-body" style="display: flex; justify-content: center; align-items: flex-end; gap: 15px; width: 100%; min-height: 250px;">
-                  <div class="status-message">Syncing Buyers...</div>
-              </div>
-          </div>
-          
+      <!-- ===== SUB-NAVIGATION: Champions · Awards · Records ===== -->
+      <div class="stats-subnav" role="tablist" aria-label="Stats sections">
+          <button class="stats-seg active" id="ssv-champions" role="tab" aria-selected="true" onclick="showStatsView('champions')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>
+              <span>Champions</span>
+          </button>
+          <button class="stats-seg" id="ssv-awards" role="tab" aria-selected="false" onclick="showStatsView('awards')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>
+              <span>Awards</span>
+          </button>
+          <button class="stats-seg" id="ssv-records" role="tab" aria-selected="false" onclick="showStatsView('records')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="11" width="3" height="7" rx="1"/><rect x="12.5" y="7" width="3" height="11" rx="1"/><rect x="18" y="4" width="3" height="14" rx="1"/></svg>
+              <span>Records</span>
+          </button>
       </div>
 
-      <!-- ===== MONTHLY AWARDS ===== -->
-      <div class="awards-section">
-          <div class="awards-section-header">
-              <h3 class="awards-section-title">🏅 Monthly Awards</h3>
-              <span id="awards-month-label" class="widget-date-display"></span>
-              <div style="position: absolute; right: 0; display: flex; gap: 8px;">
-                  <button id="awards-video-btn" class="mini-action-btn" onclick="openAwardVideo()" style="display:none;">🎬 Award Video</button>
-                  <button class="mini-action-btn" onclick="toggleAwardsHistory()">📋 History</button>
+      <!-- ===== CHAMPIONS VIEW ===== -->
+      <div class="stats-view active" id="stats-view-champions">
+          <div class="champions-row">
+              <div class="champion-block">
+                  <div class="champion-head">
+                      <div class="champion-eyebrow"><span class="ce-k">Weekly</span><span class="ce-t">Lister Champion</span></div>
+                      <span class="champion-date" id="lister-champions-date"></span>
+                  </div>
+                  <div class="champion-body" id="lister-champions-body">
+                      <div class="status-message">Syncing Listers...</div>
+                  </div>
               </div>
-          </div>
-          <div id="awards-cards-container" class="awards-cards-row award-style-octo">
-              <div class="status-message">Syncing Awards...</div>
+
+              <div class="champion-block">
+                  <div class="champion-head">
+                      <div class="champion-eyebrow"><span class="ce-k">Monthly</span><span class="ce-t">Google Review Champion</span></div>
+                      <span class="champion-date" id="google-review-champions-date"></span>
+                  </div>
+                  <div class="champion-body" id="google-review-champions-body">
+                      <div class="status-message">Syncing Reviews...</div>
+                  </div>
+              </div>
+
+              <div class="champion-block">
+                  <div class="champion-head">
+                      <div class="champion-eyebrow"><span class="ce-k">Weekly</span><span class="ce-t">Buyer Champion <span class="goals-info-i" data-tip-title="Weekly Buyer Champion" data-tip-desc="Based on a Proprietary Buying Metric Formula.">i</span></span></div>
+                      <span class="champion-date" id="buyer-champions-date"></span>
+                  </div>
+                  <div class="champion-body" id="buyer-champions-body">
+                      <div class="status-message">Syncing Buyers...</div>
+                  </div>
+              </div>
           </div>
       </div>
 
+      <!-- ===== AWARDS VIEW ===== -->
+      <div class="stats-view" id="stats-view-awards">
+          <div class="awards-section">
+              <div class="awards-section-header">
+                  <div class="awards-head-titles">
+                      <h3 class="awards-section-title">Monthly Awards</h3>
+                      <span id="awards-month-label" class="widget-date-display"></span>
+                  </div>
+                  <div class="awards-header-actions">
+                      <button id="awards-video-btn" class="mini-action-btn" onclick="openAwardVideo()" style="display:none;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg> Award Video</button>
+                      <button class="mini-action-btn" onclick="toggleAwardsHistory()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/></svg> History</button>
+                  </div>
+              </div>
+              <div id="awards-cards-container" class="awards-grid">
+                  <div class="status-message">Syncing Awards...</div>
+              </div>
+          </div>
+      </div>
+
+      <!-- ===== RECORDS VIEW ===== -->
+      <div class="stats-view" id="stats-view-records">
+          <div id="recordsContainer" style="min-height: 400px;">
+              <div class="status-message">Syncing Data...</div>
+          </div>
+      </div>
+
+      <!-- Award video lightbox (fixed overlay) -->
       <div id="awardVideoOverlay" class="award-video-overlay" onclick="closeAwardVideo()">
           <div class="award-video-lightbox" onclick="event.stopPropagation()">
-              <button class="award-video-close-btn" onclick="closeAwardVideo()">✖</button>
+              <button class="award-video-close-btn" onclick="closeAwardVideo()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
               <div id="awardVideoContent" class="award-video-lightbox-content"></div>
           </div>
-      </div>
-
-      <div id="recordsContainer" style="min-height: 400px; display: flex; align-items: center; justify-content: center;">
-          <div class="status-message">Syncing Data...</div>
       </div>
   </div>
 

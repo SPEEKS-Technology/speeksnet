@@ -4400,8 +4400,20 @@ async function fetchRecordsData() {
     } catch (e) {} 
 }
 
+// Stats page sub-navigation: Champions · Awards · Records. Every view's data is
+// already fetched on load, so switching just toggles which one is visible.
+function showStatsView(name) {
+    ['champions', 'awards', 'records'].forEach(v => {
+        const on = v === name;
+        const pane = document.getElementById('stats-view-' + v);
+        const seg  = document.getElementById('ssv-' + v);
+        if (pane) pane.classList.toggle('active', on);
+        if (seg)  { seg.classList.toggle('active', on); seg.setAttribute('aria-selected', on ? 'true' : 'false'); }
+    });
+}
+
 function renderRecords() {
-    const cont = document.getElementById('recordsContainer'); 
+    const cont = document.getElementById('recordsContainer');
     if (!cont) return;
     
     if (!recordsCache?.length) {
@@ -4419,61 +4431,63 @@ function renderRecords() {
         else map[l].s.push(r); 
     });
     
-    let bC = 0; 
-    let html = '<div class="records-masonry-grid">';
-    
+    let bC = 0;
+    let html = '<div class="records-grid">';
+
     Object.keys(map).forEach(l => {
-        let d = map[l]; 
-        bC++; 
-        let oId = 'overflow-board-' + bC; 
-        d.s.sort((a, b) => parseNum(b.value) - parseNum(a.value)); 
+        let d = map[l];
+        bC++;
+        let oId = 'overflow-board-' + bC;
+        d.s.sort((a, b) => parseNum(b.value) - parseNum(a.value));
         let cR = d.c || d.s[0];
-        
+
         html += `
-        <div class="record-metric-card">
-            <div class="rmc-header" style="background: var(--slate-charcoal);">${l}</div>`;
-            
+        <div class="rec">
+            <div class="rec-h">${l}</div>`;
+
         if (cR) {
             html += `
-            <div class="rmc-champion">
-                <div class="rmc-crown">👑 Company Record</div>
-                <div class="rmc-champ-val">${cR.value || '-'}</div>
-                <div class="rmc-champ-sub">${cR.subtext || ''}</div>
+            <div class="rec-champ">
+                <div class="cc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/></svg> Company Record</div>
+                <div class="cv">${cR.value || '-'}</div>
+                <div class="cs">${cR.subtext || ''}</div>
             </div>`;
         }
-        
+
         if (d.s.length) {
-            html += `<div class="rmc-list">`;
+            html += `<div class="rec-list">`;
             html += d.s.slice(0, 3).map((s, i) => `
-                <div class="rmc-list-item">
-                    <div class="rmc-rank">${i===0 ? '🥇' : (i===1 ? '🥈' : '🥉')}</div>
-                    <div class="rmc-store">${s.section}</div>
-                    <div class="rmc-score">
-                        <span class="rmc-score-val">${s.value || '-'}</span>
-                        <span class="rmc-score-date">${s.subtext || ''}</span>
-                    </div>
+                <div class="rec-li">
+                    <span class="lr${i===0 ? ' g' : ''}">${i+1}</span>
+                    <span class="ls">${s.section}</span>
+                    <span class="lv">
+                        <b>${s.value || '-'}</b>
+                        <span>${s.subtext || ''}</span>
+                    </span>
                 </div>`).join('');
-                
+
             if (d.s.length > 3) {
                 html += `
                 <div id="${oId}" class="hidden-board">
                     ${d.s.slice(3).map((s, i) => `
-                    <div class="rmc-list-item">
-                        <div class="rmc-rank" style="font-size:11px; color:#999;">#${i+4}</div>
-                        <div class="rmc-store">${s.section}</div>
-                        <div class="rmc-score">
-                            <span class="rmc-score-val">${s.value || '-'}</span>
-                            <span class="rmc-score-date">${s.subtext || ''}</span>
-                        </div>
+                    <div class="rec-li">
+                        <span class="lr">${i+4}</span>
+                        <span class="ls">${s.section}</span>
+                        <span class="lv">
+                            <b>${s.value || '-'}</b>
+                            <span>${s.subtext || ''}</span>
+                        </span>
                     </div>`).join('')}
-                </div>
-                <button class="rmc-expand-btn" onclick="toggleBoard('${oId}', this)">See Full Leaderboard ▾</button>`;
+                </div>`;
             }
             html += `</div>`;
+            if (d.s.length > 3) {
+                html += `<button class="rec-more" onclick="toggleBoard('${oId}', this)">See Full Leaderboard ▾</button>`;
+            }
         }
         html += `</div>`;
     });
-    
+
     html += '</div>';
     cont.innerHTML = html;
 }
@@ -4723,16 +4737,17 @@ function renderAwards() {
     container.innerHTML = AWARD_NAMES.map((name, i) => {
         const store = winners[i];
         const [line1, line2] = AWARD_DISPLAY_LINES[i];
+        const fullName = [line1, line2].filter(Boolean).join(' ');
         return `
-        <div class="award-card-trophy-wrap">
-            <button class="award-info-btn" data-desc="${escapeHtml(AWARD_DESCRIPTIONS[i])}">i</button>
-            <div class="award-card">
-                <div class="award-card-header">
-                    <div class="award-card-name">${escapeHtml(line1)}<br>${escapeHtml(line2)}</div>
-                </div>
-                <div class="award-card-sep"><span>◆</span></div>
-                <div class="award-card-body">
-                    <div class="award-card-winner">${store ? escapeHtml(store) : '<span style="opacity:0.45;">—</span>'}</div>
+        <div class="aw">
+            <button class="award-info-btn aw-i" data-desc="${escapeHtml(AWARD_DESCRIPTIONS[i])}">i</button>
+            <div class="aw-name">${escapeHtml(fullName)}</div>
+            <div class="aw-line"></div>
+            <div class="aw-win">
+                <span class="aw-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg></span>
+                <div class="aw-win-id">
+                    <div class="aw-store">${store ? escapeHtml(store) : '<span class="aw-empty">—</span>'}</div>
+                    <div class="aw-cap">Winner</div>
                 </div>
             </div>
         </div>`;
@@ -4852,12 +4867,11 @@ function renderAwardsHistory() {
             ${AWARD_NAMES.map((name, i) => {
                 const store = a[winnerKeys[i]];
                 return `<div class="awards-history-row">
-                    <span class="awards-history-medal">${AWARD_EMOJIS[i]}</span>
                     <span class="awards-history-awardname">${escapeHtml(name)}</span>
-                    <span class="awards-history-winner">${store ? `${STORE_EMOJI_MAP[store] || ''} ${store}` : '—'}</span>
+                    <span class="awards-history-winner${store ? '' : ' empty'}">${store ? escapeHtml(store) : '—'}</span>
                 </div>`;
             }).join('')}
-            ${a.videoUrl ? `<div class="awards-history-video-link"><a href="${escapeHtml(a.videoUrl)}" target="_blank">🎬 Watch Video</a></div>` : ''}
+            ${a.videoUrl ? `<div class="awards-history-video-link"><a href="${escapeHtml(a.videoUrl)}" target="_blank"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg> Watch Video</a></div>` : ''}
         </div>`).join('');
 }
 
@@ -8909,8 +8923,8 @@ document.addEventListener('mouseover', function(e) {
 
     const awardI = e.target.closest('.award-info-btn');
     if (awardI) {
-        const wrap = awardI.closest('.award-card-trophy-wrap');
-        const nameEl = wrap ? wrap.querySelector('.award-card-name') : null;
+        const wrap = awardI.closest('.aw') || awardI.closest('.award-card-trophy-wrap');
+        const nameEl = wrap ? wrap.querySelector('.aw-name, .award-card-name') : null;
         const title = nameEl ? nameEl.innerText.replace(/\s+/g, ' ').trim() : 'Award';
         customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
         customTooltip.innerHTML = `
@@ -13624,7 +13638,7 @@ async function fetchChampions() {
             console.error("Failed to fetch Weekly Buyers:", buyerErr);
         }
 
-        // 5. BUILDER HELPER
+        // 5. BUILDER HELPER — featured champion + runner-up rows (calm redesign)
         const buildPodiumHtml = (dataArray, sortBy, labelText, type) => {
             const merged = {};
             dataArray.forEach(emp => {
@@ -13635,60 +13649,52 @@ async function fetchChampions() {
                     if (type === 'review') merged[emp.name].reviews += emp.reviews;
                 }
             });
-            
+
             const uniqueEmps = Object.values(merged);
             uniqueEmps.sort((a, b) => b[sortBy] - a[sortBy]);
             const top3 = uniqueEmps.slice(0, 3);
 
-            if (top3.length === 0) return '<div style="color: #888; font-weight: 600; text-align: center; width: 100%;">No data available yet.</div>';
+            if (top3.length === 0) return '<div class="champion-empty">No data available yet.</div>';
 
-            const podiumTheme = ['#e2e8f0', '#fef08a', '#fed7aa']; 
+            // Buyer raw score scales with dollars (tens of thousands), so show a
+            // compact, absolute "points" figure: raw score / 100, rounded. This
+            // preserves the exact ranking while staying small and readable.
+            const valOf = (emp) => type === 'lister' ? emp.listed
+                                 : type === 'review' ? emp.reviews
+                                 : Math.round(emp.score / 100);
 
-            const podiumOrder = [
-                { data: top3[1], place: 2, height: '155px', color: podiumTheme[0], medal: '🥈' },
-                { data: top3[0], place: 1, height: '215px', color: podiumTheme[1], medal: '🥇' },
-                { data: top3[2], place: 3, height: '115px', color: podiumTheme[2], medal: '🥉' }
-            ];
+            const champ = top3[0];
+            const runners = top3.slice(1);
 
-            let html = '';
-            podiumOrder.forEach(podium => {
-                if (!podium.data) return; 
-                const emp = podium.data;
-                const isFirst = podium.place === 1;
-                
-                // Render the inner number/label block for Lister, Review, and Buyer podiums.
-                // Buyer raw score scales with dollars (tens of thousands), so show a
-                // compact, absolute "points" figure: the raw score / 100, rounded. This
-                // preserves the exact ranking while staying small and readable.
-                let blockContent = '';
-                if (type === 'lister' || type === 'review' || type === 'buyer') {
-                    const val = type === 'lister' ? emp.listed
-                              : type === 'review' ? emp.reviews
-                              : Math.round(emp.score / 100);
-                    blockContent = `
-                        <div style="z-index: 2; display: flex; flex-direction: column; align-items: center;">
-                            <span style="font-size: ${isFirst ? '32px' : '26px'}; font-weight: 900; color: var(--slate-charcoal); line-height: 1;">${val}</span>
-                            <span style="font-size: 9px; font-weight: 900; color: #64748b; text-transform: uppercase; margin-top: 4px;">${labelText}</span>
-                        </div>`;
-                }
-
-                html += `
-                <div style="display: flex; flex-direction: column; align-items: center; width: 130px;">
-                    <div style="margin-bottom: 12px; text-align: center; display: flex; flex-direction: column; align-items: center; z-index: 2;">
-                        <div style="font-size: ${isFirst ? '46px' : '34px'}; line-height: 1; margin-bottom: 8px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));">${podium.medal}</div>
-                        <div style="font-size: ${isFirst ? '14px' : '12px'}; font-weight: 900; color: var(--slate-charcoal); line-height: 1.2; text-align: center;">${emp.name}</div>
-                        <div style="font-size: 10px; font-weight: 800; color: #888; text-transform: uppercase; margin-top: 4px;">${emp.store}</div>
+            const runnerHtml = runners.map((emp, i) => {
+                const place = i + 2;                       // 2 or 3
+                const cls = place === 2 ? 's' : 'b';       // silver / bronze
+                return `
+                <div class="cf-run">
+                    <span class="cf-rk ${cls}">${place}</span>
+                    <div class="cf-rinfo">
+                        <span class="cf-rn">${emp.name}</span>
+                        <span class="cf-rs">${emp.store}</span>
                     </div>
-                    
-                    <div style="width: 100%; height: ${podium.height}; background: linear-gradient(to bottom, ${podium.color}, #ffffff); border: 1px solid rgba(0,0,0,0.05); border-bottom: none; border-radius: 12px 12px 0 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 15px; position: relative; overflow: hidden;">
-                        
-                        ${blockContent}
-                        
-                        <span style="position: absolute; bottom: 8px; font-size: 42px; font-weight: 900; color: #000000; opacity: 0.12; line-height: 1; user-select: none; z-index: 1;">${podium.place}</span>
-                    </div>
+                    <span class="cf-rv">${valOf(emp)}</span>
                 </div>`;
-            });
-            return html;
+            }).join('');
+
+            return `
+            <div class="champ-featured-wrap">
+                <div class="cf-feat">
+                    <span class="cf-crown">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                        Champion
+                    </span>
+                    <div class="cf-id">
+                        <div class="cf-name">${champ.name}</div>
+                        <div class="cf-store">${champ.store}</div>
+                    </div>
+                    <div class="cf-val"><b>${valOf(champ)}</b><span>${labelText}</span></div>
+                </div>
+                ${runners.length ? `<div class="cf-runners">${runnerHtml}</div>` : ''}
+            </div>`;
         };
 
         feedChampionsToTicker(allBuyers, allListers, allGoogleReviews);
@@ -16416,7 +16422,13 @@ async function checkRecycleReminders() {
             //
             //  • A manager REPLY to your note blocks nobody, so it stays seen-based:
             //    surface it once, then the high-water mark hides it.
-            const needsReview   = rows.filter(r => !r.reviewed_at && !r.delete_requested_at);
+            // A line whose latest DM note is still awaiting the manager's reply
+            // isn't the DM's ball any more — it's parked waiting on the store, so
+            // it shouldn't nag as "awaiting your review." It re-enters the review
+            // count the moment the manager replies (which also surfaces below as a
+            // reply-to-your-notes signal).
+            const awaitingMgrReply = r => getT(r.dm_note_at) > getT(r.mgr_reply_at);
+            const needsReview   = rows.filter(r => !r.reviewed_at && !r.delete_requested_at && !awaitingMgrReply(r));
             const pendingDelete = rows.filter(r => r.delete_requested_at);
 
             const sRep = Number(localStorage.getItem(_recycleSeenKey('speeksRecycleReplySeen')) || 0);
