@@ -13159,45 +13159,116 @@ function startStoreCommentPolling() {
 }
 
 // Opens the modal normally from the Speeks Tools menu (Fully Unlocked)
+// null = exec (every store's reads); an array = a manager's own store(s), which
+// scopes both the Read Receipts fetch and the store pickers.
+let _commentReadsStoreScope = null;
+const _EXEC_STORE_OPTIONS =
+    '<option value="ALL">All Stores</option>' +
+    '<option value="OVL">OVL</option>' +
+    '<option value="LEE">LEE</option>' +
+    '<option value="WSP">WSP</option>' +
+    '<option value="MPL">MPL</option>' +
+    '<option value="BAL">BAL</option>';
+
 function toggleSendCommentModal() {
-    openCEOStoreComment(null); 
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
+    // DM/CEO keep the company-wide sender; everyone else with the tool (Manager,
+    // Owner Manager, MSM) gets a version scoped to their own store(s).
+    if (role === 'district manager' || role === 'ceo') { openCEOStoreComment(null); return; }
+    openManagerStoreComment();
 }
 
 // Opens the modal from the CEO Rings and locks it to the specific store
 window.openCEOStoreComment = function(targetStore) {
     closeAllModals();
     const dropdown = document.getElementById('sendCommentModal');
-    
-    if (dropdown) {
-        dropdown.classList.add('show');
-        lockAndBlurScreen();
-        
-        // Clear previous message
-        document.getElementById('commentMessageInput').value = '';
-        
-        const storeSelect = document.getElementById('commentStoreSelect');
-        if (storeSelect) {
-            if (targetStore) {
-                // Lock it to the specific store clicked
-                storeSelect.value = targetStore;
-                storeSelect.disabled = true;
-                storeSelect.style.opacity = '0.6';
-                storeSelect.style.cursor = 'not-allowed';
-            } else {
-                // Unlock it for general use via the Speeks Tools menu
-                storeSelect.value = 'ALL';
-                storeSelect.disabled = false;
-                storeSelect.style.opacity = '1';
-                storeSelect.style.cursor = 'pointer';
-            }
-        }
+    if (!dropdown) return;
 
-        // Two tabs: Send Message | Read Receipts (built once, then reset to Send).
-        _setupCommentModalTabs();
-        _commentReadsCache = null; // refetch reads each time the modal opens
-        switchCommentTab('send');
+    dropdown.classList.add('show');
+    lockAndBlurScreen();
+    document.getElementById('commentMessageInput').value = '';
+
+    const storeSelect = document.getElementById('commentStoreSelect');
+    if (storeSelect) {
+        // Restore the full exec list (ALL + every store) in case a manager build
+        // of this modal ran earlier in the session.
+        storeSelect.innerHTML = _EXEC_STORE_OPTIONS;
+        if (targetStore) {
+            // Lock it to the specific store clicked
+            storeSelect.value = targetStore;
+            storeSelect.disabled = true;
+            storeSelect.style.opacity = '0.6';
+            storeSelect.style.cursor = 'not-allowed';
+        } else {
+            // Unlock it for general use via the Speeks Tools menu
+            storeSelect.value = 'ALL';
+            storeSelect.disabled = false;
+            storeSelect.style.opacity = '1';
+            storeSelect.style.cursor = 'pointer';
+        }
     }
+
+    _commentReadsStoreScope = null; // exec sees every store's reads
+    // Two tabs: Send Message | Read Receipts (built once, then reset to Send).
+    _setupCommentModalTabs();
+    _scopeCommentReadsFilter(null);
+    _commentReadsCache = null; // refetch reads each time the modal opens
+    switchCommentTab('send');
 };
+
+// Manager / Owner Manager / Multi-Store Manager: send only to their own store(s).
+// Single-store managers get a locked selector; the MSM gets BAL/MPL unlocked. The
+// message is authored under their name (submitStoreComment reads speeksUserName)
+// so on the recipient side it behaves identically to a DM/CEO comment.
+window.openManagerStoreComment = function() {
+    closeAllModals();
+    const dropdown = document.getElementById('sendCommentModal');
+    if (!dropdown) return;
+
+    dropdown.classList.add('show');
+    lockAndBlurScreen();
+    document.getElementById('commentMessageInput').value = '';
+
+    const isMSM = typeof isMultiStoreManager === 'function' && isMultiStoreManager();
+    const active = String(sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    const stores = isMSM
+        ? MULTISTORE_MANAGER_STORES.map(s => String(s).toUpperCase())
+        : (active ? [active] : []);
+    _commentReadsStoreScope = stores.slice();
+
+    const storeSelect = document.getElementById('commentStoreSelect');
+    if (storeSelect) {
+        storeSelect.innerHTML = stores.map(s => `<option value="${s}">${s}</option>`).join('');
+        storeSelect.value = stores.includes(active) ? active : (stores[0] || '');
+        const lock = stores.length <= 1; // one store = nothing to choose
+        storeSelect.disabled = lock;
+        storeSelect.style.opacity = lock ? '0.6' : '1';
+        storeSelect.style.cursor = lock ? 'not-allowed' : 'pointer';
+    }
+
+    _setupCommentModalTabs();
+    _scopeCommentReadsFilter(stores);
+    _commentReadsCache = null;
+    switchCommentTab('send');
+};
+
+// Restrict the Read Receipts store dropdown. Managers see only their store(s);
+// exec (null/empty) gets the full All-Stores list.
+function _scopeCommentReadsFilter(stores) {
+    const sel = document.getElementById('commentReadsStore');
+    if (!sel) return;
+    if (stores && stores.length) {
+        const opts = stores.length > 1
+            ? ['<option value="ALL">All My Stores</option>'].concat(
+                  stores.map(s => `<option value="${s}">${s}</option>`))
+            : stores.map(s => `<option value="${s}">${s}</option>`);
+        sel.innerHTML = opts.join('');
+        sel.value = stores.length > 1 ? 'ALL' : stores[0];
+    } else {
+        sel.innerHTML = _EXEC_STORE_OPTIONS;
+        sel.value = 'ALL';
+    }
+}
 
 // Adds the Send | Read Receipts tab bar + a reads panel to the send modal (once).
 function _setupCommentModalTabs() {
@@ -13261,7 +13332,9 @@ async function loadStoreCommentReads() {
     if (!_commentReadsCache) {
         listEl.innerHTML = `<div style="color:#94a3b8; font-size:13px;">Loading…</div>`;
         try {
-            const res = await fetch(`${STORE_COMMENT_URL}?mode=reads&v=${Date.now()}`);
+            const scope = (_commentReadsStoreScope && _commentReadsStoreScope.length)
+                ? `&stores=${encodeURIComponent(_commentReadsStoreScope.join(','))}` : '';
+            const res = await fetch(`${STORE_COMMENT_URL}?mode=reads${scope}&v=${Date.now()}`);
             const rows = await res.json();
             _commentReadsCache = Array.isArray(rows) ? rows : [];
         } catch (e) {
@@ -13343,6 +13416,10 @@ async function submitStoreComment() {
     const message = document.getElementById('commentMessageInput').value.trim();
     const btn = document.getElementById('sendCommentBtn');
 
+    if (!store) {
+        alert("No store is set for your account, so there's nowhere to post this. Contact your DM.");
+        return;
+    }
     if (!message) {
         alert("Please write a message before sending.");
         return;
@@ -13480,7 +13557,15 @@ async function fetchAndDisplayStoreComment() {
             try { const parsed = new Date(c.date); if (!isNaN(parsed.getTime())) parsedDateStr = parsed.toLocaleDateString('en-US', { timeZone: 'America/Chicago' }); } catch (e) {}
             return parsedDateStr === todayStr || rawDateStr.includes(todayStr);
         };
-        const forMeComments = comments.filter(c => isMyStore(String(c.store || '').trim().toUpperCase())).reverse(); // newest first
+        // Never show a user their OWN store note — a manager sending to their own
+        // store would otherwise get their message back as a bubble/feed item. (DM/CEO
+        // never hit this since their store isn't a real store, but the guard is
+        // author-based so it's correct for everyone.) Excludes it from the bubble,
+        // the Action Menu feed and the hub archive alike.
+        const forMeComments = comments
+            .filter(c => isMyStore(String(c.store || '').trim().toUpperCase()))
+            .filter(c => String(c.author || '').trim().toLowerCase() !== userName.toLowerCase())
+            .reverse(); // newest first
 
         window._hubStoreNotes = forMeComments.map(c => ({
             author: c.author, text: c.message || c.text || '', date: c.date, created_at: c.created_at, store: c.store, id: c.id,
@@ -16878,7 +16963,7 @@ const FEATURE_CATALOG = [
     { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
     { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
     { key: 'tool-variance-report',     label: 'Submit Variance Report',        tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
-    { key: 'tool-store-comment',       label: 'Send Store Comment',            tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
+    { key: 'tool-store-comment',       label: 'Send Store Comment',            tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
     { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
     { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'owner-manager'] },

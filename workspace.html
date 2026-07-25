@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260725d">
+  <link rel="stylesheet" href="styles.css?v=20260725f">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20260725d" defer></script>
+  <script src="speeks.js?v=20260725f" defer></script>
 </head>
 <body class="preload">
 
@@ -1340,7 +1340,7 @@
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-submit-scores" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></span>Submit Scores</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-manager-checklist" onclick="_closeToolsPanel(); toggleManagerChecklist();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></span>Manager Checklist</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-variance-report" onclick="_closeToolsPanel(); toggleVarianceInput();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></span>Submit Variance Report</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-store-comment" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></span>Send Store Comment</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" data-feature="tool-store-comment" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></span>Send Store Comment</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager">
