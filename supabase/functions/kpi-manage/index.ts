@@ -16,6 +16,31 @@ const MULTISTORE_MANAGER_STORES = ['BAL', 'MPL'];
 const json = (data: any, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
+// Realtime "broadcast-as-ping": after a KPI save lands, tell every open client
+// so their action-feed re-runs checkKpiDueReminders() and the "KPIs due" nag
+// clears the instant the numbers are entered. Only a tiny {tool, store} ping
+// travels — no table data — matching every other tool's broadcastChange.
+// Wrapped so a broadcast failure can never break the write it follows.
+async function broadcastChange(tool: string, store: string | null) {
+  try {
+    const url = Deno.env.get('SUPABASE_URL')!;
+    const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        messages: [{
+          topic: 'speeks-notify',
+          event: 'changed',
+          payload: { tool, store: store ? String(store).toUpperCase() : null, ts: Date.now() },
+        }],
+      }),
+    });
+  } catch (_) {
+    // swallow — the write already succeeded; realtime is best-effort
+  }
+}
+
 function formatLabel(type: string, date: string): string {
   const d = new Date(date + 'T00:00:00');
   return type === 'weekly'
@@ -187,6 +212,10 @@ Deno.serve(async (req) => {
         period_end_date: date,
         period_label:    formatLabel(periodType, date),
         is_editable:     isEditablePeriod(periodType, date),
+        // How many employees actually have a SAVED row for this period (raw DB
+        // rows, not the synthesized roster). Drives the "KPIs still need filling
+        // out" reminder — a period with saved_count 0 is untouched.
+        saved_count:     savedNames.length,
         entries: namesForDate.map((name: string) =>
           computeFields(byDate[date]?.[name] || { employee_name: name })
         ),
@@ -258,6 +287,9 @@ Deno.serve(async (req) => {
           .in('period_end_date', unique.slice(4));
       }
     }
+
+    // Ping open clients so the "KPIs due" reminder clears in realtime.
+    await broadcastChange('kpi', storeUpper);
 
     return json({ success: true, entry: computeFields(upserted) });
   }

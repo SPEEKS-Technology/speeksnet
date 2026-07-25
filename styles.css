@@ -518,7 +518,7 @@ input, textarea, select,
     --dp-line-2: #eef1f5;
     --dp-muted: #647082;
     --dp-faint: #8a94a3;
-    --dp-sage-tint: #eef4e9;
+    --dp-sage-tint: #e8f7ee;
 }
 
 .category-section { margin-bottom: 34px; }
@@ -675,13 +675,13 @@ input, textarea, select,
     transition: background 0.14s ease, color 0.14s ease;
 }
 .dp-rail-btn:hover { background: var(--dp-line-2); color: var(--slate-charcoal); }
-.dp-rail-btn.active { background: var(--dp-sage-tint); color: #4a7530; }
+.dp-rail-btn.active { background: var(--dp-sage-tint); color: #178048; }
 .dp-rail-btn:focus-visible { outline: 2px solid var(--sage-professional); outline-offset: 2px; }
 .dp-rail-btn .dp-rail-ico { flex: 0 0 auto; display: grid; place-items: center; color: currentColor; opacity: 0.85; }
 .dp-rail-btn .dp-rail-ico svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .dp-rail-btn .dp-rail-lbl { flex: 1 1 auto; min-width: 0; line-height: 1.3; }
 .dp-rail-btn .dp-rail-n { flex: 0 0 auto; font-size: 10px; font-weight: 800; color: var(--dp-faint); }
-.dp-rail-btn.active .dp-rail-n { color: #4a7530; }
+.dp-rail-btn.active .dp-rail-n { color: #178048; }
 
 /* Sections clear the fixed nav when a rail link jumps to them. */
 .category-section { scroll-margin-top: 96px; }
@@ -726,8 +726,7 @@ input, textarea, select,
 
 /* Submit Store Scores — large so each audit line item is easy to read,
    but capped so line text stays scannable on ultra-wide monitors. */
-#scorecardSubmitModal { width: 96vw; max-width: 1500px; }
-#scorecardSubmitModal .manage-content { height: 80vh; }
+#scorecardSubmitModal { width: 1200px; max-width: 95vw; }
 
 .manage-content { 
     height: 60vh; 
@@ -3113,6 +3112,24 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
     opacity: 1;
     visibility: visible;
     transform: translateY(0);
+}
+
+/* Anchored variant: pinned directly under the hovered top-nav button (positioned
+   by JS) with a small upward caret — the calm equivalent of the browser's native
+   tooltip the Tools button / shrunk tabs show. */
+.speeks-tooltip.anchored { overflow: visible; }
+.speeks-tooltip.anchored::after {
+    content: "";
+    position: absolute;
+    top: -5px;
+    left: 50%;
+    width: 9px;
+    height: 9px;
+    background: #ffffff;
+    border-left: 1px solid #e3e8ee;
+    border-top: 1px solid #e3e8ee;
+    transform: translateX(-50%) rotate(45deg);
+    display: block !important;
 }
 
 .top-nav {
@@ -6544,8 +6561,8 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     --cb-panel-2: #f6f8fa;
     --cb-muted: #647082;
     --cb-faint: #8a94a3;
-    --cb-sage: #5a8d3b;
-    --cb-sage-tint: #eef4e9;
+    --cb-sage: #1f9d57;
+    --cb-sage-tint: #e8f7ee;
     --cb-gold-tint: #fdf3e1;
     --cb-red-tint: #fcecec;
     --cb-blue-tint: #e8f0fb;
@@ -6716,7 +6733,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 }
 .cb-chip-open      { background: var(--cb-blue-tint); color: #2563a8; }
 .cb-chip-contacted { background: var(--cb-gold-tint); color: #b7791f; }
-.cb-chip-completed { background: var(--cb-sage-tint); color: #4a7530; }
+.cb-chip-completed { background: var(--cb-sage-tint); color: #178048; }
 .cb-chip-expired   { background: var(--cb-line-2); color: var(--cb-muted); }
 .cb-chip-clickable { cursor: pointer; transition: transform 0.1s ease, box-shadow 0.1s ease; }
 .cb-chip-clickable:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(16, 24, 40, 0.12); }
@@ -7208,7 +7225,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     --sam-chip: #f1f5f9;
     --sam-red-tint: #fcecec;
     --sam-gold-tint: #fdf3e1;
-    --sam-sage-tint: #eef4e9;
+    --sam-sage-tint: #e8f7ee;
     --sam-blue: #3b82f6;
     --sam-violet: #8b5cf6;
     --sam-shadow-sm: 0 1px 2px rgba(16,24,40,.06);
@@ -7269,7 +7286,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .speeks-action-menu .sam-hero-cta svg { width: 14px; height: 14px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 /* Shown only when the hero message isn't truncated (see _samSyncHero). */
 .speeks-action-menu .sam-hero-read { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; font-family: inherit; font-size: 12px; font-weight: 700; color: var(--sam-muted); background: var(--sam-panel); border: 1px solid var(--sam-line); border-radius: 8px; padding: 8px 11px; cursor: pointer; white-space: nowrap; transition: .14s; }
-.speeks-action-menu .sam-hero-read:hover { color: var(--sage-professional, #5a8d3b); border-color: var(--sage-professional, #5a8d3b); }
+.speeks-action-menu .sam-hero-read:hover { color: var(--sage-professional, #1f9d57); border-color: var(--sage-professional, #1f9d57); }
 .speeks-action-menu .sam-hero-read svg { width: 13px; height: 13px; stroke: currentColor; stroke-width: 2.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 /* `hidden` loses to the display above without this (same trap as .sam-hero). */
 .speeks-action-menu .sam-hero-read[hidden] { display: none; }
@@ -7311,7 +7328,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .speeks-action-menu .sam-ann.rem .sam-a-snip { -webkit-line-clamp: 3; white-space: normal; }
 /* "Read full" — injected by _samAddReadFull() only on rows whose snippet is
    actually clipped, so a complete short message never gets a pointless link. */
-.speeks-action-menu .sam-readfull { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; padding: 0; font-family: inherit; font-size: 11px; font-weight: 700; color: var(--sage-professional, #5a8d3b); background: none; border: 0; cursor: pointer; }
+.speeks-action-menu .sam-readfull { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; padding: 0; font-family: inherit; font-size: 11px; font-weight: 700; color: var(--sage-professional, #1f9d57); background: none; border: 0; cursor: pointer; }
 .speeks-action-menu .sam-readfull svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; transition: transform .14s; }
 .speeks-action-menu .sam-readfull:hover { text-decoration: underline; }
 .speeks-action-menu .sam-readfull:hover svg { transform: translateX(2px); }
@@ -7409,7 +7426,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 
 /* goal summary strip (replaces the dark widget header) */
 #listingGoalsModal .district-kpi-header {
-    background: #eef4e9 !important; border: 1px solid rgba(90,141,59,.25) !important;
+    background: #e8f7ee !important; border: 1px solid rgba(90,141,59,.25) !important;
     border-radius: 12px !important; padding: 15px 18px !important; margin-bottom: 18px !important;
     min-height: 0 !important; display: flex; align-items: center; justify-content: space-between; gap: 12px;
 }
@@ -7461,16 +7478,16 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     min-width: 26px; width: auto !important; height: 22px !important; padding: 0 7px !important;
     display: inline-flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: none !important;
 }
-#listingGoalsModal .role-dot:hover { border-color: #5a8d3b !important; color: #4a7530 !important; }
+#listingGoalsModal .role-dot:hover { border-color: #1f9d57 !important; color: #178048 !important; }
 #listingGoalsModal .role-dot.active {
-    background: #5a8d3b !important; border-color: #5a8d3b !important; color: #fff !important;
+    background: #1f9d57 !important; border-color: #1f9d57 !important; color: #fff !important;
 }
 #listingGoalsModal .goal-auto-display,
 #listingGoalsModal .goals-mgr-week {
     text-align: center; font-weight: 800 !important; font-variant-numeric: tabular-nums; font-size: 14px !important;
 }
 #listingGoalsModal .goal-auto-display {
-    background: #eef4e9 !important; color: #4a7530 !important; border-radius: 8px !important;
+    background: #e8f7ee !important; color: #178048 !important; border-radius: 8px !important;
     padding: 8px 0 !important; width: 60px; margin: 0 auto !important; border: 1px solid rgba(90,141,59,.2);
 }
 #listingGoalsModal .goals-mgr-week { color: #647082 !important; }
@@ -7491,7 +7508,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 }
 #listingGoalsModal .goals-total-val.target { color: #647082 !important; }
 #listingGoalsModal .goals-total-val.actual {
-    background: #eef4e9 !important; color: #4a7530 !important; border-color: rgba(90,141,59,.25) !important;
+    background: #e8f7ee !important; color: #178048 !important; border-color: rgba(90,141,59,.25) !important;
 }
 
 /* last 4 weeks — softened tinted chips instead of solid red bars */
@@ -7553,7 +7570,7 @@ body.sam-active .hotbar-btn {
 }
 body.sam-active .hotbar-btn:hover {
     border-color: var(--sage-professional); color: var(--sage-professional);
-    background: #eef4e9; transform: none;
+    background: #e8f7ee; transform: none;
 }
 
 @media (max-width: 900px) {
@@ -7603,7 +7620,7 @@ body.sam-active .hotbar-btn:hover {
     border-radius: 6px !important; cursor: pointer; flex: 0 0 auto; position: relative; margin: 0 !important;
     background: #fff !important; transition: .15s; box-shadow: none !important;
 }
-.checklist-side-panel .cl-checkbox:checked { background: #5a8d3b !important; border-color: #5a8d3b !important; }
+.checklist-side-panel .cl-checkbox:checked { background: #1f9d57 !important; border-color: #1f9d57 !important; }
 /* The tick was placed with hard-coded left/top offsets, which only line up for one
    exact box size — the 2px border and border-box sizing pushed it high and right.
    Centre it off the box itself instead, so it stays put whatever the size is.
@@ -7639,13 +7656,13 @@ body.sam-active .hotbar-btn:hover {
     padding: 9px 12px !important; font-family: inherit; font-size: 13px; color: #1c1f23 !important;
 }
 .checklist-side-panel .cl-input-area input:focus {
-    outline: none; border-color: #5a8d3b !important; box-shadow: 0 0 0 3px rgba(90,141,59,.12) !important;
+    outline: none; border-color: #1f9d57 !important; box-shadow: 0 0 0 3px rgba(90,141,59,.12) !important;
 }
 .checklist-side-panel .cl-add-btn {
-    border: 0 !important; background: #5a8d3b !important; color: #fff !important; font-weight: 700 !important;
+    border: 0 !important; background: #1f9d57 !important; color: #fff !important; font-weight: 700 !important;
     font-size: 13px !important; padding: 9px 16px !important; border-radius: 8px !important; cursor: pointer;
 }
-.checklist-side-panel .cl-add-btn:hover { background: #4a7530 !important; }
+.checklist-side-panel .cl-add-btn:hover { background: #178048 !important; }
 
 /* ---------- Goals & Initiatives ---------- */
 .goals-side-panel { background: #ffffff; }
@@ -7662,11 +7679,11 @@ body.sam-active .hotbar-btn:hover {
     font-size: 11px !important; font-weight: 800 !important; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3 !important;
 }
 .goals-side-panel .mini-action-btn {
-    font-size: 11.5px !important; font-weight: 700 !important; color: #4a7530 !important;
-    background: #eef4e9 !important; border: 1px solid transparent !important; border-radius: 7px !important;
+    font-size: 11.5px !important; font-weight: 700 !important; color: #178048 !important;
+    background: #e8f7ee !important; border: 1px solid transparent !important; border-radius: 7px !important;
     padding: 5px 10px !important; cursor: pointer;
 }
-.goals-side-panel .mini-action-btn:hover { border-color: #5a8d3b !important; }
+.goals-side-panel .mini-action-btn:hover { border-color: #1f9d57 !important; }
 .goals-side-panel .gi-items-list { display: flex; flex-direction: column; gap: 8px; }
 .goals-side-panel .mgb-goal-item,
 .goals-side-panel .cpb-project-item {
@@ -7685,7 +7702,7 @@ body.sam-active .hotbar-btn:hover {
     font-size: 9.5px !important; font-weight: 800 !important; letter-spacing: .04em; text-transform: uppercase;
     padding: 2px 7px !important; border-radius: 5px !important; border: 0 !important;
 }
-.goals-side-panel .si-status-badge--current { background: #eef4e9 !important; color: #4a7530 !important; }
+.goals-side-panel .si-status-badge--current { background: #e8f7ee !important; color: #178048 !important; }
 .goals-side-panel .si-status-badge--upcoming { background: #fdf3e1 !important; color: #f59e0b !important; }
 /* Past-months picker. Was a rounded emoji pill left over from the old design;
    now a calm icon chip that matches the nav / deck buttons. */
@@ -7696,12 +7713,12 @@ body.sam-active .hotbar-btn:hover {
     transition: background .16s ease, border-color .16s ease, color .16s ease;
 }
 .goals-side-panel .gi-prev-toggle:hover {
-    background: #eef4e9 !important; border-color: var(--sage-professional, #5a8d3b) !important;
-    color: var(--sage-professional, #5a8d3b) !important;
+    background: #e8f7ee !important; border-color: var(--sage-professional, #1f9d57) !important;
+    color: var(--sage-professional, #1f9d57) !important;
 }
 .goals-side-panel .gi-prev-toggle.active {
-    background: var(--sage-professional, #5a8d3b) !important;
-    border-color: var(--sage-professional, #5a8d3b) !important; color: #fff !important;
+    background: var(--sage-professional, #1f9d57) !important;
+    border-color: var(--sage-professional, #1f9d57) !important; color: #fff !important;
 }
 .goals-side-panel .gi-prev-toggle .gi-cal-ico { width: 13px; height: 13px; flex: 0 0 auto; }
 .goals-side-panel .gi-prev-toggle .gi-prev-chevron { width: 9px; height: 9px; flex: 0 0 auto; }
@@ -7724,7 +7741,7 @@ body.sam-active .hotbar-btn:hover {
 #notifDropdown .hub-head { padding: 18px 22px 0; border-bottom: 1px solid #eef1f5; flex: 0 0 auto; }
 #notifDropdown .hub-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 #notifDropdown .hub-title-wrap { display: flex; align-items: center; gap: 11px; }
-#notifDropdown .hub-hi { width: 34px; height: 34px; border-radius: 10px; background: #eef4e9; color: var(--sage-professional); display: grid; place-items: center; flex: 0 0 auto; }
+#notifDropdown .hub-hi { width: 34px; height: 34px; border-radius: 10px; background: #e8f7ee; color: var(--sage-professional); display: grid; place-items: center; flex: 0 0 auto; }
 #notifDropdown .hub-hi svg { width: 17px; height: 17px; }
 #notifDropdown .hub-title-wrap h3 { margin: 0; font-size: 18px; letter-spacing: -.01em; color: var(--text-dark); }
 #notifDropdown .hub-sub { font-size: 12px; color: #8a94a3; }
@@ -7750,7 +7767,7 @@ body.sam-active .hotbar-btn:hover {
 #notifDropdown .hub-row { display: flex; gap: 13px; padding: 14px 16px; }
 #notifDropdown .hub-tico { width: 34px; height: 34px; border-radius: 10px; flex: 0 0 auto; display: grid; place-items: center; background: #f1f5f9; color: #647082; }
 #notifDropdown .hub-tico svg { width: 17px; height: 17px; }
-#notifDropdown .t-ann  .hub-tico { background: #eef4e9; color: var(--sage-deep, #4a7530); }
+#notifDropdown .t-ann  .hub-tico { background: #e8f7ee; color: var(--sage-deep, #178048); }
 #notifDropdown .t-note .hub-tico { background: #fdf3e1; color: var(--idea-gold); }
 #notifDropdown .t-due  .hub-tico { background: #fcecec; color: var(--red-alert); }
 #notifDropdown .t-due.amber .hub-tico { background: #fdf3e1; color: var(--idea-gold); }
@@ -7765,7 +7782,7 @@ body.sam-active .hotbar-btn:hover {
 #notifDropdown .hub-item { scroll-margin-top: 12px; }
 #notifDropdown .hub-item.hub-jump { animation: hubJump 2.2s ease-out; }
 @keyframes hubJump {
-    0%, 22% { border-color: var(--sage-professional, #5a8d3b); box-shadow: 0 0 0 3px rgba(90,141,59,.20); }
+    0%, 22% { border-color: var(--sage-professional, #1f9d57); box-shadow: 0 0 0 3px rgba(90,141,59,.20); }
     100%    { border-color: #e3e8ee; box-shadow: 0 1px 2px rgba(16,24,40,.06); }
 }
 #notifDropdown .hub-item-top { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
@@ -7775,7 +7792,7 @@ body.sam-active .hotbar-btn:hover {
 #notifDropdown .hub-kind { font-weight: 700; text-transform: uppercase; letter-spacing: .05em; font-size: 10.5px; color: #647082; }
 #notifDropdown .hub-item-body { font-size: 13.5px; color: #4b5563; line-height: 1.6; margin-top: 8px; }
 #notifDropdown .hub-item-body ul { margin: 6px 0; padding-left: 20px; }
-#notifDropdown .hub-item-body a { color: var(--sage-deep, #4a7530); }
+#notifDropdown .hub-item-body a { color: var(--sage-deep, #178048); }
 
 /* the only loud signals */
 #notifDropdown .hub-prio-pill { font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; background: var(--red-alert); color: #fff; padding: 2px 7px; border-radius: 5px; }
@@ -7786,7 +7803,7 @@ body.sam-active .hotbar-btn:hover {
 /* deadline/reminder cards jump to their tool on click */
 #notifDropdown .hub-item.t-due[onclick] { transition: box-shadow .15s ease, transform .15s ease; }
 #notifDropdown .hub-item.t-due[onclick]:hover { box-shadow: 0 6px 18px rgba(16,24,40,.12); transform: translateY(-1px); }
-#notifDropdown .hub-open-hint { color: var(--sage-deep, #4a7530); font-weight: 700; margin-left: 5px; white-space: nowrap; }
+#notifDropdown .hub-open-hint { color: var(--sage-deep, #178048); font-weight: 700; margin-left: 5px; white-space: nowrap; }
 
 #notifDropdown .hub-item.read { opacity: .72; }
 #notifDropdown .hub-item.read .hub-item-title { color: #647082; }
@@ -7794,9 +7811,9 @@ body.sam-active .hotbar-btn:hover {
 /* announcement footer (reactions + actions) */
 #notifDropdown .hub-foot { display: flex; align-items: center; gap: 8px; margin-top: 13px; padding-top: 12px; border-top: 1px solid #eef1f5; flex-wrap: wrap; }
 #notifDropdown .hub-foot .ann-reactions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-#notifDropdown .hub-markread { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--sage-deep, #4a7530); background: none; border: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-family: inherit; }
+#notifDropdown .hub-markread { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--sage-deep, #178048); background: none; border: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-family: inherit; }
 #notifDropdown .hub-markread:hover { color: var(--sage-professional); }
-#notifDropdown .hub-doclink { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--sage-deep, #4a7530); text-decoration: none; margin-top: 10px; }
+#notifDropdown .hub-doclink { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--sage-deep, #178048); text-decoration: none; margin-top: 10px; }
 #notifDropdown .read-receipt { position: relative; }
 
 /* patch note card */
@@ -7830,14 +7847,23 @@ body.sam-active .hotbar-btn:hover {
     padding: 0 26px !important;
     min-height: 64px;
     gap: 22px;
-    box-shadow: inset 0 -1px 0 rgba(255,255,255,.05), 0 6px 22px rgba(16,24,40,.12);
+    /* Option B — elevated slate: a lifted charcoal that floats on a soft shadow. */
+    background: #181b20 !important;
+    box-shadow: inset 0 -1px 0 rgba(255,255,255,.06), 0 8px 24px rgba(10,12,16,.24);
 }
 .top-nav .brand-logo { height: 26px; }
+/* Brand: logo mark + "SPEEKSNET" text wordmark (Option B) */
+.top-nav .brand-area { display: flex; align-items: center; gap: 10px; }
+.top-nav .brand-mark { height: 30px; width: auto; display: block; flex: 0 0 auto; }
+.top-nav .brand-wordmark {
+    font-size: 19px; font-weight: 800; letter-spacing: .005em;
+    color: #fff; white-space: nowrap; line-height: 1;
+}
 
 /* --- page links --- */
 .top-nav .nav-bar { gap: 4px; }
 .top-nav .nav-link {
-    color: #98a2ad;
+    color: #b6bdc5;                    /* Option B — brighter idle links */
     height: 38px;
     padding: 0 14px;
     font-size: 13px;
@@ -7845,13 +7871,18 @@ body.sam-active .hotbar-btn:hover {
     letter-spacing: .01em;
     border-radius: 9px;
     gap: 8px;
-    transition: background .16s ease, color .16s ease;
+    transition: background .16s ease, color .16s ease, box-shadow .16s ease;
 }
-.top-nav .nav-link:hover { background: rgba(255,255,255,.06); color: #fff; transform: none; }
-.top-nav .nav-link.active { background: var(--sage-professional); color: #fff; box-shadow: 0 2px 8px rgba(90,141,59,.28); }
+.top-nav .nav-link:hover { background: rgba(255,255,255,.07); color: #fff; transform: none; }
+/* Option A — highlighted box: emerald tint + inset ring + soft glow (not a solid pill). */
+.top-nav .nav-link.active {
+    background: rgba(31,157,87,.16);
+    color: #fff;
+    box-shadow: inset 0 0 0 1px rgba(31,157,87,.55), 0 2px 12px rgba(31,157,87,.30);
+}
 .top-nav .nav-link i { width: auto; font-size: 0; display: inline-flex; align-items: center; }
-.top-nav .nav-link svg { width: 17px; height: 17px; stroke-width: 1.9; opacity: .92; }
-.top-nav .nav-link.active svg { opacity: 1; }
+.top-nav .nav-link svg { width: 17px; height: 17px; stroke-width: 1.9; opacity: .96; }
+.top-nav .nav-link.active svg { opacity: 1; color: #3ddc84; }   /* active icon lights up green */
 
 /* --- utility chip buttons (idea / messages / hotkeys / calendar / bell) --- */
 .top-nav .user-profile-nav { gap: 10px; border-right-color: rgba(255,255,255,.08); padding-right: 16px; }
@@ -7861,13 +7892,13 @@ body.sam-active .hotbar-btn:hover {
     font-size: 0;
     background: rgba(255,255,255,.05);
     border: 1px solid rgba(255,255,255,.08);
-    color: #c4cbd3;
+    color: #d3d9df;                    /* Option B — brighter chip icons */
     box-shadow: none;
     transition: background .16s ease, border-color .16s ease, color .16s ease;
 }
 .top-nav .action-btn:hover {
-    background: rgba(90,141,59,.16);
-    border-color: rgba(90,141,59,.55);
+    background: rgba(31,157,87,.16);          /* V4 emerald — match the nav-link green */
+    border-color: rgba(31,157,87,.55);
     color: #fff;
     transform: none;
     box-shadow: none;
@@ -7886,8 +7917,8 @@ body.sam-active .hotbar-btn:hover {
     height: 40px; border-radius: 10px; gap: 7px; padding: 0 14px;
     background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08);
 }
-.top-nav .tools-nav-btn:hover { background: rgba(90,141,59,.16); border-color: rgba(90,141,59,.55); }
-.top-nav .tools-nav-btn.panel-open { background: rgba(90,141,59,.24); border-color: rgba(90,141,59,.6); box-shadow: none; }
+.top-nav .tools-nav-btn:hover { background: rgba(31,157,87,.16); border-color: rgba(31,157,87,.55); }
+.top-nav .tools-nav-btn.panel-open { background: rgba(31,157,87,.24); border-color: rgba(31,157,87,.6); box-shadow: none; }
 .top-nav .tools-nav-btn .lock-icon { width: 15px; height: 15px; }
 .top-nav .tools-nav-label { font-size: 12.5px; font-weight: 700; text-transform: none; letter-spacing: .01em; }
 
@@ -8033,7 +8064,7 @@ body.sam-active .hotbar-btn:hover {
 }
 #hotkeysDropdown .kb-table tr:hover { background: #f6f8fa; }
 #hotkeysDropdown .kb-table .bubble {
-    background: #eef4e9; color: var(--sage-deep, #4a7530); border: 0;
+    background: #e8f7ee; color: var(--sage-deep, #178048); border: 0;
     font-size: 10.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
     padding: 4px 10px; border-radius: 20px; display: inline-block;
 }
@@ -8059,7 +8090,7 @@ body.sam-active .hotbar-btn:hover {
    own cards). The base .qm-category.open squares the bottom + drops the border to
    fuse with a bordered items box — but this modal has no such box, so undo that. */
 #quickMsgDropdown .qm-category.open {
-    color: var(--sage-deep, #4a7530); border-color: rgba(90,141,59,.35); background: #eef4e9;
+    color: var(--sage-deep, #178048); border-color: rgba(90,141,59,.35); background: #e8f7ee;
     border-radius: 11px; border-bottom: 1px solid rgba(90,141,59,.35);
 }
 /* The base items container is a bordered, square-topped box; here the items are
@@ -8076,9 +8107,9 @@ body.sam-active .hotbar-btn:hover {
     box-shadow: 0 1px 2px rgba(16,24,40,.06); margin-bottom: 7px;
 }
 #quickMsgDropdown .qm-item-name { font-size: 12.5px; font-weight: 750; color: #1c1f23; }
-#quickMsgDropdown .qm-item-name:hover { color: var(--sage-deep, #4a7530); }
+#quickMsgDropdown .qm-item-name:hover { color: var(--sage-deep, #178048); }
 #quickMsgDropdown .qm-copy-btn {
-    background: #eef4e9; color: var(--sage-deep, #4a7530); border: 1px solid transparent;
+    background: #e8f7ee; color: var(--sage-deep, #178048); border: 1px solid transparent;
     border-radius: 8px; font-weight: 700; font-size: 11.5px; padding: 6px 12px;
     text-transform: none; letter-spacing: .01em; box-shadow: none;
 }
@@ -8165,8 +8196,8 @@ body.sam-active .hotbar-btn:hover {
 /* the raw native file input was the other leftover */
 #ideaModal input[type="file"].idea-input { padding: 9px 12px; font-size: 12.5px; color: #647082; cursor: pointer; }
 #ideaModal input[type="file"].idea-input::file-selector-button {
-    font-family: inherit; font-size: 12px; font-weight: 700; color: var(--sage-deep, #4a7530);
-    background: #eef4e9; border: 0; border-radius: 8px; padding: 7px 13px; margin-right: 11px; cursor: pointer;
+    font-family: inherit; font-size: 12px; font-weight: 700; color: var(--sage-deep, #178048);
+    background: #e8f7ee; border: 0; border-radius: 8px; padding: 7px 13px; margin-right: 11px; cursor: pointer;
 }
 #ideaModal input[type="file"].idea-input:hover::file-selector-button { background: #e2eddb; }
 
@@ -8198,7 +8229,7 @@ body.sam-active .hotbar-btn:hover {
     padding: 7px;
     box-sizing: border-box;
     border-radius: 8px;
-    background: #eef4e9;
+    background: #e8f7ee;
     stroke: var(--sage-professional);
     flex-shrink: 0;
 }
@@ -8234,7 +8265,7 @@ body.sam-active .hotbar-btn:hover {
     font-size: 12.5px;
     font-weight: 650;
 }
-.tools-item:hover { background: #eef4e9; color: var(--sage-deep, #4a7530); }
+.tools-item:hover { background: #e8f7ee; color: var(--sage-deep, #178048); }
 .tools-item:active { background: #e2eddb; }
 .tools-item-icon {
     width: 28px; height: 28px;
@@ -8270,7 +8301,9 @@ body.sam-active .hotbar-btn:hover {
 #claimAlertBubble,
 #recycleAlertBubble,
 #varianceAlertBubble,
-#agingAlertBubble {
+#agingAlertBubble,
+#kpiWeeklyAlertBubble,
+#kpiMonthlyAlertBubble {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
@@ -8419,3 +8452,223 @@ body.sam-active .hotbar-btn:hover {
     border-color: var(--sage-professional);
     box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.12);
 }
+
+/* =========================================================
+   V4 "AIRY ELEVATED" THEME  (2026-07-24)
+   Brighter/HD finish for the already-modernised surfaces:
+   Action Menu, Feed Hub, Call Backs + Operations hero,
+   Processes library, checklist/goals side-panels, Listing
+   Goals, refined top nav + its popup modals.
+   The solid accent literals were shifted in place
+   (#5a8d3b->#1f9d57, #4a7530->#178048, #eef4e9->#e8f7ee);
+   this block flips the variable-driven accents in-scope and
+   adds the airy radius + floating shadow. Not-yet-touched
+   pages keep the calm sage look via the global tokens.
+   ========================================================= */
+
+/* var(--sage-deep, ...) is used across the redesigned modals/hub with a
+   fallback and was never defined — define it to the deep emerald. */
+:root { --sage-deep: #178048; }
+
+/* Flip var(--sage-professional) to the fresh emerald ONLY inside the
+   redesigned surfaces (the global token stays sage for untouched pages). */
+.speeks-action-menu,
+#notifDropdown,
+.cb-panel, .ops-wrap,
+.dp-header, .dp-layout,
+.checklist-side-panel, .goals-side-panel,
+#listingGoalsModal,
+#quickMsgDropdown, #ideaModal, #hotkeysDropdown, .calendar-menu,
+.hotbars-stack,
+.ws-wrap,
+.top-nav {
+    --sage-professional: #1f9d57;
+}
+/* Near-black headings in the feed/action deck (it reads --text-dark). */
+.speeks-action-menu { --text-dark: #0f172a; }
+
+/* Airy radius + floating shadow on the primary redesigned cards. */
+.speeks-action-menu .sam-card {
+    border-radius: 18px;
+    box-shadow: 0 8px 28px rgba(16, 24, 40, 0.07);
+}
+.cb-panel {
+    border-radius: 18px !important;
+    box-shadow: 0 8px 28px rgba(16, 24, 40, 0.07) !important;
+}
+.doc-card { border-radius: 16px; box-shadow: 0 4px 16px rgba(16, 24, 40, 0.05); }
+.doc-card:hover { box-shadow: 0 12px 30px rgba(16, 24, 40, 0.10); }
+
+/* Primary buttons inside redesigned surfaces: keep the hover on the deep
+   emerald instead of the global .btn-primary:hover olive (#4a7530). */
+.cb-panel .btn-primary:hover,
+.speeks-action-menu .btn-primary:hover,
+#listingGoalsModal .btn-primary:hover { background: var(--sage-deep) !important; }
+
+/* =========================================================
+   WORKSPACE TAB — V4 airy redesign (2026-07-24)
+   Page hero reuses .page-header.dp-header (like Operations).
+   Each sub-tab pane gets a calm light card header (icon +
+   eyebrow + title + one-line description) replacing the old
+   dark .district-kpi-header. Controls are unchanged — only
+   relocated into .ws-head-controls. CSS only, no JS/markup
+   logic changes.
+   ========================================================= */
+
+/* trim the base .page-header 40px margin — .ws-wrap already gaps 16px */
+.ws-wrap .ws-header { margin-bottom: 0; }
+/* sub-tab icons (match the Operations tab) */
+.ws-wrap .ws-tab svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Calm V4 tool card (replaces .district-master-panel styling for ws panes) */
+.ws-tool-panel {
+    --wsh-line: #eef2ef;
+    --wsh-line-2: #f4f8f5;
+    --wsh-muted: #64707c;
+    --wsh-faint: #9aa6ad;
+    --wsh-accent: #1f9d57;
+    --wsh-accent-tint: #e8f7ee;
+    border: 1px solid var(--wsh-line) !important;
+    border-radius: 18px !important;
+    box-shadow: 0 8px 28px rgba(16, 24, 40, 0.07) !important;
+    background: #fff !important;
+    overflow: hidden;
+}
+.ws-tool-panel svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Calm light card header */
+.ws-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+    padding: 15px 18px;
+    border-bottom: 1px solid var(--wsh-line-2);
+    background: #fff;
+}
+.ws-head-main { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.ws-head-ico {
+    flex: 0 0 auto; width: 40px; height: 40px; border-radius: 12px;
+    background: var(--wsh-accent-tint); color: var(--wsh-accent);
+    display: grid; place-items: center;
+}
+.ws-head-ico svg { width: 20px; height: 20px; }
+.ws-head-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ws-head-eyebrow { font-size: 10px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; color: var(--wsh-faint); }
+/* New class (not .district-kpi-title) so the old white/uppercase !important rules don't apply */
+.ws-head-title { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; color: var(--slate-charcoal); line-height: 1.2; }
+.ws-head-title .widget-date-display { font-size: 12px; font-weight: 700; color: var(--wsh-faint); margin-left: 6px; }
+.ws-head-sub { font-size: 12px; font-weight: 600; color: var(--wsh-muted); }
+.ws-head-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.ws-head-meta { font-size: 11px; font-weight: 700; color: var(--wsh-faint); white-space: nowrap; }
+.ws-head-meta:empty { display: none; }
+
+@media (max-width: 768px) {
+    .ws-head { align-items: flex-start; }
+    .ws-head-controls { width: 100%; justify-content: flex-start; }
+}
+
+/* Workspace primary/save buttons: emerald hover (base is var(--sage-professional)
+   → emerald in-scope; the shared :hover used the old olive). */
+.ws-wrap .kpi-update-trigger-btn:hover,
+.ws-wrap .kpi-save-section-btn:hover { background: var(--sage-deep) !important; }
+
+/* =========================================================
+   SPEEKS TOOLS — airy modal redesign (calm / V4)   [2026-07-24]
+   Shared shell for every .modal-menu.manage-menu tool modal:
+   emerald accent, airy chrome, chip close, calm header + controls.
+   Reusable header pattern: .tool-head (icon tile + eyebrow + title
+   + subtitle). Per-tool insides are refreshed next to their own
+   classes. No dark mode exists, so literal colours are safe.
+   ========================================================= */
+.modal-menu.manage-menu {
+    --sage-professional: #1f9d57;
+    border-radius: 18px;
+    border: 1px solid #e3e8ee;
+    box-shadow: 0 24px 60px rgba(16,24,40,.20), 0 2px 8px rgba(16,24,40,.06);
+}
+
+/* --- header chrome (works with the plain h3 header AND the .tool-head one) --- */
+.modal-menu.manage-menu > .modal-header {
+    background: #ffffff;
+    border-bottom: 1px solid #eef1f5;
+    padding: 16px 22px;
+    align-items: center;
+}
+.modal-menu.manage-menu > .modal-header.tool-head { align-items: flex-start; }
+.modal-menu.manage-menu > .modal-header h3 {
+    font-size: 17px; font-weight: 800; letter-spacing: -.01em; color: #0f172a;
+}
+.modal-menu.manage-menu .modal-close-btn {
+    width: 32px; height: 32px; border-radius: 9px;
+    background: #f1f5f9; color: #647082; font-size: 14px; flex: 0 0 auto;
+}
+.modal-menu.manage-menu .modal-close-btn:hover { background: #fcecec; color: var(--red-alert); }
+
+/* Reusable calm tool header: icon tile + eyebrow + title + subtitle */
+.tool-head .tool-head-main { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.tool-head-ico {
+    width: 40px; height: 40px; flex: 0 0 auto; border-radius: 11px;
+    background: #e8f7ee; color: #178048;
+    display: flex; align-items: center; justify-content: center;
+}
+.tool-head-ico svg { width: 20px; height: 20px; }
+.tool-head-titles { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tool-head-eyebrow { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: #8a94a3; }
+.tool-head-title { font-size: 18px; font-weight: 800; letter-spacing: -.01em; color: #0f172a; line-height: 1.1; }
+.tool-head-sub { font-size: 12.5px; font-weight: 500; color: #647082; line-height: 1.35; }
+
+/* --- body + footer --- */
+.modal-menu.manage-menu > .manage-content { background: #f6f8fa; padding: 20px 22px; }
+.modal-menu.manage-menu > .manage-footer {
+    background: #ffffff; border-top: 1px solid #eef1f5; padding: 14px 22px;
+}
+
+/* --- shared form controls (scoped to the tool modals) --- */
+.modal-menu.manage-menu .form-input-lg {
+    border: 1.5px solid #e3e8ee; border-radius: 10px;
+    font-size: 14px; padding: 11px 13px; background: #ffffff;
+}
+.modal-menu.manage-menu .form-input-lg:focus {
+    border-color: #1f9d57; box-shadow: 0 0 0 3px rgba(31,157,87,.12);
+}
+.modal-menu.manage-menu .form-label-caps {
+    font-size: 11px; font-weight: 800; letter-spacing: .04em; color: #647082;
+}
+
+/* --- buttons (calmer, emerald) --- */
+.modal-menu.manage-menu .btn-primary {
+    text-transform: none; letter-spacing: 0; font-size: 13.5px;
+    border-radius: 10px; padding: 11px 20px; box-shadow: 0 4px 12px rgba(31,157,87,.20);
+}
+.modal-menu.manage-menu .btn-primary:hover {
+    background: var(--sage-deep) !important; transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(31,157,87,.28);
+}
+.modal-menu.manage-menu .btn-secondary {
+    text-transform: none; letter-spacing: 0; font-size: 13.5px;
+    border-radius: 10px; padding: 11px 20px; background: #eef1f5; color: #475569;
+}
+.modal-menu.manage-menu .btn-secondary:hover { background: #e2e8f0; transform: translateY(-1px); box-shadow: none; }
+
+/* --- tabs (calm pill) --- */
+.modal-menu.manage-menu .notif-tabs { background: #eef1f5; border-radius: 10px; padding: 4px; }
+.modal-menu.manage-menu .tab-btn { font-size: 12.5px; font-weight: 700; color: #647082; border-radius: 8px; padding: 7px 16px; }
+.modal-menu.manage-menu .tab-btn.active { background: #ffffff; color: #0f172a; box-shadow: 0 1px 3px rgba(16,24,40,.10); }
+
+/* ---- Box Order flagship — airy refresh of its bespoke insides ---- */
+#boxOrderModal .box-order-tab { border: 1.5px solid #e3e8ee; border-radius: 10px; color: #647082; }
+#boxOrderModal .box-order-tab:hover:not(.active) { background: #f6f8fa; }
+#boxOrderModal .box-order-tab.active { background: #1f9d57; color: #fff; border-color: #1f9d57; }
+#boxOrderModal .box-order-row { border: 1.5px solid #e3e8ee; border-radius: 10px; background: #fff; }
+#boxOrderModal .box-row-selected { border-color: #1f9d57; background: #e8f7ee; }
+#boxOrderModal .box-stepper-btn:hover { background: #e8f7ee; border-color: #1f9d57; color: #178048; }
+#boxOrderModal .box-order-section-label { border: 1.5px solid #e3e8ee; border-radius: 10px; }
+#boxOrderModal .box-order-collapsible:hover { background: #f6f8fa; border-color: #cbd5e1; }
+#boxOrderModal .box-order-preview-label { color: #8a94a3; }
+#boxOrderModal .box-order-footer button { text-transform: none !important; letter-spacing: 0 !important; border-radius: 10px; }
+#boxOrderModal .box-order-email-preview { border-radius: 12px; }
+#boxOrderModal .box-admin-item { border-radius: 10px; }
+
+/* Tool icon sizing: SVG info badge, search icon, footer button arrows */
+.goals-info-i svg { width: 12px; height: 12px; }
+.doc-search-icon svg { width: 16px; height: 16px; display: block; }
+#boxOrderModal .box-order-footer button svg { width: 15px; height: 15px; }

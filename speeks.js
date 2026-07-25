@@ -2665,8 +2665,7 @@ function _kpiWeekRangeLabel(periodEndDate) {
 function _kpiRenderWeekly(periods) {
     const body = document.getElementById('kpiModalBody');
     if (!body) return;
-    const _modalSel = document.getElementById('kpiModalStoreSelect');
-    const store = (_modalSel && _modalSel.offsetParent !== null && _modalSel.value) || sessionStorage.getItem('speeksUserStore') || '';
+    const store = _kpiResolveStore();
     const sub = document.getElementById('kpiModalSubtitle');
     if (sub) sub.textContent = store + ' · 4-Week View';
 
@@ -3139,7 +3138,7 @@ function _mbRenderOverview() {
 
     const totalCols = 1 + MB_STORES.length;
     let head = '<th class="mb-th-metric">Metric</th>';
-    MB_STORES.forEach(s => head += '<th class="mb-th-val">' + (MB_STORE_DOT[s] || '') + ' ' + s + '</th>');
+    MB_STORES.forEach(s => head += '<th class="mb-th-val">' + s + '</th>');
 
     let html = '<div class="mb-overview-cap">All Stores · ' + _mbMonthLabel(shownMonth) +
         (editing ? '  ·  entering current month' : '') + '</div>';
@@ -3327,8 +3326,7 @@ async function mbSaveOverview() {
 function _kpiRenderMonthly(periods) {
     const body = document.getElementById('kpiModalBody');
     if (!body) return;
-    const _modalSel = document.getElementById('kpiModalStoreSelect');
-    const store = (_modalSel && _modalSel.offsetParent !== null && _modalSel.value) || sessionStorage.getItem('speeksUserStore') || '';
+    const store = _kpiResolveStore();
     const sub = document.getElementById('kpiModalSubtitle');
     if (sub) sub.textContent = store + ' · Monthly';
 
@@ -3412,7 +3410,7 @@ function _kpiToggleDot(el, on) {
 function _kpiDecorateEditBtn(force) {
     const btn = document.getElementById('kpiEditBtn');
     if (!btn) return;
-    const on = (force !== undefined ? force : _kpiReminderOn());
+    const on = (force !== undefined ? force : !!(typeof _kpiDueState === 'object' && _kpiDueState && _kpiDueState.weekly && _kpiDueState.weekly.due));
     const wants = on && btn.style.display !== 'none' && _kpiCurrentTab === 'weekly';
     btn.classList.toggle('kpi-due-pulse', wants);
     let pill = document.getElementById('kpiDuePill');
@@ -3427,20 +3425,236 @@ function _kpiDecorateEditBtn(force) {
     }
 }
 
-// Steps 1 & 2: dots on the Analytics nav-link, the Store KPIs sub-tab, and the Weekly toggle
+// Steps 1 & 2: dots on the Analytics nav-link + the Store KPIs sub-tab + the
+// Weekly/Monthly toggles. Now data-aware: driven by _kpiDueState (populated by
+// checkKpiDueReminders), so a dot only shows while the period is actually
+// UNFILLED — it clears the instant the numbers are saved, not just when the
+// Sat→Sun clock window closes.
 function applyKpiReminder() {
-    const on = _kpiReminderOn();
-    // The workspace nav-link dot is shared with Variance Replies (both live on
-    // that page): it pulses if EITHER the weekly-KPI window is open or the
-    // manager has variance lines waiting on them.
+    const st = (typeof _kpiDueState === 'object' && _kpiDueState) ? _kpiDueState : null;
+    const wkOn = !!(st && st.weekly && st.weekly.due);
+    const moOn = !!(st && st.monthly && st.monthly.due);
+    const on = wkOn || moOn;                 // the Store KPIs tab needs attention if either is due
+    // The workspace nav-link dot is shared with Variance Replies + Aging (all
+    // live on that page): it pulses if a KPI is due OR either of those needs the
+    // manager.
     const vrOn = typeof _vrDotNeeded === 'function' && _vrDotNeeded();
     const agOn = typeof _agDotNeeded === 'function' && _agDotNeeded();
     document.querySelectorAll('.nav-link[href="workspace.html"]').forEach(a => _kpiToggleDot(a, on || vrOn || agOn));
     _kpiToggleDot(document.getElementById('ws-tab-kpis'), on);
     _kpiToggleDot(document.getElementById('ws-tab-vreplies'), vrOn);
     _kpiToggleDot(document.getElementById('ws-tab-aging'), agOn);
-    _kpiToggleDot(document.getElementById('kpi-tab-weekly'), on);
-    _kpiDecorateEditBtn(on);
+    _kpiToggleDot(document.getElementById('kpi-tab-weekly'), wkOn);
+    _kpiToggleDot(document.getElementById('kpi-tab-monthly'), moOn);
+    _kpiDecorateEditBtn(wkOn);
+}
+
+// ============================================================================
+// KPI DUE REMINDERS — data-aware action-feed nags (Weekly + Monthly)
+//   Supersedes the old time-only breadcrumb (_kpiReminderActive/_kpiReminderOn,
+//   left defined above but no longer consulted). A store is nagged ONLY while
+//   its current period has zero saved entries, and the nag clears the instant
+//   any entry is saved — the kpi-manage POST broadcasts "kpi", the realtime
+//   registry re-runs checkKpiDueReminders(), the bubble hides, the feed repaints.
+//   • Weekly : due once the active Sunday period is editable; flips to "Overdue"
+//              after that Sunday passes; persists until filled or the week rolls.
+//   • Monthly: due from the FIRST SUNDAY of the month AFTER the reporting month
+//              (so a month that ends mid-week is reported the first Sunday — e.g.
+//              the 4th); "Overdue" after that Sunday; persists until filled.
+//   Roles: manager / owner-manager / MSM. (MSM is scoped to their HOME store —
+//   the Store KPIs pane's store picker is DM/CEO-only, so an MSM can only enter
+//   their home store here today.)
+// ============================================================================
+const _KPI_DUE_ROLES = new Set(['manager', 'owner (manager)', 'owner manager']);
+// NOTE: Assistant Managers are intentionally excluded. ASM KPI entry is disabled
+// for the stores right now; the day it's re-enabled, add 'assistant manager'
+// here and ASMs start getting these reminders automatically.
+
+let _kpiDueState = { weekly: { due: false, overdue: false, stores: [] }, monthly: { due: false, overdue: false, stores: [] } };
+let _kpiDueStarted = false;
+
+function _kpiDueEligible() {
+    return _KPI_DUE_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
+}
+// The store(s) whose KPIs THIS user is responsible for. A Multi-Store Manager
+// covers BOTH managed stores (they fill each by switching the active store, or
+// by clicking the store-specific feed card which routes the pane to that store —
+// see _kpiResolveStore); everyone else is their one home store.
+function _kpiMyStores() {
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        return [...MULTISTORE_MANAGER_STORES];
+    }
+    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
+}
+
+// Which store the Store KPIs pane is currently showing/saving. Preserves the
+// existing behaviour for everyone (DM/CEO picker wins; managers = their store),
+// and adds one thing: an MSM who arrived via a store-specific KPI feed card is
+// routed to THAT store (set on pane-open in switchWorkspaceTab), without
+// switching their whole dashboard — mirrors the aging pane's _agViewStore.
+let _kpiViewStore = null;
+function _kpiResolveStore() {
+    const sel = document.getElementById('kpiModalStoreSelect');
+    if (sel && sel.offsetParent !== null && sel.value) return sel.value;   // DM / CEO / TOM picker
+    if (_kpiViewStore) return _kpiViewStore;                               // MSM routed store
+    return sessionStorage.getItem('speeksUserStore') || '';               // manager default
+}
+// Today's date in Central time as YYYY-MM-DD — string-comparable with the
+// period dates the edge fn returns (both are plain calendar dates).
+function _kpiCentralToday() {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date());
+}
+// Current Central date + wall clock, so we can test the real deadline.
+function _kpiCentralParts() {
+    const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date());
+    const g = t => (p.find(x => x.type === t) || {}).value;
+    let hr = parseInt(g('hour'), 10); if (hr === 24) hr = 0;   // some engines emit 24 at midnight
+    return { date: g('year') + '-' + g('month') + '-' + g('day'), hour: hr, minute: parseInt(g('minute'), 10) };
+}
+function _kpiAddDays(dateStr, n) {
+    const d = new Date(dateStr + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+}
+// Is "now" past the deadline for work done on `sunday`? KPIs are entered Sunday
+// and due the FOLLOWING MONDAY at 08:30 Central — so it's only "overdue" once
+// that Monday-morning cutoff passes, not at Sunday midnight.
+function _kpiPastDeadline(sunday, parts) {
+    const mon = _kpiAddDays(sunday, 1);           // the Monday after
+    if (parts.date > mon) return true;
+    if (parts.date < mon) return false;
+    return parts.hour > 8 || (parts.hour === 8 && parts.minute >= 30);
+}
+// First Sunday (YYYY-MM-DD) of the month FOLLOWING the given period-end date.
+// A monthly period ending e.g. 2026-06-30 is reported the first Sunday of July,
+// which may be as late as the 7th (your "month ended mid-week → fill it the
+// first Sunday, maybe the 4th" case).
+function _kpiFirstSundayAfter(periodEndStr) {
+    const parts = String(periodEndStr).split('-').map(Number);
+    let ny = parts[0], nm = parts[1] + 1;                  // the month it's reported IN
+    if (nm > 12) { nm = 1; ny += 1; }
+    const dow = new Date(Date.UTC(ny, nm - 1, 1)).getUTCDay();  // 0 = Sunday
+    const day = dow === 0 ? 1 : 1 + (7 - dow);
+    return ny + '-' + String(nm).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+}
+
+// Lazily-created hidden alert bubble for a KPI reminder (weekly|monthly). Like
+// the variance/aging bubbles it's a state-carrier only — CSS keeps it
+// visibility:hidden; _samGatherReminders reads its display to surface the feed
+// card (see the RETIRED FLOATING ALERT TOASTS block in styles.css).
+function _kpiDueBubbleEl(which) {
+    const id = which === 'monthly' ? 'kpiMonthlyAlertBubble' : 'kpiWeeklyAlertBubble';
+    let b = document.getElementById(id);
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = id;
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #dc2626, #7f1d1d); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(127, 29, 29, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = '<span id="' + id + 'Icon" style="font-size:16px; flex-shrink:0; margin-top:2px;">📈</span>' +
+        '<span id="' + id + 'Text" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>' +
+        '<button onclick="document.getElementById(\'' + id + '\').style.display=\'none\'" class="daily-bubble-close" title="Dismiss">' +
+        '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>' +
+        '</button>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+function _kpiHideDueBubble(which) {
+    const b = document.getElementById(which === 'monthly' ? 'kpiMonthlyAlertBubble' : 'kpiWeeklyAlertBubble');
+    if (b) b.style.display = 'none';
+}
+function _kpiHideDueBubbles() { _kpiHideDueBubble('weekly'); _kpiHideDueBubble('monthly'); }
+
+// Populate + show one KPI due bubble (state-carrier for the feed card).
+function _kpiRenderDueBubble(which, show, opts) {
+    if (!show) { _kpiHideDueBubble(which); return; }
+    const b = _kpiDueBubbleEl(which);
+    if (!b) return;
+    const id = b.id;
+    const textEl = document.getElementById(id + 'Text');
+    const overdue = !!(opts && opts.overdue);
+    const stores = (opts && opts.stores) || [];
+    const monthly = which === 'monthly';
+    // You report the month/week that just ended, so an overdue weekly reads
+    // "Last week's"; monthly is always the just-ended month ("Last month's").
+    const when = monthly ? "Last month's" : (overdue ? "Last week's" : "This week's");
+    const tab = monthly ? 'monthly' : 'weekly';
+    const title = (monthly ? 'Monthly KPIs' : 'Weekly KPIs') + (overdue ? ' Overdue' : ' Due');
+    // Name the outstanding store(s) when the card can cover more than one — an MSM
+    // (either store, even when only one is left) or any multi-store list. A plain
+    // manager has one store, so naming it is just noise.
+    const isMSM = typeof isMultiStoreManager === 'function' && isMultiStoreManager();
+    const storeP = ((isMSM || stores.length > 1) && stores.length) ? (' (' + stores.join(' & ') + ')') : '';
+    const tail = overdue ? ' are overdue' : ' are due Monday by 8:30am';
+    const summary = overdue
+        ? (when + ' KPIs' + storeP + ' are overdue — enter them now.')
+        : (when + ' KPIs' + storeP + ' are due Monday by 8:30am.');
+    const body = when + ' KPIs' + storeP + tail +
+        '. Open Workspace → Store KPIs and fill in the ' + tab + ' numbers.';
+    if (textEl) {
+        textEl.dataset.summary = summary;
+        // The feed card's title + badge (Due vs Overdue) read this off the bubble,
+        // so the whole card always agrees with the bubble — no split-source drift.
+        textEl.dataset.overdue = overdue ? '1' : '';
+        // Snooze identity: re-nags if the store list or overdue state changes.
+        textEl.dataset.sig = (monthly ? 'm' : 'w') + '|' + [...stores].sort().join(',') + '|' + (overdue ? 'od' : 'due');
+        if (stores.length) textEl.dataset.stores = [...new Set(stores)].join(',');
+        else delete textEl.dataset.stores;
+        textEl.style.display = 'flex';
+        textEl.style.flexDirection = 'column';
+        textEl.style.gap = '7px';
+        textEl.innerHTML =
+            '<div style="line-height:1.4;"><strong>' + escapeHtml(title) + '</strong></div>' +
+            '<div style="line-height:1.4; opacity:0.96;">' + escapeHtml(body) + '</div>' +
+            '<button onclick="document.getElementById(\'' + id + '\').style.display=\'none\'; sessionStorage.setItem(\'speeksKpiTab\',\'' + tab + '\'); window.location.href=\'workspace.html#kpis\';" ' +
+            'style="align-self:flex-start; background:rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.5); color:#fff; font-weight:800; font-size:12px; border-radius:8px; padding:6px 12px; cursor:pointer;" ' +
+            'onmouseover="this.style.background=\'rgba(255,255,255,0.3)\';" onmouseout="this.style.background=\'rgba(255,255,255,0.18)\';">Open Store KPIs</button>';
+    }
+    b.style.display = 'flex';
+}
+
+// The check: fetches the editable weekly + monthly period for the user's store,
+// and shows/hides each bubble based on whether it has saved entries. Self-
+// installs a 10-min safety poll; realtime pings re-run it instantly on any save.
+async function checkKpiDueReminders() {
+    if (!_kpiDueEligible()) { _kpiHideDueBubbles(); _kpiDueState = { weekly: { due: false, overdue: false, stores: [] }, monthly: { due: false, overdue: false, stores: [] } }; return; }
+    const stores = _kpiMyStores();
+    if (!stores.length) { _kpiHideDueBubbles(); return; }
+    if (!_kpiDueStarted) { _kpiDueStarted = true; setInterval(checkKpiDueReminders, 10 * 60 * 1000); }
+    try {
+        const parts = _kpiCentralParts();
+        const today = parts.date;
+        const wkPending = [], moPending = [];
+        let wkEnd = null, moFirstSun = null;
+        for (const store of stores) {
+            const wUrl = KPI_MANAGE_URL + '?store=' + store + '&period_type=weekly&v=' + Date.now();
+            const mUrl = KPI_MANAGE_URL + '?store=' + store + '&period_type=monthly&v=' + Date.now();
+            const [wRes, mRes] = await Promise.all([
+                fetch(wUrl).then(r => r.json()).catch(() => null),
+                fetch(mUrl).then(r => r.json()).catch(() => null),
+            ]);
+            const wp = wRes && (wRes.periods || []).find(p => p.is_editable);
+            if (wp) { wkEnd = wp.period_end_date; if ((wp.saved_count || 0) === 0) wkPending.push(store); }
+            const mp = mRes && (mRes.periods || []).find(p => p.is_editable);
+            if (mp) {
+                const firstSun = _kpiFirstSundayAfter(mp.period_end_date);
+                moFirstSun = firstSun;
+                if ((mp.saved_count || 0) === 0 && today >= firstSun) moPending.push(store);
+            }
+        }
+        // Overdue once the Monday-08:30-CT deadline after the reporting Sunday passes.
+        const wkOverdue = !!(wkEnd && _kpiPastDeadline(wkEnd, parts));
+        const moOverdue = !!(moFirstSun && _kpiPastDeadline(moFirstSun, parts));
+        _kpiDueState = {
+            weekly:  { due: wkPending.length > 0, overdue: wkOverdue, stores: wkPending },
+            monthly: { due: moPending.length > 0, overdue: moOverdue, stores: moPending },
+        };
+        _kpiRenderDueBubble('weekly',  _kpiDueState.weekly.due,  { overdue: wkOverdue, stores: wkPending });
+        _kpiRenderDueBubble('monthly', _kpiDueState.monthly.due, { overdue: moOverdue, stores: moPending });
+        if (typeof applyKpiReminder === 'function') applyKpiReminder();
+        if (typeof renderActionFeed === 'function') renderActionFeed();
+    } catch (e) { /* next poll / ping retries */ }
 }
 
 function kpiHeaderStartEdit() {
@@ -3463,8 +3677,7 @@ function kpiHeaderCancel() {
 }
 
 async function _kpiLoadAll(tab) {
-    const modalSel = document.getElementById('kpiModalStoreSelect');
-    const store = (modalSel && modalSel.offsetParent !== null && modalSel.value) || sessionStorage.getItem('speeksUserStore');
+    const store = _kpiResolveStore();
     if (!store) return;
     const body = document.getElementById('kpiModalBody');
     if (body) body.innerHTML = '<div class="kpi-empty-state">Loading…</div>';
@@ -3526,17 +3739,28 @@ let _wsKpiLoaded   = false;
 // Loads the inline KPI grid (same markup/IDs as the old fullscreen modal, but
 // rendered in-page rather than via toggleModal). Loads once per page-init.
 async function loadWorkspaceKpis() {
-    if (_wsKpiLoaded) return;
+    // A KPI-due feed card can request a specific sub-tab (weekly|monthly) via
+    // sessionStorage before deep-linking here. Consume it once.
+    let wantTab = 'weekly';
+    try {
+        const t = sessionStorage.getItem('speeksKpiTab');
+        if (t === 'weekly' || t === 'monthly') { wantTab = t; sessionStorage.removeItem('speeksKpiTab'); }
+    } catch (e) {}
+    if (_wsKpiLoaded) {
+        // Already loaded — still honor an explicit tab request from a card.
+        if (wantTab !== _kpiCurrentTab && typeof switchKpiTab === 'function') switchKpiTab(wantTab);
+        return;
+    }
     _wsKpiLoaded = true;
-    _kpiCurrentTab = 'weekly';
+    _kpiCurrentTab = wantTab;
     _kpiEditingPeriod = null;
     // Managers (picker hidden) default to their own store; DMs keep selection
     const sel = document.getElementById('kpiModalStoreSelect');
     const userStore = sessionStorage.getItem('speeksUserStore');
     if (sel && userStore && sel.offsetParent === null) sel.value = userStore;
-    document.getElementById('kpi-tab-weekly')?.classList.add('active');
-    document.getElementById('kpi-tab-monthly')?.classList.remove('active');
-    await _kpiLoadAll('weekly');
+    document.getElementById('kpi-tab-weekly')?.classList.toggle('active', wantTab === 'weekly');
+    document.getElementById('kpi-tab-monthly')?.classList.toggle('active', wantTab === 'monthly');
+    await _kpiLoadAll(wantTab);
 }
 
 function switchWorkspaceTab(name) {
@@ -3549,6 +3773,11 @@ function switchWorkspaceTab(name) {
     if (name === 'brief') {
         if (!_wsBriefLoaded) { _wsBriefLoaded = true; if (typeof fetchMonthlyBrief === 'function') fetchMonthlyBrief(); }
     } else if (name === 'kpis') {
+        // MSM only: a store-specific KPI feed card routes the pane to that store
+        // (consumed once, cleared after), without switching the whole dashboard.
+        // No override → their active store. Non-MSM → null (falls back normally).
+        _kpiViewStore = (typeof isMultiStoreManager === 'function' && isMultiStoreManager())
+            ? (_consumeMsmAlertStore() || null) : null;
         loadWorkspaceKpis();
     } else if (name === 'b2b') {
         fetchB2BDeals();
@@ -3656,11 +3885,9 @@ function _kpiCancelEdit() {
 }
 
 async function _kpiSavePeriod(periodDate) {
-    // Mirror the load/render store resolution: DM/CEO/TOM save the store picked in
-    // the (visible) selector; managers fall back to their own store. Reading only
-    // sessionStorage here misrouted DM saves to their own store ('CORP').
-    const modalSel = document.getElementById('kpiModalStoreSelect');
-    const store = (modalSel && modalSel.offsetParent !== null && modalSel.value) || sessionStorage.getItem('speeksUserStore');
+    // Mirror the load/render store resolution (DM/CEO picker → MSM routed store →
+    // manager's own store) so the save always targets the store on screen.
+    const store = _kpiResolveStore();
     const pin   = sessionStorage.getItem('speeksUserPin');
     if (!store || !pin) return;
     const pk     = periodDate.replace(/-/g, '');
@@ -7994,8 +8221,8 @@ function applyRoleBasedUI() {
     if (greetingEl) greetingEl.innerText = `Welcome ${userName}!`;
 
     const firstName = userName.split(' ')[0];
-    const wsTitleEl = document.getElementById('wsTitle');
-    if (wsTitleEl) wsTitleEl.innerHTML = `<span>📈</span> ${firstName}'s Workspace`;
+    // (Analytics Workspace header is a static V4 hero in workspace.html now —
+    //  no per-user title injection, matching the Operations / Processes pages.)
 
     const userRoleClass = `role-${userRole.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-')}`;
     const userStoreClass = `store-${userStore.toLowerCase()}`;
@@ -8276,7 +8503,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -8386,7 +8613,21 @@ const customTooltip = document.createElement('div');
 customTooltip.className = 'speeks-tooltip';
 document.body.appendChild(customTooltip);
 
+// When true the tooltip is pinned under a top-nav button (with a caret) rather
+// than trailing the cursor — see _anchorTipBelow + the mousemove guard.
+let _tipAnchored = false;
+function _anchorTipBelow(el) {
+    const r = el.getBoundingClientRect();
+    const tw = customTooltip.offsetWidth;
+    let x = r.left + r.width / 2 - tw / 2 + window.scrollX;
+    x = Math.max(10, Math.min(x, window.scrollX + window.innerWidth - tw - 10));
+    customTooltip.style.left = x + 'px';
+    customTooltip.style.top = (r.bottom + 10 + window.scrollY) + 'px';
+}
+
 document.addEventListener('mouseover', function(e) {
+    // Reset the anchored state each pass; the top-nav branch re-arms it below.
+    customTooltip.classList.remove('anchored'); _tipAnchored = false;
     // Generic styled tooltip: any element with data-tip gets the site tooltip
     // instead of the plain browser title box. Used by the Action Menu + panels.
     const genTip = e.target.closest('[data-tip]');
@@ -8394,7 +8635,28 @@ document.addEventListener('mouseover', function(e) {
         customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
         customTooltip.innerHTML = `<span style="font-size: 12.5px; font-weight: 600; color: var(--slate-charcoal); white-space: normal;">${genTip.getAttribute('data-tip')}</span>`;
         customTooltip.classList.add('show');
+        // Top-nav buttons: pin the tooltip beneath the button with a caret instead
+        // of letting it trail the cursor (matches the Tools button / tab tooltips).
+        if (genTip.closest('.top-nav')) { customTooltip.classList.add('anchored'); _tipAnchored = true; _anchorTipBelow(genTip); }
         return;
+    }
+
+    // Collapsed nav: when the nav shrinks to icons (.nav-compact hides the label),
+    // hovering a page link shows its name in the same anchored/caret tooltip as the
+    // right-side icons. Only fires while collapsed — the label speaks for itself
+    // when it's visible.
+    const navLink = e.target.closest('.nav-link');
+    if (navLink && navLink.closest('.top-nav.nav-compact')) {
+        const lbl = navLink.querySelector('span');
+        const txt = lbl ? lbl.textContent.trim() : '';
+        if (txt) {
+            customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
+            customTooltip.innerHTML = `<span style="font-size: 12.5px; font-weight: 600; color: var(--slate-charcoal); white-space: normal;">${txt}</span>`;
+            customTooltip.classList.add('show', 'anchored');
+            _tipAnchored = true;
+            _anchorTipBelow(navLink);
+            return;
+        }
     }
 
     // Call Backs sheet: any element carrying data-cb-tip gets the standard site tooltip
@@ -8486,6 +8748,7 @@ document.addEventListener('mouseover', function(e) {
 });
 
 document.addEventListener('mousemove', function(e) {
+    if (_tipAnchored) return;   // pinned under a nav button — don't trail the cursor
     if (customTooltip.classList.contains('show')) {
         let x = e.pageX - customTooltip.offsetWidth - 15;
         let y = e.pageY + 15;
@@ -19596,7 +19859,7 @@ function renderActionFeed() {
                     <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span><span class="sam-r-due ${it.dueCls}">${_samEsc(it.due)}</span></div>
                     <div class="sam-a-snip">${_samEsc(it.snippet)}</div>
                 </div>
-                ${snoozeBtn(`samDismissItem(event,'rem','${_samEsc(it.key)}')`)}
+                ${it.noSnooze ? '' : snoozeBtn(`samDismissItem(event,'rem','${_samEsc(it.key)}')`)}
             </div>` });
             return;
         }
@@ -19951,7 +20214,7 @@ function samCleanHotbar() {
 // tool" logic the old alert bubble ran on click — the hub + dashboard cards now
 // carry it so clicking a reminder jumps straight to its tool.
 function _samReminderCfg() {
-    return [
+    const cfg = [
         { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText', title: 'Variance Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#vreplies'" },
         // A DM has no store-scoped claims tool — send them to the all-stores
         // oversight view instead, which is where they can actually act.
@@ -19962,6 +20225,25 @@ function _samReminderCfg() {
         { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "toggleRecycleInventory(); switchRecycleTab('view')" },
         { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging Inventory Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" }
     ];
+    // KPI due reminders (weekly + monthly) — data-aware, driven by
+    // checkKpiDueReminders. The bubbles gate visibility; title/due/urgency flip to
+    // "Overdue" off the bubble's data-overdue (same source as the snippet, so the
+    // whole card stays internally consistent). Cards deep-link to the Store KPIs tab.
+    const _wkT = document.getElementById('kpiWeeklyAlertBubbleText');
+    const _moT = document.getElementById('kpiMonthlyAlertBubbleText');
+    const _wkOd = !!(_wkT && _wkT.dataset && _wkT.dataset.overdue);
+    const _moOd = !!(_moT && _moT.dataset && _moT.dataset.overdue);
+    // noSnooze: a hard deadline (entered Sunday, due Monday 8:30am) — no snoozing
+    // it away; the card stays until the KPIs are actually entered.
+    cfg.push({ key: 'kpiWeekly', id: 'kpiWeeklyAlertBubble', text: 'kpiWeeklyAlertBubbleText',
+        title: _wkOd ? 'Weekly KPIs Overdue' : 'Weekly KPIs Due', urgency: _wkOd ? 3 : 2,
+        due: _wkOd ? 'Overdue' : 'Due', cls: 'sam-due-red', noSnooze: true,
+        action: "sessionStorage.setItem('speeksKpiTab','weekly'); window.location.href='workspace.html#kpis'" });
+    cfg.push({ key: 'kpiMonthly', id: 'kpiMonthlyAlertBubble', text: 'kpiMonthlyAlertBubbleText',
+        title: _moOd ? 'Monthly KPIs Overdue' : 'Monthly KPIs Due', urgency: _moOd ? 3 : 2,
+        due: _moOd ? 'Overdue' : 'Due', cls: 'sam-due-red', noSnooze: true,
+        action: "sessionStorage.setItem('speeksKpiTab','monthly'); window.location.href='workspace.html#kpis'" });
+    return cfg;
 }
 
 function _samDismKey() {
@@ -20047,7 +20329,7 @@ function _samGatherReminders() {
         out.push({
             type: 'rem', key: c.key, sig, title: c.title, snippet: sub || 'Needs your attention',
             due: c.due, dueCls: c.cls, urgency: c.urgency, read: false, dateMs: Date.now() + c.urgency,
-            action
+            action, noSnooze: !!c.noSnooze
         });
     });
     return out;
@@ -20088,6 +20370,7 @@ const _RT_TOOL_CHECKS = {
     comments:      ['fetchAndDisplayStoreComment'],
     announcements: ['loadCMS'],
     patch:         ['loadPatchNotes'],
+    kpi:           ['checkKpiDueReminders'],
 };
 
 // Re-run a tool's checks (sequentially, so any UI-refresh step runs after its

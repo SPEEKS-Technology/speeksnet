@@ -9,19 +9,20 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260723g">
+  <link rel="stylesheet" href="styles.css?v=20260724j">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260723p" defer></script>
+  <script src="speeks.js?v=20260724h" defer></script>
 </head>
 <body class="preload">
 
 <header class="top-nav">
   <div class="nav-left">
     <div class="brand-area">
-      <img src="images/speeksnet_logo.png" alt="SPEEKS Logo" class="brand-logo">
+      <img src="images/SPEEKS%20Logo%20Short%20White.png" alt="SPEEKS" class="brand-mark">
+      <span class="brand-wordmark">SPEEKSNET</span>
     </div>
   </div>
 
@@ -40,7 +41,7 @@
         <select id="msmStoreSelect" class="msm-store-select" onchange="setMultiStore(this.value)" aria-label="Managed store"></select>
       </div>
 
-      <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-owner-manager role-manager role-assistant-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" title="SPEEKS Tools">
+      <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-owner-manager role-manager role-assistant-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" data-tip="SPEEKS Tools">
         <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
           <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
@@ -491,7 +492,7 @@
       <div class="w-full-max-500">
         <div class="dp-eyebrow">SPEEKS Operations</div>
         <h2>Operational Tools</h2>
-        <p>Log customers waiting on items you don't have in stock.</p>
+        <p>Tools for running your day-to-day store operations.</p>
       </div>
     </div>
 
@@ -638,9 +639,16 @@
 </main>
 
 <div class="modal-menu manage-menu" id="boxOrderModal">
-    <div class="modal-header">
-        <h3>📦 Box Order</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Box Order</span>
+          <span class="tool-head-sub">Request boxes &amp; supplies for your store.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
     </div>
 
     <!-- TABS — DM/CEO only (managers just see the order flow) -->
@@ -652,7 +660,7 @@
     <!-- PAGE 1: Item Selection -->
     <div class="manage-content" id="boxOrderPage1">
         <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:14px;">
-            <span class="doc-search-icon">🔍</span>
+            <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
             <input type="text" id="boxOrderSearch" class="kb-search-input doc-search-input" placeholder="Search boxes & supplies..." oninput="filterBoxOrderItems()">
         </div>
         <div id="boxOrderItemsContainer"></div>
@@ -740,15 +748,15 @@
     <!-- FOOTER PAGE 1 -->
     <div class="manage-footer box-order-footer" id="boxOrderFooter1">
         <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
-        <button class="btn-primary" onclick="boxOrderNextPage()">Next →</button>
+        <button class="btn-primary" onclick="boxOrderNextPage()">Next<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
     </div>
 
     <!-- FOOTER PAGE 2 -->
     <div class="manage-footer box-order-footer" id="boxOrderFooter2" style="display:none;">
-        <span class="goals-info-i" style="align-self:center;" data-tip-title="Send Email opens your mail app" data-tip-desc="Clicking Send Email opens your computer's default email app with the order pre-filled — nothing sends until you hit Send there. If nothing opens: go to Windows Settings → Apps → Default apps → scroll to Choose defaults by link type → set MAILTO to Outlook (or your mail app). Or click 📋 Copy and paste the order into any email.">i</span>
-        <button class="btn-secondary" onclick="boxOrderBackPage()">← Back</button>
-        <button class="btn-secondary" onclick="copyBoxOrder(this)">📋 Copy</button>
-        <button class="btn-primary" onclick="sendBoxOrder()">Send Email →</button>
+        <span class="goals-info-i" style="align-self:center;" data-tip-title="Send Email opens your mail app" data-tip-desc="Clicking Send Email opens your computer's default email app with the order pre-filled — nothing sends until you hit Send there. If nothing opens: go to Windows Settings → Apps → Default apps → scroll to Choose defaults by link type → set MAILTO to Outlook (or your mail app). Or click Copy and paste the order into any email."><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
+        <button class="btn-secondary" onclick="boxOrderBackPage()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>Back</button>
+        <button class="btn-secondary" onclick="copyBoxOrder(this)">Copy</button>
+        <button class="btn-primary" onclick="sendBoxOrder()">Send Email<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
     </div>
 
     <!-- FOOTER: MANAGE ITEMS -->

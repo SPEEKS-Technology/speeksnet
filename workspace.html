@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260723g">
+  <link rel="stylesheet" href="styles.css?v=20260724j">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -17,14 +17,15 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20260723p" defer></script>
+  <script src="speeks.js?v=20260724h" defer></script>
 </head>
 <body class="preload">
 
 <header class="top-nav">
   <div class="nav-left">
     <div class="brand-area">
-      <img src="images/speeksnet_logo.png" alt="SPEEKS Logo" class="brand-logo">
+      <img src="images/SPEEKS%20Logo%20Short%20White.png" alt="SPEEKS" class="brand-mark">
+      <span class="brand-wordmark">SPEEKSNET</span>
     </div>
   </div>
 
@@ -43,7 +44,7 @@
         <select id="msmStoreSelect" class="msm-store-select" onchange="setMultiStore(this.value)" aria-label="Managed store"></select>
       </div>
 
-      <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-owner-manager role-manager role-assistant-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" title="SPEEKS Tools">
+      <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-owner-manager role-manager role-assistant-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" data-tip="SPEEKS Tools">
         <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
           <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
@@ -490,8 +491,12 @@
 <main class="main-content">
 
   <div class="ws-wrap">
-    <div class="ws-titlebar">
-      <h2 class="ws-title" id="wsTitle"><span>📈</span> Analytics Workspace</h2>
+    <div class="page-header dp-header ws-header">
+      <div class="w-full-max-500">
+        <div class="dp-eyebrow">SPEEKS Workspace</div>
+        <h2>Analytics Workspace</h2>
+        <p>Track store performance, KPIs, and follow-ups in one place.</p>
+      </div>
     </div>
 
     <div class="ws-layout">
@@ -499,20 +504,27 @@
         <!-- TEMP HIDDEN: restore by uncommenting this button, moving `active` back to it (tab + #ws-pane-b2b), and re-adding 'b2b' to initWorkspace() in speeks.js
         <button class="ws-tab active dynamic-module-flex role-district-manager role-ceo role-tom role-manager role-owner-manager role-assistant-manager" id="ws-tab-b2b" onclick="switchWorkspaceTab('b2b')">🏢 B2B</button>
         -->
-        <button class="ws-tab active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" data-feature="widget-ws-monthly-breakdown" id="ws-tab-brief" onclick="switchWorkspaceTab('brief')">📋 Monthly Breakdown</button>
-        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" data-feature="widget-ws-weekly-kpis" id="ws-tab-kpis" onclick="switchWorkspaceTab('kpis')">📊 Weekly KPI's</button>
-        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager" data-feature="widget-variance-replies" id="ws-tab-vreplies" onclick="switchWorkspaceTab('vreplies')">📉 Variance Replies</button>
-        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager" data-feature="widget-aging-inventory" id="ws-tab-aging" onclick="switchWorkspaceTab('aging')">⏳ Aging Inventory</button>
+        <button class="ws-tab active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" data-feature="widget-ws-monthly-breakdown" id="ws-tab-brief" onclick="switchWorkspaceTab('brief')"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg> Monthly Breakdown</button>
+        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" data-feature="widget-ws-weekly-kpis" id="ws-tab-kpis" onclick="switchWorkspaceTab('kpis')"><svg viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg> Store KPIs</button>
+        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager" data-feature="widget-variance-replies" id="ws-tab-vreplies" onclick="switchWorkspaceTab('vreplies')"><svg viewBox="0 0 24 24"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg> Variance Replies</button>
+        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager" data-feature="widget-aging-inventory" id="ws-tab-aging" onclick="switchWorkspaceTab('aging')"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Aging Inventory</button>
       </div>
 
       <div class="ws-panes">
 
     <!-- ===== MONTHLY PERFORMANCE BRIEF PANE ===== -->
     <section class="ws-pane active" id="ws-pane-brief">
-      <div class="card kpi-master-card district-master-panel ws-panel ws-panel-brief">
-          <div class="district-kpi-header kpi-modal-header-tight">
-              <div class="align-center gap-15">
-                  <span class="district-kpi-title">Monthly Breakdown</span>
+      <div class="card ws-tool-panel ws-panel ws-panel-brief">
+          <div class="ws-head">
+              <div class="ws-head-main">
+                  <span class="ws-head-ico"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>
+                  <div class="ws-head-titles">
+                      <span class="ws-head-eyebrow">Workspace</span>
+                      <span class="ws-head-title">Monthly Breakdown</span>
+                      <span class="ws-head-sub">How each store is tracking against its monthly targets.</span>
+                  </div>
+              </div>
+              <div class="ws-head-controls">
                   <div class="mb-view-toggle dynamic-module-flex role-ceo role-district-manager role-owner-manager">
                       <button id="mbViewOverviewBtn" class="mb-view-btn active" onclick="mbSetView('overview')">📊 Overview</button>
                       <button id="mbViewStoreBtn" class="mb-view-btn" onclick="mbSetView('store')">🏬 Store View</button>
@@ -524,9 +536,7 @@
                       <option value="MPL">MPL</option>
                       <option value="BAL">BAL</option>
                   </select>
-                  <span id="mbSubtitle" style="font-size:11px;color:#888;font-weight:600;"></span>
-              </div>
-              <div class="align-center gap-8">
+                  <span id="mbSubtitle" class="ws-head-meta"></span>
                   <button id="mbEditBtn" class="kpi-update-trigger-btn" style="display:none;" onclick="mbStartEdit()">✏️ Edit</button>
                   <button id="mbSaveBtn" class="kpi-save-section-btn" style="display:none;" onclick="mbSaveBrief()">Save</button>
                   <button id="mbCancelBtn" class="kpi-cancel-btn" style="display:none;" onclick="mbCancelEdit()">Cancel</button>
@@ -541,10 +551,17 @@
 
     <!-- ===== STORE KPIs PANE ===== -->
     <section class="ws-pane" id="ws-pane-kpis">
-      <div class="card kpi-master-card district-master-panel ws-panel ws-panel-kpis">
-          <div class="district-kpi-header kpi-modal-header-tight">
-              <div class="align-center gap-15">
-                  <span class="district-kpi-title">Weekly KPI's</span>
+      <div class="card ws-tool-panel ws-panel ws-panel-kpis">
+          <div class="ws-head">
+              <div class="ws-head-main">
+                  <span class="ws-head-ico"><svg viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></span>
+                  <div class="ws-head-titles">
+                      <span class="ws-head-eyebrow">Workspace</span>
+                      <span class="ws-head-title">Store KPIs</span>
+                      <span class="ws-head-sub">Weekly and monthly KPI performance by store.</span>
+                  </div>
+              </div>
+              <div class="ws-head-controls">
                   <div class="notif-tabs">
                       <button id="kpi-tab-weekly"  class="tab-btn active" onclick="switchKpiTab('weekly')">📅 Weekly</button>
                       <button id="kpi-tab-monthly" class="tab-btn"        onclick="switchKpiTab('monthly')">📆 Monthly</button>
@@ -556,9 +573,7 @@
                       <option value="MPL">MPL</option>
                       <option value="BAL">BAL</option>
                   </select>
-                  <span id="kpiModalSubtitle" style="font-size:11px;color:#888;font-weight:600;"></span>
-              </div>
-              <div class="align-center gap-8">
+                  <span id="kpiModalSubtitle" class="ws-head-meta"></span>
                   <button id="kpiEditBtn"   class="kpi-update-trigger-btn" onclick="kpiHeaderStartEdit()" style="display:none;">✏️ Edit</button>
                   <button id="kpiSaveBtn"   class="kpi-save-section-btn"   onclick="kpiHeaderSave()"      style="display:none;">Save</button>
                   <button id="kpiCancelBtn" class="kpi-cancel-btn"          onclick="kpiHeaderCancel()"    style="display:none;">Cancel</button>
@@ -573,10 +588,17 @@
 
     <!-- ===== B2B PANE ===== -->
     <section class="ws-pane" id="ws-pane-b2b">
-      <div class="card kpi-master-card district-master-panel ws-panel b2b-board-panel">
-          <div class="district-kpi-header b2b-board-header">
-              <span class="district-kpi-title">🏢 B2B Deals <span id="b2b-count" class="widget-date-display"></span></span>
-              <div class="b2b-controls">
+      <div class="card ws-tool-panel ws-panel b2b-board-panel">
+          <div class="ws-head">
+              <div class="ws-head-main">
+                  <span class="ws-head-ico"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></span>
+                  <div class="ws-head-titles">
+                      <span class="ws-head-eyebrow">Workspace</span>
+                      <span class="ws-head-title">B2B Deals <span id="b2b-count" class="widget-date-display"></span></span>
+                      <span class="ws-head-sub">Track and manage business-to-business deals across stores.</span>
+                  </div>
+              </div>
+              <div class="ws-head-controls b2b-controls">
                   <select id="b2bStoreFilter" class="kpi-select dynamic-module-block role-district-manager role-ceo role-tom" onchange="fetchB2BDeals()" style="display:none;">
                       <option value="ALL">All Stores</option>
                       <option value="OVL">OVL</option>
@@ -597,10 +619,17 @@
 
     <!-- ===== VARIANCE REPLIES PANE ===== -->
     <section class="ws-pane" id="ws-pane-vreplies">
-      <div class="card kpi-master-card district-master-panel ws-panel">
-          <div class="district-kpi-header kpi-modal-header-tight">
-              <div class="align-center gap-15" style="flex-wrap:wrap;">
-                  <span class="district-kpi-title">Variance Replies</span>
+      <div class="card ws-tool-panel ws-panel">
+          <div class="ws-head">
+              <div class="ws-head-main">
+                  <span class="ws-head-ico"><svg viewBox="0 0 24 24"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg></span>
+                  <div class="ws-head-titles">
+                      <span class="ws-head-eyebrow">Workspace</span>
+                      <span class="ws-head-title">Variance Replies</span>
+                      <span class="ws-head-sub">Review and reply to items with -10% or greater variance.</span>
+                  </div>
+              </div>
+              <div class="ws-head-controls">
                   <select id="vr-period-select" class="kpi-select" onchange="vrOnPeriodChange()" style="display:none;"></select>
                   <select id="vr-store-select" class="kpi-select dynamic-module-block role-district-manager" onchange="vrOnStoreChange()" style="display:none;">
                       <option value="OVL">OVL</option>
@@ -609,9 +638,7 @@
                       <option value="MPL">MPL</option>
                       <option value="BAL">BAL</option>
                   </select>
-                  <span id="vr-subtitle" style="font-size:11px;color:#888;font-weight:600;"></span>
-              </div>
-              <div class="align-center gap-8">
+                  <span id="vr-subtitle" class="ws-head-meta"></span>
                   <button id="vr-edit-btn" class="kpi-update-trigger-btn" style="display:none;" onclick="vrStartEdit()">✏️ Edit</button>
                   <button id="vr-save-btn" class="kpi-save-section-btn" style="display:none;" onclick="vrSaveEdits(this)">Save</button>
                   <button id="vr-edit-cancel-btn" class="kpi-cancel-btn" style="display:none;" onclick="vrCancelEdit()">Cancel</button>
@@ -628,10 +655,17 @@
 
     <!-- ===== AGING INVENTORY PANE ===== -->
     <section class="ws-pane" id="ws-pane-aging">
-      <div class="card kpi-master-card district-master-panel ws-panel">
-          <div class="district-kpi-header kpi-modal-header-tight">
-              <div class="align-center gap-15" style="flex-wrap:wrap;">
-                  <span class="district-kpi-title">Aging Inventory</span>
+      <div class="card ws-tool-panel ws-panel">
+          <div class="ws-head">
+              <div class="ws-head-main">
+                  <span class="ws-head-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
+                  <div class="ws-head-titles">
+                      <span class="ws-head-eyebrow">Workspace</span>
+                      <span class="ws-head-title">Aging Inventory</span>
+                      <span class="ws-head-sub">Items sitting 30+ days — review and clear them out.</span>
+                  </div>
+              </div>
+              <div class="ws-head-controls">
                   <select id="ag-store-select" class="kpi-select dynamic-module-block role-district-manager" onchange="agOnStoreChange()" style="display:none;">
                       <option value="OVL">OVL</option>
                       <option value="LEE">LEE</option>
@@ -639,9 +673,7 @@
                       <option value="MPL">MPL</option>
                       <option value="BAL">BAL</option>
                   </select>
-                  <span id="ag-subtitle" style="font-size:11px;color:#888;font-weight:600;"></span>
-              </div>
-              <div class="align-center gap-8">
+                  <span id="ag-subtitle" class="ws-head-meta"></span>
                   <button id="ag-add-cancel-btn" class="kpi-cancel-btn" onclick="agCancelAdd()" style="display:none;">Cancel</button>
                   <button id="ag-add-btn" class="kpi-update-trigger-btn dynamic-module-flex role-district-manager" onclick="agToggleAdd()" style="display:none;">＋ Add Item</button>
               </div>
@@ -781,9 +813,16 @@
 </main>
 
 <div class="modal-menu manage-menu" id="boxOrderModal">
-    <div class="modal-header">
-        <h3>📦 Box Order</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Box Order</span>
+          <span class="tool-head-sub">Request boxes &amp; supplies for your store.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
     </div>
 
     <!-- TABS — DM/CEO only (managers just see the order flow) -->
@@ -795,7 +834,7 @@
     <!-- PAGE 1: Item Selection -->
     <div class="manage-content" id="boxOrderPage1">
         <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:14px;">
-            <span class="doc-search-icon">🔍</span>
+            <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
             <input type="text" id="boxOrderSearch" class="kb-search-input doc-search-input" placeholder="Search boxes & supplies..." oninput="filterBoxOrderItems()">
         </div>
         <div id="boxOrderItemsContainer"></div>
@@ -883,15 +922,15 @@
     <!-- FOOTER PAGE 1 -->
     <div class="manage-footer box-order-footer" id="boxOrderFooter1">
         <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
-        <button class="btn-primary" onclick="boxOrderNextPage()">Next →</button>
+        <button class="btn-primary" onclick="boxOrderNextPage()">Next<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
     </div>
 
     <!-- FOOTER PAGE 2 -->
     <div class="manage-footer box-order-footer" id="boxOrderFooter2" style="display:none;">
-        <span class="goals-info-i" style="align-self:center;" data-tip-title="Send Email opens your mail app" data-tip-desc="Clicking Send Email opens your computer's default email app with the order pre-filled — nothing sends until you hit Send there. If nothing opens: go to Windows Settings → Apps → Default apps → scroll to Choose defaults by link type → set MAILTO to Outlook (or your mail app). Or click 📋 Copy and paste the order into any email.">i</span>
-        <button class="btn-secondary" onclick="boxOrderBackPage()">← Back</button>
-        <button class="btn-secondary" onclick="copyBoxOrder(this)">📋 Copy</button>
-        <button class="btn-primary" onclick="sendBoxOrder()">Send Email →</button>
+        <span class="goals-info-i" style="align-self:center;" data-tip-title="Send Email opens your mail app" data-tip-desc="Clicking Send Email opens your computer's default email app with the order pre-filled — nothing sends until you hit Send there. If nothing opens: go to Windows Settings → Apps → Default apps → scroll to Choose defaults by link type → set MAILTO to Outlook (or your mail app). Or click Copy and paste the order into any email."><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
+        <button class="btn-secondary" onclick="boxOrderBackPage()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>Back</button>
+        <button class="btn-secondary" onclick="copyBoxOrder(this)">Copy</button>
+        <button class="btn-primary" onclick="sendBoxOrder()">Send Email<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
     </div>
 
     <!-- FOOTER: MANAGE ITEMS -->
