@@ -794,6 +794,52 @@ input, textarea, select,
 
 .pin-label input[type="checkbox"] { width: 16px; height: 16px; margin: 0; cursor: pointer;}
 
+/* ── Manage Policies — card rows (2026-07-25) ──────────────────────────────
+   Redesign only: the old single-line 7-column grid truncated every field.
+   Each policy is now a card — icon · title · category · pin · delete across
+   the top, Description and Link full-width below. Same inputs/classes, so
+   addManageRow()/saveDocs() are unchanged. */
+#manageDocsList .manage-row {
+    display: grid;
+    grid-template-columns: 66px minmax(0, 1.7fr) minmax(0, 1fr) auto auto;
+    grid-template-areas:
+        "icon title category pin del"
+        "desc desc desc desc desc"
+        "link link link link link";
+    gap: 12px;
+    align-items: end;
+    min-width: 0;
+    background: #fff;
+    border: 1px solid #e3e8ee;
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+}
+#manageDocsList .mp-f-icon  { grid-area: icon; }
+#manageDocsList .mp-f-title { grid-area: title; }
+#manageDocsList .mp-f-cat   { grid-area: category; }
+#manageDocsList .mp-f-pin   { grid-area: pin; }
+#manageDocsList .mp-f-del   { grid-area: del; }
+#manageDocsList .mp-f-desc  { grid-area: desc; }
+#manageDocsList .mp-f-link  { grid-area: link; }
+#manageDocsList .mp-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+#manageDocsList .mp-field > label {
+    font-size: 10px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: .4px; color: #8a94a3; padding-left: 2px;
+}
+#manageDocsList .m-icon { text-align: center; }
+#manageDocsList .m-desc { height: 58px; min-height: 40px; line-height: 1.4; }
+#manageDocsList .pin-label.mp-f-pin { align-self: end; height: 40px; white-space: nowrap; }
+#manageDocsList .del-btn.mp-f-del {
+    align-self: end; margin-bottom: 4px;
+    width: 32px; height: 32px; padding: 0; border-radius: 9px;
+    background: #fdecec; color: #dc2626;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+#manageDocsList .del-btn.mp-f-del:hover { background: #dc2626; color: #fff; }
+#manageDocsList .del-btn.mp-f-del svg { width: 14px; height: 14px; }
+
 .manage-footer { 
     padding: 15px 20px; 
     border-top: 1px solid #eee; 
@@ -882,6 +928,9 @@ input, textarea, select,
 }
 
 .modal-close-btn:hover { background: #eee; color: var(--red-alert); }
+/* SVG X (replaces the ✖ glyph, whose ink sat high in its em-box and looked
+   off-centre); geometry-centred by the button's flex centering. */
+.modal-close-btn svg { width: 15px; height: 15px; display: block; }
 
 .notif-menu { width: 1000px; max-width: 95vw; } /* Expanded to match calendar */
 .calendar-menu { width: 1000px; max-width: 95vw; }
@@ -2127,6 +2176,57 @@ select.bs-hidden-select:focus {
 .user-manage-row { display: flex; gap: 10px; align-items: center; background: #fff; padding: 12px; border-radius: 8px; border: 1px solid var(--gen-border); margin-bottom: 8px; }
 .user-manage-row input, .user-manage-row select { padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
 .user-manage-row .del-btn { background: var(--red-alert); color: white; border: none; padding: 0 10px; height: 34px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+
+/* ── User Permissions — compact airy rows (2026-07-25) ─────────────────────
+   Denser rows so more people fit per screen, calmer field styling, and the
+   small soft-red SVG delete used elsewhere. Classes unchanged, so
+   saveManageUsers() reads the same fields. */
+#manageUsersList .user-manage-row {
+    gap: 8px; padding: 8px 10px; margin-bottom: 6px;
+    border: 1px solid #e3e8ee; border-radius: 10px; background: #fff;
+}
+#manageUsersList .user-manage-row input,
+#manageUsersList .user-manage-row select {
+    padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px;
+    font-size: 13px; font-weight: 600; color: var(--slate-charcoal);
+    outline: none; background: #fff; height: 36px; box-sizing: border-box;
+}
+#manageUsersList .user-manage-row input:focus,
+#manageUsersList .user-manage-row select:focus {
+    border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(31, 157, 87, .12);
+}
+#manageUsersList .user-manage-row .del-btn {
+    flex: 0 0 auto; width: 32px; height: 32px; padding: 0; border-radius: 9px;
+    background: #fdecec; color: #dc2626;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+#manageUsersList .user-manage-row .del-btn:hover { background: #dc2626; color: #fff; }
+#manageUsersList .user-manage-row .del-btn svg { width: 14px; height: 14px; }
+
+/* Search now lives inside the scroll area so it lines up exactly with the rows
+   (no scrollbar offset), and stays pinned to the top while the list scrolls. */
+#manageUsersList .mu-toolbar {
+    position: sticky; top: 0; z-index: 6;
+    background: #f6f8fa; padding-bottom: 10px; margin: -2px 0 0;
+}
+/* Collapsible role groups */
+#manageUsersList .mu-group { margin-bottom: 10px; }
+#manageUsersList .mu-group-head {
+    display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none;
+    padding: 10px 14px; border-radius: 10px;
+    background: #eef2f7; border: 1px solid #e3e8ee;
+    font-size: 13px; font-weight: 800; color: var(--slate-charcoal);
+}
+#manageUsersList .mu-group-head:hover { background: #e7edf4; }
+#manageUsersList .mu-group-name { flex: 1; }
+#manageUsersList .mu-group-count {
+    background: #fff; border: 1px solid #e3e8ee; border-radius: 999px;
+    padding: 1px 10px; font-size: 11px; font-weight: 800; color: #647082;
+}
+#manageUsersList .mu-group-chev { width: 16px; height: 16px; color: #8a94a3; transition: transform .15s ease; flex: 0 0 auto; }
+#manageUsersList .mu-group.collapsed .mu-group-chev { transform: rotate(-90deg); }
+#manageUsersList .mu-group-body { padding-top: 8px; }
+#manageUsersList .mu-group.collapsed .mu-group-body { display: none; }
 
 .idea-menu { width: 550px; max-width: 90vw; }
 .idea-label { display: block; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; color: var(--slate-charcoal); }
@@ -7051,25 +7151,69 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
    FEATURE ACCESS TOOL — role-matrix chips + per-user segmented controls
    ============================================================================ */
 #featureAccessModal .manage-content { scrollbar-gutter: stable; }
-.fa-chip {
-    width: 38px; height: 26px; flex-shrink: 0;
-    border-radius: 7px; border: 1.5px solid transparent;
-    font-size: 12px; font-weight: 900; cursor: pointer; line-height: 1;
-    transition: filter .12s ease;
+/* Calm redesign: info banner, grouped cards, SVG chips, airy segmented control. */
+.fa-hint {
+    font-size: 12px; color: #647082; font-weight: 500; line-height: 1.55;
+    background: #eef2f7; border: 1px solid #e3e8ee; border-radius: 10px;
+    padding: 10px 13px; margin-bottom: 14px;
 }
-.fa-chip.fa-on  { background: #d1fae5; color: #059669; }
-.fa-chip.fa-off { background: #f1f5f9; color: #cbd5e1; }
+.fa-subhead {
+    font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px;
+    color: #647082; margin: 16px 2px 8px;
+}
+.fa-group {
+    background: #fff; border: 1px solid #e3e8ee; border-radius: 12px;
+    padding: 4px 14px 8px; margin-bottom: 12px;
+}
+.fa-group-head {
+    font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px;
+    color: #1c1f23; padding: 11px 2px 6px;
+}
+.fa-row { display: flex; align-items: center; gap: 6px; padding: 6px 2px; }
+.fa-row + .fa-row { border-top: 1px solid #f1f5f9; }
+.fa-row-head { padding: 0 2px 4px; }
+.fa-row-head + .fa-row { border-top: none; }
+.fa-feat-label { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 700; color: var(--slate-charcoal); }
+.fa-col-head { width: 38px; flex-shrink: 0; text-align: center; font-size: 9px; font-weight: 800; letter-spacing: .3px; color: #94a3b8; }
+.fa-chip {
+    width: 38px; height: 28px; flex-shrink: 0;
+    border-radius: 8px; border: 1.5px solid transparent;
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    transition: filter .12s ease, background .12s ease;
+}
+.fa-chip svg { width: 13px; height: 13px; }
+.fa-chip.fa-on  { background: #d8f3e3; color: #0f8a4d; }
+.fa-chip.fa-off { background: #f1f5f9; color: #aab4c0; }
 .fa-chip.fa-ovr { border-color: #f59e0b; } /* amber ring = manual override */
-.fa-chip:disabled { cursor: not-allowed; opacity: .85; }
-.fa-chip:not(:disabled):hover { filter: brightness(.93); }
+.fa-chip:disabled { cursor: not-allowed; opacity: .9; }
+.fa-chip:not(:disabled):hover { filter: brightness(.95); }
 .fa-seg {
-    padding: 5px 12px; font-size: 11px; font-weight: 800;
+    padding: 6px 13px; font-size: 11px; font-weight: 800;
     background: #fff; color: #94a3b8; border: none; cursor: pointer;
 }
-.fa-seg + .fa-seg { border-left: 1.5px solid #e2e8f0; }
-.fa-seg-active { background: #1e293b; color: #fff; }
-.fa-seg-active.fa-seg-on  { background: #059669; }
+.fa-seg + .fa-seg { border-left: 1.5px solid #e3e8ee; }
+.fa-seg-active { background: #1c1f23; color: #fff; }
+.fa-seg-active.fa-seg-on  { background: #1f9d57; }
 .fa-seg-active.fa-seg-off { background: #dc2626; }
+/* Per-User tab — collapsible feature cards (collapsed by default) */
+.fa-ugroup { background: #fff; border: 1px solid #e3e8ee; border-radius: 12px; margin-bottom: 10px; overflow: hidden; }
+.fa-ugroup-head {
+    display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none;
+    padding: 11px 14px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: #1c1f23;
+}
+.fa-ugroup-head:hover { background: #f6f8fa; }
+.fa-ugroup-name { flex: 1; min-width: 0; }
+.fa-ugroup-count { background: #eef2f7; border: 1px solid #e3e8ee; border-radius: 999px; padding: 1px 9px; font-size: 10.5px; font-weight: 800; color: #647082; }
+.fa-ugroup-set { background: #fef3c7; border: 1px solid #fcd982; border-radius: 999px; padding: 1px 9px; font-size: 10.5px; font-weight: 800; color: #b45309; text-transform: none; letter-spacing: 0; }
+.fa-ugroup-chev { width: 15px; height: 15px; color: #8a94a3; transition: transform .15s ease; flex: 0 0 auto; }
+.fa-ugroup.collapsed .fa-ugroup-chev { transform: rotate(-90deg); }
+.fa-ugroup-body { padding: 0 14px 8px; }
+.fa-ugroup.collapsed .fa-ugroup-body { display: none; }
+.fa-urow { display: flex; align-items: center; gap: 10px; padding: 8px 2px; }
+.fa-urow + .fa-urow { border-top: 1px solid #f1f5f9; }
+.fa-urow-label { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 700; color: var(--slate-charcoal); }
+.fa-urow-label .fa-role-def { font-weight: 600; color: #b6c0cd; font-size: 11px; }
+.fa-seg-group { display: inline-flex; border: 1.5px solid #e3e8ee; border-radius: 8px; overflow: hidden; flex-shrink: 0; }
 
 /* Store badge on a borrowed hotbar link (Feature Access grant from another
    store's bar) — marks whose sheet it opens, e.g. "Passwords · WSP". */
@@ -8671,4 +8815,53 @@ body.sam-active .hotbar-btn:hover {
 /* Tool icon sizing: SVG info badge, search icon, footer button arrows */
 .goals-info-i svg { width: 12px; height: 12px; }
 .doc-search-icon svg { width: 16px; height: 16px; display: block; }
+
+/* ── Company Records — spreadsheet grid (2026-07-25) ───────────────────────
+   Metrics down the left, stores across the top; each cell is one record's
+   value + date. Redesign only — every cell keeps .record-manage-row so
+   saveManageRecords() reads exactly the same fields. */
+#manageRecordsList .cr-hint { font-size: 12px; color: #647082; margin: 0 0 12px; }
+#manageRecordsList .cr-grid-scroll { overflow-x: auto; padding-bottom: 4px; }
+#manageRecordsList .cr-grid { display: grid; gap: 6px; min-width: min-content; align-items: stretch; }
+#manageRecordsList .cr-cell { display: flex; box-sizing: border-box; }
+#manageRecordsList .cr-colhead {
+    align-items: center; justify-content: center; text-align: center;
+    font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px;
+    color: #475569; background: #eef2f7; border: 1px solid #e3e8ee; border-radius: 8px; padding: 9px 6px;
+    position: sticky; top: 0; z-index: 3;
+}
+#manageRecordsList .cr-corner {
+    align-items: center; padding: 9px 12px;
+    font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: #94a3b8;
+    background: #eef2f7; border: 1px solid #e3e8ee; border-radius: 8px;
+    position: sticky; top: 0; left: 0; z-index: 4;
+}
+#manageRecordsList .cr-rowhead {
+    align-items: center; padding: 8px 12px; line-height: 1.2;
+    font-size: 12.5px; font-weight: 800; color: var(--slate-charcoal);
+    background: #fff; border: 1px solid #e3e8ee; border-radius: 8px;
+    position: sticky; left: 0; z-index: 2;
+}
+#manageRecordsList .cr-input {
+    flex-direction: column; gap: 5px; padding: 7px;
+    background: #fff; border: 1px solid #e3e8ee; border-radius: 8px;
+}
+#manageRecordsList .cr-input input {
+    width: 100%; padding: 6px 9px; border: 1px solid #cbd5e1; border-radius: 6px;
+    font-size: 12.5px; font-weight: 600; color: var(--slate-charcoal); outline: none; background: #fff;
+}
+#manageRecordsList .cr-input input.r-date { font-size: 11px; color: #64748b; }
+#manageRecordsList .cr-input input:focus {
+    border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(31, 157, 87, .12);
+}
+#manageRecordsList .cr-empty { background: #f8fafc; border: 1px dashed #e3e8ee; border-radius: 8px; }
+/* Company column — auto-filled from the highest store, shown read-only + mint. */
+#manageRecordsList .cr-company { background: #f4faf6; border-color: #d6e9dd; }
+#manageRecordsList .cr-company input {
+    background: #f4faf6; border-color: #d6e9dd; color: #178048; font-weight: 800; cursor: default;
+}
+#manageRecordsList .cr-company input:focus { box-shadow: none; border-color: #d6e9dd; }
+#manageRecordsList .cr-company input.r-date { color: #5f8f74; font-weight: 600; }
 #boxOrderModal .box-order-footer button svg { width: 15px; height: 15px; }
+/* Recycle report footer (JS-rendered) mirrors Box Order's arrow/info buttons. */
+#recycleInvModal .btn-primary svg, #recycleInvModal .btn-secondary svg { width: 15px; height: 15px; flex: 0 0 auto; }

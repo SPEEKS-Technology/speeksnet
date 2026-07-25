@@ -184,7 +184,16 @@ function toggleSidebar() {
     localStorage.setItem('speeksSidebar', sidebar?.classList.contains('collapsed') ? 'collapsed' : 'expanded');
 }
 
+let _lockedScrollY = 0;
 function lockAndBlurScreen() {
+    // .no-scroll makes <body> position:fixed, which otherwise snaps the page to
+    // the top. Capture the current scroll and pin the body at -scrollY so it
+    // stays visually put; closeAllModals restores it. Guard against re-capturing
+    // 0 when we're already locked (e.g. switching between modals).
+    if (!document.body.classList.contains('no-scroll')) {
+        _lockedScrollY = window.scrollY || window.pageYOffset || 0;
+        document.body.style.top = `-${_lockedScrollY}px`;
+    }
     document.body.classList.add('no-scroll');
     const overlay = document.getElementById('globalOverlay');
     if (overlay) overlay.classList.add('show');
@@ -198,12 +207,13 @@ function closeAllModals() {
         if (!confirm("Close Submit Scores? Your audit entries haven't been saved yet.")) return;
         _auditDirty = false;
     }
+    const _wasLocked = document.body.classList.contains('no-scroll');
     document.body.classList.remove('no-scroll');
     document.body.style.overflow = '';
     document.body.style.position = '';
     document.body.style.top = '';
     document.body.style.paddingRight = '';
-    
+
     const topNav = document.querySelector('.top-nav');
     if (topNav) {
         topNav.style.paddingRight = ''; 
@@ -220,6 +230,10 @@ function closeAllModals() {
     // Side panels (Checklist / Goals / Cleaning) live outside .modal-menu, so
     // opening any modal (e.g. Listing Goals) must collapse them too.
     _closeSidePanels();
+
+    // Restore the scroll position we pinned in lockAndBlurScreen — otherwise the
+    // page stays snapped to the top once the fixed body is released.
+    if (_wasLocked) window.scrollTo(0, _lockedScrollY);
 }
 
 // Mutually-exclusive right-side panels. Closing every panel except `exceptId`
@@ -1031,44 +1045,121 @@ async function toggleManageUsers() {
         dropdown.classList.add('show');
         lockAndBlurScreen(); 
 
-        const list = document.getElementById('manageUsersList');
-        list.innerHTML = '<div class="status-message">Loading...</div>';
-        
+        // Status messages go in the inner rows container so the sticky search
+        // toolbar (and #manageUsersRows itself) survive — populateUsersModal
+        // renders into #manageUsersRows.
+        const rows = document.getElementById('manageUsersRows');
+        if (rows) rows.innerHTML = '<div class="status-message">Loading...</div>';
+
         try {
             let cachedData = localStorage.getItem('speeksAuthCache');
             let data = cachedData ? JSON.parse(cachedData) : null;
-            
+
             if (!data) {
-                list.innerHTML = '<div class="status-message">Syncing Database...</div>';
+                if (rows) rows.innerHTML = '<div class="status-message">Syncing Database...</div>';
                 const res = await fetch(`${AUTH_URL}?v=${Date.now()}`);
                 data = await res.json();
                 localStorage.setItem('speeksAuthCache', JSON.stringify(data));
             }
-            
+
             globalUsersData = data.users || [];
             populateUsersModal();
-            
+
             fetch(`${AUTH_URL}?v=${Date.now()}`).then(r => r.json()).then(newData => {
                 localStorage.setItem('speeksAuthCache', JSON.stringify(newData));
             }).catch(e => {});
 
         } catch (e) {
-            list.innerHTML = '<div style="color:var(--red-alert); padding:20px; text-align:center;">Failed to sync data.</div>';
+            if (rows) rows.innerHTML = '<div style="color:var(--red-alert); padding:20px; text-align:center;">Failed to sync data.</div>';
         }
     }
 }
 
 function populateUsersModal() {
-    const list = document.getElementById('manageUsersList');
-    list.innerHTML = '';
-    if (globalUsersData.length === 0) {
-        addManageUserRow();
-    } else {
-        globalUsersData.forEach(user => addManageUserRow(user));
+    const rows = document.getElementById('manageUsersRows');
+    if (!rows) return;
+    rows.innerHTML = '';
+    const search = document.getElementById('manageUsersSearch');
+    if (search) search.value = ''; // reset the filter each open
+
+    if (!globalUsersData || globalUsersData.length === 0) {
+        addManageUserRow(); // one blank row to start with
+        return;
     }
+
+    // Group users by role into collapsible bars (canonical role order first,
+    // then any unrecognised role alphabetically). Rows keep their .user-manage-row
+    // class so saveManageUsers() still reads every one regardless of grouping.
+    const ROLE_ORDER = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM'];
+    const groups = {};
+    const order = [];
+    globalUsersData.forEach(u => {
+        const role = (u.role || 'Employee').trim() || 'Employee';
+        if (!groups[role]) { groups[role] = []; order.push(role); }
+        groups[role].push(u);
+    });
+    order.sort((a, b) => {
+        const ia = ROLE_ORDER.findIndex(r => r.toLowerCase() === a.toLowerCase());
+        const ib = ROLE_ORDER.findIndex(r => r.toLowerCase() === b.toLowerCase());
+        return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b);
+    });
+
+    const chev = `<svg class="mu-group-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
+    order.forEach(role => {
+        const group = document.createElement('div');
+        group.className = 'mu-group collapsed'; // start collapsed for a compact overview
+        const head = document.createElement('div');
+        head.className = 'mu-group-head';
+        head.setAttribute('onclick', 'toggleUserGroup(this)');
+        head.innerHTML = `${chev}<span class="mu-group-name">${escapeHtml(role)}</span><span class="mu-group-count">${groups[role].length}</span>`;
+        const body = document.createElement('div');
+        body.className = 'mu-group-body';
+        group.appendChild(head);
+        group.appendChild(body);
+        rows.appendChild(group);
+        groups[role].forEach(u => addManageUserRow(u, body));
+    });
 }
 
-function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Employee' }) {
+// Collapse / expand a role group.
+function toggleUserGroup(head) {
+    const g = head.closest('.mu-group');
+    if (g) g.classList.toggle('collapsed');
+}
+
+// Live-filter the user rows by name, store or role. Matching rows show, their
+// role group auto-expands, and groups with no match hide; clearing restores all.
+function filterManageUsers() {
+    const input = document.getElementById('manageUsersSearch');
+    const rows = document.getElementById('manageUsersRows');
+    if (!input || !rows) return;
+    const q = input.value.trim().toLowerCase();
+    const isMatch = row => {
+        if (!q) return true;
+        const hay = [
+            row.querySelector('.u-name')?.value,
+            row.querySelector('.u-store')?.value,
+            row.querySelector('.u-role')?.value,
+        ].join(' ').toLowerCase();
+        return hay.includes(q);
+    };
+    rows.querySelectorAll('.mu-group').forEach(group => {
+        let any = false;
+        group.querySelectorAll('.user-manage-row').forEach(row => {
+            const m = isMatch(row);
+            row.style.display = m ? '' : 'none';
+            if (m) any = true;
+        });
+        if (q) { group.classList.remove('collapsed'); group.style.display = any ? '' : 'none'; }
+        else { group.style.display = ''; }
+    });
+    // Newly-added (ungrouped) rows sit directly under the container.
+    rows.querySelectorAll(':scope > .user-manage-row').forEach(row => {
+        row.style.display = isMatch(row) ? '' : 'none';
+    });
+}
+
+function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Employee' }, target) {
     const row = document.createElement('div');
     row.className = 'user-manage-row';
 
@@ -1083,9 +1174,20 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
         <input type="text" class="u-pin" placeholder="PIN" maxlength="4" value="${user.pin}" style="flex: 1; max-width: 80px;" oninput="this.value = this.value.replace(/[^0-9]/g, '').slice(0,4)">
         <select class="u-store" style="flex: 1;">${storeOptions}</select>
         <select class="u-role" style="flex: 1.5;">${roleOptions}</select>
-        <button class="del-btn" onclick="this.parentElement.remove()" title="Delete User">✖</button>
+        <button class="del-btn" onclick="this.parentElement.remove()" title="Delete User"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     `;
-    document.getElementById('manageUsersList').appendChild(row);
+    if (target) {
+        // Rendering into a role group during populate.
+        target.appendChild(row);
+    } else {
+        // Manual "+ Add New User": drop it at the very top (above the groups) so
+        // it's immediately visible, and clear any active filter that would hide it.
+        const container = document.getElementById('manageUsersRows');
+        if (container) container.insertBefore(row, container.firstChild);
+        const _s = document.getElementById('manageUsersSearch');
+        if (_s && _s.value.trim()) { _s.value = ''; filterManageUsers(); }
+        row.querySelector('.u-name')?.focus();
+    }
 }
 
 async function saveManageUsers() {
@@ -1209,12 +1311,34 @@ async function toggleManageDocs() {
 function populateManageModal() {
     const list = document.getElementById('manageDocsList');
     list.innerHTML = '';
-    
+    const search = document.getElementById('manageDocsSearch');
+    if (search) search.value = ''; // reset the filter each open
+
     if (globalDocsData.length === 0) {
         addManageRow();
     } else {
         globalDocsData.forEach(doc => addManageRow(doc));
     }
+}
+
+// Live-filter the policy cards by title / category / description / link — same
+// behaviour as the Box Order and docs-library search bars. Reads the inputs'
+// current values so it still matches after edits.
+function filterManageDocs() {
+    const input = document.getElementById('manageDocsSearch');
+    const list = document.getElementById('manageDocsList');
+    if (!input || !list) return;
+    const q = input.value.trim().toLowerCase();
+    list.querySelectorAll('.manage-row').forEach(row => {
+        if (!q) { row.style.display = ''; return; }
+        const hay = [
+            row.querySelector('.m-title')?.value,
+            row.querySelector('.m-category')?.value,
+            row.querySelector('.m-desc')?.value,
+            row.querySelector('.m-link')?.value,
+        ].join(' ').toLowerCase();
+        row.style.display = hay.includes(q) ? '' : 'none';
+    });
 }
 
 function addManageRow(doc = { category: '', icon: '📄', title: '', desc: '', link: '' }) {
@@ -1225,18 +1349,37 @@ function addManageRow(doc = { category: '', icon: '📄', title: '', desc: '', l
         baseCat = baseCat.replace(/,?\s*["']?pinned["']?/ig, '').trim();
     }
 
-    const row = document.createElement('div'); 
+    const row = document.createElement('div');
     row.className = 'manage-row';
+    // Card layout: icon · title · category · pin · delete on the top line, then
+    // full-width Description and Link rows so nothing is truncated. Classes are
+    // unchanged (.m-category/.m-icon/.m-title/.m-desc/.m-link/.m-pinned/.del-btn)
+    // so saveDocs() reads exactly the same fields.
     row.innerHTML = `
-        <input type="text" class="m-category" placeholder="Category" value="${baseCat}">
-        <label class="pin-label">
+        <div class="mp-field mp-f-icon">
+            <label>Icon</label>
+            <input type="text" class="m-icon" placeholder="📄" value="${doc.icon || ''}">
+        </div>
+        <div class="mp-field mp-f-title">
+            <label>Title</label>
+            <input type="text" class="m-title" placeholder="Policy title" value="${doc.title || ''}">
+        </div>
+        <div class="mp-field mp-f-cat">
+            <label>Category</label>
+            <input type="text" class="m-category" placeholder="Category" value="${baseCat}">
+        </div>
+        <label class="pin-label mp-f-pin">
             <input type="checkbox" class="m-pinned" ${isPinned ? 'checked' : ''}> Pin
         </label>
-        <input type="text" class="m-icon" placeholder="Icon" value="${doc.icon || ''}">
-        <input type="text" class="m-title" placeholder="Title" value="${doc.title || ''}">
-        <textarea class="m-desc" placeholder="Description">${doc.desc || ''}</textarea>
-        <input type="text" class="m-link" placeholder="URL Link" value="${doc.link || ''}">
-        <button class="del-btn" onclick="this.parentElement.remove()" title="Delete">✖</button>
+        <button class="del-btn mp-f-del" onclick="this.parentElement.remove()" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        <div class="mp-field mp-f-desc">
+            <label>Description</label>
+            <textarea class="m-desc" placeholder="Short description of this policy">${doc.desc || ''}</textarea>
+        </div>
+        <div class="mp-field mp-f-link">
+            <label>Link URL</label>
+            <input type="text" class="m-link" placeholder="https://drive.google.com/…" value="${doc.link || ''}">
+        </div>
     `;
     document.getElementById('manageDocsList').appendChild(row);
 }
@@ -4370,26 +4513,103 @@ async function toggleManageRecords() {
 
 function populateRecordsModal() {
     const list = document.getElementById('manageRecordsList');
-    let html = '';
-    
+
     if (!recordsCache || recordsCache.length === 0) {
         list.innerHTML = '<div style="padding: 20px; text-align: center; color: #888; font-weight: 600;">No records found.</div>';
         return;
     }
 
+    // Spreadsheet layout: metrics down the left, stores across the top, so every
+    // store's value+date for a metric sit on one line. Only combos that already
+    // exist in the data get an editable cell — no new records are invented, so
+    // saveManageRecords (which reads every .record-manage-row) is unchanged.
+    const STORE_ORDER = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    const labels = [];            // metrics, in first-seen order
+    const sections = [];          // stores, discovered then sorted
+    const byLabel = {};           // label -> section -> record
     recordsCache.forEach(r => {
-        html += `
-        <div class="record-manage-row" data-store="${r.section || ''}" data-label="${r.label || ''}" style="background: #fff; padding: 12px 15px; border-radius: 8px; border: 1px solid #e2e8f0; margin-bottom: 10px; display: flex; align-items: center; gap: 15px;">
-            <div style="flex: 2; display: flex; flex-direction: column; gap: 2px;">
-                <span style="color: #94a3b8; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px;">${r.section || 'COMPANY'}</span>
-                <span style="font-size: 13px; font-weight: 800; color: var(--slate-charcoal); line-height: 1.2;">${r.label || ''}</span>
-            </div>
-            <input type="text" class="r-val" placeholder="Value (e.g. $5,000)" value="${r.value || ''}" style="flex: 1; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; font-weight: 600; color: var(--slate-charcoal); outline: none;">
-            <input type="text" class="r-date" placeholder="Date (e.g. Oct 12)" value="${r.subtext || ''}" style="flex: 1; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; font-weight: 600; color: var(--slate-charcoal); outline: none;">
-        </div>`;
+        const label = String(r.label || '').trim();
+        if (!label) return;
+        const section = String(r.section || 'COMPANY').trim();
+        if (!byLabel[label]) { byLabel[label] = {}; labels.push(label); }
+        byLabel[label][section] = r;
+        if (!sections.includes(section)) sections.push(section);
     });
-    
-    list.innerHTML = html;
+
+    // Known stores first (in STORE_ORDER), then any other named sections, then COMPANY.
+    const rank = s => {
+        const u = s.toUpperCase();
+        const i = STORE_ORDER.indexOf(u);
+        if (i !== -1) return i;
+        if (u.startsWith('COMPANY')) return 100;
+        return 50;
+    };
+    sections.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+
+    // The Company column is auto-filled from the highest store, so make sure it
+    // exists as a column even if no metric has a company record yet.
+    let companyKey = sections.find(s => s.toUpperCase().startsWith('COMPANY'));
+    if (!companyKey) { companyKey = 'COMPANY'; sections.push(companyKey); }
+
+    let head = `<div class="cr-cell cr-corner">Metric</div>`;
+    sections.forEach(s => { head += `<div class="cr-cell cr-colhead">${escapeHtml(s.toUpperCase())}</div>`; });
+
+    let body = '';
+    labels.forEach(label => {
+        body += `<div class="cr-cell cr-rowhead" title="${escapeHtml(label)}">${escapeHtml(label)}</div>`;
+        sections.forEach(s => {
+            const rec = byLabel[label][s];
+            if (s === companyKey) {
+                // Read-only, auto-filled from the winning store (see _recomputeCompanyRecords).
+                body += `<div class="record-manage-row cr-cell cr-input cr-company" data-store="${escapeHtml(companyKey)}" data-label="${escapeHtml(label)}" title="Auto-filled from the store with the highest value">
+                    <input type="text" class="r-val" value="${escapeHtml(rec ? (rec.value || '') : '')}" placeholder="—" readonly tabindex="-1">
+                    <input type="text" class="r-date" value="${escapeHtml(rec ? (rec.subtext || '') : '')}" placeholder="—" readonly tabindex="-1">
+                </div>`;
+            } else if (rec) {
+                body += `<div class="record-manage-row cr-cell cr-input" data-store="${escapeHtml(rec.section || '')}" data-label="${escapeHtml(rec.label || '')}">
+                    <input type="text" class="r-val" placeholder="Value" value="${escapeHtml(rec.value || '')}" oninput="_recomputeCompanyRecords()">
+                    <input type="text" class="r-date" placeholder="Date" value="${escapeHtml(rec.subtext || '')}" oninput="_recomputeCompanyRecords()">
+                </div>`;
+            } else {
+                body += `<div class="cr-cell cr-empty"></div>`;
+            }
+        });
+    });
+
+    const cols = `minmax(150px, 1.3fr) repeat(${sections.length}, minmax(118px, 1fr))`;
+    list.innerHTML =
+        `<p class="cr-hint">Each column is a store. Fill a metric across the stores — the <strong>Company</strong> column auto-fills with the highest value.</p>` +
+        `<div class="cr-grid-scroll"><div class="cr-grid" style="grid-template-columns:${cols};">${head}${body}</div></div>`;
+    _recomputeCompanyRecords();
+}
+
+// The Company column mirrors whichever store has the highest value for each
+// metric (value + that store's date). Runs on load and on every store edit, so
+// the DM never has to copy the record over by hand. Read-only company inputs
+// don't feed themselves. Uses parseNum so "$21,950.00" / "93.00%" compare right.
+function _recomputeCompanyRecords() {
+    const list = document.getElementById('manageRecordsList');
+    if (!list) return;
+    const byLabel = {};
+    list.querySelectorAll('.record-manage-row.cr-input:not(.cr-company)').forEach(cell => {
+        const label = cell.getAttribute('data-label');
+        (byLabel[label] = byLabel[label] || []).push(cell);
+    });
+    list.querySelectorAll('.record-manage-row.cr-company').forEach(comp => {
+        const label = comp.getAttribute('data-label');
+        const cells = byLabel[label] || [];
+        let bestVal = '', bestDate = '', bestNum = -Infinity, found = false;
+        cells.forEach(c => {
+            const v = (c.querySelector('.r-val')?.value || '').trim();
+            if (!v) return;
+            const n = parseNum(v);
+            if (n > bestNum) { bestNum = n; bestVal = v; bestDate = (c.querySelector('.r-date')?.value || '').trim(); found = true; }
+        });
+        const valEl = comp.querySelector('.r-val');
+        const dateEl = comp.querySelector('.r-date');
+        if (valEl) valEl.value = found ? bestVal : '';
+        if (dateEl) dateEl.value = found ? bestDate : '';
+    });
 }
 
 // NOTE: populateAlertsModal lives with the rest of the alerts module (see the
@@ -12966,7 +13186,7 @@ function _setupCommentModalTabs() {
 
     const bar = document.createElement('div');
     bar.id = 'commentTabBar';
-    bar.style.cssText = 'padding:14px 18px 0;';
+    bar.style.cssText = 'padding:14px 18px 14px;';
     bar.innerHTML = `<div class="notif-tabs" style="display:inline-flex;">
         <button id="comment-tab-send" class="tab-btn active" onclick="switchCommentTab('send')">Send Message</button>
         <button id="comment-tab-reads" class="tab-btn" onclick="switchCommentTab('reads')">Read Receipts</button>
@@ -13066,9 +13286,9 @@ function renderStoreCommentReads() {
         statsHtml += `<div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:4px 2px; margin-bottom:14px;">`
             + Object.keys(byStore).sort().map(s => {
                 const v = byStore[s];
-                return `<div style="display:flex; justify-content:space-between; gap:10px; padding:6px 12px; font-size:12.5px; border-bottom:1px solid #f1f5f9;">
+                return `<div style="display:flex; justify-content:space-between; align-items:center; gap:10px; padding:6px 12px; font-size:12.5px; border-bottom:1px solid #f1f5f9;">
                     <span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(s)}</span>
-                    <span style="color:#64748b;">${v.m} msg · ${v.reads} reads · ${(v.reads / v.m).toFixed(1)} avg</span>
+                    <span style="color:#64748b; text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;">${v.m} msg · ${v.reads} reads · ${(v.reads / v.m).toFixed(1)} avg</span>
                 </div>`;
             }).join('')
             + `</div>`;
@@ -15798,8 +16018,8 @@ function renderMyRecycleTable() {
         const emptyBtns = canReview
             ? `<div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
                 ${RECYCLE_MAIL_TIP}
-                <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
-                <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email →</button>
+                <button class="btn-secondary" onclick="copyRecycleReport(this)">Copy</button>
+                <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
             </div>`
             : '';
         wrap.innerHTML = `${emptyBtns}${_recycleDeleteReqPanel(canReview)}<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No recycle requests for ${_recycleMonthLabel(month)}.</div>`;
@@ -15826,9 +16046,9 @@ function renderMyRecycleTable() {
             <div class="box-order-email-preview">${escapeHtml(`To: ${_recycleReportTo().join(', ')}\nSubject: ${subject}\n\n${body}`)}</div>
             <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
                 ${RECYCLE_MAIL_TIP}
-                <button class="btn-secondary" onclick="_recycleReportPreviewing=false; renderMyRecycleTable();">← Back</button>
-                <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
-                <button class="btn-primary" onclick="sendRecycleReport()">Send Email →</button>
+                <button class="btn-secondary" onclick="_recycleReportPreviewing=false; renderMyRecycleTable();"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>Back</button>
+                <button class="btn-secondary" onclick="copyRecycleReport(this)">Copy</button>
+                <button class="btn-primary" onclick="sendRecycleReport()">Send Email<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
             </div>`;
         return;
     }
@@ -15836,8 +16056,8 @@ function renderMyRecycleTable() {
     let html = canReview
         ? `<div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
             ${RECYCLE_MAIL_TIP}
-            <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
-            <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email →</button>
+            <button class="btn-secondary" onclick="copyRecycleReport(this)">Copy</button>
+            <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
         </div>`
         : '';
     html += _recycleDeleteReqPanel(canReview);
@@ -16392,17 +16612,17 @@ function _recipientsFor(key, fallback) {
 const EMAIL_LIST_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 const EMAIL_LIST_GROUPS = [
     {
-        title: '♻️ Recycle Month-End Report',
+        title: 'Recycle Month-End Report',
         desc: 'Who the month-end recycle report email is addressed to.',
         lists: [{ key: 'recycle_report', label: 'Recipients' }],
     },
     {
-        title: '📦 Box Orders',
+        title: 'Box Orders',
         desc: 'Supplier address each store\'s box order email opens to.',
         lists: EMAIL_LIST_STORES.map(s => ({ key: `box_order_${s}`, label: s })),
     },
     {
-        title: '📈 Weekly SPEEKS Reports',
+        title: 'Weekly SPEEKS Reports',
         desc: 'Monday morning performance emails (sent automatically).',
         lists: [
             { key: 'weekly_leadership', label: 'Leadership report' },
@@ -16496,7 +16716,7 @@ function _recycleReportTo() { return _recipientsFor('recycle_report', RECYCLE_RE
 
 // Hover "i" (site-standard goals-info-i tooltip) explaining what Send Email
 // does and how to fix a machine where mailto: links open nothing.
-const RECYCLE_MAIL_TIP = `<span class="goals-info-i" style="align-self:center;" data-tip-title="Send Email opens your mail app" data-tip-desc="Clicking Send Email opens your computer's default email app with the report pre-filled — nothing sends until you hit Send there. If nothing opens: go to Windows Settings → Apps → Default apps → scroll to Choose defaults by link type → set MAILTO to Outlook (or your mail app). Or click 📋 Copy and paste the report into any email.">i</span>`;
+const RECYCLE_MAIL_TIP = `<span class="goals-info-i" style="align-self:center;" data-tip-title="Send Email opens your mail app" data-tip-desc="Clicking Send Email opens your computer's default email app with the report pre-filled — nothing sends until you hit Send there. If nothing opens: go to Windows Settings → Apps → Default apps → scroll to Choose defaults by link type → set MAILTO to Outlook (or your mail app). Or click Copy and paste the report into any email."><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>`;
 
 function _recycleReportCompose() {
     const month = (document.getElementById('recycle-month-filter') || {}).value || _recycleMonthKey(new Date());
@@ -16630,24 +16850,24 @@ const FA_ROLES = [
 
 const FEATURE_CATALOG = [
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
-    { key: 'tool-claims-store',        label: 'Insurance Claims (store)',      tab: 'tools', group: '🛟 Claims & Refunds', def: ['manager', 'owner-manager'] },
-    { key: 'tool-claims-oversight',    label: 'Insurance Claims (oversight)',  tab: 'tools', group: '🛟 Claims & Refunds', def: ['district-manager', 'ceo'] },
-    { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: '📢 Content', def: ['district-manager', 'ceo', 'tom', 'owner-manager'] },
-    { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: '📢 Content', def: ['district-manager'] },
-    { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: '🏪 Store Ops', def: ['district-manager', 'ceo'] },
-    { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: '🏪 Store Ops', def: ['district-manager'] },
-    { key: 'tool-variance-report',     label: 'Submit Variance Report',        tab: 'tools', group: '🏪 Store Ops', def: ['district-manager'] },
-    { key: 'tool-store-comment',       label: 'Send Store Comment',            tab: 'tools', group: '🏪 Store Ops', def: ['district-manager', 'ceo'] },
-    { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: '📦 Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
-    { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: '📦 Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
-    { key: 'tool-feature-access',      label: 'Feature Access (this tool)',    tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo'] },
-    { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo'] },
-    { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
-    { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
-    { key: 'tool-manage-policies',     label: 'Manage Policies',               tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
-    { key: 'tool-monthly-awards',      label: 'Monthly Awards',                tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
-    { key: 'tool-system-hotkeys',      label: 'System Hotkeys',                tab: 'tools', group: '⚙ System', def: ['district-manager'] },
+    { key: 'tool-claims-store',        label: 'Insurance Claims (store)',      tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
+    { key: 'tool-claims-oversight',    label: 'Insurance Claims (oversight)',  tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
+    { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'tom', 'owner-manager'] },
+    { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: 'Content', def: ['district-manager'] },
+    { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
+    { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
+    { key: 'tool-variance-report',     label: 'Submit Variance Report',        tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
+    { key: 'tool-store-comment',       label: 'Send Store Comment',            tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
+    { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
+    { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
+    { key: 'tool-feature-access',      label: 'Feature Access (this tool)',    tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
+    { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
+    { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: 'Admin', def: ['district-manager'] },
+    { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
+    { key: 'tool-manage-policies',     label: 'Manage Policies',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
+    { key: 'tool-monthly-awards',      label: 'Monthly Awards',                tab: 'tools', group: 'Admin', def: ['district-manager'] },
+    { key: 'tool-system-hotkeys',      label: 'System Hotkeys',                tab: 'tools', group: 'System', def: ['district-manager'] },
     // ---- Widgets & side panels (ASM inherits employee defaults; mirrored here) ----
     { key: 'widget-goals-panel',       label: 'Goals & Initiatives (sidebar)', tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'employee', 'training', 'assistant-manager'] },
     { key: 'widget-checklist-panel',   label: 'Checklist (sidebar)',           tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'district-manager', 'assistant-manager'] },
@@ -16797,7 +17017,7 @@ function _faDeriveEntry(key, el) {
         label = key.replace(/^(tool|hb|widget|nav)-/, '').replace(/-/g, ' ')
             .replace(/\b\w/g, c => c.toUpperCase());
     }
-    return { key, label, tab, group: '✨ Uncatalogued', def, _auto: true };
+    return { key, label, tab, group: 'Uncatalogued', def, _auto: true };
 }
 
 // ---- runtime override state ------------------------------------------------
@@ -17122,28 +17342,27 @@ function renderFaBody() {
         : _faMatrixHtml(_faTab);
 }
 
+const FA_ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+const FA_ICON_X     = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+const FA_ICON_LOCK  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+
 function _faMatrixHtml(tab) {
     const feats = _faCatalog().filter(f => f.tab === tab);
     const hints = {
-        tools: 'Click a chip to force a tool on (✓) or off (✕) for that role — an amber ring means it\'s manually overridden; click again to flip it back (matching the default clears the override). Per-user exceptions on the Per-User tab beat these.',
+        tools: 'Click a chip to force a tool on or off for that role — an amber ring means it\'s manually overridden; click again to flip it back (matching the default clears the override). Per-user exceptions on the Per-User tab beat these.',
         hotbar: 'OFF always hides a link. Turning a link ON for a role/user that doesn\'t normally see its bar adds it to the end of their main hotbar — and if you enable every link of a bar, the whole bar shows up instead. Store-bar links (LEE…BAL) default to everyone in that store.',
         widgets: 'Dashboard cards and sidebar panels. Same rules as tools: per-user exceptions beat these role settings.',
     };
-    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:12px; line-height:1.5;">${hints[tab] || ''}</div>`;
-    const headerRow = `<div style="display:flex; align-items:center; gap:6px; padding:0 2px; margin-bottom:2px;">
-        <span style="flex:1;"></span>
-        ${FA_ROLES.map(r => `<span title="${r.label}" style="width:38px; text-align:center; font-size:9px; font-weight:800; color:#94a3b8; letter-spacing:.3px; flex-shrink:0;">${r.short}</span>`).join('')}
-    </div>`;
-    let lastGroup = '';
-    feats.forEach(f => {
-        if (f.group !== lastGroup) {
-            lastGroup = f.group;
-            html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:16px 2px 4px;">${f.group}</div>${headerRow}`;
-        }
-        html += `<div style="display:flex; align-items:center; gap:6px; padding:4px 2px; border-bottom:1px solid #f1f5f9;">
-            <span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${f.label}</span>
-            ${FA_ROLES.map(r => _faChipHtml(f, r)).join('')}
-        </div>`;
+    let html = `<div class="fa-hint">${hints[tab] || ''}</div>`;
+    const headerRow = `<div class="fa-row fa-row-head"><span class="fa-feat-label"></span>${FA_ROLES.map(r => `<span class="fa-col-head" title="${escapeHtml(r.label)}">${r.short}</span>`).join('')}</div>`;
+    // Group features into calm cards instead of one long striped list.
+    const groups = [];
+    const byGroup = {};
+    feats.forEach(f => { if (!byGroup[f.group]) { byGroup[f.group] = []; groups.push(f.group); } byGroup[f.group].push(f); });
+    groups.forEach(g => {
+        html += `<div class="fa-group"><div class="fa-group-head">${escapeHtml(g)}</div>${headerRow}`
+            + byGroup[g].map(f => `<div class="fa-row"><span class="fa-feat-label">${escapeHtml(f.label)}</span>${FA_ROLES.map(r => _faChipHtml(f, r)).join('')}</div>`).join('')
+            + `</div>`;
     });
     return html;
 }
@@ -17156,7 +17375,8 @@ function _faChipHtml(f, role) {
     const title = locked
         ? 'Always on for District Managers (safety lock)'
         : `${role.label}: ${eff ? 'visible' : 'hidden'}${ovr !== null ? ' (overridden)' : ' (default)'} — click to ${eff ? 'hide' : 'show'}`;
-    return `<button class="fa-chip ${eff ? 'fa-on' : 'fa-off'}${ovr !== null ? ' fa-ovr' : ''}"${locked ? ' disabled' : ''} onclick="faToggleRole('${f.key}', '${role.slug}')" title="${escapeHtml(title)}">${locked ? '🔒' : (eff ? '✓' : '✕')}</button>`;
+    const icon = locked ? FA_ICON_LOCK : (eff ? FA_ICON_CHECK : FA_ICON_X);
+    return `<button class="fa-chip ${eff ? 'fa-on' : 'fa-off'}${ovr !== null ? ' fa-ovr' : ''}"${locked ? ' disabled' : ''} onclick="faToggleRole('${f.key}', '${role.slug}')" title="${escapeHtml(title)}">${icon}</button>`;
 }
 
 async function faToggleRole(key, slug) {
@@ -17254,11 +17474,10 @@ function _faCoverageHtml() {
         .sort((a, b) => a.name.localeCompare(b.name));
     const labelFor = key => { const f = _faCatalog().find(x => x.key === key); return f ? _faDelegationLabel(f) : key; };
 
-    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:14px; line-height:1.5;">
-        Let a manager use your DM tools — while you're away or just need a hand. Pick who and which tools, then <b>Delegate tools</b>. Their own tools stay; it lasts until you <b>End delegation</b>.</div>`;
+    let html = `<div class="fa-hint">Let a manager use your DM tools — while you're away or just need a hand. Pick who and which tools, then <b>Delegate tools</b>. Their own tools stay; it lasts until you <b>End delegation</b>.</div>`;
 
     // 1) recipients
-    html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:4px 2px 6px;">Delegate to</div>`;
+    html += `<div class="fa-subhead">Delegate to</div>`;
     if (!covering.length) {
         html += `<div style="font-size:12px; color:#94a3b8; padding:6px 2px;">No manager-level users found in the directory.</div>`;
     } else {
@@ -17272,7 +17491,7 @@ function _faCoverageHtml() {
     }
 
     // 2) tools to lend
-    html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:4px 2px 6px;">Tools to lend</div>`;
+    html += `<div class="fa-subhead">Tools to lend</div>`;
     html += `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:6px 14px; margin-bottom:16px;">` + _faCoverageTools().map(f => `
         <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; font-weight:600; color:var(--slate-charcoal); cursor:pointer; padding:3px 0;">
             <input type="checkbox" class="fa-cover-tool" value="${f.key}" ${checked.has(f.key) ? 'checked' : ''} style="width:15px; height:15px; cursor:pointer;">
@@ -17284,7 +17503,7 @@ function _faCoverageHtml() {
     // 3) active delegations
     const active = _faActiveCoverage();
     const users = Object.keys(active).sort();
-    html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:22px 2px 6px;">Active delegations</div>`;
+    html += `<div class="fa-subhead" style="margin-top:22px;">Active delegations</div>`;
     if (!users.length) {
         html += `<div style="font-size:12px; color:#94a3b8; padding:6px 2px;">No one currently has borrowed tools.</div>`;
     } else {
@@ -17377,9 +17596,7 @@ function _faUserTabHtml() {
         const cnt = ovCounts[low] ? ` · ${ovCounts[low]} override${ovCounts[low] > 1 ? 's' : ''}` : '';
         return `<option value="${escapeHtml(low)}" ${low === _faUser ? 'selected' : ''}>${escapeHtml(n + meta + cnt)}</option>`;
     }));
-    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:12px; line-height:1.5;">
-        Per-user exceptions beat the role settings: force any tool, hotbar link or widget on or off for one person.
-        “Default” means the role rules decide.</div>
+    let html = `<div class="fa-hint">Per-user exceptions beat the role settings: force any tool, hotbar link or widget on or off for one person. “Default” means the role rules decide.</div>
     <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
         <select class="form-input-lg" style="flex:2; min-width:220px; margin-top:0;" onchange="_faUser=this.value; renderFaBody();">${opts.join('')}</select>
         <input class="form-input-lg" style="flex:1; min-width:140px; margin-top:0;" placeholder="Filter features…" value="${escapeHtml(_faFilter)}" oninput="_faFilter=this.value; _faRenderUserRows();">
@@ -17388,7 +17605,7 @@ function _faUserTabHtml() {
     const cnt = ovCounts[_faUser] || 0;
     if (cnt) {
         html += `<div style="display:flex; justify-content:flex-end; margin-bottom:8px;">
-            <button class="btn-secondary" style="font-size:11.5px; padding:6px 12px;" onclick="faClearUser()">↺ Clear all ${cnt} override${cnt > 1 ? 's' : ''} for this user</button></div>`;
+            <button class="btn-secondary" style="font-size:11.5px; padding:6px 12px;" onclick="faClearUser()">Clear all ${cnt} override${cnt > 1 ? 's' : ''} for this user</button></div>`;
     }
     return html + `<div id="fa-user-rows">${_faUserRowsHtml()}</div>`;
 }
@@ -17404,32 +17621,55 @@ function _faUserRowsHtml() {
     // effective role slug (Multi-Store Manager logs in with role 'manager')
     let roleSlug = u ? String(u.role || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-') : '';
     if (roleSlug === 'multi-store-manager') roleSlug = 'manager';
-    let html = '', lastGroup = '';
+    // Group features into collapsible cards (collapsed by default; a filter
+    // expands the matches) so one user's exceptions aren't one huge scroll. A
+    // "N set" badge on each card surfaces where this user already has overrides.
+    const groups = [];
+    const byGroup = {};
     _faCatalog().forEach(f => {
         if (filter && !(`${f.label} ${f.group}`).toLowerCase().includes(filter)) return;
-        if (f.group !== lastGroup) {
-            lastGroup = f.group;
-            html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:16px 2px 4px;">${f.group}</div>`;
-        }
-        const ovr = _faUserOverride(f.key, _faUser);
-        let inherited = null;
-        if (roleSlug) {
-            const roleOvr = _faRoleOverride(f.key, roleSlug);
-            inherited = roleOvr === null ? _faDefaultFor(f, roleSlug) : roleOvr;
-        }
-        const seg = (val, txt) => {
-            const active = (ovr === null && val === 'default') || (ovr === true && val === 'on') || (ovr === false && val === 'off');
-            const cls = active ? (val === 'on' ? ' fa-seg-active fa-seg-on' : (val === 'off' ? ' fa-seg-active fa-seg-off' : ' fa-seg-active')) : '';
-            return `<button class="fa-seg${cls}" onclick="faSetUser('${f.key}', '${val}')">${txt}</button>`;
-        };
-        html += `<div style="display:flex; align-items:center; gap:8px; padding:4px 2px; border-bottom:1px solid #f1f5f9;">
-            <span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${f.label}${inherited !== null ? `<span style="font-weight:600; color:#cbd5e1; font-size:11px;"> · role default: ${inherited ? 'visible' : 'hidden'}</span>` : ''}</span>
-            <div style="display:inline-flex; border:1.5px solid #e2e8f0; border-radius:8px; overflow:hidden; flex-shrink:0;">
-                ${seg('default', 'Default')}${seg('on', 'On')}${seg('off', 'Off')}
+        if (!byGroup[f.group]) { byGroup[f.group] = []; groups.push(f.group); }
+        byGroup[f.group].push(f);
+    });
+    if (!groups.length) return '<div style="padding:16px; text-align:center; color:#94a3b8; font-weight:600;">No features match the filter.</div>';
+
+    const chev = `<svg class="fa-ugroup-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
+    let html = '';
+    groups.forEach(g => {
+        const body = byGroup[g].map(f => {
+            const ovr = _faUserOverride(f.key, _faUser);
+            let inherited = null;
+            if (roleSlug) {
+                const roleOvr = _faRoleOverride(f.key, roleSlug);
+                inherited = roleOvr === null ? _faDefaultFor(f, roleSlug) : roleOvr;
+            }
+            const seg = (val, txt) => {
+                const active = (ovr === null && val === 'default') || (ovr === true && val === 'on') || (ovr === false && val === 'off');
+                const cls = active ? (val === 'on' ? ' fa-seg-active fa-seg-on' : (val === 'off' ? ' fa-seg-active fa-seg-off' : ' fa-seg-active')) : '';
+                return `<button class="fa-seg${cls}" onclick="faSetUser('${f.key}', '${val}')">${txt}</button>`;
+            };
+            return `<div class="fa-urow">
+                <span class="fa-urow-label">${escapeHtml(f.label)}${inherited !== null ? `<span class="fa-role-def"> · role default: ${inherited ? 'visible' : 'hidden'}</span>` : ''}</span>
+                <div class="fa-seg-group">${seg('default', 'Default')}${seg('on', 'On')}${seg('off', 'Off')}</div>
+            </div>`;
+        }).join('');
+        const setCount = byGroup[g].filter(f => _faUserOverride(f.key, _faUser) !== null).length;
+        const collapsed = filter ? '' : ' collapsed';
+        html += `<div class="fa-ugroup${collapsed}">
+            <div class="fa-ugroup-head" onclick="faToggleUserGroup(this)">
+                ${chev}<span class="fa-ugroup-name">${escapeHtml(g)}</span>
+                ${setCount ? `<span class="fa-ugroup-set">${setCount} set</span>` : ''}
+                <span class="fa-ugroup-count">${byGroup[g].length}</span>
             </div>
+            <div class="fa-ugroup-body">${body}</div>
         </div>`;
     });
-    return html || '<div style="padding:16px; text-align:center; color:#94a3b8; font-weight:600;">No features match the filter.</div>';
+    return html;
+}
+
+function faToggleUserGroup(head) {
+    const g = head.closest('.fa-ugroup');
+    if (g) g.classList.toggle('collapsed');
 }
 
 async function faSetUser(key, val) {
