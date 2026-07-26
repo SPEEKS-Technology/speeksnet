@@ -4125,6 +4125,11 @@ function renderBuyingSales() {
 
     document.querySelectorAll('#bs-buy-val').forEach(el => el.innerText = `$${Math.round(bV).toLocaleString()}`);
     document.querySelectorAll('#bs-buy-proj').forEach(el => el.innerText = `$${Math.round(bP).toLocaleString()}`);
+    // Airy pace bar: how much of the projected month-end buy value is already purchased.
+    document.querySelectorAll('#bs-pace-fill').forEach(fill => {
+        const pace = bP > 0 ? Math.max(0, Math.min(100, (bV / bP) * 100)) : 0;
+        fill.style.width = pace.toFixed(1) + '%';
+    });
     document.querySelectorAll('#bs-buy-margin').forEach(el => {
         el.innerText = mN.toFixed(1) + '%';
         el.className = mN > 0 && mN < 51 ? 'delta-badge delta-neg' : 'delta-badge delta-pos';
@@ -4139,8 +4144,8 @@ function renderBuyingSales() {
     document.querySelectorAll('#bs-t-gp').forEach(el => el.innerText = `$${Math.round(parseNum(hubDataCache[`${store}TrackGP`])).toLocaleString()}`);
     
     document.querySelectorAll('#bs-bar').forEach(bar => {
-        bar.style.strokeDashoffset = 402 - (Math.min(p, 100)/100) * 402; 
-        bar.style.stroke = p < 100 ? "var(--red-alert)" : "var(--sage-professional)";
+        bar.style.strokeDashoffset = 402 - (Math.min(p, 100)/100) * 402;
+        bar.style.stroke = p < 100 ? "#dc2626" : "#1f9d57";
     });
 
     // --- SELLING MARGIN MATH ---
@@ -7521,7 +7526,7 @@ async function fetchAndRenderEmployeeGoals() {
         await fetchStoreTarget(store);
         const empTarget = targetFor(store);
         const empStoreTargetEl = document.getElementById('emp-goals-store-target');
-        if (empStoreTargetEl) empStoreTargetEl.innerText = `Goal: ${empTarget} Listings`;
+        if (empStoreTargetEl) empStoreTargetEl.innerText = `${empTarget} Listings`;
         const empLuEl = document.getElementById('emp-goals-levelup');
         if (empLuEl) empLuEl.innerHTML = levelUpHtml(weeksFor(store), empTarget);
     } catch (e) {
@@ -7641,46 +7646,33 @@ async function fetchAndRenderEmployeeKPIs() {
             return;
         }
 
+        // Airy KPI tile: quiet label, my value (red if the rule flags it), store context line.
         const buildStatGridItem = (title, myVal, storeVal, ruleStr, isPercent = false, prefixLabel = "Store:", showBubble = true, noteText = '') => {
             const myIsBad = ruleStr ? checkRule(ruleStr, myVal) : false;
-            
+
             let displayMyVal = myVal || '-';
             if (displayMyVal !== '-' && isPercent && !String(displayMyVal).includes('%')) displayMyVal += '%';
-            
+
             let displayStoreVal = storeVal || '-';
             if (displayStoreVal !== '-' && isPercent && !String(displayStoreVal).includes('%')) displayStoreVal += '%';
 
-            let centerHtml = '';
-            if (showBubble) {
-                const badgeClass = displayMyVal === '-' ? 'badge-null' : (myIsBad ? 'badge-fail' : 'badge-pass');
-                centerHtml = `<div class="emp-kpi-badge ${badgeClass}" style="margin: 4px 0; padding: 4px 6px; font-size: 11px;">${displayMyVal}</div>`;
-            } else {
-                centerHtml = `<div style="font-size: 13px; font-weight: 900; color: var(--slate-charcoal); margin: 4px 0; padding: 4px 0;">${displayMyVal}</div>`;
-            }
-
             return `
-            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 6px; border: 1px dashed #e2e8f0; border-radius: 6px; background: #fdfdfd; height: 100%;">
-                <span style="font-size: 9px; font-weight: 900; color: var(--slate-charcoal); text-transform: uppercase; line-height: 1;">${title}</span>
-                ${centerHtml}
-                <span style="font-size: 8px; font-weight: 700; color: #a0aab2; text-transform: uppercase;">${prefixLabel} <strong>${displayStoreVal}</strong></span>
-                ${noteText ? `<span style="font-size: 8px; font-weight: 700; color: #b6bec6; text-transform: none; margin-top: 1px; line-height: 1.2;">${noteText}</span>` : ''}
+            <div class="ekpi-tile">
+                <span class="ekpi-k">${title}</span>
+                <span class="ekpi-v${myIsBad ? ' bad' : ''}">${displayMyVal}</span>
+                <span class="ekpi-ctx">${prefixLabel} <strong>${displayStoreVal}</strong>${noteText ? `<span class="ekpi-note">${noteText}</span>` : ''}</span>
             </div>`;
         };
 
-        // Split into two grid rows to stretch the bottom 3 boxes evenly
         container.innerHTML = `
-            <div style="display: flex; flex-direction: column; gap: 6px; height: 100%;">
-                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; flex: 1;">
-                    ${buildStatGridItem('Buying Value', myData.buyVal, sAvg.buyVal, null, false, 'Store Total:', false)}
-                    ${buildStatGridItem('Margin', myData.buyMargin, sAvg.buyMargin, 'margin', true, 'Store Avg:', true)}
-                    ${buildStatGridItem('Conversion', myData.conversion, sAvg.conversion, 'conversion', true, 'Store Avg:', true)}
-                    ${buildStatGridItem('Variance', formattedMyVar, formattedStoreVar, 'variance', false, 'Store Total:', true, varRange)}
-                </div>
-                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; flex: 1;">
-                    ${buildStatGridItem('No Deals', myData.noDeals, sAvg.noDeals, 'nodeals', false, 'Store Total:', true)}
-                    ${buildStatGridItem('Trans. Time', myData.time, sAvg.time, 'time', false, 'Store Avg:', true)}
-                    ${buildStatGridItem('Listed Dev.', myData.listed, sAvg.listed, null, false, 'Store Total:', false)}
-                </div>
+            <div class="ekpi-grid">
+                ${buildStatGridItem('Buying Value', myData.buyVal, sAvg.buyVal, null, false, 'Store total:', false)}
+                ${buildStatGridItem('Margin', myData.buyMargin, sAvg.buyMargin, 'margin', true, 'Store avg:', true)}
+                ${buildStatGridItem('Conversion', myData.conversion, sAvg.conversion, 'conversion', true, 'Store avg:', true)}
+                ${buildStatGridItem('Variance', formattedMyVar, formattedStoreVar, 'variance', false, 'Store total:', true, varRange)}
+                ${buildStatGridItem('No Deals', myData.noDeals, sAvg.noDeals, 'nodeals', false, 'Store total:', true)}
+                ${buildStatGridItem('Trans. Time', myData.time, sAvg.time, 'time', false, 'Store avg:', true)}
+                ${buildStatGridItem('Listed Dev.', myData.listed, sAvg.listed, null, false, 'Store total:', false)}
             </div>
         `;
     } catch (e) {
@@ -9134,7 +9126,7 @@ function renderKpiChart(payload, metric) {
     const mc = METRIC[metric] || METRIC.conversion;
     const { field, unit, isPct } = mc;
 
-    const STORE_COLORS = { OVL:'#a855f7', LEE:'#3b82f6', WSP:'#22c55e', MPL:'#f97316', BAL:'#ef4444' };
+    const STORE_COLORS = { OVL:'#7c6fd6', LEE:'#4e90cf', WSP:'#2ea36a', MPL:'#d99f43', BAL:'#d9776a' };
     const EMP_COLORS   = ['#a855f7','#3b82f6','#22c55e','#f97316','#ef4444','#14b8a6','#eab308','#ec4899'];
 
     const dmDropdown = document.getElementById('dmChartStoreSelector');
@@ -9303,160 +9295,45 @@ function renderKpiChart(payload, metric) {
 
 // --- CHART: DRAW LEADERBOARD ---
 function drawLeaderboard() {
+    // Standings list (replaced the Chart.js "race" — see combined Performance widget).
+    // Reads the same cachedLeaderboardData the race used; Revenue/GP toggle unchanged.
     const wrapper = document.getElementById('lb-wrapper');
     const monthLabel = document.getElementById('lb-month-display');
-    
     if (!wrapper || !cachedLeaderboardData || !cachedLeaderboardData.activeStores) return;
 
-    if (typeof Chart === 'undefined') {
-        setTimeout(drawLeaderboard, 100); 
-        return;
-    }
-
     const now = new Date();
-    if (monthLabel) {
-        monthLabel.innerText = now.toLocaleString('default', { month: 'long', year: 'numeric' }).toUpperCase();
-    }
+    if (monthLabel) monthLabel.innerText = now.toLocaleString('default', { month: 'long', year: 'numeric' });
 
-    wrapper.style.display = 'block';
-    wrapper.innerHTML = '<canvas id="leaderboardCanvas" style="width: 100%; height: 100%;"></canvas>';
-    const canvas = document.getElementById('leaderboardCanvas');
-
-    const colors = { 'OVL': '#a855f7', 'LEE': '#3b82f6', 'WSP': '#22c55e', 'MPL': '#f97316', 'BAL': '#ef4444' };
-    const daysInMonthCount = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    const dateLabels = Array.from({length: daysInMonthCount}, (_, i) => `${now.getMonth() + 1}/${i + 1}`);
-
-    let datasets = [];
+    const colors = { 'OVL': '#7c6fd6', 'LEE': '#4e90cf', 'WSP': '#2ea36a', 'MPL': '#d99f43', 'BAL': '#d9776a' };
     const dataPacket = currentLeaderboardMetric === 'Revenue' ? cachedLeaderboardData.revenue : cachedLeaderboardData.gp;
+    const myStore = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
 
-    cachedLeaderboardData.activeStores.forEach(store => {
-        if (dataPacket[store]) {
-            datasets.push({
-                label: '   ' + store + '   ', 
-                data: dataPacket[store],
-                borderColor: colors[store],
-                backgroundColor: colors[store],
-                borderWidth: 2,
-                pointRadius: 0,
-                pointHoverRadius: 6,
-                tension: 0.1
-            });
-        }
-    });
+    const rows = cachedLeaderboardData.activeStores
+        .filter(st => dataPacket && dataPacket[st])
+        .map(st => {
+            const arr = dataPacket[st];
+            const lastIdx = arr.findLastIndex(v => v !== null && v !== undefined);
+            return { store: st, val: lastIdx !== -1 ? (arr[lastIdx] || 0) : 0 };
+        })
+        .sort((a, b) => b.val - a.val);
 
-    let finalScores = [];
-    datasets.forEach((ds, i) => {
-        let lastIdx = ds.data.findLastIndex(v => v !== null);
-        let lastVal = lastIdx !== -1 ? ds.data[lastIdx] : 0;
-        finalScores.push({ index: i, val: lastVal, lastIdx: lastIdx });
-    });
-    
-    finalScores.sort((a, b) => b.val - a.val);
+    if (!rows.length) { wrapper.innerHTML = '<div class="status-message">No data yet.</div>'; return; }
 
-    let ranks = {};
-    finalScores.forEach((item, pos) => {
-        if (pos < 3) ranks[item.index] = { rank: pos + 1, lastIdx: item.lastIdx };
-    });
+    const max = Math.max(...rows.map(r => r.val), 1);
+    const fmt = v => '$' + Math.round(v).toLocaleString();
 
-    const checkeredPlugin = {
-        id: 'checkeredFinishLine',
-        beforeDatasetsDraw: (chart) => {
-            const { ctx, chartArea } = chart;
-            if (!chartArea) return;
-            const { top, bottom, right } = chartArea;
-            
-            const totalHeight = bottom - top;
-            const rowCount = Math.round(totalHeight / 12); 
-            const squareSize = totalHeight / rowCount; 
-            
-            const cols = 2; 
-            const lineWidth = squareSize * cols;
-            const startX = right - lineWidth;
-
-            ctx.save();
-            for (let row = 0; row < rowCount; row++) {
-                const currentY = top + (row * squareSize);
-                for (let col = 0; col < cols; col++) {
-                    ctx.fillStyle = ((col + row) % 2 === 0) ? '#e2e8f0' : '#1a1c1e';
-                    ctx.fillRect(startX + (col * squareSize), currentY, squareSize + 0.5, squareSize + 0.5);
-                }
-            }
-            ctx.restore();
-        }
-    };
-
-    try {
-        const ctx = canvas.getContext('2d');
-        if (leaderboardChartInstance) leaderboardChartInstance.destroy(); 
-
-        let activePlugins = typeof ChartDataLabels !== 'undefined' ? [ChartDataLabels, checkeredPlugin] : [checkeredPlugin];
-
-        leaderboardChartInstance = new Chart(ctx, {
-            type: 'line',
-            plugins: activePlugins,
-            data: { labels: dateLabels, datasets: datasets },
-            options: {
-                animation: false, 
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                layout: { padding: { top: 40, right: 50, left: 10, bottom: 0 } },
-                plugins: {
-                    tooltip: {
-                        itemSort: function(a, b) { return b.parsed.y - a.parsed.y; },
-                        callbacks: {
-                            label: function(context) {
-                                let label = context.dataset.label.trim() || ''; 
-                                if (label) label += ': ';
-                                if (context.parsed.y !== null) {
-                                    label += new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(context.parsed.y);
-                                }
-                                return label;
-                            }
-                        }
-                    },
-                    legend: {
-                        position: 'bottom',
-                        labels: { font: { size: 13, family: "'Inter', sans-serif", weight: 'bold' }, usePointStyle: true, boxWidth: 8, padding: 20 }
-                    },
-                    datalabels: {
-                        display: function(context) {
-                            const rankInfo = ranks[context.datasetIndex];
-                            if (!rankInfo) return false; 
-                            return context.dataIndex === rankInfo.lastIdx; 
-                        },
-                        formatter: function(value, context) {
-                            const r = ranks[context.datasetIndex].rank;
-                            return r === 1 ? '🥇 1st' : (r === 2 ? '🥈 2nd' : '🥉 3rd');
-                        },
-                        backgroundColor: function(context) { return context.dataset.backgroundColor; },
-                        color: 'white',
-                        borderRadius: 6,
-                        font: { size: 10, weight: 'bold', family: "'Inter', sans-serif" },
-                        padding: { top: 4, bottom: 4, left: 8, right: 8 },
-                        align: 'right',  
-                        anchor: 'center',
-                        offset: 4
-                    }
-                },
-                scales: {
-                    y: {
-                        afterFit: function(scale) { scale.width = 75; },
-                        beginAtZero: true,
-                        max: datasets.length === 0 ? 1000 : undefined, 
-                        ticks: { callback: function(value) { return '$' + (value / 1000) + 'k'; } },
-                        grid: { borderDash: [4, 4] }
-                    },
-                    x: { 
-                        grid: { display: false },
-                        ticks: { font: { size: 11, weight: 'bold', family: "'Inter', sans-serif" }, color: '#a0aab2', maxRotation: 45, minRotation: 45 }
-                    }
-                }
-            }
-        });
-    } catch (e) {
-        console.error("Chart.js failed to draw.", e);
-    }
+    wrapper.innerHTML = rows.map((r, i) => `
+        <div class="lbs-row${r.store === myStore ? ' me' : ''}">
+            <span class="lbs-rank${i === 0 ? ' g' : ''}">${i + 1}</span>
+            <span class="lbs-store">
+                <span class="lbs-dot" style="background:${colors[r.store] || '#94a3b8'}"></span>
+                <span class="lbs-info">
+                    <span class="lbs-nm">${r.store}</span>
+                    <span class="lbs-bar"><i style="width:${Math.max(5, (r.val / max) * 100).toFixed(1)}%;background:${colors[r.store] || '#94a3b8'}"></i></span>
+                </span>
+            </span>
+            <span class="lbs-val">${fmt(r.val)}</span>
+        </div>`).join('');
 }
 
 // --- MODAL: MANAGE ANNOUNCEMENTS ---

@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260725f">
+  <link rel="stylesheet" href="styles.css?v=20260725i">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260725f" defer></script>
+  <script src="speeks.js?v=20260725i" defer></script>
 </head>
 
 <body class="preload">
@@ -829,12 +829,15 @@
       </div>
   </div>
 
-  <div class="top-alerts-row dynamic-module-flex role-manager role-owner-manager role-employee employee-dashboard-row">
+  <div class="ew-dash dynamic-module-flex role-manager role-owner-manager role-employee employee-dashboard-row">
       
-      <div class="card district-master-panel employee-widget-card dynamic-module-block role-manager role-owner-manager role-employee buying-sales-module" data-feature="widget-buying-selling">
-          <div class="district-kpi-header">
-              <span class="district-kpi-title">Buying & Sales <span id="bs-last-updated" class="widget-date-display"></span></span>
-              <span class="widget-date-display no-dash goal-strong">Goal: <span id="bs-goal"></span></span>
+      <div class="card employee-widget-card ew-airy dynamic-module-block role-manager role-owner-manager role-employee buying-sales-module" data-feature="widget-buying-selling">
+          <div class="ew-head">
+              <div class="ew-titles">
+                  <span class="ew-eyebrow">My Store · This Month</span>
+                  <span class="ew-title">Buying &amp; Sales <span id="bs-last-updated" class="ew-date"></span></span>
+              </div>
+              <span class="ew-goal">Goal <b id="bs-goal"></b></span>
               <select id="bsStoreSelect" class="bs-hidden-select" onchange="renderBuyingSales()">
                   <option value="OVL">OVL</option>
                   <option value="LEE">LEE</option>
@@ -843,63 +846,49 @@
                   <option value="BAL">BAL</option>
               </select>
           </div>
-          
-          <div class="employee-widget-body bs-widget-container">
-              <div class="bs-col-left">
-                  <h4 class="bs-col-title">Buying (MTD)</h4>
-                  
-                  <div class="bs-val-container">
-                      <div class="bs-val-label">Value Purchased</div>
-                      <div class="bs-val-number" id="bs-buy-val">$0</div>
+
+          <div class="ebs-body">
+              <div class="ebs-col ebs-buy">
+                  <div class="ebs-cap">Buying (MTD)</div>
+                  <div>
+                      <div class="ebs-lbl">Value Purchased</div>
+                      <div class="ebs-big" id="bs-buy-val">$0</div>
                   </div>
-                  
-                  <div class="bs-stats-stack">
-                      <div class="bs-stat-row">
-                          <span class="bs-stat-label">Buy Tracking</span>
-                          <span class="bs-stat-val" id="bs-buy-proj">$0</span>
-                      </div>
-                      <div class="bs-stat-row">
-                          <span class="bs-stat-label">Buy Margin</span>
-                          <span class="delta-badge delta-neutral" id="bs-buy-margin">0%</span>
-                      </div>
+                  <div class="ebs-pace">
+                      <div class="ebs-pace-lbl"><span>Tracking to month-end</span><span id="bs-buy-proj">$0</span></div>
+                      <div class="ebs-pace-bar"><i id="bs-pace-fill"></i></div>
+                  </div>
+                  <div class="ebs-rows">
+                      <div class="ebs-row"><span class="k">Buy Margin</span><span class="delta-badge delta-neutral" id="bs-buy-margin">0%</span></div>
                   </div>
               </div>
-              
-              <div class="bs-col-right">
-                  <h4 class="bs-col-title">Sales (MTD)</h4>
-                  
-                  <div class="bs-ring-wrapper">
+
+              <div class="ebs-divider"></div>
+
+              <div class="ebs-col ebs-sell">
+                  <div class="ebs-cap">Sales (MTD)</div>
+                  <div class="ebs-ring-wrap">
                       <div class="progress-ring">
-                          <svg><circle class="bg" cx="70" cy="70" r="64"></circle><circle class="bar" id="bs-bar" cx="70" cy="70" r="64"></circle></svg>
+                          <svg viewBox="0 0 140 140"><circle class="bg" cx="70" cy="70" r="64"></circle><circle class="bar" id="bs-bar" cx="70" cy="70" r="64"></circle></svg>
                           <div class="percentage" id="bs-pct">0%</div>
                       </div>
                   </div>
-                  
-                  <div class="bs-stats-stack">
-                      <div class="bs-stat-row">
-                          <span class="bs-stat-label">Rev (MTD)</span>
-                          <span class="bs-stat-val" id="bs-rev">--</span>
-                      </div>
-                      <div class="bs-stat-row">
-                          <span class="bs-stat-label">GP Tracking</span>
-                          <span class="bs-stat-val" id="bs-t-gp">--</span>
-                      </div>
-                      <div class="bs-stat-row">
-                          <span class="bs-stat-label">Sell Margin</span>
-                          <span class="delta-badge delta-neutral" id="bs-sell-margin">0%</span>
-                      </div>
+                  <div class="ebs-rows">
+                      <div class="ebs-row"><span class="k">Rev (MTD)</span><span class="v" id="bs-rev">--</span></div>
+                      <div class="ebs-row"><span class="k">GP Tracking</span><span class="v" id="bs-t-gp">--</span></div>
+                      <div class="ebs-row"><span class="k">Sell Margin</span><span class="delta-badge delta-neutral" id="bs-sell-margin">0%</span></div>
                   </div>
               </div>
           </div>
       </div>
 
-      <div class="card dynamic-module-flex role-employee district-master-panel employee-widget-card" data-feature="widget-emp-listing-goals">
-          <div class="district-kpi-header">
-              <div class="district-kpi-title-wrapper">
-                  <span class="district-kpi-title">My Listing Goals <span id="emp-goals-date" class="widget-date-display"></span></span>
-                  <div id="emp-goals-pulse-dot" class="notif-dot active goals-pulse" style="display: none;"></div>
+      <div class="card dynamic-module-flex role-employee employee-widget-card ew-airy" data-feature="widget-emp-listing-goals">
+          <div class="ew-head">
+              <div class="ew-titles">
+                  <span class="ew-eyebrow">Mine · This Week</span>
+                  <span class="ew-title">My Listing Goals <span id="emp-goals-date" class="ew-date"></span><span id="emp-goals-pulse-dot" class="notif-dot active goals-pulse" style="display:none;"></span></span>
               </div>
-              <span id="emp-goals-store-target" class="widget-date-display no-dash goal-strong"></span>
+              <span class="ew-goal">Goal <b id="emp-goals-store-target"></b></span>
           </div>
 
           <div id="employee-goals-widget-body" class="employee-widget-body">
@@ -911,10 +900,11 @@
       <!-- Listing Goals moved to a popup (see #listingGoalsModal). Open it from
            the Listing Goals action item in the SPEEKS Action Menu. -->
 
-      <div class="card district-master-panel employee-widget-card dynamic-module-flex role-employee" data-feature="widget-emp-weekly-kpis">
-          <div class="district-kpi-header">
-              <div class="district-kpi-title-wrapper">
-                  <span class="district-kpi-title">My Weekly KPIs <span id="emp-kpi-period" class="widget-date-display"></span></span>
+      <div class="card employee-widget-card ew-airy dynamic-module-flex role-employee" data-feature="widget-emp-weekly-kpis">
+          <div class="ew-head">
+              <div class="ew-titles">
+                  <span class="ew-eyebrow">Mine vs Store</span>
+                  <span class="ew-title">My Weekly KPIs <span id="emp-kpi-period" class="ew-date"></span></span>
               </div>
           </div>
           
@@ -984,33 +974,16 @@
 
   </div>
 
-  <div class="dashboard-layout mb-30">
-    
-      <div class="card master-card leaderboard-card">
-          <div class="master-card-header">
-              <div class="align-center gap-8">
-                  <span class="master-card-title">Monthly Performance Leaderboard <span id="lb-month-display" class="widget-date-display"></span></span>
-              </div>
-              <div class="timeframe-toggle">
-                  <button class="toggle-btn active" id="lb-tab-rev" onclick="switchLeaderboardMetric('Revenue')">Revenue</button>
-                  <button class="toggle-btn" id="lb-tab-gp" onclick="switchLeaderboardMetric('GP')">Gross Profit</button>
-              </div>
+  <div class="ew-airy ew-perf mb-30">
+      <div class="ew-head">
+          <div class="ew-titles">
+              <span class="ew-eyebrow">The Company</span>
+              <span class="ew-title">Performance <span id="lb-month-display" class="ew-date"></span></span>
           </div>
-          
-          <div id="lb-wrapper" class="lb-wrapper-inner">
-              <div id="lbLoading" class="loader-overlay">
-                  <div class="status-message">Syncing Data...</div>
-              </div>
-          </div>
-      </div> 
-    
-      <div class="card master-card chart-card">
-          <div class="master-card-header">
-              <div class="align-center gap-8">
-                  <span class="master-card-title">KPI Comparisons</span>
-              </div>
-            
-              <div class="chart-controls align-center gap-10">
+      </div>
+      <div class="ew-perf-body">
+          <div class="ew-perf-chart">
+              <div class="ew-perf-controls">
                   <div class="dynamic-module-flex role-district-manager role-ceo">
                       <select id="dmChartStoreSelector" class="metric-dropdown hide-by-default" onchange="loadKpiData()">
                           <option value="OVL">OVL</option>
@@ -1020,33 +993,44 @@
                           <option value="BAL">BAL</option>
                       </select>
                   </div>
-                  
-                  <div class="timeframe-toggle dark-toggle">
-                      <button class="toggle-btn active" id="btn-chart-avg" onclick="setChartMode('averages')">Averages</button>
-                      <button class="toggle-btn" id="btn-chart-emp" onclick="setChartMode('employees')">My Team</button>
-                  </div>
-                
-                  <div class="timeframe-toggle dark-toggle">
-                      <button class="toggle-btn active" id="btn-4week" onclick="setTimeframe('4-Week')">4-Week</button>
-                      <button class="toggle-btn" id="btn-monthly" onclick="setTimeframe('Monthly')">Monthly</button>
-                  </div>
-                
                   <select id="metricSelector" class="metric-dropdown" onchange="loadKpiData()">
                       <option value="conversion">Customer Conversion %</option>
                       <option value="margin">Buying Margin %</option>
                       <option value="nodeals">Total No Deals</option>
                       <option value="time">Transaction Time</option>
                   </select>
+                  <div class="ew-seg">
+                      <button class="toggle-btn active" id="btn-4week" onclick="setTimeframe('4-Week')">4-Week</button>
+                      <button class="toggle-btn" id="btn-monthly" onclick="setTimeframe('Monthly')">Monthly</button>
+                  </div>
+                  <div class="ew-seg">
+                      <button class="toggle-btn active" id="btn-chart-avg" onclick="setChartMode('averages')">Averages</button>
+                      <button class="toggle-btn" id="btn-chart-emp" onclick="setChartMode('employees')">My Team</button>
+                  </div>
+              </div>
+              <div class="chart-container chart-inner-wrapper">
+                  <div id="chartLoading" class="loader-overlay">
+                      <div class="status-message">Syncing Data...</div>
+                  </div>
+                  <canvas id="mainKpiChart"></canvas>
               </div>
           </div>
-
-          <div class="chart-container chart-inner-wrapper">
-              <div id="chartLoading" class="loader-overlay">
-                  <div class="status-message">Syncing Data...</div>
+          <div class="ew-standings">
+              <div class="ew-standings-head">
+                  <span class="ew-standings-title">Leaderboard</span>
+                  <div class="ew-seg ew-seg-sm">
+                      <button class="toggle-btn active" id="lb-tab-rev" onclick="switchLeaderboardMetric('Revenue')">Revenue</button>
+                      <button class="toggle-btn" id="lb-tab-gp" onclick="switchLeaderboardMetric('GP')">GP</button>
+                  </div>
               </div>
-              <canvas id="mainKpiChart"></canvas>
+              <div id="lb-wrapper" class="lb-wrapper-inner">
+                  <div id="lbLoading" class="loader-overlay">
+                      <div class="status-message">Syncing Data...</div>
+                  </div>
+              </div>
           </div>
       </div>
+  </div>
 
 <div id="scorecardModalOverlay" onclick="closeScorecardModal()"></div>
 <div class="modal-menu manage-menu" id="claimsModal">
