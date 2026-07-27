@@ -9417,3 +9417,113 @@ body.sam-active .hotbar-btn:hover {
     .sh-scores { grid-template-columns: 1fr; }
     .sh-cats { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* =========================================================
+   CSV EXPORT DATE-RANGE PICKER   [2026-07-27]
+   Shared popup behind every "⬇ Export CSV" button (Store KPIs
+   + Monthly Breakdown). Airy V4 chrome: emerald accent, 18px
+   card, icon tile + eyebrow header, chip presets.
+   Built lazily by _exEnsureModal() in speeks.js.
+   ========================================================= */
+.ex-overlay {
+    --ex-line: #eef2ef;
+    --ex-line-2: #f4f8f5;
+    --ex-muted: #64707c;
+    --ex-faint: #9aa6ad;
+    --ex-accent: #1f9d57;
+    --ex-accent-tint: #e8f7ee;
+    --sage-professional: #1f9d57;
+    display: none;
+    position: fixed; inset: 0; z-index: 3200;
+    background: rgba(15, 23, 42, .42);
+    align-items: center; justify-content: center;
+    padding: 24px;
+}
+.ex-overlay.open { display: flex; }
+
+.ex-card {
+    width: 100%; max-width: 470px;
+    background: #fff;
+    border: 1px solid #e3e8ee;
+    border-radius: 18px;
+    box-shadow: 0 24px 60px rgba(16, 24, 40, .20), 0 2px 8px rgba(16, 24, 40, .06);
+    overflow: hidden;
+}
+
+/* --- header --- */
+.ex-head {
+    display: flex; align-items: flex-start; gap: 13px;
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--ex-line-2);
+}
+.ex-ico {
+    flex: 0 0 auto; width: 40px; height: 40px; border-radius: 12px;
+    background: var(--ex-accent-tint); color: var(--ex-accent);
+    display: grid; place-items: center;
+}
+.ex-ico svg {
+    width: 20px; height: 20px;
+    fill: none; stroke: currentColor; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+}
+.ex-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
+.ex-eyebrow { font-size: 10px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: var(--ex-faint); }
+.ex-title { font-size: 17px; font-weight: 800; letter-spacing: -.01em; color: var(--slate-charcoal); line-height: 1.2; }
+.ex-sub { font-size: 12px; font-weight: 600; color: var(--ex-muted); }
+.ex-sub:empty { display: none; }
+.ex-close {
+    flex: 0 0 auto; width: 30px; height: 30px; border: 1px solid var(--ex-line);
+    background: #fff; border-radius: 9px; color: var(--ex-muted);
+    font-size: 18px; font-weight: 700; line-height: 1; cursor: pointer;
+    transition: background .15s, color .15s;
+}
+.ex-close:hover { background: #f6f8fa; color: var(--slate-charcoal); }
+
+/* --- body --- */
+.ex-body { padding: 16px 18px 18px; }
+.ex-status { font-size: 13px; font-weight: 600; color: var(--ex-muted); padding: 10px 2px 4px; }
+
+.ex-presets { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 15px; }
+.ex-chip {
+    font-family: inherit; font-size: 12px; font-weight: 700;
+    padding: 6px 12px; border-radius: 99px; cursor: pointer;
+    background: #f6f8fa; color: var(--ex-muted);
+    border: 1px solid var(--ex-line);
+    transition: background .15s, color .15s, border-color .15s;
+}
+.ex-chip:hover { color: var(--slate-charcoal); border-color: #dde5e0; }
+.ex-chip.active {
+    background: var(--ex-accent-tint); color: #146c3c;
+    border-color: #c6ecd6;
+}
+.ex-chip:focus-visible { outline: 2px solid var(--ex-accent); outline-offset: 2px; }
+
+.ex-fields { display: flex; align-items: flex-end; gap: 10px; }
+.ex-field { flex: 1 1 0; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.ex-field > span { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--ex-faint); }
+.ex-field .kpi-select { width: 100%; }
+.ex-dash { padding-bottom: 9px; color: var(--ex-faint); font-size: 13px; font-weight: 800; }
+
+.ex-summary {
+    margin-top: 14px; padding: 11px 13px;
+    background: #f7faf8; border: 1px solid var(--ex-line); border-radius: 12px;
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px;
+    font-size: 12.5px; color: var(--ex-muted);
+    font-variant-numeric: tabular-nums;
+}
+.ex-summary b { font-size: 13px; font-weight: 800; color: var(--slate-charcoal); }
+.ex-sum-range { font-weight: 600; }
+.ex-sum-rows { font-weight: 700; color: var(--ex-faint); margin-left: auto; }
+
+.ex-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 16px; }
+.ex-actions .btn-primary, .ex-actions .btn-secondary { padding: 10px 18px; font-size: 12px; }
+.ex-actions .btn-primary:hover { background: var(--sage-deep) !important; }
+.ex-actions .btn-primary[disabled] { opacity: .6; cursor: default; }
+
+@media (max-width: 520px) {
+    .ex-overlay { padding: 14px; align-items: flex-start; }
+    .ex-card { margin-top: 24px; }
+    .ex-fields { flex-direction: column; align-items: stretch; }
+    .ex-dash { display: none; }
+    .ex-actions .btn-primary, .ex-actions .btn-secondary { flex: 1 1 0; }
+}
