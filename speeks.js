@@ -5412,28 +5412,21 @@ function copyQMToClipboard(button) {
 // --- 16. MODULE: GLOBAL AUTH OVERLAY ---
 function injectGlobalAuth() {
     if (!document.getElementById('authOverlay')) {
-        // "Storefront" split — full-bleed dark brand half + light PIN half.
-        // The wordmark PNG is white-on-transparent, so it MUST stay on the dark
-        // side. #pinInput is now transparent and overlays four cells (see the
-        // GLOBAL AUTH block in styles.css); its handlers are unchanged.
+        // "Card on dark" — wordmark + description on the emerald-lit near-black
+        // field, a white card holding nothing but the login, two-fact rail below.
+        // The logo PNG is white-on-transparent, which is exactly why the brand
+        // sits OUT here on the dark ground: no dark plaque needed inside the card.
+        // #pinInput is transparent and overlays four cells (see the GLOBAL AUTH
+        // block in styles.css); its handlers are unchanged.
         const overlayHtml = `
         <div id="authOverlay" class="auth-page" style="display: none;">
-            <div class="auth-split-layout">
-                <div class="auth-brand-side">
-                    <div class="auth-brand-top">Speeks Technology</div>
-                    <div class="auth-brand-mid">
-                        <img src="images/speeks_logo.png" alt="SPEEKS" class="auth-logo">
-                        <p>Everything your store needs to succeed: operational tools, KPIs, and the daily processes that keep the store running smoothly.</p>
-                    </div>
-                    <dl class="auth-rail">
-                        <div><dt>Stores</dt><dd>5</dd></div>
-                        <div><dt>Markets</dt><dd>KC · STL</dd></div>
-                        <div><dt>Week of</dt><dd id="authWeekOf">&nbsp;</dd></div>
-                    </dl>
+            <div class="auth-stack">
+                <div class="auth-brand">
+                    <img src="images/speeks_logo.png" alt="SPEEKS Technology" class="auth-logo">
+                    <div class="auth-portal">Internal Operations Portal</div>
                 </div>
-                <div class="auth-keyline"></div>
-                <div class="auth-form-side">
-                    <div class="auth-form-container">
+                <div class="auth-card">
+                    <div class="auth-body">
                         <div class="auth-badge">Secure access</div>
                         <h2>Welcome back</h2>
                         <p id="authSubtitle">Enter your 4-digit PIN to open the hub.</p>
@@ -5450,21 +5443,15 @@ function injectGlobalAuth() {
                         </div>
                     </div>
                 </div>
+                <dl class="auth-rail">
+                    <div><dt>Stores</dt><dd>5</dd></div>
+                    <div><dt>Markets</dt><dd>KC · STL</dd></div>
+                </dl>
+                <div class="auth-tail" aria-hidden="true"></div>
             </div>
         </div>`;
         document.body.insertAdjacentHTML('beforeend', overlayHtml);
-        _authSetWeekOf();
     }
-}
-
-// Monday of the current week, e.g. "Jul 27" — computed, never stale.
-function _authSetWeekOf() {
-    const el = document.getElementById('authWeekOf');
-    if (!el) return;
-    const d = new Date();
-    const dow = d.getDay();                              // 0 = Sunday
-    d.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1));  // back to Monday
-    el.textContent = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 // Mirror #pinInput's length onto the four cells. The input itself is invisible,
