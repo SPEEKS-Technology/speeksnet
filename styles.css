@@ -1025,175 +1025,268 @@ input, textarea, select,
 /* =========================================================
    FULL PAGE AUTHENTICATION
    ========================================================= */
-.auth-page { 
-    position: fixed; 
-    inset: 0; 
-    background-color: #1a1c1e;
-    background-image: radial-gradient(circle at 15% 0%, #2d3135 0%, transparent 50%), radial-gradient(circle at 85% 100%, #111213 0%, #1a1c1e 100%);
-    z-index: 100000; 
-    display: flex; 
-    align-items: center; 
-    justify-content: center; 
-    padding: 20px;
+/* =========================================================
+   GLOBAL AUTH — "Storefront" split   [2026-07-27, airy V4]
+   Full-bleed: dark brand half + light PIN half + emerald
+   keyline. Replaces the 1000x600 card that floated in grey.
+
+   IMPORTANT: all three logo PNGs (speeks_logo, speeksnet_logo,
+   SPEEKS Logo Short White) are WHITE on transparent, so the
+   wordmark REQUIRES a dark ground. Don't move .auth-logo onto
+   the light half without a charcoal version of the asset.
+
+   Markup lives in injectGlobalAuth() (speeks.js). Load-bearing
+   hooks the auth JS depends on: #pinInput (+.pin-filled),
+   #unlockBtn (+.loading), #pinError, #pinInputContainer, and
+   #authOverlay being valid as display:flex.
+   ========================================================= */
+.auth-page {
+    --a-cell-line: #c6d3cb;       /* pin boxes want a defined edge, not a whisper */
+    --a-cell-line-bad: #dfb0b0;   /* same visual weight as above, red family */
+    --a-error: #b23636;           /* matches the bad-chip ink in the weekly emails */
+    --a-muted: #64707c;
+    --a-faint: #9aa6ad;
+    --a-accent: #1f9d57;
+    --a-accent-deep: #178048;
+    --a-accent-tint: #e8f7ee;
+    --a-dark: #13181a;
+    /* The login was missing from the V4 emerald flip list further down this
+       file, so .btn-primary here was still rendering the pre-redesign olive
+       (#5a8d3b). Flipping the token locally puts "Unlock Portal" on the same
+       emerald as every other primary button on the redesigned surfaces. */
+    --sage-professional: #1f9d57;
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: flex;                /* JS toggles between none and flex */
+    background: var(--a-dark);    /* matches the brand half, so no flash on load */
 }
 
-.auth-split-layout { 
-    display: flex; 
-    width: 1000px; 
-    max-width: 100%; 
-    height: 600px; 
-    max-height: 95vh; 
-    background: white; 
-    border-radius: 16px; 
-    border: 1px solid #ddd; 
-    box-shadow: 0 10px 30px rgba(0,0,0,0.06); 
-    overflow: hidden; 
+.auth-split-layout {
+    flex: 1 1 auto;
+    display: flex;
+    min-width: 0;
+    background: #fff;
 }
 
-.auth-brand-side { 
-    flex: 1.2; 
-    background: var(--slate-charcoal); 
-    padding: 50px; 
-    display: flex; 
-    flex-direction: column; 
-    align-items: center; 
-    justify-content: center; 
-    text-align: center; 
-    color: white; 
+/* ---------- brand half ---------- */
+/* Type scales with the viewport rather than sitting at a fixed size. On a 1900px
+   monitor this half is ~1080px wide, and fixed sizes left it looking empty; the
+   clamps grow the wordmark and copy to fill it while holding sane minimums for
+   laptops and the stacked phone layout. */
+.auth-brand-side {
+    position: relative;           /* ::before glow anchors here */
+    flex: 0 0 57%;
+    background: var(--a-dark);
+    padding: clamp(38px, 4vw, 76px) clamp(34px, 3.6vw, 68px);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 30px;
+    color: #fff;
+    overflow: hidden;
 }
 
-.auth-brand-side::before { 
-    content: ''; 
-    position: absolute; 
-    inset: 0; 
-    background: linear-gradient(135deg, rgba(90, 141, 59, 0.15) 0%, transparent 100%); 
-    pointer-events: none; 
+.auth-brand-side::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+        radial-gradient(620px 460px at 8% 4%, rgba(31, 157, 87, .26), transparent 60%),
+        radial-gradient(520px 520px at 100% 100%, rgba(31, 157, 87, .09), transparent 62%);
+    pointer-events: none;
 }
 
-.auth-logo { 
-    width: 300px; 
-    max-width: 90%; 
-    margin-bottom: 40px; 
-    position: relative; 
-    z-index: 2; 
-    display: block; 
+.auth-brand-side > * { position: relative; z-index: 2; }
+
+.auth-brand-top {
+    font-size: clamp(13px, 1.16vw, 20px);
+    font-weight: 800;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    color: #6ee7a7;
+}
+
+.auth-logo {
+    width: clamp(300px, 33vw, 560px);
+    max-width: 88%;
+    display: block;
     object-fit: contain;
 }
 
-.auth-brand-text { position: relative; z-index: 2; }
-
-.auth-brand-text h1 { 
-    font-size: 32px; 
-    font-weight: 200; 
-    letter-spacing: 10px; 
-    margin-bottom: 10px; 
-    color: white; 
-    line-height: 1; 
+.auth-brand-mid p {
+    margin: clamp(18px, 1.7vw, 30px) 0 0;
+    font-size: clamp(15px, 1.35vw, 23px);
+    font-weight: 500;
+    color: #a9b6b0;
+    max-width: 32ch;
+    line-height: 1.5;
 }
 
-.auth-brand-text p { 
-    font-size: 14px; 
-    color: #a0aab2; 
-    font-weight: 600; 
-    letter-spacing: 2px; 
-    text-transform: uppercase; 
+/* live stat rail — grounds the door in something true */
+.auth-rail {
+    margin: 0;
+    display: flex;
+    gap: clamp(26px, 2.6vw, 48px);
+    flex-wrap: wrap;
+    padding-top: clamp(19px, 1.7vw, 28px);
+    border-top: 1px solid rgba(255, 255, 255, .10);
+}
+.auth-rail > div { display: flex; flex-direction: column; gap: 3px; }
+.auth-rail dt {
+    font-size: clamp(10px, .72vw, 12.5px);
+    font-weight: 800;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: #78877f;
+}
+.auth-rail dd {
+    margin: 0;
+    font-size: clamp(15px, 1.15vw, 20px);
+    font-weight: 700;
+    color: #e6ede9;
+    font-variant-numeric: tabular-nums;
 }
 
-.auth-form-side { 
-    flex: 1; 
-    padding: 50px; 
-    display: flex; 
-    flex-direction: column; 
-    justify-content: center; 
-    background: linear-gradient(135deg, #ffffff 0%, var(--bg-app) 100%); 
+.auth-keyline { flex: 0 0 3px; background: var(--a-accent); }
+
+/* ---------- form half ---------- */
+.auth-form-side {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: grid;
+    place-items: center;
+    padding: clamp(30px, 3vw, 56px);
+    background: #fff;
 }
 
-.auth-form-container { 
-    max-width: 380px; 
-    margin: 0 auto; 
-    width: 100%; 
+.auth-form-container {
+    width: 100%;
+    max-width: clamp(304px, 26vw, 404px);
 }
 
-.auth-badge { 
-    display: inline-block; 
-    background: var(--bg-app); 
-    color: var(--slate-charcoal); 
-    font-size: 11px; 
-    font-weight: 800; 
-    padding: 6px 14px; 
-    border-radius: 20px; 
-    margin-bottom: 20px; 
-    letter-spacing: 1px; 
-    text-transform: uppercase; 
-    border: 1px solid #ddd; 
+/* was a bordered pill; now the airy eyebrow used across the site */
+.auth-badge {
+    display: block;
+    background: none;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    font-size: clamp(10px, .8vw, 12.5px);
+    font-weight: 800;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--a-faint);
 }
 
-.auth-form-side h2 { 
-    font-size: 32px; 
-    font-weight: 800; 
-    color: var(--slate-charcoal); 
-    margin-bottom: 10px; 
-    letter-spacing: -1px; 
+.auth-form-side h2 {
+    margin: clamp(6px, .6vw, 10px) 0 clamp(5px, .5vw, 9px);
+    font-size: clamp(26px, 2.25vw, 40px);
+    font-weight: 800;
+    letter-spacing: -.028em;
+    line-height: 1.12;
+    color: var(--slate-charcoal);
 }
 
-.auth-form-side p { 
-    font-size: 14px; 
-    color: #666; 
-    margin-bottom: 35px; 
-    line-height: 1.5; 
-    font-weight: 500; 
+.auth-form-side p {
+    margin: 0 0 clamp(24px, 2.1vw, 36px);
+    font-size: clamp(13.5px, 1.08vw, 17px);
+    font-weight: 600;
+    color: var(--a-muted);
+    line-height: 1.5;
 }
 
-.pin-container { 
-    display: flex; 
-    flex-direction: column; 
-    gap: 15px; 
+.pin-container { display: flex; flex-direction: column; gap: 14px; }
+
+/* Four real cells instead of one letter-spaced input (the old approach
+   never lined the dots up under the characters). The actual #pinInput
+   is transparent and overlays the row, so native typing, maxlength,
+   Enter and the mobile numeric keyboard all still work — the cells are
+   painted from its value by _authPaintCells(). */
+.pin-cells {
+    position: relative;
+    display: flex;
+    gap: clamp(10px, .85vw, 14px);
+    cursor: text;
 }
 
-.pin-container input { 
-    width: 100%; 
-    padding: 18px; 
-    font-size: 36px; 
-    text-align: center; 
-    letter-spacing: 24px; 
-    border-radius: 12px; 
-    border: 1px solid #ddd; 
-    outline: none; 
-    transition: 0.2s; 
-    font-family: monospace; 
-    background: white; 
-    color: var(--slate-charcoal); 
-    box-shadow: inset 0 2px 4px rgba(0,0,0,0.02); 
+.pin-cell {
+    flex: 1 1 0;
+    height: clamp(66px, 5.2vw, 86px);
+    border-radius: clamp(15px, 1.2vw, 19px);
+    background: #f7faf8;
+    border: 1px solid var(--a-cell-line);
+    display: grid;
+    place-items: center;
+    transition: border-color .18s, background .18s, box-shadow .18s;
 }
 
-.pin-container input:focus { 
-    border-color: var(--sage-professional); 
-    background: white; 
-    box-shadow: 0 0 0 4px rgba(90, 141, 59, 0.1); 
+.pin-cell > span {
+    width: clamp(12px, 1vw, 16px);
+    height: clamp(12px, 1vw, 16px);
+    border-radius: 50%;
+    background: var(--a-accent-deep);
+    transform: scale(.2);
+    opacity: 0;
+    transition: transform .2s cubic-bezier(.2, 1.4, .4, 1), opacity .18s;
 }
 
-.auth-btn { 
-    width: 100%; 
-    height: 56px; 
-    font-size: 15px; 
-    border-radius: 12px; 
+.pin-cell.filled { border-color: var(--a-accent); background: var(--a-accent-tint); }
+.pin-cell.filled > span { transform: scale(1); opacity: 1; }
+
+.pin-cells:focus-within .pin-cell:not(.filled) {
+    border-color: #c6ecd6;        /* the emerald ring used across the redesign */
+    box-shadow: 0 0 0 3px rgba(31, 157, 87, .08);
+}
+
+.pin-cells.bad .pin-cell {
+    border-color: var(--a-cell-line-bad);
+    background: #fcecec;          /* V4 red tint */
+    box-shadow: none;
+}
+.pin-cells.bad { animation: shake .42s ease-in-out; }
+
+/* the real field: invisible, but fully functional and focusable */
+.pin-container input#pinInput {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: transparent;
+    caret-color: transparent;
+    font-size: 16px;              /* >=16px stops iOS zooming on focus */
+    text-align: center;
+    cursor: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.auth-btn {
+    width: 100%;
+    height: clamp(52px, 4vw, 64px);
+    font-size: clamp(13px, 1vw, 15px);
+    border-radius: clamp(14px, 1.1vw, 17px);
+    letter-spacing: .03em;
+    /* shared .btn-primary hardcodes an olive hover (#4a7530) and an olive-tinted
+       shadow, both of which fight the emerald above — restate them here. */
+    box-shadow: 0 4px 12px rgba(31, 157, 87, .22);
+}
+.auth-btn:hover {
+    background: var(--a-accent-deep);
+    box-shadow: 0 6px 16px rgba(31, 157, 87, .30);
 }
 
 .pin-error {
-    color: var(--red-alert);
-    font-size: 13px;
+    color: var(--a-error);
+    font-size: clamp(13px, 1vw, 15px);
     font-weight: 700;
-    margin-top: 10px;
     text-align: center;
     display: none;
     animation: shake 0.4s ease-in-out;
-}
-
-.pin-container input.pin-filled {
-    border-color: var(--sage-professional);
-    background: white;
-    box-shadow: 0 0 0 4px rgba(90, 141, 59, 0.15);
-    transition: box-shadow 0.25s ease, border-color 0.25s ease;
 }
 
 @keyframes auth-btn-spin {
@@ -1219,6 +1312,33 @@ input, textarea, select,
     border-top-color: white;
     border-radius: 50%;
     animation: auth-btn-spin 0.65s linear infinite;
+}
+
+/* ---------- stacked: brand collapses to a masthead band ---------- */
+@media (max-width: 860px) {
+    .auth-split-layout { flex-direction: column; overflow-y: auto; }
+    .auth-brand-side {
+        flex: 0 0 auto;
+        padding: 26px 24px 22px;
+        gap: 16px;
+    }
+    .auth-logo { width: 260px; }
+    .auth-brand-mid p { display: none; }
+    .auth-rail { gap: 20px; padding-top: 15px; }
+    .auth-keyline { flex: 0 0 3px; width: 100%; }
+    .auth-form-side { padding: 30px 24px 40px; align-items: start; }
+}
+
+@media (max-width: 420px) {
+    .auth-brand-side { padding: 22px 20px 18px; }
+    .auth-logo { width: 200px; }
+    .pin-cell { height: 60px; border-radius: 13px; }
+    .auth-form-side h2 { font-size: 23px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pin-cell, .pin-cell > span { transition: none; }
+    .pin-cells.bad, .pin-error { animation: none; }
 }
 
 @keyframes shake {

@@ -1747,6 +1747,13 @@ function handlePINAutoTrigger() {
     const input = document.getElementById('pinInput');
     const btn = document.getElementById('unlockBtn');
 
+    // Typing again clears the previous failure, so the red cells and the error
+    // line don't linger over a fresh attempt.
+    _authPaintCells();
+    document.getElementById('pinCells')?.classList.remove('bad');
+    const prevErr = document.getElementById('pinError');
+    if (prevErr) prevErr.style.display = 'none';
+
     if (_pinAutoTimer) {
         clearTimeout(_pinAutoTimer);
         _pinAutoTimer = null;
@@ -1836,6 +1843,7 @@ async function checkPIN() {
             err.innerText = "Incorrect PIN. Please try again.";
             err.style.display = 'block';
             document.getElementById('pinInput').value = '';
+            document.getElementById('pinCells')?.classList.add('bad');
         }
     } catch (e) {
         console.error(e);
@@ -1844,6 +1852,7 @@ async function checkPIN() {
     } finally {
         btn.classList.remove('loading');
         document.getElementById('pinInput').classList.remove('pin-filled');
+        _authPaintCells();   // covers success, wrong PIN and the catch above
     }
 }
 
@@ -5403,23 +5412,39 @@ function copyQMToClipboard(button) {
 // --- 16. MODULE: GLOBAL AUTH OVERLAY ---
 function injectGlobalAuth() {
     if (!document.getElementById('authOverlay')) {
+        // "Storefront" split — full-bleed dark brand half + light PIN half.
+        // The wordmark PNG is white-on-transparent, so it MUST stay on the dark
+        // side. #pinInput is now transparent and overlays four cells (see the
+        // GLOBAL AUTH block in styles.css); its handlers are unchanged.
         const overlayHtml = `
         <div id="authOverlay" class="auth-page" style="display: none;">
             <div class="auth-split-layout">
                 <div class="auth-brand-side">
-                    <img src="images/speeks_logo.png" alt="SPEEKS Logo" class="auth-logo">
-                    <div class="auth-brand-text">
-                        <h1>SPEEKSNET</h1>
-                        <p>Internal Operations Portal</p>
+                    <div class="auth-brand-top">Speeks Technology</div>
+                    <div class="auth-brand-mid">
+                        <img src="images/speeks_logo.png" alt="SPEEKS" class="auth-logo">
+                        <p>Everything your store needs to succeed: operational tools, KPIs, and the daily processes that keep the store running smoothly.</p>
                     </div>
+                    <dl class="auth-rail">
+                        <div><dt>Stores</dt><dd>5</dd></div>
+                        <div><dt>Markets</dt><dd>KC · STL</dd></div>
+                        <div><dt>Week of</dt><dd id="authWeekOf">&nbsp;</dd></div>
+                    </dl>
                 </div>
+                <div class="auth-keyline"></div>
                 <div class="auth-form-side">
                     <div class="auth-form-container">
-                        <div class="auth-badge">SECURE ACCESS</div>
-                        <h2>Welcome Back</h2>
-                        <p id="authSubtitle">Please enter your 4-digit PIN to securely access the hub.</p>
+                        <div class="auth-badge">Secure access</div>
+                        <h2>Welcome back</h2>
+                        <p id="authSubtitle">Enter your 4-digit PIN to open the hub.</p>
                         <div id="pinInputContainer" class="pin-container">
-                            <input type="password" id="pinInput" maxlength="4" placeholder="••••" onkeypress="if(event.key === 'Enter') checkPIN()" oninput="handlePINAutoTrigger()">
+                            <div class="pin-cells" id="pinCells">
+                                <div class="pin-cell"><span></span></div>
+                                <div class="pin-cell"><span></span></div>
+                                <div class="pin-cell"><span></span></div>
+                                <div class="pin-cell"><span></span></div>
+                                <input type="password" id="pinInput" maxlength="4" inputmode="numeric" autocomplete="off" aria-label="4-digit PIN" onkeypress="if(event.key === 'Enter') checkPIN()" oninput="handlePINAutoTrigger()">
+                            </div>
                             <button id="unlockBtn" class="btn-primary auth-btn" onclick="checkPIN()">Unlock Portal</button>
                             <div id="pinError" class="pin-error">Incorrect PIN. Please try again.</div>
                         </div>
@@ -5428,7 +5453,28 @@ function injectGlobalAuth() {
             </div>
         </div>`;
         document.body.insertAdjacentHTML('beforeend', overlayHtml);
+        _authSetWeekOf();
     }
+}
+
+// Monday of the current week, e.g. "Jul 27" — computed, never stale.
+function _authSetWeekOf() {
+    const el = document.getElementById('authWeekOf');
+    if (!el) return;
+    const d = new Date();
+    const dow = d.getDay();                              // 0 = Sunday
+    d.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1));  // back to Monday
+    el.textContent = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// Mirror #pinInput's length onto the four cells. The input itself is invisible,
+// so this is the only thing that shows entry progress.
+function _authPaintCells() {
+    const input = document.getElementById('pinInput');
+    const cells = document.querySelectorAll('#pinCells .pin-cell');
+    if (!input || !cells.length) return;
+    const len = input.value.length;
+    cells.forEach((c, i) => c.classList.toggle('filled', i < len));
 }
 
 function handleSignOut() {
