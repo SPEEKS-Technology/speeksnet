@@ -59,6 +59,7 @@ const RECYCLE_URL       = `${_BASE}/recycle-requests`;
 const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
 const VARIANCE_REPLIES_URL = `${_BASE}/variance-replies`;
 const AGING_INV_URL     = `${_BASE}/aging-inventory`;
+const PREFERRED_URL     = `${_BASE}/preferred-purchases`;
 const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
@@ -9348,7 +9349,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -17462,6 +17463,10 @@ const FEATURE_CATALOG = [
     { key: 'tool-store-comment',       label: 'Send Store Comment',            tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
     { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
     { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    // Two versions of one tool, sharing the `tool-preferred` stem so the
+    // Delegation tab pairs them the way it already pairs the claims tools.
+    { key: 'tool-preferred-request',   label: 'Preferred Purchases',           tab: 'tools', group: 'Orders', def: ['district-manager', 'manager', 'assistant-manager'] },
+    { key: 'tool-preferred-approve',   label: 'Preferred Purchases (Owner)',   tab: 'tools', group: 'Orders', def: ['owner-manager'] },
     { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
     { key: 'tool-feature-access',      label: 'Feature Access (this tool)',    tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
@@ -21097,7 +21102,13 @@ function _samReminderCfg() {
               ? "openClaimsOversight()"
               : "openClaimsModal(); switchClaimsTab('view')" },
         { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "toggleRecycleInventory(); switchRecycleTab('view')" },
-        { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging Inventory Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" }
+        { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging Inventory Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" },
+        // Preferred Purchases — feed-only, both directions. The owner's card is a
+        // queue to work (amber "Review"); the requester's is an answer that came
+        // back, which is information rather than a task, so it sits on the calm
+        // grey chip and opens straight to My Requests (which also marks it seen).
+        { key: 'preferredOwner', id: 'preferredOwnerAlertBubble', text: 'preferredOwnerAlertBubbleText', title: 'Purchase Requests', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "openPreferredOwner()" },
+        { key: 'preferredMine', id: 'preferredMineAlertBubble', text: 'preferredMineAlertBubbleText', title: 'Purchase Request Answered', urgency: 0, due: 'Answered', cls: 'sam-due-grey', action: "openPreferredMine()" }
     ];
     // KPI due reminders (weekly + monthly) — data-aware, driven by
     // checkKpiDueReminders. The bubbles gate visibility; title/due/urgency flip to
@@ -21245,6 +21256,7 @@ const _RT_TOOL_CHECKS = {
     announcements: ['loadCMS'],
     patch:         ['loadPatchNotes'],
     kpi:           ['checkKpiDueReminders'],
+    preferred:     ['checkPreferredReminders'],
     // Command Center + Listing Goals sources. Each re-fetches through its edge
     // fn and recomputes its update signature, so the pulsing dot / bar lights the
     // moment a write lands — no refresh or re-login. (scorecard fn, ebay-alerts
@@ -21542,3 +21554,642 @@ function openHubToPatch() {
 
 // Record the latest patch version as seen (clears the "new patch" row + badge).
 
+
+/* =========================================================
+   MODULE: PREFERRED PURCHASES
+   Managers / ASMs / the DM suggest products for the shared
+   Amazon list; the Owner (Manager) approves or denies.
+
+   Two versions of ONE modal, chosen by role (Feature Access
+   keys tool-preferred-request / tool-preferred-approve):
+     - requester: New Request + My Requests
+     - owner:     Pending queue + Decided history
+
+   Pipeline only. Approving records a decision; it does not
+   publish a list here, because the list lives on Amazon.
+   Deliberately NO category and NO store scope — one shared
+   list can express neither.
+
+   Notifications are FEED ONLY (Ethan, 2026-07-27): the two
+   #preferred*AlertBubble elements are invisible
+   state-carriers that _samGatherReminders reads, exactly like
+   the other retired bubbles. Do not style them.
+   ========================================================= */
+const _PL_OWNER_ROLES = new Set(['owner (manager)', 'owner manager']);
+// ASMs included: they are the ones handling the supplies day to day.
+const _PL_REQ_ROLES = new Set(['manager', 'assistant manager', 'district manager', 'multi-store manager']);
+
+let _plRequests = [];      // rows for whichever view is open
+let _plTab = 'new';
+let _plBusy = false;
+let _plDecideOpen = null;  // id whose note editor is expanded
+
+function _plRole()  { return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(); }
+function _plName()  { return (sessionStorage.getItem('speeksUserName') || '').trim(); }
+function _plStore() { return (sessionStorage.getItem('speeksUserStore') || '').toUpperCase().trim(); }
+function _plIsOwner() { return _PL_OWNER_ROLES.has(_plRole()); }
+// A Feature Access override can hand the owner view to someone else (that is the
+// point of that tool), so trust the rendered link rather than the role alone.
+function _plCanApprove() {
+    if (_plIsOwner()) return true;
+    const el = document.querySelector('[data-feature="tool-preferred-approve"]');
+    return !!(el && el.offsetParent !== null);
+}
+
+// ---------- money / pack-size maths ----------
+function _plMoney(n) {
+    // Number(null) and Number('') are both 0, which is finite — so without the
+    // explicit empty check a price-less row (add_direct allows one, and the
+    // column is nullable) would render a confident "$0.00".
+    if (n === null || n === undefined || n === '') return '';
+    const v = Number(n);
+    if (!Number.isFinite(v)) return '';
+    return '$' + v.toFixed(2);
+}
+// Pull a count out of free-text pack size ("box of 100", "4 rolls of 250",
+// "24-pack"). Multiplies every number it finds, so "4 rolls of 250" = 1000
+// labels. Returns null when there is nothing usable to divide by, and the
+// per-unit figure is then simply not shown — a wrong unit price is worse than
+// no unit price.
+function _plPackCount(txt) {
+    const t = String(txt || '').toLowerCase();
+    if (!t) return null;
+    const nums = t.match(/\d+(?:\.\d+)?/g);
+    if (!nums || !nums.length) return null;
+    let n = 1;
+    for (const raw of nums) {
+        const v = parseFloat(raw);
+        if (!Number.isFinite(v) || v <= 0) return null;
+        n *= v;
+    }
+    return (n > 1 && n <= 1000000) ? n : null;
+}
+// Singular noun for the per-unit label.
+//
+// Read from the ITEM NAME first, not the pack size: the pack size names the
+// CONTAINER, so "box of 100" would yield "$0.12 / box" when what you actually
+// get 100 of is gloves. Container words are the last resort, used only when
+// nothing in either string names the contents.
+function _plUnitWord(row) {
+    const name = String((row && row.item_name) || '').toLowerCase();
+    const pack = String((row && row.pack_size) || '').toLowerCase();
+    const THINGS = [
+        [/glove/, 'glove'], [/cloth|rag|towel/, 'cloth'], [/label/, 'label'],
+        [/wipe/, 'wipe'], [/sheet/, 'sheet'], [/bag|mailer/, 'bag'],
+        [/batter/, 'battery'], [/tape/, 'roll'], [/bit\b|driver/, 'bit'],
+        [/pen\b|marker|sharpie/, 'pen'], [/can\b|bottle|spray/, 'can'],
+        [/pair|sock|glasses/, 'pair'],
+    ];
+    for (const p of THINGS) { if (p[0].test(name)) return p[1]; }
+    for (const p of THINGS) { if (p[0].test(pack)) return p[1]; }
+    const CONTAINERS = [[/roll/, 'roll'], [/case/, 'case'], [/box/, 'box'], [/pack/, 'pack'], [/set/, 'set']];
+    for (const p of CONTAINERS) { if (p[0].test(pack)) return p[1]; }
+    return 'each';
+}
+function _plUnitHtml(row, cls) {
+    const c = _plPackCount(row.pack_size);
+    const p = Number(row.price);
+    if (!c || !Number.isFinite(p) || p <= 0) return '';
+    const per = p / c;
+    // Scale the decimals to the magnitude. At two decimals a 3.5-cent label
+    // rounds to "$0.03" and a sub-cent unit collapses to "$0.00" — both lose the
+    // comparison the number exists to make. Trailing zeros are trimmed back so
+    // the common case still reads "$0.12", not "$0.120".
+    let dp = 2;
+    if (per < 0.001)     dp = 5;
+    else if (per < 0.01) dp = 4;
+    else if (per < 0.10) dp = 3;
+    let txt = per.toFixed(dp);
+    if (dp > 2) txt = txt.replace(/0+$/, '').replace(/\.$/, '');
+    return '<div class="' + cls + '">$' + txt + ' / ' + escapeHtml(_plUnitWord(row)) + '</div>';
+}
+
+function _plFmtDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+function _plAgeDays(iso) {
+    if (!iso) return 0;
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return 0;
+    return Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000));
+}
+// Day-granular on purpose. The feed reconciler matches cards by a content
+// signature, so an hour-by-hour "2h ago" would change the signature on every
+// render and churn the card forever (same reason _samFmtDate is absolute).
+function _plAgeText(iso) {
+    const n = _plAgeDays(iso);
+    return n === 0 ? 'today' : n === 1 ? 'yesterday' : (n + ' days ago');
+}
+
+// ---------- duplicate hint ----------
+// Name overlap only — there are no categories to scope the comparison within.
+// Compares significant words so "Nitrile gloves box of 100" matches "Nitrile
+// Gloves, Large". A hint above the Approve button, never a block.
+const _PL_STOP = new Set(['the', 'and', 'for', 'with', 'pack', 'box', 'of', 'set', 'kit',
+    'count', 'pcs', 'large', 'small', 'medium', 'assorted', 'inch']);
+function _plWords(name) {
+    const out = new Set();
+    String(name || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+        .forEach(function (w) { if (w.length > 2 && !_PL_STOP.has(w)) out.add(w); });
+    return out;
+}
+function _plFindDupe(row, approved) {
+    const a = _plWords(row.item_name);
+    if (!a.size) return null;
+    let best = null, bestScore = 0;
+    approved.forEach(function (other) {
+        if (other.id === row.id) return;
+        const b = _plWords(other.item_name);
+        if (!b.size) return;
+        let hit = 0;
+        a.forEach(function (w) { if (b.has(w)) hit++; });
+        const score = hit / Math.min(a.size, b.size);
+        if (hit >= 1 && score >= 0.5 && score > bestScore) { bestScore = score; best = other; }
+    });
+    return best;
+}
+
+// ---------- open / close ----------
+function togglePreferredPurchases(forceTab) {
+    const modal = document.getElementById('preferredModal');
+    if (!modal) return;
+    const opening = !modal.classList.contains('show');
+    if (!opening) { closeAllModals(); return; }
+    closeAllModals();
+    _plTab = forceTab || (_plCanApprove() ? 'pending' : 'new');
+    _plDecideOpen = null;
+    _plSyncChrome();
+    modal.classList.add('show');
+    _plLoad();
+}
+function openPreferredOwner() { togglePreferredPurchases('pending'); }
+function openPreferredMine()  { togglePreferredPurchases('mine'); }
+
+// Head + tabs differ by version; the modal markup itself is shared and is
+// copied into all 5 shells.
+function _plSyncChrome() {
+    const owner = _plCanApprove();
+    const t = document.getElementById('preferredHeadTitle');
+    const s = document.getElementById('preferredHeadSub');
+    if (t) t.textContent = owner ? 'Preferred Purchases (Owner)' : 'Preferred Purchases';
+    if (s) s.textContent = owner
+        ? 'Approve what goes on the Amazon list.'
+        : 'Suggest a product for the company list.';
+    const vis = {
+        'pl-tab-new': !owner,
+        'pl-tab-mine': !owner,
+        'pl-tab-pending': owner,
+        'pl-tab-decided': owner
+    };
+    Object.keys(vis).forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = vis[id] ? '' : 'none';
+    });
+}
+
+function plSwitchTab(tab) {
+    _plTab = tab;
+    _plDecideOpen = null;
+    _plRender();
+}
+
+// ---------- load ----------
+async function _plLoad() {
+    const owner = _plCanApprove();
+    const body = document.getElementById('preferredBody');
+    if (body) body.innerHTML = '<div class="pl-empty"><div class="pl-empty-t">Loading…</div></div>';
+    try {
+        const q = owner
+            ? PREFERRED_URL + '?scope=all&v=' + Date.now()
+            : PREFERRED_URL + '?scope=mine&name=' + encodeURIComponent(_plName()) + '&v=' + Date.now();
+        const res = await fetch(q);
+        const data = await res.json();
+        _plRequests = (data && data.requests) || [];
+    } catch (e) {
+        _plRequests = [];
+        if (body) body.innerHTML = '<div class="pl-empty"><div class="pl-empty-t" style="color:var(--red-alert)">Couldn\'t load requests.</div>'
+            + '<div class="pl-empty-s">Check your connection and reopen the tool.</div></div>';
+        return;
+    }
+    _plRender();
+    // Opening the tool IS the acknowledgement for a requester — stamps the
+    // verdicts seen so their feed card clears for good instead of re-nagging.
+    if (!owner && _plUnseenDecided().length) {
+        try {
+            await postWrite(PREFERRED_URL, { action: 'mark_seen', name: _plName() });
+            const now = new Date().toISOString();
+            _plRequests.forEach(function (r) { if (r.decided_at && !r.requester_seen_at) r.requester_seen_at = now; });
+            if (typeof checkPreferredReminders === 'function') checkPreferredReminders();
+        } catch (_) { /* card just stays until next time */ }
+    }
+}
+
+function _plUnseenDecided() {
+    const me = _plName().toLowerCase();
+    return _plRequests.filter(function (r) {
+        return r.decided_at && !r.requester_seen_at
+            && String(r.requested_by || '').toLowerCase() === me;
+    });
+}
+
+// ---------- render ----------
+function _plRender() {
+    const body = document.getElementById('preferredBody');
+    if (!body) return;
+    document.querySelectorAll('#preferredTabs .tab-btn').forEach(function (b) {
+        b.classList.toggle('active', b.dataset.pltab === _plTab);
+    });
+    const foot = document.getElementById('preferredFooter');
+    if (foot) foot.style.display = (_plTab === 'new') ? 'flex' : 'none';
+
+    if (_plTab === 'new')     { body.innerHTML = _plFormHtml();    return; }
+    if (_plTab === 'mine')    { body.innerHTML = _plMineHtml();    return; }
+    if (_plTab === 'pending') { body.innerHTML = _plPendingHtml(); return; }
+    body.innerHTML = _plDecidedHtml();
+}
+
+function _plFormHtml() {
+    return ''
+    + '<div class="pl-hint" style="margin:0 0 15px;">'
+    + 'Suggest a product for the company preferred list. It gets reviewed and either '
+    + 'added to the Amazon list or answered with what to buy instead.'
+    + '</div>'
+    + '<div class="pl-grid">'
+    + '  <div class="pl-full">'
+    + '    <label class="form-label-caps">Item <span class="pl-req">*</span></label>'
+    + '    <input type="text" id="plItem" class="form-input-lg" maxlength="200" placeholder="e.g. Nitrile gloves, box of 100 (Large)">'
+    + '  </div>'
+    + '  <div class="pl-full">'
+    + '    <label class="form-label-caps">Amazon link <span class="pl-req">*</span></label>'
+    + '    <input type="text" id="plUrl" class="form-input-lg" placeholder="Paste the product URL">'
+    + '  </div>'
+    + '  <div>'
+    + '    <label class="form-label-caps">Price <span class="pl-req">*</span></label>'
+    + '    <input type="text" id="plPrice" class="form-input-lg" inputmode="decimal" placeholder="0.00">'
+    + '  </div>'
+    + '  <div>'
+    + '    <label class="form-label-caps">What you get for that <span class="pl-req">*</span></label>'
+    + '    <input type="text" id="plPack" class="form-input-lg" maxlength="120" placeholder="e.g. box of 100 &middot; 4 rolls &middot; 1 set">'
+    + '  </div>'
+    + '</div>'
+    + '<div class="pl-hint" style="margin:-6px 0 15px;">'
+    + 'Price alone can&rsquo;t be compared across brands &mdash; the pack size is what '
+    + 'turns it into a per&#8209;unit number, which is usually the whole argument.'
+    + '</div>'
+    + '<label class="form-label-caps">Why this one <span class="pl-req">*</span></label>'
+    + '<textarea id="plReason" class="form-input-lg" rows="3" maxlength="2000" '
+    + 'placeholder="What does it replace, and why is it better? Cheaper per unit, lasts longer, fits a machine we own…"></textarea>'
+    + '<div id="plFormErr" class="pl-err"></div>'
+    + '<div class="box-order-disclaimer">'
+    + 'One product per request. If you&rsquo;re suggesting a replacement for something we '
+    + 'already stock, say what it replaces &mdash; that&rsquo;s the fastest way to a yes.'
+    + '</div>';
+}
+
+function _plStatusChip(status) {
+    const s = String(status || 'pending');
+    const label = s === 'approved' ? 'Approved' : s === 'denied' ? 'Denied' : 'Pending';
+    return '<span class="pl-chip pl-chip-' + escapeHtml(s) + '">' + label + '</span>';
+}
+
+function _plSubHtml(row) {
+    if (!row.substitute_id) return '';
+    const sub = _plRequests.find(function (r) { return r.id === row.substitute_id; });
+    if (!sub) return '';
+    return '<div class="pl-sub">&#8594; Buy instead: ' + escapeHtml(sub.item_name) + '</div>';
+}
+
+function _plMineHtml() {
+    if (!_plRequests.length) {
+        return '<div class="pl-empty"><div class="pl-empty-t">Nothing sent yet.</div>'
+            + '<div class="pl-empty-s">Suggest a product on the New Request tab and it&rsquo;ll show up here.</div></div>';
+    }
+    const rows = _plRequests.map(function (r) {
+        const note = r.owner_note
+            ? '<div class="pl-tbl-note"><b>' + escapeHtml(r.decided_by || 'Owner') + ':</b> ' + escapeHtml(r.owner_note) + '</div>'
+            : '';
+        const act = (r.status === 'pending')
+            ? '<button class="pl-link" onclick="plWithdraw(' + r.id + ')">Withdraw</button>'
+            : '';
+        return '<tr>'
+            + '<td>' + _plStatusChip(r.status) + '</td>'
+            + '<td><div class="pl-it"><a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer">'
+            + escapeHtml(r.item_name) + '</a></div>' + note + _plSubHtml(r) + '</td>'
+            + '<td class="pl-num">' + _plMoney(r.price) + _plUnitHtml(r, 'pl-unit-sm') + '</td>'
+            + '<td style="white-space:nowrap;">' + _plFmtDate(r.created_at) + '</td>'
+            + '<td>' + act + '</td>'
+            + '</tr>';
+    }).join('');
+    return '<table class="pl-tbl">'
+        + '<thead><tr><th style="min-width:120px;">Status</th><th>Item</th>'
+        + '<th class="pl-num">Price</th><th>Sent</th><th></th></tr></thead>'
+        + '<tbody>' + rows + '</tbody></table>'
+        + '<div class="pl-hint" style="margin-top:14px;">'
+        + 'A denial names the alternative when there is one, so the same product doesn&rsquo;t '
+        + 'get suggested again next month. Pending requests can still be withdrawn &mdash; '
+        + 'anything decided is final.</div>';
+}
+
+const _PL_EXT_ICO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
+
+function _plPendingHtml() {
+    const pending = _plRequests.filter(function (r) { return r.status === 'pending'; })
+        .sort(function (a, b) { return new Date(a.created_at) - new Date(b.created_at); });
+    const approved = _plRequests.filter(function (r) { return r.status === 'approved'; });
+    const addBtn = '<button class="btn-secondary" style="padding:8px 14px;font-size:11.5px;" '
+        + 'onclick="plAddDirect()">+ Add without a request</button>';
+
+    if (!pending.length) {
+        return '<div class="pl-bar"><span class="pl-bar-count">Nothing waiting</span>'
+            + '<span class="pl-sp"></span>' + addBtn + '</div>'
+            + '<div class="pl-empty"><div class="pl-empty-t">Queue&rsquo;s clear.</div>'
+            + '<div class="pl-empty-s">New suggestions land here, oldest first.</div></div>';
+    }
+
+    const cards = pending.map(function (r) {
+        const dupe = _plFindDupe(r, approved);
+        const dupeHtml = dupe
+            ? '<div class="pl-dupe"><span>&#9888;</span><div>Close to something already approved '
+              + '&mdash; <b>' + escapeHtml(dupe.item_name) + '</b>'
+              + (dupe.price != null ? ' (' + _plMoney(dupe.price) + ')' : '') + '.</div></div>'
+            : '';
+        const who = [r.requested_by, r.store, r.requested_by_role].filter(Boolean)
+            .map(function (x) { return escapeHtml(x); }).join(' &middot; ');
+        const open = _plDecideOpen === r.id;
+        const subOpts = approved.length
+            ? '<select id="plSub-' + r.id + '"><option value="">No substitute &mdash; nothing to point at</option>'
+              + approved.map(function (a) {
+                  return '<option value="' + a.id + '">Buy instead: ' + escapeHtml(a.item_name) + '</option>';
+              }).join('') + '</select>'
+            : '';
+        const first = escapeHtml((r.requested_by || '').split(' ')[0] || 'them');
+        const editor = open
+            ? '<div class="pl-note-box">'
+              + '<textarea id="plNote-' + r.id + '" rows="2" maxlength="2000" '
+              + 'placeholder="Note back to ' + first + ' (optional) — buy the 6-pack, use what we have first…"></textarea>'
+              + subOpts
+              + '<div class="pl-hint">Shown to the requester with your decision. A substitute only '
+              + 'applies to a deny, and can only point at something already approved.</div>'
+              + '</div>'
+            : '';
+        return '<div class="pl-card" id="plCard-' + r.id + '">'
+            + '<div class="pl-card-top">'
+            + '<div class="pl-card-main">'
+            + '<div class="pl-card-name">' + escapeHtml(r.item_name) + '</div>'
+            + '<div class="pl-card-meta">' + who + ' &middot; ' + escapeHtml(_plAgeText(r.created_at)) + '</div>'
+            + '</div>'
+            + '<div class="pl-price-wrap">'
+            + '<div class="pl-price">' + _plMoney(r.price) + '</div>'
+            + (r.pack_size ? '<div class="pl-pack">' + escapeHtml(r.pack_size) + '</div>' : '')
+            + _plUnitHtml(r, 'pl-unit')
+            + '</div></div>'
+            + '<div class="pl-reason">' + escapeHtml(r.reason || '') + '</div>'
+            + dupeHtml
+            + '<div class="pl-acts">'
+            + '<a class="pl-link" href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer">'
+            + _PL_EXT_ICO + ' View on Amazon</a>'
+            + '<span class="pl-sp"></span>'
+            + (open ? '' : '<button class="pl-link" onclick="plToggleNote(' + r.id + ')">Add a note</button>')
+            + '<button class="pl-btn-no" onclick="plDecide(' + r.id + ',\'denied\')">Deny</button>'
+            + '<button class="pl-btn-ok" onclick="plDecide(' + r.id + ',\'approved\')">Approve</button>'
+            + '</div>' + editor + '</div>';
+    }).join('');
+
+    return '<div class="pl-bar">'
+        + '<span class="pl-bar-count"><b>' + pending.length + '</b> waiting on you</span>'
+        + '<span class="pl-bar-age">oldest first &middot; sent ' + escapeHtml(_plAgeText(pending[0].created_at)) + '</span>'
+        + '<span class="pl-sp"></span>' + addBtn + '</div>' + cards;
+}
+
+function _plDecidedHtml() {
+    const decided = _plRequests.filter(function (r) { return r.status !== 'pending'; });
+    if (!decided.length) {
+        return '<div class="pl-empty"><div class="pl-empty-t">No decisions yet.</div>'
+            + '<div class="pl-empty-s">Approvals and denials both land here.</div></div>';
+    }
+    const rows = decided.map(function (r) {
+        const note = r.owner_note
+            ? '<div class="pl-tbl-note"><b>You:</b> ' + escapeHtml(r.owner_note) + '</div>' : '';
+        return '<tr>'
+            + '<td>' + _plStatusChip(r.status) + '</td>'
+            + '<td><div class="pl-it"><a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer">'
+            + escapeHtml(r.item_name) + '</a></div>' + note + _plSubHtml(r) + '</td>'
+            + '<td class="pl-num">' + _plMoney(r.price) + _plUnitHtml(r, 'pl-unit-sm') + '</td>'
+            + '<td>' + escapeHtml((r.requested_by || '').split(' ')[0])
+            + (r.store ? ' &middot; ' + escapeHtml(r.store) : '') + '</td>'
+            + '<td style="white-space:nowrap;">' + _plFmtDate(r.decided_at) + '</td>'
+            + '<td><button class="pl-link" onclick="plOwnerDelete(' + r.id + ')">Remove</button></td>'
+            + '</tr>';
+    }).join('');
+    return '<table class="pl-tbl">'
+        + '<thead><tr><th style="min-width:120px;">Verdict</th><th>Item</th>'
+        + '<th class="pl-num">Price</th><th>From</th><th>Decided</th><th></th></tr></thead>'
+        + '<tbody>' + rows + '</tbody></table>'
+        + '<div class="pl-hint" style="margin-top:14px;">'
+        + 'This is the record of decisions, not the list itself &mdash; the list lives on '
+        + 'Amazon. Approving marks the request so you know what still needs adding there.</div>';
+}
+
+// ---------- actions ----------
+function plToggleNote(id) { _plDecideOpen = (_plDecideOpen === id) ? null : id; _plRender(); }
+
+function _plShowFormErr(msg) {
+    const e = document.getElementById('plFormErr');
+    if (!e) return;
+    e.textContent = msg || '';
+    e.style.display = msg ? 'block' : 'none';
+}
+
+async function plSubmitRequest() {
+    if (_plBusy) return;
+    const gv = function (id) { const el = document.getElementById(id); return el ? el.value : ''; };
+    const item = gv('plItem'), url = gv('plUrl'), price = gv('plPrice'),
+          pack = gv('plPack'), reason = gv('plReason');
+    if (!item.trim())   { _plShowFormErr('Give the item a name.'); return; }
+    if (!url.trim())    { _plShowFormErr('Paste the Amazon link.'); return; }
+    if (!/^https?:\/\//i.test(url.trim())) { _plShowFormErr('The link needs to start with http:// or https://'); return; }
+    if (!price.trim())  { _plShowFormErr('Add the price.'); return; }
+    if (!pack.trim())   { _plShowFormErr('Say what you get for that price — it is what makes the price comparable.'); return; }
+    if (!reason.trim()) { _plShowFormErr('Add a line on why this one.'); return; }
+    _plShowFormErr('');
+    _plBusy = true;
+    const btn = document.getElementById('plSubmitBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+    try {
+        await postWrite(PREFERRED_URL, {
+            action: 'submit_request',
+            item_name: item, url: url, price: price, pack_size: pack, reason: reason,
+            requested_by: _plName(),
+            requested_by_role: sessionStorage.getItem('speeksUserRole') || '',
+            store: _plStore()
+        });
+        _plTab = 'mine';
+        await _plLoad();
+    } catch (e) {
+        _plShowFormErr(e.message || 'Could not send that request.');
+    } finally {
+        _plBusy = false;
+        if (btn) { btn.disabled = false; btn.innerHTML = 'Send Request &#8594;'; }
+    }
+}
+
+async function plDecide(id, verdict) {
+    if (_plBusy) return;
+    const noteEl = document.getElementById('plNote-' + id);
+    const subEl = document.getElementById('plSub-' + id);
+    const card = document.getElementById('plCard-' + id);
+    if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+    _plBusy = true;
+    try {
+        await postWrite(PREFERRED_URL, {
+            action: 'decide', id: id, verdict: verdict,
+            owner_note: noteEl ? noteEl.value : '',
+            // A substitute is meaningless on an approve, so only send it on a deny.
+            substitute_id: (verdict === 'denied' && subEl && subEl.value) ? subEl.value : null,
+            decided_by: _plName()
+        });
+        _plDecideOpen = null;
+        await _plLoad();
+        if (typeof checkPreferredReminders === 'function') checkPreferredReminders();
+    } catch (e) {
+        alert(e.message || 'Could not save that decision.');
+        if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
+    } finally { _plBusy = false; }
+}
+
+async function plWithdraw(id) {
+    if (_plBusy) return;
+    if (!confirm('Withdraw this request? It will be removed entirely.')) return;
+    _plBusy = true;
+    try {
+        await postWrite(PREFERRED_URL, { action: 'withdraw_request', id: id, by: _plName() });
+        await _plLoad();
+    } catch (e) { alert(e.message || 'Could not withdraw that request.'); }
+    finally { _plBusy = false; }
+}
+
+async function plOwnerDelete(id) {
+    if (_plBusy) return;
+    if (!confirm('Remove this from the record? This cannot be undone.')) return;
+    _plBusy = true;
+    try {
+        await postWrite(PREFERRED_URL, { action: 'withdraw_request', id: id, by: _plName(), as_owner: true });
+        await _plLoad();
+    } catch (e) { alert(e.message || 'Could not remove that.'); }
+    finally { _plBusy = false; }
+}
+
+// Owner adds something nobody requested. Prompt-based on purpose: it is a rare
+// path, and a second form inside the queue would crowd the decision surface.
+async function plAddDirect() {
+    const item = prompt('Item name');
+    if (!item || !item.trim()) return;
+    const url = prompt('Amazon link');
+    if (url === null) return;
+    if (!/^https?:\/\//i.test(String(url).trim())) { alert('That link needs to start with http:// or https://'); return; }
+    const price = prompt('Price (optional)') || '';
+    const pack = prompt('What you get for that (optional) — e.g. box of 100') || '';
+    try {
+        await postWrite(PREFERRED_URL, {
+            action: 'add_direct', item_name: item, url: url, price: price,
+            pack_size: pack, by: _plName(), store: _plStore()
+        });
+        await _plLoad();
+    } catch (e) { alert(e.message || 'Could not add that.'); }
+}
+
+/* ---------- feed notifications (FEED ONLY — no bubble UI) ----------
+   Two invisible state-carriers on the same contract as every other reminder:
+   _samGatherReminders reads the element's computed display to know the reminder
+   is live, takes its one-line copy from data-summary, and its snooze identity
+   from data-sig. Both ids are in the retired-bubble rule in styles.css, so they
+   are never visible — the feed is the only surface. */
+function _plBubbleEl(which) {
+    const id = which === 'owner' ? 'preferredOwnerAlertBubble' : 'preferredMineAlertBubble';
+    let b = document.getElementById(id);
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = id;
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; align-items:flex-start; gap:8px; z-index:998;';
+    b.innerHTML = '<span id="' + id + 'Text"></span>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+function _plHideBubble(which) {
+    const b = document.getElementById(which === 'owner' ? 'preferredOwnerAlertBubble' : 'preferredMineAlertBubble');
+    if (b) b.style.display = 'none';
+}
+function _plRenderBubble(which, show, summary, sig) {
+    if (!show) { _plHideBubble(which); return; }
+    const b = _plBubbleEl(which);
+    if (!b) return;
+    const t = document.getElementById(b.id + 'Text');
+    if (t) { t.dataset.summary = summary; t.dataset.sig = sig; }
+    b.style.display = 'flex';
+}
+
+let _plCheckStarted = false;
+async function checkPreferredReminders() {
+    const role = _plRole();
+    const owner = _plCanApprove();
+    const requester = _PL_REQ_ROLES.has(role);
+    if (!owner && !requester) { _plHideBubble('owner'); _plHideBubble('mine'); return; }
+    // Safety net behind the realtime ping, same cadence as the other tools.
+    if (!_plCheckStarted) { _plCheckStarted = true; setInterval(checkPreferredReminders, 10 * 60 * 1000); }
+    try {
+        if (owner) {
+            const res = await fetch(PREFERRED_URL + '?scope=all&v=' + Date.now());
+            const data = await res.json();
+            const rows = (data && data.requests) || [];
+            const pending = rows.filter(function (r) { return r.status === 'pending'; })
+                .sort(function (a, b) { return new Date(a.created_at) - new Date(b.created_at); });
+            if (pending.length) {
+                const names = [];
+                pending.forEach(function (r) {
+                    const n = (r.requested_by || '').split(' ')[0];
+                    if (n && names.indexOf(n) === -1) names.push(n);
+                });
+                const who = names.length > 3 ? (names.slice(0, 3).join(', ') + ' and others') : names.join(', ');
+                const age = _plAgeText(pending[0].created_at);
+                const summary = pending.length === 1
+                    ? (who + ' suggested a product — sent ' + age + '.')
+                    : (pending.length + ' suggestions from ' + who + ' — oldest sent ' + age + '.');
+                // Identity is the pending id set, so a NEW request breaks through a
+                // snooze while re-rendering the same queue does not re-nag.
+                _plRenderBubble('owner', true, summary,
+                    'p:' + pending.map(function (r) { return r.id; }).sort().join(','));
+            } else { _plHideBubble('owner'); }
+        } else { _plHideBubble('owner'); }
+
+        if (requester) {
+            const res2 = await fetch(PREFERRED_URL + '?scope=mine&name=' + encodeURIComponent(_plName()) + '&v=' + Date.now());
+            const data2 = await res2.json();
+            const rows2 = (data2 && data2.requests) || [];
+            const fresh = rows2.filter(function (r) { return r.decided_at && !r.requester_seen_at; });
+            if (fresh.length) {
+                let summary;
+                if (fresh.length === 1) {
+                    const r = fresh[0];
+                    summary = '"' + r.item_name + '" was '
+                        + (r.status === 'approved' ? 'approved' : 'denied')
+                        + (r.owner_note ? ' — ' + r.owner_note : '.');
+                } else {
+                    const ok = fresh.filter(function (x) { return x.status === 'approved'; }).length;
+                    const no = fresh.length - ok;
+                    const bits = [];
+                    if (ok) bits.push(ok + ' approved');
+                    if (no) bits.push(no + ' denied');
+                    summary = fresh.length + ' of your suggestions were answered — ' + bits.join(', ') + '.';
+                }
+                _plRenderBubble('mine', true, summary,
+                    'd:' + fresh.map(function (r) { return r.id; }).sort().join(','));
+            } else { _plHideBubble('mine'); }
+        } else { _plHideBubble('mine'); }
+    } catch (_) { /* next poll / ping retries */ }
+    if (typeof renderActionFeed === 'function') renderActionFeed();
+}

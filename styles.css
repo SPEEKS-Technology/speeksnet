@@ -8852,7 +8852,9 @@ body.sam-active .hotbar-btn:hover {
 #varianceAlertBubble,
 #agingAlertBubble,
 #kpiWeeklyAlertBubble,
-#kpiMonthlyAlertBubble {
+#kpiMonthlyAlertBubble,
+#preferredOwnerAlertBubble,
+#preferredMineAlertBubble {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
@@ -9822,4 +9824,149 @@ body.sam-active .hotbar-btn:hover {
     .ex-fields { flex-direction: column; align-items: stretch; }
     .ex-dash { display: none; }
     .ex-actions .btn-primary, .ex-actions .btn-secondary { flex: 1 1 0; }
+}
+
+/* =========================================================
+   PREFERRED PURCHASES  (pl-*)   [2026-07-27, airy V4]
+   Managers / ASMs / the DM suggest products for the shared
+   Amazon list; the Owner (Manager) approves or denies.
+
+   Two surfaces, deliberately different shapes:
+     - the owner's PENDING queue is CARDS, because each row is
+       a judgment call and the link, the price maths and the
+       reason all have to be legible at once;
+     - everything else (my requests, decided history) is a
+       TABLE, because it is a record you scan.
+
+   No category and no store scope anywhere: one shared Amazon
+   list can express neither, so neither is collected.
+   ========================================================= */
+.pl-bar {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 14px; background: #f7faf8; border: 1px solid #eef2ef;
+    border-radius: 12px; margin-bottom: 14px;
+}
+.pl-bar-count { font-size: 13px; font-weight: 800; color: var(--slate-charcoal); }
+.pl-bar-count b { color: #1f9d57; }
+.pl-bar-age { font-size: 11.5px; font-weight: 700; color: #64707c; }
+.pl-bar .pl-sp { flex: 1 1 auto; }
+
+.pl-card {
+    border: 1px solid #e6ece8; border-radius: 14px; background: #fff;
+    padding: 15px 16px 14px; margin-bottom: 11px;
+}
+.pl-card-top { display: flex; align-items: flex-start; gap: 12px; }
+.pl-card-main { flex: 1 1 auto; min-width: 0; }
+.pl-card-name { font-size: 15px; font-weight: 800; color: var(--slate-charcoal); line-height: 1.3; margin: 0 0 3px; }
+.pl-card-meta { font-size: 11.5px; font-weight: 650; color: #64707c; }
+.pl-card-meta b { color: #3d4852; font-weight: 800; }
+
+.pl-price-wrap { flex: 0 0 auto; text-align: right; }
+.pl-price { font-size: 19px; font-weight: 800; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; line-height: 1.1; }
+.pl-pack { font-size: 10.5px; font-weight: 700; color: #9aa6ad; margin-top: 2px; }
+/* The comparison that actually decides it. Rendered only when a count can be
+   parsed out of the pack size, so it is never a guess. */
+.pl-unit {
+    display: inline-block; margin-top: 5px; padding: 3px 8px;
+    background: #e8f7ee; color: #178048; border-radius: 999px;
+    font-size: 10.5px; font-weight: 800; font-variant-numeric: tabular-nums;
+}
+
+.pl-reason {
+    margin: 11px 0 0; padding: 10px 12px; background: #f7faf8;
+    border-left: 3px solid #c6ecd6; border-radius: 0 8px 8px 0;
+    font-size: 12.5px; font-weight: 600; color: #3d4852; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word;
+}
+
+/* Duplicate hint. With categories gone this matches on the item name alone, so
+   it is chattier than a category-scoped match would be — which is why it sits
+   above the Approve button as a nudge and never blocks the decision. */
+.pl-dupe {
+    display: flex; align-items: flex-start; gap: 8px; margin-top: 10px;
+    padding: 9px 11px; background: #fdf3e1; border-radius: 9px;
+    font-size: 11.5px; font-weight: 700; color: #8a6114; line-height: 1.45;
+}
+.pl-dupe b { color: #6d4c0f; }
+
+.pl-acts {
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+    margin-top: 13px; padding-top: 13px; border-top: 1px solid #f1f5f2;
+}
+.pl-acts .pl-sp { flex: 1 1 auto; }
+.pl-link {
+    display: inline-flex; align-items: center; gap: 6px; padding: 8px 13px;
+    background: #fff; border: 1px solid #dde6e0; border-radius: 9px;
+    font-size: 11.5px; font-weight: 800; color: #3d4852; text-decoration: none;
+    cursor: pointer;
+}
+.pl-link:hover { border-color: #c3d6cb; color: var(--slate-charcoal); }
+.pl-link svg { width: 13px; height: 13px; flex: 0 0 auto; }
+.pl-btn-ok, .pl-btn-no {
+    padding: 8px 15px; border-radius: 9px; border: 1px solid;
+    font-size: 11.5px; font-weight: 800; cursor: pointer;
+}
+.pl-btn-ok { background: #1f9d57; border-color: #1f9d57; color: #fff; }
+.pl-btn-ok:hover { background: #178048; border-color: #178048; }
+.pl-btn-no { background: #fff; border-color: #e4c4c4; color: #b23636; }
+.pl-btn-no:hover { background: #fcecec; border-color: #d9a5a5; }
+.pl-btn-ok:disabled, .pl-btn-no:disabled { opacity: .55; cursor: default; }
+
+.pl-chip {
+    display: inline-block; font-size: 10px; font-weight: 800;
+    text-transform: uppercase; letter-spacing: .05em; padding: 4px 11px;
+    border-radius: 999px; white-space: nowrap; min-width: 86px;
+    box-sizing: border-box; text-align: center;
+}
+.pl-chip-pending  { background: #fdf3e1; color: #b7791f; }
+.pl-chip-approved { background: #e8f7ee; color: #178048; }
+.pl-chip-denied   { background: #fcecec; color: #b23636; }
+
+.pl-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.pl-tbl th {
+    text-align: left; padding: 9px 12px; font-size: 10px; font-weight: 800;
+    letter-spacing: .08em; text-transform: uppercase; color: #9aa6ad;
+    border-bottom: 1px solid #eef2ef; white-space: nowrap;
+}
+.pl-tbl td { padding: 11px 12px; border-bottom: 1px solid #f4f8f5; vertical-align: top; color: #3d4852; }
+.pl-tbl tr:last-child td { border-bottom: 0; }
+.pl-tbl .pl-num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 800; color: var(--slate-charcoal); white-space: nowrap; }
+.pl-tbl .pl-unit-sm { font-weight: 700; font-size: 10.5px; color: #178048; }
+.pl-tbl .pl-it { font-weight: 800; color: var(--slate-charcoal); }
+.pl-tbl .pl-it a { color: inherit; text-decoration: none; }
+.pl-tbl .pl-it a:hover { text-decoration: underline; }
+.pl-tbl-note { margin-top: 4px; font-size: 11.5px; font-weight: 650; color: #64707c; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.pl-tbl-note b { color: #3d4852; }
+
+/* A deny that names what to buy instead. Without it the same product comes
+   back next month. */
+.pl-sub {
+    display: inline-flex; align-items: center; gap: 5px; margin-top: 5px;
+    padding: 3px 9px; background: #e8f7ee; color: #178048; border-radius: 999px;
+    font-size: 10.5px; font-weight: 800;
+}
+
+.pl-empty { padding: 44px 20px; text-align: center; }
+.pl-empty-t { font-size: 14px; font-weight: 800; color: #3d4852; }
+.pl-empty-s { margin-top: 4px; font-size: 12.5px; font-weight: 600; color: #9aa6ad; }
+
+.pl-note-box { margin-top: 11px; }
+.pl-note-box textarea, .pl-note-box select {
+    width: 100%; box-sizing: border-box; padding: 10px 12px;
+    border: 1px solid #dde6e0; border-radius: 9px; font-size: 12.5px;
+    font-family: inherit; resize: vertical; outline: none; background: #fff;
+}
+.pl-note-box textarea:focus, .pl-note-box select:focus { border-color: #1f9d57; }
+.pl-note-box select { margin-top: 8px; }
+
+.pl-hint { font-size: 11.5px; font-weight: 650; color: #9aa6ad; margin-top: 6px; line-height: 1.5; }
+.pl-req { font-weight: 400; color: #ef4444; }
+.pl-err { color: #b23636; font-size: 12.5px; font-weight: 700; margin-top: 10px; display: none; }
+
+.pl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.pl-grid .pl-full { grid-column: 1 / -1; }
+@media (max-width: 620px) {
+    .pl-grid { grid-template-columns: 1fr; }
+    .pl-card-top { flex-direction: column; }
+    .pl-price-wrap { text-align: left; }
 }

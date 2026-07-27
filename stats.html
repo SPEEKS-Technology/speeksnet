@@ -9,9 +9,9 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260727o">
+  <link rel="stylesheet" href="styles.css?v=20260727p">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <script src="speeks.js?v=20260727o" defer></script>
+  <script src="speeks.js?v=20260727p" defer></script>
 </head>
 <body class="preload">
 
@@ -968,6 +968,36 @@
 
 </main>
 
+<div class="modal-menu manage-menu" id="preferredModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title" id="preferredHeadTitle">Preferred Purchases</span>
+          <span class="tool-head-sub" id="preferredHeadSub">Suggest a product for the company list.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+
+    <div style="padding: 14px 18px 14px;">
+        <div class="notif-tabs" id="preferredTabs" style="display: inline-flex;">
+            <button id="pl-tab-new" class="tab-btn active" data-pltab="new" onclick="plSwitchTab('new')">New Request</button>
+            <button id="pl-tab-mine" class="tab-btn" data-pltab="mine" onclick="plSwitchTab('mine')">My Requests</button>
+            <button id="pl-tab-pending" class="tab-btn" data-pltab="pending" onclick="plSwitchTab('pending')" style="display:none;">Pending</button>
+            <button id="pl-tab-decided" class="tab-btn" data-pltab="decided" onclick="plSwitchTab('decided')" style="display:none;">Decided</button>
+        </div>
+    </div>
+
+    <div class="manage-content" id="preferredBody"></div>
+
+    <div class="manage-footer" id="preferredFooter" style="display:flex; gap:10px; justify-content:flex-end; padding:14px 18px;">
+        <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
+        <button class="btn-primary" id="plSubmitBtn" onclick="plSubmitRequest()">Send Request &#8594;</button>
+    </div>
+</div>
+
 <div class="modal-menu manage-menu" id="boxOrderModal">
     <div class="modal-header tool-head">
       <div class="tool-head-main">
@@ -1294,6 +1324,8 @@
       <div class="tools-group-label">Orders</div>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" data-feature="tool-box-order" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></span>Box Order</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager" data-feature="tool-recycle-inventory" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></span>Recycle Inventory</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-manager role-assistant-manager" data-feature="tool-preferred-request" onclick="_closeToolsPanel(); togglePreferredPurchases();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/></svg></span>Preferred Purchases</a>
+      <a class="tools-item dynamic-module-flex role-owner-manager" data-feature="tool-preferred-approve" onclick="_closeToolsPanel(); openPreferredOwner();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/><polyline points="9 15 11 17 15 13"/></svg></span>Preferred Purchases (Owner)</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-owner-manager">
