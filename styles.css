@@ -9263,7 +9263,7 @@ body.sam-active .hotbar-btn:hover {
    cleared once opened. Buttons carry enough min-width that even "Buying & Sales" + the dot
    fit without clipping or overlapping the text. */
 .cc-updot { display: none; width: 7px; height: 7px; border-radius: 50%; background: #dc2626; margin-left: 6px; vertical-align: middle; }
-.cc-updot.show { display: inline-block; }
+.cc-updot.show { display: inline-block; animation: pulseNotif 2s infinite; }
 
 /* Collapsed one-line summary (default view, no tab open) */
 /* Flex (not fixed grid) so a tab disabled via Feature Access drops its cell and the

@@ -9043,6 +9043,19 @@ function initDashboardData() {
         if (!window._dmAuditSync) window._dmAuditSync = setInterval(() => {
             if (document.getElementById('dm-audit-container')) fetchDmAuditData();
         }, 60000);
+        // SAFETY NET for the Command Center dots. Realtime (broadcast-as-ping,
+        // see _RT_TOOL_CHECKS: scorecard/ebay/buying/goals) is the PRIMARY path —
+        // it lights the pulsing dot the instant a write lands. This slow poll only
+        // matters if the realtime socket never connects (CDN blocked, etc.); it
+        // re-pulls the sources so a change still surfaces within the interval.
+        if (!window._ccDataSync) window._ccDataSync = setInterval(() => {
+            const hasCC = document.getElementById('cc-updot-buying');       // manager Command Center
+            const hasEC = document.getElementById('ec-updot-buying');       // employee combined widget
+            if ((hasCC || hasEC) && typeof fetchHubData === 'function') fetchHubData();
+            if (hasCC && typeof fetchScorecardData === 'function') fetchScorecardData();
+            if (hasCC && typeof fetchAlertsData === 'function') fetchAlertsData();
+            if (hasEC && typeof fetchAndRenderEmployeeKPIs === 'function') fetchAndRenderEmployeeKPIs();
+        }, 10 * 60 * 1000);
         setTimeout(fetchAndRenderEmployeeGoals, 1100);
         setTimeout(fetchAndRenderEmployeeKPIs, 1200);
         setTimeout(fetchAndDisplayStoreComment, 1500);
@@ -20948,6 +20961,14 @@ const _RT_TOOL_CHECKS = {
     announcements: ['loadCMS'],
     patch:         ['loadPatchNotes'],
     kpi:           ['checkKpiDueReminders'],
+    // Command Center + Listing Goals sources. Each re-fetches through its edge
+    // fn and recomputes its update signature, so the pulsing dot / bar lights the
+    // moment a write lands — no refresh or re-login. (scorecard fn, ebay-alerts
+    // fn, sync-buysell cache refresh, listing-goals fn all broadcast these.)
+    scorecard:     ['fetchScorecardData'],
+    ebay:          ['fetchAlertsData'],
+    buying:        ['fetchHubData'],
+    goals:         ['fetchLiveGoalsData', 'fetchAndRenderEmployeeGoals'],
 };
 
 // Re-run a tool's checks (sequentially, so any UI-refresh step runs after its
