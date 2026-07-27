@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260725i">
+  <link rel="stylesheet" href="styles.css?v=20260726ad">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260725i" defer></script>
+  <script src="speeks.js?v=20260726ad" defer></script>
 </head>
 
 <body class="preload">
@@ -606,6 +606,26 @@
     </div>
 </div>
 
+<!-- Employee personal Listing Goals popup — opened from the "Listing Goals" bar in the
+     action menu. Same content the standalone dashboard widget used to show. -->
+<div class="modal-menu manage-menu" id="empGoalsModal">
+    <div class="modal-header">
+        <h3>My Listing Goals</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content">
+        <div class="card ew-airy emp-goals-card">
+            <div class="emp-goals-banner">
+                <span class="emp-goals-banner-goal">Goal: <b id="emp-goals-store-target">—</b></span>
+                <span class="emp-goals-banner-date" id="emp-goals-date"></span>
+            </div>
+            <div id="employee-goals-widget-body" class="employee-widget-body">
+                <div class="status-message">Syncing Data...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div id="globalOverlay" class="overlay"></div>
 
 <main class="main-content">
@@ -665,7 +685,7 @@
             <span class="sam-m-body"><span class="sam-m-t">Goals &amp; Initiatives</span><span class="sam-m-s">Team goals &amp; initiatives</span></span>
             <span class="sam-m-chev"><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></span>
           </button>
-          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager" data-feature="widget-listing-goals" onclick="toggleModal('listingGoalsModal')">
+          <button class="sam-mini dynamic-module-flex role-manager role-owner-manager role-employee role-assistant-manager role-training" data-feature="widget-listing-goals" onclick="openListingGoals()">
             <span class="sam-mico sage"><svg viewBox="0 0 24 24"><path d="M3 3v18h18M7 15l4-4 3 3 5-6"/></svg></span>
             <span class="sam-m-body"><span class="sam-m-t">Listing Goals</span><span class="sam-m-s" id="samListSub">This week's listing target</span><span class="sam-m-bar"><i id="samListFill" style="width:0%"></i></span></span>
             <span class="sam-m-val" id="samListVal"></span>
@@ -811,33 +831,112 @@
   </div>
 
 
-  <div id="top-alerts-row" class="top-alerts-row dynamic-module-flex role-manager role-owner-manager" data-feature="widget-scorecard-alerts">
-    <div class="card district-master-panel employee-widget-card">
-        <div class="district-kpi-header">
-            <span id="scorecard-store-name" class="district-kpi-title">Store Scorecard</span>
+  <div class="ew-dash dynamic-module-flex role-manager role-owner-manager role-employee employee-dashboard-row sh-dash-row">
+    <!-- ===== COMMAND CENTER (managers): Store Health + Buying & Sales, 3 tabs ===== -->
+    <div class="card employee-widget-card ew-airy cc-widget dynamic-module-block role-manager role-owner-manager" data-feature="widget-scorecard-alerts">
+        <div class="ew-head">
+            <div class="ew-titles">
+                <span class="ew-eyebrow"><span id="cc-store-eyebrow">—</span> · This Month</span>
+                <span class="ew-title"><span id="cc-store-name">Store</span> Command Center <span id="cc-week" class="ew-date"></span></span>
+            </div>
+            <span class="cc-updated">Updated as of <b id="cc-updated">—</b></span>
         </div>
-        <div id="scorecard-widget-body" class="scorecard-widget-body">
-            <div style="display: flex; justify-content: center; align-items: center; min-height: 150px; width: 100%; color: #94a3b8; font-weight: 600; font-size: 14px;">Syncing Data...</div>
+
+        <div class="cc-tabbar">
+            <div class="ew-seg cc-seg">
+                <button id="cc-tab-buying" class="toggle-btn" type="button" onclick="switchCommandTab('buying')" data-feature="cc-buying">Buying &amp; Sales<span class="cc-updot" id="cc-updot-buying"></span></button>
+                <button id="cc-tab-ebay" class="toggle-btn" type="button" onclick="switchCommandTab('ebay')" data-feature="cc-ebay">eBay<span class="cc-updot" id="cc-updot-ebay"></span></button>
+                <button id="cc-tab-scorecard" class="toggle-btn" type="button" onclick="switchCommandTab('scorecard')" data-feature="cc-scorecard">Scorecard<span class="cc-updot" id="cc-updot-scorecard"></span></button>
+            </div>
+            <div class="cc-tabbar-right">
+                <div id="sh-tab-action" class="cc-tab-action"></div>
+                <button id="cc-collapse" class="cc-collapse" type="button" onclick="collapseCommand()" style="display:none;">▴ Summary</button>
+            </div>
+        </div>
+
+        <!-- Collapsed default: one-line summary shown when no tab is open -->
+        <div class="cc-summary" id="cc-summary">
+            <div class="cc-sum" id="cc-sum-audit" data-feature="cc-scorecard"><div class="cc-sum-k">PayMore Audit</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum" id="cc-sum-score" data-feature="cc-scorecard"><div class="cc-sum-k">SPEEKS Scorecard</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum" id="cc-sum-ebay" data-feature="cc-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum" id="cc-sum-buy" data-feature="cc-buying"><div class="cc-sum-k">Tracking Buying</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum" id="cc-sum-rev" data-feature="cc-buying"><div class="cc-sum-k">Tracking Revenue</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum" id="cc-sum-goal" data-feature="cc-buying"><div class="cc-sum-k">To Goal</div><div class="cc-sum-v">—</div></div>
+        </div>
+
+        <div class="cc-strips">
+            <div class="cc-strip s3" id="cc-strip-scorecard" data-feature="cc-scorecard">
+                <div class="cc-cell" id="sh-score-audit"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
+                <div class="cc-cell" id="sh-score-mktg"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
+                <div class="cc-cell" id="cc-audit-standing"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
+            </div>
+            <div class="cc-strip s3" id="cc-strip-ebay" data-feature="cc-ebay">
+                <div class="cc-cell" id="sh-score-ebay"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
+                <div class="cc-cell" id="cc-ebay-perf"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
+                <div class="cc-cell" id="cc-ebay-top"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
+            </div>
+            <div class="cc-strip s4" id="cc-strip-buying" data-feature="cc-buying">
+                <div class="cc-cell"><span class="sh-stripe g"></span><div class="sh-k">Tracking Buying</div><div class="sh-v"><span id="cc-track-buy">$0</span></div><div class="sh-sub">projected month-end</div></div>
+                <div class="cc-cell"><span class="sh-stripe g"></span><div class="sh-k">Buy Margin</div><div class="sh-v good" id="cc-buy-margin">0%</div><div class="sh-sub">on purchases</div></div>
+                <div class="cc-cell"><span class="sh-stripe g"></span><div class="sh-k">Tracking Revenue</div><div class="sh-v"><span id="cc-track-rev">$0</span></div><div class="sh-sub">projected month-end</div></div>
+                <div class="cc-cell"><span class="sh-stripe g"></span><div class="sh-k">Sell Margin</div><div class="sh-v good" id="cc-sell-margin">0%</div><div class="sh-sub">on sales</div></div>
+            </div>
+        </div>
+
+        <div class="cc-body">
+            <div class="cc-panel" id="cc-panel-scorecard" data-feature="cc-scorecard">
+                <div id="sh-panel-audit"><div class="status-message">Syncing Data...</div></div>
+                <div id="sh-panel-mktg" class="sh-mktg-block"></div>
+            </div>
+            <div class="cc-panel" id="cc-panel-ebay" data-feature="cc-ebay">
+                <div id="sh-panel-ebay"><div class="status-message">Syncing Data...</div></div>
+            </div>
+            <div class="cc-panel" id="cc-panel-buying" data-feature="cc-buying">
+                <div class="ebs-body cc-ebs">
+                    <div class="ebs-col ebs-buy">
+                        <div class="ebs-cap">Buying Pace (MTD)</div>
+                        <div class="ebs-mid">
+                            <div><div class="ebs-lbl">Value Purchased</div><div class="ebs-big"><span id="bs-buy-val">$0</span></div></div>
+                            <div class="ebs-pace">
+                                <div class="ebs-pace-lbl"><span>Tracking to month-end</span><span id="bs-buy-proj">$0</span></div>
+                                <div class="ebs-pace-bar"><i id="bs-pace-fill"></i></div>
+                                <div class="ebs-pace-dates"><span id="bs-pace-asof">—</span><span id="bs-pace-end">—</span></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="ebs-divider"></div>
+                    <div class="ebs-col ebs-sell">
+                        <div class="ebs-cap">Sales (MTD)</div>
+                        <div class="ebs-ring-group">
+                            <div class="ebs-ring-wrap">
+                                <div class="progress-ring">
+                                    <svg viewBox="0 0 150 150"><circle class="bg" cx="75" cy="75" r="64"></circle><circle class="bar" id="bs-bar" cx="75" cy="75" r="64"></circle></svg>
+                                    <div class="percentage" id="bs-pct">0%</div>
+                                </div>
+                            </div>
+                            <div class="ebs-ring-cap">of monthly goal</div>
+                        </div>
+                        <div class="ebs-rows">
+                            <div class="ebs-row"><span class="k">Rev (MTD)</span><span class="v" id="bs-rev">--</span></div>
+                            <div class="ebs-row"><span class="k">GP Tracking</span><span class="v" id="bs-t-gp">--</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
-      <div class="card district-master-panel employee-widget-card">
-          <div class="district-kpi-header">
-              <span id="alerts-store-name" class="district-kpi-title">eBay Performance Metrics</span>
-          </div>
-         <div id="alerts-widget-body" class="employee-widget-body"><div class="status-message">Syncing Data...</div></div>
-      </div>
-  </div>
-
-  <div class="ew-dash dynamic-module-flex role-manager role-owner-manager role-employee employee-dashboard-row">
-      
-      <div class="card employee-widget-card ew-airy dynamic-module-block role-manager role-owner-manager role-employee buying-sales-module" data-feature="widget-buying-selling">
+      <!-- Combined EMPLOYEE widget: Buying & Sales + Weekly KPIs, two tabs (no summary
+           line), defaults to Buying & Sales. Managers see Buying/KPIs inside the
+           Command Center; this is the employee equivalent. Each tab is a toggleable
+           feature (widget-buying-selling / widget-emp-weekly-kpis). -->
+      <div class="card employee-widget-card ew-airy cc-widget cc-expanded ec-widget dynamic-module-block role-employee" id="ecWidget">
           <div class="ew-head">
               <div class="ew-titles">
-                  <span class="ew-eyebrow">My Store · This Month</span>
-                  <span class="ew-title">Buying &amp; Sales <span id="bs-last-updated" class="ew-date"></span></span>
+                  <span class="ew-eyebrow" id="ec-eyebrow">My Store · This Month</span>
+                  <span class="ew-title"><span id="ec-title-text">Buying &amp; Sales</span> <span id="bs-last-updated" class="ew-date"></span><span id="emp-kpi-period" class="ew-date" style="display:none;"></span></span>
               </div>
-              <span class="ew-goal">Goal <b id="bs-goal"></b></span>
+              <span class="ew-goal" id="ec-goal-wrap">Goal <b id="bs-goal"></b></span>
               <select id="bsStoreSelect" class="bs-hidden-select" onchange="renderBuyingSales()">
                   <option value="OVL">OVL</option>
                   <option value="LEE">LEE</option>
@@ -847,72 +946,67 @@
               </select>
           </div>
 
-          <div class="ebs-body">
-              <div class="ebs-col ebs-buy">
-                  <div class="ebs-cap">Buying (MTD)</div>
-                  <div>
-                      <div class="ebs-lbl">Value Purchased</div>
-                      <div class="ebs-big" id="bs-buy-val">$0</div>
-                  </div>
-                  <div class="ebs-pace">
-                      <div class="ebs-pace-lbl"><span>Tracking to month-end</span><span id="bs-buy-proj">$0</span></div>
-                      <div class="ebs-pace-bar"><i id="bs-pace-fill"></i></div>
-                  </div>
-                  <div class="ebs-rows">
-                      <div class="ebs-row"><span class="k">Buy Margin</span><span class="delta-badge delta-neutral" id="bs-buy-margin">0%</span></div>
-                  </div>
+          <div class="cc-tabbar">
+              <div class="ew-seg cc-seg">
+                  <button id="ec-tab-buying" class="toggle-btn active" type="button" onclick="switchEmpTab('buying')" data-feature="widget-buying-selling">Buying &amp; Sales<span class="cc-updot" id="ec-updot-buying"></span></button>
+                  <button id="ec-tab-kpis" class="toggle-btn" type="button" onclick="switchEmpTab('kpis')" data-feature="widget-emp-weekly-kpis">Weekly KPIs<span class="cc-updot" id="ec-updot-kpis"></span></button>
               </div>
+          </div>
 
-              <div class="ebs-divider"></div>
+          <div class="cc-body">
+              <div class="cc-panel cc-active" id="ec-panel-buying" data-feature="widget-buying-selling">
+                  <div class="ebs-body">
+                      <div class="ebs-col ebs-buy">
+                          <div class="ebs-cap">Buying (MTD)</div>
+                          <div class="ebs-mid">
+                              <div>
+                                  <div class="ebs-lbl">Value Purchased</div>
+                                  <div class="ebs-big" id="bs-buy-val">$0</div>
+                              </div>
+                              <div class="ebs-pace">
+                                  <div class="ebs-pace-lbl"><span>Tracking to month-end</span><span id="bs-buy-proj">$0</span></div>
+                                  <div class="ebs-pace-bar"><i id="bs-pace-fill"></i></div>
+                              </div>
+                          </div>
+                          <div class="ebs-rows">
+                              <div class="ebs-row"><span class="k">Buy Margin</span><span class="delta-badge delta-neutral" id="bs-buy-margin">0%</span></div>
+                          </div>
+                      </div>
 
-              <div class="ebs-col ebs-sell">
-                  <div class="ebs-cap">Sales (MTD)</div>
-                  <div class="ebs-ring-wrap">
-                      <div class="progress-ring">
-                          <svg viewBox="0 0 140 140"><circle class="bg" cx="70" cy="70" r="64"></circle><circle class="bar" id="bs-bar" cx="70" cy="70" r="64"></circle></svg>
-                          <div class="percentage" id="bs-pct">0%</div>
+                      <div class="ebs-divider"></div>
+
+                      <div class="ebs-col ebs-sell">
+                          <div class="ebs-cap">Sales (MTD)</div>
+                          <div class="ebs-ring-group">
+                              <div class="ebs-ring-wrap">
+                                  <div class="progress-ring">
+                                      <svg viewBox="0 0 150 150"><circle class="bg" cx="75" cy="75" r="64"></circle><circle class="bar" id="bs-bar" cx="75" cy="75" r="64"></circle></svg>
+                                      <div class="percentage" id="bs-pct">0%</div>
+                                  </div>
+                              </div>
+                              <div class="ebs-ring-cap">of monthly goal</div>
+                          </div>
+                          <div class="ebs-rows">
+                              <div class="ebs-row"><span class="k">Rev (MTD)</span><span class="v" id="bs-rev">--</span></div>
+                              <div class="ebs-row"><span class="k">GP Tracking</span><span class="v" id="bs-t-gp">--</span></div>
+                              <div class="ebs-row"><span class="k">Sell Margin</span><span class="delta-badge delta-neutral" id="bs-sell-margin">0%</span></div>
+                          </div>
                       </div>
                   </div>
-                  <div class="ebs-rows">
-                      <div class="ebs-row"><span class="k">Rev (MTD)</span><span class="v" id="bs-rev">--</span></div>
-                      <div class="ebs-row"><span class="k">GP Tracking</span><span class="v" id="bs-t-gp">--</span></div>
-                      <div class="ebs-row"><span class="k">Sell Margin</span><span class="delta-badge delta-neutral" id="bs-sell-margin">0%</span></div>
+              </div>
+
+              <div class="cc-panel" id="ec-panel-kpis" data-feature="widget-emp-weekly-kpis">
+                  <div id="employee-kpi-widget-body" class="employee-kpi-body">
+                      <div class="status-message">Syncing Data...</div>
                   </div>
               </div>
           </div>
       </div>
 
-      <div class="card dynamic-module-flex role-employee employee-widget-card ew-airy" data-feature="widget-emp-listing-goals">
-          <div class="ew-head">
-              <div class="ew-titles">
-                  <span class="ew-eyebrow">Mine · This Week</span>
-                  <span class="ew-title">My Listing Goals <span id="emp-goals-date" class="ew-date"></span><span id="emp-goals-pulse-dot" class="notif-dot active goals-pulse" style="display:none;"></span></span>
-              </div>
-              <span class="ew-goal">Goal <b id="emp-goals-store-target"></b></span>
-          </div>
+      <!-- My Listing Goals moved to the "Listing Goals" bar in the action menu (opens
+           #empGoalsModal). Weekly KPIs merged into the combined widget above. -->
+      <!-- Weekly KPIs merged into the combined widget above (its "Weekly KPIs" tab). -->
 
-          <div id="employee-goals-widget-body" class="employee-widget-body">
-              <div class="status-message">Syncing Data...</div>
-          </div>
-      </div>
-
-
-      <!-- Listing Goals moved to a popup (see #listingGoalsModal). Open it from
-           the Listing Goals action item in the SPEEKS Action Menu. -->
-
-      <div class="card employee-widget-card ew-airy dynamic-module-flex role-employee" data-feature="widget-emp-weekly-kpis">
-          <div class="ew-head">
-              <div class="ew-titles">
-                  <span class="ew-eyebrow">Mine vs Store</span>
-                  <span class="ew-title">My Weekly KPIs <span id="emp-kpi-period" class="ew-date"></span></span>
-              </div>
-          </div>
-          
-          <div id="employee-kpi-widget-body" class="employee-kpi-body">
-              <div class="status-message">Syncing Data...</div>
-          </div>
-      </div>
-      
   </div>
 
   <div class="dynamic-module-block role-district-manager role-ceo district-command-section" data-feature="widget-district-command">
@@ -1028,6 +1122,7 @@
                       <div class="status-message">Syncing Data...</div>
                   </div>
               </div>
+              <div class="ew-standings-foot">Updated as of <span id="lb-last-updated">—</span></div>
           </div>
       </div>
   </div>

@@ -2363,8 +2363,9 @@ select.bs-hidden-select:focus {
 #manageUsersList .mu-group-head:hover { background: #e7edf4; }
 #manageUsersList .mu-group-name { flex: 1; }
 #manageUsersList .mu-group-count {
+    display: inline-flex; align-items: center; justify-content: center; line-height: 1;
     background: #fff; border: 1px solid #e3e8ee; border-radius: 999px;
-    padding: 1px 10px; font-size: 11px; font-weight: 800; color: #647082;
+    padding: 4px 10px; font-size: 11px; font-weight: 800; color: #647082;
 }
 #manageUsersList .mu-group-chev { width: 16px; height: 16px; color: #8a94a3; transition: transform .15s ease; flex: 0 0 auto; }
 #manageUsersList .mu-group.collapsed .mu-group-chev { transform: rotate(-90deg); }
@@ -6722,7 +6723,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     max-height: 100%;
 }
 .b2b-col-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 8px; }
-.b2b-col-count { font-size: 12px; font-weight: 800; color: #6b7280; background: #fff; border-radius: 999px; padding: 1px 9px; }
+.b2b-col-count { display: inline-flex; align-items: center; justify-content: center; line-height: 1; font-size: 12px; font-weight: 800; color: #6b7280; background: #fff; border-radius: 999px; padding: 4px 9px; }
 .b2b-col-body { display: flex; flex-direction: column; gap: 10px; padding: 4px 10px 12px; overflow-y: auto; }
 .b2b-col-empty { text-align: center; color: #c4c9d1; font-size: 13px; padding: 10px 0; }
 
@@ -7346,8 +7347,8 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 }
 .fa-ugroup-head:hover { background: #f6f8fa; }
 .fa-ugroup-name { flex: 1; min-width: 0; }
-.fa-ugroup-count { background: #eef2f7; border: 1px solid #e3e8ee; border-radius: 999px; padding: 1px 9px; font-size: 10.5px; font-weight: 800; color: #647082; }
-.fa-ugroup-set { background: #fef3c7; border: 1px solid #fcd982; border-radius: 999px; padding: 1px 9px; font-size: 10.5px; font-weight: 800; color: #b45309; text-transform: none; letter-spacing: 0; }
+.fa-ugroup-count { display: inline-flex; align-items: center; justify-content: center; line-height: 1; background: #eef2f7; border: 1px solid #e3e8ee; border-radius: 999px; padding: 4px 9px; font-size: 10.5px; font-weight: 800; color: #647082; }
+.fa-ugroup-set { display: inline-flex; align-items: center; justify-content: center; line-height: 1; background: #fef3c7; border: 1px solid #fcd982; border-radius: 999px; padding: 4px 9px; font-size: 10.5px; font-weight: 800; color: #b45309; text-transform: none; letter-spacing: 0; }
 .fa-ugroup-chev { width: 15px; height: 15px; color: #8a94a3; transition: transform .15s ease; flex: 0 0 auto; }
 .fa-ugroup.collapsed .fa-ugroup-chev { transform: rotate(-90deg); }
 .fa-ugroup-body { padding: 0 14px 8px; }
@@ -7681,6 +7682,13 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .speeks-action-menu .sam-m-bar > i { display: block; height: 100%; background: var(--sage-professional); border-radius: 5px; transition: width .3s ease; }
 .speeks-action-menu .sam-m-val { font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--sam-muted); }
 .speeks-action-menu .sam-m-chev { color: var(--sam-faint); flex: 0 0 auto; }
+/* Employee "Listing Goals" bar: reports role + today's goal only — no progress track.
+   Role reads as a sage chip, goal as the bold metric number (option C). */
+.speeks-action-menu .sam-mini-emp .sam-m-bar { display: none; }
+.speeks-action-menu .sam-mini-emp .sam-m-s { display: none; }
+.speeks-action-menu .sam-mini-emp .sam-m-val { display: inline-flex; align-items: center; gap: 9px; }
+.speeks-action-menu .sam-mini-emp .sam-m-role { font-size: 10.5px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; background: var(--sam-sage-tint); color: var(--sage-professional); padding: 3px 8px; border-radius: 20px; }
+.speeks-action-menu .sam-mini-emp .sam-m-goal { font-size: 20px; font-weight: 850; color: var(--text-dark); font-variant-numeric: tabular-nums; line-height: 1; }
 .speeks-action-menu .sam-m-chev svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .speeks-action-menu .sam-storestats { display: flex; gap: 10px; margin-top: 5px; flex-wrap: wrap; }
 .speeks-action-menu .sam-storestat { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; color: var(--sam-muted); font-variant-numeric: tabular-nums; }
@@ -7698,6 +7706,30 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
    (renderManagerGoals) stays untouched; we only restyle it.
    ========================================================= */
 #listingGoalsModal { width: 1200px; max-width: 95vw; }
+/* Employee personal Listing Goals popup (compact — one person's goals) */
+#empGoalsModal { width: 560px; max-width: 94vw; }
+/* Personal Listing Goals popup — matches the manager modal's look (green goal banner,
+   generous width, tinted red/green week bars). Sized to content so there's no dead space
+   below (override .modal-menu's fixed 84vh). */
+#empGoalsModal { width: 720px; max-width: 94vw; height: auto; max-height: 84vh; }
+#empGoalsModal .modal-header { border-bottom: 1px solid #e3e8ee; }
+#empGoalsModal .modal-header h3 { font-size: 17px; letter-spacing: -.01em; }
+#empGoalsModal .manage-content { padding: 20px 24px 24px; height: auto; max-height: 82vh; background: #fff; }
+#empGoalsModal .emp-goals-card { width: 100%; max-width: none; box-shadow: none; border: 1px solid #e6ebf1; border-radius: 14px; padding: 16px !important; }
+#empGoalsModal .employee-widget-body { padding: 16px 4px 4px; overflow: visible; background: transparent; }
+.emp-goals-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #eef7f0; border: 1px solid #d7ebdf; border-radius: 12px; padding: 15px 18px; }
+.emp-goals-banner-goal { font-size: 18px; font-weight: 800; letter-spacing: -.01em; color: var(--slate-charcoal); }
+.emp-goals-banner-goal b { color: #178048; }
+.emp-goals-banner-date { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #647082; background: #fff; border: 1px solid #e6ebf1; border-radius: 999px; padding: 8px 14px; white-space: nowrap; }
+/* Match the manager modal's tinted week bars (was solid green/red) + make them larger. */
+#empGoalsModal .goals-levelup .lu-week { height: 44px; border: 1px solid transparent; }
+#empGoalsModal .goals-levelup .lu-week .lu-week-num { font-size: 17px; }
+#empGoalsModal .goals-levelup .lu-week.green { background: #d9ecc9; border-color: rgba(90,141,59,.5); }
+#empGoalsModal .goals-levelup .lu-week.green .lu-week-num { color: #3d6822; }
+#empGoalsModal .goals-levelup .lu-week.red { background: #fbd5d5; border-color: rgba(229,72,77,.5); }
+#empGoalsModal .goals-levelup .lu-week.red .lu-week-num { color: #b02a2f; }
+#empGoalsModal .goals-levelup .lu-week.empty { background: #eef1f5; border-color: #e3e8ee; }
+#empGoalsModal .goals-levelup .lu-week.empty .lu-week-num { color: #8a94a3; }
 #listingGoalsModal .modal-header { border-bottom: 1px solid #e3e8ee; }
 #listingGoalsModal .modal-header h3 { font-size: 17px; letter-spacing: -.01em; }
 #listingGoalsModal .manage-content { padding: 20px 24px 24px; height: auto; max-height: 84vh; background: #ffffff; gap: 0; }
@@ -9045,27 +9077,31 @@ body.sam-active .hotbar-btn:hover {
 /* ---- Buying & Sales body ---- */
 .ebs-body { display: grid; grid-template-columns: 1fr 1px 1.05fr; flex: 1; }
 .ebs-divider { background: #eef2f6; }
-.ebs-col { padding: 18px 20px; display: flex; flex-direction: column; }
-.ebs-col.ebs-buy { justify-content: space-between; }
+/* Both columns: cap pinned top, middle group centered, rows pinned bottom — so
+   content breathes to fill the (taller, height-matched) card instead of pooling
+   white space at the bottom. */
+.ebs-col { padding: 20px 22px; display: flex; flex-direction: column; justify-content: space-between; }
+.ebs-mid { display: flex; flex-direction: column; justify-content: center; gap: 18px; flex: 1; }
+.ebs-ring-group { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; flex: 1; }
+.ebs-ring-cap { font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: .01em; }
 .ebs-cap { font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: #94a3b8; margin-bottom: 14px; }
 .ebs-lbl { font-size: 11px; font-weight: 700; color: #647082; }
-.ebs-big { font-size: 30px; font-weight: 850; letter-spacing: -.025em; line-height: 1; color: var(--slate-charcoal); margin-top: 5px; }
+.ebs-big { font-size: 33px; font-weight: 850; letter-spacing: -.025em; line-height: 1; color: var(--slate-charcoal); margin-top: 5px; }
 .ebs-pace { margin-top: 15px; }
 .ebs-pace-lbl { display: flex; justify-content: space-between; font-size: 10.5px; font-weight: 700; color: #647082; margin-bottom: 7px; }
 .ebs-pace-lbl span:last-child { color: var(--slate-charcoal); font-weight: 800; font-variant-numeric: tabular-nums; }
 .ebs-pace-bar { height: 9px; border-radius: 5px; background: #eef2f6; overflow: hidden; }
 .ebs-pace-bar i { display: block; height: 100%; border-radius: 5px; width: 0; background: linear-gradient(90deg, #1f9d57, #178048); transition: width .8s ease; }
-.ebs-rows { margin-top: 14px; }
-.ebs-col.ebs-buy .ebs-rows { margin-top: 0; }
-.ebs-row { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; }
+.ebs-rows { margin-top: 0; }
+.ebs-row { display: flex; align-items: center; justify-content: space-between; padding: 11px 0; }
 .ebs-row + .ebs-row { border-top: 1px solid #f1f5f9; }
-.ebs-row .k { font-size: 12.5px; font-weight: 650; color: #647082; }
-.ebs-row .v { font-size: 14.5px; font-weight: 800; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
-.ebs-ring-wrap { display: flex; justify-content: center; margin: 2px 0 12px; }
+.ebs-row .k { font-size: 13px; font-weight: 650; color: #647082; }
+.ebs-row .v { font-size: 15px; font-weight: 800; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
+.ebs-ring-wrap { display: flex; justify-content: center; margin: 0; }
 .ew-airy .progress-ring { width: 128px; height: 128px; margin: 0; }
 .ew-airy .progress-ring svg { width: 128px; height: 128px; }
 .ew-airy .progress-ring .bg { stroke: #eef2f6; }
-.ew-airy .percentage { font-size: 28px; font-weight: 850; letter-spacing: -.02em; color: var(--slate-charcoal); }
+.ew-airy .percentage { font-size: 34px; font-weight: 850; letter-spacing: -.02em; color: var(--slate-charcoal); }
 @media (max-width: 560px) {
     .ebs-body { grid-template-columns: 1fr; }
     .ebs-divider { display: none; }
@@ -9074,7 +9110,7 @@ body.sam-active .hotbar-btn:hover {
 
 /* ---- Employee bento layout ---- */
 .ew-dash { flex-wrap: wrap; gap: 18px; align-items: stretch; margin-bottom: 30px; }
-.ew-dash > .buying-sales-module { flex: 1.5 1 400px; max-width: none; }
+.ew-dash > .buying-sales-module { flex: 1.4 1 400px; max-width: none; min-width: 0; }
 .ew-dash > [data-feature="widget-emp-listing-goals"] { flex: 1 1 300px; max-width: none; }
 .ew-dash > [data-feature="widget-emp-weekly-kpis"] { flex: 1 1 100%; max-width: none; }
 
@@ -9104,14 +9140,23 @@ body.sam-active .hotbar-btn:hover {
 .ew-airy .lu-week-num { font-size: 15px; font-weight: 850; color: #fff; }
 .ew-airy .lu-week.empty .lu-week-num { color: #94a3b8; }
 
-/* ---- My Weekly KPIs tiles (airy) ---- */
+/* ---- My Weekly KPIs tiles (airy) — two rows: Mine over Store ---- */
 .ew-airy .employee-kpi-body { padding: 16px 20px 18px; }
+.ekpi-rowlab { display: flex; align-items: center; gap: 10px; margin: 0 0 9px; }
+.ekpi-rowlab-store { margin-top: 16px; }
+.ekpi-pill { font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; padding: 3px 9px; border-radius: 6px; }
+.ekpi-pill.me { background: #e8f7ee; color: #178048; }
+.ekpi-pill.st { background: #eef2f6; color: #647082; }
+.ekpi-rule { flex: 1; height: 1px; background: #eef2f6; }
+.ekpi-tile.store { background: #f4faf6; }
+.ekpi-tile.store .ekpi-v { font-size: 17px; font-weight: 800; color: #647082; }
+.ekpi-tag { color: #94a3b8; font-weight: 700; }
 .ekpi-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; }
 .ekpi-tile { border: 1px solid #eef2f6; border-radius: 13px; padding: 13px 12px; background: #fff; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.ekpi-grid .ekpi-tile:first-child { background: linear-gradient(180deg, #f4faf6, #fff); border-color: color-mix(in srgb, #1f9d57 18%, transparent); }
 .ekpi-k { font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #94a3b8; }
 .ekpi-v { font-size: 21px; font-weight: 850; letter-spacing: -.015em; line-height: 1; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
 .ekpi-v.bad { color: #dc2626; }
+.ekpi-v.good { color: #178048; }
 .ekpi-ctx { font-size: 10px; font-weight: 650; color: #94a3b8; line-height: 1.3; }
 .ekpi-ctx strong { color: #647082; font-weight: 800; }
 .ekpi-note { display: block; color: #b6bec6; margin-top: 1px; }
@@ -9119,18 +9164,21 @@ body.sam-active .hotbar-btn:hover {
 @media (max-width: 620px) { .ekpi-grid { grid-template-columns: repeat(2, 1fr); } }
 
 /* ---- Combined Performance (chart + standings) ---- */
-.ew-perf { margin-bottom: 30px; }
-.ew-perf-body { display: grid; grid-template-columns: 1fr 300px; }
+/* min-height 490 matches the Command Center widget above it (same size). */
+.ew-perf { margin-bottom: 30px; min-height: 530px; }
+.ew-perf-body { display: grid; grid-template-columns: 1fr 300px; flex: 1; min-height: 0; }
 .ew-perf-chart { padding: 14px 18px 16px; min-width: 0; }
 .ew-perf-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
 .ew-seg { display: inline-flex; background: #f1f5f9; border-radius: 9px; padding: 3px; gap: 2px; }
 .ew-seg .toggle-btn { font-family: inherit; font-size: 11.5px; font-weight: 750; color: #647082; background: transparent; border: 0; border-radius: 6px; padding: 6px 11px; cursor: pointer; transition: background .15s, color .15s; }
 .ew-seg .toggle-btn.active { background: #fff; color: var(--slate-charcoal); box-shadow: 0 1px 3px rgba(16,24,40,.12); }
 .ew-perf-controls .metric-dropdown { font-family: inherit; font-size: 11.5px; font-weight: 750; color: var(--slate-charcoal); background: #fff; border: 1px solid #e6ebf1; border-radius: 9px; padding: 7px 10px; cursor: pointer; height: auto; margin: 0; }
-.ew-perf-chart .chart-container { position: relative; height: 320px; width: 100%; }
+.ew-perf-chart .chart-container { position: relative; height: 412px; width: 100%; }
 .ew-standings { border-left: 1px solid #eef2f6; padding: 14px 16px; background: #f4faf6; }
 .ew-standings-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; gap: 8px; }
 .ew-standings-title { font-size: 10px; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; color: #94a3b8; }
+.ew-standings-foot { margin-top: 12px; padding-top: 10px; border-top: 1px solid #eef2f6; font-size: 10.5px; font-weight: 650; color: #94a3b8; }
+.ew-standings-foot #lb-last-updated { font-weight: 800; color: #647082; }
 .ew-standings .ew-seg-sm .toggle-btn { padding: 4px 9px; font-size: 10.5px; }
 .ew-standings .lb-wrapper-inner { display: block; height: auto; min-height: 0; }
 .lbs-row { display: flex; align-items: center; gap: 10px; padding: 9px 2px; }
@@ -9154,8 +9202,8 @@ body.sam-active .hotbar-btn:hover {
    EMPLOYEE DASHBOARD — feedback pass
    ========================================================= */
 /* Buying & Sales: ring fits (viewBox scales), consistent number sizes */
-.ew-airy .progress-ring { width: 132px; height: 132px; overflow: visible; margin: 0; }
-.ew-airy .progress-ring svg { width: 132px; height: 132px; }
+.ew-airy .progress-ring { width: 150px; height: 150px; overflow: visible; margin: 0; }
+.ew-airy .progress-ring svg { width: 150px; height: 150px; shape-rendering: geometricPrecision; }
 .ebs-big { font-size: 15px; letter-spacing: -.01em; margin-top: 4px; }
 .ebs-pace-lbl span:last-child { font-size: 14px; }
 .ew-airy .delta-badge { font-size: 14px; padding: 3px 10px; }
@@ -9170,3 +9218,202 @@ body.sam-active .hotbar-btn:hover {
 .lbs-row { padding: 9px 8px; }
 .lbs-row.me { background: #e8f7ee; border-radius: 9px; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, #1f9d57 32%, transparent); }
 .lbs-row.me, .lbs-row.me + .lbs-row { border-top: none; }
+
+/* =========================================================
+   STORE HEALTH CONSOLE — manager Scorecard + eBay, consolidated
+   ========================================================= */
+/* The Command Center is a single full-width widget (managers). Override the base
+   .employee-widget-card 33%-width cap so it spans the row on its own. */
+.ew-dash > .cc-widget { flex: 1 1 100% !important; max-width: none !important; min-width: 0; }
+
+/* ===== COMMAND CENTER — Store Health + Buying & Sales in one 3-tab widget ===== */
+/* Collapsed by default (natural height, just the one-line summary); when a tab is open
+   it expands to a fixed height that matches the Performance chart beside/below it. */
+/* Manager Command Center matches the chart height (490); the employee widget has no
+   chart to match, so it sizes to its tallest tab (Buying) — less empty space on the
+   shorter KPIs tab. Both keep equal-height across tabs via the stacked panels. */
+/* Manager Command Center + employee widget + Performance chart all stand 530px — tall
+   enough to fit the employee's Buying tab (ring + margin rows) with no cutoff, and equal
+   so the card lines up with the chart below it. */
+.cc-widget.cc-expanded { min-height: 530px; }
+/* Employee widget: FIXED 530 (not just min) so switching tabs can't nudge the height at
+   all — the two panels are equal by construction and top-aligned. */
+.ec-widget.cc-expanded { height: 530px; }
+.ec-widget .cc-panel { display: flex; flex-direction: column; justify-content: flex-start; overflow-y: auto; }
+/* Keep the header one line so hiding the goal chip / a longer KPI title can't change its
+   height (which would shift everything below on tab switch). */
+.ec-widget .ew-title { flex-wrap: nowrap; }
+.cc-widget:not(.cc-expanded) .cc-strips,
+.cc-widget:not(.cc-expanded) .cc-body { display: none; }
+.cc-widget.cc-expanded .cc-summary { display: none; }
+.cc-updated { font-size: 10.5px; font-weight: 650; color: #94a3b8; text-align: right; white-space: nowrap; flex: none; }
+.cc-updated b { color: #647082; font-weight: 800; }
+
+/* Tabs on top */
+.cc-tabbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 13px 20px; border-bottom: 1px solid #eef2f6; min-height: 36px; }
+.cc-seg { display: flex; }
+.cc-seg .toggle-btn { position: relative; flex: 1 1 0; min-width: 140px; text-align: center; justify-content: center; }
+.cc-tabbar-right { display: flex; align-items: center; gap: 10px; flex: none; }
+.cc-tab-action:empty { display: none; }
+/* Explicit "back to summary" control (shown only while a tab is open) */
+.cc-collapse { font-family: inherit; font-size: 12px; font-weight: 750; color: #647082; background: #fff; border: 1px solid #e6ebf1; border-radius: 9px; padding: 7px 12px; cursor: pointer; white-space: nowrap; transition: border-color .12s, color .12s, background .12s; }
+.cc-collapse:hover { border-color: #178048; color: #178048; background: #f4faf6; }
+
+/* Quiet "this tab updated" cue — a small red dot that follows the tab label (inline),
+   cleared once opened. Buttons carry enough min-width that even "Buying & Sales" + the dot
+   fit without clipping or overlapping the text. */
+.cc-updot { display: none; width: 7px; height: 7px; border-radius: 50%; background: #dc2626; margin-left: 6px; vertical-align: middle; }
+.cc-updot.show { display: inline-block; }
+
+/* Collapsed one-line summary (default view, no tab open) */
+/* Flex (not fixed grid) so a tab disabled via Feature Access drops its cell and the
+   rest reflow to fill — no empty column. */
+.cc-summary { display: flex; flex-wrap: wrap; gap: 1px; background: #eef2f6; border-bottom: 1px solid #eef2f6; }
+.cc-sum { flex: 1 1 0; background: #fff; padding: 14px 16px 15px 18px; min-width: 120px; }
+.cc-sum-k { font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #647082; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-sum-v { font-size: 20px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; margin-top: 6px; color: var(--slate-charcoal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-sum-v small { font-size: 11px; font-weight: 700; color: #94a3b8; }
+.cc-sum-v.warn { color: #d97706; }
+.cc-sum-v.bad { color: #dc2626; }
+.cc-sum-v.good { color: #178048; }
+
+/* Per-tab summary strip — all three stacked in one grid cell, only the active one shown
+   (opacity, not display) so the strip row always reserves the tallest tab's height. */
+.cc-strips { display: grid; grid-template-columns: 1fr; border-bottom: 1px solid #eef2f6; }
+.cc-strip { grid-area: 1 / 1; display: grid; gap: 1px; background: #eef2f6; opacity: 0; pointer-events: none; }
+.cc-strip.cc-active { opacity: 1; pointer-events: auto; }
+.cc-strip.s3 { grid-template-columns: repeat(3, 1fr); }
+.cc-strip.s4 { grid-template-columns: repeat(4, 1fr); }
+.cc-cell { position: relative; background: #fff; padding: 14px 16px 14px 19px; min-width: 0; }
+.cc-cell .sh-stripe { position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 3px; background: #cbd5e1; }
+.cc-cell .sh-k { font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #647082; }
+.cc-cell .sh-v { font-size: 24px; font-weight: 800; letter-spacing: -.02em; line-height: 1; margin-top: 6px; color: var(--slate-charcoal); }
+.cc-cell .sh-v small { font-size: 12px; font-weight: 700; color: #94a3b8; }
+.cc-cell .sh-v.warn { color: #d97706; }
+.cc-cell .sh-v.bad { color: #dc2626; }
+.cc-cell .sh-v.good { color: #178048; }
+.cc-cell .sh-sub { font-size: 10.5px; font-weight: 600; color: #647082; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-cell .sh-trend.up { color: #059669; font-weight: 800; }
+.cc-cell .sh-trend.dn { color: #dc2626; font-weight: 800; }
+.cc-cell .sh-dot { position: absolute; top: 10px; right: 10px; }
+
+/* Detail body — fills the remaining fixed height so switching tabs never resizes the card.
+   The visible panel is the only flex child, so it fills the body; each panel scrolls
+   its own overflow. */
+/* All three panels share one grid cell; inactive panels stay laid out but transparent
+   (opacity:0, not visibility/display) so the body always reserves the TALLEST tab's height
+   — the card never resizes when switching, and a hidden panel's ring never flashes over
+   the active tab (opacity paints nothing rather than briefly compositing the SVG). */
+.cc-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr; padding: 18px 22px 20px; }
+.cc-panel { grid-area: 1 / 1; min-width: 0; overflow: visible; opacity: 0; pointer-events: none; }
+.cc-panel.cc-active { opacity: 1; pointer-events: auto; }
+.cc-body .sh-mktg-block { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eef2f6; }
+/* Buying tab detail fills the panel height */
+.cc-ebs { height: 100%; }
+
+/* Tracking-bar date stamp (Buying tab) */
+.ebs-pace-dates { display: flex; justify-content: space-between; margin-top: 6px; font-size: 10px; font-weight: 650; color: #94a3b8; }
+
+/* Audit-bar tick labels sit directly under their ticks */
+.sh-au-ticklab { position: absolute; top: 17px; transform: translateX(-50%); font-size: 9.5px; font-weight: 800; color: #647082; white-space: nowrap; }
+.sh-au-scale-sp { height: 26px; }
+
+@media (max-width: 720px) {
+    .cc-strip.s3, .cc-strip.s4 { grid-template-columns: 1fr 1fr; }
+    .cc-sum { min-width: 33%; }
+}
+
+/* Headline score strip — two equal bubbles: combined Audit+Scorecard, then eBay */
+.sh-scores { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 16px 20px 0; }
+.sh-score { position: relative; text-align: left; background: #f4faf6; border: 1px solid #e6ebf1;
+    border-radius: 13px; padding: 14px 16px 14px 20px; cursor: pointer;
+    transition: border-color .15s, box-shadow .15s, background .15s; }
+/* Combined bubble: ONE card, one left accent stripe, two stat columns split by a faint hairline */
+.sh-score-combo { padding: 0; display: flex; align-items: stretch; overflow: hidden; }
+.sh-combo-half { position: relative; flex: 1 1 0; min-width: 0; padding: 13px 13px; }
+.sh-score-combo .sh-combo-half:first-of-type { padding-left: 18px; }
+.sh-combo-half .sh-k { line-height: 1.2; }
+.sh-combo-half .sh-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sh-combo-half + .sh-combo-half { border-left: 1px solid #eef2f6; }
+.sh-score-combo.active .sh-combo-half + .sh-combo-half { border-left-color: #d9ecdf; }
+.sh-score:hover { border-color: #cfe6d8; }
+.sh-score.active { background: #e8f7ee; border-color: color-mix(in srgb, #1f9d57 42%, #e6ebf1); box-shadow: 0 1px 2px rgba(16,24,40,.05); }
+.sh-score:focus-visible { outline: 2px solid #1f9d57; outline-offset: 2px; }
+.sh-score .sh-stripe { position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 3px; background: #cbd5e1; }
+.sh-stripe.g { background: #1f9d57; }
+.sh-stripe.y { background: #d97706; }
+.sh-stripe.r { background: #dc2626; }
+.sh-score .sh-k { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #647082; }
+.sh-score .sh-v { font-size: 26px; font-weight: 800; letter-spacing: -.02em; line-height: 1; margin-top: 6px; color: var(--slate-charcoal); }
+.sh-score .sh-v small { font-size: 14px; font-weight: 700; color: #94a3b8; }
+.sh-score .sh-v.warn { color: #d97706; }
+.sh-score .sh-v.bad { color: #dc2626; }
+.sh-score .sh-sub { font-size: 11px; font-weight: 600; color: #647082; margin-top: 6px; }
+.sh-score .sh-trend.up { color: #059669; font-weight: 800; }
+.sh-score .sh-trend.dn { color: #dc2626; font-weight: 800; }
+.sh-score .sh-dot { position: absolute; top: 10px; right: 10px; }
+
+/* Tab bar + audit action (inset — the .ew-airy card itself has 0 padding).
+   min-height reserves the row so hiding the audit action on the eBay tab
+   doesn't shrink the bar and shift the panel below (the "box jumping" bug). */
+.sh-tabbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 16px 0 14px; padding: 0 20px; min-height: 36px; }
+/* Scorecard / eBay tabs share one width so the segmented control looks balanced */
+.sh-seg { display: flex; }
+.sh-seg .toggle-btn { flex: 1 1 0; min-width: 84px; text-align: center; justify-content: center; }
+.sh-view-btn { border: 1px solid #e6ebf1; background: #fff; color: var(--slate-charcoal); font-size: 12px; font-weight: 800;
+    padding: 7px 14px; border-radius: 9px; cursor: pointer; transition: background .15s, border-color .15s; }
+.sh-view-btn:hover { background: #f4faf6; border-color: #cfe6d8; }
+
+/* Detail panels — inset + one fixed height so the card never resizes per tab
+   (audit/eBay sit shorter with breathing room; a long Marketing list scrolls) */
+.sh-panels { padding: 0 20px 20px; height: 306px; overflow-y: auto; }
+.sh-scroll { padding-right: 2px; }
+
+/* Scorecard tab = PayMore Audit stacked over the Online & Marketing breakdown */
+.sh-mktg-block { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eef2f6; }
+.sh-sc-sub { display: flex; align-items: baseline; gap: 8px; font-size: 10.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: var(--slate-charcoal); margin-bottom: 11px; }
+.sh-sc-sub-date { font-size: 10px; font-weight: 600; color: #94a3b8; text-transform: none; letter-spacing: 0; font-style: italic; }
+.sh-bucket + .sh-bucket { margin-top: 16px; }
+.sh-bucket-lbl { display: flex; align-items: center; gap: 8px; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #94a3b8; margin-bottom: 9px; }
+.sh-cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(134px, 1fr)); gap: 8px; }
+.sh-cat { display: flex; align-items: center; justify-content: space-between; gap: 6px; background: #fff; border: 1px solid #e6ebf1; border-radius: 10px; padding: 9px 11px; }
+.sh-cat .cn { font-size: 10px; font-weight: 800; text-transform: uppercase; color: var(--slate-charcoal); line-height: 1.25; }
+.sh-cat .cv { flex-shrink: 0; }
+.sh-note { margin-top: 8px; padding: 8px 12px; background: #f8fafc; border-left: 3px solid #94a3b8; border-radius: 0 8px 8px 0; font-size: 12px; color: #475569; line-height: 1.5; font-style: italic; }
+
+/* Audit panel */
+.sh-au-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.sh-au-big { font-size: 30px; font-weight: 800; letter-spacing: -.02em; line-height: 1; }
+.sh-au-meta { font-size: 12px; color: #647082; font-weight: 600; margin-top: 5px; }
+.sh-au-badge { font-size: 14px; font-weight: 800; padding: 5px 12px; border-radius: 9px; white-space: nowrap; }
+.sh-au-track { position: relative; height: 9px; border-radius: 6px; background: #eef2f6; margin-top: 18px; overflow: visible; }
+.sh-au-track > i { display: block; height: 100%; border-radius: 6px; }
+.sh-au-tick { position: absolute; top: -3px; width: 2px; height: 15px; background: #94a3b8; border-radius: 2px; transform: translateX(-1px); }
+.sh-au-scale { display: flex; justify-content: space-between; margin-top: 7px; font-size: 10px; font-weight: 700; color: #94a3b8; letter-spacing: .02em; }
+.sh-au-note { margin-top: 16px; font-size: 12px; color: #647082; line-height: 1.55; }
+
+/* eBay panel — two metric groups, contained stat cells */
+.sh-ebay { display: grid; grid-template-columns: 1fr; gap: 16px; }
+.sh-eb-grouphead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.sh-grp-lbl { font-size: 10.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: var(--slate-charcoal); }
+.sh-grp-tag { font-size: 10px; font-weight: 800; letter-spacing: .02em; padding: 2px 8px; border-radius: 6px; }
+.sh-grp-tag.ok { background: #e8f7ee; color: #178048; }
+.sh-grp-tag.warn { background: #fef3c7; color: #92400e; }
+.sh-grp-tag.crit { background: #fee2e2; color: #991b1b; }
+.sh-eb-cells { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.sh-eb-cell { position: relative; background: #fff; border: 1px solid #e6ebf1; border-radius: 11px; padding: 9px 12px; display: flex; flex-direction: column; gap: 6px; min-height: 50px; }
+.sh-eb-cell.warn { border-color: #f2e2b8; background: #fffdf5; }
+.sh-eb-cell.crit { border-color: #f3cccc; background: #fff8f8; }
+.sh-eb-cell .l { font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #647082; line-height: 1.25; }
+.sh-eb-cell .sh-badge { align-self: flex-start; }
+.sh-eb-dot { position: absolute; top: 9px; right: 9px; width: 7px; height: 7px; border-radius: 50%; background: #dc2626; }
+.sh-badge { font-size: 11px; font-weight: 800; padding: 3px 9px; border-radius: 7px; text-align: left; line-height: 1.3; }
+.sh-badge.ok { background: #d1fae5; color: #065f46; }
+.sh-badge.warn { background: #fef3c7; color: #92400e; }
+.sh-badge.crit { background: #fee2e2; color: #991b1b; }
+.sh-badge.neu { background: #f1f5f9; color: #64748b; }
+
+@media (max-width: 760px) {
+    .sh-scores { grid-template-columns: 1fr; }
+    .sh-cats { grid-template-columns: repeat(2, 1fr); }
+}

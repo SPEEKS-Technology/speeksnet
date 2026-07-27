@@ -4094,6 +4094,11 @@ async function fetchHubData() {
         if (hubDataCache.leaderboard) {
             cachedLeaderboardData = hubDataCache.leaderboard;
             feedLeaderboardToTicker(cachedLeaderboardData);
+            // "Updated as of" stamp — set on data refresh only (not on the Rev/GP
+            // toggle, which also calls drawLeaderboard), mirroring the Buying &
+            // Sales / DM command-center last-updated behaviour.
+            const _lbUpd = document.getElementById('lb-last-updated');
+            if (_lbUpd) _lbUpd.innerText = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
             if (document.getElementById('lb-wrapper')) drawLeaderboard();
         } else if (document.getElementById('lb-wrapper')) {
             document.getElementById('lb-wrapper').innerHTML = '<div class="status-message" style="color:var(--red-alert);">Please Deploy "New Version" of Hub App Script!</div>';
@@ -4171,6 +4176,37 @@ function renderBuyingSales() {
     if (bsDateEl) {
         bsDateEl.innerText = hubDataCache[`${store}BuyDate`] || '—';
     }
+
+    // --- Command Center: plain-text margin strip tiles + header stamp + pace dates ---
+    document.querySelectorAll('#cc-buy-margin').forEach(el => {
+        el.innerText = mN.toFixed(1) + '%';
+        el.classList.toggle('bad', mN > 0 && mN < 51);
+        el.classList.toggle('good', !(mN > 0 && mN < 51));
+    });
+    document.querySelectorAll('#cc-sell-margin').forEach(el => {
+        el.innerText = sellMarginNum.toFixed(1) + '%';
+        el.classList.toggle('bad', sellMarginNum < 55.0);
+        el.classList.toggle('good', sellMarginNum >= 55.0);
+    });
+    const _buyDate = hubDataCache[`${store}BuyDate`] || '—';
+    document.querySelectorAll('#cc-updated').forEach(el => el.innerText = _buyDate);
+    document.querySelectorAll('#bs-pace-asof').forEach(el => el.innerText = 'as of ' + _buyDate);
+    const _mEnd = new Date(); _mEnd.setMonth(_mEnd.getMonth() + 1, 0); // last day of current month
+    const _mEndStr = _mEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    document.querySelectorAll('#bs-pace-end').forEach(el => el.innerText = 'month-end · ' + _mEndStr);
+
+    // --- Command Center: Tracking Buying/Revenue strip tiles + collapsed summary + cue ---
+    document.querySelectorAll('#cc-track-buy').forEach(el => el.innerText = `$${Math.round(bP).toLocaleString()}`);
+    // Tracking Revenue: no stored field — derive as tracking GP implied at the current sell margin.
+    const _trackGp = parseNum(hubDataCache[`${store}TrackGP`]);
+    const _trackRev = sellMarginNum > 0 ? (_trackGp / (sellMarginNum / 100)) : 0;
+    document.querySelectorAll('#cc-track-rev').forEach(el => el.innerText = `$${Math.round(_trackRev).toLocaleString()}`);
+    _ccSum('cc-sum-buy', `$${Math.round(bP).toLocaleString()}`, '');
+    _ccSum('cc-sum-rev', `$${Math.round(_trackRev).toLocaleString()}`, '');
+    _ccSum('cc-sum-goal', `${p}<small>%</small>`, p >= 100 ? 'good' : (p >= 80 ? 'warn' : 'bad'));
+    const _buySig = `${Math.round(bP)}|${p}|${hubDataCache[`${store}BuyDate`] || ''}`;
+    _ccFlagUpdate('buying', _buySig);   // manager Command Center
+    _empFlagUpdate('buying', _buySig);  // employee combined widget
 }
 
 function renderLiveData(d) {
@@ -5245,18 +5281,18 @@ function handleIframeLoad() {
 }
 
 async function fetchScorecardData() {
-    const container = document.getElementById('scorecard-widget-body');
-    if (!container) return;
+    const _shMktg = document.getElementById('sh-panel-mktg');
+    if (!_shMktg) return;
 
-    // 1. Check if they are actually logged in! 
+    // 1. Check if they are actually logged in!
     // If there is no store in memory yet (they are behind the lock screen), ABORT!
     let targetStore = sessionStorage.getItem('speeksUserStore');
-    if (!targetStore) return; 
-    
-    // If CORP/ALL, default to OVL just so the widget has something to show
-    if (targetStore === 'ALL' || targetStore === 'CORP') targetStore = 'OVL'; 
+    if (!targetStore) return;
 
-    container.innerHTML = '<div style="display: flex; justify-content: center; align-items: center; min-height: 150px; width: 100%; color: #94a3b8; font-weight: 600; font-size: 14px;">Syncing Data...</div>';
+    // If CORP/ALL, default to OVL just so the widget has something to show
+    if (targetStore === 'ALL' || targetStore === 'CORP') targetStore = 'OVL';
+
+    _shMktg.innerHTML = '<div class="status-message">Syncing Data...</div>';
 
     try {
         const response = await fetch(`${SCORECARD_URL}?v=${Date.now()}`);
@@ -5271,7 +5307,9 @@ async function fetchScorecardData() {
         const storeData = json.data.find(item => String(item.store).toUpperCase() === targetStore.toUpperCase());
 
         if (!storeData) {
-            container.innerHTML = `<div style="color: #888; text-align: center; padding: 20px 0; font-weight: bold;">No data found for ${targetStore}.</div>`;
+            document.querySelectorAll('#cc-store-name').forEach(el => el.textContent = targetStore);
+            document.querySelectorAll('#cc-store-eyebrow').forEach(el => el.textContent = targetStore);
+            _shMktg.innerHTML = `<div class="status-message">No data found for ${targetStore}.</div>`;
             return;
         }
 
@@ -5322,23 +5360,20 @@ async function fetchScorecardData() {
         const renderCategoryCard = (cat) => {
             let originalVal = parseFloat(cat.score);
             let displayVal = cat.score;
-            let bg = '#f1f5f9', color = '#64748b';
+            let cls = 'neu';
             if (!isNaN(originalVal)) {
                 let sVal = originalVal * 2;
                 displayVal = sVal;
-                if (sVal >= 8) { bg = '#d1fae5'; color = '#059669'; }
-                else if (sVal >= 6) { bg = '#fef3c7'; color = '#d97706'; }
-                else { bg = '#fee2e2'; color = '#dc2626'; }
+                if (sVal >= 8) cls = 'ok';
+                else if (sVal >= 6) cls = 'warn';
+                else cls = 'crit';
             }
-            return `<div style="display: flex; justify-content: space-between; align-items: center; background: #fff; border: 1px solid #e2e8f0; padding: 8px; border-radius: 8px; gap: 6px;">
-                <span style="font-size: 9px; font-weight: 800; color: var(--slate-charcoal); text-transform: uppercase; line-height: 1.3;">${cat.name}</span>
-                <span style="font-size: 11px; font-weight: 900; background: ${bg}; color: ${color}; padding: 2px 6px; border-radius: 6px; flex-shrink: 0;">${displayVal}</span>
-            </div>`;
+            return `<div class="sh-cat"><span class="cn">${cat.name}</span><span class="cv sh-badge ${cls}">${displayVal}</span></div>`;
         };
 
         let breakdownHtml = '';
         if (storeData.buckets && storeData.buckets.some(b => b.categories && b.categories.length > 0)) {
-            breakdownHtml = `<div style="max-height: 340px; overflow-y: auto; padding-right: 4px; margin-top: 12px;" class="kpi-scroll-area">`;
+            breakdownHtml = `<div class="sh-scroll">`;
             storeData.buckets.forEach((bucket, bIdx) => {
                 if (!bucket.categories || bucket.categories.length === 0) return;
                 const bDateStr = bucket.sectionDate ? formatWeekOf(bucket.sectionDate) : '';
@@ -5346,15 +5381,10 @@ async function fetchScorecardData() {
                     ? `<div class="notif-dot active" style="position:relative; top:auto; right:auto; width:9px; height:9px; border:1px solid white; flex-shrink:0;"></div>`
                     : '';
                 const notesHtml = bucket.notes
-                    ? `<div style="margin-top: 6px; padding: 6px 10px; background: #f8fafc; border-left: 3px solid #94a3b8; border-radius: 0 6px 6px 0; font-size: 11px; color: #475569; line-height: 1.5; font-style: italic;">${String(bucket.notes).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</div>`
+                    ? `<div class="sh-note">${String(bucket.notes).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</div>`
                     : '';
-                breakdownHtml += `<div style="margin-bottom: 12px;">
-                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; min-width: 0;">
-                        <span style="font-size: 9px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;">${bucket.name}</span>
-                        ${bDateStr ? `<span style="font-size: 9px; color: #94a3b8; font-style: italic; white-space: nowrap; flex-shrink: 0;">${bDateStr}</span>` : ''}
-                        ${sectionPulse}
-                    </div>
-                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;">
+                breakdownHtml += `<div class="sh-bucket">
+                    <div class="sh-cats">
                         ${bucket.categories.map(renderCategoryCard).join('')}
                     </div>
                     ${notesHtml}
@@ -5362,51 +5392,118 @@ async function fetchScorecardData() {
             });
             breakdownHtml += `</div>`;
         } else if (storeData.breakdown && storeData.breakdown.length > 0) {
-            breakdownHtml = `<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-height: 280px; overflow-y: auto; padding-right: 4px; margin-top: 15px; border-top: 1px solid #f0f0f0; padding-top: 15px;" class="kpi-scroll-area">
-                ${storeData.breakdown.map(renderCategoryCard).join('')}
-            </div>`;
+            breakdownHtml = `<div class="sh-cats">${storeData.breakdown.map(renderCategoryCard).join('')}</div>`;
         }
 
-        const auditHtml = buildAuditSummaryHtml(storeData.audit, targetStore);
+        // ---- Header meta (Command Center title + eyebrow + week) ----
+        document.querySelectorAll('#cc-store-name').forEach(el => el.textContent = targetStore);
+        document.querySelectorAll('#cc-store-eyebrow').forEach(el => el.textContent = targetStore);
+        document.querySelectorAll('#cc-week').forEach(el => el.textContent = displayDate);
 
-        container.innerHTML = `
-        <div class="scorecard-widget" style="padding: 20px; align-items: stretch; text-align: left; justify-content: flex-start;">
-            ${auditHtml}
-            <div style="margin-top: 15px; border-top: 1px solid #f0f0f0; padding-top: 15px;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
+        // ---- SPEEKS Scorecard headline tile ----
+        const _omStripe = displayScore > 8 ? 'g' : (displayScore >= 6 ? 'y' : 'r');
+        const _omValCls = displayScore < 6 ? ' bad' : (displayScore < 8 ? ' warn' : '');
+        const _omDot = (displayScore < 6 || showOverallDot)
+            ? `<div class="notif-dot active sh-dot" style="width:9px; height:9px;"></div>` : '';
+        const _mktgTile = document.getElementById('sh-score-mktg');
+        if (_mktgTile) _mktgTile.innerHTML = `
+            <span class="sh-stripe ${_omStripe}"></span>${_omDot}
+            <div class="sh-k">SPEEKS Scorecard</div>
+            <div class="sh-v${_omValCls}">${displayScore.toFixed(1)}<small>/10</small></div>
+            <div class="sh-sub">${displayDate}</div>`;
+
+        // ---- SPEEKS Scorecard section (sits under the audit in the Scorecard tab) ----
+        _shMktg.innerHTML =
+            `<div class="sh-sc-sub">SPEEKS Scorecard <span class="sh-sc-sub-date">${displayDate}</span></div>`
+            + (breakdownHtml || `<div class="status-message">No SPEEKS Scorecard breakdown recorded yet.</div>`);
+
+        // ---- PayMore Audit headline tile + panel + breakdown action ----
+        const _au = storeData.audit;
+        const _auTile = document.getElementById('sh-score-audit');
+        const _auPanel = document.getElementById('sh-panel-audit');
+        const _auAction = document.getElementById('sh-tab-action');
+        if (_au) {
+            const _c = auditPctColor(_au.pct);
+            const _aStripe = _au.pct >= AUDIT_TARGET_PCT ? 'g' : (_au.pct >= AUDIT_PASS_PCT ? 'y' : 'r');
+            let _trend = '';
+            if (_au.prevPct != null) {
+                const _delta = Math.round((_au.pct - _au.prevPct) * 10) / 10;
+                const _up = _delta >= 0;
+                _trend = `<span class="sh-trend ${_up ? 'up' : 'dn'}">${_up ? '▲' : '▼'} ${Math.abs(_delta)}%</span>`;
+            }
+            if (_auTile) _auTile.innerHTML = `
+                <span class="sh-stripe ${_aStripe}"></span>
+                <div class="sh-k">PayMore Audit</div>
+                <div class="sh-v">${_au.pct}<small>%</small></div>
+                <div class="sh-sub">${_au.earned}/${_au.possible}${_trend ? ' · ' + _trend : ''}</div>`;
+            // ---- Audit Standing tile (derived from % vs the pass/target thresholds) ----
+            const _standing = document.getElementById('cc-audit-standing');
+            if (_standing) {
+                let _sTxt, _sSub, _sStripe, _sCls;
+                if (_au.pct >= AUDIT_TARGET_PCT) { _sTxt = 'On Target'; _sStripe = 'g'; _sCls = ''; _sSub = `at or above ${AUDIT_TARGET_PCT}%`; }
+                else if (_au.pct >= AUDIT_PASS_PCT) { _sTxt = 'Passing'; _sStripe = 'y'; _sCls = ' warn'; _sSub = `${(Math.round((AUDIT_TARGET_PCT - _au.pct) * 10) / 10)}% to target`; }
+                else { _sTxt = 'Below Pass'; _sStripe = 'r'; _sCls = ' bad'; _sSub = `${(Math.round((AUDIT_PASS_PCT - _au.pct) * 10) / 10)}% to pass`; }
+                _standing.innerHTML = `<span class="sh-stripe ${_sStripe}"></span><div class="sh-k">Audit Standing</div><div class="sh-v${_sCls}" style="font-size:18px;">${_sTxt}</div><div class="sh-sub">${_sSub}</div>`;
+            }
+            const _dateStr = _au.date ? new Date(_au.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+            const _auPct = Math.max(0, Math.min(100, _au.pct));
+            if (_auPanel) _auPanel.innerHTML = `
+                <div class="sh-au-head">
                     <div>
-                        <div class="scorecard-label" style="text-align: left; margin-bottom: 2px;">Online &amp; Marketing</div>
-                        <div class="scorecard-date" style="margin-bottom: 0; font-size: 11px;">${displayDate}</div>
+                        <div class="sh-au-big" style="color:${_c.fg};">${_au.earned}<span style="color:#94a3b8; font-size:18px; font-weight:700;">/${_au.possible}</span></div>
+                        <div class="sh-au-meta">${_dateStr}${_au.time ? ' · ' + _fmtAuditTime(_au.time) : ''}${_au.auditor ? ' · ' + escapeHtml(_au.auditor) : ''}</div>
                     </div>
-                    <div style="position: relative; display: inline-block;">
-                        <div class="scorecard-val" style="color: ${scoreColor}; font-size: 36px; text-shadow: 0 4px 15px ${scoreColor}30; line-height: 1;">
-                            ${displayScore.toFixed(1)}<span style="color:#94a3b8;">/10</span>
-                        </div>
-                        ${pulse}
-                    </div>
+                    <span class="sh-au-badge" style="background:${_c.bg}; color:${_c.fg};">${_au.pct}%${_trend ? ' · ' + _trend : ''}</span>
                 </div>
-                ${breakdownHtml}
-            </div>
-        </div>`;
+                <div class="sh-au-track">
+                    <i style="width:${_auPct}%; background:${_c.fg};"></i>
+                    <span class="sh-au-tick" style="left:${AUDIT_PASS_PCT}%;"></span>
+                    <span class="sh-au-tick" style="left:${AUDIT_TARGET_PCT}%;"></span>
+                    <span class="sh-au-ticklab" style="left:${AUDIT_PASS_PCT}%;">Pass ${AUDIT_PASS_PCT}%</span>
+                    <span class="sh-au-ticklab" style="left:${AUDIT_TARGET_PCT}%;">Target ${AUDIT_TARGET_PCT}%</span>
+                </div>
+                <div class="sh-au-scale-sp"></div>`;
+            if (_auAction) _auAction.innerHTML = `<button class="sh-view-btn" type="button" onclick="openAuditBreakdown('${targetStore}')">View Full Breakdown</button>`;
+        } else {
+            if (_auTile) _auTile.innerHTML = `
+                <span class="sh-stripe" style="background:#cbd5e1;"></span>
+                <div class="sh-k">PayMore Audit</div>
+                <div class="sh-v" style="font-size:17px; color:#94a3b8;">No audit</div>
+                <div class="sh-sub">No practice audit this week</div>`;
+            const _standing = document.getElementById('cc-audit-standing');
+            if (_standing) _standing.innerHTML = `<span class="sh-stripe" style="background:#cbd5e1;"></span><div class="sh-k">Audit Standing</div><div class="sh-v" style="font-size:16px; color:#94a3b8;">—</div><div class="sh-sub">No audit yet</div>`;
+            if (_auPanel) _auPanel.innerHTML = `<div class="status-message">No practice audit recorded yet.</div>`;
+            if (_auAction) _auAction.innerHTML = '';
+        }
+
+        // ---- Collapsed one-line summary + "updated" cue for the Scorecard tab ----
+        _ccSum('cc-sum-score', `${displayScore.toFixed(1)}<small>/10</small>`, _omValCls.trim());
+        if (_au) {
+            const _auCls = _au.pct >= AUDIT_TARGET_PCT ? 'good' : (_au.pct >= AUDIT_PASS_PCT ? 'warn' : 'bad');
+            _ccSum('cc-sum-audit', `${_au.pct}<small>%</small>`, _auCls);
+        } else {
+            _ccSum('cc-sum-audit', 'No audit', '');
+        }
+        _ccFlagUpdate('scorecard', `${_au ? _au.pct + '@' + (_au.date || '') : 'na'}|${displayScore}`);
     } catch (error) {
         console.error('Error fetching scorecard:', error);
-        container.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; padding: 20px 0; text-align: center;">Error syncing scorecard.</div>';
+        _shMktg.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Error syncing scorecard.</div>';
     }
 }
 
 async function fetchAlertsData() {
-    const container = document.getElementById('alerts-widget-body');
-    if (!container) return;
+    const _shEbay = document.getElementById('sh-panel-ebay');
+    if (!_shEbay) return;
 
-    // 1. Check if they are actually logged in! 
+    // 1. Check if they are actually logged in!
     let targetStore = sessionStorage.getItem('speeksUserStore');
     if (!targetStore) return; // ABORT if behind the lock screen!
-    
+
     // 2. Default to OVL only if it's the CEO/Corp viewing the widget
-    if (targetStore === 'ALL' || targetStore === 'CORP') targetStore = 'OVL'; 
+    if (targetStore === 'ALL' || targetStore === 'CORP') targetStore = 'OVL';
 
     // 3. Force the loading state immediately to clear any stale UI
-    container.innerHTML = '<div class="status-message">Syncing Data...</div>';
+    _shEbay.innerHTML = '<div class="status-message">Syncing Data...</div>';
 
     try {
         const response = await fetch(EBAY_ALERTS_URL);
@@ -5461,75 +5558,279 @@ async function fetchAlertsData() {
             return 'clear';
         };
 
+        // Returns the effective severity for a metric, treating an empty value as "clear".
+        const effectiveSeverity = (rawValue, severity) => {
+            if (rawValue === null || rawValue === undefined || String(rawValue).trim() === '') return 'clear';
+            return severity;
+        };
+
         const buildMiniAlertCard = (title, rawValue, severity, isPercent) => {
-            // Default styling is Green ("clear")
-            let bgColor = '#d1fae5';
-            let textColor = '#065f46'; 
+            let badgeCls = 'ok';
             let displayText = 'All Clear';
-            let pulseHtml = '';
-            
+            let dotHtml = '';
+
             if (rawValue !== null && rawValue !== undefined && String(rawValue).trim() !== '') {
                 if (isPercent) {
                     displayText = formatPercent(rawValue);
                 } else {
-                    if (String(rawValue).includes(',')) {
-                        displayText = String(rawValue).split(',').map(s =>
-                            `<span style="display:block; padding: 2px 0;">${s.trim()}</span>`
-                        ).join('<div style="height:1px; background:rgba(0,0,0,0.1); margin: 3px 0;"></div>');
-                    } else {
-                        displayText = rawValue;
-                    }
+                    displayText = String(rawValue).includes(',')
+                        ? String(rawValue).split(',').map(s => s.trim()).join(' · ')
+                        : rawValue;
                 }
 
                 if (severity === 'high') {
-                    bgColor = '#fef3c7';
-                    textColor = '#92400e';
+                    badgeCls = 'warn';
                 } else if (severity === 'very-high') {
-                    bgColor = '#fee2e2';
-                    textColor = '#991b1b';
-                    pulseHtml = '<div class="notif-dot active" style="display:block; position:absolute; top:-3px; right:-3px; width:8px; height:8px; border-width: 1px; z-index: 5;"></div>';
+                    badgeCls = 'crit';
+                    dotHtml = '<span class="sh-eb-dot"></span>';
                 }
             }
 
             return `
-            <div style="position: relative; background: #fff; padding: 8px 12px; border-radius: 8px; border: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 2px rgba(0,0,0,0.02); height: 100%; box-sizing: border-box;">
-                ${pulseHtml}
-                <div style="font-size: 9px; font-weight: 800; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 10px; flex-shrink: 0;">${title}</div>
-                <div style="font-size: 10px; font-weight: 900; color: ${textColor}; background-color: ${bgColor}; padding: 4px 8px; border-radius: 6px; text-align: right; line-height: 1.3;">
-                    ${displayText}
-                </div>
+            <div class="sh-eb-cell ${badgeCls}">
+                ${dotHtml}
+                <div class="l">${title}</div>
+                <div class="sh-badge ${badgeCls}">${displayText}</div>
             </div>`;
         };
 
-        container.innerHTML = `
-        <div style="display: flex; flex-direction: column; gap: 15px; width: 100%;">
-            
-            <div>
-                <div style="font-size: 10px; font-weight: 800; color: var(--slate-charcoal); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">eBay Performance Metrics</div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+        // Compact status tag summarising a metric group (e.g. "All clear" / "1 watch").
+        const groupTag = (sevs) => {
+            const c = sevs.filter(s => s === 'very-high').length;
+            const w = sevs.filter(s => s === 'high').length;
+            if (c) return `<span class="sh-grp-tag crit">${c} alert${c > 1 ? 's' : ''}</span>`;
+            if (w) return `<span class="sh-grp-tag warn">${w} watch</span>`;
+            return `<span class="sh-grp-tag ok">All clear</span>`;
+        };
+
+        // ---- Roll the 8 metrics up into one headline status for the tile ----
+        const _sevs = [
+            effectiveSeverity(storeData.currentHigh, 'high'),
+            effectiveSeverity(storeData.currentVeryHigh, 'very-high'),
+            effectiveSeverity(storeData.projectedHigh, 'high'),
+            effectiveSeverity(storeData.projectedVeryHigh, 'very-high'),
+            getSeverity('defectRate', storeData.defectRate),
+            getSeverity('lateShipment', storeData.lateShipment),
+            getSeverity('casesClosed', storeData.casesClosed),
+            getSeverity('tracking', storeData.tracking),
+        ];
+        const _crit = _sevs.filter(s => s === 'very-high').length;
+        const _warn = _sevs.filter(s => s === 'high').length;
+        const _clear = _sevs.length - _crit - _warn;
+        // Headline reflects how close the account is to eBay's penalty thresholds.
+        let _ebStripe = 'g', _ebValCls = '', _ebVal = 'Healthy', _ebSub = `All ${_sevs.length} metrics clear`;
+        if (_crit > 0) {
+            _ebStripe = 'r'; _ebValCls = ' bad';
+            _ebVal = `${_crit} At Risk`;
+            _ebSub = `${_crit} at eBay limit${(_warn ? ` · ${_warn} nearing` : '')} · ${_clear} clear`;
+        } else if (_warn > 0) {
+            _ebStripe = 'y'; _ebValCls = ' warn';
+            _ebVal = `${_warn} Near Limit`;
+            _ebSub = `${_warn} approaching eBay's limit · ${_clear} clear`;
+        }
+        const _ebTile = document.getElementById('sh-score-ebay');
+        if (_ebTile) _ebTile.innerHTML = `
+            <span class="sh-stripe ${_ebStripe}"></span>
+            <div class="sh-k">Account Status</div>
+            <div class="sh-v${_ebValCls}" style="font-size:${_ebVal === 'Healthy' ? '22px' : '24px'};">${_ebVal}</div>
+            <div class="sh-sub">${_ebSub}</div>`;
+
+        // ---- eBay strip: per-group flagged counts ----
+        const _countTile = (id, label, sevs) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const c = sevs.filter(s => s === 'very-high').length;
+            const w = sevs.filter(s => s === 'high').length;
+            const flagged = c + w;
+            const stripe = c ? 'r' : (w ? 'y' : 'g');
+            const cls = c ? ' bad' : (w ? ' warn' : '');
+            const sub = flagged ? `flagged · ${sevs.length - flagged} clear` : `all ${sevs.length} clear`;
+            el.innerHTML = `<span class="sh-stripe ${stripe}"></span><div class="sh-k">${label}</div><div class="sh-v${cls}">${flagged}<small>/${sevs.length}</small></div><div class="sh-sub">${sub}</div>`;
+        };
+        _countTile('cc-ebay-perf', 'Performance Metrics', _sevs.slice(0, 4));
+        _countTile('cc-ebay-top', 'Top-Rated Metrics', _sevs.slice(4));
+
+        // ---- Collapsed one-line summary + "updated" cue for the eBay tab ----
+        _ccSum('cc-sum-ebay', _ebVal, (_ebValCls || '').trim());
+        document.querySelectorAll('#cc-sum-ebay .cc-sum-v').forEach(el => { el.style.fontSize = '15px'; });
+        _ccFlagUpdate('ebay', `${_crit}|${_warn}|${_clear}`);
+
+        // ---- eBay detail panel: two metric groups, contained stat cells ----
+        _shEbay.innerHTML = `
+        <div class="sh-ebay">
+            <div class="sh-eb-group">
+                <div class="sh-eb-grouphead"><span class="sh-grp-lbl">Performance Metrics</span>${groupTag(_sevs.slice(0, 4))}</div>
+                <div class="sh-eb-cells">
                     ${buildMiniAlertCard('Current High', storeData.currentHigh, 'high', false)}
                     ${buildMiniAlertCard('Current Very High', storeData.currentVeryHigh, 'very-high', false)}
                     ${buildMiniAlertCard('Projected High', storeData.projectedHigh, 'high', false)}
                     ${buildMiniAlertCard('Projected Very High', storeData.projectedVeryHigh, 'very-high', false)}
                 </div>
             </div>
-
-            <div style="height: 1px; background: #e2e8f0; width: 100%;"></div>
-            
-            <div>
-                <div style="font-size: 10px; font-weight: 800; color: var(--slate-charcoal); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">eBay Top Rated Metrics</div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div class="sh-eb-group">
+                <div class="sh-eb-grouphead"><span class="sh-grp-lbl">Top-Rated Metrics</span>${groupTag(_sevs.slice(4))}</div>
+                <div class="sh-eb-cells">
                     ${buildMiniAlertCard('Defect Rate', storeData.defectRate, getSeverity('defectRate', storeData.defectRate), true)}
                     ${buildMiniAlertCard('Late Shipment', storeData.lateShipment, getSeverity('lateShipment', storeData.lateShipment), true)}
                     ${buildMiniAlertCard('Cases Closed', storeData.casesClosed, getSeverity('casesClosed', storeData.casesClosed), true)}
                     ${buildMiniAlertCard('Tracking', storeData.tracking, getSeverity('tracking', storeData.tracking), true)}
                 </div>
             </div>
-
         </div>`;
     } catch (error) {
         console.error('Error fetching alerts:', error);
     }
+}
+
+// Command Center: collapsible tabs. Default is a compact one-line summary with no
+// tab open; clicking a tab expands the widget to the chart height showing that tab's
+// strip + detail; clicking the open tab again collapses back to the summary.
+// Pure view-switching — the fetch/render functions above own the data.
+// Three tabs: 'scorecard' (audit + SPEEKS Scorecard), 'ebay', 'buying'.
+function switchCommandTab(tab) {
+    const widget = document.querySelector('.cc-widget');
+    const btn = document.getElementById('cc-tab-' + tab);
+    const collapse = btn && btn.classList.contains('active'); // clicking the open tab closes it
+
+    ['scorecard', 'ebay', 'buying'].forEach(t => {
+        const on = !collapse && t === tab;
+        const b = document.getElementById('cc-tab-' + t);
+        if (b) b.classList.toggle('active', on);
+        // Strips and panels are each stacked in one grid cell and toggled by class (opacity,
+        // not display) so every tab reserves the height of the tallest — the card never
+        // resizes when switching, and no hidden panel paints over the active one.
+        const strip = document.getElementById('cc-strip-' + t);
+        if (strip) strip.classList.toggle('cc-active', on);
+        const panel = document.getElementById('cc-panel-' + t);
+        if (panel) panel.classList.toggle('cc-active', on);
+    });
+    // Expand to chart height only while a tab is open; collapsed → natural summary height.
+    if (widget) widget.classList.toggle('cc-expanded', !collapse);
+    // The "View Full Breakdown" action is audit-specific; only on the Scorecard tab.
+    const action = document.getElementById('sh-tab-action');
+    if (action) action.style.display = (!collapse && tab === 'scorecard') ? '' : 'none';
+    // Show the explicit "back to summary" control while a tab is open.
+    const coll = document.getElementById('cc-collapse');
+    if (coll) coll.style.display = collapse ? 'none' : '';
+    // Opening a tab means the manager has now seen it → clear its "updated" cue.
+    if (!collapse) _clearCommandUpdot(tab);
+}
+// Explicit "back to the one-line summary" (in addition to clicking the open tab again).
+function collapseCommand() {
+    ['scorecard', 'ebay', 'buying'].forEach(t => {
+        const b = document.getElementById('cc-tab-' + t); if (b) b.classList.remove('active');
+        const strip = document.getElementById('cc-strip-' + t); if (strip) strip.classList.remove('cc-active');
+        const panel = document.getElementById('cc-panel-' + t); if (panel) panel.classList.remove('cc-active');
+    });
+    const widget = document.querySelector('.cc-widget'); if (widget) widget.classList.remove('cc-expanded');
+    const action = document.getElementById('sh-tab-action'); if (action) action.style.display = 'none';
+    const coll = document.getElementById('cc-collapse'); if (coll) coll.style.display = 'none';
+}
+// Back-compat alias in case anything still calls the old name.
+function switchStoreHealthTab(tab) { switchCommandTab(tab === 'mktg' ? 'scorecard' : tab); }
+
+// ---- Command Center: quiet "this tab changed" cue (Option A: a dot on the tab) ----
+// A dot appears when a hidden tab's data has changed since the manager last opened it,
+// so consolidating into tabs never buries new info. The very first sighting seeds a
+// silent baseline (no dot) so a fresh login isn't a wall of dots. Persisted per store.
+var _ccSigCache = {};
+function _ccStore() {
+    const s = document.getElementById('bsStoreSelect');
+    return (s && s.value) ? s.value : (sessionStorage.getItem('speeksUserStore') || 'STORE');
+}
+function _ccFlagUpdate(tab, sig) {
+    _ccSigCache[tab] = (sig == null ? '' : String(sig));
+    const dot = document.getElementById('cc-updot-' + tab);
+    if (!dot) return;
+    const btn = document.getElementById('cc-tab-' + tab);
+    const open = btn && btn.classList.contains('active');
+    const key = 'ccSeen_' + _ccStore() + '_' + tab;
+    let last = localStorage.getItem(key);
+    if (last === '__test_prev__') last = null;   // self-heal any leftover diagnostic baseline → reseed silently
+    if (open || last === null) {            // viewing it live, or first-ever baseline → seed silently
+        localStorage.setItem(key, _ccSigCache[tab]);
+        dot.classList.remove('show');
+        return;
+    }
+    dot.classList.toggle('show', last !== _ccSigCache[tab]); // changed since last seen → red dot
+}
+function _clearCommandUpdot(tab) {
+    const dot = document.getElementById('cc-updot-' + tab);
+    if (dot) dot.classList.remove('show');
+    if (_ccSigCache[tab] != null) localStorage.setItem('ccSeen_' + _ccStore() + '_' + tab, _ccSigCache[tab]);
+}
+// Populate a collapsed one-line summary cell.
+function _ccSum(id, html, cls) {
+    const el = document.querySelector('#' + id + ' .cc-sum-v');
+    if (!el) return;
+    el.innerHTML = html;
+    el.className = 'cc-sum-v' + (cls ? ' ' + cls : '');
+}
+
+// ---- EMPLOYEE combined widget: Buying & Sales + Weekly KPIs (2 tabs, no summary) ----
+// Always expanded; defaults to Buying. Mirrors the manager Command Center's dot cue.
+function switchEmpTab(tab) {
+    ['buying', 'kpis'].forEach(t => {
+        const on = t === tab;
+        const b = document.getElementById('ec-tab-' + t); if (b) b.classList.toggle('active', on);
+        const p = document.getElementById('ec-panel-' + t); if (p) p.classList.toggle('cc-active', on);
+    });
+    // Swap the header to match the active tab (goal + date belong to Buying only).
+    const eyebrow = document.getElementById('ec-eyebrow');
+    const titleT = document.getElementById('ec-title-text');
+    const goalWrap = document.getElementById('ec-goal-wrap');
+    const bsDate = document.getElementById('bs-last-updated');
+    const kpiDate = document.getElementById('emp-kpi-period');
+    const buying = tab === 'buying';
+    if (eyebrow) eyebrow.textContent = buying ? 'My Store · This Month' : 'Mine vs Store';
+    if (titleT) titleT.textContent = buying ? 'Buying & Sales' : 'Weekly KPIs';
+    if (goalWrap) goalWrap.style.display = buying ? '' : 'none';
+    if (bsDate) bsDate.style.display = buying ? '' : 'none';
+    if (kpiDate) kpiDate.style.display = buying ? 'none' : '';
+    _clearEmpUpdot(tab);
+}
+// Employee-widget update dot — same silent-seed / change-detect / clear-on-open logic
+// as the manager Command Center, keyed separately (ec) and per store.
+var _ecSigCache = {};
+function _empFlagUpdate(tab, sig) {
+    _ecSigCache[tab] = (sig == null ? '' : String(sig));
+    const dot = document.getElementById('ec-updot-' + tab);
+    if (!dot) return;
+    const btn = document.getElementById('ec-tab-' + tab);
+    const open = btn && btn.classList.contains('active');
+    const key = 'ecSeen_' + _ccStore() + '_' + tab;
+    let last = localStorage.getItem(key);
+    if (last === '__test_prev__') last = null;
+    if (open || last === null) { localStorage.setItem(key, _ecSigCache[tab]); dot.classList.remove('show'); return; }
+    dot.classList.toggle('show', last !== _ecSigCache[tab]);
+}
+function _clearEmpUpdot(tab) {
+    const dot = document.getElementById('ec-updot-' + tab);
+    if (dot) dot.classList.remove('show');
+    if (_ecSigCache[tab] != null) localStorage.setItem('ecSeen_' + _ccStore() + '_' + tab, _ecSigCache[tab]);
+}
+
+// After role/feature UI is applied, keep the combined widgets coherent: hide the whole
+// widget if every tab was turned off, and (employee widget) make sure a visible tab is
+// active so a disabled default doesn't leave a blank body.
+function _reconcileComboTabs(widgetEl, prefix, tabs, isEmployee) {
+    if (!widgetEl || getComputedStyle(widgetEl).display === 'none') return; // not shown for this user
+    const visible = tabs.filter(t => {
+        const b = document.getElementById(prefix + '-tab-' + t);
+        return b && getComputedStyle(b).display !== 'none';
+    });
+    if (!visible.length) { widgetEl.style.setProperty('display', 'none', 'important'); return; }
+    if (isEmployee) {
+        const activeOk = visible.some(t => {
+            const b = document.getElementById(prefix + '-tab-' + t);
+            return b.classList.contains('active');
+        });
+        if (!activeOk) switchEmpTab(visible[0]);
+    }
+}
+function _reconcileCommandWidgets() {
+    _reconcileComboTabs(document.querySelector('.cc-widget:not(.ec-widget)'), 'cc', ['buying', 'ebay', 'scorecard'], false);
+    _reconcileComboTabs(document.getElementById('ecWidget'), 'ec', ['buying', 'kpis'], true);
 }
 
 // ============================================================================
@@ -7458,8 +7759,8 @@ async function fetchAndRenderEmployeeGoals() {
             
             if (recDate >= startOfWeek) {
                 const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-                const dayIdx = (recDate.getDay() + 6) % 7; 
-                dailyStats[daysOfWeek[dayIdx]] = { goal: g, result: resVal };
+                const dayIdx = (recDate.getDay() + 6) % 7;
+                dailyStats[daysOfWeek[dayIdx]] = { goal: g, result: resVal, role: r.role };
             }
         });
 
@@ -7482,13 +7783,25 @@ async function fetchAndRenderEmployeeGoals() {
         let weekGoalTotal = 0;
         Object.values(dailyStats).forEach(d => { weekGoalTotal += (d.goal || 0); });
 
+        // Feed the "Listing Goals" action-menu bar: role + today's goal (+ result for its bar).
+        const _todayStats = dailyStats[daysOfWeek[currentDayIdx]] || {};
+        window._empGoalToday = todayGoal;
+        window._empRoleToday = displayRole;
+        window._empResultToday = _todayStats.result || 0;
+        if (typeof samRefreshListing === 'function') samRefreshListing();
+
         let dailyBreakdownHtml = '<div class="emp-pill-container">';
 
         daysOfWeek.forEach((dName, dIdx) => {
-            if (dailyStats[dName] && dailyStats[dName].goal > 0) {
-                dailyBreakdownHtml += `<div class="emp-daily-pill pill-goal">${dName}: ${dailyStats[dName].goal}</div>`;
+            const stat = dailyStats[dName];
+            // Friendly role name for the hover tooltip (e.g. B1 → Buyer 1).
+            const dRole = (stat && stat.role && stat.role !== '-') ? (roleTranslations[stat.role] || stat.role) : '';
+            if (stat && stat.goal > 0) {
+                dailyBreakdownHtml += `<div class="emp-daily-pill pill-goal" title="${dRole ? escapeHtml(dRole) : 'Goal set'}">${dName}: ${stat.goal}</div>`;
             } else if (dIdx <= currentDayIdx) {
-                dailyBreakdownHtml += `<div class="emp-daily-pill pill-null" title="No role set">${dName}</div>`;
+                // A role can be set with a 0 goal (e.g. closed Sundays) — say so rather than "No role set".
+                const t = dRole ? `${escapeHtml(dRole)} — no goal (store closed)` : 'No role set';
+                dailyBreakdownHtml += `<div class="emp-daily-pill pill-null" title="${t}">${dName}</div>`;
             } else {
                 dailyBreakdownHtml += `<div class="emp-daily-pill pill-future">${dName}</div>`;
             }
@@ -7647,34 +7960,40 @@ async function fetchAndRenderEmployeeKPIs() {
         }
 
         // Airy KPI tile: quiet label, my value (red if the rule flags it), store context line.
-        const buildStatGridItem = (title, myVal, storeVal, ruleStr, isPercent = false, prefixLabel = "Store:", showBubble = true, noteText = '') => {
-            const myIsBad = ruleStr ? checkRule(ruleStr, myVal) : false;
-
-            let displayMyVal = myVal || '-';
-            if (displayMyVal !== '-' && isPercent && !String(displayMyVal).includes('%')) displayMyVal += '%';
-
-            let displayStoreVal = storeVal || '-';
-            if (displayStoreVal !== '-' && isPercent && !String(displayStoreVal).includes('%')) displayStoreVal += '%';
-
-            return `
-            <div class="ekpi-tile">
-                <span class="ekpi-k">${title}</span>
-                <span class="ekpi-v${myIsBad ? ' bad' : ''}">${displayMyVal}</span>
-                <span class="ekpi-ctx">${prefixLabel} <strong>${displayStoreVal}</strong>${noteText ? `<span class="ekpi-note">${noteText}</span>` : ''}</span>
-            </div>`;
+        // Two aligned rows — "Mine" over "Store" — so each metric reads top-to-bottom as a
+        // me-vs-store comparison and the tab fills the widget height (matches the chart).
+        const _kv = (v, pct) => {
+            let s = (v == null || v === '') ? '-' : String(v);
+            if (s !== '-' && pct && !s.includes('%')) s += '%';
+            return s;
         };
-
+        const _kpiMetrics = [
+            { t: 'Buying Value', my: myData.buyVal,    st: sAvg.buyVal,       rule: null,         pct: false, tag: 'total' },
+            { t: 'Margin',       my: myData.buyMargin, st: sAvg.buyMargin,    rule: 'margin',     pct: true,  tag: 'avg' },
+            { t: 'Conversion',   my: myData.conversion, st: sAvg.conversion,  rule: 'conversion', pct: true,  tag: 'avg' },
+            { t: 'Variance',     my: formattedMyVar,   st: formattedStoreVar, rule: 'variance',   pct: false, tag: 'total', note: varRange },
+            { t: 'No Deals',     my: myData.noDeals,   st: sAvg.noDeals,      rule: 'nodeals',    pct: false, tag: 'total' },
+            { t: 'Trans. Time',  my: myData.time,      st: sAvg.time,         rule: 'time',       pct: false, tag: 'avg' },
+            { t: 'Listed Dev.',  my: myData.listed,    st: sAvg.listed,       rule: null,         pct: false, tag: 'total' },
+        ];
+        const _mineTiles = _kpiMetrics.map(m => {
+            const hasVal = m.my != null && m.my !== '' && m.my !== '-';
+            const bad = m.rule ? checkRule(m.rule, m.my) : false;      // flagged → red
+            const good = !!m.rule && hasVal && !bad;                    // rule met → green
+            const cls = bad ? ' bad' : (good ? ' good' : '');
+            return `<div class="ekpi-tile"><span class="ekpi-k">${m.t}</span><span class="ekpi-v${cls}">${_kv(m.my, m.pct)}</span></div>`;
+        }).join('');
+        const _storeTiles = _kpiMetrics.map(m =>
+            `<div class="ekpi-tile store"><span class="ekpi-k">${m.t} <span class="ekpi-tag">· ${m.tag}</span></span><span class="ekpi-v">${_kv(m.st, m.pct)}</span>${m.note ? `<span class="ekpi-note">${m.note}</span>` : ''}</div>`
+        ).join('');
         container.innerHTML = `
-            <div class="ekpi-grid">
-                ${buildStatGridItem('Buying Value', myData.buyVal, sAvg.buyVal, null, false, 'Store total:', false)}
-                ${buildStatGridItem('Margin', myData.buyMargin, sAvg.buyMargin, 'margin', true, 'Store avg:', true)}
-                ${buildStatGridItem('Conversion', myData.conversion, sAvg.conversion, 'conversion', true, 'Store avg:', true)}
-                ${buildStatGridItem('Variance', formattedMyVar, formattedStoreVar, 'variance', false, 'Store total:', true, varRange)}
-                ${buildStatGridItem('No Deals', myData.noDeals, sAvg.noDeals, 'nodeals', false, 'Store total:', true)}
-                ${buildStatGridItem('Trans. Time', myData.time, sAvg.time, 'time', false, 'Store avg:', true)}
-                ${buildStatGridItem('Listed Dev.', myData.listed, sAvg.listed, null, false, 'Store total:', false)}
-            </div>
+            <div class="ekpi-rowlab"><span class="ekpi-pill me">Mine</span><span class="ekpi-rule"></span></div>
+            <div class="ekpi-grid">${_mineTiles}</div>
+            <div class="ekpi-rowlab ekpi-rowlab-store"><span class="ekpi-pill st">Store</span><span class="ekpi-rule"></span></div>
+            <div class="ekpi-grid">${_storeTiles}</div>
         `;
+        // Employee widget "Weekly KPIs updated" dot — fires when a new week's numbers land.
+        _empFlagUpdate('kpis', `${pTxt}|${myData.buyVal}|${myData.conversion}|${myData.listed}|${myData.noDeals}`);
     } catch (e) {
         container.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to sync KPIs.</div>';
     }
@@ -8497,6 +8816,9 @@ function applyRoleBasedUI() {
     // a synthetic EXTRAS bar so one borrowed link never drags in a whole
     // foreign hotbar.
     _syncHotbarExtras(userRoleClass, userName);
+    // Combined widgets (manager Command Center, employee Buying/KPIs): after per-tab
+    // feature overrides, hide a widget whose every tab is off and keep a valid tab active.
+    _reconcileCommandWidgets();
     // Dashboard card rows where an override hid a card rebalance so the
     // remaining cards fill the row instead of leaving an empty slot.
     _rebalanceDashboardRows();
@@ -16855,11 +17177,13 @@ const FEATURE_CATALOG = [
     { key: 'widget-goals-panel',       label: 'Goals & Initiatives (sidebar)', tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'employee', 'training', 'assistant-manager'] },
     { key: 'widget-checklist-panel',   label: 'Checklist (sidebar)',           tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'district-manager', 'assistant-manager'] },
     { key: 'widget-audit-panel',       label: 'Cleaning Checklist (sidebar)',  tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'widget-scorecard-alerts',  label: 'Store Scorecard & Alerts row',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
-    { key: 'widget-buying-selling',    label: 'Buying & Sales',                tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
-    { key: 'widget-emp-listing-goals', label: 'My Listing Goals (employee)',   tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
-    { key: 'widget-listing-goals',     label: 'Listing Goals (manager)',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
-    { key: 'widget-emp-weekly-kpis',   label: 'My Weekly KPIs (employee)',     tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'widget-scorecard-alerts',  label: 'Command Center (whole widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'cc-scorecard',             label: 'Command Center · Scorecard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'cc-ebay',                  label: 'Command Center · eBay tab',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'cc-buying',                label: 'Command Center · Buying & Sales tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'widget-buying-selling',    label: 'Buying & Sales tab (employee)', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'widget-listing-goals',     label: 'Listing Goals bar (action menu)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager', 'training'] },
+    { key: 'widget-emp-weekly-kpis',   label: 'Weekly KPIs tab (employee)',    tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown (tab)',     tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-weekly-kpis',    label: 'Weekly KPIs (tab)',             tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
@@ -20375,9 +20699,39 @@ function samSetProgress(kind, data) {
 // modal itself fills instead: #goals-total-actual is the week's summed goals, and
 // the weekly target comes from targetFor(). MSM stacks two stores, so its totals
 // live in per-store elements and both sides get summed.
+// Role class for the current user (mirrors applyRoleBasedUI's derivation).
+function _speeksRoleClass() {
+    const r = sessionStorage.getItem('speeksUserRole') || 'employee';
+    return 'role-' + r.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+}
+// Employees / ASMs / trainees have PERSONAL listing goals; managers edit the roster.
+function _isPersonalGoalsUser() {
+    return ['role-employee', 'role-assistant-manager', 'role-training'].includes(_speeksRoleClass());
+}
+// "Listing Goals" bar in the action menu: personal popup for employees, roster editor for managers.
+function openListingGoals() {
+    if (_isPersonalGoalsUser()) toggleModal('empGoalsModal');
+    else toggleModal('listingGoalsModal');
+}
+
 function samRefreshListing() {
     const val = document.getElementById('samListVal'), fill = document.getElementById('samListFill'), sub = document.getElementById('samListSub');
     if (!val || !fill || !sub) return;
+
+    // Employee view: show the person's role + today's goal (no progress bar — this bar just
+    // reports role + goal, it isn't tracking progress to a target).
+    if (_isPersonalGoalsUser()) {
+        const g = window._empGoalToday, role = window._empRoleToday || '';
+        const goalTxt = (g != null && g !== '') ? String(g) : '—';
+        // Role sits to the LEFT of the goal, same font size (see .sam-mini-emp CSS).
+        val.innerHTML = `<span class="sam-m-role">${role ? escapeHtml(role) : 'No role'}</span><span class="sam-m-goal">${goalTxt}</span>`;
+        sub.textContent = '';
+        const mini = val.closest('.sam-mini');
+        if (mini) mini.classList.add('sam-mini-emp');   // CSS hides the bar + sub, sizes role = goal
+        return;
+    }
+    const _mini = val.closest('.sam-mini');
+    if (_mini) _mini.classList.remove('sam-mini-emp');
 
     const num = el => {
         const n = parseInt(String((el && el.textContent) || '').replace(/[^\d-]/g, ''), 10);
