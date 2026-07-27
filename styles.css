@@ -9324,6 +9324,15 @@ body.sam-active .hotbar-btn:hover {
     --b2b-accent-deep: #178048;
     --b2b-accent-tint: #e8f7ee;
 }
+/* Nothing inside B2B may widen the Operations page -- min-width:0 lets the
+   flex/grid children shrink instead of forcing their min-content width up the
+   tree, which is what makes the inner scroll containers actually scroll. */
+.b2b-panel, .b2b-panel .cb-scroll { min-width: 0; max-width: 100%; }
+.b2b-queue, .b2b-items, .b2b-list, .b2b-flight { min-width: 0; }
+.b2b-q-main, .b2b-lmain, .b2b-f { min-width: 0; }
+.b2b-panel .cb-table, .b2b-vtable, .b2b-ctable { table-layout: auto; }
+.b2b-ov { overflow-x: auto; }
+
 .b2b-panel .c { text-align: center; }
 .b2b-panel .r { text-align: right; }
 .b2b-panel .b { font-weight: 800; }
@@ -9503,7 +9512,11 @@ body.sam-active .hotbar-btn:hover {
     background: var(--b2b-accent-tint); border-color: var(--sage-professional); color: var(--sage-deep);
 }
 
-.b2b-board { display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; padding-bottom: 10px; }
+/* The wrapper owns the scrolling and is hard-capped to its parent; the board
+   itself is allowed to be as wide as its columns need. Without the cap, seven
+   208px columns push the whole Operations page sideways on a laptop. */
+.b2b-boardwrap { overflow-x: auto; max-width: 100%; padding-bottom: 10px; }
+.b2b-board { display: flex; gap: 12px; align-items: flex-start; width: max-content; min-width: 100%; }
 .b2b-col {
     flex: 1 0 208px; min-width: 208px; max-width: 300px;
     background: var(--b2b-surface); border-radius: 14px;

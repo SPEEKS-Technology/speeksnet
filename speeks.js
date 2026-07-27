@@ -8058,7 +8058,7 @@ const B2B_ACTIONS = {
     pricing_location: { cta: 'Assign Pricing',  why: 'Needs somewhere to be priced',    kind: 'assign'  },
     pricing:          { cta: 'Price Items',     why: 'Itemize and price the pickup',    kind: 'pricing' },
     quote:            { cta: 'Open Quote',      why: 'Priced and ready to quote',       kind: 'quote'   },
-    listing_location: { cta: 'Assign Listing',  why: 'Accepted -- pick a listing store', kind: 'listloc' },
+    listing_location: { cta: 'Assign Listing',  why: 'Accepted — pick a listing store', kind: 'listloc' },
     listing:          { cta: 'Open Listing',    why: 'List the items for resale',       kind: 'listing' },
 };
 
@@ -8152,9 +8152,9 @@ function _b2bMoney(n, dp) {
     return '$' + (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 function _b2bDate(v) {
-    if (!v) return '--';
+    if (!v) return '—';
     const d = new Date(String(v).length <= 10 ? v + 'T00:00:00' : v);
-    return isNaN(d) ? '--' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return isNaN(d) ? '—' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 function _b2bDaysIn(deal) {
     const t = deal.stage_changed_at || deal.updated_at || deal.created_at;
@@ -8310,7 +8310,7 @@ function b2bRender() {
     if (sub) {
         sub.textContent = _b2bIsCorp()
             ? 'Bulk business deals across every store, from pickup through listing.'
-            : "Your store's B2B deals -- price them, then list them.";
+            : "Your store's B2B deals — price them, then list them.";
     }
 
     if (_b2bView === 'pipeline')      body.innerHTML = _b2bRenderPipeline(scoped);
@@ -8420,7 +8420,7 @@ function _b2bRenderPipeline(scoped) {
                 </div>
                 ${act ? '<span class="b2b-card-pill">Needs you</span>' : ''}
             </div>`;
-        }).join('') : '<div class="b2b-col-empty">--</div>';
+        }).join('') : '<div class="b2b-col-empty">—</div>';
 
         return `
         <div class="b2b-col b2b-col-${s.tone}">
@@ -8433,7 +8433,9 @@ function _b2bRenderPipeline(scoped) {
     }).join('');
 
     const cancelNote = cancelled ? `<div class="b2b-cancel-note">${cancelled} cancelled deal${cancelled === 1 ? '' : 's'} hidden.</div>` : '';
-    return `${filter}<div class="b2b-board">${cols}</div>${cancelNote}`;
+    // Seven columns are wider than most laptops, so the board scrolls inside
+    // its own wrapper rather than pushing the whole page sideways.
+    return `${filter}<div class="b2b-boardwrap"><div class="b2b-board">${cols}</div></div>${cancelNote}`;
 }
 
 // --- view: Clients (DM/CEO) ------------------------------------------------
@@ -8444,9 +8446,9 @@ function _b2bRenderClients() {
         <tr>
             <td><span class="b2b-mono b2b-acr">${escapeHtml(c.acronym)}</span></td>
             <td><b>${escapeHtml(c.company)}</b>${c.notes ? `<div class="b2b-doc-sub">${escapeHtml(c.notes)}</div>` : ''}</td>
-            <td>${escapeHtml(c.contact || '--')}</td>
-            <td>${escapeHtml(c.contact_email || '--')}</td>
-            <td>${escapeHtml(c.contact_phone || '--')}</td>
+            <td>${escapeHtml(c.contact || '—')}</td>
+            <td>${escapeHtml(c.contact_email || '—')}</td>
+            <td>${escapeHtml(c.contact_phone || '—')}</td>
             <td class="c">${c.open_count ? `<span class="b2b-chip b2b-chip-info">${c.open_count} open</span> ` : ''}${c.deal_count || 0}</td>
             <td class="r b2b-rowacts">
                 <button class="b2b-mini" onclick="b2bEditClient('${c.id}')">Edit</button>
@@ -8546,7 +8548,7 @@ function _b2bRenderOverview(scoped) {
         <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
             <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
             <td><b>${escapeHtml(d.client?.company || '')}</b></td>
-            <td>${escapeHtml(d.client?.contact_email || '--')}</td>
+            <td>${escapeHtml(d.client?.contact_email || '—')}</td>
             <td class="c">${d.quote_send_count ? `sent ${d.quote_send_count}×` : '<span class="b2b-age b2b-age-warn">not sent</span>'}</td>
             <td class="r b">${_b2bMoney(d.total_offer)}</td>
         </tr>`).join('');
@@ -8732,9 +8734,9 @@ async function b2bOpenDeal(kind, id) {
 // The identity block every stage screen opens with.
 function _b2bSummary(deal) {
     const rows = [
-        ['Client',    escapeHtml(deal.client?.company || '--')],
+        ['Client',    escapeHtml(deal.client?.company || '—')],
         ['Reference', `<span class="b2b-mono">${escapeHtml(deal.ref)}</span>`],
-        ['Contact',   escapeHtml([deal.client?.contact, deal.client?.contact_email].filter(Boolean).join(' · ') || '--')],
+        ['Contact',   escapeHtml([deal.client?.contact, deal.client?.contact_email].filter(Boolean).join(' · ') || '—')],
         ['Picked up', deal.pickup_date ? _b2bDate(deal.pickup_date) : 'Not yet'],
         ['Pricing',   _b2bStoreTag(deal.pricing_store)],
     ];
@@ -8762,7 +8764,7 @@ function _b2bStagePickup(deal) {
             <label class="form-label-caps">Items Picked Up</label>
             <textarea id="b2bPuDesc" class="form-input-lg" rows="3"
                 placeholder="e.g. ~40 laptops, 12 monitors, 3 pallets of misc peripherals">${escapeHtml(deal.pickup_desc || '')}</textarea>
-            <p class="b2b-hint">A general description is enough here -- the itemized list comes later, at pricing.</p>
+            <p class="b2b-hint">A general description is enough here — the itemized list comes later, at pricing.</p>
             <div class="b2b-grid2" style="margin-top:14px;">
                 <div>
                     <label class="form-label-caps">Client Name *</label>
@@ -8876,7 +8878,7 @@ function _b2bPaintTotals() {
     set('b2bTotMargin', `${_b2bMoney(margin, 2)} (${pct}%)`);
     _b2bModalItems.forEach(it => {
         const el = document.getElementById(`b2bLn-${it.id}`);
-        if (el) el.textContent = it.recycle_only ? '--' : _b2bMoney((Number(it.offer) || 0) * (Number(it.quantity) || 1), 2);
+        if (el) el.textContent = it.recycle_only ? '—' : _b2bMoney((Number(it.offer) || 0) * (Number(it.quantity) || 1), 2);
     });
     const submit = document.getElementById('b2bPrSubmit');
     if (submit) submit.disabled = _b2bModalItems.length === 0;
@@ -8990,7 +8992,7 @@ function _b2bItemCards() {
                         oninput="b2bItemInput('${it.id}','model',this.value)" onchange="b2bItemSave('${it.id}')"></div>
                 <div class="b2b-f"><label>Condition</label>
                     <select oninput="b2bItemInput('${it.id}','condition',this.value)" onchange="b2bItemSave('${it.id}')">
-                        <option value="">--</option>
+                        <option value="">—</option>
                         ${B2B_CONDITIONS.map(c => `<option ${it.condition === c ? 'selected' : ''}>${c}</option>`).join('')}
                     </select></div>
                 <div class="b2b-f b2b-f-n"><label>Qty</label>
@@ -9001,11 +9003,11 @@ function _b2bItemCards() {
                           : `<input type="number" min="0" step="0.01" value="${Number(it.value) || 0}"
                         oninput="b2bItemInput('${it.id}','value',this.value)" onchange="b2bItemSave('${it.id}')">`}</div>
                 <div class="b2b-f b2b-f-n"><label>Unit offer</label>
-                    ${rec ? '<div class="b2b-f-off">--</div>'
+                    ${rec ? '<div class="b2b-f-off">—</div>'
                           : `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
                         oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`}</div>
                 <div class="b2b-f b2b-f-n"><label>Line total</label>
-                    <div class="b2b-f-calc" id="b2bLn-${it.id}">${rec ? '--' : _b2bMoney((Number(it.offer) || 0) * (Number(it.quantity) || 1), 2)}</div></div>
+                    <div class="b2b-f-calc" id="b2bLn-${it.id}">${rec ? '—' : _b2bMoney((Number(it.offer) || 0) * (Number(it.quantity) || 1), 2)}</div></div>
             </div>
             <div class="b2b-pnotes">
                 <div class="b2b-f"><label>Staff notes <span class="b2b-tag-int">internal</span></label>
@@ -9025,10 +9027,10 @@ function _b2bItemCards() {
 function _b2bTotalsBar(showMargin) {
     return `
     <div class="b2b-totals">
-        <div class="b2b-tot"><span class="b2b-tot-k">Lines</span><span class="b2b-tot-v" id="b2bTotUnits">--</span></div>
-        <div class="b2b-tot"><span class="b2b-tot-k">Resale value</span><span class="b2b-tot-v" id="b2bTotValue">--</span></div>
-        <div class="b2b-tot"><span class="b2b-tot-k">Total offer</span><span class="b2b-tot-v accent" id="b2bTotOffer">--</span></div>
-        ${showMargin ? '<div class="b2b-tot"><span class="b2b-tot-k">Gross margin</span><span class="b2b-tot-v" id="b2bTotMargin">--</span></div>' : ''}
+        <div class="b2b-tot"><span class="b2b-tot-k">Lines</span><span class="b2b-tot-v" id="b2bTotUnits">—</span></div>
+        <div class="b2b-tot"><span class="b2b-tot-k">Resale value</span><span class="b2b-tot-v" id="b2bTotValue">—</span></div>
+        <div class="b2b-tot"><span class="b2b-tot-k">Total offer</span><span class="b2b-tot-v accent" id="b2bTotOffer">—</span></div>
+        ${showMargin ? '<div class="b2b-tot"><span class="b2b-tot-k">Gross margin</span><span class="b2b-tot-v" id="b2bTotMargin">—</span></div>' : ''}
     </div>`;
 }
 
@@ -9127,8 +9129,8 @@ function _b2bQuoteDoc(deal, items) {
                 <div class="b2b-doc-sku b2b-mono">${escapeHtml(it.sku || '')}</div>
             </td>
             <td class="c">${qty}</td>
-            <td class="r">${it.recycle_only ? '--' : _b2bMoney(it.offer, 2)}</td>
-            <td class="r b">${it.recycle_only ? '--' : _b2bMoney((Number(it.offer) || 0) * qty, 2)}</td>
+            <td class="r">${it.recycle_only ? '—' : _b2bMoney(it.offer, 2)}</td>
+            <td class="r b">${it.recycle_only ? '—' : _b2bMoney((Number(it.offer) || 0) * qty, 2)}</td>
         </tr>`;
     }).join('') : '<tr><td colspan="4" class="b2b-doc-empty">No line items yet.</td></tr>';
 
@@ -9474,11 +9476,11 @@ function _b2bStageView(deal) {
                 ${it.client_notes ? `<div class="b2b-doc-sub">${escapeHtml(it.client_notes)}</div>` : ''}
                 ${it.staff_notes ? `<div class="b2b-doc-sub int">Internal: ${escapeHtml(it.staff_notes)}</div>` : ''}
                 <div class="b2b-doc-sku b2b-mono">${escapeHtml(it.sku || '')}</div></td>
-            <td class="c">${escapeHtml(it.condition || '--')}</td>
+            <td class="c">${escapeHtml(it.condition || '—')}</td>
             <td class="c">${qty}</td>
             <td class="c">${_b2bDone(it)}/${qty}</td>
-            <td class="r">${it.recycle_only ? '--' : _b2bMoney(it.cost != null ? it.cost : it.offer, 2)}</td>
-            <td class="r b">${it.recycle_only ? '--' : _b2bMoney((Number(it.cost != null ? it.cost : it.offer) || 0) * qty, 2)}</td>
+            <td class="r">${it.recycle_only ? '—' : _b2bMoney(it.cost != null ? it.cost : it.offer, 2)}</td>
+            <td class="r b">${it.recycle_only ? '—' : _b2bMoney((Number(it.cost != null ? it.cost : it.offer) || 0) * qty, 2)}</td>
         </tr>`;
     }).join('');
 
