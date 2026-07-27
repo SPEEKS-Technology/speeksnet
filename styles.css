@@ -9480,9 +9480,61 @@ body.sam-active .hotbar-btn:hover {
 .cc-updated b { color: #647082; font-weight: 800; }
 
 /* Tabs on top */
-.cc-tabbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 13px 20px; border-bottom: 1px solid #eef2f6; min-height: 36px; }
-.cc-seg { display: flex; }
-.cc-seg .toggle-btn { position: relative; flex: 1 1 0; min-width: 140px; text-align: center; justify-content: center; }
+.cc-tabbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 13px 20px; border-bottom: 1px solid #e3ebe6; min-height: 36px; }
+
+/* The flat pills didn't read as tabs: an inactive tab was grey text on a grey
+   track, and the active one was white-on-near-white with a 5%-opacity shadow.
+   Now the track has a real edge and the active tab lifts to white with emerald
+   ink and an emerald ring, so "which panel am I looking at" is answerable at a
+   glance. Scoped to .cc-seg, which is the tab switcher on BOTH the manager
+   Command Center and the employee widget — the performance chart's own .ew-seg
+   toggles are deliberately left alone.
+   The global .toggle-btn rules mark padding/font/radius !important and
+   .toggle-btn.active marks background/color !important, hence the !importants
+   below; .cc-seg outscores both, so these win. */
+/* Every tab carries its own border, so you can see there are three separate
+   buttons rather than three words sharing one grey field. Inactive reads as an
+   unpressed button (white, light edge); the selected one fills emerald with an
+   emerald edge. The track is lightened so the white buttons still read against
+   it. Global .toggle-btn sets `border: none` without !important, so the border
+   here wins on specificity. */
+.cc-seg {
+    display: flex;
+    background: #f3f7f4;
+    border: 1px solid #e4ece7;
+    border-radius: 12px;
+    padding: 4px;
+    gap: 5px;
+}
+.cc-seg .toggle-btn {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 140px;
+    text-align: center;
+    justify-content: center;
+    padding: 7px 14px !important;
+    font-size: 11.5px !important;
+    font-weight: 750 !important;
+    border-radius: 8px !important;
+    background: #fff;
+    border: 1px solid #dde6e0;
+    color: #5b6b64;
+    transition: background .15s, color .15s, box-shadow .15s, border-color .15s;
+}
+.cc-seg .toggle-btn:hover:not(.active) {
+    border-color: #c3d6cb;
+    color: var(--slate-charcoal);
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .06);
+}
+.cc-seg .toggle-btn.active {
+    background: #e8f7ee !important;
+    color: #146c3c !important;
+    font-weight: 800 !important;
+    border-color: #1f9d57;
+    box-shadow: 0 0 0 1px rgba(31, 157, 87, .35), 0 1px 3px rgba(16, 24, 40, .10);
+}
+.cc-seg .toggle-btn:focus-visible { outline: 2px solid #178048; outline-offset: 1px; }
+
 .cc-tabbar-right { display: flex; align-items: center; gap: 10px; flex: none; }
 .cc-tab-action:empty { display: none; }
 /* Explicit "back to summary" control (shown only while a tab is open) */
@@ -9498,10 +9550,24 @@ body.sam-active .hotbar-btn:hover {
 /* Collapsed one-line summary (default view, no tab open) */
 /* Flex (not fixed grid) so a tab disabled via Feature Access drops its cell and the
    rest reflow to fill — no empty column. */
-.cc-summary { display: flex; flex-wrap: wrap; gap: 1px; background: #eef2f6; border-bottom: 1px solid #eef2f6; }
-.cc-sum { flex: 1 1 0; background: #fff; padding: 14px 16px 15px 18px; min-width: 120px; }
+/* The strip used to be white cells on a white card separated by one 1px
+   hairline, so it blended into the header above it. It now reads as its own
+   band: tinted cells, a heavier rule above, and a little more height. The
+   1px gaps still show the parent through as inter-cell dividers. */
+.cc-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1px;
+    background: #e0e9e4;                  /* shows through the gaps as dividers */
+    /* no border-top: .cc-tabbar already draws one, and stacking both gave a
+       2px rule in two slightly different greys. The tint change plus this
+       inset shade is what does the separating. */
+    border-bottom: 1px solid #dbe5df;
+    box-shadow: inset 0 6px 12px -8px rgba(16, 24, 40, .10);
+}
+.cc-sum { flex: 1 1 0; background: #f6faf7; padding: 17px 16px 18px 18px; min-width: 120px; }
 .cc-sum-k { font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #647082; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cc-sum-v { font-size: 20px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; margin-top: 6px; color: var(--slate-charcoal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-sum-v { font-size: 22px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; margin-top: 7px; color: var(--slate-charcoal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cc-sum-v small { font-size: 11px; font-weight: 700; color: #94a3b8; }
 .cc-sum-v.warn { color: #d97706; }
 .cc-sum-v.bad { color: #dc2626; }
