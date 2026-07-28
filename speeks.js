@@ -1840,6 +1840,15 @@ async function checkPIN() {
 
             if (typeof initDashboardData === 'function') initDashboardData();
             initTicker();
+
+            // Repopulate the feed for whoever just signed in. loadCMS otherwise
+            // runs only at page load — which on a login is BEFORE there is a
+            // user, so read state and the new-hire cutoff were both computed
+            // without one. It matters more now that signing out can happen in
+            // place: this is also what keeps the previous person's announcements
+            // and store notes out of the next person's feed.
+            if (typeof loadCMS === 'function') loadCMS();
+            if (typeof fetchAndDisplayStoreComment === 'function') fetchAndDisplayStoreComment();
         } else {
             err.innerText = "Incorrect PIN. Please try again.";
             err.style.display = 'block';
@@ -5471,15 +5480,14 @@ function handleSignOut() {
     // name is dropped, since the key is scoped to the signing-out user.
     try { sessionStorage.removeItem(_seenAgingKey()); } catch (e) { /* non-fatal */ }
 
-    // Remove the login state
-    sessionStorage.removeItem('speeksUnlocked');
-    sessionStorage.removeItem('speeksUserName');
-    sessionStorage.removeItem('speeksUserRole');
-    sessionStorage.removeItem('speeksUserStore');
-    sessionStorage.removeItem('speeksMultiStore');
-
-    // Remove the comment tracker so it pops up again on next login
-    sessionStorage.removeItem('speeksSeenCommentKeys');
+    // Every key the login sets has to be cleared here, plus the comment tracker
+    // so store comments pop again next login. speeksUserPin and
+    // speeksUserOnboardedAt were previously left behind — and the PIN is sent as
+    // the credential on several writes (kpi-manage among them), so the outgoing
+    // user's PIN stayed readable in the tab until the next login overwrote it.
+    ['speeksUnlocked', 'speeksUserName', 'speeksUserRole', 'speeksUserStore',
+     'speeksMultiStore', 'speeksUserPin', 'speeksUserOnboardedAt',
+     'speeksSeenCommentKeys'].forEach(function (k) { sessionStorage.removeItem(k); });
 
     // Hide authenticated chrome and close any open panels BEFORE reloading, so the
     // teardown/fetch window can't briefly paint role-gated controls (e.g. the green
@@ -5489,24 +5497,47 @@ function handleSignOut() {
     document.getElementById('goalsSidePanel')?.classList.remove('open');
     closeAllModals();
 
-    // Paint the login screen on THIS page before navigating. The browser holds
-    // the current frame until the next document paints, and speeks.js is
-    // deferred — so without this the hand-off showed the shell's white body for
-    // a beat. Harmless before the redesign, glaring against a near-black login.
-    // Reusing the real overlay means the colour can't drift from .auth-page and
-    // the dark-theme filter is already accounted for.
+    // Drop the outgoing user's feed data. Signing back in as someone else on
+    // this tab would otherwise flash their announcements and store notes before
+    // the new fetches resolve.
+    window._samAnnData = [];
+    window._samStoreNotes = [];
+
+    // Show the real login overlay. It is fixed at inset 0 with z-index 100000,
+    // so it covers the authenticated page outright — nothing behind it needs
+    // tearing down, and reusing it means the colour can't drift from .auth-page
+    // and the dark-theme filter is already accounted for.
     const overlay = document.getElementById('authOverlay');
     if (overlay) {
         overlay.style.display = 'flex';
         document.body.style.overflow = 'hidden';
     }
+    try { renderActionFeed(); } catch (_) { /* feed may not exist here */ }
 
-    // One navigation, not two. location.reload() from workspace/docs/operations/
-    // stats landed on a page that then found no session and bounced to
-    // index.html itself — two full loads back to back, which is the lag and the
-    // second white gap. Go straight there. replace() keeps a signed-out Back
-    // button from returning to an authenticated URL.
-    location.replace('index.html');
+    // On the dashboard, sign out IN PLACE — no navigation at all, so it is
+    // instant. This is the mirror of signing IN, which has always transitioned
+    // in place (checkPIN hides the overlay and re-runs applyRoleBasedUI /
+    // initDashboardData rather than reloading), so both directions now use the
+    // same mechanism instead of one of them costing a full page load.
+    //
+    // Anywhere else we still hand off to index.html. An unauthenticated
+    // non-index page is a state the app has never had — the load-time gate
+    // redirects such a page to index before the overlay is ever shown — and
+    // inventing it to save one page load is not worth the risk. replace() also
+    // keeps a signed-out Back button from returning to an authenticated URL.
+    const page = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
+    if (page !== '' && page !== 'index.html') { location.replace('index.html'); return; }
+
+    // Reset the PIN field so the next person types into a clean form: value,
+    // painted cells, the shake/error state and any stuck button spinner.
+    const input = document.getElementById('pinInput');
+    if (input) input.value = '';
+    if (typeof _authPaintCells === 'function') _authPaintCells();
+    document.getElementById('pinCells')?.classList.remove('bad');
+    document.getElementById('unlockBtn')?.classList.remove('loading');
+    const err = document.getElementById('pinError');
+    if (err) err.style.display = 'none';
+    if (input) input.focus();
 }
 
 // --- 17. MODULE: IDEA SUBMISSION MODAL ---
@@ -9132,6 +9163,9 @@ function applyRoleBasedUI() {
     // Only matters when one user holds both Preferred Purchases entries; the
     // labels are otherwise already correct in the markup.
     try { _plSyncToolLabels(); } catch (_) { /* module may not be loaded on this page */ }
+    // Role gating decides how many action items are visible, so square the deck
+    // up right after it rather than waiting for the feed's next render.
+    try { _samSyncRailFill(); } catch (_) { /* menu not on this page */ }
     // First call kicks off a background refresh of the overrides from Supabase
     // (cached copy applies instantly; a change re-runs this function once).
     _kickFeatureOverridesRefresh();
@@ -20701,6 +20735,9 @@ function renderActionFeed() {
 
     if (!items.length && !patchRow) {
         _samReconcileFeed(feed, [{ key: 'empty', html: '<div class="sam-empty">You\'re all caught up.</div>' }]);
+        // Must run on this path too: a caught-up feed is exactly when the deck
+        // looked lopsided, because the early return skipped the rail sync.
+        _samSyncRailFill();
         return;
     }
 
