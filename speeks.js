@@ -9500,6 +9500,17 @@ document.addEventListener('click', async (e) => {
             applyRoleBasedUI();
             closeAllModals();
 
+            // Start the new tab at the top. This swap replaces .main-content in
+            // place rather than navigating, so the scroll offset carries over from
+            // whatever you were reading on the previous tab — and because the new
+            // page is a different length, you land somewhere arbitrary rather than
+            // where you were. Has to come AFTER closeAllModals, which restores the
+            // scroll position it pinned when a modal opened and would otherwise
+            // undo this. Back/forward still restore position: popstate does a real
+            // reload and the browser handles that.
+            window.scrollTo(0, 0);
+            document.documentElement.scrollTop = 0;
+
             if (targetUrl.includes('docs.html')) {
                 if (typeof loadDocs === 'function') loadDocs();
                 const docSearch = document.getElementById('docSearch');
