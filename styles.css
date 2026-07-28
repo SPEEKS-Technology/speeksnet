@@ -9960,8 +9960,9 @@ body.sam-active .hotbar-btn:hover {
 }
 .b2b-doc-parties {
     display: flex; justify-content: space-between; gap: 16px;
-    padding: 14px 20px; background: var(--b2b-surface);
-    border-bottom: 1px solid var(--b2b-line-2); font-size: 12.5px; color: #334155;
+    padding: 14px 20px; background: #f4faf6;
+    border-top: 1px solid #dcefe4; border-bottom: 1px solid #dcefe4;
+    font-size: 12.5px; color: #334155;
 }
 .b2b-doc-parties .r { text-align: right; }
 .b2b-doc-k {
@@ -9970,10 +9971,14 @@ body.sam-active .hotbar-btn:hover {
 }
 .b2b-doc-t { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .b2b-doc-t th {
-    padding: 10px 14px; background: var(--b2b-surface); border-bottom: 2px solid var(--b2b-line);
+    padding: 11px 14px; background: var(--b2b-accent-tint);
+    border-bottom: 2px solid var(--sage-professional);
     font-size: 9.5px; font-weight: 800; letter-spacing: .07em;
-    text-transform: uppercase; color: var(--b2b-muted); text-align: left;
+    text-transform: uppercase; color: var(--sage-deep); text-align: left;
 }
+.b2b-doc-t tbody tr:nth-child(even) { background: #fbfdfc; }
+/* the money column is the point of the document */
+.b2b-doc-t tbody td:last-child { color: var(--sage-deep); }
 .b2b-doc-t td { padding: 10px 14px; border-bottom: 1px solid var(--b2b-line-2); font-size: 12.5px; color: #1a1c1e; }
 .b2b-doc-total {
     display: flex; align-items: center; justify-content: space-between;
@@ -10006,8 +10011,11 @@ body.sam-active .hotbar-btn:hover {
 }
 .b2b-doc-empty { padding: 26px; text-align: center; font-size: 12.5px; color: var(--b2b-faint); }
 .b2b-doc-foot {
-    padding: 4px 20px 20px; font-size: 11.5px; line-height: 1.6; color: var(--b2b-faint);
+    margin-top: 14px; padding: 14px 20px; background: var(--b2b-surface);
+    border-top: 1px solid var(--b2b-line-2);
+    font-size: 11.5px; line-height: 1.6; color: var(--b2b-muted);
 }
+.b2b-doc-foot b { color: var(--sage-deep); }
 
 /* --- listing -------------------------------------------------------------- */
 .b2b-scanbar {
@@ -10131,15 +10139,23 @@ body.sam-active .hotbar-btn:hover {
 .b2b-btn.is-busy, .kpi-cancel-btn.is-busy { opacity: .75; cursor: progress; }
 
 /* Print the labels for one line, straight from the pricing grid. */
+/* Square, icon-only, and unmistakably a barcode -- one per line, wherever a
+   line is listed. */
 .b2b-linelabel {
-    display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
-    height: var(--b2b-h-sm); padding: 0 10px; font: inherit;
-    font-size: 10.5px; font-weight: 750; letter-spacing: .02em;
+    display: inline-grid; place-items: center; cursor: pointer; flex: 0 0 auto;
+    width: var(--b2b-h-md); height: var(--b2b-h-md); padding: 0; font: inherit;
     border-radius: var(--b2b-r-sm); border: 1px solid var(--b2b-line);
-    background: #fff; color: var(--b2b-muted); flex: 0 0 auto;
+    background: #fff; color: var(--b2b-muted); transition: all .14s ease;
 }
-.b2b-linelabel svg { width: 12px; height: 12px; }
-.b2b-linelabel:hover { border-color: var(--sage-professional); color: var(--sage-deep); }
+.b2b-linelabel svg { width: 17px; height: 17px; stroke-width: 1.9; }
+.b2b-linelabel:hover {
+    border-color: var(--sage-professional); background: var(--b2b-accent-tint);
+    color: var(--sage-deep);
+}
+.b2b-pcard-head .b2b-linelabel { width: var(--b2b-h-sm); height: var(--b2b-h-sm); }
+.b2b-pcard-head .b2b-linelabel svg { width: 15px; height: 15px; stroke-width: 2.2; }
+.b2b-vtable .b2b-linelabel { width: var(--b2b-h-sm); height: var(--b2b-h-sm); }
+.b2b-vtable .b2b-linelabel svg { width: 15px; height: 15px; stroke-width: 2.2; }
 
 /* A Fair or For Parts line has to explain itself before it can be quoted. */
 .b2b-tag-req {

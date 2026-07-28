@@ -8998,6 +8998,20 @@ function _b2bNeedsReason(it)   { return B2B_REASON_CONDITIONS.includes(it.condit
 function _b2bMissingReason(it) { return _b2bNeedsReason(it) && !String(it.client_notes || '').trim(); }
 function _b2bUnreasoned()      { return _b2bModalItems.filter(_b2bMissingReason); }
 function _b2bItemName(it) { return [it.make, it.model].filter(Boolean).join(' ') || 'Untitled item'; }
+
+// Labels are printed per line, wherever a line is shown -- pricing, quoting,
+// the listing checklist and the read-only view all get the same button, so a
+// lost or damaged label can be reprinted from whichever screen you're on.
+const B2B_ICO_BARCODE = '<path d="M3 5v14"/><path d="M7 5v14"/><path d="M11 5v14"/>'
+                      + '<path d="M14 5v14"/><path d="M18 5v14"/><path d="M21 5v14"/>';
+
+function _b2bLabelBtn(it, cls) {
+    if (!it.sku) return '';
+    const n = Number(it.quantity) || 1;
+    return `<button class="b2b-linelabel ${cls || ''}" onclick="event.stopPropagation();b2bPrintLabels('${_b2bModalDeal?.id}','${it.id}')"
+        aria-label="Print labels for ${escapeHtml(it.sku)}"
+        data-tip="Print ${n} label${n === 1 ? '' : 's'} for ${escapeHtml(it.sku)}">${_b2bIco(B2B_ICO_BARCODE)}</button>`;
+}
 function _b2bLocalItem(id){ return _b2bModalItems.find(i => i.id === id); }
 
 function _b2bItemTotals() {
@@ -9171,10 +9185,7 @@ function _b2bItemCards() {
         <div class="b2b-pcard ${rec ? 'rec' : ''} ${missing ? 'needs-reason' : ''}">
             <div class="b2b-pcard-head">
                 <span class="b2b-mono b2b-pcard-sku">${escapeHtml(it.sku || `Line ${String(it.line_no).padStart(4, '0')}`)}</span>
-                ${it.sku ? `<button class="b2b-linelabel" onclick="b2bPrintLabels('${_b2bModalDeal?.id}','${it.id}')"
-                    title="Print ${escapeHtml(it.quantity)} label${Number(it.quantity) === 1 ? '' : 's'} for this line">
-                    ${_b2bIco('<polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>')}
-                    Labels</button>` : ''}
+                ${_b2bLabelBtn(it)}
                 <label class="b2b-rec-toggle">
                     <input type="checkbox" ${rec ? 'checked' : ''} onchange="b2bItemRecycleOnly('${it.id}',this.checked)">
                     <span>Recycle only</span>
@@ -9254,7 +9265,6 @@ function _b2bStagePricing(deal) {
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
-            <button class="b2b-btn b2b-btn-secondary" onclick="b2bPrintLabels('${deal.id}')">Print All Labels</button>
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
             <button class="b2b-btn b2b-btn-primary" id="b2bPrSubmit" ${_b2bModalItems.length ? '' : 'disabled'}
                 onclick="b2bSubmitPricing('${deal.id}',this)">Submit For Quoting</button>`,
@@ -9301,7 +9311,6 @@ function _b2bStageQuote(deal) {
                 <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
                     value="${escapeHtml(deal.client?.contact_email || '')}">
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()">Copy</button>
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bPrintLabels('${deal.id}')">Print Labels</button>
                 <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>
                 <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
             </div>
@@ -9404,16 +9413,19 @@ function _b2bQuoteInlineHtml(deal, items) {
     const total = items.reduce((s, it) => s + (it.recycle_only ? 0 : (Number(it.offer) || 0) * (Number(it.quantity) || 1)), 0);
     const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
     const picked = _b2bLongDate(deal.pickup_date);
-    const TH = 'padding:9px 12px;border-bottom:2px solid #e6ebf1;font-size:10px;font-weight:bold;'
-             + 'letter-spacing:.07em;text-transform:uppercase;color:#647082;';
+    const TH = 'padding:10px 12px;background:#e8f7ee;border-bottom:2px solid #1f9d57;'
+             + 'font-size:10px;font-weight:bold;letter-spacing:.07em;'
+             + 'text-transform:uppercase;color:#178048;';
     const TD = 'padding:11px 12px;border-bottom:1px solid #eef2f6;font-size:13px;color:#1a1c1e;';
 
     const CHIP = 'display:inline-block;margin-left:7px;padding:2px 8px;border-radius:10px;'
                + 'font-size:9.5px;font-weight:bold;letter-spacing:.05em;text-transform:uppercase;';
-    const rows = items.map(it => {
+    const rows = items.map((it, i) => {
         const qty = Number(it.quantity) || 1;
         const tone = _b2bCondTone(it.condition);
-        return `<tr>
+        // Zebra has to be per-row inline; Gmail drops <style> blocks entirely.
+        const zebra = i % 2 ? 'background:#fbfdfc;' : '';
+        return `<tr style="${zebra}">
             <td style="${TD}">
                 <b>${escapeHtml(_b2bItemName(it))}</b>
                 ${it.condition ? `<span style="${CHIP}background:${tone.bg};color:${tone.fg};">${escapeHtml(it.condition)}</span>` : ''}
@@ -9422,7 +9434,7 @@ function _b2bQuoteInlineHtml(deal, items) {
             </td>
             <td style="${TD}text-align:center;">${qty}</td>
             <td style="${TD}text-align:right;">${it.recycle_only ? '&mdash;' : _b2bMoney(it.offer, 2)}</td>
-            <td style="${TD}text-align:right;font-weight:bold;">${it.recycle_only ? '&mdash;' : _b2bMoney((Number(it.offer) || 0) * qty, 2)}</td>
+            <td style="${TD}text-align:right;font-weight:bold;color:#178048;">${it.recycle_only ? '&mdash;' : _b2bMoney((Number(it.offer) || 0) * qty, 2)}</td>
         </tr>`;
     }).join('');
 
@@ -9435,7 +9447,7 @@ function _b2bQuoteInlineHtml(deal, items) {
         <div style="display:inline-block;padding:4px 12px;border-radius:999px;background:#e8f7ee;color:#178048;font-size:12px;font-weight:bold;letter-spacing:.06em;text-transform:uppercase;">Quote</div>
         <div style="margin-top:6px;">Issued ${escapeHtml(today)}</div></td>
     </tr></table></td></tr>
-  <tr><td style="padding:16px 24px;background:#f6f8fa;border-bottom:1px solid #eef2f6;">
+  <tr><td style="padding:16px 24px;background:#f4faf6;border-top:1px solid #dcefe4;border-bottom:1px solid #dcefe4;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
       <td style="font-size:12.5px;color:#1a1c1e;vertical-align:top;">
         <div style="font-size:10px;font-weight:bold;letter-spacing:.09em;text-transform:uppercase;color:#178048;">Prepared for</div>
@@ -9459,8 +9471,8 @@ function _b2bQuoteInlineHtml(deal, items) {
       <td style="padding:14px 18px;font-size:11px;font-weight:bold;letter-spacing:.09em;text-transform:uppercase;color:#178048;">Total offer</td>
       <td align="right" style="padding:14px 18px;font-size:22px;font-weight:bold;color:#178048;">${_b2bMoney(total, 2)}</td>
     </tr></table></td></tr>
-  <tr><td style="padding:14px 24px 22px;font-size:11.5px;color:#94a3b8;line-height:1.6;">
-    Reply to this email to accept the quote or ask about any line.
+  <tr><td style="padding:16px 24px;background:#f6f8fa;border-top:1px solid #eef2f6;font-size:11.5px;color:#647082;line-height:1.6;">
+    <b style="color:#178048;">Reply to this email to accept the quote</b> or ask about any line.
     Recycle-only items carry no offer and are disposed of responsibly at no cost to you.
   </td></tr>
 </table>`;
@@ -9704,7 +9716,6 @@ function _b2bStageListing(deal) {
                 <input id="b2bScanIn" class="form-input-lg" autocomplete="off" placeholder="Scan a label, or type a SKU and press Enter"
                     onkeydown="if(event.key==='Enter'){event.preventDefault();b2bScan('${deal.id}');}">
                 <span class="b2b-scan-msg" id="b2bScanMsg"></span>
-                <button class="b2b-btn b2b-btn-secondary" onclick="b2bPrintLabels('${deal.id}')">Print Labels</button>
             </div>
             <div id="b2bListProg">${_b2bListProgress()}</div>
             <div id="b2bListRows" class="b2b-list">${_b2bListRows()}</div>`,
@@ -9747,6 +9758,7 @@ function _b2bListRows() {
                 ${recycled ? `<span class="b2b-lrec">${recycled} recycled</span>` : ''}
             </div>
             <div class="b2b-lacts">
+                ${_b2bLabelBtn(it)}
                 <button class="b2b-step" ${listed <= 0 ? 'disabled' : ''} title="Undo one" onclick="b2bTick('${it.id}',-1)">−</button>
                 <button class="b2b-step up" ${ok ? 'disabled' : ''} title="Mark one listed" onclick="b2bTick('${it.id}',1)">+</button>
                 <button class="b2b-recycle" ${ok ? 'disabled' : ''} title="Recycle units out" onclick="b2bRecycleUnits('${it.id}')">Recycle</button>
@@ -9907,6 +9919,7 @@ function _b2bStageView(deal) {
             <td class="c">${_b2bDone(it)}/${qty}</td>
             <td class="r">${it.recycle_only ? '—' : _b2bMoney(it.cost != null ? it.cost : it.offer, 2)}</td>
             <td class="r b">${it.recycle_only ? '—' : _b2bMoney((Number(it.cost != null ? it.cost : it.offer) || 0) * qty, 2)}</td>
+            <td class="r">${_b2bLabelBtn(it)}</td>
         </tr>`;
     }).join('');
 
@@ -9932,14 +9945,13 @@ function _b2bStageView(deal) {
             </div>` : ''}
             ${_b2bModalItems.length ? `
             <table class="cb-table b2b-vtable">
-                <thead><tr><th>Item</th><th class="c">Condition</th><th class="c">Qty</th><th class="c">Done</th><th class="r">Unit</th><th class="r">Line</th></tr></thead>
+                <thead><tr><th>Item</th><th class="c">Condition</th><th class="c">Qty</th><th class="c">Done</th><th class="r">Unit</th><th class="r">Line</th><th></th></tr></thead>
                 <tbody>${rows}</tbody>
-                <tfoot><tr><td colspan="5" class="r">Total</td><td class="r accent">${_b2bMoney(t.offer, 2)}</td></tr></tfoot>
+                <tfoot><tr><td colspan="5" class="r">Total</td><td class="r accent">${_b2bMoney(t.offer, 2)}</td><td></td></tr></tfoot>
             </table>` : '<div class="b2b-empty sm"><div class="b2b-empty-t">No line items yet</div></div>'}`,
         footer: `
             ${canDecline ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
             ${canReopen ? `<button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;" onclick="b2bReopenDeal('${deal.id}',this)">Reopen Deal</button>` : ''}
-            ${_b2bModalItems.some(i => i.sku) ? `<button class="b2b-btn b2b-btn-secondary" onclick="b2bPrintLabels('${deal.id}')">Print Labels</button>` : ''}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>`,
     });
 }
