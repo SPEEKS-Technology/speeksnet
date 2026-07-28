@@ -22518,13 +22518,18 @@ function _dccChecks(r) {
     return [
         { key: 'score',   s: r.score > 8 ? null : (r.score >= 6 ? 'w' : 'b') },
         { key: 'audit',   s: !r.audit ? null : (r.audit.pct >= 80 ? null : (r.audit.pct >= 50 ? 'w' : 'b')) },
-        { key: 'sales',   s: r.salesPct >= 100 ? null : 'b', rule: 'goal 100%' },
-        { key: 'sellM',   s: r.sellM >= 55.5 ? null : 'b',   rule: 'floor 55.5%' },
-        { key: 'buyM',    s: (r.buyM > 0 && r.buyM < 51) ? 'b' : null, rule: 'floor 51%' },
-        { key: 'vari',    s: r.vari < 0 ? 'b' : null,        rule: 'negative' },
-        { key: 'conv',    s: conv == null ? null : (conv < 85 ? 'b' : null), rule: 'floor 85%' },
-        { key: 'wkM',     s: wkM == null ? null : (wkM < 51 ? 'b' : null),   rule: 'floor 51%' },
-        { key: 'time',    s: mins == null ? null : (mins > 13 ? 'b' : null), rule: 'ceiling 13 min' },
+        { key: 'sales',   s: _dccTier(r.salesPct, 100, 'min'), rule: 'goal 100%' },
+        { key: 'sellM',   s: _dccTier(r.sellM, 55.5, 'min'), rule: 'floor 55.5%' },
+        // Still only judged when above zero: a missing figure parses to 0 and must
+        // not read as a 0% margin.
+        { key: 'buyM',    s: r.buyM > 0 ? _dccTier(r.buyM, 51, 'min') : null, rule: 'floor 51%' },
+        // Variance's limit is zero, so the fractional band would be zero too —
+        // 1.0 percentage point absolute instead, or a -0.05% variance would file a
+        // store as Serious.
+        { key: 'vari',    s: _dccTier(r.vari, 0, 'min', 1.0), rule: 'negative' },
+        { key: 'conv',    s: _dccTier(conv, 85, 'min'), rule: 'floor 85%' },
+        { key: 'wkM',     s: _dccTier(wkM, 51, 'min'), rule: 'floor 51%' },
+        { key: 'time',    s: _dccTier(mins, 13, 'max'), rule: 'ceiling 13 min' },
         // No-deals is a WATCH signal, not a hard fail. The ceiling of 7 is met by
         // almost no store in practice — the district records 9 to 29 in a week — so
         // treating it as serious put four of five stores in the Serious group on
@@ -22538,6 +22543,27 @@ function _dccChecks(r) {
         { key: 'track',   s: _dccSev('track', r.track),   rule: 'floor 96.0%' },
     ].concat(r.cats.map(c => ({ key: 'cat', s: c.s })));
 }
+// A miss inside the band is a Watch; beyond it, Serious. Without this every
+// threshold was binary, so a store 0.52 points short on sell margin was filed
+// alongside one failing eBay tracking by 2 points — which is why every store
+// landed in Serious and the rail stopped discriminating.
+//
+// The band is a FRACTION of the threshold so it scales with each metric's own
+// units: 5% of a 13-minute ceiling is 0.65 min, 5% of an 85% floor is 4.25
+// points. One number to tune.
+const _DCC_BAND = 0.05;
+
+// dir 'min' = the value must reach the limit (a floor); 'max' = must not exceed
+// it (a ceiling). absBand overrides the fraction for limits where a percentage
+// of the limit is meaningless — variance, whose limit is zero.
+function _dccTier(val, limit, dir, absBand) {
+    if (val == null || !isFinite(val)) return null;
+    const miss = dir === 'min' ? limit - val : val - limit;
+    if (miss <= 0) return null;
+    const band = absBand != null ? absBand : Math.abs(limit) * _DCC_BAND;
+    return miss <= band ? 'w' : 'b';
+}
+
 function _dccState(r, key) { const c = _dccChecks(r).find(x => x.key === key); return c ? c.s : null; }
 function _dccRule(r, key)  { const c = _dccChecks(r).find(x => x.key === key); return c ? (c.rule || '') : ''; }
 function _dccCount(r) {
@@ -22550,17 +22576,35 @@ function _dccWorst(r) { const n = _dccCount(r); return n.bad ? 'b' : (n.warn ? '
 // The rail's one-line read: name the single most consequential thing wrong, in
 // the order a DM would care. Falls back to a plain summary when nothing is off.
 function _dccLine(r) {
-    const n = _dccCount(r);
-    const ebayOff = ['track', 'defect', 'cases', 'late'].filter(k => _dccState(r, k)).length;
-    if (ebayOff >= 3) return 'eBay health failing on ' + ebayOff + ' of 4';
-    if (_dccState(r, 'sales')) return 'Under goal · ' + _dccFix(r.salesPct) + '% to date';
-    if (_dccState(r, 'track')) return 'eBay tracking ' + _dccEbayPct(r.track);
-    if (_dccState(r, 'conv'))  return 'Conversion ' + r.conv + '%' + (_dccState(r, 'noDeals') ? ' · ' + r.noDeals + ' no-deals' : '');
-    if (_dccState(r, 'time'))  return 'Transaction time ' + r.time + ' min';
-    if (ebayOff)               return 'eBay health over on ' + ebayOff;
-    if (_dccState(r, 'sellM')) return 'Sell margin ' + _dccFix(r.sellM) + '%';
-    if (_dccState(r, 'noDeals')) return r.noDeals + ' no-deals';
-    if (n.off) return n.off + (n.off === 1 ? ' item' : ' items') + ' to review';
+    const ebayKeys = ['track', 'defect', 'cases', 'late'];
+    const ebayOff = ebayKeys.filter(k => _dccState(r, k)).length;
+    const ebayBad = ebayKeys.filter(k => _dccState(r, k) === 'b').length;
+
+    // Candidates in the order a DM cares about them, each paired with its own
+    // severity. The first candidate matching the STORE's severity wins, so a
+    // Serious item is never hidden behind a near-miss listed above it.
+    const cand = [
+        [ebayOff >= 3 ? (ebayBad >= 3 ? 'b' : 'w') : null,
+         'eBay health failing on ' + ebayOff + ' of 4'],
+        [_dccState(r, 'sales'),   'Under goal · ' + _dccFix(r.salesPct) + '% to date'],
+        [_dccState(r, 'track'),   'eBay tracking ' + _dccEbayPct(r.track)],
+        [_dccState(r, 'conv'),    'Conversion ' + r.conv + '%'],
+        [_dccState(r, 'time'),    'Transaction time ' + r.time + ' min'],
+        [ebayOff ? (ebayBad ? 'b' : 'w') : null,
+         'eBay health over on ' + ebayOff + (ebayOff === 1 ? ' measure' : ' measures')],
+        [r.cats.length ? r.cats[0].s : null,
+         r.cats.length + (r.cats.length === 1 ? ' category' : ' categories') + ' at risk'],
+        [_dccState(r, 'sellM'),   'Sell margin ' + _dccFix(r.sellM) + '%'],
+        [_dccState(r, 'wkM'),     'Weekly margin ' + r.wkM + '%'],
+        [_dccState(r, 'buyM'),    'Buy margin ' + _dccFix(r.buyM) + '%'],
+        [_dccState(r, 'vari'),    'Variance ' + r.vari.toFixed(2) + '%'],
+        [_dccState(r, 'noDeals'), r.noDeals + ' no-deals'],
+        [_dccState(r, 'score'),   'Scorecard ' + r.score.toFixed(1)],
+        [_dccState(r, 'audit'),   'Audit ' + (r.audit ? r.audit.pct + '%' : 'not submitted')],
+    ];
+    const worst = _dccWorst(r);
+    const hit = cand.find(c => c[0] === worst) || cand.find(c => c[0]);
+    if (hit) return hit[1];
     return _dccFix(r.salesPct) + '% to goal · ' + (r.listed || '0') + ' listed';
 }
 
