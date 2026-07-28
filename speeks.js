@@ -16737,7 +16737,7 @@ function renderMyRecycleTable() {
     const total = rows.filter(r => r.review_verdict !== 'ignore' && r.review_verdict !== 'denied').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
     const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
 
-    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
+    const th = (t, extra = '') => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap; ${extra}">${t}</th>`;
     const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
     // Report preview "page" (DM/CEO) — mirrors the Box Order flow: Send Email
     // first shows the composed email, and the actual send happens from there.
@@ -16764,8 +16764,14 @@ function renderMyRecycleTable() {
         : '';
     html += _recycleDeleteReqPanel(canReview);
     const colCount = 9 + (showStore ? 1 : 0);
+    // width:100% on Description makes it the column that absorbs all slack, so
+    // every other column settles at its own min-content width. That is what lets
+    // the SKU cell be nowrap without stealing room from anything: a SKU is an
+    // identifier you read and copy in one piece, so it must not break at its
+    // hyphens, whereas a description is prose and is fine wrapping. Remove the
+    // width and the nowrap starts squeezing Description instead.
     html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
-        <thead><tr>${canReview ? th('Review') : th('Status')}${th('Date')}${showStore ? th('Store') : ''}${th('SKU')}${th('Description')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
+        <thead><tr>${canReview ? th('Review') : th('Status')}${th('Date')}${showStore ? th('Store') : ''}${th('SKU')}${th('Description', 'width:100%;')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
     rows.forEach(r => {
         // A line with a pending delete request is LOCKED — no reviewing, no
         // notes, no replies — until the DM approves/denies it or the manager
@@ -16851,7 +16857,7 @@ function renderMyRecycleTable() {
             ${firstCell}
             ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
             ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`) : ''}
-            ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.sku || '')}</span>${siteCopyBtn(r.sku, 'SKU')}`)}
+            ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.sku || '')}</span>${siteCopyBtn(r.sku, 'SKU')}`, 'white-space:nowrap;')}
             ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>${noteLine}`)}
             ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;')}
             ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}
