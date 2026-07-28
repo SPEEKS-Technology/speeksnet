@@ -209,21 +209,28 @@ function closeAllModals() {
         _auditDirty = false;
     }
     // Read this BEFORE .show comes off, since the check asks which editor was up.
+    // When a district popup asked to be returned to, this is not a close at all
+    // — it is a swap, and the difference is visible. See below.
     const _dmxBack = typeof _dmxReturnCheck === 'function' ? _dmxReturnCheck() : null;
-    const _wasLocked = document.body.classList.contains('no-scroll');
-    document.body.classList.remove('no-scroll');
-    document.body.style.overflow = '';
-    document.body.style.position = '';
-    document.body.style.top = '';
-    document.body.style.paddingRight = '';
+    const _dmxBackEl = _dmxBack ? document.getElementById(_dmxBack) : null;
 
-    const topNav = document.querySelector('.top-nav');
-    if (topNav) {
-        topNav.style.paddingRight = ''; 
+    const _wasLocked = document.body.classList.contains('no-scroll');
+    // A pending swap must not release any of this. Dropping the scroll lock and
+    // the backdrop only to restore both a tick later let the browser paint the
+    // unlocked, unblurred, scrolled page in between — that was the flicker.
+    if (!_dmxBackEl) {
+        document.body.classList.remove('no-scroll');
+        document.body.style.overflow = '';
+        document.body.style.position = '';
+        document.body.style.top = '';
+        document.body.style.paddingRight = '';
+
+        const topNav = document.querySelector('.top-nav');
+        if (topNav) topNav.style.paddingRight = '';
+
+        const overlay = document.getElementById('globalOverlay');
+        if (overlay) overlay.classList.remove('show');
     }
-    
-    const overlay = document.getElementById('globalOverlay');
-    if (overlay) overlay.classList.remove('show');
 
     const modals = document.querySelectorAll('.modal-menu');
     modals.forEach(modal => {
@@ -234,18 +241,18 @@ function closeAllModals() {
     // opening any modal (e.g. Listing Goals) must collapse them too.
     _closeSidePanels();
 
+    // Only which modal carries .show changes, and it changes inside this same
+    // task, so no frame is ever rendered showing the in-between state.
+    if (_dmxBackEl) {
+        // Repaint before showing, so the popup can't flash stale content.
+        if (_dmxBack === 'dmGoalsModal') renderDmGoalsModal();
+        _dmxBackEl.classList.add('show');
+        return;
+    }
+
     // Restore the scroll position we pinned in lockAndBlurScreen — otherwise the
     // page stays snapped to the top once the fixed body is released.
     if (_wasLocked) window.scrollTo(0, _lockedScrollY);
-
-    // Closing a sub-editor opened from a district popup returns to that popup
-    // rather than dumping the DM back on the dashboard. Deferred a tick so this
-    // call finishes tearing down before toggleModal builds back up — the flag is
-    // already cleared, so the re-open cannot loop back here.
-    if (_dmxBack) setTimeout(function () {
-        toggleModal(_dmxBack);
-        if (_dmxBack === 'dmGoalsModal') renderDmGoalsModal();
-    }, 0);
 }
 
 // Mutually-exclusive right-side panels. Closing every panel except `exceptId`
@@ -22512,14 +22519,13 @@ function renderDmGoalsModal() {
     all.forEach(s => {
         const bits = s.goals.length + ' goal' + (s.goals.length === 1 ? '' : 's')
             + ' · ' + s.inis.length + ' initiative' + (s.inis.length === 1 ? '' : 's');
-        // No meter here: goals aren't a percentage of anything. The dot only
-        // appears when a store has nothing set, which is the one actionable state.
+        // No meter (goals aren't a percentage of anything) and no dot — "0 goals"
+        // in red already says it, and the dot only repeated it a few pixels away.
         const sel = _dmxSel.mg === s.store ? ' sel' : '';
         rail += '<button type="button" class="dmx-t' + sel + '" onclick="_dmxPick(\'mg\',\'' + s.store + '\')">'
             + '<span class="dmx-t-code">' + escapeHtml(s.store) + '</span>'
             + '<span class="dmx-t-mid"><span class="dmx-t-val"'
             + (s.goals.length ? '' : ' style="color:#b91c1c;"') + '>' + bits + '</span></span>'
-            + (s.goals.length ? '<span></span>' : '<span class="dmx-dot dmx-bad"></span>')
             + '</button>';
     });
 
