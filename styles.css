@@ -10295,3 +10295,144 @@ body.sam-active .hotbar-btn:hover {
     border-radius: 7px; padding: 5px 11px;
 }
 .dmx-company-edit:hover { background: #d8f0e2; }
+
+/* ── District Command Center — grouped triage rail + store detail ──────────
+   Replaced five side-by-side store cards. The old board put 105 values on
+   screen (21 metrics × 5 stores) with roughly 100 of them wearing a coloured
+   pill, so the tint carried no information and the ~14 things actually off
+   target hid among the ones that weren't. Comparing two stores also meant a
+   horizontal eye-scan across five separated columns.
+
+   Now: stores filed under Serious / Watch / All clear down the left with their
+   % to goal, one store's full detail on the right. Colour is reserved for
+   exceptions — a healthy value is plain dark text — and every threshold is
+   printed next to its value so a miss reads as a miss without relying on hue.
+
+   Same shape as the three district popups (.dmx), deliberately: one mental
+   model across the whole DM/CEO surface. */
+
+.dcc { background: #fff; border: 1px solid #e3e8ee; border-radius: 16px; overflow: hidden;
+       box-shadow: 0 1px 3px rgba(16,24,40,.04); }
+.dcc-head { display: flex; align-items: center; gap: 13px; padding: 15px 20px; border-bottom: 1px solid #eef1f5; }
+.dcc-ico { width: 38px; height: 38px; border-radius: 11px; background: #e8f7ee; color: #178048;
+           display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.dcc-ico svg { width: 19px; height: 19px; }
+.dcc-eyebrow { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: #8a94a3; }
+.dcc-title { font-size: 18px; font-weight: 800; letter-spacing: -.012em; line-height: 1.1; color: #0f172a; }
+.dcc-head-side { margin-left: auto; display: flex; align-items: center; gap: 9px; }
+.dcc-sum { font-size: 12.5px; font-weight: 650; color: #647082; }
+.dcc-sum b { font-weight: 800; color: #0f172a; }
+.dcc-body { padding: 16px 20px 20px; background: #f6f8fa; }
+.dcc-grid { display: grid; grid-template-columns: 252px 1fr; gap: 14px; align-items: start; }
+
+/* ── the rail ──────────────────────────────────────────────────────────── */
+.dcc-group {
+    display: flex; align-items: center; gap: 7px; margin: 12px 2px 6px;
+    font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: #8a94a3;
+}
+.dcc-group:first-child { margin-top: 0; }
+.dcc-group-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.dcc-group-n { margin-left: auto; color: #aab4bf; }
+
+.dcc-t {
+    display: block; width: 100%; text-align: left; font: inherit; cursor: pointer; color: #0f172a;
+    background: #fff; border: 1px solid #e3e8ee; border-left: 3px solid transparent;
+    border-radius: 11px; padding: 10px 12px; margin-bottom: 6px;
+    transition: border-color .14s ease, background .14s ease;
+}
+.dcc-t:last-child { margin-bottom: 0; }
+.dcc-t:hover { border-color: #cfe6d9; }
+.dcc-t.sel { background: #e8f7ee; border-color: #b7e3c7; border-left-color: #1f9d57; }
+.dcc-t-top { display: flex; align-items: baseline; gap: 8px; }
+.dcc-t-code { font-size: 13.5px; font-weight: 800; letter-spacing: .02em; }
+/* % to goal, right-aligned. Under goal is the one exception worth colouring —
+   and the figure itself still says it, so the colour is reinforcement. */
+.dcc-t-pct {
+    margin-left: auto; font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums;
+    white-space: nowrap; color: #475569;
+}
+.dcc-t-pct.under { color: #b91c1c; }
+.dcc-t-pct small { font-size: 9.5px; font-weight: 700; color: #aab4bf; margin-left: 1px; }
+.dcc-t-sub { display: block; margin-top: 3px; font-size: 11px; font-weight: 600; color: #647082; line-height: 1.4; }
+
+/* ── the detail pane ───────────────────────────────────────────────────── */
+.dcc-pane { background: #fff; border: 1px solid #e3e8ee; border-radius: 13px; padding: 18px 20px; }
+.dcc-ph { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap;
+          padding-bottom: 14px; margin-bottom: 16px; border-bottom: 1px solid #eef1f5; }
+.dcc-pt { font-size: 21px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; color: #0f172a; }
+.dcc-ps { margin-top: 4px; font-size: 12.5px; font-weight: 600; color: #647082; }
+.dcc-ps a { color: #178048; font-weight: 700; text-decoration: none; border-bottom: 1px solid rgba(23,128,72,.3); }
+.dcc-ps a:hover { border-bottom-color: #178048; }
+.dcc-ph-side { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+
+.dcc-chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+            font-size: 10.5px; font-weight: 800; padding: 4px 9px; border-radius: 20px; border: 1px solid; }
+.dcc-chip svg { width: 10px; height: 10px; flex: 0 0 auto; }
+.dcc-chip-l { font-size: 8.5px; font-weight: 800; letter-spacing: .06em; opacity: .8; }
+.dcc-good { color: #15803d; background: #e9f7ef; border-color: #b7e3c7; }
+.dcc-warn { color: #b45309; background: #fdf3e1; border-color: #f3ddb0; }
+.dcc-bad  { color: #b91c1c; background: #fcecec; border-color: #f3c9c9; }
+.dcc-mute { color: #8a94a3; background: #f4f7f9; border-color: #e3e8ee; }
+.dcc-chip.act { cursor: pointer; }
+.dcc-chip.act:hover { filter: brightness(.97); }
+
+.dcc-sec { display: flex; align-items: baseline; gap: 9px; margin: 0 0 9px;
+           font-size: 9.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: #8a94a3; }
+.dcc-sec em { font-style: normal; margin-left: auto; font-weight: 700; letter-spacing: .02em;
+              text-transform: none; font-size: 10.5px; color: #aab4bf; }
+.dcc-block { margin-bottom: 18px; }
+.dcc-block:last-child { margin-bottom: 0; }
+
+/* eBay account health — four cells, each printing its own threshold */
+.dcc-g4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.dcc-cell { background: #f6f8fa; border: 1px solid #eef1f5; border-radius: 10px; padding: 10px 12px; }
+.dcc-cell.w { background: #fdf3e1; border-color: #f3ddb0; }
+.dcc-cell.b { background: #fcecec; border-color: #f3c9c9; }
+.dcc-cell-l { font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #8a94a3; }
+.dcc-cell-v { margin-top: 3px; font-size: 18px; font-weight: 800; letter-spacing: -.022em;
+              font-variant-numeric: tabular-nums; color: #0f172a; }
+.dcc-cell-v small { font-size: 11px; font-weight: 700; }
+.dcc-cell.w .dcc-cell-v { color: #b45309; }
+.dcc-cell.b .dcc-cell-v { color: #b91c1c; }
+.dcc-cell-d { margin-top: 2px; font-size: 10.5px; font-weight: 650; color: #8a94a3; }
+
+/* stat rows */
+.dcc-rows { background: #f6f8fa; border: 1px solid #eef1f5; border-radius: 10px; padding: 3px 13px; }
+.dcc-row { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+           padding: 8px 0; border-bottom: 1px solid #e9eef2; font-size: 12.5px; }
+.dcc-row:last-child { border-bottom: 0; }
+.dcc-row-l { font-weight: 650; color: #647082; }
+.dcc-row-l i { display: block; font-style: normal; font-size: 10px; font-weight: 650; color: #aab4bf; margin-top: 1px; }
+.dcc-row-v { display: flex; align-items: center; gap: 7px; font-weight: 800;
+             font-variant-numeric: tabular-nums; color: #0f172a; }
+.dcc-row-v .u { font-size: 10.5px; font-weight: 700; color: #8a94a3; }
+.dcc-row-v.b { color: #b91c1c; }
+.dcc-row-v.w { color: #b45309; }
+/* The rule that was missed, printed beside the value — so the gap is legible
+   in black and white and you don't have to know the threshold by heart. */
+.dcc-miss { font-size: 9.5px; font-weight: 800; letter-spacing: .03em; padding: 2px 7px; border-radius: 20px; border: 1px solid; }
+.dcc-miss.b { color: #b91c1c; background: #fcecec; border-color: #f3c9c9; }
+.dcc-miss.w { color: #b45309; background: #fdf3e1; border-color: #f3ddb0; }
+
+/* categories at risk */
+.dcc-cats { display: flex; flex-direction: column; gap: 7px; }
+.dcc-cat { display: grid; grid-template-columns: 96px 1fr auto; gap: 11px; align-items: center;
+           background: #f6f8fa; border: 1px solid #eef1f5; border-radius: 10px; padding: 9px 12px; font-size: 12.5px; }
+.dcc-cat.b { background: #fcecec; border-color: #f3c9c9; }
+.dcc-cat.w { background: #fdf3e1; border-color: #f3ddb0; }
+.dcc-cat-k { font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #8a94a3; }
+.dcc-cat.b .dcc-cat-k { color: #b91c1c; }
+.dcc-cat.w .dcc-cat-k { color: #b45309; }
+.dcc-cat-v { font-weight: 700; color: #0f172a; line-height: 1.4; }
+.dcc-cat svg { width: 13px; height: 13px; }
+
+.dcc-clear { display: flex; align-items: center; gap: 10px; background: #e9f7ef; border: 1px solid #b7e3c7;
+             border-radius: 10px; padding: 11px 13px; font-size: 12.5px; font-weight: 700; color: #15803d; }
+.dcc-clear svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.dcc-empty { padding: 50px 20px; text-align: center; font-size: 13px; font-weight: 650; color: #8a94a3; }
+
+@media (max-width: 900px) {
+    .dcc-grid { grid-template-columns: 1fr; }
+    .dcc-g4 { grid-template-columns: 1fr 1fr; }
+    .dcc-head-side .dcc-sum { display: none; }
+}

@@ -6364,297 +6364,33 @@ window.renderDistrictKPIs = function() {
     container.innerHTML = html;
 };
 
+const _DCC_PORTAL_LINKS = {
+    'OVL': 'https://drive.google.com/drive/folders/1dd1nkndo_Pqt3kztaHcpYWL-NgOWIP-E?usp=drive_link',
+    'LEE': 'https://drive.google.com/drive/folders/1Xv6ICOpEXNMeWk4QJBfS7CR6tIFRuElk?usp=drive_link',
+    'WSP': 'https://drive.google.com/drive/folders/1xGGzefFbX7rzBnusmCUEk2GnHxJaJqhC?usp=drive_link',
+    'MPL': 'https://drive.google.com/drive/folders/1Y5MiKRorTD1mg-lLY4SccYCqw2fZUrND?usp=drive_link',
+    'BAL': 'https://drive.google.com/drive/folders/1LnAuBH9t7MwtrB9egWK5PFJWQqPcZ-tL?usp=drive_link'
+};
+
 async function fetchMasterDistrictDashboard() {
     const container = document.getElementById('district-master-body');
     if (!container) return;
 
     const STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-    const STORE_ICONS = { 'OVL': '🟣', 'LEE': '🔵', 'WSP': '🟢', 'MPL': '🟠', 'BAL': '🔴' };
+    // (Store emoji removed with the card headers — the three-letter code identifies
+    // the store, same call as the Tools mark and the district popups.)
     
-    const PORTAL_LINKS = {
-        'OVL': 'https://drive.google.com/drive/folders/1dd1nkndo_Pqt3kztaHcpYWL-NgOWIP-E?usp=drive_link',
-        'LEE': 'https://drive.google.com/drive/folders/1Xv6ICOpEXNMeWk4QJBfS7CR6tIFRuElk?usp=drive_link',
-        'WSP': 'https://drive.google.com/drive/folders/1xGGzefFbX7rzBnusmCUEk2GnHxJaJqhC?usp=drive_link',
-        'MPL': 'https://drive.google.com/drive/folders/1Y5MiKRorTD1mg-lLY4SccYCqw2fZUrND?usp=drive_link',
-        'BAL': 'https://drive.google.com/drive/folders/1LnAuBH9t7MwtrB9egWK5PFJWQqPcZ-tL?usp=drive_link'
-    };
+    // PORTAL_LINKS lives at module scope (_DCC_PORTAL_LINKS) so _dccPick can repaint
+    // the board without this function having run again.
+    const PORTAL_LINKS = _DCC_PORTAL_LINKS;
 
+    // Normalise all five stores, then render. The parsing that used to happen
+    // inline while building card HTML now lives in _dccRow / _dccChecks, so the
+    // thresholds are readable in one place and the rail and pane read the same
+    // checks. See the DISTRICT COMMAND CENTER block further down.
     const renderMasterBoard = (hubData, varData, scoreData, alertsData, weeklyResults) => {
-        let html = '';
-        STORES.forEach(store => {
-            const sLower = store.toLowerCase();
-            const icon = STORE_ICONS[store];
-            const storeLastEdited = hubData[`${sLower}BuyDate`] || null;
-
-            // 1. SCORECARD & HEADER
-            const sScore = scoreData.data?.find(s => s.store.toUpperCase() === store) || {};
-            const scoreNum = (parseFloat(sScore.score) || 0) * 2;
-            let sColor = scoreNum > 8 ? '#065f46' : (scoreNum >= 6 ? '#92400e' : '#991b1b');
-            let sBg = scoreNum > 8 ? '#d1fae5' : (scoreNum >= 6 ? '#fef3c7' : '#fee2e2');
-
-            // Practice audit badge (clickable into the full breakdown popout).
-            const sAudit = sScore.audit || null;
-            let auditBadge = '';
-            if (sAudit) {
-                const ac = auditPctColor(sAudit.pct);
-                auditBadge = `<span onclick="event.stopPropagation(); openAuditBreakdown('${store}')" title="PayMore practice audit — ${sAudit.earned}/${sAudit.possible} · view full breakdown" style="display:inline-flex; align-items:center; gap:5px; height:25px; padding:0 10px; border-radius:8px; background:${ac.bg}; color:${ac.fg}; cursor:pointer; white-space:nowrap; box-sizing:border-box;">
-                    <span style="font-size:8px; font-weight:800; letter-spacing:.6px; opacity:.75;">AUDIT</span>
-                    <span style="font-size:14px; font-weight:900; line-height:1;">${sAudit.pct}%</span>
-                </span>`;
-            } else {
-                auditBadge = `<span title="No practice audit submitted yet" style="display:inline-flex; align-items:center; gap:5px; height:25px; padding:0 10px; border-radius:8px; background:transparent; color:#94a3b8; border:1px dashed #4a5365; white-space:nowrap; box-sizing:border-box;">
-                    <span style="font-size:8px; font-weight:800; letter-spacing:.6px;">AUDIT</span>
-                    <span style="font-size:11px; font-weight:700; letter-spacing:.3px; line-height:1;">NO DATA</span>
-                </span>`;
-            }
-
-            let displayDate = "Recent";
-            if (sScore.date) {
-                const parsedDate = new Date(sScore.date);
-                if (!isNaN(parsedDate.getTime())) {
-                    const day = parsedDate.getUTCDay();
-                    const diffToMonday = day === 0 ? -6 : 1 - day;
-                    const mondayDate = new Date(parsedDate);
-                    mondayDate.setUTCDate(parsedDate.getUTCDate() + diffToMonday);
-                    displayDate = mondayDate.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
-                }
-            }
-
-            // 2. EBAY ALERTS DATA
-            const sAlerts = alertsData.data?.find(a => a.store.toUpperCase() === store) || {};
-            
-            // Vertical Action Needed List
-            const issues = [];
-            if (sAlerts.currentVeryHigh) issues.push({text: sAlerts.currentVeryHigh, type: 'red', tip: 'Active Issue: Very High'});
-            if (sAlerts.currentHigh) issues.push({text: sAlerts.currentHigh, type: 'yellow', tip: 'Active Issue: High'});
-            if (sAlerts.projectedVeryHigh) issues.push({text: sAlerts.projectedVeryHigh, type: 'red', tip: 'Projected Issue: Very High'});
-            if (sAlerts.projectedHigh) issues.push({text: sAlerts.projectedHigh, type: 'yellow', tip: 'Projected Issue: High'});
-            if (issues.length === 0) issues.push({text: 'All Clear', type: 'green', tip: 'No active or projected alerts.'});
-
-            // 4 New Service Metrics logic
-            const formatPercent = (val) => {
-                if (val === null || val === undefined) return '0%';
-                let str = String(val).trim();
-                if (str === '' || str === 'null') return '0%';
-                if (str.endsWith('%')) return str;
-                let num = parseFloat(str.replace(/[^0-9.-]/g, ''));
-                if (isNaN(num)) return '0%';
-                return num.toFixed(2) + '%';
-            };
-
-            const getSev = (type, rawVal) => {
-                if (rawVal === null || rawVal === undefined || String(rawVal).trim() === '') return 'clear';
-                let str = String(rawVal).trim();
-                let num = parseFloat(str.replace(/[^0-9.-]/g, ''));
-                if (isNaN(num)) return 'clear';
-                let valToCheck = num;
-
-                if (type === 'defectRate') {
-                    if (valToCheck >= 0.40) return 'very-high';
-                    if (valToCheck >= 0.25) return 'high';
-                }
-                if (type === 'lateShipment') {
-                    if (valToCheck >= 2.4) return 'very-high';
-                    if (valToCheck >= 1.5) return 'high';
-                }
-                if (type === 'casesClosed') {
-                    if (valToCheck >= 0.24) return 'very-high';
-                    if (valToCheck >= 0.15) return 'high';
-                }
-                if (type === 'tracking') {
-                    if (valToCheck <= 96.0) return 'very-high';
-                    if (valToCheck <= 97.5) return 'high';
-                }
-                return 'clear';
-            };
-
-            const buildMiniAlertCard = (title, rawValue, severity, isPercent) => {
-                let bgColor = '#d1fae5';
-                let textColor = '#065f46'; 
-                let displayText = 'All Clear';
-                let pulseHtml = '';
-                
-                if (rawValue !== undefined && rawValue !== null && String(rawValue).trim() !== '') {
-                    if (isPercent) {
-                        displayText = formatPercent(rawValue);
-                    } else {
-                        displayText = String(rawValue); 
-                    }
-
-                    if (severity === 'high') {
-                        bgColor = '#fef3c7'; 
-                        textColor = '#92400e';
-                    } else if (severity === 'very-high') {
-                        bgColor = '#fee2e2';
-                        textColor = '#991b1b';
-                        // Positioned perfectly on the corner
-                        pulseHtml = '<div class="notif-dot active" style="display:block; position:absolute; top:-4px; right:-4px; width:10px; height:10px; border-width: 2px; z-index: 5;"></div>';
-                    }
-                }
-
-                return `
-                <div style="position: relative; background: #fff; padding: 8px 6px 7px; border-radius: 8px; border: 1px solid #e2e8f0; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; box-sizing: border-box; min-height: 52px; gap: 5px; text-align: center;">
-                    ${pulseHtml}
-                    <span style="font-size: 8px; font-weight: 800; color: #b0bec5; text-transform: uppercase; letter-spacing: 0.4px; line-height: 1.2; word-break: break-word;">${title}</span>
-                    <span style="font-size: 12px; font-weight: 900; color: ${textColor}; background: ${bgColor}; padding: 3px 8px; border-radius: 6px; white-space: nowrap;">${displayText}</span>
-                </div>`;
-            };
-
-            // 3. BUYING & SELLING SNAPSHOT
-            let rawPctStr = String(hubData[`${sLower}Pct`]);
-            let rawPct = parseFloat(rawPctStr) || 0;
-            let salesPctNum = (!rawPctStr.includes('%') && rawPct > 0 && rawPct <= 1.5) ? (rawPct * 100) : rawPct;
-            const salesPct = Number.isInteger(salesPctNum) ? salesPctNum : salesPctNum.toFixed(2);
-            
-            const gpTrack = Math.round(parseFloat(hubData[`${sLower}TrackGP`])) || 0;
-            const buyProj = Math.round(parseFloat(hubData[`${sLower}BuyProj`])) || 0;
-            const storeGoalText = `$${Math.round(parseFloat(hubData[`${sLower}Goal`]) || 0).toLocaleString()}`;
-            
-            let sellMarginNum = 0;
-            const rev = parseFloat(hubData[`${sLower}Rev`]) || 0;
-            const gp = parseFloat(hubData[`${sLower}GP`]) || 0;
-            if (hubData[`${sLower}SellMargin`]) {
-                let smRaw = parseFloat(hubData[`${sLower}SellMargin`]);
-                sellMarginNum = (!String(hubData[`${sLower}SellMargin`]).includes('%') && smRaw > 0 && smRaw <= 1.5) ? (smRaw * 100) : smRaw;
-            } else if (rev > 0) {
-                sellMarginNum = (gp / rev) * 100;
-            }
-            const sellMargin = Number.isInteger(sellMarginNum) ? sellMarginNum : sellMarginNum.toFixed(2);
-
-            let rawMarginStr = String(hubData[`${sLower}BuyMargin`]);
-            let rawMargin = parseFloat(rawMarginStr) || 0;
-            let buyMarginNum = (!rawMarginStr.includes('%') && rawMargin > 0 && rawMargin <= 1.5) ? (rawMargin * 100) : rawMargin;
-            const buyMargin = Number.isInteger(buyMarginNum) ? buyMarginNum : buyMarginNum.toFixed(2);
-
-            const pctColor = salesPctNum >= 100 ? '#065f46' : '#991b1b';
-            const pctBg = salesPctNum >= 100 ? '#d1fae5' : '#fee2e2';
-            const sellMarginColor = sellMarginNum >= 55.5 ? '#065f46' : '#991b1b';
-            const sellMarginBg = sellMarginNum >= 55.5 ? '#d1fae5' : '#fee2e2';
-            const marginColor = (buyMarginNum > 0 && buyMarginNum < 51) ? '#991b1b' : '#065f46';
-            const marginBg = (buyMarginNum > 0 && buyMarginNum < 51) ? '#fee2e2' : '#d1fae5';
-
-            // 4. LIVE VARIANCE
-            const sVar = varData[store] || {};
-            const totalVar = parseFloat(sVar.total) || 0;
-            const vColor = totalVar < 0 ? '#991b1b' : (totalVar > 0 ? '#065f46' : '#64748b');
-            const vBg = totalVar < 0 ? '#fee2e2' : (totalVar > 0 ? '#d1fae5' : '#f1f5f9');
-            const vSign = totalVar > 0 ? '+' : '';
-            const vRange = formatVarianceRange(sVar.dateFrom, sVar.dateTo);
-
-            // 5. WEEKLY METRICS
-            const sWeekData = weeklyResults.find(w => w.store === store);
-            const wAvg = sWeekData?.sAvg || {};
-            const wPeriod = sWeekData?.periodLabel || '';
-
-            const renderLineStat = (label, val, ruleType) => {
-                let isBad = false;
-                let displayVal = val || '-';
-                if (displayVal !== '-' && (ruleType === 'margin' || ruleType === 'conversion') && !String(displayVal).includes('%')) displayVal += '%';
-                
-                if (val && val !== '-') {
-                    let n = parseFloat(String(val).replace(/[^0-9.-]/g, ''));
-                    if (ruleType === 'margin') isBad = n < 51;
-                    if (ruleType === 'conversion') isBad = n < 85;
-                    if (ruleType === 'nodeals') isBad = n > 7;
-                    if (ruleType === 'time') {
-                        let t = String(val);
-                        let timeVal = t.includes(':') ? parseInt(t.split(':')[0]) + (parseInt(t.split(':')[1])/60) : n;
-                        isBad = timeVal > 13;
-                    }
-                }
-                
-                let bg = ruleType === 'nobg' ? 'transparent' : (ruleType === null ? '#f1f5f9' : (isBad ? '#fee2e2' : '#d1fae5'));
-                let txt = ruleType === 'nobg' ? 'var(--slate-charcoal)' : (ruleType === null ? 'var(--slate-charcoal)' : (isBad ? '#991b1b' : '#065f46'));
-                let pad = ruleType === 'nobg' ? '0' : '3px 8px';
-                if (displayVal === '-') { bg = '#f1f5f9'; txt = '#888'; pad = '3px 8px'; }
-                
-                return `
-                <div class="master-stat-row">
-                    <span class="master-stat-label">${label}</span>
-                    <span class="master-stat-val" style="color: ${txt}; background: ${bg}; padding: ${pad};">${displayVal}</span>
-                </div>`;
-            };
-
-            html += `
-            <div class="card master-card">
-                <div class="master-card-header" style="background: var(--slate-charcoal); display: flex; justify-content: space-between; align-items: stretch;">
-                    <div style="display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; gap: 10px;">
-                        <a href="${PORTAL_LINKS[store]}" target="_blank" class="portal-link-title">
-                            ${icon} ${store}
-                        </a>
-                        <span class="master-card-date goal-strong" style="margin: 0;">Goal: ${storeGoalText}</span>
-                    </div>
-                    <div style="display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; gap: 6px;">
-                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
-                            <span class="master-card-score" style="background: ${sBg}; color: ${sColor};" title="Online & Marketing scorecard">${scoreNum.toFixed(1)}</span>
-                            ${auditBadge}
-                        </div>
-                        <span class="master-card-date" style="margin: 0;">Week of ${displayDate}</span>
-                    </div>
-                </div>
-
-                <div class="master-card-body">
-                    <div>
-                        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px;">
-                            <div class="master-section-title" style="margin-bottom:0;min-width:0;">Buying &amp; Selling Snapshot</div>
-                            ${storeLastEdited ? `<span class="master-section-title" style="margin-bottom:0;white-space:nowrap;">${storeLastEdited}</span>` : ''}
-                        </div>
-                        <div class="master-stat-box">
-                            <div class="master-stat-row"><span class="master-stat-label">Sales vs Goal</span><span class="master-stat-val" style="color: ${pctColor}; background: ${pctBg};">${salesPct}%</span></div>
-                            <div class="master-stat-row"><span class="master-stat-label">Revenue</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${Math.round(rev).toLocaleString()}</span></div>
-                            <div class="master-stat-row"><span class="master-stat-label">GP Tracking</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${gpTrack.toLocaleString()}</span></div>
-                            <div class="master-stat-row dashed"><span class="master-stat-label">Sell Margin</span><span class="master-stat-val" style="color: ${sellMarginColor}; background: ${sellMarginBg};">${sellMarginNum > 0 ? sellMargin + '%' : '-'}</span></div>
-                            <div class="master-stat-row"><span class="master-stat-label">Buy Tracking</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${buyProj.toLocaleString()}</span></div>
-                            <div class="master-stat-row dashed"><span class="master-stat-label">Buy Margin</span><span class="master-stat-val" style="color: ${marginColor}; background: ${marginBg};">${buyMargin}%</span></div>
-                            <div class="master-stat-row"><span class="master-stat-label">Variance Total${vRange ? `<span style="display:block; font-size:9px; font-weight:700; color:#94a3b8; text-transform:none; letter-spacing:0; margin-top:1px;">${vRange}</span>` : ''}</span><span class="master-stat-val" style="color: ${vColor}; background: ${vBg};" title="Variance period${vRange ? ': ' + vRange : ' not set'}">${vSign}${totalVar.toFixed(2)}%</span></div>
-                        </div>
-                    </div>
-
-                    <div>
-                        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px;">
-                            <div class="master-section-title" style="margin-bottom:0;min-width:0;">Weekly Metrics</div>
-                            ${wPeriod ? `<span class="master-section-title" style="margin-bottom:0;white-space:nowrap;">${escapeHtml(wPeriod)}</span>` : ''}
-                        </div>
-                        <div class="master-stat-box">
-                            ${renderLineStat('Conversion', wAvg.conversion, 'conversion')}
-                            ${renderLineStat('Margin', wAvg.buyMargin, 'margin')}
-                            ${renderLineStat('Trans. Time', wAvg.time, 'time')}
-                            ${renderLineStat('No Deals', wAvg.noDeals, 'nodeals')}
-                            <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed #e2e8f0;">
-                                ${renderLineStat('Listed Devices', wAvg.listed, 'nobg')}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div style="flex-grow: 1; display: flex; flex-direction: column;">
-                        
-                        <div class="master-section-title">eBay Top Rated Metrics</div>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 15px;">
-                            ${buildMiniAlertCard('Defect Rate', sAlerts.defectRate, getSev('defectRate', sAlerts.defectRate), true)}
-                            ${buildMiniAlertCard('Late Shipment', sAlerts.lateShipment, getSev('lateShipment', sAlerts.lateShipment), true)}
-                            ${buildMiniAlertCard('Cases Closed', sAlerts.casesClosed, getSev('casesClosed', sAlerts.casesClosed), true)}
-                            ${buildMiniAlertCard('Tracking', sAlerts.tracking, getSev('tracking', sAlerts.tracking), true)}
-                        </div>
-
-                        <div class="master-section-title">eBay Performance Metrics</div>
-                        <div style="display: flex; flex-direction: column; gap: 6px; flex-grow: 1;">
-                            ${issues.map(b => {
-                                let bg = b.type === 'red' ? '#fee2e2' : (b.type === 'yellow' ? '#fef3c7' : '#d1fae5');
-                                let txt = b.type === 'red' ? '#991b1b' : (b.type === 'yellow' ? '#92400e' : '#065f46');
-                                let pulse = b.type === 'red' ? `<div class="notif-dot active" style="display:block; position:absolute; top:-4px; right:-4px; width:12px; height:12px; border-width: 2px;"></div>` : '';
-                                return `
-                                <div class="master-action-badge" style="color: ${txt}; background: ${bg};">
-                                    ${pulse}<span>${b.text}</span>
-                                    <div class="fast-tip">${b.tip}</div>
-                                </div>`;
-                            }).join('')}
-                        </div>
-                    </div>
-                </div>
-            </div>`;
-        });
-
-        container.innerHTML = html;
+        _dccRows = STORES.map(s => _dccRow(s, hubData, varData, scoreData, alertsData, weeklyResults));
+        container.innerHTML = _dccBoardHtml(PORTAL_LINKS);
     };
 
     const cachedHtml = localStorage.getItem('speeksDistMasterHtml');
@@ -22641,4 +22377,359 @@ function _dmxSyncRail() {
     set('samDmGoalsSub', unset
         ? unset + ' store' + (unset === 1 ? '' : 's') + ' with nothing set'
         : 'Team goals & initiatives');
+}
+
+// ============================================================================
+// DISTRICT COMMAND CENTER — grouped triage rail + store detail
+// ============================================================================
+// Replaced five side-by-side store cards. Same 21 metrics per store, same
+// thresholds, same links, same audit click-through — see the .dcc block in
+// styles.css for why the shape changed.
+//
+// The old renderer parsed values inline while building HTML, which made the
+// rules hard to see and impossible to reuse. Now every store is normalised into
+// a plain object first (_dccRow), the checks live in one table (_dccChecks), and
+// the renderers only format. The rail counts and the pane therefore cannot
+// disagree — they read the same checks.
+//
+// _dccRows keeps the last normalised payload so clicking a store repaints
+// without refetching; the 60s dashboard poll overwrites it and repaints.
+
+let _dccRows = [];
+let _dccSel = null;
+
+const _DCC_ICO = {
+    b: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>',
+    w: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>',
+    g: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+};
+
+// --- number helpers, carried over verbatim from the old renderer -------------
+
+// Sheet values arrive either as 54.98 or as 0.5498 depending on the column, so
+// a bare fraction under 1.5 is treated as a ratio. Same rule as before.
+function _dccPct(raw) {
+    const str = String(raw == null ? '' : raw);
+    const n = parseFloat(str) || 0;
+    return (!str.includes('%') && n > 0 && n <= 1.5) ? n * 100 : n;
+}
+function _dccNum(v) { return v == null ? '' : String(v); }
+function _dccFix(n) { return Number.isInteger(n) ? String(n) : n.toFixed(2); }
+function _dccMoney(n) { return '$' + Math.round(n || 0).toLocaleString(); }
+
+// eBay severity bands — unchanged thresholds. Note tracking is a FLOOR (lower is
+// worse) while the other three are ceilings.
+function _dccSev(type, raw) {
+    if (raw === null || raw === undefined || String(raw).trim() === '') return null;
+    const n = parseFloat(String(raw).replace(/[^0-9.-]/g, ''));
+    if (isNaN(n)) return null;
+    if (type === 'defect')  return n >= 0.40 ? 'b' : (n >= 0.25 ? 'w' : null);
+    if (type === 'late')    return n >= 2.4  ? 'b' : (n >= 1.5  ? 'w' : null);
+    if (type === 'cases')   return n >= 0.24 ? 'b' : (n >= 0.15 ? 'w' : null);
+    if (type === 'track')   return n <= 96.0 ? 'b' : (n <= 97.5 ? 'w' : null);
+    return null;
+}
+function _dccEbayPct(raw) {
+    if (raw === null || raw === undefined) return null;
+    let str = String(raw).trim();
+    if (str === '' || str === 'null') return null;
+    if (str.endsWith('%')) return str;
+    const n = parseFloat(str.replace(/[^0-9.-]/g, ''));
+    return isNaN(n) ? null : n.toFixed(2) + '%';
+}
+
+// Transaction time may be "13.2" or "13:12"; the old code accepted both.
+function _dccMinutes(v) {
+    const s = String(v == null ? '' : v);
+    if (s.includes(':')) {
+        const p = s.split(':');
+        return (parseInt(p[0], 10) || 0) + ((parseInt(p[1], 10) || 0) / 60);
+    }
+    const n = parseFloat(s.replace(/[^0-9.-]/g, ''));
+    return isNaN(n) ? null : n;
+}
+
+// --- normalise one store ----------------------------------------------------
+function _dccRow(store, hubData, varData, scoreData, alertsData, weeklyResults) {
+    const k = store.toLowerCase();
+    const sc = (scoreData.data || []).find(s => String(s.store).toUpperCase() === store) || {};
+    const al = (alertsData.data || []).find(a => String(a.store).toUpperCase() === store) || {};
+    const vr = varData[store] || {};
+    const wk = weeklyResults.find(w => w.store === store) || {};
+    const avg = wk.sAvg || {};
+
+    const rev = parseFloat(hubData[`${k}Rev`]) || 0;
+    const gp = parseFloat(hubData[`${k}GP`]) || 0;
+    // Sell margin is given where available, derived from GP/revenue where not.
+    let sellM = 0;
+    if (hubData[`${k}SellMargin`]) sellM = _dccPct(hubData[`${k}SellMargin`]);
+    else if (rev > 0) sellM = (gp / rev) * 100;
+
+    // Week-of label: the Monday of the scorecard's date, in UTC as before.
+    let week = 'Recent';
+    if (sc.date) {
+        const d = new Date(sc.date);
+        if (!isNaN(d.getTime())) {
+            const day = d.getUTCDay();
+            const mon = new Date(d);
+            mon.setUTCDate(d.getUTCDate() + (day === 0 ? -6 : 1 - day));
+            week = mon.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
+        }
+    }
+
+    const cats = [];
+    if (al.currentVeryHigh)   cats.push({ k: 'Active · very high',    v: al.currentVeryHigh,   s: 'b' });
+    if (al.currentHigh)       cats.push({ k: 'Active · high',         v: al.currentHigh,       s: 'w' });
+    if (al.projectedVeryHigh) cats.push({ k: 'Projected · very high', v: al.projectedVeryHigh, s: 'b' });
+    if (al.projectedHigh)     cats.push({ k: 'Projected · high',      v: al.projectedHigh,     s: 'w' });
+
+    return {
+        store,
+        goal: Math.round(parseFloat(hubData[`${k}Goal`]) || 0),
+        edited: hubData[`${k}BuyDate`] || null,
+        score: (parseFloat(sc.score) || 0) * 2,
+        audit: sc.audit || null,
+        week,
+        salesPct: _dccPct(hubData[`${k}Pct`]),
+        rev,
+        gpTrack: Math.round(parseFloat(hubData[`${k}TrackGP`])) || 0,
+        sellM,
+        buyTrack: Math.round(parseFloat(hubData[`${k}BuyProj`])) || 0,
+        buyM: _dccPct(hubData[`${k}BuyMargin`]),
+        vari: parseFloat(vr.total) || 0,
+        variRange: (typeof formatVarianceRange === 'function') ? formatVarianceRange(vr.dateFrom, vr.dateTo) : '',
+        period: wk.periodLabel || '',
+        conv: avg.conversion || '',
+        wkM: avg.buyMargin || '',
+        time: avg.time || '',
+        noDeals: avg.noDeals || '',
+        listed: avg.listed || '',
+        defect: al.defectRate, late: al.lateShipment, cases: al.casesClosed, track: al.tracking,
+        cats,
+    };
+}
+
+// --- one table of every check the panel makes -------------------------------
+// Thresholds identical to the old board. buyMargin deliberately only fails when
+// it is ABOVE zero: a missing figure parsed to 0 must not read as a 0% margin.
+function _dccChecks(r) {
+    const num = v => { const n = parseFloat(String(v).replace(/[^0-9.-]/g, '')); return isNaN(n) ? null : n; };
+    const conv = num(r.conv), wkM = num(r.wkM), nd = num(r.noDeals), mins = _dccMinutes(r.time);
+    return [
+        { key: 'score',   s: r.score > 8 ? null : (r.score >= 6 ? 'w' : 'b') },
+        { key: 'audit',   s: !r.audit ? null : (r.audit.pct >= 80 ? null : (r.audit.pct >= 50 ? 'w' : 'b')) },
+        { key: 'sales',   s: r.salesPct >= 100 ? null : 'b', rule: 'goal 100%' },
+        { key: 'sellM',   s: r.sellM >= 55.5 ? null : 'b',   rule: 'floor 55.5%' },
+        { key: 'buyM',    s: (r.buyM > 0 && r.buyM < 51) ? 'b' : null, rule: 'floor 51%' },
+        { key: 'vari',    s: r.vari < 0 ? 'b' : null,        rule: 'negative' },
+        { key: 'conv',    s: conv == null ? null : (conv < 85 ? 'b' : null), rule: 'floor 85%' },
+        { key: 'wkM',     s: wkM == null ? null : (wkM < 51 ? 'b' : null),   rule: 'floor 51%' },
+        { key: 'time',    s: mins == null ? null : (mins > 13 ? 'b' : null), rule: 'ceiling 13 min' },
+        { key: 'noDeals', s: nd == null ? null : (nd > 7 ? 'b' : null),      rule: 'ceiling 7' },
+        { key: 'defect',  s: _dccSev('defect', r.defect), rule: 'ceiling 0.40%' },
+        { key: 'late',    s: _dccSev('late', r.late),     rule: 'ceiling 2.40%' },
+        { key: 'cases',   s: _dccSev('cases', r.cases),   rule: 'ceiling 0.24%' },
+        { key: 'track',   s: _dccSev('track', r.track),   rule: 'floor 96.0%' },
+    ].concat(r.cats.map(c => ({ key: 'cat', s: c.s })));
+}
+function _dccState(r, key) { const c = _dccChecks(r).find(x => x.key === key); return c ? c.s : null; }
+function _dccRule(r, key)  { const c = _dccChecks(r).find(x => x.key === key); return c ? (c.rule || '') : ''; }
+function _dccCount(r) {
+    const c = _dccChecks(r);
+    return { bad: c.filter(x => x.s === 'b').length, warn: c.filter(x => x.s === 'w').length,
+             off: c.filter(x => x.s).length };
+}
+function _dccWorst(r) { const n = _dccCount(r); return n.bad ? 'b' : (n.warn ? 'w' : 'g'); }
+
+// The rail's one-line read: name the single most consequential thing wrong, in
+// the order a DM would care. Falls back to a plain summary when nothing is off.
+function _dccLine(r) {
+    const n = _dccCount(r);
+    const ebayOff = ['track', 'defect', 'cases', 'late'].filter(k => _dccState(r, k)).length;
+    if (ebayOff >= 3) return 'eBay health failing on ' + ebayOff + ' of 4';
+    if (_dccState(r, 'sales')) return 'Under goal · ' + _dccFix(r.salesPct) + '% to date';
+    if (_dccState(r, 'track')) return 'eBay tracking ' + _dccEbayPct(r.track);
+    if (_dccState(r, 'conv'))  return 'Conversion ' + r.conv + '%' + (_dccState(r, 'noDeals') ? ' · ' + r.noDeals + ' no-deals' : '');
+    if (_dccState(r, 'time'))  return 'Transaction time ' + r.time + ' min';
+    if (ebayOff)               return 'eBay health over on ' + ebayOff;
+    if (_dccState(r, 'sellM')) return 'Sell margin ' + _dccFix(r.sellM) + '%';
+    if (_dccState(r, 'noDeals')) return r.noDeals + ' no-deals';
+    if (n.off) return n.off + (n.off === 1 ? ' item' : ' items') + ' to review';
+    return _dccFix(r.salesPct) + '% to goal · ' + (r.listed || '0') + ' listed';
+}
+
+// Worst first, then by warnings, then alphabetically so the order is stable
+// between polls and doesn't shuffle under the cursor.
+function _dccRanked() {
+    return _dccRows.slice().sort((a, b) =>
+        _dccCount(b).bad - _dccCount(a).bad ||
+        _dccCount(b).warn - _dccCount(a).warn ||
+        a.store.localeCompare(b.store));
+}
+
+// --- rail -------------------------------------------------------------------
+function _dccRailHtml() {
+    const groups = [
+        { k: 'b', label: 'Serious',   col: '#b91c1c' },
+        { k: 'w', label: 'Watch',     col: '#b45309' },
+        { k: 'g', label: 'All clear', col: '#15803d' },
+    ];
+    return groups.map(g => {
+        const list = _dccRanked().filter(r => _dccWorst(r) === g.k);
+        if (!list.length) return '';
+        return '<div class="dcc-group"><span class="dcc-group-dot" style="background:' + g.col + '"></span>'
+            + g.label + '<span class="dcc-group-n">' + list.length + '</span></div>'
+            + list.map(r => {
+                const under = _dccState(r, 'sales') ? ' under' : '';
+                return '<button type="button" class="dcc-t' + (r.store === _dccSel ? ' sel' : '')
+                    + '" onclick="_dccPick(\'' + r.store + '\')">'
+                    + '<span class="dcc-t-top"><span class="dcc-t-code">' + escapeHtml(r.store) + '</span>'
+                    + '<span class="dcc-t-pct' + under + '">' + _dccFix(r.salesPct) + '<small>% to goal</small></span></span>'
+                    + '<span class="dcc-t-sub">' + escapeHtml(_dccLine(r)) + '</span>'
+                    + '</button>';
+            }).join('');
+    }).join('');
+}
+
+// --- pane sections ----------------------------------------------------------
+function _dccStatRow(label, value, unit, state, ruleText, sub) {
+    const cls = state ? ' ' + state : '';
+    const miss = state ? '<span class="dcc-miss ' + state + '">' + escapeHtml(ruleText) + '</span>' : '';
+    return '<div class="dcc-row"><span class="dcc-row-l">' + escapeHtml(label)
+        + (sub ? '<i>' + escapeHtml(sub) + '</i>' : '') + '</span>'
+        + '<span class="dcc-row-v' + cls + '">' + miss + value
+        + (unit ? '<span class="u">' + unit + '</span>' : '') + '</span></div>';
+}
+
+function _dccEbayBlock(r) {
+    const four = [
+        ['Tracking',      _dccEbayPct(r.track),  _dccState(r, 'track'),  'floor 96.0%'],
+        ['Defect rate',   _dccEbayPct(r.defect), _dccState(r, 'defect'), 'ceiling 0.40%'],
+        ['Cases closed',  _dccEbayPct(r.cases),  _dccState(r, 'cases'),  'ceiling 0.24%'],
+        ['Late shipment', _dccEbayPct(r.late),   _dccState(r, 'late'),   'ceiling 2.40%'],
+    ];
+    const off = four.filter(f => f[2]).length;
+    if (!off) {
+        // Nothing wrong: one line rather than four cells of good news.
+        const bits = four.filter(f => f[1]).map(f => f[0].toLowerCase() + ' ' + f[1]).join(' · ');
+        return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>all four within threshold</em></div>'
+            + '<div class="dcc-clear">' + _DCC_ICO.g + (bits || 'No data reported yet') + '</div></div>';
+    }
+    return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>' + off + ' of 4 over threshold</em></div>'
+        + '<div class="dcc-g4">' + four.map(function (f) {
+            const val = f[1] == null ? '—' : f[1].replace('%', '');
+            return '<div class="dcc-cell' + (f[2] ? ' ' + f[2] : '') + '">'
+                + '<div class="dcc-cell-l">' + f[0] + '</div>'
+                + '<div class="dcc-cell-v">' + val + (f[1] == null ? '' : '<small>%</small>') + '</div>'
+                + '<div class="dcc-cell-d">' + f[3] + '</div></div>';
+        }).join('') + '</div></div>';
+}
+
+function _dccBuyBlock(r) {
+    return '<div class="dcc-block"><div class="dcc-sec">Buying &amp; selling'
+        + (r.edited ? '<em>' + escapeHtml(r.edited) + '</em>' : '') + '</div><div class="dcc-rows">'
+        + _dccStatRow('Sales vs goal', _dccFix(r.salesPct), '%', _dccState(r, 'sales'), _dccRule(r, 'sales'))
+        + _dccStatRow('Revenue', _dccMoney(r.rev), '', null)
+        + _dccStatRow('GP tracking', _dccMoney(r.gpTrack), '', null)
+        + _dccStatRow('Sell margin', r.sellM > 0 ? _dccFix(r.sellM) : '—', r.sellM > 0 ? '%' : '', _dccState(r, 'sellM'), _dccRule(r, 'sellM'))
+        + _dccStatRow('Buy tracking', _dccMoney(r.buyTrack), '', null)
+        + _dccStatRow('Buy margin', _dccFix(r.buyM), '%', _dccState(r, 'buyM'), _dccRule(r, 'buyM'))
+        + _dccStatRow('Variance total', (r.vari > 0 ? '+' : '') + r.vari.toFixed(2), '%',
+                      _dccState(r, 'vari'), _dccRule(r, 'vari'), r.variRange || '')
+        + '</div></div>';
+}
+
+function _dccWeekBlock(r) {
+    // Percent units are appended here rather than baked into the value, matching
+    // what renderLineStat used to do for conversion and margin.
+    const or = v => (v === '' || v == null) ? '—' : v;
+    return '<div class="dcc-block"><div class="dcc-sec">Weekly metrics'
+        + (r.period ? '<em>' + escapeHtml(r.period) + '</em>' : '') + '</div><div class="dcc-rows">'
+        + _dccStatRow('Conversion', or(r.conv), r.conv ? '%' : '', _dccState(r, 'conv'), _dccRule(r, 'conv'))
+        + _dccStatRow('Margin', or(r.wkM), r.wkM ? '%' : '', _dccState(r, 'wkM'), _dccRule(r, 'wkM'))
+        + _dccStatRow('Transaction time', or(r.time), r.time ? 'min' : '', _dccState(r, 'time'), _dccRule(r, 'time'))
+        + _dccStatRow('No deals', or(r.noDeals), '', _dccState(r, 'noDeals'), _dccRule(r, 'noDeals'))
+        + _dccStatRow('Listed devices', or(r.listed), '', null)
+        + '</div></div>';
+}
+
+function _dccCatBlock(r) {
+    if (!r.cats.length) {
+        return '<div class="dcc-block"><div class="dcc-sec">eBay categories at risk</div>'
+            + '<div class="dcc-clear">' + _DCC_ICO.g + 'No categories flagged, active or projected</div></div>';
+    }
+    return '<div class="dcc-block"><div class="dcc-sec">eBay categories at risk<em>' + r.cats.length + ' flagged</em></div>'
+        + '<div class="dcc-cats">' + r.cats.map(c =>
+            '<div class="dcc-cat ' + c.s + '"><span class="dcc-cat-k">' + escapeHtml(c.k) + '</span>'
+            + '<span class="dcc-cat-v">' + escapeHtml(c.v) + '</span>'
+            + '<span>' + _DCC_ICO[c.s] + '</span></div>').join('')
+        + '</div></div>';
+}
+
+function _dccPaneHtml(r, portalLink) {
+    if (!r) return '<div class="dcc-empty">Select a store.</div>';
+    const n = _dccCount(r), k = _dccWorst(r);
+    const chipCls = s => s === 'b' ? 'dcc-bad' : s === 'w' ? 'dcc-warn' : 'dcc-good';
+
+    const scoreChip = '<span class="dcc-chip ' + chipCls(_dccState(r, 'score'))
+        + '" title="Online &amp; Marketing scorecard"><span class="dcc-chip-l">SCORECARD</span>'
+        + r.score.toFixed(1) + '</span>';
+    const auditChip = r.audit
+        ? '<span class="dcc-chip act ' + chipCls(_dccState(r, 'audit'))
+          + '" onclick="event.stopPropagation(); openAuditBreakdown(\'' + r.store + '\')"'
+          + ' title="PayMore practice audit — ' + r.audit.earned + '/' + r.audit.possible + ' · view full breakdown">'
+          + '<span class="dcc-chip-l">AUDIT</span>' + r.audit.pct + '%</span>'
+        : '<span class="dcc-chip dcc-mute" title="No practice audit submitted yet">'
+          + '<span class="dcc-chip-l">AUDIT</span>No data</span>';
+    const stateChip = '<span class="dcc-chip ' + (k === 'g' ? 'dcc-good' : chipCls(k)) + '">'
+        + _DCC_ICO[k] + (n.off ? n.off + ' to fix' : 'All clear') + '</span>';
+
+    // eBay leads when the account is in trouble: a suspension outranks a margin
+    // point. Otherwise the money leads. Same blocks either way.
+    const ebayBroken = ['track', 'defect', 'cases', 'late'].some(x => _dccState(r, x));
+    const blocks = ebayBroken
+        ? [_dccEbayBlock(r), _dccBuyBlock(r), _dccWeekBlock(r), _dccCatBlock(r)]
+        : [_dccBuyBlock(r), _dccWeekBlock(r), _dccEbayBlock(r), _dccCatBlock(r)];
+
+    return '<div class="dcc-ph"><div>'
+        + '<div class="dcc-pt">' + escapeHtml(r.store) + '</div>'
+        + '<div class="dcc-ps">Goal ' + _dccMoney(r.goal) + ' &middot; week of ' + escapeHtml(r.week)
+        + (portalLink ? ' &middot; <a href="' + portalLink + '" target="_blank" rel="noopener">Store folder</a>' : '')
+        + '</div></div>'
+        + '<div class="dcc-ph-side">' + scoreChip + auditChip + stateChip + '</div></div>'
+        + blocks.join('');
+}
+
+// --- board ------------------------------------------------------------------
+function _dccBoardHtml(portalLinks) {
+    if (!_dccRows.length) return '<div class="dcc-empty">Syncing the district…</div>';
+    if (!_dccSel || !_dccRows.some(r => r.store === _dccSel)) _dccSel = _dccRanked()[0].store;
+    const sel = _dccRows.find(r => r.store === _dccSel);
+
+    const totRev = _dccRows.reduce((a, r) => a + r.rev, 0);
+    const totGoal = _dccRows.reduce((a, r) => a + r.goal, 0);
+    const needing = _dccRows.filter(r => _dccWorst(r) !== 'g').length;
+
+    return '<div class="dcc">'
+        + '<div class="dcc-head">'
+        + '<span class="dcc-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20"/></svg></span>'
+        + '<div><div class="dcc-eyebrow">District</div><div class="dcc-title">Command Center</div></div>'
+        + '<div class="dcc-head-side"><span class="dcc-sum">'
+        + '<b>' + _dccMoney(totRev) + '</b> of ' + _dccMoney(totGoal) + ' goal &middot; '
+        + '<b>' + (needing ? needing + ' of 5' : 'no') + '</b> store' + (needing === 1 ? '' : 's') + ' needing attention'
+        + '</span></div></div>'
+        + '<div class="dcc-body"><div class="dcc-grid">'
+        + '<div class="dcc-rail">' + _dccRailHtml() + '</div>'
+        + '<div class="dcc-pane">' + _dccPaneHtml(sel, portalLinks[_dccSel]) + '</div>'
+        + '</div></div></div>';
+}
+
+// Repaint from the rows already in memory — no refetch. No-ops before the first
+// load resolves, which matters because the cached HTML restores clickable rail
+// buttons before any data exists.
+function _dccPick(store) {
+    if (!_dccRows.length) return;
+    _dccSel = store;
+    const el = document.getElementById('district-master-body');
+    if (el) el.innerHTML = _dccBoardHtml(_DCC_PORTAL_LINKS);
 }

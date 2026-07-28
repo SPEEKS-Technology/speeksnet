@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260728c">
+  <link rel="stylesheet" href="styles.css?v=20260728d">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260728c" defer></script>
+  <script src="speeks.js?v=20260728d" defer></script>
 </head>
 
 <body class="preload">
@@ -1034,18 +1034,17 @@
 
   <div class="dynamic-module-block role-district-manager role-ceo district-command-section" data-feature="widget-district-command">
     
-      <div class="district-header-wrapper">
-          <h3 class="district-command-title">🌐 District Command Center</h3>
-      </div>
-
-      <div id="district-master-body" class="district-master-grid mb-30">
-          <div class="status-message">Syncing Data...</div>
+      <!-- The section heading lived here as an <h3> with a 🌐 on it. The panel now
+           carries its own header (icon tile + eyebrow + title), so a second title
+           immediately above it was saying the same thing twice. -->
+      <div id="district-master-body" class="mb-30">
+          <div class="dcc-empty">Syncing the district&hellip;</div>
       </div>
       <!-- Monthly Team Goals, Listing Goals and Cleaning Checklist used to be three
            panels here. They are now action-menu items opening #dmGoalsModal,
            #dmListingModal and #dmCleaningModal — see the DM DISTRICT TOOLS block in
-           speeks.js. What is left on this page is the store-card grid above and the
-           Performance chart below. -->
+           speeks.js. What is left on this page is this board and the Performance
+           chart below. -->
 
       </div>
 
