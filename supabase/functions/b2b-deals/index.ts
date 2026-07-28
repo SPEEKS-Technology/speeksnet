@@ -15,8 +15,10 @@ const corsHeaders = {
 //   pickup            corp    typed-name sign-off + pickup date
 //   pricing_location  corp    route to OVL/LEE/WSP/MPL/BAL/CORP
 //   pricing           store   itemize and price
-//   quote             corp    email the quote; stays editable while the client
-//                             negotiates; CEO/TOM/DM alone may accept it
+//   quote             corp    quote goes out from the quoter's own mailbox as
+//                             a mailto draft, so replies reach them; stays
+//                             editable while the client negotiates, and only
+//                             a CEO/TOM/DM may accept it
 //   listing_location  corp    ONLY when pricing happened at CORP
 //   listing           store   check off / scan each unit; recycle bad ones
 //   completed         —       terminal
@@ -33,14 +35,8 @@ const corsHeaders = {
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const PRICING_LOCATIONS = [...STORES, "CORP"];
 const ACCEPT_ROLES = ["ceo", "tom", "district manager"];
-
-// Gmail relay (Apps Script web app) — same sender the weekly report uses, so
-// quotes go out over an already-proven path with no DNS work.
-const SECRET      = "sp33ks-sync-k3y-2026-x9mq";
-const RESEND_URL  = "https://api.resend.com/emails";
-const FROM        = Deno.env.get("RESEND_FROM") || "Speeks Quotes <onboarding@resend.dev>";
-const GMAIL_RELAY = Deno.env.get("GMAIL_RELAY_URL") ||
-  "https://script.google.com/macros/s/AKfycby4Y2l3DJ6fQCrpFuwTTXKeaD3QV5DbLhf7jmberZCUFx86VaaE6vb9Bs_CweNh3K9VtQ/exec";
+// Conditions that oblige the pricer to explain themselves on the quote.
+const REASON_CONDITIONS = ["Fair", "For Parts"];
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -115,123 +111,6 @@ async function getDeal(sb: any, id: string) {
 
 // The store a change should ping. Listing store once it exists, else pricing.
 const dealStore = (d: any) => d?.listing_store || d?.pricing_store || null;
-
-// ---------------------------------------------------------------- quote email
-
-const money = (n: number) =>
-  "$" + Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-const esc = (s: unknown) =>
-  String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
-// Email-safe: 600px, table layout, every style inline. No external CSS, no
-// flexbox, no web fonts — Outlook renders none of it.
-function quoteEmailHtml(deal: any, items: any[]) {
-  const c = deal.client || {};
-  const ref = dealRef(c.acronym || "B2B", deal.deal_no);
-  const total = items.reduce(
-    (s, it) => s + (it.recycle_only ? 0 : parseNum(it.offer) * parseInt0(it.quantity)),
-    0,
-  );
-  const today = new Date().toLocaleDateString("en-US", {
-    month: "long", day: "numeric", year: "numeric", timeZone: "America/Chicago",
-  });
-
-  const rows = items.map((it) => {
-    const qty = parseInt0(it.quantity) || 1;
-    const line = it.recycle_only ? null : parseNum(it.offer) * qty;
-    const bits = [it.condition, it.client_notes].filter(Boolean).map(esc).join(" &middot; ");
-    return `
-      <tr>
-        <td style="padding:10px 12px;border-bottom:1px solid #eef2f6;font-size:13px;color:#1a1c1e;">
-          <b>${esc([it.make, it.model].filter(Boolean).join(" ") || "Item")}</b>
-          ${it.recycle_only ? '<span style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;background:#eef2f6;color:#647082;font-size:10px;font-weight:700;">RECYCLE</span>' : ""}
-          ${bits ? `<div style="margin-top:3px;font-size:11.5px;color:#647082;">${bits}</div>` : ""}
-          <div style="margin-top:3px;font-size:10.5px;color:#94a3b8;letter-spacing:.04em;">${esc(it.sku || "")}</div>
-        </td>
-        <td style="padding:10px 12px;border-bottom:1px solid #eef2f6;font-size:13px;color:#1a1c1e;text-align:center;">${qty}</td>
-        <td style="padding:10px 12px;border-bottom:1px solid #eef2f6;font-size:13px;color:#1a1c1e;text-align:right;">${it.recycle_only ? "&mdash;" : money(parseNum(it.offer))}</td>
-        <td style="padding:10px 12px;border-bottom:1px solid #eef2f6;font-size:13px;color:#1a1c1e;text-align:right;font-weight:700;">${line === null ? "&mdash;" : money(line)}</td>
-      </tr>`;
-  }).join("");
-
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:24px 12px;background:#f4f7f9;font-family:'Segoe UI',Helvetica,Arial,sans-serif;">
-<table role="presentation" width="600" cellpadding="0" cellspacing="0" align="center" style="width:600px;max-width:100%;background:#ffffff;border:1px solid #e6ebf1;border-radius:14px;overflow:hidden;">
-  <tr>
-    <td style="padding:22px 24px;border-bottom:1px solid #eef2f6;">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-        <td style="font-size:21px;font-weight:800;color:#1a1c1e;letter-spacing:-.4px;">Pay<span style="color:#1f9d57;">More</span>
-          <div style="margin-top:2px;font-size:11px;font-weight:600;color:#647082;letter-spacing:.02em;">Buy &middot; Sell &middot; Recycle Electronics</div>
-        </td>
-        <td align="right" style="font-size:12px;color:#647082;">
-          <div style="font-size:15px;font-weight:800;color:#1a1c1e;">Quote</div>
-          <div style="margin-top:3px;">${esc(ref)}</div>
-          <div>${esc(today)}</div>
-        </td>
-      </tr></table>
-    </td>
-  </tr>
-  <tr>
-    <td style="padding:18px 24px;background:#f6f8fa;border-bottom:1px solid #eef2f6;">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-        <td style="font-size:12px;color:#647082;vertical-align:top;">
-          <div style="font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:#94a3b8;">Prepared for</div>
-          <div style="margin-top:4px;font-size:14px;font-weight:700;color:#1a1c1e;">${esc(c.company || "")}</div>
-          ${c.contact ? `<div style="margin-top:2px;">${esc(c.contact)}</div>` : ""}
-        </td>
-        <td align="right" style="font-size:12px;color:#647082;vertical-align:top;">
-          <div style="font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:#94a3b8;">Issued by</div>
-          <div style="margin-top:4px;font-size:14px;font-weight:700;color:#1a1c1e;">SPEEKS Technology</div>
-          <div style="margin-top:2px;">Authorized PayMore franchisee</div>
-          ${deal.pickup_date ? `<div style="margin-top:2px;">Picked up ${esc(deal.pickup_date)}</div>` : ""}
-        </td>
-      </tr></table>
-    </td>
-  </tr>
-  <tr><td style="padding:0 24px;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px;">
-      <tr>
-        <th align="left"   style="padding:10px 12px;border-bottom:2px solid #e6ebf1;font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#647082;">Description</th>
-        <th align="center" style="padding:10px 12px;border-bottom:2px solid #e6ebf1;font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#647082;">Qty</th>
-        <th align="right"  style="padding:10px 12px;border-bottom:2px solid #e6ebf1;font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#647082;">Unit offer</th>
-        <th align="right"  style="padding:10px 12px;border-bottom:2px solid #e6ebf1;font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#647082;">Line total</th>
-      </tr>
-      ${rows}
-      <tr>
-        <td colspan="3" align="right" style="padding:14px 12px;font-size:13px;font-weight:800;color:#1a1c1e;">Total offer</td>
-        <td align="right" style="padding:14px 12px;font-size:17px;font-weight:800;color:#178048;">${money(total)}</td>
-      </tr>
-    </table>
-  </td></tr>
-  <tr><td style="padding:6px 24px 24px;font-size:11.5px;color:#94a3b8;line-height:1.6;">
-    Reply to this email to accept the quote or ask about any line.
-    Recycle-only items carry no offer and are disposed of responsibly at no cost to you.
-  </td></tr>
-</table>
-</body></html>`;
-}
-
-async function sendEmail(to: string[], subject: string, html: string) {
-  if (GMAIL_RELAY) {
-    const res = await fetch(GMAIL_RELAY, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ secret: SECRET, to: to.join(","), subject, html }),
-    });
-    const body = await res.text();
-    return { ok: res.ok, status: res.status, body: body.slice(0, 300) };
-  }
-  const key = Deno.env.get("RESEND_API_KEY");
-  if (!key) return { ok: false, error: "No GMAIL_RELAY_URL or RESEND_API_KEY set" };
-  const res = await fetch(RESEND_URL, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: FROM, to, subject, html }),
-  });
-  const body = await res.text();
-  return { ok: res.ok, status: res.status, body: body.slice(0, 300) };
-}
 
 // ---------------------------------------------------------------------------
 
@@ -435,8 +314,10 @@ Deno.serve(async (req: Request) => {
           return jsonResponse({ success: true });
         }
 
-        // add_item — next line number for this deal. Lines added mid-quote get
-        // their SKU straight away so a label can be printed for them.
+        // add_item — next line number for this deal. The SKU is assigned right
+        // here so a label can be printed the moment the line exists. Line
+        // numbers are never reused, so deleting and re-adding leaves a gap and
+        // mints a fresh SKU; nothing is frozen until the quote is accepted.
         const { data: last } = await supabase.from("b2b_deal_items")
           .select("line_no").eq("deal_id", deal.id)
           .order("line_no", { ascending: false }).limit(1).maybeSingle();
@@ -446,7 +327,7 @@ Deno.serve(async (req: Request) => {
           ...fields,
           deal_id: deal.id,
           line_no: lineNo,
-          sku: deal.stage === "quote" ? skuFor(acronym, deal.deal_no, lineNo) : null,
+          sku: skuFor(acronym, deal.deal_no, lineNo),
         }).select("id, line_no, sku").single();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await supabase.from("b2b_deals").update(touch()).eq("id", deal.id);
@@ -461,11 +342,20 @@ Deno.serve(async (req: Request) => {
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
         if (deal.stage !== "pricing") return jsonResponse({ success: false, error: "This deal isn't in pricing." }, 409);
         const { data: items } = await supabase.from("b2b_deal_items")
-          .select("id, line_no, sku").eq("deal_id", deal.id).order("line_no", { ascending: true });
+          .select("id, line_no, sku, make, model, condition, client_notes").eq("deal_id", deal.id).order("line_no", { ascending: true });
         if (!items?.length) return jsonResponse({ success: false, error: "Add at least one line item before submitting." }, 400);
 
-        // SKUs are assigned here so labels can be printed during quoting; they
-        // are frozen for good once the quote is accepted.
+        // A line downgraded to Fair or For Parts has to carry a client-facing
+        // reason -- it prints on the quote and is what justifies the low offer.
+        const unreasoned = items.filter((it: any) =>
+          REASON_CONDITIONS.includes(String(it.condition || "")) && !String(it.client_notes || "").trim());
+        if (unreasoned.length) {
+          const names = unreasoned.map((it: any) =>
+            [it.make, it.model].filter(Boolean).join(" ") || `Line ${it.line_no}`).join(", ");
+          return jsonResponse({ success: false, error: `These lines are marked Fair or For Parts and need a reason: ${names}` }, 400);
+        }
+
+        // Backfill for any line created before SKUs were assigned on insert.
         const acronym = deal.client?.acronym || "B2B";
         for (const it of items) {
           if (it.sku) continue;
@@ -484,24 +374,13 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true });
       }
 
+      // The quote goes out from the quoter's own mailbox via a mailto draft, so
+      // the client's reply reaches the person who priced it. This just records
+      // that it went out, for the stage clock and the Overview.
       if (action === "send_quote") {
         const deal = await getDeal(supabase, String(body.id || ""));
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
-        if (deal.stage !== "quote") return jsonResponse({ success: false, error: "Only a deal in the quote stage can be emailed." }, 409);
-        const to = (txt(body.to) || deal.client?.contact_email || "").split(",").map((s: string) => s.trim()).filter(Boolean);
-        if (!to.length) return jsonResponse({ success: false, error: "No email address on file for this client." }, 400);
-
-        const { data: items } = await supabase.from("b2b_deal_items")
-          .select("*").eq("deal_id", deal.id).order("line_no", { ascending: true });
-        const ref = dealRef(deal.client?.acronym || "B2B", deal.deal_no);
-        const sent = await sendEmail(
-          to,
-          `Your PayMore quote ${ref}`,
-          quoteEmailHtml(deal, items || []),
-        );
-        if (!sent.ok) {
-          return jsonResponse({ success: false, error: `The quote couldn't be emailed: ${sent.error || sent.body || sent.status}` }, 502);
-        }
+        if (deal.stage !== "quote") return jsonResponse({ success: false, error: "Only a deal in the quote stage can be sent." }, 409);
         const { error } = await supabase.from("b2b_deals").update({
           quote_sent_at: new Date().toISOString(),
           quote_send_count: (deal.quote_send_count || 0) + 1,
@@ -509,7 +388,7 @@ Deno.serve(async (req: Request) => {
         }).eq("id", deal.id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("b2b", dealStore(deal));
-        return jsonResponse({ success: true, to });
+        return jsonResponse({ success: true, to: txt(body.to) });
       }
 
       // The hinge: offers freeze into cost, SKUs freeze, and the deal routes on.
@@ -523,8 +402,19 @@ Deno.serve(async (req: Request) => {
         }
 
         const { data: items } = await supabase.from("b2b_deal_items")
-          .select("id, line_no, sku, offer").eq("deal_id", deal.id).order("line_no", { ascending: true });
+          .select("id, line_no, sku, offer, make, model, condition, client_notes")
+          .eq("deal_id", deal.id).order("line_no", { ascending: true });
         if (!items?.length) return jsonResponse({ success: false, error: "This quote has no line items." }, 400);
+
+        // Same gate as submit_pricing: the quote stays editable right up to
+        // here, so a reason could have been cleared after it was first checked.
+        const unreasoned = items.filter((it: any) =>
+          REASON_CONDITIONS.includes(String(it.condition || "")) && !String(it.client_notes || "").trim());
+        if (unreasoned.length) {
+          const names = unreasoned.map((it: any) =>
+            [it.make, it.model].filter(Boolean).join(" ") || `Line ${it.line_no}`).join(", ");
+          return jsonResponse({ success: false, error: `These lines are marked Fair or For Parts and need a reason: ${names}` }, 400);
+        }
 
         const acronym = deal.client?.acronym || "B2B";
         for (const it of items) {

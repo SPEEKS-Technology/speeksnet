@@ -10030,6 +10030,38 @@ body.sam-active .hotbar-btn:hover {
 .b2b-cform { background: #fff; border: 1px solid var(--b2b-line); border-radius: 13px; padding: 16px; }
 .b2b-cform-acts { display: flex; justify-content: flex-end; gap: 9px; margin-top: 14px; }
 
+
+/* --- responsiveness + required-reason affordances ------------------------- */
+/* Optimistic actions report failures here instead of through alert(), which
+   would interrupt whatever the user is mid-way through. */
+.b2b-msg { margin-right: auto; font-size: 12px; font-weight: 700; line-height: 1.4; }
+.b2b-msg.ok  { color: var(--sage-deep); }
+.b2b-msg.bad { color: #d1443b; }
+
+/* The few actions that genuinely have to wait for the server. */
+.b2b-btn.is-busy, .kpi-cancel-btn.is-busy { opacity: .75; cursor: progress; }
+
+/* Print the labels for one line, straight from the pricing grid. */
+.b2b-linelabel {
+    display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+    height: var(--b2b-h-sm); padding: 0 10px; font: inherit;
+    font-size: 10.5px; font-weight: 750; letter-spacing: .02em;
+    border-radius: var(--b2b-r-sm); border: 1px solid var(--b2b-line);
+    background: #fff; color: var(--b2b-muted); flex: 0 0 auto;
+}
+.b2b-linelabel svg { width: 12px; height: 12px; }
+.b2b-linelabel:hover { border-color: var(--sage-professional); color: var(--sage-deep); }
+
+/* A Fair or For Parts line has to explain itself before it can be quoted. */
+.b2b-tag-req {
+    padding: 1px 6px; border-radius: 999px; background: #fdf3e1;
+    color: #b7791f; font-size: 8.5px; font-weight: 800; letter-spacing: .04em;
+}
+.b2b-pcard.needs-reason { border-color: #f0dcb4; background: #fffdf8; }
+.b2b-tag-free.miss { border-color: #e0b970; background: #fffbf3; }
+.b2b-tag-free.miss:focus { border-color: #b7791f; box-shadow: 0 0 0 3px rgba(183,121,31,.14); }
+.b2b-req-note { margin-top: 4px; font-size: 11px; font-weight: 650; color: #b7791f; }
+
 /* --- responsive ----------------------------------------------------------- */
 @media (max-width: 1100px) {
     .b2b-pgrid { grid-template-columns: 1fr 1fr 1fr 60px; }
