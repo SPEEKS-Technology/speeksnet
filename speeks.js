@@ -22478,9 +22478,13 @@ function _dccRow(store, hubData, varData, scoreData, alertsData, weeklyResults) 
     }
 
     const cats = [];
+    // Only an ACTIVE very-high category is Serious. Projected is a forecast about
+    // a category that has not failed yet, and the alert data already distinguishes
+    // the two, so treating a projection as a current failure overstated it. Both
+    // are still shown, and both still say which they are.
     if (al.currentVeryHigh)   cats.push({ k: 'Active · very high',    v: al.currentVeryHigh,   s: 'b' });
     if (al.currentHigh)       cats.push({ k: 'Active · high',         v: al.currentHigh,       s: 'w' });
-    if (al.projectedVeryHigh) cats.push({ k: 'Projected · very high', v: al.projectedVeryHigh, s: 'b' });
+    if (al.projectedVeryHigh) cats.push({ k: 'Projected · very high', v: al.projectedVeryHigh, s: 'w' });
     if (al.projectedHigh)     cats.push({ k: 'Projected · high',      v: al.projectedHigh,     s: 'w' });
 
     return {
@@ -22592,7 +22596,10 @@ function _dccLine(r) {
         [_dccState(r, 'time'),    'Transaction time ' + r.time + ' min'],
         [ebayOff ? (ebayBad ? 'b' : 'w') : null,
          'eBay health over on ' + ebayOff + (ebayOff === 1 ? ' measure' : ' measures')],
-        [r.cats.length ? r.cats[0].s : null,
+        [r.cats.some(c => c.s === 'b') ? 'b' : null,
+         r.cats.filter(c => c.s === 'b').length
+         + (r.cats.filter(c => c.s === 'b').length === 1 ? ' category' : ' categories') + ' failing'],
+        [r.cats.length ? 'w' : null,
          r.cats.length + (r.cats.length === 1 ? ' category' : ' categories') + ' at risk'],
         [_dccState(r, 'sellM'),   'Sell margin ' + _dccFix(r.sellM) + '%'],
         [_dccState(r, 'wkM'),     'Weekly margin ' + r.wkM + '%'],
