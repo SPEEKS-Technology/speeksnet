@@ -12694,13 +12694,27 @@ function renderClaimsTable() {
 // inventory. Styling is .site-copy in styles.css — one definition, so a
 // copyable value looks and behaves the same in every tool.
 //
-// `what` names the value in the tooltip and in the failure message, so the
-// fallback tells you WHICH thing to copy by hand.
+// `what` names the value in the tooltip, the screen-reader label and the
+// failure message, so the fallback tells you WHICH thing to copy by hand.
+//
+// Both the copy mark and the success check live in one SVG; CSS shows one at a
+// time. Line-icon style with stroke-width 2.4 to match the nav icons — at 12px
+// a thinner stroke greys out.
+const _SITE_COPY_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + '<g class="site-copy-mark-copy"><rect x="9" y="9" width="12" height="12" rx="2.5"/>'
+    + '<path d="M6 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V6"/></g>'
+    + '<polyline class="site-copy-mark-ok" points="20 6 10 17 5 12"/></svg>';
+
 function siteCopyBtn(value, what) {
     const v = String(value ?? '').trim();
     if (!v) return '';
     const label = escapeHtml(what || 'value');
-    return `<button type="button" class="site-copy" data-copy="${escapeHtml(v)}" data-what="${label}" title="Copy ${label}" onclick="siteCopy(event, this)">📋</button>`;
+    // No whitespace between the value and this button at any call site: with no
+    // break opportunity there, the icon can never be orphaned onto its own line
+    // even when the column is narrow enough that the value itself wraps.
+    return `<button type="button" class="site-copy" data-copy="${escapeHtml(v)}" data-what="${label}"`
+        + ` title="Copy ${label}" aria-label="Copy ${label}" onclick="siteCopy(event, this)">${_SITE_COPY_SVG}</button>`;
 }
 
 function siteCopy(ev, btn) {
@@ -12711,15 +12725,10 @@ function siteCopy(ev, btn) {
     const v = btn.dataset.copy || '';
     if (!v) return;
     const flash = () => {
-        const old = btn.innerText;
-        btn.innerText = '✓';
         btn.classList.add('site-copy-ok');
-        setTimeout(() => {
-            // The table may have re-rendered underneath us in the meantime, in
-            // which case this button is detached and resetting it is harmless.
-            btn.innerText = old;
-            btn.classList.remove('site-copy-ok');
-        }, 1200);
+        // The table may have re-rendered underneath us in the meantime, in
+        // which case this button is detached and resetting it is harmless.
+        setTimeout(() => btn.classList.remove('site-copy-ok'), 1200);
     };
     // navigator.clipboard is undefined on a non-secure origin, so the old
     // textarea trick is the fallback rather than an outright failure.
@@ -16842,7 +16851,7 @@ function renderMyRecycleTable() {
             ${firstCell}
             ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
             ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`) : ''}
-            ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.sku || '')}</span>${siteCopyBtn(r.sku, 'SKU')}`, 'white-space:nowrap;')}
+            ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.sku || '')}</span>${siteCopyBtn(r.sku, 'SKU')}`)}
             ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>${noteLine}`)}
             ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;')}
             ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}

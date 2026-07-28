@@ -9989,20 +9989,34 @@ body.sam-active .hotbar-btn:hover {
 .site-note-by { color: #94a3b8; font-weight: 600; }
 
 /* ── Shared copy chip ──────────────────────────────────────────────────────
-   A 📋 button beside an identifier whose whole purpose is to be pasted
-   somewhere else — a claim case number into a carrier's status lookup, a
-   recycle SKU into inventory. Lifted verbatim from the insurance-claims copy
-   button, which now uses these classes, so the two stay identical.
-   siteCopy() adds .site-copy-ok for the success flash. */
+   Sits beside an identifier whose whole purpose is to be pasted somewhere else
+   — a claim case number into a carrier's status lookup, a recycle SKU into
+   inventory.
+
+   No border and no fill at rest: a bordered pill reads as a second control
+   competing with the value, when this is really just an affordance ON the
+   value. Light grey keeps it discoverable without pulling the eye off the SKU;
+   emerald on hover is the only moment it asserts itself.
+
+   vertical-align is in em so the icon stays optically centred on the text at
+   any font size, and the width is the 18px hit target rather than the 12px
+   glyph. siteCopy() toggles .site-copy-ok, which swaps the mark to a check. */
 .site-copy {
-    margin-left: 5px; padding: 2px 5px;
-    border: 1px solid #e2e8f0; border-radius: 5px;
-    background: #f8fafc; color: #64748b;
-    font-size: 10px; line-height: 1; vertical-align: 1px;
-    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; padding: 0; margin-left: 3px;
+    vertical-align: -0.22em;
+    border: 0; border-radius: 5px; background: none;
+    color: #c3ccd2; cursor: pointer;
+    transition: color .15s, background .15s;
 }
-.site-copy:hover { background: #f1f5f9; border-color: #cbd5e1; color: #475569; }
-.site-copy.site-copy-ok { background: #ecfdf5; border-color: #34d399; color: #059669; }
+.site-copy:hover { color: #1f9d57; background: rgba(31, 157, 87, .09); }
+.site-copy:focus-visible { outline: 2px solid #1f9d57; outline-offset: 1px; color: #1f9d57; }
+.site-copy.site-copy-ok { color: #1f9d57; background: rgba(31, 157, 87, .09); }
+.site-copy svg { display: block; width: 12px; height: 12px; }
+/* Both marks ship in the same SVG; only one is ever displayed. */
+.site-copy .site-copy-mark-ok { display: none; }
+.site-copy.site-copy-ok .site-copy-mark-copy { display: none; }
+.site-copy.site-copy-ok .site-copy-mark-ok { display: block; }
 
 .pl-empty { padding: 44px 20px; text-align: center; }
 .pl-empty-t { font-size: 14px; font-weight: 800; color: #3d4852; }
