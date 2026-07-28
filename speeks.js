@@ -5487,8 +5487,26 @@ function handleSignOut() {
     document.body.classList.remove('is-authenticated');
     document.getElementById('checklistSidePanel')?.classList.remove('open');
     document.getElementById('goalsSidePanel')?.classList.remove('open');
+    closeAllModals();
 
-    location.reload();
+    // Paint the login screen on THIS page before navigating. The browser holds
+    // the current frame until the next document paints, and speeks.js is
+    // deferred — so without this the hand-off showed the shell's white body for
+    // a beat. Harmless before the redesign, glaring against a near-black login.
+    // Reusing the real overlay means the colour can't drift from .auth-page and
+    // the dark-theme filter is already accounted for.
+    const overlay = document.getElementById('authOverlay');
+    if (overlay) {
+        overlay.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    }
+
+    // One navigation, not two. location.reload() from workspace/docs/operations/
+    // stats landed on a page that then found no session and bounced to
+    // index.html itself — two full loads back to back, which is the lag and the
+    // second white gap. Go straight there. replace() keeps a signed-out Back
+    // button from returning to an authenticated URL.
+    location.replace('index.html');
 }
 
 // --- 17. MODULE: IDEA SUBMISSION MODAL ---
@@ -20766,13 +20784,16 @@ function renderActionFeed() {
 // display:none and :nth-child would still count them.
 const _SAM_RAIL_FILL_MIN = 4;
 function _samSyncRailFill() {
-    const card = document.querySelector('.speeks-action-menu .sam-rail > .sam-card');
-    if (!card) return;
+    // The class goes on .sam-rail, not the card: the rail carries
+    // align-self:start, so it has to rejoin the grid's stretch before anything
+    // inside it has height to fill.
+    const rail = document.querySelector('.speeks-action-menu .sam-rail');
+    if (!rail) return;
     let n = 0;
-    card.querySelectorAll('.sam-mini').forEach(function (el) {
+    rail.querySelectorAll('.sam-mini').forEach(function (el) {
         if (el.offsetParent !== null) n++;
     });
-    card.classList.toggle('sam-rail-fill', n >= _SAM_RAIL_FILL_MIN);
+    rail.classList.toggle('sam-rail-fill', n >= _SAM_RAIL_FILL_MIN);
 }
 
 // Keyed, in-place reconcile of the action feed. Cards are matched by a stable key
@@ -21912,13 +21933,14 @@ function _plStatusChip(status) {
 }
 
 // A note from the owner is the whole reason a requester reopens the tool, so it
-// gets a proper callout rather than a grey run-on line — same blue note box the
-// recycle threads use, so it reads as the same system.
+// gets the shared .site-note callout — same shape as the recycle-request notes
+// (💬, text, author in grey) so notes read the same everywhere on the site.
 function _plNoteHtml(row, whoLabel) {
     if (!row.owner_note) return '';
-    const who = whoLabel || row.decided_by || 'Owner';
-    return '<div class="pl-note"><span class="pl-note-who">' + escapeHtml(who) + '</span>'
-        + escapeHtml(row.owner_note) + '</div>';
+    const who = whoLabel || row.decided_by || '';
+    return '<div class="site-note">&#128172; ' + escapeHtml(row.owner_note)
+        + (who ? ' <span class="site-note-by">&mdash; ' + escapeHtml(who) + '</span>' : '')
+        + '</div>';
 }
 
 function _plMineHtml() {

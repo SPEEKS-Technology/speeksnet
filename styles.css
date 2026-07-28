@@ -7818,13 +7818,14 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .speeks-action-menu .sam-board { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 13px; align-items: stretch; }
 .speeks-action-menu .sam-board > * { min-width: 0; }
 .speeks-action-menu .sam-rail { display: flex; flex-direction: column; gap: 13px; }
-/* Squares the action-items column off against the taller feed card. The grid
-   already stretches .sam-rail to the row height; the card inside it is a column
-   flex item, so its height stayed content-sized until told to grow. Applied only
-   when a full set of items is visible (class set by _samSyncRailFill) — with two
-   or three, sharing the slack would leave each one distended. */
-.speeks-action-menu .sam-rail > .sam-card.sam-rail-fill { flex: 1 1 auto; }
-.speeks-action-menu .sam-rail > .sam-card.sam-rail-fill .sam-mini { flex: 1 1 0; }
+/* Squares the action-items column off against the feed card. Both halves are
+   needed: .sam-rail must rejoin the grid's stretch (see the align-self pair
+   further down this file) AND the card inside must grow, since a column flex
+   item stays content-sized otherwise. The items then share the slack. Applied
+   only when a full set is visible — with two or three, sharing it would leave
+   each row distended. */
+.speeks-action-menu .sam-rail.sam-rail-fill > .sam-card { flex: 1 1 auto; }
+.speeks-action-menu .sam-rail.sam-rail-fill > .sam-card .sam-mini { flex: 1 1 0; }
 .speeks-action-menu .sam-card { display: flex; flex-direction: column; }
 
 /* --- feed --- */
@@ -8949,12 +8950,18 @@ body.sam-active .hotbar-btn:hover {
    the feed to the rail's height. Give the feed card a floor matching the
    manager layout (4 rail items) so the deck reads identically everywhere,
    and let the rail hug its own content instead of stretching to match. */
-/* Floor AND ceiling: without a ceiling a busy feed (CEO sees every
-   announcement) grew the card to ~900px. The ceiling sits just above the
-   manager rail height, so every role gets the same deck and the feed
-   scrolls inside it — the full list lives in "All announcements". */
-.speeks-action-menu .sam-board > .sam-card { min-height: 270px; max-height: 300px; }
+/* ONE fixed height, not a 270–300px range. Without a ceiling a busy feed (the
+   CEO sees every announcement) grew the card to ~900px; but a floor-and-ceiling
+   still let it grow with the unread count, so the deck was a different height
+   per user and the rail beside it could never line up. Pinned instead: the feed
+   scrolls inside a constant frame and the full list lives in
+   "All announcements". */
+.speeks-action-menu .sam-board > .sam-card { height: 300px; }
+/* The rail hugs its content by default — opting out of the grid's stretch, which
+   is why a card inside it cannot fill the row on its own. _samSyncRailFill flips
+   this back to stretch when a full set of items is showing. */
 .speeks-action-menu .sam-rail { align-self: start; }
+.speeks-action-menu .sam-rail.sam-rail-fill { align-self: stretch; }
 
 /* belt-and-braces: the feed never scrolls the page sideways */
 .speeks-action-menu .sam-feed { overflow-x: hidden; }
@@ -9949,20 +9956,21 @@ body.sam-active .hotbar-btn:hover {
 .pl-tbl-note { margin-top: 4px; font-size: 11.5px; font-weight: 650; color: #64707c; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
 .pl-tbl-note b { color: #3d4852; }
 
-/* The owner's note is the whole reason a requester reopens the tool, so it gets
-   a real callout instead of a grey run-on line. Same blue note box the recycle
-   threads use (#eff6ff / #bfdbfe / #1d4ed8), so it reads as one system. */
-.pl-note {
-    margin-top: 7px; padding: 8px 11px;
-    background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px;
-    font-size: 12px; font-weight: 650; color: #1d4ed8; line-height: 1.5;
+/* ── Shared note callout ───────────────────────────────────────────────────
+   The canonical look for a note somebody left on a record, lifted verbatim
+   from the recycle-request note boxes so a note reads identically wherever it
+   appears: 💬, the text, then the author in grey. Recycle still writes these
+   as inline styles at the point of render — migrating it onto this class is a
+   tidy-up for whenever that code is next touched.
+   Values are fixed hexes rather than V4 tokens on purpose: this blue is its own
+   signal (someone said something) and must not shift with the emerald theme. */
+.site-note {
+    margin-top: 6px; padding: 4px 8px;
+    background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 7px;
+    font-size: 11.5px; font-weight: 600; color: #1d4ed8; line-height: 1.5;
     white-space: pre-wrap; word-break: break-word;
 }
-.pl-note-who {
-    display: block; margin-bottom: 2px;
-    font-size: 10px; font-weight: 800; letter-spacing: .07em;
-    text-transform: uppercase; color: #60a5fa;
-}
+.site-note-by { color: #94a3b8; font-weight: 600; }
 
 .pl-empty { padding: 44px 20px; text-align: center; }
 .pl-empty-t { font-size: 14px; font-weight: 800; color: #3d4852; }
