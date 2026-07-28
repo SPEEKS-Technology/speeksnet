@@ -9873,6 +9873,39 @@ body.sam-active .hotbar-btn:hover {
 .b2b-sendbar-s { font-size: 11px; font-weight: 750; color: var(--b2b-muted); }
 .b2b-sendbar-i { flex: 1; min-width: 190px; }
 .b2b-sendbar-hint { flex: 1 0 100%; font-size: 11px; color: var(--b2b-faint); line-height: 1.5; }
+
+/* The confirm step before the draft opens, so the paste is never a surprise. */
+.b2b-sendstep { max-width: 520px; margin: 0 auto; padding: 22px 4px 8px; text-align: center; }
+.b2b-sendstep-ico {
+    display: grid; place-items: center; width: 54px; height: 54px; margin: 0 auto 14px;
+    border-radius: 999px; background: var(--b2b-accent-tint);
+}
+.b2b-sendstep-ico svg { width: 25px; height: 25px; stroke: var(--sage-deep); }
+.b2b-sendstep-t { font-size: 16px; font-weight: 800; color: #1a1c1e; letter-spacing: -.01em; }
+.b2b-sendsteps {
+    counter-reset: b2bstep; list-style: none; margin: 16px 0 0; padding: 0; text-align: left;
+}
+.b2b-sendsteps li {
+    position: relative; padding: 0 0 14px 38px;
+    font-size: 13px; line-height: 1.6; color: #334155;
+}
+.b2b-sendsteps li::before {
+    counter-increment: b2bstep; content: counter(b2bstep);
+    position: absolute; left: 0; top: -1px;
+    display: grid; place-items: center; width: 25px; height: 25px;
+    border-radius: 999px; background: var(--sage-professional); color: #fff;
+    font-size: 12px; font-weight: 800;
+}
+.b2b-sendsteps kbd {
+    display: inline-block; padding: 2px 7px; border-radius: 6px;
+    border: 1px solid var(--b2b-line); border-bottom-width: 2px; background: #fff;
+    font-family: inherit; font-size: 11.5px; font-weight: 800; color: #1a1c1e;
+}
+.b2b-sendstep-note {
+    margin-top: 6px; padding: 11px 14px; border-radius: 10px; text-align: left;
+    background: var(--b2b-surface); border: 1px solid var(--b2b-line-2);
+    font-size: 11.5px; line-height: 1.6; color: var(--b2b-muted);
+}
 .b2b-preview { margin-top: 18px; }
 .b2b-preview > summary {
     cursor: pointer; font-size: 11px; font-weight: 800; letter-spacing: .07em;

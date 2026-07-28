@@ -9440,49 +9440,96 @@ function _b2bAscii(s) {
 // would see here. The plain-text rendition is attached as the clipboard's
 // alternate flavour, so a paste into a plain-text composer still reads well,
 // and it is what fills the body if the clipboard is unavailable.
+function _b2bQuoteSubject(deal) {
+    const picked = _b2bLongDate(deal.pickup_date);
+    return picked ? `Your PayMore Quote — Equipment Collected ${picked}` : 'Your PayMore Quote';
+}
+
+// Step one: put the quote on the clipboard and explain the paste, so nobody
+// lands in an empty draft wondering where the quote went.
 async function b2bSendQuote(id, btn) {
     const to = document.getElementById('b2bQuoteTo')?.value.trim();
     if (!to) return _b2bSay('Enter an email address to open the quote against.', true);
     const deal = _b2bModalDeal;
     if (!deal) return;
 
-    const picked = _b2bLongDate(deal.pickup_date);
-    const subject = picked ? `Your PayMore quote — equipment collected ${picked}` : 'Your PayMore quote';
-    const html = _b2bQuoteInlineHtml(deal, _b2bModalItems);
-    const text = _b2bQuoteText(deal, _b2bModalItems);
+    await _b2bBusy(btn, 'Preparing…', async () => {
+        const html = _b2bQuoteInlineHtml(deal, _b2bModalItems);
+        const text = _b2bQuoteText(deal, _b2bModalItems);
+        let copied = false;
+        try {
+            await navigator.clipboard.write([new ClipboardItem({
+                'text/html':  new Blob([html], { type: 'text/html' }),
+                'text/plain': new Blob([text], { type: 'text/plain' }),
+            })]);
+            copied = true;
+        } catch (_) {
+            try { await navigator.clipboard.writeText(text); copied = true; } catch (_) { /* no clipboard */ }
+        }
+        _b2bShowSendStep(deal, to, copied);
+    });
+}
 
-    let copied = false;
-    try {
-        await navigator.clipboard.write([new ClipboardItem({
-            'text/html':  new Blob([html], { type: 'text/html' }),
-            'text/plain': new Blob([text], { type: 'text/plain' }),
-        })]);
-        copied = true;
-    } catch (_) {
-        try { await navigator.clipboard.writeText(text); copied = true; } catch (_) { /* no clipboard */ }
-    }
+const _b2bIsMac = () => /Mac|iP(hone|ad|od)/.test(navigator.platform || navigator.userAgent || '');
 
-    // With the quote on the clipboard the draft opens empty, so the paste lands
-    // clean. Without it, fall back to carrying the plain text in the URL.
-    const ascii = _b2bAscii(text);
-    let href = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(_b2bAscii(subject))}`;
+function _b2bShowSendStep(deal, to, copied) {
+    const paste = _b2bIsMac() ? 'Cmd + V' : 'Ctrl + V';
+    const steps = copied ? [
+        `Your email app opens a new draft to <b>${escapeHtml(to)}</b> with the subject already filled in.`,
+        `Click into the message body and press <kbd>${paste}</kbd> — the full quote is already on your clipboard.`,
+        'Check it over, add anything you want to say, and send.',
+    ] : [
+        `Your email app opens a new draft to <b>${escapeHtml(to)}</b>.`,
+        'The quote is in the body as plain text — your browser blocked the clipboard, so the formatted version could not be copied.',
+        'Check it over and send.',
+    ];
+
+    _b2bShowDeal({
+        stage: 'quote',
+        eyebrow: deal.ref,
+        title: 'Send This Quote',
+        sub: copied ? 'The quote is copied and ready to paste.' : 'The quote will be in the draft as plain text.',
+        body: `
+            <div class="b2b-sendstep">
+                <div class="b2b-sendstep-ico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</div>
+                <div class="b2b-sendstep-t">What happens next</div>
+                <ol class="b2b-sendsteps">${steps.map(s => `<li>${s}</li>`).join('')}</ol>
+                ${copied ? '<div class="b2b-sendstep-note">Nothing has been emailed yet — you send it yourself from your own mailbox, so the client\'s reply comes back to you.</div>' : ''}
+            </div>`,
+        footer: `
+            <span class="b2b-msg" id="b2bDealMsg"></span>
+            <button class="kpi-cancel-btn" onclick="b2bBackToQuote('${deal.id}')">Back</button>
+            <button class="b2b-btn b2b-btn-primary" onclick="b2bOpenDraft('${deal.id}','${escapeHtml(to).replace(/'/g, "\\'")}',${copied})">Open Email Draft</button>`,
+    });
+}
+
+function b2bBackToQuote(id) {
+    const deal = _b2bDealById(id) || _b2bModalDeal;
+    if (deal) { _b2bModalDeal = deal; _b2bStageQuote(deal); }
+}
+
+// Step two. The mailto fires first and synchronously, straight off this click:
+// an external protocol handler needs user activation, and awaiting anything
+// first would spend it.
+async function b2bOpenDraft(id, to, copied) {
+    const deal = _b2bDealById(id) || _b2bModalDeal;
+    if (!deal) return;
+
+    let href = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(_b2bAscii(_b2bQuoteSubject(deal)))}`;
     if (!copied) {
+        const ascii = _b2bAscii(_b2bQuoteText(deal, _b2bModalItems));
         const withBody = `${href}&body=${encodeURIComponent(ascii)}`;
         href = withBody.length > 1900
-            ? `${href}&body=${encodeURIComponent(ascii.slice(0, 1200) + '\n\n[continued - see attached]')}`
+            ? `${href}&body=${encodeURIComponent(ascii.slice(0, 1200) + '\n\n[quote truncated - use Copy instead]')}`
             : withBody;
     }
     window.location.href = href;
 
-    await _b2bBusy(btn, 'Opening…', async () => {
-        await _b2bPost({ action: 'send_quote', id, to }, "Couldn't record the send");
-        await b2bRefresh();
-        const next = _b2bDealById(id);
-        if (next) { _b2bModalDeal = next; _b2bStageQuote(next); }
-        _b2bSay(copied
-            ? `Draft opened for ${to} — press Ctrl+V to drop the formatted quote in.`
-            : `Draft opened for ${to}.`);
-    });
+    await _b2bPost({ action: 'send_quote', id, to }, "Couldn't record the send");
+    await b2bRefresh();
+    const next = _b2bDealById(id);
+    if (next) { _b2bModalDeal = next; _b2bStageQuote(next); }
+    _b2bSay(`Draft opened for ${to}.`);
 }
 
 async function b2bAcceptQuote(id, btn) {
