@@ -12688,27 +12688,68 @@ function renderClaimsTable() {
     wrap.innerHTML = html;
 }
 
-// Tiny copy button next to a case number so the ID can be pasted straight into
-// Shopify / UPS / USPS status lookups. Flashes ✓ on success.
-function _claimCopyBtn(r) {
-    if (!r.case_number) return '';
-    return `<button onclick="copyClaimCase(this)" data-case="${escapeHtml(r.case_number)}" title="Copy case number" style="margin-left:5px; font-size:10px; padding:2px 5px; border:1px solid #e2e8f0; border-radius:5px; background:#f8fafc; color:#64748b; cursor:pointer; line-height:1; vertical-align:1px;">📋</button>`;
+// ── Shared copy chip ───────────────────────────────────────────────────────
+// A 📋 button beside an identifier whose whole job is to be pasted somewhere
+// else: a claim case number into a carrier's status lookup, a recycle SKU into
+// inventory. Styling is .site-copy in styles.css — one definition, so a
+// copyable value looks and behaves the same in every tool.
+//
+// `what` names the value in the tooltip and in the failure message, so the
+// fallback tells you WHICH thing to copy by hand.
+function siteCopyBtn(value, what) {
+    const v = String(value ?? '').trim();
+    if (!v) return '';
+    const label = escapeHtml(what || 'value');
+    return `<button type="button" class="site-copy" data-copy="${escapeHtml(v)}" data-what="${label}" title="Copy ${label}" onclick="siteCopy(event, this)">📋</button>`;
 }
 
-function copyClaimCase(btn) {
-    const num = btn.dataset.case || '';
-    if (!num) return;
-    navigator.clipboard.writeText(num).then(() => {
+function siteCopy(ev, btn) {
+    // These chips sit inside table rows and cards that have their own click
+    // handlers (opening a note, following a product link) — copying must not
+    // also fire those.
+    if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+    const v = btn.dataset.copy || '';
+    if (!v) return;
+    const flash = () => {
         const old = btn.innerText;
         btn.innerText = '✓';
-        btn.style.color = '#059669';
-        btn.style.borderColor = '#34d399';
-        btn.style.background = '#ecfdf5';
+        btn.classList.add('site-copy-ok');
         setTimeout(() => {
+            // The table may have re-rendered underneath us in the meantime, in
+            // which case this button is detached and resetting it is harmless.
             btn.innerText = old;
-            btn.style.color = ''; btn.style.borderColor = ''; btn.style.background = '';
+            btn.classList.remove('site-copy-ok');
         }, 1200);
-    }).catch(() => alert('Could not copy — please select and copy the case number manually.'));
+    };
+    // navigator.clipboard is undefined on a non-secure origin, so the old
+    // textarea trick is the fallback rather than an outright failure.
+    const manual = () => {
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = v;
+            ta.setAttribute('readonly', '');
+            ta.style.cssText = 'position:fixed; top:-1000px; opacity:0;';
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            if (!ok) throw new Error('denied');
+            flash();
+        } catch (_) {
+            alert(`Could not copy — please select and copy the ${btn.dataset.what || 'value'} manually.`);
+        }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(v).then(flash).catch(manual);
+    } else {
+        manual();
+    }
+}
+
+// Copy button next to a case number so the ID can be pasted straight into
+// Shopify / UPS / USPS status lookups.
+function _claimCopyBtn(r) {
+    return siteCopyBtn(r.case_number, 'case number');
 }
 
 // One claim row. `isChild` nests it (indent + blue edge) under its parent INR ticket;
@@ -16801,7 +16842,7 @@ function renderMyRecycleTable() {
             ${firstCell}
             ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
             ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`) : ''}
-            ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.sku || '')}</span>`)}
+            ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.sku || '')}</span>${siteCopyBtn(r.sku, 'SKU')}`, 'white-space:nowrap;')}
             ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>${noteLine}`)}
             ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;')}
             ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}
@@ -16874,7 +16915,7 @@ function _recycleDeleteReqPanel(canReview) {
         delReqs.map(r => `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:#fff; border:1px solid #fde68a; border-radius:9px; padding:9px 12px;">
             <div style="font-size:12.5px; color:var(--slate-charcoal);">
                 <span style="font-weight:800;">${escapeHtml(r.store || '')}</span>
-                · <span style="font-weight:700;">${escapeHtml(r.sku || '')}</span>
+                · <span style="font-weight:700;">${escapeHtml(r.sku || '')}</span>${siteCopyBtn(r.sku, 'SKU')}
                 <span style="color:#94a3b8;"> — ${escapeHtml(r.description || '')} · qty ${Number(r.quantity) || 1} · ${_fmtRecycleMoney(_recycleLineTotal(r))}</span>
                 <span style="color:#b45309; font-weight:700;"> · requested by ${escapeHtml(r.delete_requested_by || 'Manager')}</span>
             </div>

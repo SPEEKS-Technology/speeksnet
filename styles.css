@@ -9988,6 +9988,22 @@ body.sam-active .hotbar-btn:hover {
 }
 .site-note-by { color: #94a3b8; font-weight: 600; }
 
+/* ── Shared copy chip ──────────────────────────────────────────────────────
+   A 📋 button beside an identifier whose whole purpose is to be pasted
+   somewhere else — a claim case number into a carrier's status lookup, a
+   recycle SKU into inventory. Lifted verbatim from the insurance-claims copy
+   button, which now uses these classes, so the two stay identical.
+   siteCopy() adds .site-copy-ok for the success flash. */
+.site-copy {
+    margin-left: 5px; padding: 2px 5px;
+    border: 1px solid #e2e8f0; border-radius: 5px;
+    background: #f8fafc; color: #64748b;
+    font-size: 10px; line-height: 1; vertical-align: 1px;
+    cursor: pointer;
+}
+.site-copy:hover { background: #f1f5f9; border-color: #cbd5e1; color: #475569; }
+.site-copy.site-copy-ok { background: #ecfdf5; border-color: #34d399; color: #059669; }
+
 .pl-empty { padding: 44px 20px; text-align: center; }
 .pl-empty-t { font-size: 14px; font-weight: 800; color: #3d4852; }
 .pl-empty-s { margin-top: 4px; font-size: 12.5px; font-weight: 600; color: #9aa6ad; }
