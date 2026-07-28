@@ -8156,6 +8156,13 @@ function _b2bDate(v) {
     const d = new Date(String(v).length <= 10 ? v + 'T00:00:00' : v);
     return isNaN(d) ? '—' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
+// Client-facing dates are spelled out. The pickup date is how a client is
+// asked to identify their quote, since none of our SKUs go out to them.
+function _b2bLongDate(v) {
+    if (!v) return '';
+    const d = new Date(String(v).length <= 10 ? v + 'T00:00:00' : v);
+    return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+}
 function _b2bDaysIn(deal) {
     const t = deal.stage_changed_at || deal.updated_at || deal.created_at;
     if (!t) return 0;
@@ -9225,6 +9232,7 @@ function _b2bStageQuote(deal) {
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()">Copy</button>
                 <button class="b2b-btn b2b-btn-secondary" onclick="b2bPrintLabels('${deal.id}')">Print Labels</button>
                 <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>
+                <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
             </div>
             ${_b2bTotalsBar(true)}
             <div id="b2bItemGrid" class="b2b-items">${_b2bItemCards()}</div>
@@ -9249,10 +9257,14 @@ function _b2bPaintQuoteDoc() {
     if (el && _b2bModalDeal) el.innerHTML = _b2bQuoteDoc(_b2bModalDeal, _b2bModalItems);
 }
 
+// The client-facing quote. Deliberately carries no SKUs and no deal reference
+// -- those are ours, for labels and the floor. A client identifies their quote
+// by the date we collected their equipment.
 function _b2bQuoteDoc(deal, items) {
     const c = deal.client || {};
     const total = items.reduce((s, it) => s + (it.recycle_only ? 0 : (Number(it.offer) || 0) * (Number(it.quantity) || 1)), 0);
     const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
+    const picked = _b2bLongDate(deal.pickup_date);
 
     const rows = items.length ? items.map(it => {
         const qty = Number(it.quantity) || 1;
@@ -9262,7 +9274,6 @@ function _b2bQuoteDoc(deal, items) {
                 <b>${escapeHtml(_b2bItemName(it))}</b>
                 ${it.recycle_only ? '<span class="b2b-doc-rec">Recycle</span>' : ''}
                 ${bits ? `<div class="b2b-doc-sub">${escapeHtml(bits)}</div>` : ''}
-                <div class="b2b-doc-sku b2b-mono">${escapeHtml(it.sku || '')}</div>
             </td>
             <td class="c">${qty}</td>
             <td class="r">${it.recycle_only ? '—' : _b2bMoney(it.offer, 2)}</td>
@@ -9276,67 +9287,117 @@ function _b2bQuoteDoc(deal, items) {
             <div class="b2b-doc-brand">Pay<span>More</span><div>Buy · Sell · Recycle Electronics</div></div>
             <div class="b2b-doc-meta">
                 <div class="b2b-doc-kind">Quote</div>
-                <div class="b2b-mono">${escapeHtml(deal.ref)}</div>
-                <div>${escapeHtml(today)}</div>
+                <div>Issued ${escapeHtml(today)}</div>
             </div>
         </div>
         <div class="b2b-doc-parties">
             <div><span class="b2b-doc-k">Prepared for</span><b>${escapeHtml(c.company || '')}</b>${c.contact ? `<div>${escapeHtml(c.contact)}</div>` : ''}</div>
-            <div class="r"><span class="b2b-doc-k">Issued by</span><b>SPEEKS Technology</b><div>Authorized PayMore franchisee</div></div>
+            <div class="r"><span class="b2b-doc-k">Equipment collected</span><b>${escapeHtml(picked || 'Not recorded')}</b><div>by SPEEKS Technology, authorized PayMore franchisee</div></div>
         </div>
         <table class="b2b-doc-t">
             <thead><tr><th>Description</th><th class="c">Qty</th><th class="r">Unit offer</th><th class="r">Line total</th></tr></thead>
             <tbody>${rows}</tbody>
             <tfoot><tr><td colspan="3" class="r">Total offer</td><td class="r accent">${_b2bMoney(total, 2)}</td></tr></tfoot>
         </table>
+        <div class="b2b-doc-foot">
+            Reply to this email to accept the quote or ask about any line.
+            Recycle-only items carry no offer and are disposed of responsibly at no cost to you.
+        </div>
     </div>`;
 }
 
-// Email-safe rendition for the clipboard. Mirrors quoteEmailHtml() in the
-// b2b-deals edge function -- the server owns sending, this one exists so a
-// paste into Gmail or Outlook survives with its formatting intact.
+// The version the client actually receives: a faithful, email-safe copy of the
+// on-screen quote. Tables and inline styles only -- Gmail strips <style>
+// blocks and Outlook ignores flexbox, so everything is spelled out per cell.
+// No SKUs, no deal reference; the pickup date is the client's handle on it.
 function _b2bQuoteInlineHtml(deal, items) {
     const c = deal.client || {};
     const total = items.reduce((s, it) => s + (it.recycle_only ? 0 : (Number(it.offer) || 0) * (Number(it.quantity) || 1)), 0);
+    const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
+    const picked = _b2bLongDate(deal.pickup_date);
+    const TH = 'padding:9px 12px;border-bottom:2px solid #e6ebf1;font-size:10px;font-weight:bold;'
+             + 'letter-spacing:.07em;text-transform:uppercase;color:#647082;';
+    const TD = 'padding:11px 12px;border-bottom:1px solid #eef2f6;font-size:13px;color:#1a1c1e;';
+
     const rows = items.map(it => {
         const qty = Number(it.quantity) || 1;
-        const bits = [it.condition, it.client_notes].filter(Boolean).join(' &middot; ');
+        const bits = [it.condition, it.client_notes].filter(Boolean).map(escapeHtml).join(' &middot; ');
         return `<tr>
-            <td style="padding:10px 12px;border-bottom:1px solid #eef2f6;font-size:13px;">
-                <b>${escapeHtml(_b2bItemName(it))}</b>${it.recycle_only ? ' (recycle)' : ''}
-                ${bits ? `<div style="font-size:11.5px;color:#647082;">${escapeHtml(bits)}</div>` : ''}
-                <div style="font-size:10.5px;color:#94a3b8;">${escapeHtml(it.sku || '')}</div>
+            <td style="${TD}">
+                <b>${escapeHtml(_b2bItemName(it))}</b>
+                ${it.recycle_only ? '<span style="margin-left:6px;padding:1px 7px;border-radius:10px;background:#eef2f6;color:#647082;font-size:9px;font-weight:bold;letter-spacing:.05em;">RECYCLE</span>' : ''}
+                ${bits ? `<div style="margin-top:3px;font-size:11.5px;color:#647082;">${bits}</div>` : ''}
             </td>
-            <td style="padding:10px 12px;border-bottom:1px solid #eef2f6;font-size:13px;text-align:center;">${qty}</td>
-            <td style="padding:10px 12px;border-bottom:1px solid #eef2f6;font-size:13px;text-align:right;">${it.recycle_only ? '&mdash;' : _b2bMoney(it.offer, 2)}</td>
-            <td style="padding:10px 12px;border-bottom:1px solid #eef2f6;font-size:13px;text-align:right;font-weight:700;">${it.recycle_only ? '&mdash;' : _b2bMoney((Number(it.offer) || 0) * qty, 2)}</td>
+            <td style="${TD}text-align:center;">${qty}</td>
+            <td style="${TD}text-align:right;">${it.recycle_only ? '&mdash;' : _b2bMoney(it.offer, 2)}</td>
+            <td style="${TD}text-align:right;font-weight:bold;">${it.recycle_only ? '&mdash;' : _b2bMoney((Number(it.offer) || 0) * qty, 2)}</td>
         </tr>`;
     }).join('');
-    return `<table width="600" cellpadding="0" cellspacing="0" style="width:600px;font-family:'Segoe UI',Arial,sans-serif;border:1px solid #e6ebf1;border-radius:12px;">
-        <tr><td style="padding:20px 22px;border-bottom:1px solid #eef2f6;font-size:20px;font-weight:800;color:#1a1c1e;">Pay<span style="color:#1f9d57;">More</span>
-            <span style="float:right;font-size:13px;font-weight:600;color:#647082;">Quote ${escapeHtml(deal.ref)}</span></td></tr>
-        <tr><td style="padding:14px 22px;background:#f6f8fa;border-bottom:1px solid #eef2f6;font-size:13px;color:#1a1c1e;">
-            Prepared for <b>${escapeHtml(c.company || '')}</b></td></tr>
-        <tr><td style="padding:0 22px 16px;"><table width="100%" cellpadding="0" cellspacing="0">
-            <tr><th align="left" style="padding:10px 12px;border-bottom:2px solid #e6ebf1;font-size:10px;text-transform:uppercase;color:#647082;">Description</th>
-                <th style="padding:10px 12px;border-bottom:2px solid #e6ebf1;font-size:10px;text-transform:uppercase;color:#647082;">Qty</th>
-                <th align="right" style="padding:10px 12px;border-bottom:2px solid #e6ebf1;font-size:10px;text-transform:uppercase;color:#647082;">Unit offer</th>
-                <th align="right" style="padding:10px 12px;border-bottom:2px solid #e6ebf1;font-size:10px;text-transform:uppercase;color:#647082;">Line total</th></tr>
-            ${rows}
-            <tr><td colspan="3" align="right" style="padding:14px 12px;font-size:13px;font-weight:800;">Total offer</td>
-                <td align="right" style="padding:14px 12px;font-size:17px;font-weight:800;color:#178048;">${_b2bMoney(total, 2)}</td></tr>
-        </table></td></tr></table>`;
+
+    return `<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:100%;font-family:'Segoe UI',Helvetica,Arial,sans-serif;background:#ffffff;border:1px solid #e6ebf1;border-radius:14px;">
+  <tr><td style="padding:22px 24px;border-bottom:1px solid #eef2f6;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+      <td style="font-size:21px;font-weight:bold;color:#1a1c1e;letter-spacing:-.4px;">Pay<span style="color:#1f9d57;">More</span>
+        <div style="margin-top:3px;font-size:11px;font-weight:normal;color:#647082;">Buy &middot; Sell &middot; Recycle Electronics</div></td>
+      <td align="right" style="font-size:12px;color:#647082;">
+        <div style="font-size:15px;font-weight:bold;color:#1a1c1e;">Quote</div>
+        <div style="margin-top:3px;">Issued ${escapeHtml(today)}</div></td>
+    </tr></table></td></tr>
+  <tr><td style="padding:16px 24px;background:#f6f8fa;border-bottom:1px solid #eef2f6;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+      <td style="font-size:12.5px;color:#1a1c1e;vertical-align:top;">
+        <div style="font-size:10px;font-weight:bold;letter-spacing:.09em;text-transform:uppercase;color:#94a3b8;">Prepared for</div>
+        <div style="margin-top:4px;font-size:14px;font-weight:bold;">${escapeHtml(c.company || '')}</div>
+        ${c.contact ? `<div style="margin-top:2px;color:#647082;">${escapeHtml(c.contact)}</div>` : ''}</td>
+      <td align="right" style="font-size:12.5px;color:#1a1c1e;vertical-align:top;">
+        <div style="font-size:10px;font-weight:bold;letter-spacing:.09em;text-transform:uppercase;color:#94a3b8;">Equipment collected</div>
+        <div style="margin-top:4px;font-size:14px;font-weight:bold;">${escapeHtml(picked || 'Not recorded')}</div>
+        <div style="margin-top:2px;color:#647082;">by SPEEKS Technology, authorized PayMore franchisee</div></td>
+    </tr></table></td></tr>
+  <tr><td style="padding:6px 24px 0;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr><th align="left" style="${TH}">Description</th>
+          <th align="center" style="${TH}">Qty</th>
+          <th align="right" style="${TH}">Unit offer</th>
+          <th align="right" style="${TH}">Line total</th></tr>
+      ${rows}
+      <tr><td colspan="3" align="right" style="padding:16px 12px;font-size:13px;font-weight:bold;color:#1a1c1e;">Total offer</td>
+          <td align="right" style="padding:16px 12px;font-size:18px;font-weight:bold;color:#178048;">${_b2bMoney(total, 2)}</td></tr>
+    </table></td></tr>
+  <tr><td style="padding:4px 24px 22px;font-size:11.5px;color:#94a3b8;line-height:1.6;">
+    Reply to this email to accept the quote or ask about any line.
+    Recycle-only items carry no offer and are disposed of responsibly at no cost to you.
+  </td></tr>
+</table>`;
 }
 
+// Plain-text fallback, for a client whose mail reads text-only. Same content,
+// same omissions: no SKUs, no deal reference.
 function _b2bQuoteText(deal, items) {
     const lines = items.map(it => {
         const qty = Number(it.quantity) || 1;
-        const amt = it.recycle_only ? 'recycle' : _b2bMoney((Number(it.offer) || 0) * qty, 2);
-        return `  ${it.sku || ''}  ${_b2bItemName(it)} x${qty} — ${amt}`;
+        const amt = it.recycle_only ? 'recycle only, no offer' : _b2bMoney((Number(it.offer) || 0) * qty, 2);
+        const bits = [it.condition, it.client_notes].filter(Boolean).join(' · ');
+        return `  - ${_b2bItemName(it)} x${qty} — ${amt}${bits ? `\n      (${bits})` : ''}`;
     });
     const total = items.reduce((s, it) => s + (it.recycle_only ? 0 : (Number(it.offer) || 0) * (Number(it.quantity) || 1)), 0);
-    return [`PayMore quote ${deal.ref}`, `Prepared for ${deal.client?.company || ''}`, '', ...lines, '',
-            `Total offer: ${_b2bMoney(total, 2)}`, 'Issued by SPEEKS Technology — authorized PayMore franchisee.'].join('\n');
+    const picked = _b2bLongDate(deal.pickup_date);
+    // null drops a line that doesn't apply; '' is a deliberate blank.
+    return [
+        'PayMore — Buy · Sell · Recycle Electronics',
+        '',
+        `Prepared for: ${deal.client?.company || ''}`,
+        picked ? `Equipment collected: ${picked}` : null,
+        '',
+        ...lines,
+        '',
+        `Total offer: ${_b2bMoney(total, 2)}`,
+        '',
+        'Reply to this email to accept the quote or ask about any line.',
+        'Recycle-only items carry no offer and are disposed of responsibly at no cost to you.',
+        '',
+        'Issued by SPEEKS Technology — authorized PayMore franchisee.',
+    ].filter(l => l !== null).join('\n');
 }
 
 async function b2bCopyQuote() {
@@ -9372,35 +9433,55 @@ function _b2bAscii(s) {
 // Opens the quote in the user's own mail client rather than sending it from
 // the reports mailbox, so the client's reply lands with whoever quoted them --
 // same reason the Recycle report went back to mailto.
+//
+// A mailto body is plain text by definition (RFC 6068), so the styled quote
+// cannot ride in the URL. Instead it goes on the clipboard as rich HTML and
+// the draft opens empty: one paste and the client gets the same document they
+// would see here. The plain-text rendition is attached as the clipboard's
+// alternate flavour, so a paste into a plain-text composer still reads well,
+// and it is what fills the body if the clipboard is unavailable.
 async function b2bSendQuote(id, btn) {
     const to = document.getElementById('b2bQuoteTo')?.value.trim();
     if (!to) return _b2bSay('Enter an email address to open the quote against.', true);
     const deal = _b2bModalDeal;
     if (!deal) return;
 
-    const subject = `PayMore quote ${deal.ref}`;
-    let body = _b2bAscii(_b2bQuoteText(deal, _b2bModalItems));
-    const build = b => `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(b)}`;
+    const picked = _b2bLongDate(deal.pickup_date);
+    const subject = picked ? `Your PayMore quote — equipment collected ${picked}` : 'Your PayMore quote';
+    const html = _b2bQuoteInlineHtml(deal, _b2bModalItems);
+    const text = _b2bQuoteText(deal, _b2bModalItems);
 
-    // Long quotes blow past what a mailto URL can carry, so past that point the
-    // full text goes on the clipboard and the draft opens ready to paste into.
-    let href = build(body);
-    if (href.length > 1900) {
-        let copied = false;
-        try { await navigator.clipboard.writeText(body); copied = true; } catch (_) { /* no clipboard */ }
-        href = build(copied
-            ? 'The full quote is on your clipboard - paste it here before sending.'
-            : body.slice(0, 1200) + '\n\n[quote truncated - use Copy instead]');
+    let copied = false;
+    try {
+        await navigator.clipboard.write([new ClipboardItem({
+            'text/html':  new Blob([html], { type: 'text/html' }),
+            'text/plain': new Blob([text], { type: 'text/plain' }),
+        })]);
+        copied = true;
+    } catch (_) {
+        try { await navigator.clipboard.writeText(text); copied = true; } catch (_) { /* no clipboard */ }
+    }
+
+    // With the quote on the clipboard the draft opens empty, so the paste lands
+    // clean. Without it, fall back to carrying the plain text in the URL.
+    const ascii = _b2bAscii(text);
+    let href = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(_b2bAscii(subject))}`;
+    if (!copied) {
+        const withBody = `${href}&body=${encodeURIComponent(ascii)}`;
+        href = withBody.length > 1900
+            ? `${href}&body=${encodeURIComponent(ascii.slice(0, 1200) + '\n\n[continued - see attached]')}`
+            : withBody;
     }
     window.location.href = href;
 
-    // Record the send so the stage clock and the Overview reflect it.
     await _b2bBusy(btn, 'Opening…', async () => {
         await _b2bPost({ action: 'send_quote', id, to }, "Couldn't record the send");
         await b2bRefresh();
         const next = _b2bDealById(id);
         if (next) { _b2bModalDeal = next; _b2bStageQuote(next); }
-        _b2bSay(`Draft opened for ${to}.`);
+        _b2bSay(copied
+            ? `Draft opened for ${to} — press Ctrl+V to drop the formatted quote in.`
+            : `Draft opened for ${to}.`);
     });
 }
 
