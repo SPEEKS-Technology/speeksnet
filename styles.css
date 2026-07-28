@@ -2625,7 +2625,12 @@ select.bs-hidden-select:focus {
 .dev-workspace-btn { display: flex; align-items: center; background-color: #4b5563; color: white; padding: 8px 16px; border: none; border-radius: 25px; cursor: pointer; gap: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); transition: background-color 0.2s ease, transform 0.1s ease; }
 .dev-workspace-btn:hover { background-color: #374151; }
 .dev-workspace-btn:active { transform: scale(0.98); }
-.lock-icon { width: 14px; height: 14px; stroke: #ffffff; }
+/* Was .lock-icon: this is the SPEEKS Tools mark, and it is now a 2x2 grid
+   (the launcher mark) rather than a padlock, which said "locked" instead of
+   "here are your tools". Renamed with the glyph so the class can't go on
+   lying about what it draws. Used in exactly two places per shell — the nav
+   button and the panel header — which must always match. */
+.tools-icon { width: 14px; height: 14px; stroke: #ffffff; }
 .chevron-icon { width: 16px; height: 16px; stroke: #ffffff; transition: transform 0.3s ease; }
 .dev-title { font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
 
@@ -2645,7 +2650,7 @@ select.bs-hidden-select:focus {
 }
 .tools-nav-btn:hover { background: #4b5563; }
 .tools-nav-btn.panel-open { background: #111827; box-shadow: inset 0 2px 4px rgba(0,0,0,0.3); }
-.tools-nav-btn .lock-icon { width: 13px; height: 13px; stroke: #fff; }
+.tools-nav-btn .tools-icon { width: 13px; height: 13px; stroke: #fff; }
 .tools-nav-label { font-size: 11px; font-weight: 700; color: #fff; text-transform: uppercase; letter-spacing: 0.5px; }
 
 .tools-side-panel {
@@ -2689,7 +2694,7 @@ select.bs-hidden-select:focus {
     letter-spacing: 0.8px;
     color: #fff;
 }
-.tools-panel-title .lock-icon { width: 13px; height: 13px; stroke: #fff; }
+.tools-panel-title .tools-icon { width: 13px; height: 13px; stroke: #fff; }
 .tools-panel-close {
     background: rgba(255,255,255,0.1);
     border: none;
@@ -8480,7 +8485,7 @@ body.sam-active .hotbar-btn:hover {
 }
 .top-nav .tools-nav-btn:hover { background: rgba(31,157,87,.16); border-color: rgba(31,157,87,.55); }
 .top-nav .tools-nav-btn.panel-open { background: rgba(31,157,87,.24); border-color: rgba(31,157,87,.6); box-shadow: none; }
-.top-nav .tools-nav-btn .lock-icon { width: 15px; height: 15px; }
+.top-nav .tools-nav-btn .tools-icon { width: 15px; height: 15px; }
 .top-nav .tools-nav-label { font-size: 12.5px; font-weight: 700; text-transform: none; letter-spacing: .01em; }
 
 /* --- MSM store switcher (chip to match) --- */
@@ -8784,8 +8789,8 @@ body.sam-active .hotbar-btn:hover {
     color: #1c1f23;
     gap: 10px;
 }
-/* the lock becomes a sage tile instead of a bare white glyph */
-.tools-panel-title .lock-icon {
+/* the mark becomes a sage tile instead of a bare white glyph */
+.tools-panel-title .tools-icon {
     width: 30px; height: 30px;
     padding: 7px;
     box-sizing: border-box;
