@@ -8046,10 +8046,10 @@ const B2B_STAGES = [
     { key: 'listing_location', label: 'Listing Location', tone: 'warn',   svg: '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>' },
     { key: 'listing',          label: 'Listing',          tone: 'teal',   svg: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>' },
     { key: 'completed',        label: 'Completed',        tone: 'ok',     svg: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>' },
-    { key: 'cancelled',        label: 'Cancelled',        tone: 'neu',    svg: '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>' },
+    { key: 'declined',         label: 'Declined',         tone: 'crit',    svg: '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>' },
 ];
 const B2B_STAGE      = Object.fromEntries(B2B_STAGES.map(s => [s.key, s]));
-const B2B_BOARD      = B2B_STAGES.filter(s => s.key !== 'cancelled').map(s => s.key);
+const B2B_BOARD      = B2B_STAGES.filter(s => s.key !== 'declined').map(s => s.key);
 const B2B_LOCATIONS  = [...STORE_CODES, 'CORP'];
 
 // What the owner of each stage is being asked to do.
@@ -8123,7 +8123,7 @@ function _b2bInScope(deal) {
 // The one action this user owns on this deal right now, or null.
 function _b2bActionFor(deal) {
     const st = deal.stage;
-    if (st === 'completed' || st === 'cancelled') return null;
+    if (st === 'completed' || st === 'declined') return null;
     const mine = _b2bMyStores();
 
     if (st === 'pricing') {
@@ -8241,11 +8241,28 @@ function _b2bListedPct(deal) {
 
 // --- data -----------------------------------------------------------------
 
+let _b2bMeta = null;   // { open, archive_shown, archive_total, archive_truncated }
+
 async function _b2bGet(qs) {
     const res = await fetch(`${B2B_URL}?${qs}&v=${Date.now()}`);
     const json = await res.json().catch(() => ({}));
     if (!res.ok || json.success === false) throw new Error(json.error || `Request failed (HTTP ${res.status})`);
+    if (json.meta) _b2bMeta = json.meta;
     return json.data || [];
+}
+
+// The list view returns the client's columns flat, since a SQL view can't nest.
+// Rebuilding the object here keeps every render site reading deal.client.*
+// rather than scattering the two shapes through the module.
+function _b2bShapeDeal(d) {
+    if (d.client) return d;   // already nested, leave it alone
+    return {
+        ...d,
+        client: {
+            id: d.client_id, company: d.company, acronym: d.acronym,
+            contact: d.contact, contact_email: d.contact_email, contact_phone: d.contact_phone,
+        },
+    };
 }
 
 // Raw POST. Throws on failure and does NOT alert -- callers decide whether a
@@ -8335,7 +8352,7 @@ async function b2bLoad() {
             _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}`),
             _b2bCanClients() || _b2bIsCorp() ? _b2bGet('clients=1') : Promise.resolve([]),
         ]);
-        _b2bDeals   = deals;
+        _b2bDeals   = deals.map(_b2bShapeDeal);
         _b2bClients = clients;
         b2bRender();
     } catch (e) {
@@ -8352,7 +8369,7 @@ async function b2bRefresh() {
             _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}`),
             _b2bCanClients() || _b2bIsCorp() ? _b2bGet('clients=1') : Promise.resolve(_b2bClients),
         ]);
-        _b2bDeals = deals;
+        _b2bDeals = deals.map(_b2bShapeDeal);
         _b2bClients = clients;
         b2bRender();
     } catch (_) { /* keep what's on screen */ }
@@ -8430,7 +8447,7 @@ function b2bRender() {
 // --- view: Needs You ------------------------------------------------------
 
 function _b2bRenderQueue(scoped, queue) {
-    const rest = scoped.filter(d => !_b2bActionFor(d) && d.stage !== 'completed' && d.stage !== 'cancelled');
+    const rest = scoped.filter(d => !_b2bActionFor(d) && d.stage !== 'completed' && d.stage !== 'declined');
 
     const cards = queue.length ? queue.map(d => {
         const a     = _b2bActionFor(d);
@@ -8497,11 +8514,11 @@ function _b2bRenderQueue(scoped, queue) {
 // --- view: Pipeline -------------------------------------------------------
 
 function _b2bRenderPipeline(scoped) {
-    let deals = scoped.filter(d => d.stage !== 'cancelled');
+    let deals = scoped.filter(d => d.stage !== 'declined');
     if (_b2bIsCorp() && _b2bStoreFilter !== 'ALL') {
         deals = deals.filter(d => d.pricing_store === _b2bStoreFilter || d.listing_store === _b2bStoreFilter);
     }
-    const cancelled = scoped.filter(d => d.stage === 'cancelled').length;
+    const cancelled = scoped.filter(d => d.stage === 'declined').length;
 
     const filter = _b2bIsCorp() ? `
         <div class="b2b-filter">
@@ -8544,7 +8561,12 @@ function _b2bRenderPipeline(scoped) {
         </div>`;
     }).join('');
 
-    const cancelNote = cancelled ? `<div class="b2b-cancel-note">${cancelled} cancelled deal${cancelled === 1 ? '' : 's'} hidden.</div>` : '';
+    const notes = [];
+    if (cancelled) notes.push(`${cancelled} declined deal${cancelled === 1 ? '' : 's'} hidden`);
+    if (_b2bMeta?.archive_truncated) {
+        notes.push(`showing the ${_b2bMeta.archive_shown} most recent of ${_b2bMeta.archive_total} finished deals`);
+    }
+    const cancelNote = notes.length ? `<div class="b2b-archive-note">${escapeHtml(notes.join(" · "))}.</div>` : '';
     // Seven columns are wider than most laptops, so the board scrolls inside
     // its own wrapper rather than pushing the whole page sideways.
     return `${filter}<div class="b2b-boardwrap"><div class="b2b-board">${cols}</div></div>${cancelNote}`;
@@ -8634,7 +8656,7 @@ async function b2bDeleteClient(id) {
 // --- view: Overview (DM/CEO) -----------------------------------------------
 
 function _b2bRenderOverview(scoped) {
-    const live = scoped.filter(d => d.stage !== 'completed' && d.stage !== 'cancelled');
+    const live = scoped.filter(d => d.stage !== 'completed' && d.stage !== 'declined');
 
     const card = (title, sub, head, body, empty) => `
         <div class="b2b-ov">
@@ -9888,7 +9910,8 @@ function _b2bStageView(deal) {
         </tr>`;
     }).join('');
 
-    const canCancel = _b2bIsCorp() && !['listing', 'completed', 'cancelled'].includes(deal.stage);
+    const canDecline = _b2bIsCorp() && !['listing', 'completed', 'declined'].includes(deal.stage);
+    const canReopen  = _b2bIsCorp() && deal.stage === 'declined';
     _b2bShowDeal({
         stage: deal.stage,
         eyebrow: deal.ref,
@@ -9898,7 +9921,15 @@ function _b2bStageView(deal) {
         body: `
             ${_b2bSummary(deal)}
             ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Picked up</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
-            ${deal.cancelled_reason ? `<div class="b2b-note bad"><span class="b2b-note-k">Cancelled</span>${escapeHtml(deal.cancelled_reason)}</div>` : ''}
+            ${deal.declined_reason ? `<div class="b2b-note bad">
+                <span class="b2b-note-k">Declined</span>
+                <span>${escapeHtml(deal.declined_reason)}
+                    <div class="b2b-note-sub">${escapeHtml([
+                        B2B_DECLINE_REASONS.find(r => r.key === deal.declined_category)?.label,
+                        deal.declined_by ? `marked by ${deal.declined_by}` : '',
+                        deal.declined_at ? _b2bDate(deal.declined_at) : '',
+                    ].filter(Boolean).join(' · '))}</div></span>
+            </div>` : ''}
             ${_b2bModalItems.length ? `
             <table class="cb-table b2b-vtable">
                 <thead><tr><th>Item</th><th class="c">Condition</th><th class="c">Qty</th><th class="c">Done</th><th class="r">Unit</th><th class="r">Line</th></tr></thead>
@@ -9906,18 +9937,79 @@ function _b2bStageView(deal) {
                 <tfoot><tr><td colspan="5" class="r">Total</td><td class="r accent">${_b2bMoney(t.offer, 2)}</td></tr></tfoot>
             </table>` : '<div class="b2b-empty sm"><div class="b2b-empty-t">No line items yet</div></div>'}`,
         footer: `
-            ${canCancel ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bCancelDeal('${deal.id}')">Cancel Deal</button>` : ''}
+            ${canDecline ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
+            ${canReopen ? `<button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;" onclick="b2bReopenDeal('${deal.id}',this)">Reopen Deal</button>` : ''}
             ${_b2bModalItems.some(i => i.sku) ? `<button class="b2b-btn b2b-btn-secondary" onclick="b2bPrintLabels('${deal.id}')">Print Labels</button>` : ''}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>`,
     });
 }
 
-async function b2bCancelDeal(id) {
-    const reason = prompt('Cancel this deal? Give a short reason for the record.');
-    if (reason === null) return;
-    await _b2bPost({ action: 'cancel', id, reason: reason.trim() }, "Couldn't cancel the deal");
-    closeAllModals();
-    await b2bRefresh();
+// A deal that dies. Categorised as well as explained, so the Overview can say
+// why deals are being lost rather than just how many.
+const B2B_DECLINE_REASONS = [
+    { key: 'client_declined',     label: 'Client turned the offer down' },
+    { key: 'client_unresponsive', label: 'Client went quiet' },
+    { key: 'withdrawn',           label: 'Client withdrew the equipment' },
+    { key: 'not_viable',          label: 'Not worth doing on our side' },
+    { key: 'other',               label: 'Something else' },
+];
+
+function b2bDeclineDeal(id) {
+    const deal = _b2bDealById(id) || _b2bModalDeal;
+    if (!deal) return;
+    _b2bShowDeal({
+        stage: 'declined',
+        eyebrow: deal.ref,
+        title: 'Decline This Deal',
+        sub: 'Records the deal as dead, with why, and takes it off the board.',
+        body: `
+            ${_b2bSummary(deal)}
+            <label class="form-label-caps">What happened?</label>
+            <div class="b2b-reasons">
+                ${B2B_DECLINE_REASONS.map((r, i) => `
+                    <label class="b2b-reason">
+                        <input type="radio" name="b2bDeclineCat" value="${r.key}" ${i === 0 ? 'checked' : ''}>
+                        <span>${escapeHtml(r.label)}</span>
+                    </label>`).join('')}
+            </div>
+            <label class="form-label-caps" style="margin-top:16px;">Details *</label>
+            <textarea id="b2bDeclineWhy" class="form-input-lg" rows="3"
+                placeholder="A sentence for whoever reads this in six months"></textarea>
+            <div class="b2b-note bad" style="margin-top:14px;">
+                <span class="b2b-note-k">Note</span>
+                The deal stays on record and can be reopened if the client comes back —
+                it just stops appearing as work in flight.
+            </div>`,
+        footer: `
+            <span class="b2b-msg" id="b2bDealMsg"></span>
+            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Back</button>
+            <button class="b2b-btn b2b-btn-danger" style="margin-right:0;" onclick="b2bConfirmDecline('${deal.id}',this)">Mark Declined</button>`,
+    });
+}
+
+async function b2bConfirmDecline(id, btn) {
+    const reason = document.getElementById('b2bDeclineWhy')?.value.trim();
+    if (!reason) return _b2bSay('Add a short reason before declining.', true);
+    const category = document.querySelector('input[name="b2bDeclineCat"]:checked')?.value;
+    try {
+        await _b2bBusy(btn, 'Declining…', () =>
+            _b2bSend({ action: 'decline', id, reason, category, declined_by: _b2bUser() }));
+        closeAllModals();
+        await b2bRefresh();
+    } catch (e) {
+        _b2bSay(`Couldn't decline the deal: ${e.message}`, true);
+    }
+}
+
+async function b2bReopenDeal(id, btn) {
+    if (!confirm('Reopen this deal? It goes back to the stage it died at and returns to the board.')) return;
+    try {
+        await _b2bBusy(btn, 'Reopening…', () => _b2bSend({ action: 'reopen', id }));
+        closeAllModals();
+        await b2bRefresh();
+    } catch (e) {
+        alert(`Couldn't reopen the deal: ${e.message}`);
+    }
 }
 
 // ---------------------------------------------------------------------------
