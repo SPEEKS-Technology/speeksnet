@@ -9111,6 +9111,9 @@ function applyRoleBasedUI() {
     // the panel, so overrides can add or remove tools for any role without the
     // static role-class unions drifting out of sync.
     _syncToolsPanelChrome();
+    // Only matters when one user holds both Preferred Purchases entries; the
+    // labels are otherwise already correct in the markup.
+    try { _plSyncToolLabels(); } catch (_) { /* module may not be loaded on this page */ }
     // First call kicks off a background refresh of the overrides from Supabase
     // (cached copy applies instantly; a change re-runs this function once).
     _kickFeatureOverridesRefresh();
@@ -20700,15 +20703,26 @@ function renderActionFeed() {
     if (patchRow) desired.push({ key: 'patch', html: patchRow });
     items.forEach(it => {
         if (it.type === 'rem') {
-            const dotcls = it.dueCls === 'sam-due-red' ? 'urgent' : 'warn';
+            // grey = informational rather than a task, so it gets the calm blue dot
+            const dotcls = it.dueCls === 'sam-due-red' ? 'urgent'
+                : it.dueCls === 'sam-due-grey' ? 'info' : 'warn';
             const remClick = it.action ? ` onclick="${it.action}" style="cursor:pointer"` : '';
+            // A reminder that is news rather than an outstanding task carries no
+            // deadline, so a due badge would be inventing one (noDue).
+            const dueHtml = it.noDue ? ''
+                : `<span class="sam-r-due ${it.dueCls}">${_samEsc(it.due)}</span>`;
+            // Three shapes of trailing control: an explicit "Mark read" for
+            // informational cards (readAction), Snooze for live task-nags, and
+            // nothing at all for hard deadlines that must not be dismissed.
+            const ctrl = it.readAction ? readBtn(it.readAction)
+                : (it.noSnooze ? '' : snoozeBtn(`samDismissItem(event,'rem','${_samEsc(it.key)}')`));
             desired.push({ key: 'rem:' + it.key, html: `<div class="sam-ann rem"${remClick}>
                 <span class="sam-adot ${dotcls}"></span>
                 <div class="sam-a-body">
-                    <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span><span class="sam-r-due ${it.dueCls}">${_samEsc(it.due)}</span></div>
+                    <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span>${dueHtml}</div>
                     <div class="sam-a-snip">${_samEsc(it.snippet)}</div>
                 </div>
-                ${it.noSnooze ? '' : snoozeBtn(`samDismissItem(event,'rem','${_samEsc(it.key)}')`)}
+                ${ctrl}
             </div>` });
             return;
         }
@@ -20740,6 +20754,25 @@ function renderActionFeed() {
 
     _samReconcileFeed(feed, desired);
     _samAddReadFull();
+    _samSyncRailFill();
+}
+
+// The feed card is taller than the action-items card beside it, and the rail's
+// card is content-sized, so their bottom edges didn't line up. With a full set
+// of action items the rail card takes the row height and the items share the
+// slack, squaring the two columns off. With fewer items stretching each one
+// would look distended, so it stays content-sized below the threshold.
+// Counted from what is actually VISIBLE, since Feature Access hides items with
+// display:none and :nth-child would still count them.
+const _SAM_RAIL_FILL_MIN = 4;
+function _samSyncRailFill() {
+    const card = document.querySelector('.speeks-action-menu .sam-rail > .sam-card');
+    if (!card) return;
+    let n = 0;
+    card.querySelectorAll('.sam-mini').forEach(function (el) {
+        if (el.offsetParent !== null) n++;
+    });
+    card.classList.toggle('sam-rail-fill', n >= _SAM_RAIL_FILL_MIN);
 }
 
 // Keyed, in-place reconcile of the action feed. Cards are matched by a stable key
@@ -21104,11 +21137,13 @@ function _samReminderCfg() {
         { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "toggleRecycleInventory(); switchRecycleTab('view')" },
         { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging Inventory Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" },
         // Preferred Purchases — feed-only, both directions. The owner's card is a
-        // queue to work (amber "Review"); the requester's is an answer that came
-        // back, which is information rather than a task, so it sits on the calm
-        // grey chip and opens straight to My Requests (which also marks it seen).
+        // queue to work, so it keeps the amber "Review" badge and a Snooze.
+        // The requester's is an answer that came back: information, not a task, so
+        // it carries no due badge (there is no deadline to invent), gets a calm
+        // blue dot, and offers "Mark read" instead of Snooze. Clicking the card
+        // body opens My Requests, which marks it read as a side effect.
         { key: 'preferredOwner', id: 'preferredOwnerAlertBubble', text: 'preferredOwnerAlertBubbleText', title: 'Purchase Requests', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "openPreferredOwner()" },
-        { key: 'preferredMine', id: 'preferredMineAlertBubble', text: 'preferredMineAlertBubbleText', title: 'Purchase Request Answered', urgency: 0, due: 'Answered', cls: 'sam-due-grey', action: "openPreferredMine()" }
+        { key: 'preferredMine', id: 'preferredMineAlertBubble', text: 'preferredMineAlertBubbleText', title: 'Purchase Request Answered', urgency: 0, due: '', cls: 'sam-due-grey', noDue: true, readAction: "plMarkRead(event)", action: "openPreferredMine()" }
     ];
     // KPI due reminders (weekly + monthly) — data-aware, driven by
     // checkKpiDueReminders. The bubbles gate visibility; title/due/urgency flip to
@@ -21214,7 +21249,7 @@ function _samGatherReminders() {
         out.push({
             type: 'rem', key: c.key, sig, title: c.title, snippet: sub || 'Needs your attention',
             due: c.due, dueCls: c.cls, urgency: c.urgency, read: false, dateMs: Date.now() + c.urgency,
-            action, noSnooze: !!c.noSnooze
+            action, noSnooze: !!c.noSnooze, noDue: !!c.noDue, readAction: c.readAction || ''
         });
     });
     return out;
@@ -21599,8 +21634,9 @@ function _plCanApprove() {
 // ---------- money / pack-size maths ----------
 function _plMoney(n) {
     // Number(null) and Number('') are both 0, which is finite — so without the
-    // explicit empty check a price-less row (add_direct allows one, and the
-    // column is nullable) would render a confident "$0.00".
+    // explicit empty check a row whose price is null (the column is nullable,
+    // and parseMoney returns null on anything unparseable) would render a
+    // confident "$0.00".
     if (n === null || n === undefined || n === '') return '';
     const v = Number(n);
     if (!Number.isFinite(v)) return '';
@@ -21713,34 +21749,43 @@ function _plFindDupe(row, approved) {
 }
 
 // ---------- open / close ----------
+// Is the plain requester version available to this user? Feature Access can
+// grant both, in which case the modal carries all four tabs.
+function _plCanRequest() {
+    if (_PL_REQ_ROLES.has(_plRole())) return true;
+    const el = document.querySelector('[data-feature="tool-preferred-request"]');
+    return !!(el && el.offsetParent !== null);
+}
+
 function togglePreferredPurchases(forceTab) {
     const modal = document.getElementById('preferredModal');
     if (!modal) return;
-    const opening = !modal.classList.contains('show');
-    if (!opening) { closeAllModals(); return; }
-    closeAllModals();
-    _plTab = forceTab || (_plCanApprove() ? 'pending' : 'new');
+    if (modal.classList.contains('show')) { closeAllModals(); return; }
+    _plTab = forceTab || (_plCanRequest() ? 'new' : 'pending');
     _plDecideOpen = null;
     _plSyncChrome();
-    modal.classList.add('show');
+    // toggleModal is the shared opener — it closes whatever else is open and
+    // calls lockAndBlurScreen(), which is what dims and blurs the page behind
+    // every other SPEEKS tool. Adding .show by hand skips the backdrop.
+    toggleModal('preferredModal');
     _plLoad();
 }
 function openPreferredOwner() { togglePreferredPurchases('pending'); }
 function openPreferredMine()  { togglePreferredPurchases('mine'); }
 
-// Head + tabs differ by version; the modal markup itself is shared and is
-// copied into all 5 shells.
+// Which tabs exist depends on what the user has. The title stays plain
+// "Preferred Purchases" either way — there is one tool, and the modal shows
+// whichever halves apply, so an "(Owner)" suffix here would say nothing.
 function _plSyncChrome() {
     const owner = _plCanApprove();
-    const t = document.getElementById('preferredHeadTitle');
+    const req = _plCanRequest();
     const s = document.getElementById('preferredHeadSub');
-    if (t) t.textContent = owner ? 'Preferred Purchases (Owner)' : 'Preferred Purchases';
-    if (s) s.textContent = owner
-        ? 'Approve what goes on the Amazon list.'
-        : 'Suggest a product for the company list.';
+    if (s) s.textContent = req
+        ? 'Suggest a product for the company list.'
+        : 'Approve what goes on the Amazon list.';
     const vis = {
-        'pl-tab-new': !owner,
-        'pl-tab-mine': !owner,
+        'pl-tab-new': req,
+        'pl-tab-mine': req,
         'pl-tab-pending': owner,
         'pl-tab-decided': owner
     };
@@ -21748,6 +21793,17 @@ function _plSyncChrome() {
         const el = document.getElementById(id);
         if (el) el.style.display = vis[id] ? '' : 'none';
     });
+}
+
+// The Tools panel is the one place the two versions can appear side by side, and
+// only there does the owner link need distinguishing. Anyone who holds just the
+// one entry sees plain "Preferred Purchases".
+function _plSyncToolLabels() {
+    const req = document.querySelector('[data-feature="tool-preferred-request"]');
+    const own = document.querySelector('[data-feature="tool-preferred-approve"]');
+    const both = !!(req && req.offsetParent !== null && own && own.offsetParent !== null);
+    document.querySelectorAll('[data-feature="tool-preferred-approve"] .pl-tool-label')
+        .forEach(function (l) { l.textContent = both ? 'Preferred Purchases (Owner)' : 'Preferred Purchases'; });
 }
 
 function plSwitchTab(tab) {
@@ -21828,7 +21884,7 @@ function _plFormHtml() {
     + '  </div>'
     + '  <div>'
     + '    <label class="form-label-caps">Price <span class="pl-req">*</span></label>'
-    + '    <input type="text" id="plPrice" class="form-input-lg" inputmode="decimal" placeholder="0.00">'
+    + '    <input type="text" id="plPrice" class="form-input-lg" inputmode="decimal" placeholder="0.00" oninput="_plSanitizeMoney(this)">'
     + '  </div>'
     + '  <div>'
     + '    <label class="form-label-caps">What you get for that <span class="pl-req">*</span></label>'
@@ -21855,11 +21911,14 @@ function _plStatusChip(status) {
     return '<span class="pl-chip pl-chip-' + escapeHtml(s) + '">' + label + '</span>';
 }
 
-function _plSubHtml(row) {
-    if (!row.substitute_id) return '';
-    const sub = _plRequests.find(function (r) { return r.id === row.substitute_id; });
-    if (!sub) return '';
-    return '<div class="pl-sub">&#8594; Buy instead: ' + escapeHtml(sub.item_name) + '</div>';
+// A note from the owner is the whole reason a requester reopens the tool, so it
+// gets a proper callout rather than a grey run-on line — same blue note box the
+// recycle threads use, so it reads as the same system.
+function _plNoteHtml(row, whoLabel) {
+    if (!row.owner_note) return '';
+    const who = whoLabel || row.decided_by || 'Owner';
+    return '<div class="pl-note"><span class="pl-note-who">' + escapeHtml(who) + '</span>'
+        + escapeHtml(row.owner_note) + '</div>';
 }
 
 function _plMineHtml() {
@@ -21868,16 +21927,13 @@ function _plMineHtml() {
             + '<div class="pl-empty-s">Suggest a product on the New Request tab and it&rsquo;ll show up here.</div></div>';
     }
     const rows = _plRequests.map(function (r) {
-        const note = r.owner_note
-            ? '<div class="pl-tbl-note"><b>' + escapeHtml(r.decided_by || 'Owner') + ':</b> ' + escapeHtml(r.owner_note) + '</div>'
-            : '';
         const act = (r.status === 'pending')
             ? '<button class="pl-link" onclick="plWithdraw(' + r.id + ')">Withdraw</button>'
             : '';
         return '<tr>'
             + '<td>' + _plStatusChip(r.status) + '</td>'
             + '<td><div class="pl-it"><a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer">'
-            + escapeHtml(r.item_name) + '</a></div>' + note + _plSubHtml(r) + '</td>'
+            + escapeHtml(r.item_name) + '</a></div>' + _plNoteHtml(r) + '</td>'
             + '<td class="pl-num">' + _plMoney(r.price) + _plUnitHtml(r, 'pl-unit-sm') + '</td>'
             + '<td style="white-space:nowrap;">' + _plFmtDate(r.created_at) + '</td>'
             + '<td>' + act + '</td>'
@@ -21888,9 +21944,7 @@ function _plMineHtml() {
         + '<th class="pl-num">Price</th><th>Sent</th><th></th></tr></thead>'
         + '<tbody>' + rows + '</tbody></table>'
         + '<div class="pl-hint" style="margin-top:14px;">'
-        + 'A denial names the alternative when there is one, so the same product doesn&rsquo;t '
-        + 'get suggested again next month. Pending requests can still be withdrawn &mdash; '
-        + 'anything decided is final.</div>';
+        + 'Pending requests can still be withdrawn &mdash; anything decided is final.</div>';
 }
 
 const _PL_EXT_ICO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
@@ -21899,13 +21953,9 @@ function _plPendingHtml() {
     const pending = _plRequests.filter(function (r) { return r.status === 'pending'; })
         .sort(function (a, b) { return new Date(a.created_at) - new Date(b.created_at); });
     const approved = _plRequests.filter(function (r) { return r.status === 'approved'; });
-    const addBtn = '<button class="btn-secondary" style="padding:8px 14px;font-size:11.5px;" '
-        + 'onclick="plAddDirect()">+ Add without a request</button>';
 
     if (!pending.length) {
-        return '<div class="pl-bar"><span class="pl-bar-count">Nothing waiting</span>'
-            + '<span class="pl-sp"></span>' + addBtn + '</div>'
-            + '<div class="pl-empty"><div class="pl-empty-t">Queue&rsquo;s clear.</div>'
+        return '<div class="pl-empty"><div class="pl-empty-t">Queue&rsquo;s clear.</div>'
             + '<div class="pl-empty-s">New suggestions land here, oldest first.</div></div>';
     }
 
@@ -21919,20 +21969,12 @@ function _plPendingHtml() {
         const who = [r.requested_by, r.store, r.requested_by_role].filter(Boolean)
             .map(function (x) { return escapeHtml(x); }).join(' &middot; ');
         const open = _plDecideOpen === r.id;
-        const subOpts = approved.length
-            ? '<select id="plSub-' + r.id + '"><option value="">No substitute &mdash; nothing to point at</option>'
-              + approved.map(function (a) {
-                  return '<option value="' + a.id + '">Buy instead: ' + escapeHtml(a.item_name) + '</option>';
-              }).join('') + '</select>'
-            : '';
         const first = escapeHtml((r.requested_by || '').split(' ')[0] || 'them');
         const editor = open
             ? '<div class="pl-note-box">'
               + '<textarea id="plNote-' + r.id + '" rows="2" maxlength="2000" '
               + 'placeholder="Note back to ' + first + ' (optional) — buy the 6-pack, use what we have first…"></textarea>'
-              + subOpts
-              + '<div class="pl-hint">Shown to the requester with your decision. A substitute only '
-              + 'applies to a deny, and can only point at something already approved.</div>'
+              + '<div class="pl-hint">Shown to the requester with your decision.</div>'
               + '</div>'
             : '';
         return '<div class="pl-card" id="plCard-' + r.id + '">'
@@ -21961,7 +22003,7 @@ function _plPendingHtml() {
     return '<div class="pl-bar">'
         + '<span class="pl-bar-count"><b>' + pending.length + '</b> waiting on you</span>'
         + '<span class="pl-bar-age">oldest first &middot; sent ' + escapeHtml(_plAgeText(pending[0].created_at)) + '</span>'
-        + '<span class="pl-sp"></span>' + addBtn + '</div>' + cards;
+        + '</div>' + cards;
 }
 
 function _plDecidedHtml() {
@@ -21971,12 +22013,10 @@ function _plDecidedHtml() {
             + '<div class="pl-empty-s">Approvals and denials both land here.</div></div>';
     }
     const rows = decided.map(function (r) {
-        const note = r.owner_note
-            ? '<div class="pl-tbl-note"><b>You:</b> ' + escapeHtml(r.owner_note) + '</div>' : '';
         return '<tr>'
             + '<td>' + _plStatusChip(r.status) + '</td>'
             + '<td><div class="pl-it"><a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer">'
-            + escapeHtml(r.item_name) + '</a></div>' + note + _plSubHtml(r) + '</td>'
+            + escapeHtml(r.item_name) + '</a></div>' + _plNoteHtml(r, 'You') + '</td>'
             + '<td class="pl-num">' + _plMoney(r.price) + _plUnitHtml(r, 'pl-unit-sm') + '</td>'
             + '<td>' + escapeHtml((r.requested_by || '').split(' ')[0])
             + (r.store ? ' &middot; ' + escapeHtml(r.store) : '') + '</td>'
@@ -21995,6 +22035,16 @@ function _plDecidedHtml() {
 
 // ---------- actions ----------
 function plToggleNote(id) { _plDecideOpen = (_plDecideOpen === id) ? null : id; _plRender(); }
+
+// Money field: digits and a single decimal point, nothing else. Typed letters
+// never appear rather than being rejected on submit. Kept local rather than
+// borrowing the recycle tool's copy so this tool owns its own input rules.
+function _plSanitizeMoney(input) {
+    let v = (input.value || '').replace(/[^\d.]/g, '');
+    const dot = v.indexOf('.');
+    if (dot !== -1) v = v.slice(0, dot + 1) + v.slice(dot + 1).replace(/\./g, '');
+    input.value = v;
+}
 
 function _plShowFormErr(msg) {
     const e = document.getElementById('plFormErr');
@@ -22039,7 +22089,6 @@ async function plSubmitRequest() {
 async function plDecide(id, verdict) {
     if (_plBusy) return;
     const noteEl = document.getElementById('plNote-' + id);
-    const subEl = document.getElementById('plSub-' + id);
     const card = document.getElementById('plCard-' + id);
     if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
     _plBusy = true;
@@ -22047,8 +22096,6 @@ async function plDecide(id, verdict) {
         await postWrite(PREFERRED_URL, {
             action: 'decide', id: id, verdict: verdict,
             owner_note: noteEl ? noteEl.value : '',
-            // A substitute is meaningless on an approve, so only send it on a deny.
-            substitute_id: (verdict === 'denied' && subEl && subEl.value) ? subEl.value : null,
             decided_by: _plName()
         });
         _plDecideOpen = null;
@@ -22082,23 +22129,14 @@ async function plOwnerDelete(id) {
     finally { _plBusy = false; }
 }
 
-// Owner adds something nobody requested. Prompt-based on purpose: it is a rare
-// path, and a second form inside the queue would crowd the decision surface.
-async function plAddDirect() {
-    const item = prompt('Item name');
-    if (!item || !item.trim()) return;
-    const url = prompt('Amazon link');
-    if (url === null) return;
-    if (!/^https?:\/\//i.test(String(url).trim())) { alert('That link needs to start with http:// or https://'); return; }
-    const price = prompt('Price (optional)') || '';
-    const pack = prompt('What you get for that (optional) — e.g. box of 100') || '';
-    try {
-        await postWrite(PREFERRED_URL, {
-            action: 'add_direct', item_name: item, url: url, price: price,
-            pack_size: pack, by: _plName(), store: _plStore()
-        });
-        await _plLoad();
-    } catch (e) { alert(e.message || 'Could not add that.'); }
+// "Mark read" on the requester's feed card. Stops the click reaching the card,
+// whose own handler opens the tool — the button is the way to clear it WITHOUT
+// opening. Opening still marks it read, via _plLoad.
+async function plMarkRead(ev) {
+    if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+    try { await postWrite(PREFERRED_URL, { action: 'mark_seen', name: _plName() }); }
+    catch (_) { /* the card stays; next open will clear it */ }
+    if (typeof checkPreferredReminders === 'function') await checkPreferredReminders();
 }
 
 /* ---------- feed notifications (FEED ONLY — no bubble UI) ----------
@@ -22135,9 +22173,9 @@ function _plRenderBubble(which, show, summary, sig) {
 
 let _plCheckStarted = false;
 async function checkPreferredReminders() {
-    const role = _plRole();
     const owner = _plCanApprove();
-    const requester = _PL_REQ_ROLES.has(role);
+    const requester = _plCanRequest();
+    _plSyncToolLabels();
     if (!owner && !requester) { _plHideBubble('owner'); _plHideBubble('mine'); return; }
     // Safety net behind the realtime ping, same cadence as the other tools.
     if (!_plCheckStarted) { _plCheckStarted = true; setInterval(checkPreferredReminders, 10 * 60 * 1000); }
@@ -22155,10 +22193,9 @@ async function checkPreferredReminders() {
                     if (n && names.indexOf(n) === -1) names.push(n);
                 });
                 const who = names.length > 3 ? (names.slice(0, 3).join(', ') + ' and others') : names.join(', ');
-                const age = _plAgeText(pending[0].created_at);
                 const summary = pending.length === 1
-                    ? (who + ' suggested a product — sent ' + age + '.')
-                    : (pending.length + ' suggestions from ' + who + ' — oldest sent ' + age + '.');
+                    ? (who + ' suggested a product.')
+                    : (pending.length + ' suggestions from ' + who + '.');
                 // Identity is the pending id set, so a NEW request breaks through a
                 // snooze while re-rendering the same queue does not re-nag.
                 _plRenderBubble('owner', true, summary,

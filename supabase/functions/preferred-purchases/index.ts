@@ -139,28 +139,11 @@ Deno.serve(async (req: Request) => {
         if (!Number.isFinite(id))                          return jsonResponse({ success: false, error: "Bad id." }, 400);
         if (verdict !== "approved" && verdict !== "denied") return jsonResponse({ success: false, error: "Verdict must be approved or denied." }, 400);
 
-        // A substitute only makes sense on a deny, and only pointing at a row
-        // that is actually approved — otherwise "buy this instead" could name
-        // something that was itself rejected.
-        let substitute_id: number | null = null;
-        if (verdict === "denied" && body.substitute_id != null && body.substitute_id !== "") {
-          const sid = Number(body.substitute_id);
-          if (Number.isFinite(sid)) {
-            const { data: sub } = await supabase.from(TABLE)
-              .select("id, status").eq("id", sid).maybeSingle();
-            if (!sub || sub.status !== "approved") {
-              return jsonResponse({ success: false, error: "The substitute must be an approved item." }, 400);
-            }
-            substitute_id = sid;
-          }
-        }
-
         const { data, error } = await supabase.from(TABLE).update({
           status: verdict,
           decided_at: new Date().toISOString(),
           decided_by: s(body.decided_by, 120) || null,
           owner_note: s(body.owner_note, 2000) || null,
-          substitute_id,
           // A fresh decision is unseen news for the requester, so clear any
           // previous stamp — otherwise a re-decided request would never nag.
           requester_seen_at: null,
@@ -168,36 +151,6 @@ Deno.serve(async (req: Request) => {
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
 
         await broadcastChange("preferred", data?.store ?? null);
-        return jsonResponse({ success: true });
-      }
-
-      // ---- Owner adds something without anyone requesting it ----
-      if (action === "add_direct") {
-        const item_name = s(body.item_name, 200);
-        const link = cleanUrl(body.url);
-        const by = s(body.by, 120);
-        if (!item_name) return jsonResponse({ success: false, error: "Item name is required." }, 400);
-        if (!link)      return jsonResponse({ success: false, error: "A valid http(s) product link is required." }, 400);
-
-        const { error } = await supabase.from(TABLE).insert({
-          item_name,
-          url: link,
-          price: parseMoney(body.price),
-          pack_size: s(body.pack_size, 120) || null,
-          reason: s(body.reason, 2000) || "Added directly by the owner.",
-          requested_by: by || "Owner",
-          requested_by_role: "Owner (Manager)",
-          store: s(body.store, 12).toUpperCase() || null,
-          // Pre-approved by definition, and already seen by the only person
-          // who would be notified, so it never produces a feed card.
-          status: "approved",
-          decided_at: new Date().toISOString(),
-          decided_by: by || "Owner",
-          requester_seen_at: new Date().toISOString(),
-        });
-        if (error) return jsonResponse({ success: false, error: error.message }, 500);
-
-        await broadcastChange("preferred", null);
         return jsonResponse({ success: true });
       }
 
