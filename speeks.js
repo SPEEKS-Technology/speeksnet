@@ -22525,7 +22525,13 @@ function _dccChecks(r) {
         { key: 'conv',    s: conv == null ? null : (conv < 85 ? 'b' : null), rule: 'floor 85%' },
         { key: 'wkM',     s: wkM == null ? null : (wkM < 51 ? 'b' : null),   rule: 'floor 51%' },
         { key: 'time',    s: mins == null ? null : (mins > 13 ? 'b' : null), rule: 'ceiling 13 min' },
-        { key: 'noDeals', s: nd == null ? null : (nd > 7 ? 'b' : null),      rule: 'ceiling 7' },
+        // No-deals is a WATCH signal, not a hard fail. The ceiling of 7 is met by
+        // almost no store in practice — the district records 9 to 29 in a week — so
+        // treating it as serious put four of five stores in the Serious group on
+        // its own and the triage stopped discriminating. The threshold itself is
+        // unchanged, and checkRule() still paints the number red in its own row;
+        // what changed is that it no longer escalates the whole store.
+        { key: 'noDeals', s: nd == null ? null : (nd > 7 ? 'w' : null),      rule: 'ceiling 7' },
         { key: 'defect',  s: _dccSev('defect', r.defect), rule: 'ceiling 0.40%' },
         { key: 'late',    s: _dccSev('late', r.late),     rule: 'ceiling 2.40%' },
         { key: 'cases',   s: _dccSev('cases', r.cases),   rule: 'ceiling 0.24%' },
