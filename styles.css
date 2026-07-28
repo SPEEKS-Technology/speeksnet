@@ -9973,9 +9973,11 @@ body.sam-active .hotbar-btn:hover {
 .b2b-doc-t th {
     padding: 11px 14px; background: var(--b2b-accent-tint);
     border-bottom: 2px solid var(--sage-professional);
-    font-size: 9.5px; font-weight: 800; letter-spacing: .07em;
+    font-size: 9.5px; font-weight: 800; letter-spacing: .07em; white-space: nowrap;
     text-transform: uppercase; color: var(--sage-deep); text-align: left;
 }
+.b2b-doc-t th:first-child { border-top-left-radius: 10px; }
+.b2b-doc-t th:last-child  { border-top-right-radius: 10px; }
 .b2b-doc-t tbody tr:nth-child(even) { background: #fbfdfc; }
 /* the money column is the point of the document */
 .b2b-doc-t tbody td:last-child { color: var(--sage-deep); }

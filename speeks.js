@@ -9414,8 +9414,12 @@ function _b2bQuoteInlineHtml(deal, items) {
     const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
     const picked = _b2bLongDate(deal.pickup_date);
     const TH = 'padding:10px 12px;background:#e8f7ee;border-bottom:2px solid #1f9d57;'
-             + 'font-size:10px;font-weight:bold;letter-spacing:.07em;'
+             + 'font-size:10px;font-weight:bold;letter-spacing:.07em;white-space:nowrap;'
              + 'text-transform:uppercase;color:#178048;';
+  // the band is inset inside a rounded card, so its own outer corners have to
+  // be rounded too or they sit square against the curve
+  const THL = TH + 'border-top-left-radius:10px;';
+  const THR = TH + 'border-top-right-radius:10px;';
     const TD = 'padding:11px 12px;border-bottom:1px solid #eef2f6;font-size:13px;color:#1a1c1e;';
 
     const CHIP = 'display:inline-block;margin-left:7px;padding:2px 8px;border-radius:10px;'
@@ -9460,10 +9464,10 @@ function _b2bQuoteInlineHtml(deal, items) {
     </tr></table></td></tr>
   <tr><td style="padding:14px 24px 0;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-      <tr><th align="left" style="${TH}">Description</th>
+      <tr><th align="left" style="${THL}">Description</th>
           <th align="center" style="${TH}">Qty</th>
           <th align="right" style="${TH}">Unit offer</th>
-          <th align="right" style="${TH}">Line total</th></tr>
+          <th align="right" style="${THR}">Line total</th></tr>
       ${rows}
     </table></td></tr>
   <tr><td style="padding:14px 24px 0;">
@@ -9471,7 +9475,7 @@ function _b2bQuoteInlineHtml(deal, items) {
       <td style="padding:14px 18px;font-size:11px;font-weight:bold;letter-spacing:.09em;text-transform:uppercase;color:#178048;">Total offer</td>
       <td align="right" style="padding:14px 18px;font-size:22px;font-weight:bold;color:#178048;">${_b2bMoney(total, 2)}</td>
     </tr></table></td></tr>
-  <tr><td style="padding:16px 24px;background:#f6f8fa;border-top:1px solid #eef2f6;font-size:11.5px;color:#647082;line-height:1.6;">
+  <tr><td style="padding:16px 24px;background:#f6f8fa;border-top:1px solid #eef2f6;font-size:11.5px;color:#647082;line-height:1.6;border-bottom-left-radius:13px;border-bottom-right-radius:13px;">
     <b style="color:#178048;">Reply to this email to accept the quote</b> or ask about any line.
     Recycle-only items carry no offer and are disposed of responsibly at no cost to you.
   </td></tr>
