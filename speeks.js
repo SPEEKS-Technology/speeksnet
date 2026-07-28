@@ -16788,9 +16788,14 @@ function renderMyRecycleTable() {
         const otherRole = canReview ? 'mgr' : 'dm';
         const noteLine = thread.map(n => {
             const noteDot = (n.role === otherRole && tOf(n.at) > seenB) ? NEW_DOT : '';
+            // .site-note / .site-note-reply in styles.css — the shared note
+            // callout. These two boxes were the original, hand-inlined here;
+            // the styling now lives in one place so a note reads the same in
+            // every tool that shows one.
+            const by = n.by ? ` <span class="site-note-by">— ${escapeHtml(n.by)}</span>` : '';
             return n.role === 'dm'
-                ? `<div style="margin-top:4px; font-size:11.5px; font-weight:600; color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; border-radius:7px; padding:4px 8px;">${noteDot}💬 ${escapeHtml(n.text || '')}${n.by ? ` <span style="color:#94a3b8;">— ${escapeHtml(n.by)}</span>` : ''}</div>`
-                : `<div style="margin-top:3px; margin-left:14px; font-size:11.5px; font-weight:600; color:#047857; background:#f0fdf4; border:1px solid #a7f3d0; border-radius:7px; padding:4px 8px;">${noteDot}↩ ${escapeHtml(n.text || '')}${n.by ? ` <span style="color:#94a3b8;">— ${escapeHtml(n.by)}</span>` : ''}</div>`;
+                ? `<div class="site-note">${noteDot}💬 ${escapeHtml(n.text || '')}${by}</div>`
+                : `<div class="site-note-reply">${noteDot}↩ ${escapeHtml(n.text || '')}${by}</div>`;
         }).join('');
         html += `<tr style="${rowBg}">
             ${firstCell}
@@ -18861,6 +18866,10 @@ function _vrDmNotesOpen(p) {
 
 // One note cell: read-only text + author/date caption normally; a textarea
 // while the viewer is in ✏️ Edit mode (saved in bulk by vrSaveEdits).
+// Deliberately NOT the shared .site-note callout: these are three table columns
+// (GM note / DM note / Manager reply) whose headers already say whose note each
+// one is, so boxing them would restate the header and add noise to a dense grid.
+// The small grey caption carries the author + date instead.
 function _vrNoteCell(it, field, editable, placeholder) {
     const val = it[field] || '';
     const by = it[field + '_by'];
@@ -19887,6 +19896,11 @@ function _agRowHtml(it, canDm) {
 //   - In DM row-edit mode (`editing`) the DM's notes become editable
 //     textareas, but ONLY the ones the store hasn't answered yet — history
 //     the conversation moved past is locked.
+// Deliberately NOT the shared .site-note callout: this thread captions the
+// author ABOVE each note and uses a left rail rather than a full box, with
+// purple carrying the DM identity this tool uses elsewhere. Converting it to the
+// blue/green pair would throw away that colour tie and move the attribution,
+// which is a visual change worth seeing before making — not a silent tidy-up.
 function _agThreadHtml(it, canDm, editing) {
     const notes = it.notes || [];
     const last = notes[notes.length - 1];

@@ -9957,17 +9957,33 @@ body.sam-active .hotbar-btn:hover {
 .pl-tbl-note b { color: #3d4852; }
 
 /* ── Shared note callout ───────────────────────────────────────────────────
-   The canonical look for a note somebody left on a record, lifted verbatim
-   from the recycle-request note boxes so a note reads identically wherever it
-   appears: 💬, the text, then the author in grey. Recycle still writes these
-   as inline styles at the point of render — migrating it onto this class is a
-   tidy-up for whenever that code is next touched.
-   Values are fixed hexes rather than V4 tokens on purpose: this blue is its own
-   signal (someone said something) and must not shift with the emerald theme. */
+   The canonical look for a note somebody left on a record: 💬, the text, then
+   the author in grey. Lifted verbatim from the recycle-request note boxes,
+   which now use these classes rather than their own inline copies — so the
+   definition lives here only.
+
+   .site-note-reply is the OTHER side of a thread: green and indented, so a
+   back-and-forth reads as a conversation instead of a stack of identical
+   boxes. Recycle pairs it with ↩ where the first side uses 💬.
+
+   Fixed hexes rather than V4 tokens on purpose: "someone said something" is
+   its own signal and must not shift with the emerald theme.
+
+   NOT used by two other tools, deliberately — see the note in _vrNoteCell and
+   _agThreadHtml. Variance replies are table columns whose headers already say
+   whose note it is, and Aging uses a left-rail treatment with the author
+   captioned above. Boxing those would duplicate a label or discard a
+   distinction. */
 .site-note {
-    margin-top: 6px; padding: 4px 8px;
+    margin-top: 4px; padding: 4px 8px;
     background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 7px;
     font-size: 11.5px; font-weight: 600; color: #1d4ed8; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word;
+}
+.site-note-reply {
+    margin-top: 3px; margin-left: 14px; padding: 4px 8px;
+    background: #f0fdf4; border: 1px solid #a7f3d0; border-radius: 7px;
+    font-size: 11.5px; font-weight: 600; color: #047857; line-height: 1.5;
     white-space: pre-wrap; word-break: break-word;
 }
 .site-note-by { color: #94a3b8; font-weight: 600; }
