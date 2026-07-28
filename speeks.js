@@ -208,6 +208,8 @@ function closeAllModals() {
         if (!confirm("Close Submit Scores? Your audit entries haven't been saved yet.")) return;
         _auditDirty = false;
     }
+    // Read this BEFORE .show comes off, since the check asks which editor was up.
+    const _dmxBack = typeof _dmxReturnCheck === 'function' ? _dmxReturnCheck() : null;
     const _wasLocked = document.body.classList.contains('no-scroll');
     document.body.classList.remove('no-scroll');
     document.body.style.overflow = '';
@@ -235,6 +237,15 @@ function closeAllModals() {
     // Restore the scroll position we pinned in lockAndBlurScreen — otherwise the
     // page stays snapped to the top once the fixed body is released.
     if (_wasLocked) window.scrollTo(0, _lockedScrollY);
+
+    // Closing a sub-editor opened from a district popup returns to that popup
+    // rather than dumping the DM back on the dashboard. Deferred a tick so this
+    // call finishes tearing down before toggleModal builds back up — the flag is
+    // already cleared, so the re-open cannot loop back here.
+    if (_dmxBack) setTimeout(function () {
+        toggleModal(_dmxBack);
+        if (_dmxBack === 'dmGoalsModal') renderDmGoalsModal();
+    }, 0);
 }
 
 // Mutually-exclusive right-side panels. Closing every panel except `exceptId`
@@ -22130,16 +22141,94 @@ function _dmxPct(done, total) {
 }
 
 // One rail row in the master column. `sub` is the small number under the code.
-function _dmxTab(tool, store, sub, pct, showDot) {
-    const s = _dmxState(pct);
+//
+// No status dot. Five stores meant five dots all saying what the count and the
+// meter colour already said, and when the whole district is behind the column
+// reads as an alarm rather than as data. The count is the encoding that doesn't
+// depend on colour; the meter reinforces it.
+function _dmxTab(tool, store, sub, pct) {
     const sel = _dmxSel[tool] === store ? ' sel' : '';
     return '<button type="button" class="dmx-t' + sel + '" onclick="_dmxPick(\'' + tool + '\',\'' + store + '\')">'
         + '<span class="dmx-t-code">' + escapeHtml(store) + '</span>'
         + '<span class="dmx-t-mid"><span class="dmx-t-val">' + sub + '</span>'
         + (pct === null ? '' : '<span style="display:block; margin-top:5px;">' + _dmxMeter(pct) + '</span>')
         + '</span>'
-        + (showDot ? '<span class="dmx-dot dmx-' + s.k + '"></span>' : '<span></span>')
         + '</button>';
+}
+
+// The one cell in the summary strip that says how the day or week is going.
+// Colour plus the word, because a tint on its own is not a reading.
+function _dmxStatCell(label, valueHtml, pct) {
+    const st = _dmxState(pct);
+    return '<div class="dmx-cell dmx-stat dmx-stat-' + st.k + '">'
+        + '<div class="dmx-cell-l">' + escapeHtml(label) + ' &middot; <span class="dmx-stat-word">' + st.word + '</span></div>'
+        + '<div class="dmx-cell-v dmx-stat-v">' + valueHtml + '</div></div>';
+}
+
+// Four weeks against the store's target, target drawn as a reference line.
+// Replaces levelUpHtml() here: that helper's styling is all scoped to
+// .goals-levelup, so inside this modal it rendered as bare numbers.
+//
+// The pixel heights match .dmx-lu-track (64) and .dmx-lu-lab (15) in styles.css
+// — the target line is positioned from the bottom of the plot, so it has to
+// clear the label row. Change one and you change the other.
+function _dmxLevelUp(history, target) {
+    const last4 = (history || []).slice(-4);
+    const weeks = new Array(Math.max(0, 4 - last4.length)).fill(null).concat(last4);
+    const vals = weeks.filter(v => v != null);
+    // Headroom so the tallest bar never touches the ceiling and the target line
+    // stays inside the plot even when every week cleared it.
+    const top = Math.max(target || 0, vals.length ? Math.max.apply(null, vals) : 0, 1) * 1.14;
+    const TRACK = 64, LABEL = 15;
+    const labels = ['4 wks ago', '3 wks ago', '2 wks ago', 'Last week'];
+    let bars = '';
+    weeks.forEach(function (v, i) {
+        const k = v == null ? 'none' : (target && v >= target ? 'hit' : 'miss');
+        // 3px floor so a zero week is still a visible mark, not a gap.
+        const h = v == null ? 0 : Math.max(3, Math.round((v / top) * TRACK));
+        bars += '<div class="dmx-lu-w">'
+            + '<span class="dmx-lu-v dmx-lu-' + k + '">' + (v == null ? '&ndash;' : v) + '</span>'
+            + '<span class="dmx-lu-track"><i class="dmx-lu-' + k + '" style="height:' + h + 'px"></i></span>'
+            + '<span class="dmx-lu-lab">' + labels[i] + '</span>'
+            + '</div>';
+    });
+    const line = target
+        ? '<span class="dmx-lu-line" style="bottom:' + (LABEL + Math.round((target / top) * TRACK)) + 'px"></span>'
+        : '';
+    return '<div class="dmx-lu">'
+        + '<div class="dmx-lu-h"><span class="dmx-lu-t">Last 4 weeks</span>'
+        + (target ? '<span class="dmx-lu-target">Target ' + target + '</span>' : '')
+        + '</div>'
+        + '<div class="dmx-lu-plot">' + line + '<div class="dmx-lu-bars">' + bars + '</div></div>'
+        + '</div>';
+}
+
+// ── Handing off to a sub-editor and coming back ─────────────────────────────
+// Editing initiatives from the district popup used to close everything, which
+// lost the DM's place. These remember where to return to. Only honoured when the
+// editor was genuinely the thing on screen, so opening some other tool from the
+// Tools panel can't bounce the DM into the goals popup instead.
+let _dmxReturnTo = null;
+
+function _dmxReturnCheck() {
+    if (!_dmxReturnTo) return null;
+    const back = _dmxReturnTo;
+    _dmxReturnTo = null;
+    const editorOpen = ['editStoreInitiativesModal', 'editCompanyProjectsModal']
+        .some(id => document.getElementById(id)?.classList.contains('show'));
+    return editorOpen ? back : null;
+}
+
+// _dmxReturnTo is set AFTER the opener runs: openEdit*Modal goes through
+// toggleModal, which closes everything first and would consume the flag.
+function _dmxEditInitiatives(store) {
+    openEditStoreInitiativesModal(store);
+    _dmxReturnTo = 'dmGoalsModal';
+}
+
+function _dmxEditCompany() {
+    openEditCompanyProjectsModal();
+    _dmxReturnTo = 'dmGoalsModal';
 }
 
 function _dmxPick(tool, store) {
@@ -22234,7 +22323,7 @@ function renderDmListingModal() {
 
     let rail = '';
     all.forEach(s => {
-        rail += _dmxTab('lg', s.store, s.week + ' / ' + s.target, s.pct, true);
+        rail += _dmxTab('lg', s.store, s.week + ' / ' + s.target, s.pct);
     });
 
     const sel = all.find(s => s.store === _dmxSel.lg) || all[0];
@@ -22271,8 +22360,7 @@ function renderDmListingModal() {
         });
         pane += '<td class="dmx-num">' + sel.week + '</td></tr></tbody></table>';
 
-        pane += '<div class="dmx-sec" style="margin-top:18px;">Level up</div>'
-            + (typeof levelUpHtml === 'function' ? levelUpHtml(weeksFor(sel.store) || [], sel.target) : '');
+        pane += '<div style="margin-top:18px;">' + _dmxLevelUp(weeksFor(sel.store) || [], sel.target) + '</div>';
 
         if (sel.flag === 'flagged') {
             pane += '<div class="dmx-flag">'
@@ -22286,7 +22374,7 @@ function renderDmListingModal() {
     wrap.innerHTML = '<div class="dmx-strip">'
         + '<div class="dmx-cell"><div class="dmx-cell-l">District listed</div><div class="dmx-cell-v">' + listed + '</div></div>'
         + '<div class="dmx-cell"><div class="dmx-cell-l">District target</div><div class="dmx-cell-v">' + target + '</div></div>'
-        + '<div class="dmx-cell"><div class="dmx-cell-l">Attainment</div><div class="dmx-cell-v">' + _dmxPct(listed, target) + '<small>%</small></div></div>'
+        + _dmxStatCell('Attainment', _dmxPct(listed, target) + '<small>%</small>', _dmxPct(listed, target))
         + '<div class="dmx-cell"><div class="dmx-cell-l">Flagged for review</div><div class="dmx-cell-v">' + flagged + '</div></div>'
         + '</div>'
         + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
@@ -22350,7 +22438,7 @@ function renderDmCleaningModal() {
     const order = all.slice().sort((a, b) => a.pct - b.pct);
     let rail = '';
     order.forEach(s => {
-        rail += _dmxTab('cl', s.store, s.completed + ' / ' + s.total, s.pct, true);
+        rail += _dmxTab('cl', s.store, s.completed + ' / ' + s.total, s.pct);
     });
 
     const sel = all.find(s => s.store === _dmxSel.cl) || order[0];
@@ -22379,7 +22467,7 @@ function renderDmCleaningModal() {
     }
 
     wrap.innerHTML = '<div class="dmx-strip">'
-        + '<div class="dmx-cell"><div class="dmx-cell-l">District ' + word + '</div><div class="dmx-cell-v">' + _dmxPct(done, total) + '<small>%</small></div></div>'
+        + _dmxStatCell('District ' + word, _dmxPct(done, total) + '<small>%</small>', _dmxPct(done, total))
         + '<div class="dmx-cell"><div class="dmx-cell-l">Items done</div><div class="dmx-cell-v">' + done + '<small> / ' + total + '</small></div></div>'
         + '<div class="dmx-cell"><div class="dmx-cell-l">Stores complete</div><div class="dmx-cell-v">' + complete + '<small> of 5</small></div></div>'
         + '<div class="dmx-cell"><div class="dmx-cell-l">Behind</div><div class="dmx-cell-v">' + behind + '</div></div>'
@@ -22441,7 +22529,12 @@ function renderDmGoalsModal() {
         ? '<span class="dmx-badge up">Upcoming</span>'
         : '<span class="dmx-badge cur">Current</span>';
 
-    let company = '<div class="dmx-company"><div class="dmx-company-l">Company initiatives · all stores</div>';
+    // The only route to company-wide initiatives for a DM. It used to hang off
+    // the district dashboard panel that this popup replaced, which left no way in.
+    let company = '<div class="dmx-company"><div class="dmx-company-h">'
+        + '<span class="dmx-company-l">Company initiatives · all stores</span>'
+        + '<button type="button" class="dmx-company-edit" onclick="_dmxEditCompany()">Edit Company Initiatives</button>'
+        + '</div>';
     company += projects.length
         ? '<div class="dmx-company-r">' + projects.map(p =>
             '<span class="dmx-company-i">' + escapeHtml(p.title || '') + badge(p.status) + '</span>').join('') + '</div>'
@@ -22452,9 +22545,10 @@ function renderDmGoalsModal() {
         + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
         + '<div class="dmx-ps">' + sel.goals.length + ' of 6 goals set for '
         + escapeHtml(typeof _mgbMonthLabel === 'function' ? _mgbMonthLabel() : 'this month') + '</div>'
+        // No goal editing here: stores set their own monthly goals. The DM reads
+        // them and owns the initiatives, so that is the only edit control.
         + '</div><div class="dmx-ph-side">'
-        + '<button type="button" class="btn-secondary" style="padding:8px 14px; font-size:12.5px;" onclick="openEditMonthlyGoalsModal(\'' + sel.store + '\')">Edit goals</button>'
-        + '<button type="button" class="btn-secondary" style="padding:8px 14px; font-size:12.5px;" onclick="openEditStoreInitiativesModal(\'' + sel.store + '\')">Edit initiatives</button>'
+        + '<button type="button" class="btn-secondary" style="padding:8px 14px; font-size:12.5px;" onclick="_dmxEditInitiatives(\'' + sel.store + '\')">Edit Initiatives</button>'
         + '</div></div>';
 
     pane += '<div class="dmx-sec">Team goals</div>';

@@ -10221,3 +10221,77 @@ body.sam-active .hotbar-btn:hover {
     .dmx-t { min-width: 190px; flex: 0 0 auto; }
     .dmx-strip { grid-template-columns: 1fr 1fr; }
 }
+
+/* ── DM district tools, round 2 ────────────────────────────────────────────
+   Rail dots removed: with five stores the column was five red dots saying the
+   same thing the count and the meter already said. The count ("0 / 16") is the
+   non-colour encoding now, so status still doesn't rest on hue alone. */
+.dmx-t { grid-template-columns: 42px 1fr; }
+
+/* A hair of air between the figure and its unit — "4%" was reading as one glyph. */
+.dmx-cell-v small { margin-left: 3px; }
+
+/* The one cell in the summary strip that carries how the day/week is going.
+   Colour AND a word in the label, so the state survives colourblindness and
+   print; the tint is kept faint so the number stays the loudest thing. */
+.dmx-cell.dmx-stat { border-left-width: 3px; }
+.dmx-stat-word { font-weight: 800; }
+.dmx-stat-good { border-left-color: #15803d; background: #f4fbf7; }
+.dmx-stat-good .dmx-stat-v, .dmx-stat-good .dmx-stat-word { color: #15803d; }
+.dmx-stat-warn { border-left-color: #b45309; background: #fffaf1; }
+.dmx-stat-warn .dmx-stat-v, .dmx-stat-warn .dmx-stat-word { color: #b45309; }
+.dmx-stat-bad  { border-left-color: #b91c1c; background: #fef7f7; }
+.dmx-stat-bad .dmx-stat-v, .dmx-stat-bad .dmx-stat-word { color: #b91c1c; }
+.dmx-cell-v.dmx-stat-v small { color: inherit; opacity: .75; }
+
+/* ── Last 4 weeks ─────────────────────────────────────────────────────────
+   levelUpHtml() renders four flat bars, but every one of its rules is scoped to
+   .goals-levelup, so dropped into this modal it came out as unstyled text. This
+   is a proper small chart instead: four weeks against the store's target, with
+   the target drawn as a reference line so "did they clear it" is answerable
+   without reading a single number.
+
+   The three heights below are load-bearing — the target line is positioned from
+   the bottom of the plot, so it has to clear the label row exactly. Track 64 +
+   label 15 means the line sits at 15px + its share of 64px. Change one, change
+   _dmxLevelUp(). */
+.dmx-lu { margin-top: 4px; }
+.dmx-lu-h { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+.dmx-lu-t { font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3; }
+.dmx-lu-target { font-size: 11px; font-weight: 800; color: #647082; font-variant-numeric: tabular-nums; }
+.dmx-lu-plot { position: relative; }
+.dmx-lu-bars { display: flex; align-items: flex-end; gap: 8px; }
+.dmx-lu-w { flex: 1; display: flex; flex-direction: column; align-items: stretch; min-width: 0; }
+.dmx-lu-v {
+    height: 17px; line-height: 17px; text-align: center;
+    font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums;
+}
+.dmx-lu-track { height: 64px; display: flex; align-items: flex-end; }
+.dmx-lu-track > i { display: block; width: 100%; border-radius: 4px 4px 0 0; background: #cbd5e1; }
+.dmx-lu-hit { color: #15803d; }
+.dmx-lu-miss { color: #b91c1c; }
+.dmx-lu-none { color: #cbd5e1; }
+.dmx-lu-track > i.dmx-lu-hit { background: #15803d; }
+.dmx-lu-track > i.dmx-lu-miss { background: #c94f4f; }
+.dmx-lu-track > i.dmx-lu-none { background: #eef2f6; }
+.dmx-lu-lab {
+    height: 15px; line-height: 15px; text-align: center;
+    font-size: 9.5px; font-weight: 700; letter-spacing: .02em; color: #9aa6ad;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Reference line for the target. Dashed and grey so it reads as a threshold
+   rather than as a fifth data mark. */
+.dmx-lu-line {
+    position: absolute; left: 0; right: 0; height: 0;
+    border-top: 1.5px dashed #c3ccd2; pointer-events: none;
+}
+
+/* Company band: its edit control sits on the band, since that is the only place
+   in the product a DM can reach company-wide initiatives. */
+.dmx-company-h { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.dmx-company-edit {
+    font: inherit; font-size: 11.5px; font-weight: 800; cursor: pointer;
+    color: #178048; background: #e8f7ee; border: 1px solid #b7e3c7;
+    border-radius: 7px; padding: 5px 11px;
+}
+.dmx-company-edit:hover { background: #d8f0e2; }
