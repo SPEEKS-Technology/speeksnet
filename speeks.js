@@ -8172,8 +8172,12 @@ function _b2bStoreTag(code) {
     if (code === 'CORP') return '<span class="b2b-store b2b-store-corp">CORP</span>';
     return `<span class="b2b-store">${STORE_DOTS[code] || ''} ${escapeHtml(code)}</span>`;
 }
+// Stroke attributes go inline rather than relying on an ancestor rule: the
+// deal modals sit outside .b2b-panel / .cb-panel, so a bare <svg> there renders
+// as a filled blob (paths) or nothing at all (lines).
 function _b2bIco(svg, cls) {
-    return `<svg viewBox="0 0 24 24" class="${cls || ''}">${svg}</svg>`;
+    return `<svg viewBox="0 0 24 24" class="${cls || ''}" fill="none" stroke="currentColor"`
+         + ` stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${svg}</svg>`;
 }
 // Units still needing to be listed or recycled out.
 function _b2bOutstanding(deal) { return Number(deal.outstanding_units) || 0; }
@@ -8850,6 +8854,11 @@ async function b2bAssignPricing(id) {
 // --- line item helpers (shared by pricing + quote) ------------------------
 
 function _b2bTagsOf(str)  { return String(str || '').split(';').map(s => s.trim()).filter(Boolean); }
+// client_notes is one semicolon-joined string. Split it back into the preset
+// tags (which drive the chips) and anything typed by hand (which drives the
+// free-text box) so the two controls never show each other's content.
+function _b2bPresetNotes(it) { return _b2bTagsOf(it.client_notes).filter(t => B2B_NOTE_TAGS.includes(t)); }
+function _b2bCustomNotes(it) { return _b2bTagsOf(it.client_notes).filter(t => !B2B_NOTE_TAGS.includes(t)).join('; '); }
 function _b2bItemName(it) { return [it.make, it.model].filter(Boolean).join(' ') || 'Untitled item'; }
 function _b2bLocalItem(id){ return _b2bModalItems.find(i => i.id === id); }
 
@@ -8931,6 +8940,16 @@ async function b2bItemToggleTag(id, tag) {
     _b2bRepaintItems();
 }
 
+// The free-text box owns only the hand-typed part; the chips own the presets.
+// Recombine both into client_notes on every edit.
+function b2bItemCustomNote(id, value) {
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    const custom = String(value || '').split(';').map(s => s.trim()).filter(Boolean);
+    it.client_notes = [..._b2bPresetNotes(it), ...custom].join('; ');
+    _b2bPaintTotals();
+}
+
 async function b2bAddItem(dealId) {
     const out = await _b2bPost({
         action: 'add_item', deal_id: dealId, quantity: 1, value: 0, offer: 0,
@@ -8970,7 +8989,7 @@ function _b2bItemCards() {
     }
     return _b2bModalItems.map(it => {
         const rec  = !!it.recycle_only;
-        const tags = _b2bTagsOf(it.client_notes);
+        const tags = _b2bPresetNotes(it);
         return `
         <div class="b2b-pcard ${rec ? 'rec' : ''}">
             <div class="b2b-pcard-head">
@@ -9017,8 +9036,8 @@ function _b2bItemCards() {
                     <div class="b2b-tags">
                         ${B2B_NOTE_TAGS.map(t => `<button class="b2b-tag ${tags.includes(t) ? 'on' : ''}" onclick="b2bItemToggleTag('${it.id}','${t}')">${t}</button>`).join('')}
                     </div>
-                    <input class="b2b-tag-free" value="${escapeHtml(it.client_notes || '')}" placeholder="Or type notes, separated by semicolons"
-                        oninput="b2bItemInput('${it.id}','client_notes',this.value)" onchange="b2bItemSave('${it.id}')"></div>
+                    <input class="b2b-tag-free" value="${escapeHtml(_b2bCustomNotes(it))}" placeholder="Add anything the tags don't cover"
+                        oninput="b2bItemCustomNote('${it.id}',this.value)" onchange="b2bItemSave('${it.id}')"></div>
             </div>
         </div>`;
     }).join('');

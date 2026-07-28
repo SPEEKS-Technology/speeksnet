@@ -9313,7 +9313,12 @@ body.sam-active .hotbar-btn:hover {
    Call Backs and the workspace tools. .ops-wrap already flips
    --sage-professional to emerald, so the panel inherits it for free.
    ============================================================================ */
-.b2b-panel {
+/* Declared at the root, not on .b2b-panel: the deal and new-deal modals live
+   outside the panel (they hang off .main-content so the SPA router carries
+   them), and a token that doesn't resolve silently voids the whole shorthand
+   it sits in -- which left every card and input in those modals borderless.
+   The --b2b- prefix keeps them namespaced, so root scope costs nothing. */
+:root {
     --b2b-line: #e6ebf1;
     --b2b-line-2: #eef2f6;
     --b2b-surface: #f6f8fa;
@@ -9323,6 +9328,16 @@ body.sam-active .hotbar-btn:hover {
     --b2b-accent: #1f9d57;
     --b2b-accent-deep: #178048;
     --b2b-accent-tint: #e8f7ee;
+
+    /* One control scale, so nothing in a row is a few pixels off its neighbour.
+       sm = table/inline affordances, md = header controls and grid fields,
+       lg = modal footer actions and full-width inputs. */
+    --b2b-h-sm: 28px;
+    --b2b-h-md: 34px;
+    --b2b-h-lg: 40px;
+    --b2b-r-sm: 7px;
+    --b2b-r-md: 9px;
+    --b2b-r-lg: 12px;
 }
 /* Nothing inside B2B may widen the Operations page -- min-width:0 lets the
    flex/grid children shrink instead of forcing their min-content width up the
@@ -9340,7 +9355,14 @@ body.sam-active .hotbar-btn:hover {
 .b2b-mono { font-family: 'Consolas', 'SFMono-Regular', Menlo, monospace; letter-spacing: .02em; }
 
 /* --- header chrome -------------------------------------------------------- */
-.b2b-view-toggle .mb-view-btn { display: inline-flex; align-items: center; gap: 6px; }
+/* Everything in the controls row sits on --b2b-h-md so the segmented control,
+   the scope chip and the New Deal button share one baseline and one radius. */
+.b2b-panel .cb-head-controls { gap: 10px; }
+.b2b-view-toggle { height: var(--b2b-h-md); padding: 3px; border-radius: var(--b2b-r-md); }
+.b2b-view-toggle .mb-view-btn {
+    display: inline-flex; align-items: center; gap: 6px; height: 100%;
+    padding: 0 12px; border-radius: var(--b2b-r-sm); font-size: 12.5px;
+}
 .b2b-view-toggle .mb-view-btn svg {
     width: 14px; height: 14px; fill: none; stroke: currentColor;
     stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
@@ -9352,9 +9374,10 @@ body.sam-active .hotbar-btn:hover {
     font-size: 10px; font-weight: 800; line-height: 1;
 }
 .b2b-scope-chip {
-    display: inline-flex; align-items: center; padding: 5px 11px;
-    border-radius: 999px; background: #f1f5f9; color: #647082;
-    font-size: 11px; font-weight: 800; letter-spacing: .03em; white-space: nowrap;
+    display: inline-flex; align-items: center; height: var(--b2b-h-md);
+    padding: 0 14px; border-radius: var(--b2b-r-md);
+    background: var(--b2b-chip); color: var(--b2b-muted);
+    font-size: 11.5px; font-weight: 800; letter-spacing: .03em; white-space: nowrap;
 }
 .b2b-scope-chip.b2b-scope-corp { background: #1a1c1e; color: #fff; }
 
@@ -9404,12 +9427,20 @@ body.sam-active .hotbar-btn:hover {
 .b2b-age-crit { color: #d1443b; }
 
 /* --- buttons -------------------------------------------------------------- */
+/* Buttons come in three sizes and nothing else. The modal shell restyles bare
+   buttons inside .manage-menu, so these carry !important on the properties it
+   would otherwise win -- that shell rule is why the footer's Cancel and
+   primary buttons were 11px apart in height. */
 .b2b-btn {
-    font: inherit; font-size: 12.5px; font-weight: 750; cursor: pointer;
-    padding: 9px 16px; border-radius: 9px; border: 1px solid transparent;
+    display: inline-flex; align-items: center; justify-content: center;
+    font: inherit; font-size: 13px !important; font-weight: 750; cursor: pointer;
+    height: var(--b2b-h-lg); padding: 0 18px; flex: 0 0 auto;
+    border-radius: var(--b2b-r-md) !important; border: 1px solid transparent;
     transition: background .16s ease, color .16s ease, border-color .16s ease, box-shadow .16s ease;
-    white-space: nowrap;
+    white-space: nowrap; line-height: 1;
 }
+/* Header-row size: matches the segmented control it sits beside. */
+.b2b-btn-head { height: var(--b2b-h-md); padding: 0 15px; font-size: 12.5px !important; }
 .b2b-btn-primary { background: var(--sage-professional); color: #fff; }
 .b2b-btn-primary:hover:not(:disabled) { background: var(--sage-deep); }
 .b2b-btn-secondary { background: #fff; color: var(--b2b-muted); border-color: var(--b2b-line); }
@@ -9420,6 +9451,19 @@ body.sam-active .hotbar-btn:hover {
 .b2b-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(31,157,87,.16); }
 .b2b-add { margin-top: 12px; width: 100%; }
 .b2b-foot-note { font-size: 11.5px; color: var(--b2b-faint); align-self: center; }
+
+/* `.manage-footer button` (0,1,1) outranks `.b2b-btn` (0,1,0) and was giving
+   the shared Cancel button a different box from the primary beside it. Match
+   its specificity once, here, so every footer button takes the same size
+   whichever class it carries. */
+.b2b-deal-modal .manage-footer button,
+#b2bCreateModal .manage-footer button {
+    display: inline-flex; align-items: center; justify-content: center;
+    height: var(--b2b-h-lg); padding: 0 18px; line-height: 1; flex: 0 0 auto;
+    font-size: 13px; font-weight: 750; border-radius: var(--b2b-r-md);
+}
+.b2b-deal-modal .manage-footer,
+#b2bCreateModal .manage-footer { gap: 10px; align-items: center; }
 
 .b2b-mini {
     font: inherit; font-size: 11px; font-weight: 750; cursor: pointer;
@@ -9610,6 +9654,17 @@ body.sam-active .hotbar-btn:hover {
 
 /* --- modal shell ---------------------------------------------------------- */
 .b2b-deal-modal.b2b-modal-wide { width: min(1080px, 96vw); max-width: 96vw; }
+/* The stage icon is injected by _b2bShowDeal, so size it from the tile. */
+.b2b-deal-modal .tool-head-ico svg,
+#b2bCreateModal .tool-head-ico svg { width: 20px; height: 20px; stroke: var(--sage-deep); }
+/* The shell pins every .modal-menu to a flat 84vh and .manage-content to 60vh,
+   which left a short screen like New Deal with half a modal of dead space.
+   Same escape hatch #ideaModal and #empGoalsModal use: size to content, cap
+   the total, and let the body scroll once a long pricing grid outgrows it. */
+.b2b-deal-modal,
+#b2bCreateModal { height: auto; max-height: 88vh; }
+.b2b-deal-modal > .manage-content,
+#b2bCreateModal > .manage-content { height: auto; }
 .b2b-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
 .b2b-hint { font-size: 11.5px; color: var(--b2b-faint); line-height: 1.55; margin: 7px 0 0; }
 
@@ -9653,8 +9708,13 @@ body.sam-active .hotbar-btn:hover {
     display: flex; flex-direction: column; gap: 5px; max-height: 230px;
     overflow-y: auto; margin: 10px 0;
 }
+/* Explicit areas, not auto-placement: the count is optional, and when it was
+   auto-placed it landed in the acronym's cell and shoved the company name to
+   the far right. Named areas keep the row stable whether it renders or not. */
 .b2b-pick {
-    display: grid; grid-template-columns: auto 1fr auto; gap: 4px 11px;
+    display: grid; gap: 2px 11px;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas: "acr co n" "acr sub n";
     align-items: center; text-align: left; padding: 9px 12px; cursor: pointer;
     border-radius: 10px; border: 1px solid var(--b2b-line); background: #fff;
     font: inherit; transition: all .14s ease;
@@ -9662,14 +9722,19 @@ body.sam-active .hotbar-btn:hover {
 .b2b-pick:hover { border-color: var(--sage-professional); background: #f9fdfa; }
 .b2b-pick.on { border-color: var(--sage-professional); background: var(--b2b-accent-tint); }
 .b2b-pick-ac {
+    grid-area: acr; justify-self: start; align-self: center;
     font-family: 'Consolas', 'SFMono-Regular', monospace; font-size: 11px;
-    font-weight: 800; color: var(--sage-deep); padding: 3px 7px;
+    font-weight: 800; color: var(--sage-deep); padding: 4px 8px;
     border-radius: 6px; background: var(--b2b-accent-tint);
 }
 .b2b-pick.on .b2b-pick-ac { background: #fff; }
-.b2b-pick-co { font-size: 13.5px; font-weight: 750; color: #1a1c1e; }
-.b2b-pick-sub { grid-column: 2; font-size: 11px; color: var(--b2b-muted); }
-.b2b-pick-n { grid-row: 1 / span 2; font-size: 10.5px; font-weight: 800; color: var(--b2b-muted); }
+.b2b-pick-co { grid-area: co; font-size: 13.5px; font-weight: 750; color: #1a1c1e; }
+.b2b-pick-sub { grid-area: sub; font-size: 11px; color: var(--b2b-muted); }
+.b2b-pick-n {
+    grid-area: n; align-self: center; justify-self: end;
+    padding: 3px 9px; border-radius: 999px; background: var(--b2b-chip);
+    font-size: 10.5px; font-weight: 800; color: var(--b2b-muted); white-space: nowrap;
+}
 .b2b-pick-empty { padding: 18px; text-align: center; font-size: 12.5px; color: var(--b2b-faint); }
 .b2b-selected {
     padding: 11px 14px; border-radius: 10px; background: var(--b2b-accent-tint);
@@ -9751,9 +9816,13 @@ body.sam-active .hotbar-btn:hover {
     text-transform: uppercase; color: var(--b2b-faint);
     display: flex; align-items: center; gap: 6px;
 }
+/* Inputs and selects render at different intrinsic heights; pinning both to
+   --b2b-h-md stops a select sitting 2px proud of the input beside it. */
 .b2b-f input, .b2b-f select {
-    width: 100%; font: inherit; font-size: 12.5px; padding: 7px 9px;
-    border-radius: 8px; border: 1px solid var(--b2b-line); background: #fff; color: #1a1c1e;
+    width: 100%; font: inherit; font-size: 12.5px;
+    height: var(--b2b-h-md); padding: 0 10px; flex: 0 0 auto;
+    border-radius: var(--b2b-r-sm); border: 1px solid var(--b2b-line);
+    background: #fff; color: #1a1c1e;
     transition: border-color .14s ease, box-shadow .14s ease;
 }
 .b2b-f input:focus, .b2b-f select:focus {
@@ -9761,12 +9830,17 @@ body.sam-active .hotbar-btn:hover {
     box-shadow: 0 0 0 3px rgba(31,157,87,.12);
 }
 .b2b-f-n input { text-align: right; font-variant-numeric: tabular-nums; }
-.b2b-f-calc {
-    padding: 7px 9px; font-size: 12.5px; font-weight: 800; text-align: right;
-    color: #1a1c1e; background: var(--b2b-surface); border-radius: 8px;
-    border: 1px solid var(--b2b-line-2); font-variant-numeric: tabular-nums;
+/* Read-only cells stand in for an input, so they take the same box. */
+.b2b-f-calc, .b2b-f-off {
+    display: flex; align-items: center; justify-content: flex-end; flex: 0 0 auto;
+    height: var(--b2b-h-md); padding: 0 10px; border-radius: var(--b2b-r-sm);
+    font-size: 12.5px; font-variant-numeric: tabular-nums;
 }
-.b2b-f-off { padding: 7px 9px; font-size: 12px; text-align: right; color: var(--b2b-faint); font-style: italic; }
+.b2b-f-calc {
+    font-weight: 800; color: #1a1c1e;
+    background: var(--b2b-surface); border: 1px solid var(--b2b-line-2);
+}
+.b2b-f-off { color: var(--b2b-faint); font-style: italic; border: 1px solid transparent; }
 .b2b-tag-int {
     padding: 1px 6px; border-radius: 999px; background: #f1f5f9;
     color: var(--b2b-muted); font-size: 8.5px; letter-spacing: .04em;
@@ -9903,15 +9977,17 @@ body.sam-active .hotbar-btn:hover {
 }
 .b2b-lacts { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .b2b-step {
-    display: grid; place-items: center; width: 30px; height: 30px; cursor: pointer;
-    font: inherit; font-size: 16px; font-weight: 700; border-radius: 8px;
+    display: grid; place-items: center; cursor: pointer;
+    width: var(--b2b-h-md); height: var(--b2b-h-md);
+    font: inherit; font-size: 16px; font-weight: 700; border-radius: var(--b2b-r-sm);
     border: 1px solid var(--b2b-line); background: #fff; color: var(--b2b-muted);
 }
 .b2b-step.up { background: var(--sage-professional); border-color: var(--sage-professional); color: #fff; }
 .b2b-step:disabled { opacity: .35; cursor: not-allowed; }
 .b2b-recycle {
-    font: inherit; font-size: 11px; font-weight: 750; cursor: pointer;
-    padding: 7px 11px; border-radius: 8px; border: 1px solid var(--b2b-line);
+    display: inline-flex; align-items: center; height: var(--b2b-h-md);
+    font: inherit; font-size: 11.5px; font-weight: 750; cursor: pointer;
+    padding: 0 12px; border-radius: var(--b2b-r-sm); border: 1px solid var(--b2b-line);
     background: #fff; color: var(--b2b-muted);
 }
 .b2b-recycle:hover:not(:disabled) { border-color: #b7791f; color: #b7791f; background: #fffbf3; }

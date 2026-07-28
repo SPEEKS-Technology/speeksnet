@@ -125,3 +125,11 @@ create table public.b2b_deal_items (
 create index b2b_deal_items_deal_id_idx on public.b2b_deal_items (deal_id);
 create index b2b_deals_stage_idx        on public.b2b_deals (stage);
 create index b2b_deals_client_id_idx    on public.b2b_deals (client_id);
+
+-- 6. RLS on with no policies: the tables are closed to the anon client and
+--    every read and write goes through the service-role b2b-deals function.
+--    The linter flags this as INFO; it is the same posture as every other
+--    table in this project, and it is deliberate.
+alter table public.b2b_clients    enable row level security;
+alter table public.b2b_deals      enable row level security;
+alter table public.b2b_deal_items enable row level security;

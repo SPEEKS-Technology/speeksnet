@@ -651,7 +651,7 @@
                       <button id="b2bViewOverviewBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo" onclick="b2bSetView('overview')"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Overview</button>
                   </div>
                   <span id="b2bScopeChip" class="b2b-scope-chip" style="display:none;"></span>
-                  <button id="b2bNewBtn" class="kpi-update-trigger-btn dynamic-module-flex role-district-manager role-ceo role-tom" onclick="b2bOpenCreate()">＋ New Deal</button>
+                  <button id="b2bNewBtn" class="b2b-btn b2b-btn-primary b2b-btn-head dynamic-module-flex role-district-manager role-ceo role-tom" onclick="b2bOpenCreate()">＋ New Deal</button>
               </div>
           </div>
           <div class="cb-scroll ws-scroll" id="b2bBody">
@@ -667,11 +667,13 @@
 <!-- ===== B2B NEW DEAL MODAL (inside .main-content so the SPA router carries it) ===== -->
 <div class="modal-menu manage-menu" id="b2bCreateModal">
     <div class="modal-header tool-head">
-        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></span>
-        <div class="tool-head-titles">
-            <span class="tool-head-eyebrow">B2B</span>
-            <span class="tool-head-title">New Deal</span>
-            <span class="tool-head-sub">Pick the business, then sign off the pickup.</span>
+        <div class="tool-head-main">
+            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></span>
+            <div class="tool-head-titles">
+                <span class="tool-head-eyebrow">B2B</span>
+                <span class="tool-head-title">New Deal</span>
+                <span class="tool-head-sub">Pick the business, then sign off the pickup.</span>
+            </div>
         </div>
         <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
@@ -682,11 +684,13 @@
 <!-- ===== B2B DEAL MODAL (title / body / footer all driven by b2bOpenDeal) ===== -->
 <div class="modal-menu manage-menu b2b-deal-modal" id="b2bDealModal">
     <div class="modal-header tool-head">
-        <span class="tool-head-ico" id="b2bDealIco"></span>
-        <div class="tool-head-titles">
-            <span class="tool-head-eyebrow" id="b2bDealEyebrow">B2B</span>
-            <span class="tool-head-title" id="b2bDealTitle">Deal</span>
-            <span class="tool-head-sub" id="b2bDealSub"></span>
+        <div class="tool-head-main">
+            <span class="tool-head-ico" id="b2bDealIco"></span>
+            <div class="tool-head-titles">
+                <span class="tool-head-eyebrow" id="b2bDealEyebrow">B2B</span>
+                <span class="tool-head-title" id="b2bDealTitle">Deal</span>
+                <span class="tool-head-sub" id="b2bDealSub"></span>
+            </div>
         </div>
         <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
