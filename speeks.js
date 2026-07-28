@@ -667,8 +667,10 @@ window.addEventListener('click', (e) => {
 
 document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    // Escape peels one layer at a time: photo viewer, then camera, then modals —
-    // dismissing a picture must never take the audit down with it.
+    // Escape peels one layer at a time: export picker, photo viewer, camera, then
+    // modals — dismissing a picture must never take the audit down with it.
+    const ex = document.getElementById('exportRangeModal');
+    if (ex && ex.classList.contains('open')) { _exClose(); return; }
     const lb = document.getElementById('auditPhotoLightbox');
     if (lb && lb.style.display === 'flex') { lb.style.display = 'none'; return; }
     const cam = document.getElementById('auditCameraModal');
@@ -1753,6 +1755,13 @@ function handlePINAutoTrigger() {
     const input = document.getElementById('pinInput');
     const btn = document.getElementById('unlockBtn');
 
+    // Typing again clears the previous failure, so the red cells and the error
+    // line don't linger over a fresh attempt.
+    _authPaintCells();
+    document.getElementById('pinCells')?.classList.remove('bad');
+    const prevErr = document.getElementById('pinError');
+    if (prevErr) prevErr.style.display = 'none';
+
     if (_pinAutoTimer) {
         clearTimeout(_pinAutoTimer);
         _pinAutoTimer = null;
@@ -1842,6 +1851,7 @@ async function checkPIN() {
             err.innerText = "Incorrect PIN. Please try again.";
             err.style.display = 'block';
             document.getElementById('pinInput').value = '';
+            document.getElementById('pinCells')?.classList.add('bad');
         }
     } catch (e) {
         console.error(e);
@@ -1850,6 +1860,7 @@ async function checkPIN() {
     } finally {
         btn.classList.remove('loading');
         document.getElementById('pinInput').classList.remove('pin-filled');
+        _authPaintCells();   // covers success, wrong PIN and the catch above
     }
 }
 
@@ -2851,9 +2862,13 @@ function _kpiRenderWeekly(periods) {
     body.innerHTML = '<div class="kpi-grid-scroll-wrapper"><table class="kpi-entry-grid kpi-full-table">' + _kpiColgroupHtml() + '<tbody>' + tbody + '</tbody></table></div>';
 }
 
-function _kpiExportCSV() {
-    if (!_kpiPeriodsData || !_kpiPeriodsData.length) return;
-    const store = sessionStorage.getItem('speeksUserStore') || 'STORE';
+// `periods` lets the date-range picker export a wider span than the on-screen
+// window holds (see _exOpen). Called with no args it falls back to what's
+// currently rendered, so any other caller behaves exactly as before.
+function _kpiExportCSV(periods, spanTag) {
+    const src = (periods && periods.length) ? periods : _kpiPeriodsData;
+    if (!src || !src.length) return;
+    const store = _kpiResolveStore() || sessionStorage.getItem('speeksUserStore') || 'STORE';
     const isWeekly = _kpiCurrentTab === 'weekly';
 
     const headers = [
@@ -2869,7 +2884,10 @@ function _kpiExportCSV() {
 
     const csvRows = [headers];
 
-    _kpiPeriodsData.forEach(function(p) {
+    // oldest → newest reads better in a spreadsheet than the newest-first UI order
+    src.slice().sort(function(a, b) {
+        return a.period_end_date < b.period_end_date ? -1 : a.period_end_date > b.period_end_date ? 1 : 0;
+    }).forEach(function(p) {
         const label = isWeekly ? _kpiWeekRangeLabel(p.period_end_date) : p.period_label;
         p.entries.forEach(function(raw) {
             const e = _kpiCalcDerived(raw);
@@ -2900,7 +2918,7 @@ function _kpiExportCSV() {
 
     const tab = isWeekly ? 'Weekly' : 'Monthly';
     const ts  = new Date().toISOString().slice(0, 10);
-    const filename = store + '_KPI_' + tab + '_' + ts + '.csv';
+    const filename = store + '_KPI_' + tab + '_' + (spanTag ? spanTag + '_' : '') + ts + '.csv';
 
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url  = URL.createObjectURL(blob);
@@ -3341,7 +3359,9 @@ function _mbRenderOverview() {
     body.innerHTML = html;
 }
 
-function mbExportCSV() {
+// `months` (oldest → newest) comes from the date-range picker; with no args the
+// export falls back to the on-screen window, as it always did.
+function mbExportCSV(months, spanTag) {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     const canPickStore = role === 'ceo' || role === 'district manager';
     const sel   = document.getElementById('mbStoreSelect');
@@ -3360,32 +3380,272 @@ function mbExportCSV() {
     const sections = {}, secOrder = [];
     _mbMetrics.forEach(m => { if (!sections[m.section]) { sections[m.section] = []; secOrder.push(m.section); } sections[m.section].push(m); });
 
+    const span = spanTag ? spanTag + '_' : '';
+
     if (_mbView === 'overview') {
-        const month = _mbOverviewMonth;
-        if (!month || !_mbMetrics.length) return;
-        const rows = [['Section', 'Metric', ...MB_STORES]];
-        secOrder.forEach(sec => {
-            sections[sec].forEach(m => {
-                const row = [sec, m.label];
-                MB_STORES.forEach(s => { const v = (_mbOverviewData[s] || {})[month]; row.push(v ? v[m.key] : ''); });
-                rows.push(row);
+        // Multi-month overview pivots to one row per metric PER STORE so every
+        // selected month gets its own column; a single month keeps the old
+        // stores-across-the-top shape that people are used to.
+        const cols = (months && months.length) ? months : (_mbOverviewMonth ? [_mbOverviewMonth] : []);
+        if (!cols.length || !_mbMetrics.length) return;
+
+        let rows;
+        if (cols.length === 1) {
+            rows = [['Section', 'Metric', ...MB_STORES]];
+            secOrder.forEach(sec => {
+                sections[sec].forEach(m => {
+                    const row = [sec, m.label];
+                    MB_STORES.forEach(s => { const v = (_mbOverviewData[s] || {})[cols[0]]; row.push(v ? v[m.key] : ''); });
+                    rows.push(row);
+                });
             });
-        });
-        dl(toCSV(rows), 'Monthly_Overview_' + _mbMonthLabelShort(month).replace(/[^a-zA-Z0-9]/g, '_') + '_' + ts + '.csv');
+        } else {
+            rows = [['Section', 'Metric', 'Store', ...cols.map(_mbMonthLabelShort)]];
+            secOrder.forEach(sec => {
+                sections[sec].forEach(m => {
+                    MB_STORES.forEach(s => {
+                        const row = [sec, m.label, s];
+                        cols.forEach(mo => { const v = (_mbOverviewData[s] || {})[mo]; row.push(v && v[m.key] != null ? v[m.key] : ''); });
+                        rows.push(row);
+                    });
+                });
+            });
+        }
+        const tag = cols.length === 1 ? _mbMonthLabelShort(cols[0]).replace(/[^a-zA-Z0-9]/g, '_') + '_' : span;
+        dl(toCSV(rows), 'Monthly_Overview_' + tag + ts + '.csv');
     } else {
-        const monthSet = new Set(_mbMonths);
-        const months = [...monthSet].sort().reverse().slice(0, MB_MONTH_WINDOW).filter(mo => _mbData[mo] && Object.keys(_mbData[mo]).length);
-        if (!_mbMetrics.length || !months.length) return;
-        const rows = [['Section', 'Metric', ...months.map(m => _mbMonthLabelShort(m))]];
+        const cols = (months && months.length)
+            ? months
+            : [...new Set(_mbMonths)].sort().reverse().slice(0, MB_MONTH_WINDOW)
+                  .filter(mo => _mbData[mo] && Object.keys(_mbData[mo]).length).reverse();
+        if (!_mbMetrics.length || !cols.length) return;
+        const rows = [['Section', 'Metric', ...cols.map(_mbMonthLabelShort)]];
         secOrder.forEach(sec => {
             sections[sec].forEach(m => {
                 const row = [sec, m.label];
-                months.forEach(mo => { const v = (_mbData[mo] || {})[m.key]; row.push(v != null ? v : ''); });
+                cols.forEach(mo => { const v = (_mbData[mo] || {})[m.key]; row.push(v != null ? v : ''); });
                 rows.push(row);
             });
         });
-        dl(toCSV(rows), store + '_Monthly_Brief_' + ts + '.csv');
+        dl(toCSV(rows), store + '_Monthly_Brief_' + span + ts + '.csv');
     }
+}
+
+// --- 11d. MODULE: CSV EXPORT DATE-RANGE PICKER ------------------------------
+// The Export buttons used to dump whatever the on-screen window happened to be
+// holding — 4 weeks of KPIs, 6 months of Breakdown — even though the backend
+// keeps the whole history. This popup lets anyone with an Export button choose a
+// span instead (6 weeks, 8 weeks, a year of months…).
+//
+// Only periods that actually carry saved data are offered, so an empty export
+// isn't reachable. Weekly/monthly KPI options come from kpi-manage
+// `?mode=available` and the rows themselves from `?mode=range`; monthly-brief
+// already returns every month, so the Breakdown picker derives its options from
+// data that's already in memory.
+let _exCtx = null;   // { kind, unit, opts:[{value,label,count}], picked, preset, busy }
+
+const _EX_PRESETS = {
+    weekly:  [{ n: 4, t: '4 weeks' },  { n: 8, t: '8 weeks' },  { n: 12, t: '12 weeks' },  { n: 0, t: 'All' }],
+    monthly: [{ n: 3, t: '3 months' }, { n: 6, t: '6 months' }, { n: 12, t: '12 months' }, { n: 0, t: 'All' }],
+};
+
+function _exWeekLabel(dateStr) {
+    const end = new Date(dateStr + 'T12:00:00');
+    const start = new Date(end);
+    start.setDate(start.getDate() - 6);
+    const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return mo[start.getMonth()] + ' ' + start.getDate() + ' – ' + mo[end.getMonth()] + ' ' + end.getDate();
+}
+
+function _exEnsureModal() {
+    let el = document.getElementById('exportRangeModal');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'exportRangeModal';
+    el.className = 'ex-overlay';
+    el.addEventListener('click', function(e) { if (e.target === el) _exClose(); });
+    el.innerHTML =
+        '<div class="ex-card" role="dialog" aria-modal="true" aria-labelledby="exTitle">' +
+          '<div class="ex-head">' +
+            '<span class="ex-ico"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>' +
+              '<polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span>' +
+            '<div class="ex-titles">' +
+              '<span class="ex-eyebrow">Export CSV</span>' +
+              '<span class="ex-title" id="exTitle">Choose a date range</span>' +
+              '<span class="ex-sub" id="exSub"></span>' +
+            '</div>' +
+            '<button type="button" class="ex-close" onclick="_exClose()" title="Close">&times;</button>' +
+          '</div>' +
+          '<div class="ex-body" id="exBody"></div>' +
+        '</div>';
+    document.body.appendChild(el);
+    return el;
+}
+
+// Months the Breakdown actually has numbers for. Overview counts a month if ANY
+// store filled it in; Store View is scoped to the store on screen.
+function _exMonthOpts() {
+    const tally = {};
+    const bump = function(mo, k) { tally[mo] = (tally[mo] || 0) + k; };
+    const filledCount = function(obj) { return Object.values(obj || {}).filter(function(v) { return v != null; }).length; };
+    if (_mbView === 'overview') {
+        MB_STORES.forEach(function(s) {
+            const d = _mbOverviewData[s] || {};
+            Object.keys(d).forEach(function(mo) { const f = filledCount(d[mo]); if (f) bump(mo, f); });
+        });
+    } else {
+        Object.keys(_mbData || {}).forEach(function(mo) { const f = filledCount(_mbData[mo]); if (f) bump(mo, f); });
+    }
+    return Object.keys(tally).sort().reverse().map(function(mo) {
+        return { value: mo, label: _mbMonthLabelShort(mo), count: tally[mo] };
+    });
+}
+
+async function _exOpen(kind) {
+    const el = _exEnsureModal();
+    el.classList.add('open');
+    const unit = (kind === 'kpi') ? _kpiCurrentTab : 'monthly';
+    _exCtx = { kind: kind, unit: unit, opts: [], picked: [], preset: null, busy: true };
+
+    const sub = document.getElementById('exSub');
+    if (sub) {
+        sub.textContent = (kind === 'kpi')
+            ? 'Store KPIs · ' + (unit === 'weekly' ? 'weekly' : 'monthly') + ' · ' + (_kpiResolveStore() || '')
+            : 'Monthly Breakdown · ' + (_mbView === 'overview' ? 'all stores' : (document.getElementById('mbStoreSelect') || {}).value || 'store view');
+    }
+    _exRender();
+
+    try {
+        if (kind === 'kpi') {
+            const store = _kpiResolveStore();
+            const data = await fetch(KPI_MANAGE_URL + '?store=' + store + '&period_type=' + unit +
+                                     '&mode=available&v=' + Date.now()).then(function(r) { return r.json(); });
+            _exCtx.opts = (data.periods || []).map(function(p) {
+                return {
+                    value: p.period_end_date,
+                    label: unit === 'weekly' ? _exWeekLabel(p.period_end_date) : (p.period_label || p.period_end_date),
+                    count: p.saved_count || 0,
+                };
+            });
+        } else {
+            _exCtx.opts = _exMonthOpts();
+        }
+    } catch (e) {
+        _exCtx.opts = [];
+    }
+    _exCtx.busy = false;
+    _exRender();
+}
+
+function _exRender() {
+    const body = document.getElementById('exBody');
+    if (!body || !_exCtx) return;
+
+    if (_exCtx.busy) {
+        body.innerHTML = '<div class="ex-status">Checking what’s available…</div>';
+        return;
+    }
+    if (!_exCtx.opts.length) {
+        body.innerHTML = '<div class="ex-status">Nothing saved yet — there’s no data in this view to export.</div>' +
+            '<div class="ex-actions"><button type="button" class="btn-secondary" onclick="_exClose()">Close</button></div>';
+        return;
+    }
+
+    const presets = _EX_PRESETS[_exCtx.unit]
+        .filter(function(p) { return p.n === 0 || p.n <= _exCtx.opts.length; })
+        .map(function(p) { return '<button type="button" class="ex-chip" data-n="' + p.n + '" onclick="_exPreset(' + p.n + ')">' + p.t + '</button>'; })
+        .join('');
+    // Both selects share one newest-first list; the span is min..max of the two,
+    // so picking them "backwards" still works.
+    const optsHtml = _exCtx.opts.map(function(x, i) { return '<option value="' + i + '">' + x.label + '</option>'; }).join('');
+
+    body.innerHTML =
+        '<div class="ex-presets">' + presets + '</div>' +
+        '<div class="ex-fields">' +
+          '<label class="ex-field"><span>From</span><select id="exFrom" class="kpi-select" onchange="_exSync()">' + optsHtml + '</select></label>' +
+          '<span class="ex-dash" aria-hidden="true">→</span>' +
+          '<label class="ex-field"><span>To</span><select id="exTo" class="kpi-select" onchange="_exSync()">' + optsHtml + '</select></label>' +
+        '</div>' +
+        '<div class="ex-summary" id="exSummary"></div>' +
+        '<div class="ex-actions">' +
+          '<button type="button" class="btn-secondary" onclick="_exClose()">Cancel</button>' +
+          '<button type="button" class="btn-primary" id="exGo" onclick="_exConfirm()">Download CSV</button>' +
+        '</div>';
+
+    const want = _exCtx.unit === 'weekly' ? 8 : 6;
+    _exPreset(_exCtx.opts.length >= want ? want : 0);
+}
+
+function _exPreset(count) {
+    if (!_exCtx || !_exCtx.opts.length) return;
+    const from = document.getElementById('exFrom'), to = document.getElementById('exTo');
+    if (!from || !to) return;
+    const last = _exCtx.opts.length - 1;
+    to.value   = '0';
+    from.value = String(count === 0 ? last : Math.min(count - 1, last));
+    _exSync();
+}
+
+function _exSync() {
+    if (!_exCtx) return;
+    const from = document.getElementById('exFrom'), to = document.getElementById('exTo');
+    if (!from || !to) return;
+
+    const a = Math.min(Number(from.value), Number(to.value));
+    const b = Math.max(Number(from.value), Number(to.value));
+    const picked = _exCtx.opts.slice(a, b + 1);      // still newest-first
+    _exCtx.picked = picked;
+
+    const unitWord = _exCtx.unit === 'weekly' ? 'week' : 'month';
+    const rows = picked.reduce(function(t, x) { return t + (x.count || 0); }, 0);
+    const sum = document.getElementById('exSummary');
+    if (sum) {
+        sum.innerHTML = '<b>' + picked.length + ' ' + unitWord + (picked.length === 1 ? '' : 's') + '</b>' +
+            '<span class="ex-sum-range">' + picked[picked.length - 1].label + ' → ' + picked[0].label + '</span>' +
+            (rows ? '<span class="ex-sum-rows">' + rows + ' row' + (rows === 1 ? '' : 's') + '</span>' : '');
+    }
+    // light up whichever preset matches the current span
+    const all = _exCtx.opts.length;
+    Array.prototype.forEach.call(document.querySelectorAll('#exBody .ex-chip'), function(c) {
+        const n = Number(c.dataset.n);
+        c.classList.toggle('active', n === 0 ? picked.length === all : picked.length === n);
+    });
+}
+
+async function _exConfirm() {
+    if (!_exCtx || !_exCtx.picked || !_exCtx.picked.length) return;
+    const picked = _exCtx.picked;                       // newest-first
+    const oldest = picked[picked.length - 1].value;
+    const newest = picked[0].value;
+    const tag    = oldest + '_to_' + newest;
+    const kind   = _exCtx.kind;
+    const go     = document.getElementById('exGo');
+    if (go) { go.disabled = true; go.textContent = 'Preparing…'; }
+
+    try {
+        if (kind === 'kpi') {
+            const store = _kpiResolveStore();
+            const data = await fetch(KPI_MANAGE_URL + '?store=' + store + '&period_type=' + _kpiCurrentTab +
+                                     '&mode=range&from=' + oldest + '&to=' + newest + '&v=' + Date.now())
+                                 .then(function(r) { return r.json(); });
+            const periods = data.periods || [];
+            if (!periods.length) { alert('No KPI rows are saved in that range.'); return; }
+            _kpiExportCSV(periods, tag);
+        } else {
+            mbExportCSV(picked.map(function(x) { return x.value; }).reverse(), tag);   // oldest → newest
+        }
+        _exClose();
+    } catch (e) {
+        alert('Export failed — please try again.');
+    } finally {
+        if (go) { go.disabled = false; go.textContent = 'Download CSV'; }
+    }
+}
+
+function _exClose() {
+    const el = document.getElementById('exportRangeModal');
+    if (el) el.classList.remove('open');
+    _exCtx = null;
 }
 
 function mbStartEdit() {
@@ -5168,32 +5428,56 @@ function copyQMToClipboard(button) {
 // --- 16. MODULE: GLOBAL AUTH OVERLAY ---
 function injectGlobalAuth() {
     if (!document.getElementById('authOverlay')) {
+        // "Card on dark" — wordmark + description on the emerald-lit near-black
+        // field, a white card holding nothing but the login, two-fact rail below.
+        // The logo PNG is white-on-transparent, which is exactly why the brand
+        // sits OUT here on the dark ground: no dark plaque needed inside the card.
+        // #pinInput is transparent and overlays four cells (see the GLOBAL AUTH
+        // block in styles.css); its handlers are unchanged.
         const overlayHtml = `
         <div id="authOverlay" class="auth-page" style="display: none;">
-            <div class="auth-split-layout">
-                <div class="auth-brand-side">
-                    <img src="images/speeks_logo.png" alt="SPEEKS Logo" class="auth-logo">
-                    <div class="auth-brand-text">
-                        <h1>SPEEKSNET</h1>
-                        <p>Internal Operations Portal</p>
-                    </div>
+            <div class="auth-stack">
+                <div class="auth-brand">
+                    <img src="images/speeks_logo.png" alt="SPEEKS Technology" class="auth-logo">
+                    <div class="auth-portal">Internal Operations Portal</div>
                 </div>
-                <div class="auth-form-side">
-                    <div class="auth-form-container">
-                        <div class="auth-badge">SECURE ACCESS</div>
-                        <h2>Welcome Back</h2>
-                        <p id="authSubtitle">Please enter your 4-digit PIN to securely access the hub.</p>
+                <div class="auth-card">
+                    <div class="auth-body">
+                        <div class="auth-badge">Secure access</div>
+                        <h2>Welcome back</h2>
+                        <p id="authSubtitle">Enter your 4-digit PIN to open the hub.</p>
                         <div id="pinInputContainer" class="pin-container">
-                            <input type="password" id="pinInput" maxlength="4" placeholder="••••" onkeypress="if(event.key === 'Enter') checkPIN()" oninput="handlePINAutoTrigger()">
+                            <div class="pin-cells" id="pinCells">
+                                <div class="pin-cell"><span></span></div>
+                                <div class="pin-cell"><span></span></div>
+                                <div class="pin-cell"><span></span></div>
+                                <div class="pin-cell"><span></span></div>
+                                <input type="password" id="pinInput" maxlength="4" inputmode="numeric" autocomplete="off" aria-label="4-digit PIN" onkeypress="if(event.key === 'Enter') checkPIN()" oninput="handlePINAutoTrigger()">
+                            </div>
                             <button id="unlockBtn" class="btn-primary auth-btn" onclick="checkPIN()">Unlock Portal</button>
                             <div id="pinError" class="pin-error">Incorrect PIN. Please try again.</div>
                         </div>
                     </div>
                 </div>
+                <dl class="auth-rail">
+                    <div><dt>Stores</dt><dd>5</dd></div>
+                    <div><dt>Markets</dt><dd>KC · STL</dd></div>
+                </dl>
+                <div class="auth-tail" aria-hidden="true"></div>
             </div>
         </div>`;
         document.body.insertAdjacentHTML('beforeend', overlayHtml);
     }
+}
+
+// Mirror #pinInput's length onto the four cells. The input itself is invisible,
+// so this is the only thing that shows entry progress.
+function _authPaintCells() {
+    const input = document.getElementById('pinInput');
+    const cells = document.querySelectorAll('#pinCells .pin-cell');
+    if (!input || !cells.length) return;
+    const len = input.value.length;
+    cells.forEach((c, i) => c.classList.toggle('filled', i < len));
 }
 
 function handleSignOut() {
@@ -10894,6 +11178,19 @@ function initDashboardData() {
         if (!window._dmAuditSync) window._dmAuditSync = setInterval(() => {
             if (document.getElementById('dm-audit-container')) fetchDmAuditData();
         }, 60000);
+        // SAFETY NET for the Command Center dots. Realtime (broadcast-as-ping,
+        // see _RT_TOOL_CHECKS: scorecard/ebay/buying/goals) is the PRIMARY path —
+        // it lights the pulsing dot the instant a write lands. This slow poll only
+        // matters if the realtime socket never connects (CDN blocked, etc.); it
+        // re-pulls the sources so a change still surfaces within the interval.
+        if (!window._ccDataSync) window._ccDataSync = setInterval(() => {
+            const hasCC = document.getElementById('cc-updot-buying');       // manager Command Center
+            const hasEC = document.getElementById('ec-updot-buying');       // employee combined widget
+            if ((hasCC || hasEC) && typeof fetchHubData === 'function') fetchHubData();
+            if (hasCC && typeof fetchScorecardData === 'function') fetchScorecardData();
+            if (hasCC && typeof fetchAlertsData === 'function') fetchAlertsData();
+            if (hasEC && typeof fetchAndRenderEmployeeKPIs === 'function') fetchAndRenderEmployeeKPIs();
+        }, 10 * 60 * 1000);
         setTimeout(fetchAndRenderEmployeeGoals, 1100);
         setTimeout(fetchAndRenderEmployeeKPIs, 1200);
         setTimeout(fetchAndDisplayStoreComment, 1500);
@@ -22802,6 +23099,14 @@ const _RT_TOOL_CHECKS = {
     patch:         ['loadPatchNotes'],
     kpi:           ['checkKpiDueReminders'],
     b2b:           ['_b2bRealtimeRefresh'],
+    // Command Center + Listing Goals sources. Each re-fetches through its edge
+    // fn and recomputes its update signature, so the pulsing dot / bar lights the
+    // moment a write lands — no refresh or re-login. (scorecard fn, ebay-alerts
+    // fn, sync-buysell cache refresh, listing-goals fn all broadcast these.)
+    scorecard:     ['fetchScorecardData'],
+    ebay:          ['fetchAlertsData'],
+    buying:        ['fetchHubData'],
+    goals:         ['fetchLiveGoalsData', 'fetchAndRenderEmployeeGoals'],
 };
 
 // Re-run a tool's checks (sequentially, so any UI-refresh step runs after its

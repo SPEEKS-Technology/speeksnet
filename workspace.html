@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260727a">
+  <link rel="stylesheet" href="styles.css?v=20260728a">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20260727a" defer></script>
+  <script src="speeks.js?v=20260728a" defer></script>
 </head>
 <body class="preload">
 
@@ -628,7 +628,7 @@
                   <button id="mbEditBtn" class="kpi-update-trigger-btn" style="display:none;" onclick="mbStartEdit()">✏️ Edit</button>
                   <button id="mbSaveBtn" class="kpi-save-section-btn" style="display:none;" onclick="mbSaveBrief()">Save</button>
                   <button id="mbCancelBtn" class="kpi-cancel-btn" style="display:none;" onclick="mbCancelEdit()">Cancel</button>
-                  <button class="kpi-export-btn" onclick="mbExportCSV()" title="Export to CSV">⬇ Export CSV</button>
+                  <button class="kpi-export-btn" onclick="_exOpen('mb')" title="Export to CSV — pick a date range">⬇ Export CSV</button>
               </div>
           </div>
           <div class="weekly-kpi-scroll-area ws-scroll" id="mbBody">
@@ -665,7 +665,7 @@
                   <button id="kpiEditBtn"   class="kpi-update-trigger-btn" onclick="kpiHeaderStartEdit()" style="display:none;">✏️ Edit</button>
                   <button id="kpiSaveBtn"   class="kpi-save-section-btn"   onclick="kpiHeaderSave()"      style="display:none;">Save</button>
                   <button id="kpiCancelBtn" class="kpi-cancel-btn"          onclick="kpiHeaderCancel()"    style="display:none;">Cancel</button>
-                  <button class="kpi-export-btn" onclick="_kpiExportCSV()" title="Export to CSV">⬇ Export CSV</button>
+                  <button class="kpi-export-btn" onclick="_exOpen('kpi')" title="Export to CSV — pick a date range">⬇ Export CSV</button>
               </div>
           </div>
           <div class="kpi-fullscreen-body ws-kpi-body" id="kpiModalBody">

@@ -1025,175 +1025,345 @@ input, textarea, select,
 /* =========================================================
    FULL PAGE AUTHENTICATION
    ========================================================= */
-.auth-page { 
-    position: fixed; 
-    inset: 0; 
-    background-color: #1a1c1e;
-    background-image: radial-gradient(circle at 15% 0%, #2d3135 0%, transparent 50%), radial-gradient(circle at 85% 100%, #111213 0%, #1a1c1e 100%);
-    z-index: 100000; 
-    display: flex; 
-    align-items: center; 
-    justify-content: center; 
-    padding: 20px;
+/* =========================================================
+   GLOBAL AUTH — "Card on dark"   [2026-07-27, airy V4]
+   Wordmark + description on a near-black emerald-lit field,
+   a pure-white card holding nothing but the login, and a
+   two-fact rail underneath.
+
+   Why there's no dark plaque inside the card: every logo PNG
+   (speeks_logo, speeksnet_logo, SPEEKS Logo Short White) is
+   WHITE on transparent. Earlier passes had to inset a dark
+   block in the card just to host the mark. Putting the brand
+   on the dark ground removes that need entirely — but it also
+   means .auth-logo can NEVER move inside .auth-card without a
+   charcoal version of the asset being produced first.
+
+   Markup lives in injectGlobalAuth() (speeks.js). Load-bearing
+   hooks the auth JS depends on: #pinInput (+.pin-filled),
+   #unlockBtn (+.loading), #pinError (JS sets display:block),
+   #pinInputContainer, #authSubtitle, and #authOverlay being
+   valid as display:flex.
+   ========================================================= */
+.auth-page {
+    --a-cell-line: #c6d3cb;       /* pin boxes want a defined edge, not a whisper */
+    --a-cell-line-bad: #dfb0b0;   /* same visual weight as above, red family */
+    --a-error: #b23636;           /* matches the bad-chip ink in the weekly emails */
+    --a-muted: #64707c;
+    --a-faint: #9aa6ad;
+    --a-accent: #1f9d57;
+    --a-accent-deep: #178048;
+    --a-accent-tint: #e8f7ee;
+    --a-ring: #c6ecd6;
+    --a-ground: #0e1211;
+    /* dark-ground text scale. The site has no canonical dark palette (four
+       greens-on-dark and four near-blacks across the redesign), so these are
+       local. Worth folding into a shared scale next time the nav is touched. */
+    --a-d-muted: #a9b6b0;
+    --a-d-bright: #e6ede9;
+    --a-d-faint: #78877f;
+    /* The login was never added to the V4 emerald flip list further down this
+       file, so .btn-primary here rendered the pre-redesign olive (#5a8d3b).
+       Flipping the token locally puts "Unlock Portal" on the same emerald as
+       every other primary button on the redesigned surfaces. */
+    --sage-professional: #1f9d57;
+
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: flex;                /* JS toggles between none and flex */
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: clamp(22px, 3vw, 48px);
+    background: var(--a-ground);
+    overflow: auto;
+    /* Without this, a short viewport spawns a scrollbar that eats ~17px off the
+       right edge only, shifting the whole centred column ~8px left of the true
+       screen centre. both-edges reserves the gutter on BOTH sides, so the column
+       stays centred whether or not it is scrolling. */
+    scrollbar-gutter: stable both-edges;
 }
 
-.auth-split-layout { 
-    display: flex; 
-    width: 1000px; 
-    max-width: 100%; 
-    height: 600px; 
-    max-height: 95vh; 
-    background: white; 
-    border-radius: 16px; 
-    border: 1px solid #ddd; 
-    box-shadow: 0 10px 30px rgba(0,0,0,0.06); 
-    overflow: hidden; 
+.auth-page::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    /* Mirrored about the vertical axis. The first pass lit the field diagonally
+       (14% 0% / 96% 100%), which pulled the eye off-axis and read as a
+       mis-centred page even though the column itself was centred. Same emerald
+       bloom, now symmetric: one above the wordmark, one below the rail. */
+    background:
+        radial-gradient(900px 620px at 50% -8%, rgba(31, 157, 87, .24), transparent 66%),
+        radial-gradient(760px 520px at 50% 108%, rgba(31, 157, 87, .10), transparent 64%);
 }
 
-.auth-brand-side { 
-    flex: 1.2; 
-    background: var(--slate-charcoal); 
-    padding: 50px; 
-    display: flex; 
-    flex-direction: column; 
-    align-items: center; 
-    justify-content: center; 
-    text-align: center; 
-    color: white; 
+/* One centred column: brand region, card, rail, tail spacer.
+   The stack fills the full height so .auth-brand and .auth-tail can split the
+   leftover space equally — that's what centres the logo in the gap between the
+   top of the screen and the top of the card, and keeps the card itself from
+   sinking to the bottom. Wider than the card on purpose so the wordmark can
+   outgrow it; the card carries its own narrower cap. */
+.auth-stack {
+    position: relative;
+    z-index: 2;
+    flex: 1 1 auto;
+    width: 100%;
+    max-width: clamp(420px, 34vw, 560px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    animation: auth-rise .5s ease both;
 }
 
-.auth-brand-side::before { 
-    content: ''; 
-    position: absolute; 
-    inset: 0; 
-    background: linear-gradient(135deg, rgba(90, 141, 59, 0.15) 0%, transparent 100%); 
-    pointer-events: none; 
+@keyframes auth-rise {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: none; }
 }
 
-.auth-logo { 
-    width: 300px; 
-    max-width: 90%; 
-    margin-bottom: 40px; 
-    position: relative; 
-    z-index: 2; 
-    display: block; 
+/* ---------- brand, on the dark ground ---------- */
+/* Grows to fill the space above the card and centres the wordmark inside it.
+   min-height guarantees breathing room on short viewports, where the tail
+   collapses first. */
+/* flex column, not grid: with two children a grid with place-items:center gives
+   each its own stretched row, which would prise the logo and the line apart.
+   Flex keeps them as one tight group and centres the group. */
+.auth-brand {
+    flex: 1 1 0;
+    min-height: clamp(130px, 20vh, 290px);
+    width: 100%;
+    padding: 16px 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+
+.auth-logo {
+    width: clamp(260px, 26vw, 440px);
+    max-width: 92%;
+    display: block;
     object-fit: contain;
 }
 
-.auth-brand-text { position: relative; z-index: 2; }
-
-.auth-brand-text h1 { 
-    font-size: 32px; 
-    font-weight: 200; 
-    letter-spacing: 10px; 
-    margin-bottom: 10px; 
-    color: white; 
-    line-height: 1; 
+/* Wide-tracked emerald caps under the wordmark. Tracking is generous because
+   the line is short and sits under a 440px logo — it needs width to balance,
+   not size. */
+.auth-portal {
+    margin-top: clamp(13px, 1.15vw, 21px);
+    font-size: clamp(10px, .78vw, 12.5px);
+    font-weight: 800;
+    letter-spacing: .26em;
+    text-transform: uppercase;
+    color: #6ee7a7;
+    /* letter-spacing pads the right edge; nudge back so it reads centred */
+    text-indent: .26em;
 }
 
-.auth-brand-text p { 
-    font-size: 14px; 
-    color: #a0aab2; 
-    font-weight: 600; 
-    letter-spacing: 2px; 
-    text-transform: uppercase; 
+/* Mirrors .auth-brand's flex so the card+rail block lands in the middle of the
+   screen rather than being pushed to the bottom. Purely a spacer. */
+.auth-tail { flex: 1 1 0; min-height: 0; }
+
+/* ---------- card: login only ---------- */
+/* The emerald runs the full frame rather than a bar on the top edge only —
+   the single bar read as a loose lid once the card got taller. Global
+   box-sizing is border-box (line 28), so the 3px doesn't inflate the width.
+   To drop the green entirely, delete the `border` line: nothing else depends
+   on it. */
+.auth-card {
+    flex: 0 0 auto;
+    width: 100%;
+    /* the squared cap lives here now, not on .auth-stack, so the wordmark above
+       can be wider than the card */
+    max-width: clamp(390px, 28vw, 470px);
+    background: #fff;
+    overflow: hidden;
+    border: 3px solid var(--a-accent);
+    border-radius: clamp(20px, 1.7vw, 26px);
+    box-shadow: 0 34px 90px rgba(0, 0, 0, .55), 0 4px 14px rgba(0, 0, 0, .30);
 }
 
-.auth-form-side { 
-    flex: 1; 
-    padding: 50px; 
-    display: flex; 
-    flex-direction: column; 
-    justify-content: center; 
-    background: linear-gradient(135deg, #ffffff 0%, var(--bg-app) 100%); 
+/* Generous vertical padding is what squares the card up. Roughly +50px of
+   height versus the first pass, against a 40px narrower cap. */
+.auth-body {
+    padding: clamp(38px, 3.5vw, 60px) clamp(22px, 2vw, 34px) clamp(34px, 3.2vw, 54px);
+    text-align: center;
 }
 
-.auth-form-container { 
-    max-width: 380px; 
-    margin: 0 auto; 
-    width: 100%; 
+/* was a bordered pill in the pre-redesign build; now the airy eyebrow */
+.auth-badge {
+    display: block;
+    background: none;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    font-size: clamp(9.5px, .76vw, 11.5px);
+    font-weight: 800;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--a-faint);
+    /* tracking pads the right of the last glyph, so centred tracked caps read
+       ~1px left of centre; the indent cancels it (see .auth-portal) */
+    text-indent: .14em;
 }
 
-.auth-badge { 
-    display: inline-block; 
-    background: var(--bg-app); 
-    color: var(--slate-charcoal); 
-    font-size: 11px; 
-    font-weight: 800; 
-    padding: 6px 14px; 
-    border-radius: 20px; 
-    margin-bottom: 20px; 
-    letter-spacing: 1px; 
-    text-transform: uppercase; 
-    border: 1px solid #ddd; 
+.auth-body h2 {
+    margin: clamp(5px, .5vw, 8px) 0 clamp(4px, .4vw, 7px);
+    font-size: clamp(25px, 1.95vw, 35px);
+    font-weight: 800;
+    letter-spacing: -.028em;
+    text-indent: -.028em;         /* negative tracking pulls the line the other way */
+    line-height: 1.12;
+    color: var(--slate-charcoal);
 }
 
-.auth-form-side h2 { 
-    font-size: 32px; 
-    font-weight: 800; 
-    color: var(--slate-charcoal); 
-    margin-bottom: 10px; 
-    letter-spacing: -1px; 
+.auth-body > p {
+    margin: 0 0 clamp(26px, 2.3vw, 38px);
+    font-size: clamp(13px, 1.02vw, 15.5px);
+    font-weight: 600;
+    color: var(--a-muted);
+    line-height: 1.5;
 }
 
-.auth-form-side p { 
-    font-size: 14px; 
-    color: #666; 
-    margin-bottom: 35px; 
-    line-height: 1.5; 
-    font-weight: 500; 
+.pin-container {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(15px, 1.3vw, 21px);
 }
 
-.pin-container { 
-    display: flex; 
-    flex-direction: column; 
-    gap: 15px; 
+/* Four real cells instead of one letter-spaced input (the old approach never
+   lined the dots up under the characters). The actual #pinInput is transparent
+   and overlays the row, so native typing, maxlength, Enter and the mobile
+   numeric keyboard all still work — the cells are painted from its value by
+   _authPaintCells(). */
+.pin-cells {
+    position: relative;
+    display: flex;
+    gap: clamp(9px, .75vw, 13px);
+    cursor: text;
 }
 
-.pin-container input { 
-    width: 100%; 
-    padding: 18px; 
-    font-size: 36px; 
-    text-align: center; 
-    letter-spacing: 24px; 
-    border-radius: 12px; 
-    border: 1px solid #ddd; 
-    outline: none; 
-    transition: 0.2s; 
-    font-family: monospace; 
-    background: white; 
-    color: var(--slate-charcoal); 
-    box-shadow: inset 0 2px 4px rgba(0,0,0,0.02); 
+.pin-cell {
+    position: relative;           /* anchors the caret in ::after */
+    flex: 1 1 0;
+    height: clamp(62px, 4.6vw, 80px);
+    border-radius: clamp(14px, 1.1vw, 18px);
+    background: #f7faf8;
+    border: 1px solid var(--a-cell-line);
+    display: grid;
+    place-items: center;
+    transition: border-color .18s, background .18s, box-shadow .18s;
 }
 
-.pin-container input:focus { 
-    border-color: var(--sage-professional); 
-    background: white; 
-    box-shadow: 0 0 0 4px rgba(90, 141, 59, 0.1); 
+.pin-cell > span {
+    width: clamp(11px, .88vw, 14px);
+    height: clamp(11px, .88vw, 14px);
+    border-radius: 50%;
+    background: var(--a-accent-deep);
+    transform: scale(.2);
+    opacity: 0;
+    transition: transform .2s cubic-bezier(.2, 1.4, .4, 1), opacity .18s;
 }
 
-.auth-btn { 
-    width: 100%; 
-    height: 56px; 
-    font-size: 15px; 
-    border-radius: 12px; 
+.pin-cell.filled { border-color: var(--a-accent); background: var(--a-accent-tint); }
+.pin-cell.filled > span { transform: scale(1); opacity: 1; }
+
+/* Focus indication is two-tier. Every empty cell lifts slightly so it's clear
+   the field is live, then the ONE cell the next digit will land in gets the
+   emerald border and a blinking caret. Because cells always fill left to right,
+   "next" is expressible in pure CSS: either the first cell (nothing typed yet)
+   or the cell immediately after the last filled one. No JS involved, and when
+   all four are filled nothing is "next", so the caret disappears on its own.
+
+   :not(.bad) matters — without it these rules outscore `.pin-cells.bad
+   .pin-cell` and the error state would render green while still focused,
+   which it is immediately after a failed attempt. */
+.pin-cells:focus-within:not(.bad) .pin-cell:not(.filled) {
+    border-color: var(--a-ring);
+    box-shadow: 0 0 0 3px rgba(31, 157, 87, .08);
+}
+
+.pin-cells:focus-within:not(.bad) .pin-cell:first-child:not(.filled),
+.pin-cells:focus-within:not(.bad) .pin-cell.filled + .pin-cell:not(.filled) {
+    border-color: var(--a-accent);
+    background: #fff;
+    box-shadow: 0 0 0 3px rgba(31, 157, 87, .16);
+}
+
+.pin-cells:focus-within:not(.bad) .pin-cell:first-child:not(.filled)::after,
+.pin-cells:focus-within:not(.bad) .pin-cell.filled + .pin-cell:not(.filled)::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 2px;
+    height: 42%;
+    /* transform, not negative margins: percentage margins resolve against the
+       containing block's WIDTH, so margin-top:-21% centred the caret against
+       the cell's width (~89px) while its height is 42% of the cell's HEIGHT
+       (~66px) — it sat ~5px too high. Transform percentages resolve against
+       the element's own box, so this is exact at every cell size. */
+    transform: translate(-50%, -50%);
+    border-radius: 2px;
+    background: var(--a-accent);
+    animation: pin-caret 1.1s steps(1) infinite;
+}
+
+@keyframes pin-caret {
+    0%, 49%   { opacity: 1; }
+    50%, 100% { opacity: 0; }
+}
+
+.pin-cells.bad .pin-cell {
+    border-color: var(--a-cell-line-bad);
+    background: #fcecec;          /* V4 red tint */
+    box-shadow: none;
+}
+.pin-cells.bad { animation: shake .42s ease-in-out; }
+
+/* the real field: invisible, but fully functional and focusable */
+.pin-container input#pinInput {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: transparent;
+    caret-color: transparent;
+    font-size: 16px;              /* >=16px stops iOS zooming on focus */
+    text-align: center;
+    cursor: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.auth-btn {
+    width: 100%;
+    height: clamp(50px, 3.7vw, 60px);
+    font-size: clamp(12.5px, .98vw, 14.5px);
+    border-radius: clamp(13px, 1.05vw, 16px);
+    letter-spacing: .05em;
+    /* shared .btn-primary hardcodes an olive hover (#4a7530) and an olive-tinted
+       shadow, neither of which follows the variable — restate both as emerald. */
+    box-shadow: 0 4px 12px rgba(31, 157, 87, .22);
+}
+.auth-btn:hover {
+    background: var(--a-accent-deep);
+    box-shadow: 0 6px 16px rgba(31, 157, 87, .30);
 }
 
 .pin-error {
-    color: var(--red-alert);
-    font-size: 13px;
+    color: var(--a-error);
+    font-size: clamp(12.5px, .98vw, 14.5px);
     font-weight: 700;
-    margin-top: 10px;
     text-align: center;
-    display: none;
+    display: none;                /* JS flips this to block */
     animation: shake 0.4s ease-in-out;
-}
-
-.pin-container input.pin-filled {
-    border-color: var(--sage-professional);
-    background: white;
-    box-shadow: 0 0 0 4px rgba(90, 141, 59, 0.15);
-    transition: box-shadow 0.25s ease, border-color 0.25s ease;
 }
 
 @keyframes auth-btn-spin {
@@ -1219,6 +1389,66 @@ input, textarea, select,
     border-top-color: white;
     border-radius: 50%;
     animation: auth-btn-spin 0.65s linear infinite;
+}
+
+/* ---------- rail on the dark ground: two facts, no date ---------- */
+.auth-rail {
+    flex: 0 0 auto;
+    margin: clamp(24px, 2.1vw, 36px) 0 0;
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: clamp(30px, 3vw, 54px);
+}
+.auth-rail > div { display: flex; flex-direction: column; gap: 3px; text-align: center; }
+.auth-rail dt {
+    font-size: clamp(9px, .7vw, 11px);
+    font-weight: 800;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--a-d-faint);
+    text-indent: .13em;           /* same tracking correction as .auth-badge */
+}
+.auth-rail dd {
+    margin: 0;
+    font-size: clamp(14px, 1.1vw, 18px);
+    font-weight: 700;
+    color: var(--a-d-bright);
+    font-variant-numeric: tabular-nums;
+}
+
+/* A wide-but-short window (1920x720, a docked laptop) hits the type maximums
+   while having no vertical room, and the taller card would push the rail off
+   screen. .auth-page scrolls, but a login shouldn't need scrolling — trim the
+   vertical rhythm instead. Height-based, so it never affects phones. */
+@media (min-width: 861px) and (max-height: 840px) {
+    .auth-page { padding-top: 22px; padding-bottom: 22px; }
+    .auth-brand { min-height: 118px; padding: 8px 0; }
+    .auth-logo { width: clamp(230px, 20vw, 330px); }
+    /* text-indent must track letter-spacing or the correction over/undershoots */
+    .auth-portal { margin-top: 11px; letter-spacing: .22em; text-indent: .22em; }
+    .auth-body { padding-top: 34px; padding-bottom: 30px; }
+    .auth-body > p { margin-bottom: 24px; }
+    .auth-rail { margin-top: 22px; }
+}
+
+@media (max-width: 430px) {
+    .auth-page { padding: 18px; }
+    .auth-brand { min-height: 128px; }
+    .auth-logo { max-width: 88%; }
+    /* .26em tracking on a 22-char line overflows a 390px phone */
+    .auth-portal { letter-spacing: .17em; text-indent: .17em; font-size: 9.5px; }
+    .pin-cell { height: 60px; }
+    .auth-body h2 { font-size: 24px; }
+    .auth-rail { gap: 26px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .auth-stack { animation: none; }
+    .pin-cell, .pin-cell > span { transition: none; }
+    .pin-cells.bad, .pin-error { animation: none; }
+    /* caret stops blinking but stays visible, so the cue survives */
+    .pin-cell::after { animation: none !important; }
 }
 
 @keyframes shake {
@@ -9139,9 +9369,61 @@ body.sam-active .hotbar-btn:hover {
 .cc-updated b { color: #647082; font-weight: 800; }
 
 /* Tabs on top */
-.cc-tabbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 13px 20px; border-bottom: 1px solid #eef2f6; min-height: 36px; }
-.cc-seg { display: flex; }
-.cc-seg .toggle-btn { position: relative; flex: 1 1 0; min-width: 140px; text-align: center; justify-content: center; }
+.cc-tabbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 13px 20px; border-bottom: 1px solid #e3ebe6; min-height: 36px; }
+
+/* The flat pills didn't read as tabs: an inactive tab was grey text on a grey
+   track, and the active one was white-on-near-white with a 5%-opacity shadow.
+   Now the track has a real edge and the active tab lifts to white with emerald
+   ink and an emerald ring, so "which panel am I looking at" is answerable at a
+   glance. Scoped to .cc-seg, which is the tab switcher on BOTH the manager
+   Command Center and the employee widget — the performance chart's own .ew-seg
+   toggles are deliberately left alone.
+   The global .toggle-btn rules mark padding/font/radius !important and
+   .toggle-btn.active marks background/color !important, hence the !importants
+   below; .cc-seg outscores both, so these win. */
+/* Every tab carries its own border, so you can see there are three separate
+   buttons rather than three words sharing one grey field. Inactive reads as an
+   unpressed button (white, light edge); the selected one fills emerald with an
+   emerald edge. The track is lightened so the white buttons still read against
+   it. Global .toggle-btn sets `border: none` without !important, so the border
+   here wins on specificity. */
+.cc-seg {
+    display: flex;
+    background: #f3f7f4;
+    border: 1px solid #e4ece7;
+    border-radius: 12px;
+    padding: 4px;
+    gap: 5px;
+}
+.cc-seg .toggle-btn {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 140px;
+    text-align: center;
+    justify-content: center;
+    padding: 7px 14px !important;
+    font-size: 11.5px !important;
+    font-weight: 750 !important;
+    border-radius: 8px !important;
+    background: #fff;
+    border: 1px solid #dde6e0;
+    color: #5b6b64;
+    transition: background .15s, color .15s, box-shadow .15s, border-color .15s;
+}
+.cc-seg .toggle-btn:hover:not(.active) {
+    border-color: #c3d6cb;
+    color: var(--slate-charcoal);
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .06);
+}
+.cc-seg .toggle-btn.active {
+    background: #e8f7ee !important;
+    color: #146c3c !important;
+    font-weight: 800 !important;
+    border-color: #1f9d57;
+    box-shadow: 0 0 0 1px rgba(31, 157, 87, .35), 0 1px 3px rgba(16, 24, 40, .10);
+}
+.cc-seg .toggle-btn:focus-visible { outline: 2px solid #178048; outline-offset: 1px; }
+
 .cc-tabbar-right { display: flex; align-items: center; gap: 10px; flex: none; }
 .cc-tab-action:empty { display: none; }
 /* Explicit "back to summary" control (shown only while a tab is open) */
@@ -9152,15 +9434,29 @@ body.sam-active .hotbar-btn:hover {
    cleared once opened. Buttons carry enough min-width that even "Buying & Sales" + the dot
    fit without clipping or overlapping the text. */
 .cc-updot { display: none; width: 7px; height: 7px; border-radius: 50%; background: #dc2626; margin-left: 6px; vertical-align: middle; }
-.cc-updot.show { display: inline-block; }
+.cc-updot.show { display: inline-block; animation: pulseNotif 2s infinite; }
 
 /* Collapsed one-line summary (default view, no tab open) */
 /* Flex (not fixed grid) so a tab disabled via Feature Access drops its cell and the
    rest reflow to fill — no empty column. */
-.cc-summary { display: flex; flex-wrap: wrap; gap: 1px; background: #eef2f6; border-bottom: 1px solid #eef2f6; }
-.cc-sum { flex: 1 1 0; background: #fff; padding: 14px 16px 15px 18px; min-width: 120px; }
+/* The strip used to be white cells on a white card separated by one 1px
+   hairline, so it blended into the header above it. It now reads as its own
+   band: tinted cells, a heavier rule above, and a little more height. The
+   1px gaps still show the parent through as inter-cell dividers. */
+.cc-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1px;
+    background: #e0e9e4;                  /* shows through the gaps as dividers */
+    /* no border-top: .cc-tabbar already draws one, and stacking both gave a
+       2px rule in two slightly different greys. The tint change plus this
+       inset shade is what does the separating. */
+    border-bottom: 1px solid #dbe5df;
+    box-shadow: inset 0 6px 12px -8px rgba(16, 24, 40, .10);
+}
+.cc-sum { flex: 1 1 0; background: #f6faf7; padding: 17px 16px 18px 18px; min-width: 120px; }
 .cc-sum-k { font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #647082; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cc-sum-v { font-size: 20px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; margin-top: 6px; color: var(--slate-charcoal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-sum-v { font-size: 22px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; margin-top: 7px; color: var(--slate-charcoal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cc-sum-v small { font-size: 11px; font-weight: 700; color: #94a3b8; }
 .cc-sum-v.warn { color: #d97706; }
 .cc-sum-v.bad { color: #dc2626; }
@@ -10191,4 +10487,114 @@ body.sam-active .hotbar-btn:hover {
     .b2b-q-card, .b2b-card, .b2b-loc { transition: none; }
     .b2b-q-card:hover, .b2b-card:hover, .b2b-loc:hover { transform: none; }
     .b2b-lrow.hit, .b2b-cel-ring { animation: none; }
+}
+
+/* =========================================================
+   CSV EXPORT DATE-RANGE PICKER   [2026-07-27]
+   Shared popup behind every "⬇ Export CSV" button (Store KPIs
+   + Monthly Breakdown). Airy V4 chrome: emerald accent, 18px
+   card, icon tile + eyebrow header, chip presets.
+   Built lazily by _exEnsureModal() in speeks.js.
+   ========================================================= */
+.ex-overlay {
+    --ex-line: #eef2ef;
+    --ex-line-2: #f4f8f5;
+    --ex-muted: #64707c;
+    --ex-faint: #9aa6ad;
+    --ex-accent: #1f9d57;
+    --ex-accent-tint: #e8f7ee;
+    --sage-professional: #1f9d57;
+    display: none;
+    position: fixed; inset: 0; z-index: 3200;
+    background: rgba(15, 23, 42, .42);
+    align-items: center; justify-content: center;
+    padding: 24px;
+}
+.ex-overlay.open { display: flex; }
+
+.ex-card {
+    width: 100%; max-width: 470px;
+    background: #fff;
+    border: 1px solid #e3e8ee;
+    border-radius: 18px;
+    box-shadow: 0 24px 60px rgba(16, 24, 40, .20), 0 2px 8px rgba(16, 24, 40, .06);
+    overflow: hidden;
+}
+
+/* --- header --- */
+.ex-head {
+    display: flex; align-items: flex-start; gap: 13px;
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--ex-line-2);
+}
+.ex-ico {
+    flex: 0 0 auto; width: 40px; height: 40px; border-radius: 12px;
+    background: var(--ex-accent-tint); color: var(--ex-accent);
+    display: grid; place-items: center;
+}
+.ex-ico svg {
+    width: 20px; height: 20px;
+    fill: none; stroke: currentColor; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+}
+.ex-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
+.ex-eyebrow { font-size: 10px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: var(--ex-faint); }
+.ex-title { font-size: 17px; font-weight: 800; letter-spacing: -.01em; color: var(--slate-charcoal); line-height: 1.2; }
+.ex-sub { font-size: 12px; font-weight: 600; color: var(--ex-muted); }
+.ex-sub:empty { display: none; }
+.ex-close {
+    flex: 0 0 auto; width: 30px; height: 30px; border: 1px solid var(--ex-line);
+    background: #fff; border-radius: 9px; color: var(--ex-muted);
+    font-size: 18px; font-weight: 700; line-height: 1; cursor: pointer;
+    transition: background .15s, color .15s;
+}
+.ex-close:hover { background: #f6f8fa; color: var(--slate-charcoal); }
+
+/* --- body --- */
+.ex-body { padding: 16px 18px 18px; }
+.ex-status { font-size: 13px; font-weight: 600; color: var(--ex-muted); padding: 10px 2px 4px; }
+
+.ex-presets { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 15px; }
+.ex-chip {
+    font-family: inherit; font-size: 12px; font-weight: 700;
+    padding: 6px 12px; border-radius: 99px; cursor: pointer;
+    background: #f6f8fa; color: var(--ex-muted);
+    border: 1px solid var(--ex-line);
+    transition: background .15s, color .15s, border-color .15s;
+}
+.ex-chip:hover { color: var(--slate-charcoal); border-color: #dde5e0; }
+.ex-chip.active {
+    background: var(--ex-accent-tint); color: #146c3c;
+    border-color: #c6ecd6;
+}
+.ex-chip:focus-visible { outline: 2px solid var(--ex-accent); outline-offset: 2px; }
+
+.ex-fields { display: flex; align-items: flex-end; gap: 10px; }
+.ex-field { flex: 1 1 0; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.ex-field > span { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--ex-faint); }
+.ex-field .kpi-select { width: 100%; }
+.ex-dash { padding-bottom: 9px; color: var(--ex-faint); font-size: 13px; font-weight: 800; }
+
+.ex-summary {
+    margin-top: 14px; padding: 11px 13px;
+    background: #f7faf8; border: 1px solid var(--ex-line); border-radius: 12px;
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px;
+    font-size: 12.5px; color: var(--ex-muted);
+    font-variant-numeric: tabular-nums;
+}
+.ex-summary b { font-size: 13px; font-weight: 800; color: var(--slate-charcoal); }
+.ex-sum-range { font-weight: 600; }
+.ex-sum-rows { font-weight: 700; color: var(--ex-faint); margin-left: auto; }
+
+.ex-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 16px; }
+.ex-actions .btn-primary, .ex-actions .btn-secondary { padding: 10px 18px; font-size: 12px; }
+.ex-actions .btn-primary:hover { background: var(--sage-deep) !important; }
+.ex-actions .btn-primary[disabled] { opacity: .6; cursor: default; }
+
+@media (max-width: 520px) {
+    .ex-overlay { padding: 14px; align-items: flex-start; }
+    .ex-card { margin-top: 24px; }
+    .ex-fields { flex-direction: column; align-items: stretch; }
+    .ex-dash { display: none; }
+    .ex-actions .btn-primary, .ex-actions .btn-secondary { flex: 1 1 0; }
 }
