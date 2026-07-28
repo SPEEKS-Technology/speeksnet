@@ -727,6 +727,91 @@
 
 </main>
 
+<!-- ===== DM DISTRICT LISTING GOALS =====
+     Replaced a panel on the DM dashboard. Master/detail: five stores down the
+     left, the selected store's detail on the right — see the .dmx block in
+     styles.css for why that shape rather than an accordion. Rendered by
+     renderDm*Modal() in speeks.js; opened from the action-menu rail. -->
+<div class="modal-menu manage-menu" id="dmListingModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools &middot; District</span>
+          <span class="tool-head-title">Listing Goals</span>
+          <span class="tool-head-sub" id="dmListingSub">Syncing&hellip;</span>
+        </div>
+      </div>
+      <div class="dmx-head-side">
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+    </div>
+    <div class="manage-content">
+      <div id="dmListingBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
+    </div>
+    <div class="manage-footer">
+      <span class="dmx-foot-note">Rosters are read-only here &mdash; managers set their own. Flag decisions save immediately.</span>
+    </div>
+</div>
+
+<!-- ===== DM DISTRICT CLEANING CHECKLIST =====
+     Replaced a panel on the DM dashboard. Master/detail: five stores down the
+     left, the selected store's detail on the right — see the .dmx block in
+     styles.css for why that shape rather than an accordion. Rendered by
+     renderDm*Modal() in speeks.js; opened from the action-menu rail. -->
+<div class="modal-menu manage-menu" id="dmCleaningModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21v-4a4 4 0 0 1 4-4h5"/><path d="M14 4l6 6"/><path d="M17 7l-9 9-4 1 1-4 9-9a2.8 2.8 0 0 1 4 0 2.8 2.8 0 0 1 0 4z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools &middot; District</span>
+          <span class="tool-head-title">Cleaning Checklist</span>
+          <span class="tool-head-sub" id="dmCleaningSub">Syncing&hellip;</span>
+        </div>
+      </div>
+      <div class="dmx-head-side">
+        <div class="notif-tabs" style="margin:0;">
+          <button id="dmClTabDaily" class="tab-btn active" onclick="switchDmCleaningTab('daily')">Daily</button>
+          <button id="dmClTabWeekly" class="tab-btn" onclick="switchDmCleaningTab('weekly')">Weekly</button>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+    </div>
+    <div class="manage-content">
+      <div id="dmCleaningBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
+    </div>
+    <div class="manage-footer">
+      <span class="dmx-foot-note">Read-only &mdash; stores tick their own items. Refreshes every minute.</span>
+    </div>
+</div>
+
+<!-- ===== DM DISTRICT MONTHLY TEAM GOALS =====
+     Replaced a panel on the DM dashboard. Master/detail: five stores down the
+     left, the selected store's detail on the right — see the .dmx block in
+     styles.css for why that shape rather than an accordion. Rendered by
+     renderDm*Modal() in speeks.js; opened from the action-menu rail. -->
+<div class="modal-menu manage-menu" id="dmGoalsModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools &middot; District</span>
+          <span class="tool-head-title">Monthly Team Goals</span>
+          <span class="tool-head-sub" id="dmGoalsSub">Syncing&hellip;</span>
+        </div>
+      </div>
+      <div class="dmx-head-side">
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+    </div>
+    <div class="manage-content">
+      <div id="dmGoalsBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
+    </div>
+    <div class="manage-footer">
+      <span class="dmx-foot-note">Edit buttons open the store-scoped editor for the selected store.</span>
+    </div>
+</div>
+
 <div class="modal-menu manage-menu" id="preferredModal">
     <div class="modal-header tool-head">
       <div class="tool-head-main">

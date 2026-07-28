@@ -5509,6 +5509,18 @@ function handleSignOut() {
     // and the dark-theme filter is already accounted for.
     const overlay = document.getElementById('authOverlay');
     if (overlay) {
+        // Back to the top BEFORE the overflow lock. Signing out on the dashboard
+        // never navigates, so the page keeps whatever scroll position the outgoing
+        // user left it at — and since the login overlay is fixed at inset 0 over a
+        // scroll-locked body, there is no way to notice. The next person signs in
+        // and lands halfway down the page.
+        //
+        // Order matters: once body overflow is hidden there may be nothing left to
+        // scroll, so this has to happen first. _lockedScrollY is zeroed too, or a
+        // later unlockScreen() would restore the outgoing user's position.
+        window.scrollTo(0, 0);
+        document.documentElement.scrollTop = 0;
+        _lockedScrollY = 0;
         overlay.style.display = 'flex';
         document.body.style.overflow = 'hidden';
     }
@@ -7633,7 +7645,10 @@ async function dmGoalAction(store, action) {
             body: JSON.stringify({ store, action })
         });
         await fetchStoreTarget(store);
-        renderCompactDmGoals();
+        // Repaint the district Listing Goals popup the DM pressed this from, and
+        // the rail item, whose subtitle counts flagged stores.
+        renderDmListingModal();
+        _dmxSyncRail();
     } catch (e) {}
 }
 window.dmGoalAction = dmGoalAction;
@@ -7673,12 +7688,15 @@ function renderGoalsLevelUp() {
     el.innerHTML = levelUpHtml(managerWeeklyHistory, targetFor(goalsTargetStore));
 }
 
-// --- DM COMPACT GOALS WIDGET ---
+// --- DM LISTING GOALS DATA ---
+// Feeds the district Listing Goals popup and its rail item. This used to end in
+// a render into a dashboard panel; that panel is gone, so
+// the gate is the role rather than the presence of a container, and the results
+// go to the popup renderer + rail sync (both no-op safely when neither exists).
 let dmStoreHistory = {}; // store -> completed weekly listing totals (for level-up bars)
 
 async function fetchDmGoalsData() {
-    const cont = document.getElementById('dm-compact-goals-container');
-    if (!cont) return;
+    if (!_dmxIsDistrict()) return;
 
     const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 
@@ -7690,114 +7708,16 @@ async function fetchDmGoalsData() {
         allDistrictGoalsData = goalsResults.flat();
         dmStoreHistory = {};
         stores.forEach(s => { dmStoreHistory[s] = weeksFor(s); });
-        renderCompactDmGoals();
+        renderDmListingModal();
+        _dmxSyncRail();
     } catch (e) {
-        cont.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Network Sync Failed.</div>';
+        const cont = document.getElementById('dmListingBody');
+        if (cont) cont.innerHTML = '<div class="dmx-empty" style="padding:60px 0; color:var(--red-alert);">Couldn\'t load the district roster. Close and reopen to retry.</div>';
     }
 }
 
-function switchCompactDmTab(view) {
-    currentDmGoalView = view;
-    document.getElementById('dm-compact-tab-daily').classList.toggle('active', view === 'daily');
-    document.getElementById('dm-compact-tab-weekly').classList.toggle('active', view === 'weekly');
-    renderCompactDmGoals();
-}
 
-function toggleDmStoreAccordion(store) {
-    const rosterDiv = document.getElementById(`dm-roster-${store}`);
-    const caret = document.getElementById(`dm-caret-${store}`);
-    const isOpen = rosterDiv.style.display === 'block';
-    
-    document.querySelectorAll('.dm-store-roster').forEach(el => el.style.display = 'none');
-    document.querySelectorAll('.dm-store-caret').forEach(el => el.style.transform = 'rotate(-90deg)');
 
-    if (!isOpen) {
-        rosterDiv.style.display = 'block';
-        caret.style.transform = 'rotate(0deg)'; 
-    }
-}
-
-function renderCompactDmGoals() {
-    const cont = document.getElementById('dm-compact-goals-container');
-    if (!cont) return;
-
-    const now = new Date();
-    const todayStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-    const startOfWeek = new Date(now);
-    startOfWeek.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
-    startOfWeek.setHours(0, 0, 0, 0);
-
-    const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2' };
-    let html = '<div style="display:flex; flex-direction:column;">';
-
-    stores.forEach((store, idx) => {
-        const target = targetFor(store);
-        const flag = (_storeTargets[store] && _storeTargets[store].flag) || 'none';
-        const storeData = allDistrictGoalsData.filter(r => r.store === store);
-
-        // Per-employee today + weekly goals (last record per day wins). Read-only.
-        const emps = {};
-        storeData.forEach(r => {
-            if (goalDateObj(r.date) < startOfWeek) return;
-            const dStr = normalizeGoalDate(r.date);
-            if (!emps[r.employee]) emps[r.employee] = { role: '-', byDay: {} };
-            emps[r.employee].byDay[dStr] = parseInt(r.goal) || 0;
-            if (dStr === todayStr && r.role && r.role !== '-') emps[r.employee].role = r.role;
-        });
-
-        const empNames = Object.keys(emps);
-        let todayTotal = 0, weekTotal = 0;
-        empNames.forEach(e => {
-            todayTotal += emps[e].byDay[todayStr] || 0;
-            weekTotal += Object.values(emps[e].byDay).reduce((s, g) => s + g, 0);
-        });
-
-        const muted = weekTotal === 0 ? 'opacity:0.6;' : '';
-        const lastBorder = idx === stores.length - 1 ? 'transparent' : '#f0f0f0';
-
-        html += `
-        <div onclick="toggleDmStoreAccordion('${store}')" class="lb-row dm-store-head" style="display:grid; grid-template-columns:60px 1fr auto 18px; align-items:center; gap:12px; border-bottom:1px solid ${lastBorder}; cursor:pointer; padding:13px 15px; ${muted}">
-            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal);">${store}</span>
-            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal); text-transform:uppercase; letter-spacing:0.04em;">Goal: ${target} Listings${flag === 'flagged' ? ' <span class="dm-flag-badge">⚠ Review</span>' : ''}</span>
-            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal); text-align:right;">${weekTotal}<span style="font-size:14px; color:var(--slate-charcoal); font-weight:900;"> wk</span></span>
-            <div id="dm-caret-${store}" class="dm-store-caret" style="text-align:right; color:#888; font-size:10px; font-weight:800; transition:transform 0.3s; transform:rotate(-90deg);">▼</div>
-        </div>`;
-
-        html += `<div id="dm-roster-${store}" class="dm-store-roster" style="display:none; background:#fdfdfd; padding:10px 18px 14px; border-bottom:1px solid #e2e8f0; box-shadow:inset 0 3px 6px rgba(0,0,0,0.02);">`;
-        html += `<div class="goals-header-row"><span class="goals-header-lbl">Employee &amp; Role</span><span class="goals-header-lbl center">Today</span><span class="goals-header-lbl center">Week</span></div>`;
-
-        if (empNames.length === 0) {
-            html += `<div style="font-size:12px; color:#888; text-align:center; font-weight:600; padding:10px 0;">No roles set this week.</div>`;
-        } else {
-            empNames.forEach(e => {
-                const eToday = emps[e].byDay[todayStr] || 0;
-                const eWeek = Object.values(emps[e].byDay).reduce((s, g) => s + g, 0);
-                const badge = emps[e].role !== '-' ? `<span class="dm-role-badge">${roleName[emps[e].role] || emps[e].role}</span>` : '';
-                html += `
-                <div class="goals-mgr-row">
-                    <div class="goals-mgr-emp"><span class="goals-roster-name">${e}</span>${badge}</div>
-                    <div class="goals-mgr-week">${eToday || '–'}</div>
-                    <div class="goals-mgr-week">${eWeek || '–'}</div>
-                </div>`;
-            });
-        }
-
-        html += `<div class="goals-total-row"><span class="goals-total-lbl">Total</span><span class="goals-total-val target">${todayTotal}</span><span class="goals-total-val target">${weekTotal}</span></div>`;
-        html += `<div class="goals-levelup">${levelUpHtml(dmStoreHistory[store] || [], target)}</div>`;
-        if (flag === 'flagged') {
-            html += `<div class="dm-flag-actions">
-                <span class="dm-flag-msg">⚠️ Missed goal 2 weeks — review:</span>
-                <button class="dm-flag-btn lower" onclick="event.stopPropagation(); dmGoalAction('${store}','lower')">Lower −10</button>
-                <button class="dm-flag-btn keep" onclick="event.stopPropagation(); dmGoalAction('${store}','keep')">Keep</button>
-            </div>`;
-        }
-        html += `</div>`;
-    });
-
-    html += '</div>';
-    cont.innerHTML = html;
-}
 
 // --- DM AUDIT READINESS WIDGET (read-only, live through the week) ---
 // Lets the DM/CEO see each store's daily + weekly audit checklist progress as
@@ -7806,39 +7726,24 @@ let dmAuditData = {};            // { OVL: { daily:{items,total,completed}, week
 let currentDmAuditTab = 'daily';
 
 async function fetchDmAuditData() {
-    const cont = document.getElementById('dm-audit-container');
-    if (!cont) return;
+    // Role-gated rather than container-gated: the dashboard panel this fed is
+    // gone, and every shell carries the popup markup whether you can open it or
+    // not, so checking for the container would pull five stores of data for
+    // managers too.
+    if (!_dmxIsDistrict()) return;
     try {
         const res = await fetch(`${STORE_AUDIT_URL}?action=overview&v=${Date.now()}`);
         const json = await res.json();
         dmAuditData = json.stores || {};
-        renderDmAudit();
+        renderDmCleaningModal();
+        _dmxSyncRail();
     } catch (e) {
-        cont.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Network Sync Failed.</div>';
+        const cont = document.getElementById('dmCleaningBody');
+        if (cont) cont.innerHTML = '<div class="dmx-empty" style="padding:60px 0; color:var(--red-alert);">Couldn\'t load cleaning progress. Close and reopen to retry.</div>';
     }
 }
 
-function switchDmAuditTab(view) {
-    currentDmAuditTab = view;
-    document.getElementById('dm-audit-tab-daily')?.classList.toggle('active', view === 'daily');
-    document.getElementById('dm-audit-tab-weekly')?.classList.toggle('active', view === 'weekly');
-    renderDmAudit();
-}
 
-function toggleDmAuditAccordion(store) {
-    const rosterDiv = document.getElementById(`dm-audit-roster-${store}`);
-    const caret = document.getElementById(`dm-audit-caret-${store}`);
-    if (!rosterDiv) return;
-    const isOpen = rosterDiv.style.display === 'block';
-
-    document.querySelectorAll('.dm-audit-roster').forEach(el => el.style.display = 'none');
-    document.querySelectorAll('.dm-audit-caret').forEach(el => el.style.transform = 'rotate(-90deg)');
-
-    if (!isOpen) {
-        rosterDiv.style.display = 'block';
-        if (caret) caret.style.transform = 'rotate(0deg)';
-    }
-}
 
 // PayMore-style readiness colors: pass ≥80, watch ≥50, behind below.
 function _auditPctColor(pct) {
@@ -7847,185 +7752,7 @@ function _auditPctColor(pct) {
     return 'var(--red-alert, #dc2626)';
 }
 
-function renderDmAudit() {
-    const cont = document.getElementById('dm-audit-container');
-    if (!cont) return;
 
-    const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-    const tab = currentDmAuditTab;
-    const periodWord = tab === 'daily' ? 'today' : 'this week';
-    let html = '<div style="display:flex; flex-direction:column;">';
-
-    stores.forEach((store, idx) => {
-        const sd = dmAuditData[store] || {};
-        const pd = sd[tab] || { items: [], total: 0, completed: 0 };
-        const items = pd.items || [];
-        const total = pd.total || items.length;
-        const completed = pd.completed != null ? pd.completed : items.filter(i => i.checked).length;
-        const pct = total ? Math.round((completed / total) * 100) : 0;
-        const col = _auditPctColor(pct);
-        const muted = completed === 0 ? 'opacity:0.6;' : '';
-        const lastBorder = idx === stores.length - 1 ? 'transparent' : '#f0f0f0';
-
-        html += `
-        <div onclick="toggleDmAuditAccordion('${store}')" class="lb-row dm-store-head" style="display:grid; grid-template-columns:56px 1fr 92px 18px; align-items:center; gap:12px; border-bottom:1px solid ${lastBorder}; cursor:pointer; padding:13px 15px; ${muted}">
-            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal);">${store}</span>
-            <div style="height:8px; border-radius:6px; background:#eef2f6; overflow:hidden;"><div style="height:100%; width:${pct}%; background:${col}; border-radius:6px; transition:width .3s;"></div></div>
-            <span style="font-size:13px; font-weight:900; color:${col}; text-align:right;">${completed}/${total} · ${pct}%</span>
-            <div id="dm-audit-caret-${store}" class="dm-audit-caret" style="text-align:right; color:#888; font-size:10px; font-weight:800; transition:transform 0.3s; transform:rotate(-90deg);">▼</div>
-        </div>`;
-
-        html += `<div id="dm-audit-roster-${store}" class="dm-audit-roster" style="display:none; background:#fdfdfd; padding:10px 18px 14px; border-bottom:1px solid #e2e8f0; box-shadow:inset 0 3px 6px rgba(0,0,0,0.02);">`;
-        if (items.length === 0) {
-            html += `<div style="font-size:12px; color:#888; text-align:center; font-weight:600; padding:10px 0;">No ${tab} audit items set up yet.</div>`;
-        } else {
-            let lastSection = null;
-            items.forEach(item => {
-                if (item.section !== lastSection) {
-                    html += `<div style="font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:12px 0 4px;">${escapeHtml(item.section || 'General')}</div>`;
-                    lastSection = item.section;
-                }
-                const done = !!item.checked;
-                html += `
-                <div style="display:flex; gap:9px; align-items:center; padding:5px 2px;">
-                    <span style="font-size:14px; font-weight:900; line-height:1; color:${done ? 'var(--green-go,#16a34a)' : '#cbd5e1'};">${done ? '✓' : '○'}</span>
-                    <span style="font-size:13px; font-weight:600; color:${done ? '#94a3b8' : 'var(--slate-charcoal)'}; ${done ? 'text-decoration:line-through;' : ''}">${escapeHtml(item.text)}</span>
-                </div>`;
-            });
-            html += `<div style="margin-top:10px; font-size:12px; font-weight:800; color:${col}; text-align:right;">${completed} of ${total} done ${periodWord}</div>`;
-        }
-        html += `</div>`;
-    });
-
-    html += '</div>';
-    cont.innerHTML = html;
-}
-
-function _dmLegacyGoalsUnused() {
-    // (Superseded by the manager-style DM view above. Kept inert; never called.)
-    const cont = { innerHTML: '' };
-    const now = new Date();
-    const todayStr = '';
-    const startOfWeek = new Date(0);
-    const currentDmGoalView = 'weekly';
-    const stores = [];
-    let html = '';
-    stores.forEach((store, idx) => {
-        const storeData = allDistrictGoalsData.filter(r => r.store === store);
-        let tGoal = 0, tResult = 0;
-        let activeEmps = new Set();
-
-        const storeDedup = {};
-        storeData.forEach(r => {
-            const recDate = goalDateObj(r.date);
-            const isToday = r.date === todayStr;
-            const isThisWeek = recDate >= startOfWeek;
-
-            if ((currentDmGoalView === 'daily' && isToday) || (currentDmGoalView === 'weekly' && isThisWeek)) {
-                storeDedup[`${r.employee}|${r.date}`] = r; // last row in sheet wins per employee per day
-                activeEmps.add(r.employee);
-            }
-        });
-        Object.values(storeDedup).forEach(r => {
-            tGoal += parseInt(r.goal) || 0;
-            tResult += parseInt(r.result) || 0;
-        });
-
-        const progress = tGoal > 0 ? Math.min(100, Math.round((tResult / tGoal) * 100)) : 0;
-        const colorClass = tResult >= tGoal && tGoal > 0 ? 'var(--sage-professional)' : (tResult > 0 ? 'var(--idea-gold)' : '#cbd5e1');
-        const isMuted = tGoal === 0 && tResult === 0 ? 'opacity: 0.6;' : '';
-
-        html += `
-        <div onclick="toggleDmStoreAccordion('${store}')" class="lb-row" style="display: grid; grid-template-columns: 50px 1fr 70px 20px; align-items: center; border-bottom: 1px solid ${idx === stores.length-1 ? 'transparent' : '#f0f0f0'}; cursor: pointer; padding: 12px 15px; margin: 0; ${isMuted}">
-            <span style="font-size: 14px; font-weight: 900; color: var(--slate-charcoal);">${store}</span>
-            <div style="padding-right: 15px;">
-                <div style="width: 100%; height: 6px; background: #f1f5f9; border-radius: 3px; overflow: hidden; display: flex;">
-                    <div style="height: 100%; width: ${progress}%; background: ${colorClass}; border-radius: 3px; transition: width 0.5s ease;"></div>
-                </div>
-            </div>
-            <div style="text-align: right; font-size: 14px; font-weight: 900; color: var(--slate-charcoal);">
-                ${tResult} <span style="font-size: 11px; color: #888; font-weight: 600;">/ ${tGoal}</span>
-            </div>
-           <div id="dm-caret-${store}" class="dm-store-caret" style="text-align: right; color: #888; font-size: 10px; font-weight: 800; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); transform: rotate(-90deg);">▼</div>
-        </div>`;
-
-        html += `<div id="dm-roster-${store}" class="dm-store-roster" style="display: none; background: #fdfdfd; padding: 10px 20px; border-bottom: 1px solid #e2e8f0; box-shadow: inset 0 3px 6px rgba(0,0,0,0.02);">`;
-        
-        if (activeEmps.size === 0) {
-            html += `<div style="font-size: 12px; color: #888; text-align: center; font-weight: 600; padding: 10px 0;">No data logged.</div></div>`;
-            return;
-        }
-
-        Array.from(activeEmps).forEach(emp => {
-            const empRecords = storeData.filter(r => r.employee === emp);
-            let eG = 0, eR = 0;
-            let dailyStats = {}; 
-
-            const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-            empRecords.forEach(r => {
-                const recDate = goalDateObj(r.date);
-                if ((currentDmGoalView === 'daily' && r.date === todayStr) || (currentDmGoalView === 'weekly' && recDate >= startOfWeek)) {
-                    const rG = parseInt(r.goal) || 0;
-                    const rR = parseInt(r.result) || 0;
-                    if (currentDmGoalView === 'weekly') {
-                        const dayIdx = (recDate.getDay() + 6) % 7;
-                        dailyStats[daysOfWeek[dayIdx]] = { goal: rG, result: rR }; // last row wins per day
-                    } else {
-                        eG = rG; // daily: last record wins
-                        eR = rR;
-                    }
-                }
-            });
-            if (currentDmGoalView === 'weekly') {
-                Object.values(dailyStats).forEach(d => { eG += d.goal; eR += d.result; });
-            }
-
-            const rClass = eG > 0 || eR > 0 ? (eR >= eG ? 'delta-pos' : 'delta-neg') : 'delta-neutral';
-
-            let dailyBreakdownHtml = '';
-            if (currentDmGoalView === 'weekly') {
-                const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-                const currentDayIdx = (now.getDay() + 6) % 7;
-                const pillStyle = "flex: 1; min-width: 0; text-align: center; font-size: 9px; font-weight: 800; padding: 4px 2px; border-radius: 4px; white-space: nowrap;";
-                
-                dailyBreakdownHtml = '<div style="display: flex; gap: 6px; margin-top: 4px; padding-top: 4px; width: 100%;">';
-                
-                daysOfWeek.forEach((dName, dIdx) => {
-                    if (dailyStats[dName]) {
-                        const dG = dailyStats[dName].goal;
-                        const dR = dailyStats[dName].result;
-                        const dClass = dR >= dG ? 'color: #065f46; background: #d1fae5;' : 'color: #991b1b; background: #fee2e2;';
-                        dailyBreakdownHtml += `<div style="${pillStyle} ${dClass}">${dName}: ${dR}/${dG}</div>`;
-                    } else if (dIdx <= currentDayIdx) {
-                        dailyBreakdownHtml += `<div style="${pillStyle} color: #64748b; background: #f1f5f9;" title="Not Logged">${dName}</div>`;
-                    } else {
-                        dailyBreakdownHtml += `<div style="${pillStyle} color: #cbd5e1; border: 1px dashed #e2e8f0; background: transparent;">${dName}</div>`;
-                    }
-                });
-                dailyBreakdownHtml += '</div>';
-            }
-
-            html += `
-            <div style="display: flex; flex-direction: column; padding: 8px 0; border-bottom: 1px dashed #f0f0f0;">
-                <div style="display: grid; grid-template-columns: 1fr auto auto; gap: 15px; align-items: center;">
-                    <span style="font-size: 13px; font-weight: 700; color: var(--slate-charcoal);">${emp}</span>
-                    <div style="display: flex; justify-content: center;">
-                        <span style="font-size: 14px; font-weight: 800; color: #64748b; width: 36px; text-align: center; display: inline-block;">${eG || '-'}</span>
-                    </div>
-                    <div style="display: flex; justify-content: center; align-items: center;">
-                        <span class="delta-badge ${rClass}" style="font-size: 14px; width: 36px; height: 26px; padding: 0; display: inline-flex; justify-content: center; align-items: center;">${eR || '-'}</span>
-                    </div>
-                </div>
-                ${dailyBreakdownHtml}
-            </div>`;
-        });
-        
-        html += `</div>`; 
-    });
-
-    html += '</div>'; 
-    cont.innerHTML = html;
-}
 
 // ============================================================================
 // 21. MODULE: EMPLOYEE DASHBOARD WIDGETS
@@ -9379,9 +9106,14 @@ function initDashboardData() {
         setTimeout(fetchAwardsData, 900);
         setTimeout(fetchDmGoalsData, 1000);
         setTimeout(fetchDmAuditData, 1050);
-        // Keep audit readiness live while the DM has the dashboard open.
+        // Monthly goals are localStorage-backed and synced by the calls above this
+        // block, so the rail only needs one nudge once they've landed.
+        setTimeout(_dmxSyncRail, 1400);
+        // Keep audit readiness live while the DM has the dashboard open. Gated on
+        // the role now — fetchDmAuditData used to guard on its own dashboard
+        // container, which no longer exists.
         if (!window._dmAuditSync) window._dmAuditSync = setInterval(() => {
-            if (document.getElementById('dm-audit-container')) fetchDmAuditData();
+            if (_dmxIsDistrict()) fetchDmAuditData();
         }, 60000);
         // SAFETY NET for the Command Center dots. Realtime (broadcast-as-ping,
         // see _RT_TOOL_CHECKS: scorecard/ebay/buying/goals) is the PRIMARY path —
@@ -10519,47 +10251,13 @@ function saveMonthlyGoals() {
 
 // --- District Overview ---
 
+// The district monthly-goals grid moved into #dmGoalsModal, but five call sites
+// still say "the district goals changed, repaint" — after a save, after a sheet
+// sync, on dashboard build. Keeping the name and retargeting it keeps all five
+// working and the popup live, instead of five edits and a rename.
 function renderDistrictGoals() {
-    const container = document.getElementById('districtGoalsGrid');
-    if (!container) return;
-    const monthEl = document.getElementById('districtGoalsMonth');
-    if (monthEl) monthEl.textContent = _mgbMonthLabel();
-    const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-    const emojis = { OVL: '🟣', LEE: '🔵', WSP: '🟢', MPL: '🟠', BAL: '🔴' };
-
-    let goalsRow = '';
-    let initiativesRow = '';
-
-    stores.forEach(store => {
-        const data        = getMonthlyGoals(store);
-        const goals       = data?.goals || [];
-        const initiatives = getStoreInitiatives(store)?.initiatives || [];
-
-        const goalsContent = goals.length
-            ? goals.map(g => `<div class="dg-goal-mini" data-goal-title="${escapeHtml(g.title)}" data-goal-desc="${escapeHtml(g.description || '')}"><div class="dg-goal-mini-label">${escapeHtml(g.title)}</div></div>`).join('')
-            : '<div class="dg-no-goals">No goals set</div>';
-
-        const initiativeItems = initiatives.length
-            ? initiatives.map(i => {
-                const badge = i.status === 'upcoming'
-                    ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
-                    : '<span class="si-status-badge si-status-badge--current">Current</span>';
-                return `<div class="dg-goal-mini dg-initiative-mini" data-goal-title="${escapeHtml(i.title)}" data-goal-desc="${escapeHtml(i.description || '')}"><div class="dg-goal-mini-label">${escapeHtml(i.title)}</div>${badge}</div>`;
-            }).join('')
-            : '<div class="dg-no-goals">No initiatives set</div>';
-
-        goalsRow += `<div class="dg-goals-col">
-            <div class="dg-store-header">${emojis[store]} ${store}</div>
-            ${goalsContent}
-        </div>`;
-
-        initiativesRow += `<div class="dg-initiatives-col">
-            <div class="dg-initiatives-divider">Initiatives &amp; Projects <button class="dg-edit-btn" onclick="openEditStoreInitiativesModal('${store}')">Edit ✏️</button></div>
-            ${initiativeItems}
-        </div>`;
-    });
-
-    container.innerHTML = goalsRow + initiativesRow;
+    renderDmGoalsModal();
+    _dmxSyncRail();
 }
 
 // ============================================================================
@@ -17603,6 +17301,13 @@ const FEATURE_CATALOG = [
     { key: 'widget-listing-goals',     label: 'Listing Goals bar (action menu)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager', 'training'] },
     { key: 'widget-emp-weekly-kpis',   label: 'Weekly KPIs tab (employee)',    tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    // The three district action-menu rows. Defaults mirror exactly what the
+    // dashboard panels they replaced were gated to: Cleaning and Listing were
+    // DM+CEO, Monthly Team Goals was DM-only. Delegation pairs each with the
+    // manager row of the same stem (widget-dm-listing-goals ↔ widget-listing-goals).
+    { key: 'widget-dm-audit',          label: 'Cleaning Checklist (district)', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    { key: 'widget-dm-goals',          label: 'Monthly Team Goals (district)', tab: 'widgets', group: 'Dashboard', def: ['district-manager'] },
+    { key: 'widget-dm-listing-goals',  label: 'Listing Goals (district)',      tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown (tab)',     tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-weekly-kpis',    label: 'Weekly KPIs (tab)',             tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies (tab)',        tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
@@ -22358,4 +22063,471 @@ async function checkPreferredReminders() {
         } else { _plHideBubble('mine'); }
     } catch (_) { /* next poll / ping retries */ }
     if (typeof renderActionFeed === 'function') renderActionFeed();
+}
+
+// ============================================================================
+// DM DISTRICT TOOLS — master/detail popups
+// ============================================================================
+// Listing Goals, Cleaning Checklist and Monthly Team Goals used to be three
+// panels stacked on the DM dashboard. They are now three action-menu items that
+// open three popups, matching how managers already reach the same three things.
+//
+// All three share one skeleton (.dmx in styles.css) because they are the same
+// shape underneath: five stores, one number each, drill in for detail. The DM
+// picks a store on the left; the detail always lands in the same place on the
+// right. That replaced an accordion, which in a 1050px-wide modal left the right
+// half empty and cost two clicks to change store.
+//
+// Data is NOT re-fetched here. These render from the same module state the old
+// widgets used — allDistrictGoalsData / _storeTargets (listing), dmAuditData
+// (cleaning), and the localStorage-backed goal helpers (monthly) — so there is
+// one fetch path, not two that can disagree.
+
+const _DMX_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+
+// Which store's detail is showing, per tool. Kept separate so opening one tool
+// doesn't move another one's selection out from under the user.
+const _dmxSel = { lg: 'OVL', cl: 'OVL', mg: 'OVL' };
+
+// The fetchers used to bail when their dashboard container was missing. That
+// container is gone, so the gate is the role instead — otherwise every manager
+// would pull five stores of district data they can't see.
+function _dmxIsDistrict() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return role === 'district manager' || role === 'ceo';
+}
+
+// PayMore readiness thresholds, unchanged from the widgets these replace
+// (>=80 good, >=50 watch, below that behind). What IS new: every state carries a
+// word, so the meaning never rests on hue alone.
+function _dmxState(pct) {
+    if (pct >= 80) return { k: 'good', word: 'On track' };
+    if (pct >= 50) return { k: 'warn', word: 'Watch' };
+    return { k: 'bad', word: 'Behind' };
+}
+
+const _DMX_ICO = {
+    good: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+    warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>',
+    bad:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>',
+};
+
+function _dmxChip(pct, labelOverride) {
+    const s = _dmxState(pct);
+    const txt = labelOverride || (s.word + ' · ' + pct + '%');
+    return '<span class="dmx-st dmx-' + s.k + '">' + _DMX_ICO[s.k] + escapeHtml(txt) + '</span>';
+}
+
+function _dmxMeter(pct) {
+    const s = _dmxState(pct);
+    // Clamped so an over-target store (178 of 170) can't overflow the track.
+    const w = Math.max(0, Math.min(100, pct));
+    return '<span class="dmx-meter"><i class="dmx-f-' + s.k + '" style="width:' + w + '%"></i></span>';
+}
+
+function _dmxPct(done, total) {
+    return total ? Math.round((done / total) * 100) : 0;
+}
+
+// One rail row in the master column. `sub` is the small number under the code.
+function _dmxTab(tool, store, sub, pct, showDot) {
+    const s = _dmxState(pct);
+    const sel = _dmxSel[tool] === store ? ' sel' : '';
+    return '<button type="button" class="dmx-t' + sel + '" onclick="_dmxPick(\'' + tool + '\',\'' + store + '\')">'
+        + '<span class="dmx-t-code">' + escapeHtml(store) + '</span>'
+        + '<span class="dmx-t-mid"><span class="dmx-t-val">' + sub + '</span>'
+        + (pct === null ? '' : '<span style="display:block; margin-top:5px;">' + _dmxMeter(pct) + '</span>')
+        + '</span>'
+        + (showDot ? '<span class="dmx-dot dmx-' + s.k + '"></span>' : '<span></span>')
+        + '</button>';
+}
+
+function _dmxPick(tool, store) {
+    _dmxSel[tool] = store;
+    if (tool === 'lg') renderDmListingModal();
+    else if (tool === 'cl') renderDmCleaningModal();
+    else if (tool === 'mg') renderDmGoalsModal();
+}
+
+// ---------------------------------------------------------------------------
+// LISTING GOALS (district)
+// ---------------------------------------------------------------------------
+// Per-store weekly target vs listed, the per-employee day-by-day roster, the
+// level-up bar, and the two-week flag review — which is the one thing on this
+// screen the DM actually acts on.
+
+// Monday-anchored week, Chicago time, same as the widget it replaces.
+function _dmxWeekDays() {
+    const now = new Date();
+    const start = new Date(now);
+    start.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
+    start.setHours(0, 0, 0, 0);
+    const days = [];
+    const cur = new Date(start);
+    const todayStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+    while (true) {
+        const label = cur.toLocaleDateString('en-US', { weekday: 'short' });
+        const key = cur.toLocaleDateString('en-US');
+        days.push({ key, label });
+        if (key === todayStr || days.length >= 7) break;
+        cur.setDate(cur.getDate() + 1);
+    }
+    return { start, days, todayStr };
+}
+
+// Rolls this week's records up per employee for one store. Last record per day
+// wins, matching the widget — a manager re-saving a day overwrites, not adds.
+function _dmxListingStore(store) {
+    const { start, days, todayStr } = _dmxWeekDays();
+    const rows = (typeof allDistrictGoalsData !== 'undefined' ? allDistrictGoalsData : [])
+        .filter(r => r.store === store);
+    const emps = {};
+    rows.forEach(r => {
+        if (goalDateObj(r.date) < start) return;
+        const d = normalizeGoalDate(r.date);
+        if (!emps[r.employee]) emps[r.employee] = { role: '-', byDay: {} };
+        emps[r.employee].byDay[d] = parseInt(r.goal) || 0;
+        if (d === todayStr && r.role && r.role !== '-') emps[r.employee].role = r.role;
+    });
+    const names = Object.keys(emps);
+    let today = 0, week = 0;
+    names.forEach(n => {
+        today += emps[n].byDay[todayStr] || 0;
+        week += Object.values(emps[n].byDay).reduce((a, g) => a + g, 0);
+    });
+    const target = targetFor(store);
+    return {
+        store, target, emps, names, today, week, days, todayStr,
+        pct: _dmxPct(week, target),
+        flag: (_storeTargets[store] && _storeTargets[store].flag) || 'none',
+    };
+}
+
+function openDmListingGoals() {
+    // toggleModal is the shared opener — it closes whatever else is open and
+    // dims/blurs the page behind, like every other SPEEKS tool.
+    toggleModal('dmListingModal');
+    renderDmListingModal();
+    // The modal can be opened before the first fetch lands; this fills it in.
+    if (typeof fetchDmGoalsData === 'function') fetchDmGoalsData();
+}
+
+function renderDmListingModal() {
+    const wrap = document.getElementById('dmListingBody');
+    if (!wrap) return;
+    const all = _DMX_STORES.map(_dmxListingStore);
+    const listed = all.reduce((a, s) => a + s.week, 0);
+    const target = all.reduce((a, s) => a + s.target, 0);
+    const flagged = all.filter(s => s.flag === 'flagged').length;
+
+    const sub = document.getElementById('dmListingSub');
+    if (sub) {
+        sub.textContent = listed + ' of ' + target + ' listed this week · '
+            + _dmxPct(listed, target) + '%'
+            + (flagged ? ' · ' + flagged + ' flagged for review' : '');
+    }
+
+    if (!all.some(s => s.names.length)) {
+        wrap.innerHTML = '<div class="dmx-empty" style="padding:60px 0;">Syncing the district roster…</div>';
+        return;
+    }
+
+    let rail = '';
+    all.forEach(s => {
+        rail += _dmxTab('lg', s.store, s.week + ' / ' + s.target, s.pct, true);
+    });
+
+    const sel = all.find(s => s.store === _dmxSel.lg) || all[0];
+    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2' };
+    let pane = '<div class="dmx-ph"><div>'
+        + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
+        + '<div class="dmx-ps">Target ' + sel.target + ' listings · ' + sel.week
+        + ' this week · ' + sel.names.length + ' on roster</div>'
+        + '</div><div class="dmx-ph-side">' + _dmxChip(sel.pct) + '</div></div>';
+
+    if (!sel.names.length) {
+        pane += '<div class="dmx-empty">No roles set for ' + escapeHtml(sel.store) + ' this week.</div>';
+    } else {
+        pane += '<table class="dmx-tbl"><thead><tr><th>Employee &amp; role</th>';
+        sel.days.forEach(d => { pane += '<th style="text-align:right;">' + escapeHtml(d.label) + '</th>'; });
+        pane += '<th style="text-align:right;">Week</th></tr></thead><tbody>';
+        sel.names.forEach(n => {
+            const e = sel.emps[n];
+            const wk = Object.values(e.byDay).reduce((a, g) => a + g, 0);
+            const badge = e.role !== '-'
+                ? '<span class="dmx-role">' + escapeHtml(roleName[e.role] || e.role) + '</span>' : '';
+            pane += '<tr><td><span class="dmx-name">' + escapeHtml(n) + '</span>' + badge + '</td>';
+            sel.days.forEach(d => {
+                const v = e.byDay[d.key];
+                pane += '<td class="dmx-num' + (v ? '' : ' dmx-mute') + '">' + (v || '–') + '</td>';
+            });
+            pane += '<td class="dmx-num">' + wk + '</td></tr>';
+        });
+        pane += '<tr class="dmx-tot"><td>Total</td>';
+        sel.days.forEach(d => {
+            let t = 0;
+            sel.names.forEach(n => { t += sel.emps[n].byDay[d.key] || 0; });
+            pane += '<td class="dmx-num">' + t + '</td>';
+        });
+        pane += '<td class="dmx-num">' + sel.week + '</td></tr></tbody></table>';
+
+        pane += '<div class="dmx-sec" style="margin-top:18px;">Level up</div>'
+            + (typeof levelUpHtml === 'function' ? levelUpHtml(weeksFor(sel.store) || [], sel.target) : '');
+
+        if (sel.flag === 'flagged') {
+            pane += '<div class="dmx-flag">'
+                + '<span class="dmx-flag-t">Missed goal 2 weeks running — your call:</span>'
+                + '<button type="button" class="dmx-lower" onclick="dmGoalAction(\'' + sel.store + '\',\'lower\')">Lower −10</button>'
+                + '<button type="button" class="dmx-keep" onclick="dmGoalAction(\'' + sel.store + '\',\'keep\')">Keep at ' + sel.target + '</button>'
+                + '</div>';
+        }
+    }
+
+    wrap.innerHTML = '<div class="dmx-strip">'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">District listed</div><div class="dmx-cell-v">' + listed + '</div></div>'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">District target</div><div class="dmx-cell-v">' + target + '</div></div>'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">Attainment</div><div class="dmx-cell-v">' + _dmxPct(listed, target) + '<small>%</small></div></div>'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">Flagged for review</div><div class="dmx-cell-v">' + flagged + '</div></div>'
+        + '</div>'
+        + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
+}
+
+// ---------------------------------------------------------------------------
+// CLEANING CHECKLIST (district)
+// ---------------------------------------------------------------------------
+// Read-only follow-up view. Outstanding items are listed ABOVE done ones,
+// because "what's left" is the question a DM opens this to answer; the section
+// each item belongs to moves onto the row so the grouping isn't lost.
+
+function openDmCleaning() {
+    toggleModal('dmCleaningModal');
+    renderDmCleaningModal();
+    if (typeof fetchDmAuditData === 'function') fetchDmAuditData();
+}
+
+function switchDmCleaningTab(view) {
+    currentDmAuditTab = view;
+    document.getElementById('dmClTabDaily')?.classList.toggle('active', view === 'daily');
+    document.getElementById('dmClTabWeekly')?.classList.toggle('active', view === 'weekly');
+    renderDmCleaningModal();
+}
+
+function _dmxAuditStore(store, tab) {
+    const sd = (typeof dmAuditData !== 'undefined' ? dmAuditData : {})[store] || {};
+    const pd = sd[tab] || { items: [], total: 0, completed: 0 };
+    const items = pd.items || [];
+    const total = pd.total || items.length;
+    const completed = pd.completed != null ? pd.completed : items.filter(i => i.checked).length;
+    return { store, items, total, completed, pct: _dmxPct(completed, total) };
+}
+
+function renderDmCleaningModal() {
+    const wrap = document.getElementById('dmCleaningBody');
+    if (!wrap) return;
+    const tab = (typeof currentDmAuditTab !== 'undefined' ? currentDmAuditTab : 'daily');
+    const all = _DMX_STORES.map(s => _dmxAuditStore(s, tab));
+    const done = all.reduce((a, s) => a + s.completed, 0);
+    const total = all.reduce((a, s) => a + s.total, 0);
+    const complete = all.filter(s => s.total && s.completed === s.total).length;
+    const behind = all.filter(s => s.total && s.pct < 50).length;
+    const word = tab === 'daily' ? 'today' : 'this week';
+
+    const sub = document.getElementById('dmCleaningSub');
+    if (sub) {
+        sub.textContent = total
+            ? done + ' of ' + total + ' done ' + word + ' · ' + _dmxPct(done, total) + '%'
+                + (behind ? ' · ' + behind + ' behind' : '')
+            : 'No ' + tab + ' items set up yet.';
+    }
+
+    if (!total) {
+        wrap.innerHTML = '<div class="dmx-empty" style="padding:60px 0;">No ' + escapeHtml(tab)
+            + ' cleaning items have been set up yet.</div>';
+        return;
+    }
+
+    // Worst first: the store needing a nudge is the reason this is open.
+    const order = all.slice().sort((a, b) => a.pct - b.pct);
+    let rail = '';
+    order.forEach(s => {
+        rail += _dmxTab('cl', s.store, s.completed + ' / ' + s.total, s.pct, true);
+    });
+
+    const sel = all.find(s => s.store === _dmxSel.cl) || order[0];
+    let pane = '<div class="dmx-ph"><div>'
+        + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
+        + '<div class="dmx-ps">' + sel.completed + ' of ' + sel.total + ' done ' + word + '</div>'
+        + '</div><div class="dmx-ph-side">' + _dmxChip(sel.pct) + '</div></div>';
+
+    if (!sel.items.length) {
+        pane += '<div class="dmx-empty">No ' + escapeHtml(tab) + ' items for ' + escapeHtml(sel.store) + '.</div>';
+    } else {
+        const box = '<span class="dmx-ck-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>';
+        const row = it => '<div class="dmx-ck' + (it.checked ? ' on' : '') + '">' + box
+            + '<span class="dmx-ck-t">' + escapeHtml(it.text || '')
+            + (it.section ? ' <span class="dmx-ck-where">· ' + escapeHtml(it.section) + '</span>' : '')
+            + '</span></div>';
+        const open = sel.items.filter(i => !i.checked);
+        const shut = sel.items.filter(i => i.checked);
+        if (open.length) {
+            pane += '<div class="dmx-sec">Still outstanding · ' + open.length + '</div>'
+                + open.map(row).join('');
+        }
+        if (shut.length) {
+            pane += '<div class="dmx-sec">Done · ' + shut.length + '</div>' + shut.map(row).join('');
+        }
+    }
+
+    wrap.innerHTML = '<div class="dmx-strip">'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">District ' + word + '</div><div class="dmx-cell-v">' + _dmxPct(done, total) + '<small>%</small></div></div>'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">Items done</div><div class="dmx-cell-v">' + done + '<small> / ' + total + '</small></div></div>'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">Stores complete</div><div class="dmx-cell-v">' + complete + '<small> of 5</small></div></div>'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">Behind</div><div class="dmx-cell-v">' + behind + '</div></div>'
+        + '</div>'
+        + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
+}
+
+// ---------------------------------------------------------------------------
+// MONTHLY TEAM GOALS (district)
+// ---------------------------------------------------------------------------
+// The one of the three the DM writes to. Company-wide projects sit in a band
+// above, since they apply to every store; each store's own goals and
+// initiatives are in the pane. Editing still hands off to the existing
+// store-scoped editors — see the note on the Edit buttons.
+
+function openDmMonthlyGoals() {
+    toggleModal('dmGoalsModal');
+    renderDmGoalsModal();
+}
+
+function _dmxGoalsStore(store) {
+    const goals = (getMonthlyGoals(store) || {}).goals || [];
+    const inis = (getStoreInitiatives(store) || {}).initiatives || [];
+    return { store, goals, inis };
+}
+
+function renderDmGoalsModal() {
+    const wrap = document.getElementById('dmGoalsBody');
+    if (!wrap) return;
+    const all = _DMX_STORES.map(_dmxGoalsStore);
+    const setCount = all.reduce((a, s) => a + s.goals.length, 0);
+    const unset = all.filter(s => !s.goals.length).map(s => s.store);
+
+    const sub = document.getElementById('dmGoalsSub');
+    if (sub) {
+        sub.textContent = (typeof _mgbMonthLabel === 'function' ? _mgbMonthLabel() + ' · ' : '')
+            + setCount + ' goal' + (setCount === 1 ? '' : 's') + ' set across 5 stores'
+            + (unset.length ? ' · ' + unset.join(', ') + ' not set' : '');
+    }
+
+    let rail = '';
+    all.forEach(s => {
+        const bits = s.goals.length + ' goal' + (s.goals.length === 1 ? '' : 's')
+            + ' · ' + s.inis.length + ' initiative' + (s.inis.length === 1 ? '' : 's');
+        // No meter here: goals aren't a percentage of anything. The dot only
+        // appears when a store has nothing set, which is the one actionable state.
+        const sel = _dmxSel.mg === s.store ? ' sel' : '';
+        rail += '<button type="button" class="dmx-t' + sel + '" onclick="_dmxPick(\'mg\',\'' + s.store + '\')">'
+            + '<span class="dmx-t-code">' + escapeHtml(s.store) + '</span>'
+            + '<span class="dmx-t-mid"><span class="dmx-t-val"'
+            + (s.goals.length ? '' : ' style="color:#b91c1c;"') + '>' + bits + '</span></span>'
+            + (s.goals.length ? '<span></span>' : '<span class="dmx-dot dmx-bad"></span>')
+            + '</button>';
+    });
+
+    const sel = all.find(s => s.store === _dmxSel.mg) || all[0];
+    const projects = (getCompanyProjects() || {}).projects || [];
+    const badge = st => st === 'upcoming'
+        ? '<span class="dmx-badge up">Upcoming</span>'
+        : '<span class="dmx-badge cur">Current</span>';
+
+    let company = '<div class="dmx-company"><div class="dmx-company-l">Company initiatives · all stores</div>';
+    company += projects.length
+        ? '<div class="dmx-company-r">' + projects.map(p =>
+            '<span class="dmx-company-i">' + escapeHtml(p.title || '') + badge(p.status) + '</span>').join('') + '</div>'
+        : '<div class="dmx-empty" style="padding:8px 0; text-align:left;">No company initiatives set.</div>';
+    company += '</div>';
+
+    let pane = '<div class="dmx-ph"><div>'
+        + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
+        + '<div class="dmx-ps">' + sel.goals.length + ' of 6 goals set for '
+        + escapeHtml(typeof _mgbMonthLabel === 'function' ? _mgbMonthLabel() : 'this month') + '</div>'
+        + '</div><div class="dmx-ph-side">'
+        + '<button type="button" class="btn-secondary" style="padding:8px 14px; font-size:12.5px;" onclick="openEditMonthlyGoalsModal(\'' + sel.store + '\')">Edit goals</button>'
+        + '<button type="button" class="btn-secondary" style="padding:8px 14px; font-size:12.5px;" onclick="openEditStoreInitiativesModal(\'' + sel.store + '\')">Edit initiatives</button>'
+        + '</div></div>';
+
+    pane += '<div class="dmx-sec">Team goals</div>';
+    pane += sel.goals.length
+        ? sel.goals.map(g => '<div class="dmx-goal"><div class="dmx-goal-t">' + escapeHtml(g.title || '') + '</div>'
+            + (g.description ? '<div class="dmx-goal-d">' + escapeHtml(g.description) + '</div>' : '') + '</div>').join('')
+        : '<div class="dmx-empty">No goals set for ' + escapeHtml(sel.store) + ' this month.</div>';
+    if (sel.goals.length && sel.goals.length < 6) {
+        pane += '<div class="dmx-empty">' + (6 - sel.goals.length) + ' more can be set this month</div>';
+    }
+
+    pane += '<div class="dmx-sec">Initiatives &amp; projects</div>';
+    pane += sel.inis.length
+        ? sel.inis.map(i => '<div class="dmx-goal"><div class="dmx-goal-row"><div>'
+            + '<div class="dmx-goal-t">' + escapeHtml(i.title || '') + '</div>'
+            + (i.description ? '<div class="dmx-goal-d">' + escapeHtml(i.description) + '</div>' : '')
+            + '</div>' + badge(i.status) + '</div></div>').join('')
+        : '<div class="dmx-empty">No initiatives set for ' + escapeHtml(sel.store) + '.</div>';
+
+    wrap.innerHTML = company
+        + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
+}
+
+// ---------------------------------------------------------------------------
+// RAIL SYNC — the number that tells the DM whether to open each tool
+// ---------------------------------------------------------------------------
+// Mirrors _samSyncMini for the manager rows: sub line, right-hand value, bar.
+// Each tool shows the one figure that decides whether it's worth opening —
+// flagged stores for Listing Goals (the only part a DM must act on), district
+// completion for Cleaning (nothing to action, only to follow up), goals set for
+// Monthly (so an unset store is visible without opening anything).
+
+function _dmxSyncRail() {
+    if (!_dmxIsDistrict()) return;
+    const set = (id, txt) => { const el = document.getElementById(id); if (el && txt != null) el.textContent = txt; };
+    const bar = (id, pct) => {
+        const el = document.getElementById(id);
+        if (el) el.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    };
+
+    // Listing Goals
+    if (typeof allDistrictGoalsData !== 'undefined' && allDistrictGoalsData.length) {
+        const all = _DMX_STORES.map(_dmxListingStore);
+        const listed = all.reduce((a, s) => a + s.week, 0);
+        const target = all.reduce((a, s) => a + s.target, 0);
+        const flagged = all.filter(s => s.flag === 'flagged').length;
+        set('samDmListVal', listed + '/' + target);
+        set('samDmListSub', flagged
+            ? flagged + ' store' + (flagged === 1 ? '' : 's') + ' flagged for review'
+            : 'All five stores this week');
+        bar('samDmListFill', _dmxPct(listed, target));
+    }
+
+    // Cleaning Checklist
+    if (typeof dmAuditData !== 'undefined' && Object.keys(dmAuditData).length) {
+        const tab = (typeof currentDmAuditTab !== 'undefined' ? currentDmAuditTab : 'daily');
+        const all = _DMX_STORES.map(s => _dmxAuditStore(s, tab));
+        const done = all.reduce((a, s) => a + s.completed, 0);
+        const total = all.reduce((a, s) => a + s.total, 0);
+        const behind = all.filter(s => s.total && s.pct < 50).length;
+        set('samDmAuditVal', total ? done + '/' + total : '');
+        set('samDmAuditSub', behind
+            ? behind + ' store' + (behind === 1 ? '' : 's') + ' behind today'
+            : 'All five stores today');
+        bar('samDmAuditFill', _dmxPct(done, total));
+    }
+
+    // Monthly Team Goals
+    const goals = _DMX_STORES.map(_dmxGoalsStore);
+    const setCount = goals.reduce((a, s) => a + s.goals.length, 0);
+    const unset = goals.filter(s => !s.goals.length).length;
+    set('samDmGoalsVal', String(setCount));
+    set('samDmGoalsSub', unset
+        ? unset + ' store' + (unset === 1 ? '' : 's') + ' with nothing set'
+        : 'Team goals & initiatives');
 }
