@@ -8145,6 +8145,51 @@ function _b2bClickKind(deal) {
     return a ? a.kind : 'view';
 }
 
+// A few stages end in a decision with nothing left to fill in. Those get a
+// one-click action on the queue card so the common case doesn't need the full
+// screen -- each still confirms first, because both are one-way doors.
+// Anything needing input (a store, a name, prices) is deliberately absent.
+function _b2bQuickAction(d) {
+    if (d.stage === 'quote' && _b2bCanAccept()) {
+        return { label: 'Mark Accepted', call: `b2bQuickAccept('${d.id}',this)` };
+    }
+    if (d.stage === 'listing' && d.total_units > 0 && _b2bOutstanding(d) === 0) {
+        return { label: 'Complete Deal', call: `b2bQuickComplete('${d.id}',this)` };
+    }
+    return null;
+}
+
+async function b2bQuickAccept(id, btn) {
+    const d = _b2bDealById(id);
+    if (!d) return;
+    const msg = `Accept ${d.client?.company || 'this'} quote at ${_b2bMoney(d.total_offer, 2)}?\n\n`
+        + 'The offers lock in as our cost and the items become inventory to list. This cannot be undone.';
+    if (!confirm(msg)) return;
+    try {
+        const out = await _b2bBusy(btn, 'Accepting…', () =>
+            _b2bSend({ action: 'accept_quote', id, accepted_by: _b2bUser() }));
+        await b2bRefresh();
+        // A CORP-priced deal still needs a listing store, so carry straight on.
+        if (out.next_stage === 'listing_location' && _b2bIsCorp()) b2bOpenDeal('listloc', id);
+    } catch (e) {
+        alert(`Couldn't accept the quote: ${e.message}`);
+    }
+}
+
+async function b2bQuickComplete(id, btn) {
+    const d = _b2bDealById(id);
+    if (!d) return;
+    if (!confirm(`Complete ${d.client?.company || 'this deal'}?\n\n`
+        + `All ${d.total_units} unit${d.total_units === 1 ? '' : 's'} are listed or recycled, `
+        + 'so the deal closes out for record keeping.')) return;
+    try {
+        await _b2bBusy(btn, 'Completing…', () => _b2bSend({ action: 'complete', id }));
+        await b2bRefresh();
+    } catch (e) {
+        alert(`Couldn't complete the deal: ${e.message}`);
+    }
+}
+
 // --- formatting -----------------------------------------------------------
 
 function _b2bMoney(n, dp) {
@@ -8388,8 +8433,9 @@ function _b2bRenderQueue(scoped, queue) {
     const rest = scoped.filter(d => !_b2bActionFor(d) && d.stage !== 'completed' && d.stage !== 'cancelled');
 
     const cards = queue.length ? queue.map(d => {
-        const a    = _b2bActionFor(d);
-        const days = _b2bDaysIn(d);
+        const a     = _b2bActionFor(d);
+        const quick = _b2bQuickAction(d);
+        const days  = _b2bDaysIn(d);
         const meta = [
             d.total_units ? `${d.total_units} unit${d.total_units === 1 ? '' : 's'}` : null,
             d.total_offer ? `${_b2bMoney(d.total_offer)} offer` : null,
@@ -8412,7 +8458,10 @@ function _b2bRenderQueue(scoped, queue) {
             </div>
             <div class="b2b-q-act">
                 <span class="b2b-q-why">${escapeHtml(a.why)}</span>
-                <button class="b2b-btn b2b-btn-primary" onclick="event.stopPropagation();b2bOpenDeal('${a.kind}','${d.id}')">${escapeHtml(a.cta)}</button>
+                <div class="b2b-q-btns">
+                    ${quick ? `<button class="b2b-btn b2b-btn-quick" onclick="event.stopPropagation();${quick.call}">${escapeHtml(quick.label)}</button>` : ''}
+                    <button class="b2b-btn b2b-btn-primary" onclick="event.stopPropagation();b2bOpenDeal('${a.kind}','${d.id}')">${escapeHtml(a.cta)}</button>
+                </div>
             </div>
         </div>`;
     }).join('') : `
@@ -9257,6 +9306,21 @@ function _b2bPaintQuoteDoc() {
     if (el && _b2bModalDeal) el.innerHTML = _b2bQuoteDoc(_b2bModalDeal, _b2bModalItems);
 }
 
+// Condition earns a tinted chip on the quote, using the same semantic tones as
+// the rest of the app: emerald for sound, amber for Fair, red for For Parts.
+// The client can read the state of their equipment down the column at a glance.
+const B2B_COND_TONE = {
+    'New':       { bg: '#e8f7ee', fg: '#178048' },
+    'Like New':  { bg: '#e8f7ee', fg: '#178048' },
+    'Good':      { bg: '#e8f7ee', fg: '#178048' },
+    'Fair':      { bg: '#fdf3e1', fg: '#b7791f' },
+    'For Parts': { bg: '#fcecec', fg: '#d1443b' },
+};
+const _b2bCondTone = c => B2B_COND_TONE[c] || { bg: '#f1f5f9', fg: '#647082' };
+const _b2bCondClass = c => ({
+    'New': 'ok', 'Like New': 'ok', 'Good': 'ok', 'Fair': 'warn', 'For Parts': 'bad',
+}[c] || 'neu');
+
 // The client-facing quote. Deliberately carries no SKUs and no deal reference
 // -- those are ours, for labels and the floor. A client identifies their quote
 // by the date we collected their equipment.
@@ -9268,12 +9332,12 @@ function _b2bQuoteDoc(deal, items) {
 
     const rows = items.length ? items.map(it => {
         const qty = Number(it.quantity) || 1;
-        const bits = [it.condition, it.client_notes].filter(Boolean).join(' · ');
         return `<tr>
             <td>
                 <b>${escapeHtml(_b2bItemName(it))}</b>
+                ${it.condition ? `<span class="b2b-doc-cond ${_b2bCondClass(it.condition)}">${escapeHtml(it.condition)}</span>` : ''}
                 ${it.recycle_only ? '<span class="b2b-doc-rec">Recycle</span>' : ''}
-                ${bits ? `<div class="b2b-doc-sub">${escapeHtml(bits)}</div>` : ''}
+                ${it.client_notes ? `<div class="b2b-doc-sub">${escapeHtml(it.client_notes)}</div>` : ''}
             </td>
             <td class="c">${qty}</td>
             <td class="r">${it.recycle_only ? '—' : _b2bMoney(it.offer, 2)}</td>
@@ -9286,7 +9350,7 @@ function _b2bQuoteDoc(deal, items) {
         <div class="b2b-doc-head">
             <div class="b2b-doc-brand">Pay<span>More</span><div>Buy · Sell · Recycle Electronics</div></div>
             <div class="b2b-doc-meta">
-                <div class="b2b-doc-kind">Quote</div>
+                <span class="b2b-doc-kind">Quote</span>
                 <div>Issued ${escapeHtml(today)}</div>
             </div>
         </div>
@@ -9297,8 +9361,11 @@ function _b2bQuoteDoc(deal, items) {
         <table class="b2b-doc-t">
             <thead><tr><th>Description</th><th class="c">Qty</th><th class="r">Unit offer</th><th class="r">Line total</th></tr></thead>
             <tbody>${rows}</tbody>
-            <tfoot><tr><td colspan="3" class="r">Total offer</td><td class="r accent">${_b2bMoney(total, 2)}</td></tr></tfoot>
         </table>
+        <div class="b2b-doc-total">
+            <span>Total offer</span>
+            <b>${_b2bMoney(total, 2)}</b>
+        </div>
         <div class="b2b-doc-foot">
             Reply to this email to accept the quote or ask about any line.
             Recycle-only items carry no offer and are disposed of responsibly at no cost to you.
@@ -9319,14 +9386,17 @@ function _b2bQuoteInlineHtml(deal, items) {
              + 'letter-spacing:.07em;text-transform:uppercase;color:#647082;';
     const TD = 'padding:11px 12px;border-bottom:1px solid #eef2f6;font-size:13px;color:#1a1c1e;';
 
+    const CHIP = 'display:inline-block;margin-left:7px;padding:2px 8px;border-radius:10px;'
+               + 'font-size:9.5px;font-weight:bold;letter-spacing:.05em;text-transform:uppercase;';
     const rows = items.map(it => {
         const qty = Number(it.quantity) || 1;
-        const bits = [it.condition, it.client_notes].filter(Boolean).map(escapeHtml).join(' &middot; ');
+        const tone = _b2bCondTone(it.condition);
         return `<tr>
             <td style="${TD}">
                 <b>${escapeHtml(_b2bItemName(it))}</b>
-                ${it.recycle_only ? '<span style="margin-left:6px;padding:1px 7px;border-radius:10px;background:#eef2f6;color:#647082;font-size:9px;font-weight:bold;letter-spacing:.05em;">RECYCLE</span>' : ''}
-                ${bits ? `<div style="margin-top:3px;font-size:11.5px;color:#647082;">${bits}</div>` : ''}
+                ${it.condition ? `<span style="${CHIP}background:${tone.bg};color:${tone.fg};">${escapeHtml(it.condition)}</span>` : ''}
+                ${it.recycle_only ? `<span style="${CHIP}background:#e3f6f3;color:#0d8a7d;">Recycle</span>` : ''}
+                ${it.client_notes ? `<div style="margin-top:4px;font-size:11.5px;color:#647082;">${escapeHtml(it.client_notes)}</div>` : ''}
             </td>
             <td style="${TD}text-align:center;">${qty}</td>
             <td style="${TD}text-align:right;">${it.recycle_only ? '&mdash;' : _b2bMoney(it.offer, 2)}</td>
@@ -9334,37 +9404,40 @@ function _b2bQuoteInlineHtml(deal, items) {
         </tr>`;
     }).join('');
 
-    return `<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:100%;font-family:'Segoe UI',Helvetica,Arial,sans-serif;background:#ffffff;border:1px solid #e6ebf1;border-radius:14px;">
+    return `<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:100%;font-family:'Segoe UI',Helvetica,Arial,sans-serif;background:#ffffff;border:1px solid #e6ebf1;border-top:3px solid #1f9d57;border-radius:14px;">
   <tr><td style="padding:22px 24px;border-bottom:1px solid #eef2f6;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
       <td style="font-size:21px;font-weight:bold;color:#1a1c1e;letter-spacing:-.4px;">Pay<span style="color:#1f9d57;">More</span>
         <div style="margin-top:3px;font-size:11px;font-weight:normal;color:#647082;">Buy &middot; Sell &middot; Recycle Electronics</div></td>
       <td align="right" style="font-size:12px;color:#647082;">
-        <div style="font-size:15px;font-weight:bold;color:#1a1c1e;">Quote</div>
-        <div style="margin-top:3px;">Issued ${escapeHtml(today)}</div></td>
+        <div style="display:inline-block;padding:4px 12px;border-radius:999px;background:#e8f7ee;color:#178048;font-size:12px;font-weight:bold;letter-spacing:.06em;text-transform:uppercase;">Quote</div>
+        <div style="margin-top:6px;">Issued ${escapeHtml(today)}</div></td>
     </tr></table></td></tr>
   <tr><td style="padding:16px 24px;background:#f6f8fa;border-bottom:1px solid #eef2f6;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
       <td style="font-size:12.5px;color:#1a1c1e;vertical-align:top;">
-        <div style="font-size:10px;font-weight:bold;letter-spacing:.09em;text-transform:uppercase;color:#94a3b8;">Prepared for</div>
+        <div style="font-size:10px;font-weight:bold;letter-spacing:.09em;text-transform:uppercase;color:#178048;">Prepared for</div>
         <div style="margin-top:4px;font-size:14px;font-weight:bold;">${escapeHtml(c.company || '')}</div>
         ${c.contact ? `<div style="margin-top:2px;color:#647082;">${escapeHtml(c.contact)}</div>` : ''}</td>
       <td align="right" style="font-size:12.5px;color:#1a1c1e;vertical-align:top;">
-        <div style="font-size:10px;font-weight:bold;letter-spacing:.09em;text-transform:uppercase;color:#94a3b8;">Equipment collected</div>
+        <div style="font-size:10px;font-weight:bold;letter-spacing:.09em;text-transform:uppercase;color:#178048;">Equipment collected</div>
         <div style="margin-top:4px;font-size:14px;font-weight:bold;">${escapeHtml(picked || 'Not recorded')}</div>
         <div style="margin-top:2px;color:#647082;">by SPEEKS Technology, authorized PayMore franchisee</div></td>
     </tr></table></td></tr>
-  <tr><td style="padding:6px 24px 0;">
+  <tr><td style="padding:14px 24px 0;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
       <tr><th align="left" style="${TH}">Description</th>
           <th align="center" style="${TH}">Qty</th>
           <th align="right" style="${TH}">Unit offer</th>
           <th align="right" style="${TH}">Line total</th></tr>
       ${rows}
-      <tr><td colspan="3" align="right" style="padding:16px 12px;font-size:13px;font-weight:bold;color:#1a1c1e;">Total offer</td>
-          <td align="right" style="padding:16px 12px;font-size:18px;font-weight:bold;color:#178048;">${_b2bMoney(total, 2)}</td></tr>
     </table></td></tr>
-  <tr><td style="padding:4px 24px 22px;font-size:11.5px;color:#94a3b8;line-height:1.6;">
+  <tr><td style="padding:14px 24px 0;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#e8f7ee;border-radius:12px;"><tr>
+      <td style="padding:14px 18px;font-size:11px;font-weight:bold;letter-spacing:.09em;text-transform:uppercase;color:#178048;">Total offer</td>
+      <td align="right" style="padding:14px 18px;font-size:22px;font-weight:bold;color:#178048;">${_b2bMoney(total, 2)}</td>
+    </tr></table></td></tr>
+  <tr><td style="padding:14px 24px 22px;font-size:11.5px;color:#94a3b8;line-height:1.6;">
     Reply to this email to accept the quote or ask about any line.
     Recycle-only items carry no offer and are disposed of responsibly at no cost to you.
   </td></tr>

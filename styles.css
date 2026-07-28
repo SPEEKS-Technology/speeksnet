@@ -9522,6 +9522,16 @@ body.sam-active .hotbar-btn:hover {
 .b2b-q-bar .b2b-pace-bar { flex: 1; max-width: 220px; }
 .b2b-q-act { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; flex: 0 0 auto; }
 .b2b-q-why { font-size: 11px; font-weight: 650; color: var(--b2b-faint); }
+.b2b-q-btns { display: flex; align-items: center; gap: 8px; }
+/* The one-click finisher sits beside the CTA: clearly actionable, clearly not
+   the primary, since the primary opens the full screen. */
+.b2b-btn-quick {
+    background: var(--b2b-accent-tint); color: var(--sage-deep);
+    border-color: #cfeada;
+}
+.b2b-btn-quick:hover:not(:disabled) {
+    background: var(--sage-professional); border-color: var(--sage-professional); color: #fff;
+}
 
 .b2b-flight { display: flex; flex-direction: column; }
 .b2b-f-row {
@@ -9912,7 +9922,11 @@ body.sam-active .hotbar-btn:hover {
     text-transform: uppercase; color: var(--b2b-faint); margin-bottom: 12px;
 }
 
-.b2b-doc { background: #fff; border: 1px solid var(--b2b-line); border-radius: 14px; overflow: hidden; }
+.b2b-doc {
+    background: #fff; border: 1px solid var(--b2b-line);
+    border-top: 3px solid var(--sage-professional);
+    border-radius: 14px; overflow: hidden;
+}
 .b2b-doc-head {
     display: flex; justify-content: space-between; align-items: flex-start;
     gap: 16px; padding: 18px 20px; border-bottom: 1px solid var(--b2b-line-2);
@@ -9924,7 +9938,11 @@ body.sam-active .hotbar-btn:hover {
     letter-spacing: .02em; margin-top: 2px;
 }
 .b2b-doc-meta { text-align: right; font-size: 11.5px; color: var(--b2b-muted); }
-.b2b-doc-kind { font-size: 14px; font-weight: 800; color: #1a1c1e; }
+.b2b-doc-kind {
+    display: inline-block; padding: 4px 12px; border-radius: 999px;
+    background: var(--b2b-accent-tint); color: var(--sage-deep);
+    font-size: 11.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+}
 .b2b-doc-parties {
     display: flex; justify-content: space-between; gap: 16px;
     padding: 14px 20px; background: var(--b2b-surface);
@@ -9933,23 +9951,42 @@ body.sam-active .hotbar-btn:hover {
 .b2b-doc-parties .r { text-align: right; }
 .b2b-doc-k {
     display: block; font-size: 9.5px; font-weight: 800; letter-spacing: .09em;
-    text-transform: uppercase; color: var(--b2b-faint); margin-bottom: 3px;
+    text-transform: uppercase; color: var(--sage-deep); margin-bottom: 3px;
 }
 .b2b-doc-t { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .b2b-doc-t th {
-    padding: 10px 14px; border-bottom: 2px solid var(--b2b-line);
+    padding: 10px 14px; background: var(--b2b-surface); border-bottom: 2px solid var(--b2b-line);
     font-size: 9.5px; font-weight: 800; letter-spacing: .07em;
     text-transform: uppercase; color: var(--b2b-muted); text-align: left;
 }
 .b2b-doc-t td { padding: 10px 14px; border-bottom: 1px solid var(--b2b-line-2); font-size: 12.5px; color: #1a1c1e; }
-.b2b-doc-t tfoot td { border-bottom: none; padding: 14px; font-size: 13px; font-weight: 800; }
-.b2b-doc-t tfoot .accent { font-size: 16px; color: var(--sage-deep); }
+.b2b-doc-total {
+    display: flex; align-items: center; justify-content: space-between;
+    margin: 14px 20px 0; padding: 14px 18px; border-radius: 12px;
+    background: var(--b2b-accent-tint);
+}
+.b2b-doc-total span {
+    font-size: 11px; font-weight: 800; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--sage-deep);
+}
+.b2b-doc-total b {
+    font-size: 22px; font-weight: 850; letter-spacing: -.015em; color: var(--sage-deep);
+}
+/* Condition reads as a tinted chip, same semantic tones as the app. */
+.b2b-doc-cond {
+    display: inline-block; margin-left: 7px; padding: 2px 8px; border-radius: 10px;
+    font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+    background: #f1f5f9; color: var(--b2b-muted);
+}
+.b2b-doc-cond.ok   { background: #e8f7ee; color: #178048; }
+.b2b-doc-cond.warn { background: #fdf3e1; color: #b7791f; }
+.b2b-doc-cond.bad  { background: #fcecec; color: #d1443b; }
 .b2b-doc-sub { font-size: 11px; color: var(--b2b-muted); margin-top: 2px; }
 .b2b-doc-sub.int { color: var(--b2b-faint); font-style: italic; }
 .b2b-doc-sku { font-size: 10px; color: var(--b2b-faint); margin-top: 2px; }
 .b2b-doc-rec {
-    display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
-    background: #f1f5f9; color: var(--b2b-muted); font-size: 9px;
+    display: inline-block; margin-left: 7px; padding: 2px 8px; border-radius: 10px;
+    background: #e3f6f3; color: #0d8a7d; font-size: 9.5px;
     font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
 }
 .b2b-doc-empty { padding: 26px; text-align: center; font-size: 12.5px; color: var(--b2b-faint); }
