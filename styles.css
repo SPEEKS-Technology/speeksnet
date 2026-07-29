@@ -10151,14 +10151,109 @@ body.sam-active .hotbar-btn:hover {
 }
 .b2b-tot-v.accent { color: var(--sage-deep); }
 
-.b2b-items { display: flex; flex-direction: column; gap: 10px; }
-.b2b-pcard {
-    background: #fff; border: 1px solid var(--b2b-line); border-radius: 12px;
-    padding: 12px 14px; box-shadow: 0 1px 2px rgba(16,24,40,.04);
+/* Priced lines read as a grid, not a stack of cards: one row each, columns
+   aligned under a shared header. The column template lives on --b2b-pcols so
+   the header and every row are guaranteed to agree -- two separate
+   grid-template-columns declarations would drift the first time one changed. */
+.b2b-items {
+    display: flex; flex-direction: column; gap: 6px;
+    /* The actions column is a fixed width, not auto: the header's copy of it is
+       empty, so auto would collapse there and widen every fr column above the
+       rows -- headers sitting over the wrong columns. */
+    --b2b-pcols: 96px 1.1fr 1.5fr 108px 56px 84px 84px 86px 182px;
 }
-.b2b-pcard.rec { background: #fbfcfd; border-style: dashed; }
-.b2b-pcard-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-.b2b-pcard-sku { flex: 1; font-size: 10.5px; font-weight: 700; color: var(--b2b-faint); }
+.b2b-prow {
+    display: grid; grid-template-columns: var(--b2b-pcols);
+    gap: 8px; align-items: center;
+}
+.b2b-phead {
+    /* 13px, not 12: the rows sit inside a 1px border the header doesn't have. */
+    padding: 0 13px 2px;
+    font-size: 9.5px; font-weight: 800; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--b2b-faint);
+}
+.b2b-phead .r { text-align: right; }
+.b2b-pline {
+    background: #fff; border: 1px solid var(--b2b-line); border-radius: 11px;
+    padding: 8px 12px; box-shadow: 0 1px 2px rgba(16,24,40,.04);
+    transition: border-color .14s ease;
+}
+.b2b-pline.rec { background: #fbfcfd; border-style: dashed; }
+.b2b-pcell { display: flex; align-items: center; min-width: 0; }
+.b2b-pcell input, .b2b-pcell select {
+    width: 100%; font: inherit; font-size: 12.5px;
+    height: var(--b2b-h-md); padding: 0 9px;
+    border-radius: var(--b2b-r-sm); border: 1px solid var(--b2b-line);
+    background: #fff; color: #1a1c1e;
+    transition: border-color .14s ease, box-shadow .14s ease;
+}
+.b2b-pcell input:focus, .b2b-pcell select:focus {
+    outline: none; border-color: var(--sage-professional);
+    box-shadow: 0 0 0 3px rgba(31,157,87,.12);
+}
+.b2b-pcell.n input { text-align: right; font-variant-numeric: tabular-nums; }
+.b2b-pc-sku {
+    flex-direction: column; align-items: flex-start; gap: 2px;
+    font-size: 10.5px; font-weight: 700; color: var(--b2b-faint);
+}
+.b2b-pc-sku .b2b-doc-rec { margin-left: 0; }
+.b2b-pc-tot { justify-content: flex-end; }
+.b2b-pc-acts { gap: 5px; justify-content: flex-end; }
+
+/* Notes fold away, so the grid stays a grid. */
+.b2b-notes-btn {
+    position: relative; display: grid; place-items: center; cursor: pointer;
+    width: var(--b2b-h-md); height: var(--b2b-h-md); padding: 0;
+    border-radius: var(--b2b-r-sm); border: 1px solid var(--b2b-line); background: #fff;
+    transition: all .14s ease;
+}
+.b2b-notes-btn svg { width: 14px; height: 14px; stroke: var(--b2b-muted); }
+.b2b-notes-btn:hover { border-color: var(--sage-professional); }
+.b2b-notes-btn:hover svg { stroke: var(--sage-deep); }
+.b2b-notes-btn.on { background: var(--b2b-accent-tint); border-color: var(--sage-professional); }
+.b2b-notes-btn.on svg { stroke: var(--sage-deep); }
+.b2b-notes-btn.req { background: #fffbf3; border-color: #e0b970; }
+.b2b-notes-btn.req svg { stroke: #b7791f; }
+.b2b-notes-dot {
+    position: absolute; top: 4px; right: 4px; width: 5px; height: 5px;
+    border-radius: 999px; background: var(--sage-professional);
+}
+.b2b-pnote-hint {
+    margin: 6px 0 0; padding-left: 2px; cursor: pointer;
+    font-size: 11px; font-weight: 600; color: var(--b2b-faint);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.b2b-pnote-hint:hover { color: var(--sage-deep); }
+.b2b-pnote {
+    display: grid; gap: 9px; grid-template-columns: 1fr 1.6fr;
+    margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--b2b-line-2);
+}
+
+/* Chosen condition tags, plus a dropdown to add the next one -- nine buttons
+   per line was most of the bulk, and only ever one or two get used. */
+.b2b-chiprow { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-bottom: 5px; }
+.b2b-chip-tag {
+    display: inline-flex; align-items: center; gap: 3px; padding: 2px 3px 2px 8px;
+    border-radius: 999px; background: var(--b2b-accent-tint);
+    border: 1px solid #cfeada; color: var(--sage-deep);
+    font-size: 10.5px; font-weight: 750;
+}
+.b2b-chip-tag button {
+    display: grid; place-items: center; width: 15px; height: 15px; padding: 0;
+    border: 0; border-radius: 999px; background: none; cursor: pointer;
+    font: inherit; font-size: 12px; line-height: 1; color: var(--sage-deep);
+}
+.b2b-chip-tag button:hover { background: #fde8e6; color: #d1443b; }
+/* Needs to out-specify `.b2b-f select` (0,1,1), which sets width:100% and would
+   stretch this to the full row -- making a compact picker look like another text
+   field. Hence the element qualifier and the parent, not a bare class. */
+.b2b-chiprow select.b2b-tagsel {
+    font: inherit; font-size: 10.5px; font-weight: 700; cursor: pointer;
+    width: auto; flex: 0 0 auto; height: 22px; padding: 0 4px; color: var(--b2b-muted);
+    border-radius: 999px; border: 1px dashed var(--b2b-line); background: #fff;
+}
+.b2b-chiprow select.b2b-tagsel:hover { border-color: var(--sage-professional); color: var(--sage-deep); }
+
 .b2b-rec-toggle {
     display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
     font-size: 11.5px; font-weight: 700; color: var(--b2b-muted);
@@ -10175,14 +10270,6 @@ body.sam-active .hotbar-btn:hover {
 .b2b-x:hover { background: #fcecec; border-color: #f7dada; }
 .b2b-x:hover svg { stroke: #d1443b; }
 
-.b2b-pgrid {
-    display: grid; gap: 9px; align-items: end;
-    grid-template-columns: 1.3fr 1.6fr 1fr 64px 92px 92px 92px;
-}
-.b2b-pnotes {
-    display: grid; gap: 9px; grid-template-columns: 1fr 1.6fr;
-    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--b2b-line-2);
-}
 .b2b-f { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .b2b-f > label {
     font-size: 9.5px; font-weight: 800; letter-spacing: .08em;
@@ -10221,16 +10308,6 @@ body.sam-active .hotbar-btn:hover {
 .b2b-tag-ext {
     padding: 1px 6px; border-radius: 999px; background: var(--b2b-accent-tint);
     color: var(--sage-deep); font-size: 8.5px; letter-spacing: .04em;
-}
-.b2b-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; }
-.b2b-tag {
-    font: inherit; font-size: 10.5px; font-weight: 700; cursor: pointer;
-    padding: 3px 9px; border-radius: 999px; border: 1px solid var(--b2b-line);
-    background: #fff; color: var(--b2b-muted); transition: all .14s ease;
-}
-.b2b-tag:hover { border-color: var(--sage-professional); color: var(--sage-deep); }
-.b2b-tag.on {
-    background: var(--b2b-accent-tint); border-color: var(--sage-professional); color: var(--sage-deep);
 }
 .b2b-tag-free {
     width: 100%; font: inherit; font-size: 12px; padding: 6px 9px;
@@ -10596,8 +10673,8 @@ body.sam-active .hotbar-btn:hover {
     border-color: var(--sage-professional); background: var(--b2b-accent-tint);
     color: var(--sage-deep);
 }
-.b2b-pcard-head .b2b-linelabel { width: var(--b2b-h-sm); height: var(--b2b-h-sm); }
-.b2b-pcard-head .b2b-linelabel svg { width: 15px; height: 15px; stroke-width: 2.2; }
+.b2b-pc-acts .b2b-linelabel { width: var(--b2b-h-md); height: var(--b2b-h-md); }
+.b2b-pc-acts .b2b-linelabel svg { width: 15px; height: 15px; stroke-width: 2.2; }
 .b2b-vtable .b2b-linelabel { width: var(--b2b-h-sm); height: var(--b2b-h-sm); }
 .b2b-vtable .b2b-linelabel svg { width: 15px; height: 15px; stroke-width: 2.2; }
 
@@ -10606,21 +10683,37 @@ body.sam-active .hotbar-btn:hover {
     padding: 1px 6px; border-radius: 999px; background: #fdf3e1;
     color: #b7791f; font-size: 8.5px; font-weight: 800; letter-spacing: .04em;
 }
-.b2b-pcard.needs-reason { border-color: #f0dcb4; background: #fffdf8; }
+.b2b-pline.needs-reason { border-color: #f0dcb4; background: #fffdf8; }
 .b2b-tag-free.miss { border-color: #e0b970; background: #fffbf3; }
 .b2b-tag-free.miss:focus { border-color: #b7791f; box-shadow: 0 0 0 3px rgba(183,121,31,.14); }
 .b2b-req-note { margin-top: 4px; font-size: 11px; font-weight: 650; color: #b7791f; }
 
 /* --- responsive ----------------------------------------------------------- */
+/* Narrower than the columns can honestly hold: the header row goes away and each
+   row becomes its own labelled block, with data-k on the cell supplying the label
+   the header used to. A grid squeezed past its content just truncates. */
 @media (max-width: 1100px) {
-    .b2b-pgrid { grid-template-columns: 1fr 1fr 1fr 60px; }
-    .b2b-pnotes { grid-template-columns: 1fr; }
+    .b2b-items { --b2b-pcols: 1fr 1fr 1fr; }
+    .b2b-phead { display: none; }
+    .b2b-prow { align-items: end; gap: 9px 8px; }
+    .b2b-pcell { flex-direction: column; align-items: stretch; }
+    .b2b-pcell[data-k]::before {
+        content: attr(data-k);
+        font-size: 9.5px; font-weight: 800; letter-spacing: .08em;
+        text-transform: uppercase; color: var(--b2b-faint); margin-bottom: 4px;
+    }
+    .b2b-pc-sku { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 7px; }
+    /* Total and actions share the closing row rather than each taking one --
+       stacked, the total alone on a line reads as a stray field. */
+    .b2b-pc-tot  { grid-column: 1 / 2;  align-items: flex-start; }
+    .b2b-pc-acts { grid-column: 2 / -1; flex-direction: row; align-items: flex-end; }
+    .b2b-pnote { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
     .b2b-q-card { flex-direction: column; align-items: stretch; gap: 12px; }
     .b2b-q-act { flex-direction: row; align-items: center; justify-content: space-between; }
     .b2b-q-act .b2b-btn { flex: 0 0 auto; }
-    .b2b-pgrid { grid-template-columns: 1fr 1fr; }
+    .b2b-items { --b2b-pcols: 1fr 1fr; }
     .b2b-summary { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
     .b2b-lrow { flex-wrap: wrap; }
     .b2b-lmain { flex: 1 0 100%; order: -1; }

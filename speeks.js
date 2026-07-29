@@ -9199,11 +9199,12 @@ function b2bItemCondition(id, value) {
 // flip the warning classes on the card in place.
 function _b2bSyncReason(it) {
     const input = document.querySelector(`.b2b-tag-free[oninput*="${it.id}"]`);
-    const card = input?.closest('.b2b-pcard');
+    const line = input?.closest('.b2b-pline');
     const missing = _b2bMissingReason(it);
     input?.classList.toggle('miss', missing);
-    card?.classList.toggle('needs-reason', missing);
-    const note = card?.querySelector('.b2b-req-note');
+    line?.classList.toggle('needs-reason', missing);
+    line?.querySelector('.b2b-notes-btn')?.classList.toggle('req', missing);
+    const note = line?.querySelector('.b2b-req-note');
     if (note) note.style.display = missing ? '' : 'none';
     const submit = document.getElementById('b2bPrSubmit');
     if (submit) submit.disabled = _b2bModalItems.length === 0 || _b2bUnreasoned().length > 0;
@@ -9249,6 +9250,28 @@ function _b2bRepaintItems() {
     _b2bPaintTotals();
 }
 
+// Which lines have their notes open. Notes are the bulky part and most lines
+// never need them, so they fold away -- but a line still missing a required
+// reason is forced open, because hiding the thing blocking submission would be
+// the one case where collapsing costs more than it saves.
+const _b2bNotesOpen = new Set();
+
+function b2bToggleNotes(id) {
+    if (_b2bNotesOpen.has(id)) _b2bNotesOpen.delete(id); else _b2bNotesOpen.add(id);
+    _b2bRepaintItems();
+}
+
+// A one-line summary of what is in the notes, so a folded row still says whether
+// there is anything there.
+function _b2bNoteHint(it) {
+    const client = String(it.client_notes || '').trim();
+    const staff  = String(it.staff_notes || '').trim();
+    if (!client && !staff) return 'No notes';
+    return [client, staff ? `internal: ${staff}` : ''].filter(Boolean).join(' · ');
+}
+
+// Rendered as a grid rather than a stack of cards: one row per line with the
+// columns aligned, the way anyone pricing a pallet expects to read it.
 function _b2bItemCards() {
     if (!_b2bModalItems.length) {
         return `<div class="b2b-empty sm">
@@ -9256,66 +9279,97 @@ function _b2bItemCards() {
             <div class="b2b-empty-s">Add the first item to start pricing this pickup.</div>
         </div>`;
     }
-    return _b2bModalItems.map(it => {
-        const rec  = !!it.recycle_only;
-        const tags = _b2bPresetNotes(it);
-        const needs = _b2bNeedsReason(it);
+
+    const head = `
+        <div class="b2b-prow b2b-phead">
+            <span>Line</span><span>Brand</span><span>Model</span><span>Condition</span>
+            <span class="r">Qty</span><span class="r">Unit value</span><span class="r">Unit offer</span>
+            <span class="r">Line total</span><span></span>
+        </div>`;
+
+    const rows = _b2bModalItems.map(it => {
+        const rec     = !!it.recycle_only;
+        const tags    = _b2bPresetNotes(it);
+        const needs   = _b2bNeedsReason(it);
         const missing = _b2bMissingReason(it);
-        return `
-        <div class="b2b-pcard ${rec ? 'rec' : ''} ${missing ? 'needs-reason' : ''}">
-            <div class="b2b-pcard-head">
-                <span class="b2b-mono b2b-pcard-sku">${escapeHtml(it.sku || `Line ${String(it.line_no).padStart(4, '0')}`)}</span>
-                ${_b2bLabelBtn(it)}
-                <label class="b2b-rec-toggle">
-                    <input type="checkbox" ${rec ? 'checked' : ''} onchange="b2bItemRecycleOnly('${it.id}',this.checked)">
-                    <span>Recycle only</span>
-                </label>
-                <button class="b2b-x" title="Remove line" onclick="b2bDeleteItem('${it.id}')">
-                    ${_b2bIco('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>')}
-                </button>
-            </div>
-            <div class="b2b-pgrid">
-                <div class="b2b-f"><label>Brand</label>
-                    <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple"
-                        oninput="b2bItemInput('${it.id}','make',this.value)" onchange="b2bItemSave('${it.id}')"></div>
-                <div class="b2b-f"><label>Model</label>
-                    <input value="${escapeHtml(it.model || '')}" placeholder="MacBook Air M2"
-                        oninput="b2bItemInput('${it.id}','model',this.value)" onchange="b2bItemSave('${it.id}')"></div>
-                <div class="b2b-f"><label>Condition</label>
-                    <select onchange="b2bItemCondition('${it.id}',this.value)">
-                        <option value="">—</option>
-                        ${B2B_CONDITIONS.map(c => `<option ${it.condition === c ? 'selected' : ''}>${c}</option>`).join('')}
-                    </select></div>
-                <div class="b2b-f b2b-f-n"><label>Qty</label>
-                    <input type="number" min="1" step="1" value="${Number(it.quantity) || 1}"
-                        oninput="b2bItemInput('${it.id}','quantity',this.value)" onchange="b2bItemSave('${it.id}')"></div>
-                <div class="b2b-f b2b-f-n"><label>Unit value</label>
-                    ${rec ? '<div class="b2b-f-off">recycle</div>'
-                          : `<input type="number" min="0" step="0.01" value="${Number(it.value) || 0}"
-                        oninput="b2bItemInput('${it.id}','value',this.value)" onchange="b2bItemSave('${it.id}')">`}</div>
-                <div class="b2b-f b2b-f-n"><label>Unit offer</label>
-                    ${rec ? '<div class="b2b-f-off">—</div>'
-                          : `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
-                        oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`}</div>
-                <div class="b2b-f b2b-f-n"><label>Line total</label>
-                    <div class="b2b-f-calc" id="b2bLn-${it.id}">${rec ? '—' : _b2bMoney((Number(it.offer) || 0) * (Number(it.quantity) || 1), 2)}</div></div>
-            </div>
-            <div class="b2b-pnotes">
+        const open    = _b2bNotesOpen.has(it.id) || missing;
+        const free    = B2B_NOTE_TAGS.filter(t => !tags.includes(t));
+
+        const notes = open ? `
+            <div class="b2b-pnote">
                 <div class="b2b-f"><label>Staff notes <span class="b2b-tag-int">internal</span></label>
                     <input value="${escapeHtml(it.staff_notes || '')}" placeholder="Anything the team should know"
                         oninput="b2bItemInput('${it.id}','staff_notes',this.value)" onchange="b2bItemSave('${it.id}')"></div>
                 <div class="b2b-f"><label>Client notes
                     ${needs ? '<span class="b2b-tag-req">reason required</span>' : '<span class="b2b-tag-ext">prints on the quote</span>'}</label>
-                    <div class="b2b-tags">
-                        ${B2B_NOTE_TAGS.map(t => `<button class="b2b-tag ${tags.includes(t) ? 'on' : ''}" onclick="b2bItemToggleTag('${it.id}','${t}')">${t}</button>`).join('')}
+                    <div class="b2b-chiprow">
+                        ${tags.map(t => `<span class="b2b-chip-tag">${escapeHtml(t)}<button title="Remove"
+                            onclick="b2bItemToggleTag('${it.id}','${escapeHtml(t)}')">×</button></span>`).join('')}
+                        ${free.length ? `
+                        <select class="b2b-tagsel" onchange="b2bItemToggleTag('${it.id}',this.value)">
+                            <option value="">${tags.length ? '＋ Another tag…' : '＋ Add a tag…'}</option>
+                            ${free.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
+                        </select>` : ''}
                     </div>
                     <input class="b2b-tag-free ${missing ? 'miss' : ''}" value="${escapeHtml(_b2bCustomNotes(it))}"
-                        placeholder="${needs ? 'Why is it ' + escapeHtml(it.condition) + '? Pick a tag above or type it here' : "Add anything the tags don't cover"}"
+                        placeholder="${needs ? 'Why is it ' + escapeHtml(it.condition) + '? Pick a tag or type it here' : "Anything the tags don't cover"}"
                         oninput="b2bItemCustomNote('${it.id}',this.value)" onchange="b2bItemSave('${it.id}')">
                     ${missing ? `<span class="b2b-req-note">${escapeHtml(it.condition)} items need a reason before this can be quoted.</span>` : ''}</div>
+            </div>` : '';
+
+        return `
+        <div class="b2b-pline ${rec ? 'rec' : ''} ${missing ? 'needs-reason' : ''}">
+            <div class="b2b-prow">
+                <span class="b2b-pcell b2b-pc-sku">
+                    <span class="b2b-mono">${escapeHtml(it.sku || `L${String(it.line_no).padStart(4, '0')}`)}</span>
+                    ${rec ? '<span class="b2b-doc-rec">Recycle</span>' : ''}
+                </span>
+                <span class="b2b-pcell" data-k="Brand">
+                    <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple"
+                        oninput="b2bItemInput('${it.id}','make',this.value)" onchange="b2bItemSave('${it.id}')"></span>
+                <span class="b2b-pcell" data-k="Model">
+                    <input value="${escapeHtml(it.model || '')}" placeholder="MacBook Air M2"
+                        oninput="b2bItemInput('${it.id}','model',this.value)" onchange="b2bItemSave('${it.id}')"></span>
+                <span class="b2b-pcell" data-k="Condition">
+                    <select onchange="b2bItemCondition('${it.id}',this.value)">
+                        <option value="">—</option>
+                        ${B2B_CONDITIONS.map(c => `<option ${it.condition === c ? 'selected' : ''}>${c}</option>`).join('')}
+                    </select></span>
+                <span class="b2b-pcell n" data-k="Qty">
+                    <input type="number" min="1" step="1" value="${Number(it.quantity) || 1}"
+                        oninput="b2bItemInput('${it.id}','quantity',this.value)" onchange="b2bItemSave('${it.id}')"></span>
+                <span class="b2b-pcell n" data-k="Unit value">
+                    ${rec ? '<span class="b2b-f-off">—</span>'
+                          : `<input type="number" min="0" step="0.01" value="${Number(it.value) || 0}"
+                        oninput="b2bItemInput('${it.id}','value',this.value)" onchange="b2bItemSave('${it.id}')">`}</span>
+                <span class="b2b-pcell n" data-k="Unit offer">
+                    ${rec ? '<span class="b2b-f-off">—</span>'
+                          : `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
+                        oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`}</span>
+                <span class="b2b-pcell n b2b-pc-tot" data-k="Line total">
+                    <span class="b2b-f-calc" id="b2bLn-${it.id}">${rec ? '—' : _b2bMoney((Number(it.offer) || 0) * (Number(it.quantity) || 1), 2)}</span></span>
+                <span class="b2b-pcell b2b-pc-acts">
+                    <button class="b2b-notes-btn ${open ? 'on' : ''} ${missing ? 'req' : ''}"
+                        title="${missing ? 'This line needs a reason' : 'Notes and condition tags'}"
+                        onclick="b2bToggleNotes('${it.id}')">
+                        ${_b2bIco('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>')}
+                        ${(it.client_notes || it.staff_notes) ? '<i class="b2b-notes-dot"></i>' : ''}
+                    </button>
+                    ${_b2bLabelBtn(it)}
+                    <label class="b2b-rec-toggle" title="Scrap: no resale value and no offer">
+                        <input type="checkbox" ${rec ? 'checked' : ''} onchange="b2bItemRecycleOnly('${it.id}',this.checked)">
+                        <span>Recycle</span>
+                    </label>
+                    <button class="b2b-x" title="Remove line" onclick="b2bDeleteItem('${it.id}')">
+                        ${_b2bIco('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>')}
+                    </button>
+                </span>
             </div>
+            ${open ? notes : `<div class="b2b-pnote-hint" onclick="b2bToggleNotes('${it.id}')">${escapeHtml(_b2bNoteHint(it))}</div>`}
         </div>`;
     }).join('');
+
+    return head + rows;
 }
 
 function _b2bTotalsBar(showMargin) {
