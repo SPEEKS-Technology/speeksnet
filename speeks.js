@@ -10030,6 +10030,72 @@ function b2bPrintLabels(dealId, itemId) {
 }
 
 // ============================================================================
+// FEED REMINDER
+// ---------------------------------------------------------------------------
+// The QuickPortal feed reads its deadline cards off these hidden bubbles: the
+// CSS hides them with visibility/opacity, never display, because `display` is
+// the signal the feed uses to decide a reminder is live. Removing the element
+// would silently kill the card, so it stays in the DOM and just goes invisible.
+
+function _b2bBubbleEl() {
+    let b = document.getElementById('b2bAlertBubble');
+    if (b) return b;
+    // Hangs off the same parent as the shared claim bubble so it inherits the
+    // header's stacking context, like the aging bubble does.
+    const claim = document.getElementById('claimAlertBubble');
+    if (!claim || !claim.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'b2bAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; '
+        + 'background:linear-gradient(135deg, #1f9d57, #178048); color:white; '
+        + 'padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; '
+        + 'font-size:13px; box-shadow:0 10px 28px rgba(23,128,72,.38); '
+        + 'max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = `<span style="font-size:16px; flex-shrink:0; margin-top:2px;">📦</span>
+        <span id="b2bAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>
+        <button onclick="closeB2BAlertBubble()" class="daily-bubble-close" title="Dismiss">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>`;
+    claim.parentElement.appendChild(b);
+    return b;
+}
+
+function closeB2BAlertBubble() {
+    const b = document.getElementById('b2bAlertBubble');
+    if (b) b.style.display = 'none';
+}
+
+// Runs on every page, so it has to be cheap and quiet: one scoped read, and it
+// bails immediately for anyone whose role has no B2B duties at all.
+async function checkB2BReminders() {
+    const role = _b2bRole();
+    if (!B2B_CORP_ROLES.includes(role) && !B2B_STORE_ROLES.includes(role) && !_b2bHasCorpDelegation()) return;
+    const b = _b2bBubbleEl();
+    if (!b) return;
+    try {
+        const deals = (await _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}&archive=0`))
+            .map(_b2bShapeDeal).filter(_b2bInScope);
+        const mine = deals.filter(_b2bActionFor);
+        if (!mine.length) { b.style.display = 'none'; return; }
+
+        // Lead with the oldest, since that's the one actually holding things up.
+        const oldest = mine.reduce((a, d) => _b2bDaysIn(d) > _b2bDaysIn(a) ? d : a, mine[0]);
+        const stage = B2B_STAGE[oldest.stage]?.label || oldest.stage;
+        const t = document.getElementById('b2bAlertBubbleText');
+        if (t) {
+            const n = mine.length;
+            t.innerHTML = `<b>B2B deals need you</b><br>${n} deal${n === 1 ? '' : 's'} waiting`
+                + ` — oldest is ${escapeHtml(oldest.ref)} at ${escapeHtml(stage)}, ${_b2bDaysIn(oldest)}d in stage.`;
+            // The feed prefers an authored one-liner over scraping the bubble.
+            t.dataset.summary = `${n} deal${n === 1 ? '' : 's'} waiting · oldest ${oldest.ref} at ${stage}, ${_b2bDaysIn(oldest)}d`;
+        }
+        b.style.display = 'flex';
+    } catch (_) {
+        // a failed poll just leaves the bubble as it was
+    }
+}
+
+// ============================================================================
 // MODULE: CUSTOMER CALL BACKS (operations.html #ops-pane-callbacks)
 // Entries live 30 days from date_of_call, then auto-archive (recoverable for
 // 90 more days before purge — nightly `callbacks-daily-maintenance` pg_cron job).
@@ -22621,6 +22687,7 @@ function _samReminderCfg() {
               : "openClaimsModal(); switchClaimsTab('view')" },
         { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "toggleRecycleInventory(); switchRecycleTab('view')" },
         { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging Inventory Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" },
+        { key: 'b2b', id: 'b2bAlertBubble', text: 'b2bAlertBubbleText', title: 'B2B Deals Waiting', urgency: 1, due: 'Action', cls: 'sam-due-amber', action: "window.location.href='operations.html#b2b'" },
         // Preferred Purchases — feed-only, both directions. The owner's card is a
         // queue to work, so it keeps the amber "Review" badge and a Snooze.
         // The requester's is an answer that came back: information, not a task, so
@@ -22777,7 +22844,7 @@ const _RT_TOOL_CHECKS = {
     patch:         ['loadPatchNotes'],
     kpi:           ['checkKpiDueReminders'],
     preferred:     ['checkPreferredReminders'],
-    b2b:           ['_b2bRealtimeRefresh'],
+    b2b:           ['_b2bRealtimeRefresh', 'checkB2BReminders'],
     // Command Center + Listing Goals sources. Each re-fetches through its edge
     // fn and recomputes its update signature, so the pulsing dot / bar lights the
     // moment a write lands — no refresh or re-login. (scorecard fn, ebay-alerts
