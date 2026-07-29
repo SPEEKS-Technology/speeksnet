@@ -59,6 +59,7 @@ const RECYCLE_URL       = `${_BASE}/recycle-requests`;
 const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
 const VARIANCE_REPLIES_URL = `${_BASE}/variance-replies`;
 const AGING_INV_URL     = `${_BASE}/aging-inventory`;
+const PREFERRED_URL     = `${_BASE}/preferred-purchases`;
 const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
@@ -218,20 +219,29 @@ function closeAllModals() {
         if (!confirm("Close Submit Scores? Your audit entries haven't been saved yet.")) return;
         _auditDirty = false;
     }
-    const _wasLocked = document.body.classList.contains('no-scroll');
-    document.body.classList.remove('no-scroll');
-    document.body.style.overflow = '';
-    document.body.style.position = '';
-    document.body.style.top = '';
-    document.body.style.paddingRight = '';
+    // Read this BEFORE .show comes off, since the check asks which editor was up.
+    // When a district popup asked to be returned to, this is not a close at all
+    // — it is a swap, and the difference is visible. See below.
+    const _dmxBack = typeof _dmxReturnCheck === 'function' ? _dmxReturnCheck() : null;
+    const _dmxBackEl = _dmxBack ? document.getElementById(_dmxBack) : null;
 
-    const topNav = document.querySelector('.top-nav');
-    if (topNav) {
-        topNav.style.paddingRight = ''; 
+    const _wasLocked = document.body.classList.contains('no-scroll');
+    // A pending swap must not release any of this. Dropping the scroll lock and
+    // the backdrop only to restore both a tick later let the browser paint the
+    // unlocked, unblurred, scrolled page in between — that was the flicker.
+    if (!_dmxBackEl) {
+        document.body.classList.remove('no-scroll');
+        document.body.style.overflow = '';
+        document.body.style.position = '';
+        document.body.style.top = '';
+        document.body.style.paddingRight = '';
+
+        const topNav = document.querySelector('.top-nav');
+        if (topNav) topNav.style.paddingRight = '';
+
+        const overlay = document.getElementById('globalOverlay');
+        if (overlay) overlay.classList.remove('show');
     }
-    
-    const overlay = document.getElementById('globalOverlay');
-    if (overlay) overlay.classList.remove('show');
 
     const modals = document.querySelectorAll('.modal-menu');
     modals.forEach(modal => {
@@ -241,6 +251,15 @@ function closeAllModals() {
     // Side panels (Checklist / Goals / Cleaning) live outside .modal-menu, so
     // opening any modal (e.g. Listing Goals) must collapse them too.
     _closeSidePanels();
+
+    // Only which modal carries .show changes, and it changes inside this same
+    // task, so no frame is ever rendered showing the in-between state.
+    if (_dmxBackEl) {
+        // Repaint before showing, so the popup can't flash stale content.
+        if (_dmxBack === 'dmGoalsModal') renderDmGoalsModal();
+        _dmxBackEl.classList.add('show');
+        return;
+    }
 
     // Restore the scroll position we pinned in lockAndBlurScreen — otherwise the
     // page stays snapped to the top once the fixed body is released.
@@ -1850,6 +1869,15 @@ async function checkPIN() {
 
             if (typeof initDashboardData === 'function') initDashboardData();
             initTicker();
+
+            // Repopulate the feed for whoever just signed in. loadCMS otherwise
+            // runs only at page load — which on a login is BEFORE there is a
+            // user, so read state and the new-hire cutoff were both computed
+            // without one. It matters more now that signing out can happen in
+            // place: this is also what keeps the previous person's announcements
+            // and store notes out of the next person's feed.
+            if (typeof loadCMS === 'function') loadCMS();
+            if (typeof fetchAndDisplayStoreComment === 'function') fetchAndDisplayStoreComment();
         } else {
             err.innerText = "Incorrect PIN. Please try again.";
             err.style.display = 'block';
@@ -5489,15 +5517,14 @@ function handleSignOut() {
     // name is dropped, since the key is scoped to the signing-out user.
     try { sessionStorage.removeItem(_seenAgingKey()); } catch (e) { /* non-fatal */ }
 
-    // Remove the login state
-    sessionStorage.removeItem('speeksUnlocked');
-    sessionStorage.removeItem('speeksUserName');
-    sessionStorage.removeItem('speeksUserRole');
-    sessionStorage.removeItem('speeksUserStore');
-    sessionStorage.removeItem('speeksMultiStore');
-
-    // Remove the comment tracker so it pops up again on next login
-    sessionStorage.removeItem('speeksSeenCommentKeys');
+    // Every key the login sets has to be cleared here, plus the comment tracker
+    // so store comments pop again next login. speeksUserPin and
+    // speeksUserOnboardedAt were previously left behind — and the PIN is sent as
+    // the credential on several writes (kpi-manage among them), so the outgoing
+    // user's PIN stayed readable in the tab until the next login overwrote it.
+    ['speeksUnlocked', 'speeksUserName', 'speeksUserRole', 'speeksUserStore',
+     'speeksMultiStore', 'speeksUserPin', 'speeksUserOnboardedAt',
+     'speeksSeenCommentKeys'].forEach(function (k) { sessionStorage.removeItem(k); });
 
     // Hide authenticated chrome and close any open panels BEFORE reloading, so the
     // teardown/fetch window can't briefly paint role-gated controls (e.g. the green
@@ -5505,8 +5532,61 @@ function handleSignOut() {
     document.body.classList.remove('is-authenticated');
     document.getElementById('checklistSidePanel')?.classList.remove('open');
     document.getElementById('goalsSidePanel')?.classList.remove('open');
+    closeAllModals();
 
-    location.reload();
+    // Drop the outgoing user's feed data. Signing back in as someone else on
+    // this tab would otherwise flash their announcements and store notes before
+    // the new fetches resolve.
+    window._samAnnData = [];
+    window._samStoreNotes = [];
+
+    // Show the real login overlay. It is fixed at inset 0 with z-index 100000,
+    // so it covers the authenticated page outright — nothing behind it needs
+    // tearing down, and reusing it means the colour can't drift from .auth-page
+    // and the dark-theme filter is already accounted for.
+    const overlay = document.getElementById('authOverlay');
+    if (overlay) {
+        // Back to the top BEFORE the overflow lock. Signing out on the dashboard
+        // never navigates, so the page keeps whatever scroll position the outgoing
+        // user left it at — and since the login overlay is fixed at inset 0 over a
+        // scroll-locked body, there is no way to notice. The next person signs in
+        // and lands halfway down the page.
+        //
+        // Order matters: once body overflow is hidden there may be nothing left to
+        // scroll, so this has to happen first. _lockedScrollY is zeroed too, or a
+        // later unlockScreen() would restore the outgoing user's position.
+        window.scrollTo(0, 0);
+        document.documentElement.scrollTop = 0;
+        _lockedScrollY = 0;
+        overlay.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    }
+    try { renderActionFeed(); } catch (_) { /* feed may not exist here */ }
+
+    // On the dashboard, sign out IN PLACE — no navigation at all, so it is
+    // instant. This is the mirror of signing IN, which has always transitioned
+    // in place (checkPIN hides the overlay and re-runs applyRoleBasedUI /
+    // initDashboardData rather than reloading), so both directions now use the
+    // same mechanism instead of one of them costing a full page load.
+    //
+    // Anywhere else we still hand off to index.html. An unauthenticated
+    // non-index page is a state the app has never had — the load-time gate
+    // redirects such a page to index before the overlay is ever shown — and
+    // inventing it to save one page load is not worth the risk. replace() also
+    // keeps a signed-out Back button from returning to an authenticated URL.
+    const page = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
+    if (page !== '' && page !== 'index.html') { location.replace('index.html'); return; }
+
+    // Reset the PIN field so the next person types into a clean form: value,
+    // painted cells, the shake/error state and any stuck button spinner.
+    const input = document.getElementById('pinInput');
+    if (input) input.value = '';
+    if (typeof _authPaintCells === 'function') _authPaintCells();
+    document.getElementById('pinCells')?.classList.remove('bad');
+    document.getElementById('unlockBtn')?.classList.remove('loading');
+    const err = document.getElementById('pinError');
+    if (err) err.style.display = 'none';
+    if (input) input.focus();
 }
 
 // --- 17. MODULE: IDEA SUBMISSION MODAL ---
@@ -6303,297 +6383,33 @@ window.renderDistrictKPIs = function() {
     container.innerHTML = html;
 };
 
+const _DCC_PORTAL_LINKS = {
+    'OVL': 'https://drive.google.com/drive/folders/1dd1nkndo_Pqt3kztaHcpYWL-NgOWIP-E?usp=drive_link',
+    'LEE': 'https://drive.google.com/drive/folders/1Xv6ICOpEXNMeWk4QJBfS7CR6tIFRuElk?usp=drive_link',
+    'WSP': 'https://drive.google.com/drive/folders/1xGGzefFbX7rzBnusmCUEk2GnHxJaJqhC?usp=drive_link',
+    'MPL': 'https://drive.google.com/drive/folders/1Y5MiKRorTD1mg-lLY4SccYCqw2fZUrND?usp=drive_link',
+    'BAL': 'https://drive.google.com/drive/folders/1LnAuBH9t7MwtrB9egWK5PFJWQqPcZ-tL?usp=drive_link'
+};
+
 async function fetchMasterDistrictDashboard() {
     const container = document.getElementById('district-master-body');
     if (!container) return;
 
     const STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-    const STORE_ICONS = { 'OVL': '🟣', 'LEE': '🔵', 'WSP': '🟢', 'MPL': '🟠', 'BAL': '🔴' };
+    // (Store emoji removed with the card headers — the three-letter code identifies
+    // the store, same call as the Tools mark and the district popups.)
     
-    const PORTAL_LINKS = {
-        'OVL': 'https://drive.google.com/drive/folders/1dd1nkndo_Pqt3kztaHcpYWL-NgOWIP-E?usp=drive_link',
-        'LEE': 'https://drive.google.com/drive/folders/1Xv6ICOpEXNMeWk4QJBfS7CR6tIFRuElk?usp=drive_link',
-        'WSP': 'https://drive.google.com/drive/folders/1xGGzefFbX7rzBnusmCUEk2GnHxJaJqhC?usp=drive_link',
-        'MPL': 'https://drive.google.com/drive/folders/1Y5MiKRorTD1mg-lLY4SccYCqw2fZUrND?usp=drive_link',
-        'BAL': 'https://drive.google.com/drive/folders/1LnAuBH9t7MwtrB9egWK5PFJWQqPcZ-tL?usp=drive_link'
-    };
+    // PORTAL_LINKS lives at module scope (_DCC_PORTAL_LINKS) so _dccPick can repaint
+    // the board without this function having run again.
+    const PORTAL_LINKS = _DCC_PORTAL_LINKS;
 
+    // Normalise all five stores, then render. The parsing that used to happen
+    // inline while building card HTML now lives in _dccRow / _dccChecks, so the
+    // thresholds are readable in one place and the rail and pane read the same
+    // checks. See the DISTRICT COMMAND CENTER block further down.
     const renderMasterBoard = (hubData, varData, scoreData, alertsData, weeklyResults) => {
-        let html = '';
-        STORES.forEach(store => {
-            const sLower = store.toLowerCase();
-            const icon = STORE_ICONS[store];
-            const storeLastEdited = hubData[`${sLower}BuyDate`] || null;
-
-            // 1. SCORECARD & HEADER
-            const sScore = scoreData.data?.find(s => s.store.toUpperCase() === store) || {};
-            const scoreNum = (parseFloat(sScore.score) || 0) * 2;
-            let sColor = scoreNum > 8 ? '#065f46' : (scoreNum >= 6 ? '#92400e' : '#991b1b');
-            let sBg = scoreNum > 8 ? '#d1fae5' : (scoreNum >= 6 ? '#fef3c7' : '#fee2e2');
-
-            // Practice audit badge (clickable into the full breakdown popout).
-            const sAudit = sScore.audit || null;
-            let auditBadge = '';
-            if (sAudit) {
-                const ac = auditPctColor(sAudit.pct);
-                auditBadge = `<span onclick="event.stopPropagation(); openAuditBreakdown('${store}')" title="PayMore practice audit — ${sAudit.earned}/${sAudit.possible} · view full breakdown" style="display:inline-flex; align-items:center; gap:5px; height:25px; padding:0 10px; border-radius:8px; background:${ac.bg}; color:${ac.fg}; cursor:pointer; white-space:nowrap; box-sizing:border-box;">
-                    <span style="font-size:8px; font-weight:800; letter-spacing:.6px; opacity:.75;">AUDIT</span>
-                    <span style="font-size:14px; font-weight:900; line-height:1;">${sAudit.pct}%</span>
-                </span>`;
-            } else {
-                auditBadge = `<span title="No practice audit submitted yet" style="display:inline-flex; align-items:center; gap:5px; height:25px; padding:0 10px; border-radius:8px; background:transparent; color:#94a3b8; border:1px dashed #4a5365; white-space:nowrap; box-sizing:border-box;">
-                    <span style="font-size:8px; font-weight:800; letter-spacing:.6px;">AUDIT</span>
-                    <span style="font-size:11px; font-weight:700; letter-spacing:.3px; line-height:1;">NO DATA</span>
-                </span>`;
-            }
-
-            let displayDate = "Recent";
-            if (sScore.date) {
-                const parsedDate = new Date(sScore.date);
-                if (!isNaN(parsedDate.getTime())) {
-                    const day = parsedDate.getUTCDay();
-                    const diffToMonday = day === 0 ? -6 : 1 - day;
-                    const mondayDate = new Date(parsedDate);
-                    mondayDate.setUTCDate(parsedDate.getUTCDate() + diffToMonday);
-                    displayDate = mondayDate.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
-                }
-            }
-
-            // 2. EBAY ALERTS DATA
-            const sAlerts = alertsData.data?.find(a => a.store.toUpperCase() === store) || {};
-            
-            // Vertical Action Needed List
-            const issues = [];
-            if (sAlerts.currentVeryHigh) issues.push({text: sAlerts.currentVeryHigh, type: 'red', tip: 'Active Issue: Very High'});
-            if (sAlerts.currentHigh) issues.push({text: sAlerts.currentHigh, type: 'yellow', tip: 'Active Issue: High'});
-            if (sAlerts.projectedVeryHigh) issues.push({text: sAlerts.projectedVeryHigh, type: 'red', tip: 'Projected Issue: Very High'});
-            if (sAlerts.projectedHigh) issues.push({text: sAlerts.projectedHigh, type: 'yellow', tip: 'Projected Issue: High'});
-            if (issues.length === 0) issues.push({text: 'All Clear', type: 'green', tip: 'No active or projected alerts.'});
-
-            // 4 New Service Metrics logic
-            const formatPercent = (val) => {
-                if (val === null || val === undefined) return '0%';
-                let str = String(val).trim();
-                if (str === '' || str === 'null') return '0%';
-                if (str.endsWith('%')) return str;
-                let num = parseFloat(str.replace(/[^0-9.-]/g, ''));
-                if (isNaN(num)) return '0%';
-                return num.toFixed(2) + '%';
-            };
-
-            const getSev = (type, rawVal) => {
-                if (rawVal === null || rawVal === undefined || String(rawVal).trim() === '') return 'clear';
-                let str = String(rawVal).trim();
-                let num = parseFloat(str.replace(/[^0-9.-]/g, ''));
-                if (isNaN(num)) return 'clear';
-                let valToCheck = num;
-
-                if (type === 'defectRate') {
-                    if (valToCheck >= 0.40) return 'very-high';
-                    if (valToCheck >= 0.25) return 'high';
-                }
-                if (type === 'lateShipment') {
-                    if (valToCheck >= 2.4) return 'very-high';
-                    if (valToCheck >= 1.5) return 'high';
-                }
-                if (type === 'casesClosed') {
-                    if (valToCheck >= 0.24) return 'very-high';
-                    if (valToCheck >= 0.15) return 'high';
-                }
-                if (type === 'tracking') {
-                    if (valToCheck <= 96.0) return 'very-high';
-                    if (valToCheck <= 97.5) return 'high';
-                }
-                return 'clear';
-            };
-
-            const buildMiniAlertCard = (title, rawValue, severity, isPercent) => {
-                let bgColor = '#d1fae5';
-                let textColor = '#065f46'; 
-                let displayText = 'All Clear';
-                let pulseHtml = '';
-                
-                if (rawValue !== undefined && rawValue !== null && String(rawValue).trim() !== '') {
-                    if (isPercent) {
-                        displayText = formatPercent(rawValue);
-                    } else {
-                        displayText = String(rawValue); 
-                    }
-
-                    if (severity === 'high') {
-                        bgColor = '#fef3c7'; 
-                        textColor = '#92400e';
-                    } else if (severity === 'very-high') {
-                        bgColor = '#fee2e2';
-                        textColor = '#991b1b';
-                        // Positioned perfectly on the corner
-                        pulseHtml = '<div class="notif-dot active" style="display:block; position:absolute; top:-4px; right:-4px; width:10px; height:10px; border-width: 2px; z-index: 5;"></div>';
-                    }
-                }
-
-                return `
-                <div style="position: relative; background: #fff; padding: 8px 6px 7px; border-radius: 8px; border: 1px solid #e2e8f0; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; box-sizing: border-box; min-height: 52px; gap: 5px; text-align: center;">
-                    ${pulseHtml}
-                    <span style="font-size: 8px; font-weight: 800; color: #b0bec5; text-transform: uppercase; letter-spacing: 0.4px; line-height: 1.2; word-break: break-word;">${title}</span>
-                    <span style="font-size: 12px; font-weight: 900; color: ${textColor}; background: ${bgColor}; padding: 3px 8px; border-radius: 6px; white-space: nowrap;">${displayText}</span>
-                </div>`;
-            };
-
-            // 3. BUYING & SELLING SNAPSHOT
-            let rawPctStr = String(hubData[`${sLower}Pct`]);
-            let rawPct = parseFloat(rawPctStr) || 0;
-            let salesPctNum = (!rawPctStr.includes('%') && rawPct > 0 && rawPct <= 1.5) ? (rawPct * 100) : rawPct;
-            const salesPct = Number.isInteger(salesPctNum) ? salesPctNum : salesPctNum.toFixed(2);
-            
-            const gpTrack = Math.round(parseFloat(hubData[`${sLower}TrackGP`])) || 0;
-            const buyProj = Math.round(parseFloat(hubData[`${sLower}BuyProj`])) || 0;
-            const storeGoalText = `$${Math.round(parseFloat(hubData[`${sLower}Goal`]) || 0).toLocaleString()}`;
-            
-            let sellMarginNum = 0;
-            const rev = parseFloat(hubData[`${sLower}Rev`]) || 0;
-            const gp = parseFloat(hubData[`${sLower}GP`]) || 0;
-            if (hubData[`${sLower}SellMargin`]) {
-                let smRaw = parseFloat(hubData[`${sLower}SellMargin`]);
-                sellMarginNum = (!String(hubData[`${sLower}SellMargin`]).includes('%') && smRaw > 0 && smRaw <= 1.5) ? (smRaw * 100) : smRaw;
-            } else if (rev > 0) {
-                sellMarginNum = (gp / rev) * 100;
-            }
-            const sellMargin = Number.isInteger(sellMarginNum) ? sellMarginNum : sellMarginNum.toFixed(2);
-
-            let rawMarginStr = String(hubData[`${sLower}BuyMargin`]);
-            let rawMargin = parseFloat(rawMarginStr) || 0;
-            let buyMarginNum = (!rawMarginStr.includes('%') && rawMargin > 0 && rawMargin <= 1.5) ? (rawMargin * 100) : rawMargin;
-            const buyMargin = Number.isInteger(buyMarginNum) ? buyMarginNum : buyMarginNum.toFixed(2);
-
-            const pctColor = salesPctNum >= 100 ? '#065f46' : '#991b1b';
-            const pctBg = salesPctNum >= 100 ? '#d1fae5' : '#fee2e2';
-            const sellMarginColor = sellMarginNum >= 55.5 ? '#065f46' : '#991b1b';
-            const sellMarginBg = sellMarginNum >= 55.5 ? '#d1fae5' : '#fee2e2';
-            const marginColor = (buyMarginNum > 0 && buyMarginNum < 51) ? '#991b1b' : '#065f46';
-            const marginBg = (buyMarginNum > 0 && buyMarginNum < 51) ? '#fee2e2' : '#d1fae5';
-
-            // 4. LIVE VARIANCE
-            const sVar = varData[store] || {};
-            const totalVar = parseFloat(sVar.total) || 0;
-            const vColor = totalVar < 0 ? '#991b1b' : (totalVar > 0 ? '#065f46' : '#64748b');
-            const vBg = totalVar < 0 ? '#fee2e2' : (totalVar > 0 ? '#d1fae5' : '#f1f5f9');
-            const vSign = totalVar > 0 ? '+' : '';
-            const vRange = formatVarianceRange(sVar.dateFrom, sVar.dateTo);
-
-            // 5. WEEKLY METRICS
-            const sWeekData = weeklyResults.find(w => w.store === store);
-            const wAvg = sWeekData?.sAvg || {};
-            const wPeriod = sWeekData?.periodLabel || '';
-
-            const renderLineStat = (label, val, ruleType) => {
-                let isBad = false;
-                let displayVal = val || '-';
-                if (displayVal !== '-' && (ruleType === 'margin' || ruleType === 'conversion') && !String(displayVal).includes('%')) displayVal += '%';
-                
-                if (val && val !== '-') {
-                    let n = parseFloat(String(val).replace(/[^0-9.-]/g, ''));
-                    if (ruleType === 'margin') isBad = n < 51;
-                    if (ruleType === 'conversion') isBad = n < 85;
-                    if (ruleType === 'nodeals') isBad = n > 7;
-                    if (ruleType === 'time') {
-                        let t = String(val);
-                        let timeVal = t.includes(':') ? parseInt(t.split(':')[0]) + (parseInt(t.split(':')[1])/60) : n;
-                        isBad = timeVal > 13;
-                    }
-                }
-                
-                let bg = ruleType === 'nobg' ? 'transparent' : (ruleType === null ? '#f1f5f9' : (isBad ? '#fee2e2' : '#d1fae5'));
-                let txt = ruleType === 'nobg' ? 'var(--slate-charcoal)' : (ruleType === null ? 'var(--slate-charcoal)' : (isBad ? '#991b1b' : '#065f46'));
-                let pad = ruleType === 'nobg' ? '0' : '3px 8px';
-                if (displayVal === '-') { bg = '#f1f5f9'; txt = '#888'; pad = '3px 8px'; }
-                
-                return `
-                <div class="master-stat-row">
-                    <span class="master-stat-label">${label}</span>
-                    <span class="master-stat-val" style="color: ${txt}; background: ${bg}; padding: ${pad};">${displayVal}</span>
-                </div>`;
-            };
-
-            html += `
-            <div class="card master-card">
-                <div class="master-card-header" style="background: var(--slate-charcoal); display: flex; justify-content: space-between; align-items: stretch;">
-                    <div style="display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; gap: 10px;">
-                        <a href="${PORTAL_LINKS[store]}" target="_blank" class="portal-link-title">
-                            ${icon} ${store}
-                        </a>
-                        <span class="master-card-date goal-strong" style="margin: 0;">Goal: ${storeGoalText}</span>
-                    </div>
-                    <div style="display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; gap: 6px;">
-                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
-                            <span class="master-card-score" style="background: ${sBg}; color: ${sColor};" title="Online & Marketing scorecard">${scoreNum.toFixed(1)}</span>
-                            ${auditBadge}
-                        </div>
-                        <span class="master-card-date" style="margin: 0;">Week of ${displayDate}</span>
-                    </div>
-                </div>
-
-                <div class="master-card-body">
-                    <div>
-                        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px;">
-                            <div class="master-section-title" style="margin-bottom:0;min-width:0;">Buying &amp; Selling Snapshot</div>
-                            ${storeLastEdited ? `<span class="master-section-title" style="margin-bottom:0;white-space:nowrap;">${storeLastEdited}</span>` : ''}
-                        </div>
-                        <div class="master-stat-box">
-                            <div class="master-stat-row"><span class="master-stat-label">Sales vs Goal</span><span class="master-stat-val" style="color: ${pctColor}; background: ${pctBg};">${salesPct}%</span></div>
-                            <div class="master-stat-row"><span class="master-stat-label">Revenue</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${Math.round(rev).toLocaleString()}</span></div>
-                            <div class="master-stat-row"><span class="master-stat-label">GP Tracking</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${gpTrack.toLocaleString()}</span></div>
-                            <div class="master-stat-row dashed"><span class="master-stat-label">Sell Margin</span><span class="master-stat-val" style="color: ${sellMarginColor}; background: ${sellMarginBg};">${sellMarginNum > 0 ? sellMargin + '%' : '-'}</span></div>
-                            <div class="master-stat-row"><span class="master-stat-label">Buy Tracking</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${buyProj.toLocaleString()}</span></div>
-                            <div class="master-stat-row dashed"><span class="master-stat-label">Buy Margin</span><span class="master-stat-val" style="color: ${marginColor}; background: ${marginBg};">${buyMargin}%</span></div>
-                            <div class="master-stat-row"><span class="master-stat-label">Variance Total${vRange ? `<span style="display:block; font-size:9px; font-weight:700; color:#94a3b8; text-transform:none; letter-spacing:0; margin-top:1px;">${vRange}</span>` : ''}</span><span class="master-stat-val" style="color: ${vColor}; background: ${vBg};" title="Variance period${vRange ? ': ' + vRange : ' not set'}">${vSign}${totalVar.toFixed(2)}%</span></div>
-                        </div>
-                    </div>
-
-                    <div>
-                        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px;">
-                            <div class="master-section-title" style="margin-bottom:0;min-width:0;">Weekly Metrics</div>
-                            ${wPeriod ? `<span class="master-section-title" style="margin-bottom:0;white-space:nowrap;">${escapeHtml(wPeriod)}</span>` : ''}
-                        </div>
-                        <div class="master-stat-box">
-                            ${renderLineStat('Conversion', wAvg.conversion, 'conversion')}
-                            ${renderLineStat('Margin', wAvg.buyMargin, 'margin')}
-                            ${renderLineStat('Trans. Time', wAvg.time, 'time')}
-                            ${renderLineStat('No Deals', wAvg.noDeals, 'nodeals')}
-                            <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed #e2e8f0;">
-                                ${renderLineStat('Listed Devices', wAvg.listed, 'nobg')}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div style="flex-grow: 1; display: flex; flex-direction: column;">
-                        
-                        <div class="master-section-title">eBay Top Rated Metrics</div>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 15px;">
-                            ${buildMiniAlertCard('Defect Rate', sAlerts.defectRate, getSev('defectRate', sAlerts.defectRate), true)}
-                            ${buildMiniAlertCard('Late Shipment', sAlerts.lateShipment, getSev('lateShipment', sAlerts.lateShipment), true)}
-                            ${buildMiniAlertCard('Cases Closed', sAlerts.casesClosed, getSev('casesClosed', sAlerts.casesClosed), true)}
-                            ${buildMiniAlertCard('Tracking', sAlerts.tracking, getSev('tracking', sAlerts.tracking), true)}
-                        </div>
-
-                        <div class="master-section-title">eBay Performance Metrics</div>
-                        <div style="display: flex; flex-direction: column; gap: 6px; flex-grow: 1;">
-                            ${issues.map(b => {
-                                let bg = b.type === 'red' ? '#fee2e2' : (b.type === 'yellow' ? '#fef3c7' : '#d1fae5');
-                                let txt = b.type === 'red' ? '#991b1b' : (b.type === 'yellow' ? '#92400e' : '#065f46');
-                                let pulse = b.type === 'red' ? `<div class="notif-dot active" style="display:block; position:absolute; top:-4px; right:-4px; width:12px; height:12px; border-width: 2px;"></div>` : '';
-                                return `
-                                <div class="master-action-badge" style="color: ${txt}; background: ${bg};">
-                                    ${pulse}<span>${b.text}</span>
-                                    <div class="fast-tip">${b.tip}</div>
-                                </div>`;
-                            }).join('')}
-                        </div>
-                    </div>
-                </div>
-            </div>`;
-        });
-
-        container.innerHTML = html;
+        _dccRows = STORES.map(s => _dccRow(s, hubData, varData, scoreData, alertsData, weeklyResults));
+        container.innerHTML = _dccBoardHtml(PORTAL_LINKS);
     };
 
     const cachedHtml = localStorage.getItem('speeksDistMasterHtml');
@@ -7602,7 +7418,10 @@ async function dmGoalAction(store, action) {
             body: JSON.stringify({ store, action })
         });
         await fetchStoreTarget(store);
-        renderCompactDmGoals();
+        // Repaint the district Listing Goals popup the DM pressed this from, and
+        // the rail item, whose subtitle counts flagged stores.
+        renderDmListingModal();
+        _dmxSyncRail();
     } catch (e) {}
 }
 window.dmGoalAction = dmGoalAction;
@@ -7642,12 +7461,15 @@ function renderGoalsLevelUp() {
     el.innerHTML = levelUpHtml(managerWeeklyHistory, targetFor(goalsTargetStore));
 }
 
-// --- DM COMPACT GOALS WIDGET ---
+// --- DM LISTING GOALS DATA ---
+// Feeds the district Listing Goals popup and its rail item. This used to end in
+// a render into a dashboard panel; that panel is gone, so
+// the gate is the role rather than the presence of a container, and the results
+// go to the popup renderer + rail sync (both no-op safely when neither exists).
 let dmStoreHistory = {}; // store -> completed weekly listing totals (for level-up bars)
 
 async function fetchDmGoalsData() {
-    const cont = document.getElementById('dm-compact-goals-container');
-    if (!cont) return;
+    if (!_dmxIsDistrict()) return;
 
     const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 
@@ -7659,114 +7481,16 @@ async function fetchDmGoalsData() {
         allDistrictGoalsData = goalsResults.flat();
         dmStoreHistory = {};
         stores.forEach(s => { dmStoreHistory[s] = weeksFor(s); });
-        renderCompactDmGoals();
+        renderDmListingModal();
+        _dmxSyncRail();
     } catch (e) {
-        cont.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Network Sync Failed.</div>';
+        const cont = document.getElementById('dmListingBody');
+        if (cont) cont.innerHTML = '<div class="dmx-empty" style="padding:60px 0; color:var(--red-alert);">Couldn\'t load the district roster. Close and reopen to retry.</div>';
     }
 }
 
-function switchCompactDmTab(view) {
-    currentDmGoalView = view;
-    document.getElementById('dm-compact-tab-daily').classList.toggle('active', view === 'daily');
-    document.getElementById('dm-compact-tab-weekly').classList.toggle('active', view === 'weekly');
-    renderCompactDmGoals();
-}
 
-function toggleDmStoreAccordion(store) {
-    const rosterDiv = document.getElementById(`dm-roster-${store}`);
-    const caret = document.getElementById(`dm-caret-${store}`);
-    const isOpen = rosterDiv.style.display === 'block';
-    
-    document.querySelectorAll('.dm-store-roster').forEach(el => el.style.display = 'none');
-    document.querySelectorAll('.dm-store-caret').forEach(el => el.style.transform = 'rotate(-90deg)');
 
-    if (!isOpen) {
-        rosterDiv.style.display = 'block';
-        caret.style.transform = 'rotate(0deg)'; 
-    }
-}
-
-function renderCompactDmGoals() {
-    const cont = document.getElementById('dm-compact-goals-container');
-    if (!cont) return;
-
-    const now = new Date();
-    const todayStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-    const startOfWeek = new Date(now);
-    startOfWeek.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
-    startOfWeek.setHours(0, 0, 0, 0);
-
-    const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2' };
-    let html = '<div style="display:flex; flex-direction:column;">';
-
-    stores.forEach((store, idx) => {
-        const target = targetFor(store);
-        const flag = (_storeTargets[store] && _storeTargets[store].flag) || 'none';
-        const storeData = allDistrictGoalsData.filter(r => r.store === store);
-
-        // Per-employee today + weekly goals (last record per day wins). Read-only.
-        const emps = {};
-        storeData.forEach(r => {
-            if (goalDateObj(r.date) < startOfWeek) return;
-            const dStr = normalizeGoalDate(r.date);
-            if (!emps[r.employee]) emps[r.employee] = { role: '-', byDay: {} };
-            emps[r.employee].byDay[dStr] = parseInt(r.goal) || 0;
-            if (dStr === todayStr && r.role && r.role !== '-') emps[r.employee].role = r.role;
-        });
-
-        const empNames = Object.keys(emps);
-        let todayTotal = 0, weekTotal = 0;
-        empNames.forEach(e => {
-            todayTotal += emps[e].byDay[todayStr] || 0;
-            weekTotal += Object.values(emps[e].byDay).reduce((s, g) => s + g, 0);
-        });
-
-        const muted = weekTotal === 0 ? 'opacity:0.6;' : '';
-        const lastBorder = idx === stores.length - 1 ? 'transparent' : '#f0f0f0';
-
-        html += `
-        <div onclick="toggleDmStoreAccordion('${store}')" class="lb-row dm-store-head" style="display:grid; grid-template-columns:60px 1fr auto 18px; align-items:center; gap:12px; border-bottom:1px solid ${lastBorder}; cursor:pointer; padding:13px 15px; ${muted}">
-            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal);">${store}</span>
-            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal); text-transform:uppercase; letter-spacing:0.04em;">Goal: ${target} Listings${flag === 'flagged' ? ' <span class="dm-flag-badge">⚠ Review</span>' : ''}</span>
-            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal); text-align:right;">${weekTotal}<span style="font-size:14px; color:var(--slate-charcoal); font-weight:900;"> wk</span></span>
-            <div id="dm-caret-${store}" class="dm-store-caret" style="text-align:right; color:#888; font-size:10px; font-weight:800; transition:transform 0.3s; transform:rotate(-90deg);">▼</div>
-        </div>`;
-
-        html += `<div id="dm-roster-${store}" class="dm-store-roster" style="display:none; background:#fdfdfd; padding:10px 18px 14px; border-bottom:1px solid #e2e8f0; box-shadow:inset 0 3px 6px rgba(0,0,0,0.02);">`;
-        html += `<div class="goals-header-row"><span class="goals-header-lbl">Employee &amp; Role</span><span class="goals-header-lbl center">Today</span><span class="goals-header-lbl center">Week</span></div>`;
-
-        if (empNames.length === 0) {
-            html += `<div style="font-size:12px; color:#888; text-align:center; font-weight:600; padding:10px 0;">No roles set this week.</div>`;
-        } else {
-            empNames.forEach(e => {
-                const eToday = emps[e].byDay[todayStr] || 0;
-                const eWeek = Object.values(emps[e].byDay).reduce((s, g) => s + g, 0);
-                const badge = emps[e].role !== '-' ? `<span class="dm-role-badge">${roleName[emps[e].role] || emps[e].role}</span>` : '';
-                html += `
-                <div class="goals-mgr-row">
-                    <div class="goals-mgr-emp"><span class="goals-roster-name">${e}</span>${badge}</div>
-                    <div class="goals-mgr-week">${eToday || '–'}</div>
-                    <div class="goals-mgr-week">${eWeek || '–'}</div>
-                </div>`;
-            });
-        }
-
-        html += `<div class="goals-total-row"><span class="goals-total-lbl">Total</span><span class="goals-total-val target">${todayTotal}</span><span class="goals-total-val target">${weekTotal}</span></div>`;
-        html += `<div class="goals-levelup">${levelUpHtml(dmStoreHistory[store] || [], target)}</div>`;
-        if (flag === 'flagged') {
-            html += `<div class="dm-flag-actions">
-                <span class="dm-flag-msg">⚠️ Missed goal 2 weeks — review:</span>
-                <button class="dm-flag-btn lower" onclick="event.stopPropagation(); dmGoalAction('${store}','lower')">Lower −10</button>
-                <button class="dm-flag-btn keep" onclick="event.stopPropagation(); dmGoalAction('${store}','keep')">Keep</button>
-            </div>`;
-        }
-        html += `</div>`;
-    });
-
-    html += '</div>';
-    cont.innerHTML = html;
-}
 
 // --- DM AUDIT READINESS WIDGET (read-only, live through the week) ---
 // Lets the DM/CEO see each store's daily + weekly audit checklist progress as
@@ -7775,39 +7499,24 @@ let dmAuditData = {};            // { OVL: { daily:{items,total,completed}, week
 let currentDmAuditTab = 'daily';
 
 async function fetchDmAuditData() {
-    const cont = document.getElementById('dm-audit-container');
-    if (!cont) return;
+    // Role-gated rather than container-gated: the dashboard panel this fed is
+    // gone, and every shell carries the popup markup whether you can open it or
+    // not, so checking for the container would pull five stores of data for
+    // managers too.
+    if (!_dmxIsDistrict()) return;
     try {
         const res = await fetch(`${STORE_AUDIT_URL}?action=overview&v=${Date.now()}`);
         const json = await res.json();
         dmAuditData = json.stores || {};
-        renderDmAudit();
+        renderDmCleaningModal();
+        _dmxSyncRail();
     } catch (e) {
-        cont.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Network Sync Failed.</div>';
+        const cont = document.getElementById('dmCleaningBody');
+        if (cont) cont.innerHTML = '<div class="dmx-empty" style="padding:60px 0; color:var(--red-alert);">Couldn\'t load cleaning progress. Close and reopen to retry.</div>';
     }
 }
 
-function switchDmAuditTab(view) {
-    currentDmAuditTab = view;
-    document.getElementById('dm-audit-tab-daily')?.classList.toggle('active', view === 'daily');
-    document.getElementById('dm-audit-tab-weekly')?.classList.toggle('active', view === 'weekly');
-    renderDmAudit();
-}
 
-function toggleDmAuditAccordion(store) {
-    const rosterDiv = document.getElementById(`dm-audit-roster-${store}`);
-    const caret = document.getElementById(`dm-audit-caret-${store}`);
-    if (!rosterDiv) return;
-    const isOpen = rosterDiv.style.display === 'block';
-
-    document.querySelectorAll('.dm-audit-roster').forEach(el => el.style.display = 'none');
-    document.querySelectorAll('.dm-audit-caret').forEach(el => el.style.transform = 'rotate(-90deg)');
-
-    if (!isOpen) {
-        rosterDiv.style.display = 'block';
-        if (caret) caret.style.transform = 'rotate(0deg)';
-    }
-}
 
 // PayMore-style readiness colors: pass ≥80, watch ≥50, behind below.
 function _auditPctColor(pct) {
@@ -7816,185 +7525,7 @@ function _auditPctColor(pct) {
     return 'var(--red-alert, #dc2626)';
 }
 
-function renderDmAudit() {
-    const cont = document.getElementById('dm-audit-container');
-    if (!cont) return;
 
-    const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-    const tab = currentDmAuditTab;
-    const periodWord = tab === 'daily' ? 'today' : 'this week';
-    let html = '<div style="display:flex; flex-direction:column;">';
-
-    stores.forEach((store, idx) => {
-        const sd = dmAuditData[store] || {};
-        const pd = sd[tab] || { items: [], total: 0, completed: 0 };
-        const items = pd.items || [];
-        const total = pd.total || items.length;
-        const completed = pd.completed != null ? pd.completed : items.filter(i => i.checked).length;
-        const pct = total ? Math.round((completed / total) * 100) : 0;
-        const col = _auditPctColor(pct);
-        const muted = completed === 0 ? 'opacity:0.6;' : '';
-        const lastBorder = idx === stores.length - 1 ? 'transparent' : '#f0f0f0';
-
-        html += `
-        <div onclick="toggleDmAuditAccordion('${store}')" class="lb-row dm-store-head" style="display:grid; grid-template-columns:56px 1fr 92px 18px; align-items:center; gap:12px; border-bottom:1px solid ${lastBorder}; cursor:pointer; padding:13px 15px; ${muted}">
-            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal);">${store}</span>
-            <div style="height:8px; border-radius:6px; background:#eef2f6; overflow:hidden;"><div style="height:100%; width:${pct}%; background:${col}; border-radius:6px; transition:width .3s;"></div></div>
-            <span style="font-size:13px; font-weight:900; color:${col}; text-align:right;">${completed}/${total} · ${pct}%</span>
-            <div id="dm-audit-caret-${store}" class="dm-audit-caret" style="text-align:right; color:#888; font-size:10px; font-weight:800; transition:transform 0.3s; transform:rotate(-90deg);">▼</div>
-        </div>`;
-
-        html += `<div id="dm-audit-roster-${store}" class="dm-audit-roster" style="display:none; background:#fdfdfd; padding:10px 18px 14px; border-bottom:1px solid #e2e8f0; box-shadow:inset 0 3px 6px rgba(0,0,0,0.02);">`;
-        if (items.length === 0) {
-            html += `<div style="font-size:12px; color:#888; text-align:center; font-weight:600; padding:10px 0;">No ${tab} audit items set up yet.</div>`;
-        } else {
-            let lastSection = null;
-            items.forEach(item => {
-                if (item.section !== lastSection) {
-                    html += `<div style="font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:12px 0 4px;">${escapeHtml(item.section || 'General')}</div>`;
-                    lastSection = item.section;
-                }
-                const done = !!item.checked;
-                html += `
-                <div style="display:flex; gap:9px; align-items:center; padding:5px 2px;">
-                    <span style="font-size:14px; font-weight:900; line-height:1; color:${done ? 'var(--green-go,#16a34a)' : '#cbd5e1'};">${done ? '✓' : '○'}</span>
-                    <span style="font-size:13px; font-weight:600; color:${done ? '#94a3b8' : 'var(--slate-charcoal)'}; ${done ? 'text-decoration:line-through;' : ''}">${escapeHtml(item.text)}</span>
-                </div>`;
-            });
-            html += `<div style="margin-top:10px; font-size:12px; font-weight:800; color:${col}; text-align:right;">${completed} of ${total} done ${periodWord}</div>`;
-        }
-        html += `</div>`;
-    });
-
-    html += '</div>';
-    cont.innerHTML = html;
-}
-
-function _dmLegacyGoalsUnused() {
-    // (Superseded by the manager-style DM view above. Kept inert; never called.)
-    const cont = { innerHTML: '' };
-    const now = new Date();
-    const todayStr = '';
-    const startOfWeek = new Date(0);
-    const currentDmGoalView = 'weekly';
-    const stores = [];
-    let html = '';
-    stores.forEach((store, idx) => {
-        const storeData = allDistrictGoalsData.filter(r => r.store === store);
-        let tGoal = 0, tResult = 0;
-        let activeEmps = new Set();
-
-        const storeDedup = {};
-        storeData.forEach(r => {
-            const recDate = goalDateObj(r.date);
-            const isToday = r.date === todayStr;
-            const isThisWeek = recDate >= startOfWeek;
-
-            if ((currentDmGoalView === 'daily' && isToday) || (currentDmGoalView === 'weekly' && isThisWeek)) {
-                storeDedup[`${r.employee}|${r.date}`] = r; // last row in sheet wins per employee per day
-                activeEmps.add(r.employee);
-            }
-        });
-        Object.values(storeDedup).forEach(r => {
-            tGoal += parseInt(r.goal) || 0;
-            tResult += parseInt(r.result) || 0;
-        });
-
-        const progress = tGoal > 0 ? Math.min(100, Math.round((tResult / tGoal) * 100)) : 0;
-        const colorClass = tResult >= tGoal && tGoal > 0 ? 'var(--sage-professional)' : (tResult > 0 ? 'var(--idea-gold)' : '#cbd5e1');
-        const isMuted = tGoal === 0 && tResult === 0 ? 'opacity: 0.6;' : '';
-
-        html += `
-        <div onclick="toggleDmStoreAccordion('${store}')" class="lb-row" style="display: grid; grid-template-columns: 50px 1fr 70px 20px; align-items: center; border-bottom: 1px solid ${idx === stores.length-1 ? 'transparent' : '#f0f0f0'}; cursor: pointer; padding: 12px 15px; margin: 0; ${isMuted}">
-            <span style="font-size: 14px; font-weight: 900; color: var(--slate-charcoal);">${store}</span>
-            <div style="padding-right: 15px;">
-                <div style="width: 100%; height: 6px; background: #f1f5f9; border-radius: 3px; overflow: hidden; display: flex;">
-                    <div style="height: 100%; width: ${progress}%; background: ${colorClass}; border-radius: 3px; transition: width 0.5s ease;"></div>
-                </div>
-            </div>
-            <div style="text-align: right; font-size: 14px; font-weight: 900; color: var(--slate-charcoal);">
-                ${tResult} <span style="font-size: 11px; color: #888; font-weight: 600;">/ ${tGoal}</span>
-            </div>
-           <div id="dm-caret-${store}" class="dm-store-caret" style="text-align: right; color: #888; font-size: 10px; font-weight: 800; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); transform: rotate(-90deg);">▼</div>
-        </div>`;
-
-        html += `<div id="dm-roster-${store}" class="dm-store-roster" style="display: none; background: #fdfdfd; padding: 10px 20px; border-bottom: 1px solid #e2e8f0; box-shadow: inset 0 3px 6px rgba(0,0,0,0.02);">`;
-        
-        if (activeEmps.size === 0) {
-            html += `<div style="font-size: 12px; color: #888; text-align: center; font-weight: 600; padding: 10px 0;">No data logged.</div></div>`;
-            return;
-        }
-
-        Array.from(activeEmps).forEach(emp => {
-            const empRecords = storeData.filter(r => r.employee === emp);
-            let eG = 0, eR = 0;
-            let dailyStats = {}; 
-
-            const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-            empRecords.forEach(r => {
-                const recDate = goalDateObj(r.date);
-                if ((currentDmGoalView === 'daily' && r.date === todayStr) || (currentDmGoalView === 'weekly' && recDate >= startOfWeek)) {
-                    const rG = parseInt(r.goal) || 0;
-                    const rR = parseInt(r.result) || 0;
-                    if (currentDmGoalView === 'weekly') {
-                        const dayIdx = (recDate.getDay() + 6) % 7;
-                        dailyStats[daysOfWeek[dayIdx]] = { goal: rG, result: rR }; // last row wins per day
-                    } else {
-                        eG = rG; // daily: last record wins
-                        eR = rR;
-                    }
-                }
-            });
-            if (currentDmGoalView === 'weekly') {
-                Object.values(dailyStats).forEach(d => { eG += d.goal; eR += d.result; });
-            }
-
-            const rClass = eG > 0 || eR > 0 ? (eR >= eG ? 'delta-pos' : 'delta-neg') : 'delta-neutral';
-
-            let dailyBreakdownHtml = '';
-            if (currentDmGoalView === 'weekly') {
-                const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-                const currentDayIdx = (now.getDay() + 6) % 7;
-                const pillStyle = "flex: 1; min-width: 0; text-align: center; font-size: 9px; font-weight: 800; padding: 4px 2px; border-radius: 4px; white-space: nowrap;";
-                
-                dailyBreakdownHtml = '<div style="display: flex; gap: 6px; margin-top: 4px; padding-top: 4px; width: 100%;">';
-                
-                daysOfWeek.forEach((dName, dIdx) => {
-                    if (dailyStats[dName]) {
-                        const dG = dailyStats[dName].goal;
-                        const dR = dailyStats[dName].result;
-                        const dClass = dR >= dG ? 'color: #065f46; background: #d1fae5;' : 'color: #991b1b; background: #fee2e2;';
-                        dailyBreakdownHtml += `<div style="${pillStyle} ${dClass}">${dName}: ${dR}/${dG}</div>`;
-                    } else if (dIdx <= currentDayIdx) {
-                        dailyBreakdownHtml += `<div style="${pillStyle} color: #64748b; background: #f1f5f9;" title="Not Logged">${dName}</div>`;
-                    } else {
-                        dailyBreakdownHtml += `<div style="${pillStyle} color: #cbd5e1; border: 1px dashed #e2e8f0; background: transparent;">${dName}</div>`;
-                    }
-                });
-                dailyBreakdownHtml += '</div>';
-            }
-
-            html += `
-            <div style="display: flex; flex-direction: column; padding: 8px 0; border-bottom: 1px dashed #f0f0f0;">
-                <div style="display: grid; grid-template-columns: 1fr auto auto; gap: 15px; align-items: center;">
-                    <span style="font-size: 13px; font-weight: 700; color: var(--slate-charcoal);">${emp}</span>
-                    <div style="display: flex; justify-content: center;">
-                        <span style="font-size: 14px; font-weight: 800; color: #64748b; width: 36px; text-align: center; display: inline-block;">${eG || '-'}</span>
-                    </div>
-                    <div style="display: flex; justify-content: center; align-items: center;">
-                        <span class="delta-badge ${rClass}" style="font-size: 14px; width: 36px; height: 26px; padding: 0; display: inline-flex; justify-content: center; align-items: center;">${eR || '-'}</span>
-                    </div>
-                </div>
-                ${dailyBreakdownHtml}
-            </div>`;
-        });
-        
-        html += `</div>`; 
-    });
-
-    html += '</div>'; 
-    cont.innerHTML = html;
-}
 
 // ============================================================================
 // 21. MODULE: EMPLOYEE DASHBOARD WIDGETS
@@ -10989,6 +10520,12 @@ function applyRoleBasedUI() {
     // the panel, so overrides can add or remove tools for any role without the
     // static role-class unions drifting out of sync.
     _syncToolsPanelChrome();
+    // Only matters when one user holds both Preferred Purchases entries; the
+    // labels are otherwise already correct in the markup.
+    try { _plSyncToolLabels(); } catch (_) { /* module may not be loaded on this page */ }
+    // Role gating decides how many action items are visible, so square the deck
+    // up right after it rather than waiting for the feed's next render.
+    try { _samSyncRailFill(); } catch (_) { /* menu not on this page */ }
     // First call kicks off a background refresh of the overrides from Supabase
     // (cached copy applies instantly; a change re-runs this function once).
     _kickFeatureOverridesRefresh();
@@ -11202,9 +10739,14 @@ function initDashboardData() {
         setTimeout(fetchAwardsData, 900);
         setTimeout(fetchDmGoalsData, 1000);
         setTimeout(fetchDmAuditData, 1050);
-        // Keep audit readiness live while the DM has the dashboard open.
+        // Monthly goals are localStorage-backed and synced by the calls above this
+        // block, so the rail only needs one nudge once they've landed.
+        setTimeout(_dmxSyncRail, 1400);
+        // Keep audit readiness live while the DM has the dashboard open. Gated on
+        // the role now — fetchDmAuditData used to guard on its own dashboard
+        // container, which no longer exists.
         if (!window._dmAuditSync) window._dmAuditSync = setInterval(() => {
-            if (document.getElementById('dm-audit-container')) fetchDmAuditData();
+            if (_dmxIsDistrict()) fetchDmAuditData();
         }, 60000);
         // SAFETY NET for the Command Center dots. Realtime (broadcast-as-ping,
         // see _RT_TOOL_CHECKS: scorecard/ebay/buying/goals) is the PRIMARY path —
@@ -11227,7 +10769,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -11572,6 +11114,17 @@ document.addEventListener('click', async (e) => {
 
             applyRoleBasedUI();
             closeAllModals();
+
+            // Start the new tab at the top. This swap replaces .main-content in
+            // place rather than navigating, so the scroll offset carries over from
+            // whatever you were reading on the previous tab — and because the new
+            // page is a different length, you land somewhere arbitrary rather than
+            // where you were. Has to come AFTER closeAllModals, which restores the
+            // scroll position it pinned when a modal opened and would otherwise
+            // undo this. Back/forward still restore position: popstate does a real
+            // reload and the browser handles that.
+            window.scrollTo(0, 0);
+            document.documentElement.scrollTop = 0;
 
             if (targetUrl.includes('docs.html')) {
                 if (typeof loadDocs === 'function') loadDocs();
@@ -12342,47 +11895,13 @@ function saveMonthlyGoals() {
 
 // --- District Overview ---
 
+// The district monthly-goals grid moved into #dmGoalsModal, but five call sites
+// still say "the district goals changed, repaint" — after a save, after a sheet
+// sync, on dashboard build. Keeping the name and retargeting it keeps all five
+// working and the popup live, instead of five edits and a rename.
 function renderDistrictGoals() {
-    const container = document.getElementById('districtGoalsGrid');
-    if (!container) return;
-    const monthEl = document.getElementById('districtGoalsMonth');
-    if (monthEl) monthEl.textContent = _mgbMonthLabel();
-    const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-    const emojis = { OVL: '🟣', LEE: '🔵', WSP: '🟢', MPL: '🟠', BAL: '🔴' };
-
-    let goalsRow = '';
-    let initiativesRow = '';
-
-    stores.forEach(store => {
-        const data        = getMonthlyGoals(store);
-        const goals       = data?.goals || [];
-        const initiatives = getStoreInitiatives(store)?.initiatives || [];
-
-        const goalsContent = goals.length
-            ? goals.map(g => `<div class="dg-goal-mini" data-goal-title="${escapeHtml(g.title)}" data-goal-desc="${escapeHtml(g.description || '')}"><div class="dg-goal-mini-label">${escapeHtml(g.title)}</div></div>`).join('')
-            : '<div class="dg-no-goals">No goals set</div>';
-
-        const initiativeItems = initiatives.length
-            ? initiatives.map(i => {
-                const badge = i.status === 'upcoming'
-                    ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
-                    : '<span class="si-status-badge si-status-badge--current">Current</span>';
-                return `<div class="dg-goal-mini dg-initiative-mini" data-goal-title="${escapeHtml(i.title)}" data-goal-desc="${escapeHtml(i.description || '')}"><div class="dg-goal-mini-label">${escapeHtml(i.title)}</div>${badge}</div>`;
-            }).join('')
-            : '<div class="dg-no-goals">No initiatives set</div>';
-
-        goalsRow += `<div class="dg-goals-col">
-            <div class="dg-store-header">${emojis[store]} ${store}</div>
-            ${goalsContent}
-        </div>`;
-
-        initiativesRow += `<div class="dg-initiatives-col">
-            <div class="dg-initiatives-divider">Initiatives &amp; Projects <button class="dg-edit-btn" onclick="openEditStoreInitiativesModal('${store}')">Edit ✏️</button></div>
-            ${initiativeItems}
-        </div>`;
-    });
-
-    container.innerHTML = goalsRow + initiativesRow;
+    renderDmGoalsModal();
+    _dmxSyncRail();
 }
 
 // ============================================================================
@@ -14511,27 +14030,77 @@ function renderClaimsTable() {
     wrap.innerHTML = html;
 }
 
-// Tiny copy button next to a case number so the ID can be pasted straight into
-// Shopify / UPS / USPS status lookups. Flashes ✓ on success.
-function _claimCopyBtn(r) {
-    if (!r.case_number) return '';
-    return `<button onclick="copyClaimCase(this)" data-case="${escapeHtml(r.case_number)}" title="Copy case number" style="margin-left:5px; font-size:10px; padding:2px 5px; border:1px solid #e2e8f0; border-radius:5px; background:#f8fafc; color:#64748b; cursor:pointer; line-height:1; vertical-align:1px;">📋</button>`;
+// ── Shared copy chip ───────────────────────────────────────────────────────
+// A 📋 button beside an identifier whose whole job is to be pasted somewhere
+// else: a claim case number into a carrier's status lookup, a recycle SKU into
+// inventory. Styling is .site-copy in styles.css — one definition, so a
+// copyable value looks and behaves the same in every tool.
+//
+// `what` names the value in the tooltip, the screen-reader label and the
+// failure message, so the fallback tells you WHICH thing to copy by hand.
+//
+// Both the copy mark and the success check live in one SVG; CSS shows one at a
+// time. Line-icon style with stroke-width 2.4 to match the nav icons — at 12px
+// a thinner stroke greys out.
+const _SITE_COPY_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + '<g class="site-copy-mark-copy"><rect x="9" y="9" width="12" height="12" rx="2.5"/>'
+    + '<path d="M6 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V6"/></g>'
+    + '<polyline class="site-copy-mark-ok" points="20 6 10 17 5 12"/></svg>';
+
+function siteCopyBtn(value, what) {
+    const v = String(value ?? '').trim();
+    if (!v) return '';
+    const label = escapeHtml(what || 'value');
+    // No whitespace between the value and this button at any call site: with no
+    // break opportunity there, the icon can never be orphaned onto its own line
+    // even when the column is narrow enough that the value itself wraps.
+    return `<button type="button" class="site-copy" data-copy="${escapeHtml(v)}" data-what="${label}"`
+        + ` title="Copy ${label}" aria-label="Copy ${label}" onclick="siteCopy(event, this)">${_SITE_COPY_SVG}</button>`;
 }
 
-function copyClaimCase(btn) {
-    const num = btn.dataset.case || '';
-    if (!num) return;
-    navigator.clipboard.writeText(num).then(() => {
-        const old = btn.innerText;
-        btn.innerText = '✓';
-        btn.style.color = '#059669';
-        btn.style.borderColor = '#34d399';
-        btn.style.background = '#ecfdf5';
-        setTimeout(() => {
-            btn.innerText = old;
-            btn.style.color = ''; btn.style.borderColor = ''; btn.style.background = '';
-        }, 1200);
-    }).catch(() => alert('Could not copy — please select and copy the case number manually.'));
+function siteCopy(ev, btn) {
+    // These chips sit inside table rows and cards that have their own click
+    // handlers (opening a note, following a product link) — copying must not
+    // also fire those.
+    if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+    const v = btn.dataset.copy || '';
+    if (!v) return;
+    const flash = () => {
+        btn.classList.add('site-copy-ok');
+        // The table may have re-rendered underneath us in the meantime, in
+        // which case this button is detached and resetting it is harmless.
+        setTimeout(() => btn.classList.remove('site-copy-ok'), 1200);
+    };
+    // navigator.clipboard is undefined on a non-secure origin, so the old
+    // textarea trick is the fallback rather than an outright failure.
+    const manual = () => {
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = v;
+            ta.setAttribute('readonly', '');
+            ta.style.cssText = 'position:fixed; top:-1000px; opacity:0;';
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            if (!ok) throw new Error('denied');
+            flash();
+        } catch (_) {
+            alert(`Could not copy — please select and copy the ${btn.dataset.what || 'value'} manually.`);
+        }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(v).then(flash).catch(manual);
+    } else {
+        manual();
+    }
+}
+
+// Copy button next to a case number so the ID can be pasted straight into
+// Shopify / UPS / USPS status lookups.
+function _claimCopyBtn(r) {
+    return siteCopyBtn(r.case_number, 'case number');
 }
 
 // One claim row. `isChild` nests it (indent + blue edge) under its parent INR ticket;
@@ -18510,7 +18079,7 @@ function renderMyRecycleTable() {
     const total = rows.filter(r => r.review_verdict !== 'ignore' && r.review_verdict !== 'denied').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
     const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
 
-    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
+    const th = (t, extra = '') => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap; ${extra}">${t}</th>`;
     const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
     // Report preview "page" (DM/CEO) — mirrors the Box Order flow: Send Email
     // first shows the composed email, and the actual send happens from there.
@@ -18537,8 +18106,14 @@ function renderMyRecycleTable() {
         : '';
     html += _recycleDeleteReqPanel(canReview);
     const colCount = 9 + (showStore ? 1 : 0);
+    // width:100% on Description makes it the column that absorbs all slack, so
+    // every other column settles at its own min-content width. That is what lets
+    // the SKU cell be nowrap without stealing room from anything: a SKU is an
+    // identifier you read and copy in one piece, so it must not break at its
+    // hyphens, whereas a description is prose and is fine wrapping. Remove the
+    // width and the nowrap starts squeezing Description instead.
     html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
-        <thead><tr>${canReview ? th('Review') : th('Status')}${th('Date')}${showStore ? th('Store') : ''}${th('SKU')}${th('Description')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
+        <thead><tr>${canReview ? th('Review') : th('Status')}${th('Date')}${showStore ? th('Store') : ''}${th('SKU')}${th('Description', 'width:100%;')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
     rows.forEach(r => {
         // A line with a pending delete request is LOCKED — no reviewing, no
         // notes, no replies — until the DM approves/denies it or the manager
@@ -18611,15 +18186,20 @@ function renderMyRecycleTable() {
         const otherRole = canReview ? 'mgr' : 'dm';
         const noteLine = thread.map(n => {
             const noteDot = (n.role === otherRole && tOf(n.at) > seenB) ? NEW_DOT : '';
+            // .site-note / .site-note-reply in styles.css — the shared note
+            // callout. These two boxes were the original, hand-inlined here;
+            // the styling now lives in one place so a note reads the same in
+            // every tool that shows one.
+            const by = n.by ? ` <span class="site-note-by">— ${escapeHtml(n.by)}</span>` : '';
             return n.role === 'dm'
-                ? `<div style="margin-top:4px; font-size:11.5px; font-weight:600; color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; border-radius:7px; padding:4px 8px;">${noteDot}💬 ${escapeHtml(n.text || '')}${n.by ? ` <span style="color:#94a3b8;">— ${escapeHtml(n.by)}</span>` : ''}</div>`
-                : `<div style="margin-top:3px; margin-left:14px; font-size:11.5px; font-weight:600; color:#047857; background:#f0fdf4; border:1px solid #a7f3d0; border-radius:7px; padding:4px 8px;">${noteDot}↩ ${escapeHtml(n.text || '')}${n.by ? ` <span style="color:#94a3b8;">— ${escapeHtml(n.by)}</span>` : ''}</div>`;
+                ? `<div class="site-note">${noteDot}💬 ${escapeHtml(n.text || '')}${by}</div>`
+                : `<div class="site-note-reply">${noteDot}↩ ${escapeHtml(n.text || '')}${by}</div>`;
         }).join('');
         html += `<tr style="${rowBg}">
             ${firstCell}
             ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
             ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`) : ''}
-            ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.sku || '')}</span>`)}
+            ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.sku || '')}</span>${siteCopyBtn(r.sku, 'SKU')}`, 'white-space:nowrap;')}
             ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>${noteLine}`)}
             ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;')}
             ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}
@@ -18692,7 +18272,7 @@ function _recycleDeleteReqPanel(canReview) {
         delReqs.map(r => `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:#fff; border:1px solid #fde68a; border-radius:9px; padding:9px 12px;">
             <div style="font-size:12.5px; color:var(--slate-charcoal);">
                 <span style="font-weight:800;">${escapeHtml(r.store || '')}</span>
-                · <span style="font-weight:700;">${escapeHtml(r.sku || '')}</span>
+                · <span style="font-weight:700;">${escapeHtml(r.sku || '')}</span>${siteCopyBtn(r.sku, 'SKU')}
                 <span style="color:#94a3b8;"> — ${escapeHtml(r.description || '')} · qty ${Number(r.quantity) || 1} · ${_fmtRecycleMoney(_recycleLineTotal(r))}</span>
                 <span style="color:#b45309; font-weight:700;"> · requested by ${escapeHtml(r.delete_requested_by || 'Manager')}</span>
             </div>
@@ -19341,6 +18921,10 @@ const FEATURE_CATALOG = [
     { key: 'tool-store-comment',       label: 'Send Store Comment',            tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
     { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
     { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    // Two versions of one tool, sharing the `tool-preferred` stem so the
+    // Delegation tab pairs them the way it already pairs the claims tools.
+    { key: 'tool-preferred-request',   label: 'Preferred Purchases',           tab: 'tools', group: 'Orders', def: ['district-manager', 'manager', 'assistant-manager'] },
+    { key: 'tool-preferred-approve',   label: 'Preferred Purchases (Owner)',   tab: 'tools', group: 'Orders', def: ['owner-manager'] },
     { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
     { key: 'tool-feature-access',      label: 'Feature Access (this tool)',    tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
@@ -19361,6 +18945,13 @@ const FEATURE_CATALOG = [
     { key: 'widget-listing-goals',     label: 'Listing Goals bar (action menu)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager', 'training'] },
     { key: 'widget-emp-weekly-kpis',   label: 'Weekly KPIs tab (employee)',    tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    // The three district action-menu rows. Defaults mirror exactly what the
+    // dashboard panels they replaced were gated to: Cleaning and Listing were
+    // DM+CEO, Monthly Team Goals was DM-only. Delegation pairs each with the
+    // manager row of the same stem (widget-dm-listing-goals ↔ widget-listing-goals).
+    { key: 'widget-dm-audit',          label: 'Cleaning Checklist (district)', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    { key: 'widget-dm-goals',          label: 'Monthly Team Goals (district)', tab: 'widgets', group: 'Dashboard', def: ['district-manager'] },
+    { key: 'widget-dm-listing-goals',  label: 'Listing Goals (district)',      tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown (tab)',     tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-weekly-kpis',    label: 'Weekly KPIs (tab)',             tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies (tab)',        tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
@@ -20682,6 +20273,10 @@ function _vrDmNotesOpen(p) {
 
 // One note cell: read-only text + author/date caption normally; a textarea
 // while the viewer is in ✏️ Edit mode (saved in bulk by vrSaveEdits).
+// Deliberately NOT the shared .site-note callout: these are three table columns
+// (GM note / DM note / Manager reply) whose headers already say whose note each
+// one is, so boxing them would restate the header and add noise to a dense grid.
+// The small grey caption carries the author + date instead.
 function _vrNoteCell(it, field, editable, placeholder) {
     const val = it[field] || '';
     const by = it[field + '_by'];
@@ -21708,6 +21303,11 @@ function _agRowHtml(it, canDm) {
 //   - In DM row-edit mode (`editing`) the DM's notes become editable
 //     textareas, but ONLY the ones the store hasn't answered yet — history
 //     the conversation moved past is locked.
+// Deliberately NOT the shared .site-note callout: this thread captions the
+// author ABOVE each note and uses a left rail rather than a full box, with
+// purple carrying the DM identity this tool uses elsewhere. Converting it to the
+// blue/green pair would throw away that colour tie and move the attribution,
+// which is a visual change worth seeing before making — not a silent tidy-up.
 function _agThreadHtml(it, canDm, editing) {
     const notes = it.notes || [];
     const last = notes[notes.length - 1];
@@ -22556,6 +22156,9 @@ function renderActionFeed() {
 
     if (!items.length && !patchRow) {
         _samReconcileFeed(feed, [{ key: 'empty', html: '<div class="sam-empty">You\'re all caught up.</div>' }]);
+        // Must run on this path too: a caught-up feed is exactly when the deck
+        // looked lopsided, because the early return skipped the rail sync.
+        _samSyncRailFill();
         return;
     }
 
@@ -22576,15 +22179,26 @@ function renderActionFeed() {
     if (patchRow) desired.push({ key: 'patch', html: patchRow });
     items.forEach(it => {
         if (it.type === 'rem') {
-            const dotcls = it.dueCls === 'sam-due-red' ? 'urgent' : 'warn';
+            // grey = informational rather than a task, so it gets the calm blue dot
+            const dotcls = it.dueCls === 'sam-due-red' ? 'urgent'
+                : it.dueCls === 'sam-due-grey' ? 'info' : 'warn';
             const remClick = it.action ? ` onclick="${it.action}" style="cursor:pointer"` : '';
+            // A reminder that is news rather than an outstanding task carries no
+            // deadline, so a due badge would be inventing one (noDue).
+            const dueHtml = it.noDue ? ''
+                : `<span class="sam-r-due ${it.dueCls}">${_samEsc(it.due)}</span>`;
+            // Three shapes of trailing control: an explicit "Mark read" for
+            // informational cards (readAction), Snooze for live task-nags, and
+            // nothing at all for hard deadlines that must not be dismissed.
+            const ctrl = it.readAction ? readBtn(it.readAction)
+                : (it.noSnooze ? '' : snoozeBtn(`samDismissItem(event,'rem','${_samEsc(it.key)}')`));
             desired.push({ key: 'rem:' + it.key, html: `<div class="sam-ann rem"${remClick}>
                 <span class="sam-adot ${dotcls}"></span>
                 <div class="sam-a-body">
-                    <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span><span class="sam-r-due ${it.dueCls}">${_samEsc(it.due)}</span></div>
+                    <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span>${dueHtml}</div>
                     <div class="sam-a-snip">${_samEsc(it.snippet)}</div>
                 </div>
-                ${it.noSnooze ? '' : snoozeBtn(`samDismissItem(event,'rem','${_samEsc(it.key)}')`)}
+                ${ctrl}
             </div>` });
             return;
         }
@@ -22616,6 +22230,28 @@ function renderActionFeed() {
 
     _samReconcileFeed(feed, desired);
     _samAddReadFull();
+    _samSyncRailFill();
+}
+
+// The feed card is taller than the action-items card beside it, and the rail's
+// card is content-sized, so their bottom edges didn't line up. With a full set
+// of action items the rail card takes the row height and the items share the
+// slack, squaring the two columns off. With fewer items stretching each one
+// would look distended, so it stays content-sized below the threshold.
+// Counted from what is actually VISIBLE, since Feature Access hides items with
+// display:none and :nth-child would still count them.
+const _SAM_RAIL_FILL_MIN = 4;
+function _samSyncRailFill() {
+    // The class goes on .sam-rail, not the card: the rail carries
+    // align-self:start, so it has to rejoin the grid's stretch before anything
+    // inside it has height to fill.
+    const rail = document.querySelector('.speeks-action-menu .sam-rail');
+    if (!rail) return;
+    let n = 0;
+    rail.querySelectorAll('.sam-mini').forEach(function (el) {
+        if (el.offsetParent !== null) n++;
+    });
+    rail.classList.toggle('sam-rail-fill', n >= _SAM_RAIL_FILL_MIN);
 }
 
 // Keyed, in-place reconcile of the action feed. Cards are matched by a stable key
@@ -22978,7 +22614,15 @@ function _samReminderCfg() {
               ? "openClaimsOversight()"
               : "openClaimsModal(); switchClaimsTab('view')" },
         { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "toggleRecycleInventory(); switchRecycleTab('view')" },
-        { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging Inventory Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" }
+        { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging Inventory Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" },
+        // Preferred Purchases — feed-only, both directions. The owner's card is a
+        // queue to work, so it keeps the amber "Review" badge and a Snooze.
+        // The requester's is an answer that came back: information, not a task, so
+        // it carries no due badge (there is no deadline to invent), gets a calm
+        // blue dot, and offers "Mark read" instead of Snooze. Clicking the card
+        // body opens My Requests, which marks it read as a side effect.
+        { key: 'preferredOwner', id: 'preferredOwnerAlertBubble', text: 'preferredOwnerAlertBubbleText', title: 'Purchase Requests', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "openPreferredOwner()" },
+        { key: 'preferredMine', id: 'preferredMineAlertBubble', text: 'preferredMineAlertBubbleText', title: 'Purchase Request Answered', urgency: 0, due: '', cls: 'sam-due-grey', noDue: true, readAction: "plMarkRead(event)", action: "openPreferredMine()" }
     ];
     // KPI due reminders (weekly + monthly) — data-aware, driven by
     // checkKpiDueReminders. The bubbles gate visibility; title/due/urgency flip to
@@ -23084,7 +22728,7 @@ function _samGatherReminders() {
         out.push({
             type: 'rem', key: c.key, sig, title: c.title, snippet: sub || 'Needs your attention',
             due: c.due, dueCls: c.cls, urgency: c.urgency, read: false, dateMs: Date.now() + c.urgency,
-            action, noSnooze: !!c.noSnooze
+            action, noSnooze: !!c.noSnooze, noDue: !!c.noDue, readAction: c.readAction || ''
         });
     });
     return out;
@@ -23126,6 +22770,7 @@ const _RT_TOOL_CHECKS = {
     announcements: ['loadCMS'],
     patch:         ['loadPatchNotes'],
     kpi:           ['checkKpiDueReminders'],
+    preferred:     ['checkPreferredReminders'],
     b2b:           ['_b2bRealtimeRefresh'],
     // Command Center + Listing Goals sources. Each re-fetches through its edge
     // fn and recomputes its update signature, so the pulsing dot / bar lights the
@@ -23424,3 +23069,1660 @@ function openHubToPatch() {
 
 // Record the latest patch version as seen (clears the "new patch" row + badge).
 
+
+/* =========================================================
+   MODULE: PREFERRED PURCHASES
+   Managers / ASMs / the DM suggest products for the shared
+   Amazon list; the Owner (Manager) approves or denies.
+
+   Two versions of ONE modal, chosen by role (Feature Access
+   keys tool-preferred-request / tool-preferred-approve):
+     - requester: New Request + My Requests
+     - owner:     Pending queue + Decided history
+
+   Pipeline only. Approving records a decision; it does not
+   publish a list here, because the list lives on Amazon.
+   Deliberately NO category and NO store scope — one shared
+   list can express neither.
+
+   Notifications are FEED ONLY (Ethan, 2026-07-27): the two
+   #preferred*AlertBubble elements are invisible
+   state-carriers that _samGatherReminders reads, exactly like
+   the other retired bubbles. Do not style them.
+   ========================================================= */
+const _PL_OWNER_ROLES = new Set(['owner (manager)', 'owner manager']);
+// ASMs included: they are the ones handling the supplies day to day.
+const _PL_REQ_ROLES = new Set(['manager', 'assistant manager', 'district manager', 'multi-store manager']);
+
+let _plRequests = [];      // rows for whichever view is open
+let _plTab = 'new';
+let _plBusy = false;
+let _plDecideOpen = null;  // id whose note editor is expanded
+
+function _plRole()  { return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(); }
+function _plName()  { return (sessionStorage.getItem('speeksUserName') || '').trim(); }
+function _plStore() { return (sessionStorage.getItem('speeksUserStore') || '').toUpperCase().trim(); }
+function _plIsOwner() { return _PL_OWNER_ROLES.has(_plRole()); }
+// A Feature Access override can hand the owner view to someone else (that is the
+// point of that tool), so trust the rendered link rather than the role alone.
+function _plCanApprove() {
+    if (_plIsOwner()) return true;
+    const el = document.querySelector('[data-feature="tool-preferred-approve"]');
+    return !!(el && el.offsetParent !== null);
+}
+
+// ---------- money / pack-size maths ----------
+function _plMoney(n) {
+    // Number(null) and Number('') are both 0, which is finite — so without the
+    // explicit empty check a row whose price is null (the column is nullable,
+    // and parseMoney returns null on anything unparseable) would render a
+    // confident "$0.00".
+    if (n === null || n === undefined || n === '') return '';
+    const v = Number(n);
+    if (!Number.isFinite(v)) return '';
+    return '$' + v.toFixed(2);
+}
+// Pull a count out of free-text pack size ("box of 100", "4 rolls of 250",
+// "24-pack"). Multiplies every number it finds, so "4 rolls of 250" = 1000
+// labels. Returns null when there is nothing usable to divide by, and the
+// per-unit figure is then simply not shown — a wrong unit price is worse than
+// no unit price.
+function _plPackCount(txt) {
+    const t = String(txt || '').toLowerCase();
+    if (!t) return null;
+    const nums = t.match(/\d+(?:\.\d+)?/g);
+    if (!nums || !nums.length) return null;
+    let n = 1;
+    for (const raw of nums) {
+        const v = parseFloat(raw);
+        if (!Number.isFinite(v) || v <= 0) return null;
+        n *= v;
+    }
+    return (n > 1 && n <= 1000000) ? n : null;
+}
+// Singular noun for the per-unit label.
+//
+// Read from the ITEM NAME first, not the pack size: the pack size names the
+// CONTAINER, so "box of 100" would yield "$0.12 / box" when what you actually
+// get 100 of is gloves. Container words are the last resort, used only when
+// nothing in either string names the contents.
+function _plUnitWord(row) {
+    const name = String((row && row.item_name) || '').toLowerCase();
+    const pack = String((row && row.pack_size) || '').toLowerCase();
+    const THINGS = [
+        [/glove/, 'glove'], [/cloth|rag|towel/, 'cloth'], [/label/, 'label'],
+        [/wipe/, 'wipe'], [/sheet/, 'sheet'], [/bag|mailer/, 'bag'],
+        [/batter/, 'battery'], [/tape/, 'roll'], [/bit\b|driver/, 'bit'],
+        [/pen\b|marker|sharpie/, 'pen'], [/can\b|bottle|spray/, 'can'],
+        [/pair|sock|glasses/, 'pair'],
+    ];
+    for (const p of THINGS) { if (p[0].test(name)) return p[1]; }
+    for (const p of THINGS) { if (p[0].test(pack)) return p[1]; }
+    const CONTAINERS = [[/roll/, 'roll'], [/case/, 'case'], [/box/, 'box'], [/pack/, 'pack'], [/set/, 'set']];
+    for (const p of CONTAINERS) { if (p[0].test(pack)) return p[1]; }
+    return 'each';
+}
+function _plUnitHtml(row, cls) {
+    const c = _plPackCount(row.pack_size);
+    const p = Number(row.price);
+    if (!c || !Number.isFinite(p) || p <= 0) return '';
+    const per = p / c;
+    // Scale the decimals to the magnitude. At two decimals a 3.5-cent label
+    // rounds to "$0.03" and a sub-cent unit collapses to "$0.00" — both lose the
+    // comparison the number exists to make. Trailing zeros are trimmed back so
+    // the common case still reads "$0.12", not "$0.120".
+    let dp = 2;
+    if (per < 0.001)     dp = 5;
+    else if (per < 0.01) dp = 4;
+    else if (per < 0.10) dp = 3;
+    let txt = per.toFixed(dp);
+    if (dp > 2) txt = txt.replace(/0+$/, '').replace(/\.$/, '');
+    return '<div class="' + cls + '">$' + txt + ' / ' + escapeHtml(_plUnitWord(row)) + '</div>';
+}
+
+function _plFmtDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+function _plAgeDays(iso) {
+    if (!iso) return 0;
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return 0;
+    return Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000));
+}
+// Day-granular on purpose. The feed reconciler matches cards by a content
+// signature, so an hour-by-hour "2h ago" would change the signature on every
+// render and churn the card forever (same reason _samFmtDate is absolute).
+function _plAgeText(iso) {
+    const n = _plAgeDays(iso);
+    return n === 0 ? 'today' : n === 1 ? 'yesterday' : (n + ' days ago');
+}
+
+// ---------- duplicate hint ----------
+// Name overlap only — there are no categories to scope the comparison within.
+// Compares significant words so "Nitrile gloves box of 100" matches "Nitrile
+// Gloves, Large". A hint above the Approve button, never a block.
+const _PL_STOP = new Set(['the', 'and', 'for', 'with', 'pack', 'box', 'of', 'set', 'kit',
+    'count', 'pcs', 'large', 'small', 'medium', 'assorted', 'inch']);
+function _plWords(name) {
+    const out = new Set();
+    String(name || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+        .forEach(function (w) { if (w.length > 2 && !_PL_STOP.has(w)) out.add(w); });
+    return out;
+}
+function _plFindDupe(row, approved) {
+    const a = _plWords(row.item_name);
+    if (!a.size) return null;
+    let best = null, bestScore = 0;
+    approved.forEach(function (other) {
+        if (other.id === row.id) return;
+        const b = _plWords(other.item_name);
+        if (!b.size) return;
+        let hit = 0;
+        a.forEach(function (w) { if (b.has(w)) hit++; });
+        const score = hit / Math.min(a.size, b.size);
+        if (hit >= 1 && score >= 0.5 && score > bestScore) { bestScore = score; best = other; }
+    });
+    return best;
+}
+
+// ---------- open / close ----------
+// Is the plain requester version available to this user? Feature Access can
+// grant both, in which case the modal carries all four tabs.
+function _plCanRequest() {
+    if (_PL_REQ_ROLES.has(_plRole())) return true;
+    const el = document.querySelector('[data-feature="tool-preferred-request"]');
+    return !!(el && el.offsetParent !== null);
+}
+
+function togglePreferredPurchases(forceTab) {
+    const modal = document.getElementById('preferredModal');
+    if (!modal) return;
+    if (modal.classList.contains('show')) { closeAllModals(); return; }
+    _plTab = forceTab || (_plCanRequest() ? 'new' : 'pending');
+    _plDecideOpen = null;
+    _plSyncChrome();
+    // toggleModal is the shared opener — it closes whatever else is open and
+    // calls lockAndBlurScreen(), which is what dims and blurs the page behind
+    // every other SPEEKS tool. Adding .show by hand skips the backdrop.
+    toggleModal('preferredModal');
+    _plLoad();
+}
+function openPreferredOwner() { togglePreferredPurchases('pending'); }
+function openPreferredMine()  { togglePreferredPurchases('mine'); }
+
+// Which tabs exist depends on what the user has. The title stays plain
+// "Preferred Purchases" either way — there is one tool, and the modal shows
+// whichever halves apply, so an "(Owner)" suffix here would say nothing.
+function _plSyncChrome() {
+    const owner = _plCanApprove();
+    const req = _plCanRequest();
+    const s = document.getElementById('preferredHeadSub');
+    if (s) s.textContent = req
+        ? 'Suggest a product for the company list.'
+        : 'Approve what goes on the Amazon list.';
+    const vis = {
+        'pl-tab-new': req,
+        'pl-tab-mine': req,
+        'pl-tab-pending': owner,
+        'pl-tab-decided': owner
+    };
+    Object.keys(vis).forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = vis[id] ? '' : 'none';
+    });
+}
+
+// The Tools panel is the one place the two versions can appear side by side, and
+// only there does the owner link need distinguishing. Anyone who holds just the
+// one entry sees plain "Preferred Purchases".
+function _plSyncToolLabels() {
+    const req = document.querySelector('[data-feature="tool-preferred-request"]');
+    const own = document.querySelector('[data-feature="tool-preferred-approve"]');
+    const both = !!(req && req.offsetParent !== null && own && own.offsetParent !== null);
+    document.querySelectorAll('[data-feature="tool-preferred-approve"] .pl-tool-label')
+        .forEach(function (l) { l.textContent = both ? 'Preferred Purchases (Owner)' : 'Preferred Purchases'; });
+}
+
+function plSwitchTab(tab) {
+    _plTab = tab;
+    _plDecideOpen = null;
+    _plRender();
+}
+
+// ---------- load ----------
+async function _plLoad() {
+    const owner = _plCanApprove();
+    const body = document.getElementById('preferredBody');
+    if (body) body.innerHTML = '<div class="pl-empty"><div class="pl-empty-t">Loading…</div></div>';
+    try {
+        const q = owner
+            ? PREFERRED_URL + '?scope=all&v=' + Date.now()
+            : PREFERRED_URL + '?scope=mine&name=' + encodeURIComponent(_plName()) + '&v=' + Date.now();
+        const res = await fetch(q);
+        const data = await res.json();
+        _plRequests = (data && data.requests) || [];
+    } catch (e) {
+        _plRequests = [];
+        if (body) body.innerHTML = '<div class="pl-empty"><div class="pl-empty-t" style="color:var(--red-alert)">Couldn\'t load requests.</div>'
+            + '<div class="pl-empty-s">Check your connection and reopen the tool.</div></div>';
+        return;
+    }
+    _plRender();
+    // Opening the tool IS the acknowledgement for a requester — stamps the
+    // verdicts seen so their feed card clears for good instead of re-nagging.
+    if (!owner && _plUnseenDecided().length) {
+        try {
+            await postWrite(PREFERRED_URL, { action: 'mark_seen', name: _plName() });
+            const now = new Date().toISOString();
+            _plRequests.forEach(function (r) { if (r.decided_at && !r.requester_seen_at) r.requester_seen_at = now; });
+            if (typeof checkPreferredReminders === 'function') checkPreferredReminders();
+        } catch (_) { /* card just stays until next time */ }
+    }
+}
+
+function _plUnseenDecided() {
+    const me = _plName().toLowerCase();
+    return _plRequests.filter(function (r) {
+        return r.decided_at && !r.requester_seen_at
+            && String(r.requested_by || '').toLowerCase() === me;
+    });
+}
+
+// ---------- render ----------
+function _plRender() {
+    const body = document.getElementById('preferredBody');
+    if (!body) return;
+    document.querySelectorAll('#preferredTabs .tab-btn').forEach(function (b) {
+        b.classList.toggle('active', b.dataset.pltab === _plTab);
+    });
+    const foot = document.getElementById('preferredFooter');
+    if (foot) foot.style.display = (_plTab === 'new') ? 'flex' : 'none';
+
+    if (_plTab === 'new')     { body.innerHTML = _plFormHtml();    return; }
+    if (_plTab === 'mine')    { body.innerHTML = _plMineHtml();    return; }
+    if (_plTab === 'pending') { body.innerHTML = _plPendingHtml(); return; }
+    body.innerHTML = _plDecidedHtml();
+}
+
+function _plFormHtml() {
+    return ''
+    + '<div class="pl-hint" style="margin:0 0 15px;">'
+    + 'Suggest a product for the company preferred list. It gets reviewed and either '
+    + 'added to the Amazon list or answered with what to buy instead.'
+    + '</div>'
+    + '<div class="pl-grid">'
+    + '  <div class="pl-full">'
+    + '    <label class="form-label-caps">Item <span class="pl-req">*</span></label>'
+    + '    <input type="text" id="plItem" class="form-input-lg" maxlength="200" placeholder="e.g. Nitrile gloves, box of 100 (Large)">'
+    + '  </div>'
+    + '  <div class="pl-full">'
+    + '    <label class="form-label-caps">Amazon link <span class="pl-req">*</span></label>'
+    + '    <input type="text" id="plUrl" class="form-input-lg" placeholder="Paste the product URL">'
+    + '  </div>'
+    + '  <div>'
+    + '    <label class="form-label-caps">Price <span class="pl-req">*</span></label>'
+    + '    <input type="text" id="plPrice" class="form-input-lg" inputmode="decimal" placeholder="0.00" oninput="_plSanitizeMoney(this)">'
+    + '  </div>'
+    + '  <div>'
+    + '    <label class="form-label-caps">What you get for that <span class="pl-req">*</span></label>'
+    + '    <input type="text" id="plPack" class="form-input-lg" maxlength="120" placeholder="e.g. box of 100 &middot; 4 rolls &middot; 1 set">'
+    + '  </div>'
+    + '</div>'
+    + '<div class="pl-hint" style="margin:-6px 0 15px;">'
+    + 'Price alone can&rsquo;t be compared across brands &mdash; the pack size is what '
+    + 'turns it into a per&#8209;unit number, which is usually the whole argument.'
+    + '</div>'
+    + '<label class="form-label-caps">Why this one <span class="pl-req">*</span></label>'
+    + '<textarea id="plReason" class="form-input-lg" rows="3" maxlength="2000" '
+    + 'placeholder="What does it replace, and why is it better? Cheaper per unit, lasts longer, fits a machine we own…"></textarea>'
+    + '<div id="plFormErr" class="pl-err"></div>'
+    + '<div class="box-order-disclaimer">'
+    + 'One product per request. If you&rsquo;re suggesting a replacement for something we '
+    + 'already stock, say what it replaces &mdash; that&rsquo;s the fastest way to a yes.'
+    + '</div>';
+}
+
+function _plStatusChip(status) {
+    const s = String(status || 'pending');
+    const label = s === 'approved' ? 'Approved' : s === 'denied' ? 'Denied' : 'Pending';
+    return '<span class="pl-chip pl-chip-' + escapeHtml(s) + '">' + label + '</span>';
+}
+
+// A note from the owner is the whole reason a requester reopens the tool, so it
+// gets the shared .site-note callout — same shape as the recycle-request notes
+// (💬, text, author in grey) so notes read the same everywhere on the site.
+function _plNoteHtml(row, whoLabel) {
+    if (!row.owner_note) return '';
+    const who = whoLabel || row.decided_by || '';
+    return '<div class="site-note">&#128172; ' + escapeHtml(row.owner_note)
+        + (who ? ' <span class="site-note-by">&mdash; ' + escapeHtml(who) + '</span>' : '')
+        + '</div>';
+}
+
+function _plMineHtml() {
+    if (!_plRequests.length) {
+        return '<div class="pl-empty"><div class="pl-empty-t">Nothing sent yet.</div>'
+            + '<div class="pl-empty-s">Suggest a product on the New Request tab and it&rsquo;ll show up here.</div></div>';
+    }
+    const rows = _plRequests.map(function (r) {
+        const act = (r.status === 'pending')
+            ? '<button class="pl-link" onclick="plWithdraw(' + r.id + ')">Withdraw</button>'
+            : '';
+        return '<tr>'
+            + '<td>' + _plStatusChip(r.status) + '</td>'
+            + '<td><div class="pl-it"><a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer">'
+            + escapeHtml(r.item_name) + '</a></div>' + _plNoteHtml(r) + '</td>'
+            + '<td class="pl-num">' + _plMoney(r.price) + _plUnitHtml(r, 'pl-unit-sm') + '</td>'
+            + '<td style="white-space:nowrap;">' + _plFmtDate(r.created_at) + '</td>'
+            + '<td>' + act + '</td>'
+            + '</tr>';
+    }).join('');
+    return '<table class="pl-tbl">'
+        + '<thead><tr><th style="min-width:120px;">Status</th><th>Item</th>'
+        + '<th class="pl-num">Price</th><th>Sent</th><th></th></tr></thead>'
+        + '<tbody>' + rows + '</tbody></table>'
+        + '<div class="pl-hint" style="margin-top:14px;">'
+        + 'Pending requests can still be withdrawn &mdash; anything decided is final.</div>';
+}
+
+const _PL_EXT_ICO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
+
+function _plPendingHtml() {
+    const pending = _plRequests.filter(function (r) { return r.status === 'pending'; })
+        .sort(function (a, b) { return new Date(a.created_at) - new Date(b.created_at); });
+    const approved = _plRequests.filter(function (r) { return r.status === 'approved'; });
+
+    if (!pending.length) {
+        return '<div class="pl-empty"><div class="pl-empty-t">Queue&rsquo;s clear.</div>'
+            + '<div class="pl-empty-s">New suggestions land here, oldest first.</div></div>';
+    }
+
+    const cards = pending.map(function (r) {
+        const dupe = _plFindDupe(r, approved);
+        const dupeHtml = dupe
+            ? '<div class="pl-dupe"><span>&#9888;</span><div>Close to something already approved '
+              + '&mdash; <b>' + escapeHtml(dupe.item_name) + '</b>'
+              + (dupe.price != null ? ' (' + _plMoney(dupe.price) + ')' : '') + '.</div></div>'
+            : '';
+        const who = [r.requested_by, r.store, r.requested_by_role].filter(Boolean)
+            .map(function (x) { return escapeHtml(x); }).join(' &middot; ');
+        const open = _plDecideOpen === r.id;
+        const first = escapeHtml((r.requested_by || '').split(' ')[0] || 'them');
+        const editor = open
+            ? '<div class="pl-note-box">'
+              + '<textarea id="plNote-' + r.id + '" rows="2" maxlength="2000" '
+              + 'placeholder="Note back to ' + first + ' (optional) — buy the 6-pack, use what we have first…"></textarea>'
+              + '<div class="pl-hint">Shown to the requester with your decision.</div>'
+              + '</div>'
+            : '';
+        return '<div class="pl-card" id="plCard-' + r.id + '">'
+            + '<div class="pl-card-top">'
+            + '<div class="pl-card-main">'
+            + '<div class="pl-card-name">' + escapeHtml(r.item_name) + '</div>'
+            + '<div class="pl-card-meta">' + who + ' &middot; ' + escapeHtml(_plAgeText(r.created_at)) + '</div>'
+            + '</div>'
+            + '<div class="pl-price-wrap">'
+            + '<div class="pl-price">' + _plMoney(r.price) + '</div>'
+            + (r.pack_size ? '<div class="pl-pack">' + escapeHtml(r.pack_size) + '</div>' : '')
+            + _plUnitHtml(r, 'pl-unit')
+            + '</div></div>'
+            + '<div class="pl-reason">' + escapeHtml(r.reason || '') + '</div>'
+            + dupeHtml
+            + '<div class="pl-acts">'
+            + '<a class="pl-link" href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer">'
+            + _PL_EXT_ICO + ' View on Amazon</a>'
+            + '<span class="pl-sp"></span>'
+            + (open ? '' : '<button class="pl-link" onclick="plToggleNote(' + r.id + ')">Add a note</button>')
+            + '<button class="pl-btn-no" onclick="plDecide(' + r.id + ',\'denied\')">Deny</button>'
+            + '<button class="pl-btn-ok" onclick="plDecide(' + r.id + ',\'approved\')">Approve</button>'
+            + '</div>' + editor + '</div>';
+    }).join('');
+
+    return '<div class="pl-bar">'
+        + '<span class="pl-bar-count"><b>' + pending.length + '</b> waiting on you</span>'
+        + '<span class="pl-bar-age">oldest first &middot; sent ' + escapeHtml(_plAgeText(pending[0].created_at)) + '</span>'
+        + '</div>' + cards;
+}
+
+function _plDecidedHtml() {
+    const decided = _plRequests.filter(function (r) { return r.status !== 'pending'; });
+    if (!decided.length) {
+        return '<div class="pl-empty"><div class="pl-empty-t">No decisions yet.</div>'
+            + '<div class="pl-empty-s">Approvals and denials both land here.</div></div>';
+    }
+    const rows = decided.map(function (r) {
+        return '<tr>'
+            + '<td>' + _plStatusChip(r.status) + '</td>'
+            + '<td><div class="pl-it"><a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer">'
+            + escapeHtml(r.item_name) + '</a></div>' + _plNoteHtml(r, 'You') + '</td>'
+            + '<td class="pl-num">' + _plMoney(r.price) + _plUnitHtml(r, 'pl-unit-sm') + '</td>'
+            + '<td>' + escapeHtml((r.requested_by || '').split(' ')[0])
+            + (r.store ? ' &middot; ' + escapeHtml(r.store) : '') + '</td>'
+            + '<td style="white-space:nowrap;">' + _plFmtDate(r.decided_at) + '</td>'
+            + '<td><button class="pl-link" onclick="plOwnerDelete(' + r.id + ')">Remove</button></td>'
+            + '</tr>';
+    }).join('');
+    return '<table class="pl-tbl">'
+        + '<thead><tr><th style="min-width:120px;">Verdict</th><th>Item</th>'
+        + '<th class="pl-num">Price</th><th>From</th><th>Decided</th><th></th></tr></thead>'
+        + '<tbody>' + rows + '</tbody></table>'
+        + '<div class="pl-hint" style="margin-top:14px;">'
+        + 'This is the record of decisions, not the list itself &mdash; the list lives on '
+        + 'Amazon. Approving marks the request so you know what still needs adding there.</div>';
+}
+
+// ---------- actions ----------
+function plToggleNote(id) { _plDecideOpen = (_plDecideOpen === id) ? null : id; _plRender(); }
+
+// Money field: digits and a single decimal point, nothing else. Typed letters
+// never appear rather than being rejected on submit. Kept local rather than
+// borrowing the recycle tool's copy so this tool owns its own input rules.
+function _plSanitizeMoney(input) {
+    let v = (input.value || '').replace(/[^\d.]/g, '');
+    const dot = v.indexOf('.');
+    if (dot !== -1) v = v.slice(0, dot + 1) + v.slice(dot + 1).replace(/\./g, '');
+    input.value = v;
+}
+
+function _plShowFormErr(msg) {
+    const e = document.getElementById('plFormErr');
+    if (!e) return;
+    e.textContent = msg || '';
+    e.style.display = msg ? 'block' : 'none';
+}
+
+async function plSubmitRequest() {
+    if (_plBusy) return;
+    const gv = function (id) { const el = document.getElementById(id); return el ? el.value : ''; };
+    const item = gv('plItem'), url = gv('plUrl'), price = gv('plPrice'),
+          pack = gv('plPack'), reason = gv('plReason');
+    if (!item.trim())   { _plShowFormErr('Give the item a name.'); return; }
+    if (!url.trim())    { _plShowFormErr('Paste the Amazon link.'); return; }
+    if (!/^https?:\/\//i.test(url.trim())) { _plShowFormErr('The link needs to start with http:// or https://'); return; }
+    if (!price.trim())  { _plShowFormErr('Add the price.'); return; }
+    if (!pack.trim())   { _plShowFormErr('Say what you get for that price — it is what makes the price comparable.'); return; }
+    if (!reason.trim()) { _plShowFormErr('Add a line on why this one.'); return; }
+    _plShowFormErr('');
+    _plBusy = true;
+    const btn = document.getElementById('plSubmitBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+    try {
+        await postWrite(PREFERRED_URL, {
+            action: 'submit_request',
+            item_name: item, url: url, price: price, pack_size: pack, reason: reason,
+            requested_by: _plName(),
+            requested_by_role: sessionStorage.getItem('speeksUserRole') || '',
+            store: _plStore()
+        });
+        _plTab = 'mine';
+        await _plLoad();
+    } catch (e) {
+        _plShowFormErr(e.message || 'Could not send that request.');
+    } finally {
+        _plBusy = false;
+        if (btn) { btn.disabled = false; btn.innerHTML = 'Send Request &#8594;'; }
+    }
+}
+
+async function plDecide(id, verdict) {
+    if (_plBusy) return;
+    const noteEl = document.getElementById('plNote-' + id);
+    const card = document.getElementById('plCard-' + id);
+    if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+    _plBusy = true;
+    try {
+        await postWrite(PREFERRED_URL, {
+            action: 'decide', id: id, verdict: verdict,
+            owner_note: noteEl ? noteEl.value : '',
+            decided_by: _plName()
+        });
+        _plDecideOpen = null;
+        await _plLoad();
+        if (typeof checkPreferredReminders === 'function') checkPreferredReminders();
+    } catch (e) {
+        alert(e.message || 'Could not save that decision.');
+        if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
+    } finally { _plBusy = false; }
+}
+
+async function plWithdraw(id) {
+    if (_plBusy) return;
+    if (!confirm('Withdraw this request? It will be removed entirely.')) return;
+    _plBusy = true;
+    try {
+        await postWrite(PREFERRED_URL, { action: 'withdraw_request', id: id, by: _plName() });
+        await _plLoad();
+    } catch (e) { alert(e.message || 'Could not withdraw that request.'); }
+    finally { _plBusy = false; }
+}
+
+async function plOwnerDelete(id) {
+    if (_plBusy) return;
+    if (!confirm('Remove this from the record? This cannot be undone.')) return;
+    _plBusy = true;
+    try {
+        await postWrite(PREFERRED_URL, { action: 'withdraw_request', id: id, by: _plName(), as_owner: true });
+        await _plLoad();
+    } catch (e) { alert(e.message || 'Could not remove that.'); }
+    finally { _plBusy = false; }
+}
+
+// "Mark read" on the requester's feed card. Stops the click reaching the card,
+// whose own handler opens the tool — the button is the way to clear it WITHOUT
+// opening. Opening still marks it read, via _plLoad.
+async function plMarkRead(ev) {
+    if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+    try { await postWrite(PREFERRED_URL, { action: 'mark_seen', name: _plName() }); }
+    catch (_) { /* the card stays; next open will clear it */ }
+    if (typeof checkPreferredReminders === 'function') await checkPreferredReminders();
+}
+
+/* ---------- feed notifications (FEED ONLY — no bubble UI) ----------
+   Two invisible state-carriers on the same contract as every other reminder:
+   _samGatherReminders reads the element's computed display to know the reminder
+   is live, takes its one-line copy from data-summary, and its snooze identity
+   from data-sig. Both ids are in the retired-bubble rule in styles.css, so they
+   are never visible — the feed is the only surface. */
+function _plBubbleEl(which) {
+    const id = which === 'owner' ? 'preferredOwnerAlertBubble' : 'preferredMineAlertBubble';
+    let b = document.getElementById(id);
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = id;
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; align-items:flex-start; gap:8px; z-index:998;';
+    b.innerHTML = '<span id="' + id + 'Text"></span>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+function _plHideBubble(which) {
+    const b = document.getElementById(which === 'owner' ? 'preferredOwnerAlertBubble' : 'preferredMineAlertBubble');
+    if (b) b.style.display = 'none';
+}
+function _plRenderBubble(which, show, summary, sig) {
+    if (!show) { _plHideBubble(which); return; }
+    const b = _plBubbleEl(which);
+    if (!b) return;
+    const t = document.getElementById(b.id + 'Text');
+    if (t) { t.dataset.summary = summary; t.dataset.sig = sig; }
+    b.style.display = 'flex';
+}
+
+let _plCheckStarted = false;
+async function checkPreferredReminders() {
+    const owner = _plCanApprove();
+    const requester = _plCanRequest();
+    _plSyncToolLabels();
+    if (!owner && !requester) { _plHideBubble('owner'); _plHideBubble('mine'); return; }
+    // Safety net behind the realtime ping, same cadence as the other tools.
+    if (!_plCheckStarted) { _plCheckStarted = true; setInterval(checkPreferredReminders, 10 * 60 * 1000); }
+    try {
+        if (owner) {
+            const res = await fetch(PREFERRED_URL + '?scope=all&v=' + Date.now());
+            const data = await res.json();
+            const rows = (data && data.requests) || [];
+            const pending = rows.filter(function (r) { return r.status === 'pending'; })
+                .sort(function (a, b) { return new Date(a.created_at) - new Date(b.created_at); });
+            if (pending.length) {
+                const names = [];
+                pending.forEach(function (r) {
+                    const n = (r.requested_by || '').split(' ')[0];
+                    if (n && names.indexOf(n) === -1) names.push(n);
+                });
+                const who = names.length > 3 ? (names.slice(0, 3).join(', ') + ' and others') : names.join(', ');
+                const summary = pending.length === 1
+                    ? (who + ' suggested a product.')
+                    : (pending.length + ' suggestions from ' + who + '.');
+                // Identity is the pending id set, so a NEW request breaks through a
+                // snooze while re-rendering the same queue does not re-nag.
+                _plRenderBubble('owner', true, summary,
+                    'p:' + pending.map(function (r) { return r.id; }).sort().join(','));
+            } else { _plHideBubble('owner'); }
+        } else { _plHideBubble('owner'); }
+
+        if (requester) {
+            const res2 = await fetch(PREFERRED_URL + '?scope=mine&name=' + encodeURIComponent(_plName()) + '&v=' + Date.now());
+            const data2 = await res2.json();
+            const rows2 = (data2 && data2.requests) || [];
+            const fresh = rows2.filter(function (r) { return r.decided_at && !r.requester_seen_at; });
+            if (fresh.length) {
+                let summary;
+                if (fresh.length === 1) {
+                    const r = fresh[0];
+                    summary = '"' + r.item_name + '" was '
+                        + (r.status === 'approved' ? 'approved' : 'denied')
+                        + (r.owner_note ? ' — ' + r.owner_note : '.');
+                } else {
+                    const ok = fresh.filter(function (x) { return x.status === 'approved'; }).length;
+                    const no = fresh.length - ok;
+                    const bits = [];
+                    if (ok) bits.push(ok + ' approved');
+                    if (no) bits.push(no + ' denied');
+                    summary = fresh.length + ' of your suggestions were answered — ' + bits.join(', ') + '.';
+                }
+                _plRenderBubble('mine', true, summary,
+                    'd:' + fresh.map(function (r) { return r.id; }).sort().join(','));
+            } else { _plHideBubble('mine'); }
+        } else { _plHideBubble('mine'); }
+    } catch (_) { /* next poll / ping retries */ }
+    if (typeof renderActionFeed === 'function') renderActionFeed();
+}
+
+// ============================================================================
+// DM DISTRICT TOOLS — master/detail popups
+// ============================================================================
+// Listing Goals, Cleaning Checklist and Monthly Team Goals used to be three
+// panels stacked on the DM dashboard. They are now three action-menu items that
+// open three popups, matching how managers already reach the same three things.
+//
+// All three share one skeleton (.dmx in styles.css) because they are the same
+// shape underneath: five stores, one number each, drill in for detail. The DM
+// picks a store on the left; the detail always lands in the same place on the
+// right. That replaced an accordion, which in a 1050px-wide modal left the right
+// half empty and cost two clicks to change store.
+//
+// Data is NOT re-fetched here. These render from the same module state the old
+// widgets used — allDistrictGoalsData / _storeTargets (listing), dmAuditData
+// (cleaning), and the localStorage-backed goal helpers (monthly) — so there is
+// one fetch path, not two that can disagree.
+
+const _DMX_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+
+// Which store's detail is showing, per tool. Kept separate so opening one tool
+// doesn't move another one's selection out from under the user.
+const _dmxSel = { lg: 'OVL', cl: 'OVL', mg: 'OVL' };
+
+// The fetchers used to bail when their dashboard container was missing. That
+// container is gone, so the gate is the role instead — otherwise every manager
+// would pull five stores of district data they can't see.
+function _dmxIsDistrict() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return role === 'district manager' || role === 'ceo';
+}
+
+// PayMore readiness thresholds, unchanged from the widgets these replace
+// (>=80 good, >=50 watch, below that behind). What IS new: every state carries a
+// word, so the meaning never rests on hue alone.
+function _dmxState(pct) {
+    if (pct >= 80) return { k: 'good', word: 'On track' };
+    if (pct >= 50) return { k: 'warn', word: 'Watch' };
+    return { k: 'bad', word: 'Behind' };
+}
+
+const _DMX_ICO = {
+    good: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+    warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>',
+    bad:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>',
+};
+
+function _dmxChip(pct, labelOverride) {
+    const s = _dmxState(pct);
+    const txt = labelOverride || (s.word + ' · ' + pct + '%');
+    return '<span class="dmx-st dmx-' + s.k + '">' + _DMX_ICO[s.k] + escapeHtml(txt) + '</span>';
+}
+
+function _dmxMeter(pct) {
+    const s = _dmxState(pct);
+    // Clamped so an over-target store (178 of 170) can't overflow the track.
+    const w = Math.max(0, Math.min(100, pct));
+    return '<span class="dmx-meter"><i class="dmx-f-' + s.k + '" style="width:' + w + '%"></i></span>';
+}
+
+function _dmxPct(done, total) {
+    return total ? Math.round((done / total) * 100) : 0;
+}
+
+// One rail row in the master column. `sub` is the small number under the code.
+//
+// No status dot. Five stores meant five dots all saying what the count and the
+// meter colour already said, and when the whole district is behind the column
+// reads as an alarm rather than as data. The count is the encoding that doesn't
+// depend on colour; the meter reinforces it.
+function _dmxTab(tool, store, sub, pct) {
+    const sel = _dmxSel[tool] === store ? ' sel' : '';
+    return '<button type="button" class="dmx-t' + sel + '" onclick="_dmxPick(\'' + tool + '\',\'' + store + '\')">'
+        + '<span class="dmx-t-code">' + escapeHtml(store) + '</span>'
+        + '<span class="dmx-t-mid"><span class="dmx-t-val">' + sub + '</span>'
+        + (pct === null ? '' : '<span style="display:block; margin-top:5px;">' + _dmxMeter(pct) + '</span>')
+        + '</span>'
+        + '</button>';
+}
+
+// The one cell in the summary strip that says how the day or week is going.
+// Colour plus the word, because a tint on its own is not a reading.
+function _dmxStatCell(label, valueHtml, pct) {
+    const st = _dmxState(pct);
+    return '<div class="dmx-cell dmx-stat dmx-stat-' + st.k + '">'
+        + '<div class="dmx-cell-l">' + escapeHtml(label) + ' &middot; <span class="dmx-stat-word">' + st.word + '</span></div>'
+        + '<div class="dmx-cell-v dmx-stat-v">' + valueHtml + '</div></div>';
+}
+
+// Four weeks against the store's target, target drawn as a reference line.
+// Replaces levelUpHtml() here: that helper's styling is all scoped to
+// .goals-levelup, so inside this modal it rendered as bare numbers.
+//
+// The pixel heights match .dmx-lu-track (64) and .dmx-lu-lab (15) in styles.css
+// — the target line is positioned from the bottom of the plot, so it has to
+// clear the label row. Change one and you change the other.
+function _dmxLevelUp(history, target) {
+    const last4 = (history || []).slice(-4);
+    const weeks = new Array(Math.max(0, 4 - last4.length)).fill(null).concat(last4);
+    const vals = weeks.filter(v => v != null);
+    // Headroom so the tallest bar never touches the ceiling and the target line
+    // stays inside the plot even when every week cleared it.
+    const top = Math.max(target || 0, vals.length ? Math.max.apply(null, vals) : 0, 1) * 1.14;
+    const TRACK = 64, LABEL = 15;
+    const labels = ['4 wks ago', '3 wks ago', '2 wks ago', 'Last week'];
+    let bars = '';
+    weeks.forEach(function (v, i) {
+        const k = v == null ? 'none' : (target && v >= target ? 'hit' : 'miss');
+        // 3px floor so a zero week is still a visible mark, not a gap.
+        const h = v == null ? 0 : Math.max(3, Math.round((v / top) * TRACK));
+        bars += '<div class="dmx-lu-w">'
+            + '<span class="dmx-lu-v dmx-lu-' + k + '">' + (v == null ? '&ndash;' : v) + '</span>'
+            + '<span class="dmx-lu-track"><i class="dmx-lu-' + k + '" style="height:' + h + 'px"></i></span>'
+            + '<span class="dmx-lu-lab">' + labels[i] + '</span>'
+            + '</div>';
+    });
+    const line = target
+        ? '<span class="dmx-lu-line" style="bottom:' + (LABEL + Math.round((target / top) * TRACK)) + 'px"></span>'
+        : '';
+    return '<div class="dmx-lu">'
+        + '<div class="dmx-lu-h"><span class="dmx-lu-t">Last 4 weeks</span>'
+        + (target ? '<span class="dmx-lu-target">Target ' + target + '</span>' : '')
+        + '</div>'
+        + '<div class="dmx-lu-plot">' + line + '<div class="dmx-lu-bars">' + bars + '</div></div>'
+        + '</div>';
+}
+
+// ── Handing off to a sub-editor and coming back ─────────────────────────────
+// Editing initiatives from the district popup used to close everything, which
+// lost the DM's place. These remember where to return to. Only honoured when the
+// editor was genuinely the thing on screen, so opening some other tool from the
+// Tools panel can't bounce the DM into the goals popup instead.
+let _dmxReturnTo = null;
+
+function _dmxReturnCheck() {
+    if (!_dmxReturnTo) return null;
+    const back = _dmxReturnTo;
+    _dmxReturnTo = null;
+    const editorOpen = ['editStoreInitiativesModal', 'editCompanyProjectsModal']
+        .some(id => document.getElementById(id)?.classList.contains('show'));
+    return editorOpen ? back : null;
+}
+
+// _dmxReturnTo is set AFTER the opener runs: openEdit*Modal goes through
+// toggleModal, which closes everything first and would consume the flag.
+function _dmxEditInitiatives(store) {
+    openEditStoreInitiativesModal(store);
+    _dmxReturnTo = 'dmGoalsModal';
+}
+
+function _dmxEditCompany() {
+    openEditCompanyProjectsModal();
+    _dmxReturnTo = 'dmGoalsModal';
+}
+
+function _dmxPick(tool, store) {
+    _dmxSel[tool] = store;
+    if (tool === 'lg') renderDmListingModal();
+    else if (tool === 'cl') renderDmCleaningModal();
+    else if (tool === 'mg') renderDmGoalsModal();
+}
+
+// ---------------------------------------------------------------------------
+// LISTING GOALS (district)
+// ---------------------------------------------------------------------------
+// Per-store weekly target vs listed, the per-employee day-by-day roster, the
+// level-up bar, and the two-week flag review — which is the one thing on this
+// screen the DM actually acts on.
+
+// Monday-anchored week, Chicago time, same as the widget it replaces.
+function _dmxWeekDays() {
+    const now = new Date();
+    const start = new Date(now);
+    start.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
+    start.setHours(0, 0, 0, 0);
+    const days = [];
+    const cur = new Date(start);
+    const todayStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+    while (true) {
+        const label = cur.toLocaleDateString('en-US', { weekday: 'short' });
+        const key = cur.toLocaleDateString('en-US');
+        days.push({ key, label });
+        if (key === todayStr || days.length >= 7) break;
+        cur.setDate(cur.getDate() + 1);
+    }
+    return { start, days, todayStr };
+}
+
+// Rolls this week's records up per employee for one store. Last record per day
+// wins, matching the widget — a manager re-saving a day overwrites, not adds.
+function _dmxListingStore(store) {
+    const { start, days, todayStr } = _dmxWeekDays();
+    const rows = (typeof allDistrictGoalsData !== 'undefined' ? allDistrictGoalsData : [])
+        .filter(r => r.store === store);
+    const emps = {};
+    rows.forEach(r => {
+        if (goalDateObj(r.date) < start) return;
+        const d = normalizeGoalDate(r.date);
+        if (!emps[r.employee]) emps[r.employee] = { role: '-', byDay: {} };
+        emps[r.employee].byDay[d] = parseInt(r.goal) || 0;
+        if (d === todayStr && r.role && r.role !== '-') emps[r.employee].role = r.role;
+    });
+    const names = Object.keys(emps);
+    let today = 0, week = 0;
+    names.forEach(n => {
+        today += emps[n].byDay[todayStr] || 0;
+        week += Object.values(emps[n].byDay).reduce((a, g) => a + g, 0);
+    });
+    const target = targetFor(store);
+    return {
+        store, target, emps, names, today, week, days, todayStr,
+        pct: _dmxPct(week, target),
+        flag: (_storeTargets[store] && _storeTargets[store].flag) || 'none',
+    };
+}
+
+function openDmListingGoals() {
+    // toggleModal is the shared opener — it closes whatever else is open and
+    // dims/blurs the page behind, like every other SPEEKS tool.
+    toggleModal('dmListingModal');
+    renderDmListingModal();
+    // The modal can be opened before the first fetch lands; this fills it in.
+    if (typeof fetchDmGoalsData === 'function') fetchDmGoalsData();
+}
+
+function renderDmListingModal() {
+    const wrap = document.getElementById('dmListingBody');
+    if (!wrap) return;
+    const all = _DMX_STORES.map(_dmxListingStore);
+    const listed = all.reduce((a, s) => a + s.week, 0);
+    const target = all.reduce((a, s) => a + s.target, 0);
+    const flagged = all.filter(s => s.flag === 'flagged').length;
+
+    const sub = document.getElementById('dmListingSub');
+    if (sub) {
+        sub.textContent = listed + ' of ' + target + ' listed this week · '
+            + _dmxPct(listed, target) + '%'
+            + (flagged ? ' · ' + flagged + ' flagged for review' : '');
+    }
+
+    if (!all.some(s => s.names.length)) {
+        wrap.innerHTML = '<div class="dmx-empty" style="padding:60px 0;">Syncing the district roster…</div>';
+        return;
+    }
+
+    let rail = '';
+    all.forEach(s => {
+        rail += _dmxTab('lg', s.store, s.week + ' / ' + s.target, s.pct);
+    });
+
+    const sel = all.find(s => s.store === _dmxSel.lg) || all[0];
+    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2' };
+    let pane = '<div class="dmx-ph"><div>'
+        + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
+        + '<div class="dmx-ps">Target ' + sel.target + ' listings · ' + sel.week
+        + ' this week · ' + sel.names.length + ' on roster</div>'
+        + '</div><div class="dmx-ph-side">' + _dmxChip(sel.pct) + '</div></div>';
+
+    if (!sel.names.length) {
+        pane += '<div class="dmx-empty">No roles set for ' + escapeHtml(sel.store) + ' this week.</div>';
+    } else {
+        pane += '<table class="dmx-tbl"><thead><tr><th>Employee &amp; role</th>';
+        sel.days.forEach(d => { pane += '<th style="text-align:right;">' + escapeHtml(d.label) + '</th>'; });
+        pane += '<th style="text-align:right;">Week</th></tr></thead><tbody>';
+        sel.names.forEach(n => {
+            const e = sel.emps[n];
+            const wk = Object.values(e.byDay).reduce((a, g) => a + g, 0);
+            const badge = e.role !== '-'
+                ? '<span class="dmx-role">' + escapeHtml(roleName[e.role] || e.role) + '</span>' : '';
+            pane += '<tr><td><span class="dmx-name">' + escapeHtml(n) + '</span>' + badge + '</td>';
+            sel.days.forEach(d => {
+                const v = e.byDay[d.key];
+                pane += '<td class="dmx-num' + (v ? '' : ' dmx-mute') + '">' + (v || '–') + '</td>';
+            });
+            pane += '<td class="dmx-num">' + wk + '</td></tr>';
+        });
+        pane += '<tr class="dmx-tot"><td>Total</td>';
+        sel.days.forEach(d => {
+            let t = 0;
+            sel.names.forEach(n => { t += sel.emps[n].byDay[d.key] || 0; });
+            pane += '<td class="dmx-num">' + t + '</td>';
+        });
+        pane += '<td class="dmx-num">' + sel.week + '</td></tr></tbody></table>';
+
+        pane += '<div style="margin-top:18px;">' + _dmxLevelUp(weeksFor(sel.store) || [], sel.target) + '</div>';
+
+        if (sel.flag === 'flagged') {
+            pane += '<div class="dmx-flag">'
+                + '<span class="dmx-flag-t">Missed goal 2 weeks running — your call:</span>'
+                + '<button type="button" class="dmx-lower" onclick="dmGoalAction(\'' + sel.store + '\',\'lower\')">Lower −10</button>'
+                + '<button type="button" class="dmx-keep" onclick="dmGoalAction(\'' + sel.store + '\',\'keep\')">Keep at ' + sel.target + '</button>'
+                + '</div>';
+        }
+    }
+
+    wrap.innerHTML = '<div class="dmx-strip">'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">District listed</div><div class="dmx-cell-v">' + listed + '</div></div>'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">District target</div><div class="dmx-cell-v">' + target + '</div></div>'
+        + _dmxStatCell('Attainment', _dmxPct(listed, target) + '<small>%</small>', _dmxPct(listed, target))
+        + '<div class="dmx-cell"><div class="dmx-cell-l">Flagged for review</div><div class="dmx-cell-v">' + flagged + '</div></div>'
+        + '</div>'
+        + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
+}
+
+// ---------------------------------------------------------------------------
+// CLEANING CHECKLIST (district)
+// ---------------------------------------------------------------------------
+// Read-only follow-up view. Outstanding items are listed ABOVE done ones,
+// because "what's left" is the question a DM opens this to answer; the section
+// each item belongs to moves onto the row so the grouping isn't lost.
+
+function openDmCleaning() {
+    toggleModal('dmCleaningModal');
+    renderDmCleaningModal();
+    if (typeof fetchDmAuditData === 'function') fetchDmAuditData();
+}
+
+function switchDmCleaningTab(view) {
+    currentDmAuditTab = view;
+    document.getElementById('dmClTabDaily')?.classList.toggle('active', view === 'daily');
+    document.getElementById('dmClTabWeekly')?.classList.toggle('active', view === 'weekly');
+    renderDmCleaningModal();
+}
+
+function _dmxAuditStore(store, tab) {
+    const sd = (typeof dmAuditData !== 'undefined' ? dmAuditData : {})[store] || {};
+    const pd = sd[tab] || { items: [], total: 0, completed: 0 };
+    const items = pd.items || [];
+    const total = pd.total || items.length;
+    const completed = pd.completed != null ? pd.completed : items.filter(i => i.checked).length;
+    return { store, items, total, completed, pct: _dmxPct(completed, total) };
+}
+
+function renderDmCleaningModal() {
+    const wrap = document.getElementById('dmCleaningBody');
+    if (!wrap) return;
+    const tab = (typeof currentDmAuditTab !== 'undefined' ? currentDmAuditTab : 'daily');
+    const all = _DMX_STORES.map(s => _dmxAuditStore(s, tab));
+    const done = all.reduce((a, s) => a + s.completed, 0);
+    const total = all.reduce((a, s) => a + s.total, 0);
+    const complete = all.filter(s => s.total && s.completed === s.total).length;
+    const behind = all.filter(s => s.total && s.pct < 50).length;
+    const word = tab === 'daily' ? 'today' : 'this week';
+
+    const sub = document.getElementById('dmCleaningSub');
+    if (sub) {
+        sub.textContent = total
+            ? done + ' of ' + total + ' done ' + word + ' · ' + _dmxPct(done, total) + '%'
+                + (behind ? ' · ' + behind + ' behind' : '')
+            : 'No ' + tab + ' items set up yet.';
+    }
+
+    if (!total) {
+        wrap.innerHTML = '<div class="dmx-empty" style="padding:60px 0;">No ' + escapeHtml(tab)
+            + ' cleaning items have been set up yet.</div>';
+        return;
+    }
+
+    // Worst first: the store needing a nudge is the reason this is open.
+    const order = all.slice().sort((a, b) => a.pct - b.pct);
+    let rail = '';
+    order.forEach(s => {
+        rail += _dmxTab('cl', s.store, s.completed + ' / ' + s.total, s.pct);
+    });
+
+    const sel = all.find(s => s.store === _dmxSel.cl) || order[0];
+    let pane = '<div class="dmx-ph"><div>'
+        + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
+        + '<div class="dmx-ps">' + sel.completed + ' of ' + sel.total + ' done ' + word + '</div>'
+        + '</div><div class="dmx-ph-side">' + _dmxChip(sel.pct) + '</div></div>';
+
+    if (!sel.items.length) {
+        pane += '<div class="dmx-empty">No ' + escapeHtml(tab) + ' items for ' + escapeHtml(sel.store) + '.</div>';
+    } else {
+        const box = '<span class="dmx-ck-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>';
+        const row = it => '<div class="dmx-ck' + (it.checked ? ' on' : '') + '">' + box
+            + '<span class="dmx-ck-t">' + escapeHtml(it.text || '')
+            + (it.section ? ' <span class="dmx-ck-where">· ' + escapeHtml(it.section) + '</span>' : '')
+            + '</span></div>';
+        const open = sel.items.filter(i => !i.checked);
+        const shut = sel.items.filter(i => i.checked);
+        if (open.length) {
+            pane += '<div class="dmx-sec">Still outstanding · ' + open.length + '</div>'
+                + open.map(row).join('');
+        }
+        if (shut.length) {
+            pane += '<div class="dmx-sec">Done · ' + shut.length + '</div>' + shut.map(row).join('');
+        }
+    }
+
+    wrap.innerHTML = '<div class="dmx-strip">'
+        + _dmxStatCell('District ' + word, _dmxPct(done, total) + '<small>%</small>', _dmxPct(done, total))
+        + '<div class="dmx-cell"><div class="dmx-cell-l">Items done</div><div class="dmx-cell-v">' + done + '<small> / ' + total + '</small></div></div>'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">Stores complete</div><div class="dmx-cell-v">' + complete + '<small> of 5</small></div></div>'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">Behind</div><div class="dmx-cell-v">' + behind + '</div></div>'
+        + '</div>'
+        + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
+}
+
+// ---------------------------------------------------------------------------
+// MONTHLY TEAM GOALS (district)
+// ---------------------------------------------------------------------------
+// The one of the three the DM writes to. Company-wide projects sit in a band
+// above, since they apply to every store; each store's own goals and
+// initiatives are in the pane. Editing still hands off to the existing
+// store-scoped editors — see the note on the Edit buttons.
+
+function openDmMonthlyGoals() {
+    toggleModal('dmGoalsModal');
+    renderDmGoalsModal();
+}
+
+function _dmxGoalsStore(store) {
+    const goals = (getMonthlyGoals(store) || {}).goals || [];
+    const inis = (getStoreInitiatives(store) || {}).initiatives || [];
+    return { store, goals, inis };
+}
+
+function renderDmGoalsModal() {
+    const wrap = document.getElementById('dmGoalsBody');
+    if (!wrap) return;
+    const all = _DMX_STORES.map(_dmxGoalsStore);
+    const setCount = all.reduce((a, s) => a + s.goals.length, 0);
+    const unset = all.filter(s => !s.goals.length).map(s => s.store);
+
+    const sub = document.getElementById('dmGoalsSub');
+    if (sub) {
+        sub.textContent = (typeof _mgbMonthLabel === 'function' ? _mgbMonthLabel() + ' · ' : '')
+            + setCount + ' goal' + (setCount === 1 ? '' : 's') + ' set across 5 stores'
+            + (unset.length ? ' · ' + unset.join(', ') + ' not set' : '');
+    }
+
+    let rail = '';
+    all.forEach(s => {
+        const bits = s.goals.length + ' goal' + (s.goals.length === 1 ? '' : 's')
+            + ' · ' + s.inis.length + ' initiative' + (s.inis.length === 1 ? '' : 's');
+        // No meter (goals aren't a percentage of anything) and no dot — "0 goals"
+        // in red already says it, and the dot only repeated it a few pixels away.
+        const sel = _dmxSel.mg === s.store ? ' sel' : '';
+        rail += '<button type="button" class="dmx-t' + sel + '" onclick="_dmxPick(\'mg\',\'' + s.store + '\')">'
+            + '<span class="dmx-t-code">' + escapeHtml(s.store) + '</span>'
+            + '<span class="dmx-t-mid"><span class="dmx-t-val"'
+            + (s.goals.length ? '' : ' style="color:#b91c1c;"') + '>' + bits + '</span></span>'
+            + '</button>';
+    });
+
+    const sel = all.find(s => s.store === _dmxSel.mg) || all[0];
+    const projects = (getCompanyProjects() || {}).projects || [];
+    const badge = st => st === 'upcoming'
+        ? '<span class="dmx-badge up">Upcoming</span>'
+        : '<span class="dmx-badge cur">Current</span>';
+
+    // The only route to company-wide initiatives for a DM. It used to hang off
+    // the district dashboard panel that this popup replaced, which left no way in.
+    let company = '<div class="dmx-company"><div class="dmx-company-h">'
+        + '<span class="dmx-company-l">Company initiatives · all stores</span>'
+        + '<button type="button" class="dmx-company-edit" onclick="_dmxEditCompany()">Edit Company Initiatives</button>'
+        + '</div>';
+    company += projects.length
+        ? '<div class="dmx-company-r">' + projects.map(p =>
+            '<span class="dmx-company-i">' + escapeHtml(p.title || '') + badge(p.status) + '</span>').join('') + '</div>'
+        : '<div class="dmx-empty" style="padding:8px 0; text-align:left;">No company initiatives set.</div>';
+    company += '</div>';
+
+    let pane = '<div class="dmx-ph"><div>'
+        + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
+        + '<div class="dmx-ps">' + sel.goals.length + ' of 6 goals set for '
+        + escapeHtml(typeof _mgbMonthLabel === 'function' ? _mgbMonthLabel() : 'this month') + '</div>'
+        // No goal editing here: stores set their own monthly goals. The DM reads
+        // them and owns the initiatives, so that is the only edit control.
+        + '</div><div class="dmx-ph-side">'
+        + '<button type="button" class="btn-secondary" style="padding:8px 14px; font-size:12.5px;" onclick="_dmxEditInitiatives(\'' + sel.store + '\')">Edit Initiatives</button>'
+        + '</div></div>';
+
+    pane += '<div class="dmx-sec">Team goals</div>';
+    pane += sel.goals.length
+        ? sel.goals.map(g => '<div class="dmx-goal"><div class="dmx-goal-t">' + escapeHtml(g.title || '') + '</div>'
+            + (g.description ? '<div class="dmx-goal-d">' + escapeHtml(g.description) + '</div>' : '') + '</div>').join('')
+        : '<div class="dmx-empty">No goals set for ' + escapeHtml(sel.store) + ' this month.</div>';
+    if (sel.goals.length && sel.goals.length < 6) {
+        pane += '<div class="dmx-empty">' + (6 - sel.goals.length) + ' more can be set this month</div>';
+    }
+
+    pane += '<div class="dmx-sec">Initiatives &amp; projects</div>';
+    pane += sel.inis.length
+        ? sel.inis.map(i => '<div class="dmx-goal"><div class="dmx-goal-row"><div>'
+            + '<div class="dmx-goal-t">' + escapeHtml(i.title || '') + '</div>'
+            + (i.description ? '<div class="dmx-goal-d">' + escapeHtml(i.description) + '</div>' : '')
+            + '</div>' + badge(i.status) + '</div></div>').join('')
+        : '<div class="dmx-empty">No initiatives set for ' + escapeHtml(sel.store) + '.</div>';
+
+    wrap.innerHTML = company
+        + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
+}
+
+// ---------------------------------------------------------------------------
+// RAIL SYNC — the number that tells the DM whether to open each tool
+// ---------------------------------------------------------------------------
+// Mirrors _samSyncMini for the manager rows: sub line, right-hand value, bar.
+// Each tool shows the one figure that decides whether it's worth opening —
+// flagged stores for Listing Goals (the only part a DM must act on), district
+// completion for Cleaning (nothing to action, only to follow up), goals set for
+// Monthly (so an unset store is visible without opening anything).
+
+function _dmxSyncRail() {
+    if (!_dmxIsDistrict()) return;
+    const set = (id, txt) => { const el = document.getElementById(id); if (el && txt != null) el.textContent = txt; };
+    const bar = (id, pct) => {
+        const el = document.getElementById(id);
+        if (el) el.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    };
+
+    // Listing Goals
+    if (typeof allDistrictGoalsData !== 'undefined' && allDistrictGoalsData.length) {
+        const all = _DMX_STORES.map(_dmxListingStore);
+        const listed = all.reduce((a, s) => a + s.week, 0);
+        const target = all.reduce((a, s) => a + s.target, 0);
+        const flagged = all.filter(s => s.flag === 'flagged').length;
+        set('samDmListVal', listed + '/' + target);
+        set('samDmListSub', flagged
+            ? flagged + ' store' + (flagged === 1 ? '' : 's') + ' flagged for review'
+            : 'All five stores this week');
+        bar('samDmListFill', _dmxPct(listed, target));
+    }
+
+    // Cleaning Checklist
+    if (typeof dmAuditData !== 'undefined' && Object.keys(dmAuditData).length) {
+        const tab = (typeof currentDmAuditTab !== 'undefined' ? currentDmAuditTab : 'daily');
+        const all = _DMX_STORES.map(s => _dmxAuditStore(s, tab));
+        const done = all.reduce((a, s) => a + s.completed, 0);
+        const total = all.reduce((a, s) => a + s.total, 0);
+        const behind = all.filter(s => s.total && s.pct < 50).length;
+        set('samDmAuditVal', total ? done + '/' + total : '');
+        set('samDmAuditSub', behind
+            ? behind + ' store' + (behind === 1 ? '' : 's') + ' behind today'
+            : 'All five stores today');
+        bar('samDmAuditFill', _dmxPct(done, total));
+    }
+
+    // Monthly Team Goals
+    const goals = _DMX_STORES.map(_dmxGoalsStore);
+    const setCount = goals.reduce((a, s) => a + s.goals.length, 0);
+    const unset = goals.filter(s => !s.goals.length).length;
+    set('samDmGoalsVal', String(setCount));
+    set('samDmGoalsSub', unset
+        ? unset + ' store' + (unset === 1 ? '' : 's') + ' with nothing set'
+        : 'Team goals & initiatives');
+}
+
+// ============================================================================
+// DISTRICT COMMAND CENTER — grouped triage rail + store detail
+// ============================================================================
+// Replaced five side-by-side store cards. Same 21 metrics per store, same
+// thresholds, same links, same audit click-through — see the .dcc block in
+// styles.css for why the shape changed.
+//
+// The old renderer parsed values inline while building HTML, which made the
+// rules hard to see and impossible to reuse. Now every store is normalised into
+// a plain object first (_dccRow), the checks live in one table (_dccChecks), and
+// the renderers only format. The rail counts and the pane therefore cannot
+// disagree — they read the same checks.
+//
+// _dccRows keeps the last normalised payload so clicking a store repaints
+// without refetching; the 60s dashboard poll overwrites it and repaints.
+
+let _dccRows = [];
+let _dccSel = null;
+
+const _DCC_ICO = {
+    b: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>',
+    w: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>',
+    g: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+};
+
+// --- number helpers, carried over verbatim from the old renderer -------------
+
+// Sheet values arrive either as 54.98 or as 0.5498 depending on the column, so
+// a bare fraction under 1.5 is treated as a ratio. Same rule as before.
+function _dccPct(raw) {
+    const str = String(raw == null ? '' : raw);
+    const n = parseFloat(str) || 0;
+    return (!str.includes('%') && n > 0 && n <= 1.5) ? n * 100 : n;
+}
+function _dccNum(v) { return v == null ? '' : String(v); }
+function _dccFix(n) { return Number.isInteger(n) ? String(n) : n.toFixed(2); }
+function _dccMoney(n) { return '$' + Math.round(n || 0).toLocaleString(); }
+
+// eBay severity bands — unchanged thresholds. Note tracking is a FLOOR (lower is
+// worse) while the other three are ceilings.
+function _dccSev(type, raw) {
+    if (raw === null || raw === undefined || String(raw).trim() === '') return null;
+    const n = parseFloat(String(raw).replace(/[^0-9.-]/g, ''));
+    if (isNaN(n)) return null;
+    if (type === 'defect')  return n >= 0.40 ? 'b' : (n >= 0.25 ? 'w' : null);
+    if (type === 'late')    return n >= 2.4  ? 'b' : (n >= 1.5  ? 'w' : null);
+    if (type === 'cases')   return n >= 0.24 ? 'b' : (n >= 0.15 ? 'w' : null);
+    if (type === 'track')   return n <= 96.0 ? 'b' : (n <= 97.5 ? 'w' : null);
+    return null;
+}
+function _dccEbayPct(raw) {
+    if (raw === null || raw === undefined) return null;
+    let str = String(raw).trim();
+    if (str === '' || str === 'null') return null;
+    if (str.endsWith('%')) return str;
+    const n = parseFloat(str.replace(/[^0-9.-]/g, ''));
+    return isNaN(n) ? null : n.toFixed(2) + '%';
+}
+
+// Transaction time may be "13.2" or "13:12"; the old code accepted both.
+function _dccMinutes(v) {
+    const s = String(v == null ? '' : v);
+    if (s.includes(':')) {
+        const p = s.split(':');
+        return (parseInt(p[0], 10) || 0) + ((parseInt(p[1], 10) || 0) / 60);
+    }
+    const n = parseFloat(s.replace(/[^0-9.-]/g, ''));
+    return isNaN(n) ? null : n;
+}
+
+// --- normalise one store ----------------------------------------------------
+function _dccRow(store, hubData, varData, scoreData, alertsData, weeklyResults) {
+    const k = store.toLowerCase();
+    const sc = (scoreData.data || []).find(s => String(s.store).toUpperCase() === store) || {};
+    const al = (alertsData.data || []).find(a => String(a.store).toUpperCase() === store) || {};
+    const vr = varData[store] || {};
+    const wk = weeklyResults.find(w => w.store === store) || {};
+    const avg = wk.sAvg || {};
+
+    const rev = parseFloat(hubData[`${k}Rev`]) || 0;
+    const gp = parseFloat(hubData[`${k}GP`]) || 0;
+    // Sell margin is given where available, derived from GP/revenue where not.
+    let sellM = 0;
+    if (hubData[`${k}SellMargin`]) sellM = _dccPct(hubData[`${k}SellMargin`]);
+    else if (rev > 0) sellM = (gp / rev) * 100;
+
+    // Week-of label: the Monday of the scorecard's date, in UTC as before.
+    let week = 'Recent';
+    if (sc.date) {
+        const d = new Date(sc.date);
+        if (!isNaN(d.getTime())) {
+            const day = d.getUTCDay();
+            const mon = new Date(d);
+            mon.setUTCDate(d.getUTCDate() + (day === 0 ? -6 : 1 - day));
+            week = mon.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
+        }
+    }
+
+    const cats = [];
+    // Only an ACTIVE very-high category is Serious. Projected is a forecast about
+    // a category that has not failed yet, and the alert data already distinguishes
+    // the two, so treating a projection as a current failure overstated it. Both
+    // are still shown, and both still say which they are.
+    if (al.currentVeryHigh)   cats.push({ k: 'Active · very high',    v: al.currentVeryHigh,   s: 'b' });
+    if (al.currentHigh)       cats.push({ k: 'Active · high',         v: al.currentHigh,       s: 'w' });
+    if (al.projectedVeryHigh) cats.push({ k: 'Projected · very high', v: al.projectedVeryHigh, s: 'w' });
+    if (al.projectedHigh)     cats.push({ k: 'Projected · high',      v: al.projectedHigh,     s: 'w' });
+
+    return {
+        store,
+        goal: Math.round(parseFloat(hubData[`${k}Goal`]) || 0),
+        edited: hubData[`${k}BuyDate`] || null,
+        score: (parseFloat(sc.score) || 0) * 2,
+        audit: sc.audit || null,
+        week,
+        salesPct: _dccPct(hubData[`${k}Pct`]),
+        rev,
+        gpTrack: Math.round(parseFloat(hubData[`${k}TrackGP`])) || 0,
+        sellM,
+        buyTrack: Math.round(parseFloat(hubData[`${k}BuyProj`])) || 0,
+        buyM: _dccPct(hubData[`${k}BuyMargin`]),
+        vari: parseFloat(vr.total) || 0,
+        variRange: (typeof formatVarianceRange === 'function') ? formatVarianceRange(vr.dateFrom, vr.dateTo) : '',
+        period: wk.periodLabel || '',
+        conv: avg.conversion || '',
+        wkM: avg.buyMargin || '',
+        time: avg.time || '',
+        noDeals: avg.noDeals || '',
+        listed: avg.listed || '',
+        defect: al.defectRate, late: al.lateShipment, cases: al.casesClosed, track: al.tracking,
+        cats,
+    };
+}
+
+// Capitalise the first letter of each word, leaving words that already carry a
+// capital alone so "eBay" survives. Used on backend-supplied captions.
+function _dccCap(str) {
+    return String(str == null ? '' : str).split(' ')
+        .map(w => /[A-Z]/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+// --- one table of every check the panel makes -------------------------------
+// Thresholds identical to the old board. buyMargin deliberately only fails when
+// it is ABOVE zero: a missing figure parsed to 0 must not read as a 0% margin.
+function _dccChecks(r) {
+    const num = v => { const n = parseFloat(String(v).replace(/[^0-9.-]/g, '')); return isNaN(n) ? null : n; };
+    const conv = num(r.conv), wkM = num(r.wkM), nd = num(r.noDeals), mins = _dccMinutes(r.time);
+    return [
+        { key: 'score',   s: r.score > 8 ? null : (r.score >= 6 ? 'w' : 'b') },
+        { key: 'audit',   s: !r.audit ? null : (r.audit.pct >= 80 ? null : (r.audit.pct >= 50 ? 'w' : 'b')) },
+        { key: 'sales',   s: _dccTier(r.salesPct, 100, 'min') },
+        { key: 'sellM',   s: _dccTier(r.sellM, 55.5, 'min') },
+        // Still only judged when above zero: a missing figure parses to 0 and must
+        // not read as a 0% margin.
+        { key: 'buyM',    s: r.buyM > 0 ? _dccTier(r.buyM, 51, 'min') : null },
+        // Variance's limit is zero, so the fractional band would be zero too —
+        // 1.0 percentage point absolute instead, or a -0.05% variance would file a
+        // store as Serious.
+        { key: 'vari',    s: _dccTier(r.vari, 0, 'min', 1.0) },
+        { key: 'conv',    s: _dccTier(conv, 85, 'min') },
+        { key: 'wkM',     s: _dccTier(wkM, 51, 'min') },
+        { key: 'time',    s: _dccTier(mins, 13, 'max') },
+        // No-deals is a WATCH signal, not a hard fail. The ceiling of 7 is met by
+        // almost no store in practice — the district records 9 to 29 in a week — so
+        // treating it as serious put four of five stores in the Serious group on
+        // its own and the triage stopped discriminating. The threshold itself is
+        // unchanged and the row still paints amber; what changed is that it no
+        // longer escalates the whole store.
+        { key: 'noDeals', s: nd == null ? null : (nd > 7 ? 'w' : null) },
+        { key: 'defect',  s: _dccSev('defect', r.defect) },
+        { key: 'late',    s: _dccSev('late', r.late) },
+        { key: 'cases',   s: _dccSev('cases', r.cases) },
+        { key: 'track',   s: _dccSev('track', r.track) },
+    ].concat(r.cats.map(c => ({ key: 'cat', s: c.s })));
+}
+// A miss inside the band is a Watch; beyond it, Serious. Without this every
+// threshold was binary, so a store 0.52 points short on sell margin was filed
+// alongside one failing eBay tracking by 2 points — which is why every store
+// landed in Serious and the rail stopped discriminating.
+//
+// The band is a FRACTION of the threshold so it scales with each metric's own
+// units: 5% of a 13-minute ceiling is 0.65 min, 5% of an 85% floor is 4.25
+// points. One number to tune.
+const _DCC_BAND = 0.05;
+
+// dir 'min' = the value must reach the limit (a floor); 'max' = must not exceed
+// it (a ceiling). absBand overrides the fraction for limits where a percentage
+// of the limit is meaningless — variance, whose limit is zero.
+function _dccTier(val, limit, dir, absBand) {
+    if (val == null || !isFinite(val)) return null;
+    const miss = dir === 'min' ? limit - val : val - limit;
+    if (miss <= 0) return null;
+    const band = absBand != null ? absBand : Math.abs(limit) * _DCC_BAND;
+    return miss <= band ? 'w' : 'b';
+}
+
+function _dccState(r, key) { const c = _dccChecks(r).find(x => x.key === key); return c ? c.s : null; }
+function _dccCount(r) {
+    const c = _dccChecks(r);
+    return { bad: c.filter(x => x.s === 'b').length, warn: c.filter(x => x.s === 'w').length,
+             off: c.filter(x => x.s).length };
+}
+function _dccWorst(r) { const n = _dccCount(r); return n.bad ? 'b' : (n.warn ? 'w' : 'g'); }
+
+// The rail's one-line read: name the single most consequential thing wrong, in
+// the order a DM would care. Falls back to a plain summary when nothing is off.
+function _dccLine(r) {
+    const ebayKeys = ['track', 'defect', 'cases', 'late'];
+    const ebayOff = ebayKeys.filter(k => _dccState(r, k)).length;
+    const ebayBad = ebayKeys.filter(k => _dccState(r, k) === 'b').length;
+
+    // Candidates in the order a DM cares about them, each paired with its own
+    // severity. The first candidate matching the STORE's severity wins, so a
+    // Serious item is never hidden behind a near-miss listed above it.
+    // Being under goal is deliberately NOT a candidate: the card prints % to goal
+    // directly above this line, so saying it again spends the one line a card has
+    // on something already on screen. A store whose only miss is the goal falls
+    // through to the neutral summary instead.
+    const cand = [
+        [ebayOff >= 3 ? (ebayBad >= 3 ? 'b' : 'w') : null,
+         'eBay Health Failing On ' + ebayOff + ' Of 4'],
+        [_dccState(r, 'track'),   'eBay Tracking ' + _dccEbayPct(r.track)],
+        [_dccState(r, 'conv'),    'Conversion ' + r.conv + '%'],
+        [_dccState(r, 'time'),    'Transaction Time ' + r.time + ' Min'],
+        [ebayOff ? (ebayBad ? 'b' : 'w') : null,
+         'eBay Health Over On ' + ebayOff + (ebayOff === 1 ? ' Measure' : ' Measures')],
+        [r.cats.some(c => c.s === 'b') ? 'b' : null,
+         r.cats.filter(c => c.s === 'b').length
+         + (r.cats.filter(c => c.s === 'b').length === 1 ? ' Category' : ' Categories') + ' Failing'],
+        [r.cats.length ? 'w' : null,
+         r.cats.length + (r.cats.length === 1 ? ' Category' : ' Categories') + ' At Risk'],
+        [_dccState(r, 'sellM'),   'Sell Margin ' + _dccFix(r.sellM) + '%'],
+        [_dccState(r, 'wkM'),     'Weekly Margin ' + r.wkM + '%'],
+        [_dccState(r, 'buyM'),    'Buy Margin ' + _dccFix(r.buyM) + '%'],
+        [_dccState(r, 'vari'),    'Variance ' + r.vari.toFixed(2) + '%'],
+        [_dccState(r, 'noDeals'), r.noDeals + ' No-Deals'],
+        [_dccState(r, 'score'),   'Scorecard ' + r.score.toFixed(1)],
+        [_dccState(r, 'audit'),   'Audit ' + (r.audit ? r.audit.pct + '%' : 'Not Submitted')],
+    ];
+    const worst = _dccWorst(r);
+    const hit = cand.find(c => c[0] === worst) || cand.find(c => c[0]);
+    if (hit) return hit[1];
+    return (r.listed || '0') + ' Devices Listed';
+}
+
+// Worst first, then by warnings, then alphabetically so the order is stable
+// between polls and doesn't shuffle under the cursor.
+function _dccRanked() {
+    return _dccRows.slice().sort((a, b) =>
+        _dccCount(b).bad - _dccCount(a).bad ||
+        _dccCount(b).warn - _dccCount(a).warn ||
+        a.store.localeCompare(b.store));
+}
+
+// The rail grades on one thing: GP against goal. It reuses the 'sales' check so
+// the band and the number in the card can never disagree — on goal, inside the
+// near-miss band, or beyond it.
+//
+// This is deliberately NOT _dccWorst, which weighs all fourteen checks. A store
+// can sit in "On goal" with a failing eBay category; the card's own line still
+// names it and the pane still flags it, but goal attainment is what files it.
+function _dccBand(r) {
+    // No goal on record is not 0% attainment — don't file a data gap as Serious.
+    if (!r.goal) return 'w';
+    return _dccState(r, 'sales') || 'g';
+}
+// Best first, so the rail reads as a ranking top to bottom.
+function _dccByGoal(list) {
+    return list.slice().sort((a, b) => {
+        const x = isFinite(a.salesPct) ? a.salesPct : -Infinity;
+        const y = isFinite(b.salesPct) ? b.salesPct : -Infinity;
+        return y - x || a.store.localeCompare(b.store);
+    });
+}
+// Groups best to worst, each sorted best to worst, so the flat order is simply
+// every store by % to goal descending.
+const _DCC_GROUPS = [
+    { k: 'g', label: 'On goal' },
+    { k: 'w', label: 'Watch' },
+    { k: 'b', label: 'Serious' },
+];
+function _dccRailOrder() {
+    return _DCC_GROUPS.reduce((acc, g) =>
+        acc.concat(_dccByGoal(_dccRows.filter(r => _dccBand(r) === g.k))), []);
+}
+
+// --- rail -------------------------------------------------------------------
+function _dccRailHtml() {
+    return _DCC_GROUPS.map(g => {
+        const list = _dccByGoal(_dccRows.filter(r => _dccBand(r) === g.k));
+        if (!list.length) return '';
+        return '<div class="dcc-group">'
+            + g.label + '<span class="dcc-group-n">' + list.length + '</span></div>'
+            + list.map(r => {
+                // Red under goal, green at or over it — the same sales check that
+                // files the card into its group, so the colour and the band agree.
+                const pctCls = _dccState(r, 'sales') ? ' under' : ' over';
+                return '<button type="button" class="dcc-t' + (r.store === _dccSel ? ' sel' : '')
+                    + '" onclick="_dccPick(\'' + r.store + '\')">'
+                    + '<span class="dcc-t-top"><span class="dcc-t-code">' + escapeHtml(r.store) + '</span>'
+                    + '<span class="dcc-t-pct' + pctCls + '">' + _dccFix(r.salesPct) + '<small>% to goal</small></span></span>'
+                    + '<span class="dcc-t-sub">' + escapeHtml(_dccLine(r)) + '</span>'
+                    + '</button>';
+            }).join('');
+    }).join('');
+}
+
+// --- pane sections ----------------------------------------------------------
+// state may be 'b' (serious), 'w' (watch), 'g' (on target) or null (nothing to
+// judge — a raw count with no threshold, which stays ink). The unit always gets
+// its own fixed-width slot, empty or not: that is what puts $66,332 and 86.45
+// on the same right edge instead of letting a trailing "%" shove one of them in.
+function _dccStatRow(label, value, unit, state, sub) {
+    const cls = state ? ' ' + state : '';
+    return '<div class="dcc-row"><span class="dcc-row-l">' + escapeHtml(label)
+        + (sub ? '<i>' + escapeHtml(sub) + '</i>' : '') + '</span>'
+        + '<span class="dcc-row-v' + cls + '">'
+        + '<span class="n">' + value + '</span>'
+        + '<span class="u">' + (unit || '') + '</span></span></div>';
+}
+
+// 'g' when the metric was judged and cleared its threshold, the failure state
+// when it didn't, and null when there was nothing to judge. "has" is the same
+// availability test the value itself is rendered under, so a missing figure is
+// never painted green.
+function _dccJudge(r, key, has) {
+    if (has === false) return null;
+    return _dccState(r, key) || 'g';
+}
+
+function _dccEbayBlock(r) {
+    const four = [
+        ['Tracking',      _dccEbayPct(r.track),  _dccState(r, 'track'),  'Greater Than 96%'],
+        ['Defect Rate',   _dccEbayPct(r.defect), _dccState(r, 'defect'), 'Less Than 0.40%'],
+        ['Cases Closed',  _dccEbayPct(r.cases),  _dccState(r, 'cases'),  'Less Than 0.24%'],
+        ['Late Shipment', _dccEbayPct(r.late),   _dccState(r, 'late'),   'Less Than 2.40%'],
+    ];
+    const off = four.filter(f => f[2]).length;
+    if (!off) {
+        // Nothing wrong: one line rather than four cells of good news.
+        const bits = four.filter(f => f[1]).map(f => f[0] + ' ' + f[1]).join(' · ');
+        return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>All Four Within Threshold</em></div>'
+            + '<div class="dcc-clear">' + _DCC_ICO.g + (bits || 'No data reported yet') + '</div></div>';
+    }
+    return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>' + off + ' Of 4 Over Threshold</em></div>'
+        + '<div class="dcc-g4">' + four.map(function (f) {
+            const val = f[1] == null ? '—' : f[1].replace('%', '');
+            return '<div class="dcc-cell' + (f[2] ? ' ' + f[2] : '') + '">'
+                + '<div class="dcc-cell-l">' + f[0] + '</div>'
+                + '<div class="dcc-cell-v">' + val + (f[1] == null ? '' : '<small>%</small>') + '</div>'
+                + '<div class="dcc-cell-d">' + f[3] + '</div></div>';
+        }).join('') + '</div></div>';
+}
+
+function _dccBuyBlock(r) {
+    return '<div class="dcc-block"><div class="dcc-sec">Buying &amp; selling'
+        + (r.edited ? '<em>' + escapeHtml(r.edited) + '</em>' : '') + '</div><div class="dcc-rows">'
+        // The goal is a GP goal and this figure is gpTrack/goal, so the label says
+        // so — "Sales vs goal" read as revenue against goal, which it never was.
+        + _dccStatRow('GP tracking vs goal', _dccFix(r.salesPct), '%', _dccJudge(r, 'sales'))
+        + _dccStatRow('Revenue', _dccMoney(r.rev), '', null)
+        + _dccStatRow('GP tracking', _dccMoney(r.gpTrack), '', null)
+        + _dccStatRow('Sell margin', r.sellM > 0 ? _dccFix(r.sellM) : '—', r.sellM > 0 ? '%' : '', _dccJudge(r, 'sellM', r.sellM > 0))
+        + _dccStatRow('Buy tracking', _dccMoney(r.buyTrack), '', null)
+        + _dccStatRow('Buy margin', _dccFix(r.buyM), '%', _dccJudge(r, 'buyM', r.buyM > 0))
+        + _dccStatRow('Variance total', (r.vari > 0 ? '+' : '') + r.vari.toFixed(2), '%',
+                      _dccJudge(r, 'vari'), r.variRange || '')
+        + '</div></div>';
+}
+
+function _dccWeekBlock(r) {
+    // Percent units are appended here rather than baked into the value, matching
+    // what renderLineStat used to do for conversion and margin.
+    const or = v => (v === '' || v == null) ? '—' : v;
+    return '<div class="dcc-block"><div class="dcc-sec">Weekly metrics'
+        + (r.period ? '<em>' + escapeHtml(_dccCap(r.period)) + '</em>' : '') + '</div><div class="dcc-rows">'
+        + _dccStatRow('Conversion', or(r.conv), r.conv ? '%' : '', _dccJudge(r, 'conv', !!r.conv))
+        + _dccStatRow('Margin', or(r.wkM), r.wkM ? '%' : '', _dccJudge(r, 'wkM', !!r.wkM))
+        + _dccStatRow('Transaction time', or(r.time), r.time ? 'min' : '', _dccJudge(r, 'time', !!r.time))
+        + _dccStatRow('No deals', or(r.noDeals), '', _dccJudge(r, 'noDeals', r.noDeals !== '' && r.noDeals != null))
+        + _dccStatRow('Listed devices', or(r.listed), '', null)
+        + '</div></div>';
+}
+
+function _dccCatBlock(r) {
+    if (!r.cats.length) {
+        return '<div class="dcc-block"><div class="dcc-sec">eBay categories at risk</div>'
+            + '<div class="dcc-clear">' + _DCC_ICO.g + 'No Categories Flagged, Active Or Projected</div></div>';
+    }
+    return '<div class="dcc-block"><div class="dcc-sec">eBay categories at risk<em>' + r.cats.length + ' Flagged</em></div>'
+        + '<div class="dcc-cats">' + r.cats.map(c =>
+            '<div class="dcc-cat ' + c.s + '"><span class="dcc-cat-k">' + escapeHtml(c.k) + '</span>'
+            + '<span class="dcc-cat-v">' + escapeHtml(c.v) + '</span></div>').join('')
+        + '</div></div>';
+}
+
+function _dccPaneHtml(r, portalLink) {
+    if (!r) return '<div class="dcc-empty">Select a store.</div>';
+    const chipCls = s => s === 'b' ? 'dcc-bad' : s === 'w' ? 'dcc-warn' : 'dcc-good';
+
+    const scoreChip = '<span class="dcc-chip ' + chipCls(_dccState(r, 'score'))
+        + '" title="Online &amp; Marketing scorecard"><span class="dcc-chip-l">SCORECARD</span>'
+        + r.score.toFixed(1) + '</span>';
+    const auditChip = r.audit
+        ? '<span class="dcc-chip act ' + chipCls(_dccState(r, 'audit'))
+          + '" onclick="event.stopPropagation(); openAuditBreakdown(\'' + r.store + '\')"'
+          + ' title="PayMore practice audit — ' + r.audit.earned + '/' + r.audit.possible + ' · view full breakdown">'
+          + '<span class="dcc-chip-l">AUDIT</span>' + r.audit.pct + '%</span>'
+        : '<span class="dcc-chip dcc-mute" title="No practice audit submitted yet">'
+          + '<span class="dcc-chip-l">AUDIT</span>No data</span>';
+    // eBay leads when the account is in trouble: a suspension outranks a margin
+    // point. Otherwise the money leads. Same blocks either way.
+    const ebayBroken = ['track', 'defect', 'cases', 'late'].some(x => _dccState(r, x));
+    const blocks = ebayBroken
+        ? [_dccEbayBlock(r), _dccBuyBlock(r), _dccWeekBlock(r), _dccCatBlock(r)]
+        : [_dccBuyBlock(r), _dccWeekBlock(r), _dccEbayBlock(r), _dccCatBlock(r)];
+
+    return '<div class="dcc-ph"><div>'
+        + '<div class="dcc-pt">' + escapeHtml(r.store) + '</div>'
+        + '<div class="dcc-ps">Goal ' + _dccMoney(r.goal) + ' &middot; Week of ' + escapeHtml(r.week)
+        + (portalLink ? ' &middot; <a href="' + portalLink + '" target="_blank" rel="noopener">Store Folder</a>' : '')
+        + '</div></div>'
+        + '<div class="dcc-ph-side">' + scoreChip + auditChip + '</div></div>'
+        + blocks.join('');
+}
+
+// --- board ------------------------------------------------------------------
+function _dccBoardHtml(portalLinks) {
+    if (!_dccRows.length) return '<div class="dcc-empty">Syncing the district…</div>';
+    if (!_dccSel || !_dccRows.some(r => r.store === _dccSel)) {
+        const order = _dccRailOrder();
+        _dccSel = order[order.length - 1].store;
+    }
+    const sel = _dccRows.find(r => r.store === _dccSel);
+
+    // The store goal is a GP goal — gpTrack / goal reproduces each store's own
+    // "% to goal" exactly, revenue does not — so the district total has to be GP
+    // as well or the headline compares two different things.
+    const totGP = _dccRows.reduce((a, r) => a + r.gpTrack, 0);
+    const totGoal = _dccRows.reduce((a, r) => a + r.goal, 0);
+
+    return '<div class="dcc">'
+        + '<div class="dcc-head">'
+        + '<span class="dcc-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20"/></svg></span>'
+        + '<div><div class="dcc-eyebrow">District</div><div class="dcc-title">Command Center</div></div>'
+        // The money is the headline and carries itself at size; the store count
+        // that used to sit beside it only repeated what the rail groups already say.
+        + '<div class="dcc-head-side"><span class="dcc-sum">'
+        + '<b>' + _dccMoney(totGP) + '</b><i>of ' + _dccMoney(totGoal) + ' GP goal</i>'
+        + '</span></div></div>'
+        + '<div class="dcc-body"><div class="dcc-grid">'
+        + '<div class="dcc-rail">' + _dccRailHtml() + '</div>'
+        + '<div class="dcc-pane">' + _dccPaneHtml(sel, portalLinks[_dccSel]) + '</div>'
+        + '</div></div></div>';
+}
+
+// Repaint from the rows already in memory — no refetch. No-ops before the first
+// load resolves, which matters because the cached HTML restores clickable rail
+// buttons before any data exists.
+function _dccPick(store) {
+    if (!_dccRows.length) return;
+    _dccSel = store;
+    const el = document.getElementById('district-master-body');
+    if (el) el.innerHTML = _dccBoardHtml(_DCC_PORTAL_LINKS);
+}

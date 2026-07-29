@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260728a">
+  <link rel="stylesheet" href="styles.css?v=20260728n">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20260728a" defer></script>
+  <script src="speeks.js?v=20260728n" defer></script>
 </head>
 <body class="preload">
 
@@ -45,10 +45,8 @@
       </div>
 
       <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-owner-manager role-manager role-assistant-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" data-tip="SPEEKS Tools">
-        <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-        </svg>
+        <svg class="tools-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7.5" height="7.5" rx="1.6"></rect><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"></rect><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"></rect><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"></rect></svg>
         <span class="tools-nav-label">Tools</span>
       </button>
 
@@ -840,6 +838,121 @@
 
 </main>
 
+<!-- ===== DM DISTRICT LISTING GOALS =====
+     Replaced a panel on the DM dashboard. Master/detail: five stores down the
+     left, the selected store's detail on the right — see the .dmx block in
+     styles.css for why that shape rather than an accordion. Rendered by
+     renderDm*Modal() in speeks.js; opened from the action-menu rail. -->
+<div class="modal-menu manage-menu" id="dmListingModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools &middot; District</span>
+          <span class="tool-head-title">Listing Goals</span>
+          <span class="tool-head-sub" id="dmListingSub">Syncing&hellip;</span>
+        </div>
+      </div>
+      <div class="dmx-head-side">
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+    </div>
+    <div class="manage-content">
+      <div id="dmListingBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
+    </div>
+    <div class="manage-footer">
+      <span class="dmx-foot-note">Rosters are read-only here &mdash; managers set their own. Flag decisions save immediately.</span>
+    </div>
+</div>
+
+<!-- ===== DM DISTRICT CLEANING CHECKLIST =====
+     Replaced a panel on the DM dashboard. Master/detail: five stores down the
+     left, the selected store's detail on the right — see the .dmx block in
+     styles.css for why that shape rather than an accordion. Rendered by
+     renderDm*Modal() in speeks.js; opened from the action-menu rail. -->
+<div class="modal-menu manage-menu" id="dmCleaningModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21v-4a4 4 0 0 1 4-4h5"/><path d="M14 4l6 6"/><path d="M17 7l-9 9-4 1 1-4 9-9a2.8 2.8 0 0 1 4 0 2.8 2.8 0 0 1 0 4z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools &middot; District</span>
+          <span class="tool-head-title">Cleaning Checklist</span>
+          <span class="tool-head-sub" id="dmCleaningSub">Syncing&hellip;</span>
+        </div>
+      </div>
+      <div class="dmx-head-side">
+        <div class="notif-tabs" style="margin:0;">
+          <button id="dmClTabDaily" class="tab-btn active" onclick="switchDmCleaningTab('daily')">Daily</button>
+          <button id="dmClTabWeekly" class="tab-btn" onclick="switchDmCleaningTab('weekly')">Weekly</button>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+    </div>
+    <div class="manage-content">
+      <div id="dmCleaningBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
+    </div>
+    <div class="manage-footer">
+      <span class="dmx-foot-note">Read-only &mdash; stores tick their own items. Refreshes every minute.</span>
+    </div>
+</div>
+
+<!-- ===== DM DISTRICT MONTHLY TEAM GOALS =====
+     Replaced a panel on the DM dashboard. Master/detail: five stores down the
+     left, the selected store's detail on the right — see the .dmx block in
+     styles.css for why that shape rather than an accordion. Rendered by
+     renderDm*Modal() in speeks.js; opened from the action-menu rail. -->
+<div class="modal-menu manage-menu" id="dmGoalsModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools &middot; District</span>
+          <span class="tool-head-title">Monthly Team Goals</span>
+          <span class="tool-head-sub" id="dmGoalsSub">Syncing&hellip;</span>
+        </div>
+      </div>
+      <div class="dmx-head-side">
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+    </div>
+    <div class="manage-content">
+      <div id="dmGoalsBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
+    </div>
+    <div class="manage-footer">
+      <span class="dmx-foot-note">Edit buttons open the store-scoped editor for the selected store.</span>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="preferredModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title" id="preferredHeadTitle">Preferred Purchases</span>
+          <span class="tool-head-sub" id="preferredHeadSub">Suggest a product for the company list.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+
+    <div style="padding: 14px 18px 14px;">
+        <div class="notif-tabs" id="preferredTabs" style="display: inline-flex;">
+            <button id="pl-tab-new" class="tab-btn active" data-pltab="new" onclick="plSwitchTab('new')">New Request</button>
+            <button id="pl-tab-mine" class="tab-btn" data-pltab="mine" onclick="plSwitchTab('mine')">My Requests</button>
+            <button id="pl-tab-pending" class="tab-btn" data-pltab="pending" onclick="plSwitchTab('pending')" style="display:none;">Pending</button>
+            <button id="pl-tab-decided" class="tab-btn" data-pltab="decided" onclick="plSwitchTab('decided')" style="display:none;">Decided</button>
+        </div>
+    </div>
+
+    <div class="manage-content" id="preferredBody"></div>
+
+    <div class="manage-footer" id="preferredFooter" style="display:flex; gap:10px; justify-content:flex-end; padding:14px 18px;">
+        <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
+        <button class="btn-primary" id="plSubmitBtn" onclick="plSubmitRequest()">Send Request &#8594;</button>
+    </div>
+</div>
+
 <div class="modal-menu manage-menu" id="boxOrderModal">
     <div class="modal-header tool-head">
       <div class="tool-head-main">
@@ -1249,7 +1362,7 @@
 <div class="tools-side-panel dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager role-manager role-assistant-manager" id="toolsSidePanel" style="flex-direction:column;">
   <div class="tools-panel-header">
     <div class="tools-panel-title">
-      <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+      <svg class="tools-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"></rect><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"></rect><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"></rect><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"></rect></svg>
       SPEEKS Tools
     </div>
     <button class="tools-panel-close" onclick="_closeToolsPanel()">✕</button>
@@ -1284,6 +1397,8 @@
       <div class="tools-group-label">Orders</div>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" data-feature="tool-box-order" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></span>Box Order</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager" data-feature="tool-recycle-inventory" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></span>Recycle Inventory</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-manager role-assistant-manager" data-feature="tool-preferred-request" onclick="_closeToolsPanel(); togglePreferredPurchases();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/></svg></span><span class="pl-tool-label">Preferred Purchases</span></a>
+      <a class="tools-item dynamic-module-flex role-owner-manager" data-feature="tool-preferred-approve" onclick="_closeToolsPanel(); openPreferredOwner();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/><polyline points="9 15 11 17 15 13"/></svg></span><span class="pl-tool-label">Preferred Purchases</span></a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-owner-manager">
