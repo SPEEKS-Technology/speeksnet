@@ -10400,11 +10400,6 @@ body.sam-active .hotbar-btn:hover {
 .dcc-cell-d { margin-top: 2px; font-size: 10.5px; font-weight: 650; color: #8a94a3; }
 
 /* stat rows */
-/* Two thirds of the pane, not all of it: the value column has no reason to sit a
-   foot away from the label it belongs to. The other row-shaped blocks take the
-   same width so the pane has one right edge instead of a ragged one; the 4-cell
-   eBay grid stays full width because four cells genuinely need the room. */
-.dcc-rows, .dcc-cats, .dcc-clear { max-width: 66%; }
 .dcc-rows { background: #f6f8fa; border: 1px solid #eef1f5; border-radius: 10px; padding: 3px 13px; }
 .dcc-row { display: flex; align-items: center; justify-content: space-between; gap: 12px;
            padding: 8px 0; border-bottom: 1px solid #e9eef2; font-size: 12.5px; }
@@ -10444,10 +10439,8 @@ body.sam-active .hotbar-btn:hover {
 .dcc-clear svg { width: 14px; height: 14px; flex: 0 0 auto; }
 .dcc-empty { padding: 50px 20px; text-align: center; font-size: 13px; font-weight: 650; color: #8a94a3; }
 
-@media (max-width: 1200px) { .dcc-rows, .dcc-cats, .dcc-clear { max-width: 80%; } }
 @media (max-width: 900px) {
     .dcc-grid { grid-template-columns: 1fr; }
     .dcc-g4 { grid-template-columns: 1fr 1fr; }
-    .dcc-rows, .dcc-cats, .dcc-clear { max-width: none; }
     .dcc-head-side .dcc-sum { display: none; }
 }

@@ -22534,7 +22534,7 @@ function _dccChecks(r) {
         { key: 'vari',    s: _dccTier(r.vari, 0, 'min', 1.0), rule: 'negative' },
         { key: 'conv',    s: _dccTier(conv, 85, 'min'), rule: 'floor 85%' },
         { key: 'wkM',     s: _dccTier(wkM, 51, 'min'), rule: 'floor 51%' },
-        { key: 'time',    s: _dccTier(mins, 13, 'max'), rule: 'ceiling 13 min' },
+        { key: 'time',    s: _dccTier(mins, 13, 'max'), rule: '' },
         // No-deals is a WATCH signal, not a hard fail. The ceiling of 7 is met by
         // almost no store in practice — the district records 9 to 29 in a week — so
         // treating it as serious put four of five stores in the Serious group on
@@ -22625,33 +22625,42 @@ function _dccRanked() {
         a.store.localeCompare(b.store));
 }
 
-// Inside a group the cards run furthest-from-goal first. Severity picks the
-// group; money picks the order within it, which is the question actually being
-// asked of a card that already says how far off goal it is.
+// The rail grades on one thing: GP against goal. It reuses the 'sales' check so
+// the band and the number in the card can never disagree — on goal, inside the
+// near-miss band, or beyond it.
+//
+// This is deliberately NOT _dccWorst, which weighs all fourteen checks. A store
+// can sit in "On goal" with a failing eBay category; the card's own line still
+// names it and the pane still flags it, but goal attainment is what files it.
+function _dccBand(r) {
+    // No goal on record is not 0% attainment — don't file a data gap as Serious.
+    if (!r.goal) return 'w';
+    return _dccState(r, 'sales') || 'g';
+}
+// Best first, so the rail reads as a ranking top to bottom.
 function _dccByGoal(list) {
     return list.slice().sort((a, b) => {
-        const x = isFinite(a.salesPct) ? a.salesPct : Infinity;
-        const y = isFinite(b.salesPct) ? b.salesPct : Infinity;
-        return x - y || a.store.localeCompare(b.store);
+        const x = isFinite(a.salesPct) ? a.salesPct : -Infinity;
+        const y = isFinite(b.salesPct) ? b.salesPct : -Infinity;
+        return y - x || a.store.localeCompare(b.store);
     });
 }
-// The rail's flat order — the groups in severity order, each sorted by goal.
-// The default selection reads off the top of this so the pane always opens on
-// the card sitting first in the rail.
+// Groups best to worst, each sorted best to worst, so the flat order is simply
+// every store by % to goal descending.
 const _DCC_GROUPS = [
-    { k: 'b', label: 'Serious' },
+    { k: 'g', label: 'On goal' },
     { k: 'w', label: 'Watch' },
-    { k: 'g', label: 'All clear' },
+    { k: 'b', label: 'Serious' },
 ];
 function _dccRailOrder() {
     return _DCC_GROUPS.reduce((acc, g) =>
-        acc.concat(_dccByGoal(_dccRows.filter(r => _dccWorst(r) === g.k))), []);
+        acc.concat(_dccByGoal(_dccRows.filter(r => _dccBand(r) === g.k))), []);
 }
 
 // --- rail -------------------------------------------------------------------
 function _dccRailHtml() {
     return _DCC_GROUPS.map(g => {
-        const list = _dccByGoal(_dccRows.filter(r => _dccWorst(r) === g.k));
+        const list = _dccByGoal(_dccRows.filter(r => _dccBand(r) === g.k));
         if (!list.length) return '';
         return '<div class="dcc-group">'
             + g.label + '<span class="dcc-group-n">' + list.length + '</span></div>'
@@ -22792,10 +22801,16 @@ function _dccPaneHtml(r, portalLink) {
 // --- board ------------------------------------------------------------------
 function _dccBoardHtml(portalLinks) {
     if (!_dccRows.length) return '<div class="dcc-empty">Syncing the district…</div>';
-    if (!_dccSel || !_dccRows.some(r => r.store === _dccSel)) _dccSel = _dccRailOrder()[0].store;
+    if (!_dccSel || !_dccRows.some(r => r.store === _dccSel)) {
+        const order = _dccRailOrder();
+        _dccSel = order[order.length - 1].store;
+    }
     const sel = _dccRows.find(r => r.store === _dccSel);
 
-    const totRev = _dccRows.reduce((a, r) => a + r.rev, 0);
+    // The store goal is a GP goal — gpTrack / goal reproduces each store's own
+    // "% to goal" exactly, revenue does not — so the district total has to be GP
+    // as well or the headline compares two different things.
+    const totGP = _dccRows.reduce((a, r) => a + r.gpTrack, 0);
     const totGoal = _dccRows.reduce((a, r) => a + r.goal, 0);
 
     return '<div class="dcc">'
@@ -22805,7 +22820,7 @@ function _dccBoardHtml(portalLinks) {
         // The money is the headline and carries itself at size; the store count
         // that used to sit beside it only repeated what the rail groups already say.
         + '<div class="dcc-head-side"><span class="dcc-sum">'
-        + '<b>' + _dccMoney(totRev) + '</b><i>of ' + _dccMoney(totGoal) + ' goal</i>'
+        + '<b>' + _dccMoney(totGP) + '</b><i>of ' + _dccMoney(totGoal) + ' GP goal</i>'
         + '</span></div></div>'
         + '<div class="dcc-body"><div class="dcc-grid">'
         + '<div class="dcc-rail">' + _dccRailHtml() + '</div>'
