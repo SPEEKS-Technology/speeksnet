@@ -9712,6 +9712,10 @@ body.sam-active .hotbar-btn:hover {
     font-size: 10.5px; font-weight: 800; letter-spacing: .03em; white-space: nowrap;
 }
 .b2b-store-corp { background: #1a1c1e; color: #fff; }
+.b2b-dot {
+    width: 7px; height: 7px; border-radius: 999px; flex: 0 0 auto;
+    display: inline-block; margin-right: 1px;
+}
 .b2b-store-none {
     background: transparent; border: 1px dashed var(--b2b-line);
     color: var(--b2b-faint); font-weight: 700;
@@ -9847,7 +9851,8 @@ body.sam-active .hotbar-btn:hover {
 .b2b-f-val { font-size: 12.5px; font-weight: 800; color: var(--b2b-muted); flex: 0 0 auto; }
 
 /* --- view: Pipeline ------------------------------------------------------- */
-.b2b-filter { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+.b2b-filter { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 14px; }
+.b2b-filter-sel { height: var(--b2b-h-md); min-width: 170px; border-radius: var(--b2b-r-md); }
 .b2b-filter-l {
     font-size: 10px; font-weight: 800; letter-spacing: .09em;
     text-transform: uppercase; color: var(--b2b-faint); margin-right: 3px;
@@ -10043,6 +10048,7 @@ body.sam-active .hotbar-btn:hover {
 .b2b-pick:hover { border-color: var(--sage-professional); background: #f9fdfa; }
 .b2b-pick.on { border-color: var(--sage-professional); background: var(--b2b-accent-tint); }
 .b2b-pick-ac {
+    min-width: 52px; text-align: center;
     grid-area: acr; justify-self: start; align-self: center;
     font-family: 'Consolas', 'SFMono-Regular', monospace; font-size: 11px;
     font-weight: 800; color: var(--sage-deep); padding: 4px 8px;
@@ -10080,7 +10086,7 @@ body.sam-active .hotbar-btn:hover {
     border-color: var(--sage-professional); background: var(--b2b-accent-tint);
     box-shadow: 0 0 0 3px rgba(31,157,87,.12);
 }
-.b2b-loc-dot { font-size: 17px; line-height: 1; }
+.b2b-loc-dot { width: 12px; height: 12px; border-radius: 999px; display: block; }
 .b2b-loc-c { font-size: 12px; font-weight: 800; color: #1a1c1e; letter-spacing: .03em; }
 
 /* --- pricing / quote line items ------------------------------------------- */
@@ -10307,7 +10313,11 @@ body.sam-active .hotbar-btn:hover {
     background: #e3f6f3; color: #0d8a7d; font-size: 9.5px;
     font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
 }
-.b2b-doc-empty { padding: 26px; text-align: center; font-size: 12.5px; color: var(--b2b-faint); }
+.b2b-doc-empty {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 84px; padding: 26px; text-align: center;
+    font-size: 12.5px; color: var(--b2b-faint);
+}
 .b2b-doc-foot {
     margin-top: 14px; padding: 14px 20px; background: var(--b2b-surface);
     border-top: 1px solid var(--b2b-line-2);
@@ -10424,6 +10434,11 @@ body.sam-active .hotbar-btn:hover {
 .b2b-rowacts .b2b-mini + .b2b-mini { margin-left: 5px; }
 .b2b-cform { background: #fff; border: 1px solid var(--b2b-line); border-radius: 13px; padding: 16px; }
 .b2b-cform-acts { display: flex; justify-content: flex-end; gap: 9px; margin-top: 14px; }
+.b2b-cform-acts .kpi-cancel-btn {
+    display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+    height: var(--b2b-h-lg); padding: 0 18px; line-height: 1;
+    font-size: 13px; font-weight: 750; border-radius: var(--b2b-r-md);
+}
 
 
 /* --- responsiveness + required-reason affordances ------------------------- */

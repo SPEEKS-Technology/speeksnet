@@ -70,6 +70,9 @@ const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 // rather than inside a feature that can be rebuilt out from under them.
 const STORE_CODES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 const STORE_DOTS  = { 'OVL': '🟣', 'LEE': '🔵', 'WSP': '🟢', 'MPL': '🟠', 'BAL': '🔴' };
+// Same muted per-store palette the KPI charts use, so a store reads the same
+// colour everywhere. Rendered as a CSS dot rather than an emoji.
+const STORE_TINTS = { OVL: '#7c6fd6', LEE: '#4e90cf', WSP: '#2ea36a', MPL: '#d99f43', BAL: '#d9776a', CORP: '#1a1c1e' };
 
 // --- WRITE HELPER ---
 // POST JSON to an edge function as a "simple" request: keeping Content-Type
@@ -8506,7 +8509,7 @@ function _b2bStageChip(stage) {
 function _b2bStoreTag(code) {
     if (!code) return '<span class="b2b-store b2b-store-none">Unassigned</span>';
     if (code === 'CORP') return '<span class="b2b-store b2b-store-corp">CORP</span>';
-    return `<span class="b2b-store">${STORE_DOTS[code] || ''} ${escapeHtml(code)}</span>`;
+    return `<span class="b2b-store"><i class="b2b-dot" style="background:${STORE_TINTS[code] || '#94a3b8'}"></i>${escapeHtml(code)}</span>`;
 }
 // Stroke attributes go inline rather than relying on an ancestor rule: the
 // deal modals sit outside .b2b-panel / .cb-panel, so a bare <svg> there renders
@@ -8799,16 +8802,27 @@ function _b2bRenderQueue(scoped, queue) {
 
 function _b2bRenderPipeline(scoped) {
     let deals = scoped.filter(d => d.stage !== 'declined');
-    if (_b2bIsCorp() && _b2bStoreFilter !== 'ALL') {
+    if (_b2bIsCorp() && _b2bStoreFilter === 'NONE') {
+        deals = deals.filter(d => !d.pricing_store && !d.listing_store);
+    } else if (_b2bIsCorp() && _b2bStoreFilter !== 'ALL') {
         deals = deals.filter(d => d.pricing_store === _b2bStoreFilter || d.listing_store === _b2bStoreFilter);
     }
     const cancelled = scoped.filter(d => d.stage === 'declined').length;
 
+    // A row of store bubbles read as clutter, and worse: filtering to a store
+    // silently hid every deal with no location assigned yet -- which is exactly
+    // the set waiting to be routed. A select keeps the header calm and makes
+    // "Unassigned" an explicit, findable choice rather than a blind spot.
+    const unassigned = deals.filter(d => !d.pricing_store && !d.listing_store).length;
     const filter = _b2bIsCorp() ? `
         <div class="b2b-filter">
-            <span class="b2b-filter-l">Store</span>
-            ${['ALL', ...B2B_LOCATIONS].map(c => `
-                <button class="b2b-filter-b ${_b2bStoreFilter === c ? 'on' : ''}" onclick="b2bSetStoreFilter('${c}')">${c === 'ALL' ? 'All' : c}</button>`).join('')}
+            <label class="b2b-filter-l" for="b2bStoreSelect">Store</label>
+            <select id="b2bStoreSelect" class="kpi-select b2b-filter-sel" onchange="b2bSetStoreFilter(this.value)">
+                <option value="ALL" ${_b2bStoreFilter === 'ALL' ? 'selected' : ''}>All stores</option>
+                <option value="NONE" ${_b2bStoreFilter === 'NONE' ? 'selected' : ''}>Unassigned${unassigned ? ` (${unassigned})` : ''}</option>
+                ${B2B_LOCATIONS.map(c => `
+                    <option value="${c}" ${_b2bStoreFilter === c ? 'selected' : ''}>${c === 'CORP' ? 'CORP' : c}</option>`).join('')}
+            </select>
         </div>` : '';
 
     const cols = B2B_BOARD.map(key => {
@@ -8896,7 +8910,9 @@ function _b2bRenderClients() {
                     <div><label class="form-label-caps">Email</label>
                         <input id="b2bCfEmail" class="form-input-lg" value="${escapeHtml(editing?.contact_email || '')}"></div>
                     <div><label class="form-label-caps">Phone</label>
-                        <input id="b2bCfPhone" class="form-input-lg" value="${escapeHtml(editing?.contact_phone || '')}"></div>
+                        <input id="b2bCfPhone" class="form-input-lg" type="tel" inputmode="tel" maxlength="20"
+                            value="${escapeHtml(editing?.contact_phone || '')}" placeholder="(816) 555-0142"
+                            oninput="_b2bPhoneMask(this)"></div>
                     <div><label class="form-label-caps">Notes</label>
                         <input id="b2bCfNotes" class="form-input-lg" value="${escapeHtml(editing?.notes || '')}" placeholder="Anything worth remembering"></div>
                 </div>
@@ -8910,6 +8926,16 @@ function _b2bRenderClients() {
 }
 
 function b2bEditClient(id) { _b2bEditingClient = id; b2bRender(); }
+
+// Digits only, formatted as a US number and capped at 10 digits. A phone field
+// that accepts prose is a phone field nobody can dial from.
+function _b2bPhoneMask(el) {
+    const d = el.value.replace(/\D/g, '').slice(0, 10);
+    el.value = d.length > 6 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`
+             : d.length > 3 ? `(${d.slice(0, 3)}) ${d.slice(3)}`
+             : d.length     ? `(${d}`
+             : '';
+}
 
 async function b2bSaveClient() {
     const company = document.getElementById('b2bCfCompany')?.value.trim();
@@ -8993,15 +9019,15 @@ function _b2bRenderOverview(scoped) {
         </div>`;
 
     return tiles
-        + card('Stalled Deals', 'Nothing has moved in a week or more',
+        + card('Stalled Deals', 'No movement in a week or more',
                '<th>Ref</th><th>Client</th><th>Stage</th><th>Store</th><th class="r">In stage</th>',
-               stalledRows, 'Everything is moving. 🎉')
+               stalledRows, 'Everything is moving')
         + card('Out For Quote', 'Priced and waiting on the client',
                '<th>Ref</th><th>Client</th><th>Email</th><th class="c">Sent</th><th class="r">Offer</th>',
-               quoteRows, 'No quotes are open right now.')
+               quoteRows, 'No quotes are open right now')
         + card('Bought But Not Listed', 'Inventory paid for and not yet earning',
                '<th>Ref</th><th>Client</th><th>Store</th><th class="c">Outstanding</th><th class="r">Cost</th>',
-               unlistedRows, 'Everything accepted has been listed.');
+               unlistedRows, 'Everything accepted has been listed');
 }
 
 // ---------------------------------------------------------------------------
@@ -9161,8 +9187,10 @@ function _b2bSummary(deal) {
     if (deal.listing_store) rows.push(['Listing', _b2bStoreTag(deal.listing_store)]);
     if (deal.signed_by)     rows.push(['Signed by', escapeHtml(deal.signed_by)]);
     if (deal.delivered_by || deal.received_by) {
-        rows.push(['Custody', escapeHtml([deal.delivered_by ? `Delivered by ${deal.delivered_by}` : '',
-                                          deal.received_by ? `Received by ${deal.received_by}` : ''].filter(Boolean).join(' · '))]);
+        // Reads in the order it happened: who handed it over, then who took it in.
+        const handoff = deal.pricing_store === 'CORP' ? 'Dropped off by' : 'Picked up by';
+        rows.push(['Custody', escapeHtml([deal.delivered_by ? `${handoff} ${deal.delivered_by}` : '',
+                                          deal.received_by ? `received by ${deal.received_by}` : ''].filter(Boolean).join(', '))]);
     }
     return `<div class="b2b-summary">${rows.map(([k, v]) =>
         `<div class="b2b-sum-cell"><span class="b2b-sum-k">${k}</span><span class="b2b-sum-v">${v}</span></div>`).join('')}</div>`;
@@ -9232,14 +9260,14 @@ function _b2bStageAssign(deal) {
             <div class="b2b-loc-pick">
                 ${B2B_LOCATIONS.map(c => `
                     <button class="b2b-loc" data-loc="${c}" onclick="b2bPickLocation('${c}')">
-                        <span class="b2b-loc-dot">${c === 'CORP' ? '🏢' : (STORE_DOTS[c] || '')}</span>
+                        <span class="b2b-loc-dot" style="background:${STORE_TINTS[c] || '#94a3b8'}"></span>
                         <span class="b2b-loc-c">${c}</span>
                     </button>`).join('')}
             </div>
             <p class="b2b-hint">Pricing at CORP means the listing store gets chosen separately once the client accepts.</p>
             <div class="b2b-grid2" style="margin-top:14px;">
-                <div><label class="form-label-caps">Delivered By</label><input id="b2bAsDeliv" class="form-input-lg" placeholder="Who dropped it off"></div>
-                <div><label class="form-label-caps">Received By</label><input id="b2bAsRecv" class="form-input-lg" placeholder="Who took it in"></div>
+                <div><label class="form-label-caps">Handed Over By</label><input id="b2bAsDeliv" class="form-input-lg" placeholder="Who picked it up or dropped it off"></div>
+                <div><label class="form-label-caps">Received By</label><input id="b2bAsRecv" class="form-input-lg" placeholder="Who took it in at the location"></div>
             </div>`,
         footer: `
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
@@ -9967,7 +9995,7 @@ function _b2bStageListingLocation(deal) {
             <div class="b2b-loc-pick">
                 ${STORE_CODES.map(c => `
                     <button class="b2b-loc" data-loc="${c}" onclick="b2bPickLocation('${c}')">
-                        <span class="b2b-loc-dot">${STORE_DOTS[c] || ''}</span>
+                        <span class="b2b-loc-dot" style="background:${STORE_TINTS[c] || '#94a3b8'}"></span>
                         <span class="b2b-loc-c">${c}</span>
                     </button>`).join('')}
             </div>`,
