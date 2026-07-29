@@ -22673,11 +22673,13 @@ function _dccRailHtml() {
         return '<div class="dcc-group">'
             + g.label + '<span class="dcc-group-n">' + list.length + '</span></div>'
             + list.map(r => {
-                const under = _dccState(r, 'sales') ? ' under' : '';
+                // Red under goal, green at or over it — the same sales check that
+                // files the card into its group, so the colour and the band agree.
+                const pctCls = _dccState(r, 'sales') ? ' under' : ' over';
                 return '<button type="button" class="dcc-t' + (r.store === _dccSel ? ' sel' : '')
                     + '" onclick="_dccPick(\'' + r.store + '\')">'
                     + '<span class="dcc-t-top"><span class="dcc-t-code">' + escapeHtml(r.store) + '</span>'
-                    + '<span class="dcc-t-pct' + under + '">' + _dccFix(r.salesPct) + '<small>% to goal</small></span></span>'
+                    + '<span class="dcc-t-pct' + pctCls + '">' + _dccFix(r.salesPct) + '<small>% to goal</small></span></span>'
                     + '<span class="dcc-t-sub">' + escapeHtml(_dccLine(r)) + '</span>'
                     + '</button>';
             }).join('');
