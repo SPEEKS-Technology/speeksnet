@@ -22736,7 +22736,9 @@ function _dccEbayBlock(r) {
 function _dccBuyBlock(r) {
     return '<div class="dcc-block"><div class="dcc-sec">Buying &amp; selling'
         + (r.edited ? '<em>' + escapeHtml(r.edited) + '</em>' : '') + '</div><div class="dcc-rows">'
-        + _dccStatRow('Sales vs goal', _dccFix(r.salesPct), '%', _dccJudge(r, 'sales'))
+        // The goal is a GP goal and this figure is gpTrack/goal, so the label says
+        // so — "Sales vs goal" read as revenue against goal, which it never was.
+        + _dccStatRow('GP tracking vs goal', _dccFix(r.salesPct), '%', _dccJudge(r, 'sales'))
         + _dccStatRow('Revenue', _dccMoney(r.rev), '', null)
         + _dccStatRow('GP tracking', _dccMoney(r.gpTrack), '', null)
         + _dccStatRow('Sell margin', r.sellM > 0 ? _dccFix(r.sellM) : '—', r.sellM > 0 ? '%' : '', _dccJudge(r, 'sellM', r.sellM > 0))
