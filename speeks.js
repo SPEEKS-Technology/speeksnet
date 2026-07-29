@@ -8614,7 +8614,7 @@ function _b2bPaintPicklist() {
         <button class="b2b-pick ${c.id === _b2bCreateClientId ? 'on' : ''}" onclick="b2bPickClient('${c.id}')">
             <span class="b2b-pick-ac">${escapeHtml(c.acronym)}</span>
             <span class="b2b-pick-co">${escapeHtml(c.company)}</span>
-            <span class="b2b-pick-sub">${escapeHtml([c.contact, c.contact_email].filter(Boolean).join(' · '))}</span>
+            <span class="b2b-pick-sub">${_b2bIsCorp() ? escapeHtml([c.contact, c.contact_email].filter(Boolean).join(' · ')) : ''}</span>
             ${c.open_count ? `<span class="b2b-pick-n">${c.open_count} open</span>` : ''}
         </button>`).join('')
         : `<div class="b2b-pick-empty">No clients match${_b2bCanClients() ? ' — add one below.' : ' — ask a DM or CEO to add one.'}</div>`;
@@ -8706,15 +8706,21 @@ async function b2bOpenDeal(kind, id) {
     return _b2bStageView(deal);
 }
 
-// The identity block every stage screen opens with.
+// The identity block every stage screen opens with. A store prices and lists
+// the goods; talking to the client is corp's job, so the contact details are
+// corp-only -- a store never needs them and shouldn't be the one reaching out.
 function _b2bSummary(deal) {
     const rows = [
         ['Client',    escapeHtml(deal.client?.company || '—')],
         ['Reference', `<span class="b2b-mono">${escapeHtml(deal.ref)}</span>`],
-        ['Contact',   escapeHtml([deal.client?.contact, deal.client?.contact_email].filter(Boolean).join(' · ') || '—')],
+    ];
+    if (_b2bIsCorp()) {
+        rows.push(['Contact', escapeHtml([deal.client?.contact, deal.client?.contact_email].filter(Boolean).join(' · ') || '—')]);
+    }
+    rows.push(
         ['Picked up', deal.pickup_date ? _b2bDate(deal.pickup_date) : 'Not yet'],
         ['Pricing',   _b2bStoreTag(deal.pricing_store)],
-    ];
+    );
     if (deal.listing_store) rows.push(['Listing', _b2bStoreTag(deal.listing_store)]);
     if (deal.signed_by)     rows.push(['Signed by', escapeHtml(deal.signed_by)]);
     if (deal.delivered_by || deal.received_by) {
