@@ -22513,6 +22513,13 @@ function _dccRow(store, hubData, varData, scoreData, alertsData, weeklyResults) 
     };
 }
 
+// Capitalise the first letter of each word, leaving words that already carry a
+// capital alone so "eBay" survives. Used on backend-supplied captions.
+function _dccCap(str) {
+    return String(str == null ? '' : str).split(' ')
+        .map(w => /[A-Z]/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
 // --- one table of every check the panel makes -------------------------------
 // Thresholds identical to the old board. buyMargin deliberately only fails when
 // it is ABOVE zero: a missing figure parsed to 0 must not read as a 0% margin.
@@ -22522,30 +22529,29 @@ function _dccChecks(r) {
     return [
         { key: 'score',   s: r.score > 8 ? null : (r.score >= 6 ? 'w' : 'b') },
         { key: 'audit',   s: !r.audit ? null : (r.audit.pct >= 80 ? null : (r.audit.pct >= 50 ? 'w' : 'b')) },
-        // No rule text: "Sales vs goal" already says the target is 100%.
-    { key: 'sales',   s: _dccTier(r.salesPct, 100, 'min'), rule: '' },
-        { key: 'sellM',   s: _dccTier(r.sellM, 55.5, 'min'), rule: 'floor 55.5%' },
+        { key: 'sales',   s: _dccTier(r.salesPct, 100, 'min') },
+        { key: 'sellM',   s: _dccTier(r.sellM, 55.5, 'min') },
         // Still only judged when above zero: a missing figure parses to 0 and must
         // not read as a 0% margin.
-        { key: 'buyM',    s: r.buyM > 0 ? _dccTier(r.buyM, 51, 'min') : null, rule: 'floor 51%' },
+        { key: 'buyM',    s: r.buyM > 0 ? _dccTier(r.buyM, 51, 'min') : null },
         // Variance's limit is zero, so the fractional band would be zero too —
         // 1.0 percentage point absolute instead, or a -0.05% variance would file a
         // store as Serious.
-        { key: 'vari',    s: _dccTier(r.vari, 0, 'min', 1.0), rule: 'negative' },
-        { key: 'conv',    s: _dccTier(conv, 85, 'min'), rule: 'floor 85%' },
-        { key: 'wkM',     s: _dccTier(wkM, 51, 'min'), rule: 'floor 51%' },
-        { key: 'time',    s: _dccTier(mins, 13, 'max'), rule: '' },
+        { key: 'vari',    s: _dccTier(r.vari, 0, 'min', 1.0) },
+        { key: 'conv',    s: _dccTier(conv, 85, 'min') },
+        { key: 'wkM',     s: _dccTier(wkM, 51, 'min') },
+        { key: 'time',    s: _dccTier(mins, 13, 'max') },
         // No-deals is a WATCH signal, not a hard fail. The ceiling of 7 is met by
         // almost no store in practice — the district records 9 to 29 in a week — so
         // treating it as serious put four of five stores in the Serious group on
         // its own and the triage stopped discriminating. The threshold itself is
-        // unchanged, and checkRule() still paints the number red in its own row;
-        // what changed is that it no longer escalates the whole store.
-        { key: 'noDeals', s: nd == null ? null : (nd > 7 ? 'w' : null),      rule: '' },
-        { key: 'defect',  s: _dccSev('defect', r.defect), rule: 'ceiling 0.40%' },
-        { key: 'late',    s: _dccSev('late', r.late),     rule: 'ceiling 2.40%' },
-        { key: 'cases',   s: _dccSev('cases', r.cases),   rule: 'ceiling 0.24%' },
-        { key: 'track',   s: _dccSev('track', r.track),   rule: 'floor 96.0%' },
+        // unchanged and the row still paints amber; what changed is that it no
+        // longer escalates the whole store.
+        { key: 'noDeals', s: nd == null ? null : (nd > 7 ? 'w' : null) },
+        { key: 'defect',  s: _dccSev('defect', r.defect) },
+        { key: 'late',    s: _dccSev('late', r.late) },
+        { key: 'cases',   s: _dccSev('cases', r.cases) },
+        { key: 'track',   s: _dccSev('track', r.track) },
     ].concat(r.cats.map(c => ({ key: 'cat', s: c.s })));
 }
 // A miss inside the band is a Watch; beyond it, Serious. Without this every
@@ -22570,7 +22576,6 @@ function _dccTier(val, limit, dir, absBand) {
 }
 
 function _dccState(r, key) { const c = _dccChecks(r).find(x => x.key === key); return c ? c.s : null; }
-function _dccRule(r, key)  { const c = _dccChecks(r).find(x => x.key === key); return c ? (c.rule || '') : ''; }
 function _dccCount(r) {
     const c = _dccChecks(r);
     return { bad: c.filter(x => x.s === 'b').length, warn: c.filter(x => x.s === 'w').length,
@@ -22588,32 +22593,35 @@ function _dccLine(r) {
     // Candidates in the order a DM cares about them, each paired with its own
     // severity. The first candidate matching the STORE's severity wins, so a
     // Serious item is never hidden behind a near-miss listed above it.
+    // Being under goal is deliberately NOT a candidate: the card prints % to goal
+    // directly above this line, so saying it again spends the one line a card has
+    // on something already on screen. A store whose only miss is the goal falls
+    // through to the neutral summary instead.
     const cand = [
         [ebayOff >= 3 ? (ebayBad >= 3 ? 'b' : 'w') : null,
-         'eBay health failing on ' + ebayOff + ' of 4'],
-        [_dccState(r, 'sales'),   'Under goal · ' + _dccFix(r.salesPct) + '% to date'],
-        [_dccState(r, 'track'),   'eBay tracking ' + _dccEbayPct(r.track)],
+         'eBay Health Failing On ' + ebayOff + ' Of 4'],
+        [_dccState(r, 'track'),   'eBay Tracking ' + _dccEbayPct(r.track)],
         [_dccState(r, 'conv'),    'Conversion ' + r.conv + '%'],
-        [_dccState(r, 'time'),    'Transaction time ' + r.time + ' min'],
+        [_dccState(r, 'time'),    'Transaction Time ' + r.time + ' Min'],
         [ebayOff ? (ebayBad ? 'b' : 'w') : null,
-         'eBay health over on ' + ebayOff + (ebayOff === 1 ? ' measure' : ' measures')],
+         'eBay Health Over On ' + ebayOff + (ebayOff === 1 ? ' Measure' : ' Measures')],
         [r.cats.some(c => c.s === 'b') ? 'b' : null,
          r.cats.filter(c => c.s === 'b').length
-         + (r.cats.filter(c => c.s === 'b').length === 1 ? ' category' : ' categories') + ' failing'],
+         + (r.cats.filter(c => c.s === 'b').length === 1 ? ' Category' : ' Categories') + ' Failing'],
         [r.cats.length ? 'w' : null,
-         r.cats.length + (r.cats.length === 1 ? ' category' : ' categories') + ' at risk'],
-        [_dccState(r, 'sellM'),   'Sell margin ' + _dccFix(r.sellM) + '%'],
-        [_dccState(r, 'wkM'),     'Weekly margin ' + r.wkM + '%'],
-        [_dccState(r, 'buyM'),    'Buy margin ' + _dccFix(r.buyM) + '%'],
+         r.cats.length + (r.cats.length === 1 ? ' Category' : ' Categories') + ' At Risk'],
+        [_dccState(r, 'sellM'),   'Sell Margin ' + _dccFix(r.sellM) + '%'],
+        [_dccState(r, 'wkM'),     'Weekly Margin ' + r.wkM + '%'],
+        [_dccState(r, 'buyM'),    'Buy Margin ' + _dccFix(r.buyM) + '%'],
         [_dccState(r, 'vari'),    'Variance ' + r.vari.toFixed(2) + '%'],
-        [_dccState(r, 'noDeals'), r.noDeals + ' no-deals'],
+        [_dccState(r, 'noDeals'), r.noDeals + ' No-Deals'],
         [_dccState(r, 'score'),   'Scorecard ' + r.score.toFixed(1)],
-        [_dccState(r, 'audit'),   'Audit ' + (r.audit ? r.audit.pct + '%' : 'not submitted')],
+        [_dccState(r, 'audit'),   'Audit ' + (r.audit ? r.audit.pct + '%' : 'Not Submitted')],
     ];
     const worst = _dccWorst(r);
     const hit = cand.find(c => c[0] === worst) || cand.find(c => c[0]);
     if (hit) return hit[1];
-    return _dccFix(r.salesPct) + '% to goal · ' + (r.listed || '0') + ' listed';
+    return (r.listed || '0') + ' Devices Listed';
 }
 
 // Worst first, then by warnings, then alphabetically so the order is stable
@@ -22681,15 +22689,11 @@ function _dccRailHtml() {
 // judge — a raw count with no threshold, which stays ink). The unit always gets
 // its own fixed-width slot, empty or not: that is what puts $66,332 and 86.45
 // on the same right edge instead of letting a trailing "%" shove one of them in.
-function _dccStatRow(label, value, unit, state, ruleText, sub) {
+function _dccStatRow(label, value, unit, state, sub) {
     const cls = state ? ' ' + state : '';
-    // A blank rule prints no chip — some thresholds (sales vs goal) are implied
-    // by the label and the chip was only noise.
-    const miss = (state && state !== 'g' && ruleText)
-        ? '<span class="dcc-miss ' + state + '">' + escapeHtml(ruleText) + '</span>' : '';
     return '<div class="dcc-row"><span class="dcc-row-l">' + escapeHtml(label)
         + (sub ? '<i>' + escapeHtml(sub) + '</i>' : '') + '</span>'
-        + '<span class="dcc-row-v' + cls + '">' + miss
+        + '<span class="dcc-row-v' + cls + '">'
         + '<span class="n">' + value + '</span>'
         + '<span class="u">' + (unit || '') + '</span></span></div>';
 }
@@ -22705,19 +22709,19 @@ function _dccJudge(r, key, has) {
 
 function _dccEbayBlock(r) {
     const four = [
-        ['Tracking',      _dccEbayPct(r.track),  _dccState(r, 'track'),  'floor 96.0%'],
-        ['Defect Rate',   _dccEbayPct(r.defect), _dccState(r, 'defect'), 'ceiling 0.40%'],
-        ['Cases Closed',  _dccEbayPct(r.cases),  _dccState(r, 'cases'),  'ceiling 0.24%'],
-        ['Late Shipment', _dccEbayPct(r.late),   _dccState(r, 'late'),   'ceiling 2.40%'],
+        ['Tracking',      _dccEbayPct(r.track),  _dccState(r, 'track'),  'Greater Than 96%'],
+        ['Defect Rate',   _dccEbayPct(r.defect), _dccState(r, 'defect'), 'Less Than 0.40%'],
+        ['Cases Closed',  _dccEbayPct(r.cases),  _dccState(r, 'cases'),  'Less Than 0.24%'],
+        ['Late Shipment', _dccEbayPct(r.late),   _dccState(r, 'late'),   'Less Than 2.40%'],
     ];
     const off = four.filter(f => f[2]).length;
     if (!off) {
         // Nothing wrong: one line rather than four cells of good news.
         const bits = four.filter(f => f[1]).map(f => f[0] + ' ' + f[1]).join(' · ');
-        return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>all four within threshold</em></div>'
+        return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>All Four Within Threshold</em></div>'
             + '<div class="dcc-clear">' + _DCC_ICO.g + (bits || 'No data reported yet') + '</div></div>';
     }
-    return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>' + off + ' of 4 over threshold</em></div>'
+    return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>' + off + ' Of 4 Over Threshold</em></div>'
         + '<div class="dcc-g4">' + four.map(function (f) {
             const val = f[1] == null ? '—' : f[1].replace('%', '');
             return '<div class="dcc-cell' + (f[2] ? ' ' + f[2] : '') + '">'
@@ -22730,14 +22734,14 @@ function _dccEbayBlock(r) {
 function _dccBuyBlock(r) {
     return '<div class="dcc-block"><div class="dcc-sec">Buying &amp; selling'
         + (r.edited ? '<em>' + escapeHtml(r.edited) + '</em>' : '') + '</div><div class="dcc-rows">'
-        + _dccStatRow('Sales vs goal', _dccFix(r.salesPct), '%', _dccJudge(r, 'sales'), _dccRule(r, 'sales'))
+        + _dccStatRow('Sales vs goal', _dccFix(r.salesPct), '%', _dccJudge(r, 'sales'))
         + _dccStatRow('Revenue', _dccMoney(r.rev), '', null)
         + _dccStatRow('GP tracking', _dccMoney(r.gpTrack), '', null)
-        + _dccStatRow('Sell margin', r.sellM > 0 ? _dccFix(r.sellM) : '—', r.sellM > 0 ? '%' : '', _dccJudge(r, 'sellM', r.sellM > 0), _dccRule(r, 'sellM'))
+        + _dccStatRow('Sell margin', r.sellM > 0 ? _dccFix(r.sellM) : '—', r.sellM > 0 ? '%' : '', _dccJudge(r, 'sellM', r.sellM > 0))
         + _dccStatRow('Buy tracking', _dccMoney(r.buyTrack), '', null)
-        + _dccStatRow('Buy margin', _dccFix(r.buyM), '%', _dccJudge(r, 'buyM', r.buyM > 0), _dccRule(r, 'buyM'))
+        + _dccStatRow('Buy margin', _dccFix(r.buyM), '%', _dccJudge(r, 'buyM', r.buyM > 0))
         + _dccStatRow('Variance total', (r.vari > 0 ? '+' : '') + r.vari.toFixed(2), '%',
-                      _dccJudge(r, 'vari'), _dccRule(r, 'vari'), r.variRange || '')
+                      _dccJudge(r, 'vari'), r.variRange || '')
         + '</div></div>';
 }
 
@@ -22746,11 +22750,11 @@ function _dccWeekBlock(r) {
     // what renderLineStat used to do for conversion and margin.
     const or = v => (v === '' || v == null) ? '—' : v;
     return '<div class="dcc-block"><div class="dcc-sec">Weekly metrics'
-        + (r.period ? '<em>' + escapeHtml(r.period) + '</em>' : '') + '</div><div class="dcc-rows">'
-        + _dccStatRow('Conversion', or(r.conv), r.conv ? '%' : '', _dccJudge(r, 'conv', !!r.conv), _dccRule(r, 'conv'))
-        + _dccStatRow('Margin', or(r.wkM), r.wkM ? '%' : '', _dccJudge(r, 'wkM', !!r.wkM), _dccRule(r, 'wkM'))
-        + _dccStatRow('Transaction time', or(r.time), r.time ? 'min' : '', _dccJudge(r, 'time', !!r.time), _dccRule(r, 'time'))
-        + _dccStatRow('No deals', or(r.noDeals), '', _dccJudge(r, 'noDeals', r.noDeals !== '' && r.noDeals != null), _dccRule(r, 'noDeals'))
+        + (r.period ? '<em>' + escapeHtml(_dccCap(r.period)) + '</em>' : '') + '</div><div class="dcc-rows">'
+        + _dccStatRow('Conversion', or(r.conv), r.conv ? '%' : '', _dccJudge(r, 'conv', !!r.conv))
+        + _dccStatRow('Margin', or(r.wkM), r.wkM ? '%' : '', _dccJudge(r, 'wkM', !!r.wkM))
+        + _dccStatRow('Transaction time', or(r.time), r.time ? 'min' : '', _dccJudge(r, 'time', !!r.time))
+        + _dccStatRow('No deals', or(r.noDeals), '', _dccJudge(r, 'noDeals', r.noDeals !== '' && r.noDeals != null))
         + _dccStatRow('Listed devices', or(r.listed), '', null)
         + '</div></div>';
 }
@@ -22758,9 +22762,9 @@ function _dccWeekBlock(r) {
 function _dccCatBlock(r) {
     if (!r.cats.length) {
         return '<div class="dcc-block"><div class="dcc-sec">eBay categories at risk</div>'
-            + '<div class="dcc-clear">' + _DCC_ICO.g + 'No categories flagged, active or projected</div></div>';
+            + '<div class="dcc-clear">' + _DCC_ICO.g + 'No Categories Flagged, Active Or Projected</div></div>';
     }
-    return '<div class="dcc-block"><div class="dcc-sec">eBay categories at risk<em>' + r.cats.length + ' flagged</em></div>'
+    return '<div class="dcc-block"><div class="dcc-sec">eBay categories at risk<em>' + r.cats.length + ' Flagged</em></div>'
         + '<div class="dcc-cats">' + r.cats.map(c =>
             '<div class="dcc-cat ' + c.s + '"><span class="dcc-cat-k">' + escapeHtml(c.k) + '</span>'
             + '<span class="dcc-cat-v">' + escapeHtml(c.v) + '</span></div>').join('')
@@ -22791,7 +22795,7 @@ function _dccPaneHtml(r, portalLink) {
     return '<div class="dcc-ph"><div>'
         + '<div class="dcc-pt">' + escapeHtml(r.store) + '</div>'
         + '<div class="dcc-ps">Goal ' + _dccMoney(r.goal) + ' &middot; Week of ' + escapeHtml(r.week)
-        + (portalLink ? ' &middot; <a href="' + portalLink + '" target="_blank" rel="noopener">Store folder</a>' : '')
+        + (portalLink ? ' &middot; <a href="' + portalLink + '" target="_blank" rel="noopener">Store Folder</a>' : '')
         + '</div></div>'
         + '<div class="dcc-ph-side">' + scoreChip + auditChip + '</div></div>'
         + blocks.join('');

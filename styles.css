@@ -10416,11 +10416,6 @@ body.sam-active .hotbar-btn:hover {
 .dcc-row-v.b { color: #b91c1c; }
 .dcc-row-v.w { color: #b45309; }
 .dcc-row-v.g { color: #15803d; }
-/* The rule that was missed, printed beside the value — so the gap is legible
-   in black and white and you don't have to know the threshold by heart. */
-.dcc-miss { font-size: 9.5px; font-weight: 800; letter-spacing: .03em; padding: 2px 7px; border-radius: 20px; border: 1px solid; }
-.dcc-miss.b { color: #b91c1c; background: #fcecec; border-color: #f3c9c9; }
-.dcc-miss.w { color: #b45309; background: #fdf3e1; border-color: #f3ddb0; }
 
 /* categories at risk */
 .dcc-cats { display: flex; flex-direction: column; gap: 7px; }
