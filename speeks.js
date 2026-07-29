@@ -8537,10 +8537,18 @@ async function b2bLoadDeeperArchive(btn) {
 
 // --- view: Clients (DM/CEO) ------------------------------------------------
 
+// Which client rows are expanded. A Set rather than a single id so two clients
+// can be compared side by side.
+const _b2bClientOpen = new Set();
+
 function _b2bRenderClients() {
     const editing = _b2bEditingClient ? _b2bClients.find(c => c.id === _b2bEditingClient) : null;
-    const rows = _b2bClients.length ? _b2bClients.map(c => `
-        <tr>
+    const rows = _b2bClients.length ? _b2bClients.map(c => {
+        const open = _b2bClientOpen.has(c.id);
+        return `
+        <tr id="b2bCRow-${c.id}" class="b2b-clickrow${open ? ' open' : ''}" onclick="b2bToggleClient('${c.id}')">
+            <td><button class="b2b-cexp" aria-expanded="${open}" aria-label="Show deals and history">${
+                _b2bIco('<polyline points="9 18 15 12 9 6"/>')}</button></td>
             <td><span class="b2b-mono b2b-acr">${escapeHtml(c.acronym)}</span></td>
             <td><b>${escapeHtml(c.company)}</b>${c.notes ? `<div class="b2b-doc-sub">${escapeHtml(c.notes)}</div>` : ''}</td>
             <td>${escapeHtml(c.contact || '—')}</td>
@@ -8548,17 +8556,18 @@ function _b2bRenderClients() {
             <td>${escapeHtml(c.contact_phone || '—')}</td>
             <td class="c">${c.open_count ? `<span class="b2b-chip b2b-chip-info">${c.open_count} open</span> ` : ''}${c.deal_count || 0}</td>
             <td class="r b2b-rowacts">
-                <button class="b2b-mini" onclick="b2bEditClient('${c.id}')">Edit</button>
-                <button class="b2b-mini danger" ${c.deal_count ? 'disabled title="Clients with deals on record cannot be deleted"' : ''} onclick="b2bDeleteClient('${c.id}')">Delete</button>
+                <button class="b2b-mini" onclick="event.stopPropagation();b2bEditClient('${c.id}')">Edit</button>
+                <button class="b2b-mini danger" ${c.deal_count ? 'disabled title="Clients with deals on record cannot be deleted"' : ''} onclick="event.stopPropagation();b2bDeleteClient('${c.id}')">Delete</button>
             </td>
-        </tr>`).join('')
-        : '<tr><td colspan="7" class="b2b-doc-empty">No clients yet — add the first one below.</td></tr>';
+        </tr>${open ? _b2bClientDrawer(c.id) : ''}`;
+    }).join('')
+        : '<tr><td colspan="8" class="b2b-doc-empty">No clients yet — add the first one below.</td></tr>';
 
     return `
         <div class="b2b-sec">
             <div class="b2b-sec-h"><span>Clients</span><span class="b2b-sec-n">${_b2bClients.length}</span></div>
             <table class="cb-table b2b-ctable">
-                <thead><tr><th>Acronym</th><th>Company</th><th>Contact</th><th>Email</th><th>Phone</th><th class="c">Deals</th><th></th></tr></thead>
+                <thead><tr><th class="b2b-th-exp"></th><th>Acronym</th><th>Company</th><th>Contact</th><th>Email</th><th>Phone</th><th class="c">Deals</th><th></th></tr></thead>
                 <tbody>${rows}</tbody>
             </table>
         </div>
@@ -8588,6 +8597,94 @@ function _b2bRenderClients() {
                 </div>
             </div>
         </div>`;
+}
+
+// Expands in place rather than through b2bRender(), so opening a client doesn't
+// wipe whatever is half-typed in the add/edit form below the table.
+function b2bToggleClient(id) {
+    const row  = document.getElementById(`b2bCRow-${id}`);
+    const drop = document.getElementById(`b2bCDrop-${id}`);
+    if (drop) {
+        drop.remove();
+        _b2bClientOpen.delete(id);
+        row?.classList.remove('open');
+        row?.querySelector('.b2b-cexp')?.setAttribute('aria-expanded', 'false');
+        return;
+    }
+    if (!row) return;
+    _b2bClientOpen.add(id);
+    row.classList.add('open');
+    row.querySelector('.b2b-cexp')?.setAttribute('aria-expanded', 'true');
+    row.insertAdjacentHTML('afterend', _b2bClientDrawer(id));
+}
+
+// A client's history. The headline figures come from the server (the view rolls
+// them up over every deal on record); the deal list underneath can only show
+// what this session actually loaded, which is the open set plus the recent
+// finished tail -- so it says so when there is more behind it.
+function _b2bClientDrawer(id) {
+    const c = _b2bClients.find(x => x.id === id);
+    if (!c) return '';
+
+    const total = Number(c.deal_count) || 0;
+
+    // Six tiles of zeros says nothing a single sentence doesn't say better.
+    if (!total) {
+        return `
+        <tr class="b2b-cdrop" id="b2bCDrop-${id}">
+            <td colspan="8"><div class="b2b-doc-empty">No deals with ${escapeHtml(c.company)} yet.
+                Start one with New Deal.</div></td>
+        </tr>`;
+    }
+
+    const mine = _b2bDeals
+        .filter(d => d.client_id === id && _b2bInScope(d))
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+    const stat = (k, v, sub) => `<div class="b2b-cstat"><span class="b2b-cstat-k">${k}</span>`
+        + `<span class="b2b-cstat-v">${v}</span>${sub ? `<span class="b2b-cstat-s">${sub}</span>` : ''}</div>`;
+
+    // The year, not "Feb 11" -- a lifetime figure sitting next to a bare day and
+    // month invites reading a three-year-old relationship as a recent one.
+    const since = c.first_deal_at ? new Date(c.first_deal_at) : null;
+    const stats = `
+        <div class="b2b-cstats">
+            ${stat('Deals All Time', total, `${Number(c.open_count) || 0} still open`)}
+            ${stat('Completed', Number(c.completed_count) || 0,
+                   `${Math.round(((Number(c.completed_count) || 0) / total) * 100)}% of their deals`)}
+            ${stat('Declined', Number(c.declined_count) || 0, 'fell through')}
+            ${stat('Lifetime Spend', _b2bMoney(c.lifetime_cost), 'cost of completed deals')}
+            ${stat('Units Handled', Number(c.lifetime_units) || 0, 'listed or recycled')}
+            ${stat('Client Since', since && !isNaN(since) ? since.getFullYear() : '—',
+                   c.last_deal_at ? `latest deal ${_b2bDate(c.last_deal_at)}` : '')}
+        </div>`;
+
+    const dealRows = mine.length ? mine.map(d => `
+        <div class="b2b-cd-row" onclick="event.stopPropagation();b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')">
+            <span class="b2b-mono b2b-cd-ref">${escapeHtml(d.ref)}</span>
+            ${_b2bStageChip(d.stage)}
+            ${_b2bStoreTag(d.listing_store || d.pricing_store)}
+            <span class="b2b-cd-units">${d.total_units ? `${d.total_units} unit${d.total_units === 1 ? '' : 's'}` : `${d.line_count || 0} lines`}</span>
+            <span class="b2b-cd-val">${d.stage === 'completed' ? _b2bMoney(d.total_cost)
+                : d.total_offer ? _b2bMoney(d.total_offer) : ''}</span>
+            <span class="b2b-cd-date">${_b2bDate(d.created_at)}</span>
+        </div>`).join('')
+        : '<div class="b2b-doc-empty">None of their deals are loaded right now — '
+          + 'open Completed and load more to reach the older ones.</div>';
+
+    const hidden = total > mine.length && mine.length
+        ? `<div class="b2b-archive-note">${total - mine.length} older deal${total - mine.length === 1 ? '' : 's'} not loaded.</div>`
+        : '';
+
+    return `
+        <tr class="b2b-cdrop" id="b2bCDrop-${id}">
+            <td colspan="8">
+                ${stats}
+                <div class="b2b-cd-h">Deals</div>
+                <div class="b2b-cdeals">${dealRows}</div>
+                ${hidden}
+            </td>
+        </tr>`;
 }
 
 function b2bEditClient(id) { _b2bEditingClient = id; b2bRender(); }
