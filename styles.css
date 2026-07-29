@@ -9667,7 +9667,7 @@ body.sam-active .hotbar-btn:hover {
 .b2b-panel, .b2b-panel .cb-scroll { min-width: 0; max-width: 100%; }
 .b2b-queue, .b2b-items, .b2b-list, .b2b-flight { min-width: 0; }
 .b2b-q-main, .b2b-lmain, .b2b-f { min-width: 0; }
-.b2b-panel .cb-table, .b2b-vtable, .b2b-ctable { table-layout: auto; }
+.b2b-panel .cb-table, .b2b-vtable, .b2b-ctable, .b2b-ftable { table-layout: auto; }
 .b2b-ov { overflow-x: auto; }
 
 .b2b-panel .c { text-align: center; }
@@ -9892,6 +9892,26 @@ body.sam-active .hotbar-btn:hover {
 .b2b-filter-b.on {
     background: var(--b2b-accent-tint); border-color: var(--sage-professional); color: var(--sage-deep);
 }
+.b2b-filter-search {
+    font: inherit; font-size: 12.5px; font-weight: 600; height: var(--b2b-h-md);
+    flex: 1 1 200px; max-width: 280px; padding: 0 12px;
+    border: 1px solid var(--b2b-line); border-radius: var(--b2b-r-md);
+    background: #fff; color: #1a1c1e; transition: border-color .14s ease, box-shadow .14s ease;
+}
+.b2b-filter-search::placeholder { color: var(--b2b-faint); font-weight: 600; }
+.b2b-filter-search:focus {
+    outline: none; border-color: var(--sage-professional);
+    box-shadow: 0 0 0 3px var(--b2b-accent-tint);
+}
+
+/* An inline "go here instead" inside a note line -- reads as prose, behaves as
+   a button, so it never inherits the visited-link colour a real <a> would. */
+.b2b-linkbtn {
+    font: inherit; font-size: inherit; font-weight: 800; cursor: pointer;
+    padding: 0; border: 0; background: none; color: var(--sage-deep);
+    text-decoration: underline; text-underline-offset: 2px;
+}
+.b2b-linkbtn:hover { color: #0f6b3c; }
 
 /* The wrapper owns the scrolling and is hard-capped to its parent; the board
    itself is allowed to be as wide as its columns need. Without the cap, seven
@@ -10450,7 +10470,7 @@ body.sam-active .hotbar-btn:hover {
 }
 
 /* --- tables --------------------------------------------------------------- */
-.b2b-vtable, .b2b-ctable { width: 100%; font-variant-numeric: tabular-nums; }
+.b2b-vtable, .b2b-ctable, .b2b-ftable { width: 100%; font-variant-numeric: tabular-nums; }
 .b2b-acr {
     display: inline-block; padding: 3px 8px; border-radius: 6px;
     background: var(--b2b-accent-tint); color: var(--sage-deep);

@@ -7891,7 +7891,7 @@ const B2B_NOTE_TAGS = ['Cracked', 'LCD Damage', 'No RAM', 'No HDD', 'Non-functio
 
 let _b2bDeals        = [];
 let _b2bClients      = [];
-let _b2bView         = 'queue';     // queue | pipeline | clients | overview
+let _b2bView         = 'queue';     // queue | pipeline | finished | clients | overview
 let _b2bStoreFilter  = 'ALL';
 let _b2bLoading      = false;
 let _b2bModalDeal    = null;        // the deal open in the deal modal
@@ -8167,7 +8167,7 @@ async function b2bLoad() {
     _b2bLoading = true;
     try {
         const [deals, clients] = await Promise.all([
-            _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}`),
+            _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}&archive=${_b2bArchiveDepth}`),
             _b2bCanClients() || _b2bIsCorp() ? _b2bGet('clients=1') : Promise.resolve([]),
         ]);
         _b2bDeals   = deals.map(_b2bShapeDeal);
@@ -8184,7 +8184,7 @@ async function b2bLoad() {
 async function b2bRefresh() {
     try {
         const [deals, clients] = await Promise.all([
-            _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}`),
+            _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}&archive=${_b2bArchiveDepth}`),
             _b2bCanClients() || _b2bIsCorp() ? _b2bGet('clients=1') : Promise.resolve(_b2bClients),
         ]);
         _b2bDeals = deals.map(_b2bShapeDeal);
@@ -8228,7 +8228,8 @@ function b2bRender() {
 
     // Header chrome
     document.querySelectorAll('.b2b-view-toggle .mb-view-btn').forEach(b => b.classList.remove('active'));
-    const btn = { queue: 'b2bViewQueueBtn', pipeline: 'b2bViewPipelineBtn', clients: 'b2bViewClientsBtn', overview: 'b2bViewOverviewBtn' }[_b2bView];
+    const btn = { queue: 'b2bViewQueueBtn', pipeline: 'b2bViewPipelineBtn', finished: 'b2bViewFinishedBtn',
+                  clients: 'b2bViewClientsBtn', overview: 'b2bViewOverviewBtn' }[_b2bView];
     document.getElementById(btn)?.classList.add('active');
 
     const pip = document.getElementById('b2bQueuePip');
@@ -8257,6 +8258,7 @@ function b2bRender() {
     }
 
     if (_b2bView === 'pipeline')      body.innerHTML = _b2bRenderPipeline(scoped);
+    else if (_b2bView === 'finished') body.innerHTML = _b2bRenderFinished(scoped);
     else if (_b2bView === 'clients')  body.innerHTML = _b2bRenderClients();
     else if (_b2bView === 'overview') body.innerHTML = _b2bRenderOverview(scoped);
     else                              body.innerHTML = _b2bRenderQueue(scoped, queue);
@@ -8390,15 +8392,147 @@ function _b2bRenderPipeline(scoped) {
         </div>`;
     }).join('');
 
-    const notes = [];
-    if (cancelled) notes.push(`${cancelled} declined deal${cancelled === 1 ? '' : 's'} hidden`);
-    if (_b2bMeta?.archive_truncated) {
-        notes.push(`showing the ${_b2bMeta.archive_shown} most recent of ${_b2bMeta.archive_total} finished deals`);
-    }
-    const cancelNote = notes.length ? `<div class="b2b-archive-note">${escapeHtml(notes.join(" · "))}.</div>` : '';
+    // The board is a picture of work in flight, so finished deals live in their
+    // own view rather than as an eighth column nobody scrolls to.
+    const finished = scoped.filter(d => _b2bIsTerminal(d)).length;
+    const note = finished
+        ? `<div class="b2b-archive-note">${finished} finished deal${finished === 1 ? '' : 's'} `
+          + `${finished === 1 ? 'is' : 'are'} kept in <button class="b2b-linkbtn" onclick="b2bSetView('finished')">Completed</button>.</div>`
+        : '';
     // Seven columns are wider than most laptops, so the board scrolls inside
     // its own wrapper rather than pushing the whole page sideways.
-    return `${filter}<div class="b2b-boardwrap"><div class="b2b-board">${cols}</div></div>${cancelNote}`;
+    return `${filter}<div class="b2b-boardwrap"><div class="b2b-board">${cols}</div></div>${note}`;
+}
+
+// --- view: Completed ------------------------------------------------------
+// Both terminal outcomes, because "what happened to that deal" is the same
+// question whether it closed out or fell through.
+//
+// Only the recent tail of finished deals rides along with the board payload --
+// the finished set grows without bound, and pulling all of it on every load to
+// service a view most people never open would be the wrong trade. So the tail
+// is what you get, and a deeper page is asked for explicitly.
+
+const B2B_ARCHIVE_STEPS = [40, 200, 500];   // last step is ARCHIVE_MAX in the edge fn
+let _b2bArchiveDepth = B2B_ARCHIVE_STEPS[0];
+let _b2bFinOutcome   = 'all';   // all | completed | declined
+let _b2bFinQuery     = '';
+
+function _b2bIsTerminal(d) { return d.stage === 'completed' || d.stage === 'declined'; }
+
+// Closed-out date. stage_changed_at is when it reached its terminal stage.
+function _b2bClosedAt(d) { return d.stage_changed_at || d.updated_at || d.created_at; }
+
+function _b2bFinishedRows(rows) {
+    if (!rows.length) {
+        return `<div class="b2b-doc-empty">${_b2bFinQuery || _b2bFinOutcome !== 'all'
+            ? 'No finished deals match that.'
+            : 'Nothing has finished yet. Deals land here once they complete or get declined.'}</div>`;
+    }
+    const body = rows.map(d => {
+        const done = (Number(d.listed_units) || 0) + (Number(d.recycled_units) || 0);
+        const sub  = d.stage === 'declined' && d.cancelled_reason
+            ? `<div class="b2b-doc-sub">${escapeHtml(d.cancelled_reason)}</div>` : '';
+        return `
+        <tr class="b2b-clickrow" onclick="b2bOpenDeal('view','${d.id}')">
+            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
+            <td><b>${escapeHtml(d.client?.company || '')}</b>${sub}</td>
+            <td>${_b2bStageChip(d.stage)}</td>
+            <td>${_b2bStoreTag(d.listing_store || d.pricing_store)}</td>
+            <td class="c">${d.stage === 'completed' ? `${done} of ${d.total_units || 0}` : '—'}</td>
+            <td class="r b">${d.stage === 'completed' ? _b2bMoney(d.total_cost) : '—'}</td>
+            <td class="r">${_b2bDate(_b2bClosedAt(d))}</td>
+        </tr>`;
+    }).join('');
+    return `<table class="cb-table b2b-ftable">
+            <thead><tr><th>Ref</th><th>Client</th><th>Outcome</th><th>Store</th>
+                <th class="c">Units</th><th class="r">Cost</th><th class="r">Closed</th></tr></thead>
+            <tbody>${body}</tbody>
+        </table>`;
+}
+
+// Applies the two filters to the scoped terminal set, newest first.
+function _b2bFinishedSet(scoped) {
+    const q = _b2bFinQuery.toLowerCase().trim();
+    return scoped
+        .filter(_b2bIsTerminal)
+        .filter(d => _b2bFinOutcome === 'all' || d.stage === _b2bFinOutcome)
+        .filter(d => !q
+            || (d.ref || '').toLowerCase().includes(q)
+            || (d.client?.company || '').toLowerCase().includes(q)
+            || (d.client?.acronym || '').toLowerCase().includes(q))
+        .sort((a, b) => new Date(_b2bClosedAt(b)) - new Date(_b2bClosedAt(a)));
+}
+
+function _b2bRenderFinished(scoped) {
+    const all  = scoped.filter(_b2bIsTerminal);
+    const rows = _b2bFinishedSet(scoped);
+    const won  = all.filter(d => d.stage === 'completed');
+    const lost = all.filter(d => d.stage === 'declined');
+
+    const tiles = `
+        <div class="b2b-tiles">
+            <div class="b2b-tile"><span class="b2b-tile-k">Completed</span><span class="b2b-tile-v">${won.length}</span><span class="b2b-tile-c">deals closed out</span></div>
+            <div class="b2b-tile"><span class="b2b-tile-k">Cost Locked In</span><span class="b2b-tile-v">${_b2bMoney(won.reduce((s, d) => s + (Number(d.total_cost) || 0), 0))}</span><span class="b2b-tile-c">across completed deals</span></div>
+            <div class="b2b-tile"><span class="b2b-tile-k">Units Handled</span><span class="b2b-tile-v">${won.reduce((n, d) => n + (Number(d.listed_units) || 0) + (Number(d.recycled_units) || 0), 0)}</span><span class="b2b-tile-c">listed or recycled</span></div>
+            <div class="b2b-tile ${lost.length ? 'warn' : ''}"><span class="b2b-tile-k">Declined</span><span class="b2b-tile-v">${lost.length}</span><span class="b2b-tile-c">deals that fell through</span></div>
+        </div>`;
+
+    // The search box is written once and only the rows below it repaint, so
+    // typing never loses focus.
+    const controls = `
+        <div class="b2b-filter">
+            <label class="b2b-filter-l" for="b2bFinOutcome">Outcome</label>
+            <select id="b2bFinOutcome" class="kpi-select b2b-filter-sel" onchange="b2bSetFinOutcome(this.value)">
+                <option value="all"       ${_b2bFinOutcome === 'all'       ? 'selected' : ''}>All outcomes</option>
+                <option value="completed" ${_b2bFinOutcome === 'completed' ? 'selected' : ''}>Completed${won.length ? ` (${won.length})` : ''}</option>
+                <option value="declined"  ${_b2bFinOutcome === 'declined'  ? 'selected' : ''}>Declined${lost.length ? ` (${lost.length})` : ''}</option>
+            </select>
+            <input id="b2bFinSearch" class="b2b-filter-search" autocomplete="off" placeholder="Search ref or client…"
+                value="${escapeHtml(_b2bFinQuery)}" oninput="_b2bPaintFinished()">
+        </div>`;
+
+    // The meta counts come from the server, which scopes to one store at most --
+    // an MSM covering two pulls ALL and narrows in _b2bInScope, so quoting those
+    // numbers at them would count stores they can't see. They get the offer
+    // without the arithmetic.
+    const exact  = _b2bIsCorp() || _b2bMyStores().length === 1;
+    const more   = B2B_ARCHIVE_STEPS.some(s => s > _b2bArchiveDepth)
+        ? ' <button class="b2b-linkbtn" onclick="b2bLoadDeeperArchive(this)">Load more</button>' : '';
+    const deeper = _b2bMeta?.archive_truncated
+        ? `<div class="b2b-archive-note">${exact
+            ? `Showing the ${_b2bMeta.archive_shown} most recently finished of ${_b2bMeta.archive_total}.`
+            : 'Older finished deals are not loaded yet.'}${more}</div>`
+        : '';
+
+    return `${tiles}${controls}
+        <div class="b2b-sec">
+            <div class="b2b-sec-h"><span>Finished Deals</span><span class="b2b-sec-n">${rows.length}</span></div>
+            <div id="b2bFinRows">${_b2bFinishedRows(rows)}</div>
+        </div>
+        ${deeper}`;
+}
+
+function b2bSetFinOutcome(v) { _b2bFinOutcome = v; _b2bPaintFinished(); }
+
+// Repaints only the rows, so the filters keep their focus and caret position.
+function _b2bPaintFinished() {
+    _b2bFinQuery = document.getElementById('b2bFinSearch')?.value || '';
+    const host = document.getElementById('b2bFinRows');
+    if (!host) return;
+    const rows = _b2bFinishedSet(_b2bDeals.filter(_b2bInScope));
+    host.innerHTML = _b2bFinishedRows(rows);
+    const n = host.parentElement?.querySelector('.b2b-sec-n');
+    if (n) n.textContent = rows.length;
+}
+
+// Walks the depth up one step and refetches. Deliberately manual: the deeper
+// pages are for looking something up, not for the default load.
+async function b2bLoadDeeperArchive(btn) {
+    const next = B2B_ARCHIVE_STEPS.find(s => s > _b2bArchiveDepth);
+    if (!next) return;
+    _b2bArchiveDepth = next;
+    await _b2bBusy(btn, 'Loading…', () => b2bRefresh());
 }
 
 // --- view: Clients (DM/CEO) ------------------------------------------------
