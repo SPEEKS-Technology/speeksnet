@@ -7849,7 +7849,7 @@ async function fetchAndRenderEmployeeKPIs() {
 //   quote             corp    email it; stays editable while the client haggles
 //   listing_location  corp    ONLY when CORP did the pricing
 //   listing           store   check off / scan each unit
-//   completed         --      terminal        (cancelled is the other terminal)
+//   completed         --      terminal        (declined is the other terminal)
 //
 // Accepting a quote is the hinge: offers freeze into cost, SKUs freeze, and the
 // deal routes onward. The edge function enforces every transition; this file
@@ -7868,7 +7868,12 @@ const B2B_STAGES = [
     { key: 'declined',         label: 'Declined',         tone: 'crit',    svg: '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>' },
 ];
 const B2B_STAGE      = Object.fromEntries(B2B_STAGES.map(s => [s.key, s]));
-const B2B_BOARD      = B2B_STAGES.filter(s => s.key !== 'declined').map(s => s.key);
+// The board is work in flight, so neither terminal stage gets a column. A
+// Completed one would also lie about its count: only the recent archive tail
+// rides along with the board payload, so it would read as "we have completed 40
+// deals" no matter how many there really are. The Completed view knows the true
+// total and says so.
+const B2B_BOARD      = B2B_STAGES.filter(s => s.key !== 'declined' && s.key !== 'completed').map(s => s.key);
 const B2B_LOCATIONS  = [...STORE_CODES, 'CORP'];
 
 // What the owner of each stage is being asked to do.
@@ -8335,19 +8340,23 @@ function _b2bRenderQueue(scoped, queue) {
 // --- view: Pipeline -------------------------------------------------------
 
 function _b2bRenderPipeline(scoped) {
-    let deals = scoped.filter(d => d.stage !== 'declined');
+    const live = scoped.filter(d => !_b2bIsTerminal(d));
+    let deals = live;
     if (_b2bIsCorp() && _b2bStoreFilter === 'NONE') {
         deals = deals.filter(d => !d.pricing_store && !d.listing_store);
     } else if (_b2bIsCorp() && _b2bStoreFilter !== 'ALL') {
         deals = deals.filter(d => d.pricing_store === _b2bStoreFilter || d.listing_store === _b2bStoreFilter);
     }
-    const cancelled = scoped.filter(d => d.stage === 'declined').length;
 
     // A row of store bubbles read as clutter, and worse: filtering to a store
     // silently hid every deal with no location assigned yet -- which is exactly
     // the set waiting to be routed. A select keeps the header calm and makes
     // "Unassigned" an explicit, findable choice rather than a blind spot.
-    const unassigned = deals.filter(d => !d.pricing_store && !d.listing_store).length;
+    //
+    // Counted off `live`, not the filtered set: taken from `deals` the number
+    // collapses to zero the moment you filter to a store, so the count vanished
+    // exactly when you were somewhere else and might want to jump back to it.
+    const unassigned = live.filter(d => !d.pricing_store && !d.listing_store).length;
     const filter = _b2bIsCorp() ? `
         <div class="b2b-filter">
             <label class="b2b-filter-l" for="b2bStoreSelect">Store</label>
@@ -8400,7 +8409,7 @@ function _b2bRenderPipeline(scoped) {
         ? `<div class="b2b-archive-note">${finished} finished deal${finished === 1 ? '' : 's'} `
           + `${finished === 1 ? 'is' : 'are'} kept in <button class="b2b-linkbtn" onclick="b2bSetView('finished')">Completed</button>.</div>`
         : '';
-    // Seven columns are wider than most laptops, so the board scrolls inside
+    // Six columns are wider than most laptops, so the board scrolls inside
     // its own wrapper rather than pushing the whole page sideways.
     return `${filter}<div class="b2b-boardwrap"><div class="b2b-board">${cols}</div></div>${note}`;
 }
@@ -8432,8 +8441,8 @@ function _b2bFinishedRows(rows) {
     }
     const body = rows.map(d => {
         const done = (Number(d.listed_units) || 0) + (Number(d.recycled_units) || 0);
-        const sub  = d.stage === 'declined' && d.cancelled_reason
-            ? `<div class="b2b-doc-sub">${escapeHtml(d.cancelled_reason)}</div>` : '';
+        const sub  = d.stage === 'declined' && d.declined_reason
+            ? `<div class="b2b-doc-sub">${escapeHtml(d.declined_reason)}</div>` : '';
         return `
         <tr class="b2b-clickrow" onclick="b2bOpenDeal('view','${d.id}')">
             <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
