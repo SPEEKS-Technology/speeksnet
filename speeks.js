@@ -55,6 +55,7 @@ const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
 const MONTHLY_BRIEF_URL = `${_BASE}/monthly-brief`;
 const B2B_URL           = `${_BASE}/b2b-deals`;
 const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
+const BUYING_MARGIN_URL = `${_BASE}/buying-margin`;
 const RECYCLE_URL       = `${_BASE}/recycle-requests`;
 const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
 const VARIANCE_REPLIES_URL = `${_BASE}/variance-replies`;
@@ -686,8 +687,10 @@ window.addEventListener('click', (e) => {
 
 document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    // Escape peels one layer at a time: export picker, photo viewer, camera, then
-    // modals — dismissing a picture must never take the audit down with it.
+    // Escape peels one layer at a time: the search box, export picker, photo
+    // viewer, camera, then modals — dismissing a picture must never take the
+    // audit down with it. Search sits on top: it opens OVER whatever you had.
+    if (typeof _jumpOpen !== 'undefined' && _jumpOpen) { closeJumpSearch(); return; }
     const ex = document.getElementById('exportRangeModal');
     if (ex && ex.classList.contains('open')) { _exClose(); return; }
     const lb = document.getElementById('auditPhotoLightbox');
@@ -3879,7 +3882,9 @@ function applyKpiReminder() {
     // manager.
     const vrOn = typeof _vrDotNeeded === 'function' && _vrDotNeeded();
     const agOn = typeof _agDotNeeded === 'function' && _agDotNeeded();
-    document.querySelectorAll('.nav-link[href="workspace.html"]').forEach(a => _kpiToggleDot(a, on || vrOn || agOn));
+    const bmOn = typeof _bmDotNeeded === 'function' && _bmDotNeeded();
+    document.querySelectorAll('.nav-link[href="workspace.html"]').forEach(a => _kpiToggleDot(a, on || vrOn || agOn || bmOn));
+    _kpiToggleDot(document.getElementById('ws-tab-mreplies'), bmOn);
     _kpiToggleDot(document.getElementById('ws-tab-kpis'), on);
     _kpiToggleDot(document.getElementById('ws-tab-vreplies'), vrOn);
     _kpiToggleDot(document.getElementById('ws-tab-aging'), agOn);
@@ -4220,6 +4225,20 @@ function switchWorkspaceTab(name) {
         loadWorkspaceKpis();
     } else if (name === 'vreplies') {
         loadVarianceReplies();
+    } else if (name === 'mreplies') {
+        // Same single-store-alert routing as the other workspace tools: a feed
+        // card for one store lands on that store without switching dashboards.
+        const bmOverride = _consumeMsmAlertStore();
+        if (_bmIsDM()) {
+            _bmViewStore = null;
+            const sel = document.getElementById('bm-store-select');
+            if (bmOverride && sel && [...sel.options].some(o => o.value.toUpperCase() === bmOverride)) {
+                sel.value = bmOverride;
+            }
+        } else {
+            _bmViewStore = bmOverride || _msmDefaultStore();
+        }
+        loadMarginReplies();
     } else if (name === 'aging') {
         // Resolve which store the aging view shows ONCE per open (a single-store /
         // DM-routed alert override wins, else the active dashboard store), so the
@@ -4250,6 +4269,8 @@ function initWorkspace() {
     _wsBriefLoaded = false;
     _wsKpiLoaded   = false;
     const hash = (window.location.hash || '').replace('#', '');
+    // 'mreplies' is deliberately NOT accepted — Margin Replies is parked, so a
+    // #mreplies deep link falls through to the brief. Add it back with the tab.
     let initial = ['brief', 'kpis', 'vreplies', 'aging'].includes(hash) ? hash : 'brief';
     // A tab can be hidden by its role gate or a Feature Access override
     // (applyRoleBasedUI already ran), so never land on one the user can't see —
@@ -5409,7 +5430,10 @@ function renderQMTab(tab) {
 
         html += '<div class="qm-category-items open" style="margin-left: 0; padding-left: 0; border: none; background: transparent; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start;">';
         for (const [category, items] of Object.entries(groupedData)) {
-            html += items.map(item => `
+            // Sheet rows arrive unordered; show "Google Review 1..14" in numeric order.
+            const sorted = [...items].sort((a, b) =>
+                String(a.name || '').localeCompare(String(b.name || ''), undefined, { numeric: true, sensitivity: 'base' }));
+            html += sorted.map(item => `
                 <div class="qm-item" style="margin-bottom: 0;">
                     <div class="qm-item-header">
                         <div class="qm-item-name" onclick="this.parentElement.nextElementSibling.classList.toggle('open')">
@@ -10492,6 +10516,9 @@ function applyRoleBasedUI() {
     // the panel, so overrides can add or remove tools for any role without the
     // static role-class unions drifting out of sync.
     _syncToolsPanelChrome();
+    // Search chip in the top bar + the pinned row in the tools panel. Runs after
+    // the panel chrome so the row lands in a panel that's finished resolving.
+    try { _jumpSync(); } catch (_) { /* never let search break the page render */ }
     // Only matters when one user holds both Preferred Purchases entries; the
     // labels are otherwise already correct in the markup.
     try { _plSyncToolLabels(); } catch (_) { /* module may not be loaded on this page */ }
@@ -10741,7 +10768,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -10809,6 +10836,9 @@ document.addEventListener("DOMContentLoaded", () => {
         initTicker();
         initWorkspace();
         initOperations();
+        // A #jump=<feature> deep-link from the search box: land, then spotlight
+        // the panel that was asked for.
+        try { _jumpHandleHash(); } catch (_) { /* not fatal to the page */ }
         applyKpiReminder();
         // re-evaluate the weekly-KPI reminder window each minute so it appears/clears live
         setInterval(applyKpiReminder, 60000);
@@ -18874,7 +18904,7 @@ const FA_ROLES = [
     { slug: 'ceo',               short: 'CEO', label: 'CEO' },
     { slug: 'district-manager',  short: 'DM',  label: 'District Manager' },
     { slug: 'owner-manager',     short: 'OM',  label: 'Owner (Manager)' },
-    { slug: 'manager',           short: 'MGR', label: 'Manager (incl. Multi-Store)' },
+    { slug: 'manager',           short: 'MGR', label: 'Manager (Incl. Multi-Store)' },
     { slug: 'assistant-manager', short: 'ASM', label: 'Assistant Manager' },
     { slug: 'employee',          short: 'EMP', label: 'Employee' },
     { slug: 'training',          short: 'TRN', label: 'Training' },
@@ -18883,8 +18913,8 @@ const FA_ROLES = [
 
 const FEATURE_CATALOG = [
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
-    { key: 'tool-claims-store',        label: 'Insurance Claims (store)',      tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
-    { key: 'tool-claims-oversight',    label: 'Insurance Claims (oversight)',  tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
+    { key: 'tool-claims-store',        label: 'Insurance Claims (Store)',      tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
+    { key: 'tool-claims-oversight',    label: 'Insurance Claims (Oversight)',  tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'tom', 'owner-manager'] },
     { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: 'Content', def: ['district-manager'] },
     { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
@@ -18898,7 +18928,7 @@ const FEATURE_CATALOG = [
     { key: 'tool-preferred-request',   label: 'Preferred Purchases',           tab: 'tools', group: 'Orders', def: ['district-manager', 'manager', 'assistant-manager'] },
     { key: 'tool-preferred-approve',   label: 'Preferred Purchases (Owner)',   tab: 'tools', group: 'Orders', def: ['owner-manager'] },
     { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
-    { key: 'tool-feature-access',      label: 'Feature Access (this tool)',    tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
+    { key: 'tool-feature-access',      label: 'Feature Access (This Tool)',    tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
@@ -18906,32 +18936,40 @@ const FEATURE_CATALOG = [
     { key: 'tool-monthly-awards',      label: 'Monthly Awards',                tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-system-hotkeys',      label: 'System Hotkeys',                tab: 'tools', group: 'System', def: ['district-manager'] },
     // ---- Widgets & side panels (ASM inherits employee defaults; mirrored here) ----
-    { key: 'widget-goals-panel',       label: 'Goals & Initiatives (sidebar)', tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'employee', 'training', 'assistant-manager'] },
-    { key: 'widget-checklist-panel',   label: 'Checklist (sidebar)',           tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'district-manager', 'assistant-manager'] },
-    { key: 'widget-audit-panel',       label: 'Cleaning Checklist (sidebar)',  tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'widget-scorecard-alerts',  label: 'Command Center (whole widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'widget-goals-panel',       label: 'Goals & Initiatives (Sidebar)', tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'employee', 'training', 'assistant-manager'] },
+    { key: 'widget-checklist-panel',   label: 'Checklist (Sidebar)',           tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'district-manager', 'assistant-manager'] },
+    { key: 'widget-audit-panel',       label: 'Cleaning Checklist (Sidebar)',  tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-scorecard-alerts',  label: 'Command Center (Whole Widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'cc-scorecard',             label: 'Command Center · Scorecard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'cc-ebay',                  label: 'Command Center · eBay tab',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'cc-buying',                label: 'Command Center · Buying & Sales tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
-    { key: 'widget-buying-selling',    label: 'Buying & Sales tab (employee)', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
-    { key: 'widget-listing-goals',     label: 'Listing Goals bar (action menu)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager', 'training'] },
-    { key: 'widget-emp-weekly-kpis',   label: 'Weekly KPIs tab (employee)',    tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'widget-buying-selling',    label: 'Buying & Sales tab (Employee)', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'widget-listing-goals',     label: 'Listing Goals bar (Action Menu)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager', 'training'] },
+    { key: 'widget-emp-weekly-kpis',   label: 'Weekly KPIs tab (Employee)',    tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     // The three district action-menu rows. Defaults mirror exactly what the
     // dashboard panels they replaced were gated to: Cleaning and Listing were
     // DM+CEO, Monthly Team Goals was DM-only. Delegation pairs each with the
     // manager row of the same stem (widget-dm-listing-goals ↔ widget-listing-goals).
-    { key: 'widget-dm-audit',          label: 'Cleaning Checklist (district)', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
-    { key: 'widget-dm-goals',          label: 'Monthly Team Goals (district)', tab: 'widgets', group: 'Dashboard', def: ['district-manager'] },
-    { key: 'widget-dm-listing-goals',  label: 'Listing Goals (district)',      tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
-    { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown (tab)',     tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'widget-ws-weekly-kpis',    label: 'Weekly KPIs (tab)',             tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'widget-variance-replies',  label: 'Variance Replies (tab)',        tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
+    { key: 'widget-dm-audit',          label: 'Cleaning Checklist (District)', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    { key: 'widget-dm-goals',          label: 'Monthly Team Goals (District)', tab: 'widgets', group: 'Dashboard', def: ['district-manager'] },
+    { key: 'widget-dm-listing-goals',  label: 'Listing Goals (District)',      tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown (Tab)',     tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-ws-weekly-kpis',    label: 'Weekly KPIs (Tab)',             tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-variance-replies',  label: 'Variance Replies (Tab)',        tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
     { key: 'cap-variance-dm',          label: 'Variance Replies (DM)',         tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
-    { key: 'widget-aging-inventory',   label: 'Aging Inventory (tab)',         tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
+    // Margin Replies — PARKED (2026-07-29), UNFINISHED. Deliberately absent from
+    // the catalog, not merely defaulted off: a catalog entry would let someone
+    // switch a half-built tool on from Feature Access. With no entry,
+    // _featureEffectiveVisible returns false (feature not found), which also keeps
+    // it out of Ctrl+K and off the Workspace nav link. Restore these two lines to
+    // bring it back:
+    // { key: 'widget-margin-replies', label: 'Margin Replies (Tab)', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
+    // { key: 'cap-bmargin-dm',        label: 'Margin Replies (DM)',  tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
+    { key: 'widget-aging-inventory',   label: 'Aging Inventory (Tab)',         tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'cap-aging-dm',             label: 'Aging Inventory (DM)',          tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
-    { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
-    { key: 'widget-ops-b2b',           label: 'B2B Deals (tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'tom', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
+    { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'tom', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
@@ -19119,6 +19157,8 @@ function _featureEffectiveVisible(featureKey, userRoleClass, userName) {
 // Tabbed sections keyed by their nav-link href → the sub-tab feature keys they
 // contain. A section's nav link shows if ANY of its sub-tabs is visible.
 const _SECTION_TABS = {
+    // 'widget-margin-replies' is intentionally omitted — see the parked block in
+    // FEATURE_CATALOG. Add it back alongside the catalog entries.
     'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
     'operations.html': ['widget-ops-callbacks', 'widget-ops-b2b'],
 };
@@ -19421,8 +19461,8 @@ function _faChipHtml(f, role) {
     const eff = ovr === null ? def : ovr;
     const locked = f.key === 'tool-feature-access' && role.slug === 'district-manager';
     const title = locked
-        ? 'Always on for District Managers (safety lock)'
-        : `${role.label}: ${eff ? 'visible' : 'hidden'}${ovr !== null ? ' (overridden)' : ' (default)'} — click to ${eff ? 'hide' : 'show'}`;
+        ? 'Always on for District Managers (Safety Lock)'
+        : `${role.label}: ${eff ? 'visible' : 'hidden'}${ovr !== null ? ' (Overridden)' : ' (Default)'} — click to ${eff ? 'hide' : 'show'}`;
     const icon = locked ? FA_ICON_LOCK : (eff ? FA_ICON_CHECK : FA_ICON_X);
     return `<button class="fa-chip ${eff ? 'fa-on' : 'fa-off'}${ovr !== null ? ' fa-ovr' : ''}"${locked ? ' disabled' : ''} onclick="faToggleRole('${f.key}', '${role.slug}')" title="${escapeHtml(title)}">${icon}</button>`;
 }
@@ -19560,7 +19600,7 @@ function _faCoverageHtml() {
             const disp = u ? u.name : low;
             const chips = active[low].map(k => `<span style="display:inline-flex; align-items:center; gap:6px; background:#eef2ff; color:#3730a3; font-size:11.5px; font-weight:700; border-radius:7px; padding:3px 8px;">${escapeHtml(labelFor(k))}<button title="Remove this tool" onclick="faRevokeCoverage('${escapeHtml(low)}','${k}')" style="border:none; background:none; color:#6366f1; cursor:pointer; font-weight:800; font-size:13px; line-height:1;">×</button></span>`).join(' ');
             return `<div style="display:flex; align-items:flex-start; gap:10px; justify-content:space-between; padding:8px 2px; border-bottom:1px solid #f1f5f9;">
-                <div style="flex:1;"><div style="font-size:12.5px; font-weight:800; color:var(--slate-charcoal); margin-bottom:5px;">${escapeHtml(disp)}${u ? '' : ' <span style=\"font-weight:600;color:#cbd5e1;\">(not in directory)</span>'}</div><div style="display:flex; flex-wrap:wrap; gap:6px;">${chips}</div></div>
+                <div style="flex:1;"><div style="font-size:12.5px; font-weight:800; color:var(--slate-charcoal); margin-bottom:5px;">${escapeHtml(disp)}${u ? '' : ' <span style=\"font-weight:600;color:#cbd5e1;\">(Not in Directory)</span>'}</div><div style="display:flex; flex-wrap:wrap; gap:6px;">${chips}</div></div>
                 <button class="btn-secondary" style="height:28px; font-size:11.5px; padding:0 11px; border-radius:7px; flex-shrink:0;" onclick="faEndCoverage('${escapeHtml(low)}')">End delegation</button>
             </div>`;
         }).join('');
@@ -19640,7 +19680,7 @@ function _faUserTabHtml() {
     const opts = ['<option value="">Select a user…</option>'].concat(names.map(n => {
         const low = n.toLowerCase();
         const u = _faUsers.find(x => x.name.toLowerCase() === low);
-        const meta = u ? ` — ${u.role}${u.store ? ' · ' + u.store : ''}` : ' — (no longer in directory)';
+        const meta = u ? ` — ${u.role}${u.store ? ' · ' + u.store : ''}` : ' — (No Longer in Directory)';
         const cnt = ovCounts[low] ? ` · ${ovCounts[low]} override${ovCounts[low] > 1 ? 's' : ''}` : '';
         return `<option value="${escapeHtml(low)}" ${low === _faUser ? 'selected' : ''}>${escapeHtml(n + meta + cnt)}</option>`;
     }));
@@ -19771,6 +19811,452 @@ async function faClearUser() {
         _faLoad();
     }
 }
+
+// ============================================================
+// JUMP TO — site-wide quick search (Ctrl K)
+// ============================================================
+// One box that reaches every tool, tab, page, panel and hotbar sheet a person
+// can already click, so nobody has to remember which page a thing lives on.
+//
+// The index is rebuilt on every open from what is ACTUALLY visible right now:
+// SPEEKS Tools are read straight off the tools panel's DOM (a tool added to the
+// panel is searchable immediately, with no second list to maintain), and the
+// rest come from JUMP_PLACES below. That also means Feature Access is honored
+// for free — applyRoleBasedUI has already hidden what this user can't have, and
+// a hidden element is simply not indexed. For destinations that live on another
+// page, we fall back to _featureEffectiveVisible (same resolution, no DOM).
+//
+// Nothing about a result mentions roles or permissions: a searcher can't act on
+// that, so "nothing matches" is all we ever say.
+
+// Words people actually use, per feature key. The label itself is always
+// searched; these are the synonyms it would otherwise miss ("callback sheet").
+const JUMP_KEYWORDS = {
+    'widget-ops-callbacks':      'callback sheet call back call backs customer calls waiting hold looking for item phone',
+    'widget-ops-b2b':            'business to business wholesale bulk corporate deals scan',
+    'widget-ws-monthly-breakdown': 'month numbers breakdown brief summary monthly',
+    'widget-ws-weekly-kpis':     'kpi kpis weekly metrics targets numbers goals',
+    'widget-variance-replies':   'variance replies gm notes dm notes markdown discount negative',
+    // parked: 'widget-margin-replies': 'margin buying margin buy margin replies buyer review overpaid dollars lost',
+    'widget-aging-inventory':    'aging old stock sitting 30 day thirty day inventory',
+    'widget-scorecard-alerts':   'store health scorecard ebay buying sales console command center',
+    'widget-audit-panel':        'cleaning clean store audit tidy',
+    'widget-checklist-panel':    'checklist tasks todo to do my tasks',
+    'widget-goals-panel':        'goals initiatives monthly team',
+    'widget-listing-goals':      'listing goals listings ebay target',
+    'widget-buying-selling':     'buying selling sales bought sold',
+    'widget-district-command':   'district command center all stores overview',
+    'tool-claims-store':         'claim claims shopify usps ups damaged lost package item not received insurance',
+    'tool-claims-oversight':     'claims oversight all stores review insurance',
+    'tool-box-order':            'boxes box shipping supplies packaging tape order',
+    'tool-recycle-inventory':    'recycle scrap ewaste e waste pickup haul junk',
+    'tool-preferred-request':    'preferred purchase purchases request buy approval',
+    'tool-preferred-approve':    'preferred purchase purchases approve owner',
+    'tool-store-comment':        'comment message note feedback to store',
+    'tool-submit-scores':        'scorecard audit score scores grading points marketing',
+    'tool-manager-checklist':    'manager checklist tasks store',
+    'tool-variance-report':      'variance report upload excel markdown',
+    'tool-announcements':        'announcement announcements post news broadcast',
+    'tool-patch-notes':          'patch notes changelog updates release',
+    'tool-user-permissions':     'users permissions pin login accounts roles add user',
+    'tool-feature-access':       'feature access hide show toggle delegation permissions',
+    'tool-email-recipients':     'email recipients reports distribution who gets',
+    'tool-performance-metrics':  'performance metrics alerts thresholds',
+    'tool-company-records':      'records company files documents',
+    'tool-manage-policies':      'policies process processes handbook documents',
+    'tool-monthly-awards':       'awards winners recognition monthly',
+    'tool-system-hotkeys':       'hotkeys boot keys bios device brand reset',
+};
+
+// Everything that isn't a SPEEKS Tools panel item. `feature` drives visibility
+// and keywords; `page` is where it lives (a jump from elsewhere navigates).
+// Tabs deep-link through the plain hash their page already honors on load.
+const JUMP_PLACES = [
+    // --- page tabs -----------------------------------------------------------
+    { id: 'ws-brief',    label: 'Monthly Breakdown',  sub: 'Workspace',  kind: 'tab', feature: 'widget-ws-monthly-breakdown', page: 'workspace.html',  hash: 'brief',     fn: 'switchWorkspaceTab' },
+    { id: 'ws-kpis',     label: 'Store KPIs',         sub: 'Workspace',  kind: 'tab', feature: 'widget-ws-weekly-kpis',       page: 'workspace.html',  hash: 'kpis',      fn: 'switchWorkspaceTab' },
+    { id: 'ws-vrep',     label: 'Variance Replies',   sub: 'Workspace',  kind: 'tab', feature: 'widget-variance-replies',     page: 'workspace.html',  hash: 'vreplies',  fn: 'switchWorkspaceTab' },
+    // Margin Replies is parked (see FEATURE_CATALOG) — restore with its catalog entry:
+    // { id: 'ws-mrep',  label: 'Margin Replies',     sub: 'Workspace',  kind: 'tab', feature: 'widget-margin-replies',       page: 'workspace.html',  hash: 'mreplies',  fn: 'switchWorkspaceTab' },
+    { id: 'ws-aging',    label: 'Aging Inventory',    sub: 'Workspace',  kind: 'tab', feature: 'widget-aging-inventory',      page: 'workspace.html',  hash: 'aging',     fn: 'switchWorkspaceTab' },
+    { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
+    { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
+    // --- dashboard panels (QuickPortal) --------------------------------------
+    { id: 'w-command',   label: 'Command Center',       sub: 'QuickPortal', kind: 'panel', feature: 'widget-scorecard-alerts', page: 'index.html' },
+    { id: 'w-buying',    label: 'Buying & Sales',       sub: 'QuickPortal', kind: 'panel', feature: 'widget-buying-selling',   page: 'index.html' },
+    { id: 'w-district',  label: 'District Command Center', sub: 'QuickPortal', kind: 'panel', feature: 'widget-district-command', page: 'index.html' },
+    { id: 'w-listing',   label: 'Listing Goals',        sub: 'QuickPortal', kind: 'panel', feature: 'widget-listing-goals',    page: 'index.html' },
+    { id: 'w-checklist', label: 'Checklist',            sub: 'QuickPortal', kind: 'panel', feature: 'widget-checklist-panel',  page: 'index.html' },
+    { id: 'w-audit',     label: 'Cleaning Checklist',   sub: 'QuickPortal', kind: 'panel', feature: 'widget-audit-panel',      page: 'index.html' },
+    { id: 'w-goals',     label: 'Goals & Initiatives',  sub: 'QuickPortal', kind: 'panel', feature: 'widget-goals-panel',      page: 'index.html' },
+    // --- tabs inside a tool (open the modal, then land on the tab) -----------
+    { id: 'sub-audit',   label: 'SPEEKS Audit', sub: 'Inside Submit Scores',    kind: 'sub', feature: 'tool-submit-scores', keys: 'audit 165 points practice',
+      run: () => { openScorecardModal(); switchScoreTab('audit'); } },
+    { id: 'sub-mycases', label: 'My Cases',     sub: 'Inside Insurance Claims', kind: 'sub', feature: 'tool-claims-store',  keys: 'my claims open cases status',
+      run: () => { openClaimsModal(); switchClaimsTab('view'); } },
+    // --- pages (visibility mirrors the nav link) ----------------------------
+    { id: 'page-index',  label: 'QuickPortal',           sub: 'Main navigation', kind: 'page', page: 'index.html',      keys: 'home dashboard main portal' },
+    { id: 'page-ops',    label: 'Operations',            sub: 'Main navigation', kind: 'page', page: 'operations.html', keys: 'operations ops' },
+    { id: 'page-ws',     label: 'Workspace',             sub: 'Main navigation', kind: 'page', page: 'workspace.html',  keys: 'workspace analytics' },
+    { id: 'page-docs',   label: 'Processes & Policies',  sub: 'Main navigation', kind: 'page', page: 'docs.html',       keys: 'processes policies docs handbook how to' },
+    { id: 'page-stats',  label: 'Stats & Awards',        sub: 'Main navigation', kind: 'page', page: 'stats.html',      keys: 'stats awards leaderboard' },
+];
+
+const JUMP_ICONS = {
+    tool:  '<path d="M14.7 6.3a4 4 0 0 1-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 1 5.4-5.4"/>',
+    tab:   '<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18M9 5v5"/>',
+    page:  '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+    panel: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
+    link:  '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
+    sub:   '<polyline points="9 10 4 15 9 20"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/>',
+};
+const JUMP_GROUPS = { tab: 'Tabs', tool: 'SPEEKS Tools', sub: 'Inside a tool', panel: 'On the dashboard', link: 'Sheets & links', page: 'Pages' };
+const JUMP_ORDER  = ['tab', 'tool', 'sub', 'panel', 'link', 'page'];
+
+let _jumpIndex = [];
+let _jumpSel = 0;
+let _jumpOpen = false;
+
+function _jumpPage() {
+    return (location.pathname.split('/').pop() || 'index.html').toLowerCase() || 'index.html';
+}
+function _jumpRoleClass() {
+    const r = sessionStorage.getItem('speeksUserRole') || 'employee';
+    return 'role-' + r.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+}
+// Visible == what this user can actually reach. On the page that owns the
+// element, trust the DOM (applyRoleBasedUI already resolved every override);
+// anywhere else, resolve the same rules without it.
+function _jumpFeatureVisible(key) {
+    if (!key) return true;
+    const el = document.querySelector('[data-feature="' + key + '"]');
+    if (el) return el.style.display !== 'none' && !el.hasAttribute('hidden');
+    return _featureEffectiveVisible(key, _jumpRoleClass(), sessionStorage.getItem('speeksUserName') || '');
+}
+
+// SPEEKS Tools, read off the panel itself so the list can never drift. Clicking
+// the row later just clicks the real link, which keeps every tool's own open
+// logic (and its panel-closing) in one place.
+function _jumpToolItems() {
+    return Array.from(document.querySelectorAll('#toolsSidePanel .tools-item'))
+        .filter(a => a.style.display !== 'none')
+        .map(a => {
+            const key = a.getAttribute('data-feature') || '';
+            const group = a.closest('.tools-group');
+            const label = (a.querySelector('.pl-tool-label') || a).textContent.replace(/\s+/g, ' ').trim();
+            return {
+                id: 'tool:' + (key || label),
+                label,
+                sub: 'SPEEKS Tools' + (group && group.querySelector('.tools-group-label')
+                    ? ' · ' + group.querySelector('.tools-group-label').textContent.trim() : ''),
+                kind: 'tool',
+                keys: JUMP_KEYWORDS[key] || '',
+                run: () => a.click(),
+            };
+        });
+}
+
+// Hotbar links only exist on the dashboard, but people search for them from
+// everywhere ("passwords"). Cache the visible ones whenever we're on the
+// dashboard — which is where every session starts — and serve that cache
+// elsewhere. Store-specific URLs stay correct because the cache is per device.
+function _jumpCacheHotbar() {
+    if (_jumpPage() !== 'index.html') return;
+    const links = Array.from(document.querySelectorAll('.hotbars-stack .hotbar-btn'))
+        .filter(a => a.style.display !== 'none' && a.getAttribute('href'))
+        .filter(a => { const w = a.closest('.hotbar-wrapper'); return w && w.style.display !== 'none'; })
+        .map(a => {
+            const wrap = a.closest('.hotbar-wrapper');
+            const bar = wrap && wrap.querySelector('.hotbar-label') ? wrap.querySelector('.hotbar-label').textContent.trim() : '';
+            return { label: a.textContent.replace(/\s+/g, ' ').trim(), href: a.getAttribute('href'), bar };
+        })
+        .filter(l => l.label);
+    try { localStorage.setItem('speeksJumpHotbar', JSON.stringify(links)); } catch (e) { /* full or blocked — no cache, no hotbar results */ }
+}
+function _jumpHotbarItems() {
+    let links = [];
+    try { links = JSON.parse(localStorage.getItem('speeksJumpHotbar') || '[]'); } catch (e) { links = []; }
+    return links.map(l => ({
+        id: 'hb:' + l.bar + ':' + l.label,
+        label: l.label,
+        sub: (l.bar ? l.bar + ' Hotbar' : 'Hotbar') + ' · opens in a new tab',
+        kind: 'link',
+        keys: 'sheet link ' + l.label.toLowerCase(),
+        run: () => window.open(l.href, '_blank', 'noopener'),
+    }));
+}
+
+function _jumpPlaceItems() {
+    const here = _jumpPage();
+    return JUMP_PLACES.filter(p => {
+        if (p.kind === 'page') {
+            if (p.page === here) return false; // already here
+            const link = document.querySelector('.nav-bar a.nav-link[href="' + p.page + '"]');
+            return !link || link.style.display !== 'none';
+        }
+        return _jumpFeatureVisible(p.feature);
+    }).map(p => ({
+        id: p.id,
+        label: p.label,
+        sub: p.kind === 'tab' ? p.sub + ' · tab' : p.sub,
+        kind: p.kind,
+        keys: (p.keys || '') + ' ' + (JUMP_KEYWORDS[p.feature] || ''),
+        run: () => _jumpRunPlace(p),
+    }));
+}
+
+// Where a destination lives, as a URL. Tabs ride the plain hash their page
+// already reads on load (workspace.html#aging); panels use #jump=<feature>,
+// which _jumpHandleHash() picks up once we land.
+function _jumpDest(p) {
+    if (p.kind === 'page') return p.page;
+    return p.page + (p.hash ? '#' + p.hash : '#jump=' + p.feature);
+}
+
+function _jumpRunPlace(p) {
+    if (p.run) { p.run(); return; }                       // tool sub-tabs: same on every page
+    const here = _jumpPage();
+    if (p.kind === 'page' || p.page !== here) { location.href = _jumpDest(p); return; }
+    if (p.kind === 'tab' && typeof window[p.fn] === 'function') {
+        window[p.fn](p.hash);
+        const el = document.querySelector('.ws-wrap, .ops-wrap');
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+    }
+    _jumpSpotlight(p.feature);
+}
+
+// Take someone to a panel that's already on this page: scroll it into view and
+// pulse it once, so they see WHICH thing they asked for among a wall of cards.
+function _jumpSpotlight(featureKey) {
+    const el = document.querySelector('[data-feature="' + featureKey + '"]');
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.remove('jump-spotlight');
+    void el.offsetWidth;                 // restart the animation if it's re-picked
+    el.classList.add('jump-spotlight');
+    setTimeout(() => el.classList.remove('jump-spotlight'), 2200);
+}
+
+// A panel deep-link (#jump=widget-...) survives the page load; run it once the
+// dashboard has drawn, then drop it from the URL so a refresh doesn't re-jump.
+function _jumpHandleHash() {
+    const m = (location.hash || '').match(/^#jump=(.+)$/);
+    if (!m) return;
+    const key = decodeURIComponent(m[1]);
+    setTimeout(() => _jumpSpotlight(key), 400);
+    try { history.replaceState(null, '', location.pathname); } catch (e) { /* hash just stays */ }
+}
+
+function _jumpBuildIndex() {
+    _jumpCacheHotbar();
+    _jumpIndex = [].concat(_jumpPlaceItems(), _jumpToolItems(), _jumpHotbarItems());
+}
+
+// ---- pins ------------------------------------------------------------------
+// The user chooses what sits at the top, rather than the box guessing from
+// history. localStorage, not sessionStorage: a pin is a standing preference.
+function _jumpPins() {
+    try { return JSON.parse(localStorage.getItem('speeksJumpPins') || '[]'); } catch (e) { return []; }
+}
+function _jumpIsPinned(id) { return _jumpPins().indexOf(id) !== -1; }
+
+// Newly pinned items go to the BOTTOM of the pinned group, so pinning something
+// never reshuffles the rows above it out from under the cursor.
+function _jumpTogglePin(id) {
+    const pins = _jumpPins();
+    const at = pins.indexOf(id);
+    if (at === -1) pins.push(id); else pins.splice(at, 1);
+    try { localStorage.setItem('speeksJumpPins', JSON.stringify(pins)); } catch (e) { /* not worth failing over */ }
+    _jumpRender();
+}
+
+// ---- matching --------------------------------------------------------------
+const _jumpNorm = s => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+function _jumpScore(item, q) {
+    const t = _jumpNorm(item.label), k = _jumpNorm(item.keys), s = _jumpNorm(item.sub);
+    if (t === q) return 120;
+    if (t.startsWith(q)) return 100;
+    if (new RegExp('\\b' + q).test(t)) return 80;
+    if (t.includes(q)) return 60;
+    if (new RegExp('\\b' + q).test(k)) return 40;
+    if (k.includes(q)) return 25;
+    if (s.includes(q)) return 12;
+    return -1;
+}
+
+function _jumpMatches(q) {
+    if (!q) {
+        // Pinned first, in the order they were pinned; everything else below.
+        const pinned = _jumpPins().map(id => _jumpIndex.find(i => i.id === id)).filter(Boolean);
+        const rest = _jumpIndex.filter(i => !pinned.includes(i));
+        return [
+            { group: 'Pinned', items: pinned },
+            { group: pinned.length ? 'Everything else' : 'Everything', items: rest },
+        ].filter(g => g.items.length);
+    }
+    const scored = _jumpIndex.map(i => ({ i, s: _jumpScore(i, q) })).filter(x => x.s >= 0)
+        .sort((a, b) => b.s - a.s || a.i.label.localeCompare(b.i.label));
+    // Group by kind so the list is scannable, but float whichever group holds
+    // the best match to the top — the pre-selected row has to BE the best
+    // answer. Typing "checklist" must land on the panel actually called
+    // Checklist, not on "Manager Checklist" just because Tools group earlier.
+    return JUMP_ORDER.map((k, ord) => {
+        const items = scored.filter(x => x.i.kind === k);
+        return { group: JUMP_GROUPS[k], items: items.map(x => x.i), best: items.length ? items[0].s : -1, ord };
+    }).filter(g => g.items.length).sort((a, b) => b.best - a.best || a.ord - b.ord);
+}
+
+// ---- rendering -------------------------------------------------------------
+function _jumpHighlight(label, q) {
+    if (!q) return escapeHtml(label);
+    const i = _jumpNorm(label).indexOf(q);
+    if (i < 0) return escapeHtml(label);
+    return escapeHtml(label.slice(0, i)) + '<mark>' + escapeHtml(label.slice(i, i + q.length)) + '</mark>' + escapeHtml(label.slice(i + q.length));
+}
+
+function _jumpRender() {
+    const list = document.getElementById('jumpList');
+    if (!list) return;
+    const q = _jumpNorm((document.getElementById('jumpInput') || {}).value);
+    const groups = _jumpMatches(q);
+    const flat = groups.flatMap(g => g.items);
+    if (_jumpSel >= flat.length) _jumpSel = Math.max(0, flat.length - 1);
+
+    if (!flat.length) {
+        list.innerHTML = '<div class="jump-empty"><b>Nothing here matches “' + escapeHtml(q) + '”</b>'
+            + '<span>Try a shorter word, or part of the name.</span></div>';
+        return;
+    }
+    let n = -1;
+    list.innerHTML = groups.map(g => '<div class="jump-group">' + escapeHtml(g.group) + '</div>' + g.items.map(it => {
+        n++;
+        const ext = it.kind === 'link' ? '<span class="jump-ext">↗</span>' : '';
+        const pinned = _jumpIsPinned(it.id);
+        return '<div class="jump-row' + (n === _jumpSel ? ' sel' : '') + '" data-i="' + n + '" role="option" aria-selected="' + (n === _jumpSel) + '">'
+            + '<span class="jump-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + JUMP_ICONS[it.kind] + '</svg></span>'
+            + '<span class="jump-text"><span class="jump-title">' + _jumpHighlight(it.label, q) + ext + '</span>'
+            + '<span class="jump-sub">' + escapeHtml(it.sub) + '</span></span>'
+            + '<button type="button" class="jump-pin' + (pinned ? ' on' : '') + '" data-pin="' + escapeHtml(it.id) + '"'
+            + ' title="' + (pinned ? 'Unpin' : 'Pin To The Top') + '" aria-label="' + (pinned ? 'Unpin ' : 'Pin ') + escapeHtml(it.label) + '">'
+            + '<svg viewBox="0 0 24 24" fill="' + (pinned ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+            + '<path d="M12 17.3V22"/><path d="M9 10.9V5.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v5.4l1.7 2.6a1 1 0 0 1-.8 1.5H8.1a1 1 0 0 1-.8-1.5z"/></svg>'
+            + '</button></div>';
+    }).join('')).join('');
+    const cur = list.querySelector('.jump-row.sel');
+    if (cur) cur.scrollIntoView({ block: 'nearest' });
+}
+
+function _jumpFlat() { return _jumpMatches(_jumpNorm((document.getElementById('jumpInput') || {}).value)).flatMap(g => g.items); }
+
+function _jumpGo(i) {
+    const item = _jumpFlat()[i];
+    if (!item) return;
+    closeJumpSearch();
+    try { item.run(); } catch (e) { console.warn('Jump failed:', e); }
+}
+
+// ---- open / close ----------------------------------------------------------
+// The page behind is locked and blurred with the SAME mechanism modals use, so
+// the two can't fight. If a modal already had the screen locked we leave the
+// lock alone on close — closing the search must never dismiss what's under it.
+let _jumpLockedByUs = false;
+
+function openJumpSearch() {
+    _jumpEnsureDom();
+    _jumpBuildIndex();
+    _jumpSel = 0;
+    _jumpOpen = true;
+    _jumpLockedByUs = !document.body.classList.contains('no-scroll');
+    lockAndBlurScreen();
+    const wrap = document.getElementById('jumpSearch');
+    const input = document.getElementById('jumpInput');
+    if (wrap) wrap.classList.add('open');
+    if (input) { input.value = ''; input.focus(); }
+    _jumpRender();
+}
+
+function closeJumpSearch() {
+    _jumpOpen = false;
+    const wrap = document.getElementById('jumpSearch');
+    if (wrap) wrap.classList.remove('open');
+    if (!_jumpLockedByUs) return;      // a modal owns the lock — leave it be
+    _jumpLockedByUs = false;
+    document.body.classList.remove('no-scroll');
+    document.body.style.position = '';
+    document.body.style.top = '';
+    const overlay = document.getElementById('globalOverlay');
+    if (overlay) overlay.classList.remove('show');
+    window.scrollTo(0, _lockedScrollY);  // release the pinned body where it was
+}
+
+// ---- one-time DOM ----------------------------------------------------------
+// Injected from here rather than pasted into all 5 shells — that copy-paste is
+// exactly how the tools panel drifted between pages.
+function _jumpEnsureDom() {
+    if (document.getElementById('jumpSearch')) return;
+    const wrap = document.createElement('div');
+    wrap.id = 'jumpSearch';
+    wrap.className = 'jump-scrim';
+    wrap.innerHTML =
+        '<div class="jump-box" role="dialog" aria-modal="true" aria-label="Search SPEEKSNET">'
+        + '<div class="jump-search">'
+        + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
+        + '<input id="jumpInput" type="text" autocomplete="off" spellcheck="false" placeholder="Search tools, tabs and sheets…" aria-label="Search">'
+        + '</div>'
+        + '<div class="jump-list" id="jumpList" role="listbox"></div>'
+        + '</div>';
+    document.body.appendChild(wrap);
+
+    wrap.addEventListener('click', e => { if (e.target === wrap) closeJumpSearch(); });
+    document.getElementById('jumpInput').addEventListener('input', () => { _jumpSel = 0; _jumpRender(); });
+    document.getElementById('jumpList').addEventListener('click', e => {
+        // The pin sits inside the row, and the row is the go-button — so the pin
+        // has to claim the click before it becomes a jump.
+        const pin = e.target.closest('.jump-pin');
+        if (pin) { e.stopPropagation(); _jumpTogglePin(pin.dataset.pin); return; }
+        const row = e.target.closest('.jump-row');
+        if (row) _jumpGo(parseInt(row.dataset.i, 10));
+    });
+}
+
+// The one visible way in, besides the hotkey itself. There is deliberately no
+// chip in the top bar: the nav is already dense, and the search box is where
+// someone hunting for a tool is looking anyway.
+function _jumpSync() {
+    // The shortcut is spelled out exactly once, riding along in the panel's own
+    // search bar. A separate row would cost ~58px off a 300px-wide panel and
+    // push the tool list into scrolling — the search box is already the thing
+    // people look at when they're hunting for something.
+    const toolsSearch = document.querySelector('#toolsSidePanel .tools-search');
+    if (toolsSearch && !document.getElementById('jumpToolsKey')) {
+        const key = document.createElement('button');
+        key.id = 'jumpToolsKey';
+        key.className = 'jump-tools-key';
+        key.type = 'button';
+        key.title = 'Search Everything — Tools, Tabs And Sheets (Ctrl K)';
+        key.textContent = 'Ctrl K';
+        key.onclick = e => { e.preventDefault(); _closeToolsPanel(); openJumpSearch(); };
+        toolsSearch.appendChild(key);
+    }
+}
+
+// Ctrl/Cmd+K from anywhere, including inside a text field — that combo can't be
+// confused with typing, and a shortcut that dies in an input is a shortcut
+// people stop trusting. Arrow/Enter handling only runs while the box is open.
+document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        _jumpOpen ? closeJumpSearch() : openJumpSearch();
+        return;
+    }
+    if (!_jumpOpen) return;
+    const flat = _jumpFlat();
+    if (e.key === 'ArrowDown') { e.preventDefault(); if (flat.length) { _jumpSel = (_jumpSel + 1) % flat.length; _jumpRender(); } }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (flat.length) { _jumpSel = (_jumpSel - 1 + flat.length) % flat.length; _jumpRender(); } }
+    else if (e.key === 'Enter') { e.preventDefault(); _jumpGo(_jumpSel); }
+});
 
 // ============================================================
 // VARIANCE REPLIES (workspace tab)
@@ -20966,6 +21452,570 @@ function _vrRenderBubble(icon, title, bodyText, summary, stores) {
     // Re-stack shortly after: the store comment fades in on its own 1.5s timer
     // and the claim/recycle bubbles may land on later checks.
     setTimeout(_positionVarianceAlert, 2200);
+    b.animate([
+        { transform: 'scale(0.95) translateX(10px)', opacity: 0 },
+        { transform: 'scale(1) translateX(0)', opacity: 1 }
+    ], { duration: 400, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
+}
+
+// ============================================================
+// MARGIN REPLIES (workspace tab)
+// ============================================================
+// Buying margin is knowable on the BUY date, so feedback reaches the buyer days
+// after the deal instead of waiting on sell-through the way variance does.
+//
+// Every Monday 10:00 Central the buying-margin fn reads the weekly KPI rows and
+// snapshots a report per store: which buyers sit under the margin target over
+// the trailing 2 weeks, their conversion alongside it, and the store rollup.
+// Nothing is uploaded for that half — kpi_entries already holds buying_value
+// (projected resale) and buying_cost per buyer per week.
+//
+// The DM then pulls ONLY the flagged buyers from the POS and uploads their
+// worst deals; managers explain them in the same 3-column cycle as variance.
+//
+// Deliberately NO cap on flagged buyers per store: that count is the progress
+// metric managers watch fall over time, so capping it would make a 5-problem
+// store look identical to a 3-problem one.
+
+const _BM_MANAGER_ROLES = new Set(['manager', 'owner (manager)', 'owner manager']);
+
+function _bmRole() { return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(); }
+
+// A manager can be delegated the DM side (Feature Access → "Margin Replies (DM)"),
+// which swaps them to the DM experience wholesale — same pattern as cap-variance-dm.
+function _bmHasDmDelegation() {
+    if (typeof _featureOverrideFor !== 'function') return false;
+    const roleClass = 'role-' + _bmRole().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+    const name = sessionStorage.getItem('speeksUserName') || '';
+    return _featureOverrideFor('cap-bmargin-dm', roleClass, name) === true;
+}
+function _bmIsDM() { return _bmRole() === 'district manager' || _bmHasDmDelegation(); }
+// Mutually exclusive with the DM hat, so no render path ever gets both.
+function _bmIsManager() { return _BM_MANAGER_ROLES.has(_bmRole()) && !_bmHasDmDelegation(); }
+
+// PARKED (2026-07-29): unfinished and hidden until the POS report that supplies
+// its line items exists. Hiding the tab isn't enough on its own — a #mreplies
+// deep link and the login-time reminder checks would still run and poll an
+// endpoint that isn't deployed — so every entry point asks this first.
+// Its FEATURE_CATALOG entries are commented out, so _featureEffectiveVisible
+// finds no feature and returns false: this is hard-off until those are restored,
+// and it can't be switched on from Feature Access either (by design — the tool
+// is half-built).
+function _bmEnabled() {
+    if (typeof _featureEffectiveVisible !== 'function') return false;
+    const roleClass = 'role-' + _bmRole().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+    return _featureEffectiveVisible('widget-margin-replies', roleClass,
+        sessionStorage.getItem('speeksUserName') || '') === true;
+}
+
+function _bmStores() {
+    if (_bmIsDM()) return ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    return _bmMyStores();
+}
+// An MSM covers both managed stores; a plain manager is locked to their own.
+function _bmMyStores() {
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        return [...MULTISTORE_MANAGER_STORES];
+    }
+    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
+}
+
+let _bmPeriods = [];        // period summaries behind the date dropdown
+let _bmCurrent = null;      // { period, buyers, items } currently open
+let _bmConfig = null;       // thresholds, for labelling the view
+let _bmStoreStatus = {};
+let _bmViewStore = null;    // single-store alert routing for an MSM
+let _bmConfigOpen = false;
+
+const _bmPct = v => (v == null || v === '') ? '—' : `${Number(v).toFixed(1)}%`;
+const _bmMoney = v => (v == null || v === '') ? '—' : '$' + Math.round(Number(v)).toLocaleString();
+// "Week ending Jul 26" — the dropdown is a date picker over stored history, so
+// every generated period stays viewable, not just the newest.
+const _bmWeekLabel = d => {
+    const x = new Date(String(d) + 'T12:00:00Z');
+    return isNaN(x.getTime()) ? String(d)
+        : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+};
+
+function _bmTargetMargin() { return Number((_bmConfig && _bmConfig.buyer_margin_max) || 54); }
+
+async function loadMarginReplies() {
+    const body = document.getElementById('bm-body');
+    if (!body) return;
+    if (!_bmEnabled()) { body.innerHTML = '<div class="status-message">This tool isn\'t available yet.</div>'; return; }
+    body.innerHTML = '<div class="status-message">Loading margin replies…</div>';
+    const stores = _bmStores();
+    if (!stores.length) {
+        body.innerHTML = '<div class="status-message">No store assigned to your account.</div>';
+        return;
+    }
+    try {
+        const res = await fetch(`${BUYING_MARGIN_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        _bmPeriods = json.data || [];
+        _bmStoreStatus = json.store_status || {};
+        _bmConfig = json.config || null;
+
+        document.getElementById('bm-config-btn')?.style.setProperty('display', _bmIsDM() ? '' : 'none');
+        document.getElementById('bm-generate-btn')?.style.setProperty('display', _bmIsDM() ? '' : 'none');
+        document.getElementById('bm-store-select')?.style.setProperty('display', _bmIsDM() ? '' : 'none');
+
+        if (_bmIsDM()) {
+            const target = _consumeMsmAlertStore();
+            const sSel = document.getElementById('bm-store-select');
+            if (target && sSel && [...sSel.options].some(o => o.value === target)) sSel.value = target;
+        }
+        _bmBuildPeriodPicker();
+        const pid = _bmSelectedPeriodId();
+        if (pid) await bmOpenPeriod(pid);
+        else { _bmCurrent = null; renderMarginReplies(); }
+        if (!_bmIsDM() && typeof checkMarginReminders === 'function') checkMarginReminders();
+    } catch (e) {
+        body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load margin replies.</div>';
+    }
+}
+
+// The date dropdown. Managers hold period ids directly; the DM picks a WEEK and
+// then flips stores, because a week's reports are generated for all five at once.
+function _bmBuildPeriodPicker() {
+    const sel = document.getElementById('bm-period-select');
+    if (!sel) return;
+    if (!_bmPeriods.length) { sel.style.display = 'none'; sel.innerHTML = ''; return; }
+    const current = sel.value;
+    if (_bmIsDM()) {
+        const seen = new Set();
+        sel.innerHTML = _bmPeriods.map(p => {
+            if (seen.has(p.week_end)) return '';
+            seen.add(p.week_end);
+            return `<option value="${p.week_end}">Week ending ${escapeHtml(_bmWeekLabel(p.week_end))}</option>`;
+        }).join('');
+    } else {
+        const multi = _bmStores().length > 1;
+        sel.innerHTML = _bmPeriods.map(p =>
+            `<option value="${p.id}">${escapeHtml((multi ? p.store + ' · ' : '') + 'Week ending ' + _bmWeekLabel(p.week_end))}</option>`
+        ).join('');
+    }
+    sel.style.display = '';
+    if (current && [...sel.options].some(o => o.value === current)) {
+        sel.value = current; // hold the user's pick across re-renders
+    } else if (!_bmIsDM()) {
+        const def = _bmViewStore || _msmToolStore();
+        const match = def && _bmPeriods.find(p => (p.store || '').toUpperCase() === def);
+        if (match) sel.value = match.id;
+    }
+}
+
+function _bmSelectedPeriodId() {
+    const sel = document.getElementById('bm-period-select');
+    if (!sel || !sel.value) return '';
+    if (!_bmIsDM()) return sel.value;
+    const store = ((document.getElementById('bm-store-select') || {}).value || '').toUpperCase();
+    const p = _bmPeriods.find(p => p.week_end === sel.value && p.store === store);
+    return p ? p.id : '';
+}
+
+function bmOnStoreChange() {
+    _bmConfigOpen = false;
+    if (_bmIsDM() && _bmPeriods.length) {
+        const pid = _bmSelectedPeriodId();
+        if (pid) bmOpenPeriod(pid);
+        else { _bmCurrent = null; renderMarginReplies(); }
+        return;
+    }
+    loadMarginReplies();
+}
+function bmOnPeriodChange() {
+    const pid = _bmSelectedPeriodId();
+    if (pid) bmOpenPeriod(pid);
+    else { _bmCurrent = null; renderMarginReplies(); }
+}
+
+async function bmOpenPeriod(pid) {
+    const body = document.getElementById('bm-body');
+    try {
+        const res = await fetch(`${BUYING_MARGIN_URL}?period_id=${encodeURIComponent(pid)}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error);
+        _bmCurrent = json;
+        renderMarginReplies();
+    } catch (e) {
+        if (body) body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load that week.</div>';
+    }
+}
+
+// --- Render ---------------------------------------------------------------
+
+function _bmStoreStripHtml(p) {
+    const target = _bmTargetMargin();
+    const m = p.store_margin_2wk;
+    const good = m != null && Number(m) >= target;
+    const delta = (p.store_margin_week != null && p.store_margin_prior != null)
+        ? Number(p.store_margin_week) - Number(p.store_margin_prior) : null;
+    // The flagged count IS the progress metric — show it as prominently as the
+    // margin, with its week-over-week movement.
+    const fd = (p.prior_flagged_count == null) ? null : p.flagged_count - p.prior_flagged_count;
+    const fdTxt = fd == null ? '' : (fd === 0 ? 'no change' : (fd < 0 ? `${Math.abs(fd)} fewer than last week` : `${fd} more than last week`));
+    const cell = (label, value, sub, color) => `
+        <div style="flex:1; min-width:130px; padding:12px 16px;">
+            <div style="font-size:10px; font-weight:800; letter-spacing:.5px; text-transform:uppercase; color:#94a3b8;">${escapeHtml(label)}</div>
+            <div style="font-size:22px; font-weight:900; color:${color || 'var(--slate-charcoal)'}; line-height:1.25;">${value}</div>
+            <div style="font-size:11px; font-weight:600; color:#94a3b8;">${escapeHtml(sub || '')}</div>
+        </div>`;
+    return `<div style="display:flex; flex-wrap:wrap; border:1px solid #e2e8f0; border-radius:12px; background:#fff; margin-bottom:16px; overflow:hidden;">
+        ${cell('Store margin · 2 wk', _bmPct(m), `Target ${target}%`, good ? '#047857' : '#b45309')}
+        ${cell('Reported week', _bmPct(p.store_margin_week),
+            delta == null ? '' : `${delta >= 0 ? '+' : ''}${delta.toFixed(1)} vs prior week`,
+            delta == null ? '' : (delta >= 0 ? '#047857' : '#b91c1c'))}
+        ${cell('Buyers under target', String(p.flagged_count ?? 0), fdTxt, (p.flagged_count ? '#b45309' : '#047857'))}
+        ${cell('Buy value · 2 wk', _bmMoney(p.buy_value_2wk), `${p.buyers_evaluated || 0} buyers reviewed`)}
+    </div>`;
+}
+
+function _bmStatusBadge(b) {
+    const map = {
+        eligible:       ['Under target', '#fef2f2', '#b91c1c', '#fecaca'],
+        below_min_buys: ['Below min volume', '#fffbeb', '#92400e', '#fde68a'],
+        no_data:        ['No buys', '#f8fafc', '#64748b', '#e2e8f0'],
+        ok:             ['On target', '#ecfdf5', '#047857', '#a7f3d0'],
+    };
+    const [txt, bg, fg, bd] = map[b.status] || map.ok;
+    return `<span style="display:inline-block; padding:3px 9px; border-radius:999px; background:${bg}; color:${fg}; border:1px solid ${bd}; font-size:11px; font-weight:800;">${txt}</span>`;
+}
+
+function _bmBuyerRowHtml(b, items) {
+    const target = _bmTargetMargin();
+    const under = b.margin_2wk != null && Number(b.margin_2wk) < target;
+    const mine = items.filter(i => i.buyer_id === b.id);
+    // A short sample is labelled rather than hidden — a 1-week number should
+    // never read as a 2-week one.
+    const short = b.weeks_present === 1
+        ? `<span title="Only one of the two weeks has buys — smaller sample than it looks" style="margin-left:6px; font-size:10px; font-weight:800; color:#b45309;">1 WK</span>` : '';
+    // Margin up while conversion fell >3 pts: margin bought by walking deals.
+    // Never a review trigger — a different conversation.
+    const guard = b.guardrail
+        ? `<div style="margin-top:4px; font-size:11px; font-weight:700; color:#b45309;">⚠ Margin rose while conversion dropped — check they aren't walking deals</div>` : '';
+    const streak = (b.flagged && b.consecutive_flags > 1)
+        ? `<div style="margin-top:4px; font-size:11px; font-weight:700; color:#b91c1c;">Flagged ${b.consecutive_flags} weeks running</div>` : '';
+
+    let lines = '';
+    if (b.flagged) {
+        lines = mine.length
+            ? `<div style="margin-top:10px; border-top:1px dashed #e2e8f0; padding-top:10px;">
+                 ${mine.map(_bmItemHtml).join('')}
+               </div>`
+            : `<div style="margin-top:10px; font-size:12px; font-weight:600; color:#94a3b8;">
+                 No deals uploaded yet for this buyer.
+               </div>`;
+    }
+
+    return `<div style="border:1px solid ${under ? '#fecaca' : '#e2e8f0'}; border-radius:12px; background:#fff; padding:14px 16px; margin-bottom:10px;">
+        <div style="display:flex; flex-wrap:wrap; align-items:center; gap:12px;">
+            <div style="flex:2; min-width:170px;">
+                <div style="font-size:14px; font-weight:800; color:var(--slate-charcoal);">${escapeHtml(b.buyer_name)}${short}</div>
+                ${_bmStatusBadge(b)}
+            </div>
+            <div style="flex:1; min-width:92px;">
+                <div style="font-size:10px; font-weight:800; text-transform:uppercase; color:#94a3b8;">2wk margin</div>
+                <div style="font-size:17px; font-weight:900; color:${under ? '#b91c1c' : '#047857'};">${_bmPct(b.margin_2wk)}</div>
+            </div>
+            <div style="flex:1; min-width:84px;">
+                <div style="font-size:10px; font-weight:800; text-transform:uppercase; color:#94a3b8;">Week</div>
+                <div style="font-size:14px; font-weight:700; color:#475569;">${_bmPct(b.margin_week)}</div>
+            </div>
+            <div style="flex:1; min-width:70px;">
+                <div style="font-size:10px; font-weight:800; text-transform:uppercase; color:#94a3b8;">Buys 2wk</div>
+                <div style="font-size:14px; font-weight:700; color:#475569;">${b.buys_2wk ?? 0}</div>
+            </div>
+            <div style="flex:1; min-width:88px;">
+                <div style="font-size:10px; font-weight:800; text-transform:uppercase; color:#94a3b8;">Cust conv</div>
+                <div style="font-size:14px; font-weight:700; color:#475569;">${_bmPct(b.cust_conv)}</div>
+            </div>
+            <div style="flex:1; min-width:92px;">
+                <div style="font-size:10px; font-weight:800; text-transform:uppercase; color:#94a3b8;">Device conv</div>
+                <div style="font-size:14px; font-weight:700; color:#475569;">${_bmPct(b.device_conv)}</div>
+            </div>
+        </div>
+        ${guard}${streak}${lines}
+    </div>`;
+}
+
+function _bmItemHtml(it) {
+    return `<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:baseline; padding:7px 0; border-top:1px solid #f1f5f9;">
+        <span style="flex:2; min-width:170px; font-size:12px; font-weight:700; color:#334155;">${escapeHtml(it.product_name || it.sku || '—')}</span>
+        <span style="font-size:12px; color:#64748b;">Paid ${_bmMoney(it.buy_cost)} · resale ${_bmMoney(it.projected_resale)}</span>
+        <span style="font-size:12px; font-weight:800; color:#b91c1c;">${_bmPct(it.item_margin_pct)}</span>
+        <span style="font-size:12px; font-weight:800; color:#92400e;">−${_bmMoney(it.dollars_lost)} vs target</span>
+    </div>`;
+}
+
+function renderMarginReplies() {
+    const body = document.getElementById('bm-body');
+    const sub = document.getElementById('bm-subtitle');
+    if (!body) return;
+
+    if (_bmConfigOpen && _bmIsDM()) { body.innerHTML = _bmConfigPanelHtml(); if (sub) sub.textContent = ''; return; }
+
+    if (!_bmCurrent || !_bmCurrent.period) {
+        body.innerHTML = `<div class="status-message">No margin report yet${_bmIsDM() ? ' — use Generate to build one from the weekly KPIs.' : '. The first one lands Monday morning.'}</div>`;
+        if (sub) sub.textContent = '';
+        return;
+    }
+    const p = _bmCurrent.period;
+    const buyers = _bmCurrent.buyers || [];
+    const items = _bmCurrent.items || [];
+
+    if (sub) {
+        sub.textContent = `${p.store} · week ending ${_bmWeekLabel(p.week_end)} · ${p.flagged_count || 0} under target`;
+    }
+
+    const flagged = buyers.filter(b => b.flagged);
+    const rest = buyers.filter(b => !b.flagged);
+
+    let html = _bmStoreStripHtml(p);
+
+    if (!flagged.length) {
+        html += `<div style="border:1px solid #a7f3d0; background:#ecfdf5; border-radius:12px; padding:14px 16px; margin-bottom:16px;">
+            <div style="font-size:13px; font-weight:900; color:#065f46;">Every buyer is at or above ${_bmTargetMargin()}% this week.</div>
+            <div style="font-size:12px; font-weight:600; color:#047857; margin-top:3px;">Nothing to reply to — this is what graduation looks like.</div>
+        </div>`;
+    } else {
+        html += `<div style="font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; margin:4px 0 8px;">Under target — ${flagged.length} buyer${flagged.length > 1 ? 's' : ''}</div>`;
+        html += flagged.map(b => _bmBuyerRowHtml(b, items)).join('');
+    }
+
+    if (rest.length) {
+        html += `<details style="margin-top:14px;">
+            <summary style="cursor:pointer; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8;">Everyone else (${rest.length})</summary>
+            <div style="margin-top:10px;">${rest.map(b => _bmBuyerRowHtml(b, items)).join('')}</div>
+        </details>`;
+    }
+
+    if (p.incomplete_count) {
+        html += `<div style="margin-top:14px; font-size:11px; font-weight:600; color:#94a3b8;">
+            ${p.incomplete_count} buyer${p.incomplete_count > 1 ? 's have' : ' has'} only one of the two weeks — marked <b>1 WK</b> above. Usually a schedule gap or a mid-window transfer.
+        </div>`;
+    }
+    body.innerHTML = html;
+}
+
+// --- DM: thresholds + generation ------------------------------------------
+
+function bmToggleConfig() { _bmConfigOpen = !_bmConfigOpen; renderMarginReplies(); }
+
+// Every number in the rule is editable here rather than hardcoded: the item
+// gate especially can't be calibrated until real POS uploads show the true
+// distribution of bad deals.
+function _bmConfigPanelHtml() {
+    const c = _bmConfig || {};
+    const f = (key, label, hint) => `
+        <div style="display:flex; align-items:center; gap:12px; padding:9px 0; border-top:1px solid #f1f5f9;">
+            <label style="flex:1; font-size:12px; font-weight:700; color:#334155;">${escapeHtml(label)}
+                <div style="font-size:11px; font-weight:500; color:#94a3b8;">${escapeHtml(hint)}</div></label>
+            <input id="bm-cfg-${key}" type="number" step="0.1" value="${c[key] ?? ''}" class="form-input-lg" style="width:110px;">
+        </div>`;
+    return `<div style="max-width:640px;">
+        <div style="font-size:13px; font-weight:900; color:var(--slate-charcoal); margin-bottom:2px;">Review thresholds</div>
+        <div style="font-size:12px; color:#64748b; margin-bottom:10px;">Changing these affects future reports. Past weeks keep the thresholds they were generated under.</div>
+        ${f('buyer_margin_max', 'Buyer margin gate (%)', 'Flag buyers under this 2-week margin')}
+        ${f('min_buys_2wk', 'Minimum buys', 'Combined across both weeks, not per week')}
+        ${f('item_margin_max', 'Deal margin gate (%)', 'Only deals at or below this become line items')}
+        ${f('min_dollars_lost', 'Minimum dollars lost ($)', 'Skip small misses so a cheap item never makes work')}
+        ${f('target_margin', 'Target margin (%)', 'The bar dollars-lost is measured against')}
+        ${f('top_n_items', 'Deals per buyer', 'Cap on line items after ranking')}
+        ${f('reply_days', 'Reply window (business days)', 'How long managers get to answer')}
+        <div style="display:flex; gap:10px; margin-top:14px;">
+            <button class="btn-primary" onclick="bmSaveConfig(this)">Save</button>
+            <button class="kpi-cancel-btn" onclick="bmToggleConfig()">Cancel</button>
+        </div>
+    </div>`;
+}
+
+async function bmSaveConfig(btn) {
+    const keys = ['buyer_margin_max', 'min_buys_2wk', 'item_margin_max', 'min_dollars_lost', 'target_margin', 'top_n_items', 'reply_days'];
+    const payload = { action: 'set_config', by: sessionStorage.getItem('speeksUserName') || '' };
+    keys.forEach(k => {
+        const el = document.getElementById('bm-cfg-' + k);
+        if (el && el.value !== '') payload[k] = Number(el.value);
+    });
+    btn.textContent = 'Saving…'; btn.disabled = true;
+    try {
+        await postWrite(BUYING_MARGIN_URL, payload);
+        _bmConfigOpen = false;
+        await loadMarginReplies();
+    } catch (e) {
+        alert('Failed to save thresholds: ' + (e.message || e));
+    } finally { btn.textContent = 'Save'; btn.disabled = false; }
+}
+
+// Manual re-run. Safe at any time: periods and buyer rows upsert and uploaded
+// deals (with any notes on them) are never touched — a DM re-running after a
+// late KPI submission must not wipe replies that are already written.
+async function bmGenerate(btn) {
+    if (!confirm('Rebuild this week\'s margin reports from the weekly KPIs?\n\nAlready-uploaded deals and any replies on them are kept.')) return;
+    btn.textContent = 'Generating…'; btn.disabled = true;
+    try {
+        const res = await postWrite(BUYING_MARGIN_URL, {
+            action: 'generate_period',
+            by: sessionStorage.getItem('speeksUserName') || '',
+        });
+        await loadMarginReplies();
+        const failed = (res && res.failures) || [];
+        if (failed.length) alert('Some stores could not be generated:\n' + failed.map(f => `${f.store}: ${f.error}`).join('\n'));
+    } catch (e) {
+        alert('Failed to generate: ' + (e.message || e));
+    } finally { btn.textContent = 'Generate'; btn.disabled = false; }
+}
+
+// --- Reminders (same shape as variance) ------------------------------------
+
+let _bmRemindersStarted = false, _bmDmRemindersStarted = false;
+let _bmMyPeriodsCache = [];
+
+function _bmDotNeeded() {
+    return _bmMyPeriodsCache.some(p => (p.flagged_count || 0) > 0);
+}
+
+async function checkMarginReminders() {
+    if (!_bmEnabled() || !_bmIsManager()) return;
+    const stores = _bmMyStores();
+    if (!stores.length) return;
+    if (!_bmRemindersStarted) {
+        _bmRemindersStarted = true;
+        setInterval(checkMarginReminders, 30 * 60 * 1000); // realtime is the primary signal; this is the safety net
+    }
+    try {
+        const res = await fetch(`${BUYING_MARGIN_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json || json.success === false) return;
+        _bmStoreStatus = json.store_status || {};
+        _bmConfig = json.config || _bmConfig;
+        // Ignore stale weeks so a forgotten report can't pin the dot forever.
+        const cutoff = Date.now() - 45 * 86400000;
+        _bmMyPeriodsCache = (json.data || []).filter(p => new Date(p.generated_at).getTime() > cutoff);
+        applyKpiReminder();
+        _bmMaybePopup();
+    } catch (e) { /* next poll retries */ }
+}
+
+// DM side: their turn is when a week has been generated and there are flagged
+// buyers whose deals haven't been uploaded yet — that upload is the DM's job.
+async function checkMarginDmReminders() {
+    if (!_bmEnabled() || !_bmIsDM()) return;
+    if (!_bmDmRemindersStarted) {
+        _bmDmRemindersStarted = true;
+        setInterval(checkMarginDmReminders, 30 * 60 * 1000);
+    }
+    try {
+        const res = await fetch(`${BUYING_MARGIN_URL}?stores=OVL,LEE,WSP,MPL,BAL&v=${Date.now()}`);
+        const json = await res.json();
+        if (!json || json.success === false) return;
+        const cutoff = Date.now() - 45 * 86400000;
+        const periods = (json.data || []).filter(p => new Date(p.generated_at).getTime() > cutoff);
+        // Newest week only — older ones are water under the bridge.
+        const newest = periods.reduce((a, p) => (!a || p.week_end > a) ? p.week_end : a, '');
+        const pending = periods.filter(p => p.week_end === newest && (p.flagged_count || 0) > 0);
+        if (pending.length) {
+            const total = pending.reduce((n, p) => n + (p.flagged_count || 0), 0);
+            const stores = pending.map(p => (p.store || '').toUpperCase());
+            const summary = `${_vrFmtStores(stores)}: ${total} buyer${total > 1 ? 's' : ''} under target — pull their deals from the POS`;
+            _bmRenderBubble('📉', 'Margin reports are ready', summary + '.', summary, stores);
+        } else {
+            const b = document.getElementById('marginAlertBubble');
+            if (b && getComputedStyle(b).display !== 'none') {
+                b.style.display = 'none';
+                if (typeof _positionMarginAlert === 'function') _positionMarginAlert();
+            }
+        }
+    } catch (e) { /* next poll retries */ }
+}
+
+// Manager feed row. State-based like the variance one: it re-derives every poll
+// and leaves on its own once the work is done, rather than being a one-shot that
+// vanishes the moment you click into the tool.
+function _bmMaybePopup() {
+    const stores = [], counts = [];
+    let total = 0;
+    for (const p of _bmMyPeriodsCache) {
+        if (!(p.flagged_count > 0)) continue;
+        stores.push((p.store || '').toUpperCase());
+        counts.push(p.flagged_count);
+        total += p.flagged_count;
+    }
+    if (!stores.length) {
+        const b = document.getElementById('marginAlertBubble');
+        if (b && getComputedStyle(b).display !== 'none') {
+            b.style.display = 'none';
+            if (typeof _positionMarginAlert === 'function') _positionMarginAlert();
+        }
+        return;
+    }
+    const summary = `${_vrFmtStores(stores)}: ${total} buyer${total > 1 ? 's are' : ' is'} under the ${_bmTargetMargin()}% margin target`;
+    _bmRenderBubble('📉', 'Margin replies needed', summary + '.', summary, stores);
+}
+
+function _bmBubbleEl() {
+    let b = document.getElementById('marginAlertBubble');
+    if (b) return b;
+    const claim = document.getElementById('claimAlertBubble');
+    if (!claim || !claim.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'marginAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #d97706, #92400e); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(120, 53, 15, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = `<span id="marginAlertBubbleIcon" style="font-size:16px; flex-shrink:0; margin-top:2px;">📉</span>
+        <span id="marginAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>
+        <button onclick="closeMarginAlertBubble()" class="daily-bubble-close" title="Dismiss">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>`;
+    claim.parentElement.appendChild(b);
+    return b;
+}
+
+// Stacks below the variance bubble, above aging.
+function _positionMarginAlert() {
+    const b = document.getElementById('marginAlertBubble');
+    if (!b) return;
+    let top = 116;
+    ['dailyMessageBubble', 'claimAlertBubble', 'recycleAlertBubble', 'varianceAlertBubble'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el && getComputedStyle(el).display !== 'none' && el.offsetHeight > 0) {
+            top = Math.max(top, el.getBoundingClientRect().bottom + 12);
+        }
+    });
+    b.style.top = top + 'px';
+    if (typeof _positionAgingAlert === 'function') _positionAgingAlert();
+}
+
+function closeMarginAlertBubble() {
+    const b = document.getElementById('marginAlertBubble');
+    if (b) b.style.display = 'none';
+}
+
+function _bmRenderBubble(icon, title, bodyText, summary, stores) {
+    const b = _bmBubbleEl();
+    if (!b) return;
+    const iconEl = document.getElementById('marginAlertBubbleIcon');
+    const textEl = document.getElementById('marginAlertBubbleText');
+    if (textEl) {
+        // The feed prefers an authored one-liner over scraping the bubble.
+        textEl.dataset.summary = String(summary || bodyText).replace(/\s+/g, ' ').trim();
+        if (stores && stores.length) textEl.dataset.stores = [...new Set(stores)].join(',');
+        else delete textEl.dataset.stores;
+    }
+    if (iconEl) iconEl.textContent = icon;
+    textEl.style.display = 'flex';
+    textEl.style.flexDirection = 'column';
+    textEl.style.gap = '7px';
+    textEl.innerHTML = `
+        <div style="line-height:1.4;"><strong>${escapeHtml(title)}</strong></div>
+        <div style="line-height:1.4; opacity:0.96;">${escapeHtml(bodyText)}</div>
+        <button onclick="closeMarginAlertBubble(); window.location.href='workspace.html#mreplies';"
+            style="align-self:flex-start; background:rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.5); color:#fff; font-weight:800; font-size:12px; border-radius:8px; padding:6px 12px; cursor:pointer;"
+            onmouseover="this.style.background='rgba(255,255,255,0.3)';" onmouseout="this.style.background='rgba(255,255,255,0.18)';">Open Margin Replies</button>`;
+    b.style.display = 'flex';
+    _positionMarginAlert();
+    setTimeout(_positionMarginAlert, 2200);
     b.animate([
         { transform: 'scale(0.95) translateX(10px)', opacity: 0 },
         { transform: 'scale(1) translateX(0)', opacity: 1 }
@@ -22587,6 +23637,7 @@ function _samReminderCfg() {
               : "openClaimsModal(); switchClaimsTab('view')" },
         { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "toggleRecycleInventory(); switchRecycleTab('view')" },
         { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging Inventory Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" },
+        { key: 'margin', id: 'marginAlertBubble', text: 'marginAlertBubbleText', title: 'Margin Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#mreplies'" },
         // Preferred Purchases — feed-only, both directions. The owner's card is a
         // queue to work, so it keeps the amber "Review" badge and a Snooze.
         // The requester's is an answer that came back: information, not a task, so
@@ -22738,6 +23789,7 @@ const _RT_TOOL_CHECKS = {
     claims:        ['checkClaimReminders', 'checkAgingClaims', 'checkAgingClaimsDM'],
     recycle:       ['checkRecycleReminders'],
     variance:      ['checkVarianceReminders', 'checkVarianceDmReminders'],
+    bmargin:       ['checkMarginReminders', 'checkMarginDmReminders'],
     comments:      ['fetchAndDisplayStoreComment'],
     announcements: ['loadCMS'],
     patch:         ['loadPatchNotes'],
@@ -24662,9 +25714,11 @@ function _dccPaneHtml(r, portalLink) {
 // --- board ------------------------------------------------------------------
 function _dccBoardHtml(portalLinks) {
     if (!_dccRows.length) return '<div class="dcc-empty">Syncing the district…</div>';
+    // Open on the store at the TOP of the rail — the district leader on % to
+    // goal. (This used to land on the last card, the worst performer.) Only the
+    // first paint picks; once a DM clicks a store, _dccSel stays put.
     if (!_dccSel || !_dccRows.some(r => r.store === _dccSel)) {
-        const order = _dccRailOrder();
-        _dccSel = order[order.length - 1].store;
+        _dccSel = _dccRailOrder()[0].store;
     }
     const sel = _dccRows.find(r => r.store === _dccSel);
 
