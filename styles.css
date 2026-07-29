@@ -10386,6 +10386,22 @@ body.sam-active .hotbar-btn:hover {
 .b2b-scan-msg.ok  { color: var(--sage-deep); }
 .b2b-scan-msg.bad { color: #d1443b; }
 
+/* Waiting on the Shopify barcode. Amber, not green: the unit is mid-handshake
+   and not yet listed, and the bar should not look like a finished state. */
+.b2b-scanbar.pending { background: #fffbf3; border-color: #f0dcb8; }
+.b2b-scanbar.pending .b2b-scan-ico svg { stroke: #a9741a; }
+.b2b-scan-ask { display: flex; flex-direction: column; gap: 1px; flex: 0 1 auto; min-width: 0; }
+.b2b-scan-ask-t { font-size: 12.5px; font-weight: 800; color: #7c5510; }
+.b2b-scan-ask-s {
+    font-size: 11px; font-weight: 650; color: #9a7431;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.b2b-scanbar.pending input { flex: 1 1 150px; min-width: 130px; max-width: 200px; }
+.b2b-scan-num {
+    font-family: 'Consolas', 'SFMono-Regular', Menlo, monospace;
+    letter-spacing: .16em; font-weight: 700;
+}
+
 .b2b-prog { margin-bottom: 14px; }
 .b2b-prog-h {
     display: flex; justify-content: space-between; align-items: baseline;
@@ -10417,6 +10433,24 @@ body.sam-active .hotbar-btn:hover {
 .b2b-lname { font-size: 13px; font-weight: 750; color: #1a1c1e; }
 .b2b-lcond { margin-left: 7px; font-size: 10.5px; font-weight: 700; color: var(--b2b-muted); }
 .b2b-lsku { font-size: 10.5px; color: var(--b2b-faint); margin-top: 2px; }
+
+/* The line currently mid-handshake, so it is obvious which row the scan bar is
+   asking about when the checklist is long. */
+.b2b-lrow.waiting { background: #fffbf3; border-color: #f0dcb8; box-shadow: 0 0 0 3px rgba(217,159,67,.14); }
+
+/* Shopify barcodes captured against this line. */
+.b2b-lcodes { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.b2b-lcode {
+    display: inline-flex; align-items: center; gap: 4px; padding: 2px 3px 2px 7px;
+    border-radius: 7px; background: #eef4f9; border: 1px solid #dbe6ef;
+    font-size: 10.5px; font-weight: 700; color: #40546a;
+}
+.b2b-lcode-x {
+    display: grid; place-items: center; width: 15px; height: 15px; padding: 0;
+    border: 0; border-radius: 5px; background: none; cursor: pointer;
+    font: inherit; font-size: 12px; line-height: 1; color: #8b9cae;
+}
+.b2b-lcode-x:hover { background: #fde8e6; color: #d1443b; }
 .b2b-lcount {
     display: flex; align-items: baseline; gap: 5px; flex: 0 0 auto;
     font-size: 11.5px; color: var(--b2b-muted); font-variant-numeric: tabular-nums;

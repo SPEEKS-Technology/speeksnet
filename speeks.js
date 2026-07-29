@@ -9786,21 +9786,26 @@ function _b2bDone(it)      { return (Number(it.listed_qty) || 0) + (Number(it.re
 function _b2bSatisfied(it) { return _b2bDone(it) >= (Number(it.quantity) || 1); }
 function _b2bAllSatisfied(){ return _b2bModalItems.length > 0 && _b2bModalItems.every(_b2bSatisfied); }
 
+// Listing a unit is a two-scan handshake: our label identifies WHICH unit, then
+// the Shopify barcode records what it became. The id of the line waiting on its
+// second scan lives here.
+let _b2bPendingUnit = null;
+
+const B2B_SCAN_SVG = '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/>'
+    + '<path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>'
+    + '<line x1="7" y1="12" x2="7" y2="12"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="17" y1="8" x2="17" y2="16"/>';
+
 function _b2bStageListing(deal) {
+    _b2bPendingUnit = null;
     _b2bShowDeal({
         stage: 'listing',
         eyebrow: deal.ref,
         title: 'Listing',
-        sub: 'Scan or tick each unit as it goes live for resale.',
+        sub: 'Scan our label, then the Shopify barcode it went live under.',
         wide: true,
         body: `
             ${_b2bSummary(deal)}
-            <div class="b2b-scanbar">
-                <span class="b2b-scan-ico">${_b2bIco('<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="7" y2="12"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="17" y1="8" x2="17" y2="16"/>')}</span>
-                <input id="b2bScanIn" class="form-input-lg" autocomplete="off" placeholder="Scan a label, or type a SKU and press Enter"
-                    onkeydown="if(event.key==='Enter'){event.preventDefault();b2bScan('${deal.id}');}">
-                <span class="b2b-scan-msg" id="b2bScanMsg"></span>
-            </div>
+            <div id="b2bScanWrap">${_b2bScanBar(deal)}</div>
             <div id="b2bListProg">${_b2bListProgress()}</div>
             <div id="b2bListRows" class="b2b-list">${_b2bListRows()}</div>`,
         footer: `
@@ -9809,6 +9814,60 @@ function _b2bStageListing(deal) {
                 onclick="b2bCompleteDeal('${deal.id}',this)">Complete Deal</button>`,
         after: () => document.getElementById('b2bScanIn')?.focus(),
     });
+}
+
+// Two modes in one bar rather than a modal over the checklist: a hardware
+// scanner is a keyboard, so the operator's hands never leave it and the second
+// scan lands in the same always-focused field the first one did.
+function _b2bScanBar(deal) {
+    const it = _b2bPendingUnit ? _b2bLocalItem(_b2bPendingUnit) : null;
+    if (it) {
+        const unit = _b2bDone(it) + 1;
+        return `
+        <div class="b2b-scanbar pending">
+            <span class="b2b-scan-ico">${_b2bIco(B2B_SCAN_SVG)}</span>
+            <div class="b2b-scan-ask">
+                <span class="b2b-scan-ask-t">Now scan the Shopify barcode</span>
+                <span class="b2b-scan-ask-s">${escapeHtml(_b2bItemName(it))} · unit ${unit} of ${Number(it.quantity) || 1}</span>
+            </div>
+            <input id="b2bScanIn" class="form-input-lg b2b-scan-num" autocomplete="off" inputmode="numeric" maxlength="8"
+                placeholder="8-digit barcode"
+                oninput="_b2bScanTyped(this,'${deal.id}')"
+                onkeydown="if(event.key==='Enter'){event.preventDefault();b2bScan('${deal.id}');}
+                           if(event.key==='Escape'){b2bCancelPending();}">
+            <button class="b2b-btn b2b-btn-secondary" onclick="b2bCancelPending()">Cancel</button>
+            <span class="b2b-scan-msg" id="b2bScanMsg"></span>
+        </div>`;
+    }
+    return `
+        <div class="b2b-scanbar">
+            <span class="b2b-scan-ico">${_b2bIco(B2B_SCAN_SVG)}</span>
+            <input id="b2bScanIn" class="form-input-lg" autocomplete="off" placeholder="Scan one of our labels, or type a SKU and press Enter"
+                onkeydown="if(event.key==='Enter'){event.preventDefault();b2bScan('${deal.id}');}">
+            <span class="b2b-scan-msg" id="b2bScanMsg"></span>
+        </div>`;
+}
+
+// Repaints the bar and puts the caret back. Kept out of _b2bRepaintListing so a
+// half-typed barcode survives the row repaint that follows every tick.
+function _b2bRepaintScanBar() {
+    const wrap = document.getElementById('b2bScanWrap');
+    if (!wrap || !_b2bModalDeal) return;
+    wrap.innerHTML = _b2bScanBar(_b2bModalDeal);
+    document.getElementById('b2bScanIn')?.focus();
+}
+
+// Scanners vary on whether they send a terminating Enter. A Shopify barcode is
+// exactly 8 digits, so the field can submit itself the moment it has 8 -- which
+// also means the operator never has to reach for the keyboard.
+function _b2bScanTyped(el, dealId) {
+    el.value = el.value.replace(/\D/g, '').slice(0, 8);
+    if (el.value.length === 8) b2bScan(dealId);
+}
+
+function b2bCancelPending() {
+    _b2bPendingUnit = null;
+    _b2bRepaintScanBar();
 }
 
 function _b2bListProgress() {
@@ -9828,14 +9887,30 @@ function _b2bListRows() {
         const listed = Number(it.listed_qty) || 0;
         const recycled = Number(it.recycled_qty) || 0;
         const ok = _b2bSatisfied(it);
+        const waiting = _b2bPendingUnit === it.id;
+
+        // The barcodes are the evidence the units went live, so they are on the
+        // row rather than buried -- and each is individually removable, because
+        // a wrong one recorded is worse than one missing.
+        const codes = (it.listings || []).length ? `
+            <div class="b2b-lcodes">
+                ${it.listings.map(l => `
+                <span class="b2b-lcode" title="Listed by ${escapeHtml(l.listed_by || 'unknown')}">
+                    <span class="b2b-mono">${escapeHtml(l.shopify_barcode)}</span>
+                    <button class="b2b-lcode-x" title="Remove this barcode"
+                        onclick="b2bUnlistUnit('${it.id}','${l.id}')">×</button>
+                </span>`).join('')}
+            </div>` : '';
+
         return `
-        <div class="b2b-lrow ${ok ? 'done' : ''}" id="b2bLrow-${it.id}">
+        <div class="b2b-lrow ${ok ? 'done' : ''} ${waiting ? 'waiting' : ''}" id="b2bLrow-${it.id}">
             <span class="b2b-lcheck">${ok ? _b2bIco('<polyline points="20 6 9 17 4 12"/>') : ''}</span>
             <div class="b2b-lmain">
                 <div class="b2b-lname">${escapeHtml(_b2bItemName(it))}
                     ${it.recycle_only ? '<span class="b2b-doc-rec">Recycle only</span>' : ''}
                     ${it.condition ? `<span class="b2b-lcond">${escapeHtml(it.condition)}</span>` : ''}</div>
                 <div class="b2b-lsku b2b-mono">${escapeHtml(it.sku || '')}</div>
+                ${codes}
             </div>
             <div class="b2b-lcount">
                 <b>${listed}</b><span>/ ${qty} listed</span>
@@ -9843,8 +9918,10 @@ function _b2bListRows() {
             </div>
             <div class="b2b-lacts">
                 ${_b2bLabelBtn(it)}
-                <button class="b2b-step" ${listed <= 0 ? 'disabled' : ''} title="Undo one" onclick="b2bTick('${it.id}',-1)">−</button>
-                <button class="b2b-step up" ${ok ? 'disabled' : ''} title="Mark one listed" onclick="b2bTick('${it.id}',1)">+</button>
+                <button class="b2b-step" ${listed <= 0 ? 'disabled' : ''} title="Undo the last one" onclick="b2bUnlistUnit('${it.id}')">−</button>
+                <button class="b2b-step up" ${ok || it.recycle_only ? 'disabled' : ''}
+                    title="${it.recycle_only ? 'Recycle-only lines are never listed' : 'List one unit — asks for its Shopify barcode'}"
+                    onclick="b2bAskShopify('${it.id}')">+</button>
                 <button class="b2b-recycle" ${ok ? 'disabled' : ''} title="Recycle units out" onclick="b2bRecycleUnits('${it.id}')">Recycle</button>
             </div>
         </div>`;
@@ -9873,56 +9950,126 @@ function _b2bScanFlash(msg, bad, itemId) {
     }
 }
 
-// A barcode scanner is a keyboard: the whole SKU arrives as fast keystrokes
-// ending in Enter, so this handles a scan and a typed SKU identically.
-// Everything needed to validate a scan is already in memory, so an unknown or
+// A barcode scanner is a keyboard: the whole code arrives as fast keystrokes,
+// so this handles a scan and typed input identically. Which of the two scans is
+// being read depends only on whether a line is already waiting.
+//
+// Everything needed to validate the first scan is in memory, so an unknown or
 // already-full SKU is rejected instantly and only real scans hit the network.
 function b2bScan(dealId) {
     const input = document.getElementById('b2bScanIn');
-    const sku = (input?.value || '').trim().toUpperCase();
+    const raw = (input?.value || '').trim();
     if (input) input.value = '';
-    if (!sku) return;
+    if (!raw) return;
+
+    // Second scan: the Shopify barcode for the unit we are holding.
+    if (_b2bPendingUnit) {
+        const it = _b2bLocalItem(_b2bPendingUnit);
+        if (!it) { _b2bPendingUnit = null; return _b2bRepaintScanBar(); }
+        if (!/^\d{8}$/.test(raw)) {
+            // Nearly always our own label scanned twice by mistake. Say which
+            // mistake it was, because "invalid barcode" would not.
+            const mine = _b2bModalItems.some(i => (i.sku || '').toUpperCase() === raw.toUpperCase());
+            return _b2bScanFlash(mine
+                ? "That's one of our labels — scan the Shopify listing's barcode instead."
+                : `A Shopify barcode is 8 digits; that was ${raw.length}.`, true, it.id);
+        }
+        if (it.listings?.some(l => l.shopify_barcode === raw)) {
+            return _b2bScanFlash(`${raw} is already recorded on this line.`, true, it.id);
+        }
+        return _b2bListUnit(it, raw);
+    }
+
+    // First scan: which line is this?
+    const sku = raw.toUpperCase();
     const it = _b2bModalItems.find(i => (i.sku || '').toUpperCase() === sku);
-    if (!it)             return _b2bScanFlash(`${sku} isn't a line on this deal.`, true);
-    if (_b2bSatisfied(it)) return _b2bScanFlash(`${sku} is already fully listed.`, true, it.id);
-    _b2bBumpListed(it, 1, () => _b2bScanFlash(`${sku} — ${it.listed_qty}/${it.quantity} listed`, false, it.id));
-    input?.focus();
+    if (!it)               return _b2bScanFlash(`${sku} isn't a line on this deal.`, true);
+    if (it.recycle_only)   return _b2bScanFlash(`${sku} is recycle-only — use Recycle instead of listing it.`, true, it.id);
+    if (_b2bSatisfied(it)) return _b2bScanFlash(`${sku} is already fully accounted for.`, true, it.id);
+    b2bAskShopify(it.id);
 }
 
-function b2bTick(itemId, delta) {
+// Both routes into the second scan -- the scanned label and the manual "+" --
+// come through here, so a unit can never be ticked up without a barcode.
+function b2bAskShopify(itemId) {
     const it = _b2bLocalItem(itemId);
-    if (it) _b2bBumpListed(it, delta);
+    if (!it || it.recycle_only || _b2bSatisfied(it)) return;
+    _b2bPendingUnit = itemId;
+    _b2bRepaintScanBar();
+    _b2bRepaintListing();   // rows read _b2bPendingUnit to mark which one is waiting
 }
 
 // Apply locally, repaint now, then reconcile with the server. On failure the
 // line snaps back and says why, rather than the click having felt ignored.
-function _b2bBumpListed(it, delta, onOk) {
+function _b2bListUnit(it, code) {
     const qty = Number(it.quantity) || 1;
-    const before = { listed: Number(it.listed_qty) || 0, recycled: Number(it.recycled_qty) || 0 };
-    const next = before.listed + delta;
-    if (next < 0 || next + before.recycled > qty) return;
+    const before = { listed: Number(it.listed_qty) || 0, listings: (it.listings || []).slice() };
+    if (before.listed + (Number(it.recycled_qty) || 0) >= qty) return;
 
-    it.listed_qty = next;
+    // A temp id so an undo landing before the server replies still targets the
+    // right row; the reconcile below swaps in the real one.
+    it.listings = [...before.listings, { id: `tmp-${code}`, shopify_barcode: code, listed_by: _b2bUser() }];
+    it.listed_qty = before.listed + 1;
+    _b2bPendingUnit = null;
     _b2bDirty = true;
+    _b2bRepaintScanBar();
     _b2bRepaintListing();
-    if (onOk) onOk();
+    _b2bScanFlash(`${code} → ${it.sku || 'line'} · ${it.listed_qty} of ${qty} listed`, false, it.id);
     const done = _b2bAllSatisfied();
 
-    _b2bEnqueue(it.id, () => _b2bSend({ action: 'mark_listed', id: it.id, delta }))
+    _b2bEnqueue(it.id, () => _b2bSend({ action: 'list_unit', id: it.id, shopify_barcode: code }))
         .then(out => {
             if (!out) return;
             it.listed_qty = out.listed_qty;
             it.recycled_qty = out.recycled_qty;
+            it.listings = out.listings || it.listings;
             _b2bRepaintListing();
         })
         .catch(e => {
             it.listed_qty = before.listed;
-            it.recycled_qty = before.recycled;
+            it.listings = before.listings;
             _b2bRepaintListing();
             _b2bScanFlash(e.message, true, it.id);
         });
 
     if (done) _b2bCelebrate(_b2bModalDeal?.id);
+}
+
+// Undo one listed unit. Named barcodes come off individually; the bare "−"
+// takes the most recent, which is what "I just scanned that wrong" means.
+function b2bUnlistUnit(itemId, listingId) {
+    const it = _b2bLocalItem(itemId);
+    if (!it) return;
+    const list = it.listings || [];
+    const target = listingId ? list.find(l => l.id === listingId) : list[list.length - 1];
+    if (!target) return;
+    if (listingId && !confirm(`Remove Shopify barcode ${target.shopify_barcode} from this line?\n\n`
+        + 'The unit goes back on the checklist to be listed again.')) return;
+
+    const before = { listed: Number(it.listed_qty) || 0, listings: list.slice() };
+    it.listings = list.filter(l => l !== target);
+    it.listed_qty = Math.max(0, before.listed - 1);
+    _b2bDirty = true;
+    _b2bRepaintListing();
+
+    // A temp id means the insert is still in flight; the queue serialises them,
+    // so by the time this runs the server has a real row -- and no listing_id
+    // means "the most recent", which is that same row.
+    const realId = String(target.id).startsWith('tmp-') ? null : target.id;
+    _b2bEnqueue(it.id, () => _b2bSend({ action: 'unlist_unit', id: it.id, listing_id: realId || undefined }))
+        .then(out => {
+            if (!out) return;
+            it.listed_qty = out.listed_qty;
+            it.recycled_qty = out.recycled_qty;
+            it.listings = out.listings || it.listings;
+            _b2bRepaintListing();
+        })
+        .catch(e => {
+            it.listed_qty = before.listed;
+            it.listings = before.listings;
+            _b2bRepaintListing();
+            _b2bScanFlash(e.message, true, it.id);
+        });
 }
 
 function b2bRecycleUnits(itemId) {

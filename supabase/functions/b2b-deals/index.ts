@@ -20,7 +20,9 @@ const corsHeaders = {
 //                             editable while the client negotiates, and only
 //                             a CEO/TOM/DM may accept it
 //   listing_location  corp    ONLY when pricing happened at CORP
-//   listing           store   check off / scan each unit; recycle bad ones
+//   listing           store   two scans per unit -- our label says which unit,
+//                             the Shopify barcode records what it became;
+//                             bad units get recycled out instead
 //   completed         —       terminal, the deal ran its course
 //   declined          —       terminal, the deal died; reachable any time
 //                             before listing, since once a quote is accepted
@@ -33,7 +35,7 @@ const corsHeaders = {
 // Authorization is client-side (PIN trust model, matching the rest of the app);
 // what THIS function enforces is legal state transitions and input validity,
 // so a stale tab or a hand-rolled request can't corrupt a pipeline.
-// Tables: b2b_clients + b2b_deals + b2b_deal_items.
+// Tables: b2b_clients + b2b_deals + b2b_deal_items + b2b_item_listings.
 
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const PRICING_LOCATIONS = [...STORES, "CORP"];
@@ -148,6 +150,26 @@ function oneOf(v: unknown, allowed: string[], label: string, required = true): s
   }
   if (!allowed.includes(s)) throw new Invalid(`${label} isn't a valid option.`);
   return s;
+}
+
+// A Shopify listing barcode: exactly 8 digits, mirroring the CHECK on
+// b2b_item_listings. Strictness is the feature -- it is what stops one of our
+// own SKUs (ACM-001-0002), mis-scanned into the same field, being stored as a
+// Shopify barcode and quietly marking a unit live that never went live.
+function barcode8(v: unknown): string {
+  const s = String(v ?? "").trim();
+  if (!s) throw new Invalid("A Shopify barcode is required to list a unit.");
+  if (!/^\d{8}$/.test(s)) {
+    throw new Invalid(`"${s.slice(0, 24)}" isn't a Shopify barcode — it should be exactly 8 digits.`);
+  }
+  return s;
+}
+
+async function itemListings(supabase: any, itemId: string) {
+  const { data } = await supabase.from("b2b_item_listings")
+    .select("id,item_id,shopify_barcode,listed_by,listed_at").eq("item_id", itemId)
+    .order("listed_at", { ascending: true }).limit(10000);
+  return data || [];
 }
 
 const pad = (n: number, w: number) => String(n).padStart(w, "0");
@@ -516,12 +538,17 @@ Deno.serve(async (req: Request) => {
 
       // ============================================================== listing
 
-      // mark_listed  { id, delta }        tick a unit up or down
-      // scan_sku     { deal_id, sku }     barcode scan → +1 on the matching line
-      // recycle_units{ id, units }        pull bad units out of the line
-      if (action === "mark_listed" || action === "recycle_units" || action === "scan_sku") {
+      // list_unit    { id | (deal_id, sku), shopify_barcode }  one unit goes live
+      // unlist_unit  { id, listing_id? }                       undo the last one
+      // recycle_units{ id, units }                             pull bad units out
+      //
+      // There is deliberately NO path that marks a unit listed without a Shopify
+      // barcode. Every listed unit is one live Shopify listing, so the barcode is
+      // what makes the claim checkable; a bare counter was only ever an
+      // assertion. listed_qty is now derived by trigger from these rows.
+      if (action === "list_unit" || action === "unlist_unit" || action === "recycle_units") {
         let item: any;
-        if (action === "scan_sku") {
+        if (action === "list_unit" && !body.id) {
           const sku = String(body.sku || "").trim().toUpperCase();
           if (!sku) throw new Invalid("No SKU scanned.");
           if (sku.length > 40) throw new Invalid("That doesn't look like one of our SKUs.");
@@ -541,39 +568,74 @@ Deno.serve(async (req: Request) => {
         if (deal.stage !== "listing") return jsonResponse({ success: false, error: "Listing progress can only change while the deal is in listing." }, 409);
 
         const qty = item.quantity;
-        let listed = item.listed_qty;
-        let recycled = item.recycled_qty;
 
         if (action === "recycle_units") {
           const units = count(body.units, 1, 100000, "Units", 1);
-          const room = qty - listed - recycled;
+          const room = qty - item.listed_qty - item.recycled_qty;
           if (room <= 0) return jsonResponse({ success: false, error: "Every unit on this line is already accounted for." }, 409);
-          recycled += Math.min(units, room);
-        } else {
-          const delta = action === "scan_sku" ? 1 : (intOr(body.delta, 1) || 1);
-          const next = listed + delta;
-          if (next < 0) return jsonResponse({ success: false, error: "That line is already at zero." }, 409);
-          if (next + recycled > qty) {
-            return jsonResponse({ success: false, error: `${item.sku || "This line"} is already fully listed (${listed}/${qty}).` }, 409);
+          const { error } = await supabase.from("b2b_deal_items")
+            .update({ recycled_qty: item.recycled_qty + Math.min(units, room) }).eq("id", item.id);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+
+        } else if (action === "list_unit") {
+          if (item.recycle_only) {
+            return jsonResponse({ success: false, error: "A recycle-only line has nothing to list — recycle it out instead." }, 409);
           }
-          listed = next;
+          const code = barcode8(body.shopify_barcode);
+          if (item.listed_qty + item.recycled_qty >= qty) {
+            return jsonResponse({ success: false, error: `${item.sku || "This line"} is already fully accounted for (${item.listed_qty}/${qty}).` }, 409);
+          }
+          const { error } = await supabase.from("b2b_item_listings").insert({
+            item_id: item.id, deal_id: item.deal_id, shopify_barcode: code,
+            listed_by: str(body.user, 80, "User"),
+          });
+          if (error) {
+            // 23505 is unique_violation. The barcode is unique system-wide, so
+            // this is a real signal worth spelling out: the same Shopify listing
+            // cannot be two of our units.
+            if (error.code === "23505") {
+              return jsonResponse({ success: false, error: `Barcode ${code} is already recorded against another unit.` }, 409);
+            }
+            // 23514 is check_violation -- the listed+recycled<=quantity backstop
+            // firing means the capacity check above raced with another lister.
+            if (error.code === "23514") {
+              return jsonResponse({ success: false, error: "Someone else just listed the last unit on that line." }, 409);
+            }
+            return jsonResponse({ success: false, error: error.message }, 500);
+          }
+
+        } else {
+          // Undo: drop a specific listing if one was named, otherwise the most
+          // recent -- which is what "I just scanned that wrong" means.
+          let target = str(body.listing_id, 40, "Listing");
+          if (!target) {
+            const { data: last } = await supabase.from("b2b_item_listings")
+              .select("id").eq("item_id", item.id)
+              .order("listed_at", { ascending: false }).limit(1).maybeSingle();
+            if (!last) return jsonResponse({ success: false, error: "That line has no listed units to undo." }, 409);
+            target = last.id;
+          }
+          const { error } = await supabase.from("b2b_item_listings")
+            .delete().eq("id", target).eq("item_id", item.id);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
         }
 
-        const { error } = await supabase.from("b2b_deal_items")
-          .update({ listed_qty: listed, recycled_qty: recycled }).eq("id", item.id);
-        if (error) return jsonResponse({ success: false, error: error.message }, 500);
-
-        // One aggregate instead of pulling every row back to check: tells the
-        // client whether that was the last outstanding unit so it can fire the
-        // celebration without a second round-trip.
-        const { data: roll } = await supabase.from("b2b_deal_list")
-          .select("outstanding_units").eq("id", deal.id).maybeSingle();
+        // listed_qty is trigger-maintained, so the authoritative counts have to
+        // be read back rather than computed here. One row for the line, one
+        // aggregate for the deal -- the latter tells the client whether that was
+        // the last outstanding unit so it can celebrate without another trip.
+        const [{ data: fresh }, { data: roll }] = await Promise.all([
+          supabase.from("b2b_deal_items").select("listed_qty,recycled_qty").eq("id", item.id).maybeSingle(),
+          supabase.from("b2b_deal_list").select("outstanding_units").eq("id", deal.id).maybeSingle(),
+        ]);
 
         await broadcastChange("b2b", dealStore(deal));
         return jsonResponse({
           success: true,
-          item_id: item.id, sku: item.sku,
-          listed_qty: listed, recycled_qty: recycled, quantity: qty,
+          item_id: item.id, sku: item.sku, quantity: qty,
+          listed_qty: fresh?.listed_qty ?? item.listed_qty,
+          recycled_qty: fresh?.recycled_qty ?? item.recycled_qty,
+          listings: await itemListings(supabase, item.id),
           all_done: (roll?.outstanding_units ?? 1) === 0,
         });
       }
@@ -665,19 +727,32 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: true, data: data || [] });
     }
 
-    // ?deal_id=<uuid> → that deal's line items
+    // ?deal_id=<uuid> → that deal's line items, each with the Shopify listings
+    // its units became. Two queries indexed on deal_id rather than a per-item
+    // fan-out, then grouped here.
     const dealId = url.searchParams.get("deal_id");
     if (dealId) {
-      const { data, error } = await supabase.from("b2b_deal_items")
-        .select(ITEM_COLS).eq("deal_id", dealId)
-        .order("line_no", { ascending: true }).limit(5000);
+      const [{ data, error }, { data: listings, error: lErr }] = await Promise.all([
+        supabase.from("b2b_deal_items")
+          .select(ITEM_COLS).eq("deal_id", dealId)
+          .order("line_no", { ascending: true }).limit(5000),
+        supabase.from("b2b_item_listings")
+          .select("id,item_id,shopify_barcode,listed_by,listed_at").eq("deal_id", dealId)
+          .order("listed_at", { ascending: true }).limit(20000),
+      ]);
       if (error) return jsonResponse({ success: false, error: error.message }, 500);
+      if (lErr) return jsonResponse({ success: false, error: lErr.message }, 500);
+
+      const byItem: Record<string, any[]> = {};
+      for (const l of listings || []) (byItem[l.item_id] ||= []).push(l);
+
       return jsonResponse({
         success: true,
         data: (data || []).map((it: any) => {
           const done = it.listed_qty + it.recycled_qty;
           return {
             ...it,
+            listings: byItem[it.id] || [],
             qty_value_total: it.recycle_only ? 0 : it.value * it.quantity,
             qty_offer_total: it.recycle_only ? 0 : it.offer * it.quantity,
             outstanding: Math.max(0, it.quantity - done),
