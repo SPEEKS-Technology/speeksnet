@@ -10636,6 +10636,34 @@ body.sam-active .hotbar-btn:hover {
     transition: border-color .14s ease, box-shadow .14s ease;
 }
 .b2b-cd-row:hover { border-color: var(--sage-professional); box-shadow: 0 2px 10px rgba(16,24,40,.06); }
+/* --- outreach (mini CRM) --------------------------------------------------- */
+.b2b-or-list { display: flex; flex-direction: column; gap: 6px; }
+.b2b-or-row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 13px; background: #fff;
+    border: 1px solid var(--b2b-line); border-radius: 11px;
+}
+.b2b-or-co { display: flex; align-items: center; gap: 7px; font-size: 13px; min-width: 0; }
+.b2b-or-acts { display: flex; align-items: center; gap: 5px; margin-left: auto; flex-wrap: wrap; }
+.b2b-or-noemail { font-size: 11px; font-style: italic; color: var(--b2b-faint); }
+
+.b2b-osched {
+    background: #fff; border: 1px solid var(--b2b-line); border-radius: 11px; padding: 13px;
+}
+.b2b-osw { font-size: 12.5px; font-weight: 750; color: #1a1c1e; }
+.b2b-ogrid {
+    display: grid; gap: 9px; margin-top: 12px;
+    grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr);
+}
+.b2b-ogrid[hidden] { display: none; }
+.b2b-ogrid-wide { grid-column: 1 / -1; }
+.b2b-osched-foot {
+    display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+    margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--b2b-line-2);
+}
+.b2b-osched-when { flex: 1 1 auto; font-size: 11.5px; font-weight: 650; color: var(--b2b-muted); }
+.b2b-osave { height: var(--b2b-h-md); padding: 0 14px; font-size: 12px; }
+
 .b2b-cd-ref   { font-size: 12px; font-weight: 800; flex: 0 0 auto; }
 .b2b-cd-units { font-size: 11.5px; font-weight: 650; color: var(--b2b-muted); margin-left: auto; }
 .b2b-cd-val   { font-size: 12.5px; font-weight: 800; color: #1a1c1e; min-width: 62px; text-align: right; }

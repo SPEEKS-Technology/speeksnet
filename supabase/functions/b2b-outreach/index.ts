@@ -1,0 +1,375 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "jsr:@supabase/supabase-js@2";
+
+// ============================================================================
+// B2B client outreach -- the scheduling half of the mini CRM.
+//
+// A client can carry a cadence ("every N months from a set date"). Once a
+// cadence comes due, this sends ONE reminder to leadership listing who is due.
+//
+// It deliberately does NOT email the clients. The ask was for "alerts they can
+// set up via email to reach out to clients", and a reminder is what a CRM
+// actually provides -- but the deciding factor is the downside of guessing
+// wrong. A wrong reminder is a wasted email to ourselves; a wrong client email
+// is unsolicited mail to a real business from a no-reply reports address, with
+// their reply going somewhere nobody reads. So the reminder lands with
+// leadership and the client-facing note is one click away in the app, sent from
+// the sender's own mailbox -- the same reasoning the quote flow already follows.
+//
+// Endpoints
+//   GET  ?secret=...                run the daily sweep and send the digest
+//        &dryRun=1                  build it and return it, send nothing
+//        &to=someone@x.com          send the digest here instead
+//   GET  ?due=1                     JSON: who is due / overdue / upcoming
+//   POST { action: 'set_schedule', client_id, active, start, months, note }
+//   POST { action: 'log_touch', client_id, detail, user }
+//
+// Reads and writes b2b_clients' outreach_* columns and b2b_outreach_log.
+// The digest sender is the same Gmail Apps Script relay the weekly report uses.
+// ============================================================================
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+const SECRET      = "sp33ks-sync-k3y-2026-x9mq";
+const GMAIL_RELAY = Deno.env.get("GMAIL_RELAY_URL")
+  || "https://script.google.com/macros/s/AKfycby4Y2l3DJ6fQCrpFuwTTXKeaD3QV5DbLhf7jmberZCUFx86VaaE6vb9Bs_CweNh3K9VtQ/exec";
+const RESEND_URL  = "https://api.resend.com/emails";
+const FROM        = Deno.env.get("RESEND_FROM") || "Speeks Reports <onboarding@resend.dev>";
+const FALLBACK_TO = ["ethan.kushnir@speekstechnology.com"];
+
+// Palette lifted from the weekly report so the two emails look like the same
+// system. Values, not variables: every colour has to be inline in email HTML.
+const C = {
+  sage: "#1f9d57", sageDeep: "#178048", tint: "#e8f7ee",
+  charcoal: "#1a1c1e", app: "#f1f5f2", card: "#ffffff", soft: "#f7faf8",
+  amber: "#c07f0c", flagBg: "#fefaf3", flagBorder: "#f0dcb6",
+  line: "#eaefeb", line2: "#f4f8f5", muted: "#64707c", faint: "#9aa6ad",
+};
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+class Invalid extends Error {}
+
+function str(v: unknown, max: number, label: string, required = false): string | null {
+  const s = String(v ?? "").trim();
+  if (!s) {
+    if (required) throw new Invalid(`${label} is required.`);
+    return null;
+  }
+  if (s.length > max) throw new Invalid(`${label} is too long (max ${max} characters).`);
+  return s;
+}
+
+function isoDate(v: unknown, label: string): string | null {
+  const s = str(v, 10, label);
+  if (!s) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(s + "T00:00:00Z"))) {
+    throw new Invalid(`${label} must be a real date.`);
+  }
+  return s;
+}
+
+// Business days are Chicago days. Using UTC would fire the sweep on the wrong
+// calendar date for six hours every evening.
+function chicagoToday(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+}
+
+const longDate = (d: string | null) => d
+  ? new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })
+  : "—";
+
+const daysBetween = (a: string, b: string) =>
+  Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
+
+// Leadership list, same table and key the weekly report reads.
+async function loadRecipients(sb: any): Promise<string[]> {
+  try {
+    const { data } = await sb.from("email_recipients").select("email").eq("list_key", "weekly_leadership");
+    const list = (data || []).map((r: any) => r.email).filter(Boolean);
+    return list.length ? list : FALLBACK_TO;
+  } catch (_) {
+    return FALLBACK_TO;
+  }
+}
+
+async function sendEmail(to: string[], subject: string, html: string) {
+  if (GMAIL_RELAY) {
+    const res = await fetch(GMAIL_RELAY, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ secret: SECRET, to: to.join(","), subject, html }),
+    });
+    const txt = await res.text();
+    return { ok: res.ok, status: res.status, body: txt.slice(0, 300) };
+  }
+  const key = Deno.env.get("RESEND_API_KEY");
+  if (!key) return { ok: false, status: 0, body: "No GMAIL_RELAY_URL or RESEND_API_KEY set" };
+  const res = await fetch(RESEND_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ from: FROM, to, subject, html }),
+  });
+  const txt = await res.text();
+  return { ok: res.ok, status: res.status, body: txt.slice(0, 300) };
+}
+
+const esc = (s: unknown) => String(s ?? "")
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+// Tables and inline styles throughout: Gmail strips <style> blocks and Outlook
+// ignores flexbox and border-radius.
+function digestHtml(rows: any[], today: string): string {
+  const card = (r: any) => {
+    const due  = r.outreach_next_due as string;
+    const late = daysBetween(due, today);
+    const when = late > 0 ? `${late} day${late === 1 ? "" : "s"} overdue`
+               : late === 0 ? "Due today" : `In ${-late} day${-late === 1 ? "" : "s"}`;
+    const tone = late > 0 ? C.amber : C.sageDeep;
+    const spend = Number(r.lifetime_cost) || 0;
+    const facts = [
+      r.contact ? esc(r.contact) : null,
+      r.contact_email ? esc(r.contact_email) : null,
+      r.contact_phone ? esc(r.contact_phone) : null,
+    ].filter(Boolean).join(" &nbsp;·&nbsp; ");
+    const history = [
+      `${Number(r.deal_count) || 0} deal${Number(r.deal_count) === 1 ? "" : "s"} all time`,
+      spend ? `$${spend.toLocaleString("en-US")} lifetime` : null,
+      r.last_deal_at ? `last deal ${longDate(String(r.last_deal_at).slice(0, 10))}` : null,
+      r.outreach_last_touch_at
+        ? `last contacted ${longDate(String(r.outreach_last_touch_at).slice(0, 10))}`
+        : "never contacted on this schedule",
+    ].filter(Boolean).join(" &nbsp;·&nbsp; ");
+
+    return `
+    <tr><td style="padding:0 0 10px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+             style="background:${C.card};border:1px solid ${C.line};border-radius:12px;">
+        <tr><td style="padding:14px 16px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+            <td style="font-size:15px;font-weight:800;color:${C.charcoal};">
+              ${esc(r.company)}
+              <span style="display:inline-block;margin-left:6px;padding:2px 7px;border-radius:6px;
+                           background:${C.tint};color:${C.sageDeep};font-size:10px;font-weight:800;">${esc(r.acronym)}</span>
+            </td>
+            <td align="right" style="font-size:11.5px;font-weight:800;color:${tone};white-space:nowrap;">${when}</td>
+          </tr></table>
+          ${facts ? `<div style="margin-top:5px;font-size:12.5px;color:${C.muted};">${facts}</div>` : ""}
+          <div style="margin-top:4px;font-size:11.5px;color:${C.faint};">${history}</div>
+          ${r.outreach_note ? `
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:9px;">
+            <tr><td style="padding:8px 11px;background:${C.soft};border-left:3px solid ${C.sage};
+                           font-size:12px;color:${C.charcoal};">${esc(r.outreach_note)}</td></tr>
+          </table>` : ""}
+          <div style="margin-top:8px;font-size:11px;color:${C.faint};">
+            Every ${Number(r.outreach_months)} month${Number(r.outreach_months) === 1 ? "" : "s"}
+            from ${longDate(r.outreach_start)} &nbsp;·&nbsp; due ${longDate(due)}
+          </div>
+        </td></tr>
+      </table>
+    </td></tr>`;
+  };
+
+  const overdue = rows.filter((r) => daysBetween(r.outreach_next_due, today) > 0);
+  const dueNow  = rows.filter((r) => daysBetween(r.outreach_next_due, today) <= 0);
+  const label = (t: string, n: number) => `
+    <tr><td style="padding:14px 0 8px;font-size:10.5px;font-weight:800;letter-spacing:.09em;
+                   text-transform:uppercase;color:${C.faint};">${t} · ${n}</td></tr>`;
+
+  return `
+<div style="margin:0;padding:0;background:${C.app};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.app};">
+<tr><td align="center" style="padding:26px 12px;">
+  <table role="presentation" width="600" cellpadding="0" cellspacing="0"
+         style="width:600px;max-width:600px;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <tr><td style="padding:0 0 16px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+             style="background:${C.card};border:1px solid ${C.line};border-radius:18px;">
+        <tr><td style="padding:20px 22px;border-bottom:1px solid ${C.line2};">
+          <div style="font-size:10.5px;font-weight:800;letter-spacing:.11em;text-transform:uppercase;color:${C.sage};">
+            SPEEKS Technology · B2B
+          </div>
+          <div style="margin-top:3px;font-size:21px;font-weight:800;color:${C.charcoal};">Clients To Reach Out To</div>
+          <div style="margin-top:3px;font-size:13px;color:${C.muted};">
+            ${rows.length} client${rows.length === 1 ? " is" : "s are"} due a check-in as of ${longDate(today)}.
+          </div>
+        </td></tr>
+        <tr><td style="padding:6px 22px 20px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            ${overdue.length ? label("Overdue", overdue.length) + overdue.map(card).join("") : ""}
+            ${dueNow.length ? label("Due now", dueNow.length) + dueNow.map(card).join("") : ""}
+          </table>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px;">
+            <tr><td style="padding:11px 13px;background:${C.flagBg};border:1px solid ${C.flagBorder};
+                           border-radius:10px;font-size:12px;color:${C.charcoal};">
+              Draft the note from Operations → Business-to-Business → Clients. It opens in your own mailbox, so
+              the reply comes back to you — and marking it done there moves the schedule on.
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </td></tr>
+    <tr><td align="center" style="padding:0 0 8px;font-size:11px;color:${C.faint};">
+      Sent by SPEEKS Reports because these clients have an outreach cadence set.
+    </td></tr>
+  </table>
+</td></tr></table></div>`;
+}
+
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
+  const supabase = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  );
+
+  // ------------------------------------------------------------------ writes
+  if (req.method === "POST") {
+    try {
+      const body = JSON.parse(await req.text());
+      const action = body.action;
+      const clientId = str(body.client_id, 64, "Client", true)!;
+
+      if (action === "set_schedule") {
+        const active = body.active === true;
+        const start  = isoDate(body.start, "Start date");
+        const months = body.months === null || body.months === undefined || body.months === ""
+          ? null : Math.trunc(Number(body.months));
+        if (months !== null && (!Number.isFinite(months) || months < 1 || months > 60)) {
+          throw new Invalid("The cadence must be between 1 and 60 months.");
+        }
+        if (active && (!start || !months)) {
+          throw new Invalid("Turning outreach on needs both a start date and a cadence.");
+        }
+        const { error } = await supabase.from("b2b_clients").update({
+          outreach_active: active,
+          outreach_start: start,
+          outreach_months: months,
+          outreach_note: str(body.note, 2000, "Note"),
+        }).eq("id", clientId);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+
+        const { data: fresh } = await supabase.from("b2b_client_list")
+          .select("outreach_active,outreach_start,outreach_months,outreach_note,outreach_next_due")
+          .eq("id", clientId).maybeSingle();
+        return jsonResponse({ success: true, client: fresh });
+      }
+
+      // Someone actually reached out. This is the clock that moves the schedule
+      // on -- the reminder emails deliberately do not.
+      if (action === "log_touch") {
+        const { data: c } = await supabase.from("b2b_client_list")
+          .select("id,outreach_next_due").eq("id", clientId).maybeSingle();
+        if (!c) return jsonResponse({ success: false, error: "That client no longer exists." }, 404);
+
+        const now = new Date().toISOString();
+        const { error } = await supabase.from("b2b_clients")
+          .update({ outreach_last_touch_at: now, outreach_reminded_for: null }).eq("id", clientId);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+
+        await supabase.from("b2b_outreach_log").insert({
+          client_id: clientId, kind: "touch", due_on: c.outreach_next_due,
+          detail: str(body.detail, 1000, "Detail"), logged_by: str(body.user, 120, "User"),
+        });
+
+        const { data: fresh } = await supabase.from("b2b_client_list")
+          .select("outreach_last_touch_at,outreach_next_due").eq("id", clientId).maybeSingle();
+        return jsonResponse({ success: true, client: fresh });
+      }
+
+      return jsonResponse({ success: false, error: "Unknown action" }, 400);
+    } catch (err: any) {
+      if (err instanceof Invalid) return jsonResponse({ success: false, error: err.message }, 400);
+      return jsonResponse({ success: false, error: err.message }, 500);
+    }
+  }
+
+  // ------------------------------------------------------------------- reads
+  try {
+    const url = new URL(req.url);
+    const today = chicagoToday();
+
+    // The app's own read: everything with a cadence, so the panel can show due,
+    // overdue and upcoming without a second call.
+    if (url.searchParams.get("due")) {
+      const { data, error } = await supabase.from("b2b_client_list")
+        .select("id,company,acronym,contact,contact_email,contact_phone,deal_count,lifetime_cost," +
+                "last_deal_at,outreach_active,outreach_start,outreach_months,outreach_note," +
+                "outreach_last_touch_at,outreach_next_due")
+        .eq("outreach_active", true).limit(2000);
+      if (error) return jsonResponse({ success: false, error: error.message }, 500);
+      const rows = (data || [])
+        .filter((r: any) => r.outreach_next_due)
+        .sort((a: any, b: any) => String(a.outreach_next_due).localeCompare(String(b.outreach_next_due)));
+      return jsonResponse({ success: true, today, data: rows });
+    }
+
+    // The daily sweep. Gated on the shared secret, same as every other cron'd
+    // function here.
+    if (url.searchParams.get("secret") !== SECRET) {
+      return jsonResponse({ success: false, error: "Not authorized" }, 401);
+    }
+    const dryRun = url.searchParams.get("dryRun") === "1";
+
+    const { data, error } = await supabase.from("b2b_client_list")
+      .select("id,company,acronym,contact,contact_email,contact_phone,deal_count,lifetime_cost," +
+              "last_deal_at,outreach_active,outreach_start,outreach_months,outreach_note," +
+              "outreach_last_touch_at,outreach_reminded_for,outreach_next_due")
+      .eq("outreach_active", true).limit(2000);
+    if (error) return jsonResponse({ success: false, error: error.message }, 500);
+
+    // Due, and not already reminded about THIS occurrence. Comparing against the
+    // due date rather than "did we email today" is what makes the job idempotent:
+    // it can run every morning, or twice, and still send once per occurrence.
+    const rows = (data || [])
+      .filter((r: any) => r.outreach_next_due && r.outreach_next_due <= today)
+      .filter((r: any) => !r.outreach_reminded_for || r.outreach_reminded_for < r.outreach_next_due)
+      .sort((a: any, b: any) => String(a.outreach_next_due).localeCompare(String(b.outreach_next_due)));
+
+    if (!rows.length) return jsonResponse({ success: true, today, due: 0, sent: false });
+
+    const html = digestHtml(rows, today);
+    const subject = rows.length === 1
+      ? `B2B Outreach: ${rows[0].company} Is Due A Check-In`
+      : `B2B Outreach: ${rows.length} Clients Are Due A Check-In`;
+    if (dryRun) {
+      return jsonResponse({
+        success: true, today, due: rows.length, sent: false, subject,
+        clients: rows.map((r: any) => ({ company: r.company, due: r.outreach_next_due })), html,
+      });
+    }
+
+    const override = url.searchParams.get("to");
+    const to = override ? [override] : await loadRecipients(supabase);
+    const res = await sendEmail(to, subject, html);
+
+    // Only mark reminded when the send actually landed, so a relay outage means
+    // a retry tomorrow rather than an occurrence silently skipped.
+    if (res.ok) {
+      for (const r of rows) {
+        await supabase.from("b2b_clients")
+          .update({ outreach_reminded_for: r.outreach_next_due }).eq("id", r.id);
+      }
+    }
+    // Logged either way -- a failed send is the thing you most want a record of.
+    await supabase.from("b2b_outreach_log").insert(rows.map((r: any) => ({
+      client_id: r.id, kind: "reminder", due_on: r.outreach_next_due,
+      sent_to: to.join(","), ok: res.ok,
+      detail: res.ok ? null : `status ${res.status}: ${res.body}`.slice(0, 1000),
+      logged_by: "cron",
+    })));
+
+    return jsonResponse({ success: true, today, due: rows.length, sent: res.ok, to, relay: res.status });
+  } catch (err: any) {
+    if (err instanceof Invalid) return jsonResponse({ success: false, error: err.message }, 400);
+    return jsonResponse({ success: false, error: err.message }, 500);
+  }
+});

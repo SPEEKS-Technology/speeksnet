@@ -54,6 +54,7 @@ const TICKER_URL        = `${_BASE}/ticker`;
 const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
 const MONTHLY_BRIEF_URL = `${_BASE}/monthly-brief`;
 const B2B_URL           = `${_BASE}/b2b-deals`;
+const B2B_OUTREACH_URL  = `${_BASE}/b2b-outreach`;
 const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
 const RECYCLE_URL       = `${_BASE}/recycle-requests`;
 const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
@@ -8564,6 +8565,7 @@ function _b2bRenderClients() {
         : '<tr><td colspan="8" class="b2b-doc-empty">No clients yet — add the first one below.</td></tr>';
 
     return `
+        ${_b2bOutreachStrip()}
         <div class="b2b-sec">
             <div class="b2b-sec-h"><span>Clients</span><span class="b2b-sec-n">${_b2bClients.length}</span></div>
             <table class="cb-table b2b-ctable">
@@ -8618,6 +8620,213 @@ function b2bToggleClient(id) {
     row.insertAdjacentHTML('afterend', _b2bClientDrawer(id));
 }
 
+// --- outreach (the mini CRM) ----------------------------------------------
+// A client can carry a cadence: every N months from a date you set. The daily
+// b2b-outreach sweep emails leadership when one comes due.
+//
+// The reminder goes to US, not to the client. The client-facing note is a mailto
+// from here, so it leaves the sender's own mailbox and the reply comes back to
+// them -- same reasoning as the quote. Auto-sending to a real business from the
+// reports address would put our outreach in a place nobody reads the answer.
+
+const B2B_CADENCES = [
+    { m: 1,  label: 'Every month' },
+    { m: 2,  label: 'Every 2 months' },
+    { m: 3,  label: 'Every 3 months' },
+    { m: 4,  label: 'Every 4 months' },
+    { m: 6,  label: 'Every 6 months' },
+    { m: 12, label: 'Every year' },
+];
+
+// Today in the store's timezone, as YYYY-MM-DD, so "due" means the same thing
+// here as it does in the edge function.
+function _b2bToday() {
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+}
+
+function _b2bDueIn(dateStr) {
+    if (!dateStr) return null;
+    const a = Date.parse(_b2bToday() + 'T00:00:00Z');
+    const b = Date.parse(dateStr + 'T00:00:00Z');
+    if (Number.isNaN(b)) return null;
+    return Math.round((b - a) / 86400000);   // negative = overdue
+}
+
+function _b2bDueLabel(dateStr) {
+    const d = _b2bDueIn(dateStr);
+    if (d === null) return { text: 'Not scheduled', tone: 'neu' };
+    if (d < 0)  return { text: `${-d} day${d === -1 ? '' : 's'} overdue`, tone: 'crit' };
+    if (d === 0) return { text: 'Due today', tone: 'warn' };
+    if (d <= 14) return { text: `Due in ${d} day${d === 1 ? '' : 's'}`, tone: 'warn' };
+    return { text: `Due ${_b2bDate(dateStr)}`, tone: 'ok' };
+}
+
+// The clients list already carries the outreach columns and the computed next
+// due date, so this needs no fetch of its own.
+function _b2bOutreachStrip() {
+    const on = _b2bClients.filter(c => c.outreach_active && c.outreach_next_due);
+    if (!on.length) {
+        return `
+        <div class="b2b-sec">
+            <div class="b2b-sec-h"><span>Client Outreach</span></div>
+            <div class="b2b-doc-empty">No client is on a check-in schedule yet.
+                Open a client below to set one, and we'll email you when it comes due.</div>
+        </div>`;
+    }
+    const due = on.filter(c => _b2bDueIn(c.outreach_next_due) <= 0)
+                  .sort((a, b) => String(a.outreach_next_due).localeCompare(String(b.outreach_next_due)));
+    const next = on.filter(c => _b2bDueIn(c.outreach_next_due) > 0)
+                   .sort((a, b) => String(a.outreach_next_due).localeCompare(String(b.outreach_next_due)));
+
+    const row = (c) => {
+        const d = _b2bDueLabel(c.outreach_next_due);
+        return `
+        <div class="b2b-or-row">
+            <span class="b2b-or-co"><b>${escapeHtml(c.company)}</b>
+                <span class="b2b-mono b2b-acr">${escapeHtml(c.acronym)}</span></span>
+            <span class="b2b-age b2b-age-${d.tone === 'crit' ? 'crit' : d.tone === 'warn' ? 'warn' : 'ok'}">${escapeHtml(d.text)}</span>
+            <span class="b2b-or-acts">
+                ${c.contact_email ? `<button class="b2b-mini" onclick="b2bDraftOutreach('${c.id}')">Draft Email</button>`
+                                  : '<span class="b2b-or-noemail">No email on file</span>'}
+                <button class="b2b-mini" onclick="b2bLogTouch('${c.id}',this)">Mark Reached Out</button>
+                <button class="b2b-mini" onclick="b2bToggleClient('${c.id}');document.getElementById('b2bCRow-${c.id}')?.scrollIntoView({block:'center'})">Open</button>
+            </span>
+        </div>`;
+    };
+
+    return `
+        <div class="b2b-sec">
+            <div class="b2b-sec-h"><span>Client Outreach</span><span class="b2b-sec-n">${due.length}</span></div>
+            ${due.length ? `<div class="b2b-or-list">${due.map(row).join('')}</div>`
+                : '<div class="b2b-doc-empty">Nobody is due a check-in right now.</div>'}
+            ${next.length ? `<div class="b2b-archive-note">Next up: ${
+                escapeHtml(next.slice(0, 3).map(c => `${c.company} on ${_b2bDate(c.outreach_next_due)}`).join(' · '))
+            }${next.length > 3 ? ` · +${next.length - 3} more` : ''}.</div>` : ''}
+        </div>`;
+}
+
+// The schedule editor, shown inside a client's drawer.
+function _b2bOutreachPanel(c) {
+    const on = !!c.outreach_active;
+    const d  = on ? _b2bDueLabel(c.outreach_next_due) : null;
+    return `
+        <div class="b2b-cd-h">Outreach</div>
+        <div class="b2b-osched">
+            <label class="b2b-rec-toggle b2b-osw">
+                <input type="checkbox" id="b2bOsOn-${c.id}" ${on ? 'checked' : ''}
+                    onchange="_b2bOsToggle('${c.id}',this.checked)">
+                <span>Remind me to check in on this client</span>
+            </label>
+            <div class="b2b-ogrid" id="b2bOsFields-${c.id}" ${on ? '' : 'hidden'}>
+                <div class="b2b-f"><label>Starting</label>
+                    <input type="date" id="b2bOsStart-${c.id}" value="${escapeHtml(c.outreach_start || _b2bToday())}"></div>
+                <div class="b2b-f"><label>How often</label>
+                    <select id="b2bOsEvery-${c.id}">
+                        ${B2B_CADENCES.map(o => `<option value="${o.m}" ${Number(c.outreach_months) === o.m ? 'selected' : ''}>${o.label}</option>`).join('')}
+                    </select></div>
+                <div class="b2b-f b2b-ogrid-wide"><label>What to bring up <span class="b2b-tag-int">goes in the reminder</span></label>
+                    <input id="b2bOsNote-${c.id}" value="${escapeHtml(c.outreach_note || '')}"
+                        placeholder="Ask whether their Q1 refresh is coming up"></div>
+            </div>
+            <div class="b2b-osched-foot">
+                <span class="b2b-osched-when">${on && d
+                    ? `<span class="b2b-age b2b-age-${d.tone === 'crit' ? 'crit' : d.tone === 'warn' ? 'warn' : 'ok'}">${escapeHtml(d.text)}</span>`
+                      + (c.outreach_last_touch_at ? ` Last contacted ${_b2bDate(c.outreach_last_touch_at)}.` : ' Not contacted on this schedule yet.')
+                    : 'Off — nothing will be sent about this client.'}</span>
+                ${on && c.contact_email ? `<button class="b2b-mini" onclick="b2bDraftOutreach('${c.id}')">Draft Email</button>` : ''}
+                ${on ? `<button class="b2b-mini" onclick="b2bLogTouch('${c.id}',this)">Mark Reached Out</button>` : ''}
+                <button class="b2b-btn b2b-btn-secondary b2b-osave" onclick="b2bSaveOutreach('${c.id}',this)">Save Schedule</button>
+            </div>
+        </div>`;
+}
+
+// Show or hide the fields without a re-render, so the drawer doesn't collapse
+// underneath the click.
+function _b2bOsToggle(id, on) {
+    const f = document.getElementById(`b2bOsFields-${id}`);
+    if (f) f.hidden = !on;
+}
+
+async function b2bSaveOutreach(id, btn) {
+    const active = document.getElementById(`b2bOsOn-${id}`)?.checked || false;
+    const start  = document.getElementById(`b2bOsStart-${id}`)?.value || '';
+    const months = document.getElementById(`b2bOsEvery-${id}`)?.value || '';
+    const note   = document.getElementById(`b2bOsNote-${id}`)?.value || '';
+    if (active && !start) return alert('Pick the date the schedule should start from.');
+    try {
+        await _b2bBusy(btn, 'Saving…', async () => {
+            const res = await fetch(B2B_OUTREACH_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ action: 'set_schedule', client_id: id, active, start, months, note }),
+            });
+            const out = await res.json().catch(() => ({}));
+            if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
+        });
+        await b2bRefresh();
+    } catch (e) {
+        alert(`Couldn't save the schedule: ${e.message}`);
+    }
+}
+
+// Records that we actually reached out, which is what moves the schedule on.
+async function b2bLogTouch(id, btn) {
+    const c = _b2bClients.find(x => x.id === id);
+    if (!c) return;
+    const detail = prompt(`Log a check-in with ${c.company}.\n\n`
+        + 'Anything worth remembering? (optional — leave blank and it just records the date)', '');
+    if (detail === null) return;
+    try {
+        await _b2bBusy(btn, 'Saving…', async () => {
+            const res = await fetch(B2B_OUTREACH_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ action: 'log_touch', client_id: id, detail, user: _b2bUser() }),
+            });
+            const out = await res.json().catch(() => ({}));
+            if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
+        });
+        await b2bRefresh();
+    } catch (e) {
+        alert(`Couldn't log that check-in: ${e.message}`);
+    }
+}
+
+// Opens a draft in the sender's own mailbox. Plain text, because a mailto body
+// is plain text by RFC 6068 -- no markup survives the trip.
+function b2bDraftOutreach(id) {
+    const c = _b2bClients.find(x => x.id === id);
+    if (!c) return;
+    if (!c.contact_email) return alert(`${c.company} has no email address on file.`);
+
+    const me   = _b2bUser();
+    const who  = (c.contact || '').trim().split(/\s+/)[0];
+    const last = c.last_deal_at ? _b2bLongDate(String(c.last_deal_at).slice(0, 10)) : '';
+    const body = [
+        who ? `Hi ${who},` : 'Hello,',
+        '',
+        last
+            ? `I hope things are going well. We last worked together on a pickup in ${last}, and I wanted to check in and see whether you have any equipment coming out of service.`
+            : 'I hope things are going well. I wanted to check in and see whether you have any equipment coming out of service.',
+        '',
+        'If you do, we can look at it and get you a quote — no obligation either way. Happy to come to you for the pickup, same as before.',
+        '',
+        'Just let me know and I will get it scheduled.',
+        '',
+        'Best regards,',
+        me,
+        'SPEEKS Technology',
+    ].join('\n');
+    const subject = `Checking In From SPEEKS Technology`;
+
+    if (!confirm(`This opens a draft to ${c.contact_email} in your own email app.\n\n`
+        + 'Read it over and edit it before sending — it is a starting point, not a template to fire off.\n\n'
+        + `After you send it, use "Mark Reached Out" so the schedule moves on.`)) return;
+
+    window.location.href = `mailto:${encodeURIComponent(c.contact_email)}`
+        + `?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
 // A client's history. The headline figures come from the server (the view rolls
 // them up over every deal on record); the deal list underneath can only show
 // what this session actually loaded, which is the open set plus the recent
@@ -8628,12 +8837,17 @@ function _b2bClientDrawer(id) {
 
     const total = Number(c.deal_count) || 0;
 
-    // Six tiles of zeros says nothing a single sentence doesn't say better.
+    // Six tiles of zeros says nothing a single sentence doesn't say better -- but
+    // a client with no deals yet is exactly who you might want to chase, so the
+    // outreach panel still belongs here.
     if (!total) {
         return `
         <tr class="b2b-cdrop" id="b2bCDrop-${id}">
-            <td colspan="8"><div class="b2b-doc-empty">No deals with ${escapeHtml(c.company)} yet.
-                Start one with New Deal.</div></td>
+            <td colspan="8">
+                <div class="b2b-doc-empty">No deals with ${escapeHtml(c.company)} yet.
+                    Start one with New Deal.</div>
+                ${_b2bOutreachPanel(c)}
+            </td>
         </tr>`;
     }
 
@@ -8680,6 +8894,7 @@ function _b2bClientDrawer(id) {
         <tr class="b2b-cdrop" id="b2bCDrop-${id}">
             <td colspan="8">
                 ${stats}
+                ${_b2bOutreachPanel(c)}
                 <div class="b2b-cd-h">Deals</div>
                 <div class="b2b-cdeals">${dealRows}</div>
                 ${hidden}
