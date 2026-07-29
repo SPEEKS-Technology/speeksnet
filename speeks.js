@@ -22541,7 +22541,7 @@ function _dccChecks(r) {
         // its own and the triage stopped discriminating. The threshold itself is
         // unchanged, and checkRule() still paints the number red in its own row;
         // what changed is that it no longer escalates the whole store.
-        { key: 'noDeals', s: nd == null ? null : (nd > 7 ? 'w' : null),      rule: 'ceiling 7' },
+        { key: 'noDeals', s: nd == null ? null : (nd > 7 ? 'w' : null),      rule: '' },
         { key: 'defect',  s: _dccSev('defect', r.defect), rule: 'ceiling 0.40%' },
         { key: 'late',    s: _dccSev('late', r.late),     rule: 'ceiling 2.40%' },
         { key: 'cases',   s: _dccSev('cases', r.cases),   rule: 'ceiling 0.24%' },
@@ -22706,14 +22706,14 @@ function _dccJudge(r, key, has) {
 function _dccEbayBlock(r) {
     const four = [
         ['Tracking',      _dccEbayPct(r.track),  _dccState(r, 'track'),  'floor 96.0%'],
-        ['Defect rate',   _dccEbayPct(r.defect), _dccState(r, 'defect'), 'ceiling 0.40%'],
-        ['Cases closed',  _dccEbayPct(r.cases),  _dccState(r, 'cases'),  'ceiling 0.24%'],
-        ['Late shipment', _dccEbayPct(r.late),   _dccState(r, 'late'),   'ceiling 2.40%'],
+        ['Defect Rate',   _dccEbayPct(r.defect), _dccState(r, 'defect'), 'ceiling 0.40%'],
+        ['Cases Closed',  _dccEbayPct(r.cases),  _dccState(r, 'cases'),  'ceiling 0.24%'],
+        ['Late Shipment', _dccEbayPct(r.late),   _dccState(r, 'late'),   'ceiling 2.40%'],
     ];
     const off = four.filter(f => f[2]).length;
     if (!off) {
         // Nothing wrong: one line rather than four cells of good news.
-        const bits = four.filter(f => f[1]).map(f => f[0].toLowerCase() + ' ' + f[1]).join(' · ');
+        const bits = four.filter(f => f[1]).map(f => f[0] + ' ' + f[1]).join(' · ');
         return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>all four within threshold</em></div>'
             + '<div class="dcc-clear">' + _DCC_ICO.g + (bits || 'No data reported yet') + '</div></div>';
     }
@@ -22763,8 +22763,7 @@ function _dccCatBlock(r) {
     return '<div class="dcc-block"><div class="dcc-sec">eBay categories at risk<em>' + r.cats.length + ' flagged</em></div>'
         + '<div class="dcc-cats">' + r.cats.map(c =>
             '<div class="dcc-cat ' + c.s + '"><span class="dcc-cat-k">' + escapeHtml(c.k) + '</span>'
-            + '<span class="dcc-cat-v">' + escapeHtml(c.v) + '</span>'
-            + '<span>' + _DCC_ICO[c.s] + '</span></div>').join('')
+            + '<span class="dcc-cat-v">' + escapeHtml(c.v) + '</span></div>').join('')
         + '</div></div>';
 }
 
