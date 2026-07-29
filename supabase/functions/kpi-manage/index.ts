@@ -16,6 +16,31 @@ const MULTISTORE_MANAGER_STORES = ['BAL', 'MPL'];
 const json = (data: any, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
+// Realtime "broadcast-as-ping": after a KPI save lands, tell every open client
+// so their action-feed re-runs checkKpiDueReminders() and the "KPIs due" nag
+// clears the instant the numbers are entered. Only a tiny {tool, store} ping
+// travels — no table data — matching every other tool's broadcastChange.
+// Wrapped so a broadcast failure can never break the write it follows.
+async function broadcastChange(tool: string, store: string | null) {
+  try {
+    const url = Deno.env.get('SUPABASE_URL')!;
+    const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        messages: [{
+          topic: 'speeks-notify',
+          event: 'changed',
+          payload: { tool, store: store ? String(store).toUpperCase() : null, ts: Date.now() },
+        }],
+      }),
+    });
+  } catch (_) {
+    // swallow — the write already succeeded; realtime is best-effort
+  }
+}
+
 function formatLabel(type: string, date: string): string {
   const d = new Date(date + 'T00:00:00');
   return type === 'weekly'
@@ -123,6 +148,61 @@ Deno.serve(async (req) => {
   if (req.method === 'GET') {
     if (!store) return json({ error: 'Missing store' }, 400);
 
+    // ── CSV date-range export modes ──────────────────────────────────────
+    // The default response below is deliberately windowed (weekly = the 4 most
+    // recent Sundays) because it drives the editable grid. The exporter needs
+    // the full history instead, so these two modes read SAVED rows only — no
+    // roster synthesis, no window:
+    //   ?mode=available            → every period that actually has data
+    //   ?mode=range&from=&to=      → the entries inside a chosen span
+    // Both are additive; omitting `mode` leaves the grid path untouched.
+    const mode = url.searchParams.get('mode') || '';
+    if (mode === 'available' || mode === 'range') {
+      const from = url.searchParams.get('from') || '';
+      const to   = url.searchParams.get('to')   || '';
+
+      let q = supabase
+        .from('kpi_entries')
+        .select(mode === 'available' ? 'period_end_date' : '*')
+        .eq('store', store).eq('period_type', periodType);
+      if (from) q = q.gte('period_end_date', from);
+      if (to)   q = q.lte('period_end_date', to);
+
+      const { data: rows, error } = await q.order('period_end_date', { ascending: false });
+      if (error) return json({ error: error.message }, 500);
+
+      if (mode === 'available') {
+        const counts: Record<string, number> = {};
+        (rows || []).forEach((r: any) => {
+          counts[r.period_end_date] = (counts[r.period_end_date] || 0) + 1;
+        });
+        return json({
+          periods: Object.keys(counts).sort().reverse().map(date => ({
+            period_end_date: date,
+            period_label:    formatLabel(periodType, date),
+            saved_count:     counts[date],
+          })),
+        });
+      }
+
+      const grouped: Record<string, any[]> = {};
+      (rows || []).forEach((e: any) => {
+        if (!grouped[e.period_end_date]) grouped[e.period_end_date] = [];
+        grouped[e.period_end_date].push(e);
+      });
+      return json({
+        periods: Object.keys(grouped).sort().reverse().map(date => ({
+          period_end_date: date,
+          period_label:    formatLabel(periodType, date),
+          is_editable:     isEditablePeriod(periodType, date),
+          saved_count:     grouped[date].length,
+          entries: grouped[date]
+            .sort((a: any, b: any) => String(a.employee_name).localeCompare(String(b.employee_name)))
+            .map((e: any) => computeFields(e)),
+        })),
+      });
+    }
+
     const { data: homeUsers } = await supabase
       .from('users').select('name, role').eq('store', store).order('name');
     const roster = homeUsers || [];
@@ -187,6 +267,10 @@ Deno.serve(async (req) => {
         period_end_date: date,
         period_label:    formatLabel(periodType, date),
         is_editable:     isEditablePeriod(periodType, date),
+        // How many employees actually have a SAVED row for this period (raw DB
+        // rows, not the synthesized roster). Drives the "KPIs still need filling
+        // out" reminder — a period with saved_count 0 is untouched.
+        saved_count:     savedNames.length,
         entries: namesForDate.map((name: string) =>
           computeFields(byDate[date]?.[name] || { employee_name: name })
         ),
@@ -245,19 +329,28 @@ Deno.serve(async (req) => {
       .select().single();
     if (error) return json({ error: error.message }, 500);
 
-    // Cleanup: weekly keeps only last 4 weeks per store
+    // Retention: weekly rows used to be pruned to the last 4 weeks per store —
+    // the same 4 the grid shows — which meant the history was destroyed on every
+    // save and a multi-week CSV export was impossible. Now we keep two years so
+    // the date-range exporter has something to reach for. The GRID still shows
+    // only 4 weeks (getRecentSundays(4) above); this is storage, not display.
+    // ~5 stores x ~5 employees x 52 weeks ≈ 1.3k rows/year, so growth is a non-issue.
+    const WEEKLY_KEEP_WEEKS = 104;
     if (period_type === 'weekly') {
       const { data: weeks } = await supabase
         .from('kpi_entries').select('period_end_date')
         .eq('store', storeUpper).eq('period_type', 'weekly')
         .order('period_end_date', { ascending: false });
       const unique = [...new Set((weeks || []).map((r: any) => r.period_end_date))];
-      if (unique.length > 4) {
+      if (unique.length > WEEKLY_KEEP_WEEKS) {
         await supabase.from('kpi_entries').delete()
           .eq('store', storeUpper).eq('period_type', 'weekly')
-          .in('period_end_date', unique.slice(4));
+          .in('period_end_date', unique.slice(WEEKLY_KEEP_WEEKS));
       }
     }
+
+    // Ping open clients so the "KPIs due" reminder clears in realtime.
+    await broadcastChange('kpi', storeUpper);
 
     return json({ success: true, entry: computeFields(upserted) });
   }

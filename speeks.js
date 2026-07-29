@@ -59,6 +59,7 @@ const RECYCLE_URL       = `${_BASE}/recycle-requests`;
 const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
 const VARIANCE_REPLIES_URL = `${_BASE}/variance-replies`;
 const AGING_INV_URL     = `${_BASE}/aging-inventory`;
+const PREFERRED_URL     = `${_BASE}/preferred-purchases`;
 const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
@@ -184,7 +185,16 @@ function toggleSidebar() {
     localStorage.setItem('speeksSidebar', sidebar?.classList.contains('collapsed') ? 'collapsed' : 'expanded');
 }
 
+let _lockedScrollY = 0;
 function lockAndBlurScreen() {
+    // .no-scroll makes <body> position:fixed, which otherwise snaps the page to
+    // the top. Capture the current scroll and pin the body at -scrollY so it
+    // stays visually put; closeAllModals restores it. Guard against re-capturing
+    // 0 when we're already locked (e.g. switching between modals).
+    if (!document.body.classList.contains('no-scroll')) {
+        _lockedScrollY = window.scrollY || window.pageYOffset || 0;
+        document.body.style.top = `-${_lockedScrollY}px`;
+    }
     document.body.classList.add('no-scroll');
     const overlay = document.getElementById('globalOverlay');
     if (overlay) overlay.classList.add('show');
@@ -198,19 +208,29 @@ function closeAllModals() {
         if (!confirm("Close Submit Scores? Your audit entries haven't been saved yet.")) return;
         _auditDirty = false;
     }
-    document.body.classList.remove('no-scroll');
-    document.body.style.overflow = '';
-    document.body.style.position = '';
-    document.body.style.top = '';
-    document.body.style.paddingRight = '';
-    
-    const topNav = document.querySelector('.top-nav');
-    if (topNav) {
-        topNav.style.paddingRight = ''; 
+    // Read this BEFORE .show comes off, since the check asks which editor was up.
+    // When a district popup asked to be returned to, this is not a close at all
+    // — it is a swap, and the difference is visible. See below.
+    const _dmxBack = typeof _dmxReturnCheck === 'function' ? _dmxReturnCheck() : null;
+    const _dmxBackEl = _dmxBack ? document.getElementById(_dmxBack) : null;
+
+    const _wasLocked = document.body.classList.contains('no-scroll');
+    // A pending swap must not release any of this. Dropping the scroll lock and
+    // the backdrop only to restore both a tick later let the browser paint the
+    // unlocked, unblurred, scrolled page in between — that was the flicker.
+    if (!_dmxBackEl) {
+        document.body.classList.remove('no-scroll');
+        document.body.style.overflow = '';
+        document.body.style.position = '';
+        document.body.style.top = '';
+        document.body.style.paddingRight = '';
+
+        const topNav = document.querySelector('.top-nav');
+        if (topNav) topNav.style.paddingRight = '';
+
+        const overlay = document.getElementById('globalOverlay');
+        if (overlay) overlay.classList.remove('show');
     }
-    
-    const overlay = document.getElementById('globalOverlay');
-    if (overlay) overlay.classList.remove('show');
 
     const modals = document.querySelectorAll('.modal-menu');
     modals.forEach(modal => {
@@ -220,6 +240,19 @@ function closeAllModals() {
     // Side panels (Checklist / Goals / Cleaning) live outside .modal-menu, so
     // opening any modal (e.g. Listing Goals) must collapse them too.
     _closeSidePanels();
+
+    // Only which modal carries .show changes, and it changes inside this same
+    // task, so no frame is ever rendered showing the in-between state.
+    if (_dmxBackEl) {
+        // Repaint before showing, so the popup can't flash stale content.
+        if (_dmxBack === 'dmGoalsModal') renderDmGoalsModal();
+        _dmxBackEl.classList.add('show');
+        return;
+    }
+
+    // Restore the scroll position we pinned in lockAndBlurScreen — otherwise the
+    // page stays snapped to the top once the fixed body is released.
+    if (_wasLocked) window.scrollTo(0, _lockedScrollY);
 }
 
 // Mutually-exclusive right-side panels. Closing every panel except `exceptId`
@@ -645,8 +678,10 @@ window.addEventListener('click', (e) => {
 
 document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    // Escape peels one layer at a time: photo viewer, then camera, then modals —
-    // dismissing a picture must never take the audit down with it.
+    // Escape peels one layer at a time: export picker, photo viewer, camera, then
+    // modals — dismissing a picture must never take the audit down with it.
+    const ex = document.getElementById('exportRangeModal');
+    if (ex && ex.classList.contains('open')) { _exClose(); return; }
     const lb = document.getElementById('auditPhotoLightbox');
     if (lb && lb.style.display === 'flex') { lb.style.display = 'none'; return; }
     const cam = document.getElementById('auditCameraModal');
@@ -1012,127 +1047,9 @@ function _loadCachedChampions() {
 }
 
 async function loadTickerItems() {
-    const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 8000);
-    let loaded = false;
-    try {
-        const res = await fetch(`${TICKER_URL}?v=${Date.now()}`, { signal: controller.signal });
-        const data = await res.json();
-        if (data.items && data.items.length > 0) {
-            localStorage.setItem('_tickerStaticCache', JSON.stringify(data.items));
-            _tickerStatic = data.items.map(item => ({ icon: item.icon || '📌', text: item.text, _type: 'static' }));
-            loaded = true;
-        }
-    } catch (e) { console.warn('[Ticker] AppScript fetch failed — using cache:', e); }
-    if (!loaded) {
-        try {
-            const cached = JSON.parse(localStorage.getItem('_tickerStaticCache') || '[]');
-            if (cached.length > 0) {
-                _tickerStatic = cached.map(item => ({ icon: item.icon || '📌', text: item.text, _type: 'static' }));
-            }
-        } catch (_) {}
-    }
-    clearTimeout(tid);
+    // Ticker was removed from the site (2026-07-23). No bar to populate — kept as
+    // a resolved no-op so initTicker()'s source-await still settles cleanly.
     _tickerSourceDone('static');
-}
-
-const TICKER_EMOJIS = [
-    '⭐','🌟','🏆','🥇','🎯','🔥','💡','📣',
-    '📋','📦','💬','📊','📈','📉','🔔','📌',
-    '✅','❌','⚠️','ℹ️','🚨','💰','💳','🛒',
-    '📱','💻','🖥️','📷','🎮','🔧','⚡','🔑',
-    '📝','🗓️','⏰','🚀','💪','👍','🤝','💼',
-    '🎖️','🏅','🎁','🎉','👀','📢','🔍','💎',
-    '🌐','🛍️','🧩','🏠','🎵','🎬','📚','🎪'
-];
-
-let _tickerPickerListenerAdded = false;
-
-async function toggleManageTicker() {
-    const dropdown = document.getElementById('manageTickerDropdown');
-    if (!dropdown) return;
-    const isOpen = dropdown.classList.contains('show');
-    closeAllModals();
-    if (!isOpen) {
-        dropdown.classList.add('show');
-        lockAndBlurScreen();
-        if (!_tickerPickerListenerAdded) {
-            _tickerPickerListenerAdded = true;
-            document.addEventListener('click', function(e) {
-                if (!e.target.closest('.t-icon-wrap')) {
-                    document.querySelectorAll('.emoji-picker-panel.show').forEach(p => p.classList.remove('show'));
-                }
-            });
-        }
-        const list = document.getElementById('manageTickerList');
-        list.innerHTML = '<div class="status-message">Loading...</div>';
-        try {
-            const res = await fetch(`${TICKER_URL}?v=${Date.now()}`);
-            const data = await res.json();
-            list.innerHTML = '';
-            const items = data.items || [];
-            if (items.length === 0) { addTickerRow(); } else { items.forEach(addTickerRow); }
-        } catch (e) {
-            list.innerHTML = '<div style="color:var(--red-alert); padding:20px; text-align:center;">Failed to load ticker items.</div>';
-        }
-    }
-}
-
-function addTickerRow(item = { icon: '📌', text: '' }) {
-    const row = document.createElement('div');
-    row.className = 'manage-row ticker-manage-row';
-    const icon = item.icon || '📌';
-    const text = item.text || '';
-    const emojiGrid = TICKER_EMOJIS.map(e =>
-        `<span class="emoji-option" data-emoji="${e}" onclick="selectTickerEmoji(this)">${e}</span>`
-    ).join('');
-    row.innerHTML = `
-        <div class="t-icon-wrap">
-            <button type="button" class="t-icon-btn" onclick="toggleEmojiPicker(this)" title="Pick emoji">${icon}</button>
-            <input type="hidden" class="t-icon" value="${escapeHtml(icon)}">
-            <div class="emoji-picker-panel"><div class="emoji-picker-grid">${emojiGrid}</div></div>
-        </div>
-        <input type="text" class="t-text" placeholder="Ticker message..." value="${escapeHtml(text)}">
-        <button class="del-btn" onclick="this.closest('.manage-row').remove()" title="Remove">✖</button>
-    `;
-    document.getElementById('manageTickerList').appendChild(row);
-}
-
-function toggleEmojiPicker(btn) {
-    const panel = btn.parentElement.querySelector('.emoji-picker-panel');
-    const isOpen = panel.classList.contains('show');
-    document.querySelectorAll('.emoji-picker-panel.show').forEach(p => p.classList.remove('show'));
-    if (!isOpen) panel.classList.add('show');
-}
-
-function selectTickerEmoji(span) {
-    const emoji = span.dataset.emoji;
-    const wrap = span.closest('.t-icon-wrap');
-    wrap.querySelector('.t-icon-btn').textContent = emoji;
-    wrap.querySelector('.t-icon').value = emoji;
-    wrap.querySelector('.emoji-picker-panel').classList.remove('show');
-}
-
-async function saveTickerItems() {
-    const btn = document.getElementById('saveTickerBtn');
-    const items = [];
-    document.querySelectorAll('#manageTickerList .manage-row').forEach(row => {
-        const text = row.querySelector('.t-text').value.trim();
-        if (text) items.push({ icon: row.querySelector('.t-icon').value.trim() || '📌', text });
-    });
-    btn.textContent = 'Saving...';
-    btn.style.opacity = '0.7';
-    try {
-        await postWrite(TICKER_URL, { items });
-        _tickerStatic = items.length ? items.map(item => ({ icon: item.icon, text: item.text, _type: 'static' })) : [..._TICKER_DEFAULTS];
-        if (_tickerShown) _applyTickerContent();
-        closeAllModals();
-    } catch (e) {
-        alert('Failed to save ticker items: ' + (e.message || e));
-    } finally {
-        btn.textContent = 'Save Changes';
-        btn.style.opacity = '1';
-    }
 }
 
 // --- 5. MODULE: USER MANAGEMENT ---
@@ -1149,44 +1066,121 @@ async function toggleManageUsers() {
         dropdown.classList.add('show');
         lockAndBlurScreen(); 
 
-        const list = document.getElementById('manageUsersList');
-        list.innerHTML = '<div class="status-message">Loading...</div>';
-        
+        // Status messages go in the inner rows container so the sticky search
+        // toolbar (and #manageUsersRows itself) survive — populateUsersModal
+        // renders into #manageUsersRows.
+        const rows = document.getElementById('manageUsersRows');
+        if (rows) rows.innerHTML = '<div class="status-message">Loading...</div>';
+
         try {
             let cachedData = localStorage.getItem('speeksAuthCache');
             let data = cachedData ? JSON.parse(cachedData) : null;
-            
+
             if (!data) {
-                list.innerHTML = '<div class="status-message">Syncing Database...</div>';
+                if (rows) rows.innerHTML = '<div class="status-message">Syncing Database...</div>';
                 const res = await fetch(`${AUTH_URL}?v=${Date.now()}`);
                 data = await res.json();
                 localStorage.setItem('speeksAuthCache', JSON.stringify(data));
             }
-            
+
             globalUsersData = data.users || [];
             populateUsersModal();
-            
+
             fetch(`${AUTH_URL}?v=${Date.now()}`).then(r => r.json()).then(newData => {
                 localStorage.setItem('speeksAuthCache', JSON.stringify(newData));
             }).catch(e => {});
 
         } catch (e) {
-            list.innerHTML = '<div style="color:var(--red-alert); padding:20px; text-align:center;">Failed to sync data.</div>';
+            if (rows) rows.innerHTML = '<div style="color:var(--red-alert); padding:20px; text-align:center;">Failed to sync data.</div>';
         }
     }
 }
 
 function populateUsersModal() {
-    const list = document.getElementById('manageUsersList');
-    list.innerHTML = '';
-    if (globalUsersData.length === 0) {
-        addManageUserRow();
-    } else {
-        globalUsersData.forEach(user => addManageUserRow(user));
+    const rows = document.getElementById('manageUsersRows');
+    if (!rows) return;
+    rows.innerHTML = '';
+    const search = document.getElementById('manageUsersSearch');
+    if (search) search.value = ''; // reset the filter each open
+
+    if (!globalUsersData || globalUsersData.length === 0) {
+        addManageUserRow(); // one blank row to start with
+        return;
     }
+
+    // Group users by role into collapsible bars (canonical role order first,
+    // then any unrecognised role alphabetically). Rows keep their .user-manage-row
+    // class so saveManageUsers() still reads every one regardless of grouping.
+    const ROLE_ORDER = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM'];
+    const groups = {};
+    const order = [];
+    globalUsersData.forEach(u => {
+        const role = (u.role || 'Employee').trim() || 'Employee';
+        if (!groups[role]) { groups[role] = []; order.push(role); }
+        groups[role].push(u);
+    });
+    order.sort((a, b) => {
+        const ia = ROLE_ORDER.findIndex(r => r.toLowerCase() === a.toLowerCase());
+        const ib = ROLE_ORDER.findIndex(r => r.toLowerCase() === b.toLowerCase());
+        return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b);
+    });
+
+    const chev = `<svg class="mu-group-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
+    order.forEach(role => {
+        const group = document.createElement('div');
+        group.className = 'mu-group collapsed'; // start collapsed for a compact overview
+        const head = document.createElement('div');
+        head.className = 'mu-group-head';
+        head.setAttribute('onclick', 'toggleUserGroup(this)');
+        head.innerHTML = `${chev}<span class="mu-group-name">${escapeHtml(role)}</span><span class="mu-group-count">${groups[role].length}</span>`;
+        const body = document.createElement('div');
+        body.className = 'mu-group-body';
+        group.appendChild(head);
+        group.appendChild(body);
+        rows.appendChild(group);
+        groups[role].forEach(u => addManageUserRow(u, body));
+    });
 }
 
-function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Employee' }) {
+// Collapse / expand a role group.
+function toggleUserGroup(head) {
+    const g = head.closest('.mu-group');
+    if (g) g.classList.toggle('collapsed');
+}
+
+// Live-filter the user rows by name, store or role. Matching rows show, their
+// role group auto-expands, and groups with no match hide; clearing restores all.
+function filterManageUsers() {
+    const input = document.getElementById('manageUsersSearch');
+    const rows = document.getElementById('manageUsersRows');
+    if (!input || !rows) return;
+    const q = input.value.trim().toLowerCase();
+    const isMatch = row => {
+        if (!q) return true;
+        const hay = [
+            row.querySelector('.u-name')?.value,
+            row.querySelector('.u-store')?.value,
+            row.querySelector('.u-role')?.value,
+        ].join(' ').toLowerCase();
+        return hay.includes(q);
+    };
+    rows.querySelectorAll('.mu-group').forEach(group => {
+        let any = false;
+        group.querySelectorAll('.user-manage-row').forEach(row => {
+            const m = isMatch(row);
+            row.style.display = m ? '' : 'none';
+            if (m) any = true;
+        });
+        if (q) { group.classList.remove('collapsed'); group.style.display = any ? '' : 'none'; }
+        else { group.style.display = ''; }
+    });
+    // Newly-added (ungrouped) rows sit directly under the container.
+    rows.querySelectorAll(':scope > .user-manage-row').forEach(row => {
+        row.style.display = isMatch(row) ? '' : 'none';
+    });
+}
+
+function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Employee' }, target) {
     const row = document.createElement('div');
     row.className = 'user-manage-row';
 
@@ -1201,9 +1195,20 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
         <input type="text" class="u-pin" placeholder="PIN" maxlength="4" value="${user.pin}" style="flex: 1; max-width: 80px;" oninput="this.value = this.value.replace(/[^0-9]/g, '').slice(0,4)">
         <select class="u-store" style="flex: 1;">${storeOptions}</select>
         <select class="u-role" style="flex: 1.5;">${roleOptions}</select>
-        <button class="del-btn" onclick="this.parentElement.remove()" title="Delete User">✖</button>
+        <button class="del-btn" onclick="this.parentElement.remove()" title="Delete User"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     `;
-    document.getElementById('manageUsersList').appendChild(row);
+    if (target) {
+        // Rendering into a role group during populate.
+        target.appendChild(row);
+    } else {
+        // Manual "+ Add New User": drop it at the very top (above the groups) so
+        // it's immediately visible, and clear any active filter that would hide it.
+        const container = document.getElementById('manageUsersRows');
+        if (container) container.insertBefore(row, container.firstChild);
+        const _s = document.getElementById('manageUsersSearch');
+        if (_s && _s.value.trim()) { _s.value = ''; filterManageUsers(); }
+        row.querySelector('.u-name')?.focus();
+    }
 }
 
 async function saveManageUsers() {
@@ -1327,12 +1332,34 @@ async function toggleManageDocs() {
 function populateManageModal() {
     const list = document.getElementById('manageDocsList');
     list.innerHTML = '';
-    
+    const search = document.getElementById('manageDocsSearch');
+    if (search) search.value = ''; // reset the filter each open
+
     if (globalDocsData.length === 0) {
         addManageRow();
     } else {
         globalDocsData.forEach(doc => addManageRow(doc));
     }
+}
+
+// Live-filter the policy cards by title / category / description / link — same
+// behaviour as the Box Order and docs-library search bars. Reads the inputs'
+// current values so it still matches after edits.
+function filterManageDocs() {
+    const input = document.getElementById('manageDocsSearch');
+    const list = document.getElementById('manageDocsList');
+    if (!input || !list) return;
+    const q = input.value.trim().toLowerCase();
+    list.querySelectorAll('.manage-row').forEach(row => {
+        if (!q) { row.style.display = ''; return; }
+        const hay = [
+            row.querySelector('.m-title')?.value,
+            row.querySelector('.m-category')?.value,
+            row.querySelector('.m-desc')?.value,
+            row.querySelector('.m-link')?.value,
+        ].join(' ').toLowerCase();
+        row.style.display = hay.includes(q) ? '' : 'none';
+    });
 }
 
 function addManageRow(doc = { category: '', icon: '📄', title: '', desc: '', link: '' }) {
@@ -1343,18 +1370,37 @@ function addManageRow(doc = { category: '', icon: '📄', title: '', desc: '', l
         baseCat = baseCat.replace(/,?\s*["']?pinned["']?/ig, '').trim();
     }
 
-    const row = document.createElement('div'); 
+    const row = document.createElement('div');
     row.className = 'manage-row';
+    // Card layout: icon · title · category · pin · delete on the top line, then
+    // full-width Description and Link rows so nothing is truncated. Classes are
+    // unchanged (.m-category/.m-icon/.m-title/.m-desc/.m-link/.m-pinned/.del-btn)
+    // so saveDocs() reads exactly the same fields.
     row.innerHTML = `
-        <input type="text" class="m-category" placeholder="Category" value="${baseCat}">
-        <label class="pin-label">
+        <div class="mp-field mp-f-icon">
+            <label>Icon</label>
+            <input type="text" class="m-icon" placeholder="📄" value="${doc.icon || ''}">
+        </div>
+        <div class="mp-field mp-f-title">
+            <label>Title</label>
+            <input type="text" class="m-title" placeholder="Policy title" value="${doc.title || ''}">
+        </div>
+        <div class="mp-field mp-f-cat">
+            <label>Category</label>
+            <input type="text" class="m-category" placeholder="Category" value="${baseCat}">
+        </div>
+        <label class="pin-label mp-f-pin">
             <input type="checkbox" class="m-pinned" ${isPinned ? 'checked' : ''}> Pin
         </label>
-        <input type="text" class="m-icon" placeholder="Icon" value="${doc.icon || ''}">
-        <input type="text" class="m-title" placeholder="Title" value="${doc.title || ''}">
-        <textarea class="m-desc" placeholder="Description">${doc.desc || ''}</textarea>
-        <input type="text" class="m-link" placeholder="URL Link" value="${doc.link || ''}">
-        <button class="del-btn" onclick="this.parentElement.remove()" title="Delete">✖</button>
+        <button class="del-btn mp-f-del" onclick="this.parentElement.remove()" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        <div class="mp-field mp-f-desc">
+            <label>Description</label>
+            <textarea class="m-desc" placeholder="Short description of this policy">${doc.desc || ''}</textarea>
+        </div>
+        <div class="mp-field mp-f-link">
+            <label>Link URL</label>
+            <input type="text" class="m-link" placeholder="https://drive.google.com/…" value="${doc.link || ''}">
+        </div>
     `;
     document.getElementById('manageDocsList').appendChild(row);
 }
@@ -1402,57 +1448,229 @@ async function saveDocs() {
     }
 }
 
+/* ── Processes & Policies: icon system ────────────────────────────────────────
+   The docs sheet stores one emoji per document. The redesigned library draws SVG
+   line icons instead (same language as the nav, tools panel and feed hub), so the
+   stored emoji is now read as a HINT for which icon to draw rather than rendered
+   directly. Nothing about the data or the manage-docs tool changes.
+
+   Lookup order: emoji → category → generic document, so an unmapped emoji still
+   lands on a sensible icon instead of a blank tile. To add one, drop a line in
+   DOC_ICON_BY_EMOJI. (Emoji are written as escapes so the mapping can't be broken
+   by an editor re-encoding this file.) */
+const DOC_ICONS = {
+    file:      '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
+    check:     '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
+    sunrise:   '<path d="M17 18a5 5 0 0 0-10 0"/><line x1="12" y1="2" x2="12" y2="9"/><line x1="4.22" y1="10.22" x2="5.64" y2="11.64"/><line x1="1" y1="18" x2="3" y2="18"/><line x1="21" y1="18" x2="23" y2="18"/><line x1="18.36" y1="11.64" x2="19.78" y2="10.22"/><line x1="23" y1="22" x2="1" y2="22"/><polyline points="8 6 12 2 16 6"/>',
+    moon:      '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
+    broom:     '<path d="M19 3l-6.5 6.5"/><path d="M9.5 8.5 15 14l-4.5 4.5a4 4 0 0 1-5.66 0l-.34-.34a4 4 0 0 1 0-5.66z"/><line x1="7" y1="21" x2="3" y2="21"/>',
+    recycle:   '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
+    phone:     '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>',
+    users:     '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    scale:     '<line x1="12" y1="3" x2="12" y2="21"/><line x1="5" y1="21" x2="19" y2="21"/><line x1="3" y1="7" x2="21" y2="7"/><path d="M6 7l-3 6a3 3 0 0 0 6 0z"/><path d="M18 7l-3 6a3 3 0 0 0 6 0z"/>',
+    undo:      '<polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>',
+    package:   '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
+    bag:       '<path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/>',
+    camera:    '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>',
+    wifi:      '<path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>',
+    clipboard: '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>',
+    chat:      '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    shield:    '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+    truck:     '<rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>',
+    mobile:    '<rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>',
+    mail:      '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
+    chart:     '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+    calendar:  '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+    dollar:    '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+    shirt:     '<path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"/>',
+    tag:       '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>',
+    award:     '<circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/>',
+    gamepad:   '<line x1="6" y1="11" x2="10" y2="11"/><line x1="8" y1="9" x2="8" y2="13"/><line x1="15" y1="12" x2="15.01" y2="12"/><line x1="18" y1="10" x2="18.01" y2="10"/><rect x="2" y="6" width="20" height="12" rx="6"/>',
+    film:      '<rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/>',
+    video:     '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>',
+    star:      '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+    help:      '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+    alert:     '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+    clock:     '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+    store:     '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
+    smile:     '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>',
+    cart:      '<circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>',
+    cpu:       '<rect x="4" y="4" width="16" height="16" rx="2" ry="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/>',
+    briefcase: '<rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+    pin:       '<line x1="12" y1="17" x2="12" y2="22"/><path d="M9 2h6l-1 6 3 3v2H7v-2l3-3-1-6z"/>',
+    open:      '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
+};
+
+const DOC_ICON_BY_EMOJI = {
+    '✅':    'check',      // white check mark
+    '\u{1F305}': 'sunrise',    // sunrise
+    '\u{1F319}': 'moon',       // crescent moon
+    '\u{1F9F9}': 'broom',      // broom
+    '♻':    'recycle',    // recycling symbol
+    '\u{1F504}': 'recycle',    // counterclockwise arrows
+    '\u{1F4DE}': 'phone',      // telephone receiver
+    '\u{1F91D}': 'users',      // handshake
+    '⚖':    'scale',      // balance scale
+    '\u{1F519}': 'undo',       // back arrow
+    '\u{1F4E6}': 'package',    // package
+    '\u{1F6CD}': 'bag',        // shopping bags
+    '\u{1F4F8}': 'camera',     // camera with flash
+    '\u{1F4F6}': 'wifi',       // antenna bars
+    '\u{1F4CB}': 'clipboard',  // clipboard
+    '\u{1F4AC}': 'chat',       // speech balloon
+    '\u{1F6E1}': 'shield',     // shield
+    '\u{1F69A}': 'truck',      // delivery truck
+    '\u{1F4F1}': 'mobile',     // mobile phone
+    '\u{1F4E7}': 'mail',       // e-mail
+    '\u{1F4CA}': 'chart',      // bar chart
+    '\u{1F4C5}': 'calendar',   // calendar
+    '\u{1F4B5}': 'dollar',     // dollar banknote
+    '\u{1F4B2}': 'dollar',     // heavy dollar sign
+    '\u{1F455}': 'shirt',      // t-shirt
+    '\u{1F3F7}': 'tag',        // label
+    '\u{1F3C6}': 'award',      // trophy
+    '\u{1F3AE}': 'gamepad',    // video game
+    '\u{1F3AC}': 'film',       // clapper board
+    '\u{1F3A5}': 'video',      // movie camera
+    '⭐':    'star',       // star
+    '❓':    'help',       // question mark
+    '⚠':    'alert',      // warning
+    '⏱':    'clock',      // stopwatch
+};
+
+// Fallback when the emoji isn't mapped — matched as a substring of the category.
+const DOC_ICON_BY_CATEGORY = {
+    'store operations': 'store',
+    'customer':         'smile',
+    'hr':               'users',
+    'employee':         'users',
+    'commerce':         'cart',
+    'shipping':         'truck',
+    'policy':           'shield',
+    'tech':             'cpu',
+    'purchasing':       'briefcase',
+    'b2b':              'briefcase',
+};
+
+function _docIconSvg(emoji, category) {
+    // Strip the emoji variation selector (U+FE0F) so both the plain and the
+    // emoji-presentation form of a glyph resolve to the same entry.
+    const key = String(emoji || '').replace(/\uFE0F/g, '').trim();
+    let name = DOC_ICON_BY_EMOJI[key];
+    if (!name) {
+        const cat = String(category || '').toLowerCase();
+        const hit = Object.keys(DOC_ICON_BY_CATEGORY).find(k => cat.includes(k));
+        name = hit ? DOC_ICON_BY_CATEGORY[hit] : 'file';
+    }
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">${DOC_ICONS[name] || DOC_ICONS.file}</svg>`;
+}
+
+// Synthesized "pinned" group label. Its section carries data-pin="1" so filterDocs
+// can find it without parsing the heading text.
+const DOC_PIN_CAT = 'Pinned';
+
+// Section-id slug for a category (used by the sidebar rail's jump links).
+const _docSecId = (cat) => 'doccat-' + String(cat).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+// Scroll-spy: highlight the rail item for whichever visible section is currently
+// at the top of the viewport (just under the fixed nav). Bound once to window.
+function _docSyncRailActive() {
+    const secs = [...document.querySelectorAll('.category-section:not(.hidden)')];
+    const rail = document.getElementById('docRail');
+    if (!rail || !secs.length) return;
+    let cur = secs[0];
+    for (const s of secs) { if (s.getBoundingClientRect().top <= 150) cur = s; }
+    rail.querySelectorAll('.dp-rail-btn').forEach(b => b.classList.toggle('active', b.dataset.target === cur.id));
+}
+if (typeof window !== 'undefined' && !window._docSpyBound) {
+    window._docSpyBound = true;
+    let ticking = false;
+    window.addEventListener('scroll', () => {
+        if (ticking) return;
+        ticking = true;
+        requestAnimationFrame(() => { _docSyncRailActive(); ticking = false; });
+    }, { passive: true });
+}
+
 function renderDocs(docs) {
     const container = document.getElementById('content-container');
     if (!container) return;
-    
+
     if (!docs || docs.length === 0) {
         container.innerHTML = '<div class="empty-state">No documents found.</div>';
         return;
     }
-    
+
     const groupedDocs = {};
     docs.forEach(doc => {
-        let cleanCat = (doc.category || "Uncategorized").replace(/,?\s*["']?pinned["']?/ig, '').trim() || "General"; 
+        let cleanCat = (doc.category || "Uncategorized").replace(/,?\s*["']?pinned["']?/ig, '').trim() || "General";
         if (!groupedDocs[cleanCat]) groupedDocs[cleanCat] = [];
         groupedDocs[cleanCat].push(doc);
-        
+
         if ((doc.category || "").toLowerCase().includes('pinned')) {
-            if (!groupedDocs['📌 Pinned']) groupedDocs['📌 Pinned'] = [];
-            groupedDocs['📌 Pinned'].push(doc);
+            if (!groupedDocs[DOC_PIN_CAT]) groupedDocs[DOC_PIN_CAT] = [];
+            groupedDocs[DOC_PIN_CAT].push(doc);
         }
     });
 
-    container.innerHTML = Object.keys(groupedDocs)
-        .sort((a, b) => a === '📌 Pinned' ? -1 : (b === '📌 Pinned' ? 1 : a.localeCompare(b)))
-        .map(cat => {
-            const isPin = cat === '📌 Pinned';
-            const catTitleStyle = isPin ? 'color: var(--sage-professional); border-bottom-color: var(--sage-professional);' : '';
-            
-            let html = `<div class="category-section">`;
-            html += `<div class="category-title" style="${catTitleStyle}">${cat}</div>`;
-            html += `<div class="docs-grid">`;
-            
-            html += groupedDocs[cat].map(item => {
-                const searchStr = `${item.title} ${item.desc} ${cat}`.toLowerCase();
-                const cardStyle = isPin ? 'position: relative; border: 1px solid var(--sage-professional); box-shadow: 0 4px 10px rgba(90, 141, 59, 0.08);' : 'position: relative;';
-                const pinBadge = isPin ? `<div style="position: absolute; top: 12px; right: 15px; font-size: 16px; filter: drop-shadow(0 2px 4px rgba(90,141,59,0.3));">📌</div>` : '';
-                
-                return `
-                    <a href="${item.link}" target="_blank" class="doc-card" style="${cardStyle}" data-search="${searchStr}">
-                        ${pinBadge}
-                        <div class="doc-icon">${item.icon}</div>
+    // Order: Pinned first (the default landing group), then real categories by
+    // size (heaviest first), alphabetical as the tie-break.
+    const realCats = Object.keys(groupedDocs).filter(c => c !== DOC_PIN_CAT)
+        .sort((a, b) => groupedDocs[b].length - groupedDocs[a].length || a.localeCompare(b));
+    const order = (groupedDocs[DOC_PIN_CAT] ? [DOC_PIN_CAT] : []).concat(realCats);
+
+    const sections = order.map(cat => {
+        const isPin = cat === DOC_PIN_CAT;
+        const items = groupedDocs[cat];
+        const secId = _docSecId(cat);
+
+        const head = `
+                <div class="category-title${isPin ? ' pinned' : ''}">
+                    ${isPin ? `<span class="cat-ico"><svg viewBox="0 0 24 24" aria-hidden="true">${DOC_ICONS.pin}</svg></span>` : ''}
+                    <span class="cat-name">${cat}</span>
+                    <span class="cat-count">${items.length}</span>
+                </div>`;
+
+        const cards = items.map(item => {
+            const searchStr = `${item.title} ${item.desc} ${cat}`.toLowerCase();
+            return `
+                    <a href="${item.link}" target="_blank" rel="noopener" class="doc-card${isPin ? ' pinned' : ''}" data-search="${searchStr}">
+                        ${isPin ? `<span class="doc-pin"><svg viewBox="0 0 24 24" aria-hidden="true">${DOC_ICONS.pin}</svg></span>` : ''}
+                        <div class="doc-icon">${_docIconSvg(item.icon, cat)}</div>
                         <div class="doc-info">
                             <div class="doc-title">${item.title}</div>
                             <div class="doc-desc">${item.desc}</div>
                         </div>
+                        <span class="doc-go"><svg viewBox="0 0 24 24" aria-hidden="true">${DOC_ICONS.open}</svg></span>
                     </a>`;
-            }).join('');
-            
-            html += `</div></div>`;
-            return html;
         }).join('');
-        
+
+        return `<section class="category-section" id="${secId}"${isPin ? ' data-pin="1"' : ''}>${head}<div class="docs-grid">${cards}</div></section>`;
+    }).join('');
+
+    // Rail: one jump link per section. Category icon comes from the category
+    // fallback (_docIconSvg with no emoji), so it reads as a section, not a doc.
+    const rail = order.map(cat => {
+        const isPin = cat === DOC_PIN_CAT;
+        const ico = isPin ? `<svg viewBox="0 0 24 24" aria-hidden="true">${DOC_ICONS.pin}</svg>` : _docIconSvg('', cat);
+        return `
+                <button type="button" class="dp-rail-btn" data-target="${_docSecId(cat)}" data-total="${groupedDocs[cat].length}">
+                    <span class="dp-rail-ico">${ico}</span>
+                    <span class="dp-rail-lbl">${cat}</span>
+                    <span class="dp-rail-n">${groupedDocs[cat].length}</span>
+                </button>`;
+    }).join('');
+
+    container.innerHTML = `<div class="dp-layout">
+        <nav class="dp-rail" id="docRail" aria-label="Jump to category">${rail}</nav>
+        <div class="dp-main">${sections}</div>
+    </div>`;
+
+    container.querySelectorAll('.dp-rail-btn').forEach(b => b.addEventListener('click', () => {
+        const el = document.getElementById(b.dataset.target);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }));
+
     filterDocs();
 }
 
@@ -1481,30 +1699,41 @@ async function loadDocs() {
 
 function filterDocs() {
     const searchInput = document.getElementById('docSearch');
-    const search = searchInput ? searchInput.value.toLowerCase() : "";
+    const search = searchInput ? searchInput.value.toLowerCase().trim() : "";
     let hasVis = false;
 
     document.querySelectorAll('.category-section').forEach(s => {
-        const catTitle = s.querySelector('.category-title')?.innerText.toLowerCase() || "";
-        const isPinnedSection = catTitle.includes('pinned');
+        const railBtn = document.querySelector('.dp-rail-btn[data-target="' + s.id + '"]');
+        const railN = railBtn ? railBtn.querySelector('.dp-rail-n') : null;
 
-        if (isPinnedSection && search.length > 0) {
+        // The Pinned group duplicates docs that also live in a real category, so a
+        // search would list a pinned match twice. Hide the Pinned section (and its
+        // rail link) while searching — the doc still shows in its category, with the
+        // pin marker on the card.
+        if (s.dataset.pin === '1' && search.length > 0) {
             s.classList.add('hidden');
             s.querySelectorAll('.doc-card').forEach(c => c.classList.add('hidden'));
-        } else {
-            let sectionHasVis = false;
-            s.querySelectorAll('.doc-card').forEach(c => {
-                const match = c.getAttribute('data-search').includes(search);
-                c.classList.toggle('hidden', !match);
-                if (match) sectionHasVis = true;
-            });
-            s.classList.toggle('hidden', !sectionHasVis);
-            if (sectionHasVis) hasVis = true;
+            if (railBtn) railBtn.classList.add('hidden');
+            return;
         }
+
+        let shown = 0;
+        s.querySelectorAll('.doc-card').forEach(c => {
+            const match = c.getAttribute('data-search').includes(search);
+            c.classList.toggle('hidden', !match);
+            if (match) shown++;
+        });
+        s.classList.toggle('hidden', shown === 0);
+        if (railBtn) {
+            railBtn.classList.toggle('hidden', shown === 0);
+            if (railN) railN.textContent = search ? shown : railBtn.dataset.total;
+        }
+        if (shown) hasVis = true;
     });
 
     const noResults = document.getElementById('noResults');
     if (noResults) noResults.classList.toggle('hidden', hasVis || search === '');
+    _docSyncRailActive();
 }
 
 
@@ -1536,6 +1765,13 @@ let _pinAutoTimer = null;
 function handlePINAutoTrigger() {
     const input = document.getElementById('pinInput');
     const btn = document.getElementById('unlockBtn');
+
+    // Typing again clears the previous failure, so the red cells and the error
+    // line don't linger over a fresh attempt.
+    _authPaintCells();
+    document.getElementById('pinCells')?.classList.remove('bad');
+    const prevErr = document.getElementById('pinError');
+    if (prevErr) prevErr.style.display = 'none';
 
     if (_pinAutoTimer) {
         clearTimeout(_pinAutoTimer);
@@ -1622,10 +1858,20 @@ async function checkPIN() {
 
             if (typeof initDashboardData === 'function') initDashboardData();
             initTicker();
+
+            // Repopulate the feed for whoever just signed in. loadCMS otherwise
+            // runs only at page load — which on a login is BEFORE there is a
+            // user, so read state and the new-hire cutoff were both computed
+            // without one. It matters more now that signing out can happen in
+            // place: this is also what keeps the previous person's announcements
+            // and store notes out of the next person's feed.
+            if (typeof loadCMS === 'function') loadCMS();
+            if (typeof fetchAndDisplayStoreComment === 'function') fetchAndDisplayStoreComment();
         } else {
             err.innerText = "Incorrect PIN. Please try again.";
             err.style.display = 'block';
             document.getElementById('pinInput').value = '';
+            document.getElementById('pinCells')?.classList.add('bad');
         }
     } catch (e) {
         console.error(e);
@@ -1634,6 +1880,7 @@ async function checkPIN() {
     } finally {
         btn.classList.remove('loading');
         document.getElementById('pinInput').classList.remove('pin-filled');
+        _authPaintCells();   // covers success, wrong PIN and the catch above
     }
 }
 
@@ -2600,8 +2847,7 @@ function _kpiWeekRangeLabel(periodEndDate) {
 function _kpiRenderWeekly(periods) {
     const body = document.getElementById('kpiModalBody');
     if (!body) return;
-    const _modalSel = document.getElementById('kpiModalStoreSelect');
-    const store = (_modalSel && _modalSel.offsetParent !== null && _modalSel.value) || sessionStorage.getItem('speeksUserStore') || '';
+    const store = _kpiResolveStore();
     const sub = document.getElementById('kpiModalSubtitle');
     if (sub) sub.textContent = store + ' · 4-Week View';
 
@@ -2636,9 +2882,13 @@ function _kpiRenderWeekly(periods) {
     body.innerHTML = '<div class="kpi-grid-scroll-wrapper"><table class="kpi-entry-grid kpi-full-table">' + _kpiColgroupHtml() + '<tbody>' + tbody + '</tbody></table></div>';
 }
 
-function _kpiExportCSV() {
-    if (!_kpiPeriodsData || !_kpiPeriodsData.length) return;
-    const store = sessionStorage.getItem('speeksUserStore') || 'STORE';
+// `periods` lets the date-range picker export a wider span than the on-screen
+// window holds (see _exOpen). Called with no args it falls back to what's
+// currently rendered, so any other caller behaves exactly as before.
+function _kpiExportCSV(periods, spanTag) {
+    const src = (periods && periods.length) ? periods : _kpiPeriodsData;
+    if (!src || !src.length) return;
+    const store = _kpiResolveStore() || sessionStorage.getItem('speeksUserStore') || 'STORE';
     const isWeekly = _kpiCurrentTab === 'weekly';
 
     const headers = [
@@ -2654,7 +2904,10 @@ function _kpiExportCSV() {
 
     const csvRows = [headers];
 
-    _kpiPeriodsData.forEach(function(p) {
+    // oldest → newest reads better in a spreadsheet than the newest-first UI order
+    src.slice().sort(function(a, b) {
+        return a.period_end_date < b.period_end_date ? -1 : a.period_end_date > b.period_end_date ? 1 : 0;
+    }).forEach(function(p) {
         const label = isWeekly ? _kpiWeekRangeLabel(p.period_end_date) : p.period_label;
         p.entries.forEach(function(raw) {
             const e = _kpiCalcDerived(raw);
@@ -2685,7 +2938,7 @@ function _kpiExportCSV() {
 
     const tab = isWeekly ? 'Weekly' : 'Monthly';
     const ts  = new Date().toISOString().slice(0, 10);
-    const filename = store + '_KPI_' + tab + '_' + ts + '.csv';
+    const filename = store + '_KPI_' + tab + '_' + (spanTag ? spanTag + '_' : '') + ts + '.csv';
 
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url  = URL.createObjectURL(blob);
@@ -3074,7 +3327,7 @@ function _mbRenderOverview() {
 
     const totalCols = 1 + MB_STORES.length;
     let head = '<th class="mb-th-metric">Metric</th>';
-    MB_STORES.forEach(s => head += '<th class="mb-th-val">' + (MB_STORE_DOT[s] || '') + ' ' + s + '</th>');
+    MB_STORES.forEach(s => head += '<th class="mb-th-val">' + s + '</th>');
 
     let html = '<div class="mb-overview-cap">All Stores · ' + _mbMonthLabel(shownMonth) +
         (editing ? '  ·  entering current month' : '') + '</div>';
@@ -3126,7 +3379,9 @@ function _mbRenderOverview() {
     body.innerHTML = html;
 }
 
-function mbExportCSV() {
+// `months` (oldest → newest) comes from the date-range picker; with no args the
+// export falls back to the on-screen window, as it always did.
+function mbExportCSV(months, spanTag) {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     const canPickStore = role === 'ceo' || role === 'district manager';
     const sel   = document.getElementById('mbStoreSelect');
@@ -3145,32 +3400,272 @@ function mbExportCSV() {
     const sections = {}, secOrder = [];
     _mbMetrics.forEach(m => { if (!sections[m.section]) { sections[m.section] = []; secOrder.push(m.section); } sections[m.section].push(m); });
 
+    const span = spanTag ? spanTag + '_' : '';
+
     if (_mbView === 'overview') {
-        const month = _mbOverviewMonth;
-        if (!month || !_mbMetrics.length) return;
-        const rows = [['Section', 'Metric', ...MB_STORES]];
-        secOrder.forEach(sec => {
-            sections[sec].forEach(m => {
-                const row = [sec, m.label];
-                MB_STORES.forEach(s => { const v = (_mbOverviewData[s] || {})[month]; row.push(v ? v[m.key] : ''); });
-                rows.push(row);
+        // Multi-month overview pivots to one row per metric PER STORE so every
+        // selected month gets its own column; a single month keeps the old
+        // stores-across-the-top shape that people are used to.
+        const cols = (months && months.length) ? months : (_mbOverviewMonth ? [_mbOverviewMonth] : []);
+        if (!cols.length || !_mbMetrics.length) return;
+
+        let rows;
+        if (cols.length === 1) {
+            rows = [['Section', 'Metric', ...MB_STORES]];
+            secOrder.forEach(sec => {
+                sections[sec].forEach(m => {
+                    const row = [sec, m.label];
+                    MB_STORES.forEach(s => { const v = (_mbOverviewData[s] || {})[cols[0]]; row.push(v ? v[m.key] : ''); });
+                    rows.push(row);
+                });
             });
-        });
-        dl(toCSV(rows), 'Monthly_Overview_' + _mbMonthLabelShort(month).replace(/[^a-zA-Z0-9]/g, '_') + '_' + ts + '.csv');
+        } else {
+            rows = [['Section', 'Metric', 'Store', ...cols.map(_mbMonthLabelShort)]];
+            secOrder.forEach(sec => {
+                sections[sec].forEach(m => {
+                    MB_STORES.forEach(s => {
+                        const row = [sec, m.label, s];
+                        cols.forEach(mo => { const v = (_mbOverviewData[s] || {})[mo]; row.push(v && v[m.key] != null ? v[m.key] : ''); });
+                        rows.push(row);
+                    });
+                });
+            });
+        }
+        const tag = cols.length === 1 ? _mbMonthLabelShort(cols[0]).replace(/[^a-zA-Z0-9]/g, '_') + '_' : span;
+        dl(toCSV(rows), 'Monthly_Overview_' + tag + ts + '.csv');
     } else {
-        const monthSet = new Set(_mbMonths);
-        const months = [...monthSet].sort().reverse().slice(0, MB_MONTH_WINDOW).filter(mo => _mbData[mo] && Object.keys(_mbData[mo]).length);
-        if (!_mbMetrics.length || !months.length) return;
-        const rows = [['Section', 'Metric', ...months.map(m => _mbMonthLabelShort(m))]];
+        const cols = (months && months.length)
+            ? months
+            : [...new Set(_mbMonths)].sort().reverse().slice(0, MB_MONTH_WINDOW)
+                  .filter(mo => _mbData[mo] && Object.keys(_mbData[mo]).length).reverse();
+        if (!_mbMetrics.length || !cols.length) return;
+        const rows = [['Section', 'Metric', ...cols.map(_mbMonthLabelShort)]];
         secOrder.forEach(sec => {
             sections[sec].forEach(m => {
                 const row = [sec, m.label];
-                months.forEach(mo => { const v = (_mbData[mo] || {})[m.key]; row.push(v != null ? v : ''); });
+                cols.forEach(mo => { const v = (_mbData[mo] || {})[m.key]; row.push(v != null ? v : ''); });
                 rows.push(row);
             });
         });
-        dl(toCSV(rows), store + '_Monthly_Brief_' + ts + '.csv');
+        dl(toCSV(rows), store + '_Monthly_Brief_' + span + ts + '.csv');
     }
+}
+
+// --- 11d. MODULE: CSV EXPORT DATE-RANGE PICKER ------------------------------
+// The Export buttons used to dump whatever the on-screen window happened to be
+// holding — 4 weeks of KPIs, 6 months of Breakdown — even though the backend
+// keeps the whole history. This popup lets anyone with an Export button choose a
+// span instead (6 weeks, 8 weeks, a year of months…).
+//
+// Only periods that actually carry saved data are offered, so an empty export
+// isn't reachable. Weekly/monthly KPI options come from kpi-manage
+// `?mode=available` and the rows themselves from `?mode=range`; monthly-brief
+// already returns every month, so the Breakdown picker derives its options from
+// data that's already in memory.
+let _exCtx = null;   // { kind, unit, opts:[{value,label,count}], picked, preset, busy }
+
+const _EX_PRESETS = {
+    weekly:  [{ n: 4, t: '4 weeks' },  { n: 8, t: '8 weeks' },  { n: 12, t: '12 weeks' },  { n: 0, t: 'All' }],
+    monthly: [{ n: 3, t: '3 months' }, { n: 6, t: '6 months' }, { n: 12, t: '12 months' }, { n: 0, t: 'All' }],
+};
+
+function _exWeekLabel(dateStr) {
+    const end = new Date(dateStr + 'T12:00:00');
+    const start = new Date(end);
+    start.setDate(start.getDate() - 6);
+    const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return mo[start.getMonth()] + ' ' + start.getDate() + ' – ' + mo[end.getMonth()] + ' ' + end.getDate();
+}
+
+function _exEnsureModal() {
+    let el = document.getElementById('exportRangeModal');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'exportRangeModal';
+    el.className = 'ex-overlay';
+    el.addEventListener('click', function(e) { if (e.target === el) _exClose(); });
+    el.innerHTML =
+        '<div class="ex-card" role="dialog" aria-modal="true" aria-labelledby="exTitle">' +
+          '<div class="ex-head">' +
+            '<span class="ex-ico"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>' +
+              '<polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span>' +
+            '<div class="ex-titles">' +
+              '<span class="ex-eyebrow">Export CSV</span>' +
+              '<span class="ex-title" id="exTitle">Choose a date range</span>' +
+              '<span class="ex-sub" id="exSub"></span>' +
+            '</div>' +
+            '<button type="button" class="ex-close" onclick="_exClose()" title="Close">&times;</button>' +
+          '</div>' +
+          '<div class="ex-body" id="exBody"></div>' +
+        '</div>';
+    document.body.appendChild(el);
+    return el;
+}
+
+// Months the Breakdown actually has numbers for. Overview counts a month if ANY
+// store filled it in; Store View is scoped to the store on screen.
+function _exMonthOpts() {
+    const tally = {};
+    const bump = function(mo, k) { tally[mo] = (tally[mo] || 0) + k; };
+    const filledCount = function(obj) { return Object.values(obj || {}).filter(function(v) { return v != null; }).length; };
+    if (_mbView === 'overview') {
+        MB_STORES.forEach(function(s) {
+            const d = _mbOverviewData[s] || {};
+            Object.keys(d).forEach(function(mo) { const f = filledCount(d[mo]); if (f) bump(mo, f); });
+        });
+    } else {
+        Object.keys(_mbData || {}).forEach(function(mo) { const f = filledCount(_mbData[mo]); if (f) bump(mo, f); });
+    }
+    return Object.keys(tally).sort().reverse().map(function(mo) {
+        return { value: mo, label: _mbMonthLabelShort(mo), count: tally[mo] };
+    });
+}
+
+async function _exOpen(kind) {
+    const el = _exEnsureModal();
+    el.classList.add('open');
+    const unit = (kind === 'kpi') ? _kpiCurrentTab : 'monthly';
+    _exCtx = { kind: kind, unit: unit, opts: [], picked: [], preset: null, busy: true };
+
+    const sub = document.getElementById('exSub');
+    if (sub) {
+        sub.textContent = (kind === 'kpi')
+            ? 'Store KPIs · ' + (unit === 'weekly' ? 'weekly' : 'monthly') + ' · ' + (_kpiResolveStore() || '')
+            : 'Monthly Breakdown · ' + (_mbView === 'overview' ? 'all stores' : (document.getElementById('mbStoreSelect') || {}).value || 'store view');
+    }
+    _exRender();
+
+    try {
+        if (kind === 'kpi') {
+            const store = _kpiResolveStore();
+            const data = await fetch(KPI_MANAGE_URL + '?store=' + store + '&period_type=' + unit +
+                                     '&mode=available&v=' + Date.now()).then(function(r) { return r.json(); });
+            _exCtx.opts = (data.periods || []).map(function(p) {
+                return {
+                    value: p.period_end_date,
+                    label: unit === 'weekly' ? _exWeekLabel(p.period_end_date) : (p.period_label || p.period_end_date),
+                    count: p.saved_count || 0,
+                };
+            });
+        } else {
+            _exCtx.opts = _exMonthOpts();
+        }
+    } catch (e) {
+        _exCtx.opts = [];
+    }
+    _exCtx.busy = false;
+    _exRender();
+}
+
+function _exRender() {
+    const body = document.getElementById('exBody');
+    if (!body || !_exCtx) return;
+
+    if (_exCtx.busy) {
+        body.innerHTML = '<div class="ex-status">Checking what’s available…</div>';
+        return;
+    }
+    if (!_exCtx.opts.length) {
+        body.innerHTML = '<div class="ex-status">Nothing saved yet — there’s no data in this view to export.</div>' +
+            '<div class="ex-actions"><button type="button" class="btn-secondary" onclick="_exClose()">Close</button></div>';
+        return;
+    }
+
+    const presets = _EX_PRESETS[_exCtx.unit]
+        .filter(function(p) { return p.n === 0 || p.n <= _exCtx.opts.length; })
+        .map(function(p) { return '<button type="button" class="ex-chip" data-n="' + p.n + '" onclick="_exPreset(' + p.n + ')">' + p.t + '</button>'; })
+        .join('');
+    // Both selects share one newest-first list; the span is min..max of the two,
+    // so picking them "backwards" still works.
+    const optsHtml = _exCtx.opts.map(function(x, i) { return '<option value="' + i + '">' + x.label + '</option>'; }).join('');
+
+    body.innerHTML =
+        '<div class="ex-presets">' + presets + '</div>' +
+        '<div class="ex-fields">' +
+          '<label class="ex-field"><span>From</span><select id="exFrom" class="kpi-select" onchange="_exSync()">' + optsHtml + '</select></label>' +
+          '<span class="ex-dash" aria-hidden="true">→</span>' +
+          '<label class="ex-field"><span>To</span><select id="exTo" class="kpi-select" onchange="_exSync()">' + optsHtml + '</select></label>' +
+        '</div>' +
+        '<div class="ex-summary" id="exSummary"></div>' +
+        '<div class="ex-actions">' +
+          '<button type="button" class="btn-secondary" onclick="_exClose()">Cancel</button>' +
+          '<button type="button" class="btn-primary" id="exGo" onclick="_exConfirm()">Download CSV</button>' +
+        '</div>';
+
+    const want = _exCtx.unit === 'weekly' ? 8 : 6;
+    _exPreset(_exCtx.opts.length >= want ? want : 0);
+}
+
+function _exPreset(count) {
+    if (!_exCtx || !_exCtx.opts.length) return;
+    const from = document.getElementById('exFrom'), to = document.getElementById('exTo');
+    if (!from || !to) return;
+    const last = _exCtx.opts.length - 1;
+    to.value   = '0';
+    from.value = String(count === 0 ? last : Math.min(count - 1, last));
+    _exSync();
+}
+
+function _exSync() {
+    if (!_exCtx) return;
+    const from = document.getElementById('exFrom'), to = document.getElementById('exTo');
+    if (!from || !to) return;
+
+    const a = Math.min(Number(from.value), Number(to.value));
+    const b = Math.max(Number(from.value), Number(to.value));
+    const picked = _exCtx.opts.slice(a, b + 1);      // still newest-first
+    _exCtx.picked = picked;
+
+    const unitWord = _exCtx.unit === 'weekly' ? 'week' : 'month';
+    const rows = picked.reduce(function(t, x) { return t + (x.count || 0); }, 0);
+    const sum = document.getElementById('exSummary');
+    if (sum) {
+        sum.innerHTML = '<b>' + picked.length + ' ' + unitWord + (picked.length === 1 ? '' : 's') + '</b>' +
+            '<span class="ex-sum-range">' + picked[picked.length - 1].label + ' → ' + picked[0].label + '</span>' +
+            (rows ? '<span class="ex-sum-rows">' + rows + ' row' + (rows === 1 ? '' : 's') + '</span>' : '');
+    }
+    // light up whichever preset matches the current span
+    const all = _exCtx.opts.length;
+    Array.prototype.forEach.call(document.querySelectorAll('#exBody .ex-chip'), function(c) {
+        const n = Number(c.dataset.n);
+        c.classList.toggle('active', n === 0 ? picked.length === all : picked.length === n);
+    });
+}
+
+async function _exConfirm() {
+    if (!_exCtx || !_exCtx.picked || !_exCtx.picked.length) return;
+    const picked = _exCtx.picked;                       // newest-first
+    const oldest = picked[picked.length - 1].value;
+    const newest = picked[0].value;
+    const tag    = oldest + '_to_' + newest;
+    const kind   = _exCtx.kind;
+    const go     = document.getElementById('exGo');
+    if (go) { go.disabled = true; go.textContent = 'Preparing…'; }
+
+    try {
+        if (kind === 'kpi') {
+            const store = _kpiResolveStore();
+            const data = await fetch(KPI_MANAGE_URL + '?store=' + store + '&period_type=' + _kpiCurrentTab +
+                                     '&mode=range&from=' + oldest + '&to=' + newest + '&v=' + Date.now())
+                                 .then(function(r) { return r.json(); });
+            const periods = data.periods || [];
+            if (!periods.length) { alert('No KPI rows are saved in that range.'); return; }
+            _kpiExportCSV(periods, tag);
+        } else {
+            mbExportCSV(picked.map(function(x) { return x.value; }).reverse(), tag);   // oldest → newest
+        }
+        _exClose();
+    } catch (e) {
+        alert('Export failed — please try again.');
+    } finally {
+        if (go) { go.disabled = false; go.textContent = 'Download CSV'; }
+    }
+}
+
+function _exClose() {
+    const el = document.getElementById('exportRangeModal');
+    if (el) el.classList.remove('open');
+    _exCtx = null;
 }
 
 function mbStartEdit() {
@@ -3262,8 +3757,7 @@ async function mbSaveOverview() {
 function _kpiRenderMonthly(periods) {
     const body = document.getElementById('kpiModalBody');
     if (!body) return;
-    const _modalSel = document.getElementById('kpiModalStoreSelect');
-    const store = (_modalSel && _modalSel.offsetParent !== null && _modalSel.value) || sessionStorage.getItem('speeksUserStore') || '';
+    const store = _kpiResolveStore();
     const sub = document.getElementById('kpiModalSubtitle');
     if (sub) sub.textContent = store + ' · Monthly';
 
@@ -3347,7 +3841,7 @@ function _kpiToggleDot(el, on) {
 function _kpiDecorateEditBtn(force) {
     const btn = document.getElementById('kpiEditBtn');
     if (!btn) return;
-    const on = (force !== undefined ? force : _kpiReminderOn());
+    const on = (force !== undefined ? force : !!(typeof _kpiDueState === 'object' && _kpiDueState && _kpiDueState.weekly && _kpiDueState.weekly.due));
     const wants = on && btn.style.display !== 'none' && _kpiCurrentTab === 'weekly';
     btn.classList.toggle('kpi-due-pulse', wants);
     let pill = document.getElementById('kpiDuePill');
@@ -3362,20 +3856,236 @@ function _kpiDecorateEditBtn(force) {
     }
 }
 
-// Steps 1 & 2: dots on the Analytics nav-link, the Store KPIs sub-tab, and the Weekly toggle
+// Steps 1 & 2: dots on the Analytics nav-link + the Store KPIs sub-tab + the
+// Weekly/Monthly toggles. Now data-aware: driven by _kpiDueState (populated by
+// checkKpiDueReminders), so a dot only shows while the period is actually
+// UNFILLED — it clears the instant the numbers are saved, not just when the
+// Sat→Sun clock window closes.
 function applyKpiReminder() {
-    const on = _kpiReminderOn();
-    // The workspace nav-link dot is shared with Variance Replies (both live on
-    // that page): it pulses if EITHER the weekly-KPI window is open or the
-    // manager has variance lines waiting on them.
+    const st = (typeof _kpiDueState === 'object' && _kpiDueState) ? _kpiDueState : null;
+    const wkOn = !!(st && st.weekly && st.weekly.due);
+    const moOn = !!(st && st.monthly && st.monthly.due);
+    const on = wkOn || moOn;                 // the Store KPIs tab needs attention if either is due
+    // The workspace nav-link dot is shared with Variance Replies + Aging (all
+    // live on that page): it pulses if a KPI is due OR either of those needs the
+    // manager.
     const vrOn = typeof _vrDotNeeded === 'function' && _vrDotNeeded();
     const agOn = typeof _agDotNeeded === 'function' && _agDotNeeded();
     document.querySelectorAll('.nav-link[href="workspace.html"]').forEach(a => _kpiToggleDot(a, on || vrOn || agOn));
     _kpiToggleDot(document.getElementById('ws-tab-kpis'), on);
     _kpiToggleDot(document.getElementById('ws-tab-vreplies'), vrOn);
     _kpiToggleDot(document.getElementById('ws-tab-aging'), agOn);
-    _kpiToggleDot(document.getElementById('kpi-tab-weekly'), on);
-    _kpiDecorateEditBtn(on);
+    _kpiToggleDot(document.getElementById('kpi-tab-weekly'), wkOn);
+    _kpiToggleDot(document.getElementById('kpi-tab-monthly'), moOn);
+    _kpiDecorateEditBtn(wkOn);
+}
+
+// ============================================================================
+// KPI DUE REMINDERS — data-aware action-feed nags (Weekly + Monthly)
+//   Supersedes the old time-only breadcrumb (_kpiReminderActive/_kpiReminderOn,
+//   left defined above but no longer consulted). A store is nagged ONLY while
+//   its current period has zero saved entries, and the nag clears the instant
+//   any entry is saved — the kpi-manage POST broadcasts "kpi", the realtime
+//   registry re-runs checkKpiDueReminders(), the bubble hides, the feed repaints.
+//   • Weekly : due once the active Sunday period is editable; flips to "Overdue"
+//              after that Sunday passes; persists until filled or the week rolls.
+//   • Monthly: due from the FIRST SUNDAY of the month AFTER the reporting month
+//              (so a month that ends mid-week is reported the first Sunday — e.g.
+//              the 4th); "Overdue" after that Sunday; persists until filled.
+//   Roles: manager / owner-manager / MSM. (MSM is scoped to their HOME store —
+//   the Store KPIs pane's store picker is DM/CEO-only, so an MSM can only enter
+//   their home store here today.)
+// ============================================================================
+const _KPI_DUE_ROLES = new Set(['manager', 'owner (manager)', 'owner manager']);
+// NOTE: Assistant Managers are intentionally excluded. ASM KPI entry is disabled
+// for the stores right now; the day it's re-enabled, add 'assistant manager'
+// here and ASMs start getting these reminders automatically.
+
+let _kpiDueState = { weekly: { due: false, overdue: false, stores: [] }, monthly: { due: false, overdue: false, stores: [] } };
+let _kpiDueStarted = false;
+
+function _kpiDueEligible() {
+    return _KPI_DUE_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
+}
+// The store(s) whose KPIs THIS user is responsible for. A Multi-Store Manager
+// covers BOTH managed stores (they fill each by switching the active store, or
+// by clicking the store-specific feed card which routes the pane to that store —
+// see _kpiResolveStore); everyone else is their one home store.
+function _kpiMyStores() {
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        return [...MULTISTORE_MANAGER_STORES];
+    }
+    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
+}
+
+// Which store the Store KPIs pane is currently showing/saving. Preserves the
+// existing behaviour for everyone (DM/CEO picker wins; managers = their store),
+// and adds one thing: an MSM who arrived via a store-specific KPI feed card is
+// routed to THAT store (set on pane-open in switchWorkspaceTab), without
+// switching their whole dashboard — mirrors the aging pane's _agViewStore.
+let _kpiViewStore = null;
+function _kpiResolveStore() {
+    const sel = document.getElementById('kpiModalStoreSelect');
+    if (sel && sel.offsetParent !== null && sel.value) return sel.value;   // DM / CEO / TOM picker
+    if (_kpiViewStore) return _kpiViewStore;                               // MSM routed store
+    return sessionStorage.getItem('speeksUserStore') || '';               // manager default
+}
+// Today's date in Central time as YYYY-MM-DD — string-comparable with the
+// period dates the edge fn returns (both are plain calendar dates).
+function _kpiCentralToday() {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date());
+}
+// Current Central date + wall clock, so we can test the real deadline.
+function _kpiCentralParts() {
+    const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date());
+    const g = t => (p.find(x => x.type === t) || {}).value;
+    let hr = parseInt(g('hour'), 10); if (hr === 24) hr = 0;   // some engines emit 24 at midnight
+    return { date: g('year') + '-' + g('month') + '-' + g('day'), hour: hr, minute: parseInt(g('minute'), 10) };
+}
+function _kpiAddDays(dateStr, n) {
+    const d = new Date(dateStr + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+}
+// Is "now" past the deadline for work done on `sunday`? KPIs are entered Sunday
+// and due the FOLLOWING MONDAY at 08:30 Central — so it's only "overdue" once
+// that Monday-morning cutoff passes, not at Sunday midnight.
+function _kpiPastDeadline(sunday, parts) {
+    const mon = _kpiAddDays(sunday, 1);           // the Monday after
+    if (parts.date > mon) return true;
+    if (parts.date < mon) return false;
+    return parts.hour > 8 || (parts.hour === 8 && parts.minute >= 30);
+}
+// First Sunday (YYYY-MM-DD) of the month FOLLOWING the given period-end date.
+// A monthly period ending e.g. 2026-06-30 is reported the first Sunday of July,
+// which may be as late as the 7th (your "month ended mid-week → fill it the
+// first Sunday, maybe the 4th" case).
+function _kpiFirstSundayAfter(periodEndStr) {
+    const parts = String(periodEndStr).split('-').map(Number);
+    let ny = parts[0], nm = parts[1] + 1;                  // the month it's reported IN
+    if (nm > 12) { nm = 1; ny += 1; }
+    const dow = new Date(Date.UTC(ny, nm - 1, 1)).getUTCDay();  // 0 = Sunday
+    const day = dow === 0 ? 1 : 1 + (7 - dow);
+    return ny + '-' + String(nm).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+}
+
+// Lazily-created hidden alert bubble for a KPI reminder (weekly|monthly). Like
+// the variance/aging bubbles it's a state-carrier only — CSS keeps it
+// visibility:hidden; _samGatherReminders reads its display to surface the feed
+// card (see the RETIRED FLOATING ALERT TOASTS block in styles.css).
+function _kpiDueBubbleEl(which) {
+    const id = which === 'monthly' ? 'kpiMonthlyAlertBubble' : 'kpiWeeklyAlertBubble';
+    let b = document.getElementById(id);
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = id;
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #dc2626, #7f1d1d); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(127, 29, 29, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = '<span id="' + id + 'Icon" style="font-size:16px; flex-shrink:0; margin-top:2px;">📈</span>' +
+        '<span id="' + id + 'Text" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>' +
+        '<button onclick="document.getElementById(\'' + id + '\').style.display=\'none\'" class="daily-bubble-close" title="Dismiss">' +
+        '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>' +
+        '</button>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+function _kpiHideDueBubble(which) {
+    const b = document.getElementById(which === 'monthly' ? 'kpiMonthlyAlertBubble' : 'kpiWeeklyAlertBubble');
+    if (b) b.style.display = 'none';
+}
+function _kpiHideDueBubbles() { _kpiHideDueBubble('weekly'); _kpiHideDueBubble('monthly'); }
+
+// Populate + show one KPI due bubble (state-carrier for the feed card).
+function _kpiRenderDueBubble(which, show, opts) {
+    if (!show) { _kpiHideDueBubble(which); return; }
+    const b = _kpiDueBubbleEl(which);
+    if (!b) return;
+    const id = b.id;
+    const textEl = document.getElementById(id + 'Text');
+    const overdue = !!(opts && opts.overdue);
+    const stores = (opts && opts.stores) || [];
+    const monthly = which === 'monthly';
+    // You report the month/week that just ended, so an overdue weekly reads
+    // "Last week's"; monthly is always the just-ended month ("Last month's").
+    const when = monthly ? "Last month's" : (overdue ? "Last week's" : "This week's");
+    const tab = monthly ? 'monthly' : 'weekly';
+    const title = (monthly ? 'Monthly KPIs' : 'Weekly KPIs') + (overdue ? ' Overdue' : ' Due');
+    // Name the outstanding store(s) when the card can cover more than one — an MSM
+    // (either store, even when only one is left) or any multi-store list. A plain
+    // manager has one store, so naming it is just noise.
+    const isMSM = typeof isMultiStoreManager === 'function' && isMultiStoreManager();
+    const storeP = ((isMSM || stores.length > 1) && stores.length) ? (' (' + stores.join(' & ') + ')') : '';
+    const tail = overdue ? ' are overdue' : ' are due Monday by 8:30am';
+    const summary = overdue
+        ? (when + ' KPIs' + storeP + ' are overdue — enter them now.')
+        : (when + ' KPIs' + storeP + ' are due Monday by 8:30am.');
+    const body = when + ' KPIs' + storeP + tail +
+        '. Open Workspace → Store KPIs and fill in the ' + tab + ' numbers.';
+    if (textEl) {
+        textEl.dataset.summary = summary;
+        // The feed card's title + badge (Due vs Overdue) read this off the bubble,
+        // so the whole card always agrees with the bubble — no split-source drift.
+        textEl.dataset.overdue = overdue ? '1' : '';
+        // Snooze identity: re-nags if the store list or overdue state changes.
+        textEl.dataset.sig = (monthly ? 'm' : 'w') + '|' + [...stores].sort().join(',') + '|' + (overdue ? 'od' : 'due');
+        if (stores.length) textEl.dataset.stores = [...new Set(stores)].join(',');
+        else delete textEl.dataset.stores;
+        textEl.style.display = 'flex';
+        textEl.style.flexDirection = 'column';
+        textEl.style.gap = '7px';
+        textEl.innerHTML =
+            '<div style="line-height:1.4;"><strong>' + escapeHtml(title) + '</strong></div>' +
+            '<div style="line-height:1.4; opacity:0.96;">' + escapeHtml(body) + '</div>' +
+            '<button onclick="document.getElementById(\'' + id + '\').style.display=\'none\'; sessionStorage.setItem(\'speeksKpiTab\',\'' + tab + '\'); window.location.href=\'workspace.html#kpis\';" ' +
+            'style="align-self:flex-start; background:rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.5); color:#fff; font-weight:800; font-size:12px; border-radius:8px; padding:6px 12px; cursor:pointer;" ' +
+            'onmouseover="this.style.background=\'rgba(255,255,255,0.3)\';" onmouseout="this.style.background=\'rgba(255,255,255,0.18)\';">Open Store KPIs</button>';
+    }
+    b.style.display = 'flex';
+}
+
+// The check: fetches the editable weekly + monthly period for the user's store,
+// and shows/hides each bubble based on whether it has saved entries. Self-
+// installs a 10-min safety poll; realtime pings re-run it instantly on any save.
+async function checkKpiDueReminders() {
+    if (!_kpiDueEligible()) { _kpiHideDueBubbles(); _kpiDueState = { weekly: { due: false, overdue: false, stores: [] }, monthly: { due: false, overdue: false, stores: [] } }; return; }
+    const stores = _kpiMyStores();
+    if (!stores.length) { _kpiHideDueBubbles(); return; }
+    if (!_kpiDueStarted) { _kpiDueStarted = true; setInterval(checkKpiDueReminders, 10 * 60 * 1000); }
+    try {
+        const parts = _kpiCentralParts();
+        const today = parts.date;
+        const wkPending = [], moPending = [];
+        let wkEnd = null, moFirstSun = null;
+        for (const store of stores) {
+            const wUrl = KPI_MANAGE_URL + '?store=' + store + '&period_type=weekly&v=' + Date.now();
+            const mUrl = KPI_MANAGE_URL + '?store=' + store + '&period_type=monthly&v=' + Date.now();
+            const [wRes, mRes] = await Promise.all([
+                fetch(wUrl).then(r => r.json()).catch(() => null),
+                fetch(mUrl).then(r => r.json()).catch(() => null),
+            ]);
+            const wp = wRes && (wRes.periods || []).find(p => p.is_editable);
+            if (wp) { wkEnd = wp.period_end_date; if ((wp.saved_count || 0) === 0) wkPending.push(store); }
+            const mp = mRes && (mRes.periods || []).find(p => p.is_editable);
+            if (mp) {
+                const firstSun = _kpiFirstSundayAfter(mp.period_end_date);
+                moFirstSun = firstSun;
+                if ((mp.saved_count || 0) === 0 && today >= firstSun) moPending.push(store);
+            }
+        }
+        // Overdue once the Monday-08:30-CT deadline after the reporting Sunday passes.
+        const wkOverdue = !!(wkEnd && _kpiPastDeadline(wkEnd, parts));
+        const moOverdue = !!(moFirstSun && _kpiPastDeadline(moFirstSun, parts));
+        _kpiDueState = {
+            weekly:  { due: wkPending.length > 0, overdue: wkOverdue, stores: wkPending },
+            monthly: { due: moPending.length > 0, overdue: moOverdue, stores: moPending },
+        };
+        _kpiRenderDueBubble('weekly',  _kpiDueState.weekly.due,  { overdue: wkOverdue, stores: wkPending });
+        _kpiRenderDueBubble('monthly', _kpiDueState.monthly.due, { overdue: moOverdue, stores: moPending });
+        if (typeof applyKpiReminder === 'function') applyKpiReminder();
+        if (typeof renderActionFeed === 'function') renderActionFeed();
+    } catch (e) { /* next poll / ping retries */ }
 }
 
 function kpiHeaderStartEdit() {
@@ -3398,8 +4108,7 @@ function kpiHeaderCancel() {
 }
 
 async function _kpiLoadAll(tab) {
-    const modalSel = document.getElementById('kpiModalStoreSelect');
-    const store = (modalSel && modalSel.offsetParent !== null && modalSel.value) || sessionStorage.getItem('speeksUserStore');
+    const store = _kpiResolveStore();
     if (!store) return;
     const body = document.getElementById('kpiModalBody');
     if (body) body.innerHTML = '<div class="kpi-empty-state">Loading…</div>';
@@ -3461,17 +4170,28 @@ let _wsKpiLoaded   = false;
 // Loads the inline KPI grid (same markup/IDs as the old fullscreen modal, but
 // rendered in-page rather than via toggleModal). Loads once per page-init.
 async function loadWorkspaceKpis() {
-    if (_wsKpiLoaded) return;
+    // A KPI-due feed card can request a specific sub-tab (weekly|monthly) via
+    // sessionStorage before deep-linking here. Consume it once.
+    let wantTab = 'weekly';
+    try {
+        const t = sessionStorage.getItem('speeksKpiTab');
+        if (t === 'weekly' || t === 'monthly') { wantTab = t; sessionStorage.removeItem('speeksKpiTab'); }
+    } catch (e) {}
+    if (_wsKpiLoaded) {
+        // Already loaded — still honor an explicit tab request from a card.
+        if (wantTab !== _kpiCurrentTab && typeof switchKpiTab === 'function') switchKpiTab(wantTab);
+        return;
+    }
     _wsKpiLoaded = true;
-    _kpiCurrentTab = 'weekly';
+    _kpiCurrentTab = wantTab;
     _kpiEditingPeriod = null;
     // Managers (picker hidden) default to their own store; DMs keep selection
     const sel = document.getElementById('kpiModalStoreSelect');
     const userStore = sessionStorage.getItem('speeksUserStore');
     if (sel && userStore && sel.offsetParent === null) sel.value = userStore;
-    document.getElementById('kpi-tab-weekly')?.classList.add('active');
-    document.getElementById('kpi-tab-monthly')?.classList.remove('active');
-    await _kpiLoadAll('weekly');
+    document.getElementById('kpi-tab-weekly')?.classList.toggle('active', wantTab === 'weekly');
+    document.getElementById('kpi-tab-monthly')?.classList.toggle('active', wantTab === 'monthly');
+    await _kpiLoadAll(wantTab);
 }
 
 function switchWorkspaceTab(name) {
@@ -3484,6 +4204,11 @@ function switchWorkspaceTab(name) {
     if (name === 'brief') {
         if (!_wsBriefLoaded) { _wsBriefLoaded = true; if (typeof fetchMonthlyBrief === 'function') fetchMonthlyBrief(); }
     } else if (name === 'kpis') {
+        // MSM only: a store-specific KPI feed card routes the pane to that store
+        // (consumed once, cleared after), without switching the whole dashboard.
+        // No override → their active store. Non-MSM → null (falls back normally).
+        _kpiViewStore = (typeof isMultiStoreManager === 'function' && isMultiStoreManager())
+            ? (_consumeMsmAlertStore() || null) : null;
         loadWorkspaceKpis();
     } else if (name === 'b2b') {
         fetchB2BDeals();
@@ -3591,11 +4316,9 @@ function _kpiCancelEdit() {
 }
 
 async function _kpiSavePeriod(periodDate) {
-    // Mirror the load/render store resolution: DM/CEO/TOM save the store picked in
-    // the (visible) selector; managers fall back to their own store. Reading only
-    // sessionStorage here misrouted DM saves to their own store ('CORP').
-    const modalSel = document.getElementById('kpiModalStoreSelect');
-    const store = (modalSel && modalSel.offsetParent !== null && modalSel.value) || sessionStorage.getItem('speeksUserStore');
+    // Mirror the load/render store resolution (DM/CEO picker → MSM routed store →
+    // manager's own store) so the save always targets the store on screen.
+    const store = _kpiResolveStore();
     const pin   = sessionStorage.getItem('speeksUserPin');
     if (!store || !pin) return;
     const pk     = periodDate.replace(/-/g, '');
@@ -3659,6 +4382,11 @@ async function fetchHubData() {
         if (hubDataCache.leaderboard) {
             cachedLeaderboardData = hubDataCache.leaderboard;
             feedLeaderboardToTicker(cachedLeaderboardData);
+            // "Updated as of" stamp — set on data refresh only (not on the Rev/GP
+            // toggle, which also calls drawLeaderboard), mirroring the Buying &
+            // Sales / DM command-center last-updated behaviour.
+            const _lbUpd = document.getElementById('lb-last-updated');
+            if (_lbUpd) _lbUpd.innerText = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
             if (document.getElementById('lb-wrapper')) drawLeaderboard();
         } else if (document.getElementById('lb-wrapper')) {
             document.getElementById('lb-wrapper').innerHTML = '<div class="status-message" style="color:var(--red-alert);">Please Deploy "New Version" of Hub App Script!</div>';
@@ -3690,6 +4418,11 @@ function renderBuyingSales() {
 
     document.querySelectorAll('#bs-buy-val').forEach(el => el.innerText = `$${Math.round(bV).toLocaleString()}`);
     document.querySelectorAll('#bs-buy-proj').forEach(el => el.innerText = `$${Math.round(bP).toLocaleString()}`);
+    // Airy pace bar: how much of the projected month-end buy value is already purchased.
+    document.querySelectorAll('#bs-pace-fill').forEach(fill => {
+        const pace = bP > 0 ? Math.max(0, Math.min(100, (bV / bP) * 100)) : 0;
+        fill.style.width = pace.toFixed(1) + '%';
+    });
     document.querySelectorAll('#bs-buy-margin').forEach(el => {
         el.innerText = mN.toFixed(1) + '%';
         el.className = mN > 0 && mN < 51 ? 'delta-badge delta-neg' : 'delta-badge delta-pos';
@@ -3704,8 +4437,8 @@ function renderBuyingSales() {
     document.querySelectorAll('#bs-t-gp').forEach(el => el.innerText = `$${Math.round(parseNum(hubDataCache[`${store}TrackGP`])).toLocaleString()}`);
     
     document.querySelectorAll('#bs-bar').forEach(bar => {
-        bar.style.strokeDashoffset = 402 - (Math.min(p, 100)/100) * 402; 
-        bar.style.stroke = p < 100 ? "var(--red-alert)" : "var(--sage-professional)";
+        bar.style.strokeDashoffset = 402 - (Math.min(p, 100)/100) * 402;
+        bar.style.stroke = p < 100 ? "#dc2626" : "#1f9d57";
     });
 
     // --- SELLING MARGIN MATH ---
@@ -3731,6 +4464,37 @@ function renderBuyingSales() {
     if (bsDateEl) {
         bsDateEl.innerText = hubDataCache[`${store}BuyDate`] || '—';
     }
+
+    // --- Command Center: plain-text margin strip tiles + header stamp + pace dates ---
+    document.querySelectorAll('#cc-buy-margin').forEach(el => {
+        el.innerText = mN.toFixed(1) + '%';
+        el.classList.toggle('bad', mN > 0 && mN < 51);
+        el.classList.toggle('good', !(mN > 0 && mN < 51));
+    });
+    document.querySelectorAll('#cc-sell-margin').forEach(el => {
+        el.innerText = sellMarginNum.toFixed(1) + '%';
+        el.classList.toggle('bad', sellMarginNum < 55.0);
+        el.classList.toggle('good', sellMarginNum >= 55.0);
+    });
+    const _buyDate = hubDataCache[`${store}BuyDate`] || '—';
+    document.querySelectorAll('#cc-updated').forEach(el => el.innerText = _buyDate);
+    document.querySelectorAll('#bs-pace-asof').forEach(el => el.innerText = 'as of ' + _buyDate);
+    const _mEnd = new Date(); _mEnd.setMonth(_mEnd.getMonth() + 1, 0); // last day of current month
+    const _mEndStr = _mEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    document.querySelectorAll('#bs-pace-end').forEach(el => el.innerText = 'month-end · ' + _mEndStr);
+
+    // --- Command Center: Tracking Buying/Revenue strip tiles + collapsed summary + cue ---
+    document.querySelectorAll('#cc-track-buy').forEach(el => el.innerText = `$${Math.round(bP).toLocaleString()}`);
+    // Tracking Revenue: no stored field — derive as tracking GP implied at the current sell margin.
+    const _trackGp = parseNum(hubDataCache[`${store}TrackGP`]);
+    const _trackRev = sellMarginNum > 0 ? (_trackGp / (sellMarginNum / 100)) : 0;
+    document.querySelectorAll('#cc-track-rev').forEach(el => el.innerText = `$${Math.round(_trackRev).toLocaleString()}`);
+    _ccSum('cc-sum-buy', `$${Math.round(bP).toLocaleString()}`, '');
+    _ccSum('cc-sum-rev', `$${Math.round(_trackRev).toLocaleString()}`, '');
+    _ccSum('cc-sum-goal', `${p}<small>%</small>`, p >= 100 ? 'good' : (p >= 80 ? 'warn' : 'bad'));
+    const _buySig = `${Math.round(bP)}|${p}|${hubDataCache[`${store}BuyDate`] || ''}`;
+    _ccFlagUpdate('buying', _buySig);   // manager Command Center
+    _empFlagUpdate('buying', _buySig);  // employee combined widget
 }
 
 function renderLiveData(d) {
@@ -3965,8 +4729,20 @@ async function fetchRecordsData() {
     } catch (e) {} 
 }
 
+// Stats page sub-navigation: Champions · Awards · Records. Every view's data is
+// already fetched on load, so switching just toggles which one is visible.
+function showStatsView(name) {
+    ['champions', 'awards', 'records'].forEach(v => {
+        const on = v === name;
+        const pane = document.getElementById('stats-view-' + v);
+        const seg  = document.getElementById('ssv-' + v);
+        if (pane) pane.classList.toggle('active', on);
+        if (seg)  { seg.classList.toggle('active', on); seg.setAttribute('aria-selected', on ? 'true' : 'false'); }
+    });
+}
+
 function renderRecords() {
-    const cont = document.getElementById('recordsContainer'); 
+    const cont = document.getElementById('recordsContainer');
     if (!cont) return;
     
     if (!recordsCache?.length) {
@@ -3984,61 +4760,63 @@ function renderRecords() {
         else map[l].s.push(r); 
     });
     
-    let bC = 0; 
-    let html = '<div class="records-masonry-grid">';
-    
+    let bC = 0;
+    let html = '<div class="records-grid">';
+
     Object.keys(map).forEach(l => {
-        let d = map[l]; 
-        bC++; 
-        let oId = 'overflow-board-' + bC; 
-        d.s.sort((a, b) => parseNum(b.value) - parseNum(a.value)); 
+        let d = map[l];
+        bC++;
+        let oId = 'overflow-board-' + bC;
+        d.s.sort((a, b) => parseNum(b.value) - parseNum(a.value));
         let cR = d.c || d.s[0];
-        
+
         html += `
-        <div class="record-metric-card">
-            <div class="rmc-header" style="background: var(--slate-charcoal);">${l}</div>`;
-            
+        <div class="rec">
+            <div class="rec-h">${l}</div>`;
+
         if (cR) {
             html += `
-            <div class="rmc-champion">
-                <div class="rmc-crown">👑 Company Record</div>
-                <div class="rmc-champ-val">${cR.value || '-'}</div>
-                <div class="rmc-champ-sub">${cR.subtext || ''}</div>
+            <div class="rec-champ">
+                <div class="cc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/></svg> Company Record</div>
+                <div class="cv">${cR.value || '-'}</div>
+                <div class="cs">${cR.subtext || ''}</div>
             </div>`;
         }
-        
+
         if (d.s.length) {
-            html += `<div class="rmc-list">`;
+            html += `<div class="rec-list">`;
             html += d.s.slice(0, 3).map((s, i) => `
-                <div class="rmc-list-item">
-                    <div class="rmc-rank">${i===0 ? '🥇' : (i===1 ? '🥈' : '🥉')}</div>
-                    <div class="rmc-store">${s.section}</div>
-                    <div class="rmc-score">
-                        <span class="rmc-score-val">${s.value || '-'}</span>
-                        <span class="rmc-score-date">${s.subtext || ''}</span>
-                    </div>
+                <div class="rec-li">
+                    <span class="lr${i===0 ? ' g' : ''}">${i+1}</span>
+                    <span class="ls">${s.section}</span>
+                    <span class="lv">
+                        <b>${s.value || '-'}</b>
+                        <span>${s.subtext || ''}</span>
+                    </span>
                 </div>`).join('');
-                
+
             if (d.s.length > 3) {
                 html += `
                 <div id="${oId}" class="hidden-board">
                     ${d.s.slice(3).map((s, i) => `
-                    <div class="rmc-list-item">
-                        <div class="rmc-rank" style="font-size:11px; color:#999;">#${i+4}</div>
-                        <div class="rmc-store">${s.section}</div>
-                        <div class="rmc-score">
-                            <span class="rmc-score-val">${s.value || '-'}</span>
-                            <span class="rmc-score-date">${s.subtext || ''}</span>
-                        </div>
+                    <div class="rec-li">
+                        <span class="lr">${i+4}</span>
+                        <span class="ls">${s.section}</span>
+                        <span class="lv">
+                            <b>${s.value || '-'}</b>
+                            <span>${s.subtext || ''}</span>
+                        </span>
                     </div>`).join('')}
-                </div>
-                <button class="rmc-expand-btn" onclick="toggleBoard('${oId}', this)">See Full Leaderboard ▾</button>`;
+                </div>`;
             }
             html += `</div>`;
+            if (d.s.length > 3) {
+                html += `<button class="rec-more" onclick="toggleBoard('${oId}', this)">See Full Leaderboard ▾</button>`;
+            }
         }
         html += `</div>`;
     });
-    
+
     html += '</div>';
     cont.innerHTML = html;
 }
@@ -4078,26 +4856,103 @@ async function toggleManageRecords() {
 
 function populateRecordsModal() {
     const list = document.getElementById('manageRecordsList');
-    let html = '';
-    
+
     if (!recordsCache || recordsCache.length === 0) {
         list.innerHTML = '<div style="padding: 20px; text-align: center; color: #888; font-weight: 600;">No records found.</div>';
         return;
     }
 
+    // Spreadsheet layout: metrics down the left, stores across the top, so every
+    // store's value+date for a metric sit on one line. Only combos that already
+    // exist in the data get an editable cell — no new records are invented, so
+    // saveManageRecords (which reads every .record-manage-row) is unchanged.
+    const STORE_ORDER = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    const labels = [];            // metrics, in first-seen order
+    const sections = [];          // stores, discovered then sorted
+    const byLabel = {};           // label -> section -> record
     recordsCache.forEach(r => {
-        html += `
-        <div class="record-manage-row" data-store="${r.section || ''}" data-label="${r.label || ''}" style="background: #fff; padding: 12px 15px; border-radius: 8px; border: 1px solid #e2e8f0; margin-bottom: 10px; display: flex; align-items: center; gap: 15px;">
-            <div style="flex: 2; display: flex; flex-direction: column; gap: 2px;">
-                <span style="color: #94a3b8; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px;">${r.section || 'COMPANY'}</span>
-                <span style="font-size: 13px; font-weight: 800; color: var(--slate-charcoal); line-height: 1.2;">${r.label || ''}</span>
-            </div>
-            <input type="text" class="r-val" placeholder="Value (e.g. $5,000)" value="${r.value || ''}" style="flex: 1; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; font-weight: 600; color: var(--slate-charcoal); outline: none;">
-            <input type="text" class="r-date" placeholder="Date (e.g. Oct 12)" value="${r.subtext || ''}" style="flex: 1; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; font-weight: 600; color: var(--slate-charcoal); outline: none;">
-        </div>`;
+        const label = String(r.label || '').trim();
+        if (!label) return;
+        const section = String(r.section || 'COMPANY').trim();
+        if (!byLabel[label]) { byLabel[label] = {}; labels.push(label); }
+        byLabel[label][section] = r;
+        if (!sections.includes(section)) sections.push(section);
     });
-    
-    list.innerHTML = html;
+
+    // Known stores first (in STORE_ORDER), then any other named sections, then COMPANY.
+    const rank = s => {
+        const u = s.toUpperCase();
+        const i = STORE_ORDER.indexOf(u);
+        if (i !== -1) return i;
+        if (u.startsWith('COMPANY')) return 100;
+        return 50;
+    };
+    sections.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+
+    // The Company column is auto-filled from the highest store, so make sure it
+    // exists as a column even if no metric has a company record yet.
+    let companyKey = sections.find(s => s.toUpperCase().startsWith('COMPANY'));
+    if (!companyKey) { companyKey = 'COMPANY'; sections.push(companyKey); }
+
+    let head = `<div class="cr-cell cr-corner">Metric</div>`;
+    sections.forEach(s => { head += `<div class="cr-cell cr-colhead">${escapeHtml(s.toUpperCase())}</div>`; });
+
+    let body = '';
+    labels.forEach(label => {
+        body += `<div class="cr-cell cr-rowhead" title="${escapeHtml(label)}">${escapeHtml(label)}</div>`;
+        sections.forEach(s => {
+            const rec = byLabel[label][s];
+            if (s === companyKey) {
+                // Read-only, auto-filled from the winning store (see _recomputeCompanyRecords).
+                body += `<div class="record-manage-row cr-cell cr-input cr-company" data-store="${escapeHtml(companyKey)}" data-label="${escapeHtml(label)}" title="Auto-filled from the store with the highest value">
+                    <input type="text" class="r-val" value="${escapeHtml(rec ? (rec.value || '') : '')}" placeholder="—" readonly tabindex="-1">
+                    <input type="text" class="r-date" value="${escapeHtml(rec ? (rec.subtext || '') : '')}" placeholder="—" readonly tabindex="-1">
+                </div>`;
+            } else if (rec) {
+                body += `<div class="record-manage-row cr-cell cr-input" data-store="${escapeHtml(rec.section || '')}" data-label="${escapeHtml(rec.label || '')}">
+                    <input type="text" class="r-val" placeholder="Value" value="${escapeHtml(rec.value || '')}" oninput="_recomputeCompanyRecords()">
+                    <input type="text" class="r-date" placeholder="Date" value="${escapeHtml(rec.subtext || '')}" oninput="_recomputeCompanyRecords()">
+                </div>`;
+            } else {
+                body += `<div class="cr-cell cr-empty"></div>`;
+            }
+        });
+    });
+
+    const cols = `minmax(150px, 1.3fr) repeat(${sections.length}, minmax(118px, 1fr))`;
+    list.innerHTML =
+        `<p class="cr-hint">Each column is a store. Fill a metric across the stores — the <strong>Company</strong> column auto-fills with the highest value.</p>` +
+        `<div class="cr-grid-scroll"><div class="cr-grid" style="grid-template-columns:${cols};">${head}${body}</div></div>`;
+    _recomputeCompanyRecords();
+}
+
+// The Company column mirrors whichever store has the highest value for each
+// metric (value + that store's date). Runs on load and on every store edit, so
+// the DM never has to copy the record over by hand. Read-only company inputs
+// don't feed themselves. Uses parseNum so "$21,950.00" / "93.00%" compare right.
+function _recomputeCompanyRecords() {
+    const list = document.getElementById('manageRecordsList');
+    if (!list) return;
+    const byLabel = {};
+    list.querySelectorAll('.record-manage-row.cr-input:not(.cr-company)').forEach(cell => {
+        const label = cell.getAttribute('data-label');
+        (byLabel[label] = byLabel[label] || []).push(cell);
+    });
+    list.querySelectorAll('.record-manage-row.cr-company').forEach(comp => {
+        const label = comp.getAttribute('data-label');
+        const cells = byLabel[label] || [];
+        let bestVal = '', bestDate = '', bestNum = -Infinity, found = false;
+        cells.forEach(c => {
+            const v = (c.querySelector('.r-val')?.value || '').trim();
+            if (!v) return;
+            const n = parseNum(v);
+            if (n > bestNum) { bestNum = n; bestVal = v; bestDate = (c.querySelector('.r-date')?.value || '').trim(); found = true; }
+        });
+        const valEl = comp.querySelector('.r-val');
+        const dateEl = comp.querySelector('.r-date');
+        if (valEl) valEl.value = found ? bestVal : '';
+        if (dateEl) dateEl.value = found ? bestDate : '';
+    });
 }
 
 // NOTE: populateAlertsModal lives with the rest of the alerts module (see the
@@ -4211,16 +5066,17 @@ function renderAwards() {
     container.innerHTML = AWARD_NAMES.map((name, i) => {
         const store = winners[i];
         const [line1, line2] = AWARD_DISPLAY_LINES[i];
+        const fullName = [line1, line2].filter(Boolean).join(' ');
         return `
-        <div class="award-card-trophy-wrap">
-            <button class="award-info-btn" data-desc="${escapeHtml(AWARD_DESCRIPTIONS[i])}">i</button>
-            <div class="award-card">
-                <div class="award-card-header">
-                    <div class="award-card-name">${escapeHtml(line1)}<br>${escapeHtml(line2)}</div>
-                </div>
-                <div class="award-card-sep"><span>◆</span></div>
-                <div class="award-card-body">
-                    <div class="award-card-winner">${store ? escapeHtml(store) : '<span style="opacity:0.45;">—</span>'}</div>
+        <div class="aw">
+            <button class="award-info-btn aw-i" data-desc="${escapeHtml(AWARD_DESCRIPTIONS[i])}">i</button>
+            <div class="aw-name">${escapeHtml(fullName)}</div>
+            <div class="aw-line"></div>
+            <div class="aw-win">
+                <span class="aw-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg></span>
+                <div class="aw-win-id">
+                    <div class="aw-store">${store ? escapeHtml(store) : '<span class="aw-empty">—</span>'}</div>
+                    <div class="aw-cap">Winner</div>
                 </div>
             </div>
         </div>`;
@@ -4340,12 +5196,11 @@ function renderAwardsHistory() {
             ${AWARD_NAMES.map((name, i) => {
                 const store = a[winnerKeys[i]];
                 return `<div class="awards-history-row">
-                    <span class="awards-history-medal">${AWARD_EMOJIS[i]}</span>
                     <span class="awards-history-awardname">${escapeHtml(name)}</span>
-                    <span class="awards-history-winner">${store ? `${STORE_EMOJI_MAP[store] || ''} ${store}` : '—'}</span>
+                    <span class="awards-history-winner${store ? '' : ' empty'}">${store ? escapeHtml(store) : '—'}</span>
                 </div>`;
             }).join('')}
-            ${a.videoUrl ? `<div class="awards-history-video-link"><a href="${escapeHtml(a.videoUrl)}" target="_blank">🎬 Watch Video</a></div>` : ''}
+            ${a.videoUrl ? `<div class="awards-history-video-link"><a href="${escapeHtml(a.videoUrl)}" target="_blank"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg> Watch Video</a></div>` : ''}
         </div>`).join('');
 }
 
@@ -4585,32 +5440,56 @@ function copyQMToClipboard(button) {
 // --- 16. MODULE: GLOBAL AUTH OVERLAY ---
 function injectGlobalAuth() {
     if (!document.getElementById('authOverlay')) {
+        // "Card on dark" — wordmark + description on the emerald-lit near-black
+        // field, a white card holding nothing but the login, two-fact rail below.
+        // The logo PNG is white-on-transparent, which is exactly why the brand
+        // sits OUT here on the dark ground: no dark plaque needed inside the card.
+        // #pinInput is transparent and overlays four cells (see the GLOBAL AUTH
+        // block in styles.css); its handlers are unchanged.
         const overlayHtml = `
         <div id="authOverlay" class="auth-page" style="display: none;">
-            <div class="auth-split-layout">
-                <div class="auth-brand-side">
-                    <img src="images/speeks_logo.png" alt="SPEEKS Logo" class="auth-logo">
-                    <div class="auth-brand-text">
-                        <h1>SPEEKSNET</h1>
-                        <p>Internal Operations Portal</p>
-                    </div>
+            <div class="auth-stack">
+                <div class="auth-brand">
+                    <img src="images/speeks_logo.png" alt="SPEEKS Technology" class="auth-logo">
+                    <div class="auth-portal">Internal Operations Portal</div>
                 </div>
-                <div class="auth-form-side">
-                    <div class="auth-form-container">
-                        <div class="auth-badge">SECURE ACCESS</div>
-                        <h2>Welcome Back</h2>
-                        <p id="authSubtitle">Please enter your 4-digit PIN to securely access the hub.</p>
+                <div class="auth-card">
+                    <div class="auth-body">
+                        <div class="auth-badge">Secure access</div>
+                        <h2>Welcome back</h2>
+                        <p id="authSubtitle">Enter your 4-digit PIN to open the hub.</p>
                         <div id="pinInputContainer" class="pin-container">
-                            <input type="password" id="pinInput" maxlength="4" placeholder="••••" onkeypress="if(event.key === 'Enter') checkPIN()" oninput="handlePINAutoTrigger()">
+                            <div class="pin-cells" id="pinCells">
+                                <div class="pin-cell"><span></span></div>
+                                <div class="pin-cell"><span></span></div>
+                                <div class="pin-cell"><span></span></div>
+                                <div class="pin-cell"><span></span></div>
+                                <input type="password" id="pinInput" maxlength="4" inputmode="numeric" autocomplete="off" aria-label="4-digit PIN" onkeypress="if(event.key === 'Enter') checkPIN()" oninput="handlePINAutoTrigger()">
+                            </div>
                             <button id="unlockBtn" class="btn-primary auth-btn" onclick="checkPIN()">Unlock Portal</button>
                             <div id="pinError" class="pin-error">Incorrect PIN. Please try again.</div>
                         </div>
                     </div>
                 </div>
+                <dl class="auth-rail">
+                    <div><dt>Stores</dt><dd>5</dd></div>
+                    <div><dt>Markets</dt><dd>KC · STL</dd></div>
+                </dl>
+                <div class="auth-tail" aria-hidden="true"></div>
             </div>
         </div>`;
         document.body.insertAdjacentHTML('beforeend', overlayHtml);
     }
+}
+
+// Mirror #pinInput's length onto the four cells. The input itself is invisible,
+// so this is the only thing that shows entry progress.
+function _authPaintCells() {
+    const input = document.getElementById('pinInput');
+    const cells = document.querySelectorAll('#pinCells .pin-cell');
+    if (!input || !cells.length) return;
+    const len = input.value.length;
+    cells.forEach((c, i) => c.classList.toggle('filled', i < len));
 }
 
 function handleSignOut() {
@@ -4619,15 +5498,14 @@ function handleSignOut() {
     // name is dropped, since the key is scoped to the signing-out user.
     try { sessionStorage.removeItem(_seenAgingKey()); } catch (e) { /* non-fatal */ }
 
-    // Remove the login state
-    sessionStorage.removeItem('speeksUnlocked');
-    sessionStorage.removeItem('speeksUserName');
-    sessionStorage.removeItem('speeksUserRole');
-    sessionStorage.removeItem('speeksUserStore');
-    sessionStorage.removeItem('speeksMultiStore');
-
-    // Remove the comment tracker so it pops up again on next login
-    sessionStorage.removeItem('speeksSeenCommentKeys');
+    // Every key the login sets has to be cleared here, plus the comment tracker
+    // so store comments pop again next login. speeksUserPin and
+    // speeksUserOnboardedAt were previously left behind — and the PIN is sent as
+    // the credential on several writes (kpi-manage among them), so the outgoing
+    // user's PIN stayed readable in the tab until the next login overwrote it.
+    ['speeksUnlocked', 'speeksUserName', 'speeksUserRole', 'speeksUserStore',
+     'speeksMultiStore', 'speeksUserPin', 'speeksUserOnboardedAt',
+     'speeksSeenCommentKeys'].forEach(function (k) { sessionStorage.removeItem(k); });
 
     // Hide authenticated chrome and close any open panels BEFORE reloading, so the
     // teardown/fetch window can't briefly paint role-gated controls (e.g. the green
@@ -4635,8 +5513,61 @@ function handleSignOut() {
     document.body.classList.remove('is-authenticated');
     document.getElementById('checklistSidePanel')?.classList.remove('open');
     document.getElementById('goalsSidePanel')?.classList.remove('open');
+    closeAllModals();
 
-    location.reload();
+    // Drop the outgoing user's feed data. Signing back in as someone else on
+    // this tab would otherwise flash their announcements and store notes before
+    // the new fetches resolve.
+    window._samAnnData = [];
+    window._samStoreNotes = [];
+
+    // Show the real login overlay. It is fixed at inset 0 with z-index 100000,
+    // so it covers the authenticated page outright — nothing behind it needs
+    // tearing down, and reusing it means the colour can't drift from .auth-page
+    // and the dark-theme filter is already accounted for.
+    const overlay = document.getElementById('authOverlay');
+    if (overlay) {
+        // Back to the top BEFORE the overflow lock. Signing out on the dashboard
+        // never navigates, so the page keeps whatever scroll position the outgoing
+        // user left it at — and since the login overlay is fixed at inset 0 over a
+        // scroll-locked body, there is no way to notice. The next person signs in
+        // and lands halfway down the page.
+        //
+        // Order matters: once body overflow is hidden there may be nothing left to
+        // scroll, so this has to happen first. _lockedScrollY is zeroed too, or a
+        // later unlockScreen() would restore the outgoing user's position.
+        window.scrollTo(0, 0);
+        document.documentElement.scrollTop = 0;
+        _lockedScrollY = 0;
+        overlay.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    }
+    try { renderActionFeed(); } catch (_) { /* feed may not exist here */ }
+
+    // On the dashboard, sign out IN PLACE — no navigation at all, so it is
+    // instant. This is the mirror of signing IN, which has always transitioned
+    // in place (checkPIN hides the overlay and re-runs applyRoleBasedUI /
+    // initDashboardData rather than reloading), so both directions now use the
+    // same mechanism instead of one of them costing a full page load.
+    //
+    // Anywhere else we still hand off to index.html. An unauthenticated
+    // non-index page is a state the app has never had — the load-time gate
+    // redirects such a page to index before the overlay is ever shown — and
+    // inventing it to save one page load is not worth the risk. replace() also
+    // keeps a signed-out Back button from returning to an authenticated URL.
+    const page = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
+    if (page !== '' && page !== 'index.html') { location.replace('index.html'); return; }
+
+    // Reset the PIN field so the next person types into a clean form: value,
+    // painted cells, the shake/error state and any stuck button spinner.
+    const input = document.getElementById('pinInput');
+    if (input) input.value = '';
+    if (typeof _authPaintCells === 'function') _authPaintCells();
+    document.getElementById('pinCells')?.classList.remove('bad');
+    document.getElementById('unlockBtn')?.classList.remove('loading');
+    const err = document.getElementById('pinError');
+    if (err) err.style.display = 'none';
+    if (input) input.focus();
 }
 
 // --- 17. MODULE: IDEA SUBMISSION MODAL ---
@@ -4714,18 +5645,18 @@ function handleIframeLoad() {
 }
 
 async function fetchScorecardData() {
-    const container = document.getElementById('scorecard-widget-body');
-    if (!container) return;
+    const _shMktg = document.getElementById('sh-panel-mktg');
+    if (!_shMktg) return;
 
-    // 1. Check if they are actually logged in! 
+    // 1. Check if they are actually logged in!
     // If there is no store in memory yet (they are behind the lock screen), ABORT!
     let targetStore = sessionStorage.getItem('speeksUserStore');
-    if (!targetStore) return; 
-    
-    // If CORP/ALL, default to OVL just so the widget has something to show
-    if (targetStore === 'ALL' || targetStore === 'CORP') targetStore = 'OVL'; 
+    if (!targetStore) return;
 
-    container.innerHTML = '<div style="display: flex; justify-content: center; align-items: center; min-height: 150px; width: 100%; color: #94a3b8; font-weight: 600; font-size: 14px;">Syncing Data...</div>';
+    // If CORP/ALL, default to OVL just so the widget has something to show
+    if (targetStore === 'ALL' || targetStore === 'CORP') targetStore = 'OVL';
+
+    _shMktg.innerHTML = '<div class="status-message">Syncing Data...</div>';
 
     try {
         const response = await fetch(`${SCORECARD_URL}?v=${Date.now()}`);
@@ -4740,7 +5671,9 @@ async function fetchScorecardData() {
         const storeData = json.data.find(item => String(item.store).toUpperCase() === targetStore.toUpperCase());
 
         if (!storeData) {
-            container.innerHTML = `<div style="color: #888; text-align: center; padding: 20px 0; font-weight: bold;">No data found for ${targetStore}.</div>`;
+            document.querySelectorAll('#cc-store-name').forEach(el => el.textContent = targetStore);
+            document.querySelectorAll('#cc-store-eyebrow').forEach(el => el.textContent = targetStore);
+            _shMktg.innerHTML = `<div class="status-message">No data found for ${targetStore}.</div>`;
             return;
         }
 
@@ -4791,23 +5724,20 @@ async function fetchScorecardData() {
         const renderCategoryCard = (cat) => {
             let originalVal = parseFloat(cat.score);
             let displayVal = cat.score;
-            let bg = '#f1f5f9', color = '#64748b';
+            let cls = 'neu';
             if (!isNaN(originalVal)) {
                 let sVal = originalVal * 2;
                 displayVal = sVal;
-                if (sVal >= 8) { bg = '#d1fae5'; color = '#059669'; }
-                else if (sVal >= 6) { bg = '#fef3c7'; color = '#d97706'; }
-                else { bg = '#fee2e2'; color = '#dc2626'; }
+                if (sVal >= 8) cls = 'ok';
+                else if (sVal >= 6) cls = 'warn';
+                else cls = 'crit';
             }
-            return `<div style="display: flex; justify-content: space-between; align-items: center; background: #fff; border: 1px solid #e2e8f0; padding: 8px; border-radius: 8px; gap: 6px;">
-                <span style="font-size: 9px; font-weight: 800; color: var(--slate-charcoal); text-transform: uppercase; line-height: 1.3;">${cat.name}</span>
-                <span style="font-size: 11px; font-weight: 900; background: ${bg}; color: ${color}; padding: 2px 6px; border-radius: 6px; flex-shrink: 0;">${displayVal}</span>
-            </div>`;
+            return `<div class="sh-cat"><span class="cn">${cat.name}</span><span class="cv sh-badge ${cls}">${displayVal}</span></div>`;
         };
 
         let breakdownHtml = '';
         if (storeData.buckets && storeData.buckets.some(b => b.categories && b.categories.length > 0)) {
-            breakdownHtml = `<div style="max-height: 340px; overflow-y: auto; padding-right: 4px; margin-top: 12px;" class="kpi-scroll-area">`;
+            breakdownHtml = `<div class="sh-scroll">`;
             storeData.buckets.forEach((bucket, bIdx) => {
                 if (!bucket.categories || bucket.categories.length === 0) return;
                 const bDateStr = bucket.sectionDate ? formatWeekOf(bucket.sectionDate) : '';
@@ -4815,15 +5745,10 @@ async function fetchScorecardData() {
                     ? `<div class="notif-dot active" style="position:relative; top:auto; right:auto; width:9px; height:9px; border:1px solid white; flex-shrink:0;"></div>`
                     : '';
                 const notesHtml = bucket.notes
-                    ? `<div style="margin-top: 6px; padding: 6px 10px; background: #f8fafc; border-left: 3px solid #94a3b8; border-radius: 0 6px 6px 0; font-size: 11px; color: #475569; line-height: 1.5; font-style: italic;">${String(bucket.notes).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</div>`
+                    ? `<div class="sh-note">${String(bucket.notes).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>')}</div>`
                     : '';
-                breakdownHtml += `<div style="margin-bottom: 12px;">
-                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; min-width: 0;">
-                        <span style="font-size: 9px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;">${bucket.name}</span>
-                        ${bDateStr ? `<span style="font-size: 9px; color: #94a3b8; font-style: italic; white-space: nowrap; flex-shrink: 0;">${bDateStr}</span>` : ''}
-                        ${sectionPulse}
-                    </div>
-                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;">
+                breakdownHtml += `<div class="sh-bucket">
+                    <div class="sh-cats">
                         ${bucket.categories.map(renderCategoryCard).join('')}
                     </div>
                     ${notesHtml}
@@ -4831,51 +5756,118 @@ async function fetchScorecardData() {
             });
             breakdownHtml += `</div>`;
         } else if (storeData.breakdown && storeData.breakdown.length > 0) {
-            breakdownHtml = `<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-height: 280px; overflow-y: auto; padding-right: 4px; margin-top: 15px; border-top: 1px solid #f0f0f0; padding-top: 15px;" class="kpi-scroll-area">
-                ${storeData.breakdown.map(renderCategoryCard).join('')}
-            </div>`;
+            breakdownHtml = `<div class="sh-cats">${storeData.breakdown.map(renderCategoryCard).join('')}</div>`;
         }
 
-        const auditHtml = buildAuditSummaryHtml(storeData.audit, targetStore);
+        // ---- Header meta (Command Center title + eyebrow + week) ----
+        document.querySelectorAll('#cc-store-name').forEach(el => el.textContent = targetStore);
+        document.querySelectorAll('#cc-store-eyebrow').forEach(el => el.textContent = targetStore);
+        document.querySelectorAll('#cc-week').forEach(el => el.textContent = displayDate);
 
-        container.innerHTML = `
-        <div class="scorecard-widget" style="padding: 20px; align-items: stretch; text-align: left; justify-content: flex-start;">
-            ${auditHtml}
-            <div style="margin-top: 15px; border-top: 1px solid #f0f0f0; padding-top: 15px;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
+        // ---- SPEEKS Scorecard headline tile ----
+        const _omStripe = displayScore > 8 ? 'g' : (displayScore >= 6 ? 'y' : 'r');
+        const _omValCls = displayScore < 6 ? ' bad' : (displayScore < 8 ? ' warn' : '');
+        const _omDot = (displayScore < 6 || showOverallDot)
+            ? `<div class="notif-dot active sh-dot" style="width:9px; height:9px;"></div>` : '';
+        const _mktgTile = document.getElementById('sh-score-mktg');
+        if (_mktgTile) _mktgTile.innerHTML = `
+            <span class="sh-stripe ${_omStripe}"></span>${_omDot}
+            <div class="sh-k">SPEEKS Scorecard</div>
+            <div class="sh-v${_omValCls}">${displayScore.toFixed(1)}<small>/10</small></div>
+            <div class="sh-sub">${displayDate}</div>`;
+
+        // ---- SPEEKS Scorecard section (sits under the audit in the Scorecard tab) ----
+        _shMktg.innerHTML =
+            `<div class="sh-sc-sub">SPEEKS Scorecard <span class="sh-sc-sub-date">${displayDate}</span></div>`
+            + (breakdownHtml || `<div class="status-message">No SPEEKS Scorecard breakdown recorded yet.</div>`);
+
+        // ---- PayMore Audit headline tile + panel + breakdown action ----
+        const _au = storeData.audit;
+        const _auTile = document.getElementById('sh-score-audit');
+        const _auPanel = document.getElementById('sh-panel-audit');
+        const _auAction = document.getElementById('sh-tab-action');
+        if (_au) {
+            const _c = auditPctColor(_au.pct);
+            const _aStripe = _au.pct >= AUDIT_TARGET_PCT ? 'g' : (_au.pct >= AUDIT_PASS_PCT ? 'y' : 'r');
+            let _trend = '';
+            if (_au.prevPct != null) {
+                const _delta = Math.round((_au.pct - _au.prevPct) * 10) / 10;
+                const _up = _delta >= 0;
+                _trend = `<span class="sh-trend ${_up ? 'up' : 'dn'}">${_up ? '▲' : '▼'} ${Math.abs(_delta)}%</span>`;
+            }
+            if (_auTile) _auTile.innerHTML = `
+                <span class="sh-stripe ${_aStripe}"></span>
+                <div class="sh-k">PayMore Audit</div>
+                <div class="sh-v">${_au.pct}<small>%</small></div>
+                <div class="sh-sub">${_au.earned}/${_au.possible}${_trend ? ' · ' + _trend : ''}</div>`;
+            // ---- Audit Standing tile (derived from % vs the pass/target thresholds) ----
+            const _standing = document.getElementById('cc-audit-standing');
+            if (_standing) {
+                let _sTxt, _sSub, _sStripe, _sCls;
+                if (_au.pct >= AUDIT_TARGET_PCT) { _sTxt = 'On Target'; _sStripe = 'g'; _sCls = ''; _sSub = `at or above ${AUDIT_TARGET_PCT}%`; }
+                else if (_au.pct >= AUDIT_PASS_PCT) { _sTxt = 'Passing'; _sStripe = 'y'; _sCls = ' warn'; _sSub = `${(Math.round((AUDIT_TARGET_PCT - _au.pct) * 10) / 10)}% to target`; }
+                else { _sTxt = 'Below Pass'; _sStripe = 'r'; _sCls = ' bad'; _sSub = `${(Math.round((AUDIT_PASS_PCT - _au.pct) * 10) / 10)}% to pass`; }
+                _standing.innerHTML = `<span class="sh-stripe ${_sStripe}"></span><div class="sh-k">Audit Standing</div><div class="sh-v${_sCls}" style="font-size:18px;">${_sTxt}</div><div class="sh-sub">${_sSub}</div>`;
+            }
+            const _dateStr = _au.date ? new Date(_au.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+            const _auPct = Math.max(0, Math.min(100, _au.pct));
+            if (_auPanel) _auPanel.innerHTML = `
+                <div class="sh-au-head">
                     <div>
-                        <div class="scorecard-label" style="text-align: left; margin-bottom: 2px;">Online &amp; Marketing</div>
-                        <div class="scorecard-date" style="margin-bottom: 0; font-size: 11px;">${displayDate}</div>
+                        <div class="sh-au-big" style="color:${_c.fg};">${_au.earned}<span style="color:#94a3b8; font-size:18px; font-weight:700;">/${_au.possible}</span></div>
+                        <div class="sh-au-meta">${_dateStr}${_au.time ? ' · ' + _fmtAuditTime(_au.time) : ''}${_au.auditor ? ' · ' + escapeHtml(_au.auditor) : ''}</div>
                     </div>
-                    <div style="position: relative; display: inline-block;">
-                        <div class="scorecard-val" style="color: ${scoreColor}; font-size: 36px; text-shadow: 0 4px 15px ${scoreColor}30; line-height: 1;">
-                            ${displayScore.toFixed(1)}<span style="color:#94a3b8;">/10</span>
-                        </div>
-                        ${pulse}
-                    </div>
+                    <span class="sh-au-badge" style="background:${_c.bg}; color:${_c.fg};">${_au.pct}%${_trend ? ' · ' + _trend : ''}</span>
                 </div>
-                ${breakdownHtml}
-            </div>
-        </div>`;
+                <div class="sh-au-track">
+                    <i style="width:${_auPct}%; background:${_c.fg};"></i>
+                    <span class="sh-au-tick" style="left:${AUDIT_PASS_PCT}%;"></span>
+                    <span class="sh-au-tick" style="left:${AUDIT_TARGET_PCT}%;"></span>
+                    <span class="sh-au-ticklab" style="left:${AUDIT_PASS_PCT}%;">Pass ${AUDIT_PASS_PCT}%</span>
+                    <span class="sh-au-ticklab" style="left:${AUDIT_TARGET_PCT}%;">Target ${AUDIT_TARGET_PCT}%</span>
+                </div>
+                <div class="sh-au-scale-sp"></div>`;
+            if (_auAction) _auAction.innerHTML = `<button class="sh-view-btn" type="button" onclick="openAuditBreakdown('${targetStore}')">View Full Breakdown</button>`;
+        } else {
+            if (_auTile) _auTile.innerHTML = `
+                <span class="sh-stripe" style="background:#cbd5e1;"></span>
+                <div class="sh-k">PayMore Audit</div>
+                <div class="sh-v" style="font-size:17px; color:#94a3b8;">No audit</div>
+                <div class="sh-sub">No practice audit this week</div>`;
+            const _standing = document.getElementById('cc-audit-standing');
+            if (_standing) _standing.innerHTML = `<span class="sh-stripe" style="background:#cbd5e1;"></span><div class="sh-k">Audit Standing</div><div class="sh-v" style="font-size:16px; color:#94a3b8;">—</div><div class="sh-sub">No audit yet</div>`;
+            if (_auPanel) _auPanel.innerHTML = `<div class="status-message">No practice audit recorded yet.</div>`;
+            if (_auAction) _auAction.innerHTML = '';
+        }
+
+        // ---- Collapsed one-line summary + "updated" cue for the Scorecard tab ----
+        _ccSum('cc-sum-score', `${displayScore.toFixed(1)}<small>/10</small>`, _omValCls.trim());
+        if (_au) {
+            const _auCls = _au.pct >= AUDIT_TARGET_PCT ? 'good' : (_au.pct >= AUDIT_PASS_PCT ? 'warn' : 'bad');
+            _ccSum('cc-sum-audit', `${_au.pct}<small>%</small>`, _auCls);
+        } else {
+            _ccSum('cc-sum-audit', 'No audit', '');
+        }
+        _ccFlagUpdate('scorecard', `${_au ? _au.pct + '@' + (_au.date || '') : 'na'}|${displayScore}`);
     } catch (error) {
         console.error('Error fetching scorecard:', error);
-        container.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; padding: 20px 0; text-align: center;">Error syncing scorecard.</div>';
+        _shMktg.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Error syncing scorecard.</div>';
     }
 }
 
 async function fetchAlertsData() {
-    const container = document.getElementById('alerts-widget-body');
-    if (!container) return;
+    const _shEbay = document.getElementById('sh-panel-ebay');
+    if (!_shEbay) return;
 
-    // 1. Check if they are actually logged in! 
+    // 1. Check if they are actually logged in!
     let targetStore = sessionStorage.getItem('speeksUserStore');
     if (!targetStore) return; // ABORT if behind the lock screen!
-    
+
     // 2. Default to OVL only if it's the CEO/Corp viewing the widget
-    if (targetStore === 'ALL' || targetStore === 'CORP') targetStore = 'OVL'; 
+    if (targetStore === 'ALL' || targetStore === 'CORP') targetStore = 'OVL';
 
     // 3. Force the loading state immediately to clear any stale UI
-    container.innerHTML = '<div class="status-message">Syncing Data...</div>';
+    _shEbay.innerHTML = '<div class="status-message">Syncing Data...</div>';
 
     try {
         const response = await fetch(EBAY_ALERTS_URL);
@@ -4930,75 +5922,279 @@ async function fetchAlertsData() {
             return 'clear';
         };
 
+        // Returns the effective severity for a metric, treating an empty value as "clear".
+        const effectiveSeverity = (rawValue, severity) => {
+            if (rawValue === null || rawValue === undefined || String(rawValue).trim() === '') return 'clear';
+            return severity;
+        };
+
         const buildMiniAlertCard = (title, rawValue, severity, isPercent) => {
-            // Default styling is Green ("clear")
-            let bgColor = '#d1fae5';
-            let textColor = '#065f46'; 
+            let badgeCls = 'ok';
             let displayText = 'All Clear';
-            let pulseHtml = '';
-            
+            let dotHtml = '';
+
             if (rawValue !== null && rawValue !== undefined && String(rawValue).trim() !== '') {
                 if (isPercent) {
                     displayText = formatPercent(rawValue);
                 } else {
-                    if (String(rawValue).includes(',')) {
-                        displayText = String(rawValue).split(',').map(s =>
-                            `<span style="display:block; padding: 2px 0;">${s.trim()}</span>`
-                        ).join('<div style="height:1px; background:rgba(0,0,0,0.1); margin: 3px 0;"></div>');
-                    } else {
-                        displayText = rawValue;
-                    }
+                    displayText = String(rawValue).includes(',')
+                        ? String(rawValue).split(',').map(s => s.trim()).join(' · ')
+                        : rawValue;
                 }
 
                 if (severity === 'high') {
-                    bgColor = '#fef3c7';
-                    textColor = '#92400e';
+                    badgeCls = 'warn';
                 } else if (severity === 'very-high') {
-                    bgColor = '#fee2e2';
-                    textColor = '#991b1b';
-                    pulseHtml = '<div class="notif-dot active" style="display:block; position:absolute; top:-3px; right:-3px; width:8px; height:8px; border-width: 1px; z-index: 5;"></div>';
+                    badgeCls = 'crit';
+                    dotHtml = '<span class="sh-eb-dot"></span>';
                 }
             }
 
             return `
-            <div style="position: relative; background: #fff; padding: 8px 12px; border-radius: 8px; border: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 2px rgba(0,0,0,0.02); height: 100%; box-sizing: border-box;">
-                ${pulseHtml}
-                <div style="font-size: 9px; font-weight: 800; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 10px; flex-shrink: 0;">${title}</div>
-                <div style="font-size: 10px; font-weight: 900; color: ${textColor}; background-color: ${bgColor}; padding: 4px 8px; border-radius: 6px; text-align: right; line-height: 1.3;">
-                    ${displayText}
-                </div>
+            <div class="sh-eb-cell ${badgeCls}">
+                ${dotHtml}
+                <div class="l">${title}</div>
+                <div class="sh-badge ${badgeCls}">${displayText}</div>
             </div>`;
         };
 
-        container.innerHTML = `
-        <div style="display: flex; flex-direction: column; gap: 15px; width: 100%;">
-            
-            <div>
-                <div style="font-size: 10px; font-weight: 800; color: var(--slate-charcoal); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">eBay Performance Metrics</div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+        // Compact status tag summarising a metric group (e.g. "All clear" / "1 watch").
+        const groupTag = (sevs) => {
+            const c = sevs.filter(s => s === 'very-high').length;
+            const w = sevs.filter(s => s === 'high').length;
+            if (c) return `<span class="sh-grp-tag crit">${c} alert${c > 1 ? 's' : ''}</span>`;
+            if (w) return `<span class="sh-grp-tag warn">${w} watch</span>`;
+            return `<span class="sh-grp-tag ok">All clear</span>`;
+        };
+
+        // ---- Roll the 8 metrics up into one headline status for the tile ----
+        const _sevs = [
+            effectiveSeverity(storeData.currentHigh, 'high'),
+            effectiveSeverity(storeData.currentVeryHigh, 'very-high'),
+            effectiveSeverity(storeData.projectedHigh, 'high'),
+            effectiveSeverity(storeData.projectedVeryHigh, 'very-high'),
+            getSeverity('defectRate', storeData.defectRate),
+            getSeverity('lateShipment', storeData.lateShipment),
+            getSeverity('casesClosed', storeData.casesClosed),
+            getSeverity('tracking', storeData.tracking),
+        ];
+        const _crit = _sevs.filter(s => s === 'very-high').length;
+        const _warn = _sevs.filter(s => s === 'high').length;
+        const _clear = _sevs.length - _crit - _warn;
+        // Headline reflects how close the account is to eBay's penalty thresholds.
+        let _ebStripe = 'g', _ebValCls = '', _ebVal = 'Healthy', _ebSub = `All ${_sevs.length} metrics clear`;
+        if (_crit > 0) {
+            _ebStripe = 'r'; _ebValCls = ' bad';
+            _ebVal = `${_crit} At Risk`;
+            _ebSub = `${_crit} at eBay limit${(_warn ? ` · ${_warn} nearing` : '')} · ${_clear} clear`;
+        } else if (_warn > 0) {
+            _ebStripe = 'y'; _ebValCls = ' warn';
+            _ebVal = `${_warn} Near Limit`;
+            _ebSub = `${_warn} approaching eBay's limit · ${_clear} clear`;
+        }
+        const _ebTile = document.getElementById('sh-score-ebay');
+        if (_ebTile) _ebTile.innerHTML = `
+            <span class="sh-stripe ${_ebStripe}"></span>
+            <div class="sh-k">Account Status</div>
+            <div class="sh-v${_ebValCls}" style="font-size:${_ebVal === 'Healthy' ? '22px' : '24px'};">${_ebVal}</div>
+            <div class="sh-sub">${_ebSub}</div>`;
+
+        // ---- eBay strip: per-group flagged counts ----
+        const _countTile = (id, label, sevs) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const c = sevs.filter(s => s === 'very-high').length;
+            const w = sevs.filter(s => s === 'high').length;
+            const flagged = c + w;
+            const stripe = c ? 'r' : (w ? 'y' : 'g');
+            const cls = c ? ' bad' : (w ? ' warn' : '');
+            const sub = flagged ? `flagged · ${sevs.length - flagged} clear` : `all ${sevs.length} clear`;
+            el.innerHTML = `<span class="sh-stripe ${stripe}"></span><div class="sh-k">${label}</div><div class="sh-v${cls}">${flagged}<small>/${sevs.length}</small></div><div class="sh-sub">${sub}</div>`;
+        };
+        _countTile('cc-ebay-perf', 'Performance Metrics', _sevs.slice(0, 4));
+        _countTile('cc-ebay-top', 'Top-Rated Metrics', _sevs.slice(4));
+
+        // ---- Collapsed one-line summary + "updated" cue for the eBay tab ----
+        _ccSum('cc-sum-ebay', _ebVal, (_ebValCls || '').trim());
+        document.querySelectorAll('#cc-sum-ebay .cc-sum-v').forEach(el => { el.style.fontSize = '15px'; });
+        _ccFlagUpdate('ebay', `${_crit}|${_warn}|${_clear}`);
+
+        // ---- eBay detail panel: two metric groups, contained stat cells ----
+        _shEbay.innerHTML = `
+        <div class="sh-ebay">
+            <div class="sh-eb-group">
+                <div class="sh-eb-grouphead"><span class="sh-grp-lbl">Performance Metrics</span>${groupTag(_sevs.slice(0, 4))}</div>
+                <div class="sh-eb-cells">
                     ${buildMiniAlertCard('Current High', storeData.currentHigh, 'high', false)}
                     ${buildMiniAlertCard('Current Very High', storeData.currentVeryHigh, 'very-high', false)}
                     ${buildMiniAlertCard('Projected High', storeData.projectedHigh, 'high', false)}
                     ${buildMiniAlertCard('Projected Very High', storeData.projectedVeryHigh, 'very-high', false)}
                 </div>
             </div>
-
-            <div style="height: 1px; background: #e2e8f0; width: 100%;"></div>
-            
-            <div>
-                <div style="font-size: 10px; font-weight: 800; color: var(--slate-charcoal); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">eBay Top Rated Metrics</div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div class="sh-eb-group">
+                <div class="sh-eb-grouphead"><span class="sh-grp-lbl">Top-Rated Metrics</span>${groupTag(_sevs.slice(4))}</div>
+                <div class="sh-eb-cells">
                     ${buildMiniAlertCard('Defect Rate', storeData.defectRate, getSeverity('defectRate', storeData.defectRate), true)}
                     ${buildMiniAlertCard('Late Shipment', storeData.lateShipment, getSeverity('lateShipment', storeData.lateShipment), true)}
                     ${buildMiniAlertCard('Cases Closed', storeData.casesClosed, getSeverity('casesClosed', storeData.casesClosed), true)}
                     ${buildMiniAlertCard('Tracking', storeData.tracking, getSeverity('tracking', storeData.tracking), true)}
                 </div>
             </div>
-
         </div>`;
     } catch (error) {
         console.error('Error fetching alerts:', error);
     }
+}
+
+// Command Center: collapsible tabs. Default is a compact one-line summary with no
+// tab open; clicking a tab expands the widget to the chart height showing that tab's
+// strip + detail; clicking the open tab again collapses back to the summary.
+// Pure view-switching — the fetch/render functions above own the data.
+// Three tabs: 'scorecard' (audit + SPEEKS Scorecard), 'ebay', 'buying'.
+function switchCommandTab(tab) {
+    const widget = document.querySelector('.cc-widget');
+    const btn = document.getElementById('cc-tab-' + tab);
+    const collapse = btn && btn.classList.contains('active'); // clicking the open tab closes it
+
+    ['scorecard', 'ebay', 'buying'].forEach(t => {
+        const on = !collapse && t === tab;
+        const b = document.getElementById('cc-tab-' + t);
+        if (b) b.classList.toggle('active', on);
+        // Strips and panels are each stacked in one grid cell and toggled by class (opacity,
+        // not display) so every tab reserves the height of the tallest — the card never
+        // resizes when switching, and no hidden panel paints over the active one.
+        const strip = document.getElementById('cc-strip-' + t);
+        if (strip) strip.classList.toggle('cc-active', on);
+        const panel = document.getElementById('cc-panel-' + t);
+        if (panel) panel.classList.toggle('cc-active', on);
+    });
+    // Expand to chart height only while a tab is open; collapsed → natural summary height.
+    if (widget) widget.classList.toggle('cc-expanded', !collapse);
+    // The "View Full Breakdown" action is audit-specific; only on the Scorecard tab.
+    const action = document.getElementById('sh-tab-action');
+    if (action) action.style.display = (!collapse && tab === 'scorecard') ? '' : 'none';
+    // Show the explicit "back to summary" control while a tab is open.
+    const coll = document.getElementById('cc-collapse');
+    if (coll) coll.style.display = collapse ? 'none' : '';
+    // Opening a tab means the manager has now seen it → clear its "updated" cue.
+    if (!collapse) _clearCommandUpdot(tab);
+}
+// Explicit "back to the one-line summary" (in addition to clicking the open tab again).
+function collapseCommand() {
+    ['scorecard', 'ebay', 'buying'].forEach(t => {
+        const b = document.getElementById('cc-tab-' + t); if (b) b.classList.remove('active');
+        const strip = document.getElementById('cc-strip-' + t); if (strip) strip.classList.remove('cc-active');
+        const panel = document.getElementById('cc-panel-' + t); if (panel) panel.classList.remove('cc-active');
+    });
+    const widget = document.querySelector('.cc-widget'); if (widget) widget.classList.remove('cc-expanded');
+    const action = document.getElementById('sh-tab-action'); if (action) action.style.display = 'none';
+    const coll = document.getElementById('cc-collapse'); if (coll) coll.style.display = 'none';
+}
+// Back-compat alias in case anything still calls the old name.
+function switchStoreHealthTab(tab) { switchCommandTab(tab === 'mktg' ? 'scorecard' : tab); }
+
+// ---- Command Center: quiet "this tab changed" cue (Option A: a dot on the tab) ----
+// A dot appears when a hidden tab's data has changed since the manager last opened it,
+// so consolidating into tabs never buries new info. The very first sighting seeds a
+// silent baseline (no dot) so a fresh login isn't a wall of dots. Persisted per store.
+var _ccSigCache = {};
+function _ccStore() {
+    const s = document.getElementById('bsStoreSelect');
+    return (s && s.value) ? s.value : (sessionStorage.getItem('speeksUserStore') || 'STORE');
+}
+function _ccFlagUpdate(tab, sig) {
+    _ccSigCache[tab] = (sig == null ? '' : String(sig));
+    const dot = document.getElementById('cc-updot-' + tab);
+    if (!dot) return;
+    const btn = document.getElementById('cc-tab-' + tab);
+    const open = btn && btn.classList.contains('active');
+    const key = 'ccSeen_' + _ccStore() + '_' + tab;
+    let last = localStorage.getItem(key);
+    if (last === '__test_prev__') last = null;   // self-heal any leftover diagnostic baseline → reseed silently
+    if (open || last === null) {            // viewing it live, or first-ever baseline → seed silently
+        localStorage.setItem(key, _ccSigCache[tab]);
+        dot.classList.remove('show');
+        return;
+    }
+    dot.classList.toggle('show', last !== _ccSigCache[tab]); // changed since last seen → red dot
+}
+function _clearCommandUpdot(tab) {
+    const dot = document.getElementById('cc-updot-' + tab);
+    if (dot) dot.classList.remove('show');
+    if (_ccSigCache[tab] != null) localStorage.setItem('ccSeen_' + _ccStore() + '_' + tab, _ccSigCache[tab]);
+}
+// Populate a collapsed one-line summary cell.
+function _ccSum(id, html, cls) {
+    const el = document.querySelector('#' + id + ' .cc-sum-v');
+    if (!el) return;
+    el.innerHTML = html;
+    el.className = 'cc-sum-v' + (cls ? ' ' + cls : '');
+}
+
+// ---- EMPLOYEE combined widget: Buying & Sales + Weekly KPIs (2 tabs, no summary) ----
+// Always expanded; defaults to Buying. Mirrors the manager Command Center's dot cue.
+function switchEmpTab(tab) {
+    ['buying', 'kpis'].forEach(t => {
+        const on = t === tab;
+        const b = document.getElementById('ec-tab-' + t); if (b) b.classList.toggle('active', on);
+        const p = document.getElementById('ec-panel-' + t); if (p) p.classList.toggle('cc-active', on);
+    });
+    // Swap the header to match the active tab (goal + date belong to Buying only).
+    const eyebrow = document.getElementById('ec-eyebrow');
+    const titleT = document.getElementById('ec-title-text');
+    const goalWrap = document.getElementById('ec-goal-wrap');
+    const bsDate = document.getElementById('bs-last-updated');
+    const kpiDate = document.getElementById('emp-kpi-period');
+    const buying = tab === 'buying';
+    if (eyebrow) eyebrow.textContent = buying ? 'My Store · This Month' : 'Mine vs Store';
+    if (titleT) titleT.textContent = buying ? 'Buying & Sales' : 'Weekly KPIs';
+    if (goalWrap) goalWrap.style.display = buying ? '' : 'none';
+    if (bsDate) bsDate.style.display = buying ? '' : 'none';
+    if (kpiDate) kpiDate.style.display = buying ? 'none' : '';
+    _clearEmpUpdot(tab);
+}
+// Employee-widget update dot — same silent-seed / change-detect / clear-on-open logic
+// as the manager Command Center, keyed separately (ec) and per store.
+var _ecSigCache = {};
+function _empFlagUpdate(tab, sig) {
+    _ecSigCache[tab] = (sig == null ? '' : String(sig));
+    const dot = document.getElementById('ec-updot-' + tab);
+    if (!dot) return;
+    const btn = document.getElementById('ec-tab-' + tab);
+    const open = btn && btn.classList.contains('active');
+    const key = 'ecSeen_' + _ccStore() + '_' + tab;
+    let last = localStorage.getItem(key);
+    if (last === '__test_prev__') last = null;
+    if (open || last === null) { localStorage.setItem(key, _ecSigCache[tab]); dot.classList.remove('show'); return; }
+    dot.classList.toggle('show', last !== _ecSigCache[tab]);
+}
+function _clearEmpUpdot(tab) {
+    const dot = document.getElementById('ec-updot-' + tab);
+    if (dot) dot.classList.remove('show');
+    if (_ecSigCache[tab] != null) localStorage.setItem('ecSeen_' + _ccStore() + '_' + tab, _ecSigCache[tab]);
+}
+
+// After role/feature UI is applied, keep the combined widgets coherent: hide the whole
+// widget if every tab was turned off, and (employee widget) make sure a visible tab is
+// active so a disabled default doesn't leave a blank body.
+function _reconcileComboTabs(widgetEl, prefix, tabs, isEmployee) {
+    if (!widgetEl || getComputedStyle(widgetEl).display === 'none') return; // not shown for this user
+    const visible = tabs.filter(t => {
+        const b = document.getElementById(prefix + '-tab-' + t);
+        return b && getComputedStyle(b).display !== 'none';
+    });
+    if (!visible.length) { widgetEl.style.setProperty('display', 'none', 'important'); return; }
+    if (isEmployee) {
+        const activeOk = visible.some(t => {
+            const b = document.getElementById(prefix + '-tab-' + t);
+            return b.classList.contains('active');
+        });
+        if (!activeOk) switchEmpTab(visible[0]);
+    }
+}
+function _reconcileCommandWidgets() {
+    _reconcileComboTabs(document.querySelector('.cc-widget:not(.ec-widget)'), 'cc', ['buying', 'ebay', 'scorecard'], false);
+    _reconcileComboTabs(document.getElementById('ecWidget'), 'ec', ['buying', 'kpis'], true);
 }
 
 // ============================================================================
@@ -5168,297 +6364,33 @@ window.renderDistrictKPIs = function() {
     container.innerHTML = html;
 };
 
+const _DCC_PORTAL_LINKS = {
+    'OVL': 'https://drive.google.com/drive/folders/1dd1nkndo_Pqt3kztaHcpYWL-NgOWIP-E?usp=drive_link',
+    'LEE': 'https://drive.google.com/drive/folders/1Xv6ICOpEXNMeWk4QJBfS7CR6tIFRuElk?usp=drive_link',
+    'WSP': 'https://drive.google.com/drive/folders/1xGGzefFbX7rzBnusmCUEk2GnHxJaJqhC?usp=drive_link',
+    'MPL': 'https://drive.google.com/drive/folders/1Y5MiKRorTD1mg-lLY4SccYCqw2fZUrND?usp=drive_link',
+    'BAL': 'https://drive.google.com/drive/folders/1LnAuBH9t7MwtrB9egWK5PFJWQqPcZ-tL?usp=drive_link'
+};
+
 async function fetchMasterDistrictDashboard() {
     const container = document.getElementById('district-master-body');
     if (!container) return;
 
     const STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-    const STORE_ICONS = { 'OVL': '🟣', 'LEE': '🔵', 'WSP': '🟢', 'MPL': '🟠', 'BAL': '🔴' };
+    // (Store emoji removed with the card headers — the three-letter code identifies
+    // the store, same call as the Tools mark and the district popups.)
     
-    const PORTAL_LINKS = {
-        'OVL': 'https://drive.google.com/drive/folders/1dd1nkndo_Pqt3kztaHcpYWL-NgOWIP-E?usp=drive_link',
-        'LEE': 'https://drive.google.com/drive/folders/1Xv6ICOpEXNMeWk4QJBfS7CR6tIFRuElk?usp=drive_link',
-        'WSP': 'https://drive.google.com/drive/folders/1xGGzefFbX7rzBnusmCUEk2GnHxJaJqhC?usp=drive_link',
-        'MPL': 'https://drive.google.com/drive/folders/1Y5MiKRorTD1mg-lLY4SccYCqw2fZUrND?usp=drive_link',
-        'BAL': 'https://drive.google.com/drive/folders/1LnAuBH9t7MwtrB9egWK5PFJWQqPcZ-tL?usp=drive_link'
-    };
+    // PORTAL_LINKS lives at module scope (_DCC_PORTAL_LINKS) so _dccPick can repaint
+    // the board without this function having run again.
+    const PORTAL_LINKS = _DCC_PORTAL_LINKS;
 
+    // Normalise all five stores, then render. The parsing that used to happen
+    // inline while building card HTML now lives in _dccRow / _dccChecks, so the
+    // thresholds are readable in one place and the rail and pane read the same
+    // checks. See the DISTRICT COMMAND CENTER block further down.
     const renderMasterBoard = (hubData, varData, scoreData, alertsData, weeklyResults) => {
-        let html = '';
-        STORES.forEach(store => {
-            const sLower = store.toLowerCase();
-            const icon = STORE_ICONS[store];
-            const storeLastEdited = hubData[`${sLower}BuyDate`] || null;
-
-            // 1. SCORECARD & HEADER
-            const sScore = scoreData.data?.find(s => s.store.toUpperCase() === store) || {};
-            const scoreNum = (parseFloat(sScore.score) || 0) * 2;
-            let sColor = scoreNum > 8 ? '#065f46' : (scoreNum >= 6 ? '#92400e' : '#991b1b');
-            let sBg = scoreNum > 8 ? '#d1fae5' : (scoreNum >= 6 ? '#fef3c7' : '#fee2e2');
-
-            // Practice audit badge (clickable into the full breakdown popout).
-            const sAudit = sScore.audit || null;
-            let auditBadge = '';
-            if (sAudit) {
-                const ac = auditPctColor(sAudit.pct);
-                auditBadge = `<span onclick="event.stopPropagation(); openAuditBreakdown('${store}')" title="PayMore practice audit — ${sAudit.earned}/${sAudit.possible} · view full breakdown" style="display:inline-flex; align-items:center; gap:5px; height:25px; padding:0 10px; border-radius:8px; background:${ac.bg}; color:${ac.fg}; cursor:pointer; white-space:nowrap; box-sizing:border-box;">
-                    <span style="font-size:8px; font-weight:800; letter-spacing:.6px; opacity:.75;">AUDIT</span>
-                    <span style="font-size:14px; font-weight:900; line-height:1;">${sAudit.pct}%</span>
-                </span>`;
-            } else {
-                auditBadge = `<span title="No practice audit submitted yet" style="display:inline-flex; align-items:center; gap:5px; height:25px; padding:0 10px; border-radius:8px; background:transparent; color:#94a3b8; border:1px dashed #4a5365; white-space:nowrap; box-sizing:border-box;">
-                    <span style="font-size:8px; font-weight:800; letter-spacing:.6px;">AUDIT</span>
-                    <span style="font-size:11px; font-weight:700; letter-spacing:.3px; line-height:1;">NO DATA</span>
-                </span>`;
-            }
-
-            let displayDate = "Recent";
-            if (sScore.date) {
-                const parsedDate = new Date(sScore.date);
-                if (!isNaN(parsedDate.getTime())) {
-                    const day = parsedDate.getUTCDay();
-                    const diffToMonday = day === 0 ? -6 : 1 - day;
-                    const mondayDate = new Date(parsedDate);
-                    mondayDate.setUTCDate(parsedDate.getUTCDate() + diffToMonday);
-                    displayDate = mondayDate.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
-                }
-            }
-
-            // 2. EBAY ALERTS DATA
-            const sAlerts = alertsData.data?.find(a => a.store.toUpperCase() === store) || {};
-            
-            // Vertical Action Needed List
-            const issues = [];
-            if (sAlerts.currentVeryHigh) issues.push({text: sAlerts.currentVeryHigh, type: 'red', tip: 'Active Issue: Very High'});
-            if (sAlerts.currentHigh) issues.push({text: sAlerts.currentHigh, type: 'yellow', tip: 'Active Issue: High'});
-            if (sAlerts.projectedVeryHigh) issues.push({text: sAlerts.projectedVeryHigh, type: 'red', tip: 'Projected Issue: Very High'});
-            if (sAlerts.projectedHigh) issues.push({text: sAlerts.projectedHigh, type: 'yellow', tip: 'Projected Issue: High'});
-            if (issues.length === 0) issues.push({text: 'All Clear', type: 'green', tip: 'No active or projected alerts.'});
-
-            // 4 New Service Metrics logic
-            const formatPercent = (val) => {
-                if (val === null || val === undefined) return '0%';
-                let str = String(val).trim();
-                if (str === '' || str === 'null') return '0%';
-                if (str.endsWith('%')) return str;
-                let num = parseFloat(str.replace(/[^0-9.-]/g, ''));
-                if (isNaN(num)) return '0%';
-                return num.toFixed(2) + '%';
-            };
-
-            const getSev = (type, rawVal) => {
-                if (rawVal === null || rawVal === undefined || String(rawVal).trim() === '') return 'clear';
-                let str = String(rawVal).trim();
-                let num = parseFloat(str.replace(/[^0-9.-]/g, ''));
-                if (isNaN(num)) return 'clear';
-                let valToCheck = num;
-
-                if (type === 'defectRate') {
-                    if (valToCheck >= 0.40) return 'very-high';
-                    if (valToCheck >= 0.25) return 'high';
-                }
-                if (type === 'lateShipment') {
-                    if (valToCheck >= 2.4) return 'very-high';
-                    if (valToCheck >= 1.5) return 'high';
-                }
-                if (type === 'casesClosed') {
-                    if (valToCheck >= 0.24) return 'very-high';
-                    if (valToCheck >= 0.15) return 'high';
-                }
-                if (type === 'tracking') {
-                    if (valToCheck <= 96.0) return 'very-high';
-                    if (valToCheck <= 97.5) return 'high';
-                }
-                return 'clear';
-            };
-
-            const buildMiniAlertCard = (title, rawValue, severity, isPercent) => {
-                let bgColor = '#d1fae5';
-                let textColor = '#065f46'; 
-                let displayText = 'All Clear';
-                let pulseHtml = '';
-                
-                if (rawValue !== undefined && rawValue !== null && String(rawValue).trim() !== '') {
-                    if (isPercent) {
-                        displayText = formatPercent(rawValue);
-                    } else {
-                        displayText = String(rawValue); 
-                    }
-
-                    if (severity === 'high') {
-                        bgColor = '#fef3c7'; 
-                        textColor = '#92400e';
-                    } else if (severity === 'very-high') {
-                        bgColor = '#fee2e2';
-                        textColor = '#991b1b';
-                        // Positioned perfectly on the corner
-                        pulseHtml = '<div class="notif-dot active" style="display:block; position:absolute; top:-4px; right:-4px; width:10px; height:10px; border-width: 2px; z-index: 5;"></div>';
-                    }
-                }
-
-                return `
-                <div style="position: relative; background: #fff; padding: 8px 6px 7px; border-radius: 8px; border: 1px solid #e2e8f0; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; box-sizing: border-box; min-height: 52px; gap: 5px; text-align: center;">
-                    ${pulseHtml}
-                    <span style="font-size: 8px; font-weight: 800; color: #b0bec5; text-transform: uppercase; letter-spacing: 0.4px; line-height: 1.2; word-break: break-word;">${title}</span>
-                    <span style="font-size: 12px; font-weight: 900; color: ${textColor}; background: ${bgColor}; padding: 3px 8px; border-radius: 6px; white-space: nowrap;">${displayText}</span>
-                </div>`;
-            };
-
-            // 3. BUYING & SELLING SNAPSHOT
-            let rawPctStr = String(hubData[`${sLower}Pct`]);
-            let rawPct = parseFloat(rawPctStr) || 0;
-            let salesPctNum = (!rawPctStr.includes('%') && rawPct > 0 && rawPct <= 1.5) ? (rawPct * 100) : rawPct;
-            const salesPct = Number.isInteger(salesPctNum) ? salesPctNum : salesPctNum.toFixed(2);
-            
-            const gpTrack = Math.round(parseFloat(hubData[`${sLower}TrackGP`])) || 0;
-            const buyProj = Math.round(parseFloat(hubData[`${sLower}BuyProj`])) || 0;
-            const storeGoalText = `$${Math.round(parseFloat(hubData[`${sLower}Goal`]) || 0).toLocaleString()}`;
-            
-            let sellMarginNum = 0;
-            const rev = parseFloat(hubData[`${sLower}Rev`]) || 0;
-            const gp = parseFloat(hubData[`${sLower}GP`]) || 0;
-            if (hubData[`${sLower}SellMargin`]) {
-                let smRaw = parseFloat(hubData[`${sLower}SellMargin`]);
-                sellMarginNum = (!String(hubData[`${sLower}SellMargin`]).includes('%') && smRaw > 0 && smRaw <= 1.5) ? (smRaw * 100) : smRaw;
-            } else if (rev > 0) {
-                sellMarginNum = (gp / rev) * 100;
-            }
-            const sellMargin = Number.isInteger(sellMarginNum) ? sellMarginNum : sellMarginNum.toFixed(2);
-
-            let rawMarginStr = String(hubData[`${sLower}BuyMargin`]);
-            let rawMargin = parseFloat(rawMarginStr) || 0;
-            let buyMarginNum = (!rawMarginStr.includes('%') && rawMargin > 0 && rawMargin <= 1.5) ? (rawMargin * 100) : rawMargin;
-            const buyMargin = Number.isInteger(buyMarginNum) ? buyMarginNum : buyMarginNum.toFixed(2);
-
-            const pctColor = salesPctNum >= 100 ? '#065f46' : '#991b1b';
-            const pctBg = salesPctNum >= 100 ? '#d1fae5' : '#fee2e2';
-            const sellMarginColor = sellMarginNum >= 55.5 ? '#065f46' : '#991b1b';
-            const sellMarginBg = sellMarginNum >= 55.5 ? '#d1fae5' : '#fee2e2';
-            const marginColor = (buyMarginNum > 0 && buyMarginNum < 51) ? '#991b1b' : '#065f46';
-            const marginBg = (buyMarginNum > 0 && buyMarginNum < 51) ? '#fee2e2' : '#d1fae5';
-
-            // 4. LIVE VARIANCE
-            const sVar = varData[store] || {};
-            const totalVar = parseFloat(sVar.total) || 0;
-            const vColor = totalVar < 0 ? '#991b1b' : (totalVar > 0 ? '#065f46' : '#64748b');
-            const vBg = totalVar < 0 ? '#fee2e2' : (totalVar > 0 ? '#d1fae5' : '#f1f5f9');
-            const vSign = totalVar > 0 ? '+' : '';
-            const vRange = formatVarianceRange(sVar.dateFrom, sVar.dateTo);
-
-            // 5. WEEKLY METRICS
-            const sWeekData = weeklyResults.find(w => w.store === store);
-            const wAvg = sWeekData?.sAvg || {};
-            const wPeriod = sWeekData?.periodLabel || '';
-
-            const renderLineStat = (label, val, ruleType) => {
-                let isBad = false;
-                let displayVal = val || '-';
-                if (displayVal !== '-' && (ruleType === 'margin' || ruleType === 'conversion') && !String(displayVal).includes('%')) displayVal += '%';
-                
-                if (val && val !== '-') {
-                    let n = parseFloat(String(val).replace(/[^0-9.-]/g, ''));
-                    if (ruleType === 'margin') isBad = n < 51;
-                    if (ruleType === 'conversion') isBad = n < 85;
-                    if (ruleType === 'nodeals') isBad = n > 7;
-                    if (ruleType === 'time') {
-                        let t = String(val);
-                        let timeVal = t.includes(':') ? parseInt(t.split(':')[0]) + (parseInt(t.split(':')[1])/60) : n;
-                        isBad = timeVal > 13;
-                    }
-                }
-                
-                let bg = ruleType === 'nobg' ? 'transparent' : (ruleType === null ? '#f1f5f9' : (isBad ? '#fee2e2' : '#d1fae5'));
-                let txt = ruleType === 'nobg' ? 'var(--slate-charcoal)' : (ruleType === null ? 'var(--slate-charcoal)' : (isBad ? '#991b1b' : '#065f46'));
-                let pad = ruleType === 'nobg' ? '0' : '3px 8px';
-                if (displayVal === '-') { bg = '#f1f5f9'; txt = '#888'; pad = '3px 8px'; }
-                
-                return `
-                <div class="master-stat-row">
-                    <span class="master-stat-label">${label}</span>
-                    <span class="master-stat-val" style="color: ${txt}; background: ${bg}; padding: ${pad};">${displayVal}</span>
-                </div>`;
-            };
-
-            html += `
-            <div class="card master-card">
-                <div class="master-card-header" style="background: var(--slate-charcoal); display: flex; justify-content: space-between; align-items: stretch;">
-                    <div style="display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; gap: 10px;">
-                        <a href="${PORTAL_LINKS[store]}" target="_blank" class="portal-link-title">
-                            ${icon} ${store}
-                        </a>
-                        <span class="master-card-date goal-strong" style="margin: 0;">Goal: ${storeGoalText}</span>
-                    </div>
-                    <div style="display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; gap: 6px;">
-                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
-                            <span class="master-card-score" style="background: ${sBg}; color: ${sColor};" title="Online & Marketing scorecard">${scoreNum.toFixed(1)}</span>
-                            ${auditBadge}
-                        </div>
-                        <span class="master-card-date" style="margin: 0;">Week of ${displayDate}</span>
-                    </div>
-                </div>
-
-                <div class="master-card-body">
-                    <div>
-                        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px;">
-                            <div class="master-section-title" style="margin-bottom:0;min-width:0;">Buying &amp; Selling Snapshot</div>
-                            ${storeLastEdited ? `<span class="master-section-title" style="margin-bottom:0;white-space:nowrap;">${storeLastEdited}</span>` : ''}
-                        </div>
-                        <div class="master-stat-box">
-                            <div class="master-stat-row"><span class="master-stat-label">Sales vs Goal</span><span class="master-stat-val" style="color: ${pctColor}; background: ${pctBg};">${salesPct}%</span></div>
-                            <div class="master-stat-row"><span class="master-stat-label">Revenue</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${Math.round(rev).toLocaleString()}</span></div>
-                            <div class="master-stat-row"><span class="master-stat-label">GP Tracking</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${gpTrack.toLocaleString()}</span></div>
-                            <div class="master-stat-row dashed"><span class="master-stat-label">Sell Margin</span><span class="master-stat-val" style="color: ${sellMarginColor}; background: ${sellMarginBg};">${sellMarginNum > 0 ? sellMargin + '%' : '-'}</span></div>
-                            <div class="master-stat-row"><span class="master-stat-label">Buy Tracking</span><span class="master-stat-val" style="color: var(--slate-charcoal);">$${buyProj.toLocaleString()}</span></div>
-                            <div class="master-stat-row dashed"><span class="master-stat-label">Buy Margin</span><span class="master-stat-val" style="color: ${marginColor}; background: ${marginBg};">${buyMargin}%</span></div>
-                            <div class="master-stat-row"><span class="master-stat-label">Variance Total${vRange ? `<span style="display:block; font-size:9px; font-weight:700; color:#94a3b8; text-transform:none; letter-spacing:0; margin-top:1px;">${vRange}</span>` : ''}</span><span class="master-stat-val" style="color: ${vColor}; background: ${vBg};" title="Variance period${vRange ? ': ' + vRange : ' not set'}">${vSign}${totalVar.toFixed(2)}%</span></div>
-                        </div>
-                    </div>
-
-                    <div>
-                        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px;">
-                            <div class="master-section-title" style="margin-bottom:0;min-width:0;">Weekly Metrics</div>
-                            ${wPeriod ? `<span class="master-section-title" style="margin-bottom:0;white-space:nowrap;">${escapeHtml(wPeriod)}</span>` : ''}
-                        </div>
-                        <div class="master-stat-box">
-                            ${renderLineStat('Conversion', wAvg.conversion, 'conversion')}
-                            ${renderLineStat('Margin', wAvg.buyMargin, 'margin')}
-                            ${renderLineStat('Trans. Time', wAvg.time, 'time')}
-                            ${renderLineStat('No Deals', wAvg.noDeals, 'nodeals')}
-                            <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed #e2e8f0;">
-                                ${renderLineStat('Listed Devices', wAvg.listed, 'nobg')}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div style="flex-grow: 1; display: flex; flex-direction: column;">
-                        
-                        <div class="master-section-title">eBay Top Rated Metrics</div>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 15px;">
-                            ${buildMiniAlertCard('Defect Rate', sAlerts.defectRate, getSev('defectRate', sAlerts.defectRate), true)}
-                            ${buildMiniAlertCard('Late Shipment', sAlerts.lateShipment, getSev('lateShipment', sAlerts.lateShipment), true)}
-                            ${buildMiniAlertCard('Cases Closed', sAlerts.casesClosed, getSev('casesClosed', sAlerts.casesClosed), true)}
-                            ${buildMiniAlertCard('Tracking', sAlerts.tracking, getSev('tracking', sAlerts.tracking), true)}
-                        </div>
-
-                        <div class="master-section-title">eBay Performance Metrics</div>
-                        <div style="display: flex; flex-direction: column; gap: 6px; flex-grow: 1;">
-                            ${issues.map(b => {
-                                let bg = b.type === 'red' ? '#fee2e2' : (b.type === 'yellow' ? '#fef3c7' : '#d1fae5');
-                                let txt = b.type === 'red' ? '#991b1b' : (b.type === 'yellow' ? '#92400e' : '#065f46');
-                                let pulse = b.type === 'red' ? `<div class="notif-dot active" style="display:block; position:absolute; top:-4px; right:-4px; width:12px; height:12px; border-width: 2px;"></div>` : '';
-                                return `
-                                <div class="master-action-badge" style="color: ${txt}; background: ${bg};">
-                                    ${pulse}<span>${b.text}</span>
-                                    <div class="fast-tip">${b.tip}</div>
-                                </div>`;
-                            }).join('')}
-                        </div>
-                    </div>
-                </div>
-            </div>`;
-        });
-
-        container.innerHTML = html;
+        _dccRows = STORES.map(s => _dccRow(s, hubData, varData, scoreData, alertsData, weeklyResults));
+        container.innerHTML = _dccBoardHtml(PORTAL_LINKS);
     };
 
     const cachedHtml = localStorage.getItem('speeksDistMasterHtml');
@@ -6467,7 +7399,10 @@ async function dmGoalAction(store, action) {
             body: JSON.stringify({ store, action })
         });
         await fetchStoreTarget(store);
-        renderCompactDmGoals();
+        // Repaint the district Listing Goals popup the DM pressed this from, and
+        // the rail item, whose subtitle counts flagged stores.
+        renderDmListingModal();
+        _dmxSyncRail();
     } catch (e) {}
 }
 window.dmGoalAction = dmGoalAction;
@@ -6507,12 +7442,15 @@ function renderGoalsLevelUp() {
     el.innerHTML = levelUpHtml(managerWeeklyHistory, targetFor(goalsTargetStore));
 }
 
-// --- DM COMPACT GOALS WIDGET ---
+// --- DM LISTING GOALS DATA ---
+// Feeds the district Listing Goals popup and its rail item. This used to end in
+// a render into a dashboard panel; that panel is gone, so
+// the gate is the role rather than the presence of a container, and the results
+// go to the popup renderer + rail sync (both no-op safely when neither exists).
 let dmStoreHistory = {}; // store -> completed weekly listing totals (for level-up bars)
 
 async function fetchDmGoalsData() {
-    const cont = document.getElementById('dm-compact-goals-container');
-    if (!cont) return;
+    if (!_dmxIsDistrict()) return;
 
     const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 
@@ -6524,114 +7462,16 @@ async function fetchDmGoalsData() {
         allDistrictGoalsData = goalsResults.flat();
         dmStoreHistory = {};
         stores.forEach(s => { dmStoreHistory[s] = weeksFor(s); });
-        renderCompactDmGoals();
+        renderDmListingModal();
+        _dmxSyncRail();
     } catch (e) {
-        cont.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Network Sync Failed.</div>';
+        const cont = document.getElementById('dmListingBody');
+        if (cont) cont.innerHTML = '<div class="dmx-empty" style="padding:60px 0; color:var(--red-alert);">Couldn\'t load the district roster. Close and reopen to retry.</div>';
     }
 }
 
-function switchCompactDmTab(view) {
-    currentDmGoalView = view;
-    document.getElementById('dm-compact-tab-daily').classList.toggle('active', view === 'daily');
-    document.getElementById('dm-compact-tab-weekly').classList.toggle('active', view === 'weekly');
-    renderCompactDmGoals();
-}
 
-function toggleDmStoreAccordion(store) {
-    const rosterDiv = document.getElementById(`dm-roster-${store}`);
-    const caret = document.getElementById(`dm-caret-${store}`);
-    const isOpen = rosterDiv.style.display === 'block';
-    
-    document.querySelectorAll('.dm-store-roster').forEach(el => el.style.display = 'none');
-    document.querySelectorAll('.dm-store-caret').forEach(el => el.style.transform = 'rotate(-90deg)');
 
-    if (!isOpen) {
-        rosterDiv.style.display = 'block';
-        caret.style.transform = 'rotate(0deg)'; 
-    }
-}
-
-function renderCompactDmGoals() {
-    const cont = document.getElementById('dm-compact-goals-container');
-    if (!cont) return;
-
-    const now = new Date();
-    const todayStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
-    const startOfWeek = new Date(now);
-    startOfWeek.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
-    startOfWeek.setHours(0, 0, 0, 0);
-
-    const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2' };
-    let html = '<div style="display:flex; flex-direction:column;">';
-
-    stores.forEach((store, idx) => {
-        const target = targetFor(store);
-        const flag = (_storeTargets[store] && _storeTargets[store].flag) || 'none';
-        const storeData = allDistrictGoalsData.filter(r => r.store === store);
-
-        // Per-employee today + weekly goals (last record per day wins). Read-only.
-        const emps = {};
-        storeData.forEach(r => {
-            if (goalDateObj(r.date) < startOfWeek) return;
-            const dStr = normalizeGoalDate(r.date);
-            if (!emps[r.employee]) emps[r.employee] = { role: '-', byDay: {} };
-            emps[r.employee].byDay[dStr] = parseInt(r.goal) || 0;
-            if (dStr === todayStr && r.role && r.role !== '-') emps[r.employee].role = r.role;
-        });
-
-        const empNames = Object.keys(emps);
-        let todayTotal = 0, weekTotal = 0;
-        empNames.forEach(e => {
-            todayTotal += emps[e].byDay[todayStr] || 0;
-            weekTotal += Object.values(emps[e].byDay).reduce((s, g) => s + g, 0);
-        });
-
-        const muted = weekTotal === 0 ? 'opacity:0.6;' : '';
-        const lastBorder = idx === stores.length - 1 ? 'transparent' : '#f0f0f0';
-
-        html += `
-        <div onclick="toggleDmStoreAccordion('${store}')" class="lb-row dm-store-head" style="display:grid; grid-template-columns:60px 1fr auto 18px; align-items:center; gap:12px; border-bottom:1px solid ${lastBorder}; cursor:pointer; padding:13px 15px; ${muted}">
-            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal);">${store}</span>
-            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal); text-transform:uppercase; letter-spacing:0.04em;">Goal: ${target} Listings${flag === 'flagged' ? ' <span class="dm-flag-badge">⚠ Review</span>' : ''}</span>
-            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal); text-align:right;">${weekTotal}<span style="font-size:14px; color:var(--slate-charcoal); font-weight:900;"> wk</span></span>
-            <div id="dm-caret-${store}" class="dm-store-caret" style="text-align:right; color:#888; font-size:10px; font-weight:800; transition:transform 0.3s; transform:rotate(-90deg);">▼</div>
-        </div>`;
-
-        html += `<div id="dm-roster-${store}" class="dm-store-roster" style="display:none; background:#fdfdfd; padding:10px 18px 14px; border-bottom:1px solid #e2e8f0; box-shadow:inset 0 3px 6px rgba(0,0,0,0.02);">`;
-        html += `<div class="goals-header-row"><span class="goals-header-lbl">Employee &amp; Role</span><span class="goals-header-lbl center">Today</span><span class="goals-header-lbl center">Week</span></div>`;
-
-        if (empNames.length === 0) {
-            html += `<div style="font-size:12px; color:#888; text-align:center; font-weight:600; padding:10px 0;">No roles set this week.</div>`;
-        } else {
-            empNames.forEach(e => {
-                const eToday = emps[e].byDay[todayStr] || 0;
-                const eWeek = Object.values(emps[e].byDay).reduce((s, g) => s + g, 0);
-                const badge = emps[e].role !== '-' ? `<span class="dm-role-badge">${roleName[emps[e].role] || emps[e].role}</span>` : '';
-                html += `
-                <div class="goals-mgr-row">
-                    <div class="goals-mgr-emp"><span class="goals-roster-name">${e}</span>${badge}</div>
-                    <div class="goals-mgr-week">${eToday || '–'}</div>
-                    <div class="goals-mgr-week">${eWeek || '–'}</div>
-                </div>`;
-            });
-        }
-
-        html += `<div class="goals-total-row"><span class="goals-total-lbl">Total</span><span class="goals-total-val target">${todayTotal}</span><span class="goals-total-val target">${weekTotal}</span></div>`;
-        html += `<div class="goals-levelup">${levelUpHtml(dmStoreHistory[store] || [], target)}</div>`;
-        if (flag === 'flagged') {
-            html += `<div class="dm-flag-actions">
-                <span class="dm-flag-msg">⚠️ Missed goal 2 weeks — review:</span>
-                <button class="dm-flag-btn lower" onclick="event.stopPropagation(); dmGoalAction('${store}','lower')">Lower −10</button>
-                <button class="dm-flag-btn keep" onclick="event.stopPropagation(); dmGoalAction('${store}','keep')">Keep</button>
-            </div>`;
-        }
-        html += `</div>`;
-    });
-
-    html += '</div>';
-    cont.innerHTML = html;
-}
 
 // --- DM AUDIT READINESS WIDGET (read-only, live through the week) ---
 // Lets the DM/CEO see each store's daily + weekly audit checklist progress as
@@ -6640,39 +7480,24 @@ let dmAuditData = {};            // { OVL: { daily:{items,total,completed}, week
 let currentDmAuditTab = 'daily';
 
 async function fetchDmAuditData() {
-    const cont = document.getElementById('dm-audit-container');
-    if (!cont) return;
+    // Role-gated rather than container-gated: the dashboard panel this fed is
+    // gone, and every shell carries the popup markup whether you can open it or
+    // not, so checking for the container would pull five stores of data for
+    // managers too.
+    if (!_dmxIsDistrict()) return;
     try {
         const res = await fetch(`${STORE_AUDIT_URL}?action=overview&v=${Date.now()}`);
         const json = await res.json();
         dmAuditData = json.stores || {};
-        renderDmAudit();
+        renderDmCleaningModal();
+        _dmxSyncRail();
     } catch (e) {
-        cont.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Network Sync Failed.</div>';
+        const cont = document.getElementById('dmCleaningBody');
+        if (cont) cont.innerHTML = '<div class="dmx-empty" style="padding:60px 0; color:var(--red-alert);">Couldn\'t load cleaning progress. Close and reopen to retry.</div>';
     }
 }
 
-function switchDmAuditTab(view) {
-    currentDmAuditTab = view;
-    document.getElementById('dm-audit-tab-daily')?.classList.toggle('active', view === 'daily');
-    document.getElementById('dm-audit-tab-weekly')?.classList.toggle('active', view === 'weekly');
-    renderDmAudit();
-}
 
-function toggleDmAuditAccordion(store) {
-    const rosterDiv = document.getElementById(`dm-audit-roster-${store}`);
-    const caret = document.getElementById(`dm-audit-caret-${store}`);
-    if (!rosterDiv) return;
-    const isOpen = rosterDiv.style.display === 'block';
-
-    document.querySelectorAll('.dm-audit-roster').forEach(el => el.style.display = 'none');
-    document.querySelectorAll('.dm-audit-caret').forEach(el => el.style.transform = 'rotate(-90deg)');
-
-    if (!isOpen) {
-        rosterDiv.style.display = 'block';
-        if (caret) caret.style.transform = 'rotate(0deg)';
-    }
-}
 
 // PayMore-style readiness colors: pass ≥80, watch ≥50, behind below.
 function _auditPctColor(pct) {
@@ -6681,185 +7506,7 @@ function _auditPctColor(pct) {
     return 'var(--red-alert, #dc2626)';
 }
 
-function renderDmAudit() {
-    const cont = document.getElementById('dm-audit-container');
-    if (!cont) return;
 
-    const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-    const tab = currentDmAuditTab;
-    const periodWord = tab === 'daily' ? 'today' : 'this week';
-    let html = '<div style="display:flex; flex-direction:column;">';
-
-    stores.forEach((store, idx) => {
-        const sd = dmAuditData[store] || {};
-        const pd = sd[tab] || { items: [], total: 0, completed: 0 };
-        const items = pd.items || [];
-        const total = pd.total || items.length;
-        const completed = pd.completed != null ? pd.completed : items.filter(i => i.checked).length;
-        const pct = total ? Math.round((completed / total) * 100) : 0;
-        const col = _auditPctColor(pct);
-        const muted = completed === 0 ? 'opacity:0.6;' : '';
-        const lastBorder = idx === stores.length - 1 ? 'transparent' : '#f0f0f0';
-
-        html += `
-        <div onclick="toggleDmAuditAccordion('${store}')" class="lb-row dm-store-head" style="display:grid; grid-template-columns:56px 1fr 92px 18px; align-items:center; gap:12px; border-bottom:1px solid ${lastBorder}; cursor:pointer; padding:13px 15px; ${muted}">
-            <span style="font-size:14px; font-weight:900; color:var(--slate-charcoal);">${store}</span>
-            <div style="height:8px; border-radius:6px; background:#eef2f6; overflow:hidden;"><div style="height:100%; width:${pct}%; background:${col}; border-radius:6px; transition:width .3s;"></div></div>
-            <span style="font-size:13px; font-weight:900; color:${col}; text-align:right;">${completed}/${total} · ${pct}%</span>
-            <div id="dm-audit-caret-${store}" class="dm-audit-caret" style="text-align:right; color:#888; font-size:10px; font-weight:800; transition:transform 0.3s; transform:rotate(-90deg);">▼</div>
-        </div>`;
-
-        html += `<div id="dm-audit-roster-${store}" class="dm-audit-roster" style="display:none; background:#fdfdfd; padding:10px 18px 14px; border-bottom:1px solid #e2e8f0; box-shadow:inset 0 3px 6px rgba(0,0,0,0.02);">`;
-        if (items.length === 0) {
-            html += `<div style="font-size:12px; color:#888; text-align:center; font-weight:600; padding:10px 0;">No ${tab} audit items set up yet.</div>`;
-        } else {
-            let lastSection = null;
-            items.forEach(item => {
-                if (item.section !== lastSection) {
-                    html += `<div style="font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:12px 0 4px;">${escapeHtml(item.section || 'General')}</div>`;
-                    lastSection = item.section;
-                }
-                const done = !!item.checked;
-                html += `
-                <div style="display:flex; gap:9px; align-items:center; padding:5px 2px;">
-                    <span style="font-size:14px; font-weight:900; line-height:1; color:${done ? 'var(--green-go,#16a34a)' : '#cbd5e1'};">${done ? '✓' : '○'}</span>
-                    <span style="font-size:13px; font-weight:600; color:${done ? '#94a3b8' : 'var(--slate-charcoal)'}; ${done ? 'text-decoration:line-through;' : ''}">${escapeHtml(item.text)}</span>
-                </div>`;
-            });
-            html += `<div style="margin-top:10px; font-size:12px; font-weight:800; color:${col}; text-align:right;">${completed} of ${total} done ${periodWord}</div>`;
-        }
-        html += `</div>`;
-    });
-
-    html += '</div>';
-    cont.innerHTML = html;
-}
-
-function _dmLegacyGoalsUnused() {
-    // (Superseded by the manager-style DM view above. Kept inert; never called.)
-    const cont = { innerHTML: '' };
-    const now = new Date();
-    const todayStr = '';
-    const startOfWeek = new Date(0);
-    const currentDmGoalView = 'weekly';
-    const stores = [];
-    let html = '';
-    stores.forEach((store, idx) => {
-        const storeData = allDistrictGoalsData.filter(r => r.store === store);
-        let tGoal = 0, tResult = 0;
-        let activeEmps = new Set();
-
-        const storeDedup = {};
-        storeData.forEach(r => {
-            const recDate = goalDateObj(r.date);
-            const isToday = r.date === todayStr;
-            const isThisWeek = recDate >= startOfWeek;
-
-            if ((currentDmGoalView === 'daily' && isToday) || (currentDmGoalView === 'weekly' && isThisWeek)) {
-                storeDedup[`${r.employee}|${r.date}`] = r; // last row in sheet wins per employee per day
-                activeEmps.add(r.employee);
-            }
-        });
-        Object.values(storeDedup).forEach(r => {
-            tGoal += parseInt(r.goal) || 0;
-            tResult += parseInt(r.result) || 0;
-        });
-
-        const progress = tGoal > 0 ? Math.min(100, Math.round((tResult / tGoal) * 100)) : 0;
-        const colorClass = tResult >= tGoal && tGoal > 0 ? 'var(--sage-professional)' : (tResult > 0 ? 'var(--idea-gold)' : '#cbd5e1');
-        const isMuted = tGoal === 0 && tResult === 0 ? 'opacity: 0.6;' : '';
-
-        html += `
-        <div onclick="toggleDmStoreAccordion('${store}')" class="lb-row" style="display: grid; grid-template-columns: 50px 1fr 70px 20px; align-items: center; border-bottom: 1px solid ${idx === stores.length-1 ? 'transparent' : '#f0f0f0'}; cursor: pointer; padding: 12px 15px; margin: 0; ${isMuted}">
-            <span style="font-size: 14px; font-weight: 900; color: var(--slate-charcoal);">${store}</span>
-            <div style="padding-right: 15px;">
-                <div style="width: 100%; height: 6px; background: #f1f5f9; border-radius: 3px; overflow: hidden; display: flex;">
-                    <div style="height: 100%; width: ${progress}%; background: ${colorClass}; border-radius: 3px; transition: width 0.5s ease;"></div>
-                </div>
-            </div>
-            <div style="text-align: right; font-size: 14px; font-weight: 900; color: var(--slate-charcoal);">
-                ${tResult} <span style="font-size: 11px; color: #888; font-weight: 600;">/ ${tGoal}</span>
-            </div>
-           <div id="dm-caret-${store}" class="dm-store-caret" style="text-align: right; color: #888; font-size: 10px; font-weight: 800; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); transform: rotate(-90deg);">▼</div>
-        </div>`;
-
-        html += `<div id="dm-roster-${store}" class="dm-store-roster" style="display: none; background: #fdfdfd; padding: 10px 20px; border-bottom: 1px solid #e2e8f0; box-shadow: inset 0 3px 6px rgba(0,0,0,0.02);">`;
-        
-        if (activeEmps.size === 0) {
-            html += `<div style="font-size: 12px; color: #888; text-align: center; font-weight: 600; padding: 10px 0;">No data logged.</div></div>`;
-            return;
-        }
-
-        Array.from(activeEmps).forEach(emp => {
-            const empRecords = storeData.filter(r => r.employee === emp);
-            let eG = 0, eR = 0;
-            let dailyStats = {}; 
-
-            const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-            empRecords.forEach(r => {
-                const recDate = goalDateObj(r.date);
-                if ((currentDmGoalView === 'daily' && r.date === todayStr) || (currentDmGoalView === 'weekly' && recDate >= startOfWeek)) {
-                    const rG = parseInt(r.goal) || 0;
-                    const rR = parseInt(r.result) || 0;
-                    if (currentDmGoalView === 'weekly') {
-                        const dayIdx = (recDate.getDay() + 6) % 7;
-                        dailyStats[daysOfWeek[dayIdx]] = { goal: rG, result: rR }; // last row wins per day
-                    } else {
-                        eG = rG; // daily: last record wins
-                        eR = rR;
-                    }
-                }
-            });
-            if (currentDmGoalView === 'weekly') {
-                Object.values(dailyStats).forEach(d => { eG += d.goal; eR += d.result; });
-            }
-
-            const rClass = eG > 0 || eR > 0 ? (eR >= eG ? 'delta-pos' : 'delta-neg') : 'delta-neutral';
-
-            let dailyBreakdownHtml = '';
-            if (currentDmGoalView === 'weekly') {
-                const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-                const currentDayIdx = (now.getDay() + 6) % 7;
-                const pillStyle = "flex: 1; min-width: 0; text-align: center; font-size: 9px; font-weight: 800; padding: 4px 2px; border-radius: 4px; white-space: nowrap;";
-                
-                dailyBreakdownHtml = '<div style="display: flex; gap: 6px; margin-top: 4px; padding-top: 4px; width: 100%;">';
-                
-                daysOfWeek.forEach((dName, dIdx) => {
-                    if (dailyStats[dName]) {
-                        const dG = dailyStats[dName].goal;
-                        const dR = dailyStats[dName].result;
-                        const dClass = dR >= dG ? 'color: #065f46; background: #d1fae5;' : 'color: #991b1b; background: #fee2e2;';
-                        dailyBreakdownHtml += `<div style="${pillStyle} ${dClass}">${dName}: ${dR}/${dG}</div>`;
-                    } else if (dIdx <= currentDayIdx) {
-                        dailyBreakdownHtml += `<div style="${pillStyle} color: #64748b; background: #f1f5f9;" title="Not Logged">${dName}</div>`;
-                    } else {
-                        dailyBreakdownHtml += `<div style="${pillStyle} color: #cbd5e1; border: 1px dashed #e2e8f0; background: transparent;">${dName}</div>`;
-                    }
-                });
-                dailyBreakdownHtml += '</div>';
-            }
-
-            html += `
-            <div style="display: flex; flex-direction: column; padding: 8px 0; border-bottom: 1px dashed #f0f0f0;">
-                <div style="display: grid; grid-template-columns: 1fr auto auto; gap: 15px; align-items: center;">
-                    <span style="font-size: 13px; font-weight: 700; color: var(--slate-charcoal);">${emp}</span>
-                    <div style="display: flex; justify-content: center;">
-                        <span style="font-size: 14px; font-weight: 800; color: #64748b; width: 36px; text-align: center; display: inline-block;">${eG || '-'}</span>
-                    </div>
-                    <div style="display: flex; justify-content: center; align-items: center;">
-                        <span class="delta-badge ${rClass}" style="font-size: 14px; width: 36px; height: 26px; padding: 0; display: inline-flex; justify-content: center; align-items: center;">${eR || '-'}</span>
-                    </div>
-                </div>
-                ${dailyBreakdownHtml}
-            </div>`;
-        });
-        
-        html += `</div>`; 
-    });
-
-    html += '</div>'; 
-    cont.innerHTML = html;
-}
 
 // ============================================================================
 // 21. MODULE: EMPLOYEE DASHBOARD WIDGETS
@@ -6927,8 +7574,8 @@ async function fetchAndRenderEmployeeGoals() {
             
             if (recDate >= startOfWeek) {
                 const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-                const dayIdx = (recDate.getDay() + 6) % 7; 
-                dailyStats[daysOfWeek[dayIdx]] = { goal: g, result: resVal };
+                const dayIdx = (recDate.getDay() + 6) % 7;
+                dailyStats[daysOfWeek[dayIdx]] = { goal: g, result: resVal, role: r.role };
             }
         });
 
@@ -6951,13 +7598,25 @@ async function fetchAndRenderEmployeeGoals() {
         let weekGoalTotal = 0;
         Object.values(dailyStats).forEach(d => { weekGoalTotal += (d.goal || 0); });
 
+        // Feed the "Listing Goals" action-menu bar: role + today's goal (+ result for its bar).
+        const _todayStats = dailyStats[daysOfWeek[currentDayIdx]] || {};
+        window._empGoalToday = todayGoal;
+        window._empRoleToday = displayRole;
+        window._empResultToday = _todayStats.result || 0;
+        if (typeof samRefreshListing === 'function') samRefreshListing();
+
         let dailyBreakdownHtml = '<div class="emp-pill-container">';
 
         daysOfWeek.forEach((dName, dIdx) => {
-            if (dailyStats[dName] && dailyStats[dName].goal > 0) {
-                dailyBreakdownHtml += `<div class="emp-daily-pill pill-goal">${dName}: ${dailyStats[dName].goal}</div>`;
+            const stat = dailyStats[dName];
+            // Friendly role name for the hover tooltip (e.g. B1 → Buyer 1).
+            const dRole = (stat && stat.role && stat.role !== '-') ? (roleTranslations[stat.role] || stat.role) : '';
+            if (stat && stat.goal > 0) {
+                dailyBreakdownHtml += `<div class="emp-daily-pill pill-goal" title="${dRole ? escapeHtml(dRole) : 'Goal set'}">${dName}: ${stat.goal}</div>`;
             } else if (dIdx <= currentDayIdx) {
-                dailyBreakdownHtml += `<div class="emp-daily-pill pill-null" title="No role set">${dName}</div>`;
+                // A role can be set with a 0 goal (e.g. closed Sundays) — say so rather than "No role set".
+                const t = dRole ? `${escapeHtml(dRole)} — no goal (store closed)` : 'No role set';
+                dailyBreakdownHtml += `<div class="emp-daily-pill pill-null" title="${t}">${dName}</div>`;
             } else {
                 dailyBreakdownHtml += `<div class="emp-daily-pill pill-future">${dName}</div>`;
             }
@@ -6995,7 +7654,7 @@ async function fetchAndRenderEmployeeGoals() {
         await fetchStoreTarget(store);
         const empTarget = targetFor(store);
         const empStoreTargetEl = document.getElementById('emp-goals-store-target');
-        if (empStoreTargetEl) empStoreTargetEl.innerText = `Goal: ${empTarget} Listings`;
+        if (empStoreTargetEl) empStoreTargetEl.innerText = `${empTarget} Listings`;
         const empLuEl = document.getElementById('emp-goals-levelup');
         if (empLuEl) empLuEl.innerHTML = levelUpHtml(weeksFor(store), empTarget);
     } catch (e) {
@@ -7115,48 +7774,41 @@ async function fetchAndRenderEmployeeKPIs() {
             return;
         }
 
-        const buildStatGridItem = (title, myVal, storeVal, ruleStr, isPercent = false, prefixLabel = "Store:", showBubble = true, noteText = '') => {
-            const myIsBad = ruleStr ? checkRule(ruleStr, myVal) : false;
-            
-            let displayMyVal = myVal || '-';
-            if (displayMyVal !== '-' && isPercent && !String(displayMyVal).includes('%')) displayMyVal += '%';
-            
-            let displayStoreVal = storeVal || '-';
-            if (displayStoreVal !== '-' && isPercent && !String(displayStoreVal).includes('%')) displayStoreVal += '%';
-
-            let centerHtml = '';
-            if (showBubble) {
-                const badgeClass = displayMyVal === '-' ? 'badge-null' : (myIsBad ? 'badge-fail' : 'badge-pass');
-                centerHtml = `<div class="emp-kpi-badge ${badgeClass}" style="margin: 4px 0; padding: 4px 6px; font-size: 11px;">${displayMyVal}</div>`;
-            } else {
-                centerHtml = `<div style="font-size: 13px; font-weight: 900; color: var(--slate-charcoal); margin: 4px 0; padding: 4px 0;">${displayMyVal}</div>`;
-            }
-
-            return `
-            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 6px; border: 1px dashed #e2e8f0; border-radius: 6px; background: #fdfdfd; height: 100%;">
-                <span style="font-size: 9px; font-weight: 900; color: var(--slate-charcoal); text-transform: uppercase; line-height: 1;">${title}</span>
-                ${centerHtml}
-                <span style="font-size: 8px; font-weight: 700; color: #a0aab2; text-transform: uppercase;">${prefixLabel} <strong>${displayStoreVal}</strong></span>
-                ${noteText ? `<span style="font-size: 8px; font-weight: 700; color: #b6bec6; text-transform: none; margin-top: 1px; line-height: 1.2;">${noteText}</span>` : ''}
-            </div>`;
+        // Airy KPI tile: quiet label, my value (red if the rule flags it), store context line.
+        // Two aligned rows — "Mine" over "Store" — so each metric reads top-to-bottom as a
+        // me-vs-store comparison and the tab fills the widget height (matches the chart).
+        const _kv = (v, pct) => {
+            let s = (v == null || v === '') ? '-' : String(v);
+            if (s !== '-' && pct && !s.includes('%')) s += '%';
+            return s;
         };
-
-        // Split into two grid rows to stretch the bottom 3 boxes evenly
+        const _kpiMetrics = [
+            { t: 'Buying Value', my: myData.buyVal,    st: sAvg.buyVal,       rule: null,         pct: false, tag: 'total' },
+            { t: 'Margin',       my: myData.buyMargin, st: sAvg.buyMargin,    rule: 'margin',     pct: true,  tag: 'avg' },
+            { t: 'Conversion',   my: myData.conversion, st: sAvg.conversion,  rule: 'conversion', pct: true,  tag: 'avg' },
+            { t: 'Variance',     my: formattedMyVar,   st: formattedStoreVar, rule: 'variance',   pct: false, tag: 'total', note: varRange },
+            { t: 'No Deals',     my: myData.noDeals,   st: sAvg.noDeals,      rule: 'nodeals',    pct: false, tag: 'total' },
+            { t: 'Trans. Time',  my: myData.time,      st: sAvg.time,         rule: 'time',       pct: false, tag: 'avg' },
+            { t: 'Listed Dev.',  my: myData.listed,    st: sAvg.listed,       rule: null,         pct: false, tag: 'total' },
+        ];
+        const _mineTiles = _kpiMetrics.map(m => {
+            const hasVal = m.my != null && m.my !== '' && m.my !== '-';
+            const bad = m.rule ? checkRule(m.rule, m.my) : false;      // flagged → red
+            const good = !!m.rule && hasVal && !bad;                    // rule met → green
+            const cls = bad ? ' bad' : (good ? ' good' : '');
+            return `<div class="ekpi-tile"><span class="ekpi-k">${m.t}</span><span class="ekpi-v${cls}">${_kv(m.my, m.pct)}</span></div>`;
+        }).join('');
+        const _storeTiles = _kpiMetrics.map(m =>
+            `<div class="ekpi-tile store"><span class="ekpi-k">${m.t} <span class="ekpi-tag">· ${m.tag}</span></span><span class="ekpi-v">${_kv(m.st, m.pct)}</span>${m.note ? `<span class="ekpi-note">${m.note}</span>` : ''}</div>`
+        ).join('');
         container.innerHTML = `
-            <div style="display: flex; flex-direction: column; gap: 6px; height: 100%;">
-                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; flex: 1;">
-                    ${buildStatGridItem('Buying Value', myData.buyVal, sAvg.buyVal, null, false, 'Store Total:', false)}
-                    ${buildStatGridItem('Margin', myData.buyMargin, sAvg.buyMargin, 'margin', true, 'Store Avg:', true)}
-                    ${buildStatGridItem('Conversion', myData.conversion, sAvg.conversion, 'conversion', true, 'Store Avg:', true)}
-                    ${buildStatGridItem('Variance', formattedMyVar, formattedStoreVar, 'variance', false, 'Store Total:', true, varRange)}
-                </div>
-                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; flex: 1;">
-                    ${buildStatGridItem('No Deals', myData.noDeals, sAvg.noDeals, 'nodeals', false, 'Store Total:', true)}
-                    ${buildStatGridItem('Trans. Time', myData.time, sAvg.time, 'time', false, 'Store Avg:', true)}
-                    ${buildStatGridItem('Listed Dev.', myData.listed, sAvg.listed, null, false, 'Store Total:', false)}
-                </div>
-            </div>
+            <div class="ekpi-rowlab"><span class="ekpi-pill me">Mine</span><span class="ekpi-rule"></span></div>
+            <div class="ekpi-grid">${_mineTiles}</div>
+            <div class="ekpi-rowlab ekpi-rowlab-store"><span class="ekpi-pill st">Store</span><span class="ekpi-rule"></span></div>
+            <div class="ekpi-grid">${_storeTiles}</div>
         `;
+        // Employee widget "Weekly KPIs updated" dot — fires when a new week's numbers land.
+        _empFlagUpdate('kpis', `${pTxt}|${myData.buyVal}|${myData.conversion}|${myData.listed}|${myData.noDeals}`);
     } catch (e) {
         container.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to sync KPIs.</div>';
     }
@@ -7605,6 +8257,18 @@ const CB_STATUS_META = {
     completed: { label: 'Completed', next: 'open' }
 };
 
+// Calm SVG line icons (Feather) — replace the old emoji in the table markup so
+// Call Backs matches the Action-Menu aesthetic. Styling comes from `.cb-panel svg`.
+const CB_ICONS = {
+    plus:    '<svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+    note:    '<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    edit:    '<svg viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>',
+    trash:   '<svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+    restore: '<svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>',
+    save:    '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>',
+    cancel:  '<svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+};
+
 function _cbIsCorpRole() {
     return CB_CORP_ROLES.includes((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
 }
@@ -7695,7 +8359,7 @@ function cbRender() {
     html += `<table class="cb-table"><thead><tr>
         ${showStore ? '<th class="cb-col-store">Store</th>' : ''}
         <th class="cb-col-customer">Customer</th><th class="cb-col-phone">Phone</th><th class="cb-col-item">Item Wanted</th>
-        <th class="cb-col-status">Status</th><th class="cb-col-timer">Timer</th><th class="cb-col-notes">💬</th><th class="cb-col-logged">Logged</th><th class="cb-col-actions"></th>
+        <th class="cb-col-status">Status</th><th class="cb-col-timer">Timer</th><th class="cb-col-notes">${CB_ICONS.note}</th><th class="cb-col-logged">Logged</th><th class="cb-col-actions"></th>
     </tr></thead><tbody>`;
     entries.forEach(e => { html += cbRowHtml(e, showStore); });
     html += '</tbody></table>';
@@ -7715,7 +8379,7 @@ function _cbQuickAddHtml() {
         <input type="tel"  id="cbAddPhone" placeholder="Phone" inputmode="numeric" oninput="cbPhoneInput(this)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
         <input type="text" id="cbAddItem"  placeholder="Item they're looking for" class="cb-add-item" onkeydown="if(event.key==='Enter')cbQuickAdd()">
         <input type="text" id="cbAddNoteTxt" placeholder="Notes (optional)" onkeydown="if(event.key==='Enter')cbQuickAdd()">
-        <button class="btn-primary cb-add-btn" onclick="cbQuickAdd()">+ Add</button>
+        <button class="btn-primary cb-add-btn" onclick="cbQuickAdd()">${CB_ICONS.plus}Add</button>
     </div>`;
 }
 
@@ -7740,15 +8404,15 @@ function cbRowHtml(e, showStore) {
     let actions = '';
     if (canAct && !editing) {
         actions = isArchived
-            ? `<button class="cb-icon-btn" data-cb-tip="Restore to active" onclick="event.stopPropagation();cbRestoreEntry('${e.id}')">♻️</button>`
-            : `<button class="cb-icon-btn" data-cb-tip="Edit" onclick="event.stopPropagation();cbEditEntry('${e.id}')">✏️</button>`;
-        actions += `<button class="cb-icon-btn" data-cb-tip="Delete" onclick="event.stopPropagation();cbDeleteEntry('${e.id}')">🗑️</button>`;
+            ? `<button class="cb-icon-btn" data-cb-tip="Restore to active" onclick="event.stopPropagation();cbRestoreEntry('${e.id}')">${CB_ICONS.restore}</button>`
+            : `<button class="cb-icon-btn" data-cb-tip="Edit" onclick="event.stopPropagation();cbEditEntry('${e.id}')">${CB_ICONS.edit}</button>`;
+        actions += `<button class="cb-icon-btn cb-btn-danger" data-cb-tip="Delete" onclick="event.stopPropagation();cbDeleteEntry('${e.id}')">${CB_ICONS.trash}</button>`;
     }
 
     let row;
     if (editing) {
         row = `<tr class="cb-row cb-row-editing" data-id="${e.id}">
-            ${showStore ? `<td class="cb-col-store">${b2bStoreLabel(e.store)}</td>` : ''}
+            ${showStore ? `<td class="cb-col-store">${escapeHtml(e.store)}</td>` : ''}
             <td><input class="cb-edit-input" id="cbEditName" value="${escapeHtml(e.customer_name)}"></td>
             <td><input class="cb-edit-input" id="cbEditPhone" type="tel" inputmode="numeric" oninput="cbPhoneInput(this)" value="${escapeHtml(String(e.phone || '').replace(/\D/g, '').slice(0, 10))}"></td>
             <td class="cb-col-item"><input class="cb-edit-input" id="cbEditItem" value="${escapeHtml(e.item)}"></td>
@@ -7757,20 +8421,20 @@ function cbRowHtml(e, showStore) {
             <td class="cb-col-notes"></td>
             <td class="cb-logged"></td>
             <td class="cb-col-actions">
-                <button class="cb-icon-btn" data-cb-tip="Save" onclick="event.stopPropagation();cbSaveEdit('${e.id}')">✅</button>
-                <button class="cb-icon-btn" data-cb-tip="Cancel" onclick="event.stopPropagation();cbCancelEdit()">✖</button>
+                <button class="cb-icon-btn cb-btn-save" data-cb-tip="Save" onclick="event.stopPropagation();cbSaveEdit('${e.id}')">${CB_ICONS.save}</button>
+                <button class="cb-icon-btn cb-btn-danger" data-cb-tip="Cancel" onclick="event.stopPropagation();cbCancelEdit()">${CB_ICONS.cancel}</button>
             </td>
         </tr>`;
     } else {
         row = `<tr class="cb-row ${expanded ? 'cb-row-open' : ''} ${e.status === 'completed' ? 'cb-row-done' : ''}" data-id="${e.id}" onclick="cbToggleRow('${e.id}')">
-            ${showStore ? `<td class="cb-col-store">${b2bStoreLabel(e.store)}</td>` : ''}
+            ${showStore ? `<td class="cb-col-store">${escapeHtml(e.store)}</td>` : ''}
             <td class="cb-customer">${escapeHtml(e.customer_name)}</td>
             <td>${phone}</td>
             <td class="cb-col-item cb-item">${escapeHtml(e.item)}</td>
             <td class="cb-cell-status">${chip}</td>
             <td class="cb-cell-timer">${_cbDaysBadge(e)}</td>
-            <td class="cb-col-notes">${e.notes.length ? `<span class="cb-note-count">💬 ${e.notes.length}</span>` : ''}</td>
-            <td class="cb-logged">${escapeHtml(e.created_by)} · ${_cbShortDate(e.date_of_call)}</td>
+            <td class="cb-col-notes">${e.notes.length ? `<span class="cb-note-count">${CB_ICONS.note}${e.notes.length}</span>` : ''}</td>
+            <td class="cb-logged"><span class="cb-logged-date">${_cbShortDate(e.date_of_call)}</span><span class="cb-logged-by">${escapeHtml(e.created_by)}</span></td>
             <td class="cb-col-actions">${actions}</td>
         </tr>`;
     }
@@ -7917,11 +8581,8 @@ function applyRoleBasedUI() {
     if (greetingEl) greetingEl.innerText = `Welcome ${userName}!`;
 
     const firstName = userName.split(' ')[0];
-    const wsTitleEl = document.getElementById('wsTitle');
-    if (wsTitleEl) wsTitleEl.innerHTML = `<span>📈</span> ${firstName}'s Workspace`;
-
-    const opsTitleEl = document.getElementById('opsTitle');
-    if (opsTitleEl) opsTitleEl.innerHTML = `<span>🛠️</span> ${firstName}'s Operational Tools`;
+    // (Analytics Workspace header is a static V4 hero in workspace.html now —
+    //  no per-user title injection, matching the Operations / Processes pages.)
 
     const userRoleClass = `role-${userRole.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-')}`;
     const userStoreClass = `store-${userStore.toLowerCase()}`;
@@ -7970,6 +8631,9 @@ function applyRoleBasedUI() {
     // a synthetic EXTRAS bar so one borrowed link never drags in a whole
     // foreign hotbar.
     _syncHotbarExtras(userRoleClass, userName);
+    // Combined widgets (manager Command Center, employee Buying/KPIs): after per-tab
+    // feature overrides, hide a widget whose every tab is off and keep a valid tab active.
+    _reconcileCommandWidgets();
     // Dashboard card rows where an override hid a card rebalance so the
     // remaining cards fill the row instead of leaving an empty slot.
     _rebalanceDashboardRows();
@@ -7977,6 +8641,12 @@ function applyRoleBasedUI() {
     // the panel, so overrides can add or remove tools for any role without the
     // static role-class unions drifting out of sync.
     _syncToolsPanelChrome();
+    // Only matters when one user holds both Preferred Purchases entries; the
+    // labels are otherwise already correct in the markup.
+    try { _plSyncToolLabels(); } catch (_) { /* module may not be loaded on this page */ }
+    // Role gating decides how many action items are visible, so square the deck
+    // up right after it rather than waiting for the feed's next render.
+    try { _samSyncRailFill(); } catch (_) { /* menu not on this page */ }
     // First call kicks off a background refresh of the overrides from Supabase
     // (cached copy applies instantly; a change re-runs this function once).
     _kickFeatureOverridesRefresh();
@@ -8190,10 +8860,28 @@ function initDashboardData() {
         setTimeout(fetchAwardsData, 900);
         setTimeout(fetchDmGoalsData, 1000);
         setTimeout(fetchDmAuditData, 1050);
-        // Keep audit readiness live while the DM has the dashboard open.
+        // Monthly goals are localStorage-backed and synced by the calls above this
+        // block, so the rail only needs one nudge once they've landed.
+        setTimeout(_dmxSyncRail, 1400);
+        // Keep audit readiness live while the DM has the dashboard open. Gated on
+        // the role now — fetchDmAuditData used to guard on its own dashboard
+        // container, which no longer exists.
         if (!window._dmAuditSync) window._dmAuditSync = setInterval(() => {
-            if (document.getElementById('dm-audit-container')) fetchDmAuditData();
+            if (_dmxIsDistrict()) fetchDmAuditData();
         }, 60000);
+        // SAFETY NET for the Command Center dots. Realtime (broadcast-as-ping,
+        // see _RT_TOOL_CHECKS: scorecard/ebay/buying/goals) is the PRIMARY path —
+        // it lights the pulsing dot the instant a write lands. This slow poll only
+        // matters if the realtime socket never connects (CDN blocked, etc.); it
+        // re-pulls the sources so a change still surfaces within the interval.
+        if (!window._ccDataSync) window._ccDataSync = setInterval(() => {
+            const hasCC = document.getElementById('cc-updot-buying');       // manager Command Center
+            const hasEC = document.getElementById('ec-updot-buying');       // employee combined widget
+            if ((hasCC || hasEC) && typeof fetchHubData === 'function') fetchHubData();
+            if (hasCC && typeof fetchScorecardData === 'function') fetchScorecardData();
+            if (hasCC && typeof fetchAlertsData === 'function') fetchAlertsData();
+            if (hasEC && typeof fetchAndRenderEmployeeKPIs === 'function') fetchAndRenderEmployeeKPIs();
+        }, 10 * 60 * 1000);
         setTimeout(fetchAndRenderEmployeeGoals, 1100);
         setTimeout(fetchAndRenderEmployeeKPIs, 1200);
         setTimeout(fetchAndDisplayStoreComment, 1500);
@@ -8202,7 +8890,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -8312,7 +9000,30 @@ const customTooltip = document.createElement('div');
 customTooltip.className = 'speeks-tooltip';
 document.body.appendChild(customTooltip);
 
+// When true the tooltip is pinned under a top-nav button (with a caret) rather
+// than trailing the cursor — see _anchorTipBelow + the mousemove guard.
+let _tipAnchored = false;
+function _anchorTipBelow(el) {
+    const r = el.getBoundingClientRect();
+    const tw = customTooltip.offsetWidth;
+    let x = r.left + r.width / 2 - tw / 2 + window.scrollX;
+    x = Math.max(10, Math.min(x, window.scrollX + window.innerWidth - tw - 10));
+    customTooltip.style.left = x + 'px';
+    customTooltip.style.top = (r.bottom + 10 + window.scrollY) + 'px';
+}
+
 document.addEventListener('mouseover', function(e) {
+    // Reset the anchored state each pass; the top-nav branch re-arms it below.
+    customTooltip.classList.remove('anchored'); _tipAnchored = false;
+    // Inside the redesigned tool modals (and the Tools side panel), upgrade any
+    // native title="" tooltip to the white styled one: move it to data-tip (once)
+    // so the branch below renders it, and drop title so the black OS box never
+    // shows. Future re-renders recreate title and get re-upgraded on next hover.
+    const titledInTool = e.target.closest('.modal-menu.manage-menu [title], .tools-side-panel [title]');
+    if (titledInTool) {
+        const t = titledInTool.getAttribute('title');
+        if (t) { titledInTool.setAttribute('data-tip', t); titledInTool.removeAttribute('title'); }
+    }
     // Generic styled tooltip: any element with data-tip gets the site tooltip
     // instead of the plain browser title box. Used by the Action Menu + panels.
     const genTip = e.target.closest('[data-tip]');
@@ -8320,7 +9031,28 @@ document.addEventListener('mouseover', function(e) {
         customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
         customTooltip.innerHTML = `<span style="font-size: 12.5px; font-weight: 600; color: var(--slate-charcoal); white-space: normal;">${genTip.getAttribute('data-tip')}</span>`;
         customTooltip.classList.add('show');
+        // Top-nav buttons: pin the tooltip beneath the button with a caret instead
+        // of letting it trail the cursor (matches the Tools button / tab tooltips).
+        if (genTip.closest('.top-nav')) { customTooltip.classList.add('anchored'); _tipAnchored = true; _anchorTipBelow(genTip); }
         return;
+    }
+
+    // Collapsed nav: when the nav shrinks to icons (.nav-compact hides the label),
+    // hovering a page link shows its name in the same anchored/caret tooltip as the
+    // right-side icons. Only fires while collapsed — the label speaks for itself
+    // when it's visible.
+    const navLink = e.target.closest('.nav-link');
+    if (navLink && navLink.closest('.top-nav.nav-compact')) {
+        const lbl = navLink.querySelector('span');
+        const txt = lbl ? lbl.textContent.trim() : '';
+        if (txt) {
+            customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
+            customTooltip.innerHTML = `<span style="font-size: 12.5px; font-weight: 600; color: var(--slate-charcoal); white-space: normal;">${txt}</span>`;
+            customTooltip.classList.add('show', 'anchored');
+            _tipAnchored = true;
+            _anchorTipBelow(navLink);
+            return;
+        }
     }
 
     // Call Backs sheet: any element carrying data-cb-tip gets the standard site tooltip
@@ -8344,8 +9076,8 @@ document.addEventListener('mouseover', function(e) {
 
     const awardI = e.target.closest('.award-info-btn');
     if (awardI) {
-        const wrap = awardI.closest('.award-card-trophy-wrap');
-        const nameEl = wrap ? wrap.querySelector('.award-card-name') : null;
+        const wrap = awardI.closest('.aw') || awardI.closest('.award-card-trophy-wrap');
+        const nameEl = wrap ? wrap.querySelector('.aw-name, .award-card-name') : null;
         const title = nameEl ? nameEl.innerText.replace(/\s+/g, ' ').trim() : 'Award';
         customTooltip.style.setProperty('--tip-color', 'var(--sage-professional)');
         customTooltip.innerHTML = `
@@ -8412,6 +9144,7 @@ document.addEventListener('mouseover', function(e) {
 });
 
 document.addEventListener('mousemove', function(e) {
+    if (_tipAnchored) return;   // pinned under a nav button — don't trail the cursor
     if (customTooltip.classList.contains('show')) {
         let x = e.pageX - customTooltip.offsetWidth - 15;
         let y = e.pageY + 15;
@@ -8503,6 +9236,17 @@ document.addEventListener('click', async (e) => {
             applyRoleBasedUI();
             closeAllModals();
 
+            // Start the new tab at the top. This swap replaces .main-content in
+            // place rather than navigating, so the scroll offset carries over from
+            // whatever you were reading on the previous tab — and because the new
+            // page is a different length, you land somewhere arbitrary rather than
+            // where you were. Has to come AFTER closeAllModals, which restores the
+            // scroll position it pinned when a modal opened and would otherwise
+            // undo this. Back/forward still restore position: popstate does a real
+            // reload and the browser handles that.
+            window.scrollTo(0, 0);
+            document.documentElement.scrollTop = 0;
+
             if (targetUrl.includes('docs.html')) {
                 if (typeof loadDocs === 'function') loadDocs();
                 const docSearch = document.getElementById('docSearch');
@@ -8554,7 +9298,7 @@ function renderKpiChart(payload, metric) {
     const mc = METRIC[metric] || METRIC.conversion;
     const { field, unit, isPct } = mc;
 
-    const STORE_COLORS = { OVL:'#a855f7', LEE:'#3b82f6', WSP:'#22c55e', MPL:'#f97316', BAL:'#ef4444' };
+    const STORE_COLORS = { OVL:'#7c6fd6', LEE:'#4e90cf', WSP:'#2ea36a', MPL:'#d99f43', BAL:'#d9776a' };
     const EMP_COLORS   = ['#a855f7','#3b82f6','#22c55e','#f97316','#ef4444','#14b8a6','#eab308','#ec4899'];
 
     const dmDropdown = document.getElementById('dmChartStoreSelector');
@@ -8723,160 +9467,45 @@ function renderKpiChart(payload, metric) {
 
 // --- CHART: DRAW LEADERBOARD ---
 function drawLeaderboard() {
+    // Standings list (replaced the Chart.js "race" — see combined Performance widget).
+    // Reads the same cachedLeaderboardData the race used; Revenue/GP toggle unchanged.
     const wrapper = document.getElementById('lb-wrapper');
     const monthLabel = document.getElementById('lb-month-display');
-    
     if (!wrapper || !cachedLeaderboardData || !cachedLeaderboardData.activeStores) return;
 
-    if (typeof Chart === 'undefined') {
-        setTimeout(drawLeaderboard, 100); 
-        return;
-    }
-
     const now = new Date();
-    if (monthLabel) {
-        monthLabel.innerText = now.toLocaleString('default', { month: 'long', year: 'numeric' }).toUpperCase();
-    }
+    if (monthLabel) monthLabel.innerText = now.toLocaleString('default', { month: 'long', year: 'numeric' });
 
-    wrapper.style.display = 'block';
-    wrapper.innerHTML = '<canvas id="leaderboardCanvas" style="width: 100%; height: 100%;"></canvas>';
-    const canvas = document.getElementById('leaderboardCanvas');
-
-    const colors = { 'OVL': '#a855f7', 'LEE': '#3b82f6', 'WSP': '#22c55e', 'MPL': '#f97316', 'BAL': '#ef4444' };
-    const daysInMonthCount = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    const dateLabels = Array.from({length: daysInMonthCount}, (_, i) => `${now.getMonth() + 1}/${i + 1}`);
-
-    let datasets = [];
+    const colors = { 'OVL': '#7c6fd6', 'LEE': '#4e90cf', 'WSP': '#2ea36a', 'MPL': '#d99f43', 'BAL': '#d9776a' };
     const dataPacket = currentLeaderboardMetric === 'Revenue' ? cachedLeaderboardData.revenue : cachedLeaderboardData.gp;
+    const myStore = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
 
-    cachedLeaderboardData.activeStores.forEach(store => {
-        if (dataPacket[store]) {
-            datasets.push({
-                label: '   ' + store + '   ', 
-                data: dataPacket[store],
-                borderColor: colors[store],
-                backgroundColor: colors[store],
-                borderWidth: 2,
-                pointRadius: 0,
-                pointHoverRadius: 6,
-                tension: 0.1
-            });
-        }
-    });
+    const rows = cachedLeaderboardData.activeStores
+        .filter(st => dataPacket && dataPacket[st])
+        .map(st => {
+            const arr = dataPacket[st];
+            const lastIdx = arr.findLastIndex(v => v !== null && v !== undefined);
+            return { store: st, val: lastIdx !== -1 ? (arr[lastIdx] || 0) : 0 };
+        })
+        .sort((a, b) => b.val - a.val);
 
-    let finalScores = [];
-    datasets.forEach((ds, i) => {
-        let lastIdx = ds.data.findLastIndex(v => v !== null);
-        let lastVal = lastIdx !== -1 ? ds.data[lastIdx] : 0;
-        finalScores.push({ index: i, val: lastVal, lastIdx: lastIdx });
-    });
-    
-    finalScores.sort((a, b) => b.val - a.val);
+    if (!rows.length) { wrapper.innerHTML = '<div class="status-message">No data yet.</div>'; return; }
 
-    let ranks = {};
-    finalScores.forEach((item, pos) => {
-        if (pos < 3) ranks[item.index] = { rank: pos + 1, lastIdx: item.lastIdx };
-    });
+    const max = Math.max(...rows.map(r => r.val), 1);
+    const fmt = v => '$' + Math.round(v).toLocaleString();
 
-    const checkeredPlugin = {
-        id: 'checkeredFinishLine',
-        beforeDatasetsDraw: (chart) => {
-            const { ctx, chartArea } = chart;
-            if (!chartArea) return;
-            const { top, bottom, right } = chartArea;
-            
-            const totalHeight = bottom - top;
-            const rowCount = Math.round(totalHeight / 12); 
-            const squareSize = totalHeight / rowCount; 
-            
-            const cols = 2; 
-            const lineWidth = squareSize * cols;
-            const startX = right - lineWidth;
-
-            ctx.save();
-            for (let row = 0; row < rowCount; row++) {
-                const currentY = top + (row * squareSize);
-                for (let col = 0; col < cols; col++) {
-                    ctx.fillStyle = ((col + row) % 2 === 0) ? '#e2e8f0' : '#1a1c1e';
-                    ctx.fillRect(startX + (col * squareSize), currentY, squareSize + 0.5, squareSize + 0.5);
-                }
-            }
-            ctx.restore();
-        }
-    };
-
-    try {
-        const ctx = canvas.getContext('2d');
-        if (leaderboardChartInstance) leaderboardChartInstance.destroy(); 
-
-        let activePlugins = typeof ChartDataLabels !== 'undefined' ? [ChartDataLabels, checkeredPlugin] : [checkeredPlugin];
-
-        leaderboardChartInstance = new Chart(ctx, {
-            type: 'line',
-            plugins: activePlugins,
-            data: { labels: dateLabels, datasets: datasets },
-            options: {
-                animation: false, 
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                layout: { padding: { top: 40, right: 50, left: 10, bottom: 0 } },
-                plugins: {
-                    tooltip: {
-                        itemSort: function(a, b) { return b.parsed.y - a.parsed.y; },
-                        callbacks: {
-                            label: function(context) {
-                                let label = context.dataset.label.trim() || ''; 
-                                if (label) label += ': ';
-                                if (context.parsed.y !== null) {
-                                    label += new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(context.parsed.y);
-                                }
-                                return label;
-                            }
-                        }
-                    },
-                    legend: {
-                        position: 'bottom',
-                        labels: { font: { size: 13, family: "'Inter', sans-serif", weight: 'bold' }, usePointStyle: true, boxWidth: 8, padding: 20 }
-                    },
-                    datalabels: {
-                        display: function(context) {
-                            const rankInfo = ranks[context.datasetIndex];
-                            if (!rankInfo) return false; 
-                            return context.dataIndex === rankInfo.lastIdx; 
-                        },
-                        formatter: function(value, context) {
-                            const r = ranks[context.datasetIndex].rank;
-                            return r === 1 ? '🥇 1st' : (r === 2 ? '🥈 2nd' : '🥉 3rd');
-                        },
-                        backgroundColor: function(context) { return context.dataset.backgroundColor; },
-                        color: 'white',
-                        borderRadius: 6,
-                        font: { size: 10, weight: 'bold', family: "'Inter', sans-serif" },
-                        padding: { top: 4, bottom: 4, left: 8, right: 8 },
-                        align: 'right',  
-                        anchor: 'center',
-                        offset: 4
-                    }
-                },
-                scales: {
-                    y: {
-                        afterFit: function(scale) { scale.width = 75; },
-                        beginAtZero: true,
-                        max: datasets.length === 0 ? 1000 : undefined, 
-                        ticks: { callback: function(value) { return '$' + (value / 1000) + 'k'; } },
-                        grid: { borderDash: [4, 4] }
-                    },
-                    x: { 
-                        grid: { display: false },
-                        ticks: { font: { size: 11, weight: 'bold', family: "'Inter', sans-serif" }, color: '#a0aab2', maxRotation: 45, minRotation: 45 }
-                    }
-                }
-            }
-        });
-    } catch (e) {
-        console.error("Chart.js failed to draw.", e);
-    }
+    wrapper.innerHTML = rows.map((r, i) => `
+        <div class="lbs-row${r.store === myStore ? ' me' : ''}">
+            <span class="lbs-rank${i === 0 ? ' g' : ''}">${i + 1}</span>
+            <span class="lbs-store">
+                <span class="lbs-dot" style="background:${colors[r.store] || '#94a3b8'}"></span>
+                <span class="lbs-info">
+                    <span class="lbs-nm">${r.store}</span>
+                    <span class="lbs-bar"><i style="width:${Math.max(5, (r.val / max) * 100).toFixed(1)}%;background:${colors[r.store] || '#94a3b8'}"></i></span>
+                </span>
+            </span>
+            <span class="lbs-val">${fmt(r.val)}</span>
+        </div>`).join('');
 }
 
 // --- MODAL: MANAGE ANNOUNCEMENTS ---
@@ -9387,47 +10016,13 @@ function saveMonthlyGoals() {
 
 // --- District Overview ---
 
+// The district monthly-goals grid moved into #dmGoalsModal, but five call sites
+// still say "the district goals changed, repaint" — after a save, after a sheet
+// sync, on dashboard build. Keeping the name and retargeting it keeps all five
+// working and the popup live, instead of five edits and a rename.
 function renderDistrictGoals() {
-    const container = document.getElementById('districtGoalsGrid');
-    if (!container) return;
-    const monthEl = document.getElementById('districtGoalsMonth');
-    if (monthEl) monthEl.textContent = _mgbMonthLabel();
-    const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-    const emojis = { OVL: '🟣', LEE: '🔵', WSP: '🟢', MPL: '🟠', BAL: '🔴' };
-
-    let goalsRow = '';
-    let initiativesRow = '';
-
-    stores.forEach(store => {
-        const data        = getMonthlyGoals(store);
-        const goals       = data?.goals || [];
-        const initiatives = getStoreInitiatives(store)?.initiatives || [];
-
-        const goalsContent = goals.length
-            ? goals.map(g => `<div class="dg-goal-mini" data-goal-title="${escapeHtml(g.title)}" data-goal-desc="${escapeHtml(g.description || '')}"><div class="dg-goal-mini-label">${escapeHtml(g.title)}</div></div>`).join('')
-            : '<div class="dg-no-goals">No goals set</div>';
-
-        const initiativeItems = initiatives.length
-            ? initiatives.map(i => {
-                const badge = i.status === 'upcoming'
-                    ? '<span class="si-status-badge si-status-badge--upcoming">Upcoming</span>'
-                    : '<span class="si-status-badge si-status-badge--current">Current</span>';
-                return `<div class="dg-goal-mini dg-initiative-mini" data-goal-title="${escapeHtml(i.title)}" data-goal-desc="${escapeHtml(i.description || '')}"><div class="dg-goal-mini-label">${escapeHtml(i.title)}</div>${badge}</div>`;
-            }).join('')
-            : '<div class="dg-no-goals">No initiatives set</div>';
-
-        goalsRow += `<div class="dg-goals-col">
-            <div class="dg-store-header">${emojis[store]} ${store}</div>
-            ${goalsContent}
-        </div>`;
-
-        initiativesRow += `<div class="dg-initiatives-col">
-            <div class="dg-initiatives-divider">Initiatives &amp; Projects <button class="dg-edit-btn" onclick="openEditStoreInitiativesModal('${store}')">Edit ✏️</button></div>
-            ${initiativeItems}
-        </div>`;
-    });
-
-    container.innerHTML = goalsRow + initiativesRow;
+    renderDmGoalsModal();
+    _dmxSyncRail();
 }
 
 // ============================================================================
@@ -11556,27 +12151,77 @@ function renderClaimsTable() {
     wrap.innerHTML = html;
 }
 
-// Tiny copy button next to a case number so the ID can be pasted straight into
-// Shopify / UPS / USPS status lookups. Flashes ✓ on success.
-function _claimCopyBtn(r) {
-    if (!r.case_number) return '';
-    return `<button onclick="copyClaimCase(this)" data-case="${escapeHtml(r.case_number)}" title="Copy case number" style="margin-left:5px; font-size:10px; padding:2px 5px; border:1px solid #e2e8f0; border-radius:5px; background:#f8fafc; color:#64748b; cursor:pointer; line-height:1; vertical-align:1px;">📋</button>`;
+// ── Shared copy chip ───────────────────────────────────────────────────────
+// A 📋 button beside an identifier whose whole job is to be pasted somewhere
+// else: a claim case number into a carrier's status lookup, a recycle SKU into
+// inventory. Styling is .site-copy in styles.css — one definition, so a
+// copyable value looks and behaves the same in every tool.
+//
+// `what` names the value in the tooltip, the screen-reader label and the
+// failure message, so the fallback tells you WHICH thing to copy by hand.
+//
+// Both the copy mark and the success check live in one SVG; CSS shows one at a
+// time. Line-icon style with stroke-width 2.4 to match the nav icons — at 12px
+// a thinner stroke greys out.
+const _SITE_COPY_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + '<g class="site-copy-mark-copy"><rect x="9" y="9" width="12" height="12" rx="2.5"/>'
+    + '<path d="M6 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V6"/></g>'
+    + '<polyline class="site-copy-mark-ok" points="20 6 10 17 5 12"/></svg>';
+
+function siteCopyBtn(value, what) {
+    const v = String(value ?? '').trim();
+    if (!v) return '';
+    const label = escapeHtml(what || 'value');
+    // No whitespace between the value and this button at any call site: with no
+    // break opportunity there, the icon can never be orphaned onto its own line
+    // even when the column is narrow enough that the value itself wraps.
+    return `<button type="button" class="site-copy" data-copy="${escapeHtml(v)}" data-what="${label}"`
+        + ` title="Copy ${label}" aria-label="Copy ${label}" onclick="siteCopy(event, this)">${_SITE_COPY_SVG}</button>`;
 }
 
-function copyClaimCase(btn) {
-    const num = btn.dataset.case || '';
-    if (!num) return;
-    navigator.clipboard.writeText(num).then(() => {
-        const old = btn.innerText;
-        btn.innerText = '✓';
-        btn.style.color = '#059669';
-        btn.style.borderColor = '#34d399';
-        btn.style.background = '#ecfdf5';
-        setTimeout(() => {
-            btn.innerText = old;
-            btn.style.color = ''; btn.style.borderColor = ''; btn.style.background = '';
-        }, 1200);
-    }).catch(() => alert('Could not copy — please select and copy the case number manually.'));
+function siteCopy(ev, btn) {
+    // These chips sit inside table rows and cards that have their own click
+    // handlers (opening a note, following a product link) — copying must not
+    // also fire those.
+    if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+    const v = btn.dataset.copy || '';
+    if (!v) return;
+    const flash = () => {
+        btn.classList.add('site-copy-ok');
+        // The table may have re-rendered underneath us in the meantime, in
+        // which case this button is detached and resetting it is harmless.
+        setTimeout(() => btn.classList.remove('site-copy-ok'), 1200);
+    };
+    // navigator.clipboard is undefined on a non-secure origin, so the old
+    // textarea trick is the fallback rather than an outright failure.
+    const manual = () => {
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = v;
+            ta.setAttribute('readonly', '');
+            ta.style.cssText = 'position:fixed; top:-1000px; opacity:0;';
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            if (!ok) throw new Error('denied');
+            flash();
+        } catch (_) {
+            alert(`Could not copy — please select and copy the ${btn.dataset.what || 'value'} manually.`);
+        }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(v).then(flash).catch(manual);
+    } else {
+        manual();
+    }
+}
+
+// Copy button next to a case number so the ID can be pasted straight into
+// Shopify / UPS / USPS status lookups.
+function _claimCopyBtn(r) {
+    return siteCopyBtn(r.case_number, 'case number');
 }
 
 // One claim row. `isChild` nests it (indent + blue edge) under its parent INR ticket;
@@ -12579,45 +13224,116 @@ function startStoreCommentPolling() {
 }
 
 // Opens the modal normally from the Speeks Tools menu (Fully Unlocked)
+// null = exec (every store's reads); an array = a manager's own store(s), which
+// scopes both the Read Receipts fetch and the store pickers.
+let _commentReadsStoreScope = null;
+const _EXEC_STORE_OPTIONS =
+    '<option value="ALL">All Stores</option>' +
+    '<option value="OVL">OVL</option>' +
+    '<option value="LEE">LEE</option>' +
+    '<option value="WSP">WSP</option>' +
+    '<option value="MPL">MPL</option>' +
+    '<option value="BAL">BAL</option>';
+
 function toggleSendCommentModal() {
-    openCEOStoreComment(null); 
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
+    // DM/CEO keep the company-wide sender; everyone else with the tool (Manager,
+    // Owner Manager, MSM) gets a version scoped to their own store(s).
+    if (role === 'district manager' || role === 'ceo') { openCEOStoreComment(null); return; }
+    openManagerStoreComment();
 }
 
 // Opens the modal from the CEO Rings and locks it to the specific store
 window.openCEOStoreComment = function(targetStore) {
     closeAllModals();
     const dropdown = document.getElementById('sendCommentModal');
-    
-    if (dropdown) {
-        dropdown.classList.add('show');
-        lockAndBlurScreen();
-        
-        // Clear previous message
-        document.getElementById('commentMessageInput').value = '';
-        
-        const storeSelect = document.getElementById('commentStoreSelect');
-        if (storeSelect) {
-            if (targetStore) {
-                // Lock it to the specific store clicked
-                storeSelect.value = targetStore;
-                storeSelect.disabled = true;
-                storeSelect.style.opacity = '0.6';
-                storeSelect.style.cursor = 'not-allowed';
-            } else {
-                // Unlock it for general use via the Speeks Tools menu
-                storeSelect.value = 'ALL';
-                storeSelect.disabled = false;
-                storeSelect.style.opacity = '1';
-                storeSelect.style.cursor = 'pointer';
-            }
-        }
+    if (!dropdown) return;
 
-        // Two tabs: Send Message | Read Receipts (built once, then reset to Send).
-        _setupCommentModalTabs();
-        _commentReadsCache = null; // refetch reads each time the modal opens
-        switchCommentTab('send');
+    dropdown.classList.add('show');
+    lockAndBlurScreen();
+    document.getElementById('commentMessageInput').value = '';
+
+    const storeSelect = document.getElementById('commentStoreSelect');
+    if (storeSelect) {
+        // Restore the full exec list (ALL + every store) in case a manager build
+        // of this modal ran earlier in the session.
+        storeSelect.innerHTML = _EXEC_STORE_OPTIONS;
+        if (targetStore) {
+            // Lock it to the specific store clicked
+            storeSelect.value = targetStore;
+            storeSelect.disabled = true;
+            storeSelect.style.opacity = '0.6';
+            storeSelect.style.cursor = 'not-allowed';
+        } else {
+            // Unlock it for general use via the Speeks Tools menu
+            storeSelect.value = 'ALL';
+            storeSelect.disabled = false;
+            storeSelect.style.opacity = '1';
+            storeSelect.style.cursor = 'pointer';
+        }
     }
+
+    _commentReadsStoreScope = null; // exec sees every store's reads
+    // Two tabs: Send Message | Read Receipts (built once, then reset to Send).
+    _setupCommentModalTabs();
+    _scopeCommentReadsFilter(null);
+    _commentReadsCache = null; // refetch reads each time the modal opens
+    switchCommentTab('send');
 };
+
+// Manager / Owner Manager / Multi-Store Manager: send only to their own store(s).
+// Single-store managers get a locked selector; the MSM gets BAL/MPL unlocked. The
+// message is authored under their name (submitStoreComment reads speeksUserName)
+// so on the recipient side it behaves identically to a DM/CEO comment.
+window.openManagerStoreComment = function() {
+    closeAllModals();
+    const dropdown = document.getElementById('sendCommentModal');
+    if (!dropdown) return;
+
+    dropdown.classList.add('show');
+    lockAndBlurScreen();
+    document.getElementById('commentMessageInput').value = '';
+
+    const isMSM = typeof isMultiStoreManager === 'function' && isMultiStoreManager();
+    const active = String(sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    const stores = isMSM
+        ? MULTISTORE_MANAGER_STORES.map(s => String(s).toUpperCase())
+        : (active ? [active] : []);
+    _commentReadsStoreScope = stores.slice();
+
+    const storeSelect = document.getElementById('commentStoreSelect');
+    if (storeSelect) {
+        storeSelect.innerHTML = stores.map(s => `<option value="${s}">${s}</option>`).join('');
+        storeSelect.value = stores.includes(active) ? active : (stores[0] || '');
+        const lock = stores.length <= 1; // one store = nothing to choose
+        storeSelect.disabled = lock;
+        storeSelect.style.opacity = lock ? '0.6' : '1';
+        storeSelect.style.cursor = lock ? 'not-allowed' : 'pointer';
+    }
+
+    _setupCommentModalTabs();
+    _scopeCommentReadsFilter(stores);
+    _commentReadsCache = null;
+    switchCommentTab('send');
+};
+
+// Restrict the Read Receipts store dropdown. Managers see only their store(s);
+// exec (null/empty) gets the full All-Stores list.
+function _scopeCommentReadsFilter(stores) {
+    const sel = document.getElementById('commentReadsStore');
+    if (!sel) return;
+    if (stores && stores.length) {
+        const opts = stores.length > 1
+            ? ['<option value="ALL">All My Stores</option>'].concat(
+                  stores.map(s => `<option value="${s}">${s}</option>`))
+            : stores.map(s => `<option value="${s}">${s}</option>`);
+        sel.innerHTML = opts.join('');
+        sel.value = stores.length > 1 ? 'ALL' : stores[0];
+    } else {
+        sel.innerHTML = _EXEC_STORE_OPTIONS;
+        sel.value = 'ALL';
+    }
+}
 
 // Adds the Send | Read Receipts tab bar + a reads panel to the send modal (once).
 function _setupCommentModalTabs() {
@@ -12629,7 +13345,7 @@ function _setupCommentModalTabs() {
 
     const bar = document.createElement('div');
     bar.id = 'commentTabBar';
-    bar.style.cssText = 'padding:14px 18px 0;';
+    bar.style.cssText = 'padding:14px 18px 14px;';
     bar.innerHTML = `<div class="notif-tabs" style="display:inline-flex;">
         <button id="comment-tab-send" class="tab-btn active" onclick="switchCommentTab('send')">Send Message</button>
         <button id="comment-tab-reads" class="tab-btn" onclick="switchCommentTab('reads')">Read Receipts</button>
@@ -12681,7 +13397,9 @@ async function loadStoreCommentReads() {
     if (!_commentReadsCache) {
         listEl.innerHTML = `<div style="color:#94a3b8; font-size:13px;">Loading…</div>`;
         try {
-            const res = await fetch(`${STORE_COMMENT_URL}?mode=reads&v=${Date.now()}`);
+            const scope = (_commentReadsStoreScope && _commentReadsStoreScope.length)
+                ? `&stores=${encodeURIComponent(_commentReadsStoreScope.join(','))}` : '';
+            const res = await fetch(`${STORE_COMMENT_URL}?mode=reads${scope}&v=${Date.now()}`);
             const rows = await res.json();
             _commentReadsCache = Array.isArray(rows) ? rows : [];
         } catch (e) {
@@ -12729,9 +13447,9 @@ function renderStoreCommentReads() {
         statsHtml += `<div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:4px 2px; margin-bottom:14px;">`
             + Object.keys(byStore).sort().map(s => {
                 const v = byStore[s];
-                return `<div style="display:flex; justify-content:space-between; gap:10px; padding:6px 12px; font-size:12.5px; border-bottom:1px solid #f1f5f9;">
+                return `<div style="display:flex; justify-content:space-between; align-items:center; gap:10px; padding:6px 12px; font-size:12.5px; border-bottom:1px solid #f1f5f9;">
                     <span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(s)}</span>
-                    <span style="color:#64748b;">${v.m} msg · ${v.reads} reads · ${(v.reads / v.m).toFixed(1)} avg</span>
+                    <span style="color:#64748b; text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;">${v.m} msg · ${v.reads} reads · ${(v.reads / v.m).toFixed(1)} avg</span>
                 </div>`;
             }).join('')
             + `</div>`;
@@ -12763,6 +13481,10 @@ async function submitStoreComment() {
     const message = document.getElementById('commentMessageInput').value.trim();
     const btn = document.getElementById('sendCommentBtn');
 
+    if (!store) {
+        alert("No store is set for your account, so there's nowhere to post this. Contact your DM.");
+        return;
+    }
     if (!message) {
         alert("Please write a message before sending.");
         return;
@@ -12900,7 +13622,15 @@ async function fetchAndDisplayStoreComment() {
             try { const parsed = new Date(c.date); if (!isNaN(parsed.getTime())) parsedDateStr = parsed.toLocaleDateString('en-US', { timeZone: 'America/Chicago' }); } catch (e) {}
             return parsedDateStr === todayStr || rawDateStr.includes(todayStr);
         };
-        const forMeComments = comments.filter(c => isMyStore(String(c.store || '').trim().toUpperCase())).reverse(); // newest first
+        // Never show a user their OWN store note — a manager sending to their own
+        // store would otherwise get their message back as a bubble/feed item. (DM/CEO
+        // never hit this since their store isn't a real store, but the guard is
+        // author-based so it's correct for everyone.) Excludes it from the bubble,
+        // the Action Menu feed and the hub archive alike.
+        const forMeComments = comments
+            .filter(c => isMyStore(String(c.store || '').trim().toUpperCase()))
+            .filter(c => String(c.author || '').trim().toLowerCase() !== userName.toLowerCase())
+            .reverse(); // newest first
 
         window._hubStoreNotes = forMeComments.map(c => ({
             author: c.author, text: c.message || c.text || '', date: c.date, created_at: c.created_at, store: c.store, id: c.id,
@@ -13058,7 +13788,7 @@ async function fetchChampions() {
             console.error("Failed to fetch Weekly Buyers:", buyerErr);
         }
 
-        // 5. BUILDER HELPER
+        // 5. BUILDER HELPER — featured champion + runner-up rows (calm redesign)
         const buildPodiumHtml = (dataArray, sortBy, labelText, type) => {
             const merged = {};
             dataArray.forEach(emp => {
@@ -13069,60 +13799,52 @@ async function fetchChampions() {
                     if (type === 'review') merged[emp.name].reviews += emp.reviews;
                 }
             });
-            
+
             const uniqueEmps = Object.values(merged);
             uniqueEmps.sort((a, b) => b[sortBy] - a[sortBy]);
             const top3 = uniqueEmps.slice(0, 3);
 
-            if (top3.length === 0) return '<div style="color: #888; font-weight: 600; text-align: center; width: 100%;">No data available yet.</div>';
+            if (top3.length === 0) return '<div class="champion-empty">No data available yet.</div>';
 
-            const podiumTheme = ['#e2e8f0', '#fef08a', '#fed7aa']; 
+            // Buyer raw score scales with dollars (tens of thousands), so show a
+            // compact, absolute "points" figure: raw score / 100, rounded. This
+            // preserves the exact ranking while staying small and readable.
+            const valOf = (emp) => type === 'lister' ? emp.listed
+                                 : type === 'review' ? emp.reviews
+                                 : Math.round(emp.score / 100);
 
-            const podiumOrder = [
-                { data: top3[1], place: 2, height: '155px', color: podiumTheme[0], medal: '🥈' },
-                { data: top3[0], place: 1, height: '215px', color: podiumTheme[1], medal: '🥇' },
-                { data: top3[2], place: 3, height: '115px', color: podiumTheme[2], medal: '🥉' }
-            ];
+            const champ = top3[0];
+            const runners = top3.slice(1);
 
-            let html = '';
-            podiumOrder.forEach(podium => {
-                if (!podium.data) return; 
-                const emp = podium.data;
-                const isFirst = podium.place === 1;
-                
-                // Render the inner number/label block for Lister, Review, and Buyer podiums.
-                // Buyer raw score scales with dollars (tens of thousands), so show a
-                // compact, absolute "points" figure: the raw score / 100, rounded. This
-                // preserves the exact ranking while staying small and readable.
-                let blockContent = '';
-                if (type === 'lister' || type === 'review' || type === 'buyer') {
-                    const val = type === 'lister' ? emp.listed
-                              : type === 'review' ? emp.reviews
-                              : Math.round(emp.score / 100);
-                    blockContent = `
-                        <div style="z-index: 2; display: flex; flex-direction: column; align-items: center;">
-                            <span style="font-size: ${isFirst ? '32px' : '26px'}; font-weight: 900; color: var(--slate-charcoal); line-height: 1;">${val}</span>
-                            <span style="font-size: 9px; font-weight: 900; color: #64748b; text-transform: uppercase; margin-top: 4px;">${labelText}</span>
-                        </div>`;
-                }
-
-                html += `
-                <div style="display: flex; flex-direction: column; align-items: center; width: 130px;">
-                    <div style="margin-bottom: 12px; text-align: center; display: flex; flex-direction: column; align-items: center; z-index: 2;">
-                        <div style="font-size: ${isFirst ? '46px' : '34px'}; line-height: 1; margin-bottom: 8px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));">${podium.medal}</div>
-                        <div style="font-size: ${isFirst ? '14px' : '12px'}; font-weight: 900; color: var(--slate-charcoal); line-height: 1.2; text-align: center;">${emp.name}</div>
-                        <div style="font-size: 10px; font-weight: 800; color: #888; text-transform: uppercase; margin-top: 4px;">${emp.store}</div>
+            const runnerHtml = runners.map((emp, i) => {
+                const place = i + 2;                       // 2 or 3
+                const cls = place === 2 ? 's' : 'b';       // silver / bronze
+                return `
+                <div class="cf-run">
+                    <span class="cf-rk ${cls}">${place}</span>
+                    <div class="cf-rinfo">
+                        <span class="cf-rn">${emp.name}</span>
+                        <span class="cf-rs">${emp.store}</span>
                     </div>
-                    
-                    <div style="width: 100%; height: ${podium.height}; background: linear-gradient(to bottom, ${podium.color}, #ffffff); border: 1px solid rgba(0,0,0,0.05); border-bottom: none; border-radius: 12px 12px 0 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 15px; position: relative; overflow: hidden;">
-                        
-                        ${blockContent}
-                        
-                        <span style="position: absolute; bottom: 8px; font-size: 42px; font-weight: 900; color: #000000; opacity: 0.12; line-height: 1; user-select: none; z-index: 1;">${podium.place}</span>
-                    </div>
+                    <span class="cf-rv">${valOf(emp)}</span>
                 </div>`;
-            });
-            return html;
+            }).join('');
+
+            return `
+            <div class="champ-featured-wrap">
+                <div class="cf-feat">
+                    <span class="cf-crown">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                        Champion
+                    </span>
+                    <div class="cf-id">
+                        <div class="cf-name">${champ.name}</div>
+                        <div class="cf-store">${champ.store}</div>
+                    </div>
+                    <div class="cf-val"><b>${valOf(champ)}</b><span>${labelText}</span></div>
+                </div>
+                ${runners.length ? `<div class="cf-runners">${runnerHtml}</div>` : ''}
+            </div>`;
         };
 
         feedChampionsToTicker(allBuyers, allListers, allGoogleReviews);
@@ -14923,7 +15645,7 @@ function boxOrderRenderReceipt() {
             <button class="box-receipt-x" title="Remove" onclick="boxReceiptRemove('${p.id}')">×</button>
         </div>`).join('');
     panel.innerHTML =
-        `<div class="box-receipt-head">🧾 Your order · ${picked.length} item${picked.length === 1 ? '' : 's'}</div>` +
+        `<div class="box-receipt-head">Your order · ${picked.length} item${picked.length === 1 ? '' : 's'}</div>` +
         `<div class="box-receipt-list">${lines}</div>`;
     panel.style.display = '';
 }
@@ -15461,8 +16183,8 @@ function renderMyRecycleTable() {
         const emptyBtns = canReview
             ? `<div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
                 ${RECYCLE_MAIL_TIP}
-                <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
-                <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email →</button>
+                <button class="btn-secondary" onclick="copyRecycleReport(this)">Copy</button>
+                <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
             </div>`
             : '';
         wrap.innerHTML = `${emptyBtns}${_recycleDeleteReqPanel(canReview)}<div style="padding:28px 20px; text-align:center; color:#94a3b8; font-weight:600;">No recycle requests for ${_recycleMonthLabel(month)}.</div>`;
@@ -15478,7 +16200,7 @@ function renderMyRecycleTable() {
     const total = rows.filter(r => r.review_verdict !== 'ignore' && r.review_verdict !== 'denied').reduce((a, r) => a + (_recycleLineTotal(r) || 0), 0);
     const fmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
 
-    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
+    const th = (t, extra = '') => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0; white-space:nowrap; ${extra}">${t}</th>`;
     const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; ${extra}">${c}</td>`;
     // Report preview "page" (DM/CEO) — mirrors the Box Order flow: Send Email
     // first shows the composed email, and the actual send happens from there.
@@ -15489,9 +16211,9 @@ function renderMyRecycleTable() {
             <div class="box-order-email-preview">${escapeHtml(`To: ${_recycleReportTo().join(', ')}\nSubject: ${subject}\n\n${body}`)}</div>
             <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
                 ${RECYCLE_MAIL_TIP}
-                <button class="btn-secondary" onclick="_recycleReportPreviewing=false; renderMyRecycleTable();">← Back</button>
-                <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
-                <button class="btn-primary" onclick="sendRecycleReport()">Send Email →</button>
+                <button class="btn-secondary" onclick="_recycleReportPreviewing=false; renderMyRecycleTable();"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>Back</button>
+                <button class="btn-secondary" onclick="copyRecycleReport(this)">Copy</button>
+                <button class="btn-primary" onclick="sendRecycleReport()">Send Email<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
             </div>`;
         return;
     }
@@ -15499,14 +16221,20 @@ function renderMyRecycleTable() {
     let html = canReview
         ? `<div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;">
             ${RECYCLE_MAIL_TIP}
-            <button class="btn-secondary" onclick="copyRecycleReport(this)">📋 Copy</button>
-            <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email →</button>
+            <button class="btn-secondary" onclick="copyRecycleReport(this)">Copy</button>
+            <button class="btn-primary" onclick="_recycleReportPreviewing=true; renderMyRecycleTable();">Send Email<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
         </div>`
         : '';
     html += _recycleDeleteReqPanel(canReview);
     const colCount = 9 + (showStore ? 1 : 0);
+    // width:100% on Description makes it the column that absorbs all slack, so
+    // every other column settles at its own min-content width. That is what lets
+    // the SKU cell be nowrap without stealing room from anything: a SKU is an
+    // identifier you read and copy in one piece, so it must not break at its
+    // hyphens, whereas a description is prose and is fine wrapping. Remove the
+    // width and the nowrap starts squeezing Description instead.
     html += `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px;">
-        <thead><tr>${canReview ? th('Review') : th('Status')}${th('Date')}${showStore ? th('Store') : ''}${th('SKU')}${th('Description')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
+        <thead><tr>${canReview ? th('Review') : th('Status')}${th('Date')}${showStore ? th('Store') : ''}${th('SKU')}${th('Description', 'width:100%;')}${th('Qty')}${th('Unit Cost')}${th('Total Cost')}${th('By')}${th('')}</tr></thead><tbody>`;
     rows.forEach(r => {
         // A line with a pending delete request is LOCKED — no reviewing, no
         // notes, no replies — until the DM approves/denies it or the manager
@@ -15579,15 +16307,20 @@ function renderMyRecycleTable() {
         const otherRole = canReview ? 'mgr' : 'dm';
         const noteLine = thread.map(n => {
             const noteDot = (n.role === otherRole && tOf(n.at) > seenB) ? NEW_DOT : '';
+            // .site-note / .site-note-reply in styles.css — the shared note
+            // callout. These two boxes were the original, hand-inlined here;
+            // the styling now lives in one place so a note reads the same in
+            // every tool that shows one.
+            const by = n.by ? ` <span class="site-note-by">— ${escapeHtml(n.by)}</span>` : '';
             return n.role === 'dm'
-                ? `<div style="margin-top:4px; font-size:11.5px; font-weight:600; color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; border-radius:7px; padding:4px 8px;">${noteDot}💬 ${escapeHtml(n.text || '')}${n.by ? ` <span style="color:#94a3b8;">— ${escapeHtml(n.by)}</span>` : ''}</div>`
-                : `<div style="margin-top:3px; margin-left:14px; font-size:11.5px; font-weight:600; color:#047857; background:#f0fdf4; border:1px solid #a7f3d0; border-radius:7px; padding:4px 8px;">${noteDot}↩ ${escapeHtml(n.text || '')}${n.by ? ` <span style="color:#94a3b8;">— ${escapeHtml(n.by)}</span>` : ''}</div>`;
+                ? `<div class="site-note">${noteDot}💬 ${escapeHtml(n.text || '')}${by}</div>`
+                : `<div class="site-note-reply">${noteDot}↩ ${escapeHtml(n.text || '')}${by}</div>`;
         }).join('');
         html += `<tr style="${rowBg}">
             ${firstCell}
             ${td(`<span style="color:#94a3b8; white-space:nowrap;">${fmtDate(r.created_at)}</span>`)}
             ${showStore ? td(`<span style="font-weight:800; color:var(--slate-charcoal);">${escapeHtml(r.store || '')}</span>`) : ''}
-            ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.sku || '')}</span>`)}
+            ${td(`<span style="font-weight:700; color:var(--slate-charcoal);">${escapeHtml(r.sku || '')}</span>${siteCopyBtn(r.sku, 'SKU')}`, 'white-space:nowrap;')}
             ${td(`<span style="color:#64748b;">${escapeHtml(r.description || '—')}</span>${noteLine}`)}
             ${td(`<span style="font-weight:800;">${Number(r.quantity) || 1}</span>`, 'text-align:center;')}
             ${td(_fmtRecycleMoney(r.cost), 'white-space:nowrap; font-weight:700; color:#64748b;')}
@@ -15660,7 +16393,7 @@ function _recycleDeleteReqPanel(canReview) {
         delReqs.map(r => `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:#fff; border:1px solid #fde68a; border-radius:9px; padding:9px 12px;">
             <div style="font-size:12.5px; color:var(--slate-charcoal);">
                 <span style="font-weight:800;">${escapeHtml(r.store || '')}</span>
-                · <span style="font-weight:700;">${escapeHtml(r.sku || '')}</span>
+                · <span style="font-weight:700;">${escapeHtml(r.sku || '')}</span>${siteCopyBtn(r.sku, 'SKU')}
                 <span style="color:#94a3b8;"> — ${escapeHtml(r.description || '')} · qty ${Number(r.quantity) || 1} · ${_fmtRecycleMoney(_recycleLineTotal(r))}</span>
                 <span style="color:#b45309; font-weight:700;"> · requested by ${escapeHtml(r.delete_requested_by || 'Manager')}</span>
             </div>
@@ -15850,7 +16583,13 @@ async function checkRecycleReminders() {
             //
             //  • A manager REPLY to your note blocks nobody, so it stays seen-based:
             //    surface it once, then the high-water mark hides it.
-            const needsReview   = rows.filter(r => !r.reviewed_at && !r.delete_requested_at);
+            // A line whose latest DM note is still awaiting the manager's reply
+            // isn't the DM's ball any more — it's parked waiting on the store, so
+            // it shouldn't nag as "awaiting your review." It re-enters the review
+            // count the moment the manager replies (which also surfaces below as a
+            // reply-to-your-notes signal).
+            const awaitingMgrReply = r => getT(r.dm_note_at) > getT(r.mgr_reply_at);
+            const needsReview   = rows.filter(r => !r.reviewed_at && !r.delete_requested_at && !awaitingMgrReply(r));
             const pendingDelete = rows.filter(r => r.delete_requested_at);
 
             const sRep = Number(localStorage.getItem(_recycleSeenKey('speeksRecycleReplySeen')) || 0);
@@ -16055,17 +16794,17 @@ function _recipientsFor(key, fallback) {
 const EMAIL_LIST_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 const EMAIL_LIST_GROUPS = [
     {
-        title: '♻️ Recycle Month-End Report',
+        title: 'Recycle Month-End Report',
         desc: 'Who the month-end recycle report email is addressed to.',
         lists: [{ key: 'recycle_report', label: 'Recipients' }],
     },
     {
-        title: '📦 Box Orders',
+        title: 'Box Orders',
         desc: 'Supplier address each store\'s box order email opens to.',
         lists: EMAIL_LIST_STORES.map(s => ({ key: `box_order_${s}`, label: s })),
     },
     {
-        title: '📈 Weekly SPEEKS Reports',
+        title: 'Weekly SPEEKS Reports',
         desc: 'Monday morning performance emails (sent automatically).',
         lists: [
             { key: 'weekly_leadership', label: 'Leadership report' },
@@ -16159,7 +16898,7 @@ function _recycleReportTo() { return _recipientsFor('recycle_report', RECYCLE_RE
 
 // Hover "i" (site-standard goals-info-i tooltip) explaining what Send Email
 // does and how to fix a machine where mailto: links open nothing.
-const RECYCLE_MAIL_TIP = `<span class="goals-info-i" style="align-self:center;" data-tip-title="Send Email opens your mail app" data-tip-desc="Clicking Send Email opens your computer's default email app with the report pre-filled — nothing sends until you hit Send there. If nothing opens: go to Windows Settings → Apps → Default apps → scroll to Choose defaults by link type → set MAILTO to Outlook (or your mail app). Or click 📋 Copy and paste the report into any email.">i</span>`;
+const RECYCLE_MAIL_TIP = `<span class="goals-info-i" style="align-self:center;" data-tip-title="Send Email opens your mail app" data-tip-desc="Clicking Send Email opens your computer's default email app with the report pre-filled — nothing sends until you hit Send there. If nothing opens: go to Windows Settings → Apps → Default apps → scroll to Choose defaults by link type → set MAILTO to Outlook (or your mail app). Or click Copy and paste the report into any email."><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>`;
 
 function _recycleReportCompose() {
     const month = (document.getElementById('recycle-month-filter') || {}).value || _recycleMonthKey(new Date());
@@ -16293,35 +17032,47 @@ const FA_ROLES = [
 
 const FEATURE_CATALOG = [
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
-    { key: 'tool-claims-store',        label: 'Insurance Claims (store)',      tab: 'tools', group: '🛟 Claims & Refunds', def: ['manager', 'owner-manager'] },
-    { key: 'tool-claims-oversight',    label: 'Insurance Claims (oversight)',  tab: 'tools', group: '🛟 Claims & Refunds', def: ['district-manager', 'ceo'] },
-    { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: '📢 Content', def: ['district-manager', 'ceo', 'tom', 'owner-manager'] },
-    { key: 'tool-ticker',              label: 'Ticker Items',                  tab: 'tools', group: '📢 Content', def: ['district-manager'] },
-    { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: '📢 Content', def: ['district-manager'] },
-    { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: '🏪 Store Ops', def: ['district-manager', 'ceo'] },
-    { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: '🏪 Store Ops', def: ['district-manager'] },
-    { key: 'tool-variance-report',     label: 'Submit Variance Report',        tab: 'tools', group: '🏪 Store Ops', def: ['district-manager'] },
-    { key: 'tool-store-comment',       label: 'Send Store Comment',            tab: 'tools', group: '🏪 Store Ops', def: ['district-manager', 'ceo'] },
-    { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: '📦 Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
-    { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: '📦 Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
-    { key: 'tool-feature-access',      label: 'Feature Access (this tool)',    tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo'] },
-    { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: '👥 Admin', def: ['district-manager', 'ceo'] },
-    { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
-    { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
-    { key: 'tool-manage-policies',     label: 'Manage Policies',               tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
-    { key: 'tool-monthly-awards',      label: 'Monthly Awards',                tab: 'tools', group: '👥 Admin', def: ['district-manager'] },
-    { key: 'tool-system-hotkeys',      label: 'System Hotkeys',                tab: 'tools', group: '⚙ System', def: ['district-manager'] },
+    { key: 'tool-claims-store',        label: 'Insurance Claims (store)',      tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
+    { key: 'tool-claims-oversight',    label: 'Insurance Claims (oversight)',  tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
+    { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'tom', 'owner-manager'] },
+    { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: 'Content', def: ['district-manager'] },
+    { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
+    { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
+    { key: 'tool-variance-report',     label: 'Submit Variance Report',        tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
+    { key: 'tool-store-comment',       label: 'Send Store Comment',            tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
+    { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
+    { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    // Two versions of one tool, sharing the `tool-preferred` stem so the
+    // Delegation tab pairs them the way it already pairs the claims tools.
+    { key: 'tool-preferred-request',   label: 'Preferred Purchases',           tab: 'tools', group: 'Orders', def: ['district-manager', 'manager', 'assistant-manager'] },
+    { key: 'tool-preferred-approve',   label: 'Preferred Purchases (Owner)',   tab: 'tools', group: 'Orders', def: ['owner-manager'] },
+    { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
+    { key: 'tool-feature-access',      label: 'Feature Access (this tool)',    tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
+    { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
+    { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: 'Admin', def: ['district-manager'] },
+    { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
+    { key: 'tool-manage-policies',     label: 'Manage Policies',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
+    { key: 'tool-monthly-awards',      label: 'Monthly Awards',                tab: 'tools', group: 'Admin', def: ['district-manager'] },
+    { key: 'tool-system-hotkeys',      label: 'System Hotkeys',                tab: 'tools', group: 'System', def: ['district-manager'] },
     // ---- Widgets & side panels (ASM inherits employee defaults; mirrored here) ----
     { key: 'widget-goals-panel',       label: 'Goals & Initiatives (sidebar)', tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'employee', 'training', 'assistant-manager'] },
     { key: 'widget-checklist-panel',   label: 'Checklist (sidebar)',           tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'district-manager', 'assistant-manager'] },
     { key: 'widget-audit-panel',       label: 'Cleaning Checklist (sidebar)',  tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'widget-scorecard-alerts',  label: 'Store Scorecard & Alerts row',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
-    { key: 'widget-buying-selling',    label: 'Buying & Sales',                tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
-    { key: 'widget-emp-listing-goals', label: 'My Listing Goals (employee)',   tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
-    { key: 'widget-listing-goals',     label: 'Listing Goals (manager)',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
-    { key: 'widget-emp-weekly-kpis',   label: 'My Weekly KPIs (employee)',     tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'widget-scorecard-alerts',  label: 'Command Center (whole widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'cc-scorecard',             label: 'Command Center · Scorecard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'cc-ebay',                  label: 'Command Center · eBay tab',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'cc-buying',                label: 'Command Center · Buying & Sales tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'widget-buying-selling',    label: 'Buying & Sales tab (employee)', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'widget-listing-goals',     label: 'Listing Goals bar (action menu)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager', 'training'] },
+    { key: 'widget-emp-weekly-kpis',   label: 'Weekly KPIs tab (employee)',    tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    // The three district action-menu rows. Defaults mirror exactly what the
+    // dashboard panels they replaced were gated to: Cleaning and Listing were
+    // DM+CEO, Monthly Team Goals was DM-only. Delegation pairs each with the
+    // manager row of the same stem (widget-dm-listing-goals ↔ widget-listing-goals).
+    { key: 'widget-dm-audit',          label: 'Cleaning Checklist (district)', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    { key: 'widget-dm-goals',          label: 'Monthly Team Goals (district)', tab: 'widgets', group: 'Dashboard', def: ['district-manager'] },
+    { key: 'widget-dm-listing-goals',  label: 'Listing Goals (district)',      tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown (tab)',     tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-weekly-kpis',    label: 'Weekly KPIs (tab)',             tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies (tab)',        tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
@@ -16461,7 +17212,7 @@ function _faDeriveEntry(key, el) {
         label = key.replace(/^(tool|hb|widget|nav)-/, '').replace(/-/g, ' ')
             .replace(/\b\w/g, c => c.toUpperCase());
     }
-    return { key, label, tab, group: '✨ Uncatalogued', def, _auto: true };
+    return { key, label, tab, group: 'Uncatalogued', def, _auto: true };
 }
 
 // ---- runtime override state ------------------------------------------------
@@ -16786,28 +17537,27 @@ function renderFaBody() {
         : _faMatrixHtml(_faTab);
 }
 
+const FA_ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+const FA_ICON_X     = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+const FA_ICON_LOCK  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+
 function _faMatrixHtml(tab) {
     const feats = _faCatalog().filter(f => f.tab === tab);
     const hints = {
-        tools: 'Click a chip to force a tool on (✓) or off (✕) for that role — an amber ring means it\'s manually overridden; click again to flip it back (matching the default clears the override). Per-user exceptions on the Per-User tab beat these.',
+        tools: 'Click a chip to force a tool on or off for that role — an amber ring means it\'s manually overridden; click again to flip it back (matching the default clears the override). Per-user exceptions on the Per-User tab beat these.',
         hotbar: 'OFF always hides a link. Turning a link ON for a role/user that doesn\'t normally see its bar adds it to the end of their main hotbar — and if you enable every link of a bar, the whole bar shows up instead. Store-bar links (LEE…BAL) default to everyone in that store.',
         widgets: 'Dashboard cards and sidebar panels. Same rules as tools: per-user exceptions beat these role settings.',
     };
-    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:12px; line-height:1.5;">${hints[tab] || ''}</div>`;
-    const headerRow = `<div style="display:flex; align-items:center; gap:6px; padding:0 2px; margin-bottom:2px;">
-        <span style="flex:1;"></span>
-        ${FA_ROLES.map(r => `<span title="${r.label}" style="width:38px; text-align:center; font-size:9px; font-weight:800; color:#94a3b8; letter-spacing:.3px; flex-shrink:0;">${r.short}</span>`).join('')}
-    </div>`;
-    let lastGroup = '';
-    feats.forEach(f => {
-        if (f.group !== lastGroup) {
-            lastGroup = f.group;
-            html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:16px 2px 4px;">${f.group}</div>${headerRow}`;
-        }
-        html += `<div style="display:flex; align-items:center; gap:6px; padding:4px 2px; border-bottom:1px solid #f1f5f9;">
-            <span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${f.label}</span>
-            ${FA_ROLES.map(r => _faChipHtml(f, r)).join('')}
-        </div>`;
+    let html = `<div class="fa-hint">${hints[tab] || ''}</div>`;
+    const headerRow = `<div class="fa-row fa-row-head"><span class="fa-feat-label"></span>${FA_ROLES.map(r => `<span class="fa-col-head" title="${escapeHtml(r.label)}">${r.short}</span>`).join('')}</div>`;
+    // Group features into calm cards instead of one long striped list.
+    const groups = [];
+    const byGroup = {};
+    feats.forEach(f => { if (!byGroup[f.group]) { byGroup[f.group] = []; groups.push(f.group); } byGroup[f.group].push(f); });
+    groups.forEach(g => {
+        html += `<div class="fa-group"><div class="fa-group-head">${escapeHtml(g)}</div>${headerRow}`
+            + byGroup[g].map(f => `<div class="fa-row"><span class="fa-feat-label">${escapeHtml(f.label)}</span>${FA_ROLES.map(r => _faChipHtml(f, r)).join('')}</div>`).join('')
+            + `</div>`;
     });
     return html;
 }
@@ -16820,7 +17570,8 @@ function _faChipHtml(f, role) {
     const title = locked
         ? 'Always on for District Managers (safety lock)'
         : `${role.label}: ${eff ? 'visible' : 'hidden'}${ovr !== null ? ' (overridden)' : ' (default)'} — click to ${eff ? 'hide' : 'show'}`;
-    return `<button class="fa-chip ${eff ? 'fa-on' : 'fa-off'}${ovr !== null ? ' fa-ovr' : ''}"${locked ? ' disabled' : ''} onclick="faToggleRole('${f.key}', '${role.slug}')" title="${escapeHtml(title)}">${locked ? '🔒' : (eff ? '✓' : '✕')}</button>`;
+    const icon = locked ? FA_ICON_LOCK : (eff ? FA_ICON_CHECK : FA_ICON_X);
+    return `<button class="fa-chip ${eff ? 'fa-on' : 'fa-off'}${ovr !== null ? ' fa-ovr' : ''}"${locked ? ' disabled' : ''} onclick="faToggleRole('${f.key}', '${role.slug}')" title="${escapeHtml(title)}">${icon}</button>`;
 }
 
 async function faToggleRole(key, slug) {
@@ -16918,11 +17669,10 @@ function _faCoverageHtml() {
         .sort((a, b) => a.name.localeCompare(b.name));
     const labelFor = key => { const f = _faCatalog().find(x => x.key === key); return f ? _faDelegationLabel(f) : key; };
 
-    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:14px; line-height:1.5;">
-        Let a manager use your DM tools — while you're away or just need a hand. Pick who and which tools, then <b>Delegate tools</b>. Their own tools stay; it lasts until you <b>End delegation</b>.</div>`;
+    let html = `<div class="fa-hint">Let a manager use your DM tools — while you're away or just need a hand. Pick who and which tools, then <b>Delegate tools</b>. Their own tools stay; it lasts until you <b>End delegation</b>.</div>`;
 
     // 1) recipients
-    html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:4px 2px 6px;">Delegate to</div>`;
+    html += `<div class="fa-subhead">Delegate to</div>`;
     if (!covering.length) {
         html += `<div style="font-size:12px; color:#94a3b8; padding:6px 2px;">No manager-level users found in the directory.</div>`;
     } else {
@@ -16936,7 +17686,7 @@ function _faCoverageHtml() {
     }
 
     // 2) tools to lend
-    html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:4px 2px 6px;">Tools to lend</div>`;
+    html += `<div class="fa-subhead">Tools to lend</div>`;
     html += `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:6px 14px; margin-bottom:16px;">` + _faCoverageTools().map(f => `
         <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; font-weight:600; color:var(--slate-charcoal); cursor:pointer; padding:3px 0;">
             <input type="checkbox" class="fa-cover-tool" value="${f.key}" ${checked.has(f.key) ? 'checked' : ''} style="width:15px; height:15px; cursor:pointer;">
@@ -16948,7 +17698,7 @@ function _faCoverageHtml() {
     // 3) active delegations
     const active = _faActiveCoverage();
     const users = Object.keys(active).sort();
-    html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:22px 2px 6px;">Active delegations</div>`;
+    html += `<div class="fa-subhead" style="margin-top:22px;">Active delegations</div>`;
     if (!users.length) {
         html += `<div style="font-size:12px; color:#94a3b8; padding:6px 2px;">No one currently has borrowed tools.</div>`;
     } else {
@@ -17041,9 +17791,7 @@ function _faUserTabHtml() {
         const cnt = ovCounts[low] ? ` · ${ovCounts[low]} override${ovCounts[low] > 1 ? 's' : ''}` : '';
         return `<option value="${escapeHtml(low)}" ${low === _faUser ? 'selected' : ''}>${escapeHtml(n + meta + cnt)}</option>`;
     }));
-    let html = `<div style="font-size:12px; color:#64748b; font-weight:600; margin-bottom:12px; line-height:1.5;">
-        Per-user exceptions beat the role settings: force any tool, hotbar link or widget on or off for one person.
-        “Default” means the role rules decide.</div>
+    let html = `<div class="fa-hint">Per-user exceptions beat the role settings: force any tool, hotbar link or widget on or off for one person. “Default” means the role rules decide.</div>
     <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
         <select class="form-input-lg" style="flex:2; min-width:220px; margin-top:0;" onchange="_faUser=this.value; renderFaBody();">${opts.join('')}</select>
         <input class="form-input-lg" style="flex:1; min-width:140px; margin-top:0;" placeholder="Filter features…" value="${escapeHtml(_faFilter)}" oninput="_faFilter=this.value; _faRenderUserRows();">
@@ -17052,7 +17800,7 @@ function _faUserTabHtml() {
     const cnt = ovCounts[_faUser] || 0;
     if (cnt) {
         html += `<div style="display:flex; justify-content:flex-end; margin-bottom:8px;">
-            <button class="btn-secondary" style="font-size:11.5px; padding:6px 12px;" onclick="faClearUser()">↺ Clear all ${cnt} override${cnt > 1 ? 's' : ''} for this user</button></div>`;
+            <button class="btn-secondary" style="font-size:11.5px; padding:6px 12px;" onclick="faClearUser()">Clear all ${cnt} override${cnt > 1 ? 's' : ''} for this user</button></div>`;
     }
     return html + `<div id="fa-user-rows">${_faUserRowsHtml()}</div>`;
 }
@@ -17068,32 +17816,55 @@ function _faUserRowsHtml() {
     // effective role slug (Multi-Store Manager logs in with role 'manager')
     let roleSlug = u ? String(u.role || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-') : '';
     if (roleSlug === 'multi-store-manager') roleSlug = 'manager';
-    let html = '', lastGroup = '';
+    // Group features into collapsible cards (collapsed by default; a filter
+    // expands the matches) so one user's exceptions aren't one huge scroll. A
+    // "N set" badge on each card surfaces where this user already has overrides.
+    const groups = [];
+    const byGroup = {};
     _faCatalog().forEach(f => {
         if (filter && !(`${f.label} ${f.group}`).toLowerCase().includes(filter)) return;
-        if (f.group !== lastGroup) {
-            lastGroup = f.group;
-            html += `<div style="font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; margin:16px 2px 4px;">${f.group}</div>`;
-        }
-        const ovr = _faUserOverride(f.key, _faUser);
-        let inherited = null;
-        if (roleSlug) {
-            const roleOvr = _faRoleOverride(f.key, roleSlug);
-            inherited = roleOvr === null ? _faDefaultFor(f, roleSlug) : roleOvr;
-        }
-        const seg = (val, txt) => {
-            const active = (ovr === null && val === 'default') || (ovr === true && val === 'on') || (ovr === false && val === 'off');
-            const cls = active ? (val === 'on' ? ' fa-seg-active fa-seg-on' : (val === 'off' ? ' fa-seg-active fa-seg-off' : ' fa-seg-active')) : '';
-            return `<button class="fa-seg${cls}" onclick="faSetUser('${f.key}', '${val}')">${txt}</button>`;
-        };
-        html += `<div style="display:flex; align-items:center; gap:8px; padding:4px 2px; border-bottom:1px solid #f1f5f9;">
-            <span style="flex:1; font-size:12.5px; font-weight:700; color:var(--slate-charcoal);">${f.label}${inherited !== null ? `<span style="font-weight:600; color:#cbd5e1; font-size:11px;"> · role default: ${inherited ? 'visible' : 'hidden'}</span>` : ''}</span>
-            <div style="display:inline-flex; border:1.5px solid #e2e8f0; border-radius:8px; overflow:hidden; flex-shrink:0;">
-                ${seg('default', 'Default')}${seg('on', 'On')}${seg('off', 'Off')}
+        if (!byGroup[f.group]) { byGroup[f.group] = []; groups.push(f.group); }
+        byGroup[f.group].push(f);
+    });
+    if (!groups.length) return '<div style="padding:16px; text-align:center; color:#94a3b8; font-weight:600;">No features match the filter.</div>';
+
+    const chev = `<svg class="fa-ugroup-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
+    let html = '';
+    groups.forEach(g => {
+        const body = byGroup[g].map(f => {
+            const ovr = _faUserOverride(f.key, _faUser);
+            let inherited = null;
+            if (roleSlug) {
+                const roleOvr = _faRoleOverride(f.key, roleSlug);
+                inherited = roleOvr === null ? _faDefaultFor(f, roleSlug) : roleOvr;
+            }
+            const seg = (val, txt) => {
+                const active = (ovr === null && val === 'default') || (ovr === true && val === 'on') || (ovr === false && val === 'off');
+                const cls = active ? (val === 'on' ? ' fa-seg-active fa-seg-on' : (val === 'off' ? ' fa-seg-active fa-seg-off' : ' fa-seg-active')) : '';
+                return `<button class="fa-seg${cls}" onclick="faSetUser('${f.key}', '${val}')">${txt}</button>`;
+            };
+            return `<div class="fa-urow">
+                <span class="fa-urow-label">${escapeHtml(f.label)}${inherited !== null ? `<span class="fa-role-def"> · role default: ${inherited ? 'visible' : 'hidden'}</span>` : ''}</span>
+                <div class="fa-seg-group">${seg('default', 'Default')}${seg('on', 'On')}${seg('off', 'Off')}</div>
+            </div>`;
+        }).join('');
+        const setCount = byGroup[g].filter(f => _faUserOverride(f.key, _faUser) !== null).length;
+        const collapsed = filter ? '' : ' collapsed';
+        html += `<div class="fa-ugroup${collapsed}">
+            <div class="fa-ugroup-head" onclick="faToggleUserGroup(this)">
+                ${chev}<span class="fa-ugroup-name">${escapeHtml(g)}</span>
+                ${setCount ? `<span class="fa-ugroup-set">${setCount} set</span>` : ''}
+                <span class="fa-ugroup-count">${byGroup[g].length}</span>
             </div>
+            <div class="fa-ugroup-body">${body}</div>
         </div>`;
     });
-    return html || '<div style="padding:16px; text-align:center; color:#94a3b8; font-weight:600;">No features match the filter.</div>';
+    return html;
+}
+
+function faToggleUserGroup(head) {
+    const g = head.closest('.fa-ugroup');
+    if (g) g.classList.toggle('collapsed');
 }
 
 async function faSetUser(key, val) {
@@ -17621,6 +18392,10 @@ function _vrDmNotesOpen(p) {
 
 // One note cell: read-only text + author/date caption normally; a textarea
 // while the viewer is in ✏️ Edit mode (saved in bulk by vrSaveEdits).
+// Deliberately NOT the shared .site-note callout: these are three table columns
+// (GM note / DM note / Manager reply) whose headers already say whose note each
+// one is, so boxing them would restate the header and add noise to a dense grid.
+// The small grey caption carries the author + date instead.
 function _vrNoteCell(it, field, editable, placeholder) {
     const val = it[field] || '';
     const by = it[field + '_by'];
@@ -18647,6 +19422,11 @@ function _agRowHtml(it, canDm) {
 //   - In DM row-edit mode (`editing`) the DM's notes become editable
 //     textareas, but ONLY the ones the store hasn't answered yet — history
 //     the conversation moved past is locked.
+// Deliberately NOT the shared .site-note callout: this thread captions the
+// author ABOVE each note and uses a left rail rather than a full box, with
+// purple carrying the DM identity this tool uses elsewhere. Converting it to the
+// blue/green pair would throw away that colour tie and move the attribution,
+// which is a visual change worth seeing before making — not a silent tidy-up.
 function _agThreadHtml(it, canDm, editing) {
     const notes = it.notes || [];
     const last = notes[notes.length - 1];
@@ -19495,6 +20275,9 @@ function renderActionFeed() {
 
     if (!items.length && !patchRow) {
         _samReconcileFeed(feed, [{ key: 'empty', html: '<div class="sam-empty">You\'re all caught up.</div>' }]);
+        // Must run on this path too: a caught-up feed is exactly when the deck
+        // looked lopsided, because the early return skipped the rail sync.
+        _samSyncRailFill();
         return;
     }
 
@@ -19515,15 +20298,26 @@ function renderActionFeed() {
     if (patchRow) desired.push({ key: 'patch', html: patchRow });
     items.forEach(it => {
         if (it.type === 'rem') {
-            const dotcls = it.dueCls === 'sam-due-red' ? 'urgent' : 'warn';
+            // grey = informational rather than a task, so it gets the calm blue dot
+            const dotcls = it.dueCls === 'sam-due-red' ? 'urgent'
+                : it.dueCls === 'sam-due-grey' ? 'info' : 'warn';
             const remClick = it.action ? ` onclick="${it.action}" style="cursor:pointer"` : '';
+            // A reminder that is news rather than an outstanding task carries no
+            // deadline, so a due badge would be inventing one (noDue).
+            const dueHtml = it.noDue ? ''
+                : `<span class="sam-r-due ${it.dueCls}">${_samEsc(it.due)}</span>`;
+            // Three shapes of trailing control: an explicit "Mark read" for
+            // informational cards (readAction), Snooze for live task-nags, and
+            // nothing at all for hard deadlines that must not be dismissed.
+            const ctrl = it.readAction ? readBtn(it.readAction)
+                : (it.noSnooze ? '' : snoozeBtn(`samDismissItem(event,'rem','${_samEsc(it.key)}')`));
             desired.push({ key: 'rem:' + it.key, html: `<div class="sam-ann rem"${remClick}>
                 <span class="sam-adot ${dotcls}"></span>
                 <div class="sam-a-body">
-                    <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span><span class="sam-r-due ${it.dueCls}">${_samEsc(it.due)}</span></div>
+                    <div class="sam-a-top"><span class="sam-a-title">${_samEsc(it.title)}</span>${dueHtml}</div>
                     <div class="sam-a-snip">${_samEsc(it.snippet)}</div>
                 </div>
-                ${snoozeBtn(`samDismissItem(event,'rem','${_samEsc(it.key)}')`)}
+                ${ctrl}
             </div>` });
             return;
         }
@@ -19555,6 +20349,28 @@ function renderActionFeed() {
 
     _samReconcileFeed(feed, desired);
     _samAddReadFull();
+    _samSyncRailFill();
+}
+
+// The feed card is taller than the action-items card beside it, and the rail's
+// card is content-sized, so their bottom edges didn't line up. With a full set
+// of action items the rail card takes the row height and the items share the
+// slack, squaring the two columns off. With fewer items stretching each one
+// would look distended, so it stays content-sized below the threshold.
+// Counted from what is actually VISIBLE, since Feature Access hides items with
+// display:none and :nth-child would still count them.
+const _SAM_RAIL_FILL_MIN = 4;
+function _samSyncRailFill() {
+    // The class goes on .sam-rail, not the card: the rail carries
+    // align-self:start, so it has to rejoin the grid's stretch before anything
+    // inside it has height to fill.
+    const rail = document.querySelector('.speeks-action-menu .sam-rail');
+    if (!rail) return;
+    let n = 0;
+    rail.querySelectorAll('.sam-mini').forEach(function (el) {
+        if (el.offsetParent !== null) n++;
+    });
+    rail.classList.toggle('sam-rail-fill', n >= _SAM_RAIL_FILL_MIN);
 }
 
 // Keyed, in-place reconcile of the action feed. Cards are matched by a stable key
@@ -19816,9 +20632,39 @@ function samSetProgress(kind, data) {
 // modal itself fills instead: #goals-total-actual is the week's summed goals, and
 // the weekly target comes from targetFor(). MSM stacks two stores, so its totals
 // live in per-store elements and both sides get summed.
+// Role class for the current user (mirrors applyRoleBasedUI's derivation).
+function _speeksRoleClass() {
+    const r = sessionStorage.getItem('speeksUserRole') || 'employee';
+    return 'role-' + r.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+}
+// Employees / ASMs / trainees have PERSONAL listing goals; managers edit the roster.
+function _isPersonalGoalsUser() {
+    return ['role-employee', 'role-assistant-manager', 'role-training'].includes(_speeksRoleClass());
+}
+// "Listing Goals" bar in the action menu: personal popup for employees, roster editor for managers.
+function openListingGoals() {
+    if (_isPersonalGoalsUser()) toggleModal('empGoalsModal');
+    else toggleModal('listingGoalsModal');
+}
+
 function samRefreshListing() {
     const val = document.getElementById('samListVal'), fill = document.getElementById('samListFill'), sub = document.getElementById('samListSub');
     if (!val || !fill || !sub) return;
+
+    // Employee view: show the person's role + today's goal (no progress bar — this bar just
+    // reports role + goal, it isn't tracking progress to a target).
+    if (_isPersonalGoalsUser()) {
+        const g = window._empGoalToday, role = window._empRoleToday || '';
+        const goalTxt = (g != null && g !== '') ? String(g) : '—';
+        // Role sits to the LEFT of the goal, same font size (see .sam-mini-emp CSS).
+        val.innerHTML = `<span class="sam-m-role">${role ? escapeHtml(role) : 'No role'}</span><span class="sam-m-goal">${goalTxt}</span>`;
+        sub.textContent = '';
+        const mini = val.closest('.sam-mini');
+        if (mini) mini.classList.add('sam-mini-emp');   // CSS hides the bar + sub, sizes role = goal
+        return;
+    }
+    const _mini = val.closest('.sam-mini');
+    if (_mini) _mini.classList.remove('sam-mini-emp');
 
     const num = el => {
         const n = parseInt(String((el && el.textContent) || '').replace(/[^\d-]/g, ''), 10);
@@ -19878,7 +20724,7 @@ function samCleanHotbar() {
 // tool" logic the old alert bubble ran on click — the hub + dashboard cards now
 // carry it so clicking a reminder jumps straight to its tool.
 function _samReminderCfg() {
-    return [
+    const cfg = [
         { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText', title: 'Variance Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#vreplies'" },
         // A DM has no store-scoped claims tool — send them to the all-stores
         // oversight view instead, which is where they can actually act.
@@ -19887,8 +20733,35 @@ function _samReminderCfg() {
               ? "openClaimsOversight()"
               : "openClaimsModal(); switchClaimsTab('view')" },
         { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "toggleRecycleInventory(); switchRecycleTab('view')" },
-        { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging Inventory Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" }
+        { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging Inventory Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" },
+        // Preferred Purchases — feed-only, both directions. The owner's card is a
+        // queue to work, so it keeps the amber "Review" badge and a Snooze.
+        // The requester's is an answer that came back: information, not a task, so
+        // it carries no due badge (there is no deadline to invent), gets a calm
+        // blue dot, and offers "Mark read" instead of Snooze. Clicking the card
+        // body opens My Requests, which marks it read as a side effect.
+        { key: 'preferredOwner', id: 'preferredOwnerAlertBubble', text: 'preferredOwnerAlertBubbleText', title: 'Purchase Requests', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "openPreferredOwner()" },
+        { key: 'preferredMine', id: 'preferredMineAlertBubble', text: 'preferredMineAlertBubbleText', title: 'Purchase Request Answered', urgency: 0, due: '', cls: 'sam-due-grey', noDue: true, readAction: "plMarkRead(event)", action: "openPreferredMine()" }
     ];
+    // KPI due reminders (weekly + monthly) — data-aware, driven by
+    // checkKpiDueReminders. The bubbles gate visibility; title/due/urgency flip to
+    // "Overdue" off the bubble's data-overdue (same source as the snippet, so the
+    // whole card stays internally consistent). Cards deep-link to the Store KPIs tab.
+    const _wkT = document.getElementById('kpiWeeklyAlertBubbleText');
+    const _moT = document.getElementById('kpiMonthlyAlertBubbleText');
+    const _wkOd = !!(_wkT && _wkT.dataset && _wkT.dataset.overdue);
+    const _moOd = !!(_moT && _moT.dataset && _moT.dataset.overdue);
+    // noSnooze: a hard deadline (entered Sunday, due Monday 8:30am) — no snoozing
+    // it away; the card stays until the KPIs are actually entered.
+    cfg.push({ key: 'kpiWeekly', id: 'kpiWeeklyAlertBubble', text: 'kpiWeeklyAlertBubbleText',
+        title: _wkOd ? 'Weekly KPIs Overdue' : 'Weekly KPIs Due', urgency: _wkOd ? 3 : 2,
+        due: _wkOd ? 'Overdue' : 'Due', cls: 'sam-due-red', noSnooze: true,
+        action: "sessionStorage.setItem('speeksKpiTab','weekly'); window.location.href='workspace.html#kpis'" });
+    cfg.push({ key: 'kpiMonthly', id: 'kpiMonthlyAlertBubble', text: 'kpiMonthlyAlertBubbleText',
+        title: _moOd ? 'Monthly KPIs Overdue' : 'Monthly KPIs Due', urgency: _moOd ? 3 : 2,
+        due: _moOd ? 'Overdue' : 'Due', cls: 'sam-due-red', noSnooze: true,
+        action: "sessionStorage.setItem('speeksKpiTab','monthly'); window.location.href='workspace.html#kpis'" });
+    return cfg;
 }
 
 function _samDismKey() {
@@ -19974,7 +20847,7 @@ function _samGatherReminders() {
         out.push({
             type: 'rem', key: c.key, sig, title: c.title, snippet: sub || 'Needs your attention',
             due: c.due, dueCls: c.cls, urgency: c.urgency, read: false, dateMs: Date.now() + c.urgency,
-            action
+            action, noSnooze: !!c.noSnooze, noDue: !!c.noDue, readAction: c.readAction || ''
         });
     });
     return out;
@@ -20015,6 +20888,16 @@ const _RT_TOOL_CHECKS = {
     comments:      ['fetchAndDisplayStoreComment'],
     announcements: ['loadCMS'],
     patch:         ['loadPatchNotes'],
+    kpi:           ['checkKpiDueReminders'],
+    preferred:     ['checkPreferredReminders'],
+    // Command Center + Listing Goals sources. Each re-fetches through its edge
+    // fn and recomputes its update signature, so the pulsing dot / bar lights the
+    // moment a write lands — no refresh or re-login. (scorecard fn, ebay-alerts
+    // fn, sync-buysell cache refresh, listing-goals fn all broadcast these.)
+    scorecard:     ['fetchScorecardData'],
+    ebay:          ['fetchAlertsData'],
+    buying:        ['fetchHubData'],
+    goals:         ['fetchLiveGoalsData', 'fetchAndRenderEmployeeGoals'],
 };
 
 // Re-run a tool's checks (sequentially, so any UI-refresh step runs after its
@@ -20304,3 +21187,1660 @@ function openHubToPatch() {
 
 // Record the latest patch version as seen (clears the "new patch" row + badge).
 
+
+/* =========================================================
+   MODULE: PREFERRED PURCHASES
+   Managers / ASMs / the DM suggest products for the shared
+   Amazon list; the Owner (Manager) approves or denies.
+
+   Two versions of ONE modal, chosen by role (Feature Access
+   keys tool-preferred-request / tool-preferred-approve):
+     - requester: New Request + My Requests
+     - owner:     Pending queue + Decided history
+
+   Pipeline only. Approving records a decision; it does not
+   publish a list here, because the list lives on Amazon.
+   Deliberately NO category and NO store scope — one shared
+   list can express neither.
+
+   Notifications are FEED ONLY (Ethan, 2026-07-27): the two
+   #preferred*AlertBubble elements are invisible
+   state-carriers that _samGatherReminders reads, exactly like
+   the other retired bubbles. Do not style them.
+   ========================================================= */
+const _PL_OWNER_ROLES = new Set(['owner (manager)', 'owner manager']);
+// ASMs included: they are the ones handling the supplies day to day.
+const _PL_REQ_ROLES = new Set(['manager', 'assistant manager', 'district manager', 'multi-store manager']);
+
+let _plRequests = [];      // rows for whichever view is open
+let _plTab = 'new';
+let _plBusy = false;
+let _plDecideOpen = null;  // id whose note editor is expanded
+
+function _plRole()  { return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(); }
+function _plName()  { return (sessionStorage.getItem('speeksUserName') || '').trim(); }
+function _plStore() { return (sessionStorage.getItem('speeksUserStore') || '').toUpperCase().trim(); }
+function _plIsOwner() { return _PL_OWNER_ROLES.has(_plRole()); }
+// A Feature Access override can hand the owner view to someone else (that is the
+// point of that tool), so trust the rendered link rather than the role alone.
+function _plCanApprove() {
+    if (_plIsOwner()) return true;
+    const el = document.querySelector('[data-feature="tool-preferred-approve"]');
+    return !!(el && el.offsetParent !== null);
+}
+
+// ---------- money / pack-size maths ----------
+function _plMoney(n) {
+    // Number(null) and Number('') are both 0, which is finite — so without the
+    // explicit empty check a row whose price is null (the column is nullable,
+    // and parseMoney returns null on anything unparseable) would render a
+    // confident "$0.00".
+    if (n === null || n === undefined || n === '') return '';
+    const v = Number(n);
+    if (!Number.isFinite(v)) return '';
+    return '$' + v.toFixed(2);
+}
+// Pull a count out of free-text pack size ("box of 100", "4 rolls of 250",
+// "24-pack"). Multiplies every number it finds, so "4 rolls of 250" = 1000
+// labels. Returns null when there is nothing usable to divide by, and the
+// per-unit figure is then simply not shown — a wrong unit price is worse than
+// no unit price.
+function _plPackCount(txt) {
+    const t = String(txt || '').toLowerCase();
+    if (!t) return null;
+    const nums = t.match(/\d+(?:\.\d+)?/g);
+    if (!nums || !nums.length) return null;
+    let n = 1;
+    for (const raw of nums) {
+        const v = parseFloat(raw);
+        if (!Number.isFinite(v) || v <= 0) return null;
+        n *= v;
+    }
+    return (n > 1 && n <= 1000000) ? n : null;
+}
+// Singular noun for the per-unit label.
+//
+// Read from the ITEM NAME first, not the pack size: the pack size names the
+// CONTAINER, so "box of 100" would yield "$0.12 / box" when what you actually
+// get 100 of is gloves. Container words are the last resort, used only when
+// nothing in either string names the contents.
+function _plUnitWord(row) {
+    const name = String((row && row.item_name) || '').toLowerCase();
+    const pack = String((row && row.pack_size) || '').toLowerCase();
+    const THINGS = [
+        [/glove/, 'glove'], [/cloth|rag|towel/, 'cloth'], [/label/, 'label'],
+        [/wipe/, 'wipe'], [/sheet/, 'sheet'], [/bag|mailer/, 'bag'],
+        [/batter/, 'battery'], [/tape/, 'roll'], [/bit\b|driver/, 'bit'],
+        [/pen\b|marker|sharpie/, 'pen'], [/can\b|bottle|spray/, 'can'],
+        [/pair|sock|glasses/, 'pair'],
+    ];
+    for (const p of THINGS) { if (p[0].test(name)) return p[1]; }
+    for (const p of THINGS) { if (p[0].test(pack)) return p[1]; }
+    const CONTAINERS = [[/roll/, 'roll'], [/case/, 'case'], [/box/, 'box'], [/pack/, 'pack'], [/set/, 'set']];
+    for (const p of CONTAINERS) { if (p[0].test(pack)) return p[1]; }
+    return 'each';
+}
+function _plUnitHtml(row, cls) {
+    const c = _plPackCount(row.pack_size);
+    const p = Number(row.price);
+    if (!c || !Number.isFinite(p) || p <= 0) return '';
+    const per = p / c;
+    // Scale the decimals to the magnitude. At two decimals a 3.5-cent label
+    // rounds to "$0.03" and a sub-cent unit collapses to "$0.00" — both lose the
+    // comparison the number exists to make. Trailing zeros are trimmed back so
+    // the common case still reads "$0.12", not "$0.120".
+    let dp = 2;
+    if (per < 0.001)     dp = 5;
+    else if (per < 0.01) dp = 4;
+    else if (per < 0.10) dp = 3;
+    let txt = per.toFixed(dp);
+    if (dp > 2) txt = txt.replace(/0+$/, '').replace(/\.$/, '');
+    return '<div class="' + cls + '">$' + txt + ' / ' + escapeHtml(_plUnitWord(row)) + '</div>';
+}
+
+function _plFmtDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+function _plAgeDays(iso) {
+    if (!iso) return 0;
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return 0;
+    return Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000));
+}
+// Day-granular on purpose. The feed reconciler matches cards by a content
+// signature, so an hour-by-hour "2h ago" would change the signature on every
+// render and churn the card forever (same reason _samFmtDate is absolute).
+function _plAgeText(iso) {
+    const n = _plAgeDays(iso);
+    return n === 0 ? 'today' : n === 1 ? 'yesterday' : (n + ' days ago');
+}
+
+// ---------- duplicate hint ----------
+// Name overlap only — there are no categories to scope the comparison within.
+// Compares significant words so "Nitrile gloves box of 100" matches "Nitrile
+// Gloves, Large". A hint above the Approve button, never a block.
+const _PL_STOP = new Set(['the', 'and', 'for', 'with', 'pack', 'box', 'of', 'set', 'kit',
+    'count', 'pcs', 'large', 'small', 'medium', 'assorted', 'inch']);
+function _plWords(name) {
+    const out = new Set();
+    String(name || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+        .forEach(function (w) { if (w.length > 2 && !_PL_STOP.has(w)) out.add(w); });
+    return out;
+}
+function _plFindDupe(row, approved) {
+    const a = _plWords(row.item_name);
+    if (!a.size) return null;
+    let best = null, bestScore = 0;
+    approved.forEach(function (other) {
+        if (other.id === row.id) return;
+        const b = _plWords(other.item_name);
+        if (!b.size) return;
+        let hit = 0;
+        a.forEach(function (w) { if (b.has(w)) hit++; });
+        const score = hit / Math.min(a.size, b.size);
+        if (hit >= 1 && score >= 0.5 && score > bestScore) { bestScore = score; best = other; }
+    });
+    return best;
+}
+
+// ---------- open / close ----------
+// Is the plain requester version available to this user? Feature Access can
+// grant both, in which case the modal carries all four tabs.
+function _plCanRequest() {
+    if (_PL_REQ_ROLES.has(_plRole())) return true;
+    const el = document.querySelector('[data-feature="tool-preferred-request"]');
+    return !!(el && el.offsetParent !== null);
+}
+
+function togglePreferredPurchases(forceTab) {
+    const modal = document.getElementById('preferredModal');
+    if (!modal) return;
+    if (modal.classList.contains('show')) { closeAllModals(); return; }
+    _plTab = forceTab || (_plCanRequest() ? 'new' : 'pending');
+    _plDecideOpen = null;
+    _plSyncChrome();
+    // toggleModal is the shared opener — it closes whatever else is open and
+    // calls lockAndBlurScreen(), which is what dims and blurs the page behind
+    // every other SPEEKS tool. Adding .show by hand skips the backdrop.
+    toggleModal('preferredModal');
+    _plLoad();
+}
+function openPreferredOwner() { togglePreferredPurchases('pending'); }
+function openPreferredMine()  { togglePreferredPurchases('mine'); }
+
+// Which tabs exist depends on what the user has. The title stays plain
+// "Preferred Purchases" either way — there is one tool, and the modal shows
+// whichever halves apply, so an "(Owner)" suffix here would say nothing.
+function _plSyncChrome() {
+    const owner = _plCanApprove();
+    const req = _plCanRequest();
+    const s = document.getElementById('preferredHeadSub');
+    if (s) s.textContent = req
+        ? 'Suggest a product for the company list.'
+        : 'Approve what goes on the Amazon list.';
+    const vis = {
+        'pl-tab-new': req,
+        'pl-tab-mine': req,
+        'pl-tab-pending': owner,
+        'pl-tab-decided': owner
+    };
+    Object.keys(vis).forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = vis[id] ? '' : 'none';
+    });
+}
+
+// The Tools panel is the one place the two versions can appear side by side, and
+// only there does the owner link need distinguishing. Anyone who holds just the
+// one entry sees plain "Preferred Purchases".
+function _plSyncToolLabels() {
+    const req = document.querySelector('[data-feature="tool-preferred-request"]');
+    const own = document.querySelector('[data-feature="tool-preferred-approve"]');
+    const both = !!(req && req.offsetParent !== null && own && own.offsetParent !== null);
+    document.querySelectorAll('[data-feature="tool-preferred-approve"] .pl-tool-label')
+        .forEach(function (l) { l.textContent = both ? 'Preferred Purchases (Owner)' : 'Preferred Purchases'; });
+}
+
+function plSwitchTab(tab) {
+    _plTab = tab;
+    _plDecideOpen = null;
+    _plRender();
+}
+
+// ---------- load ----------
+async function _plLoad() {
+    const owner = _plCanApprove();
+    const body = document.getElementById('preferredBody');
+    if (body) body.innerHTML = '<div class="pl-empty"><div class="pl-empty-t">Loading…</div></div>';
+    try {
+        const q = owner
+            ? PREFERRED_URL + '?scope=all&v=' + Date.now()
+            : PREFERRED_URL + '?scope=mine&name=' + encodeURIComponent(_plName()) + '&v=' + Date.now();
+        const res = await fetch(q);
+        const data = await res.json();
+        _plRequests = (data && data.requests) || [];
+    } catch (e) {
+        _plRequests = [];
+        if (body) body.innerHTML = '<div class="pl-empty"><div class="pl-empty-t" style="color:var(--red-alert)">Couldn\'t load requests.</div>'
+            + '<div class="pl-empty-s">Check your connection and reopen the tool.</div></div>';
+        return;
+    }
+    _plRender();
+    // Opening the tool IS the acknowledgement for a requester — stamps the
+    // verdicts seen so their feed card clears for good instead of re-nagging.
+    if (!owner && _plUnseenDecided().length) {
+        try {
+            await postWrite(PREFERRED_URL, { action: 'mark_seen', name: _plName() });
+            const now = new Date().toISOString();
+            _plRequests.forEach(function (r) { if (r.decided_at && !r.requester_seen_at) r.requester_seen_at = now; });
+            if (typeof checkPreferredReminders === 'function') checkPreferredReminders();
+        } catch (_) { /* card just stays until next time */ }
+    }
+}
+
+function _plUnseenDecided() {
+    const me = _plName().toLowerCase();
+    return _plRequests.filter(function (r) {
+        return r.decided_at && !r.requester_seen_at
+            && String(r.requested_by || '').toLowerCase() === me;
+    });
+}
+
+// ---------- render ----------
+function _plRender() {
+    const body = document.getElementById('preferredBody');
+    if (!body) return;
+    document.querySelectorAll('#preferredTabs .tab-btn').forEach(function (b) {
+        b.classList.toggle('active', b.dataset.pltab === _plTab);
+    });
+    const foot = document.getElementById('preferredFooter');
+    if (foot) foot.style.display = (_plTab === 'new') ? 'flex' : 'none';
+
+    if (_plTab === 'new')     { body.innerHTML = _plFormHtml();    return; }
+    if (_plTab === 'mine')    { body.innerHTML = _plMineHtml();    return; }
+    if (_plTab === 'pending') { body.innerHTML = _plPendingHtml(); return; }
+    body.innerHTML = _plDecidedHtml();
+}
+
+function _plFormHtml() {
+    return ''
+    + '<div class="pl-hint" style="margin:0 0 15px;">'
+    + 'Suggest a product for the company preferred list. It gets reviewed and either '
+    + 'added to the Amazon list or answered with what to buy instead.'
+    + '</div>'
+    + '<div class="pl-grid">'
+    + '  <div class="pl-full">'
+    + '    <label class="form-label-caps">Item <span class="pl-req">*</span></label>'
+    + '    <input type="text" id="plItem" class="form-input-lg" maxlength="200" placeholder="e.g. Nitrile gloves, box of 100 (Large)">'
+    + '  </div>'
+    + '  <div class="pl-full">'
+    + '    <label class="form-label-caps">Amazon link <span class="pl-req">*</span></label>'
+    + '    <input type="text" id="plUrl" class="form-input-lg" placeholder="Paste the product URL">'
+    + '  </div>'
+    + '  <div>'
+    + '    <label class="form-label-caps">Price <span class="pl-req">*</span></label>'
+    + '    <input type="text" id="plPrice" class="form-input-lg" inputmode="decimal" placeholder="0.00" oninput="_plSanitizeMoney(this)">'
+    + '  </div>'
+    + '  <div>'
+    + '    <label class="form-label-caps">What you get for that <span class="pl-req">*</span></label>'
+    + '    <input type="text" id="plPack" class="form-input-lg" maxlength="120" placeholder="e.g. box of 100 &middot; 4 rolls &middot; 1 set">'
+    + '  </div>'
+    + '</div>'
+    + '<div class="pl-hint" style="margin:-6px 0 15px;">'
+    + 'Price alone can&rsquo;t be compared across brands &mdash; the pack size is what '
+    + 'turns it into a per&#8209;unit number, which is usually the whole argument.'
+    + '</div>'
+    + '<label class="form-label-caps">Why this one <span class="pl-req">*</span></label>'
+    + '<textarea id="plReason" class="form-input-lg" rows="3" maxlength="2000" '
+    + 'placeholder="What does it replace, and why is it better? Cheaper per unit, lasts longer, fits a machine we own…"></textarea>'
+    + '<div id="plFormErr" class="pl-err"></div>'
+    + '<div class="box-order-disclaimer">'
+    + 'One product per request. If you&rsquo;re suggesting a replacement for something we '
+    + 'already stock, say what it replaces &mdash; that&rsquo;s the fastest way to a yes.'
+    + '</div>';
+}
+
+function _plStatusChip(status) {
+    const s = String(status || 'pending');
+    const label = s === 'approved' ? 'Approved' : s === 'denied' ? 'Denied' : 'Pending';
+    return '<span class="pl-chip pl-chip-' + escapeHtml(s) + '">' + label + '</span>';
+}
+
+// A note from the owner is the whole reason a requester reopens the tool, so it
+// gets the shared .site-note callout — same shape as the recycle-request notes
+// (💬, text, author in grey) so notes read the same everywhere on the site.
+function _plNoteHtml(row, whoLabel) {
+    if (!row.owner_note) return '';
+    const who = whoLabel || row.decided_by || '';
+    return '<div class="site-note">&#128172; ' + escapeHtml(row.owner_note)
+        + (who ? ' <span class="site-note-by">&mdash; ' + escapeHtml(who) + '</span>' : '')
+        + '</div>';
+}
+
+function _plMineHtml() {
+    if (!_plRequests.length) {
+        return '<div class="pl-empty"><div class="pl-empty-t">Nothing sent yet.</div>'
+            + '<div class="pl-empty-s">Suggest a product on the New Request tab and it&rsquo;ll show up here.</div></div>';
+    }
+    const rows = _plRequests.map(function (r) {
+        const act = (r.status === 'pending')
+            ? '<button class="pl-link" onclick="plWithdraw(' + r.id + ')">Withdraw</button>'
+            : '';
+        return '<tr>'
+            + '<td>' + _plStatusChip(r.status) + '</td>'
+            + '<td><div class="pl-it"><a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer">'
+            + escapeHtml(r.item_name) + '</a></div>' + _plNoteHtml(r) + '</td>'
+            + '<td class="pl-num">' + _plMoney(r.price) + _plUnitHtml(r, 'pl-unit-sm') + '</td>'
+            + '<td style="white-space:nowrap;">' + _plFmtDate(r.created_at) + '</td>'
+            + '<td>' + act + '</td>'
+            + '</tr>';
+    }).join('');
+    return '<table class="pl-tbl">'
+        + '<thead><tr><th style="min-width:120px;">Status</th><th>Item</th>'
+        + '<th class="pl-num">Price</th><th>Sent</th><th></th></tr></thead>'
+        + '<tbody>' + rows + '</tbody></table>'
+        + '<div class="pl-hint" style="margin-top:14px;">'
+        + 'Pending requests can still be withdrawn &mdash; anything decided is final.</div>';
+}
+
+const _PL_EXT_ICO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
+
+function _plPendingHtml() {
+    const pending = _plRequests.filter(function (r) { return r.status === 'pending'; })
+        .sort(function (a, b) { return new Date(a.created_at) - new Date(b.created_at); });
+    const approved = _plRequests.filter(function (r) { return r.status === 'approved'; });
+
+    if (!pending.length) {
+        return '<div class="pl-empty"><div class="pl-empty-t">Queue&rsquo;s clear.</div>'
+            + '<div class="pl-empty-s">New suggestions land here, oldest first.</div></div>';
+    }
+
+    const cards = pending.map(function (r) {
+        const dupe = _plFindDupe(r, approved);
+        const dupeHtml = dupe
+            ? '<div class="pl-dupe"><span>&#9888;</span><div>Close to something already approved '
+              + '&mdash; <b>' + escapeHtml(dupe.item_name) + '</b>'
+              + (dupe.price != null ? ' (' + _plMoney(dupe.price) + ')' : '') + '.</div></div>'
+            : '';
+        const who = [r.requested_by, r.store, r.requested_by_role].filter(Boolean)
+            .map(function (x) { return escapeHtml(x); }).join(' &middot; ');
+        const open = _plDecideOpen === r.id;
+        const first = escapeHtml((r.requested_by || '').split(' ')[0] || 'them');
+        const editor = open
+            ? '<div class="pl-note-box">'
+              + '<textarea id="plNote-' + r.id + '" rows="2" maxlength="2000" '
+              + 'placeholder="Note back to ' + first + ' (optional) — buy the 6-pack, use what we have first…"></textarea>'
+              + '<div class="pl-hint">Shown to the requester with your decision.</div>'
+              + '</div>'
+            : '';
+        return '<div class="pl-card" id="plCard-' + r.id + '">'
+            + '<div class="pl-card-top">'
+            + '<div class="pl-card-main">'
+            + '<div class="pl-card-name">' + escapeHtml(r.item_name) + '</div>'
+            + '<div class="pl-card-meta">' + who + ' &middot; ' + escapeHtml(_plAgeText(r.created_at)) + '</div>'
+            + '</div>'
+            + '<div class="pl-price-wrap">'
+            + '<div class="pl-price">' + _plMoney(r.price) + '</div>'
+            + (r.pack_size ? '<div class="pl-pack">' + escapeHtml(r.pack_size) + '</div>' : '')
+            + _plUnitHtml(r, 'pl-unit')
+            + '</div></div>'
+            + '<div class="pl-reason">' + escapeHtml(r.reason || '') + '</div>'
+            + dupeHtml
+            + '<div class="pl-acts">'
+            + '<a class="pl-link" href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer">'
+            + _PL_EXT_ICO + ' View on Amazon</a>'
+            + '<span class="pl-sp"></span>'
+            + (open ? '' : '<button class="pl-link" onclick="plToggleNote(' + r.id + ')">Add a note</button>')
+            + '<button class="pl-btn-no" onclick="plDecide(' + r.id + ',\'denied\')">Deny</button>'
+            + '<button class="pl-btn-ok" onclick="plDecide(' + r.id + ',\'approved\')">Approve</button>'
+            + '</div>' + editor + '</div>';
+    }).join('');
+
+    return '<div class="pl-bar">'
+        + '<span class="pl-bar-count"><b>' + pending.length + '</b> waiting on you</span>'
+        + '<span class="pl-bar-age">oldest first &middot; sent ' + escapeHtml(_plAgeText(pending[0].created_at)) + '</span>'
+        + '</div>' + cards;
+}
+
+function _plDecidedHtml() {
+    const decided = _plRequests.filter(function (r) { return r.status !== 'pending'; });
+    if (!decided.length) {
+        return '<div class="pl-empty"><div class="pl-empty-t">No decisions yet.</div>'
+            + '<div class="pl-empty-s">Approvals and denials both land here.</div></div>';
+    }
+    const rows = decided.map(function (r) {
+        return '<tr>'
+            + '<td>' + _plStatusChip(r.status) + '</td>'
+            + '<td><div class="pl-it"><a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer">'
+            + escapeHtml(r.item_name) + '</a></div>' + _plNoteHtml(r, 'You') + '</td>'
+            + '<td class="pl-num">' + _plMoney(r.price) + _plUnitHtml(r, 'pl-unit-sm') + '</td>'
+            + '<td>' + escapeHtml((r.requested_by || '').split(' ')[0])
+            + (r.store ? ' &middot; ' + escapeHtml(r.store) : '') + '</td>'
+            + '<td style="white-space:nowrap;">' + _plFmtDate(r.decided_at) + '</td>'
+            + '<td><button class="pl-link" onclick="plOwnerDelete(' + r.id + ')">Remove</button></td>'
+            + '</tr>';
+    }).join('');
+    return '<table class="pl-tbl">'
+        + '<thead><tr><th style="min-width:120px;">Verdict</th><th>Item</th>'
+        + '<th class="pl-num">Price</th><th>From</th><th>Decided</th><th></th></tr></thead>'
+        + '<tbody>' + rows + '</tbody></table>'
+        + '<div class="pl-hint" style="margin-top:14px;">'
+        + 'This is the record of decisions, not the list itself &mdash; the list lives on '
+        + 'Amazon. Approving marks the request so you know what still needs adding there.</div>';
+}
+
+// ---------- actions ----------
+function plToggleNote(id) { _plDecideOpen = (_plDecideOpen === id) ? null : id; _plRender(); }
+
+// Money field: digits and a single decimal point, nothing else. Typed letters
+// never appear rather than being rejected on submit. Kept local rather than
+// borrowing the recycle tool's copy so this tool owns its own input rules.
+function _plSanitizeMoney(input) {
+    let v = (input.value || '').replace(/[^\d.]/g, '');
+    const dot = v.indexOf('.');
+    if (dot !== -1) v = v.slice(0, dot + 1) + v.slice(dot + 1).replace(/\./g, '');
+    input.value = v;
+}
+
+function _plShowFormErr(msg) {
+    const e = document.getElementById('plFormErr');
+    if (!e) return;
+    e.textContent = msg || '';
+    e.style.display = msg ? 'block' : 'none';
+}
+
+async function plSubmitRequest() {
+    if (_plBusy) return;
+    const gv = function (id) { const el = document.getElementById(id); return el ? el.value : ''; };
+    const item = gv('plItem'), url = gv('plUrl'), price = gv('plPrice'),
+          pack = gv('plPack'), reason = gv('plReason');
+    if (!item.trim())   { _plShowFormErr('Give the item a name.'); return; }
+    if (!url.trim())    { _plShowFormErr('Paste the Amazon link.'); return; }
+    if (!/^https?:\/\//i.test(url.trim())) { _plShowFormErr('The link needs to start with http:// or https://'); return; }
+    if (!price.trim())  { _plShowFormErr('Add the price.'); return; }
+    if (!pack.trim())   { _plShowFormErr('Say what you get for that price — it is what makes the price comparable.'); return; }
+    if (!reason.trim()) { _plShowFormErr('Add a line on why this one.'); return; }
+    _plShowFormErr('');
+    _plBusy = true;
+    const btn = document.getElementById('plSubmitBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+    try {
+        await postWrite(PREFERRED_URL, {
+            action: 'submit_request',
+            item_name: item, url: url, price: price, pack_size: pack, reason: reason,
+            requested_by: _plName(),
+            requested_by_role: sessionStorage.getItem('speeksUserRole') || '',
+            store: _plStore()
+        });
+        _plTab = 'mine';
+        await _plLoad();
+    } catch (e) {
+        _plShowFormErr(e.message || 'Could not send that request.');
+    } finally {
+        _plBusy = false;
+        if (btn) { btn.disabled = false; btn.innerHTML = 'Send Request &#8594;'; }
+    }
+}
+
+async function plDecide(id, verdict) {
+    if (_plBusy) return;
+    const noteEl = document.getElementById('plNote-' + id);
+    const card = document.getElementById('plCard-' + id);
+    if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+    _plBusy = true;
+    try {
+        await postWrite(PREFERRED_URL, {
+            action: 'decide', id: id, verdict: verdict,
+            owner_note: noteEl ? noteEl.value : '',
+            decided_by: _plName()
+        });
+        _plDecideOpen = null;
+        await _plLoad();
+        if (typeof checkPreferredReminders === 'function') checkPreferredReminders();
+    } catch (e) {
+        alert(e.message || 'Could not save that decision.');
+        if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
+    } finally { _plBusy = false; }
+}
+
+async function plWithdraw(id) {
+    if (_plBusy) return;
+    if (!confirm('Withdraw this request? It will be removed entirely.')) return;
+    _plBusy = true;
+    try {
+        await postWrite(PREFERRED_URL, { action: 'withdraw_request', id: id, by: _plName() });
+        await _plLoad();
+    } catch (e) { alert(e.message || 'Could not withdraw that request.'); }
+    finally { _plBusy = false; }
+}
+
+async function plOwnerDelete(id) {
+    if (_plBusy) return;
+    if (!confirm('Remove this from the record? This cannot be undone.')) return;
+    _plBusy = true;
+    try {
+        await postWrite(PREFERRED_URL, { action: 'withdraw_request', id: id, by: _plName(), as_owner: true });
+        await _plLoad();
+    } catch (e) { alert(e.message || 'Could not remove that.'); }
+    finally { _plBusy = false; }
+}
+
+// "Mark read" on the requester's feed card. Stops the click reaching the card,
+// whose own handler opens the tool — the button is the way to clear it WITHOUT
+// opening. Opening still marks it read, via _plLoad.
+async function plMarkRead(ev) {
+    if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+    try { await postWrite(PREFERRED_URL, { action: 'mark_seen', name: _plName() }); }
+    catch (_) { /* the card stays; next open will clear it */ }
+    if (typeof checkPreferredReminders === 'function') await checkPreferredReminders();
+}
+
+/* ---------- feed notifications (FEED ONLY — no bubble UI) ----------
+   Two invisible state-carriers on the same contract as every other reminder:
+   _samGatherReminders reads the element's computed display to know the reminder
+   is live, takes its one-line copy from data-summary, and its snooze identity
+   from data-sig. Both ids are in the retired-bubble rule in styles.css, so they
+   are never visible — the feed is the only surface. */
+function _plBubbleEl(which) {
+    const id = which === 'owner' ? 'preferredOwnerAlertBubble' : 'preferredMineAlertBubble';
+    let b = document.getElementById(id);
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = id;
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; align-items:flex-start; gap:8px; z-index:998;';
+    b.innerHTML = '<span id="' + id + 'Text"></span>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+function _plHideBubble(which) {
+    const b = document.getElementById(which === 'owner' ? 'preferredOwnerAlertBubble' : 'preferredMineAlertBubble');
+    if (b) b.style.display = 'none';
+}
+function _plRenderBubble(which, show, summary, sig) {
+    if (!show) { _plHideBubble(which); return; }
+    const b = _plBubbleEl(which);
+    if (!b) return;
+    const t = document.getElementById(b.id + 'Text');
+    if (t) { t.dataset.summary = summary; t.dataset.sig = sig; }
+    b.style.display = 'flex';
+}
+
+let _plCheckStarted = false;
+async function checkPreferredReminders() {
+    const owner = _plCanApprove();
+    const requester = _plCanRequest();
+    _plSyncToolLabels();
+    if (!owner && !requester) { _plHideBubble('owner'); _plHideBubble('mine'); return; }
+    // Safety net behind the realtime ping, same cadence as the other tools.
+    if (!_plCheckStarted) { _plCheckStarted = true; setInterval(checkPreferredReminders, 10 * 60 * 1000); }
+    try {
+        if (owner) {
+            const res = await fetch(PREFERRED_URL + '?scope=all&v=' + Date.now());
+            const data = await res.json();
+            const rows = (data && data.requests) || [];
+            const pending = rows.filter(function (r) { return r.status === 'pending'; })
+                .sort(function (a, b) { return new Date(a.created_at) - new Date(b.created_at); });
+            if (pending.length) {
+                const names = [];
+                pending.forEach(function (r) {
+                    const n = (r.requested_by || '').split(' ')[0];
+                    if (n && names.indexOf(n) === -1) names.push(n);
+                });
+                const who = names.length > 3 ? (names.slice(0, 3).join(', ') + ' and others') : names.join(', ');
+                const summary = pending.length === 1
+                    ? (who + ' suggested a product.')
+                    : (pending.length + ' suggestions from ' + who + '.');
+                // Identity is the pending id set, so a NEW request breaks through a
+                // snooze while re-rendering the same queue does not re-nag.
+                _plRenderBubble('owner', true, summary,
+                    'p:' + pending.map(function (r) { return r.id; }).sort().join(','));
+            } else { _plHideBubble('owner'); }
+        } else { _plHideBubble('owner'); }
+
+        if (requester) {
+            const res2 = await fetch(PREFERRED_URL + '?scope=mine&name=' + encodeURIComponent(_plName()) + '&v=' + Date.now());
+            const data2 = await res2.json();
+            const rows2 = (data2 && data2.requests) || [];
+            const fresh = rows2.filter(function (r) { return r.decided_at && !r.requester_seen_at; });
+            if (fresh.length) {
+                let summary;
+                if (fresh.length === 1) {
+                    const r = fresh[0];
+                    summary = '"' + r.item_name + '" was '
+                        + (r.status === 'approved' ? 'approved' : 'denied')
+                        + (r.owner_note ? ' — ' + r.owner_note : '.');
+                } else {
+                    const ok = fresh.filter(function (x) { return x.status === 'approved'; }).length;
+                    const no = fresh.length - ok;
+                    const bits = [];
+                    if (ok) bits.push(ok + ' approved');
+                    if (no) bits.push(no + ' denied');
+                    summary = fresh.length + ' of your suggestions were answered — ' + bits.join(', ') + '.';
+                }
+                _plRenderBubble('mine', true, summary,
+                    'd:' + fresh.map(function (r) { return r.id; }).sort().join(','));
+            } else { _plHideBubble('mine'); }
+        } else { _plHideBubble('mine'); }
+    } catch (_) { /* next poll / ping retries */ }
+    if (typeof renderActionFeed === 'function') renderActionFeed();
+}
+
+// ============================================================================
+// DM DISTRICT TOOLS — master/detail popups
+// ============================================================================
+// Listing Goals, Cleaning Checklist and Monthly Team Goals used to be three
+// panels stacked on the DM dashboard. They are now three action-menu items that
+// open three popups, matching how managers already reach the same three things.
+//
+// All three share one skeleton (.dmx in styles.css) because they are the same
+// shape underneath: five stores, one number each, drill in for detail. The DM
+// picks a store on the left; the detail always lands in the same place on the
+// right. That replaced an accordion, which in a 1050px-wide modal left the right
+// half empty and cost two clicks to change store.
+//
+// Data is NOT re-fetched here. These render from the same module state the old
+// widgets used — allDistrictGoalsData / _storeTargets (listing), dmAuditData
+// (cleaning), and the localStorage-backed goal helpers (monthly) — so there is
+// one fetch path, not two that can disagree.
+
+const _DMX_STORES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+
+// Which store's detail is showing, per tool. Kept separate so opening one tool
+// doesn't move another one's selection out from under the user.
+const _dmxSel = { lg: 'OVL', cl: 'OVL', mg: 'OVL' };
+
+// The fetchers used to bail when their dashboard container was missing. That
+// container is gone, so the gate is the role instead — otherwise every manager
+// would pull five stores of district data they can't see.
+function _dmxIsDistrict() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return role === 'district manager' || role === 'ceo';
+}
+
+// PayMore readiness thresholds, unchanged from the widgets these replace
+// (>=80 good, >=50 watch, below that behind). What IS new: every state carries a
+// word, so the meaning never rests on hue alone.
+function _dmxState(pct) {
+    if (pct >= 80) return { k: 'good', word: 'On track' };
+    if (pct >= 50) return { k: 'warn', word: 'Watch' };
+    return { k: 'bad', word: 'Behind' };
+}
+
+const _DMX_ICO = {
+    good: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+    warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>',
+    bad:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>',
+};
+
+function _dmxChip(pct, labelOverride) {
+    const s = _dmxState(pct);
+    const txt = labelOverride || (s.word + ' · ' + pct + '%');
+    return '<span class="dmx-st dmx-' + s.k + '">' + _DMX_ICO[s.k] + escapeHtml(txt) + '</span>';
+}
+
+function _dmxMeter(pct) {
+    const s = _dmxState(pct);
+    // Clamped so an over-target store (178 of 170) can't overflow the track.
+    const w = Math.max(0, Math.min(100, pct));
+    return '<span class="dmx-meter"><i class="dmx-f-' + s.k + '" style="width:' + w + '%"></i></span>';
+}
+
+function _dmxPct(done, total) {
+    return total ? Math.round((done / total) * 100) : 0;
+}
+
+// One rail row in the master column. `sub` is the small number under the code.
+//
+// No status dot. Five stores meant five dots all saying what the count and the
+// meter colour already said, and when the whole district is behind the column
+// reads as an alarm rather than as data. The count is the encoding that doesn't
+// depend on colour; the meter reinforces it.
+function _dmxTab(tool, store, sub, pct) {
+    const sel = _dmxSel[tool] === store ? ' sel' : '';
+    return '<button type="button" class="dmx-t' + sel + '" onclick="_dmxPick(\'' + tool + '\',\'' + store + '\')">'
+        + '<span class="dmx-t-code">' + escapeHtml(store) + '</span>'
+        + '<span class="dmx-t-mid"><span class="dmx-t-val">' + sub + '</span>'
+        + (pct === null ? '' : '<span style="display:block; margin-top:5px;">' + _dmxMeter(pct) + '</span>')
+        + '</span>'
+        + '</button>';
+}
+
+// The one cell in the summary strip that says how the day or week is going.
+// Colour plus the word, because a tint on its own is not a reading.
+function _dmxStatCell(label, valueHtml, pct) {
+    const st = _dmxState(pct);
+    return '<div class="dmx-cell dmx-stat dmx-stat-' + st.k + '">'
+        + '<div class="dmx-cell-l">' + escapeHtml(label) + ' &middot; <span class="dmx-stat-word">' + st.word + '</span></div>'
+        + '<div class="dmx-cell-v dmx-stat-v">' + valueHtml + '</div></div>';
+}
+
+// Four weeks against the store's target, target drawn as a reference line.
+// Replaces levelUpHtml() here: that helper's styling is all scoped to
+// .goals-levelup, so inside this modal it rendered as bare numbers.
+//
+// The pixel heights match .dmx-lu-track (64) and .dmx-lu-lab (15) in styles.css
+// — the target line is positioned from the bottom of the plot, so it has to
+// clear the label row. Change one and you change the other.
+function _dmxLevelUp(history, target) {
+    const last4 = (history || []).slice(-4);
+    const weeks = new Array(Math.max(0, 4 - last4.length)).fill(null).concat(last4);
+    const vals = weeks.filter(v => v != null);
+    // Headroom so the tallest bar never touches the ceiling and the target line
+    // stays inside the plot even when every week cleared it.
+    const top = Math.max(target || 0, vals.length ? Math.max.apply(null, vals) : 0, 1) * 1.14;
+    const TRACK = 64, LABEL = 15;
+    const labels = ['4 wks ago', '3 wks ago', '2 wks ago', 'Last week'];
+    let bars = '';
+    weeks.forEach(function (v, i) {
+        const k = v == null ? 'none' : (target && v >= target ? 'hit' : 'miss');
+        // 3px floor so a zero week is still a visible mark, not a gap.
+        const h = v == null ? 0 : Math.max(3, Math.round((v / top) * TRACK));
+        bars += '<div class="dmx-lu-w">'
+            + '<span class="dmx-lu-v dmx-lu-' + k + '">' + (v == null ? '&ndash;' : v) + '</span>'
+            + '<span class="dmx-lu-track"><i class="dmx-lu-' + k + '" style="height:' + h + 'px"></i></span>'
+            + '<span class="dmx-lu-lab">' + labels[i] + '</span>'
+            + '</div>';
+    });
+    const line = target
+        ? '<span class="dmx-lu-line" style="bottom:' + (LABEL + Math.round((target / top) * TRACK)) + 'px"></span>'
+        : '';
+    return '<div class="dmx-lu">'
+        + '<div class="dmx-lu-h"><span class="dmx-lu-t">Last 4 weeks</span>'
+        + (target ? '<span class="dmx-lu-target">Target ' + target + '</span>' : '')
+        + '</div>'
+        + '<div class="dmx-lu-plot">' + line + '<div class="dmx-lu-bars">' + bars + '</div></div>'
+        + '</div>';
+}
+
+// ── Handing off to a sub-editor and coming back ─────────────────────────────
+// Editing initiatives from the district popup used to close everything, which
+// lost the DM's place. These remember where to return to. Only honoured when the
+// editor was genuinely the thing on screen, so opening some other tool from the
+// Tools panel can't bounce the DM into the goals popup instead.
+let _dmxReturnTo = null;
+
+function _dmxReturnCheck() {
+    if (!_dmxReturnTo) return null;
+    const back = _dmxReturnTo;
+    _dmxReturnTo = null;
+    const editorOpen = ['editStoreInitiativesModal', 'editCompanyProjectsModal']
+        .some(id => document.getElementById(id)?.classList.contains('show'));
+    return editorOpen ? back : null;
+}
+
+// _dmxReturnTo is set AFTER the opener runs: openEdit*Modal goes through
+// toggleModal, which closes everything first and would consume the flag.
+function _dmxEditInitiatives(store) {
+    openEditStoreInitiativesModal(store);
+    _dmxReturnTo = 'dmGoalsModal';
+}
+
+function _dmxEditCompany() {
+    openEditCompanyProjectsModal();
+    _dmxReturnTo = 'dmGoalsModal';
+}
+
+function _dmxPick(tool, store) {
+    _dmxSel[tool] = store;
+    if (tool === 'lg') renderDmListingModal();
+    else if (tool === 'cl') renderDmCleaningModal();
+    else if (tool === 'mg') renderDmGoalsModal();
+}
+
+// ---------------------------------------------------------------------------
+// LISTING GOALS (district)
+// ---------------------------------------------------------------------------
+// Per-store weekly target vs listed, the per-employee day-by-day roster, the
+// level-up bar, and the two-week flag review — which is the one thing on this
+// screen the DM actually acts on.
+
+// Monday-anchored week, Chicago time, same as the widget it replaces.
+function _dmxWeekDays() {
+    const now = new Date();
+    const start = new Date(now);
+    start.setDate(now.getDate() + (now.getDay() === 0 ? -6 : 1 - now.getDay()));
+    start.setHours(0, 0, 0, 0);
+    const days = [];
+    const cur = new Date(start);
+    const todayStr = now.toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
+    while (true) {
+        const label = cur.toLocaleDateString('en-US', { weekday: 'short' });
+        const key = cur.toLocaleDateString('en-US');
+        days.push({ key, label });
+        if (key === todayStr || days.length >= 7) break;
+        cur.setDate(cur.getDate() + 1);
+    }
+    return { start, days, todayStr };
+}
+
+// Rolls this week's records up per employee for one store. Last record per day
+// wins, matching the widget — a manager re-saving a day overwrites, not adds.
+function _dmxListingStore(store) {
+    const { start, days, todayStr } = _dmxWeekDays();
+    const rows = (typeof allDistrictGoalsData !== 'undefined' ? allDistrictGoalsData : [])
+        .filter(r => r.store === store);
+    const emps = {};
+    rows.forEach(r => {
+        if (goalDateObj(r.date) < start) return;
+        const d = normalizeGoalDate(r.date);
+        if (!emps[r.employee]) emps[r.employee] = { role: '-', byDay: {} };
+        emps[r.employee].byDay[d] = parseInt(r.goal) || 0;
+        if (d === todayStr && r.role && r.role !== '-') emps[r.employee].role = r.role;
+    });
+    const names = Object.keys(emps);
+    let today = 0, week = 0;
+    names.forEach(n => {
+        today += emps[n].byDay[todayStr] || 0;
+        week += Object.values(emps[n].byDay).reduce((a, g) => a + g, 0);
+    });
+    const target = targetFor(store);
+    return {
+        store, target, emps, names, today, week, days, todayStr,
+        pct: _dmxPct(week, target),
+        flag: (_storeTargets[store] && _storeTargets[store].flag) || 'none',
+    };
+}
+
+function openDmListingGoals() {
+    // toggleModal is the shared opener — it closes whatever else is open and
+    // dims/blurs the page behind, like every other SPEEKS tool.
+    toggleModal('dmListingModal');
+    renderDmListingModal();
+    // The modal can be opened before the first fetch lands; this fills it in.
+    if (typeof fetchDmGoalsData === 'function') fetchDmGoalsData();
+}
+
+function renderDmListingModal() {
+    const wrap = document.getElementById('dmListingBody');
+    if (!wrap) return;
+    const all = _DMX_STORES.map(_dmxListingStore);
+    const listed = all.reduce((a, s) => a + s.week, 0);
+    const target = all.reduce((a, s) => a + s.target, 0);
+    const flagged = all.filter(s => s.flag === 'flagged').length;
+
+    const sub = document.getElementById('dmListingSub');
+    if (sub) {
+        sub.textContent = listed + ' of ' + target + ' listed this week · '
+            + _dmxPct(listed, target) + '%'
+            + (flagged ? ' · ' + flagged + ' flagged for review' : '');
+    }
+
+    if (!all.some(s => s.names.length)) {
+        wrap.innerHTML = '<div class="dmx-empty" style="padding:60px 0;">Syncing the district roster…</div>';
+        return;
+    }
+
+    let rail = '';
+    all.forEach(s => {
+        rail += _dmxTab('lg', s.store, s.week + ' / ' + s.target, s.pct);
+    });
+
+    const sel = all.find(s => s.store === _dmxSel.lg) || all[0];
+    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2' };
+    let pane = '<div class="dmx-ph"><div>'
+        + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
+        + '<div class="dmx-ps">Target ' + sel.target + ' listings · ' + sel.week
+        + ' this week · ' + sel.names.length + ' on roster</div>'
+        + '</div><div class="dmx-ph-side">' + _dmxChip(sel.pct) + '</div></div>';
+
+    if (!sel.names.length) {
+        pane += '<div class="dmx-empty">No roles set for ' + escapeHtml(sel.store) + ' this week.</div>';
+    } else {
+        pane += '<table class="dmx-tbl"><thead><tr><th>Employee &amp; role</th>';
+        sel.days.forEach(d => { pane += '<th style="text-align:right;">' + escapeHtml(d.label) + '</th>'; });
+        pane += '<th style="text-align:right;">Week</th></tr></thead><tbody>';
+        sel.names.forEach(n => {
+            const e = sel.emps[n];
+            const wk = Object.values(e.byDay).reduce((a, g) => a + g, 0);
+            const badge = e.role !== '-'
+                ? '<span class="dmx-role">' + escapeHtml(roleName[e.role] || e.role) + '</span>' : '';
+            pane += '<tr><td><span class="dmx-name">' + escapeHtml(n) + '</span>' + badge + '</td>';
+            sel.days.forEach(d => {
+                const v = e.byDay[d.key];
+                pane += '<td class="dmx-num' + (v ? '' : ' dmx-mute') + '">' + (v || '–') + '</td>';
+            });
+            pane += '<td class="dmx-num">' + wk + '</td></tr>';
+        });
+        pane += '<tr class="dmx-tot"><td>Total</td>';
+        sel.days.forEach(d => {
+            let t = 0;
+            sel.names.forEach(n => { t += sel.emps[n].byDay[d.key] || 0; });
+            pane += '<td class="dmx-num">' + t + '</td>';
+        });
+        pane += '<td class="dmx-num">' + sel.week + '</td></tr></tbody></table>';
+
+        pane += '<div style="margin-top:18px;">' + _dmxLevelUp(weeksFor(sel.store) || [], sel.target) + '</div>';
+
+        if (sel.flag === 'flagged') {
+            pane += '<div class="dmx-flag">'
+                + '<span class="dmx-flag-t">Missed goal 2 weeks running — your call:</span>'
+                + '<button type="button" class="dmx-lower" onclick="dmGoalAction(\'' + sel.store + '\',\'lower\')">Lower −10</button>'
+                + '<button type="button" class="dmx-keep" onclick="dmGoalAction(\'' + sel.store + '\',\'keep\')">Keep at ' + sel.target + '</button>'
+                + '</div>';
+        }
+    }
+
+    wrap.innerHTML = '<div class="dmx-strip">'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">District listed</div><div class="dmx-cell-v">' + listed + '</div></div>'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">District target</div><div class="dmx-cell-v">' + target + '</div></div>'
+        + _dmxStatCell('Attainment', _dmxPct(listed, target) + '<small>%</small>', _dmxPct(listed, target))
+        + '<div class="dmx-cell"><div class="dmx-cell-l">Flagged for review</div><div class="dmx-cell-v">' + flagged + '</div></div>'
+        + '</div>'
+        + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
+}
+
+// ---------------------------------------------------------------------------
+// CLEANING CHECKLIST (district)
+// ---------------------------------------------------------------------------
+// Read-only follow-up view. Outstanding items are listed ABOVE done ones,
+// because "what's left" is the question a DM opens this to answer; the section
+// each item belongs to moves onto the row so the grouping isn't lost.
+
+function openDmCleaning() {
+    toggleModal('dmCleaningModal');
+    renderDmCleaningModal();
+    if (typeof fetchDmAuditData === 'function') fetchDmAuditData();
+}
+
+function switchDmCleaningTab(view) {
+    currentDmAuditTab = view;
+    document.getElementById('dmClTabDaily')?.classList.toggle('active', view === 'daily');
+    document.getElementById('dmClTabWeekly')?.classList.toggle('active', view === 'weekly');
+    renderDmCleaningModal();
+}
+
+function _dmxAuditStore(store, tab) {
+    const sd = (typeof dmAuditData !== 'undefined' ? dmAuditData : {})[store] || {};
+    const pd = sd[tab] || { items: [], total: 0, completed: 0 };
+    const items = pd.items || [];
+    const total = pd.total || items.length;
+    const completed = pd.completed != null ? pd.completed : items.filter(i => i.checked).length;
+    return { store, items, total, completed, pct: _dmxPct(completed, total) };
+}
+
+function renderDmCleaningModal() {
+    const wrap = document.getElementById('dmCleaningBody');
+    if (!wrap) return;
+    const tab = (typeof currentDmAuditTab !== 'undefined' ? currentDmAuditTab : 'daily');
+    const all = _DMX_STORES.map(s => _dmxAuditStore(s, tab));
+    const done = all.reduce((a, s) => a + s.completed, 0);
+    const total = all.reduce((a, s) => a + s.total, 0);
+    const complete = all.filter(s => s.total && s.completed === s.total).length;
+    const behind = all.filter(s => s.total && s.pct < 50).length;
+    const word = tab === 'daily' ? 'today' : 'this week';
+
+    const sub = document.getElementById('dmCleaningSub');
+    if (sub) {
+        sub.textContent = total
+            ? done + ' of ' + total + ' done ' + word + ' · ' + _dmxPct(done, total) + '%'
+                + (behind ? ' · ' + behind + ' behind' : '')
+            : 'No ' + tab + ' items set up yet.';
+    }
+
+    if (!total) {
+        wrap.innerHTML = '<div class="dmx-empty" style="padding:60px 0;">No ' + escapeHtml(tab)
+            + ' cleaning items have been set up yet.</div>';
+        return;
+    }
+
+    // Worst first: the store needing a nudge is the reason this is open.
+    const order = all.slice().sort((a, b) => a.pct - b.pct);
+    let rail = '';
+    order.forEach(s => {
+        rail += _dmxTab('cl', s.store, s.completed + ' / ' + s.total, s.pct);
+    });
+
+    const sel = all.find(s => s.store === _dmxSel.cl) || order[0];
+    let pane = '<div class="dmx-ph"><div>'
+        + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
+        + '<div class="dmx-ps">' + sel.completed + ' of ' + sel.total + ' done ' + word + '</div>'
+        + '</div><div class="dmx-ph-side">' + _dmxChip(sel.pct) + '</div></div>';
+
+    if (!sel.items.length) {
+        pane += '<div class="dmx-empty">No ' + escapeHtml(tab) + ' items for ' + escapeHtml(sel.store) + '.</div>';
+    } else {
+        const box = '<span class="dmx-ck-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>';
+        const row = it => '<div class="dmx-ck' + (it.checked ? ' on' : '') + '">' + box
+            + '<span class="dmx-ck-t">' + escapeHtml(it.text || '')
+            + (it.section ? ' <span class="dmx-ck-where">· ' + escapeHtml(it.section) + '</span>' : '')
+            + '</span></div>';
+        const open = sel.items.filter(i => !i.checked);
+        const shut = sel.items.filter(i => i.checked);
+        if (open.length) {
+            pane += '<div class="dmx-sec">Still outstanding · ' + open.length + '</div>'
+                + open.map(row).join('');
+        }
+        if (shut.length) {
+            pane += '<div class="dmx-sec">Done · ' + shut.length + '</div>' + shut.map(row).join('');
+        }
+    }
+
+    wrap.innerHTML = '<div class="dmx-strip">'
+        + _dmxStatCell('District ' + word, _dmxPct(done, total) + '<small>%</small>', _dmxPct(done, total))
+        + '<div class="dmx-cell"><div class="dmx-cell-l">Items done</div><div class="dmx-cell-v">' + done + '<small> / ' + total + '</small></div></div>'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">Stores complete</div><div class="dmx-cell-v">' + complete + '<small> of 5</small></div></div>'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">Behind</div><div class="dmx-cell-v">' + behind + '</div></div>'
+        + '</div>'
+        + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
+}
+
+// ---------------------------------------------------------------------------
+// MONTHLY TEAM GOALS (district)
+// ---------------------------------------------------------------------------
+// The one of the three the DM writes to. Company-wide projects sit in a band
+// above, since they apply to every store; each store's own goals and
+// initiatives are in the pane. Editing still hands off to the existing
+// store-scoped editors — see the note on the Edit buttons.
+
+function openDmMonthlyGoals() {
+    toggleModal('dmGoalsModal');
+    renderDmGoalsModal();
+}
+
+function _dmxGoalsStore(store) {
+    const goals = (getMonthlyGoals(store) || {}).goals || [];
+    const inis = (getStoreInitiatives(store) || {}).initiatives || [];
+    return { store, goals, inis };
+}
+
+function renderDmGoalsModal() {
+    const wrap = document.getElementById('dmGoalsBody');
+    if (!wrap) return;
+    const all = _DMX_STORES.map(_dmxGoalsStore);
+    const setCount = all.reduce((a, s) => a + s.goals.length, 0);
+    const unset = all.filter(s => !s.goals.length).map(s => s.store);
+
+    const sub = document.getElementById('dmGoalsSub');
+    if (sub) {
+        sub.textContent = (typeof _mgbMonthLabel === 'function' ? _mgbMonthLabel() + ' · ' : '')
+            + setCount + ' goal' + (setCount === 1 ? '' : 's') + ' set across 5 stores'
+            + (unset.length ? ' · ' + unset.join(', ') + ' not set' : '');
+    }
+
+    let rail = '';
+    all.forEach(s => {
+        const bits = s.goals.length + ' goal' + (s.goals.length === 1 ? '' : 's')
+            + ' · ' + s.inis.length + ' initiative' + (s.inis.length === 1 ? '' : 's');
+        // No meter (goals aren't a percentage of anything) and no dot — "0 goals"
+        // in red already says it, and the dot only repeated it a few pixels away.
+        const sel = _dmxSel.mg === s.store ? ' sel' : '';
+        rail += '<button type="button" class="dmx-t' + sel + '" onclick="_dmxPick(\'mg\',\'' + s.store + '\')">'
+            + '<span class="dmx-t-code">' + escapeHtml(s.store) + '</span>'
+            + '<span class="dmx-t-mid"><span class="dmx-t-val"'
+            + (s.goals.length ? '' : ' style="color:#b91c1c;"') + '>' + bits + '</span></span>'
+            + '</button>';
+    });
+
+    const sel = all.find(s => s.store === _dmxSel.mg) || all[0];
+    const projects = (getCompanyProjects() || {}).projects || [];
+    const badge = st => st === 'upcoming'
+        ? '<span class="dmx-badge up">Upcoming</span>'
+        : '<span class="dmx-badge cur">Current</span>';
+
+    // The only route to company-wide initiatives for a DM. It used to hang off
+    // the district dashboard panel that this popup replaced, which left no way in.
+    let company = '<div class="dmx-company"><div class="dmx-company-h">'
+        + '<span class="dmx-company-l">Company initiatives · all stores</span>'
+        + '<button type="button" class="dmx-company-edit" onclick="_dmxEditCompany()">Edit Company Initiatives</button>'
+        + '</div>';
+    company += projects.length
+        ? '<div class="dmx-company-r">' + projects.map(p =>
+            '<span class="dmx-company-i">' + escapeHtml(p.title || '') + badge(p.status) + '</span>').join('') + '</div>'
+        : '<div class="dmx-empty" style="padding:8px 0; text-align:left;">No company initiatives set.</div>';
+    company += '</div>';
+
+    let pane = '<div class="dmx-ph"><div>'
+        + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
+        + '<div class="dmx-ps">' + sel.goals.length + ' of 6 goals set for '
+        + escapeHtml(typeof _mgbMonthLabel === 'function' ? _mgbMonthLabel() : 'this month') + '</div>'
+        // No goal editing here: stores set their own monthly goals. The DM reads
+        // them and owns the initiatives, so that is the only edit control.
+        + '</div><div class="dmx-ph-side">'
+        + '<button type="button" class="btn-secondary" style="padding:8px 14px; font-size:12.5px;" onclick="_dmxEditInitiatives(\'' + sel.store + '\')">Edit Initiatives</button>'
+        + '</div></div>';
+
+    pane += '<div class="dmx-sec">Team goals</div>';
+    pane += sel.goals.length
+        ? sel.goals.map(g => '<div class="dmx-goal"><div class="dmx-goal-t">' + escapeHtml(g.title || '') + '</div>'
+            + (g.description ? '<div class="dmx-goal-d">' + escapeHtml(g.description) + '</div>' : '') + '</div>').join('')
+        : '<div class="dmx-empty">No goals set for ' + escapeHtml(sel.store) + ' this month.</div>';
+    if (sel.goals.length && sel.goals.length < 6) {
+        pane += '<div class="dmx-empty">' + (6 - sel.goals.length) + ' more can be set this month</div>';
+    }
+
+    pane += '<div class="dmx-sec">Initiatives &amp; projects</div>';
+    pane += sel.inis.length
+        ? sel.inis.map(i => '<div class="dmx-goal"><div class="dmx-goal-row"><div>'
+            + '<div class="dmx-goal-t">' + escapeHtml(i.title || '') + '</div>'
+            + (i.description ? '<div class="dmx-goal-d">' + escapeHtml(i.description) + '</div>' : '')
+            + '</div>' + badge(i.status) + '</div></div>').join('')
+        : '<div class="dmx-empty">No initiatives set for ' + escapeHtml(sel.store) + '.</div>';
+
+    wrap.innerHTML = company
+        + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
+}
+
+// ---------------------------------------------------------------------------
+// RAIL SYNC — the number that tells the DM whether to open each tool
+// ---------------------------------------------------------------------------
+// Mirrors _samSyncMini for the manager rows: sub line, right-hand value, bar.
+// Each tool shows the one figure that decides whether it's worth opening —
+// flagged stores for Listing Goals (the only part a DM must act on), district
+// completion for Cleaning (nothing to action, only to follow up), goals set for
+// Monthly (so an unset store is visible without opening anything).
+
+function _dmxSyncRail() {
+    if (!_dmxIsDistrict()) return;
+    const set = (id, txt) => { const el = document.getElementById(id); if (el && txt != null) el.textContent = txt; };
+    const bar = (id, pct) => {
+        const el = document.getElementById(id);
+        if (el) el.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    };
+
+    // Listing Goals
+    if (typeof allDistrictGoalsData !== 'undefined' && allDistrictGoalsData.length) {
+        const all = _DMX_STORES.map(_dmxListingStore);
+        const listed = all.reduce((a, s) => a + s.week, 0);
+        const target = all.reduce((a, s) => a + s.target, 0);
+        const flagged = all.filter(s => s.flag === 'flagged').length;
+        set('samDmListVal', listed + '/' + target);
+        set('samDmListSub', flagged
+            ? flagged + ' store' + (flagged === 1 ? '' : 's') + ' flagged for review'
+            : 'All five stores this week');
+        bar('samDmListFill', _dmxPct(listed, target));
+    }
+
+    // Cleaning Checklist
+    if (typeof dmAuditData !== 'undefined' && Object.keys(dmAuditData).length) {
+        const tab = (typeof currentDmAuditTab !== 'undefined' ? currentDmAuditTab : 'daily');
+        const all = _DMX_STORES.map(s => _dmxAuditStore(s, tab));
+        const done = all.reduce((a, s) => a + s.completed, 0);
+        const total = all.reduce((a, s) => a + s.total, 0);
+        const behind = all.filter(s => s.total && s.pct < 50).length;
+        set('samDmAuditVal', total ? done + '/' + total : '');
+        set('samDmAuditSub', behind
+            ? behind + ' store' + (behind === 1 ? '' : 's') + ' behind today'
+            : 'All five stores today');
+        bar('samDmAuditFill', _dmxPct(done, total));
+    }
+
+    // Monthly Team Goals
+    const goals = _DMX_STORES.map(_dmxGoalsStore);
+    const setCount = goals.reduce((a, s) => a + s.goals.length, 0);
+    const unset = goals.filter(s => !s.goals.length).length;
+    set('samDmGoalsVal', String(setCount));
+    set('samDmGoalsSub', unset
+        ? unset + ' store' + (unset === 1 ? '' : 's') + ' with nothing set'
+        : 'Team goals & initiatives');
+}
+
+// ============================================================================
+// DISTRICT COMMAND CENTER — grouped triage rail + store detail
+// ============================================================================
+// Replaced five side-by-side store cards. Same 21 metrics per store, same
+// thresholds, same links, same audit click-through — see the .dcc block in
+// styles.css for why the shape changed.
+//
+// The old renderer parsed values inline while building HTML, which made the
+// rules hard to see and impossible to reuse. Now every store is normalised into
+// a plain object first (_dccRow), the checks live in one table (_dccChecks), and
+// the renderers only format. The rail counts and the pane therefore cannot
+// disagree — they read the same checks.
+//
+// _dccRows keeps the last normalised payload so clicking a store repaints
+// without refetching; the 60s dashboard poll overwrites it and repaints.
+
+let _dccRows = [];
+let _dccSel = null;
+
+const _DCC_ICO = {
+    b: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>',
+    w: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>',
+    g: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+};
+
+// --- number helpers, carried over verbatim from the old renderer -------------
+
+// Sheet values arrive either as 54.98 or as 0.5498 depending on the column, so
+// a bare fraction under 1.5 is treated as a ratio. Same rule as before.
+function _dccPct(raw) {
+    const str = String(raw == null ? '' : raw);
+    const n = parseFloat(str) || 0;
+    return (!str.includes('%') && n > 0 && n <= 1.5) ? n * 100 : n;
+}
+function _dccNum(v) { return v == null ? '' : String(v); }
+function _dccFix(n) { return Number.isInteger(n) ? String(n) : n.toFixed(2); }
+function _dccMoney(n) { return '$' + Math.round(n || 0).toLocaleString(); }
+
+// eBay severity bands — unchanged thresholds. Note tracking is a FLOOR (lower is
+// worse) while the other three are ceilings.
+function _dccSev(type, raw) {
+    if (raw === null || raw === undefined || String(raw).trim() === '') return null;
+    const n = parseFloat(String(raw).replace(/[^0-9.-]/g, ''));
+    if (isNaN(n)) return null;
+    if (type === 'defect')  return n >= 0.40 ? 'b' : (n >= 0.25 ? 'w' : null);
+    if (type === 'late')    return n >= 2.4  ? 'b' : (n >= 1.5  ? 'w' : null);
+    if (type === 'cases')   return n >= 0.24 ? 'b' : (n >= 0.15 ? 'w' : null);
+    if (type === 'track')   return n <= 96.0 ? 'b' : (n <= 97.5 ? 'w' : null);
+    return null;
+}
+function _dccEbayPct(raw) {
+    if (raw === null || raw === undefined) return null;
+    let str = String(raw).trim();
+    if (str === '' || str === 'null') return null;
+    if (str.endsWith('%')) return str;
+    const n = parseFloat(str.replace(/[^0-9.-]/g, ''));
+    return isNaN(n) ? null : n.toFixed(2) + '%';
+}
+
+// Transaction time may be "13.2" or "13:12"; the old code accepted both.
+function _dccMinutes(v) {
+    const s = String(v == null ? '' : v);
+    if (s.includes(':')) {
+        const p = s.split(':');
+        return (parseInt(p[0], 10) || 0) + ((parseInt(p[1], 10) || 0) / 60);
+    }
+    const n = parseFloat(s.replace(/[^0-9.-]/g, ''));
+    return isNaN(n) ? null : n;
+}
+
+// --- normalise one store ----------------------------------------------------
+function _dccRow(store, hubData, varData, scoreData, alertsData, weeklyResults) {
+    const k = store.toLowerCase();
+    const sc = (scoreData.data || []).find(s => String(s.store).toUpperCase() === store) || {};
+    const al = (alertsData.data || []).find(a => String(a.store).toUpperCase() === store) || {};
+    const vr = varData[store] || {};
+    const wk = weeklyResults.find(w => w.store === store) || {};
+    const avg = wk.sAvg || {};
+
+    const rev = parseFloat(hubData[`${k}Rev`]) || 0;
+    const gp = parseFloat(hubData[`${k}GP`]) || 0;
+    // Sell margin is given where available, derived from GP/revenue where not.
+    let sellM = 0;
+    if (hubData[`${k}SellMargin`]) sellM = _dccPct(hubData[`${k}SellMargin`]);
+    else if (rev > 0) sellM = (gp / rev) * 100;
+
+    // Week-of label: the Monday of the scorecard's date, in UTC as before.
+    let week = 'Recent';
+    if (sc.date) {
+        const d = new Date(sc.date);
+        if (!isNaN(d.getTime())) {
+            const day = d.getUTCDay();
+            const mon = new Date(d);
+            mon.setUTCDate(d.getUTCDate() + (day === 0 ? -6 : 1 - day));
+            week = mon.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
+        }
+    }
+
+    const cats = [];
+    // Only an ACTIVE very-high category is Serious. Projected is a forecast about
+    // a category that has not failed yet, and the alert data already distinguishes
+    // the two, so treating a projection as a current failure overstated it. Both
+    // are still shown, and both still say which they are.
+    if (al.currentVeryHigh)   cats.push({ k: 'Active · very high',    v: al.currentVeryHigh,   s: 'b' });
+    if (al.currentHigh)       cats.push({ k: 'Active · high',         v: al.currentHigh,       s: 'w' });
+    if (al.projectedVeryHigh) cats.push({ k: 'Projected · very high', v: al.projectedVeryHigh, s: 'w' });
+    if (al.projectedHigh)     cats.push({ k: 'Projected · high',      v: al.projectedHigh,     s: 'w' });
+
+    return {
+        store,
+        goal: Math.round(parseFloat(hubData[`${k}Goal`]) || 0),
+        edited: hubData[`${k}BuyDate`] || null,
+        score: (parseFloat(sc.score) || 0) * 2,
+        audit: sc.audit || null,
+        week,
+        salesPct: _dccPct(hubData[`${k}Pct`]),
+        rev,
+        gpTrack: Math.round(parseFloat(hubData[`${k}TrackGP`])) || 0,
+        sellM,
+        buyTrack: Math.round(parseFloat(hubData[`${k}BuyProj`])) || 0,
+        buyM: _dccPct(hubData[`${k}BuyMargin`]),
+        vari: parseFloat(vr.total) || 0,
+        variRange: (typeof formatVarianceRange === 'function') ? formatVarianceRange(vr.dateFrom, vr.dateTo) : '',
+        period: wk.periodLabel || '',
+        conv: avg.conversion || '',
+        wkM: avg.buyMargin || '',
+        time: avg.time || '',
+        noDeals: avg.noDeals || '',
+        listed: avg.listed || '',
+        defect: al.defectRate, late: al.lateShipment, cases: al.casesClosed, track: al.tracking,
+        cats,
+    };
+}
+
+// Capitalise the first letter of each word, leaving words that already carry a
+// capital alone so "eBay" survives. Used on backend-supplied captions.
+function _dccCap(str) {
+    return String(str == null ? '' : str).split(' ')
+        .map(w => /[A-Z]/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+// --- one table of every check the panel makes -------------------------------
+// Thresholds identical to the old board. buyMargin deliberately only fails when
+// it is ABOVE zero: a missing figure parsed to 0 must not read as a 0% margin.
+function _dccChecks(r) {
+    const num = v => { const n = parseFloat(String(v).replace(/[^0-9.-]/g, '')); return isNaN(n) ? null : n; };
+    const conv = num(r.conv), wkM = num(r.wkM), nd = num(r.noDeals), mins = _dccMinutes(r.time);
+    return [
+        { key: 'score',   s: r.score > 8 ? null : (r.score >= 6 ? 'w' : 'b') },
+        { key: 'audit',   s: !r.audit ? null : (r.audit.pct >= 80 ? null : (r.audit.pct >= 50 ? 'w' : 'b')) },
+        { key: 'sales',   s: _dccTier(r.salesPct, 100, 'min') },
+        { key: 'sellM',   s: _dccTier(r.sellM, 55.5, 'min') },
+        // Still only judged when above zero: a missing figure parses to 0 and must
+        // not read as a 0% margin.
+        { key: 'buyM',    s: r.buyM > 0 ? _dccTier(r.buyM, 51, 'min') : null },
+        // Variance's limit is zero, so the fractional band would be zero too —
+        // 1.0 percentage point absolute instead, or a -0.05% variance would file a
+        // store as Serious.
+        { key: 'vari',    s: _dccTier(r.vari, 0, 'min', 1.0) },
+        { key: 'conv',    s: _dccTier(conv, 85, 'min') },
+        { key: 'wkM',     s: _dccTier(wkM, 51, 'min') },
+        { key: 'time',    s: _dccTier(mins, 13, 'max') },
+        // No-deals is a WATCH signal, not a hard fail. The ceiling of 7 is met by
+        // almost no store in practice — the district records 9 to 29 in a week — so
+        // treating it as serious put four of five stores in the Serious group on
+        // its own and the triage stopped discriminating. The threshold itself is
+        // unchanged and the row still paints amber; what changed is that it no
+        // longer escalates the whole store.
+        { key: 'noDeals', s: nd == null ? null : (nd > 7 ? 'w' : null) },
+        { key: 'defect',  s: _dccSev('defect', r.defect) },
+        { key: 'late',    s: _dccSev('late', r.late) },
+        { key: 'cases',   s: _dccSev('cases', r.cases) },
+        { key: 'track',   s: _dccSev('track', r.track) },
+    ].concat(r.cats.map(c => ({ key: 'cat', s: c.s })));
+}
+// A miss inside the band is a Watch; beyond it, Serious. Without this every
+// threshold was binary, so a store 0.52 points short on sell margin was filed
+// alongside one failing eBay tracking by 2 points — which is why every store
+// landed in Serious and the rail stopped discriminating.
+//
+// The band is a FRACTION of the threshold so it scales with each metric's own
+// units: 5% of a 13-minute ceiling is 0.65 min, 5% of an 85% floor is 4.25
+// points. One number to tune.
+const _DCC_BAND = 0.05;
+
+// dir 'min' = the value must reach the limit (a floor); 'max' = must not exceed
+// it (a ceiling). absBand overrides the fraction for limits where a percentage
+// of the limit is meaningless — variance, whose limit is zero.
+function _dccTier(val, limit, dir, absBand) {
+    if (val == null || !isFinite(val)) return null;
+    const miss = dir === 'min' ? limit - val : val - limit;
+    if (miss <= 0) return null;
+    const band = absBand != null ? absBand : Math.abs(limit) * _DCC_BAND;
+    return miss <= band ? 'w' : 'b';
+}
+
+function _dccState(r, key) { const c = _dccChecks(r).find(x => x.key === key); return c ? c.s : null; }
+function _dccCount(r) {
+    const c = _dccChecks(r);
+    return { bad: c.filter(x => x.s === 'b').length, warn: c.filter(x => x.s === 'w').length,
+             off: c.filter(x => x.s).length };
+}
+function _dccWorst(r) { const n = _dccCount(r); return n.bad ? 'b' : (n.warn ? 'w' : 'g'); }
+
+// The rail's one-line read: name the single most consequential thing wrong, in
+// the order a DM would care. Falls back to a plain summary when nothing is off.
+function _dccLine(r) {
+    const ebayKeys = ['track', 'defect', 'cases', 'late'];
+    const ebayOff = ebayKeys.filter(k => _dccState(r, k)).length;
+    const ebayBad = ebayKeys.filter(k => _dccState(r, k) === 'b').length;
+
+    // Candidates in the order a DM cares about them, each paired with its own
+    // severity. The first candidate matching the STORE's severity wins, so a
+    // Serious item is never hidden behind a near-miss listed above it.
+    // Being under goal is deliberately NOT a candidate: the card prints % to goal
+    // directly above this line, so saying it again spends the one line a card has
+    // on something already on screen. A store whose only miss is the goal falls
+    // through to the neutral summary instead.
+    const cand = [
+        [ebayOff >= 3 ? (ebayBad >= 3 ? 'b' : 'w') : null,
+         'eBay Health Failing On ' + ebayOff + ' Of 4'],
+        [_dccState(r, 'track'),   'eBay Tracking ' + _dccEbayPct(r.track)],
+        [_dccState(r, 'conv'),    'Conversion ' + r.conv + '%'],
+        [_dccState(r, 'time'),    'Transaction Time ' + r.time + ' Min'],
+        [ebayOff ? (ebayBad ? 'b' : 'w') : null,
+         'eBay Health Over On ' + ebayOff + (ebayOff === 1 ? ' Measure' : ' Measures')],
+        [r.cats.some(c => c.s === 'b') ? 'b' : null,
+         r.cats.filter(c => c.s === 'b').length
+         + (r.cats.filter(c => c.s === 'b').length === 1 ? ' Category' : ' Categories') + ' Failing'],
+        [r.cats.length ? 'w' : null,
+         r.cats.length + (r.cats.length === 1 ? ' Category' : ' Categories') + ' At Risk'],
+        [_dccState(r, 'sellM'),   'Sell Margin ' + _dccFix(r.sellM) + '%'],
+        [_dccState(r, 'wkM'),     'Weekly Margin ' + r.wkM + '%'],
+        [_dccState(r, 'buyM'),    'Buy Margin ' + _dccFix(r.buyM) + '%'],
+        [_dccState(r, 'vari'),    'Variance ' + r.vari.toFixed(2) + '%'],
+        [_dccState(r, 'noDeals'), r.noDeals + ' No-Deals'],
+        [_dccState(r, 'score'),   'Scorecard ' + r.score.toFixed(1)],
+        [_dccState(r, 'audit'),   'Audit ' + (r.audit ? r.audit.pct + '%' : 'Not Submitted')],
+    ];
+    const worst = _dccWorst(r);
+    const hit = cand.find(c => c[0] === worst) || cand.find(c => c[0]);
+    if (hit) return hit[1];
+    return (r.listed || '0') + ' Devices Listed';
+}
+
+// Worst first, then by warnings, then alphabetically so the order is stable
+// between polls and doesn't shuffle under the cursor.
+function _dccRanked() {
+    return _dccRows.slice().sort((a, b) =>
+        _dccCount(b).bad - _dccCount(a).bad ||
+        _dccCount(b).warn - _dccCount(a).warn ||
+        a.store.localeCompare(b.store));
+}
+
+// The rail grades on one thing: GP against goal. It reuses the 'sales' check so
+// the band and the number in the card can never disagree — on goal, inside the
+// near-miss band, or beyond it.
+//
+// This is deliberately NOT _dccWorst, which weighs all fourteen checks. A store
+// can sit in "On goal" with a failing eBay category; the card's own line still
+// names it and the pane still flags it, but goal attainment is what files it.
+function _dccBand(r) {
+    // No goal on record is not 0% attainment — don't file a data gap as Serious.
+    if (!r.goal) return 'w';
+    return _dccState(r, 'sales') || 'g';
+}
+// Best first, so the rail reads as a ranking top to bottom.
+function _dccByGoal(list) {
+    return list.slice().sort((a, b) => {
+        const x = isFinite(a.salesPct) ? a.salesPct : -Infinity;
+        const y = isFinite(b.salesPct) ? b.salesPct : -Infinity;
+        return y - x || a.store.localeCompare(b.store);
+    });
+}
+// Groups best to worst, each sorted best to worst, so the flat order is simply
+// every store by % to goal descending.
+const _DCC_GROUPS = [
+    { k: 'g', label: 'On goal' },
+    { k: 'w', label: 'Watch' },
+    { k: 'b', label: 'Serious' },
+];
+function _dccRailOrder() {
+    return _DCC_GROUPS.reduce((acc, g) =>
+        acc.concat(_dccByGoal(_dccRows.filter(r => _dccBand(r) === g.k))), []);
+}
+
+// --- rail -------------------------------------------------------------------
+function _dccRailHtml() {
+    return _DCC_GROUPS.map(g => {
+        const list = _dccByGoal(_dccRows.filter(r => _dccBand(r) === g.k));
+        if (!list.length) return '';
+        return '<div class="dcc-group">'
+            + g.label + '<span class="dcc-group-n">' + list.length + '</span></div>'
+            + list.map(r => {
+                // Red under goal, green at or over it — the same sales check that
+                // files the card into its group, so the colour and the band agree.
+                const pctCls = _dccState(r, 'sales') ? ' under' : ' over';
+                return '<button type="button" class="dcc-t' + (r.store === _dccSel ? ' sel' : '')
+                    + '" onclick="_dccPick(\'' + r.store + '\')">'
+                    + '<span class="dcc-t-top"><span class="dcc-t-code">' + escapeHtml(r.store) + '</span>'
+                    + '<span class="dcc-t-pct' + pctCls + '">' + _dccFix(r.salesPct) + '<small>% to goal</small></span></span>'
+                    + '<span class="dcc-t-sub">' + escapeHtml(_dccLine(r)) + '</span>'
+                    + '</button>';
+            }).join('');
+    }).join('');
+}
+
+// --- pane sections ----------------------------------------------------------
+// state may be 'b' (serious), 'w' (watch), 'g' (on target) or null (nothing to
+// judge — a raw count with no threshold, which stays ink). The unit always gets
+// its own fixed-width slot, empty or not: that is what puts $66,332 and 86.45
+// on the same right edge instead of letting a trailing "%" shove one of them in.
+function _dccStatRow(label, value, unit, state, sub) {
+    const cls = state ? ' ' + state : '';
+    return '<div class="dcc-row"><span class="dcc-row-l">' + escapeHtml(label)
+        + (sub ? '<i>' + escapeHtml(sub) + '</i>' : '') + '</span>'
+        + '<span class="dcc-row-v' + cls + '">'
+        + '<span class="n">' + value + '</span>'
+        + '<span class="u">' + (unit || '') + '</span></span></div>';
+}
+
+// 'g' when the metric was judged and cleared its threshold, the failure state
+// when it didn't, and null when there was nothing to judge. "has" is the same
+// availability test the value itself is rendered under, so a missing figure is
+// never painted green.
+function _dccJudge(r, key, has) {
+    if (has === false) return null;
+    return _dccState(r, key) || 'g';
+}
+
+function _dccEbayBlock(r) {
+    const four = [
+        ['Tracking',      _dccEbayPct(r.track),  _dccState(r, 'track'),  'Greater Than 96%'],
+        ['Defect Rate',   _dccEbayPct(r.defect), _dccState(r, 'defect'), 'Less Than 0.40%'],
+        ['Cases Closed',  _dccEbayPct(r.cases),  _dccState(r, 'cases'),  'Less Than 0.24%'],
+        ['Late Shipment', _dccEbayPct(r.late),   _dccState(r, 'late'),   'Less Than 2.40%'],
+    ];
+    const off = four.filter(f => f[2]).length;
+    if (!off) {
+        // Nothing wrong: one line rather than four cells of good news.
+        const bits = four.filter(f => f[1]).map(f => f[0] + ' ' + f[1]).join(' · ');
+        return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>All Four Within Threshold</em></div>'
+            + '<div class="dcc-clear">' + _DCC_ICO.g + (bits || 'No data reported yet') + '</div></div>';
+    }
+    return '<div class="dcc-block"><div class="dcc-sec">eBay account health<em>' + off + ' Of 4 Over Threshold</em></div>'
+        + '<div class="dcc-g4">' + four.map(function (f) {
+            const val = f[1] == null ? '—' : f[1].replace('%', '');
+            return '<div class="dcc-cell' + (f[2] ? ' ' + f[2] : '') + '">'
+                + '<div class="dcc-cell-l">' + f[0] + '</div>'
+                + '<div class="dcc-cell-v">' + val + (f[1] == null ? '' : '<small>%</small>') + '</div>'
+                + '<div class="dcc-cell-d">' + f[3] + '</div></div>';
+        }).join('') + '</div></div>';
+}
+
+function _dccBuyBlock(r) {
+    return '<div class="dcc-block"><div class="dcc-sec">Buying &amp; selling'
+        + (r.edited ? '<em>' + escapeHtml(r.edited) + '</em>' : '') + '</div><div class="dcc-rows">'
+        // The goal is a GP goal and this figure is gpTrack/goal, so the label says
+        // so — "Sales vs goal" read as revenue against goal, which it never was.
+        + _dccStatRow('GP tracking vs goal', _dccFix(r.salesPct), '%', _dccJudge(r, 'sales'))
+        + _dccStatRow('Revenue', _dccMoney(r.rev), '', null)
+        + _dccStatRow('GP tracking', _dccMoney(r.gpTrack), '', null)
+        + _dccStatRow('Sell margin', r.sellM > 0 ? _dccFix(r.sellM) : '—', r.sellM > 0 ? '%' : '', _dccJudge(r, 'sellM', r.sellM > 0))
+        + _dccStatRow('Buy tracking', _dccMoney(r.buyTrack), '', null)
+        + _dccStatRow('Buy margin', _dccFix(r.buyM), '%', _dccJudge(r, 'buyM', r.buyM > 0))
+        + _dccStatRow('Variance total', (r.vari > 0 ? '+' : '') + r.vari.toFixed(2), '%',
+                      _dccJudge(r, 'vari'), r.variRange || '')
+        + '</div></div>';
+}
+
+function _dccWeekBlock(r) {
+    // Percent units are appended here rather than baked into the value, matching
+    // what renderLineStat used to do for conversion and margin.
+    const or = v => (v === '' || v == null) ? '—' : v;
+    return '<div class="dcc-block"><div class="dcc-sec">Weekly metrics'
+        + (r.period ? '<em>' + escapeHtml(_dccCap(r.period)) + '</em>' : '') + '</div><div class="dcc-rows">'
+        + _dccStatRow('Conversion', or(r.conv), r.conv ? '%' : '', _dccJudge(r, 'conv', !!r.conv))
+        + _dccStatRow('Margin', or(r.wkM), r.wkM ? '%' : '', _dccJudge(r, 'wkM', !!r.wkM))
+        + _dccStatRow('Transaction time', or(r.time), r.time ? 'min' : '', _dccJudge(r, 'time', !!r.time))
+        + _dccStatRow('No deals', or(r.noDeals), '', _dccJudge(r, 'noDeals', r.noDeals !== '' && r.noDeals != null))
+        + _dccStatRow('Listed devices', or(r.listed), '', null)
+        + '</div></div>';
+}
+
+function _dccCatBlock(r) {
+    if (!r.cats.length) {
+        return '<div class="dcc-block"><div class="dcc-sec">eBay categories at risk</div>'
+            + '<div class="dcc-clear">' + _DCC_ICO.g + 'No Categories Flagged, Active Or Projected</div></div>';
+    }
+    return '<div class="dcc-block"><div class="dcc-sec">eBay categories at risk<em>' + r.cats.length + ' Flagged</em></div>'
+        + '<div class="dcc-cats">' + r.cats.map(c =>
+            '<div class="dcc-cat ' + c.s + '"><span class="dcc-cat-k">' + escapeHtml(c.k) + '</span>'
+            + '<span class="dcc-cat-v">' + escapeHtml(c.v) + '</span></div>').join('')
+        + '</div></div>';
+}
+
+function _dccPaneHtml(r, portalLink) {
+    if (!r) return '<div class="dcc-empty">Select a store.</div>';
+    const chipCls = s => s === 'b' ? 'dcc-bad' : s === 'w' ? 'dcc-warn' : 'dcc-good';
+
+    const scoreChip = '<span class="dcc-chip ' + chipCls(_dccState(r, 'score'))
+        + '" title="Online &amp; Marketing scorecard"><span class="dcc-chip-l">SCORECARD</span>'
+        + r.score.toFixed(1) + '</span>';
+    const auditChip = r.audit
+        ? '<span class="dcc-chip act ' + chipCls(_dccState(r, 'audit'))
+          + '" onclick="event.stopPropagation(); openAuditBreakdown(\'' + r.store + '\')"'
+          + ' title="PayMore practice audit — ' + r.audit.earned + '/' + r.audit.possible + ' · view full breakdown">'
+          + '<span class="dcc-chip-l">AUDIT</span>' + r.audit.pct + '%</span>'
+        : '<span class="dcc-chip dcc-mute" title="No practice audit submitted yet">'
+          + '<span class="dcc-chip-l">AUDIT</span>No data</span>';
+    // eBay leads when the account is in trouble: a suspension outranks a margin
+    // point. Otherwise the money leads. Same blocks either way.
+    const ebayBroken = ['track', 'defect', 'cases', 'late'].some(x => _dccState(r, x));
+    const blocks = ebayBroken
+        ? [_dccEbayBlock(r), _dccBuyBlock(r), _dccWeekBlock(r), _dccCatBlock(r)]
+        : [_dccBuyBlock(r), _dccWeekBlock(r), _dccEbayBlock(r), _dccCatBlock(r)];
+
+    return '<div class="dcc-ph"><div>'
+        + '<div class="dcc-pt">' + escapeHtml(r.store) + '</div>'
+        + '<div class="dcc-ps">Goal ' + _dccMoney(r.goal) + ' &middot; Week of ' + escapeHtml(r.week)
+        + (portalLink ? ' &middot; <a href="' + portalLink + '" target="_blank" rel="noopener">Store Folder</a>' : '')
+        + '</div></div>'
+        + '<div class="dcc-ph-side">' + scoreChip + auditChip + '</div></div>'
+        + blocks.join('');
+}
+
+// --- board ------------------------------------------------------------------
+function _dccBoardHtml(portalLinks) {
+    if (!_dccRows.length) return '<div class="dcc-empty">Syncing the district…</div>';
+    if (!_dccSel || !_dccRows.some(r => r.store === _dccSel)) {
+        const order = _dccRailOrder();
+        _dccSel = order[order.length - 1].store;
+    }
+    const sel = _dccRows.find(r => r.store === _dccSel);
+
+    // The store goal is a GP goal — gpTrack / goal reproduces each store's own
+    // "% to goal" exactly, revenue does not — so the district total has to be GP
+    // as well or the headline compares two different things.
+    const totGP = _dccRows.reduce((a, r) => a + r.gpTrack, 0);
+    const totGoal = _dccRows.reduce((a, r) => a + r.goal, 0);
+
+    return '<div class="dcc">'
+        + '<div class="dcc-head">'
+        + '<span class="dcc-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20"/></svg></span>'
+        + '<div><div class="dcc-eyebrow">District</div><div class="dcc-title">Command Center</div></div>'
+        // The money is the headline and carries itself at size; the store count
+        // that used to sit beside it only repeated what the rail groups already say.
+        + '<div class="dcc-head-side"><span class="dcc-sum">'
+        + '<b>' + _dccMoney(totGP) + '</b><i>of ' + _dccMoney(totGoal) + ' GP goal</i>'
+        + '</span></div></div>'
+        + '<div class="dcc-body"><div class="dcc-grid">'
+        + '<div class="dcc-rail">' + _dccRailHtml() + '</div>'
+        + '<div class="dcc-pane">' + _dccPaneHtml(sel, portalLinks[_dccSel]) + '</div>'
+        + '</div></div></div>';
+}
+
+// Repaint from the rows already in memory — no refetch. No-ops before the first
+// load resolves, which matters because the cached HTML restores clickable rail
+// buttons before any data exists.
+function _dccPick(store) {
+    if (!_dccRows.length) return;
+    _dccSel = store;
+    const el = document.getElementById('district-master-body');
+    if (el) el.innerHTML = _dccBoardHtml(_DCC_PORTAL_LINKS);
+}

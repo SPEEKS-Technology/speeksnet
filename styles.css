@@ -503,94 +503,194 @@ input, textarea, select,
     font-size: 18px; 
 }
 
-.category-section { margin-bottom: 50px; }
-
-.category-title { 
-    font-size: 16px; 
-    font-weight: 800; 
-    text-transform: uppercase; 
-    color: var(--slate-charcoal); 
-    margin-bottom: 20px; 
-    letter-spacing: 0.5px; 
-    border-bottom: 2px solid #eaeaea; 
-    padding-bottom: 10px; 
+/* ---------------------------------------------------------
+   PROCESSES & POLICIES — document library (calm redesign,
+   2026-07-23). Restyled into the sage/slate system used by the
+   Action Menu, Feed Hub and top nav: white cards on hairline
+   borders, SVG line icons (renderDocs maps the sheet's emoji to
+   one), uppercase section eyebrows, sage hover. Look only —
+   search (filterDocs), pinning and the manage-docs tool are
+   untouched. Light styles only; the global html filter handles
+   dark mode.
+   --------------------------------------------------------- */
+:root {
+    --dp-line: #e3e8ee;
+    --dp-line-2: #eef1f5;
+    --dp-muted: #647082;
+    --dp-faint: #8a94a3;
+    --dp-sage-tint: #e8f7ee;
 }
 
-.docs-grid { 
-    display: grid; 
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); 
-    gap: 20px; 
+.category-section { margin-bottom: 34px; }
+
+/* Section eyebrow: a quiet label + count over a hairline, instead of the old
+   heavy 16px/800 uppercase title on a 2px rule. */
+.category-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--dp-muted);
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--dp-line-2);
 }
 
-.doc-card { 
-    background: white; 
-    border-radius: 12px; 
-    padding: 15px 20px; 
-    display: flex; 
-    align-items: center; 
-    gap: 15px; 
-    text-decoration: none; 
-    border: 1px solid #ddd; 
-    box-shadow: 0 2px 5px rgba(0,0,0,0.01); 
-    transition: all 0.2s ease; 
-    cursor: pointer; 
-    height: 105px !important; 
-    overflow: hidden; 
+.category-title .cat-count {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    color: var(--dp-faint);
+    background: #f1f5f9;
+    border-radius: 20px;
+    padding: 2px 7px;
+}
+
+.category-title .cat-ico { display: grid; place-items: center; color: var(--sage-professional); }
+.category-title .cat-ico svg { width: 13px; height: 13px; }
+
+.category-title.pinned { color: var(--sage-professional); border-bottom-color: rgba(90, 141, 59, 0.22); }
+.category-title.pinned .cat-count { color: var(--sage-professional); background: var(--dp-sage-tint); }
+
+.docs-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+}
+
+.doc-card {
+    position: relative;
+    background: white;
+    border-radius: 14px;
+    padding: 14px 15px;
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    text-decoration: none;
+    border: 1px solid var(--dp-line);
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+    cursor: pointer;
+    height: 96px;
+    overflow: hidden;
     box-sizing: border-box;
 }
 
-.doc-card:hover { 
-    transform: translateY(-3px); 
-    box-shadow: 0 6px 15px rgba(0,0,0,0.05); 
-    border-color: var(--sage-professional); 
+.doc-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(16, 24, 40, 0.08);
+    border-color: var(--sage-professional);
 }
 
-.doc-icon { 
-    font-size: 28px; 
-    background: var(--bg-app); 
-    width: 50px; 
-    height: 50px; 
-    display: flex; 
-    align-items: center; 
-    justify-content: center; 
-    border-radius: 10px; 
-    flex-shrink: 0; 
+.doc-card.pinned { border-color: rgba(90, 141, 59, 0.35); }
+
+.doc-icon {
+    width: 42px;
+    height: 42px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    border-radius: 11px;
+    background: var(--dp-sage-tint);
+    color: var(--sage-professional);
+}
+.doc-icon svg {
+    width: 19px; height: 19px;
+    fill: none; stroke: currentColor; stroke-width: 1.9;
+    stroke-linecap: round; stroke-linejoin: round;
 }
 
-.doc-info { 
-    display: flex; 
-    flex-direction: column; 
-    justify-content: center; 
-    min-width: 0; 
-    width: 100%; 
+/* Pin marker sits top-right; the hover arrow is vertically centred, so on a
+   96px card the two never overlap. */
+.doc-pin { position: absolute; top: 10px; right: 12px; display: grid; place-items: center; color: var(--sage-professional); opacity: 0.5; }
+.doc-pin svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+.doc-info {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 0;
+    flex: 1;
 }
 
-.doc-title { 
-    font-size: 15px; 
-    font-weight: 700; 
-    color: var(--slate-charcoal); 
-    margin-bottom: 4px; 
-    white-space: nowrap; 
-    overflow: hidden; 
-    text-overflow: ellipsis; 
-    line-height: 1.2;
+.doc-title {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--slate-charcoal);
+    margin-bottom: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.25;
 }
 
-.doc-desc { 
-    font-size: 12px; 
-    color: #888; 
-    font-weight: 500; 
-    line-height: 1.4; 
+.doc-desc {
+    font-size: 12px;
+    color: var(--dp-muted);
+    font-weight: 500;
+    line-height: 1.45;
     display: -webkit-box;
-    -webkit-line-clamp: 2; 
+    -webkit-line-clamp: 2;
     line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
     margin: 0;
 }
 
+/* Every card is an external link (target=_blank) — the arrow says so on hover.
+   It keeps its box while invisible so the title never reflows underneath it. */
+.doc-go {
+    flex: 0 0 auto;
+    width: 24px; height: 24px;
+    display: grid; place-items: center;
+    color: var(--dp-faint);
+    opacity: 0;
+    transform: translateX(-3px);
+    transition: opacity 0.16s ease, transform 0.16s ease, color 0.16s ease;
+}
+.doc-card:hover .doc-go { opacity: 1; transform: none; color: var(--sage-professional); }
+.doc-go svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+@media (prefers-reduced-motion: reduce) {
+    .doc-card, .doc-go { transition: none; }
+    .doc-card:hover { transform: none; }
+}
+
 .hidden { display: none !important; }
-.empty-state { text-align: center; padding: 50px; color: #888; font-weight: 600; font-size: 16px; background: white; border-radius: 12px; border: 1px dashed #ccc; }
+.empty-state { text-align: center; padding: 46px 20px; color: var(--dp-faint); font-weight: 600; font-size: 13.5px; background: white; border-radius: 14px; border: 1px dashed #dfe5ec; }
+
+/* ---- sidebar navigation (category jump-rail + scroll-spy) ---- */
+.dp-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 30px; align-items: start; }
+.dp-main { min-width: 0; }
+/* The fixed top nav is ~64px; stick the rail just below it. Its containing block
+   is .main-content, so it stays pinned while the sections scroll past. */
+.dp-rail { position: sticky; top: 88px; display: flex; flex-direction: column; gap: 2px; }
+.dp-rail-btn {
+    display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+    font-family: inherit; font-size: 13px; font-weight: 600; color: var(--dp-muted);
+    background: none; border: 0; border-radius: 9px; padding: 9px 11px; cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
+}
+.dp-rail-btn:hover { background: var(--dp-line-2); color: var(--slate-charcoal); }
+.dp-rail-btn.active { background: var(--dp-sage-tint); color: #178048; }
+.dp-rail-btn:focus-visible { outline: 2px solid var(--sage-professional); outline-offset: 2px; }
+.dp-rail-btn .dp-rail-ico { flex: 0 0 auto; display: grid; place-items: center; color: currentColor; opacity: 0.85; }
+.dp-rail-btn .dp-rail-ico svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.dp-rail-btn .dp-rail-lbl { flex: 1 1 auto; min-width: 0; line-height: 1.3; }
+.dp-rail-btn .dp-rail-n { flex: 0 0 auto; font-size: 10px; font-weight: 800; color: var(--dp-faint); }
+.dp-rail-btn.active .dp-rail-n { color: #178048; }
+
+/* Sections clear the fixed nav when a rail link jumps to them. */
+.category-section { scroll-margin-top: 96px; }
+
+@media (max-width: 900px) {
+    .dp-layout { grid-template-columns: 1fr; gap: 6px; }
+    .dp-rail { position: static; flex-direction: row; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .dp-rail-btn { width: auto; }
+}
 
 /* MANAGE FAB & ROW STYLES */
 .manage-fab { 
@@ -626,8 +726,7 @@ input, textarea, select,
 
 /* Submit Store Scores — large so each audit line item is easy to read,
    but capped so line text stays scannable on ultra-wide monitors. */
-#scorecardSubmitModal { width: 96vw; max-width: 1500px; }
-#scorecardSubmitModal .manage-content { height: 80vh; }
+#scorecardSubmitModal { width: 1200px; max-width: 95vw; }
 
 .manage-content { 
     height: 60vh; 
@@ -695,6 +794,52 @@ input, textarea, select,
 
 .pin-label input[type="checkbox"] { width: 16px; height: 16px; margin: 0; cursor: pointer;}
 
+/* ── Manage Policies — card rows (2026-07-25) ──────────────────────────────
+   Redesign only: the old single-line 7-column grid truncated every field.
+   Each policy is now a card — icon · title · category · pin · delete across
+   the top, Description and Link full-width below. Same inputs/classes, so
+   addManageRow()/saveDocs() are unchanged. */
+#manageDocsList .manage-row {
+    display: grid;
+    grid-template-columns: 66px minmax(0, 1.7fr) minmax(0, 1fr) auto auto;
+    grid-template-areas:
+        "icon title category pin del"
+        "desc desc desc desc desc"
+        "link link link link link";
+    gap: 12px;
+    align-items: end;
+    min-width: 0;
+    background: #fff;
+    border: 1px solid #e3e8ee;
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+}
+#manageDocsList .mp-f-icon  { grid-area: icon; }
+#manageDocsList .mp-f-title { grid-area: title; }
+#manageDocsList .mp-f-cat   { grid-area: category; }
+#manageDocsList .mp-f-pin   { grid-area: pin; }
+#manageDocsList .mp-f-del   { grid-area: del; }
+#manageDocsList .mp-f-desc  { grid-area: desc; }
+#manageDocsList .mp-f-link  { grid-area: link; }
+#manageDocsList .mp-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+#manageDocsList .mp-field > label {
+    font-size: 10px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: .4px; color: #8a94a3; padding-left: 2px;
+}
+#manageDocsList .m-icon { text-align: center; }
+#manageDocsList .m-desc { height: 58px; min-height: 40px; line-height: 1.4; }
+#manageDocsList .pin-label.mp-f-pin { align-self: end; height: 40px; white-space: nowrap; }
+#manageDocsList .del-btn.mp-f-del {
+    align-self: end; margin-bottom: 4px;
+    width: 32px; height: 32px; padding: 0; border-radius: 9px;
+    background: #fdecec; color: #dc2626;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+#manageDocsList .del-btn.mp-f-del:hover { background: #dc2626; color: #fff; }
+#manageDocsList .del-btn.mp-f-del svg { width: 14px; height: 14px; }
+
 .manage-footer { 
     padding: 15px 20px; 
     border-top: 1px solid #eee; 
@@ -713,54 +858,7 @@ input, textarea, select,
     transition: 0.2s;
 }
 
-.ticker-manage-row { grid-template-columns: auto 1fr 40px; }
-
-.t-icon-wrap { position: relative; flex-shrink: 0; }
-
-.t-icon-btn {
-    width: 52px;
-    height: 38px;
-    font-size: 20px;
-    border: 1px solid #ddd;
-    border-radius: 10px;
-    background: white;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: 0.2s;
-}
-.t-icon-btn:hover { border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(90,141,59,0.1); }
-
-.emoji-picker-panel {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    background: white;
-    border: 1px solid #e5e7eb;
-    border-radius: 12px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
-    padding: 10px;
-    z-index: 500;
-    width: 236px;
-    display: none;
-}
-.emoji-picker-panel.show { display: block; }
-
-.emoji-picker-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
-
-.emoji-option {
-    font-size: 18px;
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    border-radius: 6px;
-    transition: background 0.1s;
-    user-select: none;
-}
-.emoji-option:hover { background: #f3f4f6; }
+/* Manage Ticker Items tool (row + emoji picker) removed 2026-07-23 with the ticker. */
 
 /* =========================================================
    OVERLAYS, MODALS & NOTIFICATIONS
@@ -830,6 +928,9 @@ input, textarea, select,
 }
 
 .modal-close-btn:hover { background: #eee; color: var(--red-alert); }
+/* SVG X (replaces the ✖ glyph, whose ink sat high in its em-box and looked
+   off-centre); geometry-centred by the button's flex centering. */
+.modal-close-btn svg { width: 15px; height: 15px; display: block; }
 
 .notif-menu { width: 1000px; max-width: 95vw; } /* Expanded to match calendar */
 .calendar-menu { width: 1000px; max-width: 95vw; }
@@ -924,175 +1025,345 @@ input, textarea, select,
 /* =========================================================
    FULL PAGE AUTHENTICATION
    ========================================================= */
-.auth-page { 
-    position: fixed; 
-    inset: 0; 
-    background-color: #1a1c1e;
-    background-image: radial-gradient(circle at 15% 0%, #2d3135 0%, transparent 50%), radial-gradient(circle at 85% 100%, #111213 0%, #1a1c1e 100%);
-    z-index: 100000; 
-    display: flex; 
-    align-items: center; 
-    justify-content: center; 
-    padding: 20px;
+/* =========================================================
+   GLOBAL AUTH — "Card on dark"   [2026-07-27, airy V4]
+   Wordmark + description on a near-black emerald-lit field,
+   a pure-white card holding nothing but the login, and a
+   two-fact rail underneath.
+
+   Why there's no dark plaque inside the card: every logo PNG
+   (speeks_logo, speeksnet_logo, SPEEKS Logo Short White) is
+   WHITE on transparent. Earlier passes had to inset a dark
+   block in the card just to host the mark. Putting the brand
+   on the dark ground removes that need entirely — but it also
+   means .auth-logo can NEVER move inside .auth-card without a
+   charcoal version of the asset being produced first.
+
+   Markup lives in injectGlobalAuth() (speeks.js). Load-bearing
+   hooks the auth JS depends on: #pinInput (+.pin-filled),
+   #unlockBtn (+.loading), #pinError (JS sets display:block),
+   #pinInputContainer, #authSubtitle, and #authOverlay being
+   valid as display:flex.
+   ========================================================= */
+.auth-page {
+    --a-cell-line: #c6d3cb;       /* pin boxes want a defined edge, not a whisper */
+    --a-cell-line-bad: #dfb0b0;   /* same visual weight as above, red family */
+    --a-error: #b23636;           /* matches the bad-chip ink in the weekly emails */
+    --a-muted: #64707c;
+    --a-faint: #9aa6ad;
+    --a-accent: #1f9d57;
+    --a-accent-deep: #178048;
+    --a-accent-tint: #e8f7ee;
+    --a-ring: #c6ecd6;
+    --a-ground: #0e1211;
+    /* dark-ground text scale. The site has no canonical dark palette (four
+       greens-on-dark and four near-blacks across the redesign), so these are
+       local. Worth folding into a shared scale next time the nav is touched. */
+    --a-d-muted: #a9b6b0;
+    --a-d-bright: #e6ede9;
+    --a-d-faint: #78877f;
+    /* The login was never added to the V4 emerald flip list further down this
+       file, so .btn-primary here rendered the pre-redesign olive (#5a8d3b).
+       Flipping the token locally puts "Unlock Portal" on the same emerald as
+       every other primary button on the redesigned surfaces. */
+    --sage-professional: #1f9d57;
+
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: flex;                /* JS toggles between none and flex */
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: clamp(22px, 3vw, 48px);
+    background: var(--a-ground);
+    overflow: auto;
+    /* Without this, a short viewport spawns a scrollbar that eats ~17px off the
+       right edge only, shifting the whole centred column ~8px left of the true
+       screen centre. both-edges reserves the gutter on BOTH sides, so the column
+       stays centred whether or not it is scrolling. */
+    scrollbar-gutter: stable both-edges;
 }
 
-.auth-split-layout { 
-    display: flex; 
-    width: 1000px; 
-    max-width: 100%; 
-    height: 600px; 
-    max-height: 95vh; 
-    background: white; 
-    border-radius: 16px; 
-    border: 1px solid #ddd; 
-    box-shadow: 0 10px 30px rgba(0,0,0,0.06); 
-    overflow: hidden; 
+.auth-page::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    /* Mirrored about the vertical axis. The first pass lit the field diagonally
+       (14% 0% / 96% 100%), which pulled the eye off-axis and read as a
+       mis-centred page even though the column itself was centred. Same emerald
+       bloom, now symmetric: one above the wordmark, one below the rail. */
+    background:
+        radial-gradient(900px 620px at 50% -8%, rgba(31, 157, 87, .24), transparent 66%),
+        radial-gradient(760px 520px at 50% 108%, rgba(31, 157, 87, .10), transparent 64%);
 }
 
-.auth-brand-side { 
-    flex: 1.2; 
-    background: var(--slate-charcoal); 
-    padding: 50px; 
-    display: flex; 
-    flex-direction: column; 
-    align-items: center; 
-    justify-content: center; 
-    text-align: center; 
-    color: white; 
+/* One centred column: brand region, card, rail, tail spacer.
+   The stack fills the full height so .auth-brand and .auth-tail can split the
+   leftover space equally — that's what centres the logo in the gap between the
+   top of the screen and the top of the card, and keeps the card itself from
+   sinking to the bottom. Wider than the card on purpose so the wordmark can
+   outgrow it; the card carries its own narrower cap. */
+.auth-stack {
+    position: relative;
+    z-index: 2;
+    flex: 1 1 auto;
+    width: 100%;
+    max-width: clamp(420px, 34vw, 560px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    animation: auth-rise .5s ease both;
 }
 
-.auth-brand-side::before { 
-    content: ''; 
-    position: absolute; 
-    inset: 0; 
-    background: linear-gradient(135deg, rgba(90, 141, 59, 0.15) 0%, transparent 100%); 
-    pointer-events: none; 
+@keyframes auth-rise {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: none; }
 }
 
-.auth-logo { 
-    width: 300px; 
-    max-width: 90%; 
-    margin-bottom: 40px; 
-    position: relative; 
-    z-index: 2; 
-    display: block; 
+/* ---------- brand, on the dark ground ---------- */
+/* Grows to fill the space above the card and centres the wordmark inside it.
+   min-height guarantees breathing room on short viewports, where the tail
+   collapses first. */
+/* flex column, not grid: with two children a grid with place-items:center gives
+   each its own stretched row, which would prise the logo and the line apart.
+   Flex keeps them as one tight group and centres the group. */
+.auth-brand {
+    flex: 1 1 0;
+    min-height: clamp(130px, 20vh, 290px);
+    width: 100%;
+    padding: 16px 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+
+.auth-logo {
+    width: clamp(260px, 26vw, 440px);
+    max-width: 92%;
+    display: block;
     object-fit: contain;
 }
 
-.auth-brand-text { position: relative; z-index: 2; }
-
-.auth-brand-text h1 { 
-    font-size: 32px; 
-    font-weight: 200; 
-    letter-spacing: 10px; 
-    margin-bottom: 10px; 
-    color: white; 
-    line-height: 1; 
+/* Wide-tracked emerald caps under the wordmark. Tracking is generous because
+   the line is short and sits under a 440px logo — it needs width to balance,
+   not size. */
+.auth-portal {
+    margin-top: clamp(13px, 1.15vw, 21px);
+    font-size: clamp(10px, .78vw, 12.5px);
+    font-weight: 800;
+    letter-spacing: .26em;
+    text-transform: uppercase;
+    color: #6ee7a7;
+    /* letter-spacing pads the right edge; nudge back so it reads centred */
+    text-indent: .26em;
 }
 
-.auth-brand-text p { 
-    font-size: 14px; 
-    color: #a0aab2; 
-    font-weight: 600; 
-    letter-spacing: 2px; 
-    text-transform: uppercase; 
+/* Mirrors .auth-brand's flex so the card+rail block lands in the middle of the
+   screen rather than being pushed to the bottom. Purely a spacer. */
+.auth-tail { flex: 1 1 0; min-height: 0; }
+
+/* ---------- card: login only ---------- */
+/* The emerald runs the full frame rather than a bar on the top edge only —
+   the single bar read as a loose lid once the card got taller. Global
+   box-sizing is border-box (line 28), so the 3px doesn't inflate the width.
+   To drop the green entirely, delete the `border` line: nothing else depends
+   on it. */
+.auth-card {
+    flex: 0 0 auto;
+    width: 100%;
+    /* the squared cap lives here now, not on .auth-stack, so the wordmark above
+       can be wider than the card */
+    max-width: clamp(390px, 28vw, 470px);
+    background: #fff;
+    overflow: hidden;
+    border: 3px solid var(--a-accent);
+    border-radius: clamp(20px, 1.7vw, 26px);
+    box-shadow: 0 34px 90px rgba(0, 0, 0, .55), 0 4px 14px rgba(0, 0, 0, .30);
 }
 
-.auth-form-side { 
-    flex: 1; 
-    padding: 50px; 
-    display: flex; 
-    flex-direction: column; 
-    justify-content: center; 
-    background: linear-gradient(135deg, #ffffff 0%, var(--bg-app) 100%); 
+/* Generous vertical padding is what squares the card up. Roughly +50px of
+   height versus the first pass, against a 40px narrower cap. */
+.auth-body {
+    padding: clamp(38px, 3.5vw, 60px) clamp(22px, 2vw, 34px) clamp(34px, 3.2vw, 54px);
+    text-align: center;
 }
 
-.auth-form-container { 
-    max-width: 380px; 
-    margin: 0 auto; 
-    width: 100%; 
+/* was a bordered pill in the pre-redesign build; now the airy eyebrow */
+.auth-badge {
+    display: block;
+    background: none;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    font-size: clamp(9.5px, .76vw, 11.5px);
+    font-weight: 800;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--a-faint);
+    /* tracking pads the right of the last glyph, so centred tracked caps read
+       ~1px left of centre; the indent cancels it (see .auth-portal) */
+    text-indent: .14em;
 }
 
-.auth-badge { 
-    display: inline-block; 
-    background: var(--bg-app); 
-    color: var(--slate-charcoal); 
-    font-size: 11px; 
-    font-weight: 800; 
-    padding: 6px 14px; 
-    border-radius: 20px; 
-    margin-bottom: 20px; 
-    letter-spacing: 1px; 
-    text-transform: uppercase; 
-    border: 1px solid #ddd; 
+.auth-body h2 {
+    margin: clamp(5px, .5vw, 8px) 0 clamp(4px, .4vw, 7px);
+    font-size: clamp(25px, 1.95vw, 35px);
+    font-weight: 800;
+    letter-spacing: -.028em;
+    text-indent: -.028em;         /* negative tracking pulls the line the other way */
+    line-height: 1.12;
+    color: var(--slate-charcoal);
 }
 
-.auth-form-side h2 { 
-    font-size: 32px; 
-    font-weight: 800; 
-    color: var(--slate-charcoal); 
-    margin-bottom: 10px; 
-    letter-spacing: -1px; 
+.auth-body > p {
+    margin: 0 0 clamp(26px, 2.3vw, 38px);
+    font-size: clamp(13px, 1.02vw, 15.5px);
+    font-weight: 600;
+    color: var(--a-muted);
+    line-height: 1.5;
 }
 
-.auth-form-side p { 
-    font-size: 14px; 
-    color: #666; 
-    margin-bottom: 35px; 
-    line-height: 1.5; 
-    font-weight: 500; 
+.pin-container {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(15px, 1.3vw, 21px);
 }
 
-.pin-container { 
-    display: flex; 
-    flex-direction: column; 
-    gap: 15px; 
+/* Four real cells instead of one letter-spaced input (the old approach never
+   lined the dots up under the characters). The actual #pinInput is transparent
+   and overlays the row, so native typing, maxlength, Enter and the mobile
+   numeric keyboard all still work — the cells are painted from its value by
+   _authPaintCells(). */
+.pin-cells {
+    position: relative;
+    display: flex;
+    gap: clamp(9px, .75vw, 13px);
+    cursor: text;
 }
 
-.pin-container input { 
-    width: 100%; 
-    padding: 18px; 
-    font-size: 36px; 
-    text-align: center; 
-    letter-spacing: 24px; 
-    border-radius: 12px; 
-    border: 1px solid #ddd; 
-    outline: none; 
-    transition: 0.2s; 
-    font-family: monospace; 
-    background: white; 
-    color: var(--slate-charcoal); 
-    box-shadow: inset 0 2px 4px rgba(0,0,0,0.02); 
+.pin-cell {
+    position: relative;           /* anchors the caret in ::after */
+    flex: 1 1 0;
+    height: clamp(62px, 4.6vw, 80px);
+    border-radius: clamp(14px, 1.1vw, 18px);
+    background: #f7faf8;
+    border: 1px solid var(--a-cell-line);
+    display: grid;
+    place-items: center;
+    transition: border-color .18s, background .18s, box-shadow .18s;
 }
 
-.pin-container input:focus { 
-    border-color: var(--sage-professional); 
-    background: white; 
-    box-shadow: 0 0 0 4px rgba(90, 141, 59, 0.1); 
+.pin-cell > span {
+    width: clamp(11px, .88vw, 14px);
+    height: clamp(11px, .88vw, 14px);
+    border-radius: 50%;
+    background: var(--a-accent-deep);
+    transform: scale(.2);
+    opacity: 0;
+    transition: transform .2s cubic-bezier(.2, 1.4, .4, 1), opacity .18s;
 }
 
-.auth-btn { 
-    width: 100%; 
-    height: 56px; 
-    font-size: 15px; 
-    border-radius: 12px; 
+.pin-cell.filled { border-color: var(--a-accent); background: var(--a-accent-tint); }
+.pin-cell.filled > span { transform: scale(1); opacity: 1; }
+
+/* Focus indication is two-tier. Every empty cell lifts slightly so it's clear
+   the field is live, then the ONE cell the next digit will land in gets the
+   emerald border and a blinking caret. Because cells always fill left to right,
+   "next" is expressible in pure CSS: either the first cell (nothing typed yet)
+   or the cell immediately after the last filled one. No JS involved, and when
+   all four are filled nothing is "next", so the caret disappears on its own.
+
+   :not(.bad) matters — without it these rules outscore `.pin-cells.bad
+   .pin-cell` and the error state would render green while still focused,
+   which it is immediately after a failed attempt. */
+.pin-cells:focus-within:not(.bad) .pin-cell:not(.filled) {
+    border-color: var(--a-ring);
+    box-shadow: 0 0 0 3px rgba(31, 157, 87, .08);
+}
+
+.pin-cells:focus-within:not(.bad) .pin-cell:first-child:not(.filled),
+.pin-cells:focus-within:not(.bad) .pin-cell.filled + .pin-cell:not(.filled) {
+    border-color: var(--a-accent);
+    background: #fff;
+    box-shadow: 0 0 0 3px rgba(31, 157, 87, .16);
+}
+
+.pin-cells:focus-within:not(.bad) .pin-cell:first-child:not(.filled)::after,
+.pin-cells:focus-within:not(.bad) .pin-cell.filled + .pin-cell:not(.filled)::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 2px;
+    height: 42%;
+    /* transform, not negative margins: percentage margins resolve against the
+       containing block's WIDTH, so margin-top:-21% centred the caret against
+       the cell's width (~89px) while its height is 42% of the cell's HEIGHT
+       (~66px) — it sat ~5px too high. Transform percentages resolve against
+       the element's own box, so this is exact at every cell size. */
+    transform: translate(-50%, -50%);
+    border-radius: 2px;
+    background: var(--a-accent);
+    animation: pin-caret 1.1s steps(1) infinite;
+}
+
+@keyframes pin-caret {
+    0%, 49%   { opacity: 1; }
+    50%, 100% { opacity: 0; }
+}
+
+.pin-cells.bad .pin-cell {
+    border-color: var(--a-cell-line-bad);
+    background: #fcecec;          /* V4 red tint */
+    box-shadow: none;
+}
+.pin-cells.bad { animation: shake .42s ease-in-out; }
+
+/* the real field: invisible, but fully functional and focusable */
+.pin-container input#pinInput {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: transparent;
+    caret-color: transparent;
+    font-size: 16px;              /* >=16px stops iOS zooming on focus */
+    text-align: center;
+    cursor: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.auth-btn {
+    width: 100%;
+    height: clamp(50px, 3.7vw, 60px);
+    font-size: clamp(12.5px, .98vw, 14.5px);
+    border-radius: clamp(13px, 1.05vw, 16px);
+    letter-spacing: .05em;
+    /* shared .btn-primary hardcodes an olive hover (#4a7530) and an olive-tinted
+       shadow, neither of which follows the variable — restate both as emerald. */
+    box-shadow: 0 4px 12px rgba(31, 157, 87, .22);
+}
+.auth-btn:hover {
+    background: var(--a-accent-deep);
+    box-shadow: 0 6px 16px rgba(31, 157, 87, .30);
 }
 
 .pin-error {
-    color: var(--red-alert);
-    font-size: 13px;
+    color: var(--a-error);
+    font-size: clamp(12.5px, .98vw, 14.5px);
     font-weight: 700;
-    margin-top: 10px;
     text-align: center;
-    display: none;
+    display: none;                /* JS flips this to block */
     animation: shake 0.4s ease-in-out;
-}
-
-.pin-container input.pin-filled {
-    border-color: var(--sage-professional);
-    background: white;
-    box-shadow: 0 0 0 4px rgba(90, 141, 59, 0.15);
-    transition: box-shadow 0.25s ease, border-color 0.25s ease;
 }
 
 @keyframes auth-btn-spin {
@@ -1118,6 +1389,66 @@ input, textarea, select,
     border-top-color: white;
     border-radius: 50%;
     animation: auth-btn-spin 0.65s linear infinite;
+}
+
+/* ---------- rail on the dark ground: two facts, no date ---------- */
+.auth-rail {
+    flex: 0 0 auto;
+    margin: clamp(24px, 2.1vw, 36px) 0 0;
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: clamp(30px, 3vw, 54px);
+}
+.auth-rail > div { display: flex; flex-direction: column; gap: 3px; text-align: center; }
+.auth-rail dt {
+    font-size: clamp(9px, .7vw, 11px);
+    font-weight: 800;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--a-d-faint);
+    text-indent: .13em;           /* same tracking correction as .auth-badge */
+}
+.auth-rail dd {
+    margin: 0;
+    font-size: clamp(14px, 1.1vw, 18px);
+    font-weight: 700;
+    color: var(--a-d-bright);
+    font-variant-numeric: tabular-nums;
+}
+
+/* A wide-but-short window (1920x720, a docked laptop) hits the type maximums
+   while having no vertical room, and the taller card would push the rail off
+   screen. .auth-page scrolls, but a login shouldn't need scrolling — trim the
+   vertical rhythm instead. Height-based, so it never affects phones. */
+@media (min-width: 861px) and (max-height: 840px) {
+    .auth-page { padding-top: 22px; padding-bottom: 22px; }
+    .auth-brand { min-height: 118px; padding: 8px 0; }
+    .auth-logo { width: clamp(230px, 20vw, 330px); }
+    /* text-indent must track letter-spacing or the correction over/undershoots */
+    .auth-portal { margin-top: 11px; letter-spacing: .22em; text-indent: .22em; }
+    .auth-body { padding-top: 34px; padding-bottom: 30px; }
+    .auth-body > p { margin-bottom: 24px; }
+    .auth-rail { margin-top: 22px; }
+}
+
+@media (max-width: 430px) {
+    .auth-page { padding: 18px; }
+    .auth-brand { min-height: 128px; }
+    .auth-logo { max-width: 88%; }
+    /* .26em tracking on a 22-char line overflows a 390px phone */
+    .auth-portal { letter-spacing: .17em; text-indent: .17em; font-size: 9.5px; }
+    .pin-cell { height: 60px; }
+    .auth-body h2 { font-size: 24px; }
+    .auth-rail { gap: 26px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .auth-stack { animation: none; }
+    .pin-cell, .pin-cell > span { transition: none; }
+    .pin-cells.bad, .pin-error { animation: none; }
+    /* caret stops blinking but stays visible, so the cue survives */
+    .pin-cell::after { animation: none !important; }
 }
 
 @keyframes shake {
@@ -1550,6 +1881,136 @@ select.bs-hidden-select:focus {
 .rmc-expand-btn:hover { background: #e2e8f0; color: var(--slate-charcoal); }
 
 /* =========================================================
+   STATS & AWARDS — calm redesign (segmented sub-nav +
+   featured champions + airy award/record cards).
+   Light-only; dark handled by the global <html> filter.
+   ========================================================= */
+/* --- sub-navigation: Champions · Awards · Records --- */
+.stats-subnav {
+    display: flex; width: max-content; max-width: 100%; margin: 2px auto 30px;
+    gap: 4px; background: #eef2f6; border: 1px solid #e6ebf1;
+    border-radius: 14px; padding: 4px;
+}
+.stats-seg {
+    display: inline-flex; align-items: center; gap: 8px; font-family: inherit;
+    font-size: 13.5px; font-weight: 750; color: #647082; background: transparent;
+    border: 0; border-radius: 10px; padding: 9px 18px; cursor: pointer;
+    transition: background .15s ease, color .15s ease;
+}
+.stats-seg svg { width: 16px; height: 16px; }
+.stats-seg:hover { color: var(--slate-charcoal); background: rgba(255,255,255,.6); }
+.stats-seg.active { background: #fff; color: var(--slate-charcoal); box-shadow: 0 1px 3px rgba(16,24,40,.12); }
+.stats-seg.active svg { color: #178048; }
+
+.stats-view { display: none; animation: fadeIn 0.3s ease; }
+.stats-view.active { display: block; }
+
+/* --- champions: featured winner + runner-up rows --- */
+.champions-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; align-items: start; }
+.champion-block {
+    background: #fff; border: 1px solid #e6ebf1; border-radius: 16px;
+    box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.05);
+    padding: 18px 18px 20px;
+}
+.champion-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 18px; }
+.champion-eyebrow { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ce-k { font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: #178048; }
+.ce-t { font-size: 15px; font-weight: 800; letter-spacing: -.01em; color: var(--slate-charcoal); display: flex; align-items: center; gap: 6px; }
+.champion-date { font-size: 11px; font-weight: 700; color: #94a3b8; white-space: nowrap; background: #f1f5f9; padding: 5px 10px; border-radius: 999px; }
+.champion-body { min-height: 210px; }
+.champion-empty { color: #94a3b8; font-weight: 650; text-align: center; padding: 56px 0; font-size: 13.5px; }
+
+.champ-featured-wrap { display: flex; flex-direction: column; gap: 12px; }
+.cf-feat {
+    background: linear-gradient(180deg, #fbf3dc, #fff); border: 1px solid #ecd9a3;
+    border-radius: 14px; padding: 16px 16px 15px; display: flex; flex-direction: column;
+    gap: 11px; min-height: 150px;
+}
+.cf-crown { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; color: #b8860b; align-self: flex-start; }
+.cf-crown svg { width: 14px; height: 14px; }
+.cf-id .cf-name { font-size: 21px; font-weight: 850; letter-spacing: -.01em; line-height: 1.1; color: var(--slate-charcoal); }
+.cf-id .cf-store { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #94a3b8; margin-top: 3px; }
+.cf-val { margin-top: auto; display: flex; align-items: baseline; gap: 7px; }
+.cf-val b { font-size: 34px; font-weight: 850; line-height: 1; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
+.cf-val span { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: #647082; }
+.cf-runners { display: flex; flex-direction: column; gap: 9px; }
+.cf-run { display: flex; align-items: center; gap: 11px; background: #fff; border: 1px solid #e6ebf1; border-radius: 11px; padding: 10px 13px; }
+.cf-rk { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 850; color: #fff; flex: none; }
+.cf-rk.s { background: #8b97a6; }
+.cf-rk.b { background: #b57d4b; }
+.cf-rinfo { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.cf-rn { font-size: 13px; font-weight: 800; line-height: 1.15; color: var(--slate-charcoal); }
+.cf-rs { font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: #94a3b8; }
+.cf-rv { margin-left: auto; font-size: 16px; font-weight: 850; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
+
+/* --- monthly awards: calm cards --- */
+.awards-section-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; margin-bottom: 20px; padding-bottom: 0; border-bottom: 0; }
+.awards-head-titles { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.awards-section-title { font-size: 17px; font-weight: 850; color: var(--slate-charcoal); text-transform: none; letter-spacing: -.01em; margin: 0; }
+.awards-header-actions { display: flex; gap: 8px; flex: none; }
+.mini-action-btn svg { width: 14px; height: 14px; vertical-align: -2px; margin-right: 3px; }
+.awards-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.aw {
+    position: relative; background: #fff; border: 1px solid #e6ebf1; border-radius: 14px;
+    box-shadow: 0 1px 2px rgba(16,24,40,.05); padding: 16px; display: flex;
+    flex-direction: column; gap: 12px; transition: transform .16s ease, box-shadow .16s ease;
+}
+.aw:hover { transform: translateY(-2px); box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.05); }
+.aw-i {
+    position: absolute; top: 11px; right: 11px; width: 19px; height: 19px; border-radius: 50%;
+    border: 1px solid #e6ebf1; background: #fff; color: #94a3b8; font-size: 11px; font-weight: 800;
+    font-style: normal; display: grid; place-items: center; cursor: help; padding: 0; line-height: 1;
+    z-index: 2; transition: color .15s, border-color .15s;
+}
+.aw-i:hover { color: #178048; border-color: #178048; }
+.aw-name { font-size: 13.5px; font-weight: 800; line-height: 1.3; letter-spacing: -.005em; color: var(--slate-charcoal); padding-right: 24px; min-height: 2.3em; }
+.aw-line { height: 1px; background: #eef2f6; }
+.aw-win { display: flex; align-items: center; gap: 10px; }
+.aw-badge { width: 32px; height: 32px; border-radius: 9px; background: #e8f7ee; color: #178048; display: grid; place-items: center; flex: none; }
+.aw-badge svg { width: 17px; height: 17px; }
+.aw-store { font-size: 20px; font-weight: 850; letter-spacing: -.01em; color: var(--slate-charcoal); line-height: 1; }
+.aw-empty { opacity: .4; }
+.aw-cap { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #94a3b8; margin-top: 3px; }
+
+/* --- all-time records: quiet header, mint hero, clean list --- */
+.records-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-items: start; }
+.rec {
+    background: #fff; border: 1px solid #e6ebf1; border-radius: 14px;
+    box-shadow: 0 1px 2px rgba(16,24,40,.05); overflow: hidden; display: flex;
+    flex-direction: column; transition: transform .16s ease, box-shadow .16s ease;
+}
+.rec:hover { transform: translateY(-2px); box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 8px 24px rgba(16,24,40,.05); }
+.rec-h { padding: 12px 14px; font-size: 12px; font-weight: 850; letter-spacing: .03em; text-transform: uppercase; color: #647082; border-bottom: 1px solid #eef2f6; line-height: 1.3; }
+.rec-champ { padding: 15px 14px 13px; background: linear-gradient(180deg, #f4faf6, #fff); border-bottom: 1px solid #eef2f6; }
+.rec-champ .cc { font-size: 10px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; color: #178048; display: inline-flex; align-items: center; gap: 5px; margin-bottom: 7px; }
+.rec-champ .cc svg { width: 13px; height: 13px; }
+.rec-champ .cv { font-size: 26px; font-weight: 850; letter-spacing: -.015em; line-height: 1; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
+.rec-champ .cs { font-size: 11.5px; font-weight: 700; color: #94a3b8; margin-top: 5px; }
+.rec-list { padding: 6px 8px 4px; display: flex; flex-direction: column; }
+.rec-li { display: flex; align-items: center; gap: 11px; padding: 9px 8px; }
+.rec-li + .rec-li { border-top: 1px solid #f1f5f9; }
+.hidden-board .rec-li:first-child { border-top: 1px solid #f1f5f9; }
+.rec-li .lr { width: 18px; text-align: center; font-size: 12px; font-weight: 850; color: #94a3b8; flex: none; font-variant-numeric: tabular-nums; }
+.rec-li .lr.g { color: #c99a17; }
+.rec-li .ls { font-size: 13px; font-weight: 800; color: var(--slate-charcoal); }
+.rec-li .lv { margin-left: auto; text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
+.rec-li .lv b { font-size: 14px; font-weight: 850; line-height: 1.15; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
+.rec-li .lv span { font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; }
+.rec-more { margin: 4px 10px 12px; text-align: center; font-size: 11.5px; font-weight: 800; color: #178048; padding: 8px; border-radius: 9px; background: #f4faf6; border: 1px solid #eef2f6; cursor: pointer; transition: background .15s; }
+.rec-more:hover { background: #e8f7ee; }
+
+@media (max-width: 900px) {
+    .champions-row { grid-template-columns: 1fr; }
+    .awards-grid, .records-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 600px) {
+    .awards-grid, .records-grid { grid-template-columns: 1fr; }
+    .stats-subnav { width: 100%; }
+    .stats-seg { flex: 1; justify-content: center; padding: 9px 8px; }
+    .awards-section-header { flex-direction: column; align-items: flex-start; }
+}
+
+/* =========================================================
    MONTHLY AWARDS
    ========================================================= */
 .awards-section {
@@ -1787,6 +2248,7 @@ select.bs-hidden-select:focus {
     transition: background 0.2s;
 }
 .award-video-close-btn:hover { background: rgba(0, 0, 0, 0.85); }
+.award-video-close-btn svg { width: 16px; height: 16px; display: block; }
 
 /* Manage awards modal */
 .awards-form-month-row {
@@ -1817,36 +2279,41 @@ select.bs-hidden-select:focus {
 }
 
 /* History tab */
-.awards-history-list { display: flex; flex-direction: column; gap: 16px; }
+.awards-history-list { display: flex; flex-direction: column; gap: 14px; }
 .awards-history-entry {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 10px;
-    padding: 14px 16px;
+    background: #fff;
+    border: 1px solid #e6ebf1;
+    border-radius: 14px;
+    box-shadow: 0 1px 2px rgba(16,24,40,.05);
+    padding: 14px 16px 6px;
 }
 .awards-history-month {
-    font-size: 13px;
-    font-weight: 900;
-    color: var(--slate-charcoal);
-    margin-bottom: 10px;
+    font-size: 12px;
+    font-weight: 850;
+    color: #647082;
+    margin-bottom: 6px;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.06em;
 }
 .awards-history-row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 5px 0;
-    border-bottom: 1px solid #e9ecef;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid #f1f5f9;
     font-size: 13px;
 }
 .awards-history-row:last-of-type { border-bottom: none; }
-.awards-history-medal { font-size: 16px; flex-shrink: 0; }
-.awards-history-awardname { font-weight: 700; color: #64748b; flex: 1; }
-.awards-history-winner { font-weight: 800; color: var(--slate-charcoal); flex: 1; }
+.awards-history-awardname { font-weight: 700; color: var(--slate-charcoal); flex: 1; min-width: 0; }
+.awards-history-winner {
+    font-weight: 850; color: var(--slate-charcoal); margin-left: auto; text-align: right;
+    white-space: nowrap; letter-spacing: -.01em;
+}
+.awards-history-winner.empty { color: #cbd3dd; font-weight: 700; }
 .awards-history-store { font-size: 11px; color: #94a3b8; }
-.awards-history-video-link { margin-top: 8px; font-size: 12px; }
-.awards-history-video-link a { color: var(--sage-professional); font-weight: 700; text-decoration: none; }
+.awards-history-video-link { margin-top: 4px; padding: 10px 0 6px; font-size: 12px; }
+.awards-history-video-link a { display: inline-flex; align-items: center; gap: 6px; color: #178048; font-weight: 750; text-decoration: none; }
+.awards-history-video-link a svg { width: 13px; height: 13px; }
 .awards-history-video-link a:hover { text-decoration: underline; }
 
 /* =========================================================
@@ -1924,7 +2391,7 @@ select.bs-hidden-select:focus {
 }
     
     .docs-grid { grid-template-columns: 1fr !important; }
-    .doc-card { height: auto !important; min-height: 105px; }
+    .doc-card { height: auto !important; min-height: 92px; }
     
     .hotbar-container { flex-direction: column; align-items: stretch; padding: 15px 10px; }
     .hotbar-label { margin-bottom: 10px; text-align: center; border-bottom: 1px solid #eee; padding-bottom: 8px; }
@@ -2076,6 +2543,65 @@ select.bs-hidden-select:focus {
 .user-manage-row input, .user-manage-row select { padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
 .user-manage-row .del-btn { background: var(--red-alert); color: white; border: none; padding: 0 10px; height: 34px; border-radius: 4px; cursor: pointer; font-weight: bold; }
 
+/* ── User Permissions — compact airy rows (2026-07-25) ─────────────────────
+   Denser rows so more people fit per screen, calmer field styling, and the
+   small soft-red SVG delete used elsewhere. Classes unchanged, so
+   saveManageUsers() reads the same fields. */
+#manageUsersList .user-manage-row {
+    gap: 8px; padding: 8px 10px; margin-bottom: 6px;
+    border: 1px solid #e3e8ee; border-radius: 10px; background: #fff;
+}
+#manageUsersList .user-manage-row input,
+#manageUsersList .user-manage-row select {
+    padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px;
+    font-size: 13px; font-weight: 600; color: var(--slate-charcoal);
+    outline: none; background: #fff; height: 36px; box-sizing: border-box;
+}
+#manageUsersList .user-manage-row input:focus,
+#manageUsersList .user-manage-row select:focus {
+    border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(31, 157, 87, .12);
+}
+#manageUsersList .user-manage-row .del-btn {
+    flex: 0 0 auto; width: 32px; height: 32px; padding: 0; border-radius: 9px;
+    background: #fdecec; color: #dc2626;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+#manageUsersList .user-manage-row .del-btn:hover { background: #dc2626; color: #fff; }
+#manageUsersList .user-manage-row .del-btn svg { width: 14px; height: 14px; }
+
+/* Search now lives inside the scroll area so it lines up exactly with the rows
+   (no scrollbar offset), and stays pinned to the top while the list scrolls. */
+/* Zero the scroll container's top padding so the sticky search bar sticks at the
+   TRUE top — otherwise a top:0 sticky child sits below the container padding and
+   rows peek through that band. The toolbar re-supplies the 20px top spacing and
+   full-bleeds the side padding so rows scroll cleanly underneath. */
+#manageUsersList { padding-top: 0; }
+#manageUsersList .mu-toolbar {
+    position: sticky; top: 0; z-index: 6;
+    background: #f6f8fa;
+    padding: 20px 22px 12px;
+    margin: 0 -22px;
+}
+/* Collapsible role groups */
+#manageUsersList .mu-group { margin-bottom: 10px; }
+#manageUsersList .mu-group-head {
+    display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none;
+    padding: 10px 14px; border-radius: 10px;
+    background: #eef2f7; border: 1px solid #e3e8ee;
+    font-size: 13px; font-weight: 800; color: var(--slate-charcoal);
+}
+#manageUsersList .mu-group-head:hover { background: #e7edf4; }
+#manageUsersList .mu-group-name { flex: 1; }
+#manageUsersList .mu-group-count {
+    display: inline-flex; align-items: center; justify-content: center; line-height: 1;
+    background: #fff; border: 1px solid #e3e8ee; border-radius: 999px;
+    padding: 4px 10px; font-size: 11px; font-weight: 800; color: #647082;
+}
+#manageUsersList .mu-group-chev { width: 16px; height: 16px; color: #8a94a3; transition: transform .15s ease; flex: 0 0 auto; }
+#manageUsersList .mu-group.collapsed .mu-group-chev { transform: rotate(-90deg); }
+#manageUsersList .mu-group-body { padding-top: 8px; }
+#manageUsersList .mu-group.collapsed .mu-group-body { display: none; }
+
 .idea-menu { width: 550px; max-width: 90vw; }
 .idea-label { display: block; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; color: var(--slate-charcoal); }
 .idea-input { width: 100%; padding: 14px 16px; border-radius: 10px; border: 1px solid #ddd; outline: none; font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; font-size: 14px; font-weight: 500; transition: 0.2s; background: #f9fafb; color: var(--slate-charcoal); }
@@ -2099,7 +2625,12 @@ select.bs-hidden-select:focus {
 .dev-workspace-btn { display: flex; align-items: center; background-color: #4b5563; color: white; padding: 8px 16px; border: none; border-radius: 25px; cursor: pointer; gap: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); transition: background-color 0.2s ease, transform 0.1s ease; }
 .dev-workspace-btn:hover { background-color: #374151; }
 .dev-workspace-btn:active { transform: scale(0.98); }
-.lock-icon { width: 14px; height: 14px; stroke: #ffffff; }
+/* Was .lock-icon: this is the SPEEKS Tools mark, and it is now a 2x2 grid
+   (the launcher mark) rather than a padlock, which said "locked" instead of
+   "here are your tools". Renamed with the glyph so the class can't go on
+   lying about what it draws. Used in exactly two places per shell — the nav
+   button and the panel header — which must always match. */
+.tools-icon { width: 14px; height: 14px; stroke: #ffffff; }
 .chevron-icon { width: 16px; height: 16px; stroke: #ffffff; transition: transform 0.3s ease; }
 .dev-title { font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
 
@@ -2119,7 +2650,7 @@ select.bs-hidden-select:focus {
 }
 .tools-nav-btn:hover { background: #4b5563; }
 .tools-nav-btn.panel-open { background: #111827; box-shadow: inset 0 2px 4px rgba(0,0,0,0.3); }
-.tools-nav-btn .lock-icon { width: 13px; height: 13px; stroke: #fff; }
+.tools-nav-btn .tools-icon { width: 13px; height: 13px; stroke: #fff; }
 .tools-nav-label { font-size: 11px; font-weight: 700; color: #fff; text-transform: uppercase; letter-spacing: 0.5px; }
 
 .tools-side-panel {
@@ -2163,7 +2694,7 @@ select.bs-hidden-select:focus {
     letter-spacing: 0.8px;
     color: #fff;
 }
-.tools-panel-title .lock-icon { width: 13px; height: 13px; stroke: #fff; }
+.tools-panel-title .tools-icon { width: 13px; height: 13px; stroke: #fff; }
 .tools-panel-close {
     background: rgba(255,255,255,0.1);
     border: none;
@@ -2526,74 +3057,7 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
     flex-wrap: nowrap;
 }
 
-/* INFO TICKER */
-.info-ticker {
-    position: fixed;
-    top: 72px;
-    left: 0;
-    right: 0;
-    height: 32px;
-    background: var(--sage-professional);
-    z-index: 99;
-    display: none;
-    align-items: center;
-    user-select: none;
-}
-body.is-authenticated .info-ticker { display: flex; }
-
-.ticker-scroll-area {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    height: 100%;
-    display: flex;
-    align-items: center;
-}
-
-.ticker-panel-buttons {
-    display: flex;
-    align-items: center;
-    height: 100%;
-    flex-shrink: 0;
-    gap: 4px;
-    padding: 0 6px;
-}
-
-.ticker-track {
-    display: flex;
-    align-items: center;
-    white-space: nowrap;
-    animation: ticker-scroll 55s linear infinite;
-    will-change: transform;
-}
-
-@keyframes ticker-scroll {
-    0%   { transform: translateX(0); }
-    100% { transform: translateX(-50%); }
-}
-
-
-.ticker-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    padding: 0 30px;
-    font-size: 12px;
-    font-weight: 700;
-    color: rgba(255,255,255,0.95);
-    letter-spacing: 0.2px;
-    white-space: nowrap;
-}
-.ticker-item .t-icon { font-size: 13px; line-height: 1; flex-shrink: 0; }
-.ticker-sep {
-    color: rgba(255,255,255,0.3);
-    font-size: 9px;
-    flex-shrink: 0;
-}
-
-@media (max-width: 768px) {
-    .info-ticker { position: relative; top: 0; }
-}
+/* INFO TICKER — removed 2026-07-23 (green carousel bar retired site-wide). */
 
 .nav-left {
     display: flex;
@@ -3127,6 +3591,24 @@ body.is-authenticated .info-ticker { display: flex; }
     opacity: 1;
     visibility: visible;
     transform: translateY(0);
+}
+
+/* Anchored variant: pinned directly under the hovered top-nav button (positioned
+   by JS) with a small upward caret — the calm equivalent of the browser's native
+   tooltip the Tools button / shrunk tabs show. */
+.speeks-tooltip.anchored { overflow: visible; }
+.speeks-tooltip.anchored::after {
+    content: "";
+    position: absolute;
+    top: -5px;
+    left: 50%;
+    width: 9px;
+    height: 9px;
+    background: #ffffff;
+    border-left: 1px solid #e3e8ee;
+    border-top: 1px solid #e3e8ee;
+    transform: translateX(-50%) rotate(45deg);
+    display: block !important;
 }
 
 .top-nav {
@@ -6476,7 +6958,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     max-height: 100%;
 }
 .b2b-col-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 8px; }
-.b2b-col-count { font-size: 12px; font-weight: 800; color: #6b7280; background: #fff; border-radius: 999px; padding: 1px 9px; }
+.b2b-col-count { display: inline-flex; align-items: center; justify-content: center; line-height: 1; font-size: 12px; font-weight: 800; color: #6b7280; background: #fff; border-radius: 999px; padding: 4px 9px; }
 .b2b-col-body { display: flex; flex-direction: column; gap: 10px; padding: 4px 10px 12px; overflow-y: auto; }
 .b2b-col-empty { text-align: center; color: #c4c9d1; font-size: 13px; padding: 10px 0; }
 
@@ -6548,177 +7030,281 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 
 /* =========================================================
    CUSTOMER CALL BACKS (operations.html)
+   Calm redesign — matches the SPEEKS Action Menu aesthetic:
+   light card, sage accent, soft dividers, SVG line icons.
+   The global <html> filter handles dark mode, so light only.
    ========================================================= */
-.cb-scroll { padding: 14px 16px; }
+.cb-panel {
+    --cb-line: #e3e8ee;
+    --cb-line-2: #eef1f5;
+    --cb-panel-2: #f6f8fa;
+    --cb-muted: #647082;
+    --cb-faint: #8a94a3;
+    --cb-sage: #1f9d57;
+    --cb-sage-tint: #e8f7ee;
+    --cb-gold-tint: #fdf3e1;
+    --cb-red-tint: #fcecec;
+    --cb-blue-tint: #e8f0fb;
+    border: 1px solid var(--cb-line) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06) !important;
+    background: #fff !important;
+    overflow: hidden;
+}
 
-/* Quick-add bar — pinned above the table */
+/* Operations page hero — reuses the Processes & Policies .dp-header look.
+   .page-header carries a 40px bottom margin and .ops-wrap already gaps 16px,
+   so drop the margin and let the wrap's gap do the spacing. */
+.ops-wrap .ops-header { margin-bottom: 0; }
+/* Single tool-tab icon */
+.ops-wrap .ws-tab svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Shared: every line icon inside the panel picks up its parent's colour */
+.cb-panel svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* --- Calm card header (replaces the old dark district header) --- */
+.cb-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+    padding: 15px 18px;
+    border-bottom: 1px solid var(--cb-line-2);
+    background: #fff;
+}
+.cb-head-main { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.cb-head-ico {
+    flex: 0 0 auto; width: 40px; height: 40px; border-radius: 11px;
+    background: var(--cb-sage-tint); color: var(--cb-sage);
+    display: grid; place-items: center;
+}
+.cb-head-ico svg { width: 20px; height: 20px; }
+.cb-head-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.cb-eyebrow { font-size: 10px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; color: var(--cb-faint); }
+.cb-head-title { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; color: var(--slate-charcoal); line-height: 1.2; }
+.cb-head-sub { font-size: 12px; font-weight: 600; color: var(--cb-muted); }
+.cb-head-sub:empty { display: none; }
+.cb-head-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+/* View toggle (reuses .mb-view-toggle) — add icons */
+.cb-view-toggle .mb-view-btn { display: inline-flex; align-items: center; gap: 6px; }
+.cb-view-toggle .mb-view-btn svg { width: 14px; height: 14px; }
+
+.cb-store-filter { height: 34px; }
+
+.cb-completed-toggle {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 12px; font-weight: 600; color: var(--cb-muted);
+    cursor: pointer; user-select: none; white-space: nowrap;
+}
+.cb-completed-toggle input { width: 15px; height: 15px; accent-color: var(--cb-sage); cursor: pointer; }
+
+/* --- Scroll body --- */
+.cb-scroll { padding: 16px 18px; overflow-y: auto; }
+.cb-scroll::-webkit-scrollbar { width: 8px; }
+.cb-scroll::-webkit-scrollbar-track { background: transparent; }
+.cb-scroll::-webkit-scrollbar-thumb { background: #d5dbe3; border-radius: 10px; }
+
+/* --- Quick-add bar — pinned above the table --- */
 .cb-quickadd {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    background: #f6fbf2;
-    border: 1.5px solid #d8e8cc;
-    border-radius: 10px;
-    padding: 10px 12px;
-    margin-bottom: 14px;
+    display: flex; gap: 9px; align-items: center;
+    background: var(--cb-panel-2);
+    border: 1px solid var(--cb-line);
+    border-radius: 12px;
+    padding: 11px 12px;
+    margin-bottom: 16px;
 }
 .cb-quickadd input {
-    flex: 1;
-    min-width: 0;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    padding: 8px 10px;
+    flex: 1; min-width: 0;
+    border: 1px solid var(--cb-line);
+    border-radius: 8px;
+    padding: 9px 11px;
     font-size: 13px;
     font-family: inherit;
     background: #fff;
+    color: var(--slate-charcoal);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.cb-quickadd input:focus { outline: none; border-color: var(--sage-professional); }
+.cb-quickadd input::placeholder { color: var(--cb-faint); }
+.cb-quickadd input:focus { outline: none; border-color: var(--cb-sage); box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.15); }
 .cb-quickadd .cb-add-item { flex: 1.6; }
 .cb-add-store { flex: 0 0 auto; width: auto; }
-.cb-add-btn { padding: 8px 18px; font-size: 13px; white-space: nowrap; flex-shrink: 0; }
+.cb-add-btn {
+    padding: 9px 15px; font-size: 12.5px; font-weight: 700;
+    letter-spacing: 0.02em; text-transform: none;
+    white-space: nowrap; flex-shrink: 0; border-radius: 9px;
+    box-shadow: 0 1px 2px rgba(90, 141, 59, 0.18);
+    gap: 6px;
+}
+.cb-add-btn:hover { transform: none; box-shadow: 0 2px 8px rgba(90, 141, 59, 0.24); }
+.cb-add-btn svg { width: 15px; height: 15px; stroke-width: 2.4; }
 
-/* Table — fixed layout so changing chip/badge text never reflows the columns */
+/* --- Table — fixed layout so changing chip/badge text never reflows columns --- */
 .cb-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
 .cb-col-store    { width: 88px; }
 .cb-col-customer { width: 150px; }
 .cb-col-phone    { width: 128px; }
 /* .cb-col-item takes the remaining width */
 .cb-col-status   { width: 150px; }
-.cb-col-timer    { width: 122px; }  /* wide enough for the archived "purges in NNd" badge */
+.cb-col-timer    { width: 150px; }  /* fits the "purges in NNd" badge AND the inline date <input> in edit mode */
 .cb-col-notes    { width: 46px; }
-.cb-col-logged   { width: 130px; }
+.cb-col-logged   { width: 132px; }
 /* Status + Timer headers and cells center together so chips sit under their titles */
 .cb-table th.cb-col-status, .cb-cell-status,
 .cb-table th.cb-col-timer,  .cb-cell-timer { text-align: center; }
 .cb-table th {
     text-align: left;
-    background: #f3f4f6;
-    color: #6b7280;
-    font-size: 11px;
+    background: var(--cb-panel-2);
+    color: var(--cb-faint);
+    font-size: 10px;
+    font-weight: 800;
     text-transform: uppercase;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.07em;
     padding: 10px 12px;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--cb-line);
     position: sticky;
     top: 0;
     z-index: 1;
 }
-.cb-table td { padding: 9px 12px; border-bottom: 1px solid #f3f4f6; vertical-align: middle; }
+.cb-table th.cb-col-notes svg { width: 14px; height: 14px; stroke: var(--cb-faint); vertical-align: middle; }
+.cb-table td { padding: 11px 12px; border-bottom: 1px solid var(--cb-line-2); vertical-align: middle; }
+.cb-table tbody tr:last-child td { border-bottom: none; }
 .cb-row { cursor: pointer; transition: background 0.12s ease; }
-.cb-row:hover { background: #f8fafc; }
-.cb-row-open { background: #f6fbf2; }
+.cb-row:hover { background: var(--cb-panel-2); }
+.cb-row-open { background: var(--cb-sage-tint); }
+.cb-row-open:hover { background: #e7f0df; }
 .cb-row-done { opacity: 0.55; }
-.cb-col-store { white-space: nowrap; font-weight: 700; }
+.cb-col-store { white-space: nowrap; font-weight: 800; color: var(--cb-muted); font-size: 11.5px; letter-spacing: 0.02em; }
 .cb-customer { font-weight: 700; color: var(--slate-charcoal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cb-item { font-weight: 600; font-size: 13.5px; overflow-wrap: break-word; }
-.cb-phone { color: #2563eb; text-decoration: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cb-item { font-weight: 600; font-size: 13.5px; color: var(--slate-charcoal); overflow-wrap: break-word; }
+.cb-phone { color: #3167b8; text-decoration: none; white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
 .cb-phone:hover { text-decoration: underline; }
-.cb-logged { color: #9ca3af; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Logged: date on top (always visible) + who below (truncates instead of
+   eating the date when the name is long). */
+.cb-logged { color: var(--cb-faint); font-size: 11px; overflow: hidden; line-height: 1.35; }
+.cb-logged-date { display: block; font-size: 11.5px; font-weight: 700; color: var(--cb-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cb-logged-by { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cb-col-notes { text-align: center; }
-.cb-note-count { font-size: 11.5px; color: #6b7280; white-space: nowrap; }
+.cb-note-count { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 700; color: var(--cb-muted); white-space: nowrap; }
+.cb-note-count svg { width: 13px; height: 13px; stroke: var(--cb-faint); }
 .cb-col-actions { text-align: right; white-space: nowrap; width: 70px; }
 
-/* Status chips — fixed min-width + centered so cycling text doesn't shift anything */
+/* --- Status chips — fixed min-width + centered so cycling text doesn't shift anything --- */
 .cb-chip {
     display: inline-block;
-    font-size: 10.5px;
+    font-size: 10px;
     font-weight: 800;
     text-transform: uppercase;
-    letter-spacing: 0.4px;
-    padding: 3px 10px;
+    letter-spacing: 0.05em;
+    padding: 4px 11px;
     border-radius: 999px;
     white-space: nowrap;
     user-select: none;
-    min-width: 88px;
+    min-width: 92px;
     box-sizing: border-box;
     text-align: center;
 }
 .cb-status-by {
     font-size: 10.5px;
-    color: #9ca3af;
-    margin-top: 2px;
+    color: var(--cb-faint);
+    margin-top: 3px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.cb-chip-open      { background: #dbeafe; color: #1e40af; }
-.cb-chip-contacted { background: #fef3c7; color: #92400e; }
-.cb-chip-completed { background: #dcfce7; color: #166534; }
-.cb-chip-expired   { background: #e5e7eb; color: #4b5563; }
+.cb-chip-open      { background: var(--cb-blue-tint); color: #2563a8; }
+.cb-chip-contacted { background: var(--cb-gold-tint); color: #b7791f; }
+.cb-chip-completed { background: var(--cb-sage-tint); color: #178048; }
+.cb-chip-expired   { background: var(--cb-line-2); color: var(--cb-muted); }
 .cb-chip-clickable { cursor: pointer; transition: transform 0.1s ease, box-shadow 0.1s ease; }
-.cb-chip-clickable:hover { transform: scale(1.06); box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+.cb-chip-clickable:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(16, 24, 40, 0.12); }
 
-/* 30-day countdown badges */
+/* --- 30-day countdown badges --- */
 .cb-days {
     display: inline-block;
-    font-size: 11px;
+    font-size: 10.5px;
     font-weight: 800;
-    padding: 2px 8px;
-    border-radius: 6px;
+    letter-spacing: 0.02em;
+    padding: 3px 10px;
+    border-radius: 999px;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
 }
-.cb-days-ok       { background: #f3f4f6; color: #6b7280; }
-.cb-days-warn     { background: #fef3c7; color: #92400e; }
-.cb-days-urgent   { background: #fee2e2; color: #b91c1c; }
-.cb-days-archived { background: #f3f4f6; color: #9ca3af; font-weight: 600; }
+.cb-days-ok       { background: var(--cb-line-2); color: var(--cb-muted); }
+.cb-days-warn     { background: var(--cb-gold-tint); color: #b7791f; }
+.cb-days-urgent   { background: var(--cb-red-tint); color: #d1443b; }
+.cb-days-archived { background: var(--cb-line-2); color: var(--cb-faint); font-weight: 700; }
 
-/* Row actions + inline edit */
+/* --- Row actions + inline edit --- */
 .cb-icon-btn {
     border: none;
     background: transparent;
     cursor: pointer;
-    font-size: 13px;
-    padding: 3px 5px;
-    border-radius: 6px;
-    opacity: 0.45;
-    transition: opacity 0.12s ease, background 0.12s ease;
+    padding: 5px;
+    border-radius: 7px;
+    color: var(--cb-faint);
+    opacity: 0.5;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.14s ease, background 0.14s ease, color 0.14s ease;
 }
+.cb-icon-btn svg { width: 15px; height: 15px; }
 .cb-row:hover .cb-icon-btn, .cb-row-editing .cb-icon-btn { opacity: 1; }
-.cb-icon-btn:hover { background: #e5e7eb; }
+.cb-icon-btn:hover { background: var(--cb-line-2); color: var(--cb-muted); }
+.cb-icon-btn.cb-btn-danger:hover { background: var(--cb-red-tint); color: #d1443b; }
+.cb-icon-btn.cb-btn-save:hover { background: var(--cb-sage-tint); color: var(--cb-sage); }
 .cb-edit-input {
     width: 100%;
     box-sizing: border-box;
-    border: 1px solid var(--sage-professional);
-    border-radius: 6px;
-    padding: 6px 8px;
+    border: 1px solid var(--cb-sage);
+    border-radius: 8px;
+    padding: 7px 9px;
     font-size: 13px;
     font-family: inherit;
+    background: #fff;
 }
-.cb-edit-date { max-width: 140px; }
+.cb-edit-input:focus { outline: none; box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.15); }
+/* The date <input> lives in the (narrow, centered) Timer column, so trim its
+   padding/font so the full date + calendar picker never clip. */
+.cb-edit-date { width: 100%; max-width: 100%; padding: 6px 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cb-cell-timer .cb-edit-date { text-align: left; }
 
-/* Expanded notes strip */
+/* --- Expanded notes strip --- */
 .cb-row-detail td {
-    background: #f6fbf2;
-    border-bottom: 1px solid #e5e7eb;
-    padding: 12px 16px 14px;
+    background: var(--cb-panel-2);
+    border-bottom: 1px solid var(--cb-line);
+    padding: 14px 16px 16px;
 }
-.cb-notes-thread { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.cb-notes-thread { display: flex; flex-direction: column; gap: 7px; margin-bottom: 11px; }
 .cb-note { font-size: 12.5px; color: var(--slate-charcoal); line-height: 1.5; }
-.cb-note-meta { color: #9ca3af; font-size: 11.5px; }
-.cb-note-none { color: #9ca3af; font-style: italic; }
+.cb-note-meta { color: var(--cb-faint); font-size: 11.5px; }
+.cb-note-none { color: var(--cb-faint); font-style: italic; }
 .cb-note-add { display: flex; gap: 8px; }
 .cb-note-input {
     flex: 1;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    padding: 7px 10px;
+    border: 1px solid var(--cb-line);
+    border-radius: 8px;
+    padding: 8px 11px;
     font-size: 12.5px;
     font-family: inherit;
+    background: #fff;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.cb-note-input:focus { outline: none; border-color: var(--sage-professional); }
-.cb-note-btn { padding: 6px 14px; font-size: 12px; white-space: nowrap; }
+.cb-note-input:focus { outline: none; border-color: var(--cb-sage); box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.15); }
+.cb-note-btn { padding: 7px 15px; font-size: 12px; font-weight: 700; white-space: nowrap; border-radius: 8px; }
 
-/* Empty state */
+/* --- Empty state --- */
 .cb-empty {
     text-align: center;
-    color: #9ca3af;
-    font-size: 14px;
+    color: var(--cb-faint);
+    font-size: 13.5px;
     font-weight: 600;
-    padding: 60px 20px;
+    line-height: 1.6;
+    padding: 60px 24px;
 }
 
 @media (max-width: 768px) {
+    .cb-head { align-items: flex-start; }
+    .cb-head-controls { width: 100%; }
     .cb-quickadd { flex-wrap: wrap; }
     .cb-quickadd input { flex-basis: 45%; }
     .cb-logged, .cb-col-notes { display: none; }
@@ -6944,25 +7530,69 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
    FEATURE ACCESS TOOL — role-matrix chips + per-user segmented controls
    ============================================================================ */
 #featureAccessModal .manage-content { scrollbar-gutter: stable; }
-.fa-chip {
-    width: 38px; height: 26px; flex-shrink: 0;
-    border-radius: 7px; border: 1.5px solid transparent;
-    font-size: 12px; font-weight: 900; cursor: pointer; line-height: 1;
-    transition: filter .12s ease;
+/* Calm redesign: info banner, grouped cards, SVG chips, airy segmented control. */
+.fa-hint {
+    font-size: 12px; color: #647082; font-weight: 500; line-height: 1.55;
+    background: #eef2f7; border: 1px solid #e3e8ee; border-radius: 10px;
+    padding: 10px 13px; margin-bottom: 14px;
 }
-.fa-chip.fa-on  { background: #d1fae5; color: #059669; }
-.fa-chip.fa-off { background: #f1f5f9; color: #cbd5e1; }
+.fa-subhead {
+    font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px;
+    color: #647082; margin: 16px 2px 8px;
+}
+.fa-group {
+    background: #fff; border: 1px solid #e3e8ee; border-radius: 12px;
+    padding: 4px 14px 8px; margin-bottom: 12px;
+}
+.fa-group-head {
+    font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px;
+    color: #1c1f23; padding: 11px 2px 6px;
+}
+.fa-row { display: flex; align-items: center; gap: 6px; padding: 6px 2px; }
+.fa-row + .fa-row { border-top: 1px solid #f1f5f9; }
+.fa-row-head { padding: 0 2px 4px; }
+.fa-row-head + .fa-row { border-top: none; }
+.fa-feat-label { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 700; color: var(--slate-charcoal); }
+.fa-col-head { width: 38px; flex-shrink: 0; text-align: center; font-size: 9px; font-weight: 800; letter-spacing: .3px; color: #94a3b8; }
+.fa-chip {
+    width: 38px; height: 28px; flex-shrink: 0;
+    border-radius: 8px; border: 1.5px solid transparent;
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    transition: filter .12s ease, background .12s ease;
+}
+.fa-chip svg { width: 13px; height: 13px; }
+.fa-chip.fa-on  { background: #d8f3e3; color: #0f8a4d; }
+.fa-chip.fa-off { background: #f1f5f9; color: #aab4c0; }
 .fa-chip.fa-ovr { border-color: #f59e0b; } /* amber ring = manual override */
-.fa-chip:disabled { cursor: not-allowed; opacity: .85; }
-.fa-chip:not(:disabled):hover { filter: brightness(.93); }
+.fa-chip:disabled { cursor: not-allowed; opacity: .9; }
+.fa-chip:not(:disabled):hover { filter: brightness(.95); }
 .fa-seg {
-    padding: 5px 12px; font-size: 11px; font-weight: 800;
+    padding: 6px 13px; font-size: 11px; font-weight: 800;
     background: #fff; color: #94a3b8; border: none; cursor: pointer;
 }
-.fa-seg + .fa-seg { border-left: 1.5px solid #e2e8f0; }
-.fa-seg-active { background: #1e293b; color: #fff; }
-.fa-seg-active.fa-seg-on  { background: #059669; }
+.fa-seg + .fa-seg { border-left: 1.5px solid #e3e8ee; }
+.fa-seg-active { background: #1c1f23; color: #fff; }
+.fa-seg-active.fa-seg-on  { background: #1f9d57; }
 .fa-seg-active.fa-seg-off { background: #dc2626; }
+/* Per-User tab — collapsible feature cards (collapsed by default) */
+.fa-ugroup { background: #fff; border: 1px solid #e3e8ee; border-radius: 12px; margin-bottom: 10px; overflow: hidden; }
+.fa-ugroup-head {
+    display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none;
+    padding: 11px 14px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: #1c1f23;
+}
+.fa-ugroup-head:hover { background: #f6f8fa; }
+.fa-ugroup-name { flex: 1; min-width: 0; }
+.fa-ugroup-count { display: inline-flex; align-items: center; justify-content: center; line-height: 1; background: #eef2f7; border: 1px solid #e3e8ee; border-radius: 999px; padding: 4px 9px; font-size: 10.5px; font-weight: 800; color: #647082; }
+.fa-ugroup-set { display: inline-flex; align-items: center; justify-content: center; line-height: 1; background: #fef3c7; border: 1px solid #fcd982; border-radius: 999px; padding: 4px 9px; font-size: 10.5px; font-weight: 800; color: #b45309; text-transform: none; letter-spacing: 0; }
+.fa-ugroup-chev { width: 15px; height: 15px; color: #8a94a3; transition: transform .15s ease; flex: 0 0 auto; }
+.fa-ugroup.collapsed .fa-ugroup-chev { transform: rotate(-90deg); }
+.fa-ugroup-body { padding: 0 14px 8px; }
+.fa-ugroup.collapsed .fa-ugroup-body { display: none; }
+.fa-urow { display: flex; align-items: center; gap: 10px; padding: 8px 2px; }
+.fa-urow + .fa-urow { border-top: 1px solid #f1f5f9; }
+.fa-urow-label { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 700; color: var(--slate-charcoal); }
+.fa-urow-label .fa-role-def { font-weight: 600; color: #b6c0cd; font-size: 11px; }
+.fa-seg-group { display: inline-flex; border: 1.5px solid #e3e8ee; border-radius: 8px; overflow: hidden; flex-shrink: 0; }
 
 /* Store badge on a borrowed hotbar link (Feature Access grant from another
    store's bar) — marks whose sheet it opens, e.g. "Passwords · WSP". */
@@ -7118,7 +7748,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     --sam-chip: #f1f5f9;
     --sam-red-tint: #fcecec;
     --sam-gold-tint: #fdf3e1;
-    --sam-sage-tint: #eef4e9;
+    --sam-sage-tint: #e8f7ee;
     --sam-blue: #3b82f6;
     --sam-violet: #8b5cf6;
     --sam-shadow-sm: 0 1px 2px rgba(16,24,40,.06);
@@ -7179,7 +7809,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .speeks-action-menu .sam-hero-cta svg { width: 14px; height: 14px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 /* Shown only when the hero message isn't truncated (see _samSyncHero). */
 .speeks-action-menu .sam-hero-read { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; font-family: inherit; font-size: 12px; font-weight: 700; color: var(--sam-muted); background: var(--sam-panel); border: 1px solid var(--sam-line); border-radius: 8px; padding: 8px 11px; cursor: pointer; white-space: nowrap; transition: .14s; }
-.speeks-action-menu .sam-hero-read:hover { color: var(--sage-professional, #5a8d3b); border-color: var(--sage-professional, #5a8d3b); }
+.speeks-action-menu .sam-hero-read:hover { color: var(--sage-professional, #1f9d57); border-color: var(--sage-professional, #1f9d57); }
 .speeks-action-menu .sam-hero-read svg { width: 13px; height: 13px; stroke: currentColor; stroke-width: 2.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 /* `hidden` loses to the display above without this (same trap as .sam-hero). */
 .speeks-action-menu .sam-hero-read[hidden] { display: none; }
@@ -7193,6 +7823,14 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .speeks-action-menu .sam-board { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 13px; align-items: stretch; }
 .speeks-action-menu .sam-board > * { min-width: 0; }
 .speeks-action-menu .sam-rail { display: flex; flex-direction: column; gap: 13px; }
+/* Squares the action-items column off against the feed card. Both halves are
+   needed: .sam-rail must rejoin the grid's stretch (see the align-self pair
+   further down this file) AND the card inside must grow, since a column flex
+   item stays content-sized otherwise. The items then share the slack. Applied
+   only when a full set is visible — with two or three, sharing it would leave
+   each row distended. */
+.speeks-action-menu .sam-rail.sam-rail-fill > .sam-card { flex: 1 1 auto; }
+.speeks-action-menu .sam-rail.sam-rail-fill > .sam-card .sam-mini { flex: 1 1 0; }
 .speeks-action-menu .sam-card { display: flex; flex-direction: column; }
 
 /* --- feed --- */
@@ -7221,7 +7859,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .speeks-action-menu .sam-ann.rem .sam-a-snip { -webkit-line-clamp: 3; white-space: normal; }
 /* "Read full" — injected by _samAddReadFull() only on rows whose snippet is
    actually clipped, so a complete short message never gets a pointless link. */
-.speeks-action-menu .sam-readfull { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; padding: 0; font-family: inherit; font-size: 11px; font-weight: 700; color: var(--sage-professional, #5a8d3b); background: none; border: 0; cursor: pointer; }
+.speeks-action-menu .sam-readfull { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; padding: 0; font-family: inherit; font-size: 11px; font-weight: 700; color: var(--sage-professional, #1f9d57); background: none; border: 0; cursor: pointer; }
 .speeks-action-menu .sam-readfull svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; transition: transform .14s; }
 .speeks-action-menu .sam-readfull:hover { text-decoration: underline; }
 .speeks-action-menu .sam-readfull:hover svg { transform: translateX(2px); }
@@ -7235,6 +7873,10 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .speeks-action-menu .sam-ann.rem { cursor: default; }
 .speeks-action-menu .sam-adot.urgent { background: var(--red-alert); box-shadow: 0 0 0 4px var(--sam-red-tint); }
 .speeks-action-menu .sam-adot.warn { background: var(--idea-gold); box-shadow: 0 0 0 4px var(--sam-gold-tint); }
+/* Informational, not a task: an answer that came back, with no deadline of its
+   own. Amber would read as something outstanding; emerald would read as "good
+   news" on a card that might be a denial. */
+.speeks-action-menu .sam-adot.info { background: #2563a8; box-shadow: 0 0 0 4px #e8f0fb; }
 
 /* feed header actions */
 .speeks-action-menu .sam-h-actions { display: flex; align-items: center; gap: 8px; }
@@ -7287,6 +7929,13 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .speeks-action-menu .sam-m-bar > i { display: block; height: 100%; background: var(--sage-professional); border-radius: 5px; transition: width .3s ease; }
 .speeks-action-menu .sam-m-val { font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--sam-muted); }
 .speeks-action-menu .sam-m-chev { color: var(--sam-faint); flex: 0 0 auto; }
+/* Employee "Listing Goals" bar: reports role + today's goal only — no progress track.
+   Role reads as a sage chip, goal as the bold metric number (option C). */
+.speeks-action-menu .sam-mini-emp .sam-m-bar { display: none; }
+.speeks-action-menu .sam-mini-emp .sam-m-s { display: none; }
+.speeks-action-menu .sam-mini-emp .sam-m-val { display: inline-flex; align-items: center; gap: 9px; }
+.speeks-action-menu .sam-mini-emp .sam-m-role { font-size: 10.5px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; background: var(--sam-sage-tint); color: var(--sage-professional); padding: 3px 8px; border-radius: 20px; }
+.speeks-action-menu .sam-mini-emp .sam-m-goal { font-size: 20px; font-weight: 850; color: var(--text-dark); font-variant-numeric: tabular-nums; line-height: 1; }
 .speeks-action-menu .sam-m-chev svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .speeks-action-menu .sam-storestats { display: flex; gap: 10px; margin-top: 5px; flex-wrap: wrap; }
 .speeks-action-menu .sam-storestat { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; color: var(--sam-muted); font-variant-numeric: tabular-nums; }
@@ -7304,6 +7953,30 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
    (renderManagerGoals) stays untouched; we only restyle it.
    ========================================================= */
 #listingGoalsModal { width: 1200px; max-width: 95vw; }
+/* Employee personal Listing Goals popup (compact — one person's goals) */
+#empGoalsModal { width: 560px; max-width: 94vw; }
+/* Personal Listing Goals popup — matches the manager modal's look (green goal banner,
+   generous width, tinted red/green week bars). Sized to content so there's no dead space
+   below (override .modal-menu's fixed 84vh). */
+#empGoalsModal { width: 720px; max-width: 94vw; height: auto; max-height: 84vh; }
+#empGoalsModal .modal-header { border-bottom: 1px solid #e3e8ee; }
+#empGoalsModal .modal-header h3 { font-size: 17px; letter-spacing: -.01em; }
+#empGoalsModal .manage-content { padding: 20px 24px 24px; height: auto; max-height: 82vh; background: #fff; }
+#empGoalsModal .emp-goals-card { width: 100%; max-width: none; box-shadow: none; border: 1px solid #e6ebf1; border-radius: 14px; padding: 16px !important; }
+#empGoalsModal .employee-widget-body { padding: 16px 4px 4px; overflow: visible; background: transparent; }
+.emp-goals-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #eef7f0; border: 1px solid #d7ebdf; border-radius: 12px; padding: 15px 18px; }
+.emp-goals-banner-goal { font-size: 18px; font-weight: 800; letter-spacing: -.01em; color: var(--slate-charcoal); }
+.emp-goals-banner-goal b { color: #178048; }
+.emp-goals-banner-date { font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #647082; background: #fff; border: 1px solid #e6ebf1; border-radius: 999px; padding: 8px 14px; white-space: nowrap; }
+/* Match the manager modal's tinted week bars (was solid green/red) + make them larger. */
+#empGoalsModal .goals-levelup .lu-week { height: 44px; border: 1px solid transparent; }
+#empGoalsModal .goals-levelup .lu-week .lu-week-num { font-size: 17px; }
+#empGoalsModal .goals-levelup .lu-week.green { background: #d9ecc9; border-color: rgba(90,141,59,.5); }
+#empGoalsModal .goals-levelup .lu-week.green .lu-week-num { color: #3d6822; }
+#empGoalsModal .goals-levelup .lu-week.red { background: #fbd5d5; border-color: rgba(229,72,77,.5); }
+#empGoalsModal .goals-levelup .lu-week.red .lu-week-num { color: #b02a2f; }
+#empGoalsModal .goals-levelup .lu-week.empty { background: #eef1f5; border-color: #e3e8ee; }
+#empGoalsModal .goals-levelup .lu-week.empty .lu-week-num { color: #8a94a3; }
 #listingGoalsModal .modal-header { border-bottom: 1px solid #e3e8ee; }
 #listingGoalsModal .modal-header h3 { font-size: 17px; letter-spacing: -.01em; }
 #listingGoalsModal .manage-content { padding: 20px 24px 24px; height: auto; max-height: 84vh; background: #ffffff; gap: 0; }
@@ -7319,7 +7992,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 
 /* goal summary strip (replaces the dark widget header) */
 #listingGoalsModal .district-kpi-header {
-    background: #eef4e9 !important; border: 1px solid rgba(90,141,59,.25) !important;
+    background: #e8f7ee !important; border: 1px solid rgba(90,141,59,.25) !important;
     border-radius: 12px !important; padding: 15px 18px !important; margin-bottom: 18px !important;
     min-height: 0 !important; display: flex; align-items: center; justify-content: space-between; gap: 12px;
 }
@@ -7371,16 +8044,16 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     min-width: 26px; width: auto !important; height: 22px !important; padding: 0 7px !important;
     display: inline-flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: none !important;
 }
-#listingGoalsModal .role-dot:hover { border-color: #5a8d3b !important; color: #4a7530 !important; }
+#listingGoalsModal .role-dot:hover { border-color: #1f9d57 !important; color: #178048 !important; }
 #listingGoalsModal .role-dot.active {
-    background: #5a8d3b !important; border-color: #5a8d3b !important; color: #fff !important;
+    background: #1f9d57 !important; border-color: #1f9d57 !important; color: #fff !important;
 }
 #listingGoalsModal .goal-auto-display,
 #listingGoalsModal .goals-mgr-week {
     text-align: center; font-weight: 800 !important; font-variant-numeric: tabular-nums; font-size: 14px !important;
 }
 #listingGoalsModal .goal-auto-display {
-    background: #eef4e9 !important; color: #4a7530 !important; border-radius: 8px !important;
+    background: #e8f7ee !important; color: #178048 !important; border-radius: 8px !important;
     padding: 8px 0 !important; width: 60px; margin: 0 auto !important; border: 1px solid rgba(90,141,59,.2);
 }
 #listingGoalsModal .goals-mgr-week { color: #647082 !important; }
@@ -7401,7 +8074,7 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 }
 #listingGoalsModal .goals-total-val.target { color: #647082 !important; }
 #listingGoalsModal .goals-total-val.actual {
-    background: #eef4e9 !important; color: #4a7530 !important; border-color: rgba(90,141,59,.25) !important;
+    background: #e8f7ee !important; color: #178048 !important; border-color: rgba(90,141,59,.25) !important;
 }
 
 /* last 4 weeks — softened tinted chips instead of solid red bars */
@@ -7463,7 +8136,7 @@ body.sam-active .hotbar-btn {
 }
 body.sam-active .hotbar-btn:hover {
     border-color: var(--sage-professional); color: var(--sage-professional);
-    background: #eef4e9; transform: none;
+    background: #e8f7ee; transform: none;
 }
 
 @media (max-width: 900px) {
@@ -7513,7 +8186,7 @@ body.sam-active .hotbar-btn:hover {
     border-radius: 6px !important; cursor: pointer; flex: 0 0 auto; position: relative; margin: 0 !important;
     background: #fff !important; transition: .15s; box-shadow: none !important;
 }
-.checklist-side-panel .cl-checkbox:checked { background: #5a8d3b !important; border-color: #5a8d3b !important; }
+.checklist-side-panel .cl-checkbox:checked { background: #1f9d57 !important; border-color: #1f9d57 !important; }
 /* The tick was placed with hard-coded left/top offsets, which only line up for one
    exact box size — the 2px border and border-box sizing pushed it high and right.
    Centre it off the box itself instead, so it stays put whatever the size is.
@@ -7549,13 +8222,13 @@ body.sam-active .hotbar-btn:hover {
     padding: 9px 12px !important; font-family: inherit; font-size: 13px; color: #1c1f23 !important;
 }
 .checklist-side-panel .cl-input-area input:focus {
-    outline: none; border-color: #5a8d3b !important; box-shadow: 0 0 0 3px rgba(90,141,59,.12) !important;
+    outline: none; border-color: #1f9d57 !important; box-shadow: 0 0 0 3px rgba(90,141,59,.12) !important;
 }
 .checklist-side-panel .cl-add-btn {
-    border: 0 !important; background: #5a8d3b !important; color: #fff !important; font-weight: 700 !important;
+    border: 0 !important; background: #1f9d57 !important; color: #fff !important; font-weight: 700 !important;
     font-size: 13px !important; padding: 9px 16px !important; border-radius: 8px !important; cursor: pointer;
 }
-.checklist-side-panel .cl-add-btn:hover { background: #4a7530 !important; }
+.checklist-side-panel .cl-add-btn:hover { background: #178048 !important; }
 
 /* ---------- Goals & Initiatives ---------- */
 .goals-side-panel { background: #ffffff; }
@@ -7572,11 +8245,11 @@ body.sam-active .hotbar-btn:hover {
     font-size: 11px !important; font-weight: 800 !important; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3 !important;
 }
 .goals-side-panel .mini-action-btn {
-    font-size: 11.5px !important; font-weight: 700 !important; color: #4a7530 !important;
-    background: #eef4e9 !important; border: 1px solid transparent !important; border-radius: 7px !important;
+    font-size: 11.5px !important; font-weight: 700 !important; color: #178048 !important;
+    background: #e8f7ee !important; border: 1px solid transparent !important; border-radius: 7px !important;
     padding: 5px 10px !important; cursor: pointer;
 }
-.goals-side-panel .mini-action-btn:hover { border-color: #5a8d3b !important; }
+.goals-side-panel .mini-action-btn:hover { border-color: #1f9d57 !important; }
 .goals-side-panel .gi-items-list { display: flex; flex-direction: column; gap: 8px; }
 .goals-side-panel .mgb-goal-item,
 .goals-side-panel .cpb-project-item {
@@ -7595,7 +8268,7 @@ body.sam-active .hotbar-btn:hover {
     font-size: 9.5px !important; font-weight: 800 !important; letter-spacing: .04em; text-transform: uppercase;
     padding: 2px 7px !important; border-radius: 5px !important; border: 0 !important;
 }
-.goals-side-panel .si-status-badge--current { background: #eef4e9 !important; color: #4a7530 !important; }
+.goals-side-panel .si-status-badge--current { background: #e8f7ee !important; color: #178048 !important; }
 .goals-side-panel .si-status-badge--upcoming { background: #fdf3e1 !important; color: #f59e0b !important; }
 /* Past-months picker. Was a rounded emoji pill left over from the old design;
    now a calm icon chip that matches the nav / deck buttons. */
@@ -7606,12 +8279,12 @@ body.sam-active .hotbar-btn:hover {
     transition: background .16s ease, border-color .16s ease, color .16s ease;
 }
 .goals-side-panel .gi-prev-toggle:hover {
-    background: #eef4e9 !important; border-color: var(--sage-professional, #5a8d3b) !important;
-    color: var(--sage-professional, #5a8d3b) !important;
+    background: #e8f7ee !important; border-color: var(--sage-professional, #1f9d57) !important;
+    color: var(--sage-professional, #1f9d57) !important;
 }
 .goals-side-panel .gi-prev-toggle.active {
-    background: var(--sage-professional, #5a8d3b) !important;
-    border-color: var(--sage-professional, #5a8d3b) !important; color: #fff !important;
+    background: var(--sage-professional, #1f9d57) !important;
+    border-color: var(--sage-professional, #1f9d57) !important; color: #fff !important;
 }
 .goals-side-panel .gi-prev-toggle .gi-cal-ico { width: 13px; height: 13px; flex: 0 0 auto; }
 .goals-side-panel .gi-prev-toggle .gi-prev-chevron { width: 9px; height: 9px; flex: 0 0 auto; }
@@ -7634,7 +8307,7 @@ body.sam-active .hotbar-btn:hover {
 #notifDropdown .hub-head { padding: 18px 22px 0; border-bottom: 1px solid #eef1f5; flex: 0 0 auto; }
 #notifDropdown .hub-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 #notifDropdown .hub-title-wrap { display: flex; align-items: center; gap: 11px; }
-#notifDropdown .hub-hi { width: 34px; height: 34px; border-radius: 10px; background: #eef4e9; color: var(--sage-professional); display: grid; place-items: center; flex: 0 0 auto; }
+#notifDropdown .hub-hi { width: 34px; height: 34px; border-radius: 10px; background: #e8f7ee; color: var(--sage-professional); display: grid; place-items: center; flex: 0 0 auto; }
 #notifDropdown .hub-hi svg { width: 17px; height: 17px; }
 #notifDropdown .hub-title-wrap h3 { margin: 0; font-size: 18px; letter-spacing: -.01em; color: var(--text-dark); }
 #notifDropdown .hub-sub { font-size: 12px; color: #8a94a3; }
@@ -7660,7 +8333,7 @@ body.sam-active .hotbar-btn:hover {
 #notifDropdown .hub-row { display: flex; gap: 13px; padding: 14px 16px; }
 #notifDropdown .hub-tico { width: 34px; height: 34px; border-radius: 10px; flex: 0 0 auto; display: grid; place-items: center; background: #f1f5f9; color: #647082; }
 #notifDropdown .hub-tico svg { width: 17px; height: 17px; }
-#notifDropdown .t-ann  .hub-tico { background: #eef4e9; color: var(--sage-deep, #4a7530); }
+#notifDropdown .t-ann  .hub-tico { background: #e8f7ee; color: var(--sage-deep, #178048); }
 #notifDropdown .t-note .hub-tico { background: #fdf3e1; color: var(--idea-gold); }
 #notifDropdown .t-due  .hub-tico { background: #fcecec; color: var(--red-alert); }
 #notifDropdown .t-due.amber .hub-tico { background: #fdf3e1; color: var(--idea-gold); }
@@ -7675,7 +8348,7 @@ body.sam-active .hotbar-btn:hover {
 #notifDropdown .hub-item { scroll-margin-top: 12px; }
 #notifDropdown .hub-item.hub-jump { animation: hubJump 2.2s ease-out; }
 @keyframes hubJump {
-    0%, 22% { border-color: var(--sage-professional, #5a8d3b); box-shadow: 0 0 0 3px rgba(90,141,59,.20); }
+    0%, 22% { border-color: var(--sage-professional, #1f9d57); box-shadow: 0 0 0 3px rgba(90,141,59,.20); }
     100%    { border-color: #e3e8ee; box-shadow: 0 1px 2px rgba(16,24,40,.06); }
 }
 #notifDropdown .hub-item-top { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
@@ -7685,7 +8358,7 @@ body.sam-active .hotbar-btn:hover {
 #notifDropdown .hub-kind { font-weight: 700; text-transform: uppercase; letter-spacing: .05em; font-size: 10.5px; color: #647082; }
 #notifDropdown .hub-item-body { font-size: 13.5px; color: #4b5563; line-height: 1.6; margin-top: 8px; }
 #notifDropdown .hub-item-body ul { margin: 6px 0; padding-left: 20px; }
-#notifDropdown .hub-item-body a { color: var(--sage-deep, #4a7530); }
+#notifDropdown .hub-item-body a { color: var(--sage-deep, #178048); }
 
 /* the only loud signals */
 #notifDropdown .hub-prio-pill { font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; background: var(--red-alert); color: #fff; padding: 2px 7px; border-radius: 5px; }
@@ -7696,7 +8369,7 @@ body.sam-active .hotbar-btn:hover {
 /* deadline/reminder cards jump to their tool on click */
 #notifDropdown .hub-item.t-due[onclick] { transition: box-shadow .15s ease, transform .15s ease; }
 #notifDropdown .hub-item.t-due[onclick]:hover { box-shadow: 0 6px 18px rgba(16,24,40,.12); transform: translateY(-1px); }
-#notifDropdown .hub-open-hint { color: var(--sage-deep, #4a7530); font-weight: 700; margin-left: 5px; white-space: nowrap; }
+#notifDropdown .hub-open-hint { color: var(--sage-deep, #178048); font-weight: 700; margin-left: 5px; white-space: nowrap; }
 
 #notifDropdown .hub-item.read { opacity: .72; }
 #notifDropdown .hub-item.read .hub-item-title { color: #647082; }
@@ -7704,9 +8377,9 @@ body.sam-active .hotbar-btn:hover {
 /* announcement footer (reactions + actions) */
 #notifDropdown .hub-foot { display: flex; align-items: center; gap: 8px; margin-top: 13px; padding-top: 12px; border-top: 1px solid #eef1f5; flex-wrap: wrap; }
 #notifDropdown .hub-foot .ann-reactions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-#notifDropdown .hub-markread { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--sage-deep, #4a7530); background: none; border: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-family: inherit; }
+#notifDropdown .hub-markread { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--sage-deep, #178048); background: none; border: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-family: inherit; }
 #notifDropdown .hub-markread:hover { color: var(--sage-professional); }
-#notifDropdown .hub-doclink { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--sage-deep, #4a7530); text-decoration: none; margin-top: 10px; }
+#notifDropdown .hub-doclink { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--sage-deep, #178048); text-decoration: none; margin-top: 10px; }
 #notifDropdown .read-receipt { position: relative; }
 
 /* patch note card */
@@ -7740,14 +8413,23 @@ body.sam-active .hotbar-btn:hover {
     padding: 0 26px !important;
     min-height: 64px;
     gap: 22px;
-    box-shadow: inset 0 -1px 0 rgba(255,255,255,.05), 0 6px 22px rgba(16,24,40,.12);
+    /* Option B — elevated slate: a lifted charcoal that floats on a soft shadow. */
+    background: #181b20 !important;
+    box-shadow: inset 0 -1px 0 rgba(255,255,255,.06), 0 8px 24px rgba(10,12,16,.24);
 }
 .top-nav .brand-logo { height: 26px; }
+/* Brand: logo mark + "SPEEKSNET" text wordmark (Option B) */
+.top-nav .brand-area { display: flex; align-items: center; gap: 10px; }
+.top-nav .brand-mark { height: 30px; width: auto; display: block; flex: 0 0 auto; }
+.top-nav .brand-wordmark {
+    font-size: 19px; font-weight: 800; letter-spacing: .005em;
+    color: #fff; white-space: nowrap; line-height: 1;
+}
 
 /* --- page links --- */
 .top-nav .nav-bar { gap: 4px; }
 .top-nav .nav-link {
-    color: #98a2ad;
+    color: #b6bdc5;                    /* Option B — brighter idle links */
     height: 38px;
     padding: 0 14px;
     font-size: 13px;
@@ -7755,13 +8437,18 @@ body.sam-active .hotbar-btn:hover {
     letter-spacing: .01em;
     border-radius: 9px;
     gap: 8px;
-    transition: background .16s ease, color .16s ease;
+    transition: background .16s ease, color .16s ease, box-shadow .16s ease;
 }
-.top-nav .nav-link:hover { background: rgba(255,255,255,.06); color: #fff; transform: none; }
-.top-nav .nav-link.active { background: var(--sage-professional); color: #fff; box-shadow: 0 2px 8px rgba(90,141,59,.28); }
+.top-nav .nav-link:hover { background: rgba(255,255,255,.07); color: #fff; transform: none; }
+/* Option A — highlighted box: emerald tint + inset ring + soft glow (not a solid pill). */
+.top-nav .nav-link.active {
+    background: rgba(31,157,87,.16);
+    color: #fff;
+    box-shadow: inset 0 0 0 1px rgba(31,157,87,.55), 0 2px 12px rgba(31,157,87,.30);
+}
 .top-nav .nav-link i { width: auto; font-size: 0; display: inline-flex; align-items: center; }
-.top-nav .nav-link svg { width: 17px; height: 17px; stroke-width: 1.9; opacity: .92; }
-.top-nav .nav-link.active svg { opacity: 1; }
+.top-nav .nav-link svg { width: 17px; height: 17px; stroke-width: 1.9; opacity: .96; }
+.top-nav .nav-link.active svg { opacity: 1; color: #3ddc84; }   /* active icon lights up green */
 
 /* --- utility chip buttons (idea / messages / hotkeys / calendar / bell) --- */
 .top-nav .user-profile-nav { gap: 10px; border-right-color: rgba(255,255,255,.08); padding-right: 16px; }
@@ -7771,13 +8458,13 @@ body.sam-active .hotbar-btn:hover {
     font-size: 0;
     background: rgba(255,255,255,.05);
     border: 1px solid rgba(255,255,255,.08);
-    color: #c4cbd3;
+    color: #d3d9df;                    /* Option B — brighter chip icons */
     box-shadow: none;
     transition: background .16s ease, border-color .16s ease, color .16s ease;
 }
 .top-nav .action-btn:hover {
-    background: rgba(90,141,59,.16);
-    border-color: rgba(90,141,59,.55);
+    background: rgba(31,157,87,.16);          /* V4 emerald — match the nav-link green */
+    border-color: rgba(31,157,87,.55);
     color: #fff;
     transform: none;
     box-shadow: none;
@@ -7796,9 +8483,9 @@ body.sam-active .hotbar-btn:hover {
     height: 40px; border-radius: 10px; gap: 7px; padding: 0 14px;
     background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08);
 }
-.top-nav .tools-nav-btn:hover { background: rgba(90,141,59,.16); border-color: rgba(90,141,59,.55); }
-.top-nav .tools-nav-btn.panel-open { background: rgba(90,141,59,.24); border-color: rgba(90,141,59,.6); box-shadow: none; }
-.top-nav .tools-nav-btn .lock-icon { width: 15px; height: 15px; }
+.top-nav .tools-nav-btn:hover { background: rgba(31,157,87,.16); border-color: rgba(31,157,87,.55); }
+.top-nav .tools-nav-btn.panel-open { background: rgba(31,157,87,.24); border-color: rgba(31,157,87,.6); box-shadow: none; }
+.top-nav .tools-nav-btn .tools-icon { width: 15px; height: 15px; }
 .top-nav .tools-nav-label { font-size: 12.5px; font-weight: 700; text-transform: none; letter-spacing: .01em; }
 
 /* --- MSM store switcher (chip to match) --- */
@@ -7943,7 +8630,7 @@ body.sam-active .hotbar-btn:hover {
 }
 #hotkeysDropdown .kb-table tr:hover { background: #f6f8fa; }
 #hotkeysDropdown .kb-table .bubble {
-    background: #eef4e9; color: var(--sage-deep, #4a7530); border: 0;
+    background: #e8f7ee; color: var(--sage-deep, #178048); border: 0;
     font-size: 10.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
     padding: 4px 10px; border-radius: 20px; display: inline-block;
 }
@@ -7969,7 +8656,7 @@ body.sam-active .hotbar-btn:hover {
    own cards). The base .qm-category.open squares the bottom + drops the border to
    fuse with a bordered items box — but this modal has no such box, so undo that. */
 #quickMsgDropdown .qm-category.open {
-    color: var(--sage-deep, #4a7530); border-color: rgba(90,141,59,.35); background: #eef4e9;
+    color: var(--sage-deep, #178048); border-color: rgba(90,141,59,.35); background: #e8f7ee;
     border-radius: 11px; border-bottom: 1px solid rgba(90,141,59,.35);
 }
 /* The base items container is a bordered, square-topped box; here the items are
@@ -7986,9 +8673,9 @@ body.sam-active .hotbar-btn:hover {
     box-shadow: 0 1px 2px rgba(16,24,40,.06); margin-bottom: 7px;
 }
 #quickMsgDropdown .qm-item-name { font-size: 12.5px; font-weight: 750; color: #1c1f23; }
-#quickMsgDropdown .qm-item-name:hover { color: var(--sage-deep, #4a7530); }
+#quickMsgDropdown .qm-item-name:hover { color: var(--sage-deep, #178048); }
 #quickMsgDropdown .qm-copy-btn {
-    background: #eef4e9; color: var(--sage-deep, #4a7530); border: 1px solid transparent;
+    background: #e8f7ee; color: var(--sage-deep, #178048); border: 1px solid transparent;
     border-radius: 8px; font-weight: 700; font-size: 11.5px; padding: 6px 12px;
     text-transform: none; letter-spacing: .01em; box-shadow: none;
 }
@@ -8075,8 +8762,8 @@ body.sam-active .hotbar-btn:hover {
 /* the raw native file input was the other leftover */
 #ideaModal input[type="file"].idea-input { padding: 9px 12px; font-size: 12.5px; color: #647082; cursor: pointer; }
 #ideaModal input[type="file"].idea-input::file-selector-button {
-    font-family: inherit; font-size: 12px; font-weight: 700; color: var(--sage-deep, #4a7530);
-    background: #eef4e9; border: 0; border-radius: 8px; padding: 7px 13px; margin-right: 11px; cursor: pointer;
+    font-family: inherit; font-size: 12px; font-weight: 700; color: var(--sage-deep, #178048);
+    background: #e8f7ee; border: 0; border-radius: 8px; padding: 7px 13px; margin-right: 11px; cursor: pointer;
 }
 #ideaModal input[type="file"].idea-input:hover::file-selector-button { background: #e2eddb; }
 
@@ -8102,13 +8789,13 @@ body.sam-active .hotbar-btn:hover {
     color: #1c1f23;
     gap: 10px;
 }
-/* the lock becomes a sage tile instead of a bare white glyph */
-.tools-panel-title .lock-icon {
+/* the mark becomes a sage tile instead of a bare white glyph */
+.tools-panel-title .tools-icon {
     width: 30px; height: 30px;
     padding: 7px;
     box-sizing: border-box;
     border-radius: 8px;
-    background: #eef4e9;
+    background: #e8f7ee;
     stroke: var(--sage-professional);
     flex-shrink: 0;
 }
@@ -8144,7 +8831,7 @@ body.sam-active .hotbar-btn:hover {
     font-size: 12.5px;
     font-weight: 650;
 }
-.tools-item:hover { background: #eef4e9; color: var(--sage-deep, #4a7530); }
+.tools-item:hover { background: #e8f7ee; color: var(--sage-deep, #178048); }
 .tools-item:active { background: #e2eddb; }
 .tools-item-icon {
     width: 28px; height: 28px;
@@ -8180,7 +8867,11 @@ body.sam-active .hotbar-btn:hover {
 #claimAlertBubble,
 #recycleAlertBubble,
 #varianceAlertBubble,
-#agingAlertBubble {
+#agingAlertBubble,
+#kpiWeeklyAlertBubble,
+#kpiMonthlyAlertBubble,
+#preferredOwnerAlertBubble,
+#preferredMineAlertBubble {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
@@ -8264,12 +8955,18 @@ body.sam-active .hotbar-btn:hover {
    the feed to the rail's height. Give the feed card a floor matching the
    manager layout (4 rail items) so the deck reads identically everywhere,
    and let the rail hug its own content instead of stretching to match. */
-/* Floor AND ceiling: without a ceiling a busy feed (CEO sees every
-   announcement) grew the card to ~900px. The ceiling sits just above the
-   manager rail height, so every role gets the same deck and the feed
-   scrolls inside it — the full list lives in "All announcements". */
-.speeks-action-menu .sam-board > .sam-card { min-height: 270px; max-height: 300px; }
+/* ONE fixed height, not a 270–300px range. Without a ceiling a busy feed (the
+   CEO sees every announcement) grew the card to ~900px; but a floor-and-ceiling
+   still let it grow with the unread count, so the deck was a different height
+   per user and the rail beside it could never line up. Pinned instead: the feed
+   scrolls inside a constant frame and the full list lives in
+   "All announcements". */
+.speeks-action-menu .sam-board > .sam-card { height: 300px; }
+/* The rail hugs its content by default — opting out of the grid's stretch, which
+   is why a card inside it cannot fill the row on its own. _samSyncRailFill flips
+   this back to stretch when a full set of items is showing. */
 .speeks-action-menu .sam-rail { align-self: start; }
+.speeks-action-menu .sam-rail.sam-rail-fill { align-self: stretch; }
 
 /* belt-and-braces: the feed never scrolls the page sideways */
 .speeks-action-menu .sam-feed { overflow-x: hidden; }
@@ -8283,3 +8980,1464 @@ body.sam-active .hotbar-btn:hover {
 .main-content { min-width: 0; }
 .speeks-action-menu { min-width: 0; max-width: 100%; }
 .speeks-action-menu .sam-ann { min-width: 0; }
+
+/* =========================================================
+   PROCESSES & POLICIES — page header + search (2026-07-23)
+   The calm counterpart to the restyled document cards further
+   up. Scoped to .dp-header / .dp-search because .page-header is
+   shared by every page and .doc-search-* is reused by the Box
+   Order search on all 5 shells.
+   ========================================================= */
+.dp-header .dp-eyebrow {
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--sage-professional);
+    margin-bottom: 7px;
+}
+.dp-header h2 { letter-spacing: -0.8px; }
+.dp-header p { color: var(--dp-muted, #647082); }
+
+/* The magnifier is an SVG now; font-size:0 kills the stray text node spacing
+   the old emoji span relied on. */
+.dp-search .doc-search-icon {
+    left: 15px;
+    font-size: 0;
+    display: grid;
+    place-items: center;
+    color: #97a1ae;
+    transition: color 0.16s ease;
+}
+.dp-search .doc-search-icon svg { width: 16px; height: 16px; }
+.dp-search:focus-within .doc-search-icon { color: var(--sage-professional); }
+
+.dp-search .doc-search-input {
+    padding: 11px 16px 11px 42px !important;
+    border-radius: 11px;
+    border: 1px solid var(--dp-line, #e3e8ee);
+    background: #ffffff;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+    font-size: 13.5px;
+    color: var(--slate-charcoal);
+}
+.dp-search .doc-search-input::placeholder { color: var(--dp-faint, #8a94a3); }
+.dp-search .doc-search-input:focus {
+    border-color: var(--sage-professional);
+    box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.12);
+}
+
+/* =========================================================
+   V4 "AIRY ELEVATED" THEME  (2026-07-24)
+   Brighter/HD finish for the already-modernised surfaces:
+   Action Menu, Feed Hub, Call Backs + Operations hero,
+   Processes library, checklist/goals side-panels, Listing
+   Goals, refined top nav + its popup modals.
+   The solid accent literals were shifted in place
+   (#5a8d3b->#1f9d57, #4a7530->#178048, #eef4e9->#e8f7ee);
+   this block flips the variable-driven accents in-scope and
+   adds the airy radius + floating shadow. Not-yet-touched
+   pages keep the calm sage look via the global tokens.
+   ========================================================= */
+
+/* var(--sage-deep, ...) is used across the redesigned modals/hub with a
+   fallback and was never defined — define it to the deep emerald. */
+:root { --sage-deep: #178048; }
+
+/* Flip var(--sage-professional) to the fresh emerald ONLY inside the
+   redesigned surfaces (the global token stays sage for untouched pages). */
+.speeks-action-menu,
+#notifDropdown,
+.cb-panel, .ops-wrap,
+.dp-header, .dp-layout,
+.checklist-side-panel, .goals-side-panel,
+#listingGoalsModal,
+#quickMsgDropdown, #ideaModal, #hotkeysDropdown, .calendar-menu,
+.hotbars-stack,
+.ws-wrap,
+.top-nav {
+    --sage-professional: #1f9d57;
+}
+/* Near-black headings in the feed/action deck (it reads --text-dark). */
+.speeks-action-menu { --text-dark: #0f172a; }
+
+/* Airy radius + floating shadow on the primary redesigned cards. */
+.speeks-action-menu .sam-card {
+    border-radius: 18px;
+    box-shadow: 0 8px 28px rgba(16, 24, 40, 0.07);
+}
+.cb-panel {
+    border-radius: 18px !important;
+    box-shadow: 0 8px 28px rgba(16, 24, 40, 0.07) !important;
+}
+.doc-card { border-radius: 16px; box-shadow: 0 4px 16px rgba(16, 24, 40, 0.05); }
+.doc-card:hover { box-shadow: 0 12px 30px rgba(16, 24, 40, 0.10); }
+
+/* Primary buttons inside redesigned surfaces: keep the hover on the deep
+   emerald instead of the global .btn-primary:hover olive (#4a7530). */
+.cb-panel .btn-primary:hover,
+.speeks-action-menu .btn-primary:hover,
+#listingGoalsModal .btn-primary:hover { background: var(--sage-deep) !important; }
+
+/* =========================================================
+   WORKSPACE TAB — V4 airy redesign (2026-07-24)
+   Page hero reuses .page-header.dp-header (like Operations).
+   Each sub-tab pane gets a calm light card header (icon +
+   eyebrow + title + one-line description) replacing the old
+   dark .district-kpi-header. Controls are unchanged — only
+   relocated into .ws-head-controls. CSS only, no JS/markup
+   logic changes.
+   ========================================================= */
+
+/* trim the base .page-header 40px margin — .ws-wrap already gaps 16px */
+.ws-wrap .ws-header { margin-bottom: 0; }
+/* sub-tab icons (match the Operations tab) */
+.ws-wrap .ws-tab svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Calm V4 tool card (replaces .district-master-panel styling for ws panes) */
+.ws-tool-panel {
+    --wsh-line: #eef2ef;
+    --wsh-line-2: #f4f8f5;
+    --wsh-muted: #64707c;
+    --wsh-faint: #9aa6ad;
+    --wsh-accent: #1f9d57;
+    --wsh-accent-tint: #e8f7ee;
+    border: 1px solid var(--wsh-line) !important;
+    border-radius: 18px !important;
+    box-shadow: 0 8px 28px rgba(16, 24, 40, 0.07) !important;
+    background: #fff !important;
+    overflow: hidden;
+}
+.ws-tool-panel svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Calm light card header */
+.ws-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+    padding: 15px 18px;
+    border-bottom: 1px solid var(--wsh-line-2);
+    background: #fff;
+}
+.ws-head-main { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.ws-head-ico {
+    flex: 0 0 auto; width: 40px; height: 40px; border-radius: 12px;
+    background: var(--wsh-accent-tint); color: var(--wsh-accent);
+    display: grid; place-items: center;
+}
+.ws-head-ico svg { width: 20px; height: 20px; }
+.ws-head-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ws-head-eyebrow { font-size: 10px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; color: var(--wsh-faint); }
+/* New class (not .district-kpi-title) so the old white/uppercase !important rules don't apply */
+.ws-head-title { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; color: var(--slate-charcoal); line-height: 1.2; }
+.ws-head-title .widget-date-display { font-size: 12px; font-weight: 700; color: var(--wsh-faint); margin-left: 6px; }
+.ws-head-sub { font-size: 12px; font-weight: 600; color: var(--wsh-muted); }
+.ws-head-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.ws-head-meta { font-size: 11px; font-weight: 700; color: var(--wsh-faint); white-space: nowrap; }
+.ws-head-meta:empty { display: none; }
+
+@media (max-width: 768px) {
+    .ws-head { align-items: flex-start; }
+    .ws-head-controls { width: 100%; justify-content: flex-start; }
+}
+
+/* Workspace primary/save buttons: emerald hover (base is var(--sage-professional)
+   → emerald in-scope; the shared :hover used the old olive). */
+.ws-wrap .kpi-update-trigger-btn:hover,
+.ws-wrap .kpi-save-section-btn:hover { background: var(--sage-deep) !important; }
+
+/* =========================================================
+   SPEEKS TOOLS — airy modal redesign (calm / V4)   [2026-07-24]
+   Shared shell for every .modal-menu.manage-menu tool modal:
+   emerald accent, airy chrome, chip close, calm header + controls.
+   Reusable header pattern: .tool-head (icon tile + eyebrow + title
+   + subtitle). Per-tool insides are refreshed next to their own
+   classes. No dark mode exists, so literal colours are safe.
+   ========================================================= */
+.modal-menu.manage-menu {
+    --sage-professional: #1f9d57;
+    border-radius: 18px;
+    border: 1px solid #e3e8ee;
+    box-shadow: 0 24px 60px rgba(16,24,40,.20), 0 2px 8px rgba(16,24,40,.06);
+}
+
+/* --- header chrome (works with the plain h3 header AND the .tool-head one) --- */
+.modal-menu.manage-menu > .modal-header {
+    background: #ffffff;
+    border-bottom: 1px solid #eef1f5;
+    padding: 16px 22px;
+    align-items: center;
+}
+.modal-menu.manage-menu > .modal-header.tool-head { align-items: flex-start; }
+.modal-menu.manage-menu > .modal-header h3 {
+    font-size: 17px; font-weight: 800; letter-spacing: -.01em; color: #0f172a;
+}
+.modal-menu.manage-menu .modal-close-btn {
+    width: 32px; height: 32px; border-radius: 9px;
+    background: #f1f5f9; color: #647082; font-size: 14px; flex: 0 0 auto;
+}
+.modal-menu.manage-menu .modal-close-btn:hover { background: #fcecec; color: var(--red-alert); }
+
+/* Reusable calm tool header: icon tile + eyebrow + title + subtitle */
+.tool-head .tool-head-main { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.tool-head-ico {
+    width: 40px; height: 40px; flex: 0 0 auto; border-radius: 11px;
+    background: #e8f7ee; color: #178048;
+    display: flex; align-items: center; justify-content: center;
+}
+.tool-head-ico svg { width: 20px; height: 20px; }
+.tool-head-titles { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tool-head-eyebrow { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: #8a94a3; }
+.tool-head-title { font-size: 18px; font-weight: 800; letter-spacing: -.01em; color: #0f172a; line-height: 1.1; }
+.tool-head-sub { font-size: 12.5px; font-weight: 500; color: #647082; line-height: 1.35; }
+
+/* --- body + footer --- */
+.modal-menu.manage-menu > .manage-content { background: #f6f8fa; padding: 20px 22px; }
+.modal-menu.manage-menu > .manage-footer {
+    background: #ffffff; border-top: 1px solid #eef1f5; padding: 14px 22px;
+}
+
+/* --- shared form controls (scoped to the tool modals) --- */
+.modal-menu.manage-menu .form-input-lg {
+    border: 1.5px solid #e3e8ee; border-radius: 10px;
+    font-size: 14px; padding: 11px 13px; background: #ffffff;
+}
+.modal-menu.manage-menu .form-input-lg:focus {
+    border-color: #1f9d57; box-shadow: 0 0 0 3px rgba(31,157,87,.12);
+}
+.modal-menu.manage-menu .form-label-caps {
+    font-size: 11px; font-weight: 800; letter-spacing: .04em; color: #647082;
+}
+
+/* --- buttons (calmer, emerald) --- */
+.modal-menu.manage-menu .btn-primary {
+    text-transform: none; letter-spacing: 0; font-size: 13.5px;
+    border-radius: 10px; padding: 11px 20px; box-shadow: 0 4px 12px rgba(31,157,87,.20);
+}
+.modal-menu.manage-menu .btn-primary:hover {
+    background: var(--sage-deep) !important; transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(31,157,87,.28);
+}
+.modal-menu.manage-menu .btn-secondary {
+    text-transform: none; letter-spacing: 0; font-size: 13.5px;
+    border-radius: 10px; padding: 11px 20px; background: #eef1f5; color: #475569;
+}
+.modal-menu.manage-menu .btn-secondary:hover { background: #e2e8f0; transform: translateY(-1px); box-shadow: none; }
+
+/* --- tabs (calm pill) --- */
+.modal-menu.manage-menu .notif-tabs { background: #eef1f5; border-radius: 10px; padding: 4px; }
+.modal-menu.manage-menu .tab-btn { font-size: 12.5px; font-weight: 700; color: #647082; border-radius: 8px; padding: 7px 16px; }
+.modal-menu.manage-menu .tab-btn.active { background: #ffffff; color: #0f172a; box-shadow: 0 1px 3px rgba(16,24,40,.10); }
+
+/* ---- Box Order flagship — airy refresh of its bespoke insides ---- */
+#boxOrderModal .box-order-tab { border: 1.5px solid #e3e8ee; border-radius: 10px; color: #647082; }
+#boxOrderModal .box-order-tab:hover:not(.active) { background: #f6f8fa; }
+#boxOrderModal .box-order-tab.active { background: #1f9d57; color: #fff; border-color: #1f9d57; }
+#boxOrderModal .box-order-row { border: 1.5px solid #e3e8ee; border-radius: 10px; background: #fff; }
+#boxOrderModal .box-row-selected { border-color: #1f9d57; background: #e8f7ee; }
+#boxOrderModal .box-stepper-btn:hover { background: #e8f7ee; border-color: #1f9d57; color: #178048; }
+#boxOrderModal .box-order-section-label { border: 1.5px solid #e3e8ee; border-radius: 10px; }
+#boxOrderModal .box-order-collapsible:hover { background: #f6f8fa; border-color: #cbd5e1; }
+#boxOrderModal .box-order-preview-label { color: #8a94a3; }
+#boxOrderModal .box-order-footer button { text-transform: none !important; letter-spacing: 0 !important; border-radius: 10px; }
+#boxOrderModal .box-order-email-preview { border-radius: 12px; }
+#boxOrderModal .box-admin-item { border-radius: 10px; }
+
+/* Tool icon sizing: SVG info badge, search icon, footer button arrows */
+.goals-info-i svg { width: 12px; height: 12px; }
+.doc-search-icon svg { width: 16px; height: 16px; display: block; }
+
+/* ── Company Records — spreadsheet grid (2026-07-25) ───────────────────────
+   Metrics down the left, stores across the top; each cell is one record's
+   value + date. Redesign only — every cell keeps .record-manage-row so
+   saveManageRecords() reads exactly the same fields. */
+#manageRecordsList .cr-hint { font-size: 12px; color: #647082; margin: 0 0 12px; }
+#manageRecordsList .cr-grid-scroll { overflow-x: auto; padding-bottom: 4px; }
+#manageRecordsList .cr-grid { display: grid; gap: 6px; min-width: min-content; align-items: stretch; }
+#manageRecordsList .cr-cell { display: flex; box-sizing: border-box; }
+#manageRecordsList .cr-colhead {
+    align-items: center; justify-content: center; text-align: center;
+    font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px;
+    color: #475569; background: #eef2f7; border: 1px solid #e3e8ee; border-radius: 8px; padding: 9px 6px;
+    position: sticky; top: 0; z-index: 3;
+}
+#manageRecordsList .cr-corner {
+    align-items: center; padding: 9px 12px;
+    font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: #94a3b8;
+    background: #eef2f7; border: 1px solid #e3e8ee; border-radius: 8px;
+    position: sticky; top: 0; left: 0; z-index: 4;
+}
+#manageRecordsList .cr-rowhead {
+    align-items: center; padding: 8px 12px; line-height: 1.2;
+    font-size: 12.5px; font-weight: 800; color: var(--slate-charcoal);
+    background: #fff; border: 1px solid #e3e8ee; border-radius: 8px;
+    position: sticky; left: 0; z-index: 2;
+}
+#manageRecordsList .cr-input {
+    flex-direction: column; gap: 5px; padding: 7px;
+    background: #fff; border: 1px solid #e3e8ee; border-radius: 8px;
+}
+#manageRecordsList .cr-input input {
+    width: 100%; padding: 6px 9px; border: 1px solid #cbd5e1; border-radius: 6px;
+    font-size: 12.5px; font-weight: 600; color: var(--slate-charcoal); outline: none; background: #fff;
+}
+#manageRecordsList .cr-input input.r-date { font-size: 11px; color: #64748b; }
+#manageRecordsList .cr-input input:focus {
+    border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(31, 157, 87, .12);
+}
+#manageRecordsList .cr-empty { background: #f8fafc; border: 1px dashed #e3e8ee; border-radius: 8px; }
+/* Company column — auto-filled from the highest store, shown read-only + mint. */
+#manageRecordsList .cr-company { background: #f4faf6; border-color: #d6e9dd; }
+#manageRecordsList .cr-company input {
+    background: #f4faf6; border-color: #d6e9dd; color: #178048; font-weight: 800; cursor: default;
+}
+#manageRecordsList .cr-company input:focus { box-shadow: none; border-color: #d6e9dd; }
+#manageRecordsList .cr-company input.r-date { color: #5f8f74; font-weight: 600; }
+#boxOrderModal .box-order-footer button svg { width: 15px; height: 15px; }
+/* Recycle report footer (JS-rendered) mirrors Box Order's arrow/info buttons. */
+#recycleInvModal .btn-primary svg, #recycleInvModal .btn-secondary svg { width: 15px; height: 15px; flex: 0 0 auto; }
+
+/* =========================================================
+   EMPLOYEE DASHBOARD — airy widget redesign (Stage 1)
+   Scoped to .ew-airy so the legacy dark .district-kpi-title
+   !important rules never apply. Reusable shell + Buying&Sales.
+   ========================================================= */
+.ew-airy {
+    background: #fff !important;
+    border: 1px solid #e6ebf1 !important;
+    border-radius: 18px !important;
+    box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 10px 26px rgba(16,24,40,.06) !important;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 0 !important;
+}
+.ew-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+    padding: 16px 20px 13px; border-bottom: 1px solid #eef2f6;
+}
+.ew-titles { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ew-eyebrow { font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: #178048; }
+.ew-title { font-size: 15.5px; font-weight: 800; letter-spacing: -.01em; line-height: 1.15; color: var(--slate-charcoal); display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
+.ew-date { font-size: 10.5px; font-weight: 650; color: #94a3b8; text-transform: none; letter-spacing: 0; }
+.ew-date::before { content: ""; }
+.ew-goal { font-size: 11px; font-weight: 800; color: var(--slate-charcoal); background: #f1f5f9; border: 1px solid #e6ebf1; padding: 6px 11px; border-radius: 999px; white-space: nowrap; flex: none; }
+.ew-goal b { color: #178048; }
+
+/* airy delta badges inside the redesigned cards */
+.ew-airy .delta-badge { border-radius: 7px; font-size: 11px; font-weight: 800; padding: 3px 8px; font-variant-numeric: tabular-nums; }
+.ew-airy .delta-badge.delta-pos { background: #e8f7ee; color: #178048; }
+.ew-airy .delta-badge.delta-neg { background: #fdecec; color: #dc2626; }
+.ew-airy .delta-badge.delta-neutral { background: #f1f5f9; color: #647082; }
+
+/* ---- Buying & Sales body ---- */
+.ebs-body { display: grid; grid-template-columns: 1fr 1px 1.05fr; flex: 1; }
+.ebs-divider { background: #eef2f6; }
+/* Both columns: cap pinned top, middle group centered, rows pinned bottom — so
+   content breathes to fill the (taller, height-matched) card instead of pooling
+   white space at the bottom. */
+.ebs-col { padding: 20px 22px; display: flex; flex-direction: column; justify-content: space-between; }
+.ebs-mid { display: flex; flex-direction: column; justify-content: center; gap: 18px; flex: 1; }
+.ebs-ring-group { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; flex: 1; }
+.ebs-ring-cap { font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: .01em; }
+.ebs-cap { font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: #94a3b8; margin-bottom: 14px; }
+.ebs-lbl { font-size: 11px; font-weight: 700; color: #647082; }
+.ebs-big { font-size: 33px; font-weight: 850; letter-spacing: -.025em; line-height: 1; color: var(--slate-charcoal); margin-top: 5px; }
+.ebs-pace { margin-top: 15px; }
+.ebs-pace-lbl { display: flex; justify-content: space-between; font-size: 10.5px; font-weight: 700; color: #647082; margin-bottom: 7px; }
+.ebs-pace-lbl span:last-child { color: var(--slate-charcoal); font-weight: 800; font-variant-numeric: tabular-nums; }
+.ebs-pace-bar { height: 9px; border-radius: 5px; background: #eef2f6; overflow: hidden; }
+.ebs-pace-bar i { display: block; height: 100%; border-radius: 5px; width: 0; background: linear-gradient(90deg, #1f9d57, #178048); transition: width .8s ease; }
+.ebs-rows { margin-top: 0; }
+.ebs-row { display: flex; align-items: center; justify-content: space-between; padding: 11px 0; }
+.ebs-row + .ebs-row { border-top: 1px solid #f1f5f9; }
+.ebs-row .k { font-size: 13px; font-weight: 650; color: #647082; }
+.ebs-row .v { font-size: 15px; font-weight: 800; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
+.ebs-ring-wrap { display: flex; justify-content: center; margin: 0; }
+.ew-airy .progress-ring { width: 128px; height: 128px; margin: 0; }
+.ew-airy .progress-ring svg { width: 128px; height: 128px; }
+.ew-airy .progress-ring .bg { stroke: #eef2f6; }
+.ew-airy .percentage { font-size: 34px; font-weight: 850; letter-spacing: -.02em; color: var(--slate-charcoal); }
+@media (max-width: 560px) {
+    .ebs-body { grid-template-columns: 1fr; }
+    .ebs-divider { display: none; }
+    .ebs-col + .ebs-col { border-top: 1px solid #eef2f6; }
+}
+
+/* ---- Employee bento layout ---- */
+.ew-dash { flex-wrap: wrap; gap: 18px; align-items: stretch; margin-bottom: 30px; }
+.ew-dash > .buying-sales-module { flex: 1.4 1 400px; max-width: none; min-width: 0; }
+.ew-dash > [data-feature="widget-emp-listing-goals"] { flex: 1 1 300px; max-width: none; }
+.ew-dash > [data-feature="widget-emp-weekly-kpis"] { flex: 1 1 100%; max-width: none; }
+
+/* ---- Listing Goals body (airy) ---- */
+.ew-airy .employee-widget-body { padding: 18px 20px 20px; display: flex; flex-direction: column; }
+.ew-airy .emp-goals-top-row { display: flex; gap: 10px; margin-bottom: 15px; }
+.ew-airy .emp-goal-col { flex: 1; background: #f4faf6; border: 1px solid #eef2f6; border-radius: 12px; padding: 11px 13px; display: flex; flex-direction: column; gap: 3px; text-align: left; }
+.ew-airy .emp-goal-label { font-size: 9.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: #94a3b8; }
+.ew-airy .emp-goal-value { font-size: 19px; font-weight: 850; letter-spacing: -.01em; color: var(--slate-charcoal); }
+.ew-airy .emp-role-description { font-size: 11.5px; font-weight: 600; color: #647082; background: #f6f8fa; border: 1px solid #eef2f6; border-radius: 10px; padding: 9px 11px; margin-bottom: 12px; line-height: 1.45; }
+.ew-airy .emp-week-section { margin-bottom: 4px; }
+.ew-airy .emp-week-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; }
+.ew-airy .emp-week-head .emp-goal-label { display: inline-flex; align-items: center; gap: 5px; }
+.ew-airy .emp-week-total { font-size: 17px; font-weight: 850; color: var(--slate-charcoal); }
+.ew-airy .emp-pill-container { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+.ew-airy .emp-daily-pill { text-align: center; border: 1px solid #eef2f6; border-radius: 9px; padding: 8px 1px; font-size: 10.5px; font-weight: 800; color: #94a3b8; background: #fff; white-space: nowrap; }
+.ew-airy .emp-daily-pill.pill-goal { background: #e8f7ee; border-color: color-mix(in srgb, #1f9d57 30%, transparent); color: #178048; }
+.ew-airy .emp-daily-pill.pill-future { opacity: .5; }
+.ew-airy .goals-levelup { margin-top: 16px; }
+.ew-airy .lu-head { margin-bottom: 8px; }
+.ew-airy .lu-title { font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #94a3b8; }
+.ew-airy .lu-weeks { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.ew-airy .lu-week { border-radius: 10px; padding: 11px 0; display: flex; align-items: center; justify-content: center; }
+.ew-airy .lu-week.green { background: #1f9d57; }
+.ew-airy .lu-week.red { background: #dc2626; }
+.ew-airy .lu-week.empty { background: #eef2f6; }
+.ew-airy .lu-week-num { font-size: 15px; font-weight: 850; color: #fff; }
+.ew-airy .lu-week.empty .lu-week-num { color: #94a3b8; }
+
+/* ---- My Weekly KPIs tiles (airy) — two rows: Mine over Store ---- */
+.ew-airy .employee-kpi-body { padding: 16px 20px 18px; }
+.ekpi-rowlab { display: flex; align-items: center; gap: 10px; margin: 0 0 9px; }
+.ekpi-rowlab-store { margin-top: 16px; }
+.ekpi-pill { font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; padding: 3px 9px; border-radius: 6px; }
+.ekpi-pill.me { background: #e8f7ee; color: #178048; }
+.ekpi-pill.st { background: #eef2f6; color: #647082; }
+.ekpi-rule { flex: 1; height: 1px; background: #eef2f6; }
+.ekpi-tile.store { background: #f4faf6; }
+.ekpi-tile.store .ekpi-v { font-size: 17px; font-weight: 800; color: #647082; }
+.ekpi-tag { color: #94a3b8; font-weight: 700; }
+.ekpi-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; }
+.ekpi-tile { border: 1px solid #eef2f6; border-radius: 13px; padding: 13px 12px; background: #fff; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ekpi-k { font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #94a3b8; }
+.ekpi-v { font-size: 21px; font-weight: 850; letter-spacing: -.015em; line-height: 1; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
+.ekpi-v.bad { color: #dc2626; }
+.ekpi-v.good { color: #178048; }
+.ekpi-ctx { font-size: 10px; font-weight: 650; color: #94a3b8; line-height: 1.3; }
+.ekpi-ctx strong { color: #647082; font-weight: 800; }
+.ekpi-note { display: block; color: #b6bec6; margin-top: 1px; }
+@media (max-width: 1100px) { .ekpi-grid { grid-template-columns: repeat(4, 1fr); } }
+@media (max-width: 620px) { .ekpi-grid { grid-template-columns: repeat(2, 1fr); } }
+
+/* ---- Combined Performance (chart + standings) ---- */
+/* min-height 490 matches the Command Center widget above it (same size). */
+.ew-perf { margin-bottom: 30px; min-height: 530px; }
+.ew-perf-body { display: grid; grid-template-columns: 1fr 300px; flex: 1; min-height: 0; }
+.ew-perf-chart { padding: 14px 18px 16px; min-width: 0; }
+.ew-perf-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.ew-seg { display: inline-flex; background: #f1f5f9; border-radius: 9px; padding: 3px; gap: 2px; }
+.ew-seg .toggle-btn { font-family: inherit; font-size: 11.5px; font-weight: 750; color: #647082; background: transparent; border: 0; border-radius: 6px; padding: 6px 11px; cursor: pointer; transition: background .15s, color .15s; }
+.ew-seg .toggle-btn.active { background: #fff; color: var(--slate-charcoal); box-shadow: 0 1px 3px rgba(16,24,40,.12); }
+.ew-perf-controls .metric-dropdown { font-family: inherit; font-size: 11.5px; font-weight: 750; color: var(--slate-charcoal); background: #fff; border: 1px solid #e6ebf1; border-radius: 9px; padding: 7px 10px; cursor: pointer; height: auto; margin: 0; }
+.ew-perf-chart .chart-container { position: relative; height: 412px; width: 100%; }
+.ew-standings { border-left: 1px solid #eef2f6; padding: 14px 16px; background: #f4faf6; }
+.ew-standings-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; gap: 8px; }
+.ew-standings-title { font-size: 10px; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; color: #94a3b8; }
+.ew-standings-foot { margin-top: 12px; padding-top: 10px; border-top: 1px solid #eef2f6; font-size: 10.5px; font-weight: 650; color: #94a3b8; }
+.ew-standings-foot #lb-last-updated { font-weight: 800; color: #647082; }
+.ew-standings .ew-seg-sm .toggle-btn { padding: 4px 9px; font-size: 10.5px; }
+.ew-standings .lb-wrapper-inner { display: block; height: auto; min-height: 0; }
+.lbs-row { display: flex; align-items: center; gap: 10px; padding: 9px 2px; }
+.lbs-row + .lbs-row { border-top: 1px solid #f1f5f9; }
+.lbs-rank { width: 18px; text-align: center; font-size: 12px; font-weight: 850; color: #94a3b8; flex: none; font-variant-numeric: tabular-nums; }
+.lbs-rank.g { color: #c99a17; }
+.lbs-store { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; }
+.lbs-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.lbs-info { flex: 1; min-width: 0; }
+.lbs-nm { font-size: 12.5px; font-weight: 800; color: var(--slate-charcoal); display: block; }
+.lbs-you { color: #178048; font-size: 9px; font-weight: 800; }
+.lbs-bar { display: block; height: 5px; border-radius: 3px; margin-top: 4px; background: #e6ebf1; overflow: hidden; }
+.lbs-bar i { display: block; height: 100%; border-radius: 3px; }
+.lbs-val { font-size: 12.5px; font-weight: 850; color: var(--slate-charcoal); text-align: right; font-variant-numeric: tabular-nums; flex: none; }
+@media (max-width: 900px) {
+    .ew-perf-body { grid-template-columns: 1fr; }
+    .ew-standings { border-left: none; border-top: 1px solid #eef2f6; }
+}
+
+/* =========================================================
+   EMPLOYEE DASHBOARD — feedback pass
+   ========================================================= */
+/* Buying & Sales: ring fits (viewBox scales), consistent number sizes */
+.ew-airy .progress-ring { width: 150px; height: 150px; overflow: visible; margin: 0; }
+.ew-airy .progress-ring svg { width: 150px; height: 150px; shape-rendering: geometricPrecision; }
+.ebs-big { font-size: 15px; letter-spacing: -.01em; margin-top: 4px; }
+.ebs-pace-lbl span:last-child { font-size: 14px; }
+.ew-airy .delta-badge { font-size: 14px; padding: 3px 10px; }
+.ew-goal { font-size: 14px; }
+
+/* My Weekly KPIs: kill the fixed-height blank space, give tiles presence */
+.ew-airy .employee-kpi-body { height: auto; min-height: 0; overflow: visible; }
+.ekpi-tile { min-height: 104px; padding: 15px 14px; justify-content: center; gap: 6px; }
+.ekpi-v { font-size: 23px; }
+
+/* Leaderboard standings: highlight the user's store box instead of a "you" tag */
+.lbs-row { padding: 9px 8px; }
+.lbs-row.me { background: #e8f7ee; border-radius: 9px; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, #1f9d57 32%, transparent); }
+.lbs-row.me, .lbs-row.me + .lbs-row { border-top: none; }
+
+/* =========================================================
+   STORE HEALTH CONSOLE — manager Scorecard + eBay, consolidated
+   ========================================================= */
+/* The Command Center is a single full-width widget (managers). Override the base
+   .employee-widget-card 33%-width cap so it spans the row on its own. */
+.ew-dash > .cc-widget { flex: 1 1 100% !important; max-width: none !important; min-width: 0; }
+
+/* ===== COMMAND CENTER — Store Health + Buying & Sales in one 3-tab widget ===== */
+/* Collapsed by default (natural height, just the one-line summary); when a tab is open
+   it expands to a fixed height that matches the Performance chart beside/below it. */
+/* Manager Command Center matches the chart height (490); the employee widget has no
+   chart to match, so it sizes to its tallest tab (Buying) — less empty space on the
+   shorter KPIs tab. Both keep equal-height across tabs via the stacked panels. */
+/* Manager Command Center + employee widget + Performance chart all stand 530px — tall
+   enough to fit the employee's Buying tab (ring + margin rows) with no cutoff, and equal
+   so the card lines up with the chart below it. */
+.cc-widget.cc-expanded { min-height: 530px; }
+/* Employee widget: FIXED 530 (not just min) so switching tabs can't nudge the height at
+   all — the two panels are equal by construction and top-aligned. */
+.ec-widget.cc-expanded { height: 530px; }
+.ec-widget .cc-panel { display: flex; flex-direction: column; justify-content: flex-start; overflow-y: auto; }
+/* Keep the header one line so hiding the goal chip / a longer KPI title can't change its
+   height (which would shift everything below on tab switch). */
+.ec-widget .ew-title { flex-wrap: nowrap; }
+.cc-widget:not(.cc-expanded) .cc-strips,
+.cc-widget:not(.cc-expanded) .cc-body { display: none; }
+.cc-widget.cc-expanded .cc-summary { display: none; }
+.cc-updated { font-size: 10.5px; font-weight: 650; color: #94a3b8; text-align: right; white-space: nowrap; flex: none; }
+.cc-updated b { color: #647082; font-weight: 800; }
+
+/* Tabs on top */
+.cc-tabbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 13px 20px; border-bottom: 1px solid #e3ebe6; min-height: 36px; }
+
+/* The flat pills didn't read as tabs: an inactive tab was grey text on a grey
+   track, and the active one was white-on-near-white with a 5%-opacity shadow.
+   Now the track has a real edge and the active tab lifts to white with emerald
+   ink and an emerald ring, so "which panel am I looking at" is answerable at a
+   glance. Scoped to .cc-seg, which is the tab switcher on BOTH the manager
+   Command Center and the employee widget — the performance chart's own .ew-seg
+   toggles are deliberately left alone.
+   The global .toggle-btn rules mark padding/font/radius !important and
+   .toggle-btn.active marks background/color !important, hence the !importants
+   below; .cc-seg outscores both, so these win. */
+/* Every tab carries its own border, so you can see there are three separate
+   buttons rather than three words sharing one grey field. Inactive reads as an
+   unpressed button (white, light edge); the selected one fills emerald with an
+   emerald edge. The track is lightened so the white buttons still read against
+   it. Global .toggle-btn sets `border: none` without !important, so the border
+   here wins on specificity. */
+.cc-seg {
+    display: flex;
+    background: #f3f7f4;
+    border: 1px solid #e4ece7;
+    border-radius: 12px;
+    padding: 4px;
+    gap: 5px;
+}
+.cc-seg .toggle-btn {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 140px;
+    text-align: center;
+    justify-content: center;
+    padding: 7px 14px !important;
+    font-size: 11.5px !important;
+    font-weight: 750 !important;
+    border-radius: 8px !important;
+    background: #fff;
+    border: 1px solid #dde6e0;
+    color: #5b6b64;
+    transition: background .15s, color .15s, box-shadow .15s, border-color .15s;
+}
+.cc-seg .toggle-btn:hover:not(.active) {
+    border-color: #c3d6cb;
+    color: var(--slate-charcoal);
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .06);
+}
+.cc-seg .toggle-btn.active {
+    background: #e8f7ee !important;
+    color: #146c3c !important;
+    font-weight: 800 !important;
+    border-color: #1f9d57;
+    box-shadow: 0 0 0 1px rgba(31, 157, 87, .35), 0 1px 3px rgba(16, 24, 40, .10);
+}
+.cc-seg .toggle-btn:focus-visible { outline: 2px solid #178048; outline-offset: 1px; }
+
+.cc-tabbar-right { display: flex; align-items: center; gap: 10px; flex: none; }
+.cc-tab-action:empty { display: none; }
+/* Explicit "back to summary" control (shown only while a tab is open) */
+.cc-collapse { font-family: inherit; font-size: 12px; font-weight: 750; color: #647082; background: #fff; border: 1px solid #e6ebf1; border-radius: 9px; padding: 7px 12px; cursor: pointer; white-space: nowrap; transition: border-color .12s, color .12s, background .12s; }
+.cc-collapse:hover { border-color: #178048; color: #178048; background: #f4faf6; }
+
+/* Quiet "this tab updated" cue — a small red dot that follows the tab label (inline),
+   cleared once opened. Buttons carry enough min-width that even "Buying & Sales" + the dot
+   fit without clipping or overlapping the text. */
+.cc-updot { display: none; width: 7px; height: 7px; border-radius: 50%; background: #dc2626; margin-left: 6px; vertical-align: middle; }
+.cc-updot.show { display: inline-block; animation: pulseNotif 2s infinite; }
+
+/* Collapsed one-line summary (default view, no tab open) */
+/* Flex (not fixed grid) so a tab disabled via Feature Access drops its cell and the
+   rest reflow to fill — no empty column. */
+/* The strip used to be white cells on a white card separated by one 1px
+   hairline, so it blended into the header above it. It now reads as its own
+   band: tinted cells, a heavier rule above, and a little more height. The
+   1px gaps still show the parent through as inter-cell dividers. */
+.cc-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1px;
+    background: #e0e9e4;                  /* shows through the gaps as dividers */
+    /* no border-top: .cc-tabbar already draws one, and stacking both gave a
+       2px rule in two slightly different greys. The tint change plus this
+       inset shade is what does the separating. */
+    border-bottom: 1px solid #dbe5df;
+    box-shadow: inset 0 6px 12px -8px rgba(16, 24, 40, .10);
+}
+.cc-sum { flex: 1 1 0; background: #f6faf7; padding: 17px 16px 18px 18px; min-width: 120px; }
+.cc-sum-k { font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #647082; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-sum-v { font-size: 22px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; margin-top: 7px; color: var(--slate-charcoal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-sum-v small { font-size: 11px; font-weight: 700; color: #94a3b8; }
+.cc-sum-v.warn { color: #d97706; }
+.cc-sum-v.bad { color: #dc2626; }
+.cc-sum-v.good { color: #178048; }
+
+/* Per-tab summary strip — all three stacked in one grid cell, only the active one shown
+   (opacity, not display) so the strip row always reserves the tallest tab's height. */
+.cc-strips { display: grid; grid-template-columns: 1fr; border-bottom: 1px solid #eef2f6; }
+.cc-strip { grid-area: 1 / 1; display: grid; gap: 1px; background: #eef2f6; opacity: 0; pointer-events: none; }
+.cc-strip.cc-active { opacity: 1; pointer-events: auto; }
+.cc-strip.s3 { grid-template-columns: repeat(3, 1fr); }
+.cc-strip.s4 { grid-template-columns: repeat(4, 1fr); }
+.cc-cell { position: relative; background: #fff; padding: 14px 16px 14px 19px; min-width: 0; }
+.cc-cell .sh-stripe { position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 3px; background: #cbd5e1; }
+.cc-cell .sh-k { font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #647082; }
+.cc-cell .sh-v { font-size: 24px; font-weight: 800; letter-spacing: -.02em; line-height: 1; margin-top: 6px; color: var(--slate-charcoal); }
+.cc-cell .sh-v small { font-size: 12px; font-weight: 700; color: #94a3b8; }
+.cc-cell .sh-v.warn { color: #d97706; }
+.cc-cell .sh-v.bad { color: #dc2626; }
+.cc-cell .sh-v.good { color: #178048; }
+.cc-cell .sh-sub { font-size: 10.5px; font-weight: 600; color: #647082; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-cell .sh-trend.up { color: #059669; font-weight: 800; }
+.cc-cell .sh-trend.dn { color: #dc2626; font-weight: 800; }
+.cc-cell .sh-dot { position: absolute; top: 10px; right: 10px; }
+
+/* Detail body — fills the remaining fixed height so switching tabs never resizes the card.
+   The visible panel is the only flex child, so it fills the body; each panel scrolls
+   its own overflow. */
+/* All three panels share one grid cell; inactive panels stay laid out but transparent
+   (opacity:0, not visibility/display) so the body always reserves the TALLEST tab's height
+   — the card never resizes when switching, and a hidden panel's ring never flashes over
+   the active tab (opacity paints nothing rather than briefly compositing the SVG). */
+.cc-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr; padding: 18px 22px 20px; }
+.cc-panel { grid-area: 1 / 1; min-width: 0; overflow: visible; opacity: 0; pointer-events: none; }
+.cc-panel.cc-active { opacity: 1; pointer-events: auto; }
+.cc-body .sh-mktg-block { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eef2f6; }
+/* Buying tab detail fills the panel height */
+.cc-ebs { height: 100%; }
+
+/* Tracking-bar date stamp (Buying tab) */
+.ebs-pace-dates { display: flex; justify-content: space-between; margin-top: 6px; font-size: 10px; font-weight: 650; color: #94a3b8; }
+
+/* Audit-bar tick labels sit directly under their ticks */
+.sh-au-ticklab { position: absolute; top: 17px; transform: translateX(-50%); font-size: 9.5px; font-weight: 800; color: #647082; white-space: nowrap; }
+.sh-au-scale-sp { height: 26px; }
+
+@media (max-width: 720px) {
+    .cc-strip.s3, .cc-strip.s4 { grid-template-columns: 1fr 1fr; }
+    .cc-sum { min-width: 33%; }
+}
+
+/* Headline score strip — two equal bubbles: combined Audit+Scorecard, then eBay */
+.sh-scores { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 16px 20px 0; }
+.sh-score { position: relative; text-align: left; background: #f4faf6; border: 1px solid #e6ebf1;
+    border-radius: 13px; padding: 14px 16px 14px 20px; cursor: pointer;
+    transition: border-color .15s, box-shadow .15s, background .15s; }
+/* Combined bubble: ONE card, one left accent stripe, two stat columns split by a faint hairline */
+.sh-score-combo { padding: 0; display: flex; align-items: stretch; overflow: hidden; }
+.sh-combo-half { position: relative; flex: 1 1 0; min-width: 0; padding: 13px 13px; }
+.sh-score-combo .sh-combo-half:first-of-type { padding-left: 18px; }
+.sh-combo-half .sh-k { line-height: 1.2; }
+.sh-combo-half .sh-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sh-combo-half + .sh-combo-half { border-left: 1px solid #eef2f6; }
+.sh-score-combo.active .sh-combo-half + .sh-combo-half { border-left-color: #d9ecdf; }
+.sh-score:hover { border-color: #cfe6d8; }
+.sh-score.active { background: #e8f7ee; border-color: color-mix(in srgb, #1f9d57 42%, #e6ebf1); box-shadow: 0 1px 2px rgba(16,24,40,.05); }
+.sh-score:focus-visible { outline: 2px solid #1f9d57; outline-offset: 2px; }
+.sh-score .sh-stripe { position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 3px; background: #cbd5e1; }
+.sh-stripe.g { background: #1f9d57; }
+.sh-stripe.y { background: #d97706; }
+.sh-stripe.r { background: #dc2626; }
+.sh-score .sh-k { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #647082; }
+.sh-score .sh-v { font-size: 26px; font-weight: 800; letter-spacing: -.02em; line-height: 1; margin-top: 6px; color: var(--slate-charcoal); }
+.sh-score .sh-v small { font-size: 14px; font-weight: 700; color: #94a3b8; }
+.sh-score .sh-v.warn { color: #d97706; }
+.sh-score .sh-v.bad { color: #dc2626; }
+.sh-score .sh-sub { font-size: 11px; font-weight: 600; color: #647082; margin-top: 6px; }
+.sh-score .sh-trend.up { color: #059669; font-weight: 800; }
+.sh-score .sh-trend.dn { color: #dc2626; font-weight: 800; }
+.sh-score .sh-dot { position: absolute; top: 10px; right: 10px; }
+
+/* Tab bar + audit action (inset — the .ew-airy card itself has 0 padding).
+   min-height reserves the row so hiding the audit action on the eBay tab
+   doesn't shrink the bar and shift the panel below (the "box jumping" bug). */
+.sh-tabbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 16px 0 14px; padding: 0 20px; min-height: 36px; }
+/* Scorecard / eBay tabs share one width so the segmented control looks balanced */
+.sh-seg { display: flex; }
+.sh-seg .toggle-btn { flex: 1 1 0; min-width: 84px; text-align: center; justify-content: center; }
+.sh-view-btn { border: 1px solid #e6ebf1; background: #fff; color: var(--slate-charcoal); font-size: 12px; font-weight: 800;
+    padding: 7px 14px; border-radius: 9px; cursor: pointer; transition: background .15s, border-color .15s; }
+.sh-view-btn:hover { background: #f4faf6; border-color: #cfe6d8; }
+
+/* Detail panels — inset + one fixed height so the card never resizes per tab
+   (audit/eBay sit shorter with breathing room; a long Marketing list scrolls) */
+.sh-panels { padding: 0 20px 20px; height: 306px; overflow-y: auto; }
+.sh-scroll { padding-right: 2px; }
+
+/* Scorecard tab = PayMore Audit stacked over the Online & Marketing breakdown */
+.sh-mktg-block { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eef2f6; }
+.sh-sc-sub { display: flex; align-items: baseline; gap: 8px; font-size: 10.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: var(--slate-charcoal); margin-bottom: 11px; }
+.sh-sc-sub-date { font-size: 10px; font-weight: 600; color: #94a3b8; text-transform: none; letter-spacing: 0; font-style: italic; }
+.sh-bucket + .sh-bucket { margin-top: 16px; }
+.sh-bucket-lbl { display: flex; align-items: center; gap: 8px; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #94a3b8; margin-bottom: 9px; }
+.sh-cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(134px, 1fr)); gap: 8px; }
+.sh-cat { display: flex; align-items: center; justify-content: space-between; gap: 6px; background: #fff; border: 1px solid #e6ebf1; border-radius: 10px; padding: 9px 11px; }
+.sh-cat .cn { font-size: 10px; font-weight: 800; text-transform: uppercase; color: var(--slate-charcoal); line-height: 1.25; }
+.sh-cat .cv { flex-shrink: 0; }
+.sh-note { margin-top: 8px; padding: 8px 12px; background: #f8fafc; border-left: 3px solid #94a3b8; border-radius: 0 8px 8px 0; font-size: 12px; color: #475569; line-height: 1.5; font-style: italic; }
+
+/* Audit panel */
+.sh-au-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.sh-au-big { font-size: 30px; font-weight: 800; letter-spacing: -.02em; line-height: 1; }
+.sh-au-meta { font-size: 12px; color: #647082; font-weight: 600; margin-top: 5px; }
+.sh-au-badge { font-size: 14px; font-weight: 800; padding: 5px 12px; border-radius: 9px; white-space: nowrap; }
+.sh-au-track { position: relative; height: 9px; border-radius: 6px; background: #eef2f6; margin-top: 18px; overflow: visible; }
+.sh-au-track > i { display: block; height: 100%; border-radius: 6px; }
+.sh-au-tick { position: absolute; top: -3px; width: 2px; height: 15px; background: #94a3b8; border-radius: 2px; transform: translateX(-1px); }
+.sh-au-scale { display: flex; justify-content: space-between; margin-top: 7px; font-size: 10px; font-weight: 700; color: #94a3b8; letter-spacing: .02em; }
+.sh-au-note { margin-top: 16px; font-size: 12px; color: #647082; line-height: 1.55; }
+
+/* eBay panel — two metric groups, contained stat cells */
+.sh-ebay { display: grid; grid-template-columns: 1fr; gap: 16px; }
+.sh-eb-grouphead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.sh-grp-lbl { font-size: 10.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: var(--slate-charcoal); }
+.sh-grp-tag { font-size: 10px; font-weight: 800; letter-spacing: .02em; padding: 2px 8px; border-radius: 6px; }
+.sh-grp-tag.ok { background: #e8f7ee; color: #178048; }
+.sh-grp-tag.warn { background: #fef3c7; color: #92400e; }
+.sh-grp-tag.crit { background: #fee2e2; color: #991b1b; }
+.sh-eb-cells { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.sh-eb-cell { position: relative; background: #fff; border: 1px solid #e6ebf1; border-radius: 11px; padding: 9px 12px; display: flex; flex-direction: column; gap: 6px; min-height: 50px; }
+.sh-eb-cell.warn { border-color: #f2e2b8; background: #fffdf5; }
+.sh-eb-cell.crit { border-color: #f3cccc; background: #fff8f8; }
+.sh-eb-cell .l { font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: #647082; line-height: 1.25; }
+.sh-eb-cell .sh-badge { align-self: flex-start; }
+.sh-eb-dot { position: absolute; top: 9px; right: 9px; width: 7px; height: 7px; border-radius: 50%; background: #dc2626; }
+.sh-badge { font-size: 11px; font-weight: 800; padding: 3px 9px; border-radius: 7px; text-align: left; line-height: 1.3; }
+.sh-badge.ok { background: #d1fae5; color: #065f46; }
+.sh-badge.warn { background: #fef3c7; color: #92400e; }
+.sh-badge.crit { background: #fee2e2; color: #991b1b; }
+.sh-badge.neu { background: #f1f5f9; color: #64748b; }
+
+@media (max-width: 760px) {
+    .sh-scores { grid-template-columns: 1fr; }
+    .sh-cats { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* =========================================================
+   CSV EXPORT DATE-RANGE PICKER   [2026-07-27]
+   Shared popup behind every "⬇ Export CSV" button (Store KPIs
+   + Monthly Breakdown). Airy V4 chrome: emerald accent, 18px
+   card, icon tile + eyebrow header, chip presets.
+   Built lazily by _exEnsureModal() in speeks.js.
+   ========================================================= */
+.ex-overlay {
+    --ex-line: #eef2ef;
+    --ex-line-2: #f4f8f5;
+    --ex-muted: #64707c;
+    --ex-faint: #9aa6ad;
+    --ex-accent: #1f9d57;
+    --ex-accent-tint: #e8f7ee;
+    --sage-professional: #1f9d57;
+    display: none;
+    position: fixed; inset: 0; z-index: 3200;
+    background: rgba(15, 23, 42, .42);
+    align-items: center; justify-content: center;
+    padding: 24px;
+}
+.ex-overlay.open { display: flex; }
+
+.ex-card {
+    width: 100%; max-width: 470px;
+    background: #fff;
+    border: 1px solid #e3e8ee;
+    border-radius: 18px;
+    box-shadow: 0 24px 60px rgba(16, 24, 40, .20), 0 2px 8px rgba(16, 24, 40, .06);
+    overflow: hidden;
+}
+
+/* --- header --- */
+.ex-head {
+    display: flex; align-items: flex-start; gap: 13px;
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--ex-line-2);
+}
+.ex-ico {
+    flex: 0 0 auto; width: 40px; height: 40px; border-radius: 12px;
+    background: var(--ex-accent-tint); color: var(--ex-accent);
+    display: grid; place-items: center;
+}
+.ex-ico svg {
+    width: 20px; height: 20px;
+    fill: none; stroke: currentColor; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+}
+.ex-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
+.ex-eyebrow { font-size: 10px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: var(--ex-faint); }
+.ex-title { font-size: 17px; font-weight: 800; letter-spacing: -.01em; color: var(--slate-charcoal); line-height: 1.2; }
+.ex-sub { font-size: 12px; font-weight: 600; color: var(--ex-muted); }
+.ex-sub:empty { display: none; }
+.ex-close {
+    flex: 0 0 auto; width: 30px; height: 30px; border: 1px solid var(--ex-line);
+    background: #fff; border-radius: 9px; color: var(--ex-muted);
+    font-size: 18px; font-weight: 700; line-height: 1; cursor: pointer;
+    transition: background .15s, color .15s;
+}
+.ex-close:hover { background: #f6f8fa; color: var(--slate-charcoal); }
+
+/* --- body --- */
+.ex-body { padding: 16px 18px 18px; }
+.ex-status { font-size: 13px; font-weight: 600; color: var(--ex-muted); padding: 10px 2px 4px; }
+
+.ex-presets { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 15px; }
+.ex-chip {
+    font-family: inherit; font-size: 12px; font-weight: 700;
+    padding: 6px 12px; border-radius: 99px; cursor: pointer;
+    background: #f6f8fa; color: var(--ex-muted);
+    border: 1px solid var(--ex-line);
+    transition: background .15s, color .15s, border-color .15s;
+}
+.ex-chip:hover { color: var(--slate-charcoal); border-color: #dde5e0; }
+.ex-chip.active {
+    background: var(--ex-accent-tint); color: #146c3c;
+    border-color: #c6ecd6;
+}
+.ex-chip:focus-visible { outline: 2px solid var(--ex-accent); outline-offset: 2px; }
+
+.ex-fields { display: flex; align-items: flex-end; gap: 10px; }
+.ex-field { flex: 1 1 0; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.ex-field > span { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--ex-faint); }
+.ex-field .kpi-select { width: 100%; }
+.ex-dash { padding-bottom: 9px; color: var(--ex-faint); font-size: 13px; font-weight: 800; }
+
+.ex-summary {
+    margin-top: 14px; padding: 11px 13px;
+    background: #f7faf8; border: 1px solid var(--ex-line); border-radius: 12px;
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px;
+    font-size: 12.5px; color: var(--ex-muted);
+    font-variant-numeric: tabular-nums;
+}
+.ex-summary b { font-size: 13px; font-weight: 800; color: var(--slate-charcoal); }
+.ex-sum-range { font-weight: 600; }
+.ex-sum-rows { font-weight: 700; color: var(--ex-faint); margin-left: auto; }
+
+.ex-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 16px; }
+.ex-actions .btn-primary, .ex-actions .btn-secondary { padding: 10px 18px; font-size: 12px; }
+.ex-actions .btn-primary:hover { background: var(--sage-deep) !important; }
+.ex-actions .btn-primary[disabled] { opacity: .6; cursor: default; }
+
+@media (max-width: 520px) {
+    .ex-overlay { padding: 14px; align-items: flex-start; }
+    .ex-card { margin-top: 24px; }
+    .ex-fields { flex-direction: column; align-items: stretch; }
+    .ex-dash { display: none; }
+    .ex-actions .btn-primary, .ex-actions .btn-secondary { flex: 1 1 0; }
+}
+
+/* =========================================================
+   PREFERRED PURCHASES  (pl-*)   [2026-07-27, airy V4]
+   Managers / ASMs / the DM suggest products for the shared
+   Amazon list; the Owner (Manager) approves or denies.
+
+   Two surfaces, deliberately different shapes:
+     - the owner's PENDING queue is CARDS, because each row is
+       a judgment call and the link, the price maths and the
+       reason all have to be legible at once;
+     - everything else (my requests, decided history) is a
+       TABLE, because it is a record you scan.
+
+   No category and no store scope anywhere: one shared Amazon
+   list can express neither, so neither is collected.
+   ========================================================= */
+.pl-bar {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 14px; background: #f7faf8; border: 1px solid #eef2ef;
+    border-radius: 12px; margin-bottom: 14px;
+}
+.pl-bar-count { font-size: 13px; font-weight: 800; color: var(--slate-charcoal); }
+.pl-bar-count b { color: #1f9d57; }
+.pl-bar-age { font-size: 11.5px; font-weight: 700; color: #64707c; }
+.pl-bar .pl-sp { flex: 1 1 auto; }
+
+.pl-card {
+    border: 1px solid #e6ece8; border-radius: 14px; background: #fff;
+    padding: 15px 16px 14px; margin-bottom: 11px;
+}
+.pl-card-top { display: flex; align-items: flex-start; gap: 12px; }
+.pl-card-main { flex: 1 1 auto; min-width: 0; }
+.pl-card-name { font-size: 15px; font-weight: 800; color: var(--slate-charcoal); line-height: 1.3; margin: 0 0 3px; }
+.pl-card-meta { font-size: 11.5px; font-weight: 650; color: #64707c; }
+.pl-card-meta b { color: #3d4852; font-weight: 800; }
+
+.pl-price-wrap { flex: 0 0 auto; text-align: right; }
+.pl-price { font-size: 19px; font-weight: 800; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; line-height: 1.1; }
+.pl-pack { font-size: 10.5px; font-weight: 700; color: #9aa6ad; margin-top: 2px; }
+/* The comparison that actually decides it. Rendered only when a count can be
+   parsed out of the pack size, so it is never a guess. */
+.pl-unit {
+    display: inline-block; margin-top: 5px; padding: 3px 8px;
+    background: #e8f7ee; color: #178048; border-radius: 999px;
+    font-size: 10.5px; font-weight: 800; font-variant-numeric: tabular-nums;
+}
+
+.pl-reason {
+    margin: 11px 0 0; padding: 10px 12px; background: #f7faf8;
+    border-left: 3px solid #c6ecd6; border-radius: 0 8px 8px 0;
+    font-size: 12.5px; font-weight: 600; color: #3d4852; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word;
+}
+
+/* Duplicate hint. With categories gone this matches on the item name alone, so
+   it is chattier than a category-scoped match would be — which is why it sits
+   above the Approve button as a nudge and never blocks the decision. */
+.pl-dupe {
+    display: flex; align-items: flex-start; gap: 8px; margin-top: 10px;
+    padding: 9px 11px; background: #fdf3e1; border-radius: 9px;
+    font-size: 11.5px; font-weight: 700; color: #8a6114; line-height: 1.45;
+}
+.pl-dupe b { color: #6d4c0f; }
+
+.pl-acts {
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+    margin-top: 13px; padding-top: 13px; border-top: 1px solid #f1f5f2;
+}
+.pl-acts .pl-sp { flex: 1 1 auto; }
+.pl-link {
+    display: inline-flex; align-items: center; gap: 6px; padding: 8px 13px;
+    background: #fff; border: 1px solid #dde6e0; border-radius: 9px;
+    font-size: 11.5px; font-weight: 800; color: #3d4852; text-decoration: none;
+    cursor: pointer;
+}
+.pl-link:hover { border-color: #c3d6cb; color: var(--slate-charcoal); }
+.pl-link svg { width: 13px; height: 13px; flex: 0 0 auto; }
+.pl-btn-ok, .pl-btn-no {
+    padding: 8px 15px; border-radius: 9px; border: 1px solid;
+    font-size: 11.5px; font-weight: 800; cursor: pointer;
+}
+.pl-btn-ok { background: #1f9d57; border-color: #1f9d57; color: #fff; }
+.pl-btn-ok:hover { background: #178048; border-color: #178048; }
+.pl-btn-no { background: #fff; border-color: #e4c4c4; color: #b23636; }
+.pl-btn-no:hover { background: #fcecec; border-color: #d9a5a5; }
+.pl-btn-ok:disabled, .pl-btn-no:disabled { opacity: .55; cursor: default; }
+
+.pl-chip {
+    display: inline-block; font-size: 10px; font-weight: 800;
+    text-transform: uppercase; letter-spacing: .05em; padding: 4px 11px;
+    border-radius: 999px; white-space: nowrap; min-width: 86px;
+    box-sizing: border-box; text-align: center;
+}
+.pl-chip-pending  { background: #fdf3e1; color: #b7791f; }
+.pl-chip-approved { background: #e8f7ee; color: #178048; }
+.pl-chip-denied   { background: #fcecec; color: #b23636; }
+
+.pl-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.pl-tbl th {
+    text-align: left; padding: 9px 12px; font-size: 10px; font-weight: 800;
+    letter-spacing: .08em; text-transform: uppercase; color: #9aa6ad;
+    border-bottom: 1px solid #eef2ef; white-space: nowrap;
+}
+.pl-tbl td { padding: 11px 12px; border-bottom: 1px solid #f4f8f5; vertical-align: top; color: #3d4852; }
+.pl-tbl tr:last-child td { border-bottom: 0; }
+.pl-tbl .pl-num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 800; color: var(--slate-charcoal); white-space: nowrap; }
+.pl-tbl .pl-unit-sm { font-weight: 700; font-size: 10.5px; color: #178048; }
+.pl-tbl .pl-it { font-weight: 800; color: var(--slate-charcoal); }
+.pl-tbl .pl-it a { color: inherit; text-decoration: none; }
+.pl-tbl .pl-it a:hover { text-decoration: underline; }
+.pl-tbl-note { margin-top: 4px; font-size: 11.5px; font-weight: 650; color: #64707c; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.pl-tbl-note b { color: #3d4852; }
+
+/* ── Shared note callout ───────────────────────────────────────────────────
+   The canonical look for a note somebody left on a record: 💬, the text, then
+   the author in grey. Lifted verbatim from the recycle-request note boxes,
+   which now use these classes rather than their own inline copies — so the
+   definition lives here only.
+
+   .site-note-reply is the OTHER side of a thread: green and indented, so a
+   back-and-forth reads as a conversation instead of a stack of identical
+   boxes. Recycle pairs it with ↩ where the first side uses 💬.
+
+   Fixed hexes rather than V4 tokens on purpose: "someone said something" is
+   its own signal and must not shift with the emerald theme.
+
+   NOT used by two other tools, deliberately — see the note in _vrNoteCell and
+   _agThreadHtml. Variance replies are table columns whose headers already say
+   whose note it is, and Aging uses a left-rail treatment with the author
+   captioned above. Boxing those would duplicate a label or discard a
+   distinction. */
+.site-note {
+    margin-top: 4px; padding: 4px 8px;
+    background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 7px;
+    font-size: 11.5px; font-weight: 600; color: #1d4ed8; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word;
+}
+.site-note-reply {
+    margin-top: 3px; margin-left: 14px; padding: 4px 8px;
+    background: #f0fdf4; border: 1px solid #a7f3d0; border-radius: 7px;
+    font-size: 11.5px; font-weight: 600; color: #047857; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word;
+}
+.site-note-by { color: #94a3b8; font-weight: 600; }
+
+/* ── Shared copy chip ──────────────────────────────────────────────────────
+   Sits beside an identifier whose whole purpose is to be pasted somewhere else
+   — a claim case number into a carrier's status lookup, a recycle SKU into
+   inventory.
+
+   No border and no fill at rest: a bordered pill reads as a second control
+   competing with the value, when this is really just an affordance ON the
+   value. Light grey keeps it discoverable without pulling the eye off the SKU;
+   emerald on hover is the only moment it asserts itself.
+
+   vertical-align is in em so the icon stays optically centred on the text at
+   any font size, and the width is the 18px hit target rather than the 12px
+   glyph. siteCopy() toggles .site-copy-ok, which swaps the mark to a check. */
+.site-copy {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; padding: 0; margin-left: 3px;
+    vertical-align: -0.22em;
+    border: 0; border-radius: 5px; background: none;
+    color: #c3ccd2; cursor: pointer;
+    transition: color .15s, background .15s;
+}
+.site-copy:hover { color: #1f9d57; background: rgba(31, 157, 87, .09); }
+.site-copy:focus-visible { outline: 2px solid #1f9d57; outline-offset: 1px; color: #1f9d57; }
+.site-copy.site-copy-ok { color: #1f9d57; background: rgba(31, 157, 87, .09); }
+.site-copy svg { display: block; width: 12px; height: 12px; }
+/* Both marks ship in the same SVG; only one is ever displayed. */
+.site-copy .site-copy-mark-ok { display: none; }
+.site-copy.site-copy-ok .site-copy-mark-copy { display: none; }
+.site-copy.site-copy-ok .site-copy-mark-ok { display: block; }
+
+.pl-empty { padding: 44px 20px; text-align: center; }
+.pl-empty-t { font-size: 14px; font-weight: 800; color: #3d4852; }
+.pl-empty-s { margin-top: 4px; font-size: 12.5px; font-weight: 600; color: #9aa6ad; }
+
+.pl-note-box { margin-top: 11px; }
+.pl-note-box textarea, .pl-note-box select {
+    width: 100%; box-sizing: border-box; padding: 10px 12px;
+    border: 1px solid #dde6e0; border-radius: 9px; font-size: 12.5px;
+    font-family: inherit; resize: vertical; outline: none; background: #fff;
+}
+.pl-note-box textarea:focus, .pl-note-box select:focus { border-color: #1f9d57; }
+.pl-note-box select { margin-top: 8px; }
+
+.pl-hint { font-size: 11.5px; font-weight: 650; color: #9aa6ad; margin-top: 6px; line-height: 1.5; }
+.pl-req { font-weight: 400; color: #ef4444; }
+.pl-err { color: #b23636; font-size: 12.5px; font-weight: 700; margin-top: 10px; display: none; }
+
+.pl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.pl-grid .pl-full { grid-column: 1 / -1; }
+@media (max-width: 620px) {
+    .pl-grid { grid-template-columns: 1fr; }
+    .pl-card-top { flex-direction: column; }
+    .pl-price-wrap { text-align: left; }
+}
+
+/* ── DM district tools — shared master/detail skeleton ─────────────────────
+   One layout for the three district popups: Listing Goals, Cleaning Checklist,
+   Monthly Team Goals. All three are the same shape underneath — five stores,
+   one number each, drill in for detail — so they share a skeleton and read
+   identically instead of being three lookalike widgets.
+
+   These replaced accordion panels on the DM dashboard. The reason for the shape
+   change: the tool modal is 1050px wide, and a collapsed accordion leaves the
+   right half of it empty while still costing two clicks to change store (close
+   one, open another). Here every store's number stays on screen and the detail
+   always lands in the same place, so the eye doesn't chase it.
+
+   Lives inside the standard .modal-menu.manage-menu shell — chrome, buttons and
+   tabs all come from there; only the insides are defined here. */
+
+/* Tabs + close button share the header's right edge. .tool-head is flex with
+   the titles growing, so this just needs to not shrink. */
+.dmx-head-side { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+
+.dmx { display: grid; grid-template-columns: 226px 1fr; gap: 14px; align-items: start; }
+
+/* --- master: the five stores, always visible --- */
+.dmx-rail { display: flex; flex-direction: column; gap: 6px; }
+.dmx-t {
+    display: grid; grid-template-columns: 42px 1fr auto;
+    align-items: center; gap: 9px;
+    width: 100%; text-align: left; font: inherit; cursor: pointer;
+    background: #fff; border: 1px solid #e3e8ee; border-left: 3px solid transparent;
+    border-radius: 10px; padding: 10px 12px;
+    transition: background .14s ease, border-color .14s ease;
+}
+.dmx-t:hover { border-color: #cfe6d9; }
+.dmx-t.sel { background: #e8f7ee; border-color: #b7e3c7; border-left-color: #1f9d57; }
+.dmx-t-code { font-size: 13px; font-weight: 800; letter-spacing: .02em; color: #0f172a; }
+.dmx-t-mid { min-width: 0; }
+.dmx-t-val { font-size: 12.5px; font-weight: 800; font-variant-numeric: tabular-nums; color: #475569; }
+.dmx-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+
+/* --- detail: one pane, fixed position --- */
+.dmx-pane {
+    background: #fff; border: 1px solid #e3e8ee; border-radius: 12px;
+    padding: 16px 18px; min-height: 424px; box-sizing: border-box;
+}
+.dmx-ph {
+    display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap;
+    padding-bottom: 13px; margin-bottom: 14px; border-bottom: 1px solid #eef1f5;
+}
+.dmx-pt { font-size: 16px; font-weight: 800; letter-spacing: -.01em; color: #0f172a; }
+.dmx-ps { margin-top: 2px; font-size: 12.5px; font-weight: 600; color: #647082; }
+.dmx-ph-side { margin-left: auto; display: flex; align-items: center; gap: 9px; }
+
+/* --- district summary strip: the number you opened the tool for --- */
+.dmx-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+.dmx-cell { background: #fff; border: 1px solid #e3e8ee; border-radius: 11px; padding: 11px 14px; }
+.dmx-cell-l { font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: #8a94a3; }
+.dmx-cell-v {
+    margin-top: 3px; font-size: 21px; font-weight: 800; letter-spacing: -.02em;
+    color: #0f172a; font-variant-numeric: tabular-nums;
+}
+.dmx-cell-v small { font-size: 12.5px; font-weight: 700; color: #8a94a3; letter-spacing: 0; }
+
+/* --- status: never colour alone ------------------------------------------
+   The DM widgets used a bare coloured percentage (green >=80, amber >=50, red
+   below). Same thresholds, but each state now carries a word and an icon, so
+   the meaning survives colourblindness, print, and forced-colours mode.
+   These are status colours and are deliberately NOT the emerald accent — state
+   and brand must not share a hue. */
+.dmx-st {
+    display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+    font-size: 11px; font-weight: 800; padding: 4px 9px 4px 7px;
+    border-radius: 20px; border: 1px solid;
+}
+.dmx-st svg { width: 11px; height: 11px; flex: 0 0 auto; }
+.dmx-good { color: #15803d; background: #e9f7ef; border-color: #b7e3c7; }
+.dmx-warn { color: #b45309; background: #fdf3e1; border-color: #f3ddb0; }
+.dmx-bad  { color: #b91c1c; background: #fcecec; border-color: #f3c9c9; }
+.dmx-dot.dmx-good { background: #15803d; border: 0; }
+.dmx-dot.dmx-warn { background: #b45309; border: 0; }
+.dmx-dot.dmx-bad  { background: #b91c1c; border: 0; }
+
+/* --- meter: thin, rounded ends, recessive track --- */
+.dmx-meter { height: 8px; border-radius: 4px; background: #e8edf2; overflow: hidden; }
+.dmx-meter > i { display: block; height: 100%; border-radius: 4px; background: #8a94a3; }
+.dmx-meter > i.dmx-f-good { background: #15803d; }
+.dmx-meter > i.dmx-f-warn { background: #b45309; }
+.dmx-meter > i.dmx-f-bad  { background: #b91c1c; }
+
+/* --- tables inside a pane --- */
+.dmx-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.dmx-tbl th {
+    text-align: left; font-size: 9.5px; font-weight: 800; letter-spacing: .06em;
+    text-transform: uppercase; color: #8a94a3; padding: 0 10px 7px;
+    border-bottom: 1px solid #eef1f5; white-space: nowrap;
+}
+.dmx-tbl td { padding: 8px 10px; border-bottom: 1px solid #f3f6f8; vertical-align: middle; color: #0f172a; }
+.dmx-tbl tr:last-child td { border-bottom: 0; }
+.dmx-tbl .dmx-num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 800; }
+.dmx-tbl .dmx-mute { color: #8a94a3; font-weight: 700; }
+.dmx-name { font-weight: 750; }
+.dmx-role {
+    display: inline-block; margin-left: 7px; font-size: 9.5px; font-weight: 800;
+    letter-spacing: .04em; text-transform: uppercase; color: #647082;
+    background: #eef1f5; border-radius: 5px; padding: 2px 6px; vertical-align: 1px;
+}
+.dmx-tot td { border-top: 1.5px solid #eef1f5; border-bottom: 0 !important; padding-top: 10px; font-weight: 800; }
+
+/* --- section label + checklist rows --- */
+.dmx-sec {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    color: #8a94a3; margin: 15px 0 6px;
+}
+.dmx-sec:first-child { margin-top: 0; }
+.dmx-ck { display: flex; align-items: flex-start; gap: 9px; padding: 5px 0; font-size: 12.5px; }
+.dmx-ck-box {
+    width: 15px; height: 15px; flex: 0 0 auto; border-radius: 4px; margin-top: 1px;
+    border: 1.5px solid #cfd8e0; background: #fff;
+    display: flex; align-items: center; justify-content: center;
+}
+.dmx-ck-box svg { width: 9px; height: 9px; color: #fff; display: none; }
+.dmx-ck.on .dmx-ck-box { background: #15803d; border-color: #15803d; }
+.dmx-ck.on .dmx-ck-box svg { display: block; }
+.dmx-ck-t { font-weight: 650; color: #0f172a; line-height: 1.45; }
+.dmx-ck.on .dmx-ck-t { color: #8a94a3; text-decoration: line-through; }
+.dmx-ck-where { color: #8a94a3; font-weight: 650; }
+
+/* --- goal / initiative cards --- */
+.dmx-goal { background: #fff; border: 1px solid #e3e8ee; border-radius: 9px; padding: 9px 11px; margin-bottom: 7px; }
+.dmx-goal-row { display: flex; align-items: flex-start; gap: 9px; justify-content: space-between; }
+.dmx-goal-t { font-size: 12.5px; font-weight: 750; color: #0f172a; line-height: 1.4; }
+.dmx-goal-d { margin-top: 2px; font-size: 11.5px; font-weight: 550; color: #647082; line-height: 1.45; }
+.dmx-badge {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+    border-radius: 20px; padding: 2px 8px; white-space: nowrap; flex: 0 0 auto;
+}
+.dmx-badge.cur { color: #178048; background: #e8f7ee; }
+.dmx-badge.up  { color: #647082; background: #eef1f5; }
+.dmx-empty { font-size: 12px; font-weight: 650; color: #8a94a3; padding: 12px 0; text-align: center; }
+
+/* Company-wide band above the per-store goals — a left rail rather than a box,
+   so it reads as context for everything below rather than another store. */
+.dmx-company {
+    background: #fff; border: 1px solid #e3e8ee; border-left: 3px solid #1f9d57;
+    border-radius: 10px; padding: 12px 15px; margin-bottom: 13px;
+}
+.dmx-company-l { font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #178048; }
+.dmx-company-r { margin-top: 7px; display: flex; gap: 8px; flex-wrap: wrap; }
+.dmx-company-i {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: #f6f8fa; border: 1px solid #eef1f5; border-radius: 8px;
+    padding: 7px 9px; font-size: 11.5px; font-weight: 700; color: #0f172a;
+}
+
+/* --- the two-week flag review, the one thing the DM ACTS on here --- */
+.dmx-flag {
+    margin-top: 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: #fdf3e1; border: 1px solid #f3ddb0; border-radius: 9px; padding: 9px 12px;
+}
+.dmx-flag-t { font-size: 12px; font-weight: 750; color: #b45309; }
+.dmx-flag button {
+    font: inherit; font-size: 11.5px; font-weight: 800; cursor: pointer;
+    border-radius: 7px; padding: 6px 12px; border: 1px solid; background: #fff;
+}
+.dmx-flag .dmx-lower { color: #b91c1c; border-color: #f3c9c9; }
+.dmx-flag .dmx-keep { color: #475569; border-color: #cfd8e0; }
+
+.dmx-foot-note { font-size: 12px; font-weight: 600; color: #8a94a3; }
+
+@media (max-width: 780px) {
+    .dmx { grid-template-columns: 1fr; }
+    .dmx-rail { flex-direction: row; overflow-x: auto; padding-bottom: 4px; }
+    .dmx-t { min-width: 190px; flex: 0 0 auto; }
+    .dmx-strip { grid-template-columns: 1fr 1fr; }
+}
+
+/* ── DM district tools, round 2 ────────────────────────────────────────────
+   Rail dots removed: with five stores the column was five red dots saying the
+   same thing the count and the meter already said. The count ("0 / 16") is the
+   non-colour encoding now, so status still doesn't rest on hue alone. */
+.dmx-t { grid-template-columns: 42px 1fr; }
+
+/* A hair of air between the figure and its unit — "4%" was reading as one glyph. */
+.dmx-cell-v small { margin-left: 3px; }
+
+/* The one cell in the summary strip that carries how the day/week is going.
+   Colour AND a word in the label, so the state survives colourblindness and
+   print; the tint is kept faint so the number stays the loudest thing. */
+.dmx-cell.dmx-stat { border-left-width: 3px; }
+.dmx-stat-word { font-weight: 800; }
+.dmx-stat-good { border-left-color: #15803d; background: #f4fbf7; }
+.dmx-stat-good .dmx-stat-v, .dmx-stat-good .dmx-stat-word { color: #15803d; }
+.dmx-stat-warn { border-left-color: #b45309; background: #fffaf1; }
+.dmx-stat-warn .dmx-stat-v, .dmx-stat-warn .dmx-stat-word { color: #b45309; }
+.dmx-stat-bad  { border-left-color: #b91c1c; background: #fef7f7; }
+.dmx-stat-bad .dmx-stat-v, .dmx-stat-bad .dmx-stat-word { color: #b91c1c; }
+.dmx-cell-v.dmx-stat-v small { color: inherit; opacity: .75; }
+
+/* ── Last 4 weeks ─────────────────────────────────────────────────────────
+   levelUpHtml() renders four flat bars, but every one of its rules is scoped to
+   .goals-levelup, so dropped into this modal it came out as unstyled text. This
+   is a proper small chart instead: four weeks against the store's target, with
+   the target drawn as a reference line so "did they clear it" is answerable
+   without reading a single number.
+
+   The three heights below are load-bearing — the target line is positioned from
+   the bottom of the plot, so it has to clear the label row exactly. Track 64 +
+   label 15 means the line sits at 15px + its share of 64px. Change one, change
+   _dmxLevelUp(). */
+.dmx-lu { margin-top: 4px; }
+.dmx-lu-h { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+.dmx-lu-t { font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #8a94a3; }
+.dmx-lu-target { font-size: 11px; font-weight: 800; color: #647082; font-variant-numeric: tabular-nums; }
+.dmx-lu-plot { position: relative; }
+.dmx-lu-bars { display: flex; align-items: flex-end; gap: 8px; }
+.dmx-lu-w { flex: 1; display: flex; flex-direction: column; align-items: stretch; min-width: 0; }
+.dmx-lu-v {
+    height: 17px; line-height: 17px; text-align: center;
+    font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums;
+}
+.dmx-lu-track { height: 64px; display: flex; align-items: flex-end; }
+.dmx-lu-track > i { display: block; width: 100%; border-radius: 4px 4px 0 0; background: #cbd5e1; }
+.dmx-lu-hit { color: #15803d; }
+.dmx-lu-miss { color: #b91c1c; }
+.dmx-lu-none { color: #cbd5e1; }
+.dmx-lu-track > i.dmx-lu-hit { background: #15803d; }
+.dmx-lu-track > i.dmx-lu-miss { background: #c94f4f; }
+.dmx-lu-track > i.dmx-lu-none { background: #eef2f6; }
+.dmx-lu-lab {
+    height: 15px; line-height: 15px; text-align: center;
+    font-size: 9.5px; font-weight: 700; letter-spacing: .02em; color: #9aa6ad;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Reference line for the target. Dashed and grey so it reads as a threshold
+   rather than as a fifth data mark. */
+.dmx-lu-line {
+    position: absolute; left: 0; right: 0; height: 0;
+    border-top: 1.5px dashed #c3ccd2; pointer-events: none;
+}
+
+/* Company band: its edit control sits on the band, since that is the only place
+   in the product a DM can reach company-wide initiatives. */
+.dmx-company-h { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.dmx-company-edit {
+    font: inherit; font-size: 11.5px; font-weight: 800; cursor: pointer;
+    color: #178048; background: #e8f7ee; border: 1px solid #b7e3c7;
+    border-radius: 7px; padding: 5px 11px;
+}
+.dmx-company-edit:hover { background: #d8f0e2; }
+
+/* ── District Command Center — grouped triage rail + store detail ──────────
+   Replaced five side-by-side store cards. The old board put 105 values on
+   screen (21 metrics × 5 stores) with roughly 100 of them wearing a coloured
+   pill, so the tint carried no information and the ~14 things actually off
+   target hid among the ones that weren't. Comparing two stores also meant a
+   horizontal eye-scan across five separated columns.
+
+   Now: stores filed under Serious / Watch / All clear down the left with their
+   % to goal, one store's full detail on the right. Colour is reserved for
+   exceptions — a healthy value is plain dark text — and every threshold is
+   printed next to its value so a miss reads as a miss without relying on hue.
+
+   Same shape as the three district popups (.dmx), deliberately: one mental
+   model across the whole DM/CEO surface. */
+
+.dcc { background: #fff; border: 1px solid #e3e8ee; border-radius: 16px; overflow: hidden;
+       box-shadow: 0 1px 3px rgba(16,24,40,.04); }
+.dcc-head { display: flex; align-items: center; gap: 13px; padding: 15px 20px; border-bottom: 1px solid #eef1f5; }
+.dcc-ico { width: 38px; height: 38px; border-radius: 11px; background: #e8f7ee; color: #178048;
+           display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.dcc-ico svg { width: 19px; height: 19px; }
+.dcc-eyebrow { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: #8a94a3; }
+.dcc-title { font-size: 18px; font-weight: 800; letter-spacing: -.012em; line-height: 1.1; color: #0f172a; }
+.dcc-head-side { margin-left: auto; display: flex; align-items: center; gap: 9px; }
+/* District money is the header's headline: the total carries at size, the goal
+   trails it as a caption on the same baseline. */
+.dcc-sum { display: flex; align-items: baseline; gap: 7px; }
+.dcc-sum b { font-size: 22px; font-weight: 800; letter-spacing: -.022em; line-height: 1;
+             color: #0f172a; font-variant-numeric: tabular-nums; }
+.dcc-sum i { font-style: normal; font-size: 12px; font-weight: 700; color: #8a94a3; }
+.dcc-body { padding: 16px 20px 20px; background: #f6f8fa; }
+.dcc-grid { display: grid; grid-template-columns: 252px 1fr; gap: 14px; align-items: start; }
+
+/* ── the rail ──────────────────────────────────────────────────────────── */
+.dcc-group {
+    display: flex; align-items: center; gap: 7px; margin: 12px 2px 6px;
+    font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: #8a94a3;
+}
+.dcc-group:first-child { margin-top: 0; }
+.dcc-group-n { margin-left: auto; color: #aab4bf; }
+
+.dcc-t {
+    display: block; width: 100%; text-align: left; font: inherit; cursor: pointer; color: #0f172a;
+    background: #fff; border: 1px solid #e3e8ee; border-left: 3px solid transparent;
+    border-radius: 11px; padding: 10px 12px; margin-bottom: 6px;
+    transition: border-color .14s ease, background .14s ease;
+}
+.dcc-t:last-child { margin-bottom: 0; }
+.dcc-t:hover { border-color: #cfe6d9; }
+.dcc-t.sel { background: #e8f7ee; border-color: #b7e3c7; border-left-color: #1f9d57; }
+.dcc-t-top { display: flex; align-items: baseline; gap: 8px; }
+.dcc-t-code { font-size: 13.5px; font-weight: 800; letter-spacing: .02em; }
+/* % to goal, right-aligned. Under goal is the one exception worth colouring —
+   and the figure itself still says it, so the colour is reinforcement. */
+.dcc-t-pct {
+    margin-left: auto; font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums;
+    white-space: nowrap; color: #475569;
+}
+.dcc-t-pct.under { color: #b91c1c; }
+.dcc-t-pct.over  { color: #15803d; }
+.dcc-t-pct small { font-size: 9.5px; font-weight: 700; color: #aab4bf; margin-left: 1px; }
+.dcc-t-sub { display: block; margin-top: 3px; font-size: 11px; font-weight: 600; color: #647082; line-height: 1.4; }
+
+/* ── the detail pane ───────────────────────────────────────────────────── */
+.dcc-pane { background: #fff; border: 1px solid #e3e8ee; border-radius: 13px; padding: 18px 20px; }
+.dcc-ph { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap;
+          padding-bottom: 14px; margin-bottom: 16px; border-bottom: 1px solid #eef1f5; }
+.dcc-pt { font-size: 21px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; color: #0f172a; }
+.dcc-ps { margin-top: 4px; font-size: 12.5px; font-weight: 600; color: #647082; }
+.dcc-ps a { color: #178048; font-weight: 700; text-decoration: none; border-bottom: 1px solid rgba(23,128,72,.3); }
+.dcc-ps a:hover { border-bottom-color: #178048; }
+.dcc-ph-side { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+
+.dcc-chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+            font-size: 10.5px; font-weight: 800; padding: 4px 9px; border-radius: 20px; border: 1px solid; }
+.dcc-chip svg { width: 10px; height: 10px; flex: 0 0 auto; }
+.dcc-chip-l { font-size: 8.5px; font-weight: 800; letter-spacing: .06em; opacity: .8; }
+.dcc-good { color: #15803d; background: #e9f7ef; border-color: #b7e3c7; }
+.dcc-warn { color: #b45309; background: #fdf3e1; border-color: #f3ddb0; }
+.dcc-bad  { color: #b91c1c; background: #fcecec; border-color: #f3c9c9; }
+.dcc-mute { color: #8a94a3; background: #f4f7f9; border-color: #e3e8ee; }
+.dcc-chip.act { cursor: pointer; }
+.dcc-chip.act:hover { filter: brightness(.97); }
+
+.dcc-sec { display: flex; align-items: baseline; gap: 9px; margin: 0 0 9px;
+           font-size: 9.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: #8a94a3; }
+.dcc-sec em { font-style: normal; margin-left: auto; font-weight: 700; letter-spacing: .02em;
+              text-transform: none; font-size: 10.5px; color: #aab4bf; }
+.dcc-block { margin-bottom: 18px; }
+.dcc-block:last-child { margin-bottom: 0; }
+
+/* eBay account health — four cells, each printing its own threshold */
+.dcc-g4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.dcc-cell { background: #f6f8fa; border: 1px solid #eef1f5; border-radius: 10px; padding: 10px 12px; }
+.dcc-cell.w { background: #fdf3e1; border-color: #f3ddb0; }
+.dcc-cell.b { background: #fcecec; border-color: #f3c9c9; }
+.dcc-cell-l { font-size: 10px; font-weight: 800; letter-spacing: .01em; color: #8a94a3; }
+.dcc-cell-v { margin-top: 3px; font-size: 18px; font-weight: 800; letter-spacing: -.022em;
+              font-variant-numeric: tabular-nums; color: #0f172a; }
+.dcc-cell-v small { font-size: 11px; font-weight: 700; }
+.dcc-cell.w .dcc-cell-v { color: #b45309; }
+.dcc-cell.b .dcc-cell-v { color: #b91c1c; }
+.dcc-cell-d { margin-top: 2px; font-size: 10.5px; font-weight: 650; color: #8a94a3; }
+
+/* stat rows */
+.dcc-rows { background: #f6f8fa; border: 1px solid #eef1f5; border-radius: 10px; padding: 3px 13px; }
+.dcc-row { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+           padding: 8px 0; border-bottom: 1px solid #e9eef2; font-size: 12.5px; }
+.dcc-row:last-child { border-bottom: 0; }
+.dcc-row-l { font-weight: 650; color: #647082; }
+.dcc-row-l i { display: block; font-style: normal; font-size: 10px; font-weight: 650; color: #aab4bf; margin-top: 1px; }
+.dcc-row-v { display: flex; align-items: baseline; gap: 6px; font-weight: 800;
+             font-variant-numeric: tabular-nums; color: #0f172a; }
+/* The unit owns a fixed slot whether or not there is a unit to put in it, so
+   every numeral in the column ends on the same edge — $66,332 no longer sits
+   26px right of 86.45 just because one of them is followed by a "%". */
+.dcc-row-v .u { flex: 0 0 26px; font-size: 10.5px; font-weight: 700; color: #8a94a3; }
+.dcc-row-v .n { flex: 0 0 auto; }
+.dcc-row-v.b { color: #b91c1c; }
+.dcc-row-v.w { color: #b45309; }
+.dcc-row-v.g { color: #15803d; }
+
+/* categories at risk */
+.dcc-cats { display: flex; flex-direction: column; gap: 7px; }
+.dcc-cat { display: grid; grid-template-columns: 148px 1fr; gap: 11px; align-items: center;
+           background: #f6f8fa; border: 1px solid #eef1f5; border-radius: 10px; padding: 9px 12px; font-size: 12.5px; }
+.dcc-cat.b { background: #fcecec; border-color: #f3c9c9; }
+.dcc-cat.w { background: #fdf3e1; border-color: #f3ddb0; }
+.dcc-cat-k { font-size: 9.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+             white-space: nowrap; color: #8a94a3; }
+.dcc-cat.b .dcc-cat-k { color: #b91c1c; }
+.dcc-cat.w .dcc-cat-k { color: #b45309; }
+.dcc-cat-v { font-weight: 700; color: #0f172a; line-height: 1.4; }
+
+.dcc-clear { display: flex; align-items: center; gap: 10px; background: #e9f7ef; border: 1px solid #b7e3c7;
+             border-radius: 10px; padding: 11px 13px; font-size: 12.5px; font-weight: 700; color: #15803d; }
+.dcc-clear svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.dcc-empty { padding: 50px 20px; text-align: center; font-size: 13px; font-weight: 650; color: #8a94a3; }
+
+@media (max-width: 900px) {
+    .dcc-grid { grid-template-columns: 1fr; }
+    .dcc-g4 { grid-template-columns: 1fr 1fr; }
+    .dcc-cat { grid-template-columns: 1fr; gap: 2px; }
+    .dcc-head-side .dcc-sum { display: none; }
+}

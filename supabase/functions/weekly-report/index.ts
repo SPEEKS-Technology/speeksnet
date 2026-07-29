@@ -70,12 +70,29 @@ const STORE_NAME: Record<string, string> = {
 const STORE_COLOR: Record<string, string> = {
   OVL: '#7c3aed', LEE: '#2563eb', WSP: '#16a34a', MPL: '#ea580c', BAL: '#dc2626',
 };
+// Airy V4 keeps each store's hue for identity but wears it as a tinted chip
+// (fill + text + hairline) instead of a solid block — same treatment the site
+// uses everywhere else. STORE_COLOR stays the text/keyline colour.
+const STORE_TINT: Record<string, string> = {
+  OVL: '#f1ebfd', LEE: '#e8f0fb', WSP: '#e8f7ee', MPL: '#fdf0e7', BAL: '#fcecec',
+};
+const STORE_RING: Record<string, string> = {
+  OVL: '#ddd0fb', LEE: '#cfe0f7', WSP: '#c6ecd6', MPL: '#f8dcc7', BAL: '#f6d5d5',
+};
 
-// Brand palette (matches the site)
+// Brand palette — Airy V4 (matches the redesigned pages, which flip
+// --sage-professional to the fresh emerald and drop the cool slate neutrals for
+// green-biased ones). See the "V4 airy" block in styles.css.
 const C = {
-  sage: '#5a8d3b', sageDeep: '#487130', charcoal: '#1a1c1e', app: '#f4f7f9',
-  green: '#15803d', amber: '#d97706', red: '#dc2626', gold: '#f59e0b',
-  line: '#e2e8f0', muted: '#64748b', faint: '#94a3b8', card: '#ffffff', soft: '#f8fafc',
+  sage: '#1f9d57', sageDeep: '#178048', tint: '#e8f7ee',
+  charcoal: '#1a1c1e', app: '#f1f5f2', card: '#ffffff', soft: '#f7faf8',
+  green: '#1f9d57', amber: '#c07f0c', red: '#d64545', gold: '#e8a020',
+  line: '#eaefeb', line2: '#f4f8f5', track: '#eaefeb',
+  muted: '#64707c', faint: '#9aa6ad',
+  // warning surfaces (flags block, incomplete-KPI rows) on the site's gold tint
+  flagBg: '#fefaf3', flagRule: '#f4e3c4', flagBorder: '#f0dcb6', flagHead: '#fdf3e1', flagInk: '#8a5a06',
+  footBg: '#f7faf8',
+  rCard: 18, rBox: 14,
 };
 
 // The SPEEKS Scorecard is now just the "Online & Marketing" four categories.
@@ -318,29 +335,49 @@ async function gather(sb: any, weekEnd: Date) {
 }
 
 // ---------- shared HTML pieces (email-safe: tables + inline styles) ----------
-const wrapEmail = (title: string, accent: string, range: string, body: string) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>@media only screen and (max-width:520px){.gtile{display:block!important;width:100%!important;padding:6px 0!important}.pace-l,.pace-r{display:block!important;width:100%!important;text-align:left!important}.pace-r{padding-top:6px!important;font-size:24px!important}.pace-cap{font-size:12.5px!important;line-height:1.5!important}}</style></head>
+// Header icon tile — three bars built from table cells rather than an SVG or a
+// remote PNG, so it renders identically in Outlook, Gmail and Apple Mail.
+const heroTile = () => {
+  const bar = (h: number) =>
+    `<td width="4" valign="bottom" style="padding:0 2px;"><div style="width:4px;height:${h}px;background:#6ee7a7;border-radius:2px;font-size:0;line-height:0;">&nbsp;</div></td>`;
+  // 12px, not C.rBox — matches the 40px .ws-head-ico tile on the site exactly.
+  return `<table role="presentation" width="40" height="40" cellpadding="0" cellspacing="0" style="background:rgba(31,157,87,.20);border-radius:12px;"><tr><td align="center" valign="middle" height="40">
+    <table role="presentation" cellpadding="0" cellspacing="0"><tr>${bar(8)}${bar(16)}${bar(12)}</tr></table>
+  </td></tr></table>`;
+};
+
+// `chipHtml` (optional) rides in the top-right of the hero — the manager report
+// puts its store chip there.
+const wrapEmail = (title: string, accent: string, range: string, body: string, chipHtml = '') => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>@media only screen and (max-width:520px){.gtile{display:block!important;width:100%!important;padding:6px 0!important}.pace-l,.pace-r{display:block!important;width:100%!important;text-align:left!important}.pace-r{padding-top:6px!important;font-size:24px!important}.pace-cap{font-size:12.5px!important;line-height:1.5!important}}</style></head>
 <body style="margin:0;padding:0;background:${C.app};font-family:Inter,Arial,Helvetica,sans-serif;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.app};padding:20px 10px;"><tr><td align="center">
-<table role="presentation" width="680" cellpadding="0" cellspacing="0" style="max-width:680px;width:100%;background:${C.card};border:1px solid ${C.line};border-radius:16px;overflow:hidden;">
-  <tr><td style="background:${C.charcoal};border-left:6px solid ${accent};padding:24px 26px;">
-    <div style="color:#9fb89a;font-size:11px;font-weight:800;letter-spacing:2px;text-transform:uppercase;">Speeks Technology</div>
-    <div style="color:#fff;font-size:22px;font-weight:900;margin-top:6px;">${title}</div>
-    <div style="color:#c9d2cc;font-size:13px;font-weight:600;margin-top:3px;">${range}</div>
+<table role="presentation" width="680" cellpadding="0" cellspacing="0" style="max-width:680px;width:100%;background:${C.card};border:1px solid ${C.line};border-radius:${C.rCard}px;overflow:hidden;">
+  <tr><td style="background:#13181a;padding:20px 24px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td width="40" valign="top">${heroTile()}</td>
+      <td valign="middle" style="padding-left:13px;">
+        <div style="font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:#6ee7a7;">Speeks Technology</div>
+        <div style="font-size:20px;font-weight:800;letter-spacing:-.02em;color:#ffffff;margin-top:2px;">${title}</div>
+        <div style="font-size:12.5px;font-weight:600;color:rgba(255,255,255,.66);margin-top:2px;">${range}</div>
+      </td>
+      ${chipHtml ? `<td align="right" valign="top">${chipHtml}</td>` : ''}
+    </tr></table>
   </td></tr>
+  <tr><td style="height:3px;background:${accent};font-size:0;line-height:0;">&nbsp;</td></tr>
   <tr><td style="padding:22px;">${body}</td></tr>
-  <tr><td style="padding:16px;text-align:center;color:${C.faint};font-size:10.5px;border-top:1px solid ${C.line};background:#fafbfc;">
+  <tr><td style="padding:16px;text-align:center;color:${C.faint};font-size:10.5px;border-top:1px solid ${C.line};background:${C.footBg};">
     Generated automatically by Speeks · weekly figures are Mon–Sun. Goal pace is gross profit, month-to-date through the report week.
   </td></tr>
 </table></td></tr></table></body></html>`;
 
 const sectionLabel = (t: string, note = '') =>
-  `<div style="margin:26px 2px 12px;border-left:3px solid ${C.sage};padding-left:10px;">
-     <div style="font-size:16px;font-weight:900;color:${C.charcoal};letter-spacing:-.2px;">${t}</div>
-     ${note ? `<div style="font-size:11px;font-weight:600;color:${C.faint};margin-top:1px;">${note}</div>` : ''}
+  `<div style="margin:26px 2px 12px;border-left:2px solid ${C.sage};padding-left:11px;">
+     <div style="font-size:15.5px;font-weight:800;color:${C.charcoal};letter-spacing:-.015em;">${t}</div>
+     ${note ? `<div style="font-size:11px;font-weight:600;color:${C.faint};margin-top:2px;">${note}</div>` : ''}
    </div>`;
 
 const tile = (label: string, value: string, sub: string) =>
-  `<td class="gtile" width="33%" valign="top" style="padding:6px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.soft};border:1px solid ${C.line};border-radius:12px;"><tr><td style="padding:14px;">
+  `<td class="gtile" width="33%" valign="top" style="padding:6px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.soft};border:1px solid ${C.line};border-radius:${C.rBox}px;"><tr><td style="padding:14px;">
     <div style="font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.5px;color:${C.faint};">${label}</div>
     <div style="font-size:23px;font-weight:900;color:${C.charcoal};margin-top:5px;">${value}</div>
     <div style="font-size:11px;font-weight:700;color:${C.muted};margin-top:3px;">${sub}</div>
@@ -355,23 +392,25 @@ const glanceRow = (d: any) => `<table role="presentation" width="100%" cellpaddi
 const paceBlock = (label: string, mtd: number, goal: number, proj: number) => {
   const banked = goal ? Math.min(100, (mtd / goal) * 100) : 0;
   const goalPct = goal ? (proj / goal) * 100 : 0;
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:12px;"><tr><td style="padding:16px;">
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;"><tr><td style="padding:16px;">
     <table role="presentation" width="100%"><tr>
       <td class="pace-l" style="font-size:13px;font-weight:800;color:${C.muted};vertical-align:middle;">${label}</td>
       <td class="pace-r" align="right" style="font-size:20px;font-weight:900;color:${C.charcoal};white-space:nowrap;vertical-align:middle;">${moneyK(mtd)} <span style="font-size:12px;color:${C.muted};">MTD</span></td>
     </tr></table>
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 8px;background:#eef2f6;border-radius:99px;"><tr><td style="background:${C.sage};height:12px;width:${banked}%;border-radius:99px;font-size:0;line-height:0;">&nbsp;</td><td style="font-size:0;line-height:0;">&nbsp;</td></tr></table>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 8px;background:${C.track};border-radius:99px;"><tr><td style="background:${C.sage};height:12px;width:${banked}%;border-radius:99px;font-size:0;line-height:0;">&nbsp;</td><td style="font-size:0;line-height:0;">&nbsp;</td></tr></table>
     <div class="pace-cap" style="font-size:11.5px;font-weight:600;color:${C.muted};line-height:1.4;">${money(goal)} goal · ${Math.round(banked)}% banked · <b style="color:${goalPct >= 100 ? C.green : C.amber}">on pace for ${moneyK(proj)} — ${Math.round(goalPct)}% of goal</b></div>
   </td></tr></table>`;
 };
 
 const th = (t: string, align = 'center') => `<th style="font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:${C.faint};background:${C.soft};padding:9px 7px;text-align:${align};border-bottom:1px solid ${C.line};">${t}</th>`;
-const badge = (s: string) => `<span style="display:inline-block;background:${STORE_COLOR[s]};color:#fff;font-size:11px;font-weight:900;padding:2px 8px;border-radius:5px;letter-spacing:.5px;">${s}</span>`;
+const badge = (s: string) => `<span style="display:inline-block;background:${STORE_TINT[s]};color:${STORE_COLOR[s]};border:1px solid ${STORE_RING[s]};font-size:11px;font-weight:800;padding:2px 8px;border-radius:6px;letter-spacing:.5px;">${s}</span>`;
 const procCell = (count: number, p: number) => `<div style="font-weight:900;font-size:13px;color:${C.charcoal};">${count}</div><div style="font-size:9.5px;font-weight:800;color:${tgtColor(p)};">${Math.round(p)}% of tgt</div>`;
 
 // rank badge (1st green … 5th red) + a labeled stat cell for the cash-flow summary
 const rankColor = (rk: number) => rk === 1 ? C.green : rk === 2 ? '#2563eb' : rk >= 5 ? C.red : rk === 4 ? C.amber : C.muted;
-const rankBadge = (rk: number) => `<span style="display:inline-block;font-size:9px;font-weight:900;color:#fff;background:${rankColor(rk)};border-radius:99px;padding:1px 6px;margin-left:4px;vertical-align:middle;">#${rk}</span>`;
+// Tinted, not solid — a rank is metadata on a number, so it shouldn't outshout it.
+const rankTint = (rk: number) => rk === 1 ? C.tint : rk === 2 ? '#e8f0fb' : rk >= 5 ? '#fcecec' : rk === 4 ? C.flagHead : '#f1f5f4';
+const rankBadge = (rk: number) => `<span style="display:inline-block;font-size:9px;font-weight:800;color:${rankColor(rk)};background:${rankTint(rk)};border-radius:99px;padding:1px 6px;margin-left:5px;vertical-align:middle;">#${rk}</span>`;
 const statCell = (label: string, value: string, rank?: number | null, valColor?: string) =>
   `<td width="33%" valign="top" style="padding:10px 13px;">
      <div style="font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:${C.faint};">${label}${rank != null ? rankBadge(rank) : ''}</div>
@@ -385,12 +424,12 @@ function cashFlowSummary(r: any, ranks?: { buy?: number; rev?: number; gp?: numb
   const banked = r.gpGoal ? Math.min(100, r.gpMtd / r.gpGoal * 100) : 0;
   const goalPct = r.gpGoal ? (r.gpProj / r.gpGoal) * 100 : 0;
   const channel = (title: string, cells: string, footer: string) =>
-    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:12px;border-collapse:collapse;margin-bottom:10px;overflow:hidden;">
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;border-collapse:collapse;margin-bottom:10px;overflow:hidden;">
       <tr><td colspan="3" style="padding:11px 14px 0;"><span style="font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.6px;color:${C.charcoal};">${title}</span></td></tr>
       <tr>${cells}</tr>
       ${footer ? `<tr><td colspan="3" style="padding:0 14px 13px;">${footer}</td></tr>` : '<tr><td colspan="3" style="padding:0 0 6px;"></td></tr>'}
     </table>`;
-  const bar = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:9px 0 0;background:#eef2f6;border-radius:99px;"><tr><td style="background:${C.sage};height:10px;width:${banked}%;border-radius:99px;font-size:0;line-height:0;">&nbsp;</td><td style="font-size:0;line-height:0;">&nbsp;</td></tr></table>`;
+  const bar = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:9px 0 0;background:${C.track};border-radius:99px;"><tr><td style="background:${C.sage};height:10px;width:${banked}%;border-radius:99px;font-size:0;line-height:0;">&nbsp;</td><td style="font-size:0;line-height:0;">&nbsp;</td></tr></table>`;
   const buying = channel('Buying',
     statCell('Buy Value', money(r.boughtResale), ranks?.buy ?? null) +
     statCell('Cash Cost', money(r.boughtCash)) +
@@ -409,9 +448,9 @@ function leaderboardTable(rows: Record<string, any>, company: any, youStore?: st
   const goalC = (p: number) => (p >= 100 ? C.green : p >= 85 ? C.amber : C.red);
   const body = order.map((s, i) => {
     const r = rows[s]; const you = s === youStore;
-    return `<tr${you ? ` style="background:#f0f7eb;"` : ''}>
+    return `<tr${you ? ` style="background:${C.tint};"` : ''}>
       <td style="padding:9px 6px;text-align:center;font-weight:900;color:${i === 0 ? C.gold : C.faint};">${i + 1}</td>
-      <td style="padding:9px 6px;">${badge(s)}${you ? ` <span style="font-size:10px;font-weight:900;color:#fff;background:${C.sage};padding:2px 6px;border-radius:5px;">YOU</span>` : ''}</td>
+      <td style="padding:9px 6px;">${badge(s)}${you ? ` <span style="font-size:10px;font-weight:800;color:${C.sageDeep};background:${C.tint};border:1px solid #c6ecd6;padding:2px 6px;border-radius:6px;">YOU</span>` : ''}</td>
       <td style="padding:9px 6px;text-align:center;font-weight:900;">${moneyK(r.soldGp)}</td>
       <td style="padding:9px 6px;text-align:center;font-weight:800;color:${gpColor(r.gpMargin)};">${pct(r.gpMargin)}</td>
       <td style="padding:9px 6px;text-align:center;font-weight:800;color:${goalC(r.goalPct)};">${Math.round(r.goalPct)}%</td>
@@ -422,7 +461,7 @@ function leaderboardTable(rows: Record<string, any>, company: any, youStore?: st
     </tr>`;
   }).join('');
   const tc = `background:${C.soft};border-top:2px solid ${C.line};`;
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:12px;overflow:hidden;border-collapse:separate;">
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;overflow:hidden;border-collapse:separate;">
     <tr>${th('#')}${th('Store', 'left')}${th('GP$')}${th('GP%')}${th('% Goal')}${th('Sold')}${th('Bought')}${th('Buy%')}${th('Proc.')}</tr>
     ${body}
     <tr><td style="${tc}"></td>
@@ -450,7 +489,7 @@ function buyingTable(rows: Record<string, any>, company: any) {
       <td style="padding:10px 7px;text-align:center;font-weight:800;color:${buyColor(r.buyMargin)};">${pct(r.buyMargin)}</td>
     </tr>`;
   }).join('');
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:12px;overflow:hidden;border-collapse:separate;">
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;overflow:hidden;border-collapse:separate;">
     <tr>${th('#')}${th('Store', 'left')}${th('Resale Value')}${th('Cash Paid')}${th('Buy Margin')}</tr>${body}
     <tr><td style="background:${C.soft};border-top:2px solid ${C.line};"></td>
       <td style="background:${C.soft};border-top:2px solid ${C.line};padding:10px 7px;font-weight:900;">Stores</td>
@@ -473,7 +512,7 @@ function listingTable(rows: Record<string, any>, company: any) {
       <td style="padding:10px 7px;text-align:center;font-weight:800;">${pct(r.pctSold)}</td>
     </tr>`;
   }).join('');
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:12px;overflow:hidden;border-collapse:separate;">
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;overflow:hidden;border-collapse:separate;">
     <tr>${th('#')}${th('Store', 'left')}${th('Processed')}${th('Retail $')}${th('Margin')}${th('% Sold')}</tr>${body}
     <tr><td style="background:${C.soft};border-top:2px solid ${C.line};"></td>
       <td style="background:${C.soft};border-top:2px solid ${C.line};padding:10px 7px;font-weight:900;">Stores</td>
@@ -485,7 +524,11 @@ function listingTable(rows: Record<string, any>, company: any) {
 }
 
 const chip = (text: string, kind: 'bad' | 'warn' | 'ok') => {
-  const m = { bad: ['#fef2f2', '#b91c1c', '#fecaca'], warn: ['#fffbeb', '#92400e', '#fde68a'], ok: ['#ecfdf5', '#065f46', '#a7f3d0'] }[kind];
+  const m = {
+    bad:  ['#fcecec', '#b23636', '#f6d5d5'],
+    warn: [C.flagHead, C.flagInk, C.flagBorder],
+    ok:   [C.tint, '#146c3c', '#c6ecd6'],
+  }[kind];
   return `<span style="display:inline-block;font-size:11px;font-weight:800;padding:3px 9px;border-radius:99px;background:${m[0]};color:${m[1]};border:1px solid ${m[2]};margin:3px 4px 0 0;">${text}</span>`;
 };
 
@@ -500,34 +543,34 @@ function flagsBlock(d: any) {
       if (cv != null && n(cv) * 2 === 0) zeros.push(`${s} — ${label}`);
     }
   }
-  if (zeros.length) items.push(`<div style="padding:11px 14px;border-bottom:1px solid #fde7b8;"><div style="font-size:13px;font-weight:900;color:${C.red};">${zeros.length} categor${zeros.length === 1 ? 'y' : 'ies'} scored 0/10 — immediate attention</div><div>${zeros.map(z => chip(z, 'bad')).join('')}</div></div>`);
+  if (zeros.length) items.push(`<div style="padding:11px 14px;border-bottom:1px solid ${C.flagRule};"><div style="font-size:13px;font-weight:900;color:${C.red};">${zeros.length} categor${zeros.length === 1 ? 'y' : 'ies'} scored 0/10 — immediate attention</div><div>${zeros.map(z => chip(z, 'bad')).join('')}</div></div>`);
   // listing target
   const under = STORES.filter(s => d.rows[s].listingPct < 100);
   if (under.length) {
     const chips = STORES.sort((a, b) => d.rows[a].listingPct - d.rows[b].listingPct)
       .map(s => chip(`${s} ${Math.round(d.rows[s].listingPct)}%`, d.rows[s].listingPct >= 100 ? 'ok' : d.rows[s].listingPct >= 80 ? 'warn' : 'bad')).join('');
-    items.push(`<div style="padding:11px 14px;border-bottom:1px solid #fde7b8;"><div style="font-size:13px;font-weight:900;color:${C.charcoal};">Listings — ${Math.round(d.company.listingPct)}% of target</div><div style="font-size:11.5px;color:${C.muted};font-weight:600;">${under.length} of 5 stores under goal</div><div>${chips}</div></div>`);
+    items.push(`<div style="padding:11px 14px;border-bottom:1px solid ${C.flagRule};"><div style="font-size:13px;font-weight:900;color:${C.charcoal};">Listings — ${Math.round(d.company.listingPct)}% of target</div><div style="font-size:11.5px;color:${C.muted};font-weight:600;">${under.length} of 5 stores under goal</div><div>${chips}</div></div>`);
   }
   // buy margin
   const lowBuy = STORES.filter(s => d.rows[s].buyMargin < 51);
   if (lowBuy.length) {
-    items.push(`<div style="padding:11px 14px;border-bottom:1px solid #fde7b8;"><div style="font-size:13px;font-weight:900;color:${C.charcoal};">Buy margin under 51% floor</div><div>${lowBuy.map(s => chip(`${s} ${pct(d.rows[s].buyMargin)}`, 'bad')).join('')}</div></div>`);
+    items.push(`<div style="padding:11px 14px;border-bottom:1px solid ${C.flagRule};"><div style="font-size:13px;font-weight:900;color:${C.charcoal};">Buy margin under 51% floor</div><div>${lowBuy.map(s => chip(`${s} ${pct(d.rows[s].buyMargin)}`, 'bad')).join('')}</div></div>`);
   }
   // scorecard lowest
-  if (d.lowestCat) items.push(`<div style="padding:11px 14px;border-bottom:1px solid #fde7b8;"><div style="font-size:13px;font-weight:900;color:${C.charcoal};">${esc(d.lowestCat)} is the lowest scorecard category</div><div style="font-size:11.5px;color:${C.muted};font-weight:600;">Company average ${d.lowestVal.toFixed(1)}/10</div></div>`);
+  if (d.lowestCat) items.push(`<div style="padding:11px 14px;border-bottom:1px solid ${C.flagRule};"><div style="font-size:13px;font-weight:900;color:${C.charcoal};">${esc(d.lowestCat)} is the lowest scorecard category</div><div style="font-size:11.5px;color:${C.muted};font-weight:600;">Company average ${d.lowestVal.toFixed(1)}/10</div></div>`);
   // practice audit below the 80% pass line
   const failAudit = STORES.filter(s => d.rows[s].audit && d.rows[s].audit.pct < 80);
   if (failAudit.length) {
-    items.push(`<div style="padding:11px 14px;border-bottom:1px solid #fde7b8;"><div style="font-size:13px;font-weight:900;color:${C.red};">${failAudit.length} store${failAudit.length === 1 ? '' : 's'} below the 80% audit pass line</div><div style="font-size:11.5px;color:${C.muted};font-weight:600;">target is 90%+</div><div>${failAudit.map(s => chip(`${s} ${d.rows[s].audit.pct}%`, 'bad')).join('')}</div></div>`);
+    items.push(`<div style="padding:11px 14px;border-bottom:1px solid ${C.flagRule};"><div style="font-size:13px;font-weight:900;color:${C.red};">${failAudit.length} store${failAudit.length === 1 ? '' : 's'} below the 80% audit pass line</div><div style="font-size:11.5px;color:${C.muted};font-weight:600;">target is 90%+</div><div>${failAudit.map(s => chip(`${s} ${d.rows[s].audit.pct}%`, 'bad')).join('')}</div></div>`);
   }
   // incomplete kpi
   if (d.incomplete.length) items.push(`<div style="padding:11px 14px;"><div style="font-size:13px;font-weight:900;color:${C.charcoal};">${d.incomplete.length} incomplete KPI ${d.incomplete.length === 1 ? 'entry' : 'entries'}</div><div>${d.incomplete.map((x: any) => chip(`${esc(x.name)} · ${x.store} — ${x.what}`, 'warn')).join('')}</div></div>`);
   if (!items.length) items.push(`<div style="padding:11px 14px;font-size:12.5px;color:${C.muted};">No flags this week.</div>`);
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #fde68a;background:#fffbeb;border-radius:12px;overflow:hidden;"><tr><td style="background:#fef3c7;padding:9px 14px;font-size:12px;font-weight:900;color:#92400e;text-transform:uppercase;letter-spacing:.5px;">Live flags this week</td></tr><tr><td>${items.join('')}</td></tr></table>`;
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.flagBorder};background:${C.flagBg};border-radius:${C.rBox}px;overflow:hidden;"><tr><td style="background:${C.flagHead};padding:9px 14px;font-size:12px;font-weight:900;color:${C.flagInk};text-transform:uppercase;letter-spacing:.5px;">Live flags this week</td></tr><tr><td>${items.join('')}</td></tr></table>`;
 }
 
 function rowsBox(rowsHtml: string) {
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:12px;overflow:hidden;">${rowsHtml}</table>`;
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;overflow:hidden;">${rowsHtml}</table>`;
 }
 
 // ---------- leadership email ----------
@@ -539,7 +582,7 @@ function buildLeadership(d: any) {
 
   // per-store score table — Online & Marketing /10 + PayMore practice Audit %
   const tpRow = tp
-    ? `<tr><td colspan="4" style="padding:11px 14px;border-bottom:1px solid #f1f5f9;background:#f0f7eb;"><span style="font-size:9.5px;font-weight:900;color:#fff;background:${C.green};padding:3px 8px;border-radius:99px;">TOP PERFORMER</span> <b style="color:${C.charcoal};">${esc(tp.employee_name)} · ${tp.store}</b> <span style="color:${C.muted};font-size:11px;">${n(tp.listed_count)} processed${tpConv != null ? ` · ${tpConv}% conversion` : ''}</span></td></tr>`
+    ? `<tr><td colspan="4" style="padding:11px 14px;border-bottom:1px solid ${C.line2};background:${C.tint};"><span style="font-size:9.5px;font-weight:800;color:${C.sageDeep};background:${C.tint};border:1px solid #c6ecd6;padding:3px 8px;border-radius:99px;">TOP PERFORMER</span> <b style="color:${C.charcoal};">${esc(tp.employee_name)} · ${tp.store}</b> <span style="color:${C.muted};font-size:11px;">${n(tp.listed_count)} processed${tpConv != null ? ` · ${tpConv}% conversion` : ''}</span></td></tr>`
     : '';
   // ranked by practice-audit % (stores without an audit fall to the bottom)
   const scoreOrder = [...STORES].sort((a, b) => (d.rows[b].audit ? d.rows[b].audit.pct : -1) - (d.rows[a].audit ? d.rows[a].audit.pct : -1));
@@ -555,13 +598,13 @@ function buildLeadership(d: any) {
       ? `<span style="color:${aCol};font-weight:900;">${a.pct}%</span><span style="color:${C.faint};font-size:10.5px;font-weight:700;margin-left:10px;">${a.earned} / ${a.possible}</span>`
       : `<span style="color:${C.faint};">—</span>`;
     return `<tr>
-      <td style="padding:12px 10px;text-align:center;font-weight:900;color:${i === 0 ? C.gold : C.faint};border-bottom:1px solid #f1f5f9;">${i + 1}</td>
-      <td style="padding:12px 14px;border-bottom:1px solid #f1f5f9;">${badge(s)}</td>
-      <td style="padding:12px 18px;text-align:center;border-bottom:1px solid #f1f5f9;font-size:16px;white-space:nowrap;">${scStr}</td>
-      <td style="padding:12px 18px;text-align:center;border-bottom:1px solid #f1f5f9;font-size:16px;white-space:nowrap;">${aStr}</td>
+      <td style="padding:12px 10px;text-align:center;font-weight:900;color:${i === 0 ? C.gold : C.faint};border-bottom:1px solid ${C.line2};">${i + 1}</td>
+      <td style="padding:12px 14px;border-bottom:1px solid ${C.line2};">${badge(s)}</td>
+      <td style="padding:12px 18px;text-align:center;border-bottom:1px solid ${C.line2};font-size:16px;white-space:nowrap;">${scStr}</td>
+      <td style="padding:12px 18px;text-align:center;border-bottom:1px solid ${C.line2};font-size:16px;white-space:nowrap;">${aStr}</td>
     </tr>`;
   }).join('');
-  const scoreBox = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:12px;overflow:hidden;border-collapse:separate;">
+  const scoreBox = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;overflow:hidden;border-collapse:separate;">
     ${tpRow}
     <tr>${th('#')}${th('Store', 'left')}${th('Scorecard')}${th('PayMore Audit')}</tr>
     ${scoreRows}
@@ -581,7 +624,7 @@ function buildLeadership(d: any) {
   ${sectionLabel('Store Scores', 'ranked by audit · targets 8.0+ and 90%+')}
   ${scoreBox}
   ${sectionLabel('Ops Compliance')}
-  ${rowsBox(`<tr><td style="padding:11px 14px;border-bottom:1px solid #f1f5f9;font-size:12.5px;"><b>Weekly KPIs submitted</b> <span style="float:right;font-weight:900;color:${kpiCount === 5 ? C.green : C.amber};">${kpiCount} / 5</span></td></tr><tr><td style="padding:11px 14px;font-size:12.5px;"><b>Audit Readiness</b> <span style="color:${C.faint};font-weight:600;">weekly % · daily avg % (Mon–Sun)</span>
+  ${rowsBox(`<tr><td style="padding:11px 14px;border-bottom:1px solid ${C.line2};font-size:12.5px;"><b>Weekly KPIs submitted</b> <span style="float:right;font-weight:900;color:${kpiCount === 5 ? C.green : C.amber};">${kpiCount} / 5</span></td></tr><tr><td style="padding:11px 14px;font-size:12.5px;"><b>Audit Readiness</b> <span style="color:${C.faint};font-weight:600;">weekly % · daily avg % (Mon–Sun)</span>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">${STORES.map(s => {
       const w = d.rows[s].auditWeeklyPct, da = d.rows[s].auditDailyPct;
       const ac = (p: number | null) => p == null ? C.faint : p >= 80 ? C.green : p >= 50 ? C.amber : C.red;
@@ -609,24 +652,37 @@ function buildManager(d: any, store: string) {
   const listRank = rankOf(x => x.listingPct);
   const scoreRank = rankOf(x => x.card ? n(x.card.store_average) : -1);
   const auditRank = rankOf(x => x.audit ? x.audit.pct : -1);
-  const auditPctStr = r.audit ? `${r.audit.pct}<span style="font-size:12px;">%</span>` : '—';
 
-  // header card: store name + Scorecard / Listing / Audit (each ranked)
-  const headTile = (label: string, rank: number, value: string) =>
-    `<td width="50%" valign="top" style="padding:3px 4px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:rgba(255,255,255,.16);border-radius:10px;"><tr><td style="padding:10px 13px;">
-      <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:rgba(255,255,255,.9);">${label}${rank > 0 ? rankBadge(rank) : ''}</div>
-      <div style="font-size:21px;font-weight:900;color:#fff;margin-top:3px;">${value}</div>
+  // Header card: store identity + Scorecard / Listing / Audit (each ranked).
+  // Airy V4 — the store colour is a 3px keyline plus the chip rather than a
+  // full-bleed panel, which used to fight every section beneath it. The ground
+  // matches the email hero so the two read as one masthead.
+  const UNIT = 'font-size:12px;font-weight:700;color:rgba(255,255,255,.60);';
+  const headTile = (label: string, rank: number, value: string, valColor = '#ffffff') =>
+    `<td width="50%" valign="top" style="padding:4px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.10);border-radius:${C.rBox}px;"><tr><td style="padding:11px 13px;">
+      <div style="font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:rgba(255,255,255,.60);">${label}${rank > 0 ? rankBadge(rank) : ''}</div>
+      <div style="font-size:20px;font-weight:800;letter-spacing:-.02em;color:${valColor};margin-top:3px;">${value}</div>
     </td></tr></table></td>`;
-  const headerCard = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${STORE_COLOR[store]};border-radius:14px;"><tr><td style="padding:18px 16px;">
-    <div style="font-size:21px;font-weight:900;color:#fff;">${store} · ${STORE_NAME[store]}</div>
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:10px;">
+  const passTile = !r.audit
+    ? headTile('Audit Pass', 0, '—')
+    : r.audit.pct >= 80
+      ? headTile('Audit Pass', 0, `<span style="font-size:14px;font-weight:800;">${r.audit.pct >= 90 ? 'On target ✓' : 'Passing'}</span>`, '#6ee7a7')
+      : headTile('Audit Pass', 0, '<span style="font-size:14px;font-weight:800;">Below 80%</span>', '#ff9d9d');
+  const headerCard = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#13181a;border-radius:${C.rBox}px;overflow:hidden;">
+    <tr><td style="height:3px;background:${STORE_COLOR[store]};font-size:0;line-height:0;">&nbsp;</td></tr>
+    <tr><td style="padding:16px 16px 14px;">
+    <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+      <td>${badge(store)}</td>
+      <td style="padding-left:9px;font-size:19px;font-weight:800;letter-spacing:-.02em;color:#ffffff;">${STORE_NAME[store]}</td>
+    </tr></table>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:9px;">
       <tr>
-        ${headTile('Scorecard', r.card ? scoreRank : 0, r.card ? `${avg}<span style="font-size:12px;">/10</span>` : '—')}
-        ${headTile('Listing Prod.', listRank, `${Math.round(r.listingPct)}<span style="font-size:12px;">% goal</span>`)}
+        ${headTile('Scorecard', r.card ? scoreRank : 0, r.card ? `${avg}<span style="${UNIT}">/10</span>` : '—')}
+        ${headTile('Listing Prod.', listRank, `${Math.round(r.listingPct)}<span style="${UNIT}">% goal</span>`)}
       </tr>
       <tr>
-        ${headTile('PayMore Audit', r.audit ? auditRank : 0, auditPctStr)}
-        ${headTile('Audit Pass', 0, r.audit ? (r.audit.pct >= 80 ? `<span style="font-size:15px;">${r.audit.pct >= 90 ? 'On target ✓' : 'Passing'}</span>` : `<span style="font-size:15px;">Below 80%</span>`) : '—')}
+        ${headTile('PayMore Audit', r.audit ? auditRank : 0, r.audit ? `${r.audit.pct}<span style="${UNIT}">%</span>` : '—')}
+        ${passTile}
       </tr>
     </table>
   </td></tr></table>`;
@@ -639,8 +695,8 @@ function buildManager(d: any, store: string) {
     const lmv = n(k.listed_retail_price) ? (n(k.listed_retail_price) - n(k.listed_cost)) / n(k.listed_retail_price) * 100 : 0;
     const lm = inc ? '—' : `<span style="color:${lmv >= 55 ? C.green : C.amber};">${pct(lmv)}</span>`;
     const ps = inc ? '—' : pct(n(k.listed_retail_price) ? n(k.listed_sold_value) / n(k.listed_retail_price) * 100 : 0);
-    return `<tr${inc ? ' style="background:#fffbeb;"' : ''}>
-      <td style="padding:9px 7px;font-weight:800;">${i === 0 ? '<span style="font-size:9px;font-weight:900;color:#fff;background:#15803d;padding:1px 6px;border-radius:99px;margin-right:5px;">TOP</span>' : ''}${esc(k.employee_name)}${inc ? ` <span style="font-size:9px;font-weight:800;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:99px;padding:1px 7px;">incomplete KPI</span>` : ''}</td>
+    return `<tr${inc ? ` style="background:${C.flagBg};"` : ''}>
+      <td style="padding:9px 7px;font-weight:800;">${i === 0 ? `<span style="font-size:9px;font-weight:800;color:${C.sageDeep};background:${C.tint};border:1px solid #c6ecd6;padding:1px 6px;border-radius:99px;margin-right:5px;">TOP</span>` : ''}${esc(k.employee_name)}${inc ? ` <span style="font-size:9px;font-weight:800;color:${C.flagInk};background:${C.flagHead};border:1px solid ${C.flagBorder};border-radius:99px;padding:1px 7px;">incomplete KPI</span>` : ''}</td>
       <td style="padding:9px 7px;text-align:center;font-weight:800;">${n(k.listed_count)}</td>
       <td style="padding:9px 7px;text-align:center;font-weight:800;">${retail}</td>
       <td style="padding:9px 7px;text-align:center;font-weight:800;">${lm}</td>
@@ -666,8 +722,8 @@ function buildManager(d: any, store: string) {
   if (r.card) {
     scoreHtml = scoredCats.map(x => {
       const v = x.v as number;
-      return `<tr><td style="padding:8px 14px;font-weight:700;color:${C.charcoal};font-size:12px;border-bottom:1px solid #f1f5f9;width:70%;">${x.label}</td>
-        <td style="padding:8px 14px;text-align:right;font-weight:900;color:${scoreColor(v)};border-bottom:1px solid #f1f5f9;">${v}</td></tr>`;
+      return `<tr><td style="padding:8px 14px;font-weight:700;color:${C.charcoal};font-size:12px;border-bottom:1px solid ${C.line2};width:70%;">${x.label}</td>
+        <td style="padding:8px 14px;text-align:right;font-weight:900;color:${scoreColor(v)};border-bottom:1px solid ${C.line2};">${v}</td></tr>`;
     }).join('') +
       `<tr><td style="padding:10px 14px;font-weight:900;color:${C.charcoal};font-size:13px;${tt}">Store Average</td>
         <td style="padding:10px 14px;text-align:right;font-weight:900;font-size:14px;color:${scoreColor(n(r.card.store_average) * 2)};${tt}">${avg}/10</td></tr>`;
@@ -681,8 +737,8 @@ function buildManager(d: any, store: string) {
     auditHtml = secs.map(sec => {
       const full = sec.earned === sec.total;
       const col = full ? C.green : (sec.earned > 0 ? C.amber : C.red);
-      return `<tr><td style="padding:8px 14px;font-weight:700;color:${C.charcoal};font-size:12px;border-bottom:1px solid #f1f5f9;width:70%;">${sec.title}</td>
-        <td style="padding:8px 14px;text-align:right;font-weight:900;color:${col};border-bottom:1px solid #f1f5f9;">${sec.earned}/${sec.total}</td></tr>`;
+      return `<tr><td style="padding:8px 14px;font-weight:700;color:${C.charcoal};font-size:12px;border-bottom:1px solid ${C.line2};width:70%;">${sec.title}</td>
+        <td style="padding:8px 14px;text-align:right;font-weight:900;color:${col};border-bottom:1px solid ${C.line2};">${sec.earned}/${sec.total}</td></tr>`;
     }).join('') +
       `<tr><td style="padding:10px 14px;font-weight:900;color:${C.charcoal};font-size:13px;${tt}">Audit Score</td>
         <td style="padding:10px 14px;text-align:right;font-weight:900;font-size:14px;color:${aCol};${tt}">${r.audit.earned}/${r.audit.possible} · ${r.audit.pct}%</td></tr>`;
@@ -705,16 +761,16 @@ function buildManager(d: any, store: string) {
   ${sectionLabel('Where You Stand', 'all stores this week · ranked by gross profit')}
   ${leaderboardTable(d.rows, d.company, store)}
   ${sectionLabel('Listing Productivity', `${r.processed} of ${r.target} target · ${Math.round(r.listingPct)}%`)}
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:12px;overflow:hidden;border-collapse:separate;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;overflow:hidden;border-collapse:separate;">
     <tr>${th('Lister', 'left')}${th('Listed')}${th('Retail $')}${th('Margin')}${th('% Sold')}</tr>${teamRows}${teamTotal}
   </table>
   ${sectionLabel('Scorecard', r.card ? `Online & Marketing · ${avg}/10` : '')}
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:12px;overflow:hidden;">${scoreHtml}</table>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;overflow:hidden;">${scoreHtml}</table>
   ${sectionLabel('PayMore Audit', r.audit ? `${r.audit.earned}/${r.audit.possible} · ${r.audit.pct}% · pass 80% · target 90%+` : '')}
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:12px;overflow:hidden;">${auditHtml}</table>
-  ${focus.length ? sectionLabel('Focus This Week') + rowsBox(focus.map(f => `<tr><td style="padding:10px 14px;font-size:12.5px;border-bottom:1px solid #f1f5f9;">${f}</td></tr>`).join('')) : ''}
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;overflow:hidden;">${auditHtml}</table>
+  ${focus.length ? sectionLabel('Focus This Week') + rowsBox(focus.map(f => `<tr><td style="padding:10px 14px;font-size:12.5px;border-bottom:1px solid ${C.line2};">${f}</td></tr>`).join('')) : ''}
   `;
-  return wrapEmail('Your Weekly Report', STORE_COLOR[store], range, body);
+  return wrapEmail('Your Weekly Report', C.sage, range, body, badge(store));
 }
 
 // ---------- send (Gmail relay preferred, Resend fallback) ----------

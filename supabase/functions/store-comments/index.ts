@@ -55,15 +55,25 @@ Deno.serve(async (req: Request) => {
     since.setDate(since.getDate() - 30);
     const sinceStr = since.toISOString().split("T")[0];
 
-    // ── DM/CEO read-receipts view ─────────────────────────────────────
-    // Recent comments with who has read them (dismissed the bubble). Only the
-    // Send Store Comment tool (DM/CEO) calls this, so it isn't in the lean poll.
+    // ── Read-receipts view ────────────────────────────────────────────
+    // Recent comments with who has read them (dismissed the bubble). Called by
+    // the Send Store Comment tool, so it isn't in the lean poll. An optional
+    // `stores` param (comma-separated) scopes the result to those store(s) —
+    // managers pass their own store(s) so they only see their store's messages;
+    // DM/CEO omit it and get every store.
     if (mode === "reads") {
-      const { data: comments, error } = await supabase
+      const storesParam = url.searchParams.get("stores");
+      const storeFilter = storesParam
+        ? storesParam.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean)
+        : null;
+
+      let query = supabase
         .from("store_comments")
         .select("id, date, store, author, message")
         .gt("created_at", READS_TRACKING_SINCE)
         .order("created_at", { ascending: false });
+      if (storeFilter && storeFilter.length) query = query.in("store", storeFilter);
+      const { data: comments, error } = await query;
       if (error) {
         return new Response(JSON.stringify({ error: error.message }), {
           status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },

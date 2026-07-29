@@ -9,16 +9,17 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260723a">
+  <link rel="stylesheet" href="styles.css?v=20260728m">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <script src="speeks.js?v=20260723j" defer></script>
+  <script src="speeks.js?v=20260728m" defer></script>
 </head>
 <body class="preload">
 
 <header class="top-nav">
   <div class="nav-left">
     <div class="brand-area">
-      <img src="images/speeksnet_logo.png" alt="SPEEKS Logo" class="brand-logo">
+      <img src="images/SPEEKS%20Logo%20Short%20White.png" alt="SPEEKS" class="brand-mark">
+      <span class="brand-wordmark">SPEEKSNET</span>
     </div>
   </div>
   
@@ -37,11 +38,9 @@
         <select id="msmStoreSelect" class="msm-store-select" onchange="setMultiStore(this.value)" aria-label="Managed store"></select>
       </div>
 
-      <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-owner-manager role-manager role-assistant-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" title="SPEEKS Tools">
-        <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-        </svg>
+      <button class="tools-nav-btn dynamic-module-flex role-district-manager role-ceo role-owner-manager role-manager role-assistant-manager" id="toolsNavBtn" onclick="toggleToolsPanel(event)" data-tip="SPEEKS Tools">
+        <svg class="tools-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7.5" height="7.5" rx="1.6"></rect><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"></rect><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"></rect><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"></rect></svg>
         <span class="tools-nav-label">Tools</span>
       </button>
 
@@ -76,31 +75,6 @@
     </div>
 </header>
 
-<div id="infoTicker" class="info-ticker">
-  <div class="ticker-scroll-area">
-    <div class="ticker-track" id="tickerTrack"></div>
-  </div>
-  <div class="ticker-panel-buttons">
-    <button class="gi-nav-toggle dynamic-module-flex role-manager role-owner-manager role-employee role-training" data-feature="widget-goals-panel" onclick="toggleGoalsPanel()" title="Goals &amp; Initiatives">
-        <span style="font-size: 13px; line-height: 1;">🎯</span>
-        <span>Goals &amp; Initiatives</span>
-        <svg class="gi-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-    </button>
-    <button class="cl-nav-toggle dynamic-module-flex role-manager role-owner-manager role-district-manager role-assistant-manager" data-feature="widget-checklist-panel" onclick="toggleChecklistPanel(event); loadChecklist();" title="Checklist">
-        <span style="font-size: 13px; line-height: 1;">📋</span>
-        <span>Checklist</span>
-        <span id="cl-progress-chip" class="cl-progress-chip"></span>
-        <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-    </button>
-    <button class="cl-nav-toggle audit-nav-toggle dynamic-module-flex role-manager role-owner-manager role-assistant-manager" data-feature="widget-audit-panel" onclick="toggleAuditPanel(event); loadAudit();" title="Cleaning Checklist">
-        <span style="font-size: 13px; line-height: 1;">🧹</span>
-        <span>Cleaning Checklist</span>
-        <span id="audit-progress-chip" class="cl-progress-chip"></span>
-        <svg class="cl-toggle-chevron" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-    </button>
-  </div>
-</div>
-
 <!-- ===== FIRST-LOGIN TUTORIAL ===== -->
 
 
@@ -109,7 +83,7 @@
 <div class="modal-menu manage-docs-menu" id="hotkeysDropdown">
     <div class="modal-header">
         <h3>Hotkeys & Commands</h3>
-        <button class="modal-close-btn" onclick="closeAllModals(); document.getElementById('hotkeysDropdown').classList.remove('show');">✖</button>
+        <button class="modal-close-btn" onclick="closeAllModals(); document.getElementById('hotkeysDropdown').classList.remove('show');"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="modal-body">
         <div id="kbSearchArea" class="kb-search-bar mb-15">
@@ -141,7 +115,7 @@
                 <button id="qm-tab-reviews" class="tab-btn" onclick="switchQMTab('reviews')">Reviews</button>
                 <button id="qm-tab-networking" class="tab-btn dynamic-module-block role-district-manager role-manager role-owner-manager" onclick="switchQMTab('networking')">Networking</button>
             </div>
-            <button class="modal-close-btn" onclick="closeAllModals(); document.getElementById('quickMsgDropdown').classList.remove('show');">✖</button>
+            <button class="modal-close-btn" onclick="closeAllModals(); document.getElementById('quickMsgDropdown').classList.remove('show');"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
     </div>
     <div class="modal-body">
@@ -159,7 +133,7 @@
                 <span class="hub-hi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"></path></svg></span>
                 <div><h3>SPEEKS Feed</h3><div class="hub-sub">Everything from your team, in one place</div></div>
             </div>
-            <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+            <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div class="hub-filter">
             <label>Show</label>
@@ -181,7 +155,7 @@
 <div class="modal-menu calendar-menu" id="calendarDropdown">
     <div class="modal-header">
         <h3>Strategic Calendar</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="calendar-content">
         <iframe src="https://calendar.google.com/calendar/embed?src=75d63f4495d48b06d2405686eb56d8dfe7fe74175f4dddc340588565a5545980%40group.calendar.google.com&ctz=America%2FChicago"></iframe>
@@ -189,11 +163,26 @@
 </div>
 
 <div class="modal-menu manage-menu" id="manageUsersDropdown">
-    <div class="modal-header">
-        <h3>Manage Portal Users</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">User Permissions</span>
+          <span class="tool-head-sub">Manage portal users, roles and PINs.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
-    <div class="manage-content" id="manageUsersList"></div>
+    <div class="manage-content" id="manageUsersList">
+        <div class="mu-toolbar">
+            <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:0;">
+                <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+                <input type="text" id="manageUsersSearch" class="kb-search-input doc-search-input" placeholder="Search by name, store, or role…" autocomplete="off" oninput="filterManageUsers()" onkeydown="if(event.key===&quot;Escape&quot;){this.value=&quot;&quot;;filterManageUsers();}">
+            </div>
+        </div>
+        <div id="manageUsersRows"></div>
+    </div>
     <div class="manage-footer">
         <button class="btn-secondary" onclick="addManageUserRow()">+ Add New User</button>
         <button id="saveUsersBtn" class="btn-primary" onclick="saveManageUsers()">Save Changes</button>
@@ -201,9 +190,16 @@
 </div>
 
 <div class="modal-menu manage-menu" id="sendCommentModal">
-    <div class="modal-header">
-        <h3>Send Store Comment</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Send Store Comment</span>
+          <span class="tool-head-sub">Post a note to a store's dashboard.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content">
         <p style="font-size: 13px; color: #666; margin-bottom: 15px;">This message will pop up for all users in the selected store when they sign in today. It will expire at midnight.</p>
@@ -227,9 +223,16 @@
 </div>
 
 <div class="modal-menu manage-menu" id="manageAnnouncementsDropdown">
-    <div class="modal-header">
-        <h3>Publish Announcement</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Announcements</span>
+          <span class="tool-head-sub">Publish an announcement to the team.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content">
         <div>
@@ -260,9 +263,16 @@
 </div>
 
 <div class="modal-menu manage-menu" id="manageRecordsDropdown">
-    <div class="modal-header">
-        <h3>Edit Company Records</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Company Records</span>
+          <span class="tool-head-sub">Edit company records and reference data.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content" id="manageRecordsList"></div>
     <div class="manage-footer flex-end">
@@ -271,9 +281,16 @@
 </div>
 
 <div class="modal-menu manage-menu" id="manageAlertsDropdown">
-    <div class="modal-header">
-        <h3>Performance Metrics</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Performance Metrics</span>
+          <span class="tool-head-sub">Set the store performance metric targets.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content" id="manageAlertsList"></div>
     <div class="manage-footer flex-end">
@@ -282,9 +299,16 @@
 </div>
 
 <div class="modal-menu manage-menu" id="managerChecklistDropdown">
-    <div class="modal-header">
-        <h3>Manager Checklist</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Manager Checklist</span>
+          <span class="tool-head-sub">Assign and review store checklist tasks.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content">
         <div class="mcl-field" style="margin-bottom:16px;">
@@ -333,9 +357,16 @@
 </div>
 
 <div class="modal-menu manage-menu" id="manageHotkeysDropdown">
-    <div class="modal-header">
-        <h3>Edit Hotkeys</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 0 0 3-3z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">System Hotkeys</span>
+          <span class="tool-head-sub">Edit the global hotkeys and commands.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content" id="manageHotkeysList"></div>
     <div class="manage-footer">
@@ -345,9 +376,22 @@
 </div>
 
 <div class="modal-menu manage-menu" id="manageDocsDropdown">
-    <div class="modal-header">
-        <h3>Manage Policies</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Manage Policies</span>
+          <span class="tool-head-sub">Create and edit store policies &amp; docs.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div style="padding: 12px 20px 2px;">
+        <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:0;">
+            <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+            <input type="text" id="manageDocsSearch" class="kb-search-input doc-search-input" placeholder="Search policies…" autocomplete="off" oninput="filterManageDocs()" onkeydown="if(event.key===&quot;Escape&quot;){this.value=&quot;&quot;;filterManageDocs();}">
+        </div>
     </div>
     <div class="manage-content" id="manageDocsList"></div>
     <div class="manage-footer">
@@ -357,13 +401,16 @@
 </div>
 
 <main class="main-content">
-  <div class="page-header mb-40">
+  <div class="page-header mb-40 dp-header">
     <div class="w-full-max-500">
-        <h2>Processes & Policies</h2>
+        <div class="dp-eyebrow">SPEEKS Library</div>
+        <h2>Processes &amp; Policies</h2>
         <p class="mb-20">Your central library for company guidelines, procedures, and manuals.</p>
-        
-        <div class="kb-search-bar doc-search-wrapper">
-            <span class="doc-search-icon">🔍</span>
+
+        <!-- .dp-search scopes the restyle here: .doc-search-* is shared with the
+             Box Order search on every shell, so it must not be restyled globally. -->
+        <div class="kb-search-bar doc-search-wrapper dp-search">
+            <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
             <input type="text" id="docSearch" class="kb-search-input doc-search-input" placeholder="Search for documents..." onkeyup="filterDocs()">
         </div>
     </div>
@@ -376,12 +423,19 @@
 
 <div id="scorecardModalOverlay" onclick="closeScorecardModal()"></div>
 <div class="modal-menu manage-menu" id="claimsModal">
-    <div class="modal-header">
-        <h3>Insurance Claims &amp; Refunds</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><line x1="4.93" y1="4.93" x2="9.17" y2="9.17"/><line x1="14.83" y1="14.83" x2="19.07" y2="19.07"/><line x1="14.83" y1="9.17" x2="19.07" y2="4.93"/><line x1="9.17" y1="14.83" x2="4.93" y2="19.07"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Insurance Claims</span>
+          <span class="tool-head-sub">File and track Shopify, USPS &amp; UPS claims.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
 
-    <div style="padding: 14px 18px 0;">
+    <div style="padding: 14px 18px 14px;">
         <div class="notif-tabs" style="display: inline-flex;">
             <button id="claims-tab-new" class="tab-btn active" onclick="switchClaimsTab('new')">New Case</button>
             <button id="claims-tab-view" class="tab-btn" onclick="switchClaimsTab('view')">My Cases</button>
@@ -460,9 +514,16 @@
 </div>
 
 <div class="modal-menu manage-menu" id="claimsOversightModal">
-    <div class="modal-header">
-        <h3>Insurance Claims</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Insurance Claims</span>
+          <span class="tool-head-sub">Review open claims across every store.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content">
         <div id="claims-oversight-body"><div class="status-message">Loading…</div></div>
@@ -470,12 +531,19 @@
 </div>
 
 <div class="modal-menu manage-menu" id="scorecardSubmitModal">
-    <div class="modal-header">
-        <h3>Submit Store Scores</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Submit Scores</span>
+          <span class="tool-head-sub">Score stores and run the SPEEKS Audit.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
 
-    <div style="padding: 14px 18px 0;">
+    <div style="padding: 14px 18px 14px;">
         <div class="notif-tabs" style="display: inline-flex;">
             <button id="sc-tab-scorecard" class="tab-btn active" onclick="switchScoreTab('scorecard')">Scorecard</button>
             <button id="sc-tab-audit" class="tab-btn" onclick="switchScoreTab('audit')">SPEEKS Audit</button>
@@ -522,16 +590,23 @@
 <div class="modal-menu manage-menu" id="auditBreakdownModal">
     <div class="modal-header">
         <h3 id="audit-breakdown-title">Audit Breakdown</h3>
-        <button class="modal-close-btn" onclick="closeAuditBreakdown()">✖</button>
+        <button class="modal-close-btn" onclick="closeAuditBreakdown()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content" id="audit-breakdown-body"></div>
 </div>
 
 <!-- ===== EDIT MONTHLY GOALS MODAL ===== -->
 <div class="modal-menu manage-menu" id="editMonthlyGoalsModal">
-    <div class="modal-header">
-        <h3>🎯 Set Monthly Team Goals</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Monthly Team Goals</span>
+          <span class="tool-head-sub">Set your team's goals for the month.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content">
         <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Set up to 6 goals for your team this month. Give each goal a title and an optional description.</p>
@@ -545,9 +620,16 @@
 
 <!-- ===== EDIT COMPANY PROJECTS MODAL ===== -->
 <div class="modal-menu manage-menu" id="editCompanyProjectsModal">
-    <div class="modal-header">
-        <h3>🏢 Company Initiatives</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="21" x2="21" y2="21"/><path d="M5 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16"/><path d="M19 21V9l-4-3"/><line x1="9" y1="7" x2="11" y2="7"/><line x1="9" y1="11" x2="11" y2="11"/><line x1="9" y1="15" x2="11" y2="15"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Company Initiatives</span>
+          <span class="tool-head-sub">Company-wide initiatives every store can see.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content">
         <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Set up to 8 company-wide initiatives or projects. All stores will see these.</p>
@@ -561,9 +643,16 @@
 
 <!-- ===== EDIT STORE INITIATIVES MODAL ===== -->
 <div class="modal-menu manage-menu" id="editStoreInitiativesModal">
-    <div class="modal-header">
-        <h3 id="editStoreInitiativesTitle">🧪 Store Initiatives</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6"/><path d="M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3"/><line x1="7" y1="15" x2="17" y2="15"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title" id="editStoreInitiativesTitle">Store Initiatives</span>
+          <span class="tool-head-sub">Track ongoing initiatives for your store.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content">
         <p style="font-size: 13px; color: #666; margin-bottom: 15px;">Set up to 6 ongoing initiatives or experiments for your store. These persist until you remove them.</p>
@@ -582,7 +671,7 @@
                 <span style="font-size: 18px;">🎯</span>
                 <h3 style="margin: 0; font-size: 15px; font-weight: 800; color: var(--slate-charcoal);">Goals &amp; Initiatives</h3>
             </div>
-            <button class="modal-close-btn" onclick="toggleGoalsPanel()" style="width: 28px; height: 28px; font-size: 14px; background: #f1f5f9; color: #64748b;">✖</button>
+            <button class="modal-close-btn" onclick="toggleGoalsPanel()" style="width: 28px; height: 28px; font-size: 14px; background: #f1f5f9; color: #64748b;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
     </div>
     <div class="gi-panel-body">
@@ -622,7 +711,7 @@
     <div class="cl-panel-header">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
             <h3 style="margin: 0;">Manager Checklist</h3>
-            <button class="modal-close-btn" onclick="toggleChecklistPanel(event)" style="width: 28px; height: 28px; font-size: 14px; background: #f1f5f9; color: #64748b;">✖</button>
+            <button class="modal-close-btn" onclick="toggleChecklistPanel(event)" style="width: 28px; height: 28px; font-size: 14px; background: #f1f5f9; color: #64748b;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         
         <div class="notif-tabs">
@@ -653,7 +742,7 @@
     <div class="cl-panel-header">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
             <h3 style="margin: 0;">Cleaning Checklist</h3>
-            <button class="modal-close-btn" onclick="toggleAuditPanel(event)" style="width: 28px; height: 28px; font-size: 14px; background: #f1f5f9; color: #64748b;">✖</button>
+            <button class="modal-close-btn" onclick="toggleAuditPanel(event)" style="width: 28px; height: 28px; font-size: 14px; background: #f1f5f9; color: #64748b;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div class="notif-tabs">
             <button id="audit-tab-daily" class="tab-btn active" onclick="switchAuditTab('daily')">Daily</button>
@@ -670,10 +759,132 @@
 
 </main>
 
+<!-- ===== DM DISTRICT LISTING GOALS =====
+     Replaced a panel on the DM dashboard. Master/detail: five stores down the
+     left, the selected store's detail on the right — see the .dmx block in
+     styles.css for why that shape rather than an accordion. Rendered by
+     renderDm*Modal() in speeks.js; opened from the action-menu rail. -->
+<div class="modal-menu manage-menu" id="dmListingModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools &middot; District</span>
+          <span class="tool-head-title">Listing Goals</span>
+          <span class="tool-head-sub" id="dmListingSub">Syncing&hellip;</span>
+        </div>
+      </div>
+      <div class="dmx-head-side">
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+    </div>
+    <div class="manage-content">
+      <div id="dmListingBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
+    </div>
+    <div class="manage-footer">
+      <span class="dmx-foot-note">Rosters are read-only here &mdash; managers set their own. Flag decisions save immediately.</span>
+    </div>
+</div>
+
+<!-- ===== DM DISTRICT CLEANING CHECKLIST =====
+     Replaced a panel on the DM dashboard. Master/detail: five stores down the
+     left, the selected store's detail on the right — see the .dmx block in
+     styles.css for why that shape rather than an accordion. Rendered by
+     renderDm*Modal() in speeks.js; opened from the action-menu rail. -->
+<div class="modal-menu manage-menu" id="dmCleaningModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21v-4a4 4 0 0 1 4-4h5"/><path d="M14 4l6 6"/><path d="M17 7l-9 9-4 1 1-4 9-9a2.8 2.8 0 0 1 4 0 2.8 2.8 0 0 1 0 4z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools &middot; District</span>
+          <span class="tool-head-title">Cleaning Checklist</span>
+          <span class="tool-head-sub" id="dmCleaningSub">Syncing&hellip;</span>
+        </div>
+      </div>
+      <div class="dmx-head-side">
+        <div class="notif-tabs" style="margin:0;">
+          <button id="dmClTabDaily" class="tab-btn active" onclick="switchDmCleaningTab('daily')">Daily</button>
+          <button id="dmClTabWeekly" class="tab-btn" onclick="switchDmCleaningTab('weekly')">Weekly</button>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+    </div>
+    <div class="manage-content">
+      <div id="dmCleaningBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
+    </div>
+    <div class="manage-footer">
+      <span class="dmx-foot-note">Read-only &mdash; stores tick their own items. Refreshes every minute.</span>
+    </div>
+</div>
+
+<!-- ===== DM DISTRICT MONTHLY TEAM GOALS =====
+     Replaced a panel on the DM dashboard. Master/detail: five stores down the
+     left, the selected store's detail on the right — see the .dmx block in
+     styles.css for why that shape rather than an accordion. Rendered by
+     renderDm*Modal() in speeks.js; opened from the action-menu rail. -->
+<div class="modal-menu manage-menu" id="dmGoalsModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools &middot; District</span>
+          <span class="tool-head-title">Monthly Team Goals</span>
+          <span class="tool-head-sub" id="dmGoalsSub">Syncing&hellip;</span>
+        </div>
+      </div>
+      <div class="dmx-head-side">
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+    </div>
+    <div class="manage-content">
+      <div id="dmGoalsBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
+    </div>
+    <div class="manage-footer">
+      <span class="dmx-foot-note">Edit buttons open the store-scoped editor for the selected store.</span>
+    </div>
+</div>
+
+<div class="modal-menu manage-menu" id="preferredModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title" id="preferredHeadTitle">Preferred Purchases</span>
+          <span class="tool-head-sub" id="preferredHeadSub">Suggest a product for the company list.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+
+    <div style="padding: 14px 18px 14px;">
+        <div class="notif-tabs" id="preferredTabs" style="display: inline-flex;">
+            <button id="pl-tab-new" class="tab-btn active" data-pltab="new" onclick="plSwitchTab('new')">New Request</button>
+            <button id="pl-tab-mine" class="tab-btn" data-pltab="mine" onclick="plSwitchTab('mine')">My Requests</button>
+            <button id="pl-tab-pending" class="tab-btn" data-pltab="pending" onclick="plSwitchTab('pending')" style="display:none;">Pending</button>
+            <button id="pl-tab-decided" class="tab-btn" data-pltab="decided" onclick="plSwitchTab('decided')" style="display:none;">Decided</button>
+        </div>
+    </div>
+
+    <div class="manage-content" id="preferredBody"></div>
+
+    <div class="manage-footer" id="preferredFooter" style="display:flex; gap:10px; justify-content:flex-end; padding:14px 18px;">
+        <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
+        <button class="btn-primary" id="plSubmitBtn" onclick="plSubmitRequest()">Send Request &#8594;</button>
+    </div>
+</div>
+
 <div class="modal-menu manage-menu" id="boxOrderModal">
-    <div class="modal-header">
-        <h3>📦 Box Order</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Box Order</span>
+          <span class="tool-head-sub">Request boxes &amp; supplies for your store.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
 
     <!-- TABS — DM/CEO only (managers just see the order flow) -->
@@ -685,7 +896,7 @@
     <!-- PAGE 1: Item Selection -->
     <div class="manage-content" id="boxOrderPage1">
         <div class="kb-search-bar doc-search-wrapper" style="margin-bottom:14px;">
-            <span class="doc-search-icon">🔍</span>
+            <span class="doc-search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
             <input type="text" id="boxOrderSearch" class="kb-search-input doc-search-input" placeholder="Search boxes & supplies..." oninput="filterBoxOrderItems()">
         </div>
         <div id="boxOrderItemsContainer"></div>
@@ -773,15 +984,15 @@
     <!-- FOOTER PAGE 1 -->
     <div class="manage-footer box-order-footer" id="boxOrderFooter1">
         <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
-        <button class="btn-primary" onclick="boxOrderNextPage()">Next →</button>
+        <button class="btn-primary" onclick="boxOrderNextPage()">Next<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
     </div>
 
     <!-- FOOTER PAGE 2 -->
     <div class="manage-footer box-order-footer" id="boxOrderFooter2" style="display:none;">
-        <span class="goals-info-i" style="align-self:center;" data-tip-title="Send Email opens your mail app" data-tip-desc="Clicking Send Email opens your computer's default email app with the order pre-filled — nothing sends until you hit Send there. If nothing opens: go to Windows Settings → Apps → Default apps → scroll to Choose defaults by link type → set MAILTO to Outlook (or your mail app). Or click 📋 Copy and paste the order into any email.">i</span>
-        <button class="btn-secondary" onclick="boxOrderBackPage()">← Back</button>
-        <button class="btn-secondary" onclick="copyBoxOrder(this)">📋 Copy</button>
-        <button class="btn-primary" onclick="sendBoxOrder()">Send Email →</button>
+        <span class="goals-info-i" style="align-self:center;" data-tip-title="Send Email opens your mail app" data-tip-desc="Clicking Send Email opens your computer's default email app with the order pre-filled — nothing sends until you hit Send there. If nothing opens: go to Windows Settings → Apps → Default apps → scroll to Choose defaults by link type → set MAILTO to Outlook (or your mail app). Or click Copy and paste the order into any email."><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
+        <button class="btn-secondary" onclick="boxOrderBackPage()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>Back</button>
+        <button class="btn-secondary" onclick="copyBoxOrder(this)">Copy</button>
+        <button class="btn-primary" onclick="sendBoxOrder()">Send Email<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
     </div>
 
     <!-- FOOTER: MANAGE ITEMS -->
@@ -791,12 +1002,19 @@
 </div>
 
 <div class="modal-menu manage-menu" id="recycleInvModal">
-    <div class="modal-header">
-        <h3>♻️ Recycle Inventory</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Recycle Inventory</span>
+          <span class="tool-head-sub">Log recycled units for pickup and review.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
 
-    <div style="padding: 14px 18px 0;">
+    <div style="padding: 14px 18px 14px;">
         <div class="notif-tabs" style="display: inline-flex;">
             <button id="recycle-tab-new" class="tab-btn active" onclick="switchRecycleTab('new')">New Request</button>
             <button id="recycle-tab-view" class="tab-btn" onclick="switchRecycleTab('view')">My Requests</button>
@@ -856,22 +1074,17 @@
     </div>
 </div>
 
-<div class="modal-menu manage-menu" id="manageTickerDropdown">
-    <div class="modal-header">
-        <h3>Manage Ticker Items</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
-    </div>
-    <div class="manage-content" id="manageTickerList"></div>
-    <div class="manage-footer">
-        <button class="btn-secondary" onclick="addTickerRow()">+ Add Item</button>
-        <button id="saveTickerBtn" class="btn-primary" onclick="saveTickerItems()">Save Changes</button>
-    </div>
-</div>
-
 <div class="modal-menu manage-menu" id="varianceInputModal">
-    <div class="modal-header">
-        <h3>📊 Submit Variance Report</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Submit Variance Report</span>
+          <span class="tool-head-sub">Upload the weekly variance for a store.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content">
         <label class="form-label-caps">Store</label>
@@ -898,7 +1111,7 @@
         <input type="number" id="vi-store-pct" class="form-input-lg" step="0.01" placeholder="e.g. -2.45" style="margin-bottom: 15px;">
 
         <label class="form-label-caps">Employees</label>
-        <div id="vi-employees" style="display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto;"></div>
+        <div id="vi-employees" style="display: flex; flex-direction: column; gap: 8px;"></div>
     </div>
     <div class="manage-footer flex-end">
         <button class="btn-secondary" onclick="closeAllModals()">Cancel</button>
@@ -907,13 +1120,22 @@
 </div>
 
 <div class="modal-menu manage-menu" id="patchNotesManageModal">
-    <div class="modal-header">
-        <h3>📋 Patch Notes</h3>
-        <div class="notif-tabs">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Patch Notes</span>
+          <span class="tool-head-sub">Publish product patch notes and updates.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div style="padding: 14px 18px 14px;">
+        <div class="notif-tabs" style="display:inline-flex;">
             <button id="pnmTab-add" class="tab-btn active" onclick="switchPNManageTab('add')">Add New</button>
             <button id="pnmTab-edit" class="tab-btn" onclick="switchPNManageTab('edit')">Edit Previous</button>
         </div>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
     </div>
 
     <!-- ADD NEW TAB -->
@@ -948,9 +1170,16 @@
 </div>
 
 <div class="modal-menu manage-menu" id="manageAwardsDropdown">
-    <div class="modal-header">
-        <h3>Monthly Awards</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Monthly Awards</span>
+          <span class="tool-head-sub">Publish the monthly team award winners.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
 
     <div class="manage-content" id="awardsTabEdit">
@@ -967,27 +1196,27 @@
 
         <div class="awards-form-grid">
             <div class="awards-form-award-block">
-                <div class="awards-form-award-title">🥇 The Beyond The Benchmark Award</div>
+                <div class="awards-form-award-title">The Beyond The Benchmark Award</div>
                 <label class="form-label-caps">Winning Store</label>
                 <select id="award1Store" class="form-input-lg">
                     <option value="">— Select Store —</option>
-                    <option value="OVL">🟣 OVL</option><option value="LEE">🔵 LEE</option><option value="WSP">🟢 WSP</option><option value="MPL">🟠 MPL</option><option value="BAL">🔴 BAL</option>
+                    <option value="OVL">OVL</option><option value="LEE">LEE</option><option value="WSP">WSP</option><option value="MPL">MPL</option><option value="BAL">BAL</option>
                 </select>
             </div>
             <div class="awards-form-award-block">
-                <div class="awards-form-award-title">🥈 The Scroll Stopper Award</div>
+                <div class="awards-form-award-title">The Scroll Stopper Award</div>
                 <label class="form-label-caps">Winning Store</label>
                 <select id="award2Store" class="form-input-lg">
                     <option value="">— Select Store —</option>
-                    <option value="OVL">🟣 OVL</option><option value="LEE">🔵 LEE</option><option value="WSP">🟢 WSP</option><option value="MPL">🟠 MPL</option><option value="BAL">🔴 BAL</option>
+                    <option value="OVL">OVL</option><option value="LEE">LEE</option><option value="WSP">WSP</option><option value="MPL">MPL</option><option value="BAL">BAL</option>
                 </select>
             </div>
             <div class="awards-form-award-block">
-                <div class="awards-form-award-title">🥉 The Brand Beacon Award</div>
+                <div class="awards-form-award-title">The Brand Beacon Award</div>
                 <label class="form-label-caps">Winning Store</label>
                 <select id="award3Store" class="form-input-lg">
                     <option value="">— Select Store —</option>
-                    <option value="OVL">🟣 OVL</option><option value="LEE">🔵 LEE</option><option value="WSP">🟢 WSP</option><option value="MPL">🟠 MPL</option><option value="BAL">🔴 BAL</option>
+                    <option value="OVL">OVL</option><option value="LEE">LEE</option><option value="WSP">WSP</option><option value="MPL">MPL</option><option value="BAL">BAL</option>
                 </select>
             </div>
         </div>
@@ -1011,19 +1240,33 @@
 <!-- ===== SPEEKS TOOLS SIDE PANEL ===== -->
 <!-- ===== EMAIL RECIPIENTS MODAL (DM/CEO) ===== -->
 <div class="modal-menu manage-menu" id="emailRecipientsModal">
-    <div class="modal-header">
-        <h3>📧 Email Recipients</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Email Recipients</span>
+          <span class="tool-head-sub">Manage who receives each automated report.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content" id="emailRecipientsBody"></div>
 </div>
 
 <div class="modal-menu manage-menu" id="featureAccessModal">
-    <div class="modal-header">
-        <h3>🎛️ Feature Access</h3>
-        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Feature Access</span>
+          <span class="tool-head-sub">Show or hide features by role and user.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
-    <div style="padding: 14px 18px 0;">
+    <div style="padding: 14px 18px 14px;">
         <div class="notif-tabs" style="display: inline-flex;">
             <button id="fa-tab-tools" class="tab-btn active" onclick="switchFaTab('tools')">SPEEKS Tools</button>
             <button id="fa-tab-hotbar" class="tab-btn" onclick="switchFaTab('hotbar')">Hotbar Links</button>
@@ -1040,7 +1283,7 @@
 <div class="tools-side-panel dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager role-manager role-assistant-manager" id="toolsSidePanel" style="flex-direction:column;">
   <div class="tools-panel-header">
     <div class="tools-panel-title">
-      <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+      <svg class="tools-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"></rect><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"></rect><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"></rect><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"></rect></svg>
       SPEEKS Tools
     </div>
     <button class="tools-panel-close" onclick="_closeToolsPanel()">✕</button>
@@ -1068,13 +1311,15 @@
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-submit-scores" onclick="_closeToolsPanel(); openScorecardModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></span>Submit Scores</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-manager-checklist" onclick="_closeToolsPanel(); toggleManagerChecklist();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></span>Manager Checklist</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-variance-report" onclick="_closeToolsPanel(); toggleVarianceInput();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></span>Submit Variance Report</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-store-comment" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></span>Send Store Comment</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" data-feature="tool-store-comment" onclick="_closeToolsPanel(); toggleSendCommentModal();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></span>Send Store Comment</a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager">
       <div class="tools-group-label">Orders</div>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager" data-feature="tool-box-order" onclick="_closeToolsPanel(); toggleBoxOrder();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></span>Box Order</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-manager role-owner-manager role-assistant-manager" data-feature="tool-recycle-inventory" onclick="_closeToolsPanel(); toggleRecycleInventory();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></span>Recycle Inventory</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-manager role-assistant-manager" data-feature="tool-preferred-request" onclick="_closeToolsPanel(); togglePreferredPurchases();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/></svg></span><span class="pl-tool-label">Preferred Purchases</span></a>
+      <a class="tools-item dynamic-module-flex role-owner-manager" data-feature="tool-preferred-approve" onclick="_closeToolsPanel(); openPreferredOwner();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V6a3 3 0 0 1 6 0v5"/><path d="M4 11h16l-1.2 9.2A2 2 0 0 1 16.8 22H7.2a2 2 0 0 1-2-1.8z"/><polyline points="9 15 11 17 15 13"/></svg></span><span class="pl-tool-label">Preferred Purchases</span></a>
     </div>
 
     <div class="tools-group dynamic-module-block role-district-manager role-ceo role-owner-manager">
