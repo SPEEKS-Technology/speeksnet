@@ -22522,7 +22522,8 @@ function _dccChecks(r) {
     return [
         { key: 'score',   s: r.score > 8 ? null : (r.score >= 6 ? 'w' : 'b') },
         { key: 'audit',   s: !r.audit ? null : (r.audit.pct >= 80 ? null : (r.audit.pct >= 50 ? 'w' : 'b')) },
-        { key: 'sales',   s: _dccTier(r.salesPct, 100, 'min'), rule: 'goal 100%' },
+        // No rule text: "Sales vs goal" already says the target is 100%.
+    { key: 'sales',   s: _dccTier(r.salesPct, 100, 'min'), rule: '' },
         { key: 'sellM',   s: _dccTier(r.sellM, 55.5, 'min'), rule: 'floor 55.5%' },
         // Still only judged when above zero: a missing figure parses to 0 and must
         // not read as a 0% margin.
@@ -22624,17 +22625,35 @@ function _dccRanked() {
         a.store.localeCompare(b.store));
 }
 
+// Inside a group the cards run furthest-from-goal first. Severity picks the
+// group; money picks the order within it, which is the question actually being
+// asked of a card that already says how far off goal it is.
+function _dccByGoal(list) {
+    return list.slice().sort((a, b) => {
+        const x = isFinite(a.salesPct) ? a.salesPct : Infinity;
+        const y = isFinite(b.salesPct) ? b.salesPct : Infinity;
+        return x - y || a.store.localeCompare(b.store);
+    });
+}
+// The rail's flat order — the groups in severity order, each sorted by goal.
+// The default selection reads off the top of this so the pane always opens on
+// the card sitting first in the rail.
+const _DCC_GROUPS = [
+    { k: 'b', label: 'Serious' },
+    { k: 'w', label: 'Watch' },
+    { k: 'g', label: 'All clear' },
+];
+function _dccRailOrder() {
+    return _DCC_GROUPS.reduce((acc, g) =>
+        acc.concat(_dccByGoal(_dccRows.filter(r => _dccWorst(r) === g.k))), []);
+}
+
 // --- rail -------------------------------------------------------------------
 function _dccRailHtml() {
-    const groups = [
-        { k: 'b', label: 'Serious',   col: '#b91c1c' },
-        { k: 'w', label: 'Watch',     col: '#b45309' },
-        { k: 'g', label: 'All clear', col: '#15803d' },
-    ];
-    return groups.map(g => {
-        const list = _dccRanked().filter(r => _dccWorst(r) === g.k);
+    return _DCC_GROUPS.map(g => {
+        const list = _dccByGoal(_dccRows.filter(r => _dccWorst(r) === g.k));
         if (!list.length) return '';
-        return '<div class="dcc-group"><span class="dcc-group-dot" style="background:' + g.col + '"></span>'
+        return '<div class="dcc-group">'
             + g.label + '<span class="dcc-group-n">' + list.length + '</span></div>'
             + list.map(r => {
                 const under = _dccState(r, 'sales') ? ' under' : '';
@@ -22649,13 +22668,30 @@ function _dccRailHtml() {
 }
 
 // --- pane sections ----------------------------------------------------------
+// state may be 'b' (serious), 'w' (watch), 'g' (on target) or null (nothing to
+// judge — a raw count with no threshold, which stays ink). The unit always gets
+// its own fixed-width slot, empty or not: that is what puts $66,332 and 86.45
+// on the same right edge instead of letting a trailing "%" shove one of them in.
 function _dccStatRow(label, value, unit, state, ruleText, sub) {
     const cls = state ? ' ' + state : '';
-    const miss = state ? '<span class="dcc-miss ' + state + '">' + escapeHtml(ruleText) + '</span>' : '';
+    // A blank rule prints no chip — some thresholds (sales vs goal) are implied
+    // by the label and the chip was only noise.
+    const miss = (state && state !== 'g' && ruleText)
+        ? '<span class="dcc-miss ' + state + '">' + escapeHtml(ruleText) + '</span>' : '';
     return '<div class="dcc-row"><span class="dcc-row-l">' + escapeHtml(label)
         + (sub ? '<i>' + escapeHtml(sub) + '</i>' : '') + '</span>'
-        + '<span class="dcc-row-v' + cls + '">' + miss + value
-        + (unit ? '<span class="u">' + unit + '</span>' : '') + '</span></div>';
+        + '<span class="dcc-row-v' + cls + '">' + miss
+        + '<span class="n">' + value + '</span>'
+        + '<span class="u">' + (unit || '') + '</span></span></div>';
+}
+
+// 'g' when the metric was judged and cleared its threshold, the failure state
+// when it didn't, and null when there was nothing to judge. "has" is the same
+// availability test the value itself is rendered under, so a missing figure is
+// never painted green.
+function _dccJudge(r, key, has) {
+    if (has === false) return null;
+    return _dccState(r, key) || 'g';
 }
 
 function _dccEbayBlock(r) {
@@ -22685,14 +22721,14 @@ function _dccEbayBlock(r) {
 function _dccBuyBlock(r) {
     return '<div class="dcc-block"><div class="dcc-sec">Buying &amp; selling'
         + (r.edited ? '<em>' + escapeHtml(r.edited) + '</em>' : '') + '</div><div class="dcc-rows">'
-        + _dccStatRow('Sales vs goal', _dccFix(r.salesPct), '%', _dccState(r, 'sales'), _dccRule(r, 'sales'))
+        + _dccStatRow('Sales vs goal', _dccFix(r.salesPct), '%', _dccJudge(r, 'sales'), _dccRule(r, 'sales'))
         + _dccStatRow('Revenue', _dccMoney(r.rev), '', null)
         + _dccStatRow('GP tracking', _dccMoney(r.gpTrack), '', null)
-        + _dccStatRow('Sell margin', r.sellM > 0 ? _dccFix(r.sellM) : '—', r.sellM > 0 ? '%' : '', _dccState(r, 'sellM'), _dccRule(r, 'sellM'))
+        + _dccStatRow('Sell margin', r.sellM > 0 ? _dccFix(r.sellM) : '—', r.sellM > 0 ? '%' : '', _dccJudge(r, 'sellM', r.sellM > 0), _dccRule(r, 'sellM'))
         + _dccStatRow('Buy tracking', _dccMoney(r.buyTrack), '', null)
-        + _dccStatRow('Buy margin', _dccFix(r.buyM), '%', _dccState(r, 'buyM'), _dccRule(r, 'buyM'))
+        + _dccStatRow('Buy margin', _dccFix(r.buyM), '%', _dccJudge(r, 'buyM', r.buyM > 0), _dccRule(r, 'buyM'))
         + _dccStatRow('Variance total', (r.vari > 0 ? '+' : '') + r.vari.toFixed(2), '%',
-                      _dccState(r, 'vari'), _dccRule(r, 'vari'), r.variRange || '')
+                      _dccJudge(r, 'vari'), _dccRule(r, 'vari'), r.variRange || '')
         + '</div></div>';
 }
 
@@ -22702,10 +22738,10 @@ function _dccWeekBlock(r) {
     const or = v => (v === '' || v == null) ? '—' : v;
     return '<div class="dcc-block"><div class="dcc-sec">Weekly metrics'
         + (r.period ? '<em>' + escapeHtml(r.period) + '</em>' : '') + '</div><div class="dcc-rows">'
-        + _dccStatRow('Conversion', or(r.conv), r.conv ? '%' : '', _dccState(r, 'conv'), _dccRule(r, 'conv'))
-        + _dccStatRow('Margin', or(r.wkM), r.wkM ? '%' : '', _dccState(r, 'wkM'), _dccRule(r, 'wkM'))
-        + _dccStatRow('Transaction time', or(r.time), r.time ? 'min' : '', _dccState(r, 'time'), _dccRule(r, 'time'))
-        + _dccStatRow('No deals', or(r.noDeals), '', _dccState(r, 'noDeals'), _dccRule(r, 'noDeals'))
+        + _dccStatRow('Conversion', or(r.conv), r.conv ? '%' : '', _dccJudge(r, 'conv', !!r.conv), _dccRule(r, 'conv'))
+        + _dccStatRow('Margin', or(r.wkM), r.wkM ? '%' : '', _dccJudge(r, 'wkM', !!r.wkM), _dccRule(r, 'wkM'))
+        + _dccStatRow('Transaction time', or(r.time), r.time ? 'min' : '', _dccJudge(r, 'time', !!r.time), _dccRule(r, 'time'))
+        + _dccStatRow('No deals', or(r.noDeals), '', _dccJudge(r, 'noDeals', r.noDeals !== '' && r.noDeals != null), _dccRule(r, 'noDeals'))
         + _dccStatRow('Listed devices', or(r.listed), '', null)
         + '</div></div>';
 }
@@ -22725,7 +22761,6 @@ function _dccCatBlock(r) {
 
 function _dccPaneHtml(r, portalLink) {
     if (!r) return '<div class="dcc-empty">Select a store.</div>';
-    const n = _dccCount(r), k = _dccWorst(r);
     const chipCls = s => s === 'b' ? 'dcc-bad' : s === 'w' ? 'dcc-warn' : 'dcc-good';
 
     const scoreChip = '<span class="dcc-chip ' + chipCls(_dccState(r, 'score'))
@@ -22738,9 +22773,6 @@ function _dccPaneHtml(r, portalLink) {
           + '<span class="dcc-chip-l">AUDIT</span>' + r.audit.pct + '%</span>'
         : '<span class="dcc-chip dcc-mute" title="No practice audit submitted yet">'
           + '<span class="dcc-chip-l">AUDIT</span>No data</span>';
-    const stateChip = '<span class="dcc-chip ' + (k === 'g' ? 'dcc-good' : chipCls(k)) + '">'
-        + _DCC_ICO[k] + (n.off ? n.off + ' to fix' : 'All clear') + '</span>';
-
     // eBay leads when the account is in trouble: a suspension outranks a margin
     // point. Otherwise the money leads. Same blocks either way.
     const ebayBroken = ['track', 'defect', 'cases', 'late'].some(x => _dccState(r, x));
@@ -22750,30 +22782,30 @@ function _dccPaneHtml(r, portalLink) {
 
     return '<div class="dcc-ph"><div>'
         + '<div class="dcc-pt">' + escapeHtml(r.store) + '</div>'
-        + '<div class="dcc-ps">Goal ' + _dccMoney(r.goal) + ' &middot; week of ' + escapeHtml(r.week)
+        + '<div class="dcc-ps">Goal ' + _dccMoney(r.goal) + ' &middot; Week of ' + escapeHtml(r.week)
         + (portalLink ? ' &middot; <a href="' + portalLink + '" target="_blank" rel="noopener">Store folder</a>' : '')
         + '</div></div>'
-        + '<div class="dcc-ph-side">' + scoreChip + auditChip + stateChip + '</div></div>'
+        + '<div class="dcc-ph-side">' + scoreChip + auditChip + '</div></div>'
         + blocks.join('');
 }
 
 // --- board ------------------------------------------------------------------
 function _dccBoardHtml(portalLinks) {
     if (!_dccRows.length) return '<div class="dcc-empty">Syncing the district…</div>';
-    if (!_dccSel || !_dccRows.some(r => r.store === _dccSel)) _dccSel = _dccRanked()[0].store;
+    if (!_dccSel || !_dccRows.some(r => r.store === _dccSel)) _dccSel = _dccRailOrder()[0].store;
     const sel = _dccRows.find(r => r.store === _dccSel);
 
     const totRev = _dccRows.reduce((a, r) => a + r.rev, 0);
     const totGoal = _dccRows.reduce((a, r) => a + r.goal, 0);
-    const needing = _dccRows.filter(r => _dccWorst(r) !== 'g').length;
 
     return '<div class="dcc">'
         + '<div class="dcc-head">'
         + '<span class="dcc-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20"/></svg></span>'
         + '<div><div class="dcc-eyebrow">District</div><div class="dcc-title">Command Center</div></div>'
+        // The money is the headline and carries itself at size; the store count
+        // that used to sit beside it only repeated what the rail groups already say.
         + '<div class="dcc-head-side"><span class="dcc-sum">'
-        + '<b>' + _dccMoney(totRev) + '</b> of ' + _dccMoney(totGoal) + ' goal &middot; '
-        + '<b>' + (needing ? needing + ' of 5' : 'no') + '</b> store' + (needing === 1 ? '' : 's') + ' needing attention'
+        + '<b>' + _dccMoney(totRev) + '</b><i>of ' + _dccMoney(totGoal) + ' goal</i>'
         + '</span></div></div>'
         + '<div class="dcc-body"><div class="dcc-grid">'
         + '<div class="dcc-rail">' + _dccRailHtml() + '</div>'

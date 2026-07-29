@@ -10320,8 +10320,12 @@ body.sam-active .hotbar-btn:hover {
 .dcc-eyebrow { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: #8a94a3; }
 .dcc-title { font-size: 18px; font-weight: 800; letter-spacing: -.012em; line-height: 1.1; color: #0f172a; }
 .dcc-head-side { margin-left: auto; display: flex; align-items: center; gap: 9px; }
-.dcc-sum { font-size: 12.5px; font-weight: 650; color: #647082; }
-.dcc-sum b { font-weight: 800; color: #0f172a; }
+/* District money is the header's headline: the total carries at size, the goal
+   trails it as a caption on the same baseline. */
+.dcc-sum { display: flex; align-items: baseline; gap: 7px; }
+.dcc-sum b { font-size: 22px; font-weight: 800; letter-spacing: -.022em; line-height: 1;
+             color: #0f172a; font-variant-numeric: tabular-nums; }
+.dcc-sum i { font-style: normal; font-size: 12px; font-weight: 700; color: #8a94a3; }
 .dcc-body { padding: 16px 20px 20px; background: #f6f8fa; }
 .dcc-grid { display: grid; grid-template-columns: 252px 1fr; gap: 14px; align-items: start; }
 
@@ -10331,7 +10335,6 @@ body.sam-active .hotbar-btn:hover {
     font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: #8a94a3;
 }
 .dcc-group:first-child { margin-top: 0; }
-.dcc-group-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
 .dcc-group-n { margin-left: auto; color: #aab4bf; }
 
 .dcc-t {
@@ -10397,17 +10400,27 @@ body.sam-active .hotbar-btn:hover {
 .dcc-cell-d { margin-top: 2px; font-size: 10.5px; font-weight: 650; color: #8a94a3; }
 
 /* stat rows */
+/* Two thirds of the pane, not all of it: the value column has no reason to sit a
+   foot away from the label it belongs to. The other row-shaped blocks take the
+   same width so the pane has one right edge instead of a ragged one; the 4-cell
+   eBay grid stays full width because four cells genuinely need the room. */
+.dcc-rows, .dcc-cats, .dcc-clear { max-width: 66%; }
 .dcc-rows { background: #f6f8fa; border: 1px solid #eef1f5; border-radius: 10px; padding: 3px 13px; }
 .dcc-row { display: flex; align-items: center; justify-content: space-between; gap: 12px;
            padding: 8px 0; border-bottom: 1px solid #e9eef2; font-size: 12.5px; }
 .dcc-row:last-child { border-bottom: 0; }
 .dcc-row-l { font-weight: 650; color: #647082; }
 .dcc-row-l i { display: block; font-style: normal; font-size: 10px; font-weight: 650; color: #aab4bf; margin-top: 1px; }
-.dcc-row-v { display: flex; align-items: center; gap: 7px; font-weight: 800;
+.dcc-row-v { display: flex; align-items: baseline; gap: 6px; font-weight: 800;
              font-variant-numeric: tabular-nums; color: #0f172a; }
-.dcc-row-v .u { font-size: 10.5px; font-weight: 700; color: #8a94a3; }
+/* The unit owns a fixed slot whether or not there is a unit to put in it, so
+   every numeral in the column ends on the same edge — $66,332 no longer sits
+   26px right of 86.45 just because one of them is followed by a "%". */
+.dcc-row-v .u { flex: 0 0 26px; font-size: 10.5px; font-weight: 700; color: #8a94a3; }
+.dcc-row-v .n { flex: 0 0 auto; }
 .dcc-row-v.b { color: #b91c1c; }
 .dcc-row-v.w { color: #b45309; }
+.dcc-row-v.g { color: #15803d; }
 /* The rule that was missed, printed beside the value — so the gap is legible
    in black and white and you don't have to know the threshold by heart. */
 .dcc-miss { font-size: 9.5px; font-weight: 800; letter-spacing: .03em; padding: 2px 7px; border-radius: 20px; border: 1px solid; }
@@ -10431,8 +10444,10 @@ body.sam-active .hotbar-btn:hover {
 .dcc-clear svg { width: 14px; height: 14px; flex: 0 0 auto; }
 .dcc-empty { padding: 50px 20px; text-align: center; font-size: 13px; font-weight: 650; color: #8a94a3; }
 
+@media (max-width: 1200px) { .dcc-rows, .dcc-cats, .dcc-clear { max-width: 80%; } }
 @media (max-width: 900px) {
     .dcc-grid { grid-template-columns: 1fr; }
     .dcc-g4 { grid-template-columns: 1fr 1fr; }
+    .dcc-rows, .dcc-cats, .dcc-clear { max-width: none; }
     .dcc-head-side .dcc-sum { display: none; }
 }
