@@ -64,6 +64,14 @@ const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
+// --- SHARED STORE ROSTER ---
+// Every store code in the district, plus the colour dot each is shown with.
+// These used to live inside the B2B module as B2B_STORE_LIST / B2B_STORE_ICONS,
+// but Call Backs and the MSM alert router read them too, so they belong here
+// rather than inside a feature that can be rebuilt out from under them.
+const STORE_CODES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+const STORE_DOTS  = { 'OVL': '🟣', 'LEE': '🔵', 'WSP': '🟢', 'MPL': '🟠', 'BAL': '🔴' };
+
 // --- WRITE HELPER ---
 // POST JSON to an edge function as a "simple" request: keeping Content-Type
 // text/plain avoids a CORS preflight, and dropping mode:'no-cors' means the
@@ -4162,7 +4170,7 @@ async function switchKpiTab(tab) {
 }
 
 // ============================================================================
-// ANALYTICS WORKSPACE (workspace.html) — Monthly Brief / Store KPIs / B2B
+// ANALYTICS WORKSPACE (workspace.html) — Monthly Brief / Store KPIs / Variance
 // ============================================================================
 let _wsBriefLoaded = false;
 let _wsKpiLoaded   = false;
@@ -4210,8 +4218,6 @@ function switchWorkspaceTab(name) {
         _kpiViewStore = (typeof isMultiStoreManager === 'function' && isMultiStoreManager())
             ? (_consumeMsmAlertStore() || null) : null;
         loadWorkspaceKpis();
-    } else if (name === 'b2b') {
-        fetchB2BDeals();
     } else if (name === 'vreplies') {
         loadVarianceReplies();
     } else if (name === 'aging') {
@@ -4237,13 +4243,13 @@ function switchWorkspaceTab(name) {
 }
 
 // Detects the workspace page and opens the requested sub-tab (defaults to the
-// brief, or honors a #brief / #kpis / #b2b deep-link). Safe no-op elsewhere.
+// brief, or honors a #brief / #kpis / #vreplies / #aging deep-link). Safe no-op
+// elsewhere. B2B is an Operations tab now, not a workspace one.
 function initWorkspace() {
     if (!document.querySelector('.ws-wrap')) return;
     _wsBriefLoaded = false;
     _wsKpiLoaded   = false;
     const hash = (window.location.hash || '').replace('#', '');
-    // TEMP: B2B tab hidden — restore by putting 'b2b' back in the list and as the default.
     let initial = ['brief', 'kpis', 'vreplies', 'aging'].includes(hash) ? hash : 'brief';
     // A tab can be hidden by its role gate or a Feature Access override
     // (applyRoleBasedUI already ran), so never land on one the user can't see —
@@ -4273,6 +4279,8 @@ function switchOperationsTab(name) {
     if (name === 'callbacks') {
         cbLoad();
         _startCbSync();
+    } else if (name === 'b2b') {
+        b2bLoad();
     }
 }
 
@@ -4293,11 +4301,19 @@ function _startCbSync() {
 }
 
 // Detects the operations page and opens the requested sub-tab (defaults to
-// call backs, or honors a #callbacks deep-link). Safe no-op elsewhere.
+// call backs, or honors a #callbacks / #b2b deep-link). Safe no-op elsewhere.
+// A tab can be hidden by its role gate or a Feature Access override, so never
+// land on one the user can't see -- fall back to the first visible tab.
 function initOperations() {
     if (!document.querySelector('.ops-wrap')) return;
     const hash = (window.location.hash || '').replace('#', '');
-    const initial = ['callbacks'].includes(hash) ? hash : 'callbacks';
+    let initial = ['callbacks', 'b2b'].includes(hash) ? hash : 'callbacks';
+    const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
+    if (!tabVisible('ops-tab-' + initial)) {
+        const firstVisible = Array.from(document.querySelectorAll('[id^="ops-tab-"]'))
+            .find(b => b.style.display !== 'none' && !b.hidden);
+        if (firstVisible) initial = firstVisible.id.replace('ops-tab-', '');
+    }
     switchOperationsTab(initial);
 }
 
@@ -7815,333 +7831,2168 @@ async function fetchAndRenderEmployeeKPIs() {
 }
 
 // ============================================================================
-// 22b. MODULE: B2B DEAL STATUS TRACKER
+// MODULE: B2B DEALS (operations.html #ops-pane-b2b)
+// ----------------------------------------------------------------------------
+// A business sells us bulk electronics; we collect them, price them, quote the
+// client, and once they accept, the goods are our inventory and get listed.
+//
+// Seven stages, each with exactly ONE owner -- which is what makes the "Needs
+// You" queue derivable from the stage alone rather than from a pile of flags:
+//
+//   pickup            corp    typed-name sign-off + pickup date
+//   pricing_location  corp    route to a store, or CORP
+//   pricing           store   itemize and price
+//   quote             corp    email it; stays editable while the client haggles
+//   listing_location  corp    ONLY when CORP did the pricing
+//   listing           store   check off / scan each unit
+//   completed         --      terminal        (cancelled is the other terminal)
+//
+// Accepting a quote is the hinge: offers freeze into cost, SKUs freeze, and the
+// deal routes onward. The edge function enforces every transition; this file
+// only decides what to *offer* the user. Backed by `b2b-deals` /
+// b2b_clients + b2b_deals + b2b_deal_items.
 // ============================================================================
 
-const B2B_STORE_ICONS = { 'OVL': '🟣', 'LEE': '🔵', 'WSP': '🟢', 'MPL': '🟠', 'BAL': '🔴' };
-const B2B_STORE_LIST  = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
-const B2B_CORP_ROLES  = ['district manager', 'ceo', 'tom'];   // can create + leave Location Pending
-const B2B_APPROVERS   = ['ceo', 'district manager'];          // can approve
-const B2B_STORE_ROLES = ['manager', 'owner (manager)', 'assistant manager']; // store actors
+const B2B_STAGES = [
+    { key: 'pickup',           label: 'Pickup Sign-Off',  tone: 'warn',   svg: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>' },
+    { key: 'pricing_location', label: 'Pricing Location', tone: 'info',   svg: '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>' },
+    { key: 'pricing',          label: 'Pricing',          tone: 'info',   svg: '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>' },
+    { key: 'quote',            label: 'Quote',            tone: 'violet', svg: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>' },
+    { key: 'listing_location', label: 'Listing Location', tone: 'warn',   svg: '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>' },
+    { key: 'listing',          label: 'Listing',          tone: 'teal',   svg: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>' },
+    { key: 'completed',        label: 'Completed',        tone: 'ok',     svg: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>' },
+    { key: 'declined',         label: 'Declined',         tone: 'crit',    svg: '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>' },
+];
+const B2B_STAGE      = Object.fromEntries(B2B_STAGES.map(s => [s.key, s]));
+const B2B_BOARD      = B2B_STAGES.filter(s => s.key !== 'declined').map(s => s.key);
+const B2B_LOCATIONS  = [...STORE_CODES, 'CORP'];
 
-let b2bDealsCache = [];
-let b2bCurrentDealId = null;
+// What the owner of each stage is being asked to do.
+const B2B_ACTIONS = {
+    pickup:           { cta: 'Sign Off Pickup', why: 'Pickup needs signing off',        kind: 'pickup'  },
+    pricing_location: { cta: 'Assign Pricing',  why: 'Needs somewhere to be priced',    kind: 'assign'  },
+    pricing:          { cta: 'Price Items',     why: 'Itemize and price the pickup',    kind: 'pricing' },
+    quote:            { cta: 'Open Quote',      why: 'Priced and ready to quote',       kind: 'quote'   },
+    listing_location: { cta: 'Assign Listing',  why: 'Accepted — pick a listing store', kind: 'listloc' },
+    listing:          { cta: 'Open Listing',    why: 'List the items for resale',       kind: 'listing' },
+};
 
-function b2bMoney(n) {
-    return '$' + (Number(n) || 0).toLocaleString('en-US', { maximumFractionDigits: 2 });
+const B2B_CORP_ROLES   = ['district manager', 'ceo', 'tom'];
+const B2B_ACCEPT_ROLES = ['ceo', 'tom', 'district manager'];   // may lock a quote
+const B2B_STORE_ROLES  = ['manager', 'owner (manager)', 'owner manager', 'assistant manager'];
+const B2B_CONDITIONS   = ['New', 'Like New', 'Good', 'Fair', 'For Parts'];
+// Preset client-facing note tags. Joined with '; ' rather than ',' so a typed
+// note containing a comma doesn't get re-parsed into phantom tags on reload.
+const B2B_NOTE_TAGS = ['Cracked', 'LCD Damage', 'No RAM', 'No HDD', 'Non-functional',
+                       'iCloud Locked', 'Scratched', 'Body Damage', 'Missing Charger'];
+
+let _b2bDeals        = [];
+let _b2bClients      = [];
+let _b2bView         = 'queue';     // queue | pipeline | clients | overview
+let _b2bStoreFilter  = 'ALL';
+let _b2bLoading      = false;
+let _b2bModalDeal    = null;        // the deal open in the deal modal
+let _b2bModalItems   = [];
+let _b2bEditingClient = null;
+let _b2bCreateClientId = null;      // client chosen in the new-deal modal
+let _b2bAssignPick   = null;        // location picked but not yet submitted
+
+// --- identity -------------------------------------------------------------
+
+function _b2bRole()  { return (sessionStorage.getItem('speeksUserRole')  || '').toLowerCase().trim(); }
+function _b2bStore() { return (sessionStorage.getItem('speeksUserStore') || '').toUpperCase().trim(); }
+function _b2bUser()  { return sessionStorage.getItem('speeksUserName') || 'Unknown'; }
+
+// A manager can be lent the corp side of B2B (Feature Access -> Delegation ->
+// "B2B Deals (DM)") -- same pattern as cap-aging-dm / cap-variance-dm: while
+// delegated they wear the corp hat for routing, quoting and listing hand-off.
+function _b2bHasCorpDelegation() {
+    if (typeof _featureOverrideFor !== 'function') return false;
+    const roleClass = 'role-' + _b2bRole().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+    return _featureOverrideFor('cap-b2b-corp', roleClass, sessionStorage.getItem('speeksUserName') || '') === true;
 }
+function _b2bIsCorp()    { return B2B_CORP_ROLES.includes(_b2bRole()) || _b2bHasCorpDelegation(); }
+function _b2bIsDM()      { return _b2bRole() === 'district manager' || _b2bHasCorpDelegation(); }
+// Accepting a quote is deliberately NOT delegable -- it locks the money.
+function _b2bCanAccept()  { return B2B_ACCEPT_ROLES.includes(_b2bRole()); }
+function _b2bCanClients() { return ['ceo', 'district manager'].includes(_b2bRole()); }
+function _b2bCanOverview(){ return ['ceo', 'district manager'].includes(_b2bRole()); }
 
-function b2bStoreLabel(store) {
-    if (!store) return 'Unassigned';
-    return `${B2B_STORE_ICONS[store] || '🏬'} ${store}`;
-}
-
-function b2bStatusBadge(status) {
-    const slug = status.toLowerCase().replace(/\s+/g, '-');
-    return `<span class="b2b-badge b2b-badge-${slug}">${status}</span>`;
-}
-
-// Who can act on a deal in its current state (UI gating; server enforces transition legality)
-function b2bCanAct(deal) {
-    const role  = (sessionStorage.getItem('speeksUserRole')  || '').toLowerCase();
-    const store = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
-    switch (deal.status) {
-        case 'Location Pending': return B2B_CORP_ROLES.includes(role);
-        case 'Pricing':          return B2B_STORE_ROLES.includes(role) && deal.assigned_store === store;
-        case 'Approval Pending': return B2B_APPROVERS.includes(role);
-        case 'Approved':         return B2B_STORE_ROLES.includes(role) && deal.assigned_store === store;
-        default:                 return false;
+// The stores this user acts for. An MSM covers both of theirs.
+function _b2bMyStores() {
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        return [...MULTISTORE_MANAGER_STORES];
     }
+    const s = _b2bStore();
+    return STORE_CODES.includes(s) ? [s] : [];
 }
 
-const B2B_PIPELINE = ['Location Pending', 'Pricing', 'Approval Pending', 'Approved'];
+// --- scope + ownership ----------------------------------------------------
 
-async function fetchB2BDeals() {
-    const list = document.getElementById('b2bDealList');
-    if (!list) return; // not on this page
-    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase();
-    let store = (sessionStorage.getItem('speeksUserStore') || 'ALL').toUpperCase();
-    // Corporate roles can pick any store (or ALL) via the board filter
-    if (B2B_CORP_ROLES.includes(role)) {
-        store = document.getElementById('b2bStoreFilter')?.value || 'ALL';
+function _b2bInScope(deal) {
+    if (_b2bIsCorp()) return true;
+    const mine = _b2bMyStores();
+    return mine.includes(deal.pricing_store) || mine.includes(deal.listing_store);
+}
+
+// The one action this user owns on this deal right now, or null.
+function _b2bActionFor(deal) {
+    const st = deal.stage;
+    if (st === 'completed' || st === 'declined') return null;
+    const mine = _b2bMyStores();
+
+    if (st === 'pricing') {
+        // CORP prices its own pickups; everything else belongs to the store.
+        if (deal.pricing_store === 'CORP') return _b2bIsCorp() ? B2B_ACTIONS.pricing : null;
+        if (mine.includes(deal.pricing_store)) return B2B_ACTIONS.pricing;
+        return _b2bIsDM() ? B2B_ACTIONS.pricing : null;   // DM can always step in
     }
+    if (st === 'listing') {
+        if (mine.includes(deal.listing_store)) return B2B_ACTIONS.listing;
+        return _b2bIsDM() ? B2B_ACTIONS.listing : null;
+    }
+    return _b2bIsCorp() ? B2B_ACTIONS[st] : null;
+}
+
+// What opening the card should show someone with no queued action.
+function _b2bClickKind(deal) {
+    const a = _b2bActionFor(deal);
+    return a ? a.kind : 'view';
+}
+
+// A few stages end in a decision with nothing left to fill in. Those get a
+// one-click action on the queue card so the common case doesn't need the full
+// screen -- each still confirms first, because both are one-way doors.
+// Anything needing input (a store, a name, prices) is deliberately absent.
+function _b2bQuickAction(d) {
+    if (d.stage === 'quote' && _b2bCanAccept()) {
+        return { label: 'Mark Accepted', call: `b2bQuickAccept('${d.id}',this)` };
+    }
+    if (d.stage === 'listing' && d.total_units > 0 && _b2bOutstanding(d) === 0) {
+        return { label: 'Complete Deal', call: `b2bQuickComplete('${d.id}',this)` };
+    }
+    return null;
+}
+
+async function b2bQuickAccept(id, btn) {
+    const d = _b2bDealById(id);
+    if (!d) return;
+    const msg = `Accept ${d.client?.company || 'this'} quote at ${_b2bMoney(d.total_offer, 2)}?\n\n`
+        + 'The offers lock in as our cost and the items become inventory to list. This cannot be undone.';
+    if (!confirm(msg)) return;
     try {
-        const res = await fetch(`${B2B_URL}?store=${encodeURIComponent(store)}&v=${Date.now()}`);
-        b2bDealsCache = await res.json();
-        if (!Array.isArray(b2bDealsCache)) b2bDealsCache = [];
-        renderB2BDeals();
+        const out = await _b2bBusy(btn, 'Accepting…', () =>
+            _b2bSend({ action: 'accept_quote', id, accepted_by: _b2bUser() }));
+        await b2bRefresh();
+        // A CORP-priced deal still needs a listing store, so carry straight on.
+        if (out.next_stage === 'listing_location' && _b2bIsCorp()) b2bOpenDeal('listloc', id);
     } catch (e) {
-        list.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Failed to load B2B deals.</div>';
+        alert(`Couldn't accept the quote: ${e.message}`);
     }
 }
 
-// Full-page Kanban-style pipeline: one column per state, deals as cards.
-function renderB2BDeals() {
-    const board = document.getElementById('b2bDealList');
-    if (!board) return;
-    const showCompleted = document.getElementById('b2bShowCompleted')?.checked;
-    const columns = showCompleted ? [...B2B_PIPELINE, 'Completed'] : B2B_PIPELINE;
-
-    const countEl = document.getElementById('b2b-count');
-    if (countEl) {
-        const actionable = b2bDealsCache.filter(b2bCanAct).length;
-        countEl.textContent = actionable ? `• ${actionable} need${actionable === 1 ? 's' : ''} your action` : '';
-    }
-
-    board.innerHTML = columns.map(state => {
-        const deals = b2bDealsCache.filter(d => d.status === state);
-        const slug = state.toLowerCase().replace(/\s+/g, '-');
-        const cards = deals.length
-            ? deals.map(d => b2bCardHtml(d)).join('')
-            : '<div class="b2b-col-empty">—</div>';
-        return `
-        <div class="b2b-col b2b-col-${slug}">
-            <div class="b2b-col-head">
-                ${b2bStatusBadge(state)}
-                <span class="b2b-col-count">${deals.length}</span>
-            </div>
-            <div class="b2b-col-body">${cards}</div>
-        </div>`;
-    }).join('');
-}
-
-function b2bCardHtml(d) {
-    const act = b2bCanAct(d);
-    const pill = act ? '<span class="b2b-action-pill">Action needed</span>' : '';
-    return `
-        <div class="b2b-card ${act ? 'b2b-card-actionable' : ''}" onclick="openB2BDeal('${d.id}')">
-            <div class="b2b-card-company">${escapeHtml(d.company)}</div>
-            <div class="b2b-card-meta">
-                <span>📅 ${escapeHtml(d.pickup_date)}</span>
-                <span>${b2bStoreLabel(d.assigned_store)}</span>
-            </div>
-            <div class="b2b-card-totals">
-                <span><b>${d.line_count || 0}</b> items · qty <b>${d.total_qty || 0}</b></span>
-                <span>Offer <b>${b2bMoney(d.total_offer)}</b></span>
-                <span>Value <b>${b2bMoney(d.total_value)}</b></span>
-            </div>
-            ${pill}
-        </div>`;
-}
-
-// ----- Create -----
-function openB2BCreate() {
-    const modal = document.getElementById('b2bCreateModal');
-    if (!modal) { console.warn('B2B create modal not found in DOM'); return; }
-    const dateEl = document.getElementById('b2bPickupInput');
-    if (dateEl && !dateEl.value) {
-        dateEl.value = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' }); // YYYY-MM-DD
-    }
-    const companyEl = document.getElementById('b2bCompanyInput');
-    if (companyEl) companyEl.value = '';
-    toggleModal('b2bCreateModal');
-}
-
-async function createB2BDeal() {
-    const company = document.getElementById('b2bCompanyInput').value.trim();
-    const pickup  = document.getElementById('b2bPickupInput').value;
-    if (!company || !pickup) { alert('Please enter a company and pickup date.'); return; }
-
-    const btn = document.getElementById('b2bCreateBtn');
-    btn.disabled = true; btn.innerText = 'Creating...';
+async function b2bQuickComplete(id, btn) {
+    const d = _b2bDealById(id);
+    if (!d) return;
+    if (!confirm(`Complete ${d.client?.company || 'this deal'}?\n\n`
+        + `All ${d.total_units} unit${d.total_units === 1 ? '' : 's'} are listed or recycled, `
+        + 'so the deal closes out for record keeping.')) return;
     try {
-        const res = await fetch(B2B_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({
-                action: 'create',
-                company,
-                pickup_date: pickup,
-                created_by: sessionStorage.getItem('speeksUserName') || 'Unknown'
-            })
-        });
-        const out = await res.json();
-        if (!res.ok) throw new Error(out.error || 'Failed');
-        closeAllModals();
-        await fetchB2BDeals();
+        await _b2bBusy(btn, 'Completing…', () => _b2bSend({ action: 'complete', id }));
+        await b2bRefresh();
     } catch (e) {
-        alert('Could not create deal: ' + e.message);
-    } finally {
-        btn.disabled = false; btn.innerText = 'Create Deal';
+        alert(`Couldn't complete the deal: ${e.message}`);
     }
 }
 
-// ----- Detail view -----
-async function openB2BDeal(id) {
-    const deal = b2bDealsCache.find(d => d.id === id);
-    if (!deal) return;
-    b2bCurrentDealId = id;
-    const body = document.getElementById('b2bDetailBody');
-    document.getElementById('b2bDetailTitle').innerHTML = `${escapeHtml(deal.company)} ${b2bStatusBadge(deal.status)}`;
-    body.innerHTML = '<div class="status-message">Loading items...</div>';
+// --- formatting -----------------------------------------------------------
 
-    const modal = document.getElementById('b2bDetailModal');
-    closeAllModals();
-    modal.classList.add('show');
-    lockAndBlurScreen();
+function _b2bMoney(n, dp) {
+    const d = dp === undefined ? 0 : dp;
+    return '$' + (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function _b2bDate(v) {
+    if (!v) return '—';
+    const d = new Date(String(v).length <= 10 ? v + 'T00:00:00' : v);
+    return isNaN(d) ? '—' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+// Client-facing dates are spelled out. The pickup date is how a client is
+// asked to identify their quote, since none of our SKUs go out to them.
+function _b2bLongDate(v) {
+    if (!v) return '';
+    const d = new Date(String(v).length <= 10 ? v + 'T00:00:00' : v);
+    return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+}
+function _b2bDaysIn(deal) {
+    const t = deal.stage_changed_at || deal.updated_at || deal.created_at;
+    if (!t) return 0;
+    return Math.max(0, Math.floor((Date.now() - new Date(t).getTime()) / 86400000));
+}
+function _b2bAgeTone(days) { return days >= 7 ? 'crit' : days >= 4 ? 'warn' : 'ok'; }
 
-    let items = [];
+function _b2bStageChip(stage) {
+    const s = B2B_STAGE[stage] || { label: stage, tone: 'neu' };
+    return `<span class="b2b-chip b2b-chip-${s.tone}">${escapeHtml(s.label)}</span>`;
+}
+function _b2bStoreTag(code) {
+    if (!code) return '<span class="b2b-store b2b-store-none">Unassigned</span>';
+    if (code === 'CORP') return '<span class="b2b-store b2b-store-corp">CORP</span>';
+    return `<span class="b2b-store">${STORE_DOTS[code] || ''} ${escapeHtml(code)}</span>`;
+}
+// Stroke attributes go inline rather than relying on an ancestor rule: the
+// deal modals sit outside .b2b-panel / .cb-panel, so a bare <svg> there renders
+// as a filled blob (paths) or nothing at all (lines).
+function _b2bIco(svg, cls) {
+    return `<svg viewBox="0 0 24 24" class="${cls || ''}" fill="none" stroke="currentColor"`
+         + ` stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${svg}</svg>`;
+}
+// Units still needing to be listed or recycled out.
+function _b2bOutstanding(deal) { return Number(deal.outstanding_units) || 0; }
+function _b2bListedPct(deal) {
+    const total = Number(deal.total_units) || 0;
+    if (!total) return 0;
+    return Math.round(((Number(deal.listed_units) + Number(deal.recycled_units)) / total) * 100);
+}
+
+// --- data -----------------------------------------------------------------
+
+let _b2bMeta = null;   // { open, archive_shown, archive_total, archive_truncated }
+
+async function _b2bGet(qs) {
+    const res = await fetch(`${B2B_URL}?${qs}&v=${Date.now()}`);
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.success === false) throw new Error(json.error || `Request failed (HTTP ${res.status})`);
+    if (json.meta) _b2bMeta = json.meta;
+    return json.data || [];
+}
+
+// The list view returns the client's columns flat, since a SQL view can't nest.
+// Rebuilding the object here keeps every render site reading deal.client.*
+// rather than scattering the two shapes through the module.
+function _b2bShapeDeal(d) {
+    if (d.client) return d;   // already nested, leave it alone
+    return {
+        ...d,
+        client: {
+            id: d.client_id, company: d.company, acronym: d.acronym,
+            contact: d.contact, contact_email: d.contact_email, contact_phone: d.contact_phone,
+        },
+    };
+}
+
+// Raw POST. Throws on failure and does NOT alert -- callers decide whether a
+// failure deserves a blocking alert or a quiet inline rollback.
+async function _b2bSend(payload) {
+    const res = await fetch(B2B_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ ...payload, role: _b2bRole(), user: _b2bUser() })
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
+    return out;
+}
+
+async function _b2bPost(payload, errLabel) {
     try {
-        const res = await fetch(`${B2B_URL}?deal_id=${encodeURIComponent(id)}&v=${Date.now()}`);
-        items = await res.json();
-        if (!Array.isArray(items)) items = [];
-    } catch (e) { /* show empty */ }
-    renderB2BDetail(deal, items);
-}
-
-function renderB2BDetail(deal, items) {
-    const body = document.getElementById('b2bDetailBody');
-    const canAct = b2bCanAct(deal);
-    const editable = deal.status === 'Pricing' && canAct;
-
-    let html = `
-        <div class="b2b-detail-summary">
-            <div><span class="form-label-caps">Pickup</span> ${escapeHtml(deal.pickup_date)}</div>
-            <div><span class="form-label-caps">Store</span> ${b2bStoreLabel(deal.assigned_store)}</div>
-            <div><span class="form-label-caps">Logged by</span> ${escapeHtml(deal.created_by || '—')}</div>
-        </div>`;
-
-    // Location Pending: assign a store
-    if (deal.status === 'Location Pending') {
-        if (canAct) {
-            html += `
-            <div class="b2b-assign-box">
-                <label class="form-label-caps">Assign to store</label>
-                <select id="b2bAssignStore" class="form-input-lg" style="margin-bottom:12px;">
-                    ${B2B_STORE_LIST.map(s => `<option value="${s}">${B2B_STORE_ICONS[s]} ${s}</option>`).join('')}
-                </select>
-                <button class="btn-primary" onclick="assignAndAdvanceB2B('${deal.id}')">Assign &amp; Start Pricing →</button>
-            </div>`;
-        } else {
-            html += '<p class="status-message">Awaiting a store assignment from DM / CEO / TOM.</p>';
-        }
-        body.innerHTML = html;
-        return;
-    }
-
-    // Items table (Pricing / Approval Pending / Approved / Completed)
-    const totalOffer = items.reduce((s, it) => s + (it.qty_offer_total || 0), 0);
-    const totalValue = items.reduce((s, it) => s + (it.qty_value_total || 0), 0);
-    const totalQty   = items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
-
-    html += '<div class="b2b-items-wrap"><table class="b2b-items-table"><thead><tr>' +
-            '<th>Make</th><th>Model</th><th>Qty</th><th>Unit Value</th><th>Unit Offer</th>' +
-            '<th>Value Total</th><th>Offer Total</th>' + (editable ? '<th></th>' : '') +
-            '</tr></thead><tbody>';
-
-    if (!items.length) {
-        html += `<tr><td colspan="${editable ? 8 : 7}" class="b2b-empty-row">No items added yet.</td></tr>`;
-    } else {
-        html += items.map(it => editable ? `
-            <tr>
-                <td><input class="b2b-cell" value="${escapeHtml(it.make)}" onchange="updateB2BItem('${it.id}','make',this.value)"></td>
-                <td><input class="b2b-cell" value="${escapeHtml(it.model)}" onchange="updateB2BItem('${it.id}','model',this.value)"></td>
-                <td><input class="b2b-cell b2b-cell-num" type="number" min="0" value="${it.quantity}" onchange="updateB2BItem('${it.id}','quantity',this.value)"></td>
-                <td><input class="b2b-cell b2b-cell-num" type="number" min="0" step="0.01" value="${it.value}" onchange="updateB2BItem('${it.id}','value',this.value)"></td>
-                <td><input class="b2b-cell b2b-cell-num" type="number" min="0" step="0.01" value="${it.offer}" onchange="updateB2BItem('${it.id}','offer',this.value)"></td>
-                <td>${b2bMoney(it.qty_value_total)}</td>
-                <td>${b2bMoney(it.qty_offer_total)}</td>
-                <td><button class="b2b-del-btn" onclick="deleteB2BItem('${it.id}')" title="Remove">✖</button></td>
-            </tr>` : `
-            <tr>
-                <td>${escapeHtml(it.make)}</td>
-                <td>${escapeHtml(it.model)}</td>
-                <td>${it.quantity}</td>
-                <td>${b2bMoney(it.value)}</td>
-                <td>${b2bMoney(it.offer)}</td>
-                <td>${b2bMoney(it.qty_value_total)}</td>
-                <td>${b2bMoney(it.qty_offer_total)}</td>
-            </tr>`).join('');
-    }
-
-    // Add-item row (Pricing only)
-    if (editable) {
-        html += `
-            <tr class="b2b-add-row">
-                <td><input id="b2bNewMake" class="b2b-cell" placeholder="Make"></td>
-                <td><input id="b2bNewModel" class="b2b-cell" placeholder="Model"></td>
-                <td><input id="b2bNewQty" class="b2b-cell b2b-cell-num" type="number" min="0" value="1"></td>
-                <td><input id="b2bNewValue" class="b2b-cell b2b-cell-num" type="number" min="0" step="0.01" placeholder="0"></td>
-                <td><input id="b2bNewOffer" class="b2b-cell b2b-cell-num" type="number" min="0" step="0.01" placeholder="0"></td>
-                <td colspan="2"></td>
-                <td><button class="b2b-add-btn" onclick="addB2BItem('${deal.id}')" title="Add item">＋</button></td>
-            </tr>`;
-    }
-
-    html += '</tbody><tfoot><tr>' +
-            `<td colspan="2"><b>Totals</b></td><td><b>${totalQty}</b></td><td></td><td></td>` +
-            `<td><b>${b2bMoney(totalValue)}</b></td><td><b>${b2bMoney(totalOffer)}</b></td>` +
-            (editable ? '<td></td>' : '') + '</tr></tfoot></table></div>';
-
-    // Primary state action
-    if (canAct) {
-        if (deal.status === 'Pricing') {
-            html += `<div class="b2b-detail-action"><button class="btn-primary" onclick="advanceB2BDeal('${deal.id}','Submit these items for approval?')">Submit for Approval →</button></div>`;
-        } else if (deal.status === 'Approval Pending') {
-            html += `<div class="b2b-detail-action"><button class="btn-primary" onclick="advanceB2BDeal('${deal.id}','Approve this deal?')">✓ Approve Deal</button></div>`;
-        } else if (deal.status === 'Approved') {
-            html += `<div class="b2b-detail-action"><button class="btn-primary" onclick="advanceB2BDeal('${deal.id}','Mark this deal completed and archive it?')">Mark Completed ✓</button></div>`;
-        }
-    }
-
-    body.innerHTML = html;
-}
-
-// ----- State transitions -----
-async function assignAndAdvanceB2B(id) {
-    const store = document.getElementById('b2bAssignStore')?.value;
-    if (!store) return;
-    await b2bPost({ action: 'assign_advance', id, assigned_store: store }, 'Could not assign store');
-    closeAllModals();
-    await fetchB2BDeals();
-}
-
-async function advanceB2BDeal(id, confirmMsg) {
-    if (confirmMsg && !confirm(confirmMsg)) return;
-    await b2bPost({ action: 'advance', id }, 'Could not advance deal');
-    closeAllModals();
-    await fetchB2BDeals();
-}
-
-// ----- Item CRUD -----
-async function addB2BItem(dealId) {
-    const make  = document.getElementById('b2bNewMake').value.trim();
-    const model = document.getElementById('b2bNewModel').value.trim();
-    const qty   = document.getElementById('b2bNewQty').value;
-    const value = document.getElementById('b2bNewValue').value;
-    const offer = document.getElementById('b2bNewOffer').value;
-    if (!make && !model) { alert('Enter a make or model.'); return; }
-    await b2bPost({ action: 'add_item', deal_id: dealId, make, model, quantity: qty, value, offer }, 'Could not add item');
-    await openB2BDeal(dealId);   // re-fetch items + re-render
-    fetchB2BDeals();             // refresh card totals in background
-}
-
-async function updateB2BItem(id, field, value) {
-    await b2bPost({ action: 'update_item', id, [field]: value }, 'Could not update item');
-    if (b2bCurrentDealId) await openB2BDeal(b2bCurrentDealId);
-    fetchB2BDeals();
-}
-
-async function deleteB2BItem(id) {
-    await b2bPost({ action: 'delete_item', id }, 'Could not remove item');
-    if (b2bCurrentDealId) await openB2BDeal(b2bCurrentDealId);
-    fetchB2BDeals();
-}
-
-async function b2bPost(payload, errLabel) {
-    try {
-        const res = await fetch(B2B_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(payload)
-        });
-        const out = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(out.error || 'Request failed');
-        return out;
+        return await _b2bSend(payload);
     } catch (e) {
         alert(`${errLabel}: ${e.message}`);
         throw e;
     }
+}
+
+// --- responsiveness -------------------------------------------------------
+// Ticking a unit or toggling a tag used to await the round-trip before
+// repainting, so every click felt like it hung. These three helpers let the UI
+// commit immediately and reconcile afterwards.
+
+// Serialise writes per key so rapid clicks land in the order they were made.
+// A delta-based endpoint is order-sensitive: +1 +1 -1 arriving out of order
+// gives the wrong count.
+const _b2bQueues = {};
+function _b2bEnqueue(key, fn) {
+    const prev = _b2bQueues[key] || Promise.resolve();
+    const next = prev.then(fn, fn);
+    _b2bQueues[key] = next.catch(() => {});
+    return next;
+}
+
+// A quiet line in the modal footer. Optimistic rollbacks report here rather
+// than through alert(), which would fight the work the user is mid-flow on.
+function _b2bSay(msg, bad) {
+    const el = document.getElementById('b2bDealMsg');
+    if (!el) { if (bad) alert(msg); return; }
+    el.textContent = msg || '';
+    el.className = 'b2b-msg' + (bad ? ' bad' : msg ? ' ok' : '');
+    if (msg) setTimeout(() => { if (el.textContent === msg) { el.textContent = ''; el.className = 'b2b-msg'; } }, 3200);
+}
+
+// For the actions that genuinely must confirm before the screen moves on:
+// hold the button in a visible working state instead of appearing dead.
+async function _b2bBusy(btn, label, fn) {
+    if (!btn) return fn();
+    const html = btn.innerHTML, wasOff = btn.disabled;
+    btn.disabled = true;
+    btn.classList.add('is-busy');
+    btn.innerHTML = escapeHtml(label);
+    try { return await fn(); }
+    finally { btn.disabled = wasOff; btn.classList.remove('is-busy'); btn.innerHTML = html; }
+}
+
+// Item writes only change what is already on screen in the modal, so the pane
+// behind it is refreshed once on close rather than after every edit.
+let _b2bDirty = false;
+function b2bCloseDeal() {
+    closeAllModals();
+    if (_b2bDirty) { _b2bDirty = false; b2bRefresh(); }
+}
+
+// A single-store user only pulls their own store; corp and MSMs pull the lot
+// and filter in _b2bInScope (the MSM covers two stores, which the API's
+// single-store filter can't express).
+function _b2bFetchScope() {
+    if (_b2bIsCorp()) return 'ALL';
+    const mine = _b2bMyStores();
+    return mine.length === 1 ? mine[0] : 'ALL';
+}
+
+async function b2bLoad() {
+    const body = document.getElementById('b2bBody');
+    if (!body) return;
+    if (!_b2bLoading) body.innerHTML = '<div class="status-message">Loading B2B Deals…</div>';
+    _b2bLoading = true;
+    try {
+        const [deals, clients] = await Promise.all([
+            _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}`),
+            _b2bCanClients() || _b2bIsCorp() ? _b2bGet('clients=1') : Promise.resolve([]),
+        ]);
+        _b2bDeals   = deals.map(_b2bShapeDeal);
+        _b2bClients = clients;
+        b2bRender();
+    } catch (e) {
+        body.innerHTML = `<div class="status-message" style="color:var(--red-alert);">Couldn't load B2B deals. ${escapeHtml(e.message)}</div>`;
+    } finally {
+        _b2bLoading = false;
+    }
+}
+
+// Background refresh after a write -- no spinner, no scroll jump.
+async function b2bRefresh() {
+    try {
+        const [deals, clients] = await Promise.all([
+            _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}`),
+            _b2bCanClients() || _b2bIsCorp() ? _b2bGet('clients=1') : Promise.resolve(_b2bClients),
+        ]);
+        _b2bDeals = deals.map(_b2bShapeDeal);
+        _b2bClients = clients;
+        b2bRender();
+    } catch (_) { /* keep what's on screen */ }
+}
+
+function _b2bDealById(id) { return _b2bDeals.find(d => d.id === id) || null; }
+
+// Realtime ping handler. Only refreshes when the pane is actually on screen and
+// nobody has a deal modal open -- re-rendering underneath someone mid-edit
+// would throw away what they were typing.
+function _b2bRealtimeRefresh() {
+    const pane = document.getElementById('ops-pane-b2b');
+    if (!pane || !pane.classList.contains('active') || document.hidden) return;
+    if (document.getElementById('b2bDealModal')?.classList.contains('show')) return;
+    if (document.getElementById('b2bCreateModal')?.classList.contains('show')) return;
+    b2bRefresh();
+}
+
+// --- render controller ----------------------------------------------------
+
+function b2bSetView(view) {
+    if (view === 'clients'  && !_b2bCanClients())  view = 'queue';
+    if (view === 'overview' && !_b2bCanOverview()) view = 'queue';
+    _b2bView = view;
+    b2bRender();
+}
+
+function b2bSetStoreFilter(code) { _b2bStoreFilter = code; b2bRender(); }
+
+function b2bRender() {
+    const body = document.getElementById('b2bBody');
+    if (!body) return;
+    if (_b2bView === 'clients'  && !_b2bCanClients())  _b2bView = 'queue';
+    if (_b2bView === 'overview' && !_b2bCanOverview()) _b2bView = 'queue';
+
+    const scoped = _b2bDeals.filter(_b2bInScope);
+    const queue  = scoped.filter(d => _b2bActionFor(d));
+
+    // Header chrome
+    document.querySelectorAll('.b2b-view-toggle .mb-view-btn').forEach(b => b.classList.remove('active'));
+    const btn = { queue: 'b2bViewQueueBtn', pipeline: 'b2bViewPipelineBtn', clients: 'b2bViewClientsBtn', overview: 'b2bViewOverviewBtn' }[_b2bView];
+    document.getElementById(btn)?.classList.add('active');
+
+    const pip = document.getElementById('b2bQueuePip');
+    if (pip) {
+        pip.textContent = queue.length;
+        pip.style.display = queue.length ? 'inline-flex' : 'none';
+    }
+    const chip = document.getElementById('b2bScopeChip');
+    if (chip) {
+        if (_b2bIsCorp()) {
+            chip.textContent = 'District-wide';
+            chip.className = 'b2b-scope-chip b2b-scope-corp';
+            chip.style.display = 'inline-flex';
+        } else {
+            const mine = _b2bMyStores();
+            chip.textContent = mine.join(' · ') || 'No store';
+            chip.className = 'b2b-scope-chip';
+            chip.style.display = mine.length ? 'inline-flex' : 'none';
+        }
+    }
+    const sub = document.getElementById('b2bSubtitle');
+    if (sub) {
+        sub.textContent = _b2bIsCorp()
+            ? 'Bulk business deals across every store, from pickup through listing.'
+            : "Your store's B2B deals — price them, then list them.";
+    }
+
+    if (_b2bView === 'pipeline')      body.innerHTML = _b2bRenderPipeline(scoped);
+    else if (_b2bView === 'clients')  body.innerHTML = _b2bRenderClients();
+    else if (_b2bView === 'overview') body.innerHTML = _b2bRenderOverview(scoped);
+    else                              body.innerHTML = _b2bRenderQueue(scoped, queue);
+}
+
+// --- view: Needs You ------------------------------------------------------
+
+function _b2bRenderQueue(scoped, queue) {
+    const rest = scoped.filter(d => !_b2bActionFor(d) && d.stage !== 'completed' && d.stage !== 'declined');
+
+    const cards = queue.length ? queue.map(d => {
+        const a     = _b2bActionFor(d);
+        const quick = _b2bQuickAction(d);
+        const days  = _b2bDaysIn(d);
+        const meta = [
+            d.total_units ? `${d.total_units} unit${d.total_units === 1 ? '' : 's'}` : null,
+            d.total_offer ? `${_b2bMoney(d.total_offer)} offer` : null,
+            d.pickup_date ? `Picked up ${_b2bDate(d.pickup_date)}` : null,
+        ].filter(Boolean).map(t => `<span>${escapeHtml(t)}</span>`).join('');
+        const bar = (d.stage === 'listing')
+            ? `<div class="b2b-q-bar"><div class="b2b-pace-bar"><i style="width:${_b2bListedPct(d)}%"></i></div>
+               <span>${d.listed_units + d.recycled_units} of ${d.total_units} units done</span></div>` : '';
+        return `
+        <div class="b2b-q-card" onclick="b2bOpenDeal('${a.kind}','${d.id}')">
+            <div class="b2b-q-main">
+                <div class="b2b-q-top">
+                    <span class="b2b-q-ref">${escapeHtml(d.ref)}</span>
+                    <span class="b2b-q-co">${escapeHtml(d.client?.company || 'Unknown client')}</span>
+                    ${_b2bStageChip(d.stage)}
+                    ${_b2bStoreTag(d.listing_store || d.pricing_store)}
+                </div>
+                <div class="b2b-q-meta">${meta}<span class="b2b-age b2b-age-${_b2bAgeTone(days)}">${days}d in stage</span></div>
+                ${bar}
+            </div>
+            <div class="b2b-q-act">
+                <span class="b2b-q-why">${escapeHtml(a.why)}</span>
+                <div class="b2b-q-btns">
+                    ${quick ? `<button class="b2b-btn b2b-btn-quick" onclick="event.stopPropagation();${quick.call}">${escapeHtml(quick.label)}</button>` : ''}
+                    <button class="b2b-btn b2b-btn-primary" onclick="event.stopPropagation();b2bOpenDeal('${a.kind}','${d.id}')">${escapeHtml(a.cta)}</button>
+                </div>
+            </div>
+        </div>`;
+    }).join('') : `
+        <div class="b2b-empty">
+            ${_b2bIco('<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>')}
+            <div class="b2b-empty-t">You're all caught up</div>
+            <div class="b2b-empty-s">No B2B deals are waiting on you. Check the Pipeline to see what's in flight.</div>
+        </div>`;
+
+    const flight = rest.length ? `
+        <div class="b2b-sec">
+            <div class="b2b-sec-h"><span>Also In Flight</span><span class="b2b-sec-n">${rest.length}</span></div>
+            <div class="b2b-flight">
+                ${rest.map(d => `
+                <div class="b2b-f-row" onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')">
+                    <span class="b2b-f-ref">${escapeHtml(d.ref)}</span>
+                    <span class="b2b-f-co">${escapeHtml(d.client?.company || '')}</span>
+                    ${_b2bStageChip(d.stage)}
+                    ${_b2bStoreTag(d.listing_store || d.pricing_store)}
+                    <span class="b2b-f-val">${d.total_offer ? _b2bMoney(d.total_offer) : ''}</span>
+                </div>`).join('')}
+            </div>
+        </div>` : '';
+
+    return `
+        <div class="b2b-sec">
+            <div class="b2b-sec-h"><span>Needs Your Action</span><span class="b2b-sec-n">${queue.length}</span></div>
+            <div class="b2b-queue">${cards}</div>
+        </div>
+        ${flight}`;
+}
+
+// --- view: Pipeline -------------------------------------------------------
+
+function _b2bRenderPipeline(scoped) {
+    let deals = scoped.filter(d => d.stage !== 'declined');
+    if (_b2bIsCorp() && _b2bStoreFilter !== 'ALL') {
+        deals = deals.filter(d => d.pricing_store === _b2bStoreFilter || d.listing_store === _b2bStoreFilter);
+    }
+    const cancelled = scoped.filter(d => d.stage === 'declined').length;
+
+    const filter = _b2bIsCorp() ? `
+        <div class="b2b-filter">
+            <span class="b2b-filter-l">Store</span>
+            ${['ALL', ...B2B_LOCATIONS].map(c => `
+                <button class="b2b-filter-b ${_b2bStoreFilter === c ? 'on' : ''}" onclick="b2bSetStoreFilter('${c}')">${c === 'ALL' ? 'All' : c}</button>`).join('')}
+        </div>` : '';
+
+    const cols = B2B_BOARD.map(key => {
+        const s = B2B_STAGE[key];
+        const inCol = deals.filter(d => d.stage === key);
+        const cards = inCol.length ? inCol.map(d => {
+            const days = _b2bDaysIn(d);
+            const act  = _b2bActionFor(d);
+            const bar  = (key === 'listing')
+                ? `<div class="b2b-pace-bar sm"><i style="width:${_b2bListedPct(d)}%"></i></div>` : '';
+            return `
+            <div class="b2b-card ${act ? 'act' : ''}" onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')">
+                <div class="b2b-card-top">
+                    <span class="b2b-card-ref">${escapeHtml(d.ref)}</span>
+                    ${_b2bStoreTag(d.listing_store || d.pricing_store)}
+                </div>
+                <div class="b2b-card-co">${escapeHtml(d.client?.company || '')}</div>
+                ${bar}
+                <div class="b2b-card-foot">
+                    <span>${d.total_offer ? _b2bMoney(d.total_offer) : `${d.line_count || 0} lines`}</span>
+                    <span class="b2b-age b2b-age-${_b2bAgeTone(days)}">${days}d</span>
+                </div>
+                ${act ? '<span class="b2b-card-pill">Needs you</span>' : ''}
+            </div>`;
+        }).join('') : '<div class="b2b-col-empty">—</div>';
+
+        return `
+        <div class="b2b-col b2b-col-${s.tone}">
+            <div class="b2b-col-h">
+                <span class="b2b-col-t">${_b2bIco(s.svg)}${escapeHtml(s.label)}</span>
+                <span class="b2b-col-n">${inCol.length}</span>
+            </div>
+            <div class="b2b-col-b">${cards}</div>
+        </div>`;
+    }).join('');
+
+    const notes = [];
+    if (cancelled) notes.push(`${cancelled} declined deal${cancelled === 1 ? '' : 's'} hidden`);
+    if (_b2bMeta?.archive_truncated) {
+        notes.push(`showing the ${_b2bMeta.archive_shown} most recent of ${_b2bMeta.archive_total} finished deals`);
+    }
+    const cancelNote = notes.length ? `<div class="b2b-archive-note">${escapeHtml(notes.join(" · "))}.</div>` : '';
+    // Seven columns are wider than most laptops, so the board scrolls inside
+    // its own wrapper rather than pushing the whole page sideways.
+    return `${filter}<div class="b2b-boardwrap"><div class="b2b-board">${cols}</div></div>${cancelNote}`;
+}
+
+// --- view: Clients (DM/CEO) ------------------------------------------------
+
+function _b2bRenderClients() {
+    const editing = _b2bEditingClient ? _b2bClients.find(c => c.id === _b2bEditingClient) : null;
+    const rows = _b2bClients.length ? _b2bClients.map(c => `
+        <tr>
+            <td><span class="b2b-mono b2b-acr">${escapeHtml(c.acronym)}</span></td>
+            <td><b>${escapeHtml(c.company)}</b>${c.notes ? `<div class="b2b-doc-sub">${escapeHtml(c.notes)}</div>` : ''}</td>
+            <td>${escapeHtml(c.contact || '—')}</td>
+            <td>${escapeHtml(c.contact_email || '—')}</td>
+            <td>${escapeHtml(c.contact_phone || '—')}</td>
+            <td class="c">${c.open_count ? `<span class="b2b-chip b2b-chip-info">${c.open_count} open</span> ` : ''}${c.deal_count || 0}</td>
+            <td class="r b2b-rowacts">
+                <button class="b2b-mini" onclick="b2bEditClient('${c.id}')">Edit</button>
+                <button class="b2b-mini danger" ${c.deal_count ? 'disabled title="Clients with deals on record cannot be deleted"' : ''} onclick="b2bDeleteClient('${c.id}')">Delete</button>
+            </td>
+        </tr>`).join('')
+        : '<tr><td colspan="7" class="b2b-doc-empty">No clients yet — add the first one below.</td></tr>';
+
+    return `
+        <div class="b2b-sec">
+            <div class="b2b-sec-h"><span>Clients</span><span class="b2b-sec-n">${_b2bClients.length}</span></div>
+            <table class="cb-table b2b-ctable">
+                <thead><tr><th>Acronym</th><th>Company</th><th>Contact</th><th>Email</th><th>Phone</th><th class="c">Deals</th><th></th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
+        <div class="b2b-sec">
+            <div class="b2b-sec-h"><span>${editing ? 'Edit Client' : 'Add A Client'}</span></div>
+            <div class="b2b-cform">
+                <div class="b2b-grid2">
+                    <div><label class="form-label-caps">Company *</label>
+                        <input id="b2bCfCompany" class="form-input-lg" value="${escapeHtml(editing?.company || '')}" placeholder="Acme Corp"></div>
+                    <div><label class="form-label-caps">Acronym *</label>
+                        <input id="b2bCfAcronym" class="form-input-lg b2b-mono" maxlength="6" value="${escapeHtml(editing?.acronym || '')}" placeholder="ACM" oninput="this.value=this.value.toUpperCase()"></div>
+                    <div><label class="form-label-caps">Contact</label>
+                        <input id="b2bCfContact" class="form-input-lg" value="${escapeHtml(editing?.contact || '')}"></div>
+                    <div><label class="form-label-caps">Email</label>
+                        <input id="b2bCfEmail" class="form-input-lg" value="${escapeHtml(editing?.contact_email || '')}"></div>
+                    <div><label class="form-label-caps">Phone</label>
+                        <input id="b2bCfPhone" class="form-input-lg" value="${escapeHtml(editing?.contact_phone || '')}"></div>
+                    <div><label class="form-label-caps">Notes</label>
+                        <input id="b2bCfNotes" class="form-input-lg" value="${escapeHtml(editing?.notes || '')}" placeholder="Anything worth remembering"></div>
+                </div>
+                <p class="b2b-hint">The acronym leads every SKU printed for this client, so it locks once they have a quoted deal.</p>
+                <div class="b2b-cform-acts">
+                    ${editing ? '<button class="kpi-cancel-btn" onclick="b2bEditClient(null)">Cancel Edit</button>' : ''}
+                    <button class="b2b-btn b2b-btn-primary" onclick="b2bSaveClient()">${editing ? 'Save Changes' : 'Add Client'}</button>
+                </div>
+            </div>
+        </div>`;
+}
+
+function b2bEditClient(id) { _b2bEditingClient = id; b2bRender(); }
+
+async function b2bSaveClient() {
+    const company = document.getElementById('b2bCfCompany')?.value.trim();
+    const acronym = document.getElementById('b2bCfAcronym')?.value.trim().toUpperCase();
+    if (!company) return alert('A company name is required.');
+    if (!/^[A-Z0-9]{2,6}$/.test(acronym)) return alert('The acronym must be 2-6 letters or digits.');
+    await _b2bPost({
+        action: _b2bEditingClient ? 'update_client' : 'create_client',
+        id: _b2bEditingClient || undefined,
+        company, acronym,
+        contact:       document.getElementById('b2bCfContact')?.value.trim(),
+        contact_email: document.getElementById('b2bCfEmail')?.value.trim(),
+        contact_phone: document.getElementById('b2bCfPhone')?.value.trim(),
+        notes:         document.getElementById('b2bCfNotes')?.value.trim(),
+    }, "Couldn't save the client");
+    _b2bEditingClient = null;
+    await b2bRefresh();
+}
+
+async function b2bDeleteClient(id) {
+    const c = _b2bClients.find(x => x.id === id);
+    if (!c) return;
+    if (!confirm(`Delete "${c.company}"? This only works while they have no deals on record.`)) return;
+    await _b2bPost({ action: 'delete_client', id }, "Couldn't delete the client");
+    await b2bRefresh();
+}
+
+// --- view: Overview (DM/CEO) -----------------------------------------------
+
+function _b2bRenderOverview(scoped) {
+    const live = scoped.filter(d => d.stage !== 'completed' && d.stage !== 'declined');
+
+    const card = (title, sub, head, body, empty) => `
+        <div class="b2b-ov">
+            <div class="b2b-ov-h"><div><span class="b2b-ov-t">${title}</span><span class="b2b-ov-s">${sub}</span></div></div>
+            ${body ? `<table class="cb-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
+                   : `<div class="b2b-doc-empty">${empty}</div>`}
+        </div>`;
+
+    // Stalled: nothing has moved in a week.
+    const stalled = live.filter(d => _b2bDaysIn(d) >= 7).sort((a, b) => _b2bDaysIn(b) - _b2bDaysIn(a));
+    const stalledRows = stalled.map(d => `
+        <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
+            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
+            <td><b>${escapeHtml(d.client?.company || '')}</b></td>
+            <td>${_b2bStageChip(d.stage)}</td>
+            <td>${_b2bStoreTag(d.listing_store || d.pricing_store)}</td>
+            <td class="r"><span class="b2b-age b2b-age-${_b2bAgeTone(_b2bDaysIn(d))}">${_b2bDaysIn(d)}d</span></td>
+        </tr>`).join('');
+
+    // Quotes out with the client, oldest first.
+    const quotes = live.filter(d => d.stage === 'quote').sort((a, b) => _b2bDaysIn(b) - _b2bDaysIn(a));
+    const quoteRows = quotes.map(d => `
+        <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
+            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
+            <td><b>${escapeHtml(d.client?.company || '')}</b></td>
+            <td>${escapeHtml(d.client?.contact_email || '—')}</td>
+            <td class="c">${d.quote_send_count ? `sent ${d.quote_send_count}×` : '<span class="b2b-age b2b-age-warn">not sent</span>'}</td>
+            <td class="r b">${_b2bMoney(d.total_offer)}</td>
+        </tr>`).join('');
+
+    // Inventory bought and paid for that is not yet earning.
+    const unlisted = live.filter(d => d.stage === 'listing' && _b2bOutstanding(d) > 0)
+        .sort((a, b) => _b2bOutstanding(b) - _b2bOutstanding(a));
+    const unlistedTotal = unlisted.reduce((s, d) => s + (Number(d.total_cost) || 0), 0);
+    const unlistedRows = unlisted.map(d => `
+        <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
+            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
+            <td><b>${escapeHtml(d.client?.company || '')}</b></td>
+            <td>${_b2bStoreTag(d.listing_store)}</td>
+            <td class="c">${_b2bOutstanding(d)} of ${d.total_units}</td>
+            <td class="r b">${_b2bMoney(d.total_cost)}</td>
+        </tr>`).join('');
+
+    const tiles = `
+        <div class="b2b-tiles">
+            <div class="b2b-tile"><span class="b2b-tile-k">In Flight</span><span class="b2b-tile-v">${live.length}</span><span class="b2b-tile-c">deals moving</span></div>
+            <div class="b2b-tile"><span class="b2b-tile-k">Out For Quote</span><span class="b2b-tile-v">${_b2bMoney(quotes.reduce((s, d) => s + (Number(d.total_offer) || 0), 0))}</span><span class="b2b-tile-c">${quotes.length} awaiting a decision</span></div>
+            <div class="b2b-tile"><span class="b2b-tile-k">Unlisted Stock</span><span class="b2b-tile-v">${_b2bMoney(unlistedTotal)}</span><span class="b2b-tile-c">${unlisted.reduce((n, d) => n + _b2bOutstanding(d), 0)} units to list</span></div>
+            <div class="b2b-tile ${stalled.length ? 'warn' : ''}"><span class="b2b-tile-k">Stalled</span><span class="b2b-tile-v">${stalled.length}</span><span class="b2b-tile-c">no movement in 7+ days</span></div>
+        </div>`;
+
+    return tiles
+        + card('Stalled Deals', 'Nothing has moved in a week or more',
+               '<th>Ref</th><th>Client</th><th>Stage</th><th>Store</th><th class="r">In stage</th>',
+               stalledRows, 'Everything is moving. 🎉')
+        + card('Out For Quote', 'Priced and waiting on the client',
+               '<th>Ref</th><th>Client</th><th>Email</th><th class="c">Sent</th><th class="r">Offer</th>',
+               quoteRows, 'No quotes are open right now.')
+        + card('Bought But Not Listed', 'Inventory paid for and not yet earning',
+               '<th>Ref</th><th>Client</th><th>Store</th><th class="c">Outstanding</th><th class="r">Cost</th>',
+               unlistedRows, 'Everything accepted has been listed.');
+}
+
+// ---------------------------------------------------------------------------
+// NEW DEAL
+// ---------------------------------------------------------------------------
+
+function b2bOpenCreate() {
+    _b2bCreateClientId = null;
+    _b2bRenderCreate();
+    toggleModal('b2bCreateModal');
+}
+
+function _b2bRenderCreate() {
+    const body = document.getElementById('b2bCreateBody');
+    if (!body) return;
+    const addForm = _b2bCanClients() ? `
+        <details class="b2b-newclient" ${_b2bClients.length ? '' : 'open'}>
+            <summary>Add a new client</summary>
+            <div class="b2b-grid2">
+                <div><label class="form-label-caps">Company *</label><input id="b2bNcCompany" class="form-input-lg" placeholder="Acme Corp"></div>
+                <div><label class="form-label-caps">Acronym *</label><input id="b2bNcAcronym" class="form-input-lg b2b-mono" maxlength="6" placeholder="ACM" oninput="this.value=this.value.toUpperCase()"></div>
+                <div><label class="form-label-caps">Contact</label><input id="b2bNcContact" class="form-input-lg" placeholder="Dana Reyes"></div>
+                <div><label class="form-label-caps">Email</label><input id="b2bNcEmail" class="form-input-lg" placeholder="dana@acme.com"></div>
+            </div>
+            <p class="b2b-hint">The acronym leads every SKU we print for this client, so it locks once they have a quoted deal.</p>
+            <button class="b2b-btn b2b-btn-secondary" onclick="b2bCreateClientInline()">Add Client</button>
+        </details>` : '';
+
+    // The search box is written once and never re-rendered -- only the list and
+    // the selection line below it repaint, so typing never loses focus.
+    body.innerHTML = `
+        <label class="form-label-caps">Client</label>
+        <input id="b2bClientSearch" class="form-input-lg" autocomplete="off"
+            placeholder="Search by company, acronym or contact…" oninput="_b2bPaintPicklist()">
+        <div class="b2b-picklist" id="b2bPickList"></div>
+        <div id="b2bPickSel"></div>
+        ${addForm}`;
+    _b2bPaintPicklist();
+}
+
+function _b2bPaintPicklist() {
+    const list = document.getElementById('b2bPickList');
+    const sel  = document.getElementById('b2bPickSel');
+    if (!list) return;
+    const q = (document.getElementById('b2bClientSearch')?.value || '').toLowerCase().trim();
+    const matches = _b2bClients.filter(c => !q
+        || (c.company || '').toLowerCase().includes(q)
+        || (c.acronym || '').toLowerCase().includes(q)
+        || (c.contact || '').toLowerCase().includes(q)
+        || (c.contact_email || '').toLowerCase().includes(q)).slice(0, 40);
+
+    list.innerHTML = matches.length ? matches.map(c => `
+        <button class="b2b-pick ${c.id === _b2bCreateClientId ? 'on' : ''}" onclick="b2bPickClient('${c.id}')">
+            <span class="b2b-pick-ac">${escapeHtml(c.acronym)}</span>
+            <span class="b2b-pick-co">${escapeHtml(c.company)}</span>
+            <span class="b2b-pick-sub">${escapeHtml([c.contact, c.contact_email].filter(Boolean).join(' · '))}</span>
+            ${c.open_count ? `<span class="b2b-pick-n">${c.open_count} open</span>` : ''}
+        </button>`).join('')
+        : `<div class="b2b-pick-empty">No clients match${_b2bCanClients() ? ' — add one below.' : ' — ask a DM or CEO to add one.'}</div>`;
+
+    const chosen = _b2bClients.find(c => c.id === _b2bCreateClientId);
+    if (sel) {
+        sel.innerHTML = chosen
+            ? `<div class="b2b-selected"><b>${escapeHtml(chosen.acronym)}</b> · ${escapeHtml(chosen.company)} — this will be deal <b class="b2b-mono">${escapeHtml(chosen.acronym)}-${String((chosen.deal_count || 0) + 1).padStart(3, '0')}</b></div>`
+            : '';
+    }
+    const foot = document.getElementById('b2bCreateFooter');
+    if (foot) {
+        foot.innerHTML = `
+            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
+            <button class="b2b-btn b2b-btn-primary" ${_b2bCreateClientId ? '' : 'disabled'} onclick="b2bCreateDeal()">Create Deal</button>`;
+    }
+}
+
+function b2bPickClient(id) {
+    _b2bCreateClientId = (_b2bCreateClientId === id) ? null : id;
+    _b2bPaintPicklist();
+}
+
+async function b2bCreateClientInline() {
+    const company = document.getElementById('b2bNcCompany')?.value.trim();
+    const acronym = document.getElementById('b2bNcAcronym')?.value.trim().toUpperCase();
+    if (!company) return alert('A company name is required.');
+    if (!/^[A-Z0-9]{2,6}$/.test(acronym)) return alert('The acronym must be 2-6 letters or digits.');
+    const out = await _b2bPost({
+        action: 'create_client', company, acronym,
+        contact: document.getElementById('b2bNcContact')?.value.trim(),
+        contact_email: document.getElementById('b2bNcEmail')?.value.trim(),
+    }, "Couldn't add the client");
+    _b2bClients = await _b2bGet('clients=1');
+    _b2bCreateClientId = out.id;
+    _b2bRenderCreate();
+}
+
+async function b2bCreateDeal() {
+    if (!_b2bCreateClientId) return;
+    const out = await _b2bPost({
+        action: 'create', client_id: _b2bCreateClientId, created_by: _b2bUser(),
+    }, "Couldn't create the deal");
+    closeAllModals();
+    await b2bRefresh();
+    // Straight into the pickup form -- that's the whole point of creating it.
+    b2bOpenDeal('pickup', out.id);
+}
+
+// ---------------------------------------------------------------------------
+// DEAL MODAL -- one shell, one renderer per stage
+// ---------------------------------------------------------------------------
+
+function _b2bShowDeal(cfg) {
+    const stage = B2B_STAGE[cfg.stage] || B2B_STAGE.pickup;
+    document.getElementById('b2bDealIco').innerHTML     = _b2bIco(cfg.svg || stage.svg);
+    document.getElementById('b2bDealEyebrow').textContent = cfg.eyebrow || 'B2B';
+    document.getElementById('b2bDealTitle').textContent   = cfg.title || 'Deal';
+    document.getElementById('b2bDealSub').textContent     = cfg.sub || '';
+    document.getElementById('b2bDealBody').innerHTML      = cfg.body || '';
+    document.getElementById('b2bDealFooter').innerHTML    = cfg.footer || '';
+    const modal = document.getElementById('b2bDealModal');
+    modal.classList.toggle('b2b-modal-wide', !!cfg.wide);
+    closeAllModals();
+    modal.classList.add('show');
+    lockAndBlurScreen();
+    if (cfg.after) cfg.after();
+}
+
+async function b2bOpenDeal(kind, id) {
+    const deal = _b2bDealById(id);
+    if (!deal) return;
+    _b2bModalDeal = deal;
+    _b2bModalItems = [];
+    // Every stage past pricing needs the line items; fetch once up front.
+    if (['pricing', 'quote', 'listing', 'view'].includes(kind)) {
+        try {
+            _b2bModalItems = await _b2bGet(`deal_id=${encodeURIComponent(id)}`);
+        } catch (e) {
+            return alert(`Couldn't load the line items: ${e.message}`);
+        }
+    }
+    if (kind === 'pickup')       return _b2bStagePickup(deal);
+    if (kind === 'assign')       return _b2bStageAssign(deal);
+    if (kind === 'pricing')      return _b2bStagePricing(deal);
+    if (kind === 'quote')        return _b2bStageQuote(deal);
+    if (kind === 'listloc')      return _b2bStageListingLocation(deal);
+    if (kind === 'listing')      return _b2bStageListing(deal);
+    return _b2bStageView(deal);
+}
+
+// The identity block every stage screen opens with.
+function _b2bSummary(deal) {
+    const rows = [
+        ['Client',    escapeHtml(deal.client?.company || '—')],
+        ['Reference', `<span class="b2b-mono">${escapeHtml(deal.ref)}</span>`],
+        ['Contact',   escapeHtml([deal.client?.contact, deal.client?.contact_email].filter(Boolean).join(' · ') || '—')],
+        ['Picked up', deal.pickup_date ? _b2bDate(deal.pickup_date) : 'Not yet'],
+        ['Pricing',   _b2bStoreTag(deal.pricing_store)],
+    ];
+    if (deal.listing_store) rows.push(['Listing', _b2bStoreTag(deal.listing_store)]);
+    if (deal.signed_by)     rows.push(['Signed by', escapeHtml(deal.signed_by)]);
+    if (deal.delivered_by || deal.received_by) {
+        rows.push(['Custody', escapeHtml([deal.delivered_by ? `Delivered by ${deal.delivered_by}` : '',
+                                          deal.received_by ? `Received by ${deal.received_by}` : ''].filter(Boolean).join(' · '))]);
+    }
+    return `<div class="b2b-summary">${rows.map(([k, v]) =>
+        `<div class="b2b-sum-cell"><span class="b2b-sum-k">${k}</span><span class="b2b-sum-v">${v}</span></div>`).join('')}</div>`;
+}
+
+// --- stage 1: pickup sign-off ---------------------------------------------
+
+function _b2bStagePickup(deal) {
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+    _b2bShowDeal({
+        stage: 'pickup',
+        eyebrow: deal.ref,
+        title: 'Pickup Sign-Off',
+        sub: 'Record what was collected and have the client acknowledge it.',
+        body: `
+            ${_b2bSummary(deal)}
+            <label class="form-label-caps">Items Picked Up</label>
+            <textarea id="b2bPuDesc" class="form-input-lg" rows="3"
+                placeholder="e.g. ~40 laptops, 12 monitors, 3 pallets of misc peripherals">${escapeHtml(deal.pickup_desc || '')}</textarea>
+            <p class="b2b-hint">A general description is enough here — the itemized list comes later, at pricing.</p>
+            <div class="b2b-grid2" style="margin-top:14px;">
+                <div>
+                    <label class="form-label-caps">Client Name *</label>
+                    <input id="b2bPuSigned" class="form-input-lg" placeholder="Full name of whoever released the items">
+                </div>
+                <div>
+                    <label class="form-label-caps">Pickup Date *</label>
+                    <input id="b2bPuDate" type="date" class="form-input-lg" value="${today}">
+                </div>
+            </div>
+            <label class="b2b-ack">
+                <input type="checkbox" id="b2bPuAck" onchange="document.getElementById('b2bPuGo').disabled=!this.checked">
+                <span>The client confirms the items above were collected by SPEEKS Technology on the date shown.</span>
+            </label>`,
+        footer: `
+            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
+            <button class="b2b-btn b2b-btn-primary" id="b2bPuGo" disabled onclick="b2bSignPickup('${deal.id}',this)">Sign &amp; Mark Picked Up</button>`,
+    });
+}
+
+async function b2bSignPickup(id) {
+    const signed = document.getElementById('b2bPuSigned')?.value.trim();
+    const date   = document.getElementById('b2bPuDate')?.value;
+    if (!signed) return alert("Enter the name of the person releasing the items.");
+    if (!date)   return alert('Pick the date the items were collected.');
+    await _b2bPost({
+        action: 'sign_pickup', id, signed_by: signed, pickup_date: date,
+        pickup_desc: document.getElementById('b2bPuDesc')?.value.trim(),
+    }, "Couldn't sign off the pickup");
+    closeAllModals();
+    await b2bRefresh();
+}
+
+// --- stage 2: pricing location --------------------------------------------
+
+function _b2bStageAssign(deal) {
+    _b2bAssignPick = null;
+    _b2bShowDeal({
+        stage: 'pricing_location',
+        eyebrow: deal.ref,
+        title: 'Assign Pricing Location',
+        sub: 'Pick who itemizes and prices this pickup, and record the hand-off.',
+        body: `
+            ${_b2bSummary(deal)}
+            ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Picked up</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
+            <label class="form-label-caps" style="margin-top:14px;">Price It At</label>
+            <div class="b2b-loc-pick">
+                ${B2B_LOCATIONS.map(c => `
+                    <button class="b2b-loc" data-loc="${c}" onclick="b2bPickLocation('${c}')">
+                        <span class="b2b-loc-dot">${c === 'CORP' ? '🏢' : (STORE_DOTS[c] || '')}</span>
+                        <span class="b2b-loc-c">${c}</span>
+                    </button>`).join('')}
+            </div>
+            <p class="b2b-hint">Pricing at CORP means the listing store gets chosen separately once the client accepts.</p>
+            <div class="b2b-grid2" style="margin-top:14px;">
+                <div><label class="form-label-caps">Delivered By</label><input id="b2bAsDeliv" class="form-input-lg" placeholder="Who dropped it off"></div>
+                <div><label class="form-label-caps">Received By</label><input id="b2bAsRecv" class="form-input-lg" placeholder="Who took it in"></div>
+            </div>`,
+        footer: `
+            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
+            <button class="b2b-btn b2b-btn-primary" id="b2bAsGo" disabled onclick="b2bAssignPricing('${deal.id}',this)">Send To Pricing</button>`,
+    });
+}
+
+function b2bPickLocation(code) {
+    _b2bAssignPick = code;
+    document.querySelectorAll('.b2b-loc').forEach(b => b.classList.toggle('on', b.dataset.loc === code));
+    const go = document.getElementById('b2bAsGo');
+    if (go) { go.disabled = false; go.textContent = `Send To ${code}`; }
+}
+
+async function b2bAssignPricing(id) {
+    if (!_b2bAssignPick) return;
+    await _b2bPost({
+        action: 'assign_pricing', id, pricing_store: _b2bAssignPick,
+        delivered_by: document.getElementById('b2bAsDeliv')?.value.trim(),
+        received_by:  document.getElementById('b2bAsRecv')?.value.trim(),
+    }, "Couldn't assign the pricing location");
+    closeAllModals();
+    await b2bRefresh();
+}
+
+// --- line item helpers (shared by pricing + quote) ------------------------
+
+function _b2bTagsOf(str)  { return String(str || '').split(';').map(s => s.trim()).filter(Boolean); }
+// client_notes is one semicolon-joined string. Split it back into the preset
+// tags (which drive the chips) and anything typed by hand (which drives the
+// free-text box) so the two controls never show each other's content.
+function _b2bPresetNotes(it) { return _b2bTagsOf(it.client_notes).filter(t => B2B_NOTE_TAGS.includes(t)); }
+function _b2bCustomNotes(it) { return _b2bTagsOf(it.client_notes).filter(t => !B2B_NOTE_TAGS.includes(t)).join('; '); }
+
+// Anything downgraded to Fair or For Parts has to say why: that note prints on
+// the quote and is the only thing standing between a low offer and an argument
+// with the client later.
+const B2B_REASON_CONDITIONS = ['Fair', 'For Parts'];
+function _b2bNeedsReason(it)   { return B2B_REASON_CONDITIONS.includes(it.condition); }
+function _b2bMissingReason(it) { return _b2bNeedsReason(it) && !String(it.client_notes || '').trim(); }
+function _b2bUnreasoned()      { return _b2bModalItems.filter(_b2bMissingReason); }
+function _b2bItemName(it) { return [it.make, it.model].filter(Boolean).join(' ') || 'Untitled item'; }
+
+// Labels are printed per line, wherever a line is shown -- pricing, quoting,
+// the listing checklist and the read-only view all get the same button, so a
+// lost or damaged label can be reprinted from whichever screen you're on.
+const B2B_ICO_BARCODE = '<path d="M3 5v14"/><path d="M7 5v14"/><path d="M11 5v14"/>'
+                      + '<path d="M14 5v14"/><path d="M18 5v14"/><path d="M21 5v14"/>';
+
+function _b2bLabelBtn(it, cls) {
+    if (!it.sku) return '';
+    const n = Number(it.quantity) || 1;
+    return `<button class="b2b-linelabel ${cls || ''}" onclick="event.stopPropagation();b2bPrintLabels('${_b2bModalDeal?.id}','${it.id}')"
+        aria-label="Print labels for ${escapeHtml(it.sku)}"
+        data-tip="Print ${n} label${n === 1 ? '' : 's'} for ${escapeHtml(it.sku)}">${_b2bIco(B2B_ICO_BARCODE)}</button>`;
+}
+function _b2bLocalItem(id){ return _b2bModalItems.find(i => i.id === id); }
+
+function _b2bItemTotals() {
+    let value = 0, offer = 0, units = 0;
+    _b2bModalItems.forEach(it => {
+        const q = Number(it.quantity) || 1;
+        units += q;
+        if (!it.recycle_only) {
+            value += (Number(it.value) || 0) * q;
+            offer += (Number(it.offer) || 0) * q;
+        }
+    });
+    return { value, offer, units, lines: _b2bModalItems.length };
+}
+
+// Repaint just the numbers -- retyping the whole grid would eat focus.
+function _b2bPaintTotals() {
+    const t = _b2bItemTotals();
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('b2bTotValue', _b2bMoney(t.value, 2));
+    set('b2bTotOffer', _b2bMoney(t.offer, 2));
+    set('b2bTotUnits', `${t.units} unit${t.units === 1 ? '' : 's'} · ${t.lines} line${t.lines === 1 ? '' : 's'}`);
+    const margin = t.value - t.offer;
+    const pct = t.value > 0 ? Math.round((margin / t.value) * 100) : 0;
+    set('b2bTotMargin', `${_b2bMoney(margin, 2)} (${pct}%)`);
+    _b2bModalItems.forEach(it => {
+        const el = document.getElementById(`b2bLn-${it.id}`);
+        if (el) el.textContent = it.recycle_only ? '—' : _b2bMoney((Number(it.offer) || 0) * (Number(it.quantity) || 1), 2);
+    });
+    const submit = document.getElementById('b2bPrSubmit');
+    if (submit) submit.disabled = _b2bModalItems.length === 0 || _b2bUnreasoned().length > 0;
+    // On the quote screen the preview sits below the grid, so it can be redrawn
+    // on every keystroke without touching whichever field has focus.
+    _b2bPaintQuoteDoc();
+}
+
+// Local edit -> repaint. Text/number fields post on change (blur), so typing
+// stays smooth and we don't fire a request per keystroke.
+function b2bItemInput(id, field, value) {
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    it[field] = (field === 'quantity') ? Math.max(1, parseInt(value, 10) || 1)
+              : (field === 'value' || field === 'offer') ? (parseFloat(value) || 0)
+              : value;
+    _b2bPaintTotals();
+}
+
+// Fire-and-forget: the local object is already the source of truth for what is
+// on screen, so the save runs behind the user instead of in front of them.
+function b2bItemSave(id) {
+    const it = _b2bLocalItem(id);
+    if (!it) return Promise.resolve();
+    _b2bDirty = true;
+    return _b2bEnqueue(id, () => _b2bSend({
+        action: 'update_item', id,
+        make: it.make, model: it.model, condition: it.condition,
+        staff_notes: it.staff_notes, client_notes: it.client_notes,
+        quantity: it.quantity, value: it.value, offer: it.offer,
+        recycle_only: !!it.recycle_only,
+    })).catch(e => _b2bSay(`Couldn't save that change: ${e.message}`, true));
+}
+
+function b2bItemRecycleOnly(id, on) {
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    it.recycle_only = on;
+    if (on) { it.value = 0; it.offer = 0; }
+    _b2bRepaintItems();
+    b2bItemSave(id);
+}
+
+function b2bItemToggleTag(id, tag) {
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    const tags = _b2bTagsOf(it.client_notes);
+    const i = tags.indexOf(tag);
+    if (i >= 0) tags.splice(i, 1); else tags.push(tag);
+    it.client_notes = tags.join('; ');
+    _b2bRepaintItems();
+    b2bItemSave(id);
+}
+
+// The free-text box owns only the hand-typed part; the chips own the presets.
+// Recombine both into client_notes on every edit.
+function b2bItemCustomNote(id, value) {
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    const custom = String(value || '').split(';').map(s => s.trim()).filter(Boolean);
+    it.client_notes = [..._b2bPresetNotes(it), ...custom].join('; ');
+    _b2bSyncReason(it);
+    _b2bPaintTotals();
+}
+
+// Changing the condition can make a reason newly required (or no longer), so
+// the card is re-rendered -- a select has already lost focus by then.
+function b2bItemCondition(id, value) {
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    it.condition = value;
+    _b2bRepaintItems();
+    b2bItemSave(id);
+}
+
+// Typing is different: repainting mid-keystroke would steal focus, so just
+// flip the warning classes on the card in place.
+function _b2bSyncReason(it) {
+    const input = document.querySelector(`.b2b-tag-free[oninput*="${it.id}"]`);
+    const card = input?.closest('.b2b-pcard');
+    const missing = _b2bMissingReason(it);
+    input?.classList.toggle('miss', missing);
+    card?.classList.toggle('needs-reason', missing);
+    const note = card?.querySelector('.b2b-req-note');
+    if (note) note.style.display = missing ? '' : 'none';
+    const submit = document.getElementById('b2bPrSubmit');
+    if (submit) submit.disabled = _b2bModalItems.length === 0 || _b2bUnreasoned().length > 0;
+}
+
+// The server owns the line number and SKU, so this one has to wait -- but the
+// button says so rather than just sitting there.
+async function b2bAddItem(dealId, btn) {
+    await _b2bBusy(btn, 'Adding…', async () => {
+        const out = await _b2bPost({
+            action: 'add_item', deal_id: dealId, quantity: 1, value: 0, offer: 0,
+        }, "Couldn't add a line");
+        _b2bModalItems.push({
+            id: out.id, line_no: out.line_no, sku: out.sku, make: '', model: '', condition: '',
+            staff_notes: '', client_notes: '', quantity: 1, value: 0, offer: 0,
+            recycle_only: false, listed_qty: 0, recycled_qty: 0,
+        });
+        _b2bDirty = true;
+        _b2bRepaintItems();
+        document.getElementById(`b2bMake-${out.id}`)?.focus();
+    });
+}
+
+function b2bDeleteItem(id) {
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    if (!confirm(`Remove "${_b2bItemName(it)}" from this deal?`)) return;
+    const at = _b2bModalItems.indexOf(it);
+    _b2bModalItems.splice(at, 1);
+    _b2bDirty = true;
+    _b2bRepaintItems();
+    _b2bEnqueue(id, () => _b2bSend({ action: 'delete_item', id }))
+        .catch(e => {
+            _b2bModalItems.splice(at, 0, it);   // put it back where it was
+            _b2bRepaintItems();
+            _b2bSay(`Couldn't remove that line: ${e.message}`, true);
+        });
+}
+
+function _b2bRepaintItems() {
+    const wrap = document.getElementById('b2bItemGrid');
+    if (wrap) wrap.innerHTML = _b2bItemCards();
+    _b2bPaintTotals();
+}
+
+function _b2bItemCards() {
+    if (!_b2bModalItems.length) {
+        return `<div class="b2b-empty sm">
+            <div class="b2b-empty-t">No lines yet</div>
+            <div class="b2b-empty-s">Add the first item to start pricing this pickup.</div>
+        </div>`;
+    }
+    return _b2bModalItems.map(it => {
+        const rec  = !!it.recycle_only;
+        const tags = _b2bPresetNotes(it);
+        const needs = _b2bNeedsReason(it);
+        const missing = _b2bMissingReason(it);
+        return `
+        <div class="b2b-pcard ${rec ? 'rec' : ''} ${missing ? 'needs-reason' : ''}">
+            <div class="b2b-pcard-head">
+                <span class="b2b-mono b2b-pcard-sku">${escapeHtml(it.sku || `Line ${String(it.line_no).padStart(4, '0')}`)}</span>
+                ${_b2bLabelBtn(it)}
+                <label class="b2b-rec-toggle">
+                    <input type="checkbox" ${rec ? 'checked' : ''} onchange="b2bItemRecycleOnly('${it.id}',this.checked)">
+                    <span>Recycle only</span>
+                </label>
+                <button class="b2b-x" title="Remove line" onclick="b2bDeleteItem('${it.id}')">
+                    ${_b2bIco('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>')}
+                </button>
+            </div>
+            <div class="b2b-pgrid">
+                <div class="b2b-f"><label>Brand</label>
+                    <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple"
+                        oninput="b2bItemInput('${it.id}','make',this.value)" onchange="b2bItemSave('${it.id}')"></div>
+                <div class="b2b-f"><label>Model</label>
+                    <input value="${escapeHtml(it.model || '')}" placeholder="MacBook Air M2"
+                        oninput="b2bItemInput('${it.id}','model',this.value)" onchange="b2bItemSave('${it.id}')"></div>
+                <div class="b2b-f"><label>Condition</label>
+                    <select onchange="b2bItemCondition('${it.id}',this.value)">
+                        <option value="">—</option>
+                        ${B2B_CONDITIONS.map(c => `<option ${it.condition === c ? 'selected' : ''}>${c}</option>`).join('')}
+                    </select></div>
+                <div class="b2b-f b2b-f-n"><label>Qty</label>
+                    <input type="number" min="1" step="1" value="${Number(it.quantity) || 1}"
+                        oninput="b2bItemInput('${it.id}','quantity',this.value)" onchange="b2bItemSave('${it.id}')"></div>
+                <div class="b2b-f b2b-f-n"><label>Unit value</label>
+                    ${rec ? '<div class="b2b-f-off">recycle</div>'
+                          : `<input type="number" min="0" step="0.01" value="${Number(it.value) || 0}"
+                        oninput="b2bItemInput('${it.id}','value',this.value)" onchange="b2bItemSave('${it.id}')">`}</div>
+                <div class="b2b-f b2b-f-n"><label>Unit offer</label>
+                    ${rec ? '<div class="b2b-f-off">—</div>'
+                          : `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
+                        oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`}</div>
+                <div class="b2b-f b2b-f-n"><label>Line total</label>
+                    <div class="b2b-f-calc" id="b2bLn-${it.id}">${rec ? '—' : _b2bMoney((Number(it.offer) || 0) * (Number(it.quantity) || 1), 2)}</div></div>
+            </div>
+            <div class="b2b-pnotes">
+                <div class="b2b-f"><label>Staff notes <span class="b2b-tag-int">internal</span></label>
+                    <input value="${escapeHtml(it.staff_notes || '')}" placeholder="Anything the team should know"
+                        oninput="b2bItemInput('${it.id}','staff_notes',this.value)" onchange="b2bItemSave('${it.id}')"></div>
+                <div class="b2b-f"><label>Client notes
+                    ${needs ? '<span class="b2b-tag-req">reason required</span>' : '<span class="b2b-tag-ext">prints on the quote</span>'}</label>
+                    <div class="b2b-tags">
+                        ${B2B_NOTE_TAGS.map(t => `<button class="b2b-tag ${tags.includes(t) ? 'on' : ''}" onclick="b2bItemToggleTag('${it.id}','${t}')">${t}</button>`).join('')}
+                    </div>
+                    <input class="b2b-tag-free ${missing ? 'miss' : ''}" value="${escapeHtml(_b2bCustomNotes(it))}"
+                        placeholder="${needs ? 'Why is it ' + escapeHtml(it.condition) + '? Pick a tag above or type it here' : "Add anything the tags don't cover"}"
+                        oninput="b2bItemCustomNote('${it.id}',this.value)" onchange="b2bItemSave('${it.id}')">
+                    ${missing ? `<span class="b2b-req-note">${escapeHtml(it.condition)} items need a reason before this can be quoted.</span>` : ''}</div>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function _b2bTotalsBar(showMargin) {
+    return `
+    <div class="b2b-totals">
+        <div class="b2b-tot"><span class="b2b-tot-k">Lines</span><span class="b2b-tot-v" id="b2bTotUnits">—</span></div>
+        <div class="b2b-tot"><span class="b2b-tot-k">Resale value</span><span class="b2b-tot-v" id="b2bTotValue">—</span></div>
+        <div class="b2b-tot"><span class="b2b-tot-k">Total offer</span><span class="b2b-tot-v accent" id="b2bTotOffer">—</span></div>
+        ${showMargin ? '<div class="b2b-tot"><span class="b2b-tot-k">Gross margin</span><span class="b2b-tot-v" id="b2bTotMargin">—</span></div>' : ''}
+    </div>`;
+}
+
+// --- stage 3: pricing ------------------------------------------------------
+
+function _b2bStagePricing(deal) {
+    _b2bShowDeal({
+        stage: 'pricing',
+        eyebrow: deal.ref,
+        title: 'Price The Pickup',
+        sub: 'Itemize what came in. Every change saves as you go.',
+        wide: true,
+        body: `
+            ${_b2bSummary(deal)}
+            ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Picked up</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
+            ${_b2bTotalsBar(true)}
+            <div id="b2bItemGrid" class="b2b-items">${_b2bItemCards()}</div>
+            <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>`,
+        footer: `
+            <span class="b2b-msg" id="b2bDealMsg"></span>
+            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
+            <button class="b2b-btn b2b-btn-primary" id="b2bPrSubmit" ${_b2bModalItems.length ? '' : 'disabled'}
+                onclick="b2bSubmitPricing('${deal.id}',this)">Submit For Quoting</button>`,
+        after: _b2bPaintTotals,
+    });
+}
+
+async function b2bSubmitPricing(id, btn) {
+    if (!_b2bModalItems.length) return;
+    const gaps = _b2bUnreasoned();
+    if (gaps.length) {
+        return _b2bSay(`${gaps.length} line${gaps.length === 1 ? '' : 's'} marked Fair or For Parts still need a reason: `
+            + gaps.map(_b2bItemName).join(', '), true);
+    }
+    if (!confirm('Submit this pricing? SKUs get assigned now so labels can be printed, and a DM or CEO takes it from here.')) return;
+    await _b2bBusy(btn, 'Submitting…', async () => {
+        await _b2bPost({ action: 'submit_pricing', id, priced_by: _b2bUser() }, "Couldn't submit the pricing");
+        _b2bDirty = false;
+        closeAllModals();
+        await b2bRefresh();
+    });
+}
+
+// --- stage 4: quote --------------------------------------------------------
+// The quote stays fully editable while the client negotiates. Accepting is the
+// one-way door: offers freeze into cost and the goods become our inventory.
+
+function _b2bStageQuote(deal) {
+    const canAccept = _b2bCanAccept();
+    const sent = deal.quote_send_count
+        ? `Sent ${deal.quote_send_count}× · last ${_b2bDate(deal.quote_sent_at)}`
+        : 'Not sent yet';
+
+    _b2bShowDeal({
+        stage: 'quote',
+        eyebrow: deal.ref,
+        title: 'Quote',
+        sub: 'Edit freely while the client decides. Accepting locks the offers in as our cost.',
+        wide: true,
+        body: `
+            ${_b2bSummary(deal)}
+            <div class="b2b-sendbar">
+                <span class="b2b-sendbar-s">${escapeHtml(sent)}</span>
+                <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
+                    value="${escapeHtml(deal.client?.contact_email || '')}">
+                <button class="b2b-btn b2b-btn-secondary" onclick="b2bCopyQuote()">Copy</button>
+                <button class="b2b-btn b2b-btn-primary" onclick="b2bSendQuote('${deal.id}',this)">Open In Email</button>
+                <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
+            </div>
+            ${_b2bTotalsBar(true)}
+            <div id="b2bItemGrid" class="b2b-items">${_b2bItemCards()}</div>
+            <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
+            <details class="b2b-preview" open>
+                <summary>Quote preview — this is what the client sees</summary>
+                <div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div>
+            </details>`,
+        footer: `
+            <span class="b2b-msg" id="b2bDealMsg"></span>
+            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
+            ${canAccept
+                ? `<button class="b2b-btn b2b-btn-primary" onclick="b2bAcceptQuote('${deal.id}',this)">Mark Accepted</button>`
+                : '<span class="b2b-foot-note">Only a CEO, TOM or District Manager can accept a quote.</span>'}`,
+        after: () => { _b2bPaintTotals(); _b2bPaintQuoteDoc(); },
+    });
+}
+
+// Keep the preview in step with the grid without stealing focus from it.
+function _b2bPaintQuoteDoc() {
+    const el = document.getElementById('b2bQuoteDoc');
+    if (el && _b2bModalDeal) el.innerHTML = _b2bQuoteDoc(_b2bModalDeal, _b2bModalItems);
+}
+
+// Condition earns a tinted chip on the quote, using the same semantic tones as
+// the rest of the app: emerald for sound, amber for Fair, red for For Parts.
+// The client can read the state of their equipment down the column at a glance.
+const B2B_COND_TONE = {
+    'New':       { bg: '#e8f7ee', fg: '#178048' },
+    'Like New':  { bg: '#e8f7ee', fg: '#178048' },
+    'Good':      { bg: '#e8f7ee', fg: '#178048' },
+    'Fair':      { bg: '#fdf3e1', fg: '#b7791f' },
+    'For Parts': { bg: '#fcecec', fg: '#d1443b' },
+};
+const _b2bCondTone = c => B2B_COND_TONE[c] || { bg: '#f1f5f9', fg: '#647082' };
+const _b2bCondClass = c => ({
+    'New': 'ok', 'Like New': 'ok', 'Good': 'ok', 'Fair': 'warn', 'For Parts': 'bad',
+}[c] || 'neu');
+
+// The client-facing quote. Deliberately carries no SKUs and no deal reference
+// -- those are ours, for labels and the floor. A client identifies their quote
+// by the date we collected their equipment.
+function _b2bQuoteDoc(deal, items) {
+    const c = deal.client || {};
+    const total = items.reduce((s, it) => s + (it.recycle_only ? 0 : (Number(it.offer) || 0) * (Number(it.quantity) || 1)), 0);
+    const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
+    const picked = _b2bLongDate(deal.pickup_date);
+
+    const rows = items.length ? items.map(it => {
+        const qty = Number(it.quantity) || 1;
+        return `<tr>
+            <td>
+                <b>${escapeHtml(_b2bItemName(it))}</b>
+                ${it.condition ? `<span class="b2b-doc-cond ${_b2bCondClass(it.condition)}">${escapeHtml(it.condition)}</span>` : ''}
+                ${it.recycle_only ? '<span class="b2b-doc-rec">Recycle</span>' : ''}
+                ${it.client_notes ? `<div class="b2b-doc-sub">${escapeHtml(it.client_notes)}</div>` : ''}
+            </td>
+            <td class="c">${qty}</td>
+            <td class="r">${it.recycle_only ? '—' : _b2bMoney(it.offer, 2)}</td>
+            <td class="r b">${it.recycle_only ? '—' : _b2bMoney((Number(it.offer) || 0) * qty, 2)}</td>
+        </tr>`;
+    }).join('') : '<tr><td colspan="4" class="b2b-doc-empty">No line items yet.</td></tr>';
+
+    return `
+    <div class="b2b-doc">
+        <div class="b2b-doc-head">
+            <div class="b2b-doc-brand">Pay<span>More</span><div>Buy · Sell · Recycle Electronics</div></div>
+            <div class="b2b-doc-meta">
+                <span class="b2b-doc-kind">Quote</span>
+                <div>Issued ${escapeHtml(today)}</div>
+            </div>
+        </div>
+        <div class="b2b-doc-parties">
+            <div><span class="b2b-doc-k">Prepared for</span><b>${escapeHtml(c.company || '')}</b>${c.contact ? `<div>${escapeHtml(c.contact)}</div>` : ''}</div>
+            <div class="r"><span class="b2b-doc-k">Equipment collected</span><b>${escapeHtml(picked || 'Not recorded')}</b><div>by SPEEKS Technology, authorized PayMore franchisee</div></div>
+        </div>
+        <table class="b2b-doc-t">
+            <thead><tr><th>Description</th><th class="c">Qty</th><th class="r">Unit offer</th><th class="r">Line total</th></tr></thead>
+            <tbody>${rows}</tbody>
+        </table>
+        <div class="b2b-doc-total">
+            <span>Total offer</span>
+            <b>${_b2bMoney(total, 2)}</b>
+        </div>
+        <div class="b2b-doc-foot">
+            Reply to this email to accept the quote or ask about any line.
+            Recycle-only items carry no offer and are disposed of responsibly at no cost to you.
+        </div>
+    </div>`;
+}
+
+// The version the client actually receives: a faithful, email-safe copy of the
+// on-screen quote. Tables and inline styles only -- Gmail strips <style>
+// blocks and Outlook ignores flexbox, so everything is spelled out per cell.
+// No SKUs, no deal reference; the pickup date is the client's handle on it.
+function _b2bQuoteInlineHtml(deal, items) {
+    const c = deal.client || {};
+    const total = items.reduce((s, it) => s + (it.recycle_only ? 0 : (Number(it.offer) || 0) * (Number(it.quantity) || 1)), 0);
+    const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
+    const picked = _b2bLongDate(deal.pickup_date);
+    const TH = 'padding:10px 12px;background:#e8f7ee;border-bottom:2px solid #1f9d57;'
+             + 'font-size:10px;font-weight:bold;letter-spacing:.07em;white-space:nowrap;'
+             + 'text-transform:uppercase;color:#178048;';
+  // the band is inset inside a rounded card, so its own outer corners have to
+  // be rounded too or they sit square against the curve
+  const THL = TH + 'border-top-left-radius:10px;';
+  const THR = TH + 'border-top-right-radius:10px;';
+    const TD = 'padding:11px 12px;border-bottom:1px solid #eef2f6;font-size:13px;color:#1a1c1e;';
+
+    const CHIP = 'display:inline-block;margin-left:7px;padding:2px 8px;border-radius:10px;'
+               + 'font-size:9.5px;font-weight:bold;letter-spacing:.05em;text-transform:uppercase;';
+    const rows = items.map((it, i) => {
+        const qty = Number(it.quantity) || 1;
+        const tone = _b2bCondTone(it.condition);
+        // Zebra has to be per-row inline; Gmail drops <style> blocks entirely.
+        const zebra = i % 2 ? 'background:#fbfdfc;' : '';
+        return `<tr style="${zebra}">
+            <td style="${TD}">
+                <b>${escapeHtml(_b2bItemName(it))}</b>
+                ${it.condition ? `<span style="${CHIP}background:${tone.bg};color:${tone.fg};">${escapeHtml(it.condition)}</span>` : ''}
+                ${it.recycle_only ? `<span style="${CHIP}background:#e3f6f3;color:#0d8a7d;">Recycle</span>` : ''}
+                ${it.client_notes ? `<div style="margin-top:4px;font-size:11.5px;color:#647082;">${escapeHtml(it.client_notes)}</div>` : ''}
+            </td>
+            <td style="${TD}text-align:center;">${qty}</td>
+            <td style="${TD}text-align:right;">${it.recycle_only ? '&mdash;' : _b2bMoney(it.offer, 2)}</td>
+            <td style="${TD}text-align:right;font-weight:bold;color:#178048;">${it.recycle_only ? '&mdash;' : _b2bMoney((Number(it.offer) || 0) * qty, 2)}</td>
+        </tr>`;
+    }).join('');
+
+    return `<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:100%;font-family:'Segoe UI',Helvetica,Arial,sans-serif;background:#ffffff;border:1px solid #e6ebf1;border-top:3px solid #1f9d57;border-radius:14px;">
+  <tr><td style="padding:22px 24px;border-bottom:1px solid #eef2f6;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+      <td style="font-size:21px;font-weight:bold;color:#1a1c1e;letter-spacing:-.4px;">Pay<span style="color:#1f9d57;">More</span>
+        <div style="margin-top:3px;font-size:11px;font-weight:normal;color:#647082;">Buy &middot; Sell &middot; Recycle Electronics</div></td>
+      <td align="right" style="font-size:12px;color:#647082;">
+        <div style="display:inline-block;padding:4px 12px;border-radius:999px;background:#e8f7ee;color:#178048;font-size:12px;font-weight:bold;letter-spacing:.06em;text-transform:uppercase;">Quote</div>
+        <div style="margin-top:6px;">Issued ${escapeHtml(today)}</div></td>
+    </tr></table></td></tr>
+  <tr><td style="padding:16px 24px;background:#f4faf6;border-top:1px solid #dcefe4;border-bottom:1px solid #dcefe4;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+      <td style="font-size:12.5px;color:#1a1c1e;vertical-align:top;">
+        <div style="font-size:10px;font-weight:bold;letter-spacing:.09em;text-transform:uppercase;color:#178048;">Prepared for</div>
+        <div style="margin-top:4px;font-size:14px;font-weight:bold;">${escapeHtml(c.company || '')}</div>
+        ${c.contact ? `<div style="margin-top:2px;color:#647082;">${escapeHtml(c.contact)}</div>` : ''}</td>
+      <td align="right" style="font-size:12.5px;color:#1a1c1e;vertical-align:top;">
+        <div style="font-size:10px;font-weight:bold;letter-spacing:.09em;text-transform:uppercase;color:#178048;">Equipment collected</div>
+        <div style="margin-top:4px;font-size:14px;font-weight:bold;">${escapeHtml(picked || 'Not recorded')}</div>
+        <div style="margin-top:2px;color:#647082;">by SPEEKS Technology, authorized PayMore franchisee</div></td>
+    </tr></table></td></tr>
+  <tr><td style="padding:14px 24px 0;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr><th align="left" style="${THL}">Description</th>
+          <th align="center" style="${TH}">Qty</th>
+          <th align="right" style="${TH}">Unit offer</th>
+          <th align="right" style="${THR}">Line total</th></tr>
+      ${rows}
+    </table></td></tr>
+  <tr><td style="padding:14px 24px 0;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#e8f7ee;border-radius:12px;"><tr>
+      <td style="padding:14px 18px;font-size:11px;font-weight:bold;letter-spacing:.09em;text-transform:uppercase;color:#178048;">Total offer</td>
+      <td align="right" style="padding:14px 18px;font-size:22px;font-weight:bold;color:#178048;">${_b2bMoney(total, 2)}</td>
+    </tr></table></td></tr>
+  <tr><td style="padding:16px 24px;background:#f6f8fa;border-top:1px solid #eef2f6;font-size:11.5px;color:#647082;line-height:1.6;border-bottom-left-radius:13px;border-bottom-right-radius:13px;">
+    <b style="color:#178048;">Reply to this email to accept the quote</b> or ask about any line.
+    Recycle-only items carry no offer and are disposed of responsibly at no cost to you.
+  </td></tr>
+</table>`;
+}
+
+// Plain-text fallback, for a client whose mail reads text-only. Same content,
+// same omissions: no SKUs, no deal reference.
+function _b2bQuoteText(deal, items) {
+    const lines = items.map(it => {
+        const qty = Number(it.quantity) || 1;
+        const amt = it.recycle_only ? 'recycle only, no offer' : _b2bMoney((Number(it.offer) || 0) * qty, 2);
+        const bits = [it.condition, it.client_notes].filter(Boolean).join(' · ');
+        return `  - ${_b2bItemName(it)} x${qty} — ${amt}${bits ? `\n      (${bits})` : ''}`;
+    });
+    const total = items.reduce((s, it) => s + (it.recycle_only ? 0 : (Number(it.offer) || 0) * (Number(it.quantity) || 1)), 0);
+    const picked = _b2bLongDate(deal.pickup_date);
+    // null drops a line that doesn't apply; '' is a deliberate blank.
+    return [
+        'PayMore — Buy · Sell · Recycle Electronics',
+        '',
+        `Prepared for: ${deal.client?.company || ''}`,
+        picked ? `Equipment collected: ${picked}` : null,
+        '',
+        ...lines,
+        '',
+        `Total offer: ${_b2bMoney(total, 2)}`,
+        '',
+        'Reply to this email to accept the quote or ask about any line.',
+        'Recycle-only items carry no offer and are disposed of responsibly at no cost to you.',
+        '',
+        'Issued by SPEEKS Technology — authorized PayMore franchisee.',
+    ].filter(l => l !== null).join('\n');
+}
+
+async function b2bCopyQuote() {
+    const deal = _b2bModalDeal;
+    if (!deal) return;
+    const html = _b2bQuoteInlineHtml(deal, _b2bModalItems);
+    const text = _b2bQuoteText(deal, _b2bModalItems);
+    try {
+        await navigator.clipboard.write([new ClipboardItem({
+            'text/html':  new Blob([html], { type: 'text/html' }),
+            'text/plain': new Blob([text], { type: 'text/plain' }),
+        })]);
+        alert('Quote copied — paste it into Gmail or Outlook.');
+    } catch (_) {
+        try {
+            await navigator.clipboard.writeText(text);
+            alert('Quote copied as plain text.');
+        } catch (e) {
+            alert(`Couldn't copy the quote: ${e.message}`);
+        }
+    }
+}
+
+// Smart punctuation survives a clipboard paste but mangles in a mailto body,
+// so the plain-text rendition gets flattened to ASCII on the way out.
+function _b2bAscii(s) {
+    return String(s || '')
+        .replace(/[—–]/g, '-').replace(/[‘’]/g, "'")
+        .replace(/[“”]/g, '"').replace(/·/g, '-').replace(/…/g, '...')
+        .replace(/[^\x00-\x7F]/g, '');
+}
+
+// Opens the quote in the user's own mail client rather than sending it from
+// the reports mailbox, so the client's reply lands with whoever quoted them --
+// same reason the Recycle report went back to mailto.
+//
+// A mailto body is plain text by definition (RFC 6068), so the styled quote
+// cannot ride in the URL. Instead it goes on the clipboard as rich HTML and
+// the draft opens empty: one paste and the client gets the same document they
+// would see here. The plain-text rendition is attached as the clipboard's
+// alternate flavour, so a paste into a plain-text composer still reads well,
+// and it is what fills the body if the clipboard is unavailable.
+function _b2bQuoteSubject(deal) {
+    const picked = _b2bLongDate(deal.pickup_date);
+    return picked ? `Your PayMore Quote — Equipment Collected ${picked}` : 'Your PayMore Quote';
+}
+
+// Step one: put the quote on the clipboard and explain the paste, so nobody
+// lands in an empty draft wondering where the quote went.
+async function b2bSendQuote(id, btn) {
+    const to = document.getElementById('b2bQuoteTo')?.value.trim();
+    if (!to) return _b2bSay('Enter an email address to open the quote against.', true);
+    const deal = _b2bModalDeal;
+    if (!deal) return;
+
+    await _b2bBusy(btn, 'Preparing…', async () => {
+        const html = _b2bQuoteInlineHtml(deal, _b2bModalItems);
+        const text = _b2bQuoteText(deal, _b2bModalItems);
+        let copied = false;
+        try {
+            await navigator.clipboard.write([new ClipboardItem({
+                'text/html':  new Blob([html], { type: 'text/html' }),
+                'text/plain': new Blob([text], { type: 'text/plain' }),
+            })]);
+            copied = true;
+        } catch (_) {
+            try { await navigator.clipboard.writeText(text); copied = true; } catch (_) { /* no clipboard */ }
+        }
+        _b2bShowSendStep(deal, to, copied);
+    });
+}
+
+const _b2bIsMac = () => /Mac|iP(hone|ad|od)/.test(navigator.platform || navigator.userAgent || '');
+
+function _b2bShowSendStep(deal, to, copied) {
+    const paste = _b2bIsMac() ? 'Cmd + V' : 'Ctrl + V';
+    const steps = copied ? [
+        `Your email app opens a new draft to <b>${escapeHtml(to)}</b> with the subject already filled in.`,
+        `Click into the message body and press <kbd>${paste}</kbd> — the full quote is already on your clipboard.`,
+        'Check it over, add anything you want to say, and send.',
+    ] : [
+        `Your email app opens a new draft to <b>${escapeHtml(to)}</b>.`,
+        'The quote is in the body as plain text — your browser blocked the clipboard, so the formatted version could not be copied.',
+        'Check it over and send.',
+    ];
+
+    _b2bShowDeal({
+        stage: 'quote',
+        eyebrow: deal.ref,
+        title: 'Send This Quote',
+        sub: copied ? 'The quote is copied and ready to paste.' : 'The quote will be in the draft as plain text.',
+        body: `
+            <div class="b2b-sendstep">
+                <div class="b2b-sendstep-ico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</div>
+                <div class="b2b-sendstep-t">What happens next</div>
+                <ol class="b2b-sendsteps">${steps.map(s => `<li>${s}</li>`).join('')}</ol>
+                ${copied ? '<div class="b2b-sendstep-note">Nothing has been emailed yet — you send it yourself from your own mailbox, so the client\'s reply comes back to you.</div>' : ''}
+            </div>`,
+        footer: `
+            <span class="b2b-msg" id="b2bDealMsg"></span>
+            <button class="kpi-cancel-btn" onclick="b2bBackToQuote('${deal.id}')">Back</button>
+            <button class="b2b-btn b2b-btn-primary" onclick="b2bOpenDraft('${deal.id}','${escapeHtml(to).replace(/'/g, "\\'")}',${copied})">Open Email Draft</button>`,
+    });
+}
+
+function b2bBackToQuote(id) {
+    const deal = _b2bDealById(id) || _b2bModalDeal;
+    if (deal) { _b2bModalDeal = deal; _b2bStageQuote(deal); }
+}
+
+// Step two. The mailto fires first and synchronously, straight off this click:
+// an external protocol handler needs user activation, and awaiting anything
+// first would spend it.
+async function b2bOpenDraft(id, to, copied) {
+    const deal = _b2bDealById(id) || _b2bModalDeal;
+    if (!deal) return;
+
+    let href = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(_b2bAscii(_b2bQuoteSubject(deal)))}`;
+    if (!copied) {
+        const ascii = _b2bAscii(_b2bQuoteText(deal, _b2bModalItems));
+        const withBody = `${href}&body=${encodeURIComponent(ascii)}`;
+        href = withBody.length > 1900
+            ? `${href}&body=${encodeURIComponent(ascii.slice(0, 1200) + '\n\n[quote truncated - use Copy instead]')}`
+            : withBody;
+    }
+    window.location.href = href;
+
+    await _b2bPost({ action: 'send_quote', id, to }, "Couldn't record the send");
+    await b2bRefresh();
+    const next = _b2bDealById(id);
+    if (next) { _b2bModalDeal = next; _b2bStageQuote(next); }
+    _b2bSay(`Draft opened for ${to}.`);
+}
+
+async function b2bAcceptQuote(id, btn) {
+    const gaps = _b2bUnreasoned();
+    if (gaps.length) {
+        return _b2bSay(`${gaps.length} line${gaps.length === 1 ? '' : 's'} marked Fair or For Parts still need a reason: `
+            + gaps.map(_b2bItemName).join(', '), true);
+    }
+    const t = _b2bItemTotals();
+    const msg = `Accept this quote at ${_b2bMoney(t.offer, 2)}?\n\n`
+        + 'The offers lock in as our cost, the SKUs freeze, and the items become inventory to list. '
+        + 'This cannot be undone.';
+    if (!confirm(msg)) return;
+    const out = await _b2bBusy(btn, 'Accepting…', () =>
+        _b2bPost({ action: 'accept_quote', id, accepted_by: _b2bUser() }, "Couldn't accept the quote"));
+    _b2bDirty = false;
+    closeAllModals();
+    await b2bRefresh();
+    const next = _b2bDealById(id);
+    if (!next) return;
+    // CORP-priced deals still need a listing store before anyone can tick items.
+    if (out.next_stage === 'listing_location' && _b2bIsCorp()) b2bOpenDeal('listloc', id);
+    else if (_b2bActionFor(next))                              b2bOpenDeal(_b2bClickKind(next), id);
+}
+
+// --- stage 5: listing location (CORP-priced deals only) --------------------
+
+function _b2bStageListingLocation(deal) {
+    _b2bAssignPick = null;
+    _b2bShowDeal({
+        stage: 'listing_location',
+        eyebrow: deal.ref,
+        title: 'Assign Listing Store',
+        sub: 'CORP priced this one, so pick the store that will list the items.',
+        body: `
+            ${_b2bSummary(deal)}
+            <div class="b2b-note ok"><span class="b2b-note-k">Accepted</span>
+                ${escapeHtml(deal.client?.company || '')} accepted ${_b2bMoney(deal.total_offer, 2)} across ${deal.total_units} unit${deal.total_units === 1 ? '' : 's'}.</div>
+            <label class="form-label-caps" style="margin-top:14px;">List At</label>
+            <div class="b2b-loc-pick">
+                ${STORE_CODES.map(c => `
+                    <button class="b2b-loc" data-loc="${c}" onclick="b2bPickLocation('${c}')">
+                        <span class="b2b-loc-dot">${STORE_DOTS[c] || ''}</span>
+                        <span class="b2b-loc-c">${c}</span>
+                    </button>`).join('')}
+            </div>`,
+        footer: `
+            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
+            <button class="b2b-btn b2b-btn-primary" id="b2bAsGo" disabled onclick="b2bAssignListing('${deal.id}',this)">Send To Listing</button>`,
+    });
+}
+
+async function b2bAssignListing(id) {
+    if (!_b2bAssignPick) return;
+    await _b2bPost({ action: 'assign_listing', id, listing_store: _b2bAssignPick }, "Couldn't assign the listing store");
+    closeAllModals();
+    await b2bRefresh();
+}
+
+// --- stage 6: listing ------------------------------------------------------
+
+function _b2bDone(it)      { return (Number(it.listed_qty) || 0) + (Number(it.recycled_qty) || 0); }
+function _b2bSatisfied(it) { return _b2bDone(it) >= (Number(it.quantity) || 1); }
+function _b2bAllSatisfied(){ return _b2bModalItems.length > 0 && _b2bModalItems.every(_b2bSatisfied); }
+
+function _b2bStageListing(deal) {
+    _b2bShowDeal({
+        stage: 'listing',
+        eyebrow: deal.ref,
+        title: 'Listing',
+        sub: 'Scan or tick each unit as it goes live for resale.',
+        wide: true,
+        body: `
+            ${_b2bSummary(deal)}
+            <div class="b2b-scanbar">
+                <span class="b2b-scan-ico">${_b2bIco('<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="7" y2="12"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="17" y1="8" x2="17" y2="16"/>')}</span>
+                <input id="b2bScanIn" class="form-input-lg" autocomplete="off" placeholder="Scan a label, or type a SKU and press Enter"
+                    onkeydown="if(event.key==='Enter'){event.preventDefault();b2bScan('${deal.id}');}">
+                <span class="b2b-scan-msg" id="b2bScanMsg"></span>
+            </div>
+            <div id="b2bListProg">${_b2bListProgress()}</div>
+            <div id="b2bListRows" class="b2b-list">${_b2bListRows()}</div>`,
+        footer: `
+            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
+            <button class="b2b-btn b2b-btn-primary" id="b2bListDone" ${_b2bAllSatisfied() ? '' : 'disabled'}
+                onclick="b2bCompleteDeal('${deal.id}',this)">Complete Deal</button>`,
+        after: () => document.getElementById('b2bScanIn')?.focus(),
+    });
+}
+
+function _b2bListProgress() {
+    const total = _b2bModalItems.reduce((n, it) => n + (Number(it.quantity) || 1), 0);
+    const done  = _b2bModalItems.reduce((n, it) => n + _b2bDone(it), 0);
+    const pct   = total ? Math.round((done / total) * 100) : 0;
+    return `
+        <div class="b2b-prog">
+            <div class="b2b-prog-h"><span>Listing progress</span><span><b>${done}</b> of ${total} units · ${pct}%</span></div>
+            <div class="b2b-pace-bar"><i style="width:${pct}%"></i></div>
+        </div>`;
+}
+
+function _b2bListRows() {
+    return _b2bModalItems.map(it => {
+        const qty = Number(it.quantity) || 1;
+        const listed = Number(it.listed_qty) || 0;
+        const recycled = Number(it.recycled_qty) || 0;
+        const ok = _b2bSatisfied(it);
+        return `
+        <div class="b2b-lrow ${ok ? 'done' : ''}" id="b2bLrow-${it.id}">
+            <span class="b2b-lcheck">${ok ? _b2bIco('<polyline points="20 6 9 17 4 12"/>') : ''}</span>
+            <div class="b2b-lmain">
+                <div class="b2b-lname">${escapeHtml(_b2bItemName(it))}
+                    ${it.recycle_only ? '<span class="b2b-doc-rec">Recycle only</span>' : ''}
+                    ${it.condition ? `<span class="b2b-lcond">${escapeHtml(it.condition)}</span>` : ''}</div>
+                <div class="b2b-lsku b2b-mono">${escapeHtml(it.sku || '')}</div>
+            </div>
+            <div class="b2b-lcount">
+                <b>${listed}</b><span>/ ${qty} listed</span>
+                ${recycled ? `<span class="b2b-lrec">${recycled} recycled</span>` : ''}
+            </div>
+            <div class="b2b-lacts">
+                ${_b2bLabelBtn(it)}
+                <button class="b2b-step" ${listed <= 0 ? 'disabled' : ''} title="Undo one" onclick="b2bTick('${it.id}',-1)">−</button>
+                <button class="b2b-step up" ${ok ? 'disabled' : ''} title="Mark one listed" onclick="b2bTick('${it.id}',1)">+</button>
+                <button class="b2b-recycle" ${ok ? 'disabled' : ''} title="Recycle units out" onclick="b2bRecycleUnits('${it.id}')">Recycle</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function _b2bRepaintListing() {
+    const rows = document.getElementById('b2bListRows');
+    const prog = document.getElementById('b2bListProg');
+    if (rows) rows.innerHTML = _b2bListRows();
+    if (prog) prog.innerHTML = _b2bListProgress();
+    const done = document.getElementById('b2bListDone');
+    if (done) done.disabled = !_b2bAllSatisfied();
+}
+
+function _b2bScanFlash(msg, bad, itemId) {
+    const el = document.getElementById('b2bScanMsg');
+    if (el) {
+        el.textContent = msg;
+        el.className = `b2b-scan-msg ${bad ? 'bad' : 'ok'}`;
+        setTimeout(() => { if (el.textContent === msg) { el.textContent = ''; el.className = 'b2b-scan-msg'; } }, 2600);
+    }
+    if (itemId) {
+        const row = document.getElementById(`b2bLrow-${itemId}`);
+        if (row) { row.classList.add('hit'); setTimeout(() => row.classList.remove('hit'), 700); }
+    }
+}
+
+// A barcode scanner is a keyboard: the whole SKU arrives as fast keystrokes
+// ending in Enter, so this handles a scan and a typed SKU identically.
+// Everything needed to validate a scan is already in memory, so an unknown or
+// already-full SKU is rejected instantly and only real scans hit the network.
+function b2bScan(dealId) {
+    const input = document.getElementById('b2bScanIn');
+    const sku = (input?.value || '').trim().toUpperCase();
+    if (input) input.value = '';
+    if (!sku) return;
+    const it = _b2bModalItems.find(i => (i.sku || '').toUpperCase() === sku);
+    if (!it)             return _b2bScanFlash(`${sku} isn't a line on this deal.`, true);
+    if (_b2bSatisfied(it)) return _b2bScanFlash(`${sku} is already fully listed.`, true, it.id);
+    _b2bBumpListed(it, 1, () => _b2bScanFlash(`${sku} — ${it.listed_qty}/${it.quantity} listed`, false, it.id));
+    input?.focus();
+}
+
+function b2bTick(itemId, delta) {
+    const it = _b2bLocalItem(itemId);
+    if (it) _b2bBumpListed(it, delta);
+}
+
+// Apply locally, repaint now, then reconcile with the server. On failure the
+// line snaps back and says why, rather than the click having felt ignored.
+function _b2bBumpListed(it, delta, onOk) {
+    const qty = Number(it.quantity) || 1;
+    const before = { listed: Number(it.listed_qty) || 0, recycled: Number(it.recycled_qty) || 0 };
+    const next = before.listed + delta;
+    if (next < 0 || next + before.recycled > qty) return;
+
+    it.listed_qty = next;
+    _b2bDirty = true;
+    _b2bRepaintListing();
+    if (onOk) onOk();
+    const done = _b2bAllSatisfied();
+
+    _b2bEnqueue(it.id, () => _b2bSend({ action: 'mark_listed', id: it.id, delta }))
+        .then(out => {
+            if (!out) return;
+            it.listed_qty = out.listed_qty;
+            it.recycled_qty = out.recycled_qty;
+            _b2bRepaintListing();
+        })
+        .catch(e => {
+            it.listed_qty = before.listed;
+            it.recycled_qty = before.recycled;
+            _b2bRepaintListing();
+            _b2bScanFlash(e.message, true, it.id);
+        });
+
+    if (done) _b2bCelebrate(_b2bModalDeal?.id);
+}
+
+function b2bRecycleUnits(itemId) {
+    const it = _b2bLocalItem(itemId);
+    if (!it) return;
+    const room = (Number(it.quantity) || 1) - _b2bDone(it);
+    if (room <= 0) return;
+    const raw = prompt(`How many "${_b2bItemName(it)}" units are being recycled out?\n\n${room} unit${room === 1 ? '' : 's'} still outstanding.`, String(room));
+    if (raw === null) return;
+    const units = Math.min(room, Math.max(1, parseInt(raw, 10) || 0));
+    if (!units) return;
+    if (!confirm(`Recycle ${units} unit${units === 1 ? '' : 's'} of "${_b2bItemName(it)}"?\n\nThey come off the listing checklist for good and won't be listed for resale. This can't be undone.`)) return;
+
+    const before = Number(it.recycled_qty) || 0;
+    it.recycled_qty = before + units;
+    _b2bDirty = true;
+    _b2bRepaintListing();
+    const done = _b2bAllSatisfied();
+
+    _b2bEnqueue(it.id, () => _b2bSend({ action: 'recycle_units', id: it.id, units }))
+        .then(out => {
+            if (!out) return;
+            it.listed_qty = out.listed_qty;
+            it.recycled_qty = out.recycled_qty;
+            _b2bRepaintListing();
+        })
+        .catch(e => {
+            it.recycled_qty = before;
+            _b2bRepaintListing();
+            _b2bScanFlash(e.message, true, it.id);
+        });
+
+    if (done) _b2bCelebrate(_b2bModalDeal?.id);
+}
+
+// Every unit is accounted for -- say so properly before closing the deal out.
+function _b2bCelebrate(dealId) {
+    const deal = _b2bDealById(dealId) || _b2bModalDeal;
+    if (!deal) return;
+    const units = _b2bModalItems.reduce((n, it) => n + (Number(it.quantity) || 1), 0);
+    const recycled = _b2bModalItems.reduce((n, it) => n + (Number(it.recycled_qty) || 0), 0);
+    document.getElementById('b2bDealBody').innerHTML = `
+        <div class="b2b-celebrate">
+            <div class="b2b-cel-ring">${_b2bIco('<polyline points="20 6 9 17 4 12"/>')}</div>
+            <div class="b2b-cel-t">Every unit is accounted for</div>
+            <div class="b2b-cel-s">${escapeHtml(deal.ref)} · ${escapeHtml(deal.client?.company || '')}</div>
+            <div class="b2b-cel-stats">
+                <div><b>${units - recycled}</b><span>listed</span></div>
+                ${recycled ? `<div><b>${recycled}</b><span>recycled</span></div>` : ''}
+                <div><b>${_b2bMoney(deal.total_cost || deal.total_offer)}</b><span>inventory cost</span></div>
+            </div>
+        </div>`;
+    document.getElementById('b2bDealFooter').innerHTML = `
+        <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Not Yet</button>
+        <button class="b2b-btn b2b-btn-primary" onclick="b2bCompleteDeal('${deal.id}',this)">Complete Deal</button>`;
+}
+
+async function b2bCompleteDeal(id) {
+    await _b2bPost({ action: 'complete', id }, "Couldn't complete the deal");
+    closeAllModals();
+    await b2bRefresh();
+}
+
+// --- read-only view --------------------------------------------------------
+
+function _b2bStageView(deal) {
+    const t = _b2bItemTotals();
+    const rows = _b2bModalItems.map(it => {
+        const qty = Number(it.quantity) || 1;
+        return `<tr>
+            <td><b>${escapeHtml(_b2bItemName(it))}</b>
+                ${it.recycle_only ? '<span class="b2b-doc-rec">Recycle</span>' : ''}
+                ${it.client_notes ? `<div class="b2b-doc-sub">${escapeHtml(it.client_notes)}</div>` : ''}
+                ${it.staff_notes ? `<div class="b2b-doc-sub int">Internal: ${escapeHtml(it.staff_notes)}</div>` : ''}
+                <div class="b2b-doc-sku b2b-mono">${escapeHtml(it.sku || '')}</div></td>
+            <td class="c">${escapeHtml(it.condition || '—')}</td>
+            <td class="c">${qty}</td>
+            <td class="c">${_b2bDone(it)}/${qty}</td>
+            <td class="r">${it.recycle_only ? '—' : _b2bMoney(it.cost != null ? it.cost : it.offer, 2)}</td>
+            <td class="r b">${it.recycle_only ? '—' : _b2bMoney((Number(it.cost != null ? it.cost : it.offer) || 0) * qty, 2)}</td>
+            <td class="r">${_b2bLabelBtn(it)}</td>
+        </tr>`;
+    }).join('');
+
+    const canDecline = _b2bIsCorp() && !['listing', 'completed', 'declined'].includes(deal.stage);
+    const canReopen  = _b2bIsCorp() && deal.stage === 'declined';
+    _b2bShowDeal({
+        stage: deal.stage,
+        eyebrow: deal.ref,
+        title: deal.client?.company || 'Deal',
+        sub: `${B2B_STAGE[deal.stage]?.label || deal.stage}${deal.accepted_at ? ` · accepted ${_b2bDate(deal.accepted_at)}` : ''}`,
+        wide: true,
+        body: `
+            ${_b2bSummary(deal)}
+            ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Picked up</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
+            ${deal.declined_reason ? `<div class="b2b-note bad">
+                <span class="b2b-note-k">Declined</span>
+                <span>${escapeHtml(deal.declined_reason)}
+                    <div class="b2b-note-sub">${escapeHtml([
+                        B2B_DECLINE_REASONS.find(r => r.key === deal.declined_category)?.label,
+                        deal.declined_by ? `marked by ${deal.declined_by}` : '',
+                        deal.declined_at ? _b2bDate(deal.declined_at) : '',
+                    ].filter(Boolean).join(' · '))}</div></span>
+            </div>` : ''}
+            ${_b2bModalItems.length ? `
+            <table class="cb-table b2b-vtable">
+                <thead><tr><th>Item</th><th class="c">Condition</th><th class="c">Qty</th><th class="c">Done</th><th class="r">Unit</th><th class="r">Line</th><th></th></tr></thead>
+                <tbody>${rows}</tbody>
+                <tfoot><tr><td colspan="5" class="r">Total</td><td class="r accent">${_b2bMoney(t.offer, 2)}</td><td></td></tr></tfoot>
+            </table>` : '<div class="b2b-empty sm"><div class="b2b-empty-t">No line items yet</div></div>'}`,
+        footer: `
+            ${canDecline ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bDeclineDeal('${deal.id}')">Decline Deal</button>` : ''}
+            ${canReopen ? `<button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;" onclick="b2bReopenDeal('${deal.id}',this)">Reopen Deal</button>` : ''}
+            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>`,
+    });
+}
+
+// A deal that dies. Categorised as well as explained, so the Overview can say
+// why deals are being lost rather than just how many.
+const B2B_DECLINE_REASONS = [
+    { key: 'client_declined',     label: 'Client turned the offer down' },
+    { key: 'client_unresponsive', label: 'Client went quiet' },
+    { key: 'withdrawn',           label: 'Client withdrew the equipment' },
+    { key: 'not_viable',          label: 'Not worth doing on our side' },
+    { key: 'other',               label: 'Something else' },
+];
+
+function b2bDeclineDeal(id) {
+    const deal = _b2bDealById(id) || _b2bModalDeal;
+    if (!deal) return;
+    _b2bShowDeal({
+        stage: 'declined',
+        eyebrow: deal.ref,
+        title: 'Decline This Deal',
+        sub: 'Records the deal as dead, with why, and takes it off the board.',
+        body: `
+            ${_b2bSummary(deal)}
+            <label class="form-label-caps">What happened?</label>
+            <div class="b2b-reasons">
+                ${B2B_DECLINE_REASONS.map((r, i) => `
+                    <label class="b2b-reason">
+                        <input type="radio" name="b2bDeclineCat" value="${r.key}" ${i === 0 ? 'checked' : ''}>
+                        <span>${escapeHtml(r.label)}</span>
+                    </label>`).join('')}
+            </div>
+            <label class="form-label-caps" style="margin-top:16px;">Details *</label>
+            <textarea id="b2bDeclineWhy" class="form-input-lg" rows="3"
+                placeholder="A sentence for whoever reads this in six months"></textarea>
+            <div class="b2b-note bad" style="margin-top:14px;">
+                <span class="b2b-note-k">Note</span>
+                The deal stays on record and can be reopened if the client comes back —
+                it just stops appearing as work in flight.
+            </div>`,
+        footer: `
+            <span class="b2b-msg" id="b2bDealMsg"></span>
+            <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Back</button>
+            <button class="b2b-btn b2b-btn-danger" style="margin-right:0;" onclick="b2bConfirmDecline('${deal.id}',this)">Mark Declined</button>`,
+    });
+}
+
+async function b2bConfirmDecline(id, btn) {
+    const reason = document.getElementById('b2bDeclineWhy')?.value.trim();
+    if (!reason) return _b2bSay('Add a short reason before declining.', true);
+    const category = document.querySelector('input[name="b2bDeclineCat"]:checked')?.value;
+    try {
+        await _b2bBusy(btn, 'Declining…', () =>
+            _b2bSend({ action: 'decline', id, reason, category, declined_by: _b2bUser() }));
+        closeAllModals();
+        await b2bRefresh();
+    } catch (e) {
+        _b2bSay(`Couldn't decline the deal: ${e.message}`, true);
+    }
+}
+
+async function b2bReopenDeal(id, btn) {
+    if (!confirm('Reopen this deal? It goes back to the stage it died at and returns to the board.')) return;
+    try {
+        await _b2bBusy(btn, 'Reopening…', () => _b2bSend({ action: 'reopen', id }));
+        closeAllModals();
+        await b2bRefresh();
+    } catch (e) {
+        alert(`Couldn't reopen the deal: ${e.message}`);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BARCODE LABELS
+// ---------------------------------------------------------------------------
+// Code 128B, encoded here rather than pulled from a library: the page has no
+// build step and no CDN access, and hand-rolling it means the barcode is a
+// vector SVG that stays crisp on both label sizes instead of a fixed-DPI
+// canvas. SKUs are uppercase alphanumerics with hyphens, all of which sit in
+// the plain Code 128B character set.
+
+// One entry per code value 0-106. Each is bar/space module widths, alternating
+// bar-first. 103 = Start A, 104 = Start B, 105 = Start C, 106 = Stop.
+const _B2B_C128 = [
+    '212222','222122','222221','121223','121322','131222','122213','122312','132212','221213',
+    '221312','231212','112232','122132','122231','113222','123122','123221','223211','221132',
+    '221231','213212','223112','312131','311222','321122','321221','312212','322112','322211',
+    '212123','212321','232121','111323','131123','131321','112313','132113','132311','211313',
+    '231113','231311','112133','112331','132131','113123','113321','133121','313121','211331',
+    '231131','213113','213311','213131','311123','311321','331121','312113','312311','332111',
+    '314111','221411','431111','111224','111422','121124','121421','141122','141221','112214',
+    '112412','122114','122411','142112','142211','241211','221114','413111','241112','134111',
+    '111242','121142','121241','114212','124112','124211','411212','421112','421211','212141',
+    '214121','412121','111143','111341','131141','114113','114311','411113','411311','113141',
+    '114131','311141','411131','211412','211214','211232','2331112'
+];
+
+// Returns the bar rectangles plus the total module width, quiet zones included.
+function _b2bCode128B(data) {
+    const QUIET = 10;
+    const values = [104];                       // Start B
+    for (const ch of String(data)) {
+        const v = ch.charCodeAt(0) - 32;
+        if (v < 0 || v > 94) throw new Error(`"${ch}" can't be encoded in Code 128B`);
+        values.push(v);
+    }
+    // Checksum: start value plus each data value times its 1-based position.
+    let sum = 104;
+    for (let i = 1; i < values.length; i++) sum += values[i] * i;
+    values.push(sum % 103);
+    values.push(106);                           // Stop
+
+    const bars = [];
+    let x = QUIET;
+    values.forEach(v => {
+        const pattern = _B2B_C128[v];
+        for (let i = 0; i < pattern.length; i++) {
+            const w = Number(pattern[i]);
+            if (i % 2 === 0) bars.push({ x, w }); // even index is a bar, odd a space
+            x += w;
+        }
+    });
+    return { bars, width: x + QUIET };
+}
+
+function _b2bBarcodeSvg(data) {
+    let enc;
+    try { enc = _b2bCode128B(data); } catch (_) { return ''; }
+    const H = 100;
+    const rects = enc.bars.map(b => `<rect x="${b.x}" y="0" width="${b.w}" height="${H}"/>`).join('');
+    // preserveAspectRatio="none" lets the label CSS set width and height
+    // independently -- every bar scales by the same factor, so it stays valid.
+    return `<svg class="bc" viewBox="0 0 ${enc.width} ${H}" preserveAspectRatio="none" shape-rendering="crispEdges">${rects}</svg>`;
+}
+
+// One label per physical unit: a qty-5 line prints 5 identical labels, so each
+// scan during listing ticks that line up by one.
+function b2bPrintLabels(dealId, itemId) {
+    const deal = _b2bDealById(dealId) || _b2bModalDeal;
+    if (!deal) return;
+    const source = itemId ? _b2bModalItems.filter(i => i.id === itemId) : _b2bModalItems;
+    const labels = [];
+    source.forEach(it => {
+        if (!it.sku) return;
+        const n = Math.max(1, Number(it.quantity) || 1);
+        for (let i = 0; i < n; i++) labels.push(it);
+    });
+    if (!labels.length) {
+        return alert('No SKUs to print yet — they get assigned when the pricing is submitted.');
+    }
+
+    const cells = labels.map(it => `
+        <div class="lb">
+            ${_b2bBarcodeSvg(it.sku)}
+            <div class="sku">${escapeHtml(it.sku)}</div>
+            <div class="desc">${escapeHtml(_b2bItemName(it))}</div>
+        </div>`).join('');
+
+    const doc = `<!doctype html><html><head><meta charset="utf-8">
+<title>Labels ${escapeHtml(deal.ref)}</title>
+<style id="pageSize">@page { size: 2.25in 1in; margin: 0; }</style>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Inter','Segoe UI',Arial,sans-serif; background: #f4f7f9; }
+  .bar { position: sticky; top: 0; display: flex; gap: 8px; align-items: center;
+         padding: 12px 16px; background: #fff; border-bottom: 1px solid #e6ebf1; }
+  .bar b { font-size: 13px; font-weight: 800; color: #1a1c1e; margin-right: 6px; }
+  .bar button { font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+                padding: 7px 13px; border-radius: 9px; border: 1px solid #e6ebf1;
+                background: #fff; color: #647082; }
+  .bar button.on { background: #e8f7ee; border-color: #1f9d57; color: #178048; }
+  .bar button.go { background: #1f9d57; border-color: #1f9d57; color: #fff; margin-left: auto; }
+  .bar span { font-size: 12px; color: #94a3b8; }
+
+  .sheet { padding: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .lb { width: 2.25in; height: 1in; padding: 0.05in 0.07in; background: #fff;
+        border: 1px dashed #cbd5e1; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; overflow: hidden; }
+  .lb .bc { display: block; width: 100%; height: 0.42in; fill: #000; }
+  .lb .sku { font-family: 'Consolas','SFMono-Regular',monospace; font-size: 10pt;
+             font-weight: 700; letter-spacing: .04em; line-height: 1.1; margin-top: 0.03in; }
+  .lb .desc { font-size: 6.5pt; color: #333; line-height: 1.1; margin-top: 0.01in;
+              max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* The short stock has no room for a description line. */
+  body.sm .lb { height: 0.75in; }
+  body.sm .lb .bc { height: 0.34in; }
+  body.sm .lb .sku { font-size: 9pt; }
+  body.sm .lb .desc { display: none; }
+
+  @media print {
+    body { background: #fff; }
+    .bar { display: none; }
+    .sheet { padding: 0; gap: 0; display: block; }
+    .lb { border: none; page-break-after: always; break-after: page; }
+    .lb:last-child { page-break-after: auto; break-after: auto; }
+  }
+</style></head>
+<body>
+  <div class="bar">
+    <b>${escapeHtml(deal.ref)}</b>
+    <button id="b1" class="on" onclick="setSize(false)">2.25 × 1 in</button>
+    <button id="b2" onclick="setSize(true)">2.25 × 0.75 in</button>
+    <span>${labels.length} label${labels.length === 1 ? '' : 's'} — one per unit</span>
+    <button class="go" onclick="window.print()">Print</button>
+  </div>
+  <div class="sheet">${cells}</div>
+<script>
+  function setSize(small) {
+    document.body.classList.toggle('sm', small);
+    document.getElementById('b1').className = small ? '' : 'on';
+    document.getElementById('b2').className = small ? 'on' : '';
+    document.getElementById('pageSize').textContent =
+      '@page { size: 2.25in ' + (small ? '0.75in' : '1in') + '; margin: 0; }';
+  }
+<\/script>
+</body></html>`;
+
+    const w = window.open('', '_blank');
+    if (!w) return alert('Allow pop-ups for this site to print labels.');
+    w.document.write(doc);
+    w.document.close();
 }
 
 // ============================================================================
@@ -8206,14 +10057,14 @@ function cbCanModify(entry) {
 // gets both of their stores, everyone else is locked to their own (no picker).
 function _cbAddStores() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    if (CB_CORP_ROLES.includes(role)) return B2B_STORE_LIST;
+    if (CB_CORP_ROLES.includes(role)) return STORE_CODES;
     if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) return [...MULTISTORE_MANAGER_STORES];
     return null;
 }
 
 function _cbHomeStore() {
     const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
-    return B2B_STORE_LIST.includes(s) ? s : 'OVL';
+    return STORE_CODES.includes(s) ? s : 'OVL';
 }
 
 function cbDaysInfo(entry) {
@@ -8719,7 +10570,7 @@ function _consumeMsmAlertStore() {
     // Validated against every store (not just the MSM's two) so a DM alert can also
     // route to a specific store that needs review, using the same override.
     const up = (s || '').toUpperCase();
-    return B2B_STORE_LIST.includes(up) ? up : '';
+    return STORE_CODES.includes(up) ? up : '';
 }
 // The store a store-specific tool should OPEN on for an MSM: a pending single-store
 // alert override wins (cleared after use), else the active dashboard store.
@@ -17080,6 +18931,8 @@ const FEATURE_CATALOG = [
     { key: 'widget-aging-inventory',   label: 'Aging Inventory (tab)',         tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'cap-aging-dm',             label: 'Aging Inventory (DM)',          tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
+    { key: 'widget-ops-b2b',           label: 'B2B Deals (tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'tom', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
     //      the link just inherits it. ----
@@ -17267,7 +19120,7 @@ function _featureEffectiveVisible(featureKey, userRoleClass, userName) {
 // contain. A section's nav link shows if ANY of its sub-tabs is visible.
 const _SECTION_TABS = {
     'workspace.html': ['widget-ws-monthly-breakdown', 'widget-ws-weekly-kpis', 'widget-variance-replies', 'widget-aging-inventory'],
-    'operations.html': ['widget-ops-callbacks'],
+    'operations.html': ['widget-ops-callbacks', 'widget-ops-b2b'],
 };
 
 function _applySectionNavVisibility(userRoleClass, userName) {
@@ -20890,6 +22743,7 @@ const _RT_TOOL_CHECKS = {
     patch:         ['loadPatchNotes'],
     kpi:           ['checkKpiDueReminders'],
     preferred:     ['checkPreferredReminders'],
+    b2b:           ['_b2bRealtimeRefresh'],
     // Command Center + Listing Goals sources. Each re-fetches through its edge
     // fn and recomputes its update signature, so the pulsing dot / bar lights the
     // moment a write lands — no refresh or re-login. (scorecard fn, ebay-alerts

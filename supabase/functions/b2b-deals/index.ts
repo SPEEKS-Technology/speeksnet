@@ -1,0 +1,735 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "jsr:@supabase/supabase-js@2";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+// B2B deal tracker. A business sells us bulk electronics; we collect them,
+// itemize and price them, quote the client, and once they accept, the goods
+// become our inventory and get listed for resale.
+//
+// Pipeline (each stage has exactly one owner, so "needs you" is derivable from
+// the stage alone):
+//   pickup            corp    typed-name sign-off + pickup date
+//   pricing_location  corp    route to OVL/LEE/WSP/MPL/BAL/CORP
+//   pricing           store   itemize and price
+//   quote             corp    goes out from the quoter's own mailbox as a
+//                             mailto draft so replies reach them; stays
+//                             editable while the client negotiates, and only
+//                             a CEO/TOM/DM may accept it
+//   listing_location  corp    ONLY when pricing happened at CORP
+//   listing           store   check off / scan each unit; recycle bad ones
+//   completed         —       terminal, the deal ran its course
+//   declined          —       terminal, the deal died; reachable any time
+//                             before listing, since once a quote is accepted
+//                             the goods are already ours
+//
+// Reads come from the b2b_deal_list / b2b_client_list views, which roll the
+// line items up in Postgres. Summing them here meant transferring every item
+// on every board draw, which does not survive thousands of them.
+//
+// Authorization is client-side (PIN trust model, matching the rest of the app);
+// what THIS function enforces is legal state transitions and input validity,
+// so a stale tab or a hand-rolled request can't corrupt a pipeline.
+// Tables: b2b_clients + b2b_deals + b2b_deal_items.
+
+const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
+const PRICING_LOCATIONS = [...STORES, "CORP"];
+const ACCEPT_ROLES = ["ceo", "tom", "district manager"];
+const REASON_CONDITIONS = ["Fair", "For Parts"];
+const DECLINE_CATEGORIES = ["client_declined", "client_unresponsive", "withdrawn", "not_viable", "other"];
+const TERMINAL = ["completed", "declined"];
+
+// How many finished deals ride along with the open ones. The board only ever
+// shows the recent tail; the full history is paged for explicitly.
+const ARCHIVE_DEFAULT = 40;
+const ARCHIVE_MAX = 500;
+
+const STAGE_RANK: Record<string, number> = {
+  declined: 0, pickup: 1, pricing_location: 2, pricing: 3,
+  quote: 4, listing_location: 5, listing: 6, completed: 7,
+};
+
+// The column list the board needs. Selecting * from a view with rollups drags
+// along everything; naming them keeps the payload predictable.
+const DEAL_COLS = [
+  "id", "client_id", "deal_no", "ref", "stage", "stage_rank", "is_terminal",
+  "pickup_desc", "signed_by", "signed_at", "pickup_date",
+  "pricing_store", "listing_store", "delivered_by", "received_by",
+  "priced_by", "quote_sent_at", "quote_send_count", "accepted_at", "accepted_by",
+  "declined_at", "declined_by", "declined_reason", "declined_category",
+  "created_by", "created_at", "updated_at", "stage_changed_at",
+  "company", "acronym", "contact", "contact_email", "contact_phone",
+  "line_count", "total_units", "listed_units", "recycled_units", "outstanding_units",
+  "total_value", "total_offer", "total_cost",
+].join(",");
+
+const ITEM_COLS = [
+  "id", "deal_id", "line_no", "sku", "make", "model", "condition",
+  "staff_notes", "client_notes", "quantity", "value", "offer", "cost",
+  "recycle_only", "listed_qty", "recycled_qty", "created_at",
+].join(",");
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+// ------------------------------------------------------------- validation
+// Every limit here mirrors a CHECK constraint on the table. The database is
+// the backstop; this exists so a user gets "Model is too long" instead of a
+// 500 with a constraint name in it.
+
+class Invalid extends Error {}
+
+function str(v: unknown, max: number, label: string, required = false): string | null {
+  const s = String(v ?? "").trim();
+  if (!s) {
+    if (required) throw new Invalid(`${label} is required.`);
+    return null;
+  }
+  if (s.length > max) throw new Invalid(`${label} is too long (max ${max} characters).`);
+  return s;
+}
+
+// numeric(12,2) — round rather than reject, but refuse anything absurd so a
+// slipped keypress can't poison every rollup that reads the column.
+function money(v: unknown, label: string): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  if (n < 0) throw new Invalid(`${label} can't be negative.`);
+  if (n > 9999999) throw new Invalid(`${label} is unrealistically large.`);
+  return Math.round(n * 100) / 100;
+}
+
+function count(v: unknown, lo: number, hi: number, label: string, dflt: number): number {
+  if (v === undefined || v === null || v === "") return dflt;
+  const n = Math.trunc(Number(v));
+  if (!Number.isFinite(n)) throw new Invalid(`${label} must be a number.`);
+  if (n < lo || n > hi) throw new Invalid(`${label} must be between ${lo} and ${hi}.`);
+  return n;
+}
+
+// Number(null) is 0, not NaN -- an absent query param would otherwise read as
+// a deliberate zero and silently cap the archive to nothing.
+function intOr(v: unknown, dflt: number): number {
+  if (v === undefined || v === null || v === "") return dflt;
+  const n = Math.trunc(Number(v));
+  return Number.isFinite(n) ? n : dflt;
+}
+
+const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+function email(v: unknown, label: string): string | null {
+  const s = str(v, 200, label);
+  if (s && !EMAIL.test(s)) throw new Invalid(`${label} doesn't look like an email address.`);
+  return s;
+}
+
+// A date column will happily take garbage and fail deep in Postgres; catching
+// the shape here keeps the error readable.
+function isoDate(v: unknown, label: string, required = false): string | null {
+  const s = str(v, 10, label, required);
+  if (!s) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(s + "T00:00:00Z"))) {
+    throw new Invalid(`${label} must be a real date.`);
+  }
+  return s;
+}
+
+function oneOf(v: unknown, allowed: string[], label: string, required = true): string | null {
+  const s = String(v ?? "").trim();
+  if (!s) {
+    if (required) throw new Invalid(`${label} is required.`);
+    return null;
+  }
+  if (!allowed.includes(s)) throw new Invalid(`${label} isn't a valid option.`);
+  return s;
+}
+
+const pad = (n: number, w: number) => String(n).padStart(w, "0");
+const skuFor = (acronym: string, dealNo: number, lineNo: number) =>
+  `${acronym}-${pad(dealNo, 3)}-${pad(lineNo, 4)}`;
+
+// Realtime "ping": after a successful write, tell any signed-in client that this
+// tool changed so it can re-run its check (which re-fetches through THIS function
+// — no table data ever travels over realtime, so the RLS-locked tables stay
+// closed to the anon client). The store is a hint for client-side filtering.
+// Wrapped so a broadcast failure can never break the write it follows.
+async function broadcastChange(tool: string, store: string | null) {
+  try {
+    const url = Deno.env.get("SUPABASE_URL")!;
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        messages: [{
+          topic: "speeks-notify",
+          event: "changed",
+          payload: { tool, store: store ? String(store).toUpperCase() : null, ts: Date.now() },
+        }],
+      }),
+    });
+  } catch (_) {
+    // swallow — the write already succeeded; realtime is best-effort
+  }
+}
+
+// updated_at and stage_changed_at are maintained by the b2b_touch_row trigger,
+// so no write here has to remember them.
+async function getDeal(sb: any, id: string) {
+  if (!id) throw new Invalid("A deal id is required.");
+  const { data, error } = await sb
+    .from("b2b_deals")
+    .select("*, client:b2b_clients(id, company, acronym, contact, contact_email)")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+const dealStore = (d: any) => d?.listing_store || d?.pricing_store || null;
+
+// A line downgraded to Fair or For Parts must carry a client-facing reason --
+// it prints on the quote and is what justifies the low offer.
+function unreasonedNames(items: any[]): string | null {
+  const bad = items.filter((it) =>
+    REASON_CONDITIONS.includes(String(it.condition || "")) && !String(it.client_notes || "").trim());
+  if (!bad.length) return null;
+  return bad.map((it) => [it.make, it.model].filter(Boolean).join(" ") || `Line ${it.line_no}`).join(", ");
+}
+
+// ---------------------------------------------------------------------------
+
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
+  const supabase = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  );
+
+  if (req.method === "POST") {
+    try {
+      const body = JSON.parse(await req.text());
+      const action = body.action;
+
+      // ===================================================== client directory
+
+      if (action === "create_client" || action === "update_client") {
+        const row = {
+          company: str(body.company, 160, "Company name", true),
+          acronym: String(body.acronym ?? "").trim().toUpperCase(),
+          contact: str(body.contact, 120, "Contact"),
+          contact_email: email(body.contact_email, "Email"),
+          contact_phone: str(body.contact_phone, 40, "Phone"),
+          notes: str(body.notes, 2000, "Notes"),
+        };
+        if (!/^[A-Z0-9]{2,6}$/.test(row.acronym)) {
+          throw new Invalid("Acronym must be 2-6 letters or digits (it leads every SKU).");
+        }
+
+        if (action === "create_client") {
+          const { data, error } = await supabase.from("b2b_clients").insert(row).select("id").single();
+          if (error) {
+            const dupe = String(error.message).toLowerCase().includes("duplicate");
+            return jsonResponse({ success: false, error: dupe ? "That company name or acronym is already taken." : error.message }, dupe ? 409 : 500);
+          }
+          await broadcastChange("b2b", null);
+          return jsonResponse({ success: true, id: data.id });
+        }
+
+        const id = str(body.id, 64, "Client id", true)!;
+        // The acronym is baked into every SKU already printed on a label, so it
+        // can only change while the client has no deal past pricing.
+        const { data: locked } = await supabase.from("b2b_deals")
+          .select("id").eq("client_id", id)
+          .in("stage", ["quote", "listing_location", "listing", "completed"]).limit(1);
+        const { data: current } = await supabase.from("b2b_clients").select("acronym").eq("id", id).maybeSingle();
+        if (!current) return jsonResponse({ success: false, error: "That client no longer exists." }, 404);
+        if (locked?.length && current.acronym !== row.acronym) {
+          return jsonResponse({ success: false, error: "This client already has quoted deals — the acronym is locked into their SKUs." }, 409);
+        }
+        const { error } = await supabase.from("b2b_clients").update(row).eq("id", id);
+        if (error) {
+          const dupe = String(error.message).toLowerCase().includes("duplicate");
+          return jsonResponse({ success: false, error: dupe ? "That company name or acronym is already taken." : error.message }, dupe ? 409 : 500);
+        }
+        await broadcastChange("b2b", null);
+        return jsonResponse({ success: true });
+      }
+
+      if (action === "delete_client") {
+        const id = str(body.id, 64, "Client id", true)!;
+        const { data: deals } = await supabase.from("b2b_deals").select("id").eq("client_id", id).limit(1);
+        if (deals?.length) {
+          return jsonResponse({ success: false, error: "This client has deals on record — they can't be deleted." }, 409);
+        }
+        const { error } = await supabase.from("b2b_clients").delete().eq("id", id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", null);
+        return jsonResponse({ success: true });
+      }
+
+      // ============================================================ new deal
+
+      if (action === "create") {
+        const clientId = str(body.client_id, 64, "Client", true)!;
+        const { data: client } = await supabase.from("b2b_clients")
+          .select("id, acronym").eq("id", clientId).maybeSingle();
+        if (!client) return jsonResponse({ success: false, error: "That client no longer exists." }, 404);
+
+        // Per-client counter. The unique index is the real guard; on a race we
+        // recompute and retry, which is plenty for this volume.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const { data: last } = await supabase.from("b2b_deals")
+            .select("deal_no").eq("client_id", clientId)
+            .order("deal_no", { ascending: false }).limit(1).maybeSingle();
+          const dealNo = (last?.deal_no || 0) + 1;
+          const { data, error } = await supabase.from("b2b_deals").insert({
+            client_id: clientId,
+            deal_no: dealNo,
+            stage: "pickup",
+            pickup_desc: str(body.pickup_desc, 2000, "Pickup description"),
+            created_by: str(body.created_by, 120, "Created by") || "Unknown",
+          }).select("id").single();
+          if (!error) {
+            await broadcastChange("b2b", null);
+            return jsonResponse({ success: true, id: data.id, deal_no: dealNo, ref: `${client.acronym}-${pad(dealNo, 3)}` });
+          }
+          if (!String(error.message).toLowerCase().includes("duplicate")) {
+            return jsonResponse({ success: false, error: error.message }, 500);
+          }
+        }
+        return jsonResponse({ success: false, error: "Couldn't assign a deal number — try again." }, 409);
+      }
+
+      // ==================================================== stage transitions
+
+      if (action === "sign_pickup") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "pickup") return jsonResponse({ success: false, error: "This pickup has already been signed off." }, 409);
+        const { error } = await supabase.from("b2b_deals").update({
+          stage: "pricing_location",
+          pickup_desc: str(body.pickup_desc, 2000, "Pickup description"),
+          signed_by: str(body.signed_by, 120, "The client's name", true),
+          signed_at: new Date().toISOString(),
+          pickup_date: isoDate(body.pickup_date, "Pickup date", true),
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", null);
+        return jsonResponse({ success: true });
+      }
+
+      if (action === "assign_pricing") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "pricing_location") return jsonResponse({ success: false, error: "This deal isn't waiting for a pricing location." }, 409);
+        const store = oneOf(String(body.pricing_store ?? "").toUpperCase(), PRICING_LOCATIONS, "Pricing location")!;
+        const { error } = await supabase.from("b2b_deals").update({
+          stage: "pricing",
+          pricing_store: store,
+          delivered_by: str(body.delivered_by, 120, "Delivered by"),
+          received_by: str(body.received_by, 120, "Received by"),
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", store);
+        return jsonResponse({ success: true });
+      }
+
+      // ============================================================== items
+      // Editable through `pricing` AND `quote` — the quote stays open while the
+      // client negotiates, right up until someone accepts it.
+
+      if (action === "add_item" || action === "update_item" || action === "delete_item") {
+        const itemId = String(body.id || "");
+        let deal: any;
+        if (action === "add_item") {
+          deal = await getDeal(supabase, String(body.deal_id || ""));
+        } else {
+          const { data: it } = await supabase.from("b2b_deal_items").select("deal_id").eq("id", itemId).maybeSingle();
+          if (!it) return jsonResponse({ success: false, error: "Line item not found." }, 404);
+          deal = await getDeal(supabase, it.deal_id);
+        }
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "pricing" && deal.stage !== "quote") {
+          return jsonResponse({ success: false, error: "Line items can only be changed while pricing or quoting." }, 409);
+        }
+
+        if (action === "delete_item") {
+          const { error } = await supabase.from("b2b_deal_items").delete().eq("id", itemId);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+          await broadcastChange("b2b", dealStore(deal));
+          return jsonResponse({ success: true });
+        }
+
+        const recycleOnly = body.recycle_only === true;
+        const fields = {
+          make: str(body.make, 120, "Brand"),
+          model: str(body.model, 200, "Model"),
+          condition: str(body.condition, 40, "Condition"),
+          staff_notes: str(body.staff_notes, 1000, "Staff notes"),
+          client_notes: str(body.client_notes, 1000, "Client notes"),
+          quantity: count(body.quantity, 1, 100000, "Quantity", 1),
+          recycle_only: recycleOnly,
+          // A recycle-only line is scrap: no resale value and no offer. The
+          // table enforces this too, so the two can never disagree.
+          value: recycleOnly ? 0 : money(body.value, "Unit value"),
+          offer: recycleOnly ? 0 : money(body.offer, "Unit offer"),
+        };
+
+        if (action === "update_item") {
+          const { error } = await supabase.from("b2b_deal_items").update(fields).eq("id", itemId);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+          await broadcastChange("b2b", dealStore(deal));
+          return jsonResponse({ success: true });
+        }
+
+        // add_item — the SKU is assigned here so a label can be printed the
+        // moment the line exists. Line numbers are never reused, so deleting
+        // and re-adding leaves a gap and mints a fresh SKU; nothing is frozen
+        // until the quote is accepted.
+        const { data: last } = await supabase.from("b2b_deal_items")
+          .select("line_no").eq("deal_id", deal.id)
+          .order("line_no", { ascending: false }).limit(1).maybeSingle();
+        const lineNo = (last?.line_no || 0) + 1;
+        const { data, error } = await supabase.from("b2b_deal_items").insert({
+          ...fields,
+          deal_id: deal.id,
+          line_no: lineNo,
+          sku: skuFor(deal.client?.acronym || "B2B", deal.deal_no, lineNo),
+        }).select("id, line_no, sku").single();
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", dealStore(deal));
+        return jsonResponse({ success: true, id: data.id, line_no: data.line_no, sku: data.sku });
+      }
+
+      // ============================================================== quoting
+
+      if (action === "submit_pricing") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "pricing") return jsonResponse({ success: false, error: "This deal isn't in pricing." }, 409);
+        const { data: items } = await supabase.from("b2b_deal_items")
+          .select("id, line_no, sku, make, model, condition, client_notes")
+          .eq("deal_id", deal.id).order("line_no", { ascending: true });
+        if (!items?.length) return jsonResponse({ success: false, error: "Add at least one line item before submitting." }, 400);
+
+        const gaps = unreasonedNames(items);
+        if (gaps) return jsonResponse({ success: false, error: `These lines are marked Fair or For Parts and need a reason: ${gaps}` }, 400);
+
+        // Backfill for any line created before SKUs were assigned on insert.
+        const missing = items.filter((it: any) => !it.sku);
+        for (const it of missing) {
+          const { error } = await supabase.from("b2b_deal_items")
+            .update({ sku: skuFor(deal.client?.acronym || "B2B", deal.deal_no, it.line_no) }).eq("id", it.id);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        }
+
+        const { error } = await supabase.from("b2b_deals").update({
+          stage: "quote",
+          priced_by: str(body.priced_by, 120, "Priced by"),
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", dealStore(deal));
+        return jsonResponse({ success: true });
+      }
+
+      // The quote goes out from the quoter's own mailbox via a mailto draft, so
+      // the client's reply reaches the person who priced it. This just records
+      // that it went out, for the stage clock and the Overview.
+      if (action === "send_quote") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "quote") return jsonResponse({ success: false, error: "Only a deal in the quote stage can be sent." }, 409);
+        const { error } = await supabase.from("b2b_deals").update({
+          quote_sent_at: new Date().toISOString(),
+          quote_send_count: Math.min(1000, (deal.quote_send_count || 0) + 1),
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", dealStore(deal));
+        return jsonResponse({ success: true, to: str(body.to, 200, "Recipient") });
+      }
+
+      // The hinge: offers freeze into cost, SKUs freeze, and the deal routes on.
+      if (action === "accept_quote") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "quote") return jsonResponse({ success: false, error: "Only a deal in the quote stage can be accepted." }, 409);
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can accept a quote." }, 403);
+        }
+
+        const { data: items } = await supabase.from("b2b_deal_items")
+          .select("id, line_no, sku, offer, make, model, condition, client_notes")
+          .eq("deal_id", deal.id).order("line_no", { ascending: true });
+        if (!items?.length) return jsonResponse({ success: false, error: "This quote has no line items." }, 400);
+
+        // Same gate as submit_pricing: the quote stays editable right up to
+        // here, so a reason could have been cleared after it was first checked.
+        const gaps = unreasonedNames(items);
+        if (gaps) return jsonResponse({ success: false, error: `These lines are marked Fair or For Parts and need a reason: ${gaps}` }, 400);
+
+        const acronym = deal.client?.acronym || "B2B";
+        for (const it of items) {
+          const patch: Record<string, unknown> = { cost: it.offer };
+          if (!it.sku) patch.sku = skuFor(acronym, deal.deal_no, it.line_no);
+          const { error } = await supabase.from("b2b_deal_items").update(patch).eq("id", it.id);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        }
+
+        // CORP priced it, so someone still has to say which store lists it.
+        const toCorp = deal.pricing_store === "CORP";
+        const { error } = await supabase.from("b2b_deals").update({
+          stage: toCorp ? "listing_location" : "listing",
+          listing_store: toCorp ? null : deal.pricing_store,
+          accepted_at: new Date().toISOString(),
+          accepted_by: str(body.accepted_by, 120, "Accepted by"),
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", toCorp ? null : deal.pricing_store);
+        return jsonResponse({ success: true, next_stage: toCorp ? "listing_location" : "listing" });
+      }
+
+      if (action === "assign_listing") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "listing_location") return jsonResponse({ success: false, error: "This deal isn't waiting for a listing location." }, 409);
+        const store = oneOf(String(body.listing_store ?? "").toUpperCase(), STORES, "Listing store")!;
+        const { error } = await supabase.from("b2b_deals").update({
+          stage: "listing", listing_store: store,
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", store);
+        return jsonResponse({ success: true });
+      }
+
+      // ============================================================== listing
+
+      // mark_listed  { id, delta }        tick a unit up or down
+      // scan_sku     { deal_id, sku }     barcode scan → +1 on the matching line
+      // recycle_units{ id, units }        pull bad units out of the line
+      if (action === "mark_listed" || action === "recycle_units" || action === "scan_sku") {
+        let item: any;
+        if (action === "scan_sku") {
+          const sku = String(body.sku || "").trim().toUpperCase();
+          if (!sku) throw new Invalid("No SKU scanned.");
+          if (sku.length > 40) throw new Invalid("That doesn't look like one of our SKUs.");
+          const { data } = await supabase.from("b2b_deal_items")
+            .select(ITEM_COLS).eq("deal_id", String(body.deal_id || "")).eq("sku", sku).maybeSingle();
+          if (!data) return jsonResponse({ success: false, error: `${sku} isn't a line on this deal.` }, 404);
+          item = data;
+        } else {
+          const { data } = await supabase.from("b2b_deal_items")
+            .select(ITEM_COLS).eq("id", String(body.id || "")).maybeSingle();
+          if (!data) return jsonResponse({ success: false, error: "Line item not found." }, 404);
+          item = data;
+        }
+
+        const deal = await getDeal(supabase, item.deal_id);
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "listing") return jsonResponse({ success: false, error: "Listing progress can only change while the deal is in listing." }, 409);
+
+        const qty = item.quantity;
+        let listed = item.listed_qty;
+        let recycled = item.recycled_qty;
+
+        if (action === "recycle_units") {
+          const units = count(body.units, 1, 100000, "Units", 1);
+          const room = qty - listed - recycled;
+          if (room <= 0) return jsonResponse({ success: false, error: "Every unit on this line is already accounted for." }, 409);
+          recycled += Math.min(units, room);
+        } else {
+          const delta = action === "scan_sku" ? 1 : (intOr(body.delta, 1) || 1);
+          const next = listed + delta;
+          if (next < 0) return jsonResponse({ success: false, error: "That line is already at zero." }, 409);
+          if (next + recycled > qty) {
+            return jsonResponse({ success: false, error: `${item.sku || "This line"} is already fully listed (${listed}/${qty}).` }, 409);
+          }
+          listed = next;
+        }
+
+        const { error } = await supabase.from("b2b_deal_items")
+          .update({ listed_qty: listed, recycled_qty: recycled }).eq("id", item.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+
+        // One aggregate instead of pulling every row back to check: tells the
+        // client whether that was the last outstanding unit so it can fire the
+        // celebration without a second round-trip.
+        const { data: roll } = await supabase.from("b2b_deal_list")
+          .select("outstanding_units").eq("id", deal.id).maybeSingle();
+
+        await broadcastChange("b2b", dealStore(deal));
+        return jsonResponse({
+          success: true,
+          item_id: item.id, sku: item.sku,
+          listed_qty: listed, recycled_qty: recycled, quantity: qty,
+          all_done: (roll?.outstanding_units ?? 1) === 0,
+        });
+      }
+
+      if (action === "complete") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "listing") return jsonResponse({ success: false, error: "Only a deal in listing can be completed." }, 409);
+        const { data: roll } = await supabase.from("b2b_deal_list")
+          .select("outstanding_units").eq("id", deal.id).maybeSingle();
+        const outstanding = roll?.outstanding_units ?? 0;
+        if (outstanding > 0) {
+          return jsonResponse({ success: false, error: `${outstanding} unit${outstanding === 1 ? "" : "s"} still need listing or recycling.` }, 409);
+        }
+        const { error } = await supabase.from("b2b_deals").update({ stage: "completed" }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", dealStore(deal));
+        return jsonResponse({ success: true });
+      }
+
+      // The deal died. Reachable any time before listing -- once a quote is
+      // accepted the goods are already ours, so there is nothing left to
+      // decline. A reason is mandatory: a dead deal with no explanation is
+      // worse than no record at all.
+      if (action === "decline") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (STAGE_RANK[deal.stage] >= 6) {
+          return jsonResponse({ success: false, error: "This deal was already accepted — the goods are ours, so it can't be declined." }, 409);
+        }
+        if (deal.stage === "declined") {
+          return jsonResponse({ success: false, error: "This deal is already marked declined." }, 409);
+        }
+        const { error } = await supabase.from("b2b_deals").update({
+          stage: "declined",
+          declined_at: new Date().toISOString(),
+          declined_by: str(body.declined_by, 120, "Declined by"),
+          declined_reason: str(body.reason, 1000, "Reason", true),
+          declined_category: oneOf(body.category, DECLINE_CATEGORIES, "Category", false),
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", dealStore(deal));
+        return jsonResponse({ success: true });
+      }
+
+      // A declined deal that turns out to be alive after all goes back to where
+      // it died, rather than starting over.
+      if (action === "reopen") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "declined") return jsonResponse({ success: false, error: "Only a declined deal can be reopened." }, 409);
+        // Resume at the furthest stage its own data can satisfy. Checking
+        // listing_store as well as accepted_at matters: a CORP deal declined
+        // at listing_location has been accepted but has no listing store yet,
+        // and sending it straight to listing would trip the state-machine
+        // constraint.
+        const stage = (deal.accepted_at && deal.listing_store) ? "listing"
+          : deal.accepted_at ? "listing_location"
+          : deal.priced_by ? "quote"
+          : deal.pricing_store ? "pricing"
+          : deal.signed_at ? "pricing_location"
+          : "pickup";
+        const { error } = await supabase.from("b2b_deals").update({
+          stage, declined_at: null, declined_by: null,
+          declined_reason: null, declined_category: null,
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", dealStore(deal));
+        return jsonResponse({ success: true, stage });
+      }
+
+      return jsonResponse({ success: false, error: "Unknown action" }, 400);
+    } catch (err: any) {
+      if (err instanceof Invalid) return jsonResponse({ success: false, error: err.message }, 400);
+      return jsonResponse({ success: false, error: err.message }, 500);
+    }
+  }
+
+  // ---------------------------------------------------------------- GET reads
+
+  try {
+    const url = new URL(req.url);
+
+    // ?clients=1 → the directory, with deal counts rolled up in the view
+    if (url.searchParams.get("clients")) {
+      const { data, error } = await supabase.from("b2b_client_list")
+        .select("*").order("company", { ascending: true }).limit(2000);
+      if (error) return jsonResponse({ success: false, error: error.message }, 500);
+      return jsonResponse({ success: true, data: data || [] });
+    }
+
+    // ?deal_id=<uuid> → that deal's line items
+    const dealId = url.searchParams.get("deal_id");
+    if (dealId) {
+      const { data, error } = await supabase.from("b2b_deal_items")
+        .select(ITEM_COLS).eq("deal_id", dealId)
+        .order("line_no", { ascending: true }).limit(5000);
+      if (error) return jsonResponse({ success: false, error: error.message }, 500);
+      return jsonResponse({
+        success: true,
+        data: (data || []).map((it: any) => {
+          const done = it.listed_qty + it.recycled_qty;
+          return {
+            ...it,
+            qty_value_total: it.recycle_only ? 0 : it.value * it.quantity,
+            qty_offer_total: it.recycle_only ? 0 : it.offer * it.quantity,
+            outstanding: Math.max(0, it.quantity - done),
+            satisfied: done >= it.quantity,
+          };
+        }),
+      });
+    }
+
+    // ?store=ALL|<CODE> → the board.
+    // Open deals come back in full because they are the working set and it is
+    // bounded by how much work is actually in flight. Finished deals are the
+    // unbounded half, so only the recent tail rides along; ?archive=N pages
+    // deeper and the response says when it truncated.
+    const store = String(url.searchParams.get("store") || "ALL").toUpperCase();
+    const archiveWanted = Math.min(ARCHIVE_MAX, Math.max(0, intOr(url.searchParams.get("archive"), ARCHIVE_DEFAULT)));
+    const scoped = (q: any) => (store && store !== "ALL")
+      ? q.or(`pricing_store.eq.${store},listing_store.eq.${store}`)
+      : q;
+
+    const openQ = scoped(
+      supabase.from("b2b_deal_list").select(DEAL_COLS)
+        .not("stage", "in", `(${TERMINAL.join(",")})`)
+        .order("created_at", { ascending: false }).limit(2000),
+    );
+    const archiveQ = scoped(
+      supabase.from("b2b_deal_list").select(DEAL_COLS)
+        .in("stage", TERMINAL)
+        .order("stage_changed_at", { ascending: false }).limit(Math.max(1, archiveWanted)),
+    );
+    const countQ = scoped(
+      supabase.from("b2b_deal_list").select("id", { count: "exact", head: true }).in("stage", TERMINAL),
+    );
+
+    const [open, archive, counted] = await Promise.all([openQ, archiveQ, countQ]);
+    if (open.error) return jsonResponse({ success: false, error: open.error.message }, 500);
+    if (archive.error) return jsonResponse({ success: false, error: archive.error.message }, 500);
+
+    const archiveRows = archiveWanted === 0 ? [] : (archive.data || []);
+    const archiveTotal = counted.count ?? archiveRows.length;
+    return jsonResponse({
+      success: true,
+      data: [...(open.data || []), ...archiveRows],
+      meta: {
+        open: (open.data || []).length,
+        archive_shown: archiveRows.length,
+        archive_total: archiveTotal,
+        archive_truncated: archiveTotal > archiveRows.length,
+      },
+    });
+  } catch (err: any) {
+    if (err instanceof Invalid) return jsonResponse({ success: false, error: err.message }, 400);
+    return jsonResponse({ success: false, error: err.message }, 500);
+  }
+});

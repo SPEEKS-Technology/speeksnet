@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260728m">
+  <link rel="stylesheet" href="styles.css?v=20260728n">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260728m" defer></script>
+  <script src="speeks.js?v=20260728n" defer></script>
 </head>
 <body class="preload">
 
@@ -588,6 +588,7 @@
     <div class="ws-layout">
       <div class="ws-subtabs">
         <button class="ws-tab active" data-feature="widget-ops-callbacks" id="ops-tab-callbacks" onclick="switchOperationsTab('callbacks')"><svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.81.36 1.6.7 2.34a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.74-1.74a2 2 0 0 1 2.11-.45c.74.34 1.53.57 2.34.7A2 2 0 0 1 22 16.92z"/></svg> Customer Call Backs</button>
+        <button class="ws-tab dynamic-module-flex role-district-manager role-ceo role-tom role-manager role-owner-manager role-assistant-manager" data-feature="widget-ops-b2b" id="ops-tab-b2b" onclick="switchOperationsTab('b2b')"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg> B2B Deals</button>
       </div>
 
       <div class="ws-panes">
@@ -628,9 +629,72 @@
       </div>
     </section>
 
+    <!-- ===== B2B DEALS PANE ===== -->
+    <section class="ws-pane" id="ops-pane-b2b">
+      <div class="card cb-panel ws-panel b2b-panel">
+          <div class="cb-head">
+              <div class="cb-head-main">
+                  <span class="cb-head-ico"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></span>
+                  <div class="cb-head-titles">
+                      <span class="cb-eyebrow">Operations</span>
+                      <span class="cb-head-title">B2B Deals</span>
+                      <span id="b2bSubtitle" class="cb-head-sub">Track bulk business deals from pickup through listing.</span>
+                  </div>
+              </div>
+              <div class="cb-head-controls">
+                  <div class="mb-view-toggle b2b-view-toggle">
+                      <button id="b2bViewQueueBtn" class="mb-view-btn active" onclick="b2bSetView('queue')"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Needs You<span class="b2b-pip" id="b2bQueuePip" style="display:none;">0</span></button>
+                      <button id="b2bViewPipelineBtn" class="mb-view-btn" onclick="b2bSetView('pipeline')"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="15" y="3" width="6" height="12" rx="1"/></svg>Pipeline</button>
+                      <button id="b2bViewClientsBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo" onclick="b2bSetView('clients')"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Clients</button>
+                      <button id="b2bViewOverviewBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo" onclick="b2bSetView('overview')"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Overview</button>
+                  </div>
+                  <span id="b2bScopeChip" class="b2b-scope-chip" style="display:none;"></span>
+                  <button id="b2bNewBtn" class="b2b-btn b2b-btn-primary b2b-btn-head dynamic-module-flex role-district-manager role-ceo role-tom" onclick="b2bOpenCreate()">＋ New Deal</button>
+              </div>
+          </div>
+          <div class="cb-scroll ws-scroll" id="b2bBody">
+              <div class="status-message">Loading B2B Deals…</div>
+          </div>
+      </div>
+    </section>
+
       </div><!-- /.ws-panes -->
     </div><!-- /.ws-layout -->
   </div>
+
+<!-- ===== B2B NEW DEAL MODAL (inside .main-content so the SPA router carries it) ===== -->
+<div class="modal-menu manage-menu" id="b2bCreateModal">
+    <div class="modal-header tool-head">
+        <div class="tool-head-main">
+            <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></span>
+            <div class="tool-head-titles">
+                <span class="tool-head-eyebrow">B2B</span>
+                <span class="tool-head-title">New Deal</span>
+                <span class="tool-head-sub">Pick the business, then sign off the pickup.</span>
+            </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="b2bCreateBody"></div>
+    <div class="manage-footer flex-end" id="b2bCreateFooter"></div>
+</div>
+
+<!-- ===== B2B DEAL MODAL (title / body / footer all driven by b2bOpenDeal) ===== -->
+<div class="modal-menu manage-menu b2b-deal-modal" id="b2bDealModal">
+    <div class="modal-header tool-head">
+        <div class="tool-head-main">
+            <span class="tool-head-ico" id="b2bDealIco"></span>
+            <div class="tool-head-titles">
+                <span class="tool-head-eyebrow" id="b2bDealEyebrow">B2B</span>
+                <span class="tool-head-title" id="b2bDealTitle">Deal</span>
+                <span class="tool-head-sub" id="b2bDealSub"></span>
+            </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="b2bDealBody"></div>
+    <div class="manage-footer flex-end" id="b2bDealFooter"></div>
+</div>
 
 <div id="goalsSidePanel" data-feature="widget-goals-panel" class="goals-side-panel dynamic-module-flex role-manager role-owner-manager role-employee role-training">
     <div class="gi-panel-header">
