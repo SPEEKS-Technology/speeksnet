@@ -686,8 +686,10 @@ window.addEventListener('click', (e) => {
 
 document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    // Escape peels one layer at a time: export picker, photo viewer, camera, then
-    // modals — dismissing a picture must never take the audit down with it.
+    // Escape peels one layer at a time: the search box, export picker, photo
+    // viewer, camera, then modals — dismissing a picture must never take the
+    // audit down with it. Search sits on top: it opens OVER whatever you had.
+    if (typeof _jumpOpen !== 'undefined' && _jumpOpen) { closeJumpSearch(); return; }
     const ex = document.getElementById('exportRangeModal');
     if (ex && ex.classList.contains('open')) { _exClose(); return; }
     const lb = document.getElementById('auditPhotoLightbox');
@@ -10492,6 +10494,9 @@ function applyRoleBasedUI() {
     // the panel, so overrides can add or remove tools for any role without the
     // static role-class unions drifting out of sync.
     _syncToolsPanelChrome();
+    // Search chip in the top bar + the pinned row in the tools panel. Runs after
+    // the panel chrome so the row lands in a panel that's finished resolving.
+    try { _jumpSync(); } catch (_) { /* never let search break the page render */ }
     // Only matters when one user holds both Preferred Purchases entries; the
     // labels are otherwise already correct in the markup.
     try { _plSyncToolLabels(); } catch (_) { /* module may not be loaded on this page */ }
@@ -10809,6 +10814,9 @@ document.addEventListener("DOMContentLoaded", () => {
         initTicker();
         initWorkspace();
         initOperations();
+        // A #jump=<feature> deep-link from the search box: land, then spotlight
+        // the panel that was asked for.
+        try { _jumpHandleHash(); } catch (_) { /* not fatal to the page */ }
         applyKpiReminder();
         // re-evaluate the weekly-KPI reminder window each minute so it appears/clears live
         setInterval(applyKpiReminder, 60000);
@@ -18874,7 +18882,7 @@ const FA_ROLES = [
     { slug: 'ceo',               short: 'CEO', label: 'CEO' },
     { slug: 'district-manager',  short: 'DM',  label: 'District Manager' },
     { slug: 'owner-manager',     short: 'OM',  label: 'Owner (Manager)' },
-    { slug: 'manager',           short: 'MGR', label: 'Manager (incl. Multi-Store)' },
+    { slug: 'manager',           short: 'MGR', label: 'Manager (Incl. Multi-Store)' },
     { slug: 'assistant-manager', short: 'ASM', label: 'Assistant Manager' },
     { slug: 'employee',          short: 'EMP', label: 'Employee' },
     { slug: 'training',          short: 'TRN', label: 'Training' },
@@ -18883,8 +18891,8 @@ const FA_ROLES = [
 
 const FEATURE_CATALOG = [
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
-    { key: 'tool-claims-store',        label: 'Insurance Claims (store)',      tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
-    { key: 'tool-claims-oversight',    label: 'Insurance Claims (oversight)',  tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
+    { key: 'tool-claims-store',        label: 'Insurance Claims (Store)',      tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
+    { key: 'tool-claims-oversight',    label: 'Insurance Claims (Oversight)',  tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
     { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'tom', 'owner-manager'] },
     { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: 'Content', def: ['district-manager'] },
     { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
@@ -18898,7 +18906,7 @@ const FEATURE_CATALOG = [
     { key: 'tool-preferred-request',   label: 'Preferred Purchases',           tab: 'tools', group: 'Orders', def: ['district-manager', 'manager', 'assistant-manager'] },
     { key: 'tool-preferred-approve',   label: 'Preferred Purchases (Owner)',   tab: 'tools', group: 'Orders', def: ['owner-manager'] },
     { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
-    { key: 'tool-feature-access',      label: 'Feature Access (this tool)',    tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
+    { key: 'tool-feature-access',      label: 'Feature Access (This Tool)',    tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
@@ -18906,32 +18914,32 @@ const FEATURE_CATALOG = [
     { key: 'tool-monthly-awards',      label: 'Monthly Awards',                tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-system-hotkeys',      label: 'System Hotkeys',                tab: 'tools', group: 'System', def: ['district-manager'] },
     // ---- Widgets & side panels (ASM inherits employee defaults; mirrored here) ----
-    { key: 'widget-goals-panel',       label: 'Goals & Initiatives (sidebar)', tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'employee', 'training', 'assistant-manager'] },
-    { key: 'widget-checklist-panel',   label: 'Checklist (sidebar)',           tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'district-manager', 'assistant-manager'] },
-    { key: 'widget-audit-panel',       label: 'Cleaning Checklist (sidebar)',  tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'widget-scorecard-alerts',  label: 'Command Center (whole widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'widget-goals-panel',       label: 'Goals & Initiatives (Sidebar)', tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'employee', 'training', 'assistant-manager'] },
+    { key: 'widget-checklist-panel',   label: 'Checklist (Sidebar)',           tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'district-manager', 'assistant-manager'] },
+    { key: 'widget-audit-panel',       label: 'Cleaning Checklist (Sidebar)',  tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-scorecard-alerts',  label: 'Command Center (Whole Widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'cc-scorecard',             label: 'Command Center · Scorecard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'cc-ebay',                  label: 'Command Center · eBay tab',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'cc-buying',                label: 'Command Center · Buying & Sales tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
-    { key: 'widget-buying-selling',    label: 'Buying & Sales tab (employee)', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
-    { key: 'widget-listing-goals',     label: 'Listing Goals bar (action menu)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager', 'training'] },
-    { key: 'widget-emp-weekly-kpis',   label: 'Weekly KPIs tab (employee)',    tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'widget-buying-selling',    label: 'Buying & Sales tab (Employee)', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'widget-listing-goals',     label: 'Listing Goals bar (Action Menu)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager', 'training'] },
+    { key: 'widget-emp-weekly-kpis',   label: 'Weekly KPIs tab (Employee)',    tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     // The three district action-menu rows. Defaults mirror exactly what the
     // dashboard panels they replaced were gated to: Cleaning and Listing were
     // DM+CEO, Monthly Team Goals was DM-only. Delegation pairs each with the
     // manager row of the same stem (widget-dm-listing-goals ↔ widget-listing-goals).
-    { key: 'widget-dm-audit',          label: 'Cleaning Checklist (district)', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
-    { key: 'widget-dm-goals',          label: 'Monthly Team Goals (district)', tab: 'widgets', group: 'Dashboard', def: ['district-manager'] },
-    { key: 'widget-dm-listing-goals',  label: 'Listing Goals (district)',      tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
-    { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown (tab)',     tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'widget-ws-weekly-kpis',    label: 'Weekly KPIs (tab)',             tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'widget-variance-replies',  label: 'Variance Replies (tab)',        tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
+    { key: 'widget-dm-audit',          label: 'Cleaning Checklist (District)', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    { key: 'widget-dm-goals',          label: 'Monthly Team Goals (District)', tab: 'widgets', group: 'Dashboard', def: ['district-manager'] },
+    { key: 'widget-dm-listing-goals',  label: 'Listing Goals (District)',      tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown (Tab)',     tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-ws-weekly-kpis',    label: 'Weekly KPIs (Tab)',             tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-variance-replies',  label: 'Variance Replies (Tab)',        tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
     { key: 'cap-variance-dm',          label: 'Variance Replies (DM)',         tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
-    { key: 'widget-aging-inventory',   label: 'Aging Inventory (tab)',         tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-aging-inventory',   label: 'Aging Inventory (Tab)',         tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'cap-aging-dm',             label: 'Aging Inventory (DM)',          tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
-    { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
-    { key: 'widget-ops-b2b',           label: 'B2B Deals (tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'tom', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
+    { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'tom', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
@@ -19421,8 +19429,8 @@ function _faChipHtml(f, role) {
     const eff = ovr === null ? def : ovr;
     const locked = f.key === 'tool-feature-access' && role.slug === 'district-manager';
     const title = locked
-        ? 'Always on for District Managers (safety lock)'
-        : `${role.label}: ${eff ? 'visible' : 'hidden'}${ovr !== null ? ' (overridden)' : ' (default)'} — click to ${eff ? 'hide' : 'show'}`;
+        ? 'Always on for District Managers (Safety Lock)'
+        : `${role.label}: ${eff ? 'visible' : 'hidden'}${ovr !== null ? ' (Overridden)' : ' (Default)'} — click to ${eff ? 'hide' : 'show'}`;
     const icon = locked ? FA_ICON_LOCK : (eff ? FA_ICON_CHECK : FA_ICON_X);
     return `<button class="fa-chip ${eff ? 'fa-on' : 'fa-off'}${ovr !== null ? ' fa-ovr' : ''}"${locked ? ' disabled' : ''} onclick="faToggleRole('${f.key}', '${role.slug}')" title="${escapeHtml(title)}">${icon}</button>`;
 }
@@ -19560,7 +19568,7 @@ function _faCoverageHtml() {
             const disp = u ? u.name : low;
             const chips = active[low].map(k => `<span style="display:inline-flex; align-items:center; gap:6px; background:#eef2ff; color:#3730a3; font-size:11.5px; font-weight:700; border-radius:7px; padding:3px 8px;">${escapeHtml(labelFor(k))}<button title="Remove this tool" onclick="faRevokeCoverage('${escapeHtml(low)}','${k}')" style="border:none; background:none; color:#6366f1; cursor:pointer; font-weight:800; font-size:13px; line-height:1;">×</button></span>`).join(' ');
             return `<div style="display:flex; align-items:flex-start; gap:10px; justify-content:space-between; padding:8px 2px; border-bottom:1px solid #f1f5f9;">
-                <div style="flex:1;"><div style="font-size:12.5px; font-weight:800; color:var(--slate-charcoal); margin-bottom:5px;">${escapeHtml(disp)}${u ? '' : ' <span style=\"font-weight:600;color:#cbd5e1;\">(not in directory)</span>'}</div><div style="display:flex; flex-wrap:wrap; gap:6px;">${chips}</div></div>
+                <div style="flex:1;"><div style="font-size:12.5px; font-weight:800; color:var(--slate-charcoal); margin-bottom:5px;">${escapeHtml(disp)}${u ? '' : ' <span style=\"font-weight:600;color:#cbd5e1;\">(Not in Directory)</span>'}</div><div style="display:flex; flex-wrap:wrap; gap:6px;">${chips}</div></div>
                 <button class="btn-secondary" style="height:28px; font-size:11.5px; padding:0 11px; border-radius:7px; flex-shrink:0;" onclick="faEndCoverage('${escapeHtml(low)}')">End delegation</button>
             </div>`;
         }).join('');
@@ -19640,7 +19648,7 @@ function _faUserTabHtml() {
     const opts = ['<option value="">Select a user…</option>'].concat(names.map(n => {
         const low = n.toLowerCase();
         const u = _faUsers.find(x => x.name.toLowerCase() === low);
-        const meta = u ? ` — ${u.role}${u.store ? ' · ' + u.store : ''}` : ' — (no longer in directory)';
+        const meta = u ? ` — ${u.role}${u.store ? ' · ' + u.store : ''}` : ' — (No Longer in Directory)';
         const cnt = ovCounts[low] ? ` · ${ovCounts[low]} override${ovCounts[low] > 1 ? 's' : ''}` : '';
         return `<option value="${escapeHtml(low)}" ${low === _faUser ? 'selected' : ''}>${escapeHtml(n + meta + cnt)}</option>`;
     }));
@@ -19771,6 +19779,449 @@ async function faClearUser() {
         _faLoad();
     }
 }
+
+// ============================================================
+// JUMP TO — site-wide quick search (Ctrl K)
+// ============================================================
+// One box that reaches every tool, tab, page, panel and hotbar sheet a person
+// can already click, so nobody has to remember which page a thing lives on.
+//
+// The index is rebuilt on every open from what is ACTUALLY visible right now:
+// SPEEKS Tools are read straight off the tools panel's DOM (a tool added to the
+// panel is searchable immediately, with no second list to maintain), and the
+// rest come from JUMP_PLACES below. That also means Feature Access is honored
+// for free — applyRoleBasedUI has already hidden what this user can't have, and
+// a hidden element is simply not indexed. For destinations that live on another
+// page, we fall back to _featureEffectiveVisible (same resolution, no DOM).
+//
+// Nothing about a result mentions roles or permissions: a searcher can't act on
+// that, so "nothing matches" is all we ever say.
+
+// Words people actually use, per feature key. The label itself is always
+// searched; these are the synonyms it would otherwise miss ("callback sheet").
+const JUMP_KEYWORDS = {
+    'widget-ops-callbacks':      'callback sheet call back call backs customer calls waiting hold looking for item phone',
+    'widget-ops-b2b':            'business to business wholesale bulk corporate deals scan',
+    'widget-ws-monthly-breakdown': 'month numbers breakdown brief summary monthly',
+    'widget-ws-weekly-kpis':     'kpi kpis weekly metrics targets numbers goals',
+    'widget-variance-replies':   'variance replies gm notes dm notes markdown discount negative',
+    'widget-aging-inventory':    'aging old stock sitting 30 day thirty day inventory',
+    'widget-scorecard-alerts':   'store health scorecard ebay buying sales console command center',
+    'widget-audit-panel':        'cleaning clean store audit tidy',
+    'widget-checklist-panel':    'checklist tasks todo to do my tasks',
+    'widget-goals-panel':        'goals initiatives monthly team',
+    'widget-listing-goals':      'listing goals listings ebay target',
+    'widget-buying-selling':     'buying selling sales bought sold',
+    'widget-district-command':   'district command center all stores overview',
+    'tool-claims-store':         'claim claims shopify usps ups damaged lost package item not received insurance',
+    'tool-claims-oversight':     'claims oversight all stores review insurance',
+    'tool-box-order':            'boxes box shipping supplies packaging tape order',
+    'tool-recycle-inventory':    'recycle scrap ewaste e waste pickup haul junk',
+    'tool-preferred-request':    'preferred purchase purchases request buy approval',
+    'tool-preferred-approve':    'preferred purchase purchases approve owner',
+    'tool-store-comment':        'comment message note feedback to store',
+    'tool-submit-scores':        'scorecard audit score scores grading points marketing',
+    'tool-manager-checklist':    'manager checklist tasks store',
+    'tool-variance-report':      'variance report upload excel markdown',
+    'tool-announcements':        'announcement announcements post news broadcast',
+    'tool-patch-notes':          'patch notes changelog updates release',
+    'tool-user-permissions':     'users permissions pin login accounts roles add user',
+    'tool-feature-access':       'feature access hide show toggle delegation permissions',
+    'tool-email-recipients':     'email recipients reports distribution who gets',
+    'tool-performance-metrics':  'performance metrics alerts thresholds',
+    'tool-company-records':      'records company files documents',
+    'tool-manage-policies':      'policies process processes handbook documents',
+    'tool-monthly-awards':       'awards winners recognition monthly',
+    'tool-system-hotkeys':       'hotkeys boot keys bios device brand reset',
+};
+
+// Everything that isn't a SPEEKS Tools panel item. `feature` drives visibility
+// and keywords; `page` is where it lives (a jump from elsewhere navigates).
+// Tabs deep-link through the plain hash their page already honors on load.
+const JUMP_PLACES = [
+    // --- page tabs -----------------------------------------------------------
+    { id: 'ws-brief',    label: 'Monthly Breakdown',  sub: 'Workspace',  kind: 'tab', feature: 'widget-ws-monthly-breakdown', page: 'workspace.html',  hash: 'brief',     fn: 'switchWorkspaceTab' },
+    { id: 'ws-kpis',     label: 'Store KPIs',         sub: 'Workspace',  kind: 'tab', feature: 'widget-ws-weekly-kpis',       page: 'workspace.html',  hash: 'kpis',      fn: 'switchWorkspaceTab' },
+    { id: 'ws-vrep',     label: 'Variance Replies',   sub: 'Workspace',  kind: 'tab', feature: 'widget-variance-replies',     page: 'workspace.html',  hash: 'vreplies',  fn: 'switchWorkspaceTab' },
+    { id: 'ws-aging',    label: 'Aging Inventory',    sub: 'Workspace',  kind: 'tab', feature: 'widget-aging-inventory',      page: 'workspace.html',  hash: 'aging',     fn: 'switchWorkspaceTab' },
+    { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
+    { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
+    // --- dashboard panels (QuickPortal) --------------------------------------
+    { id: 'w-command',   label: 'Command Center',       sub: 'QuickPortal', kind: 'panel', feature: 'widget-scorecard-alerts', page: 'index.html' },
+    { id: 'w-buying',    label: 'Buying & Sales',       sub: 'QuickPortal', kind: 'panel', feature: 'widget-buying-selling',   page: 'index.html' },
+    { id: 'w-district',  label: 'District Command Center', sub: 'QuickPortal', kind: 'panel', feature: 'widget-district-command', page: 'index.html' },
+    { id: 'w-listing',   label: 'Listing Goals',        sub: 'QuickPortal', kind: 'panel', feature: 'widget-listing-goals',    page: 'index.html' },
+    { id: 'w-checklist', label: 'Checklist',            sub: 'QuickPortal', kind: 'panel', feature: 'widget-checklist-panel',  page: 'index.html' },
+    { id: 'w-audit',     label: 'Cleaning Checklist',   sub: 'QuickPortal', kind: 'panel', feature: 'widget-audit-panel',      page: 'index.html' },
+    { id: 'w-goals',     label: 'Goals & Initiatives',  sub: 'QuickPortal', kind: 'panel', feature: 'widget-goals-panel',      page: 'index.html' },
+    // --- tabs inside a tool (open the modal, then land on the tab) -----------
+    { id: 'sub-audit',   label: 'SPEEKS Audit', sub: 'Inside Submit Scores',    kind: 'sub', feature: 'tool-submit-scores', keys: 'audit 165 points practice',
+      run: () => { openScorecardModal(); switchScoreTab('audit'); } },
+    { id: 'sub-mycases', label: 'My Cases',     sub: 'Inside Insurance Claims', kind: 'sub', feature: 'tool-claims-store',  keys: 'my claims open cases status',
+      run: () => { openClaimsModal(); switchClaimsTab('view'); } },
+    // --- pages (visibility mirrors the nav link) ----------------------------
+    { id: 'page-index',  label: 'QuickPortal',           sub: 'Main navigation', kind: 'page', page: 'index.html',      keys: 'home dashboard main portal' },
+    { id: 'page-ops',    label: 'Operations',            sub: 'Main navigation', kind: 'page', page: 'operations.html', keys: 'operations ops' },
+    { id: 'page-ws',     label: 'Workspace',             sub: 'Main navigation', kind: 'page', page: 'workspace.html',  keys: 'workspace analytics' },
+    { id: 'page-docs',   label: 'Processes & Policies',  sub: 'Main navigation', kind: 'page', page: 'docs.html',       keys: 'processes policies docs handbook how to' },
+    { id: 'page-stats',  label: 'Stats & Awards',        sub: 'Main navigation', kind: 'page', page: 'stats.html',      keys: 'stats awards leaderboard' },
+];
+
+const JUMP_ICONS = {
+    tool:  '<path d="M14.7 6.3a4 4 0 0 1-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 1 5.4-5.4"/>',
+    tab:   '<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18M9 5v5"/>',
+    page:  '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+    panel: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
+    link:  '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
+    sub:   '<polyline points="9 10 4 15 9 20"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/>',
+};
+const JUMP_GROUPS = { tab: 'Tabs', tool: 'SPEEKS Tools', sub: 'Inside a tool', panel: 'On the dashboard', link: 'Sheets & links', page: 'Pages' };
+const JUMP_ORDER  = ['tab', 'tool', 'sub', 'panel', 'link', 'page'];
+
+let _jumpIndex = [];
+let _jumpSel = 0;
+let _jumpOpen = false;
+
+function _jumpPage() {
+    return (location.pathname.split('/').pop() || 'index.html').toLowerCase() || 'index.html';
+}
+function _jumpRoleClass() {
+    const r = sessionStorage.getItem('speeksUserRole') || 'employee';
+    return 'role-' + r.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+}
+// Visible == what this user can actually reach. On the page that owns the
+// element, trust the DOM (applyRoleBasedUI already resolved every override);
+// anywhere else, resolve the same rules without it.
+function _jumpFeatureVisible(key) {
+    if (!key) return true;
+    const el = document.querySelector('[data-feature="' + key + '"]');
+    if (el) return el.style.display !== 'none' && !el.hasAttribute('hidden');
+    return _featureEffectiveVisible(key, _jumpRoleClass(), sessionStorage.getItem('speeksUserName') || '');
+}
+
+// SPEEKS Tools, read off the panel itself so the list can never drift. Clicking
+// the row later just clicks the real link, which keeps every tool's own open
+// logic (and its panel-closing) in one place.
+function _jumpToolItems() {
+    return Array.from(document.querySelectorAll('#toolsSidePanel .tools-item'))
+        .filter(a => a.style.display !== 'none')
+        .map(a => {
+            const key = a.getAttribute('data-feature') || '';
+            const group = a.closest('.tools-group');
+            const label = (a.querySelector('.pl-tool-label') || a).textContent.replace(/\s+/g, ' ').trim();
+            return {
+                id: 'tool:' + (key || label),
+                label,
+                sub: 'SPEEKS Tools' + (group && group.querySelector('.tools-group-label')
+                    ? ' · ' + group.querySelector('.tools-group-label').textContent.trim() : ''),
+                kind: 'tool',
+                keys: JUMP_KEYWORDS[key] || '',
+                run: () => a.click(),
+            };
+        });
+}
+
+// Hotbar links only exist on the dashboard, but people search for them from
+// everywhere ("passwords"). Cache the visible ones whenever we're on the
+// dashboard — which is where every session starts — and serve that cache
+// elsewhere. Store-specific URLs stay correct because the cache is per device.
+function _jumpCacheHotbar() {
+    if (_jumpPage() !== 'index.html') return;
+    const links = Array.from(document.querySelectorAll('.hotbars-stack .hotbar-btn'))
+        .filter(a => a.style.display !== 'none' && a.getAttribute('href'))
+        .filter(a => { const w = a.closest('.hotbar-wrapper'); return w && w.style.display !== 'none'; })
+        .map(a => {
+            const wrap = a.closest('.hotbar-wrapper');
+            const bar = wrap && wrap.querySelector('.hotbar-label') ? wrap.querySelector('.hotbar-label').textContent.trim() : '';
+            return { label: a.textContent.replace(/\s+/g, ' ').trim(), href: a.getAttribute('href'), bar };
+        })
+        .filter(l => l.label);
+    try { localStorage.setItem('speeksJumpHotbar', JSON.stringify(links)); } catch (e) { /* full or blocked — no cache, no hotbar results */ }
+}
+function _jumpHotbarItems() {
+    let links = [];
+    try { links = JSON.parse(localStorage.getItem('speeksJumpHotbar') || '[]'); } catch (e) { links = []; }
+    return links.map(l => ({
+        id: 'hb:' + l.bar + ':' + l.label,
+        label: l.label,
+        sub: (l.bar ? l.bar + ' Hotbar' : 'Hotbar') + ' · opens in a new tab',
+        kind: 'link',
+        keys: 'sheet link ' + l.label.toLowerCase(),
+        run: () => window.open(l.href, '_blank', 'noopener'),
+    }));
+}
+
+function _jumpPlaceItems() {
+    const here = _jumpPage();
+    return JUMP_PLACES.filter(p => {
+        if (p.kind === 'page') {
+            if (p.page === here) return false; // already here
+            const link = document.querySelector('.nav-bar a.nav-link[href="' + p.page + '"]');
+            return !link || link.style.display !== 'none';
+        }
+        return _jumpFeatureVisible(p.feature);
+    }).map(p => ({
+        id: p.id,
+        label: p.label,
+        sub: p.kind === 'tab' ? p.sub + ' · tab' : p.sub,
+        kind: p.kind,
+        keys: (p.keys || '') + ' ' + (JUMP_KEYWORDS[p.feature] || ''),
+        run: () => _jumpRunPlace(p),
+    }));
+}
+
+// Where a destination lives, as a URL. Tabs ride the plain hash their page
+// already reads on load (workspace.html#aging); panels use #jump=<feature>,
+// which _jumpHandleHash() picks up once we land.
+function _jumpDest(p) {
+    if (p.kind === 'page') return p.page;
+    return p.page + (p.hash ? '#' + p.hash : '#jump=' + p.feature);
+}
+
+function _jumpRunPlace(p) {
+    if (p.run) { p.run(); return; }                       // tool sub-tabs: same on every page
+    const here = _jumpPage();
+    if (p.kind === 'page' || p.page !== here) { location.href = _jumpDest(p); return; }
+    if (p.kind === 'tab' && typeof window[p.fn] === 'function') {
+        window[p.fn](p.hash);
+        const el = document.querySelector('.ws-wrap, .ops-wrap');
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+    }
+    _jumpSpotlight(p.feature);
+}
+
+// Take someone to a panel that's already on this page: scroll it into view and
+// pulse it once, so they see WHICH thing they asked for among a wall of cards.
+function _jumpSpotlight(featureKey) {
+    const el = document.querySelector('[data-feature="' + featureKey + '"]');
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.remove('jump-spotlight');
+    void el.offsetWidth;                 // restart the animation if it's re-picked
+    el.classList.add('jump-spotlight');
+    setTimeout(() => el.classList.remove('jump-spotlight'), 2200);
+}
+
+// A panel deep-link (#jump=widget-...) survives the page load; run it once the
+// dashboard has drawn, then drop it from the URL so a refresh doesn't re-jump.
+function _jumpHandleHash() {
+    const m = (location.hash || '').match(/^#jump=(.+)$/);
+    if (!m) return;
+    const key = decodeURIComponent(m[1]);
+    setTimeout(() => _jumpSpotlight(key), 400);
+    try { history.replaceState(null, '', location.pathname); } catch (e) { /* hash just stays */ }
+}
+
+function _jumpBuildIndex() {
+    _jumpCacheHotbar();
+    _jumpIndex = [].concat(_jumpPlaceItems(), _jumpToolItems(), _jumpHotbarItems());
+}
+
+// ---- pins ------------------------------------------------------------------
+// The user chooses what sits at the top, rather than the box guessing from
+// history. localStorage, not sessionStorage: a pin is a standing preference.
+function _jumpPins() {
+    try { return JSON.parse(localStorage.getItem('speeksJumpPins') || '[]'); } catch (e) { return []; }
+}
+function _jumpIsPinned(id) { return _jumpPins().indexOf(id) !== -1; }
+
+// Newly pinned items go to the BOTTOM of the pinned group, so pinning something
+// never reshuffles the rows above it out from under the cursor.
+function _jumpTogglePin(id) {
+    const pins = _jumpPins();
+    const at = pins.indexOf(id);
+    if (at === -1) pins.push(id); else pins.splice(at, 1);
+    try { localStorage.setItem('speeksJumpPins', JSON.stringify(pins)); } catch (e) { /* not worth failing over */ }
+    _jumpRender();
+}
+
+// ---- matching --------------------------------------------------------------
+const _jumpNorm = s => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+function _jumpScore(item, q) {
+    const t = _jumpNorm(item.label), k = _jumpNorm(item.keys), s = _jumpNorm(item.sub);
+    if (t === q) return 120;
+    if (t.startsWith(q)) return 100;
+    if (new RegExp('\\b' + q).test(t)) return 80;
+    if (t.includes(q)) return 60;
+    if (new RegExp('\\b' + q).test(k)) return 40;
+    if (k.includes(q)) return 25;
+    if (s.includes(q)) return 12;
+    return -1;
+}
+
+function _jumpMatches(q) {
+    if (!q) {
+        // Pinned first, in the order they were pinned; everything else below.
+        const pinned = _jumpPins().map(id => _jumpIndex.find(i => i.id === id)).filter(Boolean);
+        const rest = _jumpIndex.filter(i => !pinned.includes(i));
+        return [
+            { group: 'Pinned', items: pinned },
+            { group: pinned.length ? 'Everything else' : 'Everything', items: rest },
+        ].filter(g => g.items.length);
+    }
+    const scored = _jumpIndex.map(i => ({ i, s: _jumpScore(i, q) })).filter(x => x.s >= 0)
+        .sort((a, b) => b.s - a.s || a.i.label.localeCompare(b.i.label));
+    // Group by kind so the list is scannable, but float whichever group holds
+    // the best match to the top — the pre-selected row has to BE the best
+    // answer. Typing "checklist" must land on the panel actually called
+    // Checklist, not on "Manager Checklist" just because Tools group earlier.
+    return JUMP_ORDER.map((k, ord) => {
+        const items = scored.filter(x => x.i.kind === k);
+        return { group: JUMP_GROUPS[k], items: items.map(x => x.i), best: items.length ? items[0].s : -1, ord };
+    }).filter(g => g.items.length).sort((a, b) => b.best - a.best || a.ord - b.ord);
+}
+
+// ---- rendering -------------------------------------------------------------
+function _jumpHighlight(label, q) {
+    if (!q) return escapeHtml(label);
+    const i = _jumpNorm(label).indexOf(q);
+    if (i < 0) return escapeHtml(label);
+    return escapeHtml(label.slice(0, i)) + '<mark>' + escapeHtml(label.slice(i, i + q.length)) + '</mark>' + escapeHtml(label.slice(i + q.length));
+}
+
+function _jumpRender() {
+    const list = document.getElementById('jumpList');
+    if (!list) return;
+    const q = _jumpNorm((document.getElementById('jumpInput') || {}).value);
+    const groups = _jumpMatches(q);
+    const flat = groups.flatMap(g => g.items);
+    if (_jumpSel >= flat.length) _jumpSel = Math.max(0, flat.length - 1);
+
+    if (!flat.length) {
+        list.innerHTML = '<div class="jump-empty"><b>Nothing here matches “' + escapeHtml(q) + '”</b>'
+            + '<span>Try a shorter word, or part of the name.</span></div>';
+        return;
+    }
+    let n = -1;
+    list.innerHTML = groups.map(g => '<div class="jump-group">' + escapeHtml(g.group) + '</div>' + g.items.map(it => {
+        n++;
+        const ext = it.kind === 'link' ? '<span class="jump-ext">↗</span>' : '';
+        const pinned = _jumpIsPinned(it.id);
+        return '<div class="jump-row' + (n === _jumpSel ? ' sel' : '') + '" data-i="' + n + '" role="option" aria-selected="' + (n === _jumpSel) + '">'
+            + '<span class="jump-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + JUMP_ICONS[it.kind] + '</svg></span>'
+            + '<span class="jump-text"><span class="jump-title">' + _jumpHighlight(it.label, q) + ext + '</span>'
+            + '<span class="jump-sub">' + escapeHtml(it.sub) + '</span></span>'
+            + '<button type="button" class="jump-pin' + (pinned ? ' on' : '') + '" data-pin="' + escapeHtml(it.id) + '"'
+            + ' title="' + (pinned ? 'Unpin' : 'Pin To The Top') + '" aria-label="' + (pinned ? 'Unpin ' : 'Pin ') + escapeHtml(it.label) + '">'
+            + '<svg viewBox="0 0 24 24" fill="' + (pinned ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+            + '<path d="M12 17.3V22"/><path d="M9 10.9V5.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v5.4l1.7 2.6a1 1 0 0 1-.8 1.5H8.1a1 1 0 0 1-.8-1.5z"/></svg>'
+            + '</button></div>';
+    }).join('')).join('');
+    const cur = list.querySelector('.jump-row.sel');
+    if (cur) cur.scrollIntoView({ block: 'nearest' });
+}
+
+function _jumpFlat() { return _jumpMatches(_jumpNorm((document.getElementById('jumpInput') || {}).value)).flatMap(g => g.items); }
+
+function _jumpGo(i) {
+    const item = _jumpFlat()[i];
+    if (!item) return;
+    closeJumpSearch();
+    try { item.run(); } catch (e) { console.warn('Jump failed:', e); }
+}
+
+// ---- open / close ----------------------------------------------------------
+// The page behind is locked and blurred with the SAME mechanism modals use, so
+// the two can't fight. If a modal already had the screen locked we leave the
+// lock alone on close — closing the search must never dismiss what's under it.
+let _jumpLockedByUs = false;
+
+function openJumpSearch() {
+    _jumpEnsureDom();
+    _jumpBuildIndex();
+    _jumpSel = 0;
+    _jumpOpen = true;
+    _jumpLockedByUs = !document.body.classList.contains('no-scroll');
+    lockAndBlurScreen();
+    const wrap = document.getElementById('jumpSearch');
+    const input = document.getElementById('jumpInput');
+    if (wrap) wrap.classList.add('open');
+    if (input) { input.value = ''; input.focus(); }
+    _jumpRender();
+}
+
+function closeJumpSearch() {
+    _jumpOpen = false;
+    const wrap = document.getElementById('jumpSearch');
+    if (wrap) wrap.classList.remove('open');
+    if (!_jumpLockedByUs) return;      // a modal owns the lock — leave it be
+    _jumpLockedByUs = false;
+    document.body.classList.remove('no-scroll');
+    document.body.style.position = '';
+    document.body.style.top = '';
+    const overlay = document.getElementById('globalOverlay');
+    if (overlay) overlay.classList.remove('show');
+    window.scrollTo(0, _lockedScrollY);  // release the pinned body where it was
+}
+
+// ---- one-time DOM ----------------------------------------------------------
+// Injected from here rather than pasted into all 5 shells — that copy-paste is
+// exactly how the tools panel drifted between pages.
+function _jumpEnsureDom() {
+    if (document.getElementById('jumpSearch')) return;
+    const wrap = document.createElement('div');
+    wrap.id = 'jumpSearch';
+    wrap.className = 'jump-scrim';
+    wrap.innerHTML =
+        '<div class="jump-box" role="dialog" aria-modal="true" aria-label="Search SPEEKSNET">'
+        + '<div class="jump-search">'
+        + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
+        + '<input id="jumpInput" type="text" autocomplete="off" spellcheck="false" placeholder="Search tools, tabs and sheets…" aria-label="Search">'
+        + '</div>'
+        + '<div class="jump-list" id="jumpList" role="listbox"></div>'
+        + '</div>';
+    document.body.appendChild(wrap);
+
+    wrap.addEventListener('click', e => { if (e.target === wrap) closeJumpSearch(); });
+    document.getElementById('jumpInput').addEventListener('input', () => { _jumpSel = 0; _jumpRender(); });
+    document.getElementById('jumpList').addEventListener('click', e => {
+        // The pin sits inside the row, and the row is the go-button — so the pin
+        // has to claim the click before it becomes a jump.
+        const pin = e.target.closest('.jump-pin');
+        if (pin) { e.stopPropagation(); _jumpTogglePin(pin.dataset.pin); return; }
+        const row = e.target.closest('.jump-row');
+        if (row) _jumpGo(parseInt(row.dataset.i, 10));
+    });
+}
+
+// The one visible way in, besides the hotkey itself. There is deliberately no
+// chip in the top bar: the nav is already dense, and the search box is where
+// someone hunting for a tool is looking anyway.
+function _jumpSync() {
+    // The shortcut is spelled out exactly once, riding along in the panel's own
+    // search bar. A separate row would cost ~58px off a 300px-wide panel and
+    // push the tool list into scrolling — the search box is already the thing
+    // people look at when they're hunting for something.
+    const toolsSearch = document.querySelector('#toolsSidePanel .tools-search');
+    if (toolsSearch && !document.getElementById('jumpToolsKey')) {
+        const key = document.createElement('button');
+        key.id = 'jumpToolsKey';
+        key.className = 'jump-tools-key';
+        key.type = 'button';
+        key.title = 'Search Everything — Tools, Tabs And Sheets (Ctrl K)';
+        key.textContent = 'Ctrl K';
+        key.onclick = e => { e.preventDefault(); _closeToolsPanel(); openJumpSearch(); };
+        toolsSearch.appendChild(key);
+    }
+}
+
+// Ctrl/Cmd+K from anywhere, including inside a text field — that combo can't be
+// confused with typing, and a shortcut that dies in an input is a shortcut
+// people stop trusting. Arrow/Enter handling only runs while the box is open.
+document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        _jumpOpen ? closeJumpSearch() : openJumpSearch();
+        return;
+    }
+    if (!_jumpOpen) return;
+    const flat = _jumpFlat();
+    if (e.key === 'ArrowDown') { e.preventDefault(); if (flat.length) { _jumpSel = (_jumpSel + 1) % flat.length; _jumpRender(); } }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (flat.length) { _jumpSel = (_jumpSel - 1 + flat.length) % flat.length; _jumpRender(); } }
+    else if (e.key === 'Enter') { e.preventDefault(); _jumpGo(_jumpSel); }
+});
 
 // ============================================================
 // VARIANCE REPLIES (workspace tab)
@@ -24662,9 +25113,11 @@ function _dccPaneHtml(r, portalLink) {
 // --- board ------------------------------------------------------------------
 function _dccBoardHtml(portalLinks) {
     if (!_dccRows.length) return '<div class="dcc-empty">Syncing the district…</div>';
+    // Open on the store at the TOP of the rail — the district leader on % to
+    // goal. (This used to land on the last card, the worst performer.) Only the
+    // first paint picks; once a DM clicks a store, _dccSel stays put.
     if (!_dccSel || !_dccRows.some(r => r.store === _dccSel)) {
-        const order = _dccRailOrder();
-        _dccSel = order[order.length - 1].store;
+        _dccSel = _dccRailOrder()[0].store;
     }
     const sel = _dccRows.find(r => r.store === _dccSel);
 
