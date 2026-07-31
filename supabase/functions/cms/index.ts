@@ -140,9 +140,34 @@ Deno.serve(async (req: Request) => {
         reactions: reactionsMap[a.id] || {},
       }));
 
+      // The Documents view labels each file with the announcement it came with, and
+      // files goals/bonus sheets by those words — both need the title. Shipping the
+      // whole message body back would undo the egress trim this list exists to allow,
+      // so derive just the title here: the first <strong>, which is exactly where the
+      // client's _hubParseAnn looks. Keep the two rules in step if either changes.
+      const docTitle = (msg: string | null): string => {
+        // The "🚨 HIGH PRIORITY" marker is a <span> and never wraps the title, so this
+        // strip is belt-and-braces — the <strong> match lands correctly either way.
+        const cleaned = String(msg || "")
+          .replace(/<span[^>]*>[\s\S]*?HIGH PRIORITY[\s\S]*?<\/span>/gi, " ");
+        const m = cleaned.match(/<strong[^>]*>([\s\S]*?)<\/strong>/i);
+        return (m ? m[1] : cleaned)
+          .replace(/<[^>]*>/g, " ")
+          .replace(/&nbsp;/gi, " ")
+          .replace(/&amp;/gi, "&")
+          .replace(/&lt;/gi, "<")
+          .replace(/&gt;/gi, ">")
+          .replace(/&quot;/gi, '"')
+          .replace(/&#0?39;|&apos;/gi, "'")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 100);
+      };
+
       // Every announcement that ever had a document attached, regardless of age — this
       // feeds the Documents section so files stay available after the post itself has
-      // aged off the board. Compact fields only (no message text / readBy / reactions).
+      // aged off the board. Compact fields only (title, not the message text; no
+      // readBy / reactions).
       const documents = annRows
         .filter((a: any) => a.doc_url)
         .map((a: any) => ({
@@ -151,6 +176,7 @@ Deno.serve(async (req: Request) => {
           author: a.author,
           docUrl: a.doc_url,
           docName: a.doc_name || null,
+          title: docTitle(a.message),
         }));
 
       return new Response(JSON.stringify({ announcements, documents, active: [], upcoming: [] }), {

@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260729c">
+  <link rel="stylesheet" href="styles.css?v=20260731u">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260729c" defer></script>
+  <script src="speeks.js?v=20260731u" defer></script>
 </head>
 
 <body class="preload">
@@ -529,6 +529,14 @@
                 <span class="hub-chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
             </div>
             <span class="hub-count" id="hubCount"></span>
+            <!-- Entry point for the Documents view. openDocsModal() and #annDocsModal
+                 have existed since the feed was built — including a "← Back" that
+                 returns here — but nothing ever called it, so every file ever attached
+                 to an announcement was unreachable once the post scrolled away. -->
+            <button type="button" class="hub-docs-btn" onclick="openDocsModal()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                Documents<span class="hub-docs-n" id="hubDocsCount"></span>
+            </button>
         </div>
     </div>
     <div id="hubFeed" class="hub-feed"><div class="status-message">Syncing your feed...</div></div>
@@ -538,10 +546,26 @@
     <div class="modal-header">
         <div class="align-center gap-15">
             <button class="ann-docs-back-btn" onclick="closeAllModals(); toggleNotifs();">← Back</button>
-            <h3>📎 Documents</h3>
+            <h3>Documents</h3>
         </div>
         <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
+    <!-- Search lives OUTSIDE #annDocsList: loadAnnouncementDocs() rewrites that list on
+         every keystroke, so an input inside it would be destroyed mid-type. -->
+    <div class="ann-docs-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="20" y1="20" x2="16.2" y2="16.2"/></svg>
+        <input type="text" id="annDocsSearch" autocomplete="off" spellcheck="false"
+               placeholder="Search documents by name…"
+               oninput="loadAnnouncementDocs()">
+        <button type="button" class="ann-docs-clear" id="annDocsClear" onclick="annDocsClearSearch()" title="Clear">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+    </div>
+    <!-- Two tabs — Goals & Bonuses (default) and Other Documents. Rendered by
+         loadAnnouncementDocs() rather than static markup because the counts track the
+         current search. Kept out of #annDocsList so clicking a tab doesn't rebuild
+         the control that was just clicked. -->
+    <div id="annDocsTabs" class="ann-docs-tabs"></div>
     <div id="annDocsList" class="ann-docs-list" style="padding: 0 4px;">
         <div class="status-message">Loading documents...</div>
     </div>
@@ -941,6 +965,10 @@
                         </div>
                         <div class="ebs-rows">
                             <div class="ebs-row"><span class="k">Rev (MTD)</span><span class="v" id="bs-rev">--</span></div>
+                            <!-- GP banked so far, above the month-end projection. The ring
+                                 shows TRACKING attainment, so without this row there is
+                                 nothing on screen saying where the store actually stands today. -->
+                            <div class="ebs-row"><span class="k">GP (MTD)</span><span class="v" id="bs-gp">--</span></div>
                             <div class="ebs-row"><span class="k">GP Tracking</span><span class="v" id="bs-t-gp">--</span></div>
                         </div>
                     </div>
@@ -1011,6 +1039,7 @@
                           </div>
                           <div class="ebs-rows">
                               <div class="ebs-row"><span class="k">Rev (MTD)</span><span class="v" id="bs-rev">--</span></div>
+                              <div class="ebs-row"><span class="k">GP (MTD)</span><span class="v" id="bs-gp">--</span></div>
                               <div class="ebs-row"><span class="k">GP Tracking</span><span class="v" id="bs-t-gp">--</span></div>
                               <div class="ebs-row"><span class="k">Sell Margin</span><span class="delta-badge delta-neutral" id="bs-sell-margin">0%</span></div>
                           </div>

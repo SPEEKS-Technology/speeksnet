@@ -6839,6 +6839,73 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .ann-doc-link svg { flex-shrink: 0; }
 
 /* Documents tab list */
+/* Documents entry point in the feed header. Sits with the filter row rather than the
+   title row so it reads as a way to look at the feed, not a way to close it. */
+.hub-docs-btn {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+    font: inherit; font-size: 12px; font-weight: 750; color: var(--sage-professional);
+    background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 9px; padding: 7px 12px;
+    white-space: nowrap;
+}
+.hub-docs-btn:hover { background: #dcfce7; }
+.hub-docs-btn svg { width: 14px; height: 14px; flex: none; }
+.hub-docs-n {
+    font-size: 11px; font-weight: 800; background: #bbf7d0; color: #166534;
+    border-radius: 999px; padding: 1px 7px; font-variant-numeric: tabular-nums;
+}
+.hub-docs-n:empty { display: none; }
+
+/* Search. Hidden by loadAnnouncementDocs() until there are more than 4 documents —
+   a search box over three files is just furniture. */
+.ann-docs-search {
+    display: flex; align-items: center; gap: 8px; margin: 4px 12px 10px;
+    background: #f8fafc; border: 1px solid #e6ebf1; border-radius: 10px; padding: 0 10px;
+}
+.ann-docs-search:focus-within { border-color: #bbf7d0; background: #fff; box-shadow: 0 0 0 3px rgba(90,141,59,.09); }
+.ann-docs-search > svg { width: 15px; height: 15px; color: #94a3b8; flex: none; }
+.ann-docs-search input {
+    flex: 1; min-width: 0; border: 0; background: none; outline: none;
+    font: inherit; font-size: 13px; color: var(--text-dark); padding: 10px 0;
+}
+.ann-docs-search input::placeholder { color: #a8b3bf; }
+.ann-docs-clear {
+    display: none; align-items: center; justify-content: center; cursor: pointer;
+    width: 20px; height: 20px; flex: none; border: 0; border-radius: 50%;
+    background: #e2e8f0; color: #64748b; padding: 0;
+}
+.ann-docs-clear:hover { background: #cbd5e1; color: #334155; }
+.ann-docs-clear svg { width: 11px; height: 11px; }
+.ann-doc-found {
+    padding: 2px 12px 10px; font-size: 11.5px; font-weight: 700; color: #94a3b8;
+}
+
+/* Two tabs. Goals & Bonuses leads because it's what people open this for; the count
+   on each tab tracks the live search, so a query can't hide matches on the other tab. */
+.ann-docs-tabs {
+    display: flex; gap: 6px; margin: 0 12px 8px; padding: 4px;
+    background: #f1f5f9; border-radius: 11px;
+}
+.ann-docs-tab {
+    flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 750; color: #64748b;
+    background: none; border: 1px solid transparent; border-radius: 8px; padding: 8px 10px;
+    white-space: nowrap; min-width: 0;
+}
+.ann-docs-tab:hover { color: #334155; }
+.ann-docs-tab em {
+    font-style: normal; font-size: 11px; font-weight: 800; background: #e2e8f0; color: #64748b;
+    border-radius: 999px; padding: 1px 7px; font-variant-numeric: tabular-nums;
+}
+.ann-docs-tab.active {
+    background: #fff; border-color: #e6ebf1; color: var(--sage-professional);
+    box-shadow: 0 1px 2px rgba(16,24,40,.05);
+}
+.ann-docs-tab.active em { background: #dcfce7; color: #166534; }
+.ann-docs-tab:focus-visible { outline: 2px solid var(--sage-professional); outline-offset: 1px; }
+
+.ann-doc-none { padding: 34px 20px; text-align: center; color: #94a3b8; font-size: 14px; }
+.ann-doc-none b { color: #64748b; }
+.ann-doc-none small { display: block; margin-top: 8px; font-size: 12.5px; }
 .ann-docs-list { display: flex; flex-direction: column; gap: 0; }
 .ann-doc-card {
     display: flex;
@@ -9381,9 +9448,13 @@ body.sam-active .hotbar-btn:hover {
    enough to fit the employee's Buying tab (ring + margin rows) with no cutoff, and equal
    so the card lines up with the chart below it. */
 .cc-widget.cc-expanded { min-height: 530px; }
-/* Employee widget: FIXED 530 (not just min) so switching tabs can't nudge the height at
-   all — the two panels are equal by construction and top-aligned. */
-.ec-widget.cc-expanded { height: 530px; }
+/* Employee widget: 530 is a FLOOR, not a lock. It was `height: 530px` to stop tab
+   switching nudging the card, but that guard was never needed — both panels live in the
+   same grid cell (.cc-panel is grid-area 1/1, hidden by opacity, not display:none), so
+   the row is already the max of the two and the height is stable by construction. The
+   hard lock only clipped: the Buying panel needs 437px of the 378px it left, so the
+   Sell Margin row fell outside the card entirely once GP (MTD) was added. */
+.ec-widget.cc-expanded { min-height: 530px; }
 .ec-widget .cc-panel { display: flex; flex-direction: column; justify-content: flex-start; overflow-y: auto; }
 /* Keep the header one line so hiding the goal chip / a longer KPI title can't change its
    height (which would shift everything below on tab switch). */
@@ -11349,4 +11420,673 @@ body.sam-active .hotbar-btn:hover {
 @media (max-width: 900px) {
     .jump-scrim { padding: 8px; align-items: stretch; }
     .jump-box { max-height: none; height: 100%; max-width: none; }
+}
+
+/* ========================================================================== *
+ * MARGIN GUIDE (Operations, first tab)
+ * --------------------------------------------------------------------------
+ * Rail & Ladder layout: selection parked in a sticky left rail, the ladder as
+ * the centre of gravity, coaching down the right edge. Nothing reflows when the
+ * condition changes, because a buyer works this dozens of times a shift.
+ * The ladder's semantic colour (go / your ceiling / manager) is separate from
+ * the sage accent, so the rungs read at a glance without inventing brand hues.
+ * ========================================================================== */
+.mg-panel {
+    --mg-line: #e3e8ee;
+    --mg-hdr: #f6faf7;
+    --mg-muted: #64707c;
+    --mg-faint: #9aa6ad;
+    --mg-accent: #1f9d57;
+    --mg-accent-deep: #178048;
+    --mg-accent-tint: #e8f7ee;
+    --mg-ring: #c6ecd6;
+    --mg-amber: #b45309;
+    --mg-amber-tint: #fdf3e1;
+    --mg-amber-line: #f0d9a8;
+    --mg-red: #b23636;
+    --mg-red-tint: #fcecec;
+    --mg-red-line: #edc9c9;
+    --mg-blue: #2c5aa0;
+    --mg-blue-tint: #e8f0fb;
+    --mg-chip: #f1f4f7;
+    padding: 0;
+    /* .ws-panel pins every pane to calc(100vh - 250px), which clipped the tail of
+       a long Condition Help list. This is a reference tool, not a dashboard: it
+       should grow with its content and let the page scroll. Same escape hatch
+       .ws-panel-brief uses. overflow stays visible so the sticky rail works —
+       an overflow-hidden ancestor silently kills position: sticky. */
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible;
+}
+/* The panel no longer clips, so the header band rounds its own top corners. */
+.mg-head {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 18px 22px; border-bottom: 1px solid var(--mg-line);
+    background: var(--mg-hdr); border-radius: 16px 16px 0 0;
+}
+.mg-eyebrow {
+    font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--mg-accent-deep);
+}
+.mg-title { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
+/* Instructions sit under the title, matching the page-header pattern used across
+   the site rather than floating off to the right. No max-width: the header spans
+   the panel, so the line has room to stay on one line and only wraps on narrow
+   screens where it should. */
+.mg-sub { margin: 0; font-size: 13.5px; color: var(--mg-muted); }
+.mg-body { padding: 18px 22px 24px; }
+.mg-loading, .mg-error { padding: 40px 0; text-align: center; color: var(--mg-muted); font-size: 14px; }
+.mg-error { color: var(--mg-red); }
+.mg-retry {
+    display: inline-block; margin-left: 10px; font: inherit; font-size: 12.5px; font-weight: 650;
+    padding: 5px 12px; border-radius: 8px; border: 1px solid var(--mg-line);
+    background: #fff; color: var(--mg-muted); cursor: pointer;
+}
+.mg-retry:hover { border-color: var(--mg-accent); color: var(--mg-accent-deep); }
+
+.mg-grid { display: grid; grid-template-columns: 272px minmax(0, 1fr) 372px; gap: 18px; align-items: start; }
+@media (max-width: 1300px) { .mg-grid { grid-template-columns: 1fr; } }
+
+/* ---- left rail ---- */
+.mg-rail {
+    display: flex; flex-direction: column; gap: 16px; padding: 17px;
+    border: 1px solid var(--mg-line); border-radius: 12px; background: #fff;
+    box-shadow: 0 1px 2px rgba(16,24,40,.05); position: sticky; top: 16px; min-width: 0;
+}
+@media (max-width: 1300px) { .mg-rail { position: static; } }
+.mg-rail > * { min-width: 0; max-width: 100%; }
+.mg-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mg-lab {
+    font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--mg-faint);
+}
+/* box-sizing is explicit: width 100% plus padding overflowed the rail without it. */
+.mg-select, .mg-input {
+    box-sizing: border-box; width: 100%; max-width: 100%; font: inherit; font-size: 14px;
+    font-weight: 550; color: var(--slate-charcoal, #1a1c1e); background: #fbfcfd;
+    border: 1px solid var(--mg-line); border-radius: 9px; padding: 10px 11px;
+}
+.mg-select {
+    appearance: none; cursor: pointer; padding-right: 30px;
+    background-image: linear-gradient(45deg, transparent 50%, var(--mg-muted) 50%),
+                      linear-gradient(135deg, var(--mg-muted) 50%, transparent 50%);
+    background-position: calc(100% - 16px) 51%, calc(100% - 11px) 51%;
+    background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+}
+.mg-select:focus-visible, .mg-input:focus-visible { outline: 2px solid var(--mg-accent); outline-offset: 1px; }
+/* Nothing chosen yet: the placeholder reads as a prompt, not as a value. Matches
+   the empty projection box, so the whole rail says "waiting on you" at a glance. */
+.mg-select.mg-unset { color: var(--mg-faint); font-weight: 500; }
+.mg-select:disabled { background: #f7f9fa; cursor: not-allowed; opacity: .85; }
+.mg-money { position: relative; }
+.mg-money::before {
+    content: "$"; position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+    color: var(--mg-faint); font-size: 14px; font-weight: 600; pointer-events: none;
+}
+.mg-money .mg-input { padding-left: 25px; font-variant-numeric: tabular-nums; font-weight: 650; }
+
+/* The projection is the only number the buyer types, and it opens pre-filled with
+   the band's midpoint — a value that looks like an answer but isn't theirs. So it
+   is the primary control on the rail rather than a peer of the two dropdowns, and
+   it keeps visibly asking until they replace that default. */
+.mg-field-proj .mg-lab { color: var(--mg-accent-deep); }
+.mg-field-proj .mg-money::before { color: var(--mg-accent); font-weight: 700; }
+.mg-field-proj .mg-input {
+    background: #fff; border-color: var(--mg-ring);
+    box-shadow: 0 0 0 3px rgba(31, 157, 87, .08);
+    font-size: 16px; font-weight: 700; padding-top: 11px; padding-bottom: 11px;
+}
+.mg-field-proj .mg-input:hover { border-color: var(--mg-accent); }
+
+/* Label and cue share one row; the cue retires the moment they type. */
+.mg-lab-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.mg-cue {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .04em; text-transform: none;
+    white-space: nowrap; color: var(--mg-accent-deep); background: var(--mg-accent-tint);
+    border: 1px solid var(--mg-ring); border-radius: 999px; padding: 2px 8px;
+}
+.mg-field-proj:not(.mg-needs) .mg-cue { display: none; }
+
+/* Still holding the midpoint: a firmer ring, and two slow breaths that then stop.
+   Perpetual motion at the counter turns into wallpaper (and the buyer is mid
+   conversation with a customer), so this catches the eye once and settles. */
+.mg-field-proj.mg-needs .mg-input {
+    border-color: var(--mg-accent); animation: mgProjAsk 1.7s ease-in-out 2;
+}
+@keyframes mgProjAsk {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(31, 157, 87, .08); }
+    50%      { box-shadow: 0 0 0 7px rgba(31, 157, 87, .20); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .mg-field-proj.mg-needs .mg-input {
+        animation: none; box-shadow: 0 0 0 5px rgba(31, 157, 87, .16);
+    }
+}
+
+/* ---- DM editor entry ------------------------------------------------------
+   Shares the title's row so the instruction line below keeps the full width.
+   Hidden by default and revealed by .mg-can from mgRender(); Feature Access can
+   still hide it outright with display:none !important, which wins over this. */
+.mg-title-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.mg-manage { display: none; }
+.mg-manage.mg-can {
+    display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+    font: inherit; font-size: 12px; font-weight: 700; color: var(--mg-deep);
+    background: var(--mg-accent-tint); border: 1px solid var(--mg-ring);
+    border-radius: 9px; padding: 7px 13px; white-space: nowrap;
+}
+.mg-manage.mg-can:hover { background: #dcf2e5; }
+.mg-manage svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+/* ---- DM editor ------------------------------------------------------------ */
+.mg-adm { padding: 18px 22px 22px; }
+.mg-adm-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+.mg-back {
+    display: inline-flex; align-items: center; gap: 7px; cursor: pointer; font: inherit;
+    font-size: 12px; font-weight: 700; color: var(--mg-muted); background: #fff;
+    border: 1px solid var(--mg-line); border-radius: 9px; padding: 7px 13px;
+}
+.mg-back svg { width: 13px; height: 13px; stroke: currentColor; fill: none; }
+.mg-adm-tabs { display: flex; gap: 6px; margin-left: auto; }
+.mg-adm-tab {
+    cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--mg-muted);
+    background: #f6f8f9; border: 1px solid var(--mg-line); border-radius: 9px; padding: 8px 15px;
+}
+.mg-adm-tab.active { background: var(--mg-accent-tint); border-color: var(--mg-ring); color: var(--mg-deep); }
+
+.mg-adm-grid { display: grid; grid-template-columns: 258px 1fr; gap: 22px; align-items: start; }
+.mg-adm-rail { display: flex; flex-direction: column; gap: 13px; }
+.mg-adm-main { min-width: 0; }
+.mg-adm-sub {
+    font-size: 10px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--mg-faint); margin-bottom: 8px;
+}
+.mg-adm-hint { margin: 6px 0 0; font-size: 11.5px; color: var(--mg-muted); }
+.mg-adm-lead { margin: 0 0 16px; font-size: 13px; color: var(--mg-muted); max-width: 78ch; }
+.mg-adm-lead b { color: var(--slate-charcoal); }
+.mg-inline-link {
+    font: inherit; font-size: 13px; font-weight: 700; color: var(--mg-deep);
+    background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline;
+}
+.mg-adm-count {
+    display: flex; align-items: baseline; gap: 8px; background: var(--mg-accent-tint);
+    border: 1px solid var(--mg-ring); border-radius: 10px; padding: 11px 13px; color: var(--mg-deep);
+}
+.mg-adm-count b { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.mg-adm-count span { font-size: 12px; font-weight: 700; }
+
+.mg-step { display: flex; align-items: center; gap: 8px; }
+.mg-step button {
+    cursor: pointer; font: inherit; font-size: 16px; font-weight: 800; width: 34px; height: 34px;
+    border: 1px solid var(--mg-line); border-radius: 8px; background: #fff; color: var(--mg-muted);
+}
+.mg-step button:hover { border-color: var(--mg-ring); color: var(--mg-deep); }
+.mg-step-val {
+    flex: 1; text-align: center; font-size: 19px; font-weight: 800; font-variant-numeric: tabular-nums;
+    color: var(--mg-deep); border: 1px solid var(--mg-ring); border-radius: 8px; padding: 5px 0; background: #fbfefc;
+}
+
+.mg-adm-plan { border: 1px solid var(--mg-ring); border-radius: 11px; background: #fbfefc; padding: 13px 15px; }
+.mg-adm-plan-h { font-size: 13.5px; color: var(--mg-muted); }
+.mg-adm-plan-h b { color: var(--mg-deep); font-weight: 800; font-variant-numeric: tabular-nums; }
+.mg-adm-plan-b { margin-top: 5px; font-size: 12px; font-weight: 700; color: var(--mg-faint); }
+/* Reuses the buyer's rung so the DM is looking at the real thing, but compacted
+   and widened to four columns — the stock rung is a 3-column grid, and the
+   before-value is a fourth child that would otherwise wrap to its own row. */
+.mg-adm-sample { margin-top: 14px; display: flex; flex-direction: column; gap: 7px; }
+.mg-adm-sample .mg-rung { grid-template-columns: 4px 1fr auto auto; align-items: center; }
+.mg-adm-sample .mg-rung-body { padding: 9px 13px; }
+.mg-adm-sample .mg-rung-name { font-size: 13px; }
+.mg-adm-sample .mg-rung-val { padding: 0 15px 0 10px; font-size: 22px; letter-spacing: -.02em; }
+.mg-adm-was {
+    font-size: 12.5px; font-weight: 700; color: var(--mg-faint); text-decoration: line-through;
+    font-variant-numeric: tabular-nums;
+}
+.mg-adm-act { margin-top: 15px; display: flex; gap: 9px; }
+.mg-btn-go {
+    cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 750; color: #fff;
+    background: var(--mg-accent); border: 1px solid var(--mg-accent); border-radius: 9px; padding: 9px 17px;
+}
+.mg-btn-go[disabled] { opacity: .55; cursor: default; }
+
+.mg-adj-list { display: flex; flex-direction: column; gap: 7px; }
+.mg-adj-row {
+    display: flex; align-items: center; gap: 11px; border: 1px solid var(--mg-line);
+    border-radius: 9px; padding: 9px 12px; font-size: 12.5px; flex-wrap: wrap;
+}
+.mg-adj-scope { font-weight: 750; color: var(--slate-charcoal); }
+.mg-adj-delta {
+    font-weight: 800; font-variant-numeric: tabular-nums; color: var(--mg-deep);
+    background: var(--mg-accent-tint); border: 1px solid var(--mg-ring);
+    border-radius: 999px; padding: 1px 10px; font-size: 11.5px;
+}
+.mg-adj-cells { color: var(--mg-muted); }
+.mg-adj-rm {
+    margin-left: auto; cursor: pointer; font: inherit; font-size: 11px; font-weight: 700;
+    color: var(--mg-muted); background: #fff; border: 1px solid var(--mg-line);
+    border-radius: 7px; padding: 5px 11px;
+}
+.mg-adm-none {
+    border: 1px dashed var(--mg-line); border-radius: 9px; padding: 13px;
+    font-size: 12.5px; color: var(--mg-muted); background: #fbfcfd;
+}
+
+/* ---- tier rows ---- */
+.mg-tier-head, .mg-tier-row {
+    display: grid; grid-template-columns: 168px 250px 1fr 128px 76px; gap: 14px; align-items: center;
+}
+.mg-tier-head { padding: 0 11px 7px; }
+.mg-tier-head span {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: var(--mg-faint);
+}
+.mg-tier-row { padding: 9px 11px; border-top: 1px solid #f1f4f7; }
+.mg-tier-row:hover { background: #fcfdfd; }
+.mg-tier-name b { display: block; font-size: 14px; font-weight: 750; }
+.mg-tier-name span { font-size: 10.5px; color: var(--mg-faint); font-family: ui-monospace, monospace; }
+.mg-tier-pcts { display: flex; gap: 7px; }
+.mg-pct { position: relative; width: 76px; }
+.mg-pct em {
+    position: absolute; top: -12px; left: 1px; font-style: normal;
+    font-size: 8.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+}
+.mg-pct-s em { color: var(--mg-deep); }
+.mg-pct-t em { color: var(--mg-amber); }
+.mg-pct-m em { color: var(--mg-red); }
+.mg-pct input {
+    box-sizing: border-box; width: 100%; font: inherit; font-size: 14px; font-weight: 750;
+    font-variant-numeric: tabular-nums; text-align: center; color: var(--slate-charcoal);
+    border: 1px solid var(--mg-line); border-radius: 8px; padding: 6px 4px; background: #fff;
+}
+.mg-pct-s input { border-color: var(--mg-ring); background: #fbfefc; }
+.mg-pct-t input { border-color: var(--mg-amber-line); background: #fffdf8; }
+.mg-pct-m input { border-color: var(--mg-red-line, #f2cfcf); background: #fffbfb; }
+.mg-spread { position: relative; height: 6px; border-radius: 4px; background: #eef2f5; }
+.mg-spread-fill { position: absolute; top: 0; bottom: 0; border-radius: 4px; background: #dcebe2; }
+.mg-spread i {
+    position: absolute; top: -3px; width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid #fff; transform: translateX(-6px);
+}
+.mg-mk-s { background: var(--mg-accent); }
+.mg-mk-t { background: #d98324; }
+.mg-mk-m { background: var(--mg-red); }
+.mg-tier-reach { font-size: 11.5px; color: var(--mg-muted); }
+.mg-tier-reach b { font-size: 14px; font-weight: 800; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
+.mg-reachbar { display: block; height: 3px; border-radius: 3px; background: #eef2f5; margin-top: 5px; }
+.mg-reachbar span { display: block; height: 100%; border-radius: 3px; background: #9fcfb3; }
+.mg-tier-save { padding: 8px 0; width: 100%; }
+
+@media (max-width: 1000px) {
+    .mg-adm-grid { grid-template-columns: 1fr; }
+    .mg-tier-head { display: none; }
+    .mg-tier-row { grid-template-columns: 1fr; gap: 9px; }
+}
+
+/* Waiting on a projection. Dashed and grey on purpose: these placeholders have to
+   read as "nothing here yet" rather than as a value, because the whole point of
+   starting empty is that nothing on screen can be mistaken for an answer. */
+.mg-wait {
+    display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+    border: 1px dashed var(--mg-line); border-radius: 9px; background: #fbfcfd;
+    color: var(--mg-muted); font-size: 12.5px; font-weight: 600;
+}
+.mg-wait svg { width: 15px; height: 15px; stroke: var(--mg-faint); fill: none; stroke-width: 2; flex: none; }
+.mg-wait b { color: var(--mg-accent-deep); font-weight: 750; }
+.mg-wait-lad { justify-content: center; padding: 26px 20px; font-size: 13.5px; }
+
+/* One per row, so five grades line up instead of wrapping 2-2-1. */
+.mg-conds { display: grid; grid-template-columns: 1fr; gap: 6px; }
+.mg-cond {
+    display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+    font: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 12px; border-radius: 9px;
+    border: 1px solid var(--mg-line); background: #fbfcfd; color: var(--mg-muted); cursor: pointer;
+}
+.mg-cond::before {
+    content: ""; width: 7px; height: 7px; border-radius: 50%;
+    border: 1.5px solid var(--mg-faint); flex: none;
+}
+/* THE SELECTED CHIP — sage tint, not a black slab.
+   It used to be a solid #1a1c1e fill, which showed a faint hairline just inside its
+   edge on Ethan's machine. That was never reproducible here (software raster, GPU
+   raster via SwiftShader, seven display scales, sub-pixel offsets and a pixel-level
+   scan all came back crisp), and five attempts at the boundary — transparent
+   border, same-ink seal, no border at all — didn't shift it. It only ever appeared
+   on this one element because it was the only high-contrast fill in the rail: a
+   black-on-white edge is where any rasterisation artifact becomes visible.
+   So the high-contrast edge is gone. A tinted fill with a ring and a 3px accent
+   marker reads just as clearly as "this one is selected", has no black-on-white
+   boundary anywhere, and matches the airy palette the rest of the tool uses. The
+   luminance step at the chip's edge drops from ~227 to ~12, which is well below
+   anything a 1px artifact could show up against. */
+.mg-cond[aria-pressed="true"] {
+    background: var(--mg-accent-tint);
+    border: 1px solid var(--mg-ring);
+    color: var(--slate-charcoal);
+    font-weight: 750;
+    box-shadow: inset 3px 0 0 var(--mg-accent);
+}
+/* Keep the marker under the focus halo, or focusing the selected chip would drop it. */
+.mg-cond[aria-pressed="true"]:focus-visible {
+    box-shadow: inset 3px 0 0 var(--mg-accent), 0 0 0 3px rgba(31, 157, 87, .30);
+}
+.mg-cond[aria-pressed="true"]::before { background: var(--mg-accent); border-color: var(--mg-accent); }
+.mg-cond[disabled] {
+    opacity: .45; cursor: not-allowed; background: transparent;
+    text-decoration: line-through; text-decoration-thickness: 1px;
+}
+/* Focus ring as a soft OUTER halo, not a hairline hugging the edge.
+   At `outline: 2px solid accent; outline-offset: 1px` the ring sat one pixel off the
+   chip, which on the black selected chip read as a stray inner border — reported as
+   "a fake border within the black card, like it's highlighted with a cursor". A halo
+   is unmistakably a focus state rather than part of the chip.
+   The transparent outline is deliberate: box-shadow is dropped in forced-colors /
+   high-contrast mode, and the outline becomes visible there, so focus is never lost. */
+.mg-cond:focus-visible {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 3px rgba(31, 157, 87, .30);
+}
+.mg-nobuy {
+    font-size: 12px; color: var(--mg-muted); background: var(--mg-chip);
+    border: 1px dashed var(--mg-line); border-radius: 8px; padding: 8px 10px;
+}
+/* Quiet by design: useful when you need it, invisible when you don't. It must not
+   compete with the pickers above it, which are the actual job.
+   NO border-top: the rail already has its own border, and a rule across the foot
+   closed the fourth side of a rectangle around the condition list — it read as a
+   stray box drawn around the filter. Whitespace separates it perfectly well. */
+.mg-missing {
+    margin: 10px 0 0; font-size: 11.5px; line-height: 1.55; color: var(--mg-faint);
+}
+.mg-missing .mg-inline-link { font-size: 11.5px; color: var(--mg-muted); }
+.mg-missing .mg-inline-link:hover { color: var(--mg-accent-deep); }
+
+/* ---- "What it says": the coaching text editor -----------------------------
+   Four help sections in a responsive two-up grid, then rebuttals full width
+   underneath (they carry three fields each and don't fit a column). Rows show
+   their Save affordance only once edited — .mg-dirty is set both by the render
+   (draft differs from what's stored) and live by mgTextDraft() on the first
+   keystroke, so it appears without a re-render stealing the caret. */
+.mg-adm-text { max-width: 1180px; }
+.mg-tpick { display: flex; gap: 14px; align-items: flex-end; margin-bottom: 14px; max-width: 420px; }
+.mg-tpick .mg-field { flex: 1; }
+.mg-tshared {
+    display: block; font-size: 12.5px; line-height: 1.5; color: #8a5a12;
+    background: #fdf6e7; border: 1px solid #f2e0b8; border-radius: 10px;
+    padding: 11px 14px; margin-bottom: 16px;
+}
+.mg-tshared b { color: #7a4e0a; }
+
+/* Mirrors the buyer's own layout, which is what makes this editable at a glance:
+   the hero card runs full width above (exactly where it appears above the ladder),
+   and the three lists sit as three columns (exactly the buyer's right-hand rail).
+   align-items:start so a short list doesn't get stretched to its neighbour's
+   height — that left a slab of dead white space under "Before you buy". */
+.mg-tsecs {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px; align-items: start;
+}
+.mg-tsec-gates { grid-column: 1 / -1; }
+.mg-tsec {
+    border: 1px solid var(--mg-line); border-radius: 12px; background: #fff;
+    padding: 14px 16px 16px; min-width: 0;
+}
+/* Full width, so the add box can sit beside the list rather than under it. */
+.mg-tsec-gates .mg-tsec-hint { max-width: 88ch; }
+.mg-tsec-h { display: flex; align-items: center; gap: 9px; }
+.mg-tsec-h h4 { margin: 0; font-size: 13.5px; font-weight: 800; letter-spacing: -.01em; color: var(--slate-charcoal); }
+.mg-tsec-n {
+    margin-left: auto; font-size: 11px; font-weight: 800; color: var(--mg-muted);
+    background: #f4f7f9; border-radius: 999px; padding: 2px 9px; font-variant-numeric: tabular-nums;
+}
+.mg-tsec-ic {
+    display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px;
+    background: var(--mg-accent-tint); color: var(--mg-deep); flex: none;
+}
+.mg-tsec-ic svg { width: 14px; height: 14px; }
+/* The hero-card section is the one that voids a deal, so it reads as a warning
+   rather than as another list. */
+.mg-tsec-warn { background: #fdecec; color: #c1332c; }
+.mg-tsec-hint { margin: 8px 0 12px; font-size: 11.5px; line-height: 1.55; color: var(--mg-muted); }
+
+.mg-trows { display: flex; flex-direction: column; gap: 8px; }
+.mg-trow {
+    display: grid; grid-template-columns: 20px 1fr; gap: 8px 9px; align-items: start;
+    border: 1px solid var(--mg-line); border-radius: 10px; padding: 9px 10px; background: #fdfefe;
+}
+.mg-trow.mg-dirty { border-color: var(--mg-ring); background: #fbfefc; }
+.mg-trow-ord { display: flex; flex-direction: column; gap: 3px; }
+.mg-ord {
+    cursor: pointer; font: inherit; font-size: 8px; line-height: 1; width: 20px; height: 16px;
+    color: var(--mg-faint); background: #fff; border: 1px solid var(--mg-line); border-radius: 5px;
+}
+.mg-ord:hover:not([disabled]) { color: var(--mg-deep); border-color: var(--mg-ring); }
+.mg-ord[disabled] { opacity: .3; cursor: default; }
+.mg-tbody {
+    font: inherit; font-size: 12.5px; line-height: 1.5; color: var(--slate-charcoal);
+    border: 1px solid transparent; border-radius: 7px; padding: 4px 6px; background: transparent;
+    resize: vertical; min-width: 0; width: 100%;
+}
+.mg-tbody:focus { outline: none; border-color: var(--mg-ring); background: #fff; }
+.mg-trow-acts {
+    grid-column: 2; display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+}
+/* Save/Undo stay out of the way until the row is actually edited — 600-odd rows
+   across the catalog, and a Save button on every one of them is just noise. */
+.mg-trow .mg-tsave, .mg-trow .mg-tbtn { display: none; }
+.mg-trow.mg-dirty .mg-tsave, .mg-trow.mg-dirty .mg-tbtn { display: inline-flex; }
+.mg-trow .mg-tbtn:first-of-type { display: inline-flex; }   /* Pin / Unpin is always available */
+.mg-tsave { padding: 6px 13px; font-size: 11.5px; }
+.mg-tbtn {
+    cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; color: var(--mg-muted);
+    background: #fff; border: 1px solid var(--mg-line); border-radius: 7px; padding: 5px 10px;
+    align-items: center;
+}
+.mg-tbtn:hover { color: var(--mg-deep); border-color: var(--mg-ring); }
+.mg-tmust { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; color: var(--mg-muted); cursor: pointer; }
+.mg-tmust input { accent-color: var(--mg-accent); }
+.mg-tdel {
+    margin-left: auto; cursor: pointer; font: inherit; font-size: 15px; line-height: 1;
+    color: var(--mg-faint); background: none; border: none; padding: 2px 5px; border-radius: 6px;
+}
+.mg-tdel:hover { color: #dc2626; background: #fdecec; }
+.mg-tadd {
+    display: flex; align-items: flex-start; gap: 8px; margin-top: 10px;
+    border-top: 1px dashed var(--mg-line); padding-top: 11px;
+}
+.mg-tadd .mg-tbody { border: 1px solid var(--mg-line); background: #fff; }
+.mg-tadd .mg-btn-go { padding: 8px 14px; font-size: 11.5px; flex: none; }
+
+/* ---- rebuttal cards ---- */
+.mg-tsec-reb { margin-top: 16px; }
+.mg-rcard {
+    border: 1px solid var(--mg-line); border-radius: 11px; padding: 12px 13px;
+    background: #fdfefe; margin-bottom: 10px;
+}
+.mg-rcard.mg-dirty { border-color: var(--mg-ring); background: #fbfefc; }
+.mg-rcard-top { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
+.mg-rcard-top .mg-trow-ord { flex-direction: row; }
+.mg-rname {
+    flex: 1; font: inherit; font-size: 13px; font-weight: 750; color: var(--slate-charcoal);
+    border: 1px solid transparent; border-radius: 7px; padding: 5px 7px; background: transparent; min-width: 0;
+}
+.mg-rname:focus { outline: none; border-color: var(--mg-ring); background: #fff; }
+.mg-rfield { display: block; margin-bottom: 9px; }
+.mg-rfield em {
+    display: block; font-style: normal; font-size: 10px; font-weight: 800;
+    letter-spacing: .07em; text-transform: uppercase; color: var(--mg-faint); margin-bottom: 4px;
+}
+.mg-rfield em i { font-style: normal; font-weight: 650; letter-spacing: 0; text-transform: none; }
+.mg-rfield textarea {
+    width: 100%; font: inherit; font-size: 12.5px; line-height: 1.5; color: var(--slate-charcoal);
+    border: 1px solid var(--mg-line); border-radius: 8px; padding: 7px 9px; background: #fff; resize: vertical;
+}
+.mg-rfield textarea:focus { outline: none; border-color: var(--mg-ring); }
+.mg-rconds { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 10px 0 4px; }
+.mg-rconds-l { font-size: 11px; font-weight: 700; color: var(--mg-faint); margin-right: 2px; }
+.mg-rconds-l b { color: var(--mg-muted); }
+.mg-ctag {
+    cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; color: var(--mg-muted);
+    background: #fff; border: 1px solid var(--mg-line); border-radius: 999px; padding: 4px 11px;
+}
+.mg-ctag:hover { border-color: var(--mg-ring); }
+.mg-ctag.on { background: #1a1c1e; border-color: #1a1c1e; color: #fff; }
+.mg-rcard-acts { display: flex; gap: 8px; margin-top: 10px; }
+.mg-rcard-acts .mg-btn-go { padding: 7px 15px; font-size: 11.5px; }
+.mg-radd { margin-top: 16px; border-top: 1px dashed var(--mg-line); padding-top: 14px; }
+.mg-radd .mg-rcard { margin-bottom: 0; }
+
+@media (max-width: 1080px) {
+    .mg-tsecs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+    .mg-tsecs { grid-template-columns: 1fr; }
+    .mg-tpick { max-width: none; }
+}
+
+/* ---- centre column ---- */
+.mg-mid { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.mg-crumb { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; padding: 0 2px; }
+.mg-crumb b { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+.mg-crumb span { font-size: 13px; color: var(--mg-muted); }
+.mg-crumb i { width: 4px; height: 4px; border-radius: 50%; background: var(--mg-faint); display: block; }
+
+/* Preconditions on the deal, not tips. Amber not red: this is "stop and check",
+   not "something is broken". */
+.mg-gates {
+    border: 1px solid var(--mg-amber-line); border-left: 3px solid var(--mg-amber);
+    border-radius: 11px; background: var(--mg-amber-tint); padding: 13px 16px;
+}
+.mg-gates-h {
+    display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 800;
+    letter-spacing: .09em; text-transform: uppercase; color: var(--mg-amber); margin-bottom: 9px;
+}
+.mg-gates-h svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
+.mg-gates ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.mg-gates li {
+    font-size: 13.5px; line-height: 1.45; font-weight: 600; color: #7c4a12;
+    padding-left: 15px; position: relative;
+}
+.mg-gates li::before {
+    content: ""; position: absolute; left: 0; top: .55em; width: 5px; height: 5px;
+    border-radius: 50%; background: var(--mg-amber);
+}
+
+/* No card of its own: each rung already carries a border and a fill, so an outer
+   container just nested one box in another and inset the rungs, leaving them
+   narrower than the Before-you-buy card above. Bare flex column keeps the gate
+   card and every rung on exactly the same left and right edges. */
+.mg-ladder { display: flex; flex-direction: column; gap: 9px; }
+.mg-rung {
+    display: grid; grid-template-columns: 4px 1fr auto; align-items: stretch;
+    border: 1px solid var(--mg-line); border-radius: 11px; overflow: hidden;
+}
+.mg-rung-stripe { background: var(--mg-line); }
+.mg-rung-body { padding: 15px 17px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mg-rung-name { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+.mg-rung-sub { font-size: 12.5px; color: var(--mg-muted); }
+/* Percentage headlines at the original 38px; the dollar figure sits under it as
+   the saved arithmetic. Both inherit the rung's colour, so the <em> only needs to
+   step down in size and weight to read as secondary.
+   The DM editor's sample rung reuses .mg-rung with bare text and no <b>, which is
+   why the size lives on the child rather than the container — .mg-adm-sample sets
+   its own font-size and still works. */
+.mg-rung-val {
+    display: flex; flex-direction: column; align-items: flex-end; justify-content: center;
+    padding: 0 22px; font-variant-numeric: tabular-nums; line-height: 1.05;
+}
+.mg-rung-val b { font-size: 38px; font-weight: 700; letter-spacing: -.035em; }
+.mg-rung-val em {
+    font-style: normal; font-size: 14px; font-weight: 800; letter-spacing: -.01em;
+    opacity: .82; margin-top: 4px; white-space: nowrap;
+}
+.mg-rung-start { background: var(--mg-accent-tint); border-color: var(--mg-ring); }
+.mg-rung-start .mg-rung-stripe { background: var(--mg-accent); }
+.mg-rung-start .mg-rung-name, .mg-rung-start .mg-rung-val { color: var(--mg-accent-deep); }
+.mg-rung-team { background: var(--mg-amber-tint); border-color: var(--mg-amber-line); }
+.mg-rung-team .mg-rung-stripe { background: var(--mg-amber); }
+.mg-rung-team .mg-rung-name, .mg-rung-team .mg-rung-val { color: var(--mg-amber); }
+.mg-rung-mgr { background: var(--mg-red-tint); border-color: var(--mg-red-line); }
+.mg-rung-mgr .mg-rung-stripe { background: var(--mg-red); }
+.mg-rung-mgr .mg-rung-name, .mg-rung-mgr .mg-rung-val { color: var(--mg-red); }
+@media (max-width: 620px) {
+    .mg-rung { grid-template-columns: 4px 1fr; }
+    .mg-rung-val { padding: 0 17px 14px; font-size: 32px; }
+}
+
+/* Flat cash per item (Video Games under $20). A percentage ladder is the wrong
+   shape for it, so it gets its own card rather than three fudged rungs. */
+.mg-flat {
+    display: flex; flex-direction: column; gap: 4px; padding: 20px 22px;
+    border: 1px solid var(--mg-ring); border-radius: 12px; background: var(--mg-accent-tint);
+}
+.mg-flat-lab {
+    font-size: 10.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--mg-accent-deep);
+}
+.mg-flat-val {
+    font-size: 40px; font-weight: 700; letter-spacing: -.035em; line-height: 1.05;
+    color: var(--mg-accent-deep); font-variant-numeric: tabular-nums;
+}
+.mg-flat-note { font-size: 13px; color: var(--mg-muted); }
+
+/* ---- right column + rebuttals share the panel chrome ---- */
+.mg-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.mg-hp {
+    border: 1px solid var(--mg-line); border-radius: 12px; background: #fff; overflow: hidden;
+    box-shadow: 0 2px 4px rgba(16,24,40,.05);
+}
+.mg-hp-h {
+    display: flex; align-items: center; gap: 9px; padding: 11px 14px;
+    background: var(--mg-hdr); border-bottom: 1px solid var(--mg-ring);
+}
+.mg-hp-h h4 {
+    margin: 0; font-size: 11.5px; font-weight: 800; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--mg-accent-deep);
+}
+.mg-ico { width: 15px; height: 15px; stroke: var(--mg-accent-deep); fill: none; stroke-width: 1.9; flex: none; }
+.mg-ct {
+    margin-left: auto; font-size: 10.5px; font-weight: 700; color: var(--mg-accent-deep);
+    opacity: .7; font-variant-numeric: tabular-nums;
+}
+.mg-hp-b { padding: 13px 15px; }
+.mg-bl { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 11px; }
+.mg-bl li { font-size: 14px; line-height: 1.5; padding-left: 17px; position: relative; }
+.mg-bl li::before {
+    content: ""; position: absolute; left: 0; top: .5em; width: 6px; height: 6px;
+    border-radius: 50%; background: var(--mg-accent); box-shadow: 0 0 0 3px var(--mg-accent-tint);
+}
+.mg-bl li.mg-must-li { font-weight: 600; }
+.mg-bl li.mg-must-li::before { background: var(--mg-red); box-shadow: 0 0 0 3px var(--mg-red-tint); }
+.mg-bl li.mg-empty { color: var(--mg-faint); font-style: italic; }
+.mg-bl li.mg-empty::before { background: var(--mg-line); box-shadow: none; }
+.mg-must {
+    display: inline-block; font-size: 9px; font-weight: 800; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--mg-red); background: var(--mg-red-tint);
+    border: 1px solid var(--mg-red-line); padding: 1px 5px; border-radius: 4px;
+    margin-right: 6px; vertical-align: 1px;
+}
+
+.mg-rb-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 1300px) { .mg-rb-grid { grid-template-columns: 1fr; } }
+.mg-rb {
+    border: 1px solid var(--mg-line); border-radius: 10px; padding: 12px 14px; background: #fbfcfd;
+    display: flex; flex-direction: column; gap: 8px;
+}
+.mg-rb-top { display: flex; align-items: center; gap: 8px; }
+.mg-rb-dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--mg-accent); flex: none;
+    box-shadow: 0 0 0 3px var(--mg-accent-tint);
+}
+.mg-rb-name { font-size: 13.5px; font-weight: 750; }
+.mg-rb-tag {
+    font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    padding: 2px 6px; border-radius: 4px; background: var(--mg-blue-tint); color: var(--mg-blue);
+}
+.mg-rb-tag:last-child { margin-left: auto; }
+.mg-rb-say { font-size: 14.5px; line-height: 1.52; border-left: 2.5px solid var(--mg-accent); padding-left: 12px; }
+.mg-rb-why { font-size: 12px; line-height: 1.45; color: var(--mg-muted); }
+.mg-rb-why b {
+    font-weight: 800; color: var(--mg-faint); text-transform: uppercase;
+    letter-spacing: .07em; font-size: 9.5px; margin-right: 4px;
 }
