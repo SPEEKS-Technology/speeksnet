@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260731u">
+  <link rel="stylesheet" href="styles.css?v=20260801q">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260731u" defer></script>
+  <script src="speeks.js?v=20260801q" defer></script>
 </head>
 
 <body class="preload">
@@ -157,7 +157,7 @@
 
         <div class="checkbox-wrapper">
             <input type="checkbox" id="annPriorityInput" class="custom-checkbox">
-            <label for="annPriorityInput" class="checkbox-label">🚨 Mark as High Priority (Highlights in Red for all Stores)</label>
+            <label for="annPriorityInput" class="checkbox-label">Mark as High Priority (Highlights in Red for all Stores)</label>
         </div>
 
         <div class="editor-container">
@@ -178,7 +178,7 @@
             <label class="form-label-caps">Attach Document <span style="font-weight:400;text-transform:none;color:#888;">(optional — Word, PDF, Excel · max 10 MB)</span></label>
             <div class="ann-doc-dropzone" id="annDocDropzone">
                 <input type="file" id="annDocInput" accept=".doc,.docx,.pdf,.xls,.xlsx" style="display:none;" onchange="onAnnDocSelected(this)">
-                <button type="button" class="ann-doc-browse-btn" onclick="document.getElementById('annDocInput').click()">📎 Browse File</button>
+                <button type="button" class="ann-doc-browse-btn" onclick="document.getElementById('annDocInput').click()">Browse File</button>
                 <span id="annDocFileName" class="ann-doc-filename">No file selected</span>
                 <button type="button" id="annDocClear" class="ann-doc-clear" style="display:none;" onclick="clearAnnDoc()">✖</button>
             </div>
@@ -187,7 +187,7 @@
 
     <div class="manage-footer flex-end">
         <button id="publishAnnBtn" class="btn-primary" onclick="publishAnnouncement()">
-            <span class="align-center gap-8">Publish to All Stores 🚀</span>
+            <span class="align-center gap-8">Publish to All Stores</span>
         </button>
     </div>
 </div>
@@ -550,6 +550,11 @@
         </div>
         <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
+    <!-- Filing a document straight into this view — no announcement goes out.
+         Rendered by _annRenderDocAdd(); empty for anyone without the role, and
+         outside #annDocsList so a re-render of the list can't wipe a half-filled
+         form. -->
+    <div id="annDocsAdd" class="ann-docs-add-host"></div>
     <!-- Search lives OUTSIDE #annDocsList: loadAnnouncementDocs() rewrites that list on
          every keystroke, so an input inside it would be destroyed mid-type. -->
     <div class="ann-docs-search">

@@ -38,7 +38,15 @@ const json = (body: unknown, status = 200) =>
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 
+// Two spellings of the same role exist in the codebase: the session stores
+// "district manager" (a space — see speeks.js, which compares against that), while
+// Feature Access keys it "district-manager". This list was written in the Feature
+// Access spelling but is checked against the session value, so EVERY DM write was
+// rejected while the CEO's went through. Normalize instead of picking a side, so
+// either spelling authorizes and a future caller can't reintroduce the mismatch.
 const EDIT_ROLES = ["district-manager", "ceo", "tom"];
+const normRole = (r: unknown) =>
+  String(r ?? "").toLowerCase().trim().replace(/[\s_]+/g, "-");
 
 // An adjustment applies to a cell when every filter it sets matches. A null filter
 // means "any", so {condition: 'NEW'} alone covers new-in-box on all 40 devices.
@@ -199,9 +207,9 @@ Deno.serve(async (req: Request) => {
     try { body = JSON.parse(await req.text()); }
     catch { return json({ success: false, error: "Invalid JSON" }, 400); }
 
-    const role = String(body.role || "").toLowerCase();
+    const role = normRole(body.role);
     if (!EDIT_ROLES.includes(role)) {
-      return json({ success: false, error: "Not authorized to edit the margin ladder" }, 403);
+      return json({ success: false, error: "Not authorized to edit the Margin Guide" }, 403);
     }
 
     // Retune a tier — every band row pointing at it moves with it.
@@ -244,6 +252,35 @@ Deno.serve(async (req: Request) => {
         }, { onConflict: "band_id,condition" });
         if (error) return json({ success: false, error: error.message }, 500);
       }
+      await broadcastChange("marginguide");
+      return json({ success: true });
+    }
+
+    // Flat-pay bands (the two Video Games rows) carry dollars per item instead of
+    // a tier, so no tier or adjustment action can reach them — this is the only
+    // way they are editable at all.
+    if (body.action === "saveBand" && body.band_id) {
+      const low = Number(body.flat_low), high = Number(body.flat_high);
+      if (![low, high].every(Number.isFinite)) {
+        return json({ success: false, error: "Both dollar amounts are required" }, 400);
+      }
+      if (low < 0 || high < low) {
+        return json({
+          success: false,
+          error: "The high end has to be at least the low end, and neither can be negative.",
+        }, 400);
+      }
+      // Guard the pay_mode rather than trusting the caller: writing flat dollars
+      // onto a percent band would leave a row the resolver silently ignores.
+      const { data: band, error: readErr } = await supabase.from("mg_bands")
+        .select("pay_mode").eq("id", Number(body.band_id)).single();
+      if (readErr) return json({ success: false, error: readErr.message }, 500);
+      if (band?.pay_mode !== "flat") {
+        return json({ success: false, error: "That band pays on the tier ladder, not a flat amount." }, 400);
+      }
+      const { error } = await supabase.from("mg_bands")
+        .update({ flat_low: low, flat_high: high }).eq("id", Number(body.band_id));
+      if (error) return json({ success: false, error: error.message }, 500);
       await broadcastChange("marginguide");
       return json({ success: true });
     }

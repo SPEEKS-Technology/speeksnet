@@ -450,7 +450,9 @@ async function loadCMS() {
                         </div>
                     </div>`;
 
-                hubAnn.push({ kind: 'ann', read: isRead, hidden: isHidden, priority: parsed.priority, dateMs, html: cardHtml });
+                // rowId is carried so a read recorded after this build (reacting,
+                // for one) can find and patch its own entry without a refetch.
+                hubAnn.push({ kind: 'ann', rowId: annId, read: isRead, hidden: isHidden, priority: parsed.priority, dateMs, html: cardHtml });
             });
 
             feedAnnouncementsToTicker(showBadge ? sortedAnns.slice(0, 2) : []);
@@ -463,12 +465,16 @@ async function loadCMS() {
 
         const badge = document.getElementById('notifBadge');
         if (badge) {
+            // cleanUser, not currentUser: updateMainBadge() and _samMarkAnnRead()
+            // read this flag under the lowercased name, matching speeksLocalRead_.
+            // Written under the raw name it was a different key, so every
+            // updateMainBadge() call saw "no unread" and cleared the dot.
             if (showBadge) {
-                if (currentUser) localStorage.setItem('speeksUnreadAnnouncements_' + currentUser, 'true');
+                if (cleanUser) localStorage.setItem('speeksUnreadAnnouncements_' + cleanUser, 'true');
                 badge.style.display = 'block';
                 badge.classList.add('active');
             } else {
-                if (currentUser) localStorage.removeItem('speeksUnreadAnnouncements_' + currentUser);
+                if (cleanUser) localStorage.removeItem('speeksUnreadAnnouncements_' + cleanUser);
                 updateMainBadge(); // keep dot alive if patch notes are also unseen
             }
         }
@@ -550,7 +556,21 @@ function toggleNotifs() {
         loadPatchNotes();    // fetch patch notes, mark seen, re-render
     }
 }
-function toggleCalendar() { toggleModal('calendarDropdown'); }
+// The Google embed is a snapshot: the iframe fetches once when the page loads and
+// never refetches, so an edit made in Google after that never appears until a full
+// page reload. Force a fresh load every time the modal is opened by swapping in a
+// clone of the frame — replacing the node is what actually restarts the load, and
+// unlike appending a cache-buster to the URL it can't upset the embed's own params.
+// (Cross-origin means we can't reach inside the frame to reload it directly.)
+function toggleCalendar() {
+    const modal = document.getElementById('calendarDropdown');
+    const frame = modal && modal.querySelector('iframe');
+    // Only on the way in — reloading as it closes would just burn a fetch.
+    if (frame && modal && !modal.classList.contains('show')) {
+        frame.replaceWith(frame.cloneNode(true));
+    }
+    toggleModal('calendarDropdown');
+}
 function toggleIdeaModal() {
     // Pre-fill the submitter's name from their session so they don't retype it.
     const nameEl = document.getElementById('ideaName');
@@ -597,6 +617,9 @@ function openDocsModal() {
     const box = document.getElementById('annDocsSearch');
     if (box) box.value = '';
     _annDocsTab = 'goals';
+    // Never reopen onto a half-filled add form from last time.
+    _annDocAdd = { open: false, busy: false, file: null };
+    _annRenderDocAdd();
     loadAnnouncementDocs();
 }
 
@@ -622,6 +645,15 @@ const _annTitleOf = item => {
 const _annIsGoalsDoc = item =>
     _ANN_GOALS_RE.test(String(item.docName || '')) || _ANN_GOALS_RE.test(_annTitleOf(item));
 
+// DM and CEO only (Ethan, 2026-08-01) — deliberately NARROWER than the
+// Announcements tool itself, which also opens to Tom and the Owner (Manager).
+// Posting an announcement is a one-way act; the Documents list is shared state
+// everyone reads from, and removing from it takes a file away from every store.
+// The edge function enforces the same two roles, so this is presentation only.
+const _ANN_DOC_ROLES = new Set(['district manager', 'ceo']);
+const annCanManageDocs = () =>
+    _ANN_DOC_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
+
 function _annDocCard(item) {
     const date = item.date ? new Date(item.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : '';
     const ext = (item.docName || '').split('.').pop().toUpperCase();
@@ -631,6 +663,8 @@ function _annDocCard(item) {
     // carry it when it differs from the file name.
     const title = _annTitleOf(item).trim();
     const name = item.docName || 'Attached Document';
+    // Demo rows (#docsdemo) aren't real and have no row to remove.
+    const removable = annCanManageDocs() && item.rowId && !item._demo;
     return `
         <div class="ann-doc-card">
             <div class="ann-doc-badge" style="background:${badgeColor};">${ext || 'FILE'}</div>
@@ -639,7 +673,155 @@ function _annDocCard(item) {
                 <div class="ann-doc-card-meta">${title && title !== name ? escapeHtml(title) + ' · ' : ''}${escapeHtml(item.author || '')}${date ? ` · ${date}` : ''}</div>
             </div>
             <a href="${item.docUrl}" target="_blank" rel="noopener" class="ann-doc-dl-btn">⬇ Download</a>
+            ${removable ? `<button type="button" class="ann-doc-del" title="Remove from Documents"
+                onclick="annRemoveDoc('${item.rowId}', this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>` : ''}
         </div>`;
+}
+
+/* ---- filing a document straight into this view -----------------------------
+ * The file goes to the same ann-docs bucket the announcement composer uploads to;
+ * the edge function then records it as a doc_only announcements row, which keeps
+ * it out of the board and the feed while leaving it in this list.
+ */
+let _annDocAdd = { open: false, busy: false, file: null };
+
+function annDocAddToggle() {
+    _annDocAdd.open = !_annDocAdd.open;
+    if (!_annDocAdd.open) _annDocAdd.file = null;
+    _annRenderDocAdd();
+}
+
+function annDocAddPicked(input) {
+    _annDocAdd.file = (input.files && input.files[0]) || null;
+    const nameEl = document.getElementById('annDocAddName');
+    if (nameEl) nameEl.textContent = _annDocAdd.file ? _annDocAdd.file.name : 'No file selected';
+    // Save people typing the title twice — the file name minus its extension is
+    // right often enough to be worth offering, and it's editable.
+    const titleEl = document.getElementById('annDocAddTitle');
+    if (titleEl && !titleEl.value.trim() && _annDocAdd.file) {
+        titleEl.value = _annDocAdd.file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
+    }
+}
+
+function _annRenderDocAdd() {
+    const host = document.getElementById('annDocsAdd');
+    if (!host) return;
+    if (!annCanManageDocs()) { host.innerHTML = ''; host.style.display = 'none'; return; }
+    host.style.display = '';
+    if (!_annDocAdd.open) {
+        host.innerHTML = `<button type="button" class="ann-doc-add-btn" onclick="annDocAddToggle()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add a document</button>`;
+        return;
+    }
+    host.innerHTML = `<div class="ann-doc-add">
+        <div class="ann-doc-add-h">
+          <b>Add a document</b>
+          <span>Filed here only &mdash; no announcement goes out.</span>
+        </div>
+        <input type="text" id="annDocAddTitle" class="ann-doc-add-title" maxlength="100"
+               placeholder="Title &mdash; e.g. August Goals &amp; Bonuses" autocomplete="off">
+        <div class="ann-doc-add-row">
+          <input type="file" id="annDocAddFile" accept=".doc,.docx,.pdf,.xls,.xlsx" style="display:none;" onchange="annDocAddPicked(this)">
+          <button type="button" class="ann-doc-add-browse" onclick="document.getElementById('annDocAddFile').click()">Browse File</button>
+          <span class="ann-doc-add-fname" id="annDocAddName">No file selected</span>
+        </div>
+        <div class="ann-doc-add-acts">
+          <button type="button" class="ann-doc-add-save" onclick="annDocAddSave(this)">Add document</button>
+          <button type="button" class="ann-doc-add-cancel" onclick="annDocAddToggle()">Cancel</button>
+        </div>
+        <p class="ann-doc-add-note">Word, PDF or Excel &middot; max 10 MB. A title with
+          &ldquo;goals&rdquo;, &ldquo;bonus&rdquo; or similar files it under Goals &amp; Bonuses.</p>
+      </div>`;
+}
+
+const _ANN_DOC_MAX = 10 * 1024 * 1024;
+
+async function annDocAddSave(btn) {
+    if (_annDocAdd.busy) return;
+    const titleEl = document.getElementById('annDocAddTitle');
+    const title = titleEl ? titleEl.value.trim() : '';
+    const file = _annDocAdd.file;
+    if (!title) { alert('Give the document a title — that\'s what people scan this list for.'); return; }
+    if (!file)  { alert('Choose a file to upload.'); return; }
+    if (file.size > _ANN_DOC_MAX) { alert('That file is over 10 MB. Please compress it or split it up.'); return; }
+
+    _annDocAdd.busy = true;
+    const label = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
+    try {
+        // Same bucket and same name-safing as the announcement composer, so the two
+        // paths can't drift into producing differently-shaped URLs.
+        const safeName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        const up = await fetch(`${_SUPABASE_URL}/storage/v1/object/ann-docs/${safeName}`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${_SUPABASE_ANON_KEY}`,
+                'apikey': _SUPABASE_ANON_KEY,
+                'Content-Type': file.type || 'application/octet-stream',
+                'x-upsert': 'true',
+            },
+            body: file,
+        });
+        if (!up.ok) throw new Error('Upload failed: ' + (await up.text()).slice(0, 200));
+
+        if (btn) btn.textContent = 'Saving…';
+        const res = await fetch(CMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'add_document',
+                title,
+                doc_url: `${_SUPABASE_URL}/storage/v1/object/public/ann-docs/${safeName}`,
+                doc_name: file.name,
+                author: sessionStorage.getItem('speeksUserName') || 'Executive Team',
+                role: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(),
+            }),
+        });
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok || out.success === false) throw new Error(out.error || 'Could not save the document.');
+
+        _annDocAdd = { open: false, busy: false, file: null };
+        // loadCMS re-reads the all-time documents list and re-renders this view.
+        await loadCMS();
+        _annRenderDocAdd();
+        loadAnnouncementDocs();
+    } catch (e) {
+        alert(e.message || 'Could not add the document.');
+    } finally {
+        _annDocAdd.busy = false;
+        if (btn) { btn.disabled = false; btn.textContent = label || 'Add document'; }
+    }
+}
+
+async function annRemoveDoc(rowId, btn) {
+    const item = _annDocsCache.find(d => String(d.rowId) === String(rowId));
+    if (!item) return;
+    // Two different consequences, so say which one this is before asking.
+    const msg = item.docOnly
+        ? `Remove "${item.docName || 'this document'}" from Documents?`
+        : `"${item.docName || 'This file'}" is attached to an announcement.\n\n` +
+          `Removing it takes the file off that post and out of Documents. The announcement itself stays.`;
+    if (!confirm(msg + '\n\nThe uploaded file is kept, so this can be undone by re-adding it.')) return;
+
+    if (btn) { btn.disabled = true; btn.style.opacity = '.5'; }
+    try {
+        const res = await fetch(CMS_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'remove_document', rowId,
+                role: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(),
+            }),
+        });
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok || out.success === false) throw new Error(out.error || 'Could not remove the document.');
+        await loadCMS();
+        loadAnnouncementDocs();
+    } catch (e) {
+        alert(e.message || 'Could not remove the document.');
+        if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+    }
 }
 
 // The document's own name, and nothing else. It previously also searched the
@@ -682,7 +864,8 @@ function loadAnnouncementDocs() {
     if (searchWrap) searchWrap.style.display = _annDocsCache.length ? 'flex' : 'none';
 
     if (!_annDocsCache.length) {
-        list.innerHTML = '<div style="padding:30px;text-align:center;color:#999;font-size:14px;">No documents have been attached to announcements yet.</div>';
+        list.innerHTML = `<div style="padding:30px;text-align:center;color:#999;font-size:14px;">
+            No documents yet.${annCanManageDocs() ? ' Use <b>Add a document</b> above to file one.' : ''}</div>`;
         return;
     }
     // Split into tabs FIRST, then search only the tab in front of you. The box filters
@@ -919,6 +1102,16 @@ window.toggleReaction = function(id, emoji) {
     // by pollReactions() every 15s, so on failure we just log rather than alert.
     postWrite(CMS_URL, payload)
         .catch(err => console.warn('reaction save failed:', err.message));
+
+    // Reacting IS reading — you can't pick an emoji for something you didn't
+    // read — so it marks the announcement read and saves the second click.
+    // Only on adding: removing a reaction implies an earlier add that already
+    // marked it, and un-reacting shouldn't hand the item back as unread.
+    if (payload.addEmoji) {
+        const card = container.closest('.hub-item');
+        // Reacting to something already read shouldn't cost a needless write.
+        if (!card || !card.classList.contains('read')) _annMarkReadInPlace(id);
+    }
 };
 
 window.toggleReactionPicker = function(id) {
@@ -4517,7 +4710,9 @@ async function mgLoad(opts) {
         // Unsaved wording from the last visit is not a draft worth keeping: it
         // would reappear over whatever the text says now, which may have moved on.
         _mgTextDrafts = {};
-        _mgAdmin.tDev = '';
+        _mgAdmin.deviceId = '';
+        _mgAdmin.cell = null;
+        _mgAdmin.pending.clear();
     }
     if (_mgCatalog) { mgRender(); return; }        // already have it — don't refetch
     try {
@@ -4590,14 +4785,49 @@ function _mgEnsureSelection() {
     }
 }
 
+/* The editor is a different place, not a mode of the guide, so the panel header
+ * says so: eyebrow, title and instruction line all swap, and the Manage button
+ * hands its slot to the way back. */
+const _MG_HEAD = {
+    guide: {
+        eyebrow: 'Buying Reference',
+        title: 'Margin Guide',
+        sub: 'Pick the item and its condition, enter your resale projection, and work the ladder from the top down.',
+    },
+    admin: {
+        eyebrow: 'Margin Guide',
+        title: 'Edit the guide',
+        sub: 'Pick an item to set what each condition pays and rewrite what the guide tells your buyers.',
+    },
+};
+function _mgSyncHead(admin) {
+    const copy = _MG_HEAD[admin ? 'admin' : 'guide'];
+    const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+    set('mg-eyebrow', copy.eyebrow);
+    set('mg-title', copy.title);
+    set('mg-sub', copy.sub);
+    // Class, not an inline style — Feature Access strips inline display from every
+    // non-overridden [data-feature] element, which would show this to everyone.
+    const manage = document.getElementById('mg-manage-btn');
+    if (manage) manage.classList.toggle('mg-can', mgCanEditLadder() && !admin);
+    const back = document.getElementById('mg-back-btn');
+    if (back) back.classList.toggle('mg-can', admin);
+
+    // Save rides in the header next to Back rather than in a bar at the bottom.
+    // The header pins itself while editing so scrolling down to the wording can
+    // never put queued cell changes out of reach.
+    const host = document.getElementById('mg-head-save');
+    if (host) host.innerHTML = admin ? _mgAdminBar() : '';
+    const head = document.querySelector('.mg-panel .mg-head');
+    if (head) head.classList.toggle('mg-head-stuck', admin);
+}
+
 function mgRender() {
     const body = document.getElementById('mg-body');
     if (!body || !_mgCatalog) return;
-    // Class, not an inline style — Feature Access strips inline display from every
-    // non-overridden [data-feature] element, which would show this to everyone.
-    const manageBtn = document.getElementById('mg-manage-btn');
-    if (manageBtn) manageBtn.classList.toggle('mg-can', mgCanEditLadder());
-    if (_mgAdmin.open && mgCanEditLadder()) { _mgRenderAdmin(body); return; }
+    const admin = _mgAdmin.open && mgCanEditLadder();
+    _mgSyncHead(admin);
+    if (admin) { _mgRenderAdmin(body); return; }
     _mgEnsureSelection();
 
     const device = _mgDevice();
@@ -4645,7 +4875,7 @@ function mgRender() {
                isn't there. Wired to the existing hotbar idea modal rather than a new
                form, so requests land where every other suggestion already goes. -->
           <p class="mg-missing">Item or category missing? Send it over with the
-            <button type="button" class="mg-inline-link" onclick="toggleIdeaModal()">Have an Idea</button>
+            <button type="button" class="mg-inline-link" onclick="toggleIdeaModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1V17h6v-.2c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2z"/></svg>Have an Idea</button>
             button and we'll add it.</p>
         </div>
 
@@ -4939,7 +5169,7 @@ function _startCbSync() {
 }
 
 /* ========================================================================== *
- * MARGIN GUIDE — DM editor ("Manage ladder")
+ * MARGIN GUIDE — DM editor (the "Edit" button)
  * --------------------------------------------------------------------------
  * Two ways to change the numbers, because the DM's two real needs work on
  * different axes:
@@ -4963,83 +5193,98 @@ function mgCanEditLadder() {
     return MG_EDIT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
 }
 
-// tDev is the Text tab's own device selection, deliberately NOT shared with the
-// slice picker above it. They mean different things — the slice fields are the
-// SCOPE of a percentage change and are legitimately left broad (category only,
-// or condition only), whereas the text tab always edits exactly one item's
-// wording. Sharing them would mean arriving at the Text tab with nothing
-// selected whenever the DM had been adjusting a whole category.
-let _mgAdmin = { open: false, tab: 'adjust', cat: '', deviceId: '', cond: '', bandId: '', delta: -5, busy: false, tDev: '' };
+/* ==========================================================================
+ * The DM editor: ONE WORKSPACE PER ITEM.
+ *
+ * Replaces the old three tabs (Adjust a slice / The ten tiers / What it says).
+ * Those modelled the implementation — a shared ladder plus a delta layer — while
+ * the DM is almost always thinking about one item. Three tabs meant three units
+ * of work, two separate item pickers, and three different save affordances.
+ *
+ * The lever is mg_band_conditions.tier_id: which tier this (band, condition)
+ * cell pays on. The edge fn has always had `assignTier`; nothing ever called it,
+ * so the most direct edit in the whole model was unreachable and the only ways
+ * to change a number were to retune a shared tier (moves every item using it) or
+ * build a scoped delta (never once used — mg_adjustments was empty).
+ *
+ * The ten tiers are no longer editable here at all. That is deliberate: with
+ * assignment as the only lever, NOTHING in this screen can move a cell belonging
+ * to another item. Retuning the ladder itself becomes a migration.
+ * ========================================================================== */
+let _mgAdmin = {
+    open: false,
+    deviceId: '',        // the item being edited
+    busy: false,
+    pickOpen: false,     // the item listbox in the header
+    cell: null,          // { bandId, cond } — which cell's tier popover is open
+    reb: null,           // id of the one expanded rebuttal (accordion, one at a time)
+    pending: new Map(),  // "bandId|cond" -> { from, to } queued cell moves
+};
+
+const _mgPendKey = (bandId, cond) => bandId + '|' + cond;
 
 function mgOpenAdmin() {
     if (!mgCanEditLadder()) return;
     _mgAdmin.open = true;
+    // Always arrive with the rebuttal list shut. Whichever one was open belonged
+    // to the last visit, and reopening onto a half-scrolled expanded card reads
+    // as the editor having remembered the wrong thing.
+    _mgAdmin.reb = null;
     // Inherit whatever the DM was already looking at as a buyer. They almost
     // always get here because something on the screen in front of them read
     // wrong, so preselecting that item saves re-finding it.
-    if (!_mgAdmin.tDev && _mgState.deviceId) _mgAdmin.tDev = String(_mgState.deviceId);
+    if (!_mgAdmin.deviceId && _mgState.deviceId) _mgAdmin.deviceId = String(_mgState.deviceId);
     mgRender();
 }
-function mgCloseAdmin() { _mgAdmin.open = false; mgRender(); }
-function mgAdminTab(tab) { _mgAdmin.tab = tab; mgRender(); }
-
-// Mirrors adjMatches() in the edge function. A null/empty filter means "any".
-function _mgAdjHits(a, category, deviceId, cond, bandId) {
-    return (!a.category || a.category === category)
-        && (!a.device_id || Number(a.device_id) === deviceId)
-        && (!a.condition || a.condition === cond)
-        && (!a.band_id || Number(a.band_id) === bandId);
-}
-
-// Every cell the current slice selection matches. Used for the live count, the
-// plan preview and the sample, so all three can never disagree.
-function _mgSliceCells() {
-    const sel = _mgAdmin;
-    const out = [];
-    _mgDevices().forEach(d => {
-        if (sel.cat && d.category !== sel.cat) return;
-        if (sel.deviceId && d.id !== Number(sel.deviceId)) return;
-        (d.bands || []).forEach(b => {
-            if (sel.bandId && b.id !== Number(sel.bandId)) return;
-            Object.keys(b.pct || {}).forEach(cond => {
-                if (sel.cond && cond !== sel.cond) return;
-                out.push({ device: d, band: b, cond, pct: b.pct[cond] });
-            });
-        });
-    });
-    return out;
-}
-
-// How many cells each tier carries, straight from the catalog — the same number
-// the function would report, without a round trip.
-function _mgTierCellCounts() {
-    const n = {};
-    _mgDevices().forEach(d => (d.bands || []).forEach(b =>
-        Object.values(b.conds || {}).forEach(t => { n[t] = (n[t] || 0) + 1; })));
-    return n;
-}
-
-// Same translate-don't-clamp rule as the edge function, so the preview matches
-// what will actually be saved.
-function _mgShift(s, t, m, delta) {
-    let a = s + delta, b = t + delta, c = m + delta;
-    if (c > 100) { const d = c - 100; a -= d; b -= d; c -= d; }
-    if (a < 1) { const d = 1 - a; a += d; b += d; c += d; }
-    return { s: Math.max(1, a), t: b, m: Math.min(100, c) };
-}
-
-function mgAdjSet(field, value) {
-    _mgAdmin[field] = value;
-    // A band belongs to one device, so a band filter is meaningless once the
-    // device changes underneath it.
-    if (field === 'cat') { _mgAdmin.deviceId = ''; _mgAdmin.bandId = ''; }
-    if (field === 'deviceId') _mgAdmin.bandId = '';
+function mgCloseAdmin() {
+    if (!_mgAdminConfirmDiscard()) return;
+    _mgAdmin.open = false;
+    _mgAdmin.cell = null;
+    _mgAdmin.reb = null;
     mgRender();
 }
-function mgAdjDelta(step) {
-    const next = Math.max(-60, Math.min(60, (Number(_mgAdmin.delta) || 0) + step));
-    _mgAdmin.delta = next === 0 ? step : next;   // 0 is not a change; skip past it
+
+// Queued cell moves live only in memory until Save, so leaving the screen (or
+// switching item) has to say so rather than dropping them silently.
+function _mgAdminConfirmDiscard() {
+    const n = _mgAdmin.pending.size;
+    if (!n) return true;
+    if (!confirm(`${n} cell change${n === 1 ? '' : 's'} ${n === 1 ? 'has' : 'have'} not been saved.\n\nLeave and lose ${n === 1 ? 'it' : 'them'}?`)) return false;
+    _mgAdmin.pending.clear();
+    return true;
+}
+
+function mgAdminPick(value) {
+    if (!_mgAdminConfirmDiscard()) { mgRender(); return; }
+    _mgAdmin.deviceId = value;
+    _mgAdmin.cell = null;
     mgRender();
+}
+
+// The item being edited, and its tier lookup.
+const _mgAdminDevice = () => _mgDevices().find(d => String(d.id) === String(_mgAdmin.deviceId)) || null;
+const _mgTierById = id => ((_mgCatalog && _mgCatalog.tiers) || []).find(t => Number(t.id) === Number(id)) || null;
+
+// The effective tier for a cell: the queued move if there is one, else what the
+// catalog says. Every render path reads through this so a pending change looks
+// exactly like a saved one, minus the "was" note.
+function _mgCellTier(band, cond) {
+    const p = _mgAdmin.pending.get(_mgPendKey(band.id, cond));
+    return p ? p.to : (band.conds || {})[cond];
+}
+
+// Conditions this item actually has a row for, plus the next one it does NOT —
+// an absent condition is meaningful (we don't buy Broken accessories), so it is
+// rendered as "Not bought" rather than dropped, and stays one click from being
+// added.
+// Every condition, always. This used to show the ones in use plus exactly ONE
+// unused column, which made the grades a ladder you had to climb in order:
+// CHECKOUT was unreachable until you had decided to buy the item Broken, and
+// Broken CHECKOUT until CHECKOUT. There is no such dependency between grades —
+// an item can be bought through Checkout and not Broken — so every cell is now
+// one click from being turned on, independent of every other.
+function _mgAdminConds() {
+    return _mgCondOrder();
 }
 
 async function _mgAdminPost(payload, btn) {
@@ -5073,206 +5318,264 @@ async function _mgAdminPost(payload, btn) {
     }
 }
 
-async function mgApplyAdjustment(btn) {
-    const cells = _mgSliceCells();
-    if (!cells.length) { alert('That selection matches no cells.'); return; }
-    const sel = _mgAdmin;
-    if (!sel.cat && !sel.deviceId && !sel.cond && !sel.bandId) {
-        alert('Narrow it down first — an adjustment with no scope would move the whole ladder, which is what the Tiers tab is for.');
-        return;
+/* ---- cell moves ---------------------------------------------------------- */
+
+// Open / close the tier picker for one cell. Toggling the same cell closes it,
+// so the popover behaves like the disclosure it looks like.
+function mgCellOpen(bandId, cond) {
+    const c = _mgAdmin.cell;
+    _mgAdmin.cell = (c && c.bandId === Number(bandId) && c.cond === cond)
+        ? null : { bandId: Number(bandId), cond };
+    mgRender();
+}
+function mgCellClose() { _mgAdmin.cell = null; mgRender(); }
+
+// Queue a move rather than writing it: a DM retuning an item usually touches
+// several cells, and one confirmation for the set beats one per click.
+function mgCellPick(bandId, cond, tierId) {
+    const device = _mgAdminDevice();
+    const band = device && (device.bands || []).find(b => b.id === Number(bandId));
+    if (!band) return;
+    const key = _mgPendKey(Number(bandId), cond);
+    const prev = _mgAdmin.pending.get(key);
+    const from = prev ? prev.from : ((band.conds || {})[cond] ?? null);
+    const to = tierId === null ? null : Number(tierId);
+    // Back to where it started is not a change.
+    if (from === to) _mgAdmin.pending.delete(key);
+    else _mgAdmin.pending.set(key, { from, to });
+    _mgAdmin.cell = null;
+    mgRender();
+}
+
+function mgCellsDiscard() {
+    if (!_mgAdmin.pending.size) return;
+    _mgAdmin.pending.clear();
+    mgRender();
+}
+
+// Writes each queued cell through assignTier. Sequential rather than parallel so
+// a failure stops the run instead of leaving an unknown subset applied, and so
+// the error names the cell that actually failed.
+async function mgCellsSave(btn) {
+    const device = _mgAdminDevice();
+    if (!device || !_mgAdmin.pending.size || _mgAdmin.busy) return;
+    const entries = [..._mgAdmin.pending.entries()];
+    const label = btn ? btn.textContent : '';
+    _mgAdmin.busy = true;
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    const user = sessionStorage.getItem('speeksUserName') || null;
+    let done = 0;
+    try {
+        for (const [key, move] of entries) {
+            const [bandId, ...rest] = key.split('|');
+            const cond = rest.join('|');
+            const res = await fetch(MARGIN_GUIDE_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'assignTier', band_id: Number(bandId), condition: cond,
+                    tier_id: move.to === null ? null : Number(move.to), role, user,
+                }),
+            });
+            const out = await res.json().catch(() => ({}));
+            if (!res.ok || out.success === false) throw new Error(out.error || `Could not save ${cond}.`);
+            _mgAdmin.pending.delete(key);
+            done++;
+        }
+    } catch (e) {
+        alert(`${e.message}\n\n${done} of ${entries.length} saved. The rest are still pending.`);
+    } finally {
+        _mgAdmin.busy = false;
+        if (btn) { btn.disabled = false; btn.textContent = label; }
+        // Buyers read the same cached catalog, so a write has to invalidate it or
+        // the DM sees stale numbers on the screen they just edited.
+        _mgCatalog = null;
+        await mgLoad({ keep: true });
+        mgRender();
     }
-    const d = Number(sel.delta);
-    if (!d) { alert('Pick a number of points to shift by.'); return; }
-    if (!confirm(`${d > 0 ? 'Add' : 'Take'} ${Math.abs(d)} point${Math.abs(d) === 1 ? '' : 's'} ${d > 0 ? 'to' : 'off'} ${cells.length} cell${cells.length === 1 ? '' : 's'}?\n\nThe ten shared tiers are not touched. You can remove this again at any time.`)) return;
-    const out = await _mgAdminPost({
-        action: 'saveAdjustment',
-        category: sel.cat || null,
-        device_id: sel.deviceId ? Number(sel.deviceId) : null,
-        condition: sel.cond || null,
-        band_id: sel.bandId ? Number(sel.bandId) : null,
-        delta: d,
-    }, btn);
-    if (out) mgRender();
 }
 
-async function mgRemoveAdjustment(id, btn) {
-    if (!confirm('Remove this adjustment?\n\nThose cells go straight back onto the shared ladder.')) return;
-    const out = await _mgAdminPost({ action: 'deleteAdjustment', id }, btn);
-    if (out) mgRender();
-}
-
-async function mgSaveTier(slug, btn) {
-    const wrap = document.getElementById(`mg-tier-${slug}`);
+// Flat-pay bands hold dollars, not a tier, so they save on their own — there is
+// no cell to queue. Until now nothing in the tool could edit them at all.
+async function mgSaveFlatBand(bandId, btn) {
+    const wrap = document.getElementById(`mg-aflat-${bandId}`);
     if (!wrap) return;
-    const vals = ['s', 't', 'm'].map(k => Number(wrap.querySelector(`[data-p="${k}"]`).value));
-    const [s, t, m] = vals;
-    if (!vals.every(Number.isFinite)) { alert('All three percentages are required.'); return; }
-    if (!(s > 0 && s < t && t < m && m <= 100)) {
-        alert('The ladder has to climb: start below your ceiling, your ceiling below the manager ceiling, nothing over 100%.');
+    const low = Number(wrap.querySelector('[data-f="low"]').value);
+    const high = Number(wrap.querySelector('[data-f="high"]').value);
+    if (![low, high].every(Number.isFinite)) { alert('Both dollar amounts are required.'); return; }
+    if (low < 0 || high < low) {
+        alert('The high end has to be at least the low end, and neither can be negative.');
         return;
     }
-    const counts = _mgTierCellCounts();
-    const tier = (_mgCatalog.tiers || []).find(x => x.slug === slug);
-    const n = counts[tier.id] || 0;
-    if (!confirm(`${n} cell${n === 1 ? '' : 's'} use ${tier.name}.\n\nSaving moves every one of them to ${s} · ${t} · ${m}.`)) return;
-    const out = await _mgAdminPost({ action: 'saveTier', slug, start_pct: s, team_pct: t, mgr_pct: m }, btn);
+    const out = await _mgAdminPost({ action: 'saveBand', band_id: Number(bandId), flat_low: low, flat_high: high }, btn);
     if (out) mgRender();
+}
+
+// A hand-built listbox rather than a <select>. The native one opened UPWARD and
+// covered the page: a 40-item, 14-group list is taller than the room under a
+// header sitting low in the viewport, and Chrome flips it in that case. Popup
+// direction is not stylable on a native select, so the only way to guarantee it
+// drops down is to own the menu.
+function mgAdminPickToggle() {
+    _mgAdmin.pickOpen = !_mgAdmin.pickOpen;
+    _mgAdmin.cell = null;      // never two menus open at once
+    mgRender();
+}
+// One dismiss for both this and the cell popover — clicking off either closes it.
+function mgAdminDismiss() {
+    _mgAdmin.pickOpen = false;
+    _mgAdmin.cell = null;
+    mgRender();
 }
 
 function _mgAdminHead() {
-    const t = _mgAdmin.tab;
-    return `<div class="mg-adm-head">
-        <button type="button" class="mg-back" onclick="mgCloseAdmin()">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
-          Back to the guide</button>
-        <div class="mg-adm-tabs">
-          <button type="button" class="mg-adm-tab${t === 'adjust' ? ' active' : ''}" onclick="mgAdminTab('adjust')">Adjust a slice</button>
-          <button type="button" class="mg-adm-tab${t === 'tiers' ? ' active' : ''}" onclick="mgAdminTab('tiers')">The ten tiers</button>
-          <button type="button" class="mg-adm-tab${t === 'text' ? ' active' : ''}" onclick="mgAdminTab('text')">What it says</button>
-        </div>
-      </div>`;
-}
-
-function _mgAdjustPane() {
-    const sel = _mgAdmin;
     const cats = [...new Set(_mgDevices().map(d => d.category))];
-    const devs = _mgDevices().filter(d => !sel.cat || d.category === sel.cat);
-    const bands = sel.deviceId ? ((_mgDevices().find(d => d.id === Number(sel.deviceId)) || {}).bands || []) : [];
-    const conds = _mgCondOrder();
-    const cells = _mgSliceCells();
-    const delta = Number(sel.delta) || 0;
-    const scoped = !!(sel.cat || sel.deviceId || sel.cond || sel.bandId);
+    const dev = _mgAdminDevice();
+    const open = !!_mgAdmin.pickOpen;
+    const menu = open ? `<div class="mg-picker-menu" role="listbox">
+        ${cats.map(c => `<div class="mg-picker-grp">${_mgEsc(c)}</div>
+          ${_mgDevices().filter(d => d.category === c).map(d => {
+              const on = String(d.id) === String(_mgAdmin.deviceId);
+              return `<button type="button" class="mg-picker-opt${on ? ' on' : ''}" role="option"
+                        aria-selected="${on}" onclick="mgAdminPickItem('${d.id}')">${_mgEsc(d.device)}</button>`;
+          }).join('')}`).join('')}
+      </div>` : '';
 
-    const opt = (v, label, cur) => `<option value="${_mgEsc(v)}"${String(cur) === String(v) ? ' selected' : ''}>${_mgEsc(label)}</option>`;
-
-    // Sample the change on a real matched cell, so the DM sees actual numbers
-    // rather than a promise about them.
-    let sample = '';
-    if (cells.length && delta) {
-        const c = cells[0];
-        const after = _mgShift(c.pct.s, c.pct.t, c.pct.m, delta);
-        const rung = (cls, name, was, now) => `<div class="mg-rung mg-rung-${cls}">
-            <div class="mg-rung-stripe"></div>
-            <div class="mg-rung-body"><span class="mg-rung-name">${name}</span></div>
-            <span class="mg-adm-was">${was}%</span>
-            <div class="mg-rung-val">${now}%</div></div>`;
-        sample = `<div class="mg-adm-sample">
-            <div class="mg-adm-sub">Sample — ${_mgEsc(c.device.device)} · ${_mgEsc(c.band.label)} · ${_mgEsc(c.cond)}</div>
-            ${rung('start', 'Start here', c.pct.s, after.s)}
-            ${rung('team', 'Your ceiling', c.pct.t, after.t)}
-            ${rung('mgr', 'Manager ceiling', c.pct.m, after.m)}
-          </div>`;
-    }
-
-    const live = (_mgCatalog.adjustments || []);
-    const liveList = live.length
-        ? live.map(a => {
-            const bits = [
-                a.category || (a.device_id ? '' : 'All categories'),
-                a.device_id ? (_mgDevices().find(d => d.id === Number(a.device_id)) || {}).device : '',
-                a.condition || 'all conditions',
-            ].filter(Boolean);
-            return `<div class="mg-adj-row">
-                <span class="mg-adj-scope">${_mgEsc(bits.join(' · '))}</span>
-                <span class="mg-adj-delta">${a.delta > 0 ? '+' : ''}${a.delta}</span>
-                <span class="mg-adj-cells">${a.cells} cell${a.cells === 1 ? '' : 's'}</span>
-                <button type="button" class="mg-adj-rm" onclick="mgRemoveAdjustment(${a.id}, this)">Remove</button>
-              </div>`;
-        }).join('')
-        : `<div class="mg-adm-none">No adjustments yet — every cell is on the shared ladder.</div>`;
-
-    return `<div class="mg-adm-grid">
-        <div class="mg-adm-rail">
-          <div class="mg-field"><label class="mg-lab">Category</label>
-            <select class="mg-select" onchange="mgAdjSet('cat', this.value)">
-              ${opt('', 'All ' + cats.length + ' categories', sel.cat)}${cats.map(c => opt(c, c, sel.cat)).join('')}
-            </select></div>
-          <div class="mg-field"><label class="mg-lab">Device</label>
-            <select class="mg-select" onchange="mgAdjSet('deviceId', this.value)">
-              ${opt('', 'All ' + devs.length + ' device' + (devs.length === 1 ? '' : 's'), sel.deviceId)}
-              ${devs.map(d => opt(d.id, d.device, sel.deviceId)).join('')}
-            </select></div>
-          <div class="mg-field"><label class="mg-lab">Condition</label>
-            <select class="mg-select" onchange="mgAdjSet('cond', this.value)">
-              ${opt('', 'All conditions', sel.cond)}${conds.map(c => opt(c, c, sel.cond)).join('')}
-            </select></div>
-          <div class="mg-field"><label class="mg-lab">Price band</label>
-            <select class="mg-select" onchange="mgAdjSet('bandId', this.value)" ${bands.length ? '' : 'disabled'}>
-              ${opt('', bands.length ? 'All bands' : 'Pick a device first', sel.bandId)}
-              ${bands.map(b => opt(b.id, b.label, sel.bandId)).join('')}
-            </select></div>
-
-          <div class="mg-adm-count"><b>${cells.length}</b><span>cell${cells.length === 1 ? '' : 's'} match</span></div>
-
-          <div class="mg-field"><label class="mg-lab">Shift by</label>
-            <div class="mg-step">
-              <button type="button" onclick="mgAdjDelta(-1)" aria-label="Down one point">&minus;</button>
-              <div class="mg-step-val">${delta > 0 ? '+' : ''}${delta}</div>
-              <button type="button" onclick="mgAdjDelta(1)" aria-label="Up one point">+</button>
-            </div>
-            <p class="mg-adm-hint">Points added to all three rungs, so the gaps between them stay put.</p>
+    // No back button here — it lives in the panel header, in the slot the Manage
+    // button vacates, so entering and leaving happen in the same place.
+    return `<div class="mg-adm-head">
+        <div class="mg-adm-pick">
+          <span class="mg-adm-editing">Editing</span>
+          <div class="mg-picker${open ? ' open' : ''}">
+            <button type="button" class="mg-picker-btn" aria-haspopup="listbox" aria-expanded="${open}"
+                    onclick="mgAdminPickToggle()">
+              <span${dev ? '' : ' class="mg-picker-ph"'}>${_mgEsc(dev ? dev.device : 'Pick an item…')}</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            ${menu}
           </div>
         </div>
+        ${dev ? `<span class="mg-adm-meta">${(dev.bands || []).length} band${(dev.bands || []).length === 1 ? '' : 's'}</span>` : ''}
+      </div>`;
+}
 
-        <div class="mg-adm-main">
-          <div class="mg-adm-sub">What this will do</div>
-          ${!scoped
-            ? `<div class="mg-wait">Narrow the slice first — an adjustment with no scope is a tier change, on the next tab.</div>`
-            : !cells.length
-            ? `<div class="mg-wait">Nothing matches that selection.</div>`
-            : `<div class="mg-adm-plan">
-                 <div class="mg-adm-plan-h">
-                   <b>${cells.length}</b> cell${cells.length === 1 ? '' : 's'} shift by
-                   <b>${delta > 0 ? '+' : ''}${delta}</b> · the ten tiers are untouched
-                 </div>
-                 <div class="mg-adm-plan-b">${_mgEsc([
-                     sel.cat || 'All categories',
-                     sel.deviceId ? (_mgDevices().find(d => d.id === Number(sel.deviceId)) || {}).device : null,
-                     sel.cond || 'all conditions',
-                     sel.bandId ? (bands.find(b => b.id === Number(sel.bandId)) || {}).label : null,
-                   ].filter(Boolean).join(' · '))}</div>
-               </div>
-               ${sample}
-               <div class="mg-adm-act">
-                 <button type="button" class="mg-btn-go" onclick="mgApplyAdjustment(this)">Apply adjustment</button>
-               </div>`}
+/* ---- the grid: one row per price band, one column per condition ----------
+ * Cell shading tracks how richly a tier pays, so the ladder should visibly drain
+ * away as you read right and down. A cell that breaks the gradient is a cell on
+ * the wrong tier, readable before any number is.
+ */
+function _mgTierRank(tierId) {
+    const tiers = (_mgCatalog && _mgCatalog.tiers) || [];
+    const i = tiers.findIndex(t => Number(t.id) === Number(tierId));
+    return i < 0 ? tiers.length : i + 1;
+}
 
-          <div class="mg-adm-sub" style="margin-top:22px;">Adjustments in effect</div>
-          <div class="mg-adj-list">${liveList}</div>
+function _mgCellBtn(band, cond) {
+    const tierId = _mgCellTier(band, cond);
+    const key = _mgPendKey(band.id, cond);
+    const pend = _mgAdmin.pending.get(key);
+    const open = _mgAdmin.cell && _mgAdmin.cell.bandId === band.id && _mgAdmin.cell.cond === cond;
+    const call = `mgCellOpen(${band.id}, '${_mgEsc(cond).replace(/'/g, "\\'")}')`;
+
+    if (!tierId) {
+        // Absent on purpose: we do not buy this item in this condition. Rendered
+        // rather than dropped so the gap is visible, and one click from filled.
+        return `<td class="mg-cellw">
+            <button type="button" class="mg-cell-none${pend ? ' pending' : ''}${open ? ' open' : ''}" onclick="${call}">
+              Not bought${pend ? '<em>was ' + _mgEsc((_mgTierById(pend.from) || {}).name || '—') + '</em>' : ' +'}
+            </button>${open ? _mgCellPop(band, cond, null) : ''}</td>`;
+    }
+    const t = _mgTierById(tierId);
+    if (!t) return '<td class="mg-cellw"></td>';
+    const adj = ((band.pct || {})[cond] || {}).adj || 0;
+    return `<td class="mg-cellw">
+        <button type="button" class="mg-cell${pend ? ' pending' : ''}${open ? ' open' : ''}" data-rank="${_mgTierRank(tierId)}" onclick="${call}">
+          <span class="mg-cell-tier">${_mgEsc(t.name)}</span>
+          <span class="mg-cell-pcts">${t.start_pct} &middot; ${t.team_pct} &middot; ${t.mgr_pct}${adj ? ` <i>${adj > 0 ? '+' : ''}${adj}</i>` : ''}</span>
+          ${pend ? `<span class="mg-cell-was">was ${_mgEsc((_mgTierById(pend.from) || {}).name || 'not bought')}</span>` : ''}
+        </button>${open ? _mgCellPop(band, cond, tierId) : ''}</td>`;
+}
+
+// The tier picker. Rendered inline in the cell rather than appended to <body>:
+// it stays put on scroll, needs no coordinate maths, and survives the re-render
+// that every pick triggers.
+function _mgCellPop(band, cond, current) {
+    const tiers = (_mgCatalog && _mgCatalog.tiers) || [];
+    const esc = s => _mgEsc(s).replace(/'/g, "\\'");
+    return `<div class="mg-pop" role="dialog" aria-label="Pick a tier">
+        <div class="mg-pop-h">
+          <b>${_mgEsc(band.label)} &middot; ${_mgEsc(cond)}</b>
+          <span>Pick the tier this cell pays on</span>
+        </div>
+        <div class="mg-pop-list">
+          ${tiers.map(t => `<button type="button" class="mg-pop-opt${Number(t.id) === Number(current) ? ' on' : ''}"
+                onclick="mgCellPick(${band.id}, '${esc(cond)}', ${t.id})">
+              <span class="mg-pop-tick">${Number(t.id) === Number(current)
+                ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>' : ''}</span>
+              <span class="mg-pop-name">${_mgEsc(t.name)}</span>
+              <span class="mg-pop-nums">${t.start_pct} &middot; ${t.team_pct} &middot; ${t.mgr_pct}</span>
+            </button>`).join('')}
+        </div>
+        <div class="mg-pop-foot">
+          ${current === null
+            ? `<span class="mg-pop-note">We do not buy this item in this condition.</span>`
+            : `<button type="button" class="mg-pop-clear" onclick="mgCellPick(${band.id}, '${esc(cond)}', null)">
+                 Stop buying this condition</button>`}
         </div>
       </div>`;
 }
 
-function _mgTiersPane() {
-    const counts = _mgTierCellCounts();
-    const max = Math.max(1, ...Object.values(counts));
-    const rows = (_mgCatalog.tiers || []).map(t => {
-        const n = counts[t.id] || 0;
-        return `<div class="mg-tier-row" id="mg-tier-${_mgEsc(t.slug)}">
-            <div class="mg-tier-name"><b>${_mgEsc(t.name)}</b><span>${_mgEsc(t.slug)}</span></div>
-            <div class="mg-tier-pcts">
-              <label class="mg-pct mg-pct-s"><em>Start</em><input type="number" data-p="s" min="1" max="100" value="${t.start_pct}"></label>
-              <label class="mg-pct mg-pct-t"><em>Yours</em><input type="number" data-p="t" min="1" max="100" value="${t.team_pct}"></label>
-              <label class="mg-pct mg-pct-m"><em>Mgr</em><input type="number" data-p="m" min="1" max="100" value="${t.mgr_pct}"></label>
-            </div>
-            <div class="mg-spread">
-              <span class="mg-spread-fill" style="left:${t.start_pct}%; right:${100 - t.mgr_pct}%"></span>
-              <i class="mg-mk-s" style="left:${t.start_pct}%"></i>
-              <i class="mg-mk-t" style="left:${t.team_pct}%"></i>
-              <i class="mg-mk-m" style="left:${t.mgr_pct}%"></i>
-            </div>
-            <div class="mg-tier-reach"><b>${n}</b> cell${n === 1 ? '' : 's'}
-              <span class="mg-reachbar"><span style="width:${Math.round(n / max * 100)}%"></span></span></div>
-            <button type="button" class="mg-btn-go mg-tier-save" onclick="mgSaveTier('${_mgEsc(t.slug)}', this)">Save</button>
-          </div>`;
+function _mgAdminGrid(device) {
+    const cols = _mgAdminConds();
+    const head = `<thead><tr><th class="mg-gband">Price band</th>${
+        cols.map(c => `<th>${_mgEsc(c)}</th>`).join('')}</tr></thead>`;
+
+    const rows = (device.bands || []).map(b => {
+        if (b.payMode === 'flat') {
+            const cash = v => (Number(v) % 1 === 0 ? String(Number(v)) : Number(v).toFixed(2));
+            return `<tr><td class="mg-gband">
+                <div class="mg-gband-n">${_mgEsc(b.label)}</div>
+                <div class="mg-gband-s">Flat pay</div></td>
+              <td colspan="${cols.length}">
+                <div class="mg-aflat" id="mg-aflat-${b.id}">
+                  <span class="mg-aflat-lab">Pays a flat amount, not a percentage</span>
+                  <span class="mg-aflat-in">$<input type="text" data-f="low" value="${cash(b.flatLow)}" aria-label="Low end"></span>
+                  <span class="mg-aflat-in">to&nbsp;$<input type="text" data-f="high" value="${cash(b.flatHigh)}" aria-label="High end"></span>
+                  <button type="button" class="mg-btn-go mg-aflat-save" onclick="mgSaveFlatBand(${b.id}, this)">Save</button>
+                  <span class="mg-aflat-note">Same in every condition &middot; no tier applies</span>
+                </div></td></tr>`;
+        }
+        return `<tr><td class="mg-gband">
+            <div class="mg-gband-n">${_mgEsc(b.label)}</div>
+            <div class="mg-gband-s">Start &middot; Yours &middot; Manager</div></td>
+          ${cols.map(c => _mgCellBtn(b, c)).join('')}</tr>`;
     }).join('');
 
-    return `<div class="mg-adm-tiers">
-        <p class="mg-adm-lead">Retuning a tier moves <b>every cell that uses it</b> — that is the point of the shared
-          ladder, and why you're asked to confirm the count before it saves. For a change that should only hit part of
-          the catalog, use <button type="button" class="mg-inline-link" onclick="mgAdminTab('adjust')">Adjust a slice</button> instead.</p>
-        <div class="mg-tier-head"><span>Tier</span><span>Start · Yours · Manager</span><span>Where it sits</span><span>Carries</span><span></span></div>
-        ${rows}
+    // See .mg-gwrap.popped — the sideways scroll container has to stand down while
+    // a tier popover is open, or it clips the popover at the grid's bottom edge.
+    return `<div class="mg-gwrap${_mgAdmin.cell ? ' popped' : ''}"><table class="mg-agrid">${head}<tbody>${rows}</tbody></table></div>`;
+}
+
+function _mgAdminNumbers() {
+    const device = _mgAdminDevice();
+    if (!device) return '';
+    return `<section class="mg-adm-sec">
+        <div class="mg-adm-sech"><h4>The numbers</h4>
+          <span class="mg-adm-sechint">Click a cell to move it to another tier</span></div>
+        ${_mgAdminGrid(device)}
+      </section>`;
+}
+
+// Sits at the foot of the screen only while cells are queued. One save for the
+// item, rather than a button per row.
+function _mgAdminBar() {
+    const n = _mgAdmin.pending.size;
+    if (!n) return '';
+    return `<div class="mg-savebar">
+        <span class="mg-savebar-n"><b>${n}</b> unsaved cell change${n === 1 ? '' : 's'}</span>
+        <button type="button" class="mg-sb-discard" onclick="mgCellsDiscard()">Discard</button>
+        <button type="button" class="mg-sb-save" onclick="mgCellsSave(this)">Save</button>
       </div>`;
 }
 
@@ -5311,7 +5614,10 @@ const MG_TEXT_SECTIONS = [
 // every other line the DM had in progress. Same lesson as the audit scorecard.
 let _mgTextDrafts = {};
 
-const _mgTextDevice = () => _mgDevices().find(d => String(d.id) === String(_mgAdmin.tDev)) || null;
+// The item is chosen once, in the workspace header — the wording and the numbers
+// on this screen are always the same item's. (It used to be a second, separate
+// picker on its own tab.)
+const _mgTextDevice = () => _mgAdminDevice();
 
 // Items sharing this device's help_key. Only two keys in the catalog are shared
 // (Audio/Home Theatre covers 4 items, Miscellaneous 3), but when they are, a DM
@@ -5335,10 +5641,13 @@ function _mgTextRows(sectionKey) {
     return [...rows].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || a.id - b.id);
 }
 
-function mgTextPick(value) {
-    _mgAdmin.tDev = value;
-    _mgTextDrafts = {};   // drafts belong to the item they were typed against
-    mgRender();
+// Wording drafts belong to the item they were typed against, so switching item
+// clears them. Called from the one picker in the workspace header.
+function mgAdminPickItem(value) {
+    _mgTextDrafts = {};
+    _mgAdmin.pickOpen = false;
+    _mgAdmin.reb = null;      // the open rebuttal belongs to the item you're leaving
+    mgAdminPick(value);
 }
 
 // Draft plumbing. oninput only records; nothing is sent until Save is pressed,
@@ -5349,7 +5658,19 @@ function mgTextDraft(id, field, value) {
     // Toggle the row's own Save button rather than re-rendering: re-rendering on
     // every keystroke would move the caret to the end of the textarea.
     const row = document.querySelector(`[data-mgrow="${k}"]`);
-    if (row) row.classList.add('mg-dirty');
+    if (row) {
+        row.classList.add('mg-dirty');
+        // Rebuttals live inside an accordion; mark the bar too so shutting one
+        // mid-edit still shows it as unsaved.
+        const acc = row.closest('.mg-racc');
+        if (acc) acc.classList.add('mg-dirty');
+    }
+    // Same reason the caret rules out a re-render: patch the accordion bar's
+    // label directly so it isn't still reading "Untitled rebuttal" as you name it.
+    if (field === 'name') {
+        const lab = document.querySelector(`[data-rebname="${k}"]`);
+        if (lab) lab.textContent = value || (k.startsWith('new:') ? 'Add a rebuttal' : 'Untitled rebuttal');
+    }
 }
 const _mgTextVal = (id, field, fallback) => {
     const d = _mgTextDrafts[String(id)];
@@ -5374,7 +5695,7 @@ const _mgTextIcon = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentCo
 // Reads the row out of the DOM rather than out of the draft map. A draft only
 // exists for fields actually touched, so defaulting a missing draft to ''/false
 // would blank the text of an unedited row and quietly clear its Strong flag.
-// The DOM always holds the full current state. Mirrors mgSaveTier.
+// The DOM always holds the full current state.
 const _mgTextRowEl = id => document.querySelector(`[data-mgrow="${String(id).replace(/"/g, '')}"]`);
 
 async function mgSaveHelpItem(id, kind, isGate, btn) {
@@ -5407,59 +5728,83 @@ async function mgPinHelpItem(id, toGate, btn) {
     if (out) mgRender();
 }
 
-async function mgMoveHelpItem(id, dir, btn) {
-    const out = await _mgAdminPost({ action: 'moveHelpItem', id, dir }, btn);
-    if (out) mgRender();
-}
+// No mgMoveHelpItem / mgMoveRebuttal: manual reordering was dropped (Ethan,
+// 2026-08-01) — what matters is that a line is present, not where it sits in its
+// list. sort_order still exists and still orders the lists on read, and Pin /
+// Unpin still resequences the group it leaves; new rows just append. The edge
+// function's moveHelpItem / moveRebuttal actions are left in place, unused.
 
-async function mgSaveRebuttal(id, btn) {
-    const el = _mgTextRowEl(id);
+/* NAMESPACED KEYS. mg_help_items and mg_rebuttals are separate tables that both
+ * start their ids at 1, so all 228 rebuttal ids also name a help item — and on
+ * the Apple iPhone screen, rebuttals 1-7 and help items 1-7 both render. Both
+ * used the bare id as their data-mgrow and their _mgTextDrafts key, so
+ * _mgTextRowEl() returned whichever came first in the DOM (always the help item;
+ * help sections render above the rebuttals) and the two shared a draft slot.
+ * Saving a rebuttal read the help row's fields, found no .mg-rname, and refused
+ * with "Give the rebuttal a name" — no rebuttal was saveable at all. Prefixing
+ * the client-side key fixes both; the bare number is what still goes to the
+ * server. */
+const _mgRebKey = id => String(id).startsWith('new:') ? String(id) : 'reb:' + id;
+const _mgRebId  = key => String(key).replace(/^reb:/, '');
+
+async function mgSaveRebuttal(key, btn) {
+    const el = _mgTextRowEl(key);
     if (!el) return;
     const field = sel => String((el.querySelector(sel) || {}).value || '').trim();
     const name = field('.mg-rname');
-    const say  = field('[data-rf="say"]');
     const why  = field('[data-rf="why"]');
     if (!name) { alert('Give the rebuttal a name — that\'s the heading a buyer scans for mid-conversation.'); return; }
-    if (!why)  { alert('The business reason is required. It\'s what a buyer falls back on when the customer pushes.'); return; }
+    if (!why)  { alert('A rebuttal needs its line. That\'s the whole thing a buyer reads out.'); return; }
     // Tags live only in the draft (they're buttons, not inputs), so read them
     // from there and fall back to what's on the row today.
-    const conds = _mgTextVal(id, 'conds', [...el.querySelectorAll('.mg-ctag.on')].map(b => b.dataset.cond));
+    const conds = _mgTextVal(key, 'conds', [...el.querySelectorAll('.mg-ctag.on')].map(b => b.dataset.cond));
     const sibs = _mgTextSiblings();
     if (sibs.length > 1 && !confirm(`This rebuttal is shared by ${sibs.length} items:\n\n${sibs.map(s => '· ' + s.device).join('\n')}\n\nSave to all of them?`)) return;
     const out = await _mgAdminPost({
         action: 'saveRebuttal',
-        id: String(id).startsWith('new:') ? null : id,
+        id: String(key).startsWith('new:') ? null : Number(_mgRebId(key)),
         help_key: (_mgTextDevice() || {}).helpKey,
-        name, why, say,
+        name, why,
+        // One field now — see _mgRebText. The box already holds `say || why`, so
+        // writing it to `why` and clearing `say` collapses the row to what the
+        // DM just looked at. The edge fn stores "" as NULL, which is what the
+        // buyer's `say || why` needs to fall through cleanly.
+        say: '',
         conditions: conds,
     }, btn);
-    if (out) { delete _mgTextDrafts[String(id)]; mgRender(); }
+    if (out) {
+        delete _mgTextDrafts[String(key)];
+        // The add row's fields are now blank, so leaving it open just shows an
+        // empty form over the rebuttal it created. Shut it.
+        if (String(key).startsWith('new:')) _mgAdmin.reb = null;
+        mgRender();
+    }
 }
 
-async function mgDeleteRebuttal(id, btn) {
+async function mgDeleteRebuttal(key, btn) {
     if (!confirm('Delete this rebuttal?')) return;
-    const out = await _mgAdminPost({ action: 'deleteRebuttal', id }, btn);
-    if (out) { delete _mgTextDrafts[String(id)]; mgRender(); }
-}
-
-async function mgMoveRebuttal(id, dir, btn) {
-    const out = await _mgAdminPost({ action: 'moveRebuttal', id, dir }, btn);
-    if (out) mgRender();
+    const out = await _mgAdminPost({ action: 'deleteRebuttal', id: Number(_mgRebId(key)) }, btn);
+    if (out) {
+        delete _mgTextDrafts[String(key)];
+        if (_mgAdmin.reb === String(key)) _mgAdmin.reb = null;
+        mgRender();
+    }
 }
 
 // A rebuttal with no tags applies to every grade; tagging it narrows it. Toggling
 // only touches the draft — nothing is written until Save. The current state is
 // looked up from the catalog rather than passed in, which keeps a JSON array out
 // of an onclick attribute.
-function _mgRebConds(id) {
-    const row = _mgTextRows('rebuttals').find(r => String(r.id) === String(id));
-    return _mgTextVal(id, 'conds', (row && row.conds) || []);
+function _mgRebConds(key) {
+    const id = _mgRebId(key);
+    const row = _mgTextRows('rebuttals').find(r => String(r.id) === id);
+    return _mgTextVal(key, 'conds', (row && row.conds) || []);
 }
-function mgTextTag(id, cond) {
-    const list = [..._mgRebConds(id)];
+function mgTextTag(key, cond) {
+    const list = [..._mgRebConds(key)];
     const at = list.indexOf(cond);
     if (at >= 0) list.splice(at, 1); else list.push(cond);
-    (_mgTextDrafts[String(id)] ||= {}).conds = list;
+    (_mgTextDrafts[String(key)] ||= {}).conds = list;
     mgRender();
 }
 
@@ -5472,7 +5817,7 @@ function _mgRows(text, perLine, max = 9) {
     return Math.min(max, Math.max(2, Math.ceil((String(text).length || 1) / perLine)));
 }
 
-function _mgHelpRow(row, section, idx, total) {
+function _mgHelpRow(row, section) {
     const id = row.id;
     const body = _mgTextVal(id, 'body', row.body);
     const must = _mgTextVal(id, 'must', !!row.must);
@@ -5482,10 +5827,6 @@ function _mgHelpRow(row, section, idx, total) {
     // travel with the row rather than being re-derived from the section.
     const kind = isGate ? (row.kind || 'reminder') : section.kind;
     return `<div class="mg-trow${dirty ? ' mg-dirty' : ''}" data-mgrow="${id}">
-        <div class="mg-trow-ord">
-          <button type="button" class="mg-ord" title="Move up"${idx === 0 ? ' disabled' : ''} onclick="mgMoveHelpItem(${id}, -1, this)">&#9650;</button>
-          <button type="button" class="mg-ord" title="Move down"${idx === total - 1 ? ' disabled' : ''} onclick="mgMoveHelpItem(${id}, 1, this)">&#9660;</button>
-        </div>
         <textarea class="mg-tbody" rows="${_mgRows(body, isGate ? 104 : 46)}" oninput="mgTextDraft(${id}, 'body', this.value)">${_mgEsc(body)}</textarea>
         <div class="mg-trow-acts">
           ${isGate
@@ -5512,7 +5853,7 @@ function _mgHelpSection(section) {
         </header>
         <p class="mg-tsec-hint">${section.hint}</p>
         ${rows.length
-            ? `<div class="mg-trows">${rows.map((r, i) => _mgHelpRow(r, section, i, rows.length)).join('')}</div>`
+            ? `<div class="mg-trows">${rows.map(r => _mgHelpRow(r, section)).join('')}</div>`
             : `<div class="mg-adm-none">Nothing here yet${isGate ? ' — this item shows no warning card.' : '.'}</div>`}
         <div class="mg-tadd" data-mgrow="${nid}">
           <textarea class="mg-tbody" rows="2" placeholder="${isGate ? 'Add a hard precondition…' : 'Add a line…'}" oninput="mgTextDraft('${nid}', 'body', this.value)">${_mgEsc(draft)}</textarea>
@@ -5521,73 +5862,102 @@ function _mgHelpSection(section) {
       </section>`;
 }
 
-function _mgRebuttalCard(row, idx, total) {
-    const id = row.id;
-    const isNew = String(id).startsWith('new:');
-    const name = _mgTextVal(id, 'name', row.name || '');
-    const say  = _mgTextVal(id, 'say', row.say || '');
-    const why  = _mgTextVal(id, 'why', row.why || '');
-    const conds = _mgTextVal(id, 'conds', row.conds || []);
-    const dirty = isNew
-        ? !!(name || say || why)
-        : name !== (row.name || '') || say !== (row.say || '') || why !== (row.why || '')
-          || conds.join('|') !== (row.conds || []).join('|');
-    return `<div class="mg-rcard${dirty ? ' mg-dirty' : ''}" data-mgrow="${id}">
-        <div class="mg-rcard-top">
-          ${isNew ? '' : `<div class="mg-trow-ord">
-            <button type="button" class="mg-ord" title="Move up"${idx === 0 ? ' disabled' : ''} onclick="mgMoveRebuttal(${id}, -1, this)">&#9650;</button>
-            <button type="button" class="mg-ord" title="Move down"${idx === total - 1 ? ' disabled' : ''} onclick="mgMoveRebuttal(${id}, 1, this)">&#9660;</button>
-          </div>`}
-          <input class="mg-rname" type="text" placeholder="What the customer is pushing back on" value="${_mgEsc(name)}" oninput="mgTextDraft('${id}', 'name', this.value)">
-          ${isNew ? '' : `<button type="button" class="mg-tdel" title="Delete" onclick="mgDeleteRebuttal(${id}, this)">&#215;</button>`}
+/* ONE PIECE OF TEXT PER REBUTTAL.
+ *
+ * The table still has two columns: `say` (the scripted line) and `why` (the
+ * business reason). 195 of the 228 rebuttals only ever had `why` — the buyer
+ * renders `say || why` as the quote, so for those there was one piece of text
+ * behind two boxes. The 33 that carry both are near-restatements of each other,
+ * with `say` the fuller, customer-facing wording.
+ *
+ * So the editor shows one box, holding whatever the buyer actually reads
+ * (`say || why`), and saving writes it to `why` and clears `say`. Rows migrate as
+ * they're edited rather than in one sweep, and nothing on screen is ever lost —
+ * what's in the box IS what the buyer sees. The only casualty is the small "Why"
+ * sub-line under the quote on the 33, which stops appearing once that rebuttal is
+ * next saved. The buyer renderer needs no change: it already handles say = null.
+ */
+const _mgRebText = row => String(row.say || row.why || '');
+
+// Is this rebuttal's on-screen state different from what's saved?
+function _mgRebDirty(row) {
+    const key = _mgRebKey(row.id);
+    const name = _mgTextVal(key, 'name', row.name || '');
+    const text = _mgTextVal(key, 'why', _mgRebText(row));
+    const conds = _mgTextVal(key, 'conds', row.conds || []);
+    if (String(key).startsWith('new:')) return !!(name || text);
+    return name !== (row.name || '') || text !== _mgRebText(row)
+        || conds.join('|') !== (row.conds || []).join('|');
+}
+
+/* An accordion, one open at a time. Expanded, a rebuttal is a name, its text and
+ * six grade tags; a dozen of them ran the editor several screens deep and buried
+ * the grid it belongs next to. Collapsing loses nothing — drafts live in
+ * _mgTextDrafts, outside the DOM, exactly so a re-render can't drop typing. */
+function mgRebToggle(id) {
+    const k = String(id);
+    _mgAdmin.reb = _mgAdmin.reb === k ? null : k;
+    mgRender();
+}
+
+function _mgRebuttalBar(row) {
+    const key = _mgRebKey(row.id);      // 'reb:<id>' — see the note on _mgRebKey
+    const isNew = key.startsWith('new:');
+    const open = _mgAdmin.reb === key;
+    const dirty = _mgRebDirty(row);
+    const name = _mgTextVal(key, 'name', row.name || '');
+    const conds = _mgTextVal(key, 'conds', row.conds || []);
+    const label = isNew ? 'Add a rebuttal' : (name || 'Untitled rebuttal');
+    const meta = isNew ? '' : (conds.length ? conds.join(' · ') : 'Every grade');
+
+    return `<div class="mg-racc${open ? ' open' : ''}${isNew ? ' isnew' : ''}${dirty ? ' mg-dirty' : ''}">
+        <div class="mg-rbar">
+          <button type="button" class="mg-rbar-t" aria-expanded="${open}" onclick="mgRebToggle('${key}')">
+            <span class="mg-rbar-cv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
+            <span class="mg-rbar-n" data-rebname="${key}">${_mgEsc(label)}</span>
+            ${meta ? `<span class="mg-rbar-m">${_mgEsc(meta)}</span>` : ''}
+            ${dirty ? '<span class="mg-rbar-d">Unsaved</span>' : ''}
+          </button>
+          ${isNew ? '' : `<button type="button" class="mg-tdel" title="Delete" onclick="mgDeleteRebuttal('${key}', this)">&#215;</button>`}
         </div>
+        ${open ? _mgRebuttalCard(row) : ''}
+      </div>`;
+}
+
+// The expanded body. Reordering and deleting live on the bar above, so they stay
+// reachable while the card is shut.
+function _mgRebuttalCard(row) {
+    const key = _mgRebKey(row.id);      // NOT row.id — see the note on _mgRebKey
+    const name = _mgTextVal(key, 'name', row.name || '');
+    const text = _mgTextVal(key, 'why', _mgRebText(row));
+    const conds = _mgTextVal(key, 'conds', row.conds || []);
+    const isNew = String(key).startsWith('new:');
+    const dirty = _mgRebDirty(row);
+    return `<div class="mg-rcard${dirty ? ' mg-dirty' : ''}" data-mgrow="${key}">
         <label class="mg-rfield">
-          <em>Say this <i>— read almost verbatim to the customer</i></em>
-          <textarea data-rf="say" rows="${_mgRows(say, 108, 6)}" placeholder="Optional. Left blank, the buyer sees the reason below instead." oninput="mgTextDraft('${id}', 'say', this.value)">${_mgEsc(say)}</textarea>
+          <em>Name <i>&mdash; what the customer is pushing back on</i></em>
+          <input class="mg-rname" type="text" placeholder="&ldquo;I can get more on eBay&rdquo;" value="${_mgEsc(name)}" oninput="mgTextDraft('${key}', 'name', this.value)">
         </label>
         <label class="mg-rfield">
-          <em>Because <i>— the business reason, for when they push</i></em>
-          <textarea data-rf="why" rows="${_mgRows(why, 108, 6)}" oninput="mgTextDraft('${id}', 'why', this.value)">${_mgEsc(why)}</textarea>
+          <em>What to say <i>&mdash; read almost verbatim to the customer</i></em>
+          <textarea data-rf="why" rows="${_mgRows(text, 108, 7)}" placeholder="The line a buyer reads out when the customer pushes back." oninput="mgTextDraft('${key}', 'why', this.value)">${_mgEsc(text)}</textarea>
         </label>
         <div class="mg-rconds">
           <span class="mg-rconds-l">Shows for${conds.length ? '' : ' <b>every grade</b>'}</span>
-          ${_mgCondOrder().map(c => `<button type="button" class="mg-ctag${conds.includes(c) ? ' on' : ''}" data-cond="${_mgEsc(c)}" onclick="mgTextTag('${id}', '${_mgEsc(c)}')">${_mgEsc(c)}</button>`).join('')}
+          <div class="mg-ctags">
+            ${_mgCondOrder().map(c => `<button type="button" class="mg-ctag${conds.includes(c) ? ' on' : ''}" data-cond="${_mgEsc(c)}" onclick="mgTextTag('${key}', '${_mgEsc(c)}')">${_mgEsc(c)}</button>`).join('')}
+          </div>
         </div>
         <div class="mg-rcard-acts">
-          <button type="button" class="mg-btn-go" onclick="mgSaveRebuttal('${id}', this)">${isNew ? 'Add rebuttal' : 'Save'}</button>
-          ${dirty && !isNew ? `<button type="button" class="mg-tbtn" onclick="mgTextDiscard('${id}')">Undo</button>` : ''}
+          <button type="button" class="mg-btn-go" onclick="mgSaveRebuttal('${key}', this)">${isNew ? 'Add rebuttal' : 'Save'}</button>
+          ${dirty && !isNew ? `<button type="button" class="mg-tbtn" onclick="mgTextDiscard('${key}')">Undo</button>` : ''}
         </div>
       </div>`;
 }
 
 function _mgTextPane() {
-    const cats = [...new Set(_mgDevices().map(d => d.category))];
     const dev = _mgTextDevice();
-    const opt = (v, label, cur) => `<option value="${_mgEsc(v)}"${String(cur) === String(v) ? ' selected' : ''}>${_mgEsc(label)}</option>`;
-
-    const picker = `<div class="mg-tpick">
-        <label class="mg-field">
-          <span>Item</span>
-          <select onchange="mgTextPick(this.value)">
-            <option value="">Pick an item…</option>
-            ${cats.map(c => `<optgroup label="${_mgEsc(c)}">${
-                _mgDevices().filter(d => d.category === c).map(d => opt(d.id, d.device, _mgAdmin.tDev)).join('')
-            }</optgroup>`).join('')}
-          </select>
-        </label>
-      </div>`;
-
-    if (!dev) {
-        return `<div class="mg-adm-text">
-            <p class="mg-adm-lead">Everything a buyer <b>reads</b> on this screen — the warning card above the ladder,
-              the three lists down the side, and the rebuttals. Pick the item you want to reword.</p>
-            ${picker}
-            <div class="mg-wait mg-wait-lad">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-              <span><b>Pick an item</b> to edit what it tells your buyers.</span>
-            </div>
-          </div>`;
-    }
+    if (!dev) return '';
 
     const sibs = _mgTextSiblings();
     const shared = sibs.length > 1
@@ -5600,38 +5970,57 @@ function _mgTextPane() {
     const rebuttals = _mgTextRows('rebuttals');
     const newReb = { id: 'new:reb', name: '', say: '', why: '', conds: [] };
 
-    return `<div class="mg-adm-text">
-        <p class="mg-adm-lead">Everything a buyer <b>reads</b> on this screen. Changes are live for every store the moment
-          you save — there is no draft state, so a half-finished thought is better left unsaved than parked.</p>
-        ${picker}
-        ${shared}
-        <div class="mg-tsecs">${MG_TEXT_SECTIONS.map(_mgHelpSection).join('')}</div>
-        <section class="mg-tsec mg-tsec-reb">
-          <header class="mg-tsec-h">
-            <span class="mg-tsec-ic mg-tsec-talk">${_mgTextIcon('talk')}</span>
-            <h4>Rebuttals</h4>
-            <span class="mg-tsec-n">${rebuttals.length}</span>
-          </header>
-          <p class="mg-tsec-hint">What to say when the customer argues the offer. Tag a rebuttal with the grades it fits,
-            or leave it untagged so it shows for all of them.</p>
-          ${rebuttals.length
-            ? rebuttals.map((r, i) => _mgRebuttalCard(r, i, rebuttals.length)).join('')
-            : '<div class="mg-adm-none">No rebuttals for this item yet.</div>'}
-          <div class="mg-radd">
-            <div class="mg-adm-sub">Add a rebuttal</div>
-            ${_mgRebuttalCard(newReb, 0, 1)}
-          </div>
-        </section>
-      </div>`;
+    return `<section class="mg-adm-sec">
+        <div class="mg-adm-sech"><h4>What it says</h4>
+          <span class="mg-adm-sechint">Saved one row at a time &middot; live for every store immediately</span></div>
+        <div class="mg-adm-text">
+          ${shared}
+          <div class="mg-tsecs">${MG_TEXT_SECTIONS.map(_mgHelpSection).join('')}</div>
+          <section class="mg-tsec mg-tsec-reb">
+            <header class="mg-tsec-h">
+              <span class="mg-tsec-ic mg-tsec-talk">${_mgTextIcon('talk')}</span>
+              <h4>Rebuttals</h4>
+              <span class="mg-tsec-n">${rebuttals.length}</span>
+            </header>
+            <p class="mg-tsec-hint">What to say when the customer argues the offer. Tag a rebuttal with the grades it fits,
+              or leave it untagged so it shows for all of them. Open one at a time &mdash; anything you've typed is kept while it's shut.</p>
+            ${rebuttals.length
+              ? `<div class="mg-raccs">${rebuttals.map(r => _mgRebuttalBar(r)).join('')}</div>`
+              : '<div class="mg-adm-none">No rebuttals for this item yet.</div>'}
+            <div class="mg-radd">${_mgRebuttalBar(newReb)}</div>
+          </section>
+        </div>
+      </section>`;
 }
 
 function _mgRenderAdmin(body) {
+    const dev = _mgAdminDevice();
+    // One transparent layer behind whichever menu is open, so clicking anywhere
+    // off it closes it. Sits under both (z-index 30) and above everything else.
+    const dismiss = (_mgAdmin.pickOpen || _mgAdmin.cell)
+        ? '<div class="mg-dismiss" onclick="mgAdminDismiss()"></div>' : '';
     body.innerHTML = `<div class="mg-adm">
+        ${dismiss}
         ${_mgAdminHead()}
-        ${_mgAdmin.tab === 'adjust' ? _mgAdjustPane()
-          : _mgAdmin.tab === 'text' ? _mgTextPane()
-          : _mgTiersPane()}
+        ${dev
+          ? `<p class="mg-adm-lead">Everything this item pays and everything it tells your buyers, on one screen.
+               Cell moves are queued and saved together; wording saves a row at a time.</p>
+             ${_mgAdminNumbers()}
+             ${_mgTextPane()}`
+          : `<p class="mg-adm-lead">Pick an item to edit what it pays and what it tells your buyers.</p>
+             <div class="mg-wait mg-wait-lad">
+               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+               <span><b>Pick an item</b> to get started.</span>
+             </div>`}
       </div>`;
+
+    // Open the list on the item you're already editing, not on Accessories.
+    // scrollTop rather than scrollIntoView so the page behind never moves.
+    if (_mgAdmin.pickOpen) {
+        const menu = body.querySelector('.mg-picker-menu');
+        const on = menu && menu.querySelector('.mg-picker-opt.on');
+        if (on) menu.scrollTop = Math.max(0, on.offsetTop - 64);
+    }
 }
 
 // Detects the operations page and opens the requested sub-tab (defaults to
@@ -6099,6 +6488,37 @@ function showStatsView(name) {
     });
 }
 
+/* Who actually holds the company record.
+ *
+ * A "Company" row carries only the number and the month — no store — so the
+ * headline never said whose record it was, even though the answer sits in the
+ * leaderboard directly underneath it. Half the metrics have no Company row at
+ * all and already fall back to the top store, in which case the holder IS that
+ * row and there is nothing to look up.
+ *
+ * Matching is on the parsed number, not the string: these values are hand-typed
+ * and inconsistently spaced ("$ 11,212.00"). Subtext only breaks ties, since two
+ * stores can legitimately hold the same figure — and when it can't break one,
+ * both names are shown rather than one picked arbitrarily.
+ *
+ * If nothing matches we say nothing. A Company row no store's number reproduces
+ * is a company-wide total rather than somebody's record, and naming a store for
+ * it would be worse than the blank that's there today.
+ */
+function _recHolders(champ, stores) {
+    if (!champ || !stores.length) return [];
+    if (stores.includes(champ)) return [String(champ.section).trim()];
+
+    const target = parseNum(champ.value);
+    if (!target) return [];
+    const hits = stores.filter(s => parseNum(s.value) === target);
+    if (hits.length < 2) return hits.map(s => String(s.section).trim());
+
+    const norm = v => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const exact = hits.filter(s => norm(s.subtext) === norm(champ.subtext));
+    return (exact.length ? exact : hits).map(s => String(s.section).trim());
+}
+
 function renderRecords() {
     const cont = document.getElementById('recordsContainer');
     if (!cont) return;
@@ -6133,11 +6553,13 @@ function renderRecords() {
             <div class="rec-h">${l}</div>`;
 
         if (cR) {
+            const who = _recHolders(cR, d.s).map(escapeHtml).join(' &middot; ');
+            const when = cR.subtext || '';
             html += `
             <div class="rec-champ">
                 <div class="cc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/></svg> Company Record</div>
                 <div class="cv">${cR.value || '-'}</div>
-                <div class="cs">${cR.subtext || ''}</div>
+                <div class="cs">${who ? `<b class="ch">${who}</b>` : ''}${who && when ? '<span class="cd">&middot;</span>' : ''}${when}</div>
             </div>`;
         }
 
@@ -6887,7 +7309,10 @@ function handleSignOut() {
     // next person to sign in on this counter machine inherits the last buyer's item
     // and projection.
     if (typeof _mgResetSelection === 'function') _mgResetSelection();
-    if (typeof _mgAdmin === 'object' && _mgAdmin) { _mgAdmin.open = false; _mgAdmin.tDev = ''; }
+    if (typeof _mgAdmin === 'object' && _mgAdmin) {
+        _mgAdmin.open = false; _mgAdmin.deviceId = ''; _mgAdmin.cell = null;
+        if (_mgAdmin.pending) _mgAdmin.pending.clear();
+    }
     // Same reasoning for half-typed coaching text: it must not be sitting in the
     // editor for whoever signs in next, still attributed to them when saved.
     if (typeof _mgTextDrafts === 'object') _mgTextDrafts = {};
@@ -11961,9 +12386,10 @@ function initMultiStoreSwitcher() {
 function checkInstantNotifCache() {
     const currentUser = sessionStorage.getItem('speeksUserName');
     if (!currentUser) return;
+    const cleanUser = String(currentUser).trim().toLowerCase();   // one key spelling everywhere
 
-    const hasAnns   = localStorage.getItem('speeksUnreadAnnouncements_' + currentUser) === 'true';
-    const hasPatch  = localStorage.getItem('speeksUnseenPatchNotes_'     + currentUser) === 'true';
+    const hasAnns   = localStorage.getItem('speeksUnreadAnnouncements_' + cleanUser) === 'true';
+    const hasPatch  = localStorage.getItem('speeksUnseenPatchNotes_'     + cleanUser) === 'true';
     if (hasAnns || hasPatch) {
         const badge = document.getElementById('notifBadge');
         if (badge) { badge.style.display = 'block'; badge.classList.add('active'); }
@@ -12789,7 +13215,7 @@ async function publishAnnouncement() {
         return;
     }
 
-    btn.innerHTML = "Publishing... ⏳";
+    btn.innerHTML = "Publishing...";
     btn.style.opacity = "0.7";
     btn.style.pointerEvents = "none";
 
@@ -12797,7 +13223,7 @@ async function publishAnnouncement() {
     let docName = null;
 
     if (file) {
-        btn.innerHTML = "Uploading document... ⏳";
+        btn.innerHTML = "Uploading document...";
         try {
             const safeName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
             const uploadResp = await fetch(
@@ -12825,7 +13251,7 @@ async function publishAnnouncement() {
             console.error('Document upload error:', e);
             alert('Document upload failed. The announcement will be published without the attachment.');
         }
-        btn.innerHTML = "Publishing... ⏳";
+        btn.innerHTML = "Publishing...";
     }
 
     let compiledMessage = "";
@@ -12862,7 +13288,9 @@ async function publishAnnouncement() {
         console.error("Error publishing announcement:", error);
         alert("Failed to publish announcement. Please try again.");
     } finally {
-        btn.innerHTML = "<span>Publish to All Stores</span> 🚀";
+        // Matches the shells' markup exactly, so the restored button is identical
+        // to the one they render rather than a bare span.
+        btn.innerHTML = '<span class="align-center gap-8">Publish to All Stores</span>';
         btn.style.opacity = "1";
         btn.style.pointerEvents = "auto";
     }
@@ -20413,10 +20841,10 @@ const FEATURE_CATALOG = [
     { key: 'widget-aging-inventory',   label: 'Aging Inventory — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'cap-aging-dm',             label: 'Aging Inventory (DM)',          tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
     { key: 'widget-ops-marginguide',   label: 'Margin Guide (Tab)',            tab: 'widgets', group: 'Operations', def: 'all' },
-    // The editor behind the Margin Guide's "Manage ladder" button. Listed so it can
+    // The editor behind the Margin Guide's "Edit" button. Listed so it can
     // be delegated or pulled back without a code change; mgCanEditLadder() gates it
     // in JS as well, and the edge function enforces the same roles on every write.
-    { key: 'tool-margin-manage',       label: 'Margin Guide — Manage Ladder',  tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
+    { key: 'tool-margin-manage',       label: 'Margin Guide — Edit',           tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
     { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'tom', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
@@ -21798,9 +22226,17 @@ async function loadVarianceReplies() {
             const active = _msmDefaultStore();
             const seen = _vrGetReviewSeen();
             _vrPeriods.forEach(p => {
-                if (p.dm_notes_at && (!active || (p.store || '').toUpperCase() === active)) {
-                    seen[p.id] = new Date(p.dm_notes_at).getTime();
-                }
+                if (active && (p.store || '').toUpperCase() !== active) return;
+                // Stamp the latest thing that could have surfaced this period. A
+                // cleared store has no dm_notes_at to stamp against, so the upload
+                // itself is what "I've looked at this" refers to — without it the
+                // new-report nudge would never clear. Taking the max keeps the
+                // existing DM-review behaviour exactly as it was: notes that arrive
+                // later are still newer than the stamp, so they re-surface.
+                const stamps = [seen[p.id] || 0];
+                if (p.dm_notes_at) stamps.push(new Date(p.dm_notes_at).getTime());
+                if (p.uploaded_at) stamps.push(new Date(p.uploaded_at).getTime());
+                seen[p.id] = Math.max(...stamps.filter(Number.isFinite));
             });
             _vrSetReviewSeen(seen);
             if (typeof checkVarianceReminders === 'function') checkVarianceReminders();
@@ -22765,10 +23201,20 @@ function _vrMaybePopup() {
     const replyStores = [];     // stores with DM notes still awaiting a reply
     let replyCount = 0, replyOverdue = false;
     const reviewedStores = [];  // DM reviewed, no reply needed — FYI until they look
+    const clearedStores = [];   // in the clear, but a report they haven't opened
 
     for (const p of _vrMyPeriodsCache) {
-        if (_vrStoreCleared(p.store)) continue;
         const store = (p.store || '').toUpperCase();
+        // "In the clear" means no line-by-line replies are required. It does NOT
+        // mean the report is irrelevant — the manager still has to read their team
+        // variance and the store total, which is the whole reason the tool still
+        // shows them those. So a new upload surfaces once and clears when they open
+        // the tool, instead of being silently swallowed (Ethan, 2026-08-01).
+        if (_vrStoreCleared(p.store)) {
+            const upMs = new Date(p.uploaded_at).getTime();
+            if (upMs && upMs > (reviewSeen[p.id] || 0)) clearedStores.push(store);
+            continue;
+        }
         const unanswered = (p.items || 0) - (p.answered || 0);
         const due = new Date(p.manager_due_at).getTime();
         if (unanswered > 0) {
@@ -22794,7 +23240,7 @@ function _vrMaybePopup() {
         }
     }
 
-    if (!explainStores.length && !replyStores.length && !reviewedStores.length) {
+    if (!explainStores.length && !replyStores.length && !reviewedStores.length && !clearedStores.length) {
         // Nothing outstanding — drop the row so it clears once the work's done.
         const b = document.getElementById('varianceAlertBubble');
         if (b && getComputedStyle(b).display !== 'none') {
@@ -22815,16 +23261,26 @@ function _vrMaybePopup() {
     if (reviewedStores.length) {
         parts.push(`${_vrFmtStores(reviewedStores)}: DM reviewed your replies — take a look`);
     }
+    if (clearedStores.length) {
+        parts.push(`${_vrFmtStores(clearedStores)}: new variance report — you're in the clear, but review your numbers`);
+    }
     const summary = parts.join(' · ');
     const overdue = explainOverdue || replyOverdue;
-    const coveredStores = [...explainStores, ...replyStores, ...reviewedStores];
+    const coveredStores = [...explainStores, ...replyStores, ...reviewedStores, ...clearedStores];
+    // Nothing is actually DUE when the only rows are "go and look" ones — a
+    // cleared store owes no replies, and a DM review that asked for none is
+    // information. Flagged so the feed card can drop the red "Due" badge and stop
+    // calling it "Variance Replies Due", which it isn't. Same data-attribute
+    // pattern the KPI reminders use for their overdue flip.
+    const fyiOnly = !explainStores.length && !replyStores.length;
     // Three tiers: overdue → dueSoon → normal. The bubble itself is invisible
     // (retired toast); only the summary reaches the feed, which drives both the row
     // text and — since no data-sig is set — the snooze signature, so a changed
     // count OR a changed urgency tag re-surfaces a snoozed row.
     _vrRenderBubble(overdue ? '🚨' : (explainDueSoon ? '⏰' : '📊'),
-        overdue ? 'Variance replies overdue' : (explainDueSoon ? 'Variance replies due tomorrow' : 'Variance replies needed'),
-        summary + '.', summary, coveredStores);
+        fyiOnly ? 'New variance report to review'
+                : (overdue ? 'Variance replies overdue' : (explainDueSoon ? 'Variance replies due tomorrow' : 'Variance replies needed')),
+        summary + '.', summary, coveredStores, fyiOnly);
 }
 
 // Same shared red bubble as the claim reminders, with a button into the tab.
@@ -22870,7 +23326,7 @@ function closeVarianceAlertBubble() {
     if (b) b.style.display = 'none';
 }
 
-function _vrRenderBubble(icon, title, bodyText, summary, stores) {
+function _vrRenderBubble(icon, title, bodyText, summary, stores, fyiOnly) {
     const b = _vrBubbleEl();
     if (!b) return;
     const iconEl = document.getElementById('varianceAlertBubbleIcon');
@@ -22879,6 +23335,8 @@ function _vrRenderBubble(icon, title, bodyText, summary, stores) {
     // its title (already the feed row's own title). The body/summary is the point.
     if (textEl) {
         textEl.dataset.summary = String(summary || bodyText).replace(/\s+/g, ' ').trim();
+        // Read by _samReminderCfg to soften the card when nothing is owed.
+        if (fyiOnly) textEl.dataset.fyi = '1'; else delete textEl.dataset.fyi;
         // Stores this alert covers → the feed uses it to route an MSM single-store
         // click to that store (see _samGatherReminders).
         if (stores && stores.length) textEl.dataset.stores = [...new Set(stores)].join(',');
@@ -24884,6 +25342,14 @@ function _samMarkAnnRead(rowId) {
     set.add(rowId);
     localStorage.setItem(key, JSON.stringify([...set]));
     try { postWrite(CMS_URL, { type: 'mark_read', user, rowIds: [rowId] }).catch(() => {}); } catch (_) {}
+    // The bell flag is only maintained by loadCMS(), so recompute it here from the
+    // data already in hand — otherwise reading without a refetch either leaves the
+    // dot lit with nothing behind it, or clears it while others are still unread.
+    try {
+        const anyUnread = (window._samAnnData || []).some(a => !_samAnnRead(a));
+        const bk = 'speeksUnreadAnnouncements_' + clean;
+        if (anyUnread) localStorage.setItem(bk, 'true'); else localStorage.removeItem(bk);
+    } catch (_) {}
     if (typeof updateMainBadge === 'function') updateMainBadge();
 }
 
@@ -25074,8 +25540,18 @@ function samCleanHotbar() {
 // tool" logic the old alert bubble ran on click — the hub + dashboard cards now
 // carry it so clicking a reminder jumps straight to its tool.
 function _samReminderCfg() {
+    // Variance flips between a real deadline and a "go and look" — a store marked
+    // in the clear owes no replies but still has to read its numbers. data-fyi is
+    // set by _vrRenderBubble off the same data that wrote the snippet, so the badge,
+    // the title and the colour can't disagree with the text underneath them.
+    const _vrT = document.getElementById('varianceAlertBubbleText');
+    const _vrFyi = !!(_vrT && _vrT.dataset && _vrT.dataset.fyi);
     const cfg = [
-        { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText', title: 'Variance Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#vreplies'" },
+        { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText',
+          title: _vrFyi ? 'Variance Report to Review' : 'Variance Replies Due',
+          urgency: _vrFyi ? 1 : 2, due: _vrFyi ? 'Review' : 'Due',
+          cls: _vrFyi ? 'sam-due-amber' : 'sam-due-red',
+          action: "window.location.href='workspace.html#vreplies'" },
         // A DM has no store-scoped claims tool — send them to the all-stores
         // oversight view instead, which is where they can actually act.
         { key: 'claims', id: 'claimAlertBubble', text: 'claimAlertBubbleText', title: 'Insurance Claims Aging', urgency: 2, due: 'Aging', cls: 'sam-due-red',
@@ -25526,6 +26002,33 @@ function setHubFilter(v) { window._hubFilter = v; renderHubFeed(); }
 function hubMarkRead(rowId) {
     if (typeof _samMarkAnnRead === 'function') _samMarkAnnRead(rowId);
     if (typeof loadCMS === 'function') loadCMS();
+}
+
+// The same read, but patched into the card that's already on screen instead of
+// refetching. Used by the reaction path, where loadCMS() would be wrong twice
+// over: it rebuilds the hub feed's innerHTML (scrolling it back to the top under
+// a click that wasn't about navigating), and it can return before the reaction
+// POST lands, redrawing the card without the reaction the user just added.
+function _annMarkReadInPlace(rowId) {
+    if (typeof _samMarkAnnRead !== 'function') return;
+    _samMarkAnnRead(rowId);
+
+    const card = document.querySelector(`.hub-item[data-hub-id="ann-${rowId}"]`);
+    if (card) {
+        card.classList.add('read');
+        card.removeAttribute('data-ann-id');
+        const kind = card.querySelector('.hub-kind');
+        if (kind) kind.textContent = 'Read · Announcement';
+        const btn = card.querySelector('.hub-markread');
+        if (btn) btn.remove();
+    }
+    // renderHubFeed() rebuilds from these stored strings on every filter change,
+    // so re-store the patched card — otherwise switching filters resurrects the
+    // unread version until the next loadCMS().
+    const item = (window._hubAnnItems || []).find(i => String(i.rowId) === String(rowId));
+    if (item) { item.read = true; if (card) item.html = card.outerHTML; }
+
+    try { if (typeof renderActionFeed === 'function') renderActionFeed(); } catch (_) {}
 }
 
 // Open the hub straight to the patch-notes filter (from the main feed's row).
