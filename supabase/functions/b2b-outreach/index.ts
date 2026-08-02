@@ -90,15 +90,27 @@ const longDate = (d: string | null) => d
 const daysBetween = (a: string, b: string) =>
   Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
 
-// Leadership list, same table and key the weekly report reads.
-async function loadRecipients(sb: any): Promise<string[]> {
+// CRM settings: the CEO's single notification address + toggles. This REPLACES
+// the old leadership list — reach-out reminders now go only where the CEO says.
+async function loadSettings(sb: any): Promise<{ notify_email: string | null; enabled: boolean; overdue_only: boolean }> {
   try {
-    const { data } = await sb.from("email_recipients").select("email").eq("list_key", "weekly_leadership");
-    const list = (data || []).map((r: any) => r.email).filter(Boolean);
-    return list.length ? list : FALLBACK_TO;
+    const { data } = await sb.from("b2b_crm_settings").select("notify_email,enabled,overdue_only").eq("id", 1).maybeSingle();
+    return {
+      notify_email: (data?.notify_email || "").trim() || null,
+      enabled: data ? data.enabled !== false : true,
+      overdue_only: !!data?.overdue_only,
+    };
   } catch (_) {
-    return FALLBACK_TO;
+    return { notify_email: null, enabled: true, overdue_only: false };
   }
+}
+
+// "Every 2 weeks" / "Every 3 months" / "Every 10 days"
+function cadenceLabel(every: number | null, unit: string | null): string {
+  const n = Number(every) || 0;
+  const u = unit || "month";
+  if (n < 1) return "—";
+  return `Every ${n} ${u}${n === 1 ? "" : "s"}`;
 }
 
 async function sendEmail(to: string[], subject: string, html: string) {
@@ -169,8 +181,7 @@ function digestHtml(rows: any[], today: string): string {
                            font-size:12px;color:${C.charcoal};">${esc(r.outreach_note)}</td></tr>
           </table>` : ""}
           <div style="margin-top:8px;font-size:11px;color:${C.faint};">
-            Every ${Number(r.outreach_months)} month${Number(r.outreach_months) === 1 ? "" : "s"}
-            from ${longDate(r.outreach_start)} &nbsp;·&nbsp; due ${longDate(due)}
+            ${cadenceLabel(r.outreach_every, r.outreach_unit)} from ${longDate(r.outreach_start)} &nbsp;·&nbsp; due ${longDate(due)}
           </div>
         </td></tr>
       </table>
@@ -236,31 +247,66 @@ Deno.serve(async (req: Request) => {
     try {
       const body = JSON.parse(await req.text());
       const action = body.action;
+
+      // CEO-only in the UI: the notification email + toggles for all reach-out mail.
+      if (action === "set_crm_settings") {
+        const email = str(body.notify_email, 200, "Notification email");
+        if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+          throw new Invalid("That doesn't look like a valid email address.");
+        }
+        const { error } = await supabase.from("b2b_crm_settings").update({
+          notify_email: email,
+          enabled: body.enabled !== false,
+          overdue_only: body.overdue_only === true,
+          updated_at: new Date().toISOString(),
+          updated_by: str(body.user, 120, "User"),
+        }).eq("id", 1);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        const { data } = await supabase.from("b2b_crm_settings")
+          .select("notify_email,enabled,overdue_only").eq("id", 1).maybeSingle();
+        return jsonResponse({ success: true, settings: data });
+      }
+
       const clientId = str(body.client_id, 64, "Client", true)!;
 
       if (action === "set_schedule") {
         const active = body.active === true;
         const start  = isoDate(body.start, "Start date");
-        const months = body.months === null || body.months === undefined || body.months === ""
-          ? null : Math.trunc(Number(body.months));
-        if (months !== null && (!Number.isFinite(months) || months < 1 || months > 60)) {
-          throw new Invalid("The cadence must be between 1 and 60 months.");
+        const unit   = str(body.unit, 8, "Unit") || "month";
+        if (!["day", "week", "month"].includes(unit)) throw new Invalid("Cadence unit must be day, week or month.");
+        const every = body.every === null || body.every === undefined || body.every === ""
+          ? null : Math.trunc(Number(body.every));
+        if (every !== null && (!Number.isFinite(every) || every < 1 || every > 365)) {
+          throw new Invalid("The cadence interval must be between 1 and 365.");
         }
-        if (active && (!start || !months)) {
+        if (active && (!start || !every)) {
           throw new Invalid("Turning outreach on needs both a start date and a cadence.");
         }
         const { error } = await supabase.from("b2b_clients").update({
           outreach_active: active,
           outreach_start: start,
-          outreach_months: months,
+          outreach_every: every,
+          outreach_unit: every ? unit : null,
+          outreach_months: (every && unit === "month") ? every : null,  // legacy column, no longer read
           outreach_note: str(body.note, 2000, "Note"),
+          outreach_reviewed_at: new Date().toISOString(),               // configuring counts as reviewed
         }).eq("id", clientId);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
 
         const { data: fresh } = await supabase.from("b2b_client_list")
-          .select("outreach_active,outreach_start,outreach_months,outreach_note,outreach_next_due")
+          .select("outreach_active,outreach_start,outreach_every,outreach_unit,outreach_note,outreach_next_due,outreach_reviewed_at")
           .eq("id", clientId).maybeSingle();
         return jsonResponse({ success: true, client: fresh });
+      }
+
+      // Mark a client handled without (or before) a cadence — clears it from the
+      // "New Clients" queue so the CEO can zero the badge for clients that don't
+      // need reminders.
+      if (action === "mark_reviewed") {
+        const { error } = await supabase.from("b2b_clients")
+          .update({ outreach_reviewed_at: new Date().toISOString() }).eq("id", clientId);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        return jsonResponse({ success: true });
       }
 
       // Someone actually reached out. This is the clock that moves the schedule
@@ -297,12 +343,20 @@ Deno.serve(async (req: Request) => {
     const url = new URL(req.url);
     const today = chicagoToday();
 
+    // CRM settings + New-Clients badge count (clients never reviewed).
+    if (url.searchParams.get("settings")) {
+      const settings = await loadSettings(supabase);
+      const { count } = await supabase.from("b2b_clients")
+        .select("id", { count: "exact", head: true }).is("outreach_reviewed_at", null);
+      return jsonResponse({ success: true, settings, new_count: count || 0 });
+    }
+
     // The app's own read: everything with a cadence, so the panel can show due,
     // overdue and upcoming without a second call.
     if (url.searchParams.get("due")) {
       const { data, error } = await supabase.from("b2b_client_list")
         .select("id,company,acronym,contact,contact_email,contact_phone,deal_count,lifetime_cost," +
-                "last_deal_at,outreach_active,outreach_start,outreach_months,outreach_note," +
+                "last_deal_at,outreach_active,outreach_start,outreach_every,outreach_unit,outreach_note," +
                 "outreach_last_touch_at,outreach_next_due")
         .eq("outreach_active", true).limit(2000);
       if (error) return jsonResponse({ success: false, error: error.message }, 500);
@@ -318,10 +372,11 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ success: false, error: "Not authorized" }, 401);
     }
     const dryRun = url.searchParams.get("dryRun") === "1";
+    const settings = await loadSettings(supabase);
 
     const { data, error } = await supabase.from("b2b_client_list")
       .select("id,company,acronym,contact,contact_email,contact_phone,deal_count,lifetime_cost," +
-              "last_deal_at,outreach_active,outreach_start,outreach_months,outreach_note," +
+              "last_deal_at,outreach_active,outreach_start,outreach_every,outreach_unit,outreach_note," +
               "outreach_last_touch_at,outreach_reminded_for,outreach_next_due")
       .eq("outreach_active", true).limit(2000);
     if (error) return jsonResponse({ success: false, error: error.message }, 500);
@@ -329,8 +384,9 @@ Deno.serve(async (req: Request) => {
     // Due, and not already reminded about THIS occurrence. Comparing against the
     // due date rather than "did we email today" is what makes the job idempotent:
     // it can run every morning, or twice, and still send once per occurrence.
+    // overdue_only trims out clients that are merely due today (not yet late).
     const rows = (data || [])
-      .filter((r: any) => r.outreach_next_due && r.outreach_next_due <= today)
+      .filter((r: any) => r.outreach_next_due && r.outreach_next_due < (settings.overdue_only ? today : (today + "~")))
       .filter((r: any) => !r.outreach_reminded_for || r.outreach_reminded_for < r.outreach_next_due)
       .sort((a: any, b: any) => String(a.outreach_next_due).localeCompare(String(b.outreach_next_due)));
 
@@ -340,15 +396,24 @@ Deno.serve(async (req: Request) => {
     const subject = rows.length === 1
       ? `B2B Outreach: ${rows[0].company} Is Due A Check-In`
       : `B2B Outreach: ${rows.length} Clients Are Due A Check-In`;
+
+    // Recipient: the CEO's address from CRM settings (a ?to= override wins for tests).
+    const override = url.searchParams.get("to");
+    const to = override ? [override] : (settings.notify_email ? [settings.notify_email] : []);
+
     if (dryRun) {
       return jsonResponse({
-        success: true, today, due: rows.length, sent: false, subject,
+        success: true, today, due: rows.length, sent: false, subject, to,
+        enabled: settings.enabled, overdue_only: settings.overdue_only,
         clients: rows.map((r: any) => ({ company: r.company, due: r.outreach_next_due })), html,
       });
     }
+    // Nothing to do if the CEO has notifications off or hasn't set an address yet.
+    if (!override && (!settings.enabled || !to.length)) {
+      return jsonResponse({ success: true, today, due: rows.length, sent: false,
+        reason: !settings.enabled ? "notifications disabled" : "no notification email set" });
+    }
 
-    const override = url.searchParams.get("to");
-    const to = override ? [override] : await loadRecipients(supabase);
     const res = await sendEmail(to, subject, html);
 
     // Only mark reminded when the send actually landed, so a relay outage means

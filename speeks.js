@@ -7924,8 +7924,13 @@ function _b2bIsCorp()    { return B2B_CORP_ROLES.includes(_b2bRole()) || _b2bHas
 function _b2bIsDM()      { return _b2bRole() === 'district manager' || _b2bHasCorpDelegation(); }
 // Accepting a quote is deliberately NOT delegable -- it locks the money.
 function _b2bCanAccept()  { return B2B_ACCEPT_ROLES.includes(_b2bRole()); }
-function _b2bCanClients() { return ['ceo', 'district manager'].includes(_b2bRole()); }
+function _b2bCanClients() { return ['ceo', 'district manager', 'tom'].includes(_b2bRole()); }
+// CRM notification setup (cadences + who gets the reach-out emails) is CEO-only.
+function _b2bCanCrm() { return _b2bRole() === 'ceo'; }
 function _b2bCanOverview(){ return ['ceo', 'district manager'].includes(_b2bRole()); }
+// Employees / trainees help PRICE items but never escalate: no submit, no quote,
+// no listing/complete, no accept. Pricing-edit only.
+function _b2bIsEmployee(){ return ['employee', 'training'].includes(_b2bRole()); }
 
 // The stores this user acts for. An MSM covers both of theirs.
 function _b2bMyStores() {
@@ -7949,6 +7954,11 @@ function _b2bActionFor(deal) {
     const st = deal.stage;
     if (st === 'completed' || st === 'declined') return null;
     const mine = _b2bMyStores();
+
+    // Employees/trainees may only help price their own store's pickups — no escalation.
+    if (_b2bIsEmployee()) {
+        return (st === 'pricing' && mine.includes(deal.pricing_store)) ? B2B_ACTIONS.pricing : null;
+    }
 
     if (st === 'pricing') {
         // CORP prices its own pickups; everything else belongs to the store.
@@ -7974,6 +7984,7 @@ function _b2bClickKind(deal) {
 // screen -- each still confirms first, because both are one-way doors.
 // Anything needing input (a store, a name, prices) is deliberately absent.
 function _b2bQuickAction(d) {
+    if (_b2bIsEmployee()) return null;   // employees never escalate from a card
     if (d.stage === 'quote' && _b2bCanAccept()) {
         return { label: 'Mark Accepted', call: `b2bQuickAccept('${d.id}',this)` };
     }
@@ -8196,6 +8207,7 @@ async function b2bRefresh() {
         _b2bDeals = deals.map(_b2bShapeDeal);
         _b2bClients = clients;
         b2bRender();
+        if (typeof crmRefreshBadge === 'function') crmRefreshBadge();
     } catch (_) { /* keep what's on screen */ }
 }
 
@@ -8574,7 +8586,6 @@ function _b2bRenderClients() {
         : '<tr><td colspan="8" class="b2b-doc-empty">No clients yet — add the first one below.</td></tr>';
 
     return `
-        ${_b2bOutreachStrip()}
         <div class="b2b-sec">
             <div class="b2b-sec-h"><span>Clients</span><span class="b2b-sec-n">${_b2bClients.length}</span></div>
             <table class="cb-table b2b-ctable">
@@ -8854,9 +8865,7 @@ function _b2bClientDrawer(id) {
         <tr class="b2b-cdrop" id="b2bCDrop-${id}">
             <td colspan="8">
                 <div class="b2b-doc-empty">No deals with ${escapeHtml(c.company)} yet.
-                    Start one with New Deal.</div>
-                ${_b2bOutreachPanel(c)}
-            </td>
+                    Start one with New Deal.</div>            </td>
         </tr>`;
     }
 
@@ -8902,13 +8911,215 @@ function _b2bClientDrawer(id) {
     return `
         <tr class="b2b-cdrop" id="b2bCDrop-${id}">
             <td colspan="8">
-                ${stats}
-                ${_b2bOutreachPanel(c)}
-                <div class="b2b-cd-h">Deals</div>
+                ${stats}                <div class="b2b-cd-h">Deals</div>
                 <div class="b2b-cdeals">${dealRows}</div>
                 ${hidden}
             </td>
         </tr>`;
+}
+
+// ============================================================================
+// CRM SETTINGS (CEO only) — the notification half of the mini CRM.
+// Three tabs: per-client cadence (Client List), a queue of unconfigured clients
+// (New Clients + badge), and the single email address all reach-out reminders
+// are sent to (Notifications). Cadence + email persist through b2b-outreach.
+// ============================================================================
+let _crmTab      = 'clients';
+let _crmSearch   = '';
+let _crmSettings = { notify_email: '', enabled: true, overdue_only: false };
+const CRM_UNITS  = ['day', 'week', 'month'];
+
+function _crmNewClients() { return _b2bClients.filter(c => !c.outreach_reviewed_at); }
+
+// Badge on the gear button + the New Clients tab. Safe anywhere: no-ops when the
+// elements aren't present (e.g. other pages).
+function crmRefreshBadge() {
+    const n = _crmNewClients().length;
+    ['crmGearBadge', 'crmTabBadge'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.textContent = n; el.style.display = n > 0 ? '' : 'none'; }
+    });
+}
+
+async function crmLoadSettings() {
+    try {
+        const res = await fetch(`${B2B_OUTREACH_URL}?settings=1&v=${Date.now()}`);
+        const j = await res.json();
+        if (j && j.settings) _crmSettings = {
+            notify_email: j.settings.notify_email || '',
+            enabled: j.settings.enabled !== false,
+            overdue_only: !!j.settings.overdue_only,
+        };
+    } catch (_) { /* keep what we have */ }
+}
+
+async function crmOpen() {
+    if (!_b2bCanCrm()) return;
+    const modal = document.getElementById('crmModal');
+    if (!modal) return;
+    _crmTab = 'clients'; _crmSearch = '';
+    document.getElementById('crmBody').innerHTML = '<div class="status-message">Loading…</div>';
+    closeAllModals();
+    modal.classList.add('show');
+    lockAndBlurScreen();
+    await crmLoadSettings();
+    if (!_b2bClients.length) { try { _b2bClients = await _b2bGet('clients=1'); } catch (_) {} }
+    crmSyncTabs();
+    crmRender();
+}
+
+function crmSyncTabs() {
+    document.querySelectorAll('#crmTabs .crm-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === _crmTab));
+    const n = _crmNewClients().length;
+    const tb = document.getElementById('crmTabBadge');
+    if (tb) { tb.textContent = n; tb.style.display = n > 0 ? '' : 'none'; }
+}
+
+function crmTab(t) { _crmTab = t; crmSyncTabs(); crmRender(); }
+
+function crmRender() {
+    const body = document.getElementById('crmBody');
+    if (!body) return;
+    if (_crmTab === 'settings') body.innerHTML = _crmSettingsHtml();
+    else if (_crmTab === 'new') body.innerHTML = _crmNewHtml();
+    else body.innerHTML = _crmClientsHtml();
+}
+
+function _crmFilter(list) {
+    const q = _crmSearch.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter(c => (c.company || '').toLowerCase().includes(q)
+        || (c.acronym || '').toLowerCase().includes(q)
+        || (c.contact || '').toLowerCase().includes(q));
+}
+
+function _crmClientsHtml() {
+    const list = _crmFilter(_b2bClients.slice().sort((a, b) => String(a.company).localeCompare(String(b.company))));
+    const rows = list.length ? list.map(_crmClientRow).join('') : '<div class="b2b-doc-empty">No clients match.</div>';
+    return `
+        <p class="crm-help">Set how often each client should get a check-in reminder and the day it starts from. Reminders email the address on the Notifications tab — nothing shows in the app.</p>
+        <input class="form-input-lg crm-search" placeholder="Search clients…" value="${escapeHtml(_crmSearch)}" oninput="_crmSearch=this.value;_crmRenderList()">
+        <div class="crm-clist" id="crmClist">${rows}</div>`;
+}
+// Re-render just the list on search so the search box keeps focus.
+function _crmRenderList() {
+    const el = document.getElementById('crmClist');
+    if (!el) return;
+    const list = _crmFilter(_b2bClients.slice().sort((a, b) => String(a.company).localeCompare(String(b.company))));
+    el.innerHTML = list.length ? list.map(_crmClientRow).join('') : '<div class="b2b-doc-empty">No clients match.</div>';
+}
+
+function _crmNewHtml() {
+    const list = _crmNewClients().sort((a, b) => String(a.company).localeCompare(String(b.company)));
+    if (!list.length) return `<div class="crm-clear"><div class="crm-clear-em">✓</div><h4>All caught up</h4>
+        <p>Every client has been set up. New clients you add show up here to configure their reminders.</p></div>`;
+    return `<p class="crm-help">New clients that haven't been set up yet. Give them a reminder cadence, or mark that they don't need one — either clears them from this list.</p>
+        <div class="crm-clist">${list.map(_crmClientRow).join('')}</div>`;
+}
+
+function _crmClientRow(c) {
+    const on = !!c.outreach_active;
+    const every = c.outreach_every || 1;
+    const unit = c.outreach_unit || 'week';
+    const due = on ? _b2bDueLabel(c.outreach_next_due) : null;
+    const newTag = !c.outreach_reviewed_at ? '<span class="crm-newtag">NEW</span>' : '';
+    return `
+    <div class="crm-crow" id="crmRow-${c.id}">
+        <div class="crm-crow-top">
+            <span class="crm-co"><b>${escapeHtml(c.company)}</b> <span class="b2b-mono b2b-acr">${escapeHtml(c.acronym)}</span>${newTag}</span>
+            <span class="crm-when">${on && due
+                ? `<span class="b2b-age b2b-age-${due.tone === 'crit' ? 'crit' : due.tone === 'warn' ? 'warn' : 'ok'}">${escapeHtml(due.text)}</span>`
+                : '<span class="crm-off">No reminders</span>'}</span>
+        </div>
+        <label class="crm-toggle"><input type="checkbox" id="crmOn-${c.id}" ${on ? 'checked' : ''} onchange="_crmToggle('${c.id}',this.checked)"> Remind me to check in on this client</label>
+        <div class="crm-fields" id="crmFields-${c.id}" ${on ? '' : 'style="display:none;"'}>
+            <span class="crm-inline">Every
+                <input type="number" min="1" max="365" id="crmEvery-${c.id}" value="${every}" class="crm-num">
+                <select id="crmUnit-${c.id}" class="crm-sel">${CRM_UNITS.map(u => `<option value="${u}" ${unit === u ? 'selected' : ''}>${u}s</option>`).join('')}</select>
+                starting <input type="date" id="crmStart-${c.id}" value="${escapeHtml(c.outreach_start || _b2bToday())}" class="crm-date">
+            </span>
+            <input id="crmNote-${c.id}" class="form-input-lg crm-note" placeholder="What to bring up (goes in the reminder email)" value="${escapeHtml(c.outreach_note || '')}">
+        </div>
+        <div class="crm-crow-acts">
+            <button class="b2b-btn b2b-btn-primary b2b-mini" onclick="crmSaveSchedule('${c.id}',this)">Save</button>
+            ${!c.outreach_reviewed_at ? `<button class="b2b-mini" onclick="crmMarkReviewed('${c.id}',this)">No reminders needed</button>` : ''}
+            ${on && c.contact_email ? `<button class="b2b-mini" onclick="b2bDraftOutreach('${c.id}')">Draft Email</button>` : ''}
+            ${on ? `<button class="b2b-mini" onclick="b2bLogTouch('${c.id}',this)">Mark Reached Out</button>` : ''}
+        </div>
+    </div>`;
+}
+function _crmToggle(id, on) { const f = document.getElementById('crmFields-' + id); if (f) f.style.display = on ? '' : 'none'; }
+
+async function crmSaveSchedule(id, btn) {
+    const on    = document.getElementById('crmOn-' + id)?.checked || false;
+    const every = document.getElementById('crmEvery-' + id)?.value || '';
+    const unit  = document.getElementById('crmUnit-' + id)?.value || 'month';
+    const start = document.getElementById('crmStart-' + id)?.value || '';
+    const note  = document.getElementById('crmNote-' + id)?.value || '';
+    if (on && !start) return alert('Pick the date the schedule should start from.');
+    if (on && (!every || Number(every) < 1)) return alert('Set how often the reminder should repeat.');
+    try {
+        await _b2bBusy(btn, 'Saving…', async () => {
+            const res = await fetch(B2B_OUTREACH_URL, {
+                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ action: 'set_schedule', client_id: id, active: on, start, every, unit, note }),
+            });
+            const out = await res.json().catch(() => ({}));
+            if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
+        });
+        await b2bRefresh();
+        crmSyncTabs(); crmRender();
+    } catch (e) { alert(`Couldn't save the schedule: ${e.message}`); }
+}
+
+async function crmMarkReviewed(id, btn) {
+    try {
+        await _b2bBusy(btn, 'Saving…', async () => {
+            const res = await fetch(B2B_OUTREACH_URL, {
+                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ action: 'mark_reviewed', client_id: id }),
+            });
+            const out = await res.json().catch(() => ({}));
+            if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
+        });
+        await b2bRefresh();
+        crmSyncTabs(); crmRender();
+    } catch (e) { alert(`Couldn't update that client: ${e.message}`); }
+}
+
+function _crmSettingsHtml() {
+    const s = _crmSettings;
+    return `
+    <p class="crm-help">Where B2B reach-out reminders are sent. <b>Every</b> notification for needing to contact a client goes to this address — nothing appears inside the website.</p>
+    <div class="crm-settings">
+        <label class="form-label-caps">Notification email</label>
+        <input id="crmEmail" class="form-input-lg" type="email" value="${escapeHtml(s.notify_email || '')}" placeholder="ceo@speekstechnology.com">
+        <label class="crm-toggle" style="margin-top:16px;"><input type="checkbox" id="crmEnabled" ${s.enabled ? 'checked' : ''}> Send reach-out reminders</label>
+        <label class="crm-toggle"><input type="checkbox" id="crmOverdue" ${s.overdue_only ? 'checked' : ''}> Only email once a client is overdue (skip the day it first comes due)</label>
+        <div class="crm-settings-acts">
+            <button class="b2b-btn b2b-btn-primary" onclick="crmSaveSettings(this)">Save Settings</button>
+            <span class="crm-msg" id="crmSetMsg"></span>
+        </div>
+    </div>`;
+}
+
+async function crmSaveSettings(btn) {
+    const notify_email = document.getElementById('crmEmail')?.value.trim() || '';
+    const enabled      = document.getElementById('crmEnabled')?.checked !== false;
+    const overdue_only = document.getElementById('crmOverdue')?.checked || false;
+    try {
+        await _b2bBusy(btn, 'Saving…', async () => {
+            const res = await fetch(B2B_OUTREACH_URL, {
+                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ action: 'set_crm_settings', notify_email, enabled, overdue_only, user: _b2bUser() }),
+            });
+            const out = await res.json().catch(() => ({}));
+            if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
+        });
+        _crmSettings = { notify_email, enabled, overdue_only };
+        const m = document.getElementById('crmSetMsg');
+        if (m) { m.textContent = 'Saved.'; setTimeout(() => { const e = document.getElementById('crmSetMsg'); if (e) e.textContent = ''; }, 2500); }
+    } catch (e) { alert(`Couldn't save settings: ${e.message}`); }
 }
 
 function b2bEditClient(id) { _b2bEditingClient = id; b2bRender(); }
@@ -9624,13 +9835,16 @@ function _b2bStagePricing(deal) {
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
-            <button class="b2b-btn b2b-btn-primary" id="b2bPrSubmit" ${_b2bModalItems.length ? '' : 'disabled'}
-                onclick="b2bSubmitPricing('${deal.id}',this)">Submit For Quoting</button>`,
+            ${_b2bIsEmployee()
+                ? '<span class="b2b-msg" style="color:var(--cb-muted);font-weight:600;">Prices save automatically — a manager or DM submits this for quoting.</span>'
+                : `<button class="b2b-btn b2b-btn-primary" id="b2bPrSubmit" ${_b2bModalItems.length ? '' : 'disabled'}
+                onclick="b2bSubmitPricing('${deal.id}',this)">Submit For Quoting</button>`}`,
         after: _b2bPaintTotals,
     });
 }
 
 async function b2bSubmitPricing(id, btn) {
+    if (_b2bIsEmployee()) return _b2bSay('Only a manager or DM can submit pricing for quoting.', true);
     if (!_b2bModalItems.length) return;
     const gaps = _b2bUnreasoned();
     if (gaps.length) {
@@ -10725,7 +10939,7 @@ function closeB2BAlertBubble() {
 // bails immediately for anyone whose role has no B2B duties at all.
 async function checkB2BReminders() {
     const role = _b2bRole();
-    if (!B2B_CORP_ROLES.includes(role) && !B2B_STORE_ROLES.includes(role) && !_b2bHasCorpDelegation()) return;
+    if (!B2B_CORP_ROLES.includes(role) && !B2B_STORE_ROLES.includes(role) && !_b2bIsEmployee() && !_b2bHasCorpDelegation()) return;
     const b = _b2bBubbleEl();
     if (!b) return;
     try {
@@ -19687,7 +19901,7 @@ const FEATURE_CATALOG = [
     { key: 'widget-aging-inventory',   label: 'Aging Inventory (tab)',         tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'cap-aging-dm',             label: 'Aging Inventory (DM)',          tab: 'widgets', group: 'Workspace', def: ['district-manager'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
-    { key: 'widget-ops-b2b',           label: 'B2B Deals (tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'tom', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-ops-b2b',           label: 'B2B Deals (tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'tom', 'manager', 'owner-manager', 'assistant-manager', 'employee', 'training'] },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
