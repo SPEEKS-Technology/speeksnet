@@ -1986,6 +1986,11 @@ select.bs-hidden-select:focus {
 .rec-champ .cc svg { width: 13px; height: 13px; }
 .rec-champ .cv { font-size: 26px; font-weight: 850; letter-spacing: -.015em; line-height: 1; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
 .rec-champ .cs { font-size: 11.5px; font-weight: 700; color: #94a3b8; margin-top: 5px; }
+/* The store holding the record leads the subline and takes the accent — it is
+   the answer to "whose is this?", where the month is only when. Both stay on one
+   line; the separator is faint so the two read as one caption, not two labels. */
+.rec-champ .cs .ch { color: #178048; font-weight: 850; letter-spacing: .015em; }
+.rec-champ .cs .cd { color: #cbd5e1; margin: 0 5px; }
 .rec-list { padding: 6px 8px 4px; display: flex; flex-direction: column; }
 .rec-li { display: flex; align-items: center; gap: 11px; padding: 9px 8px; }
 .rec-li + .rec-li { border-top: 1px solid #f1f5f9; }
@@ -6839,6 +6844,133 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .ann-doc-link svg { flex-shrink: 0; }
 
 /* Documents tab list */
+/* Documents entry point in the feed header. Sits with the filter row rather than the
+   title row so it reads as a way to look at the feed, not a way to close it. */
+.hub-docs-btn {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+    font: inherit; font-size: 12px; font-weight: 750; color: var(--sage-professional);
+    background: #e8f7ee; border: 1px solid #c6ecd6; border-radius: 9px; padding: 7px 12px;
+    white-space: nowrap;
+}
+.hub-docs-btn:hover { background: #d9f0e3; }
+.hub-docs-btn svg { width: 14px; height: 14px; flex: none; }
+.hub-docs-n {
+    font-size: 11px; font-weight: 800; background: #c6ecd6; color: var(--sage-deep, #178048);
+    border-radius: 999px; padding: 1px 7px; font-variant-numeric: tabular-nums;
+}
+.hub-docs-n:empty { display: none; }
+
+/* ---- filing a document straight into this view ---------------------------
+   Only rendered for the roles that can manage announcements; empty (and gone)
+   for everyone else, so the list looks exactly as it did for them. */
+.ann-docs-add-host:empty { display: none; }
+.ann-docs-add-host { margin: 4px 12px 10px; }
+.ann-doc-add-btn {
+    display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+    font: inherit; font-size: 12.5px; font-weight: 700; color: var(--sage-deep, #178048);
+    background: #e8f7ee; border: 1px solid #c6ecd6; border-radius: 9px; padding: 8px 14px;
+}
+.ann-doc-add-btn:hover { background: #d9f0e3; }
+.ann-doc-add-btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; }
+
+.ann-doc-add {
+    border: 1px solid #e6ebf1; border-radius: 12px; padding: 14px; background: #fbfdfc;
+}
+.ann-doc-add-h { margin-bottom: 10px; }
+.ann-doc-add-h b { display: block; font-size: 13.5px; font-weight: 750; color: var(--slate-charcoal); }
+.ann-doc-add-h span { display: block; font-size: 11.5px; color: #94a3b8; margin-top: 2px; }
+.ann-doc-add-title {
+    width: 100%; font: inherit; font-size: 13px; font-weight: 600; color: var(--text-dark);
+    border: 1px solid #e6ebf1; border-radius: 9px; padding: 9px 11px; background: #fff;
+}
+.ann-doc-add-title:focus { outline: none; border-color: #c6ecd6; box-shadow: 0 0 0 3px rgba(90,141,59,.09); }
+.ann-doc-add-row { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
+.ann-doc-add-browse {
+    cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; color: #fff;
+    background: #1a1c1e; border: 1px solid #1a1c1e; border-radius: 8px; padding: 7px 14px;
+    white-space: nowrap;
+}
+.ann-doc-add-browse:hover { background: #33383d; }
+.ann-doc-add-fname {
+    font-size: 12px; color: #94a3b8; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ann-doc-add-acts { display: flex; gap: 8px; margin-top: 12px; }
+.ann-doc-add-save, .ann-doc-add-cancel {
+    cursor: pointer; font: inherit; font-size: 12px; font-weight: 700;
+    border-radius: 8px; padding: 8px 15px;
+}
+.ann-doc-add-save { color: #fff; background: var(--sage-professional); border: 1px solid var(--sage-professional); }
+.ann-doc-add-save:hover { filter: brightness(.94); }
+.ann-doc-add-save[disabled] { opacity: .6; cursor: default; }
+.ann-doc-add-cancel { color: #64748b; background: #fff; border: 1px solid #e6ebf1; }
+.ann-doc-add-cancel:hover { background: #f8fafc; }
+.ann-doc-add-note { margin: 10px 0 0; font-size: 11px; color: #a8b3bf; line-height: 1.5; }
+
+/* Removal sits quiet until the row is hovered — it's the destructive control on a
+   list people mostly come to download from. */
+.ann-doc-del {
+    flex-shrink: 0; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border-radius: 8px;
+    color: #cbd5e1; background: none; border: 1px solid transparent;
+    opacity: 0; transition: opacity .12s, color .12s, background .12s;
+}
+.ann-doc-card:hover .ann-doc-del { opacity: 1; }
+.ann-doc-del:focus-visible { opacity: 1; outline: 2px solid #b23636; outline-offset: 1px; }
+.ann-doc-del:hover { color: #b23636; background: #fcecec; border-color: #f3d4d4; }
+.ann-doc-del svg { width: 14px; height: 14px; stroke: currentColor; fill: none; }
+
+/* Search. Hidden by loadAnnouncementDocs() until there are more than 4 documents —
+   a search box over three files is just furniture. */
+.ann-docs-search {
+    display: flex; align-items: center; gap: 8px; margin: 4px 12px 10px;
+    background: #f8fafc; border: 1px solid #e6ebf1; border-radius: 10px; padding: 0 10px;
+}
+.ann-docs-search:focus-within { border-color: #c6ecd6; background: #fff; box-shadow: 0 0 0 3px rgba(90,141,59,.09); }
+.ann-docs-search > svg { width: 15px; height: 15px; color: #94a3b8; flex: none; }
+.ann-docs-search input {
+    flex: 1; min-width: 0; border: 0; background: none; outline: none;
+    font: inherit; font-size: 13px; color: var(--text-dark); padding: 10px 0;
+}
+.ann-docs-search input::placeholder { color: #a8b3bf; }
+.ann-docs-clear {
+    display: none; align-items: center; justify-content: center; cursor: pointer;
+    width: 20px; height: 20px; flex: none; border: 0; border-radius: 50%;
+    background: #e2e8f0; color: #64748b; padding: 0;
+}
+.ann-docs-clear:hover { background: #cbd5e1; color: #334155; }
+.ann-docs-clear svg { width: 11px; height: 11px; }
+.ann-doc-found {
+    padding: 2px 12px 10px; font-size: 11.5px; font-weight: 700; color: #94a3b8;
+}
+
+/* Two tabs. Goals & Bonuses leads because it's what people open this for; the count
+   on each tab tracks the live search, so a query can't hide matches on the other tab. */
+.ann-docs-tabs {
+    display: flex; gap: 6px; margin: 0 12px 8px; padding: 4px;
+    background: #f1f5f9; border-radius: 11px;
+}
+.ann-docs-tab {
+    flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 750; color: #64748b;
+    background: none; border: 1px solid transparent; border-radius: 8px; padding: 8px 10px;
+    white-space: nowrap; min-width: 0;
+}
+.ann-docs-tab:hover { color: #334155; }
+.ann-docs-tab em {
+    font-style: normal; font-size: 11px; font-weight: 800; background: #e2e8f0; color: #64748b;
+    border-radius: 999px; padding: 1px 7px; font-variant-numeric: tabular-nums;
+}
+.ann-docs-tab.active {
+    background: #fff; border-color: #e6ebf1; color: var(--sage-deep, #178048);
+    box-shadow: 0 1px 2px rgba(16,24,40,.05);
+}
+.ann-docs-tab.active em { background: #e8f7ee; color: var(--sage-deep, #178048); }
+.ann-docs-tab:focus-visible { outline: 2px solid var(--sage-professional); outline-offset: 1px; }
+
+.ann-doc-none { padding: 34px 20px; text-align: center; color: #94a3b8; font-size: 14px; }
+.ann-doc-none b { color: #64748b; }
+.ann-doc-none small { display: block; margin-top: 8px; font-size: 12.5px; }
 .ann-docs-list { display: flex; flex-direction: column; gap: 0; }
 .ann-doc-card {
     display: flex;
@@ -8938,6 +9070,11 @@ body.sam-active .hotbar-btn:hover {
    redesigned surfaces (the global token stays sage for untouched pages). */
 .speeks-action-menu,
 #notifDropdown,
+/* The Documents view is a SIBLING modal of the hub, not a child of it, so being
+   on this list via #notifDropdown never reached it — its Download / Back / Add
+   buttons kept rendering the pre-redesign olive while the hub you reach them
+   from was emerald. Same miss as the login screen further up this file. */
+#annDocsModal,
 .cb-panel, .ops-wrap,
 .dp-header, .dp-layout,
 .checklist-side-panel, .goals-side-panel,
@@ -9381,9 +9518,13 @@ body.sam-active .hotbar-btn:hover {
    enough to fit the employee's Buying tab (ring + margin rows) with no cutoff, and equal
    so the card lines up with the chart below it. */
 .cc-widget.cc-expanded { min-height: 530px; }
-/* Employee widget: FIXED 530 (not just min) so switching tabs can't nudge the height at
-   all — the two panels are equal by construction and top-aligned. */
-.ec-widget.cc-expanded { height: 530px; }
+/* Employee widget: 530 is a FLOOR, not a lock. It was `height: 530px` to stop tab
+   switching nudging the card, but that guard was never needed — both panels live in the
+   same grid cell (.cc-panel is grid-area 1/1, hidden by opacity, not display:none), so
+   the row is already the max of the two and the height is stable by construction. The
+   hard lock only clipped: the Buying panel needs 437px of the 378px it left, so the
+   Sell Margin row fell outside the card entirely once GP (MTD) was added. */
+.ec-widget.cc-expanded { min-height: 530px; }
 .ec-widget .cc-panel { display: flex; flex-direction: column; justify-content: flex-start; overflow-y: auto; }
 /* Keep the header one line so hiding the goal chip / a longer KPI title can't change its
    height (which would shift everything below on tab switch). */
@@ -11349,4 +11490,892 @@ body.sam-active .hotbar-btn:hover {
 @media (max-width: 900px) {
     .jump-scrim { padding: 8px; align-items: stretch; }
     .jump-box { max-height: none; height: 100%; max-width: none; }
+}
+
+/* ========================================================================== *
+ * MARGIN GUIDE (Operations, first tab)
+ * --------------------------------------------------------------------------
+ * Rail & Ladder layout: selection parked in a sticky left rail, the ladder as
+ * the centre of gravity, coaching down the right edge. Nothing reflows when the
+ * condition changes, because a buyer works this dozens of times a shift.
+ * The ladder's semantic colour (go / your ceiling / manager) is separate from
+ * the sage accent, so the rungs read at a glance without inventing brand hues.
+ * ========================================================================== */
+.mg-panel {
+    --mg-line: #e3e8ee;
+    --mg-hdr: #f6faf7;
+    --mg-muted: #64707c;
+    --mg-faint: #9aa6ad;
+    --mg-accent: #1f9d57;
+    --mg-accent-deep: #178048;
+    --mg-accent-tint: #e8f7ee;
+    --mg-ring: #c6ecd6;
+    --mg-amber: #b45309;
+    --mg-amber-tint: #fdf3e1;
+    --mg-amber-line: #f0d9a8;
+    --mg-red: #b23636;
+    --mg-red-tint: #fcecec;
+    --mg-red-line: #edc9c9;
+    --mg-blue: #2c5aa0;
+    --mg-blue-tint: #e8f0fb;
+    --mg-chip: #f1f4f7;
+    padding: 0;
+    /* .ws-panel pins every pane to calc(100vh - 250px), which clipped the tail of
+       a long Condition Help list. This is a reference tool, not a dashboard: it
+       should grow with its content and let the page scroll. Same escape hatch
+       .ws-panel-brief uses. overflow stays visible so the sticky rail works —
+       an overflow-hidden ancestor silently kills position: sticky. */
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible;
+}
+/* The panel no longer clips, so the header band rounds its own top corners. */
+.mg-head {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 18px 22px; border-bottom: 1px solid var(--mg-line);
+    background: var(--mg-hdr); border-radius: 16px 16px 0 0;
+}
+.mg-eyebrow {
+    font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--mg-accent-deep);
+}
+.mg-title { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
+/* Instructions sit under the title, matching the page-header pattern used across
+   the site rather than floating off to the right. No max-width: the header spans
+   the panel, so the line has room to stay on one line and only wraps on narrow
+   screens where it should. */
+.mg-sub { margin: 0; font-size: 13.5px; color: var(--mg-muted); }
+.mg-body { padding: 18px 22px 24px; }
+.mg-loading, .mg-error { padding: 40px 0; text-align: center; color: var(--mg-muted); font-size: 14px; }
+.mg-error { color: var(--mg-red); }
+.mg-retry {
+    display: inline-block; margin-left: 10px; font: inherit; font-size: 12.5px; font-weight: 650;
+    padding: 5px 12px; border-radius: 8px; border: 1px solid var(--mg-line);
+    background: #fff; color: var(--mg-muted); cursor: pointer;
+}
+.mg-retry:hover { border-color: var(--mg-accent); color: var(--mg-accent-deep); }
+
+.mg-grid { display: grid; grid-template-columns: 272px minmax(0, 1fr) 372px; gap: 18px; align-items: start; }
+@media (max-width: 1300px) { .mg-grid { grid-template-columns: 1fr; } }
+
+/* ---- left rail ---- */
+.mg-rail {
+    display: flex; flex-direction: column; gap: 16px; padding: 17px;
+    border: 1px solid var(--mg-line); border-radius: 12px; background: #fff;
+    box-shadow: 0 1px 2px rgba(16,24,40,.05); position: sticky; top: 16px; min-width: 0;
+}
+@media (max-width: 1300px) { .mg-rail { position: static; } }
+.mg-rail > * { min-width: 0; max-width: 100%; }
+.mg-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mg-lab {
+    font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--mg-faint);
+}
+/* box-sizing is explicit: width 100% plus padding overflowed the rail without it. */
+.mg-select, .mg-input {
+    box-sizing: border-box; width: 100%; max-width: 100%; font: inherit; font-size: 14px;
+    font-weight: 550; color: var(--slate-charcoal, #1a1c1e); background: #fbfcfd;
+    border: 1px solid var(--mg-line); border-radius: 9px; padding: 10px 11px;
+}
+.mg-select {
+    appearance: none; cursor: pointer; padding-right: 30px;
+    background-image: linear-gradient(45deg, transparent 50%, var(--mg-muted) 50%),
+                      linear-gradient(135deg, var(--mg-muted) 50%, transparent 50%);
+    background-position: calc(100% - 16px) 51%, calc(100% - 11px) 51%;
+    background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+}
+.mg-select:focus-visible, .mg-input:focus-visible { outline: 2px solid var(--mg-accent); outline-offset: 1px; }
+/* Nothing chosen yet: the placeholder reads as a prompt, not as a value. Matches
+   the empty projection box, so the whole rail says "waiting on you" at a glance. */
+.mg-select.mg-unset { color: var(--mg-faint); font-weight: 500; }
+.mg-select:disabled { background: #f7f9fa; cursor: not-allowed; opacity: .85; }
+.mg-money { position: relative; }
+.mg-money::before {
+    content: "$"; position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+    color: var(--mg-faint); font-size: 14px; font-weight: 600; pointer-events: none;
+}
+.mg-money .mg-input { padding-left: 25px; font-variant-numeric: tabular-nums; font-weight: 650; }
+
+/* The projection is the only number the buyer types, and it opens pre-filled with
+   the band's midpoint — a value that looks like an answer but isn't theirs. So it
+   is the primary control on the rail rather than a peer of the two dropdowns, and
+   it keeps visibly asking until they replace that default. */
+.mg-field-proj .mg-lab { color: var(--mg-accent-deep); }
+.mg-field-proj .mg-money::before { color: var(--mg-accent); font-weight: 700; }
+.mg-field-proj .mg-input {
+    background: #fff; border-color: var(--mg-ring);
+    box-shadow: 0 0 0 3px rgba(31, 157, 87, .08);
+    font-size: 16px; font-weight: 700; padding-top: 11px; padding-bottom: 11px;
+}
+.mg-field-proj .mg-input:hover { border-color: var(--mg-accent); }
+
+/* Label and cue share one row; the cue retires the moment they type. */
+.mg-lab-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.mg-cue {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .04em; text-transform: none;
+    white-space: nowrap; color: var(--mg-accent-deep); background: var(--mg-accent-tint);
+    border: 1px solid var(--mg-ring); border-radius: 999px; padding: 2px 8px;
+}
+.mg-field-proj:not(.mg-needs) .mg-cue { display: none; }
+
+/* Still holding the midpoint: a firmer ring, and two slow breaths that then stop.
+   Perpetual motion at the counter turns into wallpaper (and the buyer is mid
+   conversation with a customer), so this catches the eye once and settles. */
+.mg-field-proj.mg-needs .mg-input {
+    border-color: var(--mg-accent); animation: mgProjAsk 1.7s ease-in-out 2;
+}
+@keyframes mgProjAsk {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(31, 157, 87, .08); }
+    50%      { box-shadow: 0 0 0 7px rgba(31, 157, 87, .20); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .mg-field-proj.mg-needs .mg-input {
+        animation: none; box-shadow: 0 0 0 5px rgba(31, 157, 87, .16);
+    }
+}
+
+/* ---- DM editor entry ------------------------------------------------------
+   Shares the title's row so the instruction line below keeps the full width.
+   Hidden by default and revealed by .mg-can from mgRender(); Feature Access can
+   still hide it outright with display:none !important, which wins over this. */
+.mg-title-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+/* One group on the right so space-between still splits title from controls once
+   the save chip joins them. */
+.mg-title-acts { display: flex; align-items: center; gap: 10px; }
+.mg-head-save:empty { display: none; }
+/* The header carries Save while editing, so it pins — scrolling down to the
+   wording must never put queued cell changes out of reach. .mg-panel already
+   keeps overflow visible (the buyer's sticky rail needs it), so this works. */
+.mg-head.mg-head-stuck { position: sticky; top: 0; z-index: 26; }
+.mg-manage { display: none; }
+.mg-manage.mg-can {
+    display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+    font: inherit; font-size: 12px; font-weight: 700; color: var(--mg-deep);
+    background: var(--mg-accent-tint); border: 1px solid var(--mg-ring);
+    border-radius: 9px; padding: 7px 13px; white-space: nowrap;
+}
+.mg-manage.mg-can:hover { background: #dcf2e5; }
+.mg-manage svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+/* ---- DM editor ------------------------------------------------------------ */
+.mg-adm { padding: 18px 22px 22px; }
+.mg-adm-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+.mg-back {
+    display: inline-flex; align-items: center; gap: 7px; cursor: pointer; font: inherit;
+    font-size: 12px; font-weight: 700; color: var(--mg-muted); background: #fff;
+    border: 1px solid var(--mg-line); border-radius: 9px; padding: 7px 13px;
+}
+.mg-back svg { width: 13px; height: 13px; stroke: currentColor; fill: none; }
+/* The header copy of it: hidden until mgRender() adds .mg-can, so it only ever
+   shows while the editor is open. Declared after .mg-back so display: none wins
+   on equal specificity. */
+.mg-back-top { display: none; }
+.mg-back-top.mg-can { display: inline-flex; white-space: nowrap; }
+.mg-back-top.mg-can:hover { background: var(--mg-hdr); color: var(--mg-deep); }
+/* Small shared bits that also lived in the removed panes and are still used by
+   the wording editor: the intro line and the empty state. */
+.mg-adm-lead { margin: 0 0 16px; font-size: 13px; color: var(--mg-muted); max-width: 78ch; }
+.mg-adm-lead b { color: var(--slate-charcoal); }
+.mg-adm-none {
+    border: 1px dashed var(--mg-line); border-radius: 9px; padding: 13px;
+    font-size: 12.5px; color: var(--mg-muted); background: #fbfcfd;
+}
+
+/* The primary action button, shared by every editor on this screen. It lived in
+   the old adjust/tiers panes and was lost with them — which silently unstyled the
+   Save on every help item and rebuttal too, not just the ones added here. */
+.mg-btn-go {
+    cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 750; color: #fff;
+    background: var(--mg-accent); border: 1px solid var(--mg-accent); border-radius: 9px; padding: 9px 17px;
+}
+.mg-btn-go:hover { background: var(--mg-accent-deep); border-color: var(--mg-accent-deep); }
+.mg-btn-go[disabled] { opacity: .55; cursor: default; }
+
+/* ---- DM workspace: item picker in the header ---------------------------- */
+.mg-adm-pick { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.mg-adm-editing {
+    font-size: 10px; font-weight: 800; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--mg-faint);
+}
+/* Hand-built item listbox. A native <select> opened upward and covered the page
+   — Chrome flips the popup when the list is taller than the space below, and the
+   direction is not stylable. Owning the menu is the only way to pin it downward. */
+.mg-picker { position: relative; }
+.mg-picker-btn {
+    display: flex; align-items: center; gap: 10px; min-width: 210px; cursor: pointer;
+    font: inherit; font-size: 13.5px; font-weight: 750; color: var(--slate-charcoal);
+    background: #fff; border: 1px solid var(--mg-line); border-radius: 9px;
+    padding: 8px 11px; text-align: left;
+}
+.mg-picker-btn:hover { border-color: var(--mg-ring); }
+.mg-picker-btn:focus-visible { outline: 2px solid var(--mg-accent); outline-offset: 1px; }
+.mg-picker-btn > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mg-picker-btn .mg-picker-ph { color: var(--mg-faint); font-weight: 650; }
+.mg-picker-btn svg { width: 15px; height: 15px; stroke: var(--mg-muted); fill: none; flex: none; transition: transform .15s; }
+.mg-picker.open .mg-picker-btn { border-color: var(--mg-accent); box-shadow: 0 0 0 3px rgba(31, 157, 87, .14); }
+.mg-picker.open .mg-picker-btn svg { transform: rotate(180deg); }
+
+/* top: 100% pins it BELOW the button, always. */
+.mg-picker-menu {
+    position: absolute; z-index: 45; top: calc(100% + 5px); left: 0;
+    min-width: 100%; width: max-content; max-width: 320px; max-height: 340px; overflow-y: auto;
+    background: #fff; border: 1px solid var(--mg-line); border-radius: 11px;
+    box-shadow: 0 12px 34px rgba(16, 24, 40, .18); padding: 5px;
+}
+.mg-picker-grp {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--mg-faint); padding: 9px 9px 4px;
+}
+.mg-picker-grp:first-child { padding-top: 4px; }
+.mg-picker-opt {
+    display: block; width: 100%; text-align: left; cursor: pointer; font: inherit;
+    font-size: 12.5px; font-weight: 650; color: var(--slate-charcoal);
+    background: none; border: 0; border-radius: 7px; padding: 7px 9px;
+}
+.mg-picker-opt:hover { background: var(--mg-chip); }
+.mg-picker-opt:focus-visible { outline: 2px solid var(--mg-accent); outline-offset: -2px; }
+.mg-picker-opt.on { background: var(--mg-accent-tint); color: var(--mg-accent-deep); font-weight: 780; }
+
+/* Catches the click that closes whichever menu is open. Above the sticky save
+   bar (30) so that stops taking clicks too, below both menus (40 / 45). */
+.mg-dismiss { position: fixed; inset: 0; z-index: 35; }
+.mg-adm-meta { margin-left: auto; font-size: 11.5px; color: var(--mg-faint); font-variant-numeric: tabular-nums; }
+
+.mg-adm-sec { margin-top: 18px; }
+.mg-adm-sech { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 9px; }
+.mg-adm-sech h4 {
+    margin: 0; font-size: 10.5px; font-weight: 800; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--slate-charcoal);
+}
+.mg-adm-sechint { font-size: 11.5px; color: var(--mg-faint); margin-left: auto; }
+
+/* ---- the assignment grid ------------------------------------------------ */
+/* The grid scrolls sideways on a narrow screen rather than crushing its columns.
+   `overflow-x: auto` alone cannot do that here: setting one axis to a non-visible
+   value forces the other to auto too, which makes this a clipping box and cuts
+   the tier popover off at the grid's bottom edge. So the scroll container is
+   dropped for exactly as long as a popover is open — the popover is the thing
+   that matters at that moment, and it closes on the next click. */
+.mg-gwrap { overflow-x: auto; padding-bottom: 2px; }
+.mg-gwrap.popped { overflow: visible; }
+/* All six grades are always shown, so the table needs the room for six columns
+   before .mg-gwrap starts scrolling it sideways — squashing them is worse.
+   table-layout: fixed so the six grade columns are all EXACTLY equal: auto layout
+   sized each one to its own content, which made "Broken CHECKOUT" wider than
+   "NEW" and left the cells visibly ragged. */
+.mg-agrid {
+    border-collapse: separate; border-spacing: 0; width: 100%; min-width: 940px;
+    table-layout: fixed;
+}
+.mg-agrid th, .mg-agrid td { padding: 0; }
+.mg-agrid thead th {
+    font-size: 10.5px; font-weight: 750; color: var(--mg-muted);
+    text-align: center; padding: 0 6px 8px; white-space: nowrap;
+}
+.mg-agrid thead th.mg-gband { text-align: left; padding-left: 2px; }
+/* The 3px right gutter is the gap between cells and applies to EVERY column,
+   last one included — exempting the last made that one cell 3px wider than the
+   other five, which is exactly the raggedness table-layout: fixed is here to
+   remove. The 3px of dead space at the table's right edge costs nothing. */
+.mg-agrid tbody td { padding: 0 3px 6px 0; vertical-align: top; }
+/* Fixed, not min-, because table-layout: fixed reads the first row's widths and
+   splits whatever is left equally between the six grades. */
+.mg-gband { padding: 9px 12px 9px 2px; width: 136px; }
+.mg-gband-n { font-size: 12.5px; font-weight: 750; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
+.mg-gband-s { font-size: 10px; color: var(--mg-faint); margin-top: 1px; }
+
+/* The popover is absolutely positioned against its cell. */
+.mg-cellw { position: relative; }
+
+/* MG_CELL_H — every cell in the grid is this tall, tier or not-bought, whether or
+   not it carries a "was …" line. The height fits all three lines, so a queued
+   change can't make one cell taller than its neighbours and knock the row out of
+   line. Centred rather than top-aligned so one- and three-line cells still read
+   as the same object. */
+.mg-cell, .mg-cell-none {
+    height: 62px; width: 100%;
+    display: flex; flex-direction: column; justify-content: center; align-items: center;
+    text-align: center;
+}
+.mg-cell {
+    cursor: pointer; font: inherit;
+    border: 1px solid var(--mg-line); border-radius: 10px; padding: 8px 10px;
+    background: #fff; color: var(--slate-charcoal);
+    transition: border-color .12s, box-shadow .12s;
+}
+.mg-cell:hover { border-color: var(--mg-ring); box-shadow: 0 2px 8px rgba(16, 24, 40, .08); }
+.mg-cell:focus-visible { outline: 2px solid var(--mg-accent); outline-offset: 2px; }
+.mg-cell.open { border-color: var(--mg-accent); box-shadow: 0 0 0 3px rgba(31, 157, 87, .16); }
+.mg-cell-tier { display: block; font-size: 12px; font-weight: 780; letter-spacing: -.01em; }
+.mg-cell-pcts {
+    display: block; margin-top: 2px; font-size: 11px; font-weight: 600;
+    color: var(--mg-muted); font-variant-numeric: tabular-nums;
+}
+.mg-cell-pcts i { font-style: normal; font-weight: 750; color: var(--mg-amber); }
+.mg-cell-was {
+    display: block; margin-top: 3px; font-size: 10px; font-weight: 700;
+    color: var(--mg-amber); font-variant-numeric: tabular-nums;
+}
+
+/* Richness ramp: rank 1 is the tier that pays most, 10 the least. Read right and
+   down and the colour should drain away — a cell that breaks the gradient is on
+   the wrong tier, and you see it before you read a number. */
+.mg-cell[data-rank="1"]  { background: var(--mg-accent-tint); }
+.mg-cell[data-rank="2"]  { background: #ebf8f0; }
+.mg-cell[data-rank="3"]  { background: #eff9f3; }
+.mg-cell[data-rank="4"]  { background: #f2faf6; }
+.mg-cell[data-rank="5"]  { background: #f5fbf8; }
+.mg-cell[data-rank="6"]  { background: #f8fcfa; }
+.mg-cell[data-rank="7"]  { background: #fafdfb; }
+.mg-cell[data-rank="8"]  { background: #fcfefd; }
+.mg-cell[data-rank="9"]  { background: #fdfefe; }
+.mg-cell[data-rank="10"] { background: #fff; }
+.mg-cell.pending, .mg-cell.pending[data-rank] {
+    border-color: var(--mg-amber); background: var(--mg-amber-tint);
+}
+
+/* An absent condition is a decision, not a gap — we do not buy this item in this
+   grade. Rendered so the decision is visible and one click from reversed. */
+.mg-cell-none {
+    align-items: center; gap: 3px; cursor: pointer; font: inherit;
+    font-size: 11px; font-weight: 700; color: var(--mg-red);
+    background: var(--mg-red-tint); border: 1px dashed var(--mg-red-line); border-radius: 10px;
+}
+.mg-cell-none:hover { border-style: solid; }
+.mg-cell-none:focus-visible { outline: 2px solid var(--mg-red); outline-offset: 2px; }
+.mg-cell-none.open { border-style: solid; box-shadow: 0 0 0 3px rgba(178, 54, 54, .14); }
+.mg-cell-none em { display: block; font-style: normal; font-size: 10px; margin-top: 2px; }
+.mg-cell-none.pending { color: var(--mg-amber); background: var(--mg-amber-tint); border-color: var(--mg-amber); }
+
+/* ---- tier popover ------------------------------------------------------- */
+.mg-pop {
+    position: absolute; z-index: 40; top: calc(100% + 5px); left: 0; width: 288px;
+    background: #fff; border: 1px solid var(--mg-line); border-radius: 12px;
+    box-shadow: 0 12px 34px rgba(16, 24, 40, .18); overflow: hidden;
+}
+/* Keep the last columns' popovers on screen rather than off the right edge. */
+.mg-agrid tbody td:nth-last-child(-n+2) .mg-pop { left: auto; right: 0; }
+.mg-pop-h { padding: 10px 12px 8px; background: var(--mg-hdr); border-bottom: 1px solid var(--mg-line); }
+.mg-pop-h b { display: block; font-size: 12px; font-weight: 780; color: var(--slate-charcoal); }
+.mg-pop-h span { display: block; font-size: 10.5px; color: var(--mg-faint); margin-top: 1px; }
+.mg-pop-list { max-height: 244px; overflow-y: auto; padding: 5px; }
+.mg-pop-opt {
+    display: flex; align-items: center; gap: 8px; width: 100%; cursor: pointer;
+    font: inherit; text-align: left; background: none; border: 0;
+    color: var(--slate-charcoal); border-radius: 8px; padding: 6px 8px;
+}
+.mg-pop-opt:hover { background: var(--mg-chip); }
+.mg-pop-opt.on { background: var(--mg-accent-tint); }
+.mg-pop-opt:focus-visible { outline: 2px solid var(--mg-accent); outline-offset: -2px; }
+.mg-pop-tick { width: 14px; display: grid; place-items: center; color: var(--mg-accent); }
+.mg-pop-tick svg { width: 14px; height: 14px; stroke: currentColor; fill: none; }
+.mg-pop-name { font-size: 12px; font-weight: 700; flex: 1; }
+.mg-pop-nums { font-size: 11px; font-weight: 650; color: var(--mg-muted); font-variant-numeric: tabular-nums; }
+.mg-pop-foot { border-top: 1px solid var(--mg-line); padding: 7px 8px; }
+.mg-pop-note { font-size: 11px; color: var(--mg-faint); }
+.mg-pop-clear {
+    font: inherit; font-size: 11.5px; font-weight: 700; cursor: pointer;
+    color: var(--mg-red); background: none; border: 0; padding: 3px 4px;
+    border-radius: 6px; text-align: left; width: 100%;
+}
+.mg-pop-clear:hover { background: var(--mg-red-tint); }
+.mg-pop-clear:focus-visible { outline: 2px solid var(--mg-red); outline-offset: -2px; }
+
+/* ---- flat-pay band ------------------------------------------------------ */
+.mg-aflat {
+    display: flex; align-items: center; gap: 11px; flex-wrap: wrap;
+    background: var(--mg-blue-tint); border: 1px solid #cbdcf5;
+    border-left: 3px solid var(--mg-blue); border-radius: 10px; padding: 9px 12px;
+}
+.mg-aflat-lab { font-size: 11.5px; font-weight: 750; color: var(--mg-blue); }
+.mg-aflat-in { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 700; }
+.mg-aflat-in input {
+    font: inherit; font-weight: 750; width: 62px; text-align: right;
+    font-variant-numeric: tabular-nums; background: #fff; color: var(--slate-charcoal);
+    border: 1px solid var(--mg-line); border-radius: 7px; padding: 5px 8px;
+}
+.mg-aflat-in input:focus-visible { outline: 2px solid var(--mg-blue); outline-offset: 1px; }
+.mg-aflat-save { padding: 6px 14px; }
+.mg-aflat-note { font-size: 11px; color: var(--mg-muted); margin-left: auto; }
+
+/* ---- save bar ----------------------------------------------------------- */
+/* Queued cell moves only. Wording still saves a row at a time, so this bar never
+   claims to be holding text. It renders into the panel header (.mg-head-save)
+   beside Back, and amber rather than dark because amber is already what a queued
+   cell is tinted — the chip and the cells it refers to read as one state. */
+.mg-savebar {
+    display: flex; align-items: center; gap: 9px;
+    padding: 4px 4px 4px 12px;
+    background: var(--mg-amber-tint); color: var(--mg-amber);
+    border: 1px solid var(--mg-amber-line); border-radius: 10px;
+}
+.mg-savebar-n { font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+.mg-savebar-n b { font-variant-numeric: tabular-nums; }
+.mg-savebar button {
+    font: inherit; font-size: 11.5px; font-weight: 750; cursor: pointer;
+    border-radius: 8px; padding: 5px 12px; white-space: nowrap;
+}
+.mg-sb-discard { color: var(--mg-amber); background: none; border: 1px solid var(--mg-amber-line); }
+.mg-sb-discard:hover { background: rgba(180, 83, 9, .09); }
+.mg-sb-save { color: #fff; background: var(--mg-accent); border: 1px solid var(--mg-accent); }
+.mg-sb-save:hover { background: var(--mg-accent-deep); border-color: var(--mg-accent-deep); }
+.mg-savebar button:focus-visible { outline: 2px solid var(--mg-amber); outline-offset: 2px; }
+
+@media (max-width: 700px) {
+    .mg-adm-head { flex-wrap: wrap; }
+    .mg-adm-meta { margin-left: 0; }
+    .mg-aflat-note { margin-left: 0; width: 100%; }
+}
+
+/* Waiting on a projection. Dashed and grey on purpose: these placeholders have to
+   read as "nothing here yet" rather than as a value, because the whole point of
+   starting empty is that nothing on screen can be mistaken for an answer. */
+.mg-wait {
+    display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+    border: 1px dashed var(--mg-line); border-radius: 9px; background: #fbfcfd;
+    color: var(--mg-muted); font-size: 12.5px; font-weight: 600;
+}
+.mg-wait svg { width: 15px; height: 15px; stroke: var(--mg-faint); fill: none; stroke-width: 2; flex: none; }
+.mg-wait b { color: var(--mg-accent-deep); font-weight: 750; }
+.mg-wait-lad { justify-content: center; padding: 26px 20px; font-size: 13.5px; }
+
+/* One per row, so five grades line up instead of wrapping 2-2-1. */
+.mg-conds { display: grid; grid-template-columns: 1fr; gap: 6px; }
+.mg-cond {
+    display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+    font: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 12px; border-radius: 9px;
+    border: 1px solid var(--mg-line); background: #fbfcfd; color: var(--mg-muted); cursor: pointer;
+}
+.mg-cond::before {
+    content: ""; width: 7px; height: 7px; border-radius: 50%;
+    border: 1.5px solid var(--mg-faint); flex: none;
+}
+/* THE SELECTED CHIP — sage tint, not a black slab.
+   It used to be a solid #1a1c1e fill, which showed a faint hairline just inside its
+   edge on Ethan's machine. That was never reproducible here (software raster, GPU
+   raster via SwiftShader, seven display scales, sub-pixel offsets and a pixel-level
+   scan all came back crisp), and five attempts at the boundary — transparent
+   border, same-ink seal, no border at all — didn't shift it. It only ever appeared
+   on this one element because it was the only high-contrast fill in the rail: a
+   black-on-white edge is where any rasterisation artifact becomes visible.
+   So the high-contrast edge is gone. A tinted fill with a ring and a 3px accent
+   marker reads just as clearly as "this one is selected", has no black-on-white
+   boundary anywhere, and matches the airy palette the rest of the tool uses. The
+   luminance step at the chip's edge drops from ~227 to ~12, which is well below
+   anything a 1px artifact could show up against. */
+.mg-cond[aria-pressed="true"] {
+    background: var(--mg-accent-tint);
+    border: 1px solid var(--mg-ring);
+    color: var(--slate-charcoal);
+    font-weight: 750;
+    box-shadow: inset 3px 0 0 var(--mg-accent);
+}
+/* Keep the marker under the focus halo, or focusing the selected chip would drop it. */
+.mg-cond[aria-pressed="true"]:focus-visible {
+    box-shadow: inset 3px 0 0 var(--mg-accent), 0 0 0 3px rgba(31, 157, 87, .30);
+}
+.mg-cond[aria-pressed="true"]::before { background: var(--mg-accent); border-color: var(--mg-accent); }
+.mg-cond[disabled] {
+    opacity: .45; cursor: not-allowed; background: transparent;
+    text-decoration: line-through; text-decoration-thickness: 1px;
+}
+/* Focus ring as a soft OUTER halo, not a hairline hugging the edge.
+   At `outline: 2px solid accent; outline-offset: 1px` the ring sat one pixel off the
+   chip, which on the black selected chip read as a stray inner border — reported as
+   "a fake border within the black card, like it's highlighted with a cursor". A halo
+   is unmistakably a focus state rather than part of the chip.
+   The transparent outline is deliberate: box-shadow is dropped in forced-colors /
+   high-contrast mode, and the outline becomes visible there, so focus is never lost. */
+.mg-cond:focus-visible {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 3px rgba(31, 157, 87, .30);
+}
+.mg-nobuy {
+    font-size: 12px; color: var(--mg-muted); background: var(--mg-chip);
+    border: 1px dashed var(--mg-line); border-radius: 8px; padding: 8px 10px;
+}
+/* Quiet by design: useful when you need it, invisible when you don't. It must not
+   compete with the pickers above it, which are the actual job.
+   NO border-top: the rail already has its own border, and a rule across the foot
+   closed the fourth side of a rectangle around the condition list — it read as a
+   stray box drawn around the filter. Whitespace separates it perfectly well. */
+.mg-missing {
+    margin: 10px 0 0; font-size: 11.5px; line-height: 1.9; color: var(--mg-faint);
+}
+
+/* The "Have an Idea" reference. It names the lightbulb in the top action bar and
+   is itself a shortcut to it, so it carries the same icon — otherwise the sentence
+   points at a button with no text label and the reader has to go hunting.
+   A chip rather than a text link because it is depicting a button, not linking.
+   (The base rule for this class lived in the removed admin panes; without it the
+   thing rendered as a default grey browser box mid-sentence.) */
+.mg-inline-link {
+    display: inline-flex; align-items: center; gap: 5px; vertical-align: -3px;
+    font: inherit; font-size: 11.5px; font-weight: 700; line-height: 1.3;
+    cursor: pointer; color: var(--mg-accent-deep);
+    background: var(--mg-accent-tint); border: 1px solid var(--mg-ring);
+    border-radius: 999px; padding: 3px 10px 3px 8px; margin: 0 1px;
+    transition: background .12s, border-color .12s, box-shadow .12s;
+}
+.mg-inline-link svg { width: 12px; height: 12px; stroke: currentColor; fill: none; flex: none; }
+.mg-inline-link:hover {
+    background: #fff; border-color: var(--mg-accent);
+    box-shadow: 0 1px 5px rgba(31, 157, 87, .18);
+}
+.mg-inline-link:focus-visible { outline: 2px solid var(--mg-accent); outline-offset: 2px; }
+
+/* ---- "What it says": the coaching text editor -----------------------------
+   Four help sections in a responsive two-up grid, then rebuttals full width
+   underneath (they carry three fields each and don't fit a column). Rows show
+   their Save affordance only once edited — .mg-dirty is set both by the render
+   (draft differs from what's stored) and live by mgTextDraft() on the first
+   keystroke, so it appears without a re-render stealing the caret. */
+/* No max-width: this pane sits directly under the tier grid, which is width:100%
+   of the same padding box, so any cap here reads as an unexplained ragged right
+   edge against the grid above rather than as a measure. The long prose that
+   needed a measure — the section hints — carries its own ch cap instead. */
+.mg-adm-text { max-width: none; }
+.mg-tpick { display: flex; gap: 14px; align-items: flex-end; margin-bottom: 14px; max-width: 420px; }
+.mg-tpick .mg-field { flex: 1; }
+.mg-tshared {
+    display: block; font-size: 12.5px; line-height: 1.5; color: #8a5a12;
+    background: #fdf6e7; border: 1px solid #f2e0b8; border-radius: 10px;
+    padding: 11px 14px; margin-bottom: 16px;
+}
+.mg-tshared b { color: #7a4e0a; }
+
+/* Mirrors the buyer's own layout, which is what makes this editable at a glance:
+   the hero card runs full width above (exactly where it appears above the ladder),
+   and the three lists sit as three columns (exactly the buyer's right-hand rail).
+   The three match each other's height (grid's default stretch) so the row reads
+   as one band rather than three ragged boxes. The slack that used to pool as
+   dead white space at the bottom of the shorter cards is absorbed by pushing
+   each card's "Add a line…" composer to its floor — see .mg-tadd below. */
+.mg-tsecs {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px; align-items: stretch;
+}
+.mg-tsec-gates { grid-column: 1 / -1; }
+.mg-tsec {
+    border: 1px solid var(--mg-line); border-radius: 12px; background: #fff;
+    padding: 14px 16px 16px; min-width: 0;
+    display: flex; flex-direction: column;
+}
+/* Full width, so the add box can sit beside the list rather than under it. */
+.mg-tsec-gates .mg-tsec-hint, .mg-tsec-reb .mg-tsec-hint { max-width: 88ch; }
+.mg-tsec-h { display: flex; align-items: center; gap: 9px; }
+.mg-tsec-h h4 { margin: 0; font-size: 13.5px; font-weight: 800; letter-spacing: -.01em; color: var(--slate-charcoal); }
+.mg-tsec-n {
+    margin-left: auto; font-size: 11px; font-weight: 800; color: var(--mg-muted);
+    background: #f4f7f9; border-radius: 999px; padding: 2px 9px; font-variant-numeric: tabular-nums;
+}
+.mg-tsec-ic {
+    display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px;
+    background: var(--mg-accent-tint); color: var(--mg-deep); flex: none;
+}
+.mg-tsec-ic svg { width: 14px; height: 14px; }
+/* The hero-card section is the one that voids a deal, so it reads as a warning
+   rather than as another list. */
+.mg-tsec-warn { background: #fdecec; color: #c1332c; }
+.mg-tsec-hint { margin: 8px 0 12px; font-size: 11.5px; line-height: 1.55; color: var(--mg-muted); }
+/* Two of the three hints are one line and the third wraps to two, which started
+   every column's first row at a different height. Reserving two lines lines the
+   lists up with each other; the section titles are fixed copy, so this is a
+   known two-line ceiling rather than a guess. Not applied to the full-width
+   "Before you buy" card, whose hint is a paragraph. */
+.mg-tsecs .mg-tsec:not(.mg-tsec-gates) .mg-tsec-hint { min-height: 3.1em; }
+
+.mg-trows { display: flex; flex-direction: column; gap: 8px; }
+/* One column since the reorder arrows went — the text is the row now. */
+.mg-trow {
+    display: grid; grid-template-columns: 1fr; gap: 8px; align-items: start;
+    border: 1px solid var(--mg-line); border-radius: 10px; padding: 9px 10px; background: #fdfefe;
+}
+.mg-trow.mg-dirty { border-color: var(--mg-ring); background: #fbfefc; }
+.mg-tbody {
+    font: inherit; font-size: 12.5px; line-height: 1.5; color: var(--slate-charcoal);
+    border: 1px solid transparent; border-radius: 7px; padding: 4px 6px; background: transparent;
+    resize: vertical; min-width: 0; width: 100%;
+}
+.mg-tbody:focus { outline: none; border-color: var(--mg-ring); background: #fff; }
+.mg-trow-acts { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+/* Save/Undo stay out of the way until the row is actually edited — 600-odd rows
+   across the catalog, and a Save button on every one of them is just noise. */
+.mg-trow .mg-tsave, .mg-trow .mg-tbtn { display: none; }
+.mg-trow.mg-dirty .mg-tsave, .mg-trow.mg-dirty .mg-tbtn { display: inline-flex; }
+.mg-trow .mg-tbtn:first-of-type { display: inline-flex; }   /* Pin / Unpin is always available */
+.mg-tsave { padding: 6px 13px; font-size: 11.5px; }
+.mg-tbtn {
+    cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; color: var(--mg-muted);
+    background: #fff; border: 1px solid var(--mg-line); border-radius: 7px; padding: 5px 10px;
+    align-items: center;
+}
+.mg-tbtn:hover { color: var(--mg-deep); border-color: var(--mg-ring); }
+.mg-tmust { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; color: var(--mg-muted); cursor: pointer; }
+.mg-tmust input { accent-color: var(--mg-accent); }
+.mg-tdel {
+    margin-left: auto; cursor: pointer; font: inherit; font-size: 15px; line-height: 1;
+    color: var(--mg-faint); background: none; border: none; padding: 2px 5px; border-radius: 6px;
+}
+.mg-tdel:hover { color: #dc2626; background: #fdecec; }
+/* margin-top:auto pins the composer to the bottom of the card, so on the
+   equal-height row the leftover space lands above the dashed rule instead of
+   below the Add button — the three "Add a line…" boxes then sit on one line.
+   The list carries the minimum gap, since auto wipes out any margin here. */
+.mg-tadd {
+    display: flex; align-items: flex-start; gap: 8px; margin-top: auto;
+    border-top: 1px dashed var(--mg-line); padding-top: 11px;
+}
+.mg-tsec > .mg-trows, .mg-tsec > .mg-adm-none { margin-bottom: 10px; }
+.mg-tadd .mg-tbody { border: 1px solid var(--mg-line); background: #fff; }
+.mg-tadd .mg-btn-go { padding: 8px 14px; font-size: 11.5px; flex: none; }
+
+/* ---- rebuttal cards ---- */
+.mg-tsec-reb { margin-top: 16px; }
+.mg-rcard {
+    border: 1px solid var(--mg-line); border-radius: 11px; padding: 12px 13px;
+    background: #fdfefe; margin-bottom: 10px;
+}
+.mg-rcard.mg-dirty { border-color: var(--mg-ring); background: #fbfefc; }
+.mg-rname {
+    flex: 1; font: inherit; font-size: 13px; font-weight: 750; color: var(--slate-charcoal);
+    border: 1px solid transparent; border-radius: 7px; padding: 5px 7px; background: transparent; min-width: 0;
+}
+.mg-rname:focus { outline: none; border-color: var(--mg-ring); background: #fff; }
+.mg-rfield { display: block; margin-bottom: 9px; }
+.mg-rfield em {
+    display: block; font-style: normal; font-size: 10px; font-weight: 800;
+    letter-spacing: .07em; text-transform: uppercase; color: var(--mg-faint); margin-bottom: 4px;
+}
+.mg-rfield em i { font-style: normal; font-weight: 650; letter-spacing: 0; text-transform: none; }
+.mg-rfield textarea {
+    width: 100%; font: inherit; font-size: 12.5px; line-height: 1.5; color: var(--slate-charcoal);
+    border: 1px solid var(--mg-line); border-radius: 8px; padding: 7px 9px; background: #fff; resize: vertical;
+}
+.mg-rfield textarea:focus { outline: none; border-color: var(--mg-ring); }
+.mg-rconds { margin: 12px 0 4px; }
+.mg-rconds-l { display: block; font-size: 11px; font-weight: 700; color: var(--mg-faint); margin-bottom: 6px; }
+.mg-rconds-l b { color: var(--mg-muted); }
+/* Six equal columns rather than pills sized to their own labels — "NEW" next to
+   "Broken CHECKOUT" made the row read as ragged rather than as one control. */
+.mg-ctags { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+.mg-ctag {
+    cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; color: var(--mg-muted);
+    background: #fff; border: 1px solid var(--mg-line); border-radius: 999px; padding: 6px 8px;
+    width: 100%; text-align: center;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mg-ctag:hover { border-color: var(--mg-ring); }
+.mg-ctag.on { background: #1a1c1e; border-color: #1a1c1e; color: #fff; }
+.mg-rcard-acts { display: flex; gap: 8px; margin-top: 10px; }
+.mg-rcard-acts .mg-btn-go { padding: 7px 15px; font-size: 11.5px; }
+.mg-radd { margin-top: 14px; border-top: 1px dashed var(--mg-line); padding-top: 14px; }
+.mg-radd .mg-rcard { margin-bottom: 0; }
+
+/* ---- rebuttals: accordion ----------------------------------------------- */
+/* One open at a time. Expanded, each rebuttal is four fields plus six grade
+   tags; a dozen of them ran the editor several screens deep and buried the grid
+   they belong beside. */
+.mg-racc {
+    border: 1px solid var(--mg-line); border-radius: 11px; background: #fff;
+    margin-bottom: 6px; overflow: hidden;
+}
+.mg-racc:last-child { margin-bottom: 0; }
+.mg-racc.open { border-color: var(--mg-ring); box-shadow: 0 2px 10px rgba(16, 24, 40, .07); }
+.mg-racc.mg-dirty { border-color: var(--mg-amber-line); }
+.mg-rbar { display: flex; align-items: center; gap: 8px; padding: 0 9px 0 11px; }
+.mg-rbar-t {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px;
+    font: inherit; text-align: left; cursor: pointer;
+    background: none; border: 0; padding: 11px 2px;
+}
+.mg-rbar-t:focus-visible { outline: 2px solid var(--mg-accent); outline-offset: -2px; border-radius: 8px; }
+.mg-rbar-cv { display: flex; color: var(--mg-faint); transition: transform .16s ease; }
+.mg-rbar-cv svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2.4; }
+.mg-racc.open .mg-rbar-cv { transform: rotate(90deg); color: var(--mg-accent-deep); }
+.mg-rbar-n {
+    font-size: 12.5px; font-weight: 750; color: var(--slate-charcoal);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mg-racc.isnew .mg-rbar-n { color: var(--mg-accent-deep); }
+.mg-rbar-m {
+    margin-left: auto; font-size: 10.5px; font-weight: 650; color: var(--mg-faint);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46%;
+}
+.mg-rbar-d {
+    flex-shrink: 0; font-size: 9.5px; font-weight: 800; letter-spacing: .05em;
+    text-transform: uppercase; color: var(--mg-amber); background: var(--mg-amber-tint);
+    border: 1px solid var(--mg-amber-line); border-radius: 999px; padding: 2px 8px;
+}
+/* The card is now the accordion's contents, not a card in its own right. */
+.mg-racc .mg-rcard {
+    margin: 0; border: 0; border-top: 1px solid var(--mg-line);
+    border-radius: 0; background: none; padding: 12px 13px 13px;
+}
+.mg-racc .mg-rcard.mg-dirty { background: #fffdf8; }
+/* The name is a labelled field inside the card now, not the bar's own heading. */
+.mg-racc .mg-rname {
+    width: 100%; border-color: var(--mg-line); background: #fff;
+    font-size: 12.5px; font-weight: 700; padding: 7px 9px;
+}
+
+@media (max-width: 1080px) {
+    .mg-tsecs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    /* Three across on two rows, so the tags stay legible and still all match. */
+    .mg-ctags { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+    .mg-tsecs { grid-template-columns: 1fr; }
+    /* Stacked, there is nothing to line up with — drop the reserved second line. */
+    .mg-tsecs .mg-tsec:not(.mg-tsec-gates) .mg-tsec-hint { min-height: 0; }
+    .mg-tpick { max-width: none; }
+    .mg-ctags { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ---- centre column ---- */
+.mg-mid { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.mg-crumb { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; padding: 0 2px; }
+.mg-crumb b { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+.mg-crumb span { font-size: 13px; color: var(--mg-muted); }
+.mg-crumb i { width: 4px; height: 4px; border-radius: 50%; background: var(--mg-faint); display: block; }
+
+/* Preconditions on the deal, not tips. Amber not red: this is "stop and check",
+   not "something is broken". */
+.mg-gates {
+    border: 1px solid var(--mg-amber-line); border-left: 3px solid var(--mg-amber);
+    border-radius: 11px; background: var(--mg-amber-tint); padding: 13px 16px;
+}
+.mg-gates-h {
+    display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 800;
+    letter-spacing: .09em; text-transform: uppercase; color: var(--mg-amber); margin-bottom: 9px;
+}
+.mg-gates-h svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
+.mg-gates ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.mg-gates li {
+    font-size: 13.5px; line-height: 1.45; font-weight: 600; color: #7c4a12;
+    padding-left: 15px; position: relative;
+}
+.mg-gates li::before {
+    content: ""; position: absolute; left: 0; top: .55em; width: 5px; height: 5px;
+    border-radius: 50%; background: var(--mg-amber);
+}
+
+/* No card of its own: each rung already carries a border and a fill, so an outer
+   container just nested one box in another and inset the rungs, leaving them
+   narrower than the Before-you-buy card above. Bare flex column keeps the gate
+   card and every rung on exactly the same left and right edges. */
+.mg-ladder { display: flex; flex-direction: column; gap: 9px; }
+.mg-rung {
+    display: grid; grid-template-columns: 4px 1fr auto; align-items: stretch;
+    border: 1px solid var(--mg-line); border-radius: 11px; overflow: hidden;
+}
+.mg-rung-stripe { background: var(--mg-line); }
+.mg-rung-body { padding: 15px 17px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mg-rung-name { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+.mg-rung-sub { font-size: 12.5px; color: var(--mg-muted); }
+/* Percentage headlines at the original 38px; the dollar figure sits under it as
+   the saved arithmetic. Both inherit the rung's colour, so the <em> only needs to
+   step down in size and weight to read as secondary.
+   The DM editor's sample rung reuses .mg-rung with bare text and no <b>, which is
+   why the size lives on the child rather than the container — .mg-adm-sample sets
+   its own font-size and still works. */
+.mg-rung-val {
+    display: flex; flex-direction: column; align-items: flex-end; justify-content: center;
+    padding: 0 22px; font-variant-numeric: tabular-nums; line-height: 1.05;
+}
+.mg-rung-val b { font-size: 38px; font-weight: 700; letter-spacing: -.035em; }
+.mg-rung-val em {
+    font-style: normal; font-size: 14px; font-weight: 800; letter-spacing: -.01em;
+    opacity: .82; margin-top: 4px; white-space: nowrap;
+}
+.mg-rung-start { background: var(--mg-accent-tint); border-color: var(--mg-ring); }
+.mg-rung-start .mg-rung-stripe { background: var(--mg-accent); }
+.mg-rung-start .mg-rung-name, .mg-rung-start .mg-rung-val { color: var(--mg-accent-deep); }
+.mg-rung-team { background: var(--mg-amber-tint); border-color: var(--mg-amber-line); }
+.mg-rung-team .mg-rung-stripe { background: var(--mg-amber); }
+.mg-rung-team .mg-rung-name, .mg-rung-team .mg-rung-val { color: var(--mg-amber); }
+.mg-rung-mgr { background: var(--mg-red-tint); border-color: var(--mg-red-line); }
+.mg-rung-mgr .mg-rung-stripe { background: var(--mg-red); }
+.mg-rung-mgr .mg-rung-name, .mg-rung-mgr .mg-rung-val { color: var(--mg-red); }
+@media (max-width: 620px) {
+    .mg-rung { grid-template-columns: 4px 1fr; }
+    .mg-rung-val { padding: 0 17px 14px; font-size: 32px; }
+}
+
+/* Flat cash per item (Video Games under $20). A percentage ladder is the wrong
+   shape for it, so it gets its own card rather than three fudged rungs. */
+.mg-flat {
+    display: flex; flex-direction: column; gap: 4px; padding: 20px 22px;
+    border: 1px solid var(--mg-ring); border-radius: 12px; background: var(--mg-accent-tint);
+}
+.mg-flat-lab {
+    font-size: 10.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--mg-accent-deep);
+}
+.mg-flat-val {
+    font-size: 40px; font-weight: 700; letter-spacing: -.035em; line-height: 1.05;
+    color: var(--mg-accent-deep); font-variant-numeric: tabular-nums;
+}
+.mg-flat-note { font-size: 13px; color: var(--mg-muted); }
+
+/* ---- right column + rebuttals share the panel chrome ---- */
+.mg-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.mg-hp {
+    border: 1px solid var(--mg-line); border-radius: 12px; background: #fff; overflow: hidden;
+    box-shadow: 0 2px 4px rgba(16,24,40,.05);
+}
+.mg-hp-h {
+    display: flex; align-items: center; gap: 9px; padding: 11px 14px;
+    background: var(--mg-hdr); border-bottom: 1px solid var(--mg-ring);
+}
+.mg-hp-h h4 {
+    margin: 0; font-size: 11.5px; font-weight: 800; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--mg-accent-deep);
+}
+.mg-ico { width: 15px; height: 15px; stroke: var(--mg-accent-deep); fill: none; stroke-width: 1.9; flex: none; }
+.mg-ct {
+    margin-left: auto; font-size: 10.5px; font-weight: 700; color: var(--mg-accent-deep);
+    opacity: .7; font-variant-numeric: tabular-nums;
+}
+.mg-hp-b { padding: 13px 15px; }
+.mg-bl { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 11px; }
+.mg-bl li { font-size: 14px; line-height: 1.5; padding-left: 17px; position: relative; }
+.mg-bl li::before {
+    content: ""; position: absolute; left: 0; top: .5em; width: 6px; height: 6px;
+    border-radius: 50%; background: var(--mg-accent); box-shadow: 0 0 0 3px var(--mg-accent-tint);
+}
+.mg-bl li.mg-must-li { font-weight: 600; }
+.mg-bl li.mg-must-li::before { background: var(--mg-red); box-shadow: 0 0 0 3px var(--mg-red-tint); }
+.mg-bl li.mg-empty { color: var(--mg-faint); font-style: italic; }
+.mg-bl li.mg-empty::before { background: var(--mg-line); box-shadow: none; }
+.mg-must {
+    display: inline-block; font-size: 9px; font-weight: 800; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--mg-red); background: var(--mg-red-tint);
+    border: 1px solid var(--mg-red-line); padding: 1px 5px; border-radius: 4px;
+    margin-right: 6px; vertical-align: 1px;
+}
+
+.mg-rb-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 1300px) { .mg-rb-grid { grid-template-columns: 1fr; } }
+.mg-rb {
+    border: 1px solid var(--mg-line); border-radius: 10px; padding: 12px 14px; background: #fbfcfd;
+    display: flex; flex-direction: column; gap: 8px;
+}
+.mg-rb-top { display: flex; align-items: center; gap: 8px; }
+.mg-rb-dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--mg-accent); flex: none;
+    box-shadow: 0 0 0 3px var(--mg-accent-tint);
+}
+.mg-rb-name { font-size: 13.5px; font-weight: 750; }
+.mg-rb-tag {
+    font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    padding: 2px 6px; border-radius: 4px; background: var(--mg-blue-tint); color: var(--mg-blue);
+}
+.mg-rb-tag:last-child { margin-left: auto; }
+.mg-rb-say { font-size: 14.5px; line-height: 1.52; border-left: 2.5px solid var(--mg-accent); padding-left: 12px; }
+.mg-rb-why { font-size: 12px; line-height: 1.45; color: var(--mg-muted); }
+.mg-rb-why b {
+    font-weight: 800; color: var(--mg-faint); text-transform: uppercase;
+    letter-spacing: .07em; font-size: 9.5px; margin-right: 4px;
 }
