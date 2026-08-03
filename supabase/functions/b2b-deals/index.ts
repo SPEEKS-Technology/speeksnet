@@ -14,15 +14,23 @@ const corsHeaders = {
 // the stage alone):
 //   pickup            corp    typed-name sign-off + pickup date
 //   pricing_location  corp    route to OVL/LEE/WSP/MPL/BAL/CORP
-//   pricing           store   itemize and price
-//   quote             corp    goes out from the quoter's own mailbox as a
-//                             mailto draft so replies reach them; stays
-//                             editable while the client negotiates, and only
-//                             a CEO/TOM/DM may accept it
+//   pricing           store   itemize and price: type, specs, one serial per
+//                             unit, a disposition, and whether it needs a
+//                             certified data wipe
+//   quote             corp    two phases in one stage, told apart by
+//                             quote_send_count: at 0 it is awaiting approval
+//                             (the approver was emailed when it arrived, and
+//                             can send it back to pricing with a note); once
+//                             emailed it is out with the client. Goes out from
+//                             the quoter's own mailbox as a mailto draft so
+//                             replies reach them; stays editable throughout,
+//                             and only a CEO/TOM/DM may accept or send back
 //   listing_location  corp    ONLY when pricing happened at CORP
 //   listing           store   two scans per unit -- our label says which unit,
-//                             the Shopify barcode records what it became;
-//                             bad units get recycled out instead
+//                             the Shopify barcode records what it became; a
+//                             line quoted for a certified wipe must be ticked
+//                             wiped before its units can go up; bad units get
+//                             recycled out instead
 //   completed         —       terminal, the deal ran its course
 //   declined          —       terminal, the deal died; reachable any time
 //                             before listing, since once a quote is accepted
@@ -36,6 +44,10 @@ const corsHeaders = {
 // what THIS function enforces is legal state transitions and input validity,
 // so a stale tab or a hand-rolled request can't corrupt a pipeline.
 // Tables: b2b_clients + b2b_deals + b2b_deal_items + b2b_item_listings.
+
+// Shared with the other B2B functions and the cron jobs. Same value as
+// b2b-outreach's, which is what lets this function ask it to send a mail.
+const SECRET = "sp33ks-sync-k3y-2026-x9mq";
 
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const PRICING_LOCATIONS = [...STORES, "CORP"];
@@ -62,17 +74,33 @@ const DEAL_COLS = [
   "pricing_store", "listing_store", "delivered_by", "received_by",
   "priced_by", "quote_sent_at", "quote_send_count", "accepted_at", "accepted_by",
   "declined_at", "declined_by", "declined_reason", "declined_category",
+  "sendback_note", "sendback_by", "sendback_at",
   "created_by", "created_at", "updated_at", "stage_changed_at",
   "company", "acronym", "contact", "contact_email", "contact_phone",
   "line_count", "total_units", "listed_units", "recycled_units", "outstanding_units",
-  "total_value", "total_offer", "total_cost",
+  "wiped_units", "total_value", "total_offer", "total_cost", "total_wipe_fee", "net_offer",
 ].join(",");
 
 const ITEM_COLS = [
   "id", "deal_id", "line_no", "sku", "make", "model", "condition",
   "staff_notes", "client_notes", "quantity", "value", "offer", "cost",
-  "recycle_only", "listed_qty", "recycled_qty", "created_at",
+  "disposition", "listed_qty", "recycled_qty", "created_at",
+  "item_type", "cpu", "ram", "storage", "gpu", "battery_health", "serials",
+  "wipe_required", "wipe_fee", "wiped_qty",
 ].join(",");
+
+const ITEM_TYPES = ["laptop", "desktop", "other"];
+const DISPOSITIONS = ["purchase", "no_residual", "recycle"];
+// Which spec fields each type carries. `other` carries none -- a box of cables
+// has no CPU, and the CHECK on the table refuses one.
+const SPECS_FOR: Record<string, string[]> = {
+  laptop: ["cpu", "ram", "storage", "gpu", "battery_health"],
+  desktop: ["cpu", "ram", "storage", "gpu"],
+  other: [],
+};
+// The subset you cannot price without. GPU is optional (integrated graphics are
+// the norm) and so is battery health (a dead battery reports nothing).
+const SPECS_REQUIRED = ["cpu", "ram", "storage"];
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -205,6 +233,40 @@ async function broadcastChange(tool: string, store: string | null) {
   }
 }
 
+// What we charge per device for a certified data wipe. Resolved here rather
+// than taken from the request: the browser that flags a line may be a tab left
+// open since before the fee changed, and the figure it snapshots onto the item
+// is the one the client is quoted.
+async function wipeFeeNow(sb: any): Promise<number> {
+  try {
+    const { data } = await sb.from("b2b_crm_settings").select("wipe_fee").eq("id", 1).maybeSingle();
+    const n = Number(data?.wipe_fee);
+    return Number.isFinite(n) && n >= 0 ? n : 8;
+  } catch (_) {
+    return 8;
+  }
+}
+
+// Tell the approver a quote is waiting on them. The mail itself is built and
+// sent by b2b-outreach, which already owns the settings row, the relay and the
+// email styling -- duplicating any of that here would give us two versions of
+// the same email to keep in step.
+//
+// Wrapped exactly like broadcastChange: the submit has already committed by the
+// time this runs, so nothing it does may throw.
+async function notifyQuoteReady(dealId: string) {
+  try {
+    const url = Deno.env.get("SUPABASE_URL")!;
+    await fetch(`${url}/functions/v1/b2b-outreach`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "notify_quote_ready", deal_id: dealId, secret: SECRET }),
+    });
+  } catch (_) {
+    // swallow — the stage change already succeeded; the email is best-effort
+  }
+}
+
 // updated_at and stage_changed_at are maintained by the b2b_touch_row trigger,
 // so no write here has to remember them.
 async function getDeal(sb: any, id: string) {
@@ -220,13 +282,50 @@ async function getDeal(sb: any, id: string) {
 
 const dealStore = (d: any) => d?.listing_store || d?.pricing_store || null;
 
+const lineName = (it: any) =>
+  [it.make, it.model].filter(Boolean).join(" ") || `Line ${it.line_no}`;
+const namesOf = (bad: any[]) => bad.length ? bad.map(lineName).join(", ") : null;
+
+// One entry per unit, comma separated. Deliberately NOT a row per unit: a qty-5
+// line stays one row and carries "S1,S2,S3,S4,S5". Shared by the validator, the
+// item read and the quote, so the three cannot disagree about what counts.
+function serialList(v: unknown): string[] {
+  return String(v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
 // A line downgraded to Fair or For Parts must carry a client-facing reason --
 // it prints on the quote and is what justifies the low offer.
 function unreasonedNames(items: any[]): string | null {
-  const bad = items.filter((it) =>
-    REASON_CONDITIONS.includes(String(it.condition || "")) && !String(it.client_notes || "").trim());
-  if (!bad.length) return null;
-  return bad.map((it) => [it.make, it.model].filter(Boolean).join(" ") || `Line ${it.line_no}`).join(", ");
+  return namesOf(items.filter((it) =>
+    REASON_CONDITIONS.includes(String(it.condition || "")) && !String(it.client_notes || "").trim()));
+}
+
+// Every unit needs a serial. "NO SERIAL" is a legitimate entry -- plenty of kit
+// has no visible one -- so this counts entries, it does not judge them.
+function unserialledNames(items: any[]): string | null {
+  return namesOf(items.filter((it) => serialList(it.serials).length !== (Number(it.quantity) || 1)));
+}
+
+// You cannot price a machine you have no specs for.
+function unspeccedNames(items: any[]): string | null {
+  return namesOf(items.filter((it) =>
+    SPECS_FOR[it.item_type]?.length &&
+    SPECS_REQUIRED.some((f) => !String(it[f] ?? "").trim())));
+}
+
+// The one gate both submit_pricing and accept_quote run. Checked twice on
+// purpose: the quote stays editable in between, so a field can be cleared after
+// it first passed. Reports every problem at once rather than one per round trip.
+function itemGaps(items: any[]): string | null {
+  const parts: string[] = [];
+  const reasons = unreasonedNames(items);
+  const serials = unserialledNames(items);
+  const specs = unspeccedNames(items);
+  if (reasons) parts.push(`marked Fair or For Parts and need a reason: ${reasons}`);
+  if (specs) parts.push(`missing CPU, RAM or storage: ${specs}`);
+  if (serials) parts.push(`need one serial per unit (use "No visible serial" where there isn't one): ${serials}`);
+  if (!parts.length) return null;
+  return `These lines aren't ready — ${parts.join(" · ")}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -394,7 +493,19 @@ Deno.serve(async (req: Request) => {
           return jsonResponse({ success: true });
         }
 
-        const recycleOnly = body.recycle_only === true;
+        const itemType = oneOf(String(body.item_type ?? "other"), ITEM_TYPES, "Item type")!;
+        const disposition = oneOf(String(body.disposition ?? "purchase"), DISPOSITIONS, "Disposition")!;
+        const wipeRequired = body.wipe_required === true;
+
+        // Specs are nulled for any field this type does not carry, so switching
+        // a laptop to "other" can't leave a stale CPU behind. The table CHECKs
+        // the same thing; this is what stops it ever getting that far.
+        const carries = SPECS_FOR[itemType] || [];
+        const specs: Record<string, string | null> = {};
+        for (const f of ["cpu", "ram", "storage", "gpu", "battery_health"]) {
+          specs[f] = carries.includes(f) ? str(body[f], 60, f.toUpperCase()) : null;
+        }
+
         const fields = {
           make: str(body.make, 120, "Brand"),
           model: str(body.model, 200, "Model"),
@@ -402,11 +513,22 @@ Deno.serve(async (req: Request) => {
           staff_notes: str(body.staff_notes, 1000, "Staff notes"),
           client_notes: str(body.client_notes, 1000, "Client notes"),
           quantity: count(body.quantity, 1, 100000, "Quantity", 1),
-          recycle_only: recycleOnly,
-          // A recycle-only line is scrap: no resale value and no offer. The
-          // table enforces this too, so the two can never disagree.
-          value: recycleOnly ? 0 : money(body.value, "Unit value"),
-          offer: recycleOnly ? 0 : money(body.offer, "Unit offer"),
+          item_type: itemType,
+          ...specs,
+          serials: str(body.serials, 4000, "Serial numbers"),
+          disposition,
+          // Only a purchase carries money to the client; recycle has no resale
+          // value to us either. Mirrors the two disposition CHECKs exactly.
+          value: disposition === "recycle" ? 0 : money(body.value, "Unit value"),
+          offer: disposition === "purchase" ? money(body.offer, "Unit offer") : 0,
+          wipe_required: wipeRequired,
+          // Snapshotted per line rather than read live at render time: changing
+          // the global fee must not silently reprice a quote already sent. Kept
+          // if the line already had one, so an edit to an unrelated field can't
+          // move the price a client has been shown.
+          wipe_fee: wipeRequired
+            ? (Number(body.keep_wipe_fee) > 0 ? money(body.keep_wipe_fee, "Wipe fee") : await wipeFeeNow(supabase))
+            : 0,
         };
 
         if (action === "update_item") {
@@ -442,12 +564,12 @@ Deno.serve(async (req: Request) => {
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
         if (deal.stage !== "pricing") return jsonResponse({ success: false, error: "This deal isn't in pricing." }, 409);
         const { data: items } = await supabase.from("b2b_deal_items")
-          .select("id, line_no, sku, make, model, condition, client_notes")
+          .select("id, line_no, sku, make, model, condition, client_notes, quantity, serials, item_type, cpu, ram, storage")
           .eq("deal_id", deal.id).order("line_no", { ascending: true });
         if (!items?.length) return jsonResponse({ success: false, error: "Add at least one line item before submitting." }, 400);
 
-        const gaps = unreasonedNames(items);
-        if (gaps) return jsonResponse({ success: false, error: `These lines are marked Fair or For Parts and need a reason: ${gaps}` }, 400);
+        const bad = itemGaps(items);
+        if (bad) return jsonResponse({ success: false, error: bad }, 400);
 
         // Backfill for any line created before SKUs were assigned on insert.
         const missing = items.filter((it: any) => !it.sku);
@@ -460,9 +582,16 @@ Deno.serve(async (req: Request) => {
         const { error } = await supabase.from("b2b_deals").update({
           stage: "quote",
           priced_by: str(body.priced_by, 120, "Priced by"),
+          // Clearing it here means a deal sent back for changes and re-submitted
+          // doesn't keep showing the old note as if it were still outstanding.
+          sendback_note: null, sendback_by: null, sendback_at: null,
         }).eq("id", deal.id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("b2b", dealStore(deal));
+        // This is the moment the quote becomes someone else's problem, so it is
+        // where the approver gets told. Fire and forget: the submit has already
+        // succeeded and a mail failure must not undo it.
+        await notifyQuoteReady(deal.id);
         return jsonResponse({ success: true });
       }
 
@@ -493,14 +622,14 @@ Deno.serve(async (req: Request) => {
         }
 
         const { data: items } = await supabase.from("b2b_deal_items")
-          .select("id, line_no, sku, offer, make, model, condition, client_notes")
+          .select("id, line_no, sku, offer, make, model, condition, client_notes, quantity, serials, item_type, cpu, ram, storage")
           .eq("deal_id", deal.id).order("line_no", { ascending: true });
         if (!items?.length) return jsonResponse({ success: false, error: "This quote has no line items." }, 400);
 
         // Same gate as submit_pricing: the quote stays editable right up to
-        // here, so a reason could have been cleared after it was first checked.
-        const gaps = unreasonedNames(items);
-        if (gaps) return jsonResponse({ success: false, error: `These lines are marked Fair or For Parts and need a reason: ${gaps}` }, 400);
+        // here, so a field could have been cleared after it was first checked.
+        const bad = itemGaps(items);
+        if (bad) return jsonResponse({ success: false, error: bad }, 400);
 
         const acronym = deal.client?.acronym || "B2B";
         for (const it of items) {
@@ -541,12 +670,14 @@ Deno.serve(async (req: Request) => {
       // list_unit    { id | (deal_id, sku), shopify_barcode }  one unit goes live
       // unlist_unit  { id, listing_id? }                       undo the last one
       // recycle_units{ id, units }                             pull bad units out
+      // mark_wiped   { id, units }                             certify N wiped
       //
       // There is deliberately NO path that marks a unit listed without a Shopify
       // barcode. Every listed unit is one live Shopify listing, so the barcode is
       // what makes the claim checkable; a bare counter was only ever an
       // assertion. listed_qty is now derived by trigger from these rows.
-      if (action === "list_unit" || action === "unlist_unit" || action === "recycle_units") {
+      if (action === "list_unit" || action === "unlist_unit" ||
+          action === "recycle_units" || action === "mark_wiped") {
         let item: any;
         if (action === "list_unit" && !body.id) {
           const sku = String(body.sku || "").trim().toUpperCase();
@@ -577,13 +708,33 @@ Deno.serve(async (req: Request) => {
             .update({ recycled_qty: item.recycled_qty + Math.min(units, room) }).eq("id", item.id);
           if (error) return jsonResponse({ success: false, error: error.message }, 500);
 
+        } else if (action === "mark_wiped") {
+          if (!item.wipe_required) {
+            return jsonResponse({ success: false, error: "This line wasn't quoted for a certified wipe." }, 409);
+          }
+          const units = count(body.units, 1, 100000, "Units", 1);
+          const room = qty - item.wiped_qty;
+          if (room <= 0) return jsonResponse({ success: false, error: "Every unit on this line is already certified wiped." }, 409);
+          const { error } = await supabase.from("b2b_deal_items")
+            .update({ wiped_qty: item.wiped_qty + Math.min(units, room) }).eq("id", item.id);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+
         } else if (action === "list_unit") {
-          if (item.recycle_only) {
-            return jsonResponse({ success: false, error: "A recycle-only line has nothing to list — recycle it out instead." }, 409);
+          if (item.disposition === "recycle") {
+            return jsonResponse({ success: false, error: "A recycle line has nothing to list — recycle it out instead." }, 409);
           }
           const code = barcode8(body.shopify_barcode);
           if (item.listed_qty + item.recycled_qty >= qty) {
             return jsonResponse({ success: false, error: `${item.sku || "This line"} is already fully accounted for (${item.listed_qty}/${qty}).` }, 409);
+          }
+          // We charged the client for a certified wipe on this line, so a unit
+          // cannot go up for sale until one has actually been done. You may list
+          // exactly as many as have been certified, no more.
+          if (item.wipe_required && item.listed_qty >= item.wiped_qty) {
+            return jsonResponse({
+              success: false,
+              error: `${item.sku || "This line"} needs a certified data wipe first — ${item.wiped_qty} of ${qty} wiped so far.`,
+            }, 409);
           }
           const { error } = await supabase.from("b2b_item_listings").insert({
             item_id: item.id, deal_id: item.deal_id, shopify_barcode: code,
@@ -625,7 +776,7 @@ Deno.serve(async (req: Request) => {
         // aggregate for the deal -- the latter tells the client whether that was
         // the last outstanding unit so it can celebrate without another trip.
         const [{ data: fresh }, { data: roll }] = await Promise.all([
-          supabase.from("b2b_deal_items").select("listed_qty,recycled_qty").eq("id", item.id).maybeSingle(),
+          supabase.from("b2b_deal_items").select("listed_qty,recycled_qty,wiped_qty").eq("id", item.id).maybeSingle(),
           supabase.from("b2b_deal_list").select("outstanding_units").eq("id", deal.id).maybeSingle(),
         ]);
 
@@ -635,6 +786,7 @@ Deno.serve(async (req: Request) => {
           item_id: item.id, sku: item.sku, quantity: qty,
           listed_qty: fresh?.listed_qty ?? item.listed_qty,
           recycled_qty: fresh?.recycled_qty ?? item.recycled_qty,
+          wiped_qty: fresh?.wiped_qty ?? item.wiped_qty,
           listings: await itemListings(supabase, item.id),
           all_done: (roll?.outstanding_units ?? 1) === 0,
         });
@@ -651,6 +803,39 @@ Deno.serve(async (req: Request) => {
           return jsonResponse({ success: false, error: `${outstanding} unit${outstanding === 1 ? "" : "s"} still need listing or recycling.` }, 409);
         }
         const { error } = await supabase.from("b2b_deals").update({ stage: "completed" }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", dealStore(deal));
+        return jsonResponse({ success: true });
+      }
+
+      // Bounce a quote back to whoever priced it, with a note saying why.
+      //
+      // The only backwards edge in the pipeline that isn't decline/reopen. It is
+      // safe against the state-machine CHECKs because quote -> pricing only
+      // lowers the rank, and b2b_deals_pricing_located just requires a
+      // pricing_store at rank >= 3, which this deal already has.
+      //
+      // Same role gate as accepting: deciding a quote isn't good enough is the
+      // same authority as deciding it is.
+      if (action === "request_changes") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "quote") {
+          return jsonResponse({ success: false, error: "Only a deal in the quote stage can be sent back." }, 409);
+        }
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can send a quote back." }, 403);
+        }
+        const { error } = await supabase.from("b2b_deals").update({
+          stage: "pricing",
+          // Cleared because it is no longer true -- someone has to price it
+          // again, and the queue reads this to decide the stage is unowned.
+          priced_by: null,
+          sendback_note: str(body.note, 2000, "A note saying what needs changing", true),
+          sendback_by: str(body.sent_back_by, 120, "Sent back by"),
+          sendback_at: new Date().toISOString(),
+        }).eq("id", deal.id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("b2b", dealStore(deal));
         return jsonResponse({ success: true });
@@ -753,8 +938,10 @@ Deno.serve(async (req: Request) => {
           return {
             ...it,
             listings: byItem[it.id] || [],
-            qty_value_total: it.recycle_only ? 0 : it.value * it.quantity,
-            qty_offer_total: it.recycle_only ? 0 : it.offer * it.quantity,
+            serial_list: serialList(it.serials),
+            qty_value_total: it.disposition === "recycle" ? 0 : it.value * it.quantity,
+            qty_offer_total: it.offer * it.quantity,
+            qty_wipe_total: it.wipe_required ? it.wipe_fee * it.quantity : 0,
             outstanding: Math.max(0, it.quantity - done),
             satisfied: done >= it.quantity,
           };
@@ -787,7 +974,7 @@ Deno.serve(async (req: Request) => {
       supabase.from("b2b_deal_list").select("id", { count: "exact", head: true }).in("stage", TERMINAL),
     );
 
-    const [open, archive, counted] = await Promise.all([openQ, archiveQ, countQ]);
+    const [open, archive, counted, wipeFee] = await Promise.all([openQ, archiveQ, countQ, wipeFeeNow(supabase)]);
     if (open.error) return jsonResponse({ success: false, error: open.error.message }, 500);
     if (archive.error) return jsonResponse({ success: false, error: archive.error.message }, 500);
 
@@ -801,6 +988,9 @@ Deno.serve(async (req: Request) => {
         archive_shown: archiveRows.length,
         archive_total: archiveTotal,
         archive_truncated: archiveTotal > archiveRows.length,
+        // So the pricing screen can show what a wipe costs without needing the
+        // CEO-only settings endpoint.
+        wipe_fee: wipeFee,
       },
     });
   } catch (err: any) {

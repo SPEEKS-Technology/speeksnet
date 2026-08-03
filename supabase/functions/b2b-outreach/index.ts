@@ -2,30 +2,42 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 // ============================================================================
-// B2B client outreach -- the scheduling half of the mini CRM.
+// B2B mini-CRM: everything B2B sends by email, plus the outreach schedule.
 //
-// A client can carry a cadence ("every N months from a set date"). Once a
-// cadence comes due, this sends ONE reminder to leadership listing who is due.
+// Two mails, one recipient. Both go to the single notify_email the CEO sets in
+// CRM Settings -- deliberately one address, so there is no question about who
+// is expected to act:
 //
-// It deliberately does NOT email the clients. The ask was for "alerts they can
-// set up via email to reach out to clients", and a reminder is what a CRM
-// actually provides -- but the deciding factor is the downside of guessing
+//   * the daily outreach digest -- clients whose cadence ("every N days/weeks/
+//     months from a set date") has come due
+//   * quote-ready -- fired by b2b-deals the moment pricing is submitted, so the
+//     approver knows a quote is sitting waiting on them
+//
+// It deliberately does NOT email the clients themselves. The ask was for "alerts
+// they can set up via email to reach out to clients", and a reminder is what a
+// CRM actually provides -- but the deciding factor is the downside of guessing
 // wrong. A wrong reminder is a wasted email to ourselves; a wrong client email
 // is unsolicited mail to a real business from a no-reply reports address, with
-// their reply going somewhere nobody reads. So the reminder lands with
-// leadership and the client-facing note is one click away in the app, sent from
-// the sender's own mailbox -- the same reasoning the quote flow already follows.
+// their reply going somewhere nobody reads. So the reminder lands with us and
+// the client-facing note is one click away in the app, sent from the sender's
+// own mailbox -- the same reasoning the quote flow already follows.
 //
 // Endpoints
 //   GET  ?secret=...                run the daily sweep and send the digest
 //        &dryRun=1                  build it and return it, send nothing
 //        &to=someone@x.com          send the digest here instead
 //   GET  ?due=1                     JSON: who is due / overdue / upcoming
-//   POST { action: 'set_schedule', client_id, active, start, months, note }
+//   GET  ?settings=1                JSON: CRM settings + unreviewed client count
+//   POST { action: 'set_crm_settings', notify_email, enabled, overdue_only,
+//                                      quote_ready_enabled, wipe_fee, user }
+//   POST { action: 'set_schedule', client_id, active, start, every, unit, note }
+//   POST { action: 'mark_reviewed', client_id }
 //   POST { action: 'log_touch', client_id, detail, user }
+//   POST { action: 'notify_quote_ready', deal_id, secret }   <- from b2b-deals
 //
-// Reads and writes b2b_clients' outreach_* columns and b2b_outreach_log.
-// The digest sender is the same Gmail Apps Script relay the weekly report uses.
+// Reads and writes b2b_clients' outreach_* columns, b2b_outreach_log and
+// b2b_crm_settings; reads b2b_deal_list for the quote-ready figures.
+// The sender is the same Gmail Apps Script relay the weekly report uses.
 // ============================================================================
 
 const corsHeaders = {
@@ -38,7 +50,6 @@ const GMAIL_RELAY = Deno.env.get("GMAIL_RELAY_URL")
   || "https://script.google.com/macros/s/AKfycby4Y2l3DJ6fQCrpFuwTTXKeaD3QV5DbLhf7jmberZCUFx86VaaE6vb9Bs_CweNh3K9VtQ/exec";
 const RESEND_URL  = "https://api.resend.com/emails";
 const FROM        = Deno.env.get("RESEND_FROM") || "Speeks Reports <onboarding@resend.dev>";
-const FALLBACK_TO = ["ethan.kushnir@speekstechnology.com"];
 
 // Palette lifted from the weekly report so the two emails look like the same
 // system. Values, not variables: every colour has to be inline in email HTML.
@@ -90,18 +101,23 @@ const longDate = (d: string | null) => d
 const daysBetween = (a: string, b: string) =>
   Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
 
+const SETTINGS_COLS = "notify_email,enabled,overdue_only,quote_ready_enabled,wipe_fee";
+
 // CRM settings: the CEO's single notification address + toggles. This REPLACES
 // the old leadership list — reach-out reminders now go only where the CEO says.
-async function loadSettings(sb: any): Promise<{ notify_email: string | null; enabled: boolean; overdue_only: boolean }> {
+// The same address receives quote-ready mail, by the CEO's own choice.
+async function loadSettings(sb: any) {
   try {
-    const { data } = await sb.from("b2b_crm_settings").select("notify_email,enabled,overdue_only").eq("id", 1).maybeSingle();
+    const { data } = await sb.from("b2b_crm_settings").select(SETTINGS_COLS).eq("id", 1).maybeSingle();
     return {
       notify_email: (data?.notify_email || "").trim() || null,
       enabled: data ? data.enabled !== false : true,
       overdue_only: !!data?.overdue_only,
+      quote_ready_enabled: data ? data.quote_ready_enabled !== false : true,
+      wipe_fee: Number(data?.wipe_fee ?? 8),
     };
   } catch (_) {
-    return { notify_email: null, enabled: true, overdue_only: false };
+    return { notify_email: null, enabled: true, overdue_only: false, quote_ready_enabled: true, wipe_fee: 8 };
   }
 }
 
@@ -234,6 +250,92 @@ function digestHtml(rows: any[], today: string): string {
 </td></tr></table></div>`;
 }
 
+const money = (n: unknown) =>
+  "$" + (Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// "A quote is waiting on you." Sent the moment pricing is submitted, because
+// that is when it stops being the store's problem and becomes the approver's.
+//
+// Everything here is one read from b2b_deal_list -- the rollups it already
+// computes are exactly the figures worth putting in the email, and taking them
+// from the same place the screen does means the two can't tell different
+// stories about the same deal.
+async function sendQuoteReady(sb: any, dealId: string) {
+  const settings = await loadSettings(sb);
+  if (!settings.quote_ready_enabled) return jsonResponse({ success: true, sent: false, reason: "quote-ready email is switched off" });
+  if (!settings.notify_email) return jsonResponse({ success: true, sent: false, reason: "no notification email set" });
+
+  const { data: d } = await sb.from("b2b_deal_list")
+    .select("id,ref,company,contact,contact_email,pickup_date,pricing_store,priced_by," +
+            "line_count,total_units,total_value,total_offer,total_wipe_fee,net_offer")
+    .eq("id", dealId).maybeSingle();
+  if (!d) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+
+  const row = (k: string, v: string) => `
+    <tr>
+      <td style="padding:7px 0;font-size:12px;color:${C.muted};white-space:nowrap;">${k}</td>
+      <td style="padding:7px 0 7px 18px;font-size:13px;font-weight:700;color:${C.charcoal};text-align:right;">${v}</td>
+    </tr>`;
+
+  const html = `
+<div style="margin:0;padding:0;background:${C.app};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.app};">
+<tr><td align="center" style="padding:26px 12px;">
+  <table role="presentation" width="600" cellpadding="0" cellspacing="0"
+         style="width:600px;max-width:600px;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <tr><td style="padding:0 0 16px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+             style="background:${C.card};border:1px solid ${C.line};border-radius:18px;">
+        <tr><td style="padding:20px 22px;border-bottom:1px solid ${C.line2};">
+          <div style="font-size:10.5px;font-weight:800;letter-spacing:.11em;text-transform:uppercase;color:${C.sage};">
+            SPEEKS Technology &middot; B2B
+          </div>
+          <div style="margin-top:3px;font-size:21px;font-weight:800;color:${C.charcoal};">A Quote Is Ready To Send</div>
+          <div style="margin-top:3px;font-size:13px;color:${C.muted};">
+            ${esc(d.company)} has been priced and is waiting on your approval.
+          </div>
+        </td></tr>
+        <tr><td style="padding:16px 22px 4px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            ${row("Reference", `<span style="font-family:Consolas,monospace;">${esc(d.ref)}</span>`)}
+            ${row("Client", esc(d.company))}
+            ${row("Picked up", longDate(d.pickup_date))}
+            ${row("Priced at", esc(d.pricing_store || "—"))}
+            ${row("Priced by", esc(d.priced_by || "—"))}
+            ${row("Items", `${d.line_count} line${Number(d.line_count) === 1 ? "" : "s"} &middot; ${d.total_units} unit${Number(d.total_units) === 1 ? "" : "s"}`)}
+            ${row("Resale value", money(d.total_value))}
+            ${row("Offer", money(d.total_offer))}
+            ${Number(d.total_wipe_fee) > 0 ? row("Certified data wipes", `&minus;${money(d.total_wipe_fee)}`) : ""}
+          </table>
+        </td></tr>
+        <tr><td style="padding:4px 22px 20px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                 style="background:${C.tint};border:1px solid #cfeada;border-radius:10px;">
+            <tr>
+              <td style="padding:12px 14px;font-size:12.5px;font-weight:700;color:${C.sageDeep};">We would pay</td>
+              <td style="padding:12px 14px;font-size:19px;font-weight:800;color:${C.sageDeep};text-align:right;">${money(d.net_offer)}</td>
+            </tr>
+          </table>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:12px;">
+            <tr><td style="padding:11px 13px;background:${C.flagBg};border:1px solid ${C.flagBorder};
+                           border-radius:10px;font-size:12px;color:${C.charcoal};">
+              Open <b>Operations &rarr; Business-to-Business</b> to review it. From there you can send it to the client
+              from your own mailbox, or send it back to pricing with a note if something needs changing.
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </td></tr>
+    <tr><td align="center" style="padding:0 0 8px;font-size:11px;color:${C.faint};">
+      Sent by SPEEKS Reports because a B2B quote reached the approval stage.
+    </td></tr>
+  </table>
+</td></tr></table></div>`;
+
+  const res = await sendEmail([settings.notify_email], `B2B Quote Ready: ${d.company} (${d.ref})`, html);
+  return jsonResponse({ success: true, sent: res.ok, to: settings.notify_email, relay: res.status });
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -254,17 +356,30 @@ Deno.serve(async (req: Request) => {
         if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
           throw new Invalid("That doesn't look like a valid email address.");
         }
+        const fee = Number(body.wipe_fee);
+        if (!Number.isFinite(fee) || fee < 0 || fee > 9999999) {
+          throw new Invalid("The certified wipe charge has to be a number, and not a negative one.");
+        }
         const { error } = await supabase.from("b2b_crm_settings").update({
           notify_email: email,
           enabled: body.enabled !== false,
           overdue_only: body.overdue_only === true,
+          quote_ready_enabled: body.quote_ready_enabled !== false,
+          wipe_fee: Math.round(fee * 100) / 100,
           updated_at: new Date().toISOString(),
           updated_by: str(body.user, 120, "User"),
         }).eq("id", 1);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         const { data } = await supabase.from("b2b_crm_settings")
-          .select("notify_email,enabled,overdue_only").eq("id", 1).maybeSingle();
+          .select(SETTINGS_COLS).eq("id", 1).maybeSingle();
         return jsonResponse({ success: true, settings: data });
+      }
+
+      // Called by b2b-deals when a deal reaches the quote stage, not by a
+      // browser -- hence the shared secret rather than a role check.
+      if (action === "notify_quote_ready") {
+        if (body.secret !== SECRET) return jsonResponse({ success: false, error: "Not authorized" }, 401);
+        return await sendQuoteReady(supabase, str(body.deal_id, 64, "Deal", true)!);
       }
 
       const clientId = str(body.client_id, 64, "Client", true)!;
