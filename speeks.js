@@ -9342,6 +9342,10 @@ function _b2bShowDeal(cfg) {
     document.getElementById('b2bDealSub').textContent     = cfg.sub || '';
     document.getElementById('b2bDealBody').innerHTML      = cfg.body || '';
     document.getElementById('b2bDealFooter').innerHTML    = cfg.footer || '';
+    // SKU label print becomes available once the pickup is dropped at its
+    // assigned pricing location — i.e. from the pricing stage onward.
+    const pb = document.getElementById('b2bDealPrintBtn');
+    if (pb) pb.style.display = ['pricing', 'quote', 'listing_location', 'listing', 'completed'].includes(cfg.stage) ? '' : 'none';
     const modal = document.getElementById('b2bDealModal');
     modal.classList.toggle('b2b-modal-wide', !!cfg.wide);
     closeAllModals();
@@ -10895,6 +10899,67 @@ function b2bPrintLabels(dealId, itemId) {
 
     const w = window.open('', '_blank');
     if (!w) return alert('Allow pop-ups for this site to print labels.');
+    w.document.write(doc);
+    w.document.close();
+}
+
+// Full-page SKU label for a whole pickup: the deal ref, sized to fill the top
+// half of a portrait Letter page so it folds in half into a tent/hang tag.
+function b2bPrintPickup() {
+    const deal = _b2bModalDeal;
+    if (!deal) return;
+    const ref = deal.ref || '';
+    if (!ref) return alert('This pickup has no SKU yet — it gets one when it reaches pricing.');
+    const company = deal.company || deal.client?.company || '';
+    const when = deal.pickup_date ? _b2bDate(deal.pickup_date) : '';
+
+    // Size the ref to fit the usable width (~6.7in ≈ 480pt); monospace runs about
+    // 0.62em/char. Capped so short refs don't get comically large.
+    const size = Math.max(40, Math.min(150, Math.floor(480 / (ref.length * 0.62))));
+
+    const doc = `<!doctype html><html><head><meta charset="utf-8">
+<title>SKU ${escapeHtml(ref)}</title>
+<style>
+  @page { size: letter portrait; margin: 0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Inter','Segoe UI',Arial,sans-serif; background: #f4f7f9; }
+  .bar { position: sticky; top: 0; display: flex; gap: 12px; align-items: center;
+         padding: 12px 16px; background: #fff; border-bottom: 1px solid #e6ebf1; }
+  .bar b { font-size: 13px; font-weight: 800; color: #1a1c1e; }
+  .bar span { font-size: 12px; color: #94a3b8; }
+  .bar button.go { margin-left: auto; background: #1f9d57; border: 1px solid #1f9d57;
+         color: #fff; font: inherit; font-size: 12px; font-weight: 700; padding: 8px 15px;
+         border-radius: 9px; cursor: pointer; }
+  .page { width: 8.5in; height: 11in; margin: 0 auto; background: #fff; }
+  .top { height: 5.5in; padding: 0.55in 0.9in; display: flex; flex-direction: column;
+         align-items: center; justify-content: center; text-align: center;
+         border-bottom: 2px dashed #c7ced6; position: relative; }
+  .eyebrow { font-size: 26pt; font-weight: 800; letter-spacing: .22em;
+             text-transform: uppercase; color: #5a6b7b; }
+  .sku { font-family: 'Consolas','SFMono-Regular','Menlo',monospace; font-weight: 800;
+         letter-spacing: .01em; line-height: 1; color: #0f1720; margin: 0.22in 0;
+         white-space: nowrap; }
+  .co { font-size: 30pt; font-weight: 700; color: #1a1c1e; max-width: 100%;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta { font-size: 15pt; font-weight: 600; color: #6b7280; margin-top: 0.08in; }
+  @media print { body { background: #fff; } .bar { display: none; } .page { margin: 0; } }
+</style></head>
+<body>
+  <div class="bar">
+    <b>${escapeHtml(ref)}</b>
+    <span>Prints on the top half of a portrait page — fold in half and tape up.</span>
+    <button class="go" onclick="window.print()">Print</button>
+  </div>
+  <div class="page"><div class="top">
+    <div class="eyebrow">B2B Pickup</div>
+    <div class="sku" style="font-size:${size}pt;">${escapeHtml(ref)}</div>
+    ${company ? `<div class="co">${escapeHtml(company)}</div>` : ''}
+    ${when ? `<div class="meta">Picked up ${escapeHtml(when)}</div>` : ''}
+  </div></div>
+</body></html>`;
+
+    const w = window.open('', '_blank');
+    if (!w) return alert('Allow pop-ups for this site to print the label.');
     w.document.write(doc);
     w.document.close();
 }

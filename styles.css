@@ -11503,3 +11503,8 @@ body.sam-active .hotbar-btn:hover {
 .crm-clear-em { font-size: 34px; color: #1f9d57; }
 .crm-clear h4 { margin: 10px 0 4px; font-size: 16px; font-weight: 800; color: #1a1c1e; }
 .crm-clear p { margin: 0; font-size: 13px; }
+
+/* deal-modal header actions (SKU-label print + close) */
+.tool-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.b2b-deal-print { display: inline-flex; align-items: center; gap: 6px; }
+.b2b-deal-print svg { width: 15px; height: 15px; }
