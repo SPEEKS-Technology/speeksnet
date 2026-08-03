@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260801q">
+  <link rel="stylesheet" href="styles.css?v=20260803s">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260801q" defer></script>
+  <script src="speeks.js?v=20260803s" defer></script>
 </head>
 <body class="preload">
 
@@ -71,7 +71,7 @@
       <div class="greeting-stack">
         <h2 id="userGreeting">Welcome!</h2>
         <div class="version-signout-row">
-            <span class="version-tag">v2.2.2</span>
+            <span class="version-tag">v3.0</span>
             <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
         </div>
       </div>
@@ -918,9 +918,7 @@
     <div class="manage-content">
       <div id="dmGoalsBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
     </div>
-    <div class="manage-footer">
-      <span class="dmx-foot-note">Edit buttons open the store-scoped editor for the selected store.</span>
-    </div>
+
 </div>
 
 <div class="modal-menu manage-menu" id="preferredModal">

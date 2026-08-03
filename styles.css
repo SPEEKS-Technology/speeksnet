@@ -35,9 +35,18 @@ body {
     background: var(--bg-app); 
     color: var(--text-dark); 
     line-height: 1.6; 
-    display: flex; 
-    min-height: 100vh; 
-    overflow-x: hidden; 
+    display: flex;
+    min-height: 100vh;
+    /* `clip`, not `hidden` — they look identical but behave differently here.
+       A non-visible overflow on ONE axis forces the other axis to compute to
+       `auto`, so `overflow-x: hidden` quietly turned <body> into a scroll
+       container. Any position:sticky descendant then anchors to <body>, which
+       never scrolls internally (the page scrolls on <html>), so sticky could
+       never engage anywhere on the site — which is why the Monthly Breakdown
+       and Store KPI headers had been given up on and set to position:static.
+       `clip` suppresses the same horizontal overflow WITHOUT creating a scroll
+       container, so sticky resolves against the viewport as intended. */
+    overflow-x: clip;
 }
 
 body.no-scroll {
@@ -2658,12 +2667,18 @@ select.bs-hidden-select:focus {
 .tools-nav-btn .tools-icon { width: 13px; height: 13px; stroke: #fff; }
 .tools-nav-label { font-size: 11px; font-weight: 700; color: #fff; text-transform: uppercase; letter-spacing: 0.5px; }
 
+/* --panel-top is set by _syncLayout() (initLayoutSync, speeks.js) from the nav's
+   measured height. The fallback is 64px to match .top-nav's min-height, so if the
+   script never runs the panel still hangs flush instead of floating. It used to be
+   104px, and when _syncLayout stopped running the panels detached from the header
+   by exactly that difference — a fallback that doesn't match the real layout turns
+   a JS failure into a visible one. */
 .tools-side-panel {
     position: fixed;
-    top: var(--panel-top, 104px);
+    top: var(--panel-top, 64px);
     right: 0;
     width: 270px;
-    height: calc(100vh - var(--panel-top, 104px));
+    height: calc(100vh - var(--panel-top, 64px));
     background: #fff;
     border-radius: 0 0 0 14px;
     box-shadow: -8px 0 32px rgba(0,0,0,0.13);
@@ -4017,6 +4032,94 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 
 /* ── overview: metrics × stores for the most-recent month ── */
 .mb-overview-cap { font-size: 12px; font-weight: 700; color: #64748b; padding: 2px 2px 10px 14px; letter-spacing: 0.2px; }
+/* =========================================================
+   MANAGE ROWS — the Monthly Breakdown's row catalog editor
+   ========================================================= */
+.mbm-sec {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+    color: #64707c; background: #f4f8f5;
+    padding: 7px 12px; margin: 14px 0 4px; border-radius: 8px;
+}
+.mbm-sec:first-child { margin-top: 0; }
+.mbm-sec-name  { flex: 0 0 auto; }
+.mbm-sec-count { flex: 1 1 auto; font-weight: 600; letter-spacing: 0; text-transform: none; color: #9aa6ad; }
+/* Kept quiet until the section is hovered — these are occasional admin actions,
+   not something to advertise above every group. */
+.mbm-sec-actions { flex: 0 0 auto; display: flex; gap: 6px; opacity: 0; transition: opacity .15s; }
+.mbm-sec:hover .mbm-sec-actions,
+.mbm-sec:focus-within .mbm-sec-actions { opacity: 1; }
+.mbm-sec-btn {
+    height: 24px; padding: 0 10px;
+    border: 1px solid #dbe4de; border-radius: 6px; background: #fff;
+    font-family: inherit; font-size: 10px; font-weight: 800;
+    letter-spacing: .04em; text-transform: uppercase; color: #56636e; cursor: pointer;
+    transition: background .15s, border-color .15s;
+}
+.mbm-sec-btn:hover { background: #e8f7ee; border-color: #9fdcbb; color: #178048; }
+.mbm-sec-btn.mbm-danger { color: var(--red-alert, #dc2626); border-color: #f3d3d3; }
+.mbm-sec-btn.mbm-danger:hover { background: #fdecec; border-color: #eab8b8; color: var(--red-alert, #dc2626); }
+
+/* the "move its rows where?" strip, revealed under a section by Delete */
+.mbm-sec-move {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 9px 12px; margin: -2px 0 6px;
+    background: #fdf7f7; border: 1px solid #f3d3d3; border-radius: 8px;
+}
+.mbm-sec-move-label { font-size: 11.5px; font-weight: 700; color: #56636e; }
+.mbm-sec-move select {
+    height: 28px; padding: 0 8px;
+    border: 1px solid #dbe4de; border-radius: 6px; background: #fff;
+    font-family: inherit; font-size: 12.5px; font-weight: 600; color: #1f2937;
+}
+.mbm-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 9px 12px; border-bottom: 1px solid #f0f4f1;
+}
+.mbm-row:hover { background: #fafcfb; }
+.mbm-row.is-retired { opacity: .5; }
+/* Label only — the key/type/flag chips that used to sit here were removed; their
+   styles went with them rather than lingering as dead rules. */
+.mbm-row-main { flex: 1 1 auto; min-width: 0; }
+.mbm-label { font-size: 13.5px; font-weight: 700; color: #1f2937; }
+.mbm-row-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+.mbm-btn { height: 28px; padding: 0 12px; font-size: 12px; }
+.mbm-danger { color: var(--red-alert, #dc2626); border-color: #f3d3d3; }
+.mbm-danger:hover { background: #fdecec; }
+.mbm-locked { font-size: 11px; font-weight: 700; color: #9aa6ad; padding-right: 6px; }
+
+/* the add / edit form, pinned above the list */
+.mbm-form {
+    border: 1px solid #cfe0d5; border-radius: 12px;
+    background: #f7faf8; padding: 14px 16px; margin-bottom: 16px;
+}
+.mbm-form-head { font-size: 13px; font-weight: 800; color: #1f2937; margin-bottom: 12px; }
+.mbm-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 10px 14px; margin-bottom: 10px;
+}
+.mbm-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mbm-field > span {
+    font-size: 10px; font-weight: 800; letter-spacing: .05em;
+    text-transform: uppercase; color: #64707c;
+}
+.mbm-field input, .mbm-field select {
+    height: 34px; box-sizing: border-box; padding: 0 10px;
+    border: 1px solid #dbe4de; border-radius: 8px; background: #fff;
+    font-family: inherit; font-size: 13px; font-weight: 600; color: #1f2937; outline: none;
+}
+.mbm-field input:focus, .mbm-field select:focus {
+    border-color: var(--sage-professional, #1f9d57);
+    box-shadow: 0 0 0 3px rgba(31,157,87,.14);
+}
+.mbm-field input:disabled { background: #f1f5f2; color: #9aa6ad; }
+.mbm-checks { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 12px; }
+.mbm-checks label { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; color: #374151; }
+.mbm-hint { color: #9aa6ad; font-weight: 500; }
+.mbm-form-foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.mbm-status { flex: 1 1 auto; font-size: 12px; font-weight: 700; color: #93a0aa; }
+.mbm-status.is-error { color: var(--red-alert, #dc2626); }
+
 .mb-table-overview .mb-th-metric { width: 25%; }
 .mb-table-overview .mb-th-val { width: 15%; }
 .mb-best  { background: #eaf6ee; color: #15803d; }
@@ -4524,10 +4627,10 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 /* Drop-down checklist panel — hangs flush from the right of the header */
 .checklist-side-panel {
     position: fixed;
-    top: var(--panel-top, 104px);
+    top: var(--panel-top, 64px);
     right: 0;
     width: 420px;
-    height: calc(100vh - var(--panel-top, 104px));
+    height: calc(100vh - var(--panel-top, 64px));
     background: white;
     border-radius: 0 0 0 14px;
     box-shadow: -8px 0 32px rgba(0,0,0,0.12);
@@ -4580,10 +4683,10 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
    ========================================================= */
 .goals-side-panel {
     position: fixed;
-    top: var(--panel-top, 104px);
+    top: var(--panel-top, 64px);
     right: 0;
     width: 420px;
-    height: calc(100vh - var(--panel-top, 104px));
+    height: calc(100vh - var(--panel-top, 64px));
     background: white;
     border-radius: 0 0 0 14px;
     box-shadow: -8px 0 32px rgba(0,0,0,0.12);
@@ -6349,6 +6452,177 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 /* =========================================================
    KPI MODAL FOOTER (Save All)
    ========================================================= */
+/* =========================================================
+   KPI COACHING NOTES
+   A collapsible bar per period, under that period's numbers.
+
+   The row is a <td colspan="24"> and everything inside is
+   width:100%, so the bar and the textarea run the full width
+   of the grid and line up with its edges. That's safe because
+   .kpi-full-table is `width: 100%; table-layout: fixed` — the
+   table is panel-width, not a wide horizontal scroller, so
+   "full table width" is also "fully visible".
+
+   Collapsed is the resting state: most periods never get a
+   note, so the default costs one bar's height instead of a
+   textarea's.
+   ========================================================= */
+.kpi-note-row > td {
+    padding: 0 !important;
+    background: #f7faf8;
+    border-top: 1px solid #e6ece8;
+}
+.kpi-note-box {
+    width: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+}
+
+/* --- the bar (always visible, and the toggle) --- */
+.kpi-note-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 9px 16px;
+    background: none;
+    border: 0;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 0;
+    transition: background .15s;
+}
+.kpi-note-head:hover { background: #eef5f0; }
+.kpi-note-head:focus-visible {
+    outline: 2px solid var(--sage-professional, #1f9d57);
+    outline-offset: -2px;
+}
+.kpi-note-chevron {
+    width: 14px; height: 14px; flex: 0 0 auto;
+    color: #7c8a95;
+    transition: transform .18s ease;
+}
+.kpi-note-box.is-open .kpi-note-chevron { transform: rotate(90deg); }
+.kpi-note-title {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: #56636e;
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
+/* Filled only when a note exists — the one glance that says "there's something
+   in here" without opening it. */
+.kpi-note-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #1f9d57;
+    flex: 0 0 auto;
+    display: none;
+}
+.kpi-note-box.has-note .kpi-note-dot { display: block; }
+/* The note's opening words, so a collapsed bar still tells you what's inside.
+   min-width:0 lets it actually shrink and ellipsis inside the flex row. */
+.kpi-note-preview {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #6b7885;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.kpi-note-box.is-open .kpi-note-preview { visibility: hidden; }
+.kpi-note-meta {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #93a0aa;
+    white-space: nowrap;
+    flex: 0 0 auto;
+    margin-left: auto;
+}
+
+/* --- the editor (only when expanded) --- */
+.kpi-note-body {
+    display: none;
+    flex-direction: column;
+    gap: 8px;
+    padding: 2px 16px 14px;
+}
+.kpi-note-box.is-open .kpi-note-body { display: flex; }
+
+.kpi-note-input {
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+    min-height: 62px;
+    padding: 10px 12px;
+    border: 1px solid #dbe4de;
+    border-radius: 10px;
+    background: #fff;
+    font-family: inherit;
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: #1f2937;
+    transition: border-color .15s, box-shadow .15s;
+}
+.kpi-note-input::placeholder { color: #a8b3bc; }
+.kpi-note-input:focus {
+    outline: none;
+    border-color: var(--sage-professional, #1f9d57);
+    box-shadow: 0 0 0 3px rgba(31,157,87,.14);
+}
+.kpi-note-foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    min-height: 26px;   /* reserved, so the box doesn't jolt when a status appears */
+}
+.kpi-note-status { font-size: 12px; font-weight: 700; color: #93a0aa; }
+.kpi-note-status.is-dirty { color: #c07f0c; }
+.kpi-note-status.is-saved { color: #178048; }
+.kpi-note-status.is-error { color: var(--red-alert, #dc2626); }
+.kpi-note-save {
+    height: 30px;
+    padding: 0 16px;
+    border: 1px solid #cfe0d5;
+    border-radius: 8px;
+    background: #fff;
+    color: #178048;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+    transition: background .15s, border-color .15s, opacity .15s;
+}
+.kpi-note-save:hover:not(:disabled) { background: #e8f7ee; border-color: #9fdcbb; }
+/* Disabled is the resting state (nothing to save), so it has to read as calm
+   rather than broken — no red, no hard fade. */
+.kpi-note-save:disabled { opacity: .45; cursor: default; }
+
+/* --- read-only view (DM, CEO, ASM, or any store that isn't yours) ---
+   Rendered as text, not a disabled textarea: a greyed-out input still reads as
+   "you could type here if something were different", which isn't true — nobody
+   above the store manager edits their coaching notes. */
+.kpi-note-read {
+    padding: 10px 12px;
+    border: 1px solid #e6ece8;
+    border-left: 3px solid #cfe0d5;
+    border-radius: 8px;
+    background: #fff;
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: #374151;
+    white-space: pre-wrap;   /* the manager's own line breaks are part of the note */
+    overflow-wrap: anywhere;
+}
+/* No hover affordance on a bar that only expands to text. */
+.kpi-note-box.is-readonly .kpi-note-head:hover { background: none; }
+
 .kpi-entry-modal-footer {
     display: flex;
     align-items: center;
@@ -6763,7 +7037,29 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 /* Monthly Brief pane flows as part of the page too: natural height, no inner scrollbar */
 .ws-panel-brief { height: auto !important; min-height: 0 !important; overflow: visible !important; }
 .ws-panel-brief .ws-scroll { overflow: visible; flex: none; min-height: 0; }
-.ws-panel-brief .mb-table thead th { position: static; }
+
+/* Freeze the header row (Metric + store names on Overview, Metric + months on
+   Store View) as the page scrolls.
+
+   .mb-table already declares `position: sticky; top: 0`, written for when this
+   pane had its own inner scrollbar. Once it was changed to flow with the page,
+   top:0 would have pinned the header underneath the fixed top nav — so it was
+   turned off with `position: static` rather than re-anchored. That's why the
+   header scrolled away.
+
+   Re-anchoring is the actual fix: stick it to --panel-top, the measured height
+   of the fixed nav (set by _syncLayout), so it comes to rest exactly on the
+   nav's bottom edge instead of behind it. The subtabs row isn't sticky, so
+   there's nothing else to clear.
+
+   overflow must stay visible on every ancestor above — an overflow-hidden
+   ancestor silently kills position: sticky, which is what the two rules above
+   are protecting. */
+.ws-panel-brief .mb-table thead th {
+    position: sticky;
+    top: var(--panel-top, 64px);
+    z-index: 6;   /* over .mb-section-row, which paints its own background */
+}
 
 /* underline tabs: flat row, active = sage underline + bold */
 .ws-subtabs { display: flex; gap: 2px; border-bottom: 2px solid #e5e8ec; }
@@ -6773,6 +7069,15 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 }
 .ws-tab:hover { color: var(--slate-charcoal); }
 .ws-tab.active { color: var(--sage-professional); border-bottom-color: var(--sage-professional); }
+
+/* Equal-width tabs across Workspace and Operations (both use .ws-subtabs).
+   Font size and weight were already uniform at 13px/700 — what made the row look
+   ragged was WIDTH, since each tab sized to its own label: 182 / 120 / 157 / 158.
+   flex:1 1 0 gives every tab an equal share of the row, so the active underline
+   is the same length whichever tab you're on, and the row stays even no matter
+   how many tabs a role can see. Basis 0, not auto, or the longest label would
+   still claim more room. */
+.ws-subtabs .ws-tab { flex: 1 1 0; justify-content: center; min-width: 0; }
 
 /* ============================================================================
    ANNOUNCEMENT DOCUMENT UPLOAD & DOCS TAB
@@ -7046,6 +7351,10 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 @media (max-width: 768px) {
     .ws-titlebar { flex-direction: column; align-items: stretch; }
     .ws-subtabs { overflow-x: auto; }
+    /* Narrow screens scroll the row instead of sharing it out — equal widths
+       here would crush "Customer Call Backs" into an ellipsis. Back to natural
+       width so each label stays readable and the row scrolls sideways. */
+    .ws-subtabs .ws-tab { flex: 0 0 auto; }
     .ws-panel { height: auto !important; min-height: 70vh; }
 }
 
@@ -8996,7 +9305,7 @@ body.sam-active .hotbar-btn:hover {
 /* --- page can never be wider than the viewport ---------------------------
    body is display:flex, so .main-content is a flex item and its default
    min-width:auto refuses to shrink below the content's min-content width.
-   Paired with body{overflow-x:hidden} that lays content out past the right
+   Paired with body{overflow-x:clip} that lays content out past the right
    edge with NO way to scroll to it — you could only see it by zooming out.
    min-width:0 lets the column shrink so the deck fits the screen. */
 .main-content { min-width: 0; }

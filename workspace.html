@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260801q">
+  <link rel="stylesheet" href="styles.css?v=20260803s">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20260801q" defer></script>
+  <script src="speeks.js?v=20260803s" defer></script>
 </head>
 <body class="preload">
 
@@ -74,7 +74,7 @@
       <div class="greeting-stack">
         <h2 id="userGreeting">Welcome!</h2>
         <div class="version-signout-row">
-            <span class="version-tag">v2.2.2</span>
+            <span class="version-tag">v3.0</span>
             <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
         </div>
       </div>
@@ -627,6 +627,9 @@
                       <button id="mbViewOverviewBtn" class="mb-view-btn active" onclick="mbSetView('overview')">📊 Overview</button>
                       <button id="mbViewStoreBtn" class="mb-view-btn" onclick="mbSetView('store')">🏬 Store View</button>
                   </div>
+                  <!-- Overview only. Populated by _mbSyncOverviewMonths from the data
+                       already in memory, so switching months never refetches. -->
+                  <select id="mbOverviewMonth" class="kpi-select" onchange="mbSetOverviewMonth(this.value)" style="display:none;" aria-label="Month"></select>
                   <select id="mbStoreSelect" class="kpi-select" onchange="fetchMonthlyBrief()" style="display:none;">
                       <option value="OVL">OVL</option>
                       <option value="LEE">LEE</option>
@@ -635,6 +638,7 @@
                       <option value="BAL">BAL</option>
                   </select>
                   <span id="mbSubtitle" class="ws-head-meta"></span>
+                  <button id="mbRowsBtn" class="kpi-update-trigger-btn" style="display:none;" onclick="mbOpenManageRows()" title="Add, edit or retire the rows on this report">☰ Manage Rows</button>
                   <button id="mbEditBtn" class="kpi-update-trigger-btn" style="display:none;" onclick="mbStartEdit()">✏️ Edit</button>
                   <button id="mbSaveBtn" class="kpi-save-section-btn" style="display:none;" onclick="mbSaveBrief()">Save</button>
                   <button id="mbCancelBtn" class="kpi-cancel-btn" style="display:none;" onclick="mbCancelEdit()">Cancel</button>
@@ -945,6 +949,32 @@
      left, the selected store's detail on the right — see the .dmx block in
      styles.css for why that shape rather than an accordion. Rendered by
      renderDm*Modal() in speeks.js; opened from the action-menu rail. -->
+<!-- Manage Rows — the Monthly Breakdown's row catalog. DM/CEO only.
+     Rows live in monthly_brief_metrics; values stay in monthly_brief keyed by
+     metric_key, so adding a row here needs no schema change and no deploy. -->
+<div class="modal-menu manage-menu" id="mbRowsModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools &middot; District</span>
+          <span class="tool-head-title">Manage Rows</span>
+          <span class="tool-head-sub" id="mbRowsSub">Rows apply to every store. Hiding one keeps its history.</span>
+        </div>
+      </div>
+      <div class="dmx-head-side">
+        <button class="btn-primary" id="mbRowsAddBtn" onclick="_mbmNew()">+ Add Row</button>
+        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+    </div>
+    <div class="manage-content">
+      <div id="mbRowsForm" class="mbm-form" style="display:none;"></div>
+      <div id="mbRowsBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
+    </div>
+    <!-- No manage-footer: the standing rule it held now sits in tool-head-sub,
+         where every other tool modal explains itself. -->
+</div>
+
 <div class="modal-menu manage-menu" id="dmGoalsModal">
     <div class="modal-header tool-head">
       <div class="tool-head-main">
@@ -962,9 +992,7 @@
     <div class="manage-content">
       <div id="dmGoalsBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
     </div>
-    <div class="manage-footer">
-      <span class="dmx-foot-note">Edit buttons open the store-scoped editor for the selected store.</span>
-    </div>
+
 </div>
 
 <div class="modal-menu manage-menu" id="preferredModal">

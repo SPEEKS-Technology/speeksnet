@@ -1251,16 +1251,42 @@ function _syncLayout() {
     document.documentElement.style.setProperty('--panel-top', totalTop + 'px');
 }
 
-async function initTicker() {
-    if (_tickerIniting || _tickerShown) return;
-    _tickerIniting = true;
-    const ticker = document.getElementById('infoTicker');
-    if (!ticker) { _tickerIniting = false; return; }
-
+// Every right-hand side panel (Tools, Checklist, Goals) hangs off --panel-top,
+// so this has to run on EVERY page — not just the ones that happen to have
+// something else calling it.
+//
+// It didn't. The wiring lived inside initTicker(), below its
+// `if (!ticker) return` guard, and #infoTicker was removed site-wide on
+// 2026-07-23 — so initTicker has bailed before reaching it ever since, on all
+// five shells. That left --panel-top unset and the panels falling back to the
+// CSS default of 104px while the nav is 64px: a 40px gap with the panel floating
+// free of the header it's supposed to hang from. It only looked fine on the
+// dashboard because samInit() calls _syncLayout() separately, and samInit
+// returns early wherever there's no action menu — i.e. the other four pages.
+// Ctrl+K made it obvious by making those pages easy to reach.
+//
+// Idempotent: the flag means a second call can't stack a second observer.
+let _layoutSyncWired = false;
+function initLayoutSync() {
+    _syncLayout();                              // correct before first paint of any panel
+    if (_layoutSyncWired) return;
+    _layoutSyncWired = true;
+    // The nav grows when the greeting wraps and settles again once webfonts land,
+    // so measure once more after layout rather than trusting the first read.
     requestAnimationFrame(_syncLayout);
     const nav = document.querySelector('.top-nav');
     if (nav && window.ResizeObserver) new ResizeObserver(_syncLayout).observe(nav);
     window.addEventListener('resize', _syncLayout);
+}
+
+async function initTicker() {
+    if (_tickerIniting || _tickerShown) return;
+    _tickerIniting = true;
+    const ticker = document.getElementById('infoTicker');
+    // The layout sync used to be wired below this guard, which silently killed it
+    // when the ticker was retired — it lives in initLayoutSync() now, called
+    // unconditionally, and must stay out of here.
+    if (!ticker) { _tickerIniting = false; return; }
 
     // Wait until all 4 sources check in, or 12 s absolute max
     await Promise.race([
@@ -3207,6 +3233,197 @@ function _kpiStoreTotalRowHtml(entries) {
     return '<tr class="kpi-total-row">' + cells + '</tr>';
 }
 
+// ── Coaching notes ──────────────────────────────────────────────────────────
+// One free-text box per period, sitting under that period's numbers. Its own
+// row rather than a column, because it's about the whole store's week, not any
+// one employee's cell.
+//
+// Independent of the grid's Edit mode ON PURPOSE. Edit mode is a guarded state
+// for rewriting numbers (and only works on the current period); a note is
+// something you jot while reading, most often about a week that has already
+// locked. Making it wait for Edit would put a lock on the one thing that has no
+// reason to be locked — and would mean you could never annotate last week.
+// Collapsed by default: most periods never get a note, and an always-open
+// textarea under every one of them turns the grid into mostly empty boxes. So the
+// resting state is a single bar, and the editor only exists when asked for.
+//
+// The cost of collapsing is that an existing note can hide — so the bar carries
+// its own evidence: a filled dot, the author and date, and the note's opening
+// words. You can tell which periods have notes without opening any of them.
+//
+// Expanded state is remembered per period (module-level, not persisted) so the
+// re-renders that follow a numbers save don't slam the box shut mid-thought.
+const _kpiNotesOpen = new Set();
+
+// Who may WRITE a note. Must mirror canEditNotes() in the kpi-manage function —
+// the backend is the real gate, this only decides whether to draw an editor.
+// (Frontend and backend role lists drifting apart is what made every DM write to
+// the Margin Guide 403 for a week, so they get checked as a pair.)
+//
+// Narrower than KPI editing on purpose: a coaching note is the store manager's
+// prep for a conversation with their own team, so nobody above them edits it.
+// DM, CEO and corp read only; assistant managers read only.
+const _KPI_NOTE_EDIT_ROLES = new Set(['manager', 'owner (manager)', 'owner manager', 'multi-store manager']);
+
+// Editing also requires that the store on screen is actually theirs — a DM's
+// store picker and an MSM's routing both mean the grid can be showing a store
+// the viewer doesn't manage.
+function _kpiCanEditNotes() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (!_KPI_NOTE_EDIT_ROLES.has(role)) return false;
+    const onScreen = (_kpiResolveStore() || '').toUpperCase();
+    if (!onScreen) return false;
+    // An MSM manages every store in the list, not just the one whose dashboard
+    // they're currently on — _kpiResolveStore can legitimately show them either.
+    if (role === 'multi-store manager') return MULTISTORE_MANAGER_STORES.indexOf(onScreen) !== -1;
+    return (sessionStorage.getItem('speeksUserStore') || '').toUpperCase() === onScreen;
+}
+
+function _kpiNotePreview(note) {
+    const flat = String(note || '').replace(/\s+/g, ' ').trim();
+    return flat.length > 90 ? flat.slice(0, 89) + '…' : flat;
+}
+
+function _kpiToggleNote(pk) {
+    const box = document.getElementById('kpiNoteBox-' + pk);
+    if (!box) return;
+    const open = !box.classList.contains('is-open');
+    box.classList.toggle('is-open', open);
+    const head = document.getElementById('kpiNoteHead-' + pk);
+    if (head) head.setAttribute('aria-expanded', String(open));
+    if (open) {
+        _kpiNotesOpen.add(pk);
+        // Opening the bar is the request to write — put the cursor where the
+        // writing happens instead of making it a second click.
+        const ta = document.getElementById('kpiNote-' + pk);
+        if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    } else {
+        _kpiNotesOpen.delete(pk);
+    }
+}
+
+function _kpiNoteRowHtml(p) {
+    const pk    = p.period_end_date.replace(/-/g, '');
+    const note  = p.note || '';
+    const by    = p.note_by || '';
+    const at    = p.note_at ? _kpiNoteStamp(p.note_at) : '';
+    const meta  = (by && at) ? escapeHtml(by) + ' · ' + escapeHtml(at)
+                : by ? escapeHtml(by) : '';
+    const open  = _kpiNotesOpen.has(pk);
+    const canEdit = _kpiCanEditNotes();
+
+    // For a read-only viewer an empty period has nothing to show, so show
+    // nothing. Otherwise a DM's grid grows an "Coaching Notes — none" bar under
+    // every period of every store, which is pure noise for someone who couldn't
+    // fill it in anyway. Managers always get the bar: theirs is an invitation.
+    if (!canEdit && !note) return '';
+
+    // Read-only viewers (DM, CEO, ASM, anyone looking at a store that isn't
+    // theirs) get the note as text. No textarea, so there's no editor to type
+    // into and only discover on save that it wasn't allowed.
+    const body = canEdit
+        ? '<textarea class="kpi-note-input" id="kpiNote-' + pk + '" rows="3" maxlength="4000" ' +
+            'placeholder="What stood out this period? Wins to call out, patterns to work on, who to sit down with." ' +
+            'oninput="_kpiNoteDirty(\'' + pk + '\')" ' +
+            'onblur="_kpiSaveNote(\'' + p.period_end_date + '\')">' + escapeHtml(note) + '</textarea>' +
+          '<div class="kpi-note-foot">' +
+            '<span class="kpi-note-status" id="kpiNoteStatus-' + pk + '"></span>' +
+            '<button type="button" class="kpi-note-save" id="kpiNoteSave-' + pk + '" ' +
+              'onclick="_kpiSaveNote(\'' + p.period_end_date + '\')" disabled>Save Note</button>' +
+          '</div>'
+        : '<div class="kpi-note-read">' + escapeHtml(note) + '</div>';
+
+    return '<tr class="kpi-note-row"><td colspan="24">' +
+        '<div class="kpi-note-box' + (note ? ' has-note' : '') + (open ? ' is-open' : '') +
+            (canEdit ? '' : ' is-readonly') + '" id="kpiNoteBox-' + pk + '">' +
+          '<button type="button" class="kpi-note-head" id="kpiNoteHead-' + pk + '" ' +
+            'aria-expanded="' + open + '" aria-controls="kpiNoteBody-' + pk + '" ' +
+            'onclick="_kpiToggleNote(\'' + pk + '\')">' +
+            '<svg class="kpi-note-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>' +
+            '<span class="kpi-note-title">Coaching Notes</span>' +
+            '<span class="kpi-note-dot" aria-hidden="true"></span>' +
+            '<span class="kpi-note-preview" id="kpiNotePreview-' + pk + '">' + escapeHtml(_kpiNotePreview(note)) + '</span>' +
+            '<span class="kpi-note-meta" id="kpiNoteMeta-' + pk + '">' + meta + '</span>' +
+          '</button>' +
+          '<div class="kpi-note-body" id="kpiNoteBody-' + pk + '">' + body + '</div>' +
+        '</div></td></tr>';
+}
+
+// Short "when", in the store's timezone — a coaching note found weeks later
+// needs a date more than it needs a clock.
+function _kpiNoteStamp(iso) {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' });
+}
+
+function _kpiNoteDirty(pk) {
+    const st = document.getElementById('kpiNoteStatus-' + pk);
+    const bt = document.getElementById('kpiNoteSave-' + pk);
+    if (st) { st.textContent = 'Unsaved changes'; st.className = 'kpi-note-status is-dirty'; }
+    if (bt) bt.disabled = false;
+}
+
+// Saves without re-rendering the grid. A full reload here would tear the
+// textarea out from under the cursor on every blur — and blur is the common
+// save path, since the whole point is that you can type and move on.
+async function _kpiSaveNote(periodDate) {
+    const pk  = periodDate.replace(/-/g, '');
+    const ta  = document.getElementById('kpiNote-' + pk);
+    const st  = document.getElementById('kpiNoteStatus-' + pk);
+    const bt  = document.getElementById('kpiNoteSave-' + pk);
+    if (!ta) return;
+    const period = (_kpiPeriodsData || []).find(function(p) { return p.period_end_date === periodDate; });
+    const value  = ta.value.trim();
+    // Nothing changed — a blur with no edit shouldn't cost a round trip or
+    // flash a status the user didn't cause.
+    if (period && (period.note || '') === value) {
+        if (bt) bt.disabled = true;
+        if (st && st.classList.contains('is-dirty')) { st.textContent = ''; st.className = 'kpi-note-status'; }
+        return;
+    }
+    const store = _kpiResolveStore();
+    const pin   = sessionStorage.getItem('speeksUserPin');
+    if (!store || !pin) return;
+    if (st) { st.textContent = 'Saving…'; st.className = 'kpi-note-status'; }
+    if (bt) bt.disabled = true;
+    try {
+        const resp = await fetch(KPI_MANAGE_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({
+                action: 'save_note', store: store, period_type: _kpiCurrentTab,
+                period_end_date: periodDate, note: value,
+            }),
+        });
+        const result = await resp.json();
+        if (!resp.ok || result.success === false) throw new Error(result.error || 'Save failed');
+        // Keep the in-memory period in step so the next blur sees no change, and
+        // so a tab switch back re-renders what was actually saved.
+        if (period) {
+            period.note    = result.note || '';
+            period.note_by = result.note_by || '';
+            period.note_at = result.note_at || null;
+        }
+        const meta = document.getElementById('kpiNoteMeta-' + pk);
+        if (meta) {
+            meta.textContent = (result.note_by && result.note_at)
+                ? result.note_by + ' · ' + _kpiNoteStamp(result.note_at)
+                : (result.note_by || '');
+        }
+        // The bar is what everyone sees once this collapses, so its preview and
+        // its has-a-note dot have to move with the save — not wait for a reload.
+        const prev = document.getElementById('kpiNotePreview-' + pk);
+        if (prev) prev.textContent = _kpiNotePreview(result.note || '');
+        const box = document.getElementById('kpiNoteBox-' + pk);
+        if (box) box.classList.toggle('has-note', !!(result.note || ''));
+        if (st) { st.textContent = 'Saved'; st.className = 'kpi-note-status is-saved'; }
+    } catch (e) {
+        if (st) { st.textContent = String(e.message || 'Could not save'); st.className = 'kpi-note-status is-error'; }
+        if (bt) bt.disabled = false;   // leave the way back open
+    }
+}
+
 function _kpiWeekRangeLabel(periodEndDate) {
     const end = new Date(periodEndDate + 'T12:00:00');
     const start = new Date(end);
@@ -3227,7 +3444,9 @@ function _kpiRenderWeekly(periods) {
     // Always show the current (editable) week plus any past weeks with saved data.
     // Rendering it even in view mode means clicking Edit just swaps its cells from
     // text to inputs IN PLACE — no new section appears, so nothing on the page shifts.
-    let visible = (periods || []).filter(function(p) { return p.is_editable || p.entries.some(function(e) { return e.id; }); });
+    // A period with a note but no numbers still has to render, or the note it
+    // holds becomes unreachable the moment it exists.
+    let visible = (periods || []).filter(function(p) { return p.is_editable || !!(p.note) || p.entries.some(function(e) { return e.id; }); });
     if (_kpiEditingPeriod) {
         const ep = periods.find(function(p) { return p.period_end_date === _kpiEditingPeriod; });
         if (ep && !visible.find(function(p) { return p.period_end_date === ep.period_end_date; })) visible.unshift(ep);
@@ -3251,6 +3470,7 @@ function _kpiRenderWeekly(periods) {
         tbody += _kpiAddSelfRowHtml(p, isEd);
         const hasSavedData = p.entries.some(function(e) { return e.id; });
         if (hasSavedData) tbody += _kpiStoreTotalRowHtml(p.entries);
+        tbody += _kpiNoteRowHtml(p);   // last: the week's numbers, then the week's notes
     });
     body.innerHTML = '<div class="kpi-grid-scroll-wrapper"><table class="kpi-entry-grid kpi-full-table">' + _kpiColgroupHtml() + '<tbody>' + tbody + '</tbody></table></div>';
 }
@@ -3331,8 +3551,17 @@ let _mbEditable = '';    // editable period_end_date
 let _mbEditing = false;
 let _mbView = null;          // 'overview' | 'store' (decided by role on first load)
 let _mbOverviewData = {};    // { store: { period_end_date: { metric_key: value } } }
-let _mbOverviewMonth = '';   // month shown in the overview (the editable/current one when open)
+let _mbOverviewMonth = '';   // newest month WITH data — the overview's default
 let _mbOverviewEditable = ''; // editable period_end_date (same across stores)
+// Month explicitly chosen in the Overview picker. '' means "follow the default",
+// so a fresh load always lands on the newest month rather than a stale pick.
+let _mbOverviewPick = '';
+// How many months the Overview picker offers. THIRTEEN, not twelve: twelve
+// entries reach back to the month AFTER the one you're comparing against, so the
+// same month last year — the whole point of the YoY rows — would be the first
+// month off the end of the list. The 13th is that month.
+// A display cap only; the fetch still loads every month on file.
+const MB_OVERVIEW_MONTHS = 13;
 
 function _mbMonthLabel(dateStr) {
     const d = new Date(dateStr + 'T12:00:00');
@@ -3350,7 +3579,12 @@ const MB_MONTH_WINDOW = 6; // how many recent months to show across the brief
 function _mbFmt(type, v) {
     if (v == null || v === '' || isNaN(Number(v))) return '—';
     const n = Number(v);
-    if (type === 'money')  return '$' + Math.round(n).toLocaleString();
+    // Sign OUTSIDE the symbol. Until YoY rows existed no money metric could go
+    // negative, so '$' + n rendered fine; a down year would have printed "$-1,274".
+    if (type === 'money') {
+        const r = Math.round(n);
+        return (r < 0 ? '-$' : '$') + Math.abs(r).toLocaleString();
+    }
     if (type === 'pct')    return n.toFixed(1) + '%';
     if (type === 'rating') return n.toFixed(1) + ' ★';
     if (type === 'int')    return Math.round(n).toLocaleString();
@@ -3358,7 +3592,15 @@ function _mbFmt(type, v) {
 }
 
 // Metrics where a DECREASE is good (lower = better). All others: increase = good.
-const _MB_INVERSE = new Set([
+//
+// These two Sets are now REBUILT FROM THE CATALOG on every load (see
+// _mbSyncMetricFlags) — the row's lower_is_better / no_shade columns are the
+// source of truth, so a row added in Manage Rows grades correctly without a
+// deploy. They start as the shipped values so the very first render, and any
+// fallback where the catalog can't be read, still grades the way it always did.
+// `let`, not `const`, purely so they can be reassigned; every .has() call site
+// is unchanged.
+let _MB_INVERSE = new Set([
     'avg_transaction_time', 'inventory_cost', 'inventory_cost_under_30', 'pct_inventory_over_30',
     'recycled_inventory', 'recycled_pct_inventory', 'inventory_confiscation',
     'refunds', 'discounts', 'return_rate', 'shipping_label_cost', 'shipping_cost_pct_sales',
@@ -3367,7 +3609,43 @@ const _MB_INVERSE = new Set([
 
 // Metrics that never get good/bad coloring — month-over-month or cross-store
 // comparison isn't meaningful for them (running totals / external rankings).
-const _MB_NO_SHADE = new Set(['google_score', 'google_reviews', 'paymore_ranking']);
+let _MB_NO_SHADE = new Set(['google_score', 'google_reviews', 'paymore_ranking']);
+
+// Adopt the catalog's grading flags. Called after every load, before render.
+// Older payloads (or the fallback catalog) carry no flags at all — in that case
+// keep whatever is already in the Sets rather than silently clearing them, which
+// would flip every "lower is better" metric to green-when-rising.
+function _mbSyncMetricFlags() {
+    if (!Array.isArray(_mbMetrics) || !_mbMetrics.length) return;
+    if (!_mbMetrics.some(m => 'lower_is_better' in m || 'no_shade' in m)) return;
+    _MB_INVERSE  = new Set(_mbMetrics.filter(m => m.lower_is_better).map(m => m.key));
+    _MB_NO_SHADE = new Set(_mbMetrics.filter(m => m.no_shade).map(m => m.key));
+}
+
+// True for any row the DM shouldn't be able to type into: the legacy spreadsheet
+// formulas (_MB_DERIVED) and anything the catalog marks derived.
+function _mbIsDerived(m) {
+    return _MB_DERIVED_KEYS.has(m.key) || (m && m.source === 'derived');
+}
+
+// A row whose VALUE IS ALREADY A CHANGE (YoY $ or YoY %), as opposed to a level.
+// These are graded on direction rather than ranked against the other stores —
+// see the shading block in _mbRenderOverview for why. yoy_prior is deliberately
+// excluded: it's last year's level, so ranking it is meaningful.
+function _mbIsChangeMetric(m) {
+    return !!m && (m.formula_key === 'yoy_pct' || m.formula_key === 'yoy_delta');
+}
+
+// Green when the change is in the good direction for this row, red when it
+// isn't, nothing at zero or with no data. Returns a class suffix (leading space)
+// so callers can append it to 'mb-val'.
+function _mbChangeCls(m, v) {
+    if (v == null || isNaN(Number(v))) return '';
+    const n = Number(v);
+    if (n === 0) return '';
+    const good = _MB_INVERSE.has(m.key) ? (n < 0) : (n > 0);
+    return good ? ' mb-best' : ' mb-worst';
+}
 
 // Derived metrics, replicating the Monthly KPI spreadsheet's cell formulas.
 // These are auto-calculated from the manually entered fields (and locked in edit
@@ -3401,6 +3679,91 @@ function _mbApplyDerived(values) {
         values[key] = (x == null || !isFinite(x)) ? null : x;
     });
     return values;
+}
+
+// ── Cross-period formulas ───────────────────────────────────────────────────
+// _MB_DERIVED above computes a value from OTHER VALUES IN THE SAME MONTH, and
+// those results are stored — they're saved alongside the numbers they came from.
+//
+// These are different: they reach into a DIFFERENT PERIOD, so they are computed
+// at render time and never stored. If someone corrects last July's buying, every
+// YoY built on it has to move with it; a stored copy would quietly go stale and
+// there would be nothing on screen to reveal that it had.
+//
+// The registry is parameterised on purpose. `yoy_pct` doesn't know about buying
+// — it takes the metric_key to compare as formula_arg. So "YoY Buying", "YoY NET
+// Sales" and "YoY Gross Profit" are three CATALOG ROWS, not three functions, and
+// a DM adds the next one from Manage Rows without touching this file.
+//
+// Signature: (arg, byMonth, month) -> number | null
+//   arg      the metric_key being compared (from the catalog row's formula_arg)
+//   byMonth  { 'YYYY-MM-DD': { metric_key: value } } for ONE store
+//   month    the period being rendered
+const _MB_FORMULAS = {
+    // Percent change against the same month one year earlier.
+    yoy_pct: (arg, byMonth, month) => {
+        const p = _mbYoyPair(arg, byMonth, month);
+        // A zero base has no meaningful percentage — "up from nothing" is
+        // infinite, not 100%, so show nothing rather than a made-up number.
+        if (!p || p.then === 0) return null;
+        return _mbR2((p.now - p.then) / Math.abs(p.then) * 100);
+    },
+    // Absolute change against the same month one year earlier, in the source
+    // metric's own unit. Unlike yoy_pct a zero base is fine here: "up $8,234
+    // from nothing" is a real, readable statement.
+    yoy_delta: (arg, byMonth, month) => {
+        const p = _mbYoyPair(arg, byMonth, month);
+        return p ? _mbR2(p.now - p.then) : null;
+    },
+    // The same month last year, as it stood — no arithmetic, just the number to
+    // compare against. Useful as a plain reference row beside the current month.
+    yoy_prior: (arg, byMonth, month) => {
+        const p = _mbYoyPair(arg, byMonth, month);
+        return p ? p.then : null;
+    },
+};
+
+// Shared lookup for every year-over-year formula: this month's value and the
+// same month last year, or null if either is missing. One place to get the
+// "is there a prior year at all" question right.
+function _mbYoyPair(arg, byMonth, month) {
+    if (!arg) return null;
+    const prev = _mbPriorYearKey(byMonth, month);
+    if (!prev) return null;
+    const now  = Number((byMonth[month] || {})[arg]);
+    const then = Number((byMonth[prev]  || {})[arg]);
+    if (!isFinite(now) || !isFinite(then)) return null;
+    return { now, then };
+}
+
+// The period_end_date exactly one year before `month`, if it's on file. Both are
+// month-ends, so this is "same month, previous year" — matched on the YYYY-MM
+// prefix rather than by subtracting days, which would miss Feb 29 and any
+// month-end whose day-of-month differs across years.
+function _mbPriorYearKey(byMonth, month) {
+    const m = String(month || '').match(/^(\d{4})-(\d{2})/);
+    if (!m) return null;
+    const target = (Number(m[1]) - 1) + '-' + m[2];
+    return Object.keys(byMonth || {}).find(k => k.slice(0, 7) === target) || null;
+}
+
+// Fill every cross-period row into one store's data, in memory only. Run after
+// each load so that rendering, the delta chips and the CSV export all read these
+// exactly like stored values and need no special-casing.
+function _mbApplyComputedRows(byMonth) {
+    if (!byMonth) return byMonth;
+    const computed = (_mbMetrics || []).filter(m =>
+        m.source === 'derived' && m.formula_key && m.formula_key !== 'legacy' && _MB_FORMULAS[m.formula_key]);
+    if (!computed.length) return byMonth;
+    Object.keys(byMonth).forEach(month => {
+        computed.forEach(m => {
+            let v = null;
+            try { v = _MB_FORMULAS[m.formula_key](m.formula_arg, byMonth, month); }
+            catch (e) { v = null; }   // one bad row must not blank the brief
+            byMonth[month][m.key] = (v == null || !isFinite(v)) ? null : v;
+        });
+    });
+    return byMonth;
 }
 
 // Live recompute while typing in edit mode: reads every metric input with the
@@ -3445,11 +3808,68 @@ function _mbSyncControls() {
     document.getElementById('mbViewStoreBtn')?.classList.toggle('active', _mbView === 'store');
     const sel = document.getElementById('mbStoreSelect');
     if (sel) sel.style.display = (_mbView === 'store' && canPickStore) ? '' : 'none';
+    // Manage Rows edits the catalog, which is the same on both views — but hide
+    // it mid-edit so the shape of the report can't change under an open form.
+    const rowsBtn = document.getElementById('mbRowsBtn');
+    if (rowsBtn) rowsBtn.style.display = (_mbCanManageRows() && !_mbEditing) ? '' : 'none';
+    _mbSyncOverviewMonths();
     const sub = document.getElementById('mbSubtitle');
     if (sub) {
         const store = (sel && canPickStore ? sel.value : null) || sessionStorage.getItem('speeksUserStore') || '';
         sub.textContent = _mbView === 'overview' ? 'All Stores' : (store + ' · Store View');
     }
+}
+
+// Month picker for the Overview. Store View already shows five months side by
+// side, so it needs no picker — this is Overview-only.
+//
+// Every month for every store is ALREADY in _mbOverviewData (the fetch pulls a
+// store's whole history), so changing months is a re-render off memory. No
+// refetch, no spinner.
+function _mbSyncOverviewMonths() {
+    const sel = document.getElementById('mbOverviewMonth');
+    if (!sel) return;
+    if (_mbView !== 'overview') { sel.style.display = 'none'; return; }
+
+    // Only months that actually carry values for some store. The API lists the
+    // open edit window in `months` before anything is entered for it, and an
+    // empty month in the picker is a dead end.
+    const months = new Set();
+    Object.keys(_mbOverviewData).forEach(s => {
+        const byMonth = _mbOverviewData[s] || {};
+        Object.keys(byMonth).forEach(mo => {
+            if (byMonth[mo] && Object.keys(byMonth[mo]).length) months.add(mo);
+        });
+    });
+    // Newest first, capped at a year. There are 23 months on file and growing;
+    // past a year the list is scrolling rather than choosing. This caps only the
+    // PICKER — nothing else is windowed, so the YoY rows still reach back into
+    // the full history for their prior-year figure.
+    const list = [...months].sort().reverse().slice(0, MB_OVERVIEW_MONTHS);
+    if (!list.length) { sel.style.display = 'none'; return; }
+
+    // A pick that no longer exists (store switch, fresh load) falls back to the
+    // newest month rather than leaving the select pointing at nothing.
+    if (_mbOverviewPick && list.indexOf(_mbOverviewPick) === -1) _mbOverviewPick = '';
+    const current = _mbOverviewPick || _mbOverviewMonth || list[0];
+
+    sel.innerHTML = list.map(mo =>
+        '<option value="' + mo + '"' + (mo === current ? ' selected' : '') + '>' + _mbMonthLabel(mo) + '</option>'
+    ).join('');
+    sel.value = current;
+    sel.style.display = '';
+    // While editing, the view is pinned to the open month — offering a picker
+    // that can't move would be a lie, and moving it mid-edit would silently
+    // retarget the inputs at a locked month.
+    sel.disabled = !!_mbEditing;
+    sel.title = _mbEditing ? 'Finish or cancel editing to change months' : 'View a previous month';
+}
+
+function mbSetOverviewMonth(month) {
+    if (_mbEditing) return;                  // guarded above, belt and braces
+    _mbOverviewPick = month || '';
+    _mbRenderOverview();
+    _mbSyncOverviewMonths();
 }
 
 function mbSetView(view) {
@@ -3471,6 +3891,9 @@ async function fetchMonthlyBriefOverview() {
     const body = document.getElementById('mbBody');
     if (!body) return;
     _mbEditing = false;
+    // A reload starts from the newest month. Keeping a stale pick across a view
+    // switch would silently reopen on an old month with no obvious cause.
+    _mbOverviewPick = '';
     body.innerHTML = '<div class="status-message">Syncing Performance Brief…</div>';
     // allSettled so one store being unreachable doesn't blank the whole overview
     const settled = await Promise.allSettled(MB_STORES.map(s =>
@@ -3497,6 +3920,10 @@ async function fetchMonthlyBriefOverview() {
         return;
     }
     _mbOverviewEditable = editable;
+    // Catalog flags first — _mbApplyComputedRows reads _mbMetrics to know which
+    // rows are computed, so it has to run after the metrics have landed.
+    _mbSyncMetricFlags();
+    Object.keys(_mbOverviewData).forEach(s => _mbApplyComputedRows(_mbOverviewData[s]));
     // Display the most recent month that has data (useful for everyone); editing
     // switches to the open edit window, which may still be awaiting entry.
     _mbOverviewMonth = [...dataMonths].sort().reverse()[0] || editable || '';
@@ -3519,6 +3946,8 @@ async function fetchMonthlyBriefStore() {
         _mbMonths   = d.months || [];
         _mbMetrics  = d.metrics || [];
         _mbEditable = d.editable_period || '';
+        _mbSyncMetricFlags();
+        _mbApplyComputedRows(_mbData);
         renderMonthlyBrief();
     } catch (e) {
         body.innerHTML = '<div class="status-message" style="color:var(--red-alert)">Failed to load brief.</div>';
@@ -3587,10 +4016,13 @@ function _mbRenderStore() {
                 // Value cell — editable month becomes an input in edit mode
                 if (_mbEditing && canEdit && mo === _mbEditable) {
                     const step = (m.type === 'int') ? '1' : (m.type === 'rating' ? '0.1' : '0.01');
-                    if (_MB_DERIVED_KEYS.has(m.key)) {
-                        // spreadsheet-formula cell — locked, fills itself from the other inputs
+                    if (_mbIsDerived(m)) {
+                        // Computed cell — locked. Either a spreadsheet formula that
+                        // fills itself from the other inputs, or a cross-period row
+                        // (YoY) that isn't stored at all and so has nothing to type.
+                        const auto = _MB_DERIVED_KEYS.has(m.key) ? 'Auto-calculated' : 'Calculated from history';
                         html += '<td class="mb-val mb-val-primary"><input class="mb-input mb-input-auto" type="number" disabled ' +
-                            'title="Auto-calculated" placeholder="auto" id="mb-in-' + m.key + '" value="' + (v != null ? v : '') + '"></td>';
+                            'title="' + auto + '" placeholder="auto" id="mb-in-' + m.key + '" value="' + (v != null ? v : '') + '"></td>';
                     } else {
                         html += '<td class="mb-val mb-val-primary"><input class="mb-input" type="number" step="' + step +
                             '" id="mb-in-' + m.key + '" value="' + (v != null ? v : '') + '" oninput="_mbLiveDerive(\'mb-in-\')"></td>';
@@ -3680,8 +4112,9 @@ function _mbRenderOverview() {
     const isDM = role === 'district manager';
     const canEdit = (isDM || role === 'ceo' || role === 'owner manager') && !!_mbOverviewEditable;
     const editing = _mbEditing && canEdit;
-    // View the most recent month that has data; while editing, switch to the open window.
-    const shownMonth = editing ? _mbOverviewEditable : _mbOverviewMonth;
+    // Editing always targets the open window. Otherwise: the month picked in the
+    // dropdown, falling back to the most recent one with data.
+    const shownMonth = editing ? _mbOverviewEditable : (_mbOverviewPick || _mbOverviewMonth);
 
     const editBtn = document.getElementById('mbEditBtn');
     if (editBtn) editBtn.style.display = (canEdit && !_mbEditing) ? 'inline-block' : 'none';
@@ -3713,9 +4146,16 @@ function _mbRenderOverview() {
                 const x = (_mbOverviewData[s] && _mbOverviewData[s][shownMonth] || {})[m.key];
                 return (x == null || isNaN(x)) ? null : Number(x);
             });
+            // A CHANGE metric is graded on direction, not on rank. Ranking asks
+            // "who has the biggest number" — fine for Buying, wrong for YoY
+            // Buying, where every store on the row may have grown. With only two
+            // stores holding a prior year, rank-shading is forced to paint one of
+            // them red: LEE grew $30,595 (+49%) and was marked worst for trailing
+            // OVL by $2,567. Sign is the honest signal — up is green, down is red.
+            const changeMetric = _mbIsChangeMetric(m);
             // best / worst store for this metric (only when not editing, ≥2 have data, and they differ)
             let bestIdx = -1, worstIdx = -1;
-            if (!editing && !_MB_NO_SHADE.has(m.key) && raw.filter(x => x != null).length >= 2) {
+            if (!editing && !changeMetric && !_MB_NO_SHADE.has(m.key) && raw.filter(x => x != null).length >= 2) {
                 const inv = _MB_INVERSE.has(m.key);
                 let best = inv ? Infinity : -Infinity, worst = inv ? -Infinity : Infinity;
                 raw.forEach((x, idx) => {
@@ -3729,9 +4169,10 @@ function _mbRenderOverview() {
             MB_STORES.forEach((s, idx) => {
                 if (editing) {
                     const step = (m.type === 'int') ? '1' : (m.type === 'rating' ? '0.1' : '0.01');
-                    if (_MB_DERIVED_KEYS.has(m.key)) {
+                    if (_mbIsDerived(m)) {
+                        const auto = _MB_DERIVED_KEYS.has(m.key) ? 'Auto-calculated' : 'Calculated from history';
                         html += '<td class="mb-val"><input class="mb-input mb-input-auto" type="number" disabled ' +
-                            'title="Auto-calculated" placeholder="auto" id="mb-ov-' + s + '-' + m.key + '" value="' + (raw[idx] != null ? raw[idx] : '') + '"></td>';
+                            'title="' + auto + '" placeholder="auto" id="mb-ov-' + s + '-' + m.key + '" value="' + (raw[idx] != null ? raw[idx] : '') + '"></td>';
                     } else {
                         html += '<td class="mb-val"><input class="mb-input" type="number" step="' + step +
                             '" id="mb-ov-' + s + '-' + m.key + '" value="' + (raw[idx] != null ? raw[idx] : '') +
@@ -3739,9 +4180,17 @@ function _mbRenderOverview() {
                     }
                 } else {
                     const ebayOverride = _mbEbayThresholdCls(m.key, raw[idx]);
-                    const cls = ebayOverride !== null
-                        ? ebayOverride
-                        : (idx === bestIdx ? 'mb-val mb-best' : (idx === worstIdx ? 'mb-val mb-worst' : 'mb-val'));
+                    let cls;
+                    if (ebayOverride !== null) {
+                        cls = ebayOverride;
+                    } else if (changeMetric) {
+                        // Direction, honouring the row's own "lower is better" —
+                        // a YoY of refunds should be green when it FALLS. Same
+                        // rule the store-view delta chips already use.
+                        cls = 'mb-val' + _mbChangeCls(m, raw[idx]);
+                    } else {
+                        cls = idx === bestIdx ? 'mb-val mb-best' : (idx === worstIdx ? 'mb-val mb-worst' : 'mb-val');
+                    }
                     html += '<td class="' + cls + '">' + _mbFmt(m.type, raw[idx]) + '</td>';
                 }
             });
@@ -4041,6 +4490,429 @@ function _exClose() {
     _exCtx = null;
 }
 
+// ── Manage Rows: the row catalog editor (DM / CEO / owner-manager) ──────────
+// The rows on this report are data, not code — monthly_brief_metrics. Values
+// stay in monthly_brief keyed by metric_key, which is already EAV, so adding a
+// row here needs no schema change and no deploy.
+let _mbmCatalog = [], _mbmInUse = new Set(), _mbmFormulas = [], _mbmEditingKey = null;
+// metric_key -> how many stored values it has. Drives how loudly a hard delete
+// warns; an empty row is a trivial cleanup, a populated one is irreversible.
+let _mbmInUseCounts = {};
+
+// Plain-English names for the calculations, so the dropdown doesn't show raw
+// formula keys. An unlisted key falls back to the key itself rather than
+// vanishing — a formula the app can run should always be selectable.
+const _MBM_FORMULA_LABELS = {
+    yoy_pct:   'Year over year — % change',
+    yoy_delta: 'Year over year — change in $ (or unit)',
+    yoy_prior: 'Year over year — same month last year',
+};
+
+function _mbCanManageRows() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return role === 'district manager' || role === 'ceo'
+        || role === 'owner manager' || role === 'owner (manager)';
+}
+
+async function mbOpenManageRows() {
+    if (!_mbCanManageRows()) return;
+    toggleModal('mbRowsModal');
+    _mbmEditingKey = null;
+    const form = document.getElementById('mbRowsForm');
+    if (form) form.style.display = 'none';
+    await _mbmLoad();
+}
+
+async function _mbmLoad() {
+    const body = document.getElementById('mbRowsBody');
+    if (body) body.innerHTML = '<div class="dmx-empty" style="padding:60px 0;">Syncing…</div>';
+    try {
+        const d = await fetch(MONTHLY_BRIEF_URL + '?catalog=1&v=' + Date.now()).then(r => r.json());
+        _mbmCatalog     = d.catalog || [];
+        _mbmInUse       = new Set(d.in_use || []);
+        _mbmInUseCounts = d.in_use_counts || {};
+        _mbmFormulas    = d.formulas || [];
+        _mbmRender();
+    } catch (e) {
+        if (body) body.innerHTML = '<div class="dmx-empty" style="padding:60px 0; color:var(--red-alert);">Could not load the row catalog.</div>';
+    }
+}
+
+function _mbmRender() {
+    const body = document.getElementById('mbRowsBody');
+    if (!body) return;
+    // Subtitle carries the standing rule (it used to be a footer note) plus the
+    // live count — same place every other tool modal explains itself.
+    const sub = document.getElementById('mbRowsSub');
+    const live = _mbmCatalog.filter(r => r.active).length;
+    if (sub) sub.textContent = 'Rows apply to every store. Hiding one keeps its history. · ' +
+        live + ' visible' + (_mbmCatalog.length > live ? ' · ' + (_mbmCatalog.length - live) + ' hidden' : '');
+
+    const sections = [], bySection = {};
+    _mbmCatalog.forEach(r => {
+        if (!bySection[r.section]) { bySection[r.section] = []; sections.push(r.section); }
+        bySection[r.section].push(r);
+    });
+    // Remembered so the section buttons can index into exactly what was drawn —
+    // recomputing the order in the handlers is how the two would drift apart.
+    _mbmSectionOrder = sections;
+
+    let html = '';
+    sections.forEach((sec, si) => {
+        // Sections are indexed rather than keyed by name: names contain spaces
+        // and ampersands ("Buying & Customers"), which don't survive being
+        // dropped into an element id or an inline onclick argument.
+        const count = bySection[sec].length;
+        html += '<div class="mbm-sec">' +
+            '<span class="mbm-sec-name">' + escapeHtml(sec) + '</span>' +
+            '<span class="mbm-sec-count">' + count + ' row' + (count === 1 ? '' : 's') + '</span>' +
+            '<span class="mbm-sec-actions">' +
+              '<button type="button" class="mbm-sec-btn" onclick="_mbmRenameSection(' + si + ')">Rename</button>' +
+              // Only offered when there's somewhere to send the rows. With one
+              // section left, deleting it would leave every row homeless.
+              (sections.length > 1
+                ? '<button type="button" class="mbm-sec-btn mbm-danger" onclick="_mbmDeleteSection(' + si + ')">Delete</button>'
+                : '') +
+            '</span>' +
+          '</div>' +
+          '<div class="mbm-sec-move" id="mbmSecMove-' + si + '" style="display:none;"></div>';
+        bySection[sec].forEach(r => {
+            const derived = r.source === 'derived';
+            const legacy  = derived && r.formula_key === 'legacy';
+            // Label only. The key, type, flags and formula used to sit here as
+            // chips, which made the list a wall of grey text — and all of it is
+            // already visible (and editable) one click away in the Edit form,
+            // which is where it's actually useful.
+            html += '<div class="mbm-row' + (r.active ? '' : ' is-retired') + '">' +
+                '<div class="mbm-row-main">' +
+                  '<span class="mbm-label">' + escapeHtml(r.label) + '</span>' +
+                '</div>' +
+                '<div class="mbm-row-actions">' +
+                  // The 13 spreadsheet formulas are wired to code in _MB_DERIVED;
+                  // editing their key or type from here would break that binding,
+                  // so they're read-only. Everything else is fair game.
+                  (legacy ? '<span class="mbm-locked">Built In</span>'
+                          : '<button type="button" class="btn-secondary mbm-btn" onclick="_mbmEdit(\'' + r.metric_key + '\')">Edit</button>') +
+                  (r.active
+                    ? (legacy ? '' : '<button type="button" class="btn-secondary mbm-btn" onclick="_mbmRetire(\'' + r.metric_key + '\')">Hide</button>')
+                    : '<button type="button" class="btn-secondary mbm-btn" onclick="_mbmRestore(\'' + r.metric_key + '\')">Show</button>') +
+                  // Hard delete sits beside Hide rather than replacing it: Hide
+                  // is the reversible one and stays the default, this is for a
+                  // row that shouldn't exist. Built-ins are excluded — they're
+                  // bound to code.
+                  (legacy ? '' : '<button type="button" class="btn-secondary mbm-btn mbm-danger" onclick="_mbmPurge(\'' + r.metric_key + '\')">Delete</button>') +
+                '</div>' +
+              '</div>';
+        });
+    });
+    body.innerHTML = html || '<div class="dmx-empty" style="padding:60px 0;">No rows yet.</div>';
+}
+
+// ---- sections -------------------------------------------------------------
+// A section has no record of its own; it exists only because rows carry its
+// name. So renaming and deleting are the same write — point the rows elsewhere —
+// and both go through the one `rename_section` action.
+let _mbmSectionOrder = [];
+
+async function _mbmSectionWrite(from, to, okMsg) {
+    const pin = sessionStorage.getItem('speeksUserPin');
+    if (!pin) { alert('Session expired — sign in again.'); return; }
+    try {
+        const resp = await fetch(MONTHLY_BRIEF_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({ action: 'rename_section', from, to }),
+        });
+        const result = await resp.json();
+        if (!resp.ok || result.error) throw new Error(result.error || 'Failed');
+        await _mbmLoad();
+        await fetchMonthlyBrief();   // the brief behind the modal is now stale
+    } catch (e) {
+        alert((okMsg || 'Could not update the section') + ': ' + (e.message || e));
+    }
+}
+
+function _mbmRenameSection(si) {
+    const from = _mbmSectionOrder[si];
+    if (!from) return;
+    const to = prompt('Rename this section.\n\nEvery row in it moves with the name.', from);
+    if (to === null) return;                       // cancelled
+    const next = String(to).trim();
+    if (!next || next === from) return;
+    // Renaming ONTO an existing section merges the two — worth saying out loud,
+    // because it looks like a rename and behaves like a merge.
+    if (_mbmSectionOrder.indexOf(next) !== -1 &&
+        !confirm('“' + next + '” already exists. Its rows and this section\'s will be combined.\n\nContinue?')) return;
+    _mbmSectionWrite(from, next, 'Could not rename the section');
+}
+
+// Delete needs a destination: the rows have to land somewhere, so this opens an
+// inline picker rather than a confirm that silently guesses.
+function _mbmDeleteSection(si) {
+    const sec  = _mbmSectionOrder[si];
+    const wrap = document.getElementById('mbmSecMove-' + si);
+    if (!sec || !wrap) return;
+    if (wrap.style.display !== 'none') { wrap.style.display = 'none'; return; }  // toggle shut
+    const others = _mbmSectionOrder.filter(s => s !== sec);
+    if (!others.length) return;
+    const n = (_mbmCatalog.filter(r => r.section === sec) || []).length;
+    wrap.innerHTML =
+        '<span class="mbm-sec-move-label">Move ' + n + ' row' + (n === 1 ? '' : 's') + ' to</span>' +
+        '<select id="mbmSecMoveTo-' + si + '">' +
+          others.map(s => '<option value="' + escapeHtml(s) + '">' + escapeHtml(s) + '</option>').join('') +
+        '</select>' +
+        '<button type="button" class="mbm-sec-btn mbm-danger" onclick="_mbmDoDeleteSection(' + si + ')">Move &amp; Delete</button>' +
+        '<button type="button" class="mbm-sec-btn" onclick="document.getElementById(\'mbmSecMove-' + si + '\').style.display=\'none\'">Cancel</button>';
+    wrap.style.display = '';
+}
+
+function _mbmDoDeleteSection(si) {
+    const from = _mbmSectionOrder[si];
+    const sel  = document.getElementById('mbmSecMoveTo-' + si);
+    if (!from || !sel || !sel.value) return;
+    _mbmSectionWrite(from, sel.value, 'Could not delete the section');
+}
+
+function _mbmNew()  { _mbmEditingKey = null; _mbmShowForm(null); }
+function _mbmEdit(key) {
+    const r = _mbmCatalog.find(x => x.metric_key === key);
+    if (!r) return;
+    _mbmEditingKey = key;
+    _mbmShowForm(r);
+}
+function _mbmCancel() {
+    _mbmEditingKey = null;
+    const form = document.getElementById('mbRowsForm');
+    if (form) form.style.display = 'none';
+}
+
+function _mbmShowForm(r) {
+    const form = document.getElementById('mbRowsForm');
+    if (!form) return;
+    const isNew = !r;
+    const v = k => (r && r[k] != null ? String(r[k]) : '');
+    const sections = [...new Set(_mbmCatalog.map(x => x.section))];
+    // Only manual rows can be compared year over year: a YoY of a YoY is
+    // meaningless, and the legacy formulas already recompute per month.
+    const sourceable = _mbmCatalog.filter(x => x.source === 'manual' && x.active);
+
+    form.innerHTML =
+      '<div class="mbm-form-head">' + (isNew ? 'Add a row' : 'Edit “' + escapeHtml(r.label) + '”') + '</div>' +
+      '<div class="mbm-grid">' +
+        '<label class="mbm-field"><span>Label</span>' +
+          '<input id="mbmLabel" type="text" maxlength="80" value="' + escapeHtml(v('label')) + '" placeholder="YoY Buying"></label>' +
+        '<label class="mbm-field"><span>Key</span>' +
+          '<input id="mbmKey" type="text" maxlength="60" value="' + escapeHtml(v('metric_key')) + '" placeholder="yoy_buying"' +
+          (isNew ? '' : ' disabled title="The key is what every stored value is filed under — it can\'t change"') + '></label>' +
+        // A real <select>, not an <input list=...> + <datalist>. The datalist
+        // version rendered as a plain text box: Chrome only reveals its arrow on
+        // focus and Firefox shows nothing, so the options were invisible unless
+        // you already knew to guess at them. Sections still have to be
+        // extensible, hence the "+ New section" escape hatch below.
+        '<label class="mbm-field"><span>Section</span>' +
+          '<select id="mbmSection" onchange="_mbmToggleSection()">' +
+            sections.map(s => '<option value="' + escapeHtml(s) + '"' +
+              (v('section') === s ? ' selected' : '') + '>' + escapeHtml(s) + '</option>').join('') +
+            '<option value="__new">+ New section…</option>' +
+          '</select></label>' +
+        '<label class="mbm-field" id="mbmSectionNewWrap" style="display:none;"><span>New section name</span>' +
+          '<input id="mbmSectionNew" type="text" maxlength="60" placeholder="Marketing"></label>' +
+        '<label class="mbm-field"><span>Format</span><select id="mbmType">' +
+          ['money', 'pct', 'int', 'rating', 'num'].map(t =>
+            '<option value="' + t + '"' + (v('type') === t ? ' selected' : '') + '>' + t + '</option>').join('') +
+        '</select></label>' +
+        '<label class="mbm-field"><span>Position</span>' +
+          '<input id="mbmOrder" type="number" step="1" value="' + (v('sort_order') || '999') + '" title="Lower numbers sort higher. Existing rows are spaced by 10."></label>' +
+        '<label class="mbm-field"><span>Value comes from</span><select id="mbmSource" onchange="_mbmToggleFormula()">' +
+          '<option value="manual"' + (v('source') !== 'derived' ? ' selected' : '') + '>Typed in each month</option>' +
+          '<option value="derived"' + (v('source') === 'derived' ? ' selected' : '') + '>Calculated</option>' +
+        '</select></label>' +
+      '</div>' +
+      '<div id="mbmFormulaWrap" class="mbm-grid" style="display:none;">' +
+        '<label class="mbm-field"><span>Calculation</span><select id="mbmFormula">' +
+          // Offered straight from what the app can actually evaluate (the fn's
+          // KNOWN_FORMULAS), minus 'legacy', which isn't a choice — it's the tag
+          // on the 13 built-in spreadsheet formulas.
+          _mbmFormulas.filter(f => f !== 'legacy').map(f =>
+            '<option value="' + f + '"' + (v('formula_key') === f ? ' selected' : '') + '>' +
+            escapeHtml(_MBM_FORMULA_LABELS[f] || f) + '</option>').join('') +
+        '</select></label>' +
+        '<label class="mbm-field"><span>Compare which row</span><select id="mbmFormulaArg">' +
+          sourceable.map(x => '<option value="' + x.metric_key + '"' + (v('formula_arg') === x.metric_key ? ' selected' : '') + '>' +
+            escapeHtml(x.label) + '</option>').join('') +
+        '</select></label>' +
+      '</div>' +
+      '<div class="mbm-checks">' +
+        '<label><input type="checkbox" id="mbmLower"' + (r && r.lower_is_better ? ' checked' : '') + '> Lower is better ' +
+          '<span class="mbm-hint">(green when it falls — refunds, defect rate)</span></label>' +
+        '<label><input type="checkbox" id="mbmNoShade"' + (r && r.no_shade ? ' checked' : '') + '> Never colour-grade ' +
+          '<span class="mbm-hint">(running totals, external rankings)</span></label>' +
+      '</div>' +
+      '<div class="mbm-form-foot">' +
+        '<span class="mbm-status" id="mbmStatus"></span>' +
+        '<button type="button" class="btn-secondary" onclick="_mbmCancel()">Cancel</button>' +
+        '<button type="button" class="btn-primary" onclick="_mbmSave()">' + (isNew ? 'Add Row' : 'Save Changes') + '</button>' +
+      '</div>';
+    form.style.display = 'block';
+    // The form is pinned above the list, so clicking Edit on a row 30 deep left
+    // the user staring at the same rows with the editor off-screen above them.
+    // .manage-content is the scroller (height:60vh), not the window.
+    const scroller = form.closest('.manage-content');
+    if (scroller) scroller.scrollTo({ top: 0, behavior: 'smooth' });
+    _mbmToggleFormula();
+    _mbmToggleSection();
+    // Auto-suggest a key from the label while adding, so nobody has to invent
+    // snake_case by hand — but never touch it once they've typed their own.
+    if (isNew) {
+        const lab = document.getElementById('mbmLabel'), key = document.getElementById('mbmKey');
+        let touched = false;
+        key.addEventListener('input', () => { touched = true; });
+        lab.addEventListener('input', () => {
+            if (touched) return;
+            key.value = lab.value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);
+        });
+        lab.focus();
+    }
+}
+
+function _mbmToggleFormula() {
+    const src = document.getElementById('mbmSource');
+    const wrap = document.getElementById('mbmFormulaWrap');
+    if (src && wrap) wrap.style.display = (src.value === 'derived') ? '' : 'none';
+}
+
+// Reveal the free-text box only when "+ New section" is chosen, and put the
+// cursor in it — picking that option IS the request to type a name.
+function _mbmToggleSection() {
+    const sel  = document.getElementById('mbmSection');
+    const wrap = document.getElementById('mbmSectionNewWrap');
+    if (!sel || !wrap) return;
+    const isNew = sel.value === '__new';
+    wrap.style.display = isNew ? '' : 'none';
+    if (isNew) { const el = document.getElementById('mbmSectionNew'); if (el) el.focus(); }
+}
+
+// The section as chosen: either an existing one, or whatever was typed into the
+// new-section box. Returns '' when "+ New section" is picked but left blank, so
+// the caller can complain rather than silently filing the row under "__new".
+function _mbmSectionValue() {
+    const sel = document.getElementById('mbmSection');
+    if (!sel) return '';
+    if (sel.value !== '__new') return sel.value;
+    return (document.getElementById('mbmSectionNew') || {}).value?.trim() || '';
+}
+
+async function _mbmSave() {
+    const pin = sessionStorage.getItem('speeksUserPin');
+    const st  = document.getElementById('mbmStatus');
+    const set = (msg, cls) => { if (st) { st.textContent = msg; st.className = 'mbm-status' + (cls ? ' ' + cls : ''); } };
+    if (!pin) { set('Session expired — sign in again.', 'is-error'); return; }
+
+    const source = document.getElementById('mbmSource').value;
+    const payload = {
+        action: 'save_metric',
+        metric_key: (_mbmEditingKey || document.getElementById('mbmKey').value || '').trim().toLowerCase(),
+        label:   document.getElementById('mbmLabel').value.trim(),
+        section: _mbmSectionValue(),
+        type:    document.getElementById('mbmType').value,
+        sort_order: Number(document.getElementById('mbmOrder').value),
+        lower_is_better: document.getElementById('mbmLower').checked,
+        no_shade:        document.getElementById('mbmNoShade').checked,
+        source,
+        formula_key: source === 'derived' ? document.getElementById('mbmFormula').value : null,
+        formula_arg: source === 'derived' ? document.getElementById('mbmFormulaArg').value : null,
+    };
+    if (!payload.label) { set('Give the row a label.', 'is-error'); return; }
+    if (!payload.metric_key) { set('Give the row a key.', 'is-error'); return; }
+    if (!payload.section) { set('Name the new section, or pick an existing one.', 'is-error'); return; }
+
+    set('Saving…');
+    try {
+        const resp = await fetch(MONTHLY_BRIEF_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify(payload),
+        });
+        const result = await resp.json();
+        if (!resp.ok || result.error) throw new Error(result.error || 'Save failed');
+        _mbmCancel();
+        await _mbmLoad();
+        // The brief behind the modal is now out of date — it was rendered from
+        // the old catalog and won't show the row that was just added.
+        await fetchMonthlyBrief();
+    } catch (e) {
+        set(String(e.message || 'Could not save'), 'is-error');
+    }
+}
+
+async function _mbmSetActive(key, active) {
+    const pin = sessionStorage.getItem('speeksUserPin');
+    if (!pin) return;
+    const row = _mbmCatalog.find(x => x.metric_key === key) || {};
+    const body = active
+        ? Object.assign({}, row, { action: 'save_metric', active: true })
+        : { action: 'delete_metric', metric_key: key };
+    try {
+        const resp = await fetch(MONTHLY_BRIEF_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify(body),
+        });
+        const result = await resp.json();
+        if (!resp.ok || result.error) throw new Error(result.error || 'Failed');
+        await _mbmLoad();
+        await fetchMonthlyBrief();
+    } catch (e) {
+        alert('Could not update the row: ' + (e.message || e));
+    }
+}
+
+function _mbmRetire(key) {
+    // Warn only when it would hide real numbers — hiding an unused row is
+    // harmless and shouldn't need a confirmation nobody reads.
+    const warn = _mbmInUse.has(key)
+        ? 'This row has data saved against it. Hiding it removes it from every store\'s report; the history is kept and comes back if you show it again.\n\nHide it?'
+        : 'Hide this row? It disappears from every store\'s report.';
+    if (!confirm(warn)) return;
+    _mbmSetActive(key, false);
+}
+function _mbmRestore(key) { _mbmSetActive(key, true); }
+
+// Hard delete — the row AND every value stored under it. The confirmation is
+// deliberately proportional: a row added by mistake carries nothing and gets a
+// one-line check; a row with history has to state the damage in figures, because
+// this is the one action here that can't be undone.
+async function _mbmPurge(key) {
+    const row = _mbmCatalog.find(x => x.metric_key === key);
+    if (!row) return;
+    const n = _mbmInUseCounts[key] || 0;
+    const msg = n
+        ? 'DELETE “' + row.label + '” permanently?\n\n' +
+          'This also destroys ' + n + ' saved value' + (n === 1 ? '' : 's') + ' across every store and every month. ' +
+          'It cannot be undone.\n\nTo keep the history instead, cancel and use Hide.'
+        : 'Delete “' + row.label + '” permanently?\n\nIt has no saved data, so nothing else is lost.';
+    if (!confirm(msg)) return;
+    // A second gate only when history is actually at stake — asking twice for an
+    // empty row would just train people to click through both.
+    if (n && !confirm('Last check: ' + n + ' value' + (n === 1 ? '' : 's') + ' will be deleted for good.')) return;
+
+    const pin = sessionStorage.getItem('speeksUserPin');
+    if (!pin) { alert('Session expired — sign in again.'); return; }
+    try {
+        const resp = await fetch(MONTHLY_BRIEF_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({ action: 'purge_metric', metric_key: key }),
+        });
+        const result = await resp.json();
+        if (!resp.ok || result.error) throw new Error(result.error || 'Delete failed');
+        await _mbmLoad();
+        await fetchMonthlyBrief();
+    } catch (e) {
+        alert('Could not delete the row: ' + (e.message || e));
+    }
+}
+
 function mbStartEdit() {
     _mbEditing = true;
     renderMonthlyBrief();
@@ -4119,6 +4991,10 @@ async function mbSaveOverview() {
         }));
         _mbEditing = false;
         _mbOverviewMonth = period; // the month we just entered is now the most recent with data
+        // Drop any earlier month the picker was parked on, so saving lands you on
+        // the numbers you just entered rather than bouncing back to the month you
+        // happened to be reviewing before you clicked Edit.
+        _mbOverviewPick = '';
         renderMonthlyBrief();
     } catch (e) {
         alert('Could not save: ' + e.message);
@@ -4137,7 +5013,9 @@ function _kpiRenderMonthly(periods) {
     // Always show the current (editable) month plus any past months with saved data.
     // Rendering it even in view mode means clicking Edit just swaps its cells from
     // text to inputs IN PLACE — no new section appears, so nothing on the page shifts.
-    let visible = (periods || []).filter(function(p) { return p.is_editable || p.entries.some(function(e) { return e.id; }); });
+    // A period with a note but no numbers still has to render, or the note it
+    // holds becomes unreachable the moment it exists.
+    let visible = (periods || []).filter(function(p) { return p.is_editable || !!(p.note) || p.entries.some(function(e) { return e.id; }); });
     if (_kpiEditingPeriod) {
         const ep = periods.find(function(p) { return p.period_end_date === _kpiEditingPeriod; });
         if (ep && !visible.find(function(p) { return p.period_end_date === ep.period_end_date; })) visible.unshift(ep);
@@ -4161,6 +5039,7 @@ function _kpiRenderMonthly(periods) {
         tbody += _kpiAddSelfRowHtml(p, isEd);
         const hasSavedData = p.entries.some(function(e) { return e.id; });
         if (hasSavedData) tbody += _kpiStoreTotalRowHtml(p.entries);
+        tbody += _kpiNoteRowHtml(p);   // last: the month's numbers, then the month's notes
     });
     body.innerHTML = '<div class="kpi-grid-scroll-wrapper"><table class="kpi-entry-grid kpi-full-table">' + _kpiColgroupHtml() + '<tbody>' + tbody + '</tbody></table></div>';
 }
@@ -7239,7 +8118,7 @@ function injectGlobalAuth() {
                 <div class="auth-card">
                     <div class="auth-body">
                         <div class="auth-badge">Secure access</div>
-                        <h2>Welcome back</h2>
+                        <h2>Welcome Back</h2>
                         <p id="authSubtitle">Enter your 4-digit PIN to open the hub.</p>
                         <div id="pinInputContainer" class="pin-container">
                             <div class="pin-cells" id="pinCells">
@@ -12589,6 +13468,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
         closeAllModals();
         applyRoleBasedUI();
+        // Before anything can open a side panel: sets --panel-top so they hang
+        // flush from the nav on every page, not just the dashboard.
+        initLayoutSync();
         initDashboardData();
         initTicker();
         initWorkspace();
@@ -19680,6 +20562,38 @@ function _recycleMonthLabel(key) {
     return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 }
 
+// The month a notification should land on: the OLDEST row it covers. Clicking a
+// July "awaiting your review" in August opened the tool on August — the month
+// filter always defaulted to today — so the one line being nagged about was the
+// one line not on screen, and the tool looked empty. Oldest rather than newest
+// because the stale request is the one at risk; the fresher months are one click
+// away in a dropdown the user can see, while the old one is invisible.
+//
+// Returns '' when there is nothing to focus, which leaves the default alone.
+function _recycleFocusMonth(rows) {
+    const stamps = (rows || []).map(r => r && r.created_at).filter(Boolean);
+    if (!stamps.length) return '';
+    const oldest = stamps.reduce((a, b) => (new Date(a).getTime() <= new Date(b).getTime() ? a : b));
+    return _recycleMonthKey(oldest);
+}
+
+// Set by a notification just before it opens the tool; read once by
+// _buildRecycleViewFilters. sessionStorage, not a function argument, because the
+// open path runs through toggleModal → fetch → render and the month has to
+// survive that round trip. Same handoff the KPI due cards use for their tab.
+const _RECYCLE_FOCUS_KEY = 'speeksRecycleMonth';
+
+// Every notification route into the tool goes through here so the month handoff
+// can't be forgotten by one of them: the (invisible) bubble's own button, and
+// the Action Menu feed card.
+function openRecycleFocused() {
+    const t = document.getElementById('recycleAlertBubbleText');
+    const month = t && t.dataset ? (t.dataset.month || '') : '';
+    if (month) { try { sessionStorage.setItem(_RECYCLE_FOCUS_KEY, month); } catch (e) { /* filter just defaults */ } }
+    toggleRecycleInventory();
+    switchRecycleTab('view');
+}
+
 // Month dropdown options: every month present in `rows`, plus the current month.
 function _recycleMonthOptions(rows, selected) {
     const keys = new Set(rows.map(r => _recycleMonthKey(r.created_at)).filter(Boolean));
@@ -19861,8 +20775,22 @@ async function fetchMyRecycleRequests() {
 function _buildRecycleViewFilters(stores) {
     const mSel = document.getElementById('recycle-month-filter');
     if (mSel) {
-        const current = mSel.value || _recycleMonthKey(new Date());
+        // A notification's month wins over both the sticky selection and today's
+        // date — that's the whole point of arriving from one. Consumed once, so
+        // the next manual open goes back to the normal default instead of being
+        // yanked to an old month.
+        let pinned = '';
+        try {
+            pinned = sessionStorage.getItem(_RECYCLE_FOCUS_KEY) || '';
+            if (pinned) sessionStorage.removeItem(_RECYCLE_FOCUS_KEY);
+        } catch (e) { /* no pin, normal default applies */ }
+        const current = pinned || mSel.value || _recycleMonthKey(new Date());
         mSel.innerHTML = _recycleMonthOptions(_recycleMine, current);
+        // The options come from _recycleMine, which is scoped to the stores this
+        // viewer can see — an alert month outside that set would match nothing and
+        // silently drop the select onto its first option. Only re-assert the pin
+        // when it's actually there.
+        if (pinned && [...mSel.options].some(o => o.value === pinned)) mSel.value = pinned;
     }
     const row = document.getElementById('recycle-view-filter-row');
     const sel = document.getElementById('recycle-view-filter');
@@ -20366,7 +21294,12 @@ async function checkRecycleReminders() {
             // ever reordered, and because the same string is both the bubble body
             // and the Action Menu feed one-liner.
             const summary = parts.join(' · ').replace(/^[a-z]/, c => c.toUpperCase());
-            _recycleRenderBubble('♻️', 'Recycle requests need your review', summary + '.', summary);
+            // Land on the oldest line that's actually blocking a store. Replies
+            // are the fallback: they're information, not a block, so they only
+            // choose the month when there's no action item to beat them to it.
+            const blocking = needsReview.concat(pendingDelete);
+            _recycleRenderBubble('♻️', 'Recycle requests need your review', summary + '.', summary,
+                null, _recycleFocusMonth(blocking.length ? blocking : freshRep));
             return;
         }
 
@@ -20410,7 +21343,7 @@ async function checkRecycleReminders() {
             `${fresh.length} of your recycle request${fresh.length > 1 ? 's' : ''} ${fresh.length > 1 ? 'have' : 'has'} new activity from the DM${summary}.${noteTxt}`,
             // Compact feed line — counts first, so nothing useful is lost to the cap.
             `${fresh.length} reviewed by the DM${summary}` + (noted ? ` · ${noted} with a note` : ''),
-            fresh.map(r => r.store));
+            fresh.map(r => r.store), _recycleFocusMonth(fresh));
     } catch (e) { /* next poll retries */ }
 }
 
@@ -20456,11 +21389,15 @@ function closeRecycleAlertBubble() {
     if (b) b.style.display = 'none';
 }
 
-function _recycleRenderBubble(icon, title, bodyText, summary, stores) {
+function _recycleRenderBubble(icon, title, bodyText, summary, stores, focusMonth) {
     const b = _recycleBubbleEl();
     if (!b) return;
     const iconEl = document.getElementById('recycleAlertBubbleIcon');
     const textEl = document.getElementById('recycleAlertBubbleText');
+    // Month this alert is actually about → openRecycleFocused lands the tool
+    // there instead of on whatever month it happens to be today.
+    if (focusMonth) textEl.dataset.month = focusMonth;
+    else delete textEl.dataset.month;
     // Feed one-liner. Without this the Action Menu scrapes the bubble and repeats
     // the title, which is already the feed row's own title ("Recycle review").
     // The body alone is the useful part.
@@ -20476,7 +21413,7 @@ function _recycleRenderBubble(icon, title, bodyText, summary, stores) {
     textEl.innerHTML = `
         <div style="line-height:1.4;"><strong>${escapeHtml(title)}</strong></div>
         <div style="line-height:1.4; opacity:0.96;">${escapeHtml(bodyText)}</div>
-        <button onclick="closeRecycleAlertBubble(); toggleRecycleInventory(); switchRecycleTab('view');"
+        <button onclick="closeRecycleAlertBubble(); openRecycleFocused();"
             style="align-self:flex-start; background:rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.5); color:#fff; font-weight:800; font-size:12px; border-radius:8px; padding:6px 12px; cursor:pointer;"
             onmouseover="this.style.background='rgba(255,255,255,0.3)';" onmouseout="this.style.background='rgba(255,255,255,0.18)';">Open Recycle Requests</button>`;
     b.style.display = 'flex';
@@ -21931,8 +22868,22 @@ function _jumpBuildIndex() {
 // ---- pins ------------------------------------------------------------------
 // The user chooses what sits at the top, rather than the box guessing from
 // history. localStorage, not sessionStorage: a pin is a standing preference.
+//
+// Namespaced per user. Store machines are shared and everyone signs in with a PIN
+// on the same browser, so a single 'speeksJumpPins' key meant one person's pins
+// were everyone's — the manager pinning Recycle Requests silently reordered the
+// box for every employee on that till. Same per-user keying the recycle seen marks
+// and the feed's dismissals already use (_recycleSeenKey, _samDismKey).
+//
+// Storage is still per-BROWSER: a user's pins don't follow them to another
+// machine. That's the same bargain every other localStorage preference here makes,
+// and pins are two clicks to recreate.
+function _jumpPinsKey() {
+    const u = (sessionStorage.getItem('speeksUserName') || 'anon').trim().toLowerCase();
+    return 'speeksJumpPins_' + u;
+}
 function _jumpPins() {
-    try { return JSON.parse(localStorage.getItem('speeksJumpPins') || '[]'); } catch (e) { return []; }
+    try { return JSON.parse(localStorage.getItem(_jumpPinsKey()) || '[]'); } catch (e) { return []; }
 }
 function _jumpIsPinned(id) { return _jumpPins().indexOf(id) !== -1; }
 
@@ -21942,7 +22893,13 @@ function _jumpTogglePin(id) {
     const pins = _jumpPins();
     const at = pins.indexOf(id);
     if (at === -1) pins.push(id); else pins.splice(at, 1);
-    try { localStorage.setItem('speeksJumpPins', JSON.stringify(pins)); } catch (e) { /* not worth failing over */ }
+    try {
+        localStorage.setItem(_jumpPinsKey(), JSON.stringify(pins));
+        // Drop the old shared list once someone sets their own. Deliberately NOT
+        // migrated into the first user's namespace: adopting it would hand one
+        // person the shared pins and re-create the bug one last time.
+        localStorage.removeItem('speeksJumpPins');
+    } catch (e) { /* not worth failing over */ }
     _jumpRender();
 }
 
@@ -25558,7 +26515,9 @@ function _samReminderCfg() {
           action: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'district manager'
               ? "openClaimsOversight()"
               : "openClaimsModal(); switchClaimsTab('view')" },
-        { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "toggleRecycleInventory(); switchRecycleTab('view')" },
+        // openRecycleFocused, not the two calls inline: it also carries the alert's
+        // month across, so a card about a July request doesn't open on August.
+        { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "openRecycleFocused()" },
         { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging Inventory Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" },
         { key: 'margin', id: 'marginAlertBubble', text: 'marginAlertBubbleText', title: 'Margin Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#mreplies'" },
         // Preferred Purchases — feed-only, both directions. The owner's card is a
