@@ -8031,7 +8031,10 @@ function _b2bClickKind(deal) {
 // Anything needing input (a store, a name, prices) is deliberately absent.
 function _b2bQuickAction(d) {
     if (_b2bIsEmployee()) return null;   // employees never escalate from a card
-    if (d.stage === 'quote' && _b2bCanAccept()) {
+    // Only once it has actually gone out. "Mark Accepted" on a quote awaiting
+    // approval would be recording a decision from a client who has never seen
+    // it -- and it would skip the send, leaving no quote on record at all.
+    if (d.stage === 'quote' && !_b2bAwaitingApproval(d) && _b2bCanAccept()) {
         return { label: 'Mark Accepted', call: `b2bQuickAccept('${d.id}',this)` };
     }
     if (d.stage === 'listing' && d.total_units > 0 && _b2bOutstanding(d) === 0) {
@@ -8043,7 +8046,7 @@ function _b2bQuickAction(d) {
 async function b2bQuickAccept(id, btn) {
     const d = _b2bDealById(id);
     if (!d) return;
-    const msg = `Accept ${d.client?.company || 'this'} quote at ${_b2bMoney(d.total_offer, 2)}?\n\n`
+    const msg = `Accept ${d.client?.company || 'this'} quote at ${_b2bMoney(_b2bNetOffer(d), 2)}?\n\n`
         + 'The offers lock in as our cost and the items become inventory to list. This cannot be undone.';
     if (!confirm(msg)) return;
     try {
@@ -8121,6 +8124,21 @@ function _b2bIco(svg, cls) {
     return `<svg viewBox="0 0 24 24" class="${cls || ''}" fill="none" stroke="currentColor"`
          + ` stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${svg}</svg>`;
 }
+// What we actually pay, and what it actually cost us -- the offer (or the cost
+// it froze into) less the certified-wipe charge, never below zero.
+//
+// EVERY summary of a deal's money goes through these. The quote, the approval
+// email and the pricing screen all show the net figure, so a board card showing
+// the gross would be the same deal wearing two different prices.
+//
+// net_offer is computed in the view; net cost is derived here from two columns
+// the board already returns, which beats adding a column and redeploying, and
+// uses the same clamp so the two cannot drift.
+const _b2bNetOffer = (d) => Number(d.net_offer ?? Math.max(0,
+    (Number(d.total_offer) || 0) - (Number(d.total_wipe_fee) || 0)));
+const _b2bNetCost  = (d) => Math.max(0,
+    (Number(d.total_cost) || 0) - (Number(d.total_wipe_fee) || 0));
+
 // Units still needing to be listed or recycled out.
 function _b2bOutstanding(deal) { return Number(deal.outstanding_units) || 0; }
 function _b2bListedPct(deal) {
@@ -8348,7 +8366,7 @@ function _b2bRenderQueue(scoped, queue) {
         const days  = _b2bDaysIn(d);
         const meta = [
             d.total_units ? `${d.total_units} unit${d.total_units === 1 ? '' : 's'}` : null,
-            d.total_offer ? `${_b2bMoney(d.total_offer)} offer` : null,
+            d.total_offer ? `${_b2bMoney(_b2bNetOffer(d))} offer` : null,
             d.pickup_date ? `Picked up ${_b2bDate(d.pickup_date)}` : null,
         ].filter(Boolean).map(t => `<span>${escapeHtml(t)}</span>`).join('');
         const bar = (d.stage === 'listing')
@@ -8391,7 +8409,7 @@ function _b2bRenderQueue(scoped, queue) {
                     <span class="b2b-f-co">${escapeHtml(d.client?.company || '')}</span>
                     ${_b2bStageChip(d.stage, d)}
                     ${_b2bStoreTag(d.listing_store || d.pricing_store)}
-                    <span class="b2b-f-val">${d.total_offer ? _b2bMoney(d.total_offer) : ''}</span>
+                    <span class="b2b-f-val">${d.total_offer ? _b2bMoney(_b2bNetOffer(d)) : ''}</span>
                 </div>`).join('')}
             </div>
         </div>` : '';
@@ -8452,7 +8470,7 @@ function _b2bRenderPipeline(scoped) {
                 <div class="b2b-card-co">${escapeHtml(d.client?.company || '')}</div>
                 ${bar}
                 <div class="b2b-card-foot">
-                    <span>${d.total_offer ? _b2bMoney(d.total_offer) : `${d.line_count || 0} lines`}</span>
+                    <span>${d.total_offer ? _b2bMoney(_b2bNetOffer(d)) : `${d.line_count || 0} lines`}</span>
                     <span class="b2b-age b2b-age-${_b2bAgeTone(days)}">${days}d</span>
                 </div>
                 ${act ? '<span class="b2b-card-pill">Needs you</span>' : ''}
@@ -8517,7 +8535,7 @@ function _b2bFinishedRows(rows) {
             <td>${_b2bStageChip(d.stage, d)}</td>
             <td>${_b2bStoreTag(d.listing_store || d.pricing_store)}</td>
             <td class="c">${d.stage === 'completed' ? `${done} of ${d.total_units || 0}` : '—'}</td>
-            <td class="r b">${d.stage === 'completed' ? _b2bMoney(d.total_cost) : '—'}</td>
+            <td class="r b">${d.stage === 'completed' ? _b2bMoney(_b2bNetCost(d)) : '—'}</td>
             <td class="r">${_b2bDate(_b2bClosedAt(d))}</td>
         </tr>`;
     }).join('');
@@ -8550,7 +8568,7 @@ function _b2bRenderFinished(scoped) {
     const tiles = `
         <div class="b2b-tiles">
             <div class="b2b-tile"><span class="b2b-tile-k">Completed</span><span class="b2b-tile-v">${won.length}</span><span class="b2b-tile-c">deals closed out</span></div>
-            <div class="b2b-tile"><span class="b2b-tile-k">Cost Locked In</span><span class="b2b-tile-v">${_b2bMoney(won.reduce((s, d) => s + (Number(d.total_cost) || 0), 0))}</span><span class="b2b-tile-c">across completed deals</span></div>
+            <div class="b2b-tile"><span class="b2b-tile-k">Cost Locked In</span><span class="b2b-tile-v">${_b2bMoney(won.reduce((s, d) => s + _b2bNetCost(d), 0))}</span><span class="b2b-tile-c">across completed deals</span></div>
             <div class="b2b-tile"><span class="b2b-tile-k">Units Handled</span><span class="b2b-tile-v">${won.reduce((n, d) => n + (Number(d.listed_units) || 0) + (Number(d.recycled_units) || 0), 0)}</span><span class="b2b-tile-c">listed or recycled</span></div>
             <div class="b2b-tile ${lost.length ? 'warn' : ''}"><span class="b2b-tile-k">Declined</span><span class="b2b-tile-v">${lost.length}</span><span class="b2b-tile-c">deals that fell through</span></div>
         </div>`;
@@ -8835,8 +8853,8 @@ function _b2bClientDrawer(id) {
             ${_b2bStageChip(d.stage, d)}
             ${_b2bStoreTag(d.listing_store || d.pricing_store)}
             <span class="b2b-cd-units">${d.total_units ? `${d.total_units} unit${d.total_units === 1 ? '' : 's'}` : `${d.line_count || 0} lines`}</span>
-            <span class="b2b-cd-val">${d.stage === 'completed' ? _b2bMoney(d.total_cost)
-                : d.total_offer ? _b2bMoney(d.total_offer) : ''}</span>
+            <span class="b2b-cd-val">${d.stage === 'completed' ? _b2bMoney(_b2bNetCost(d))
+                : d.total_offer ? _b2bMoney(_b2bNetOffer(d)) : ''}</span>
             <span class="b2b-cd-date">${_b2bDate(d.created_at)}</span>
         </div>`).join('')
         : '<div class="b2b-doc-empty">None of their deals are loaded right now — '
@@ -9151,26 +9169,26 @@ function _b2bRenderOverview(scoped) {
             <td><b>${escapeHtml(d.client?.company || '')}</b></td>
             <td>${escapeHtml(d.client?.contact_email || '—')}</td>
             <td class="c">${d.quote_send_count ? `sent ${d.quote_send_count}×` : '<span class="b2b-age b2b-age-warn">not sent</span>'}</td>
-            <td class="r b">${_b2bMoney(d.total_offer)}</td>
+            <td class="r b">${_b2bMoney(_b2bNetOffer(d))}</td>
         </tr>`).join('');
 
     // Inventory bought and paid for that is not yet earning.
     const unlisted = live.filter(d => d.stage === 'listing' && _b2bOutstanding(d) > 0)
         .sort((a, b) => _b2bOutstanding(b) - _b2bOutstanding(a));
-    const unlistedTotal = unlisted.reduce((s, d) => s + (Number(d.total_cost) || 0), 0);
+    const unlistedTotal = unlisted.reduce((s, d) => s + _b2bNetCost(d), 0);
     const unlistedRows = unlisted.map(d => `
         <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
             <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
             <td><b>${escapeHtml(d.client?.company || '')}</b></td>
             <td>${_b2bStoreTag(d.listing_store)}</td>
             <td class="c">${_b2bOutstanding(d)} of ${d.total_units}</td>
-            <td class="r b">${_b2bMoney(d.total_cost)}</td>
+            <td class="r b">${_b2bMoney(_b2bNetCost(d))}</td>
         </tr>`).join('');
 
     const tiles = `
         <div class="b2b-tiles">
             <div class="b2b-tile"><span class="b2b-tile-k">In Flight</span><span class="b2b-tile-v">${live.length}</span><span class="b2b-tile-c">deals moving</span></div>
-            <div class="b2b-tile"><span class="b2b-tile-k">Out For Quote</span><span class="b2b-tile-v">${_b2bMoney(quotes.reduce((s, d) => s + (Number(d.total_offer) || 0), 0))}</span><span class="b2b-tile-c">${quotes.length} awaiting a decision</span></div>
+            <div class="b2b-tile"><span class="b2b-tile-k">Out For Quote</span><span class="b2b-tile-v">${_b2bMoney(quotes.reduce((s, d) => s + _b2bNetOffer(d), 0))}</span><span class="b2b-tile-c">${quotes.length} awaiting a decision</span></div>
             <div class="b2b-tile"><span class="b2b-tile-k">Unlisted Stock</span><span class="b2b-tile-v">${_b2bMoney(unlistedTotal)}</span><span class="b2b-tile-c">${unlisted.reduce((n, d) => n + _b2bOutstanding(d), 0)} units to list</span></div>
             <div class="b2b-tile ${stalled.length ? 'warn' : ''}"><span class="b2b-tile-k">Stalled</span><span class="b2b-tile-v">${stalled.length}</span><span class="b2b-tile-c">no movement in 7+ days</span></div>
         </div>`;
@@ -9475,7 +9493,9 @@ function _b2bCustomNotes(it) { return _b2bTagsOf(it.client_notes).filter(t => !B
 const B2B_REASON_CONDITIONS = ['Fair', 'For Parts'];
 function _b2bNeedsReason(it)   { return B2B_REASON_CONDITIONS.includes(it.condition); }
 function _b2bMissingReason(it) { return _b2bNeedsReason(it) && !String(it.client_notes || '').trim(); }
-function _b2bUnreasoned()      { return _b2bModalItems.filter(_b2bMissingReason); }
+// Deliberately no `unreasoned()` helper: a second, weaker gate alongside
+// _b2bNotReady() is one someone will reach for by mistake, and it is how the
+// accept path came to check reasons but not serials or specs.
 function _b2bItemName(it) { return [it.make, it.model].filter(Boolean).join(' ') || 'Untitled item'; }
 
 // Labels are printed per line, wherever a line is shown -- pricing, quoting,
@@ -9825,6 +9845,15 @@ function _b2bNoteHint(it) {
     return bits.length ? bits.join(' · ') : 'No details yet';
 }
 
+// Just the line's own number in the grid. Every SKU on a deal shares the same
+// ACM-007- prefix and the deal ref is already in the modal header, so repeating
+// it down thirty rows spends the column on nothing. The full SKU is the cell's
+// tooltip, and it is what prints on the label.
+function _b2bLineNo(it) {
+    const parts = String(it.sku || '').split('-');
+    return parts.length > 1 ? parts[parts.length - 1] : String(it.line_no).padStart(4, '0');
+}
+
 // Rendered as a grid rather than a stack of cards: one row per line with the
 // columns aligned, the way anyone pricing a pallet expects to read it.
 function _b2bItemCards() {
@@ -9934,10 +9963,10 @@ function _b2bItemCards() {
             </div>` : '';
 
         return `
-        <div class="b2b-pline ${scrap ? 'rec' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
+        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
             <div class="b2b-prow">
-                <span class="b2b-pcell b2b-pc-sku">
-                    <span class="b2b-mono">${escapeHtml(it.sku || `L${String(it.line_no).padStart(4, '0')}`)}</span>
+                <span class="b2b-pcell b2b-pc-sku" title="${escapeHtml(it.sku || '')}">
+                    <span class="b2b-mono">${escapeHtml(_b2bLineNo(it))}</span>
                     ${!buy ? `<span class="b2b-doc-rec ${scrap ? '' : 'nrv'}">${escapeHtml(B2B_DISP[disp].short)}</span>` : ''}
                     ${it.wipe_required ? '<span class="b2b-doc-rec wipe" title="Certified data wipe">Wipe</span>' : ''}
                 </span>
@@ -9971,7 +10000,7 @@ function _b2bItemCards() {
                     <span class="b2b-f-calc" id="b2bLn-${it.id}">${buy ? _b2bMoney((Number(it.offer) || 0) * need, 2) : '—'}</span></span>
                 <span class="b2b-pcell b2b-pc-acts">
                     <button class="b2b-notes-btn ${open ? 'on' : ''} ${blocked.length ? 'req' : ''}"
-                        title="${blocked.length ? 'Not ready yet — ' + escapeHtml(blocked.join(', ')) : 'Specs, serials and notes'}"
+                        title="${blocked.length ? 'Not ready yet — ' + escapeHtml(blocked.join(', ')) : escapeHtml(_b2bNoteHint(it))}"
                         onclick="b2bToggleNotes('${it.id}')">
                         ${_b2bIco('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>')}
                         ${(it.client_notes || it.staff_notes || it.serials) ? '<i class="b2b-notes-dot"></i>' : ''}
@@ -9983,7 +10012,7 @@ function _b2bItemCards() {
                 </span>
             </div>
             <div class="b2b-ready" style="${blocked.length ? '' : 'display:none;'}">${escapeHtml(blocked.join(' · '))}</div>
-            ${open ? drawer : `<div class="b2b-pnote-hint" onclick="b2bToggleNotes('${it.id}')">${escapeHtml(_b2bNoteHint(it))}</div>`}
+            ${drawer}
         </div>`;
     }).join('');
 
@@ -9993,7 +10022,7 @@ function _b2bItemCards() {
 function _b2bTotalsBar(showMargin) {
     return `
     <div class="b2b-totals">
-        <div class="b2b-tot"><span class="b2b-tot-k">Lines</span><span class="b2b-tot-v" id="b2bTotUnits">—</span></div>
+        <div class="b2b-tot"><span class="b2b-tot-k">Items</span><span class="b2b-tot-v" id="b2bTotUnits">—</span></div>
         <div class="b2b-tot"><span class="b2b-tot-k">Resale value</span><span class="b2b-tot-v" id="b2bTotValue">—</span></div>
         <div class="b2b-tot muted"><span class="b2b-tot-k">Data wipes</span><span class="b2b-tot-v" id="b2bTotWipe">—</span></div>
         <div class="b2b-tot"><span class="b2b-tot-k">We pay</span><span class="b2b-tot-v accent" id="b2bTotOffer">—</span></div>
@@ -10577,13 +10606,23 @@ async function b2bOpenDraft(id, to, copied) {
 }
 
 async function b2bAcceptQuote(id, btn) {
-    const gaps = _b2bUnreasoned();
+    // The same readiness gate as submitting, because the server runs the same
+    // one here -- checking only the reasons would let a line with two of five
+    // serials get all the way to a 400 from the accept call.
+    const gaps = _b2bNotReady();
     if (gaps.length) {
-        return _b2bSay(`${gaps.length} line${gaps.length === 1 ? '' : 's'} marked Fair or For Parts still need a reason: `
-            + gaps.map(_b2bItemName).join(', '), true);
+        gaps.forEach(it => _b2bNotesOpen.add(it.id));
+        _b2bRepaintItems();
+        return _b2bSay(gaps.map(it => `${_b2bItemName(it)} (${_b2bItemBlocked(it).join(', ')})`).join(' · '), true);
     }
     const t = _b2bItemTotals();
-    const msg = `Accept this quote at ${_b2bMoney(t.offer, 2)}?\n\n`
+    const unsent = _b2bModalDeal && _b2bAwaitingApproval(_b2bModalDeal);
+    const msg = `Accept this quote at ${_b2bMoney(t.net, 2)}?\n\n`
+        // Not blocked: a client can accept over the phone. But accepting a quote
+        // that was never sent leaves no record of what they agreed to, so it
+        // should be a deliberate choice rather than a slip.
+        + (unsent ? 'This quote has never been emailed, so there is no record of what the client saw. '
+                  + 'Send it first unless they have already agreed to these numbers.\n\n' : '')
         + 'The offers lock in as our cost, the SKUs freeze, and the items become inventory to list. '
         + 'This cannot be undone.';
     if (!confirm(msg)) return;
@@ -10611,7 +10650,7 @@ function _b2bStageListingLocation(deal) {
         body: `
             ${_b2bSummary(deal)}
             <div class="b2b-note ok"><span class="b2b-note-k">Accepted</span>
-                ${escapeHtml(deal.client?.company || '')} accepted ${_b2bMoney(deal.total_offer, 2)} across ${deal.total_units} unit${deal.total_units === 1 ? '' : 's'}.</div>
+                ${escapeHtml(deal.client?.company || '')} accepted ${_b2bMoney(_b2bNetOffer(deal), 2)} across ${deal.total_units} unit${deal.total_units === 1 ? '' : 's'}.</div>
             <label class="form-label-caps" style="margin-top:14px;">List At</label>
             <div class="b2b-loc-pick">
                 ${STORE_CODES.map(c => `
@@ -11027,7 +11066,7 @@ function _b2bCelebrate(dealId) {
             <div class="b2b-cel-stats">
                 <div><b>${units - recycled}</b><span>listed</span></div>
                 ${recycled ? `<div><b>${recycled}</b><span>recycled</span></div>` : ''}
-                <div><b>${_b2bMoney(deal.total_cost || deal.total_offer)}</b><span>inventory cost</span></div>
+                <div><b>${_b2bMoney(deal.total_cost ? _b2bNetCost(deal) : _b2bNetOffer(deal))}</b><span>inventory cost</span></div>
             </div>
         </div>`;
     document.getElementById('b2bDealFooter').innerHTML = `
