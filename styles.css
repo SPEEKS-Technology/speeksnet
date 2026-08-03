@@ -10063,6 +10063,11 @@ body.sam-active .hotbar-btn:hover {
 }
 .b2b-note.ok  { background: var(--b2b-accent-tint); border-color: #cfeada; }
 .b2b-note.bad { background: #fcecec; border-color: #f7dada; }
+.b2b-note.warn { background: #fffbf3; border-color: #f0dcb8; }
+.b2b-note.warn .b2b-note-k { color: #a9741a; }
+/* The two notes that must be read before anything else on their screen: why a
+   quote came back, and that one is still sitting unsent. */
+.b2b-sentback, .b2b-approve { align-items: flex-start; box-shadow: 0 0 0 3px rgba(217,159,67,.10); }
 .b2b-note-k {
     flex: 0 0 auto; font-size: 9.5px; font-weight: 800; letter-spacing: .09em;
     text-transform: uppercase; color: var(--b2b-faint);
@@ -10154,6 +10159,9 @@ body.sam-active .hotbar-btn:hover {
     font-variant-numeric: tabular-nums;
 }
 .b2b-tot-v.accent { color: var(--sage-deep); }
+/* A zero wipe total is dimmed rather than hidden: the slot staying put stops the
+   row from reflowing the moment someone ticks the first Wipe box. */
+.b2b-tot.muted .b2b-tot-v { color: var(--b2b-faint); font-weight: 700; }
 
 /* Priced lines read as a grid, not a stack of cards: one row each, columns
    aligned under a shared header. The column template lives on --b2b-pcols so
@@ -10164,7 +10172,7 @@ body.sam-active .hotbar-btn:hover {
     /* The actions column is a fixed width, not auto: the header's copy of it is
        empty, so auto would collapse there and widen every fr column above the
        rows -- headers sitting over the wrong columns. */
-    --b2b-pcols: 96px 1.1fr 1.5fr 108px 56px 84px 84px 86px 182px;
+    --b2b-pcols: 100px 92px 1.1fr 1.4fr 104px 54px 82px 82px 84px 112px;
 }
 .b2b-prow {
     display: grid; grid-template-columns: var(--b2b-pcols);
@@ -10228,9 +10236,37 @@ body.sam-active .hotbar-btn:hover {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .b2b-pnote-hint:hover { color: var(--sage-deep); }
+.b2b-pdrawer {
+    margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--b2b-line-2);
+    display: flex; flex-direction: column; gap: 11px;
+}
 .b2b-pnote {
     display: grid; gap: 9px; grid-template-columns: 1fr 1.6fr;
-    margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--b2b-line-2);
+}
+
+/* Specs, only for the types that have them. Auto-fit rather than a fixed count
+   so a desktop's four fields fill the row a laptop's five would occupy. */
+.b2b-specs { display: grid; gap: 9px; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); }
+.b2b-spec input { font-size: 12px; }
+
+/* One serial per unit, comma separated, with the no-serial escape hatch beside
+   it -- 50 cables should be one click, not fifty refusals. */
+.b2b-serialrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.b2b-serialrow input { flex: 1 1 260px; min-width: 0; }
+.b2b-serialrow .b2b-mini { flex: 0 0 auto; height: var(--b2b-h-md); }
+.b2b-serialf .b2b-serial-count {
+    padding: 1px 7px; border-radius: 999px; background: var(--b2b-accent-tint);
+    color: var(--sage-deep); font-size: 9.5px; letter-spacing: .03em;
+    font-variant-numeric: tabular-nums;
+}
+.b2b-serialf .b2b-serial-count.miss { background: #fdf3e1; color: #b7791f; }
+
+/* Everything blocking this line from being submitted, on the line itself, so
+   you fix it where you are instead of hunting after the submit is refused. */
+.b2b-ready {
+    margin-top: 6px; padding: 5px 9px; border-radius: 8px;
+    background: #fffbf3; border: 1px solid #f0dcb8;
+    font-size: 11px; font-weight: 700; color: #b7791f;
 }
 
 /* Chosen condition tags, plus a dropdown to add the next one -- nine buttons
@@ -10263,6 +10299,22 @@ body.sam-active .hotbar-btn:hover {
     font-size: 11.5px; font-weight: 700; color: var(--b2b-muted);
 }
 .b2b-rec-toggle input { width: 15px; height: 15px; accent-color: var(--sage-professional); }
+
+/* The two pricing decisions, in the drawer rather than the row: they are set
+   once per line, and five controls in the action cell overflowed it. */
+.b2b-handling { display: grid; gap: 9px; grid-template-columns: 1fr 1.4fr; }
+.b2b-handling select.b2b-dispsel {
+    width: 100%; height: var(--b2b-h-md); padding: 0 9px; font: inherit; font-size: 12.5px;
+    border-radius: var(--b2b-r-sm); border: 1px solid var(--b2b-line);
+    background: #fff; color: #1a1c1e; cursor: pointer;
+}
+/* Wrapped one level down so `.b2b-f > label` (uppercase micro-caption) can't
+   claim the toggle, and out-specified so `.b2b-f input { width:100% }` can't
+   stretch the checkbox across the row -- which is exactly what both did. */
+.b2b-wipewrap { display: flex; align-items: center; height: var(--b2b-h-md); }
+.b2b-handling .b2b-wipetog { font-size: 12.5px; font-weight: 700; color: #1a1c1e; text-transform: none; letter-spacing: 0; }
+.b2b-handling .b2b-wipetog input { width: 16px; height: 16px; flex: 0 0 auto; }
+.b2b-hint.sm { margin-top: 3px; font-size: 10.5px; line-height: 1.4; }
 .b2b-x {
     display: grid; place-items: center; width: 26px; height: 26px; cursor: pointer;
     border-radius: 7px; border: 1px solid var(--b2b-line); background: #fff;
@@ -10440,6 +10492,20 @@ body.sam-active .hotbar-btn:hover {
     background: #e3f6f3; color: #0d8a7d; font-size: 9.5px;
     font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
 }
+/* Three outcomes, three colours. Teal is scrap, blue is "free to you but we may
+   resell it", violet is the certified wipe -- distinct at a glance, because the
+   client is being told three different things about their kit. */
+.b2b-doc-rec.nrv  { background: #eaf1fb; color: #3a6ea8; }
+.b2b-doc-rec.wipe { background: #f1ebfd; color: #6b46c1; }
+
+/* Subtotal and the wipe deduction, above the headline figure. */
+.b2b-doc-sub2 {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 6px 20px; font-size: 12.5px; color: var(--b2b-muted);
+    font-variant-numeric: tabular-nums;
+}
+.b2b-doc-sub2 b { font-weight: 800; color: #1a1c1e; }
+.b2b-doc-sub2.minus b { color: #6b46c1; }
 .b2b-doc-empty {
     display: flex; align-items: center; justify-content: center;
     min-height: 84px; padding: 26px; text-align: center;
@@ -10520,6 +10586,18 @@ body.sam-active .hotbar-btn:hover {
 .b2b-lrow.waiting { background: #fffbf3; border-color: #f0dcb8; box-shadow: 0 0 0 3px rgba(217,159,67,.14); }
 
 /* Shopify barcodes captured against this line. */
+/* Certified wipes, on the row that is blocked by them. The listing "+" reads
+   its own disabled reason from the same numbers. */
+.b2b-lwipe {
+    display: flex; align-items: center; gap: 7px; margin-top: 6px;
+    padding: 4px 9px; border-radius: 8px; width: fit-content;
+    background: #f6f2fd; border: 1px solid #e2d7f7;
+    font-size: 11px; font-weight: 700; color: #6b46c1;
+}
+.b2b-lwipe svg { width: 13px; height: 13px; flex: 0 0 auto; }
+.b2b-lwipe.done { background: var(--b2b-accent-tint); border-color: #cfeada; color: var(--sage-deep); }
+.b2b-lwipe .b2b-mini { height: 22px; padding: 0 8px; font-size: 10.5px; }
+
 .b2b-lcodes { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 .b2b-lcode {
     display: inline-flex; align-items: center; gap: 4px; padding: 2px 3px 2px 7px;
@@ -10738,8 +10816,8 @@ body.sam-active .hotbar-btn:hover {
     /* Total and actions share the closing row rather than each taking one --
        stacked, the total alone on a line reads as a stray field. */
     .b2b-pc-tot  { grid-column: 1 / 2;  align-items: flex-start; }
-    .b2b-pc-acts { grid-column: 2 / -1; flex-direction: row; align-items: flex-end; }
-    .b2b-pnote { grid-template-columns: 1fr; }
+    .b2b-pc-acts { grid-column: 2 / -1; flex-direction: row; align-items: flex-end; flex-wrap: wrap; }
+    .b2b-pnote, .b2b-handling { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
     .b2b-q-card { flex-direction: column; align-items: stretch; gap: 12px; }
@@ -11496,6 +11574,19 @@ body.sam-active .hotbar-btn:hover {
 .crm-crow-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
 
 .crm-settings { max-width: 460px; }
+/* Divides notification settings from pricing ones -- they are both CEO-owned but
+   they are not the same kind of decision. */
+.crm-sec {
+    margin: 22px 0 12px; padding-top: 16px; border-top: 1px solid #eef2f6;
+    font-size: 10px; font-weight: 800; letter-spacing: .09em;
+    text-transform: uppercase; color: #9aa6ad;
+}
+.crm-fee { position: relative; max-width: 160px; }
+.crm-fee-$ {
+    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    font-size: 14px; font-weight: 700; color: #9aa6ad; pointer-events: none;
+}
+.crm-fee input { padding-left: 26px; font-variant-numeric: tabular-nums; }
 .crm-settings-acts { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
 .crm-msg { font-size: 12.5px; font-weight: 700; color: #178048; }
 
