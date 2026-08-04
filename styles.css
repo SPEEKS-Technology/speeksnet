@@ -12725,7 +12725,10 @@ body.sam-active .hotbar-btn:hover {
            color: #647082; text-transform: uppercase; letter-spacing: .04em; }
 .exp-ctl > span { white-space: nowrap; }
 .exp-ctl-ro b { font-size: 13px; color: #0f172a; text-transform: none; letter-spacing: 0; }
+/* Control-row primary — sized to sit level with the small button and the 34px
+   select beside it. Needs the #id to outrank .modal-menu.manage-menu .btn-primary. */
 .exp-btn-mail { flex: 0 0 auto; }
+#expensesModal .exp-btn-mail { font-size: 12px; padding: 7px 16px; line-height: 18px; }
 
 /* The footer arrows are inline SVGs with only a viewBox, so without an explicit
    size they fall back to 300x150 and blow the button apart — same rule Box Order
@@ -12745,7 +12748,7 @@ body.sam-active .hotbar-btn:hover {
 .exp-btn-sm {
     font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap;
     color: #fff; background: var(--sage-professional); border: none; border-radius: 10px;
-    padding: 7px 16px; box-shadow: 0 4px 12px rgba(31,157,87,.20);
+    padding: 7px 16px; line-height: 18px; box-shadow: 0 4px 12px rgba(31,157,87,.20);
     transition: all .2s ease;
 }
 .exp-btn-sm:hover { background: var(--sage-deep); transform: translateY(-1px); box-shadow: 0 6px 16px rgba(31,157,87,.28); }
@@ -12823,17 +12826,19 @@ body.sam-active .hotbar-btn:hover {
 
 /* category manager */
 .exp-cats { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 13px 15px; margin-bottom: 16px; }
-.exp-cats-h { font-size: 12px; font-weight: 800; color: #0f172a; }
-.exp-cats-sub { font-size: 11px; font-weight: 650; color: #8a94a3; margin: 3px 0 11px; line-height: 1.45; }
+.exp-cats-sub { font-size: 11px; font-weight: 650; color: #8a94a3; margin: 0 0 11px; line-height: 1.45; }
 .exp-cat-row { display: flex; gap: 7px; align-items: center; margin-bottom: 7px; }
 .exp-cat-row .exp-input { flex: 1 1 auto; }
 .exp-cat-row.retired .exp-input { color: #94a3b8; background: #f1f5f9; }
 .exp-cat-tag { font-size: 10px; font-weight: 800; color: #b45309; background: #fef3c7;
                border-radius: 999px; padding: 3px 9px; white-space: nowrap; }
 
-/* email preview */
-.exp-preview-wrap { padding-top: 4px; }
-.exp-preview-h { font-size: 12px; font-weight: 800; color: #0f172a; margin-bottom: 9px; }
+/* takeover views (category manager, email preview) — each replaces the whole
+   body rather than stacking under it, so only one job is on screen at a time */
+.exp-view { padding-top: 4px; }
+.exp-view-h { font-size: 13px; font-weight: 800; color: #0f172a; margin-bottom: 10px; }
+.exp-view-foot { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 14px; }
+.exp-view .exp-cats { margin-bottom: 0; }
 
 @media (max-width: 700px) {
     .exp-add-grid label { flex: 1 1 100%; }

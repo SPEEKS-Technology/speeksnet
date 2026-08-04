@@ -29256,7 +29256,10 @@ function renderExpenses() {
             + (_expIsReviewer() ? ' · reviewing ' + _expPerson : '');
     }
 
+    // Both of these take over the whole body — you are either filing expenses,
+    // editing the catalog, or looking at the email, never two at once.
     if (_expPreview) { body.innerHTML = _expPreviewHtml(); return; }
+    if (_expCatsOpen) { body.innerHTML = _expCatsHtml(); return; }
 
     const nExp = _expRows('expense').length;
     body.innerHTML =
@@ -29548,7 +29551,7 @@ window.expSetPerson = expSetPerson;
 window.expSetTab = expSetTab;
 
 // ---- category manager (CEO / DM) --------------------------------------------
-function expToggleCats() { _expCatsOpen = !_expCatsOpen; renderExpenses(); }
+function expToggleCats() { _expCatsOpen = !_expCatsOpen; _expPreview = false; _expEditId = null; renderExpenses(); }
 window.expToggleCats = expToggleCats;
 
 function _expCatsHtml() {
@@ -29560,8 +29563,10 @@ function _expCatsHtml() {
         + '<button type="button" class="exp-btn-sm" onclick="expSaveCat(this)">Save</button>'
         + '<button type="button" class="exp-btn-sm ghost" onclick="expDeleteCat(\'' + c.id + '\')">Delete</button>'
         + '</div>').join('');
-    return '<div class="exp-cats">'
-        + '<div class="exp-cats-h">Expense categories</div>'
+    // Own view, so it carries its own heading and Back, exactly like the preview.
+    return '<div class="exp-view">'
+        + '<div class="exp-view-h">Expense categories</div>'
+        + '<div class="exp-cats">'
         + '<div class="exp-cats-sub">Renaming a category also relabels every line already filed under it. '
         + 'Deleting one that is still in use retires it instead, so old reports keep their labels.</div>'
         + rows
@@ -29569,7 +29574,11 @@ function _expCatsHtml() {
         + '<input type="text" class="exp-input" id="exp-cat-new" placeholder="New category name…">'
         + '<button type="button" class="exp-btn-sm" onclick="expAddCat()">Add</button>'
         + '</div>'
-        + '<div class="exp-msg" id="exp-cat-msg"></div></div>';
+        + '<div class="exp-msg" id="exp-cat-msg"></div></div>'
+        + '<div class="exp-view-foot">'
+        + '<button class="btn-secondary" onclick="expToggleCats()">'
+        + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>Back</button>'
+        + '</div></div>';
 }
 
 async function expSaveCat(btn) {
@@ -29666,12 +29675,12 @@ function _expCompose() {
 
 function _expPreviewHtml() {
     const { email, subject, body } = _expCompose();
-    return '<div class="exp-preview-wrap">'
-        + '<div class="exp-preview-h">Email preview</div>'
+    return '<div class="exp-view">'
+        + '<div class="exp-view-h">Email preview</div>'
         + '<div class="box-order-email-preview">'
         + escapeHtml('To: ' + email + '\nSubject: ' + subject + '\n\n' + body)
         + '</div>'
-        + '<div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px; align-items:center;">'
+        + '<div class="exp-view-foot">'
         + RECYCLE_MAIL_TIP
         + '<button class="btn-secondary" onclick="expHidePreview()">'
         + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>Back</button>'
@@ -29681,7 +29690,7 @@ function _expPreviewHtml() {
         + '</div></div>';
 }
 
-function expShowPreview() { _expPreview = true; _expEditId = null; renderExpenses(); }
+function expShowPreview() { _expPreview = true; _expCatsOpen = false; _expEditId = null; renderExpenses(); }
 function expHidePreview() { _expPreview = false; renderExpenses(); }
 window.expShowPreview = expShowPreview;
 window.expHidePreview = expHidePreview;
