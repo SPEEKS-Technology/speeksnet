@@ -29204,7 +29204,17 @@ function _expCanManageCats() {
     const r = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
     return r === 'ceo' || r === 'district manager';
 }
+// The rate is one global value, so this is "may change it for everyone".
+function _expCanEditRate() {
+    const r = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return r === 'ceo' || r === 'district manager';
+}
 function _expIsReviewer() { return !!(_expData && _expData.isReviewer); }
+
+// Sentinel for the "All" option in the person picker. Never sent to the server as
+// a person — it is a view over the roster the server already scoped for us.
+const _EXP_ALL = '__all__';
+function _expIsAll() { return _expPerson === _EXP_ALL; }
 
 async function openExpenses() {
     closeAllModals();
@@ -29243,7 +29253,9 @@ window.loadExpenses = loadExpenses;
 // for the month, so the person filter happens here.
 function _expRows(kind) {
     const all = (_expData && _expData.entries) || [];
-    return all.filter(e => e.person === _expPerson && (!kind || e.kind === kind));
+    // In "All", the server payload is already scoped to this viewer's roster, so
+    // no person filter — just the kind.
+    return all.filter(e => (_expIsAll() || e.person === _expPerson) && (!kind || e.kind === kind));
 }
 function _expTotal(kind) {
     return _expRows(kind).reduce((a, e) => a + (Number(e.amount) || 0), 0);
@@ -29261,7 +29273,9 @@ function renderExpenses() {
     const sub = document.getElementById('expSub');
     if (sub) {
         sub.textContent = _expMonthLabel(_expMonth) + ' · ' + _expMoney(mileage + expense) + ' total'
-            + (_expIsReviewer() ? ' · reviewing ' + _expPerson : '');
+            + (_expIsReviewer()
+                ? (_expIsAll() ? ' · everyone' : ' · reviewing ' + _expPerson)
+                : '');
     }
 
     // Both of these take over the whole body — you are either filing expenses,
@@ -29301,16 +29315,18 @@ function _expControlsHtml() {
         '<option value="' + m + '"' + (m === _expMonth ? ' selected' : '') + '>' + escapeHtml(_expMonthLabel(m)) + '</option>').join('');
 
     const people = (_expData && _expData.people) || [];
+    // "All" is an overview across everyone the server let us see — for a DM that
+    // roster already excludes the CEO, so this can't widen what they can read.
     const personSel = _expIsReviewer()
         ? '<label class="exp-ctl"><span>Person</span><select class="kpi-select" onchange="expSetPerson(this.value)">'
+            + '<option value="' + _EXP_ALL + '"' + (_expIsAll() ? ' selected' : '') + '>All</option>'
             + people.map(p => '<option value="' + escapeHtml(p) + '"' + (p === _expPerson ? ' selected' : '') + '>' + escapeHtml(p) + '</option>').join('')
             + '</select></label>'
         : '';
 
     const rate = (_expData && _expData.rate) || 0;
-    // Only the CEO may move the rate; everyone else sees what it is.
-    const isCeo = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'ceo';
-    const rateCtl = isCeo
+    // One global rate — the CEO and the DM may move it, everyone else reads it.
+    const rateCtl = _expCanEditRate()
         ? '<label class="exp-ctl"><span>Mileage rate</span>'
             + '<input type="number" id="exp-rate" class="exp-input" style="width:86px;" step="0.01" min="0" max="100" value="' + rate + '">'
             + '<button type="button" class="exp-btn-sm" onclick="expSaveRate()">Save</button>'
@@ -29326,32 +29342,40 @@ function _expControlsHtml() {
         + '<label class="exp-ctl"><span>Month</span><select class="kpi-select" onchange="expSetMonth(this.value)">' + monthOpts + '</select></label>'
         + personSel + rateCtl
         + '<span class="exp-controls-sp"></span>' + cats
-        + '<button type="button" class="btn-primary exp-btn-mail" onclick="expShowPreview()">'
-        + 'Email Report<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>'
+        // A report is filed by one person for one month, so there is nothing to
+        // email from the "All" overview.
+        + (_expIsAll() ? ''
+            : '<button type="button" class="btn-primary exp-btn-mail" onclick="expShowPreview()">'
+              + 'Email Report<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>')
         + '</div>';
 }
 
 // A DM/MSM may only edit their own report; the CEO may edit anyone's.
 function _expCanEdit() {
+    // "All" is a read-only overview — a line has to belong to one person, so
+    // there is nothing sensible to add or edit against the aggregate.
+    if (_expIsAll()) return false;
     return _expIsReviewer() || !!(_expData && _expPerson === _expData.me);
 }
 
 function _expMileageHtml() {
     const rows = _expRows('mileage');
     const canEdit = _expCanEdit();
+    const all = _expIsAll();
     let html = '<div class="exp-table-wrap"><table class="exp-table"><thead><tr>'
-        + '<th>Date</th><th>Purpose</th><th>From</th><th>To</th>'
+        + '<th>Date</th>' + (all ? '<th>Person</th>' : '') + '<th>Purpose</th><th>From</th><th>To</th>'
         + '<th class="num">Miles</th><th class="num">Rate</th><th class="num">Amount</th>'
         + (canEdit ? '<th></th>' : '') + '</tr></thead><tbody>';
 
     if (!rows.length) {
-        html += '<tr><td colspan="' + (canEdit ? 8 : 7) + '" class="exp-none">No mileage logged for '
+        html += '<tr><td colspan="' + (7 + (canEdit ? 1 : 0) + (all ? 1 : 0)) + '" class="exp-none">No mileage logged for '
               + escapeHtml(_expMonthLabel(_expMonth)) + '.</td></tr>';
     }
     rows.forEach(e => {
         if (_expEditId === e.id) { html += _expMileageEditRow(e); return; }
         html += '<tr>'
             + '<td>' + _expDate(e.entry_date) + '</td>'
+            + (all ? '<td class="strong">' + escapeHtml(e.person || '—') + '</td>' : '')
             + '<td>' + escapeHtml(e.description || '—') + '</td>'
             + '<td>' + escapeHtml(e.from_loc || '—') + '</td>'
             + '<td>' + escapeHtml(e.to_loc || '—') + '</td>'
@@ -29369,18 +29393,20 @@ function _expMileageHtml() {
 function _expExpenseHtml() {
     const rows = _expRows('expense');
     const canEdit = _expCanEdit();
+    const all = _expIsAll();
     let html = '<div class="exp-table-wrap"><table class="exp-table"><thead><tr>'
-        + '<th>Date</th><th>Category</th><th>Description</th><th class="num">Amount</th>'
+        + '<th>Date</th>' + (all ? '<th>Person</th>' : '') + '<th>Category</th><th>Description</th><th class="num">Amount</th>'
         + (canEdit ? '<th></th>' : '') + '</tr></thead><tbody>';
 
     if (!rows.length) {
-        html += '<tr><td colspan="' + (canEdit ? 5 : 4) + '" class="exp-none">No expenses logged for '
+        html += '<tr><td colspan="' + (4 + (canEdit ? 1 : 0) + (all ? 1 : 0)) + '" class="exp-none">No expenses logged for '
               + escapeHtml(_expMonthLabel(_expMonth)) + '.</td></tr>';
     }
     rows.forEach(e => {
         if (_expEditId === e.id) { html += _expExpenseEditRow(e); return; }
         html += '<tr>'
             + '<td>' + _expDate(e.entry_date) + '</td>'
+            + (all ? '<td class="strong">' + escapeHtml(e.person || '—') + '</td>' : '')
             + '<td><span class="exp-cat">' + escapeHtml(e.category || '—') + '</span></td>'
             + '<td>' + escapeHtml(e.description || '—') + '</td>'
             + '<td class="num strong">' + _expMoney(e.amount) + '</td>'

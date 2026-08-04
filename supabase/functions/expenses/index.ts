@@ -11,12 +11,20 @@ const corsHeaders = {
 // too — these are people's reimbursement claims, not store operating data, so
 // they should not be readable by an unauthenticated request.
 const TOOL_ROLES = new Set(["ceo", "district manager", "multi-store manager"]);
-// The CEO reviews everyone; a DM/MSM only ever sees their own report.
-const REVIEWER_ROLES = new Set(["ceo"]);
+// Reviewers see and edit other people's reports. The CEO reviews everyone; the
+// DM reviews everyone EXCEPT the CEO — they file the MSM's and their own work so
+// the CEO doesn't have to, but the CEO's own claims stay private from them. That
+// exclusion is enforced on every path below (list, read, write, delete), not just
+// by leaving the name out of the picker.
+const REVIEWER_ROLES = new Set(["ceo", "district manager"]);
+// Reviewers who still must not see the CEO's own report.
+const EXCLUDES_CEO = new Set(["district manager"]);
 // Who may rename/add/remove categories.
 const CATALOG_ROLES = new Set(["ceo", "district manager"]);
-// Who may change the mileage reimbursement rate.
-const RATE_ROLES = new Set(["ceo"]);
+// Who may change the mileage reimbursement rate. It is a single global value, so
+// changing it applies to everyone from that point on (filed lines keep the rate
+// they were created with).
+const RATE_ROLES = new Set(["ceo", "district manager"]);
 
 const DEFAULT_RATE = 0.70;
 
@@ -82,34 +90,61 @@ Deno.serve(async (req: Request) => {
     return data || [];
   }
 
-  // A DM/MSM is pinned to their own report no matter what they ask for; only the
-  // reviewer may name someone else.
-  function scopePerson(requested: unknown): string {
+  // The roster this user is allowed to act on. A non-reviewer is just themselves;
+  // a DM is everyone bar the CEO(s); the CEO is everyone. Computed from the users
+  // table rather than a hardcoded name so adding a second CEO needs no code change.
+  let _visible: string[] | null = null;
+  async function visiblePeople(): Promise<string[]> {
+    if (_visible) return _visible;
+    if (!isReviewer) return (_visible = [me]);
+    const { data: staff } = await supabase
+      .from("users").select("name, role")
+      .in("role", ["CEO", "District Manager", "Multi-Store Manager"]);
+    const hideCeo = EXCLUDES_CEO.has(role);
+    _visible = (staff || [])
+      // never hide the viewer from themselves, whatever their role
+      .filter((u: any) => !hideCeo || String(u.role || "").toLowerCase().trim() !== "ceo" || String(u.name) === me)
+      .map((u: any) => String(u.name)).filter(Boolean).sort();
+    if (!_visible.includes(me)) _visible.push(me);
+    return _visible;
+  }
+
+  // May this user read/write that person's report at all?
+  async function canTouch(person: string): Promise<boolean> {
+    if (person === me) return true;
+    if (!isReviewer) return false;
+    return (await visiblePeople()).includes(person);
+  }
+
+  // A non-reviewer is pinned to their own report no matter what they ask for, and
+  // a reviewer may only name someone inside their visible roster — so a DM cannot
+  // write to the CEO's report by passing the name directly. null = refuse, rather
+  // than silently filing the line under the caller instead of who they named.
+  async function scopePerson(requested: unknown): Promise<string | null> {
     if (!isReviewer) return me;
     const p = String(requested || "").trim();
-    return p || me;
+    if (!p) return me;
+    return (await canTouch(p)) ? p : null;
   }
 
   if (req.method === "GET") {
     const month = monthStart(url.searchParams.get("month") || "") ||
       monthStart(new Date().toISOString().slice(0, 7))!;
 
-    // Everyone who could file a report, so the reviewer's picker is populated
-    // from the real roster rather than from whoever happens to have entries.
-    const { data: staff } = await supabase
-      .from("users").select("name, role")
-      .in("role", ["CEO", "District Manager", "Multi-Store Manager"]);
-    const people = (staff || []).map((u: any) => String(u.name)).filter(Boolean).sort();
+    // Who this user may act on, from the real roster rather than from whoever
+    // happens to have entries. Doubles as the read filter below, so the picker
+    // and the data can never disagree.
+    const people = await visiblePeople();
 
-    let q = supabase.from("expense_entries").select("*").eq("month_start", month);
-    if (!isReviewer) q = q.eq("person", me);
-    const { data: entries } = await q
+    // Filtered by the visible roster, not just by isReviewer — a DM is a reviewer
+    // but must not receive the CEO's lines in the payload.
+    const { data: entries } = await supabase
+      .from("expense_entries").select("*").eq("month_start", month).in("person", people)
       .order("entry_date", { ascending: true }).order("created_at", { ascending: true });
 
     // Which months already have anything, for the month picker.
-    let mq = supabase.from("expense_entries").select("month_start");
-    if (!isReviewer) mq = mq.eq("person", me);
-    const { data: mrows } = await mq;
+    const { data: mrows } = await supabase
+      .from("expense_entries").select("month_start").in("person", people);
     const months = [...new Set((mrows || []).map((r: any) => r.month_start))].sort().reverse();
 
     return json({
@@ -134,8 +169,11 @@ Deno.serve(async (req: Request) => {
       const month = monthStart(String(body.entry_date));
       if (!month) return json({ error: "Pick a valid date." }, 400);
 
+      const person = await scopePerson(body.person);
+      if (!person) return json({ error: "Not your report." }, 403);
+
       const row: Record<string, unknown> = {
-        person: scopePerson(body.person),
+        person,
         month_start: month,
         kind,
         entry_date: body.entry_date,
@@ -183,8 +221,14 @@ Deno.serve(async (req: Request) => {
       const { data: existing } = await supabase
         .from("expense_entries").select("person").eq("id", id).maybeSingle();
       if (!existing) return json({ error: "That line no longer exists." }, 404);
-      if (!isReviewer && existing.person !== me) return json({ error: "Not your report." }, 403);
+      // Re-checked against the visible roster, not just isReviewer — otherwise a
+      // DM (now a reviewer) could edit a CEO line by passing its id.
+      if (!(await canTouch(String(existing.person)))) return json({ error: "Not your report." }, 403);
       delete row.created_by;
+      // An edit must never move a line to a different report. `row.person` was
+      // computed for the add path and defaults to the caller, so a reviewer
+      // correcting someone else's line would otherwise transfer it to themselves.
+      delete row.person;
       const { data, error } = await supabase
         .from("expense_entries").update(row).eq("id", id).select().single();
       if (error) return json({ error: error.message }, 500);
@@ -197,7 +241,7 @@ Deno.serve(async (req: Request) => {
       const { data: existing } = await supabase
         .from("expense_entries").select("person").eq("id", id).maybeSingle();
       if (!existing) return json({ ok: true });
-      if (!isReviewer && existing.person !== me) return json({ error: "Not your report." }, 403);
+      if (!(await canTouch(String(existing.person)))) return json({ error: "Not your report." }, 403);
       const { error } = await supabase.from("expense_entries").delete().eq("id", id);
       if (error) return json({ error: error.message }, 500);
       return json({ ok: true });
@@ -205,7 +249,7 @@ Deno.serve(async (req: Request) => {
 
     // ---- mileage rate ----
     if (action === "set_rate") {
-      if (!RATE_ROLES.has(role)) return json({ error: "Only the CEO can change the mileage rate." }, 403);
+      if (!RATE_ROLES.has(role)) return json({ error: "You cannot change the mileage rate." }, 403);
       const rate = Number(body.rate);
       if (!Number.isFinite(rate) || rate <= 0 || rate > 100) {
         return json({ error: "Enter a rate between 0 and 100." }, 400);
