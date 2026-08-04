@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260803a">
+  <link rel="stylesheet" href="styles.css?v=20260804a">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20260803a" defer></script>
+  <script src="speeks.js?v=20260804a" defer></script>
 </head>
 <body class="preload">
 
@@ -418,7 +418,7 @@
         </div>
         <div class="checkbox-wrapper">
             <input type="checkbox" id="annPriorityInput" class="custom-checkbox">
-            <label for="annPriorityInput" class="checkbox-label">🚨 Mark as High Priority (Highlights in Red for all Stores)</label>
+            <label for="annPriorityInput" class="checkbox-label">Mark as High Priority (Highlights in Red for all Stores)</label>
         </div>
         <div class="editor-container">
             <label class="form-label-caps">Message Body</label>
@@ -434,7 +434,7 @@
     </div>
     <div class="manage-footer flex-end">
         <button id="publishAnnBtn" class="btn-primary" onclick="publishAnnouncement()">
-            <span class="align-center gap-8">Publish to All Stores 🚀</span>
+            <span class="align-center gap-8">Publish to All Stores</span>
         </button>
     </div>
 </div>
@@ -593,6 +593,18 @@
         <button class="ws-tab active dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" data-feature="widget-ws-monthly-breakdown" id="ws-tab-brief" onclick="switchWorkspaceTab('brief')"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg> Monthly Breakdown</button>
         <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager role-ceo role-assistant-manager" data-feature="widget-ws-weekly-kpis" id="ws-tab-kpis" onclick="switchWorkspaceTab('kpis')"><svg viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg> Store KPIs</button>
         <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager" data-feature="widget-variance-replies" id="ws-tab-vreplies" onclick="switchWorkspaceTab('vreplies')"><svg viewBox="0 0 24 24"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg> Variance Replies</button>
+        <!-- Margin Replies: BUILT BUT PARKED (2026-07-29) — UNFINISHED, waiting on the POS
+             report that supplies the line items. The button is commented out rather than
+             role-gated because applyRoleBasedUI treats a dynamic-module-* element with NO
+             role-* classes as visible to EVERYONE (requiredRoles.length === 0 passes), so
+             stripping the classes showed the tab instead of hiding it. Its pane below is
+             left intact but unreachable: nothing can call switchWorkspaceTab('mreplies')
+             now that this button, the initWorkspace hash whitelist and the Ctrl+K entry
+             are all gone. To bring it back, restore this button plus the commented blocks
+             in FEATURE_CATALOG, _SECTION_TABS, JUMP_PLACES, JUMP_KEYWORDS and the
+             initWorkspace hash list in speeks.js.
+        <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-district-manager" data-feature="widget-margin-replies" id="ws-tab-mreplies" onclick="switchWorkspaceTab('mreplies')"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg> Margin Replies</button>
+        -->
         <button class="ws-tab dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager" data-feature="widget-aging-inventory" id="ws-tab-aging" onclick="switchWorkspaceTab('aging')"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Aging Inventory</button>
       </div>
 
@@ -704,6 +716,38 @@
           </div>
           <div class="weekly-kpi-scroll-area ws-scroll" id="vr-body">
               <div class="status-message">Loading variance replies…</div>
+          </div>
+      </div>
+    </section>
+
+    <!-- ===== MARGIN REPLIES PANE ===== -->
+    <section class="ws-pane" id="ws-pane-mreplies">
+      <div class="card ws-tool-panel ws-panel">
+          <div class="ws-head">
+              <div class="ws-head-main">
+                  <span class="ws-head-ico"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>
+                  <div class="ws-head-titles">
+                      <span class="ws-head-eyebrow">Workspace</span>
+                      <span class="ws-head-title">Margin Replies</span>
+                      <span class="ws-head-sub">Buyers under the margin target, and the deals that put them there.</span>
+                  </div>
+              </div>
+              <div class="ws-head-controls">
+                  <select id="bm-period-select" class="kpi-select" onchange="bmOnPeriodChange()" style="display:none;"></select>
+                  <select id="bm-store-select" class="kpi-select dynamic-module-block role-district-manager" onchange="bmOnStoreChange()" style="display:none;">
+                      <option value="OVL">OVL</option>
+                      <option value="LEE">LEE</option>
+                      <option value="WSP">WSP</option>
+                      <option value="MPL">MPL</option>
+                      <option value="BAL">BAL</option>
+                  </select>
+                  <span id="bm-subtitle" class="ws-head-meta"></span>
+                  <button id="bm-config-btn" class="kpi-update-trigger-btn dynamic-module-flex role-district-manager" onclick="bmToggleConfig()" style="display:none;">Thresholds</button>
+                  <button id="bm-generate-btn" class="kpi-update-trigger-btn dynamic-module-flex role-district-manager" onclick="bmGenerate(this)" style="display:none;">Generate</button>
+              </div>
+          </div>
+          <div class="weekly-kpi-scroll-area ws-scroll" id="bm-body">
+              <div class="status-message">Loading margin replies…</div>
           </div>
       </div>
     </section>
