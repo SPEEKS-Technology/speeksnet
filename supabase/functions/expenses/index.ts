@@ -155,8 +155,15 @@ Deno.serve(async (req: Request) => {
       .from("expense_entries").select("month_start").in("person", people);
     const months = [...new Set((mrows || []).map((r: any) => r.month_start))].sort().reverse();
 
+    // Months THIS person has marked filed. Drives the monthly reminder, which
+    // cannot be derived from the data: the report leaves via a mailto handed to
+    // their mail client, so "filed" is an assertion, not something we observe.
+    const { data: subs } = await supabase
+      .from("expense_submissions").select("month_start").eq("person", me);
+    const filedMonths = (subs || []).map((r: any) => String(r.month_start));
+
     return json({
-      me, role, isReviewer, canEditOthers, people, month, months,
+      me, role, isReviewer, canEditOthers, people, month, months, filedMonths,
       rate: await currentRate(),
       categories: await categories(),
       entries: entries || [],
@@ -253,6 +260,25 @@ Deno.serve(async (req: Request) => {
       const { error } = await supabase.from("expense_entries").delete().eq("id", id);
       if (error) return json({ error: error.message }, 500);
       return json({ ok: true });
+    }
+
+    // ---- "I have filed this month" ----
+    // Always about the caller's OWN report — nobody files on someone else's
+    // behalf, so there is no person parameter to scope or spoof.
+    if (action === "mark_filed" || action === "unmark_filed") {
+      const month = monthStart(String(body.month || ""));
+      if (!month) return json({ error: "Pick a valid month." }, 400);
+      if (action === "unmark_filed") {
+        const { error } = await supabase.from("expense_submissions")
+          .delete().eq("person", me).eq("month_start", month);
+        if (error) return json({ error: error.message }, 500);
+        return json({ ok: true, filed: false, month });
+      }
+      const { error } = await supabase.from("expense_submissions").upsert({
+        person: me, month_start: month, filed_at: new Date().toISOString(), filed_by: me,
+      }, { onConflict: "person,month_start" });
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true, filed: true, month });
     }
 
     // ---- mileage rate ----

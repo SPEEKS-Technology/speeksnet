@@ -8200,6 +8200,13 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .speeks-action-menu .sam-ann:hover .sam-markread-btn { opacity: 1; }
 .speeks-action-menu .sam-markread-btn:hover { color: var(--sage-professional); border-color: var(--sage-professional); background: var(--sam-sage-tint); }
 .speeks-action-menu .sam-markread-btn svg { width: 12px; height: 12px; stroke: currentColor; stroke-width: 2.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+/* A card can carry Snooze AND a completion (a task the app can't verify itself).
+   The completion is the one that ends it, so it reads as the primary of the two
+   and they can't be mistaken for each other. */
+.speeks-action-menu .sam-done-btn { color: var(--sage-professional); border-color: var(--sage-professional); background: var(--sam-sage-tint); opacity: 1; }
+.speeks-action-menu .sam-done-btn:hover { color: #fff; background: var(--sage-professional); border-color: var(--sage-professional); }
+.speeks-action-menu .sam-ann .sam-done-btn + .sam-done-btn,
+.speeks-action-menu .sam-snooze-btn + .sam-done-btn { margin-left: 6px; }
 .speeks-action-menu .sam-ann.rem { cursor: default; }
 .speeks-action-menu .sam-adot.urgent { background: var(--red-alert); box-shadow: 0 0 0 4px var(--sam-red-tint); }
 .speeks-action-menu .sam-adot.warn { background: var(--idea-gold); box-shadow: 0 0 0 4px var(--sam-gold-tint); }
@@ -9204,7 +9211,8 @@ body.sam-active .hotbar-btn:hover {
 #preferredOwnerAlertBubble,
 #preferredMineAlertBubble,
 #listingGoalAlertBubble,
-#listingGoalsDailyAlertBubble {
+#listingGoalsDailyAlertBubble,
+#expenseFileAlertBubble {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;

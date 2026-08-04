@@ -8278,30 +8278,23 @@ function handleSignOut() {
     }
     try { renderActionFeed(); } catch (_) { /* feed may not exist here */ }
 
-    // On the dashboard, sign out IN PLACE — no navigation at all, so it is
-    // instant. This is the mirror of signing IN, which has always transitioned
-    // in place (checkPIN hides the overlay and re-runs applyRoleBasedUI /
-    // initDashboardData rather than reloading), so both directions now use the
-    // same mechanism instead of one of them costing a full page load.
+    // Sign out ALWAYS hands off to index.html, which on the dashboard means a
+    // reload. It used to sign out in place there — instant, but nothing on the
+    // page was actually torn down. The feed's alert bubbles and every tool's
+    // cached payload are ordinary DOM and module state that outlive an in-place
+    // sign-out, so the next person briefly saw the previous person's
+    // notifications, and their data on opening a tool, until their own fetches
+    // landed. Clearing that by hand means naming every cache in the app and
+    // keeping the list current forever; a reload resets all of them at once,
+    // including tools added later. The other four pages already paid this page
+    // load — the dashboard was the only exception, which is why it was the only
+    // page with the glitch. replace() also keeps a signed-out Back button from
+    // returning to an authenticated URL.
     //
-    // Anywhere else we still hand off to index.html. An unauthenticated
-    // non-index page is a state the app has never had — the load-time gate
-    // redirects such a page to index before the overlay is ever shown — and
-    // inventing it to save one page load is not worth the risk. replace() also
-    // keeps a signed-out Back button from returning to an authenticated URL.
-    const page = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
-    if (page !== '' && page !== 'index.html') { location.replace('index.html'); return; }
-
-    // Reset the PIN field so the next person types into a clean form: value,
-    // painted cells, the shake/error state and any stuck button spinner.
-    const input = document.getElementById('pinInput');
-    if (input) input.value = '';
-    if (typeof _authPaintCells === 'function') _authPaintCells();
-    document.getElementById('pinCells')?.classList.remove('bad');
-    document.getElementById('unlockBtn')?.classList.remove('loading');
-    const err = document.getElementById('pinError');
-    if (err) err.style.display = 'none';
-    if (input) input.focus();
+    // The teardown above still matters: sessionStorage survives a reload, so
+    // those removeItem calls are what actually sign the user out, and the rest
+    // is a safety net if navigation is ever blocked.
+    location.replace('index.html');
 }
 
 // --- 17. MODULE: IDEA SUBMISSION MODAL ---
@@ -13753,7 +13746,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkListingGoalsDailyReminder(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -26462,6 +26455,9 @@ function renderActionFeed() {
     // Reminders are live task-nags, so theirs is a "Snooze" (quiets today, returns
     // tomorrow if still outstanding, auto-clears for good once the work is done).
     const snoozeBtn = onclick => `<button class="sam-markread-btn sam-snooze-btn" data-tip="Snoozes for today — comes back tomorrow if it's still outstanding, and disappears for good once the work is done." onclick="${onclick}"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>Snooze</button>`;
+    // Completion the app can't observe for itself — the only way this card ever
+    // goes away for good. Distinguished from Snooze so the two aren't confused.
+    const doneBtn = (onclick, label) => `<button class="sam-markread-btn sam-done-btn" data-tip="Clears this for good. Snooze only quiets it until tomorrow." onclick="${onclick}"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>${_samEsc(label || 'Mark done')}</button>`;
 
     // Build a keyed list of cards, then reconcile in place (see
     // _samReconcileFeed). renderActionFeed used to blow away and rebuild the whole
@@ -26483,8 +26479,13 @@ function renderActionFeed() {
             // Three shapes of trailing control: an explicit "Mark read" for
             // informational cards (readAction), Snooze for live task-nags, and
             // nothing at all for hard deadlines that must not be dismissed.
-            const ctrl = it.readAction ? readBtn(it.readAction)
-                : (it.noSnooze ? '' : snoozeBtn(`samDismissItem(event,'rem','${_samEsc(it.key)}')`));
+            // A fourth shape: a task the app cannot verify itself (filing an
+            // expense report leaves via the person's own mail client), so it gets
+            // BOTH — Snooze to quiet it today, and an explicit completion that is
+            // the only thing that clears it for good.
+            const snoozeHtml = it.noSnooze ? '' : snoozeBtn(`samDismissItem(event,'rem','${_samEsc(it.key)}')`);
+            const ctrl = it.doneAction ? (snoozeHtml + doneBtn(it.doneAction, it.doneLabel))
+                : (it.readAction ? readBtn(it.readAction) : snoozeHtml);
             desired.push({ key: 'rem:' + it.key, html: `<div class="sam-ann rem"${remClick}>
                 <span class="sam-adot ${dotcls}"></span>
                 <div class="sam-a-body">
@@ -26983,6 +26984,14 @@ function _samReminderCfg() {
     // the saved rows, so whoever sets them clears it for the manager AND the ASM.
     // noSnooze: the goals have to actually be entered — there is no "later" for
     // this one, so the card stays put until the roles are in.
+    // DM + MSM, monthly. The app cannot tell whether the report was actually
+    // emailed (mailto hands it to their own mail client), so this one is cleared
+    // by the person saying so — Snooze quiets it for today, "Mark filed" is what
+    // ends it, and that assertion is stored server-side per person + month.
+    cfg.push({ key: 'expenseFile', id: 'expenseFileAlertBubble', text: 'expenseFileAlertBubbleText',
+        title: 'File Your Expense Report', urgency: 1, due: 'Due', cls: 'sam-due-amber',
+        doneAction: "expMarkFiled(event)", doneLabel: 'Mark filed',
+        action: "openExpenses()" });
     cfg.push({ key: 'listingGoalsDaily', id: 'listingGoalsDailyAlertBubble', text: 'listingGoalsDailyAlertBubbleText',
         title: 'Set Today’s Listing Goals', urgency: 2, due: 'Due', cls: 'sam-due-red', noSnooze: true,
         action: "openListingGoals()" });
@@ -27072,7 +27081,8 @@ function _samGatherReminders() {
         out.push({
             type: 'rem', key: c.key, sig, title: c.title, snippet: sub || 'Needs your attention',
             due: c.due, dueCls: c.cls, urgency: c.urgency, read: false, dateMs: Date.now() + c.urgency,
-            action, noSnooze: !!c.noSnooze, noDue: !!c.noDue, readAction: c.readAction || ''
+            action, noSnooze: !!c.noSnooze, noDue: !!c.noDue, readAction: c.readAction || '',
+            doneAction: c.doneAction || '', doneLabel: c.doneLabel || ''
         });
     });
     return out;
@@ -29264,6 +29274,11 @@ async function openExpenses() {
     // would otherwise come back to their report, and file against it by mistake.
     // Cleared rather than set, so loadExpenses fills it from the server's `me`.
     _expPerson = '';
+    // Drop the last payload too, or the modal still holds the previous render —
+    // a DM who was reviewing someone would see THAT person's lines for the
+    // moment before the new fetch lands. Nulling it makes loadExpenses paint its
+    // "Loading" placeholder instead.
+    _expData = null;
     if (!_expMonth) _expMonth = _expThisMonth();
     await loadExpenses();
 }
@@ -29719,7 +29734,7 @@ function _expCompose() {
         body += 'MILEAGE\n';
         mileageRows.forEach(e => {
             const trip = [e.from_loc, e.to_loc].filter(Boolean).join(' to ');
-            body += '  ' + _expPad(_expDate(e.entry_date), 12)
+            body += '  ' + _expPad(_expDate(e.entry_date) + ' -', 13)
                  + _expPad(e.description || trip || 'Trip', 33)
                  + _expPadL((Number(e.miles) || 0) + ' mi', 10)
                  + _expPadL('@ $' + _expRate(e.rate), 9)
@@ -29727,19 +29742,19 @@ function _expCompose() {
         });
         // "Total" leads the row. Sitting it next to the amount instead put it
         // between the two figures, which read as "22 total 15.40".
-        body += '  ' + _expPad('Total', 45) + _expPadL(Math.round(miles * 10) / 10 + ' mi', 10)
+        body += '  ' + _expPad('Total', 46) + _expPadL(Math.round(miles * 10) / 10 + ' mi', 10)
              + _expPadL('', 9) + _expPadL(_expMoney(mileageTotal), 12) + '\n\n';
     }
 
     if (expenseRows.length) {
         body += 'EXPENSES\n';
         expenseRows.forEach(e => {
-            body += '  ' + _expPad(_expDate(e.entry_date), 12)
+            body += '  ' + _expPad(_expDate(e.entry_date) + ' -', 13)
                  + _expPad(e.category || '', 26)
                  + _expPad(e.description || '', 26)
                  + _expPadL(_expMoney(e.amount), 12) + '\n';
         });
-        body += '  ' + _expPad('Total', 64) + _expPadL(_expMoney(expenseTotal), 12) + '\n\n';
+        body += '  ' + _expPad('Total', 65) + _expPadL(_expMoney(expenseTotal), 12) + '\n\n';
     }
 
     if (!mileageRows.length && !expenseRows.length) {
@@ -29796,3 +29811,109 @@ function expCopyReport(button) {
     }).catch(() => alert('Could not copy. Select the preview text and copy it manually.'));
 }
 window.expCopyReport = expCopyReport;
+
+// ---- monthly "file your expense report" reminder ------------------------------
+// DM and MSM only (the CEO receives the reports, they don't file one). Unlike the
+// KPI nags this cannot be data-derived — the report leaves as a mailto handed to
+// the person's mail client, so the app never sees it sent. "Filed" is therefore
+// an assertion the person makes, stored server-side (expense_submissions) so it
+// survives filing from another machine and shows leadership who has filed.
+const _EXP_REMIND_ROLES = new Set(['district manager']);
+let _expRemindStarted = false;
+
+function _expRemindApplies() {
+    const r = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (_EXP_REMIND_ROLES.has(r)) return true;
+    // An MSM signs in with the effective role 'manager', so the flag is the only
+    // way to tell them apart from a store manager.
+    return typeof isMultiStoreManager === 'function' && isMultiStoreManager();
+}
+
+// The month being chased is the one that just CLOSED — you file August in
+// September. Central time, so the rollover matches the stores' day.
+function _expRemindMonth() {
+    const nowC = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+    const d = new Date(nowC.getFullYear(), nowC.getMonth() - 1, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
+function _expRemindBubbleEl() {
+    let b = document.getElementById('expenseFileAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'expenseFileAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; padding:11px 14px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; z-index:998;';
+    b.innerHTML = '<span id="expenseFileAlertBubbleText"></span>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+
+async function checkExpenseFileReminder() {
+    const hide = () => {
+        const b = document.getElementById('expenseFileAlertBubble');
+        if (b) b.style.display = 'none';
+    };
+    if (!_expRemindApplies()) { hide(); return; }
+    if (!_expRemindStarted) { _expRemindStarted = true; setInterval(checkExpenseFileReminder, 30 * 60 * 1000); }
+
+    const month = _expRemindMonth();
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (!pin) { hide(); return; }
+
+    let filed = [];
+    try {
+        const j = await fetch(`${EXPENSES_URL}?month=${encodeURIComponent(month)}&v=${Date.now()}`,
+            { headers: { 'x-user-pin': pin } }).then(r => r.json());
+        if (!j || j.error) { hide(); return; }   // never invent a nag from a failed fetch
+        filed = j.filedMonths || [];
+    } catch (_) { hide(); return; }
+
+    // Like the other async checks, this lands AFTER the login sweep painted the
+    // feed, so it has to repaint or the live bubble is never picked up.
+    const paint = () => { if (typeof renderActionFeed === 'function') renderActionFeed(); };
+
+    if (filed.indexOf(month) !== -1) { hide(); paint(); return; }
+
+    const el = _expRemindBubbleEl();
+    if (!el) return;
+    const t = document.getElementById('expenseFileAlertBubbleText');
+    if (t) {
+        const label = _expMonthLabel(month);
+        t.dataset.summary = `Your ${label} expense report hasn’t been filed yet — `
+            + 'check your mileage and expenses are in, email it, then mark it filed.';
+        t.dataset.month = month;
+        // Snooze signature: keyed to the month, so snoozing September's nag can't
+        // also swallow October's.
+        t.dataset.sig = 'expfile:' + month;
+        t.textContent = t.dataset.summary;
+    }
+    el.style.display = 'flex';
+    paint();
+}
+window.checkExpenseFileReminder = checkExpenseFileReminder;
+
+// "Mark filed" on the feed card. Writes the assertion, then re-checks so the card
+// clears from the same source of truth rather than being hidden optimistically.
+async function expMarkFiled(ev) {
+    if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+    const t = document.getElementById('expenseFileAlertBubbleText');
+    const month = (t && t.dataset && t.dataset.month) || _expRemindMonth();
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const btn = ev && ev.currentTarget;
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    try {
+        const j = await fetch(EXPENSES_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({ action: 'mark_filed', month }),
+        }).then(r => r.json());
+        if (!j || j.error) throw new Error((j && j.error) || 'Could not save');
+        await checkExpenseFileReminder();
+    } catch (e) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Mark filed'; }
+        alert('Could not mark it filed — ' + (e.message || 'try again') + '.');
+    }
+}
+window.expMarkFiled = expMarkFiled;
