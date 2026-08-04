@@ -10713,6 +10713,9 @@ body.sam-active .hotbar-btn:hover {
     padding: 12px 14px; margin-bottom: 14px; border-radius: 12px;
     background: var(--b2b-surface); border: 1px solid var(--b2b-line-2);
 }
+/* An unsent quote is waiting on the approver -- warm the send bar to match the
+   "Awaiting approval" banner above it. */
+.b2b-sendbar.urgent { background: #fffbf3; border-color: #f0dcb8; }
 .b2b-sendbar-s { font-size: 11px; font-weight: 750; color: var(--b2b-muted); }
 .b2b-sendbar-i { flex: 1; min-width: 190px; }
 .b2b-sendbar-hint { flex: 1 0 100%; font-size: 11px; color: var(--b2b-faint); line-height: 1.5; }
@@ -11004,6 +11007,13 @@ body.sam-active .hotbar-btn:hover {
 
 /* --- tables --------------------------------------------------------------- */
 .b2b-vtable, .b2b-ctable, .b2b-ftable { width: 100%; font-variant-numeric: tabular-nums; }
+/* The read-only view table lives in the deal modal, not .b2b-panel, so the bare
+   cell-alignment classes (.c/.r/.b/.accent) need a modal-scoped home too --
+   otherwise a completed deal's money reads left-aligned and unweighted. */
+.b2b-vtable .c { text-align: center; }
+.b2b-vtable .r { text-align: right; }
+.b2b-vtable .b { font-weight: 800; }
+.b2b-vtable .accent { color: var(--b2b-accent-deep); }
 .b2b-acr {
     display: inline-block; padding: 3px 8px; border-radius: 6px;
     background: var(--b2b-accent-tint); color: var(--sage-deep);
