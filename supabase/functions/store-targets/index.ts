@@ -8,31 +8,44 @@ const corsHeaders = {
 };
 
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
-const STEP = 10;       // performance ratchet step
-const HITS_UP = 2;     // consecutive weeks at/above target to RAISE
-const MISS_FLAG = 2;   // consecutive weeks below target to FLAG for DM review
 
 // Stores overseen by a Multi-Store Manager. Mirrors MULTISTORE_MANAGER_STORES in speeks.js.
 const MULTISTORE_MANAGER_STORES = ["BAL", "MPL"];
 // The MSM splits time across their stores and isn't really listing, so they don't
-// count as a full person (±20) on ANY store's ladder — instead each store they
-// cover gets this flat listings boost, reflecting what they do pitch in.
+// count as a full person (±20) on either store's ladder — instead each store they
+// cover gets this flat boost. NOTE: this only affects the SUGGESTED number now.
+// Once the DM types a goal, their figure is the whole goal, boost included.
 const MSM_TARGET_BOOST = 15;
 
-// Incremental weekly target: +/-20 per person, anchored at 4 people = 190.
-// (2->150, 3->170, 4->190, 5->210, 6->230). Floor at 150 so data gaps can't
-// produce an absurd target. Matches ListingGoalsEngine.weeklyTarget on the frontend.
-// NOTE: the MSM boost is added ON TOP of this (see msmBoost), not baked into it —
-// per-person daily goals derive from the unboosted ladder so regular listers
-// don't absorb the MSM's share.
+// Suggested weekly target: +/-20 per person, anchored at 4 people = 190.
+// (2->150, 3->170, 4->190, 5->210, 6->230), floored at 150.
+//
+// This used to BE the goal. It is now only the prefill the DM sees the first time
+// a store has never had a week set — they set the real number by hand every Monday.
+// Nothing raises or lowers a target automatically any more.
 function baseForSize(size: number) { return Math.max(150, 110 + 20 * size); }
 
-// Monday that starts the NEXT week relative to a YYYY-MM-DD date (UTC).
-// Added staff take effect here so mid-week training isn't counted against the goal.
+// Today's calendar date in STORE time, not UTC. The edge runtime is UTC, so a
+// naive new Date() rolls the day over at 7pm Central and would start the new
+// goal week on Sunday evening. Same class of bug as the checklist midnight reset.
+function centralToday(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+}
+
+// The Monday that starts the week containing a YYYY-MM-DD date.
+// Sunday maps BACK to the Monday just gone, matching the KPI week (ends Sunday).
+function mondayOf(ds: string): string {
+  const d = new Date(ds + "T00:00:00Z");
+  const back = (d.getUTCDay() + 6) % 7; // Mon->0, Tue->1 ... Sun->6
+  d.setUTCDate(d.getUTCDate() - back);
+  return d.toISOString().split("T")[0];
+}
+
+// Monday that starts the NEXT week. Added staff take effect here so a mid-week
+// hire's training days aren't counted against the goal.
 function nextMonday(ds: string): string {
   const d = new Date(ds + "T00:00:00Z");
-  const dow = d.getUTCDay();                 // 0 Sun .. 6 Sat
-  const add = ((8 - dow) % 7) || 7;          // strictly-future Monday
+  const add = ((8 - d.getUTCDay()) % 7) || 7; // strictly-future Monday
   d.setUTCDate(d.getUTCDate() + add);
   return d.toISOString().split("T")[0];
 }
@@ -52,7 +65,8 @@ Deno.serve(async (req: Request) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
   const url = new URL(req.url);
-  const todayStr = new Date().toISOString().split("T")[0]; // week ends Sunday; completed = period_end_date < today
+  const todayStr = centralToday();
+  const thisMonday = mondayOf(todayStr);
 
   // Live roster COUNT for a store (excludes CEO / District Manager / Multi-Store
   // Manager — the MSM contributes via the flat MSM_TARGET_BOOST instead).
@@ -62,8 +76,6 @@ Deno.serve(async (req: Request) => {
     return (data || []).filter((u: any) => !excl.has(String(u.role || "").toLowerCase().trim())).length;
   }
 
-  // Flat boost for stores covered by a Multi-Store Manager. Applies only while
-  // an MSM actually exists in users, so it self-removes if the role goes away.
   async function msmBoost(store: string) {
     if (!MULTISTORE_MANAGER_STORES.includes(store)) return 0;
     const { data } = await supabase.from("users").select("role").ilike("role", "multi-store manager");
@@ -86,6 +98,16 @@ Deno.serve(async (req: Request) => {
     return Object.keys(byWeek).sort().map((w) => ({ week: w, total: byWeek[w] }));
   }
 
+  // Every hand-set goal for a store, newest first.
+  async function goalRows(store: string) {
+    const { data } = await supabase
+      .from("listing_goal_weeks")
+      .select("week_start, target, set_by, set_at")
+      .eq("store", store)
+      .order("week_start", { ascending: false });
+    return data || [];
+  }
+
   async function getRow(store: string) {
     const { data } = await supabase.from("store_targets").select("*").eq("store", store).maybeSingle();
     if (data) return data;
@@ -99,22 +121,22 @@ Deno.serve(async (req: Request) => {
     return row;
   }
 
-  // Lazily, on every read: settle team-size changes (asymmetric timing), re-base the
-  // goal ladder, then ratchet over newly-completed weeks. Persist if anything moved.
+  // Settle team-size changes (asymmetric timing) and keep the suggested ladder in
+  // step with the roster. The performance ratchet that used to live here is GONE:
+  // it fought the DM's typed number and produced the review/lower/raise prompts
+  // that are no longer wanted.
   async function evaluate(store: string) {
     const row: any = await getRow(store);
     const weeks = await weeklyTotals(store);
-    let {
-      current_target, hit_streak, miss_streak, flag_status, base_target, last_eval_week,
-      team_size, pending_size, pending_effective,
-    } = row;
+    const goals = await goalRows(store);
+    let { base_target, team_size, pending_size, pending_effective } = row;
     let changed = false;
 
     const liveSize = await rosterCount(store);
     const boost = await msmBoost(store);
-    if (team_size == null) { team_size = liveSize; changed = true; } // first run after migration
+    if (team_size == null) { team_size = liveSize; changed = true; }
 
-    // (1) Promote a previously-deferred addition once its effective week has arrived.
+    // (1) Promote a previously-deferred addition once its effective week arrived.
     if (pending_effective != null && todayStr >= pending_effective) {
       team_size = pending_size;
       pending_size = null; pending_effective = null;
@@ -123,64 +145,67 @@ Deno.serve(async (req: Request) => {
 
     // (2) React to a roster change vs the current EFFECTIVE size.
     if (liveSize < team_size) {
-      // Someone left -> shrink the goal immediately (mid-week), cancel any pending raise.
-      team_size = liveSize;
+      team_size = liveSize;                                   // someone left: shrink now
       pending_size = null; pending_effective = null;
       changed = true;
     } else if (liveSize > team_size) {
-      // Someone added -> defer the higher goal to the start of next week (training week).
-      if (pending_size !== liveSize) {
+      if (pending_size !== liveSize) {                        // someone added: defer a week
         pending_size = liveSize;
         pending_effective = nextMonday(todayStr);
         changed = true;
       }
     } else if (pending_size != null) {
-      // Roster returned to the effective size before the raise landed -> cancel it.
-      pending_size = null; pending_effective = null;
+      pending_size = null; pending_effective = null;          // roster bounced back
       changed = true;
     }
 
-    // (3) Re-base the ladder to the effective team size (+ the MSM boost where one
-    //     covers this store); carry earned ratchet steps.
+    // (3) Keep the suggestion in step with the effective team size.
     const newBase = baseForSize(team_size) + boost;
-    if (newBase !== base_target) {
-      const earned = Math.max(0, current_target - base_target);
-      base_target = newBase;
-      current_target = newBase + earned;
-      changed = true;
-    }
-
-    // (4) Weekly performance ratchet over any newly-completed weeks.
-    if (last_eval_week == null) {
-      const latest = weeks.length ? weeks[weeks.length - 1].week : null;
-      if (latest !== last_eval_week) { last_eval_week = latest; changed = true; }
-    } else {
-      const newWeeks = weeks.filter((w) => w.week > last_eval_week);
-      for (const w of newWeeks) {
-        if (w.total >= current_target) {
-          hit_streak++; miss_streak = 0;
-          if (hit_streak >= HITS_UP) { current_target += STEP; hit_streak = 0; }
-        } else {
-          miss_streak++; hit_streak = 0;
-          if (miss_streak >= MISS_FLAG) flag_status = "flagged";
-        }
-        last_eval_week = w.week;
-        changed = true;
-      }
-    }
+    if (newBase !== base_target) { base_target = newBase; changed = true; }
 
     if (changed) {
       await supabase.from("store_targets").update({
-        current_target, hit_streak, miss_streak, flag_status, base_target, last_eval_week,
-        team_size, pending_size, pending_effective,
+        base_target, current_target: base_target, team_size, pending_size, pending_effective,
+        flag_status: "none", hit_streak: 0, miss_streak: 0,
         updated_at: new Date().toISOString(),
       }).eq("store", store);
     }
 
+    // (4) Resolve THIS week's goal. Explicitly set for this week wins; otherwise
+    //     the most recent earlier week carries forward (a missed Monday must not
+    //     reset a store to the ladder); otherwise the ladder suggestion.
+    const exact = goals.find((g: any) => g.week_start === thisMonday);
+    const carried = exact ? null : goals.find((g: any) => g.week_start < thisMonday);
+    const target = exact ? exact.target : (carried ? carried.target : base_target);
+
+    // (5) Attach the goal that was in force in each completed week, so the
+    //     green/red history can't be re-coloured by changing this week's number.
+    //     period_end_date is the Sunday; its Monday is six days earlier.
+    const byWeekStart: Record<string, number> = {};
+    goals.forEach((g: any) => { byWeekStart[g.week_start] = g.target; });
+    const sortedStarts = Object.keys(byWeekStart).sort();
+    const targetForWeekEnd = (endSunday: string) => {
+      const start = mondayOf(endSunday);
+      if (byWeekStart[start] != null) return byWeekStart[start];
+      let prior: number | null = null;
+      for (const s of sortedStarts) { if (s < start) prior = byWeekStart[s]; else break; }
+      return prior != null ? prior : base_target;
+    };
+
     return {
-      store, target: current_target, base: base_target, flag: flag_status,
-      weeks: weeks.slice(-4), size: team_size,
+      store,
+      target,
+      base: base_target,                 // ladder suggestion / prefill
+      suggested: base_target,
+      manual: !!exact,                   // was THIS week set by hand
+      carried: !exact && !!carried,      // running on a previous week's number
+      weekStart: thisMonday,
+      setBy: exact ? exact.set_by : (carried ? carried.set_by : null),
+      setAt: exact ? exact.set_at : (carried ? carried.set_at : null),
+      weeks: weeks.slice(-4).map((w) => ({ ...w, target: targetForWeekEnd(w.week) })),
+      size: team_size,
       pending: pending_size != null ? { size: pending_size, effective: pending_effective } : null,
+      flag: "none",                      // kept so a stale cached client can't paint a flag
     };
   }
 
@@ -193,22 +218,27 @@ Deno.serve(async (req: Request) => {
   }
 
   if (req.method === "POST") {
-    // DM action on a flagged store. Body: { store, action: 'lower' | 'keep' }
+    // DM sets a week's listing goal. Body: { store, target, week_start?, name? }
     let body: any;
     try { body = JSON.parse(await req.text()); } catch { return json({ error: "Invalid JSON" }, 400); }
-    const store = (body.store || "").toUpperCase();
-    const action = body.action;
-    if (!store || (action !== "lower" && action !== "keep")) {
-      return json({ error: "Missing store/action" }, 400);
+
+    const store = String(body.store || "").toUpperCase();
+    if (!STORES.includes(store)) return json({ error: "Unknown store" }, 400);
+
+    const target = Number(body.target);
+    if (!Number.isFinite(target) || target < 0 || target > 2000) {
+      return json({ error: "Target must be a whole number between 0 and 2000" }, 400);
     }
-    const row: any = await getRow(store);
-    let current_target = row.current_target;
-    if (action === "lower") current_target = Math.max(row.base_target, current_target - STEP);
-    await supabase.from("store_targets").update({
-      current_target, flag_status: "resolved", miss_streak: 0,
-      updated_at: new Date().toISOString(),
-    }).eq("store", store);
-    return json({ store, target: current_target, flag: "resolved" });
+
+    const weekStart = body.week_start ? mondayOf(String(body.week_start)) : thisMonday;
+
+    const { error } = await supabase.from("listing_goal_weeks").upsert({
+      store, week_start: weekStart, target: Math.round(target),
+      set_by: body.name || null, set_at: new Date().toISOString(),
+    }, { onConflict: "store,week_start" });
+    if (error) return json({ error: error.message }, 500);
+
+    return json(await evaluate(store));
   }
 
   return new Response("Method Not Allowed", { status: 405, headers: corsHeaders });

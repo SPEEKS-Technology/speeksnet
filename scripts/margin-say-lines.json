@@ -1,0 +1,45 @@
+{
+  "Apple iPhone": {
+    "Online Prices": "Those online prices lose about 15% to seller fees before shipping, and you're carrying the scam risk. I can hand you cash today.",
+    "Battery Health [X]%": "It's showing [X]% battery health, so whoever buys it next is replacing the battery pretty soon — that comes off what I can offer.",
+    "Base Storage": "This is the base storage model. Buyers are asking for more space now, so these sit on the shelf a lot longer.",
+    "Carrier Locked": "Because it's still locked to that carrier, I can only sell it to someone on that same carrier. That's a much smaller pool of buyers.",
+    "Micro-Scratches": "The screen isn't cracked, you're right — but with these scratches I have to list it as Fair instead of Mint, and that's a real price difference.",
+    "Untested Item": "Since I can't fully test this one, I have to price in the chance it needs more work than I can see right now.",
+    "Store Credit Pivot": "If the cash number isn't working for you, I can do $[X] in store credit right now toward anything in the store."
+  },
+  "Apple iPad": {
+    "WiFi-Only": "This is the WiFi-only model — no GPS and no cellular. It's a less flexible tablet, and that shows up in what it resells for.",
+    "Battery Wear": "The battery in these is sealed in, so servicing it is a real job. High wear means the next owner is facing that cost.",
+    "White Spots": "Those light patches on the screen are backlight damage — it's a permanent hardware fault, not something that cleans up.",
+    "OS Updates": "This generation is at the end of Apple's support window, so apps will start dropping off it. That makes it a slow seller for me.",
+    "Base Storage": "At this storage size buyers hesitate — most people want 128GB or more now."
+  },
+  "Apple Smart Watch": {
+    "Battery Health": "The battery in these is tiny, and this one's worn down enough that the next owner won't get through a full day on it.",
+    "Casing Wear": "A watch is jewelry — people look at it. Scratches on the screen and pitting in the aluminum cost more here than they would on a phone.",
+    "Outdated Tech": "The sensors and processor in this generation are a few years behind now, and that's where the demand went.",
+    "Base Model": "This is the aluminum GPS-only version, which is the entry model — it doesn't bring what a Stainless or an Ultra does.",
+    "Band Hygiene": "The band is worn and discolored, and for hygiene I have to replace it before it goes back out. That cost is in my number.",
+    "Charger Missing": "The charger for these is proprietary and pricey, so not having the original changes what I can do.",
+    "SE Series": "This is the SE line. It doesn't have the always-on display or the health sensors the main series has, and resale reflects that."
+  },
+  "Apple MacBooks": {
+    "Intel Processor": "This one's an Intel model, and Apple moved to their own M-series chips a while back. The Intels run hotter and slower, and buyers know it.",
+    "High Cycle Count": "Mac batteries are rated to about 1,000 cycles and this one's well past that, so a battery service is coming for whoever buys it.",
+    "8GB RAM": "It's the 8GB model. Anyone doing real work on it wants 16 at a minimum now, so this one moves slowly.",
+    "Case Dents": "Dents in the aluminum can't be worked out — they're permanent. On a premium machine like this, that hits the resale price hard.",
+    "Genuine Chargers": "The original Apple charger isn't with it, and those aren't cheap to replace — I have to account for buying one.",
+    "Butterfly Keyboard": "This is one of the 2016 to 2019 models with the butterfly keyboard. They have a known failure history, so demand on them is soft.",
+    "Flexgate/Display": "See these faint lines along the bottom of the screen? That's a display cable starting to fail, and it gets worse, not better."
+  },
+  "GPU": {
+    "Generational Drop": "New card generations come out constantly, and this one's a few behind — it struggles with what people are playing now.",
+    "Thermal Wear": "Heavy gaming dries out the thermal paste and wears the fans down, so I'm pricing in the chance this one runs hot.",
+    "Market Saturation": "There are a lot of used cards out there right now. That much supply pushes the cash value down for everybody.",
+    "Missing Adapters": "This card needs a specific high-wattage power adapter and it isn't here — I have to deduct what it costs to source one.",
+    "Physical Sag": "See how the bracket's bent from the card sagging? That's long-term structural stress, and it drops the grade to Fair.",
+    "Coil Whine": "It's got a noticeable buzz under load. PC builders hear that immediately and pass, so it's a hard resell.",
+    "No Original Box": "Without the original foam packaging, shipping a card this size safely means buying real materials for it."
+  }
+}

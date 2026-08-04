@@ -24,6 +24,23 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+// Realtime "ping": after a successful write, tell signed-in clients this tool
+// changed so they re-run their check (which re-fetches through the edge fn — no
+// table data travels over realtime). Wrapped so it can never break the write.
+async function broadcastChange(tool: string, store: string | null) {
+  try {
+    const url = Deno.env.get("SUPABASE_URL")!;
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: key, Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        messages: [{ topic: "speeks-notify", event: "changed", payload: { tool, store: store ? String(store).toUpperCase() : null, ts: Date.now() } }],
+      }),
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -59,6 +76,7 @@ Deno.serve(async (req: Request) => {
         };
         const { data, error } = await supabase.from("recycle_requests").insert(record).select().single();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("recycle", store);
         return jsonResponse({ success: true, data });
       }
 
@@ -84,6 +102,7 @@ Deno.serve(async (req: Request) => {
           })
           .eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("recycle", null);
         return jsonResponse({ success: true });
       }
 
@@ -101,6 +120,7 @@ Deno.serve(async (req: Request) => {
           })
           .eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("recycle", null);
         return jsonResponse({ success: true });
       }
 
@@ -126,6 +146,7 @@ Deno.serve(async (req: Request) => {
         else { patch.mgr_reply = text; patch.mgr_reply_by = by; patch.mgr_reply_at = at; }
         const { error } = await supabase.from("recycle_requests").update(patch).eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("recycle", null);
         return jsonResponse({ success: true, entry: { role, text, by, at } });
       }
 
@@ -143,6 +164,7 @@ Deno.serve(async (req: Request) => {
           })
           .eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("recycle", null);
         return jsonResponse({ success: true });
       }
 
@@ -175,6 +197,7 @@ Deno.serve(async (req: Request) => {
           })
           .eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("recycle", null);
         return jsonResponse({ success: true });
       }
 
@@ -186,6 +209,7 @@ Deno.serve(async (req: Request) => {
           .update({ delete_requested_at: null, delete_requested_by: null })
           .eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("recycle", null);
         return jsonResponse({ success: true });
       }
 
@@ -196,6 +220,7 @@ Deno.serve(async (req: Request) => {
         if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
         const { error } = await supabase.from("recycle_requests").delete().eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("recycle", null);
         return jsonResponse({ success: true });
       }
 

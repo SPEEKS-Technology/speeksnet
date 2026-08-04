@@ -13,6 +13,42 @@ const corsHeaders = {
 // so the Documents section keeps every attachment forever regardless of age.
 const ROLLING_DAYS = 30;
 
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+
+// Who can file and remove documents: DM and CEO only (Ethan, 2026-08-01). This is
+// deliberately narrower than the Announcements tool, which also opens to Tom and
+// the Owner (Manager) — posting is a one-way act, whereas removing from the shared
+// Documents list takes a file away from every store.
+//
+// Normalized rather than matched literally: the session stores "district manager"
+// with a space while Feature Access keys it "district-manager", and matching one
+// spelling silently locks out whoever sends the other (exactly the bug that made
+// every DM write to the Margin Guide fail).
+const DOC_ROLES = ["district-manager", "ceo"];
+const normRole = (r: unknown) =>
+  String(r ?? "").toLowerCase().trim().replace(/[()]/g, " ").replace(/[\s_]+/g, "-").replace(/^-|-$/g, "");
+
+// Realtime "ping": after a successful write, tell signed-in clients this tool
+// changed so they re-run their check (which re-fetches through the edge fn — no
+// table data travels over realtime). Wrapped so it can never break the write.
+async function broadcastChange(tool: string, store: string | null) {
+  try {
+    const url = Deno.env.get("SUPABASE_URL")!;
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: key, Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        messages: [{ topic: "speeks-notify", event: "changed", payload: { tool, store: store ? String(store).toUpperCase() : null, ts: Date.now() } }],
+      }),
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -53,7 +89,13 @@ Deno.serve(async (req: Request) => {
       .toISOString().slice(0, 10);
     // Board membership: within the rolling window, or undated (safety). Documents are
     // handled independently below, so a doc attachment does NOT keep an old post here.
-    const keep = (a: any) => !a.date || a.date >= cutoff;
+    //
+    // doc_only rows are files filed straight into the Documents view. They are stored
+    // as announcements so they can share the `documents` list, the storage bucket and
+    // the title matching — but they were never posted, so they must not reach the
+    // board, the feed, the ticker or the unread badge. Excluded here, once, for both
+    // GET payloads; `documents` below deliberately keeps them.
+    const keep = (a: any) => !a.doc_only && (!a.date || a.date >= cutoff);
 
     try {
       // ── Lightweight reactions-only poll ────────────────────────────────
@@ -63,7 +105,7 @@ Deno.serve(async (req: Request) => {
       // posted?" check still works and can fall back to a full reload when needed.
       if (mode === "reactions") {
         const [annRows, reactionRows, userRows] = await Promise.all([
-          selectAll("announcements", "id, date, doc_url", "created_at"),
+          selectAll("announcements", "id, date, doc_url, doc_only", "created_at"),
           selectAll("announcement_reactions", "announcement_id, user_pin, emoji"),
           selectAll("users", "pin, name"),
         ]);
@@ -90,7 +132,7 @@ Deno.serve(async (req: Request) => {
 
       // ── Full board ─────────────────────────────────────────────────────
       const [annRows, readRows, reactionRows, userRows] = await Promise.all([
-        selectAll("announcements", "id, message, date, author, high_priority, doc_url, doc_name", "created_at"),
+        selectAll("announcements", "id, message, date, author, high_priority, doc_url, doc_name, doc_only", "created_at"),
         selectAll("announcement_reads", "announcement_id, user_pin"),
         selectAll("announcement_reactions", "announcement_id, user_pin, emoji"),
         selectAll("users", "pin, name"),
@@ -123,9 +165,34 @@ Deno.serve(async (req: Request) => {
         reactions: reactionsMap[a.id] || {},
       }));
 
+      // The Documents view labels each file with the announcement it came with, and
+      // files goals/bonus sheets by those words — both need the title. Shipping the
+      // whole message body back would undo the egress trim this list exists to allow,
+      // so derive just the title here: the first <strong>, which is exactly where the
+      // client's _hubParseAnn looks. Keep the two rules in step if either changes.
+      const docTitle = (msg: string | null): string => {
+        // The "🚨 HIGH PRIORITY" marker is a <span> and never wraps the title, so this
+        // strip is belt-and-braces — the <strong> match lands correctly either way.
+        const cleaned = String(msg || "")
+          .replace(/<span[^>]*>[\s\S]*?HIGH PRIORITY[\s\S]*?<\/span>/gi, " ");
+        const m = cleaned.match(/<strong[^>]*>([\s\S]*?)<\/strong>/i);
+        return (m ? m[1] : cleaned)
+          .replace(/<[^>]*>/g, " ")
+          .replace(/&nbsp;/gi, " ")
+          .replace(/&amp;/gi, "&")
+          .replace(/&lt;/gi, "<")
+          .replace(/&gt;/gi, ">")
+          .replace(/&quot;/gi, '"')
+          .replace(/&#0?39;|&apos;/gi, "'")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 100);
+      };
+
       // Every announcement that ever had a document attached, regardless of age — this
       // feeds the Documents section so files stay available after the post itself has
-      // aged off the board. Compact fields only (no message text / readBy / reactions).
+      // aged off the board. Compact fields only (title, not the message text; no
+      // readBy / reactions).
       const documents = annRows
         .filter((a: any) => a.doc_url)
         .map((a: any) => ({
@@ -134,6 +201,12 @@ Deno.serve(async (req: Request) => {
           author: a.author,
           docUrl: a.doc_url,
           docName: a.doc_name || null,
+          title: docTitle(a.message),
+          // Removing a file means two different things, and the client has to be
+          // able to tell them apart before it asks for confirmation: a doc_only row
+          // is deleted outright, while a file attached to a real post is only
+          // detached — the post itself is never touched.
+          docOnly: !!a.doc_only,
         }));
 
       return new Response(JSON.stringify({ announcements, documents, active: [], upcoming: [] }), {
@@ -211,6 +284,77 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    // ── Documents filed on their own, with no post going out ───────────────
+    //
+    // Stored as an announcements row with doc_only = true, so the Documents view,
+    // the storage bucket and the goals/other title matching all keep working
+    // unchanged — the row is simply invisible to the board and the feed.
+    //
+    // The file itself is uploaded to the ann-docs bucket by the client (same path
+    // the announcement composer uses); this only records it.
+    if (type === "add_document") {
+      if (!DOC_ROLES.includes(normRole(body.role))) {
+        return json({ success: false, error: "Not authorized to manage documents" }, 403);
+      }
+      const docUrl = String(body.doc_url || "").trim();
+      const docName = String(body.doc_name || "").trim();
+      const title = String(body.title || "").trim();
+      if (!docUrl || !docName) return json({ success: false, error: "A file is required" }, 400);
+      if (!title) return json({ success: false, error: "Give the document a title" }, 400);
+      if (title.length > 100) return json({ success: false, error: "Keep the title under 100 characters" }, 400);
+
+      // <strong> because docTitle() reads the first <strong> — the same rule the
+      // board uses for an announcement's title. Storing it this way means one
+      // title implementation, not two.
+      const esc = (s: string) => s
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const { data: inserted, error } = await supabase.from("announcements").insert({
+        message: `<strong>${esc(title)}</strong>`,
+        date: new Date().toISOString().split("T")[0],
+        author: body.author || "Executive Team",
+        high_priority: false,
+        doc_url: docUrl,
+        doc_name: docName,
+        doc_only: true,
+      }).select("id").single();
+      if (error) return json({ success: false, error: error.message }, 500);
+
+      await broadcastChange("announcements", null);
+      return json({ success: true, id: inserted?.id ?? null });
+    }
+
+    // Remove a file from the Documents view. Two very different operations behind
+    // one button, decided by what the row actually is:
+    //   doc_only  -> the row exists only to hold the file, so delete the row
+    //   otherwise -> a real announcement someone posted; clear only the attachment
+    //                and leave the post, its reactions and its read receipts alone.
+    // The stored object is deliberately NOT deleted: it costs almost nothing to
+    // keep, the app never surfaces an orphan, and it makes a mis-click recoverable.
+    if (type === "remove_document") {
+      if (!DOC_ROLES.includes(normRole(body.role))) {
+        return json({ success: false, error: "Not authorized to manage documents" }, 403);
+      }
+      const id = String(body.rowId || "");
+      if (!id) return json({ success: false, error: "Which document?" }, 400);
+
+      const { data: row, error: readErr } = await supabase.from("announcements")
+        .select("id, doc_only, doc_url").eq("id", id).single();
+      if (readErr || !row) return json({ success: false, error: readErr?.message || "No such document" }, 404);
+      if (!row.doc_url) return json({ success: true, id, unchanged: true });
+
+      if (row.doc_only) {
+        const { error } = await supabase.from("announcements").delete().eq("id", id);
+        if (error) return json({ success: false, error: error.message }, 500);
+      } else {
+        const { error } = await supabase.from("announcements")
+          .update({ doc_url: null, doc_name: null }).eq("id", id);
+        if (error) return json({ success: false, error: error.message }, 500);
+      }
+
+      await broadcastChange("announcements", null);
+      return json({ success: true, id, deletedPost: !!row.doc_only });
+    }
+
     // Publish new announcement (type === 'publish' or legacy posts without type)
     if (type === "publish" || (body.text && body.author)) {
       const today = new Date().toISOString().split('T')[0];
@@ -247,6 +391,7 @@ Deno.serve(async (req: Request) => {
         }
       }
 
+      await broadcastChange("announcements", null);
       return new Response(JSON.stringify({ success: true, id: inserted?.id }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
