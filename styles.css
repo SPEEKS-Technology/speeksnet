@@ -3583,7 +3583,11 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
    soft shadow, no heavy coloured accent bar. Multi-line tooltips (title + desc)
    still work — they set their own inner text colours on this white ground. */
 .speeks-tooltip {
-    position: absolute;
+    /* Fixed, not absolute: while a modal is open the <body> is position:fixed with
+       a negative top (scroll lock), which shifts an absolutely-positioned child by
+       the locked scroll amount — that was the offset on every in-modal tooltip.
+       Fixed + viewport (client) coordinates in the JS positioners sidesteps it. */
+    position: fixed;
     background: #ffffff;
     color: var(--slate-charcoal, #1c1f23);
     padding: 10px 14px;
@@ -7427,8 +7431,12 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 }
 .cb-completed-toggle input { width: 15px; height: 15px; accent-color: var(--cb-sage); cursor: pointer; }
 
-/* --- Scroll body --- */
-.cb-scroll { padding: 16px 18px; overflow-y: auto; }
+/* --- Scroll body ---
+   No top padding: a sticky header (top:0) pins to the scroll container's padding
+   edge, so any top padding becomes a band where scrolled rows peek ABOVE the header.
+   Top spacing is added on the inner content instead (.cb-table / .cb-scroll > :first-child). */
+.cb-scroll { padding: 0 18px 16px; overflow-y: auto; }
+.cb-scroll > :first-child:not(.cb-table) { margin-top: 16px; }
 .cb-scroll::-webkit-scrollbar { width: 8px; }
 .cb-scroll::-webkit-scrollbar-track { background: transparent; }
 .cb-scroll::-webkit-scrollbar-thumb { background: #d5dbe3; border-radius: 10px; }
@@ -9210,6 +9218,7 @@ body.sam-active .hotbar-btn:hover {
 #kpiMonthlyAlertBubble,
 #preferredOwnerAlertBubble,
 #preferredMineAlertBubble,
+#b2bAlertBubble,
 #listingGoalAlertBubble,
 #listingGoalsDailyAlertBubble,
 #expenseFileAlertBubble {
@@ -10127,7 +10136,7 @@ body.sam-active .hotbar-btn:hover {
 .b2b-panel, .b2b-panel .cb-scroll { min-width: 0; max-width: 100%; }
 .b2b-queue, .b2b-items, .b2b-list, .b2b-flight { min-width: 0; }
 .b2b-q-main, .b2b-lmain, .b2b-f { min-width: 0; }
-.b2b-panel .cb-table, .b2b-vtable, .b2b-ctable { table-layout: auto; }
+.b2b-panel .cb-table, .b2b-vtable, .b2b-ctable, .b2b-ftable { table-layout: auto; }
 .b2b-ov { overflow-x: auto; }
 
 .b2b-panel .c { text-align: center; }
@@ -10198,6 +10207,10 @@ body.sam-active .hotbar-btn:hover {
     font-size: 10.5px; font-weight: 800; letter-spacing: .03em; white-space: nowrap;
 }
 .b2b-store-corp { background: #1a1c1e; color: #fff; }
+.b2b-dot {
+    width: 7px; height: 7px; border-radius: 999px; flex: 0 0 auto;
+    display: inline-block; margin-right: 1px;
+}
 .b2b-store-none {
     background: transparent; border: 1px dashed var(--b2b-line);
     color: var(--b2b-faint); font-weight: 700;
@@ -10333,7 +10346,8 @@ body.sam-active .hotbar-btn:hover {
 .b2b-f-val { font-size: 12.5px; font-weight: 800; color: var(--b2b-muted); flex: 0 0 auto; }
 
 /* --- view: Pipeline ------------------------------------------------------- */
-.b2b-filter { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+.b2b-filter { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 14px; }
+.b2b-filter-sel { height: var(--b2b-h-md); min-width: 170px; border-radius: var(--b2b-r-md); }
 .b2b-filter-l {
     font-size: 10px; font-weight: 800; letter-spacing: .09em;
     text-transform: uppercase; color: var(--b2b-faint); margin-right: 3px;
@@ -10347,6 +10361,26 @@ body.sam-active .hotbar-btn:hover {
 .b2b-filter-b.on {
     background: var(--b2b-accent-tint); border-color: var(--sage-professional); color: var(--sage-deep);
 }
+.b2b-filter-search {
+    font: inherit; font-size: 12.5px; font-weight: 600; height: var(--b2b-h-md);
+    flex: 1 1 200px; max-width: 280px; padding: 0 12px;
+    border: 1px solid var(--b2b-line); border-radius: var(--b2b-r-md);
+    background: #fff; color: #1a1c1e; transition: border-color .14s ease, box-shadow .14s ease;
+}
+.b2b-filter-search::placeholder { color: var(--b2b-faint); font-weight: 600; }
+.b2b-filter-search:focus {
+    outline: none; border-color: var(--sage-professional);
+    box-shadow: 0 0 0 3px var(--b2b-accent-tint);
+}
+
+/* An inline "go here instead" inside a note line -- reads as prose, behaves as
+   a button, so it never inherits the visited-link colour a real <a> would. */
+.b2b-linkbtn {
+    font: inherit; font-size: inherit; font-weight: 800; cursor: pointer;
+    padding: 0; border: 0; background: none; color: var(--sage-deep);
+    text-decoration: underline; text-underline-offset: 2px;
+}
+.b2b-linkbtn:hover { color: #0f6b3c; }
 
 /* The wrapper owns the scrolling and is hard-capped to its parent; the board
    itself is allowed to be as wide as its columns need. Without the cap, seven
@@ -10494,6 +10528,11 @@ body.sam-active .hotbar-btn:hover {
 }
 .b2b-note.ok  { background: var(--b2b-accent-tint); border-color: #cfeada; }
 .b2b-note.bad { background: #fcecec; border-color: #f7dada; }
+.b2b-note.warn { background: #fffbf3; border-color: #f0dcb8; }
+.b2b-note.warn .b2b-note-k { color: #a9741a; }
+/* The two notes that must be read before anything else on their screen: why a
+   quote came back, and that one is still sitting unsent. */
+.b2b-sentback, .b2b-approve { align-items: flex-start; box-shadow: 0 0 0 3px rgba(217,159,67,.10); }
 .b2b-note-k {
     flex: 0 0 auto; font-size: 9.5px; font-weight: 800; letter-spacing: .09em;
     text-transform: uppercase; color: var(--b2b-faint);
@@ -10529,6 +10568,7 @@ body.sam-active .hotbar-btn:hover {
 .b2b-pick:hover { border-color: var(--sage-professional); background: #f9fdfa; }
 .b2b-pick.on { border-color: var(--sage-professional); background: var(--b2b-accent-tint); }
 .b2b-pick-ac {
+    min-width: 52px; text-align: center;
     grid-area: acr; justify-self: start; align-self: center;
     font-family: 'Consolas', 'SFMono-Regular', monospace; font-size: 11px;
     font-weight: 800; color: var(--sage-deep); padding: 4px 8px;
@@ -10566,7 +10606,7 @@ body.sam-active .hotbar-btn:hover {
     border-color: var(--sage-professional); background: var(--b2b-accent-tint);
     box-shadow: 0 0 0 3px rgba(31,157,87,.12);
 }
-.b2b-loc-dot { font-size: 17px; line-height: 1; }
+.b2b-loc-dot { width: 12px; height: 12px; border-radius: 999px; display: block; }
 .b2b-loc-c { font-size: 12px; font-weight: 800; color: #1a1c1e; letter-spacing: .03em; }
 
 /* --- pricing / quote line items ------------------------------------------- */
@@ -10584,20 +10624,206 @@ body.sam-active .hotbar-btn:hover {
     font-variant-numeric: tabular-nums;
 }
 .b2b-tot-v.accent { color: var(--sage-deep); }
+/* A zero wipe total is dimmed rather than hidden: the slot staying put stops the
+   row from reflowing the moment someone ticks the first Wipe box. */
+.b2b-tot.muted .b2b-tot-v { color: var(--b2b-faint); font-weight: 700; }
 
-.b2b-items { display: flex; flex-direction: column; gap: 10px; }
-.b2b-pcard {
-    background: #fff; border: 1px solid var(--b2b-line); border-radius: 12px;
-    padding: 12px 14px; box-shadow: 0 1px 2px rgba(16,24,40,.04);
+/* Priced lines read as one table, not a stack of cards. A pallet can run to
+   thirty lines, and at that length per-row borders, radii, shadows and gaps are
+   just noise between you and the numbers -- so the container owns the frame and
+   the rows share hairlines, the way a spreadsheet does.
+   The column template lives on --b2b-pcols so the header and every row are
+   guaranteed to agree; two separate grid-template-columns declarations would
+   drift the first time one changed. */
+.b2b-items {
+    /* The actions column is a fixed width, not auto: the header's copy of it is
+       empty, so auto would collapse there and widen every fr column above the
+       rows -- headers sitting over the wrong columns. */
+    /* The line column holds a 4-digit number plus up to two state chips
+       (Recycle + Wipe), which is what sets its width. */
+    --b2b-pcols: 118px 88px 1.1fr 1.4fr 100px 50px 78px 78px 82px 96px;
+    --b2b-prow-pad: 10px;
+    background: #fff; border: 1px solid var(--b2b-line);
+    border-radius: 12px;
+    /* Deliberately NOT overflow:hidden. That would make this a scroll container,
+       and the sticky header would then stick to a box that never scrolls -- i.e.
+       never stick at all. The corners are rounded on the header and last row
+       instead. */
 }
-.b2b-pcard.rec { background: #fbfcfd; border-style: dashed; }
-.b2b-pcard-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-.b2b-pcard-sku { flex: 1; font-size: 10.5px; font-weight: 700; color: var(--b2b-faint); }
+.b2b-prow {
+    display: grid; grid-template-columns: var(--b2b-pcols);
+    gap: 6px; align-items: center;
+}
+/* Sticky against .manage-content, which is the modal's scroll container --
+   thirty rows in, you still need to know which column you are typing into. */
+.b2b-phead {
+    position: sticky; top: 0; z-index: 3;
+    padding: 7px var(--b2b-prow-pad);
+    background: var(--b2b-surface); border-bottom: 1px solid var(--b2b-line);
+    border-radius: 11px 11px 0 0;
+    font-size: 9.5px; font-weight: 800; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--b2b-faint);
+}
+.b2b-phead .r { text-align: right; }
+
+.b2b-pline {
+    padding: 3px var(--b2b-prow-pad);
+    border-bottom: 1px solid var(--b2b-line-2);
+    transition: background .12s ease;
+}
+.b2b-pline:last-child { border-bottom: 0; border-radius: 0 0 11px 11px; }
+/* The container already draws the frame, so the empty state must not draw a
+   second one inside it. */
+.b2b-items > .b2b-empty { border: 0; box-shadow: none; background: transparent; }
+/* A wide row is a long way for the eye to travel; the row under the cursor
+   holding still is what stops you reading a price off the wrong line. */
+.b2b-pline:hover { background: #fbfcfd; }
+/* Row state as an inset bar rather than a border, so it costs no layout and
+   cannot shift the columns out of line with the header. */
+/* Prefixed, not `.rec`: a bare global `.rec` exists (the all-time-records card)
+   and was leaking its border, radius and overflow into every recycle row --
+   invisible while these rows were cards themselves, obvious once they weren't. */
+.b2b-pline.b2b-scrap { box-shadow: inset 3px 0 0 #b8ddd6; }
+.b2b-pline.needs-reason { background: #fffdf7; box-shadow: inset 3px 0 0 #e0b970; }
+.b2b-pline.needs-reason:hover { background: #fffbf1; }
+
+.b2b-pcell { display: flex; align-items: center; min-width: 0; }
+.b2b-pcell input, .b2b-pcell select {
+    width: 100%; font: inherit; font-size: 12.5px;
+    height: var(--b2b-h-sm); padding: 0 8px;
+    border-radius: 6px; border: 1px solid transparent;
+    background: transparent; color: #1a1c1e;
+    transition: border-color .12s ease, background .12s ease, box-shadow .12s ease;
+}
+/* Fields are drawn only on approach. Boxing all ten of them on every row is
+   what made the old sheet feel heavy; the row hairlines already say where the
+   cells are, and hover plus focus say which one you are in. */
+.b2b-pcell input:hover, .b2b-pcell select:hover { border-color: var(--b2b-line); background: #fff; }
+.b2b-pcell input:focus, .b2b-pcell select:focus {
+    outline: none; background: #fff; border-color: var(--sage-professional);
+    box-shadow: 0 0 0 3px rgba(31,157,87,.12);
+}
+.b2b-pcell input::placeholder { color: #c3ccd4; }
+.b2b-pcell.n input { text-align: right; font-variant-numeric: tabular-nums; }
+.b2b-pcell select { padding-left: 5px; }
+
+.b2b-pc-sku {
+    gap: 5px; font-size: 10.5px; font-weight: 700; color: var(--b2b-faint);
+    white-space: nowrap; overflow: hidden;
+}
+.b2b-pc-sku .b2b-doc-rec { margin-left: 0; padding: 1px 5px; font-size: 8.5px; }
+.b2b-pc-tot { justify-content: flex-end; }
+.b2b-pc-acts { gap: 3px; justify-content: flex-end; }
+
+/* Row buttons match the field height and lose their chrome until hovered, for
+   the same reason the inputs do: thirty rows of outlined icons is a wall. */
+.b2b-notes-btn {
+    position: relative; display: grid; place-items: center; cursor: pointer;
+    width: var(--b2b-h-sm); height: var(--b2b-h-sm); padding: 0;
+    border-radius: 6px; border: 1px solid transparent; background: transparent;
+    transition: all .12s ease;
+}
+.b2b-notes-btn svg { width: 14px; height: 14px; stroke: var(--b2b-muted); }
+.b2b-notes-btn:hover { border-color: var(--b2b-line); background: #fff; }
+.b2b-notes-btn:hover svg { stroke: var(--sage-deep); }
+.b2b-notes-btn.on { background: var(--b2b-accent-tint); border-color: #cfeada; }
+.b2b-notes-btn.on svg { stroke: var(--sage-deep); }
+.b2b-notes-btn.req { background: #fdf3e1; border-color: #e0b970; }
+.b2b-notes-btn.req svg { stroke: #b7791f; }
+.b2b-notes-dot {
+    position: absolute; top: 3px; right: 3px; width: 5px; height: 5px;
+    border-radius: 999px; background: var(--sage-professional);
+}
+
+/* The open drawer belongs to the row above it, so it is tinted and carries the
+   same inset bar -- otherwise, mid-table, it reads as a floating panel. */
+.b2b-pdrawer {
+    margin: 0 calc(var(--b2b-prow-pad) * -1) 0;
+    padding: 11px calc(var(--b2b-prow-pad) + 3px) 13px;
+    background: var(--b2b-surface); border-top: 1px solid var(--b2b-line-2);
+    box-shadow: inset 3px 0 0 var(--sage-professional);
+    display: flex; flex-direction: column; gap: 10px;
+}
+.b2b-pline.needs-reason .b2b-pdrawer { box-shadow: inset 3px 0 0 #e0b970; background: #fffdf7; }
+.b2b-pdrawer input, .b2b-pdrawer select {
+    background: #fff; border: 1px solid var(--b2b-line);
+}
+.b2b-pnote {
+    display: grid; gap: 9px; grid-template-columns: 1fr 1.6fr;
+}
+
+/* Specs, only for the types that have them. Auto-fit rather than a fixed count
+   so a desktop's four fields fill the row a laptop's five would occupy. */
+.b2b-specs { display: grid; gap: 9px; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); }
+.b2b-spec input { font-size: 12px; }
+
+/* One serial per unit, comma separated, with the no-serial escape hatch beside
+   it -- 50 cables should be one click, not fifty refusals. */
+.b2b-serialrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.b2b-serialrow input { flex: 1 1 260px; min-width: 0; }
+.b2b-serialrow .b2b-mini { flex: 0 0 auto; height: var(--b2b-h-md); }
+.b2b-serialf .b2b-serial-count {
+    padding: 1px 7px; border-radius: 999px; background: var(--b2b-accent-tint);
+    color: var(--sage-deep); font-size: 9.5px; letter-spacing: .03em;
+    font-variant-numeric: tabular-nums;
+}
+.b2b-serialf .b2b-serial-count.miss { background: #fdf3e1; color: #b7791f; }
+
+/* Everything blocking this line from being submitted, on the line itself, so
+   you fix it where you are instead of hunting after the submit is refused. The
+   row is already tinted amber, so this needs no box of its own. */
+.b2b-ready {
+    padding: 0 0 4px 1px;
+    font-size: 10.5px; font-weight: 700; color: #b7791f;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Chosen condition tags, plus a dropdown to add the next one -- nine buttons
+   per line was most of the bulk, and only ever one or two get used. */
+.b2b-chiprow { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-bottom: 5px; }
+.b2b-chip-tag {
+    display: inline-flex; align-items: center; gap: 3px; padding: 2px 3px 2px 8px;
+    border-radius: 999px; background: var(--b2b-accent-tint);
+    border: 1px solid #cfeada; color: var(--sage-deep);
+    font-size: 10.5px; font-weight: 750;
+}
+.b2b-chip-tag button {
+    display: grid; place-items: center; width: 15px; height: 15px; padding: 0;
+    border: 0; border-radius: 999px; background: none; cursor: pointer;
+    font: inherit; font-size: 12px; line-height: 1; color: var(--sage-deep);
+}
+.b2b-chip-tag button:hover { background: #fde8e6; color: #d1443b; }
+/* Needs to out-specify `.b2b-f select` (0,1,1), which sets width:100% and would
+   stretch this to the full row -- making a compact picker look like another text
+   field. Hence the element qualifier and the parent, not a bare class. */
+.b2b-chiprow select.b2b-tagsel {
+    font: inherit; font-size: 10.5px; font-weight: 700; cursor: pointer;
+    width: auto; flex: 0 0 auto; height: 22px; padding: 0 4px; color: var(--b2b-muted);
+    border-radius: 999px; border: 1px dashed var(--b2b-line); background: #fff;
+}
+.b2b-chiprow select.b2b-tagsel:hover { border-color: var(--sage-professional); color: var(--sage-deep); }
+
 .b2b-rec-toggle {
     display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
     font-size: 11.5px; font-weight: 700; color: var(--b2b-muted);
 }
 .b2b-rec-toggle input { width: 15px; height: 15px; accent-color: var(--sage-professional); }
+
+/* The two pricing decisions, in the drawer rather than the row: they are set
+   once per line, and five controls in the action cell overflowed it. */
+.b2b-handling { display: grid; gap: 9px; grid-template-columns: 1fr 1.4fr; }
+.b2b-handling select.b2b-dispsel {
+    width: 100%; height: var(--b2b-h-md); padding: 0 9px; font: inherit; font-size: 12.5px;
+    border-radius: var(--b2b-r-sm); border: 1px solid var(--b2b-line);
+    background: #fff; color: #1a1c1e; cursor: pointer;
+}
+/* Wrapped one level down so `.b2b-f > label` (uppercase micro-caption) can't
+   claim the toggle, and out-specified so `.b2b-f input { width:100% }` can't
+   stretch the checkbox across the row -- which is exactly what both did. */
+.b2b-wipewrap { display: flex; align-items: center; height: var(--b2b-h-md); }
+.b2b-handling .b2b-wipetog { font-size: 12.5px; font-weight: 700; color: #1a1c1e; text-transform: none; letter-spacing: 0; }
+.b2b-handling .b2b-wipetog input { width: 16px; height: 16px; flex: 0 0 auto; }
+.b2b-hint.sm { margin-top: 3px; font-size: 10.5px; line-height: 1.4; }
 .b2b-x {
     display: grid; place-items: center; width: 26px; height: 26px; cursor: pointer;
     border-radius: 7px; border: 1px solid var(--b2b-line); background: #fff;
@@ -10609,14 +10835,6 @@ body.sam-active .hotbar-btn:hover {
 .b2b-x:hover { background: #fcecec; border-color: #f7dada; }
 .b2b-x:hover svg { stroke: #d1443b; }
 
-.b2b-pgrid {
-    display: grid; gap: 9px; align-items: end;
-    grid-template-columns: 1.3fr 1.6fr 1fr 64px 92px 92px 92px;
-}
-.b2b-pnotes {
-    display: grid; gap: 9px; grid-template-columns: 1fr 1.6fr;
-    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--b2b-line-2);
-}
 .b2b-f { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .b2b-f > label {
     font-size: 9.5px; font-weight: 800; letter-spacing: .08em;
@@ -10656,20 +10874,157 @@ body.sam-active .hotbar-btn:hover {
     padding: 1px 6px; border-radius: 999px; background: var(--b2b-accent-tint);
     color: var(--sage-deep); font-size: 8.5px; letter-spacing: .04em;
 }
-.b2b-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; }
-.b2b-tag {
-    font: inherit; font-size: 10.5px; font-weight: 700; cursor: pointer;
-    padding: 3px 9px; border-radius: 999px; border: 1px solid var(--b2b-line);
-    background: #fff; color: var(--b2b-muted); transition: all .14s ease;
-}
-.b2b-tag:hover { border-color: var(--sage-professional); color: var(--sage-deep); }
-.b2b-tag.on {
-    background: var(--b2b-accent-tint); border-color: var(--sage-professional); color: var(--sage-deep);
-}
 .b2b-tag-free {
     width: 100%; font: inherit; font-size: 12px; padding: 6px 9px;
     border-radius: 8px; border: 1px solid var(--b2b-line);
 }
+
+/* --- pricing spreadsheet -------------------------------------------------- */
+/* Pricing runs near-full-screen: a pallet can be thirty lines, so the sheet
+   wants the width for its columns and the height to show as many rows as it can.
+   The generic wide modal stays 1080; this one goes bigger and taller. */
+.b2b-deal-modal.b2b-modal-full {
+    width: min(1480px, 97vw); max-width: 97vw;
+    height: 92vh; max-height: 92vh;
+}
+/* Never clip the acts column on a narrow laptop -- scroll the body instead. */
+.b2b-deal-modal.b2b-modal-full > .manage-content { overflow-x: auto; }
+
+/* Two more columns than the card grid: disposition and the wipe flag are their
+   own cells here, and the notes fold away behind the ⋯ rather than into a drawer,
+   so a line is always exactly one row tall. */
+.b2b-items.b2b-ss {
+    /* Fifteen columns: the three required specs (CPU/RAM/Storage) sit inline
+       between Model and Condition so a keyboard pricer tabs straight across them.
+       Disposition is wide enough to spell out "No Residual Value". Wider than the
+       modal on a small laptop -- the body scrolls x (see .b2b-modal-full). */
+    --b2b-pcols: 64px 80px minmax(74px, 1fr) minmax(96px, 1.2fr) 94px 82px 94px 86px 44px 68px 68px 138px 42px 78px 76px;
+}
+/* True grid: drop the inter-cell gap and draw a hairline down every column
+   boundary. The row's own bottom border is the horizontal line, so together they
+   read as a spreadsheet rather than a list of chips. */
+.b2b-items.b2b-ss .b2b-prow { gap: 0; }
+.b2b-items.b2b-ss .b2b-pcell,
+.b2b-items.b2b-ss .b2b-phead > span {
+    border-right: 1px solid var(--b2b-line-2);
+    padding-left: 7px; padding-right: 5px; min-width: 0;
+}
+.b2b-items.b2b-ss .b2b-phead > span { display: flex; align-items: center; }
+.b2b-items.b2b-ss .b2b-phead > span.r { justify-content: flex-end; }
+.b2b-items.b2b-ss .b2b-phead > span.c { justify-content: center; }
+/* The cell already pads, so the field doesn't need its own wide inset -- keeps
+   narrow columns (specs, disposition) usable. */
+.b2b-items.b2b-ss .b2b-pcell input,
+.b2b-items.b2b-ss .b2b-pcell select { padding-left: 5px; padding-right: 4px; }
+/* The line's own edges close the grid -- no dangling border on the last column. */
+.b2b-items.b2b-ss .b2b-prow > *:last-child { border-right: 0; }
+.b2b-phead .c { text-align: center; }
+
+/* Inline spec cell: a clean input by default; the ∅ one-tap "none" fades in on
+   hover/focus, overlaid at the right edge so it never widens the cell or clutters
+   the grid at rest. */
+.b2b-pc-spec { position: relative; }
+.b2b-pc-spec input { width: 100%; }
+.b2b-spec-none {
+    position: absolute; right: 3px; top: 3px; bottom: 3px; width: 20px; padding: 0;
+    display: grid; place-items: center; border: 1px solid var(--b2b-line);
+    background: #fff; border-radius: 5px; color: var(--b2b-faint);
+    font-size: 13px; line-height: 1; cursor: pointer;
+    opacity: 0; pointer-events: none; transition: opacity .1s ease;
+}
+.b2b-pc-spec:hover .b2b-spec-none,
+.b2b-pc-spec:focus-within .b2b-spec-none { opacity: 1; pointer-events: auto; }
+.b2b-spec-none:hover { border-color: var(--sage-professional); color: var(--sage-deep); }
+/* Zebra banding earns its keep at spreadsheet density -- the eye tracks a row
+   across fifteen columns by its shade. State tints (recycle / needs-reason) and
+   the hover row still win, so banding never hides them. */
+.b2b-items.b2b-ss .b2b-pline:nth-child(even):not(:hover):not(.needs-reason):not(.b2b-scrap) {
+    background: #f9fbfc;
+}
+/* A blocked line flags itself in the Line cell too, next to the number, so it
+   reads as "not ready" without opening it. */
+.b2b-ss-flag {
+    flex: 0 0 auto; width: 6px; height: 6px; border-radius: 999px;
+    background: #e0b970; box-shadow: 0 0 0 2px #fcefd4;
+}
+.b2b-pc-disp { min-width: 0; }
+.b2b-pc-wipe { justify-content: center; }
+.b2b-ss-wipe {
+    display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.b2b-ss-wipe input {
+    width: 16px; height: 16px; margin: 0; cursor: pointer;
+    accent-color: var(--sage-professional);
+}
+
+/* Per-line detail sheet: specs, serials and notes open here over the grid, one
+   line at a time, instead of an inline drawer that would make the row tall. Its
+   own layer above the deal modal (z 300), with its own scrim. */
+#b2bItemSheet {
+    position: fixed; inset: 0; z-index: 360;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+    background: rgba(16, 24, 34, .42);
+}
+.b2b-isheet-panel {
+    display: flex; flex-direction: column;
+    width: min(600px, 100%); max-height: 88vh; overflow: hidden;
+    background: #fff; border: 1px solid var(--b2b-line); border-radius: 18px;
+    box-shadow: 0 30px 70px rgba(0, 0, 0, .28);
+}
+.b2b-isheet-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+    padding: 16px 18px 14px; border-bottom: 1px solid var(--b2b-line-2);
+}
+.b2b-isheet-id { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.b2b-isheet-sku {
+    flex: 0 0 auto; padding: 5px 9px; border-radius: 8px;
+    background: var(--b2b-accent-tint); color: var(--sage-deep);
+    font-size: 11.5px; font-weight: 800;
+}
+.b2b-isheet-name { font-size: 15px; font-weight: 800; color: #1a1c1e; letter-spacing: -.01em; }
+.b2b-isheet-meta { font-size: 11.5px; font-weight: 650; color: var(--b2b-muted); margin-top: 1px; }
+.b2b-isheet-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+.b2b-isheet-actions .b2b-linelabel { width: 32px; height: 32px; }
+.b2b-isheet-head .modal-close-btn {
+    flex: 0 0 auto; display: grid; place-items: center; width: 32px; height: 32px;
+    border: 1px solid var(--b2b-line); background: #fff; border-radius: 9px;
+    color: var(--b2b-muted); cursor: pointer;
+}
+.b2b-isheet-head .modal-close-btn svg { width: 16px; height: 16px; }
+.b2b-isheet-head .modal-close-btn:hover { background: #fcecec; color: #d1443b; border-color: #f7dada; }
+.b2b-isheet-block { margin: 12px 18px 0; }
+.b2b-isheet-body {
+    padding: 16px 18px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 16px;
+}
+.b2b-isheet-sec { display: flex; flex-direction: column; gap: 8px; }
+.b2b-isheet-sec > h5 {
+    margin: 0; font-size: 9.5px; font-weight: 800; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--b2b-faint);
+    display: flex; align-items: center; gap: 7px;
+}
+.b2b-isheet-foot {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 13px 18px; border-top: 1px solid var(--b2b-line-2); background: var(--b2b-surface);
+}
+.b2b-isheet-hint { font-size: 11.5px; color: var(--b2b-faint); }
+/* Spec input + its one-tap "No CPU/RAM/Storage" button share a row; the field
+   takes the room and the button stays compact. Wider spec cells so both fit. */
+.b2b-isheet-sec .b2b-specs { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.b2b-spec-row { display: flex; align-items: center; gap: 6px; }
+.b2b-spec-row input { flex: 1 1 auto; min-width: 0; }
+.b2b-spec-row .b2b-mini { flex: 0 0 auto; height: var(--b2b-h-md); white-space: nowrap; }
+/* Client notes is now a free-text area, no chips. */
+.b2b-isheet-sec textarea.b2b-tag-free { resize: vertical; min-height: 46px; line-height: 1.5; }
+.b2b-spec-miss { border-color: #e0b970 !important; background: #fffdf7; }
+/* The serial tally sits in the section heading here, not inside .b2b-serialf, so
+   give it the same pill treatment on its own. */
+.b2b-isheet-sec .b2b-serial-count {
+    padding: 1px 7px; border-radius: 999px; background: var(--b2b-accent-tint);
+    color: var(--sage-deep); font-size: 9.5px; letter-spacing: .03em;
+    font-variant-numeric: tabular-nums; text-transform: none;
+}
+.b2b-isheet-sec .b2b-serial-count.miss { background: #fdf3e1; color: #b7791f; }
 
 /* --- quote ---------------------------------------------------------------- */
 .b2b-sendbar {
@@ -10677,6 +11032,9 @@ body.sam-active .hotbar-btn:hover {
     padding: 12px 14px; margin-bottom: 14px; border-radius: 12px;
     background: var(--b2b-surface); border: 1px solid var(--b2b-line-2);
 }
+/* An unsent quote is waiting on the approver -- warm the send bar to match the
+   "Awaiting approval" banner above it. */
+.b2b-sendbar.urgent { background: #fffbf3; border-color: #f0dcb8; }
 .b2b-sendbar-s { font-size: 11px; font-weight: 750; color: var(--b2b-muted); }
 .b2b-sendbar-i { flex: 1; min-width: 190px; }
 .b2b-sendbar-hint { flex: 1 0 100%; font-size: 11px; color: var(--b2b-faint); line-height: 1.5; }
@@ -10718,6 +11076,9 @@ body.sam-active .hotbar-btn:hover {
     cursor: pointer; font-size: 11px; font-weight: 800; letter-spacing: .07em;
     text-transform: uppercase; color: var(--b2b-faint); margin-bottom: 12px;
 }
+/* The editing grid runs full-screen wide, but the quote itself is a document --
+   cap and centre it so the preview reads like the page the client receives. */
+.b2b-preview .b2b-doc { max-width: 860px; margin: 0 auto; }
 
 .b2b-doc {
     background: #fff; border: 1px solid var(--b2b-line);
@@ -10793,7 +11154,25 @@ body.sam-active .hotbar-btn:hover {
     background: #e3f6f3; color: #0d8a7d; font-size: 9.5px;
     font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
 }
-.b2b-doc-empty { padding: 26px; text-align: center; font-size: 12.5px; color: var(--b2b-faint); }
+/* Three outcomes, three colours. Teal is scrap, blue is "free to you but we may
+   resell it", violet is the certified wipe -- distinct at a glance, because the
+   client is being told three different things about their kit. */
+.b2b-doc-rec.nrv  { background: #eaf1fb; color: #3a6ea8; }
+.b2b-doc-rec.wipe { background: #f1ebfd; color: #6b46c1; }
+
+/* Subtotal and the wipe deduction, above the headline figure. */
+.b2b-doc-sub2 {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 6px 20px; font-size: 12.5px; color: var(--b2b-muted);
+    font-variant-numeric: tabular-nums;
+}
+.b2b-doc-sub2 b { font-weight: 800; color: #1a1c1e; }
+.b2b-doc-sub2.minus b { color: #6b46c1; }
+.b2b-doc-empty {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 84px; padding: 26px; text-align: center;
+    font-size: 12.5px; color: var(--b2b-faint);
+}
 .b2b-doc-foot {
     margin-top: 14px; padding: 14px 20px; background: var(--b2b-surface);
     border-top: 1px solid var(--b2b-line-2);
@@ -10815,6 +11194,22 @@ body.sam-active .hotbar-btn:hover {
 .b2b-scan-msg { font-size: 12px; font-weight: 750; min-width: 0; }
 .b2b-scan-msg.ok  { color: var(--sage-deep); }
 .b2b-scan-msg.bad { color: #d1443b; }
+
+/* Waiting on the Shopify barcode. Amber, not green: the unit is mid-handshake
+   and not yet listed, and the bar should not look like a finished state. */
+.b2b-scanbar.pending { background: #fffbf3; border-color: #f0dcb8; }
+.b2b-scanbar.pending .b2b-scan-ico svg { stroke: #a9741a; }
+.b2b-scan-ask { display: flex; flex-direction: column; gap: 1px; flex: 0 1 auto; min-width: 0; }
+.b2b-scan-ask-t { font-size: 12.5px; font-weight: 800; color: #7c5510; }
+.b2b-scan-ask-s {
+    font-size: 11px; font-weight: 650; color: #9a7431;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.b2b-scanbar.pending input { flex: 1 1 150px; min-width: 130px; max-width: 200px; }
+.b2b-scan-num {
+    font-family: 'Consolas', 'SFMono-Regular', Menlo, monospace;
+    letter-spacing: .16em; font-weight: 700;
+}
 
 .b2b-prog { margin-bottom: 14px; }
 .b2b-prog-h {
@@ -10847,6 +11242,36 @@ body.sam-active .hotbar-btn:hover {
 .b2b-lname { font-size: 13px; font-weight: 750; color: #1a1c1e; }
 .b2b-lcond { margin-left: 7px; font-size: 10.5px; font-weight: 700; color: var(--b2b-muted); }
 .b2b-lsku { font-size: 10.5px; color: var(--b2b-faint); margin-top: 2px; }
+
+/* The line currently mid-handshake, so it is obvious which row the scan bar is
+   asking about when the checklist is long. */
+.b2b-lrow.waiting { background: #fffbf3; border-color: #f0dcb8; box-shadow: 0 0 0 3px rgba(217,159,67,.14); }
+
+/* Shopify barcodes captured against this line. */
+/* Certified wipes, on the row that is blocked by them. The listing "+" reads
+   its own disabled reason from the same numbers. */
+.b2b-lwipe {
+    display: flex; align-items: center; gap: 7px; margin-top: 6px;
+    padding: 4px 9px; border-radius: 8px; width: fit-content;
+    background: #f6f2fd; border: 1px solid #e2d7f7;
+    font-size: 11px; font-weight: 700; color: #6b46c1;
+}
+.b2b-lwipe svg { width: 13px; height: 13px; flex: 0 0 auto; }
+.b2b-lwipe.done { background: var(--b2b-accent-tint); border-color: #cfeada; color: var(--sage-deep); }
+.b2b-lwipe .b2b-mini { height: 22px; padding: 0 8px; font-size: 10.5px; }
+
+.b2b-lcodes { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.b2b-lcode {
+    display: inline-flex; align-items: center; gap: 4px; padding: 2px 3px 2px 7px;
+    border-radius: 7px; background: #eef4f9; border: 1px solid #dbe6ef;
+    font-size: 10.5px; font-weight: 700; color: #40546a;
+}
+.b2b-lcode-x {
+    display: grid; place-items: center; width: 15px; height: 15px; padding: 0;
+    border: 0; border-radius: 5px; background: none; cursor: pointer;
+    font: inherit; font-size: 12px; line-height: 1; color: #8b9cae;
+}
+.b2b-lcode-x:hover { background: #fde8e6; color: #d1443b; }
 .b2b-lcount {
     display: flex; align-items: baseline; gap: 5px; flex: 0 0 auto;
     font-size: 11.5px; color: var(--b2b-muted); font-variant-numeric: tabular-nums;
@@ -10900,7 +11325,14 @@ body.sam-active .hotbar-btn:hover {
 }
 
 /* --- tables --------------------------------------------------------------- */
-.b2b-vtable, .b2b-ctable { width: 100%; font-variant-numeric: tabular-nums; }
+.b2b-vtable, .b2b-ctable, .b2b-ftable { width: 100%; font-variant-numeric: tabular-nums; }
+/* The read-only view table lives in the deal modal, not .b2b-panel, so the bare
+   cell-alignment classes (.c/.r/.b/.accent) need a modal-scoped home too --
+   otherwise a completed deal's money reads left-aligned and unweighted. */
+.b2b-vtable .c { text-align: center; }
+.b2b-vtable .r { text-align: right; }
+.b2b-vtable .b { font-weight: 800; }
+.b2b-vtable .accent { color: var(--b2b-accent-deep); }
 .b2b-acr {
     display: inline-block; padding: 3px 8px; border-radius: 6px;
     background: var(--b2b-accent-tint); color: var(--sage-deep);
@@ -10908,8 +11340,92 @@ body.sam-active .hotbar-btn:hover {
 }
 .b2b-rowacts { white-space: nowrap; }
 .b2b-rowacts .b2b-mini + .b2b-mini { margin-left: 5px; }
+
+/* --- clients: expandable row ---------------------------------------------- */
+.b2b-th-exp { width: 34px; }
+.b2b-cexp {
+    display: grid; place-items: center; width: 24px; height: 24px; padding: 0;
+    border: 0; border-radius: 7px; background: none; cursor: pointer;
+    color: var(--b2b-faint); transition: color .14s ease, background .14s ease, transform .16s ease;
+}
+.b2b-cexp svg { width: 15px; height: 15px; }
+.b2b-clickrow:hover .b2b-cexp { color: var(--sage-deep); background: var(--b2b-accent-tint); }
+.b2b-clickrow.open .b2b-cexp { color: var(--sage-deep); transform: rotate(90deg); }
+.b2b-ctable tr.open > td { background: var(--b2b-accent-tint); }
+
+.b2b-cdrop > td { padding: 0 !important; background: var(--b2b-surface); }
+.b2b-cdrop > td > * { margin-left: 16px; margin-right: 16px; }
+.b2b-cdrop > td > *:first-child { margin-top: 16px; }
+.b2b-cdrop > td > *:last-child  { margin-bottom: 18px; }
+
+.b2b-cstats {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 9px;
+}
+.b2b-cstat {
+    display: flex; flex-direction: column; gap: 2px; padding: 11px 13px;
+    background: #fff; border: 1px solid var(--b2b-line); border-radius: 11px;
+}
+.b2b-cstat-k {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--b2b-faint);
+}
+.b2b-cstat-v {
+    font-size: 18px; font-weight: 800; color: #1a1c1e;
+    letter-spacing: -.02em; font-variant-numeric: tabular-nums;
+}
+.b2b-cstat-s { font-size: 10.5px; font-weight: 650; color: var(--b2b-muted); }
+
+.b2b-cd-h {
+    margin-top: 16px !important; margin-bottom: 7px;
+    font-size: 10px; font-weight: 800; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--b2b-faint);
+}
+.b2b-cdeals { display: flex; flex-direction: column; gap: 6px; }
+.b2b-cd-row {
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer;
+    background: #fff; border: 1px solid var(--b2b-line); border-radius: 10px;
+    transition: border-color .14s ease, box-shadow .14s ease;
+}
+.b2b-cd-row:hover { border-color: var(--sage-professional); box-shadow: 0 2px 10px rgba(16,24,40,.06); }
+/* --- outreach (mini CRM) --------------------------------------------------- */
+.b2b-or-list { display: flex; flex-direction: column; gap: 6px; }
+.b2b-or-row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 13px; background: #fff;
+    border: 1px solid var(--b2b-line); border-radius: 11px;
+}
+.b2b-or-co { display: flex; align-items: center; gap: 7px; font-size: 13px; min-width: 0; }
+.b2b-or-acts { display: flex; align-items: center; gap: 5px; margin-left: auto; flex-wrap: wrap; }
+.b2b-or-noemail { font-size: 11px; font-style: italic; color: var(--b2b-faint); }
+
+.b2b-osched {
+    background: #fff; border: 1px solid var(--b2b-line); border-radius: 11px; padding: 13px;
+}
+.b2b-osw { font-size: 12.5px; font-weight: 750; color: #1a1c1e; }
+.b2b-ogrid {
+    display: grid; gap: 9px; margin-top: 12px;
+    grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr);
+}
+.b2b-ogrid[hidden] { display: none; }
+.b2b-ogrid-wide { grid-column: 1 / -1; }
+.b2b-osched-foot {
+    display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+    margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--b2b-line-2);
+}
+.b2b-osched-when { flex: 1 1 auto; font-size: 11.5px; font-weight: 650; color: var(--b2b-muted); }
+.b2b-osave { height: var(--b2b-h-md); padding: 0 14px; font-size: 12px; }
+
+.b2b-cd-ref   { font-size: 12px; font-weight: 800; flex: 0 0 auto; }
+.b2b-cd-units { font-size: 11.5px; font-weight: 650; color: var(--b2b-muted); margin-left: auto; }
+.b2b-cd-val   { font-size: 12.5px; font-weight: 800; color: #1a1c1e; min-width: 62px; text-align: right; }
+.b2b-cd-date  { font-size: 11.5px; font-weight: 650; color: var(--b2b-faint); min-width: 48px; text-align: right; }
 .b2b-cform { background: #fff; border: 1px solid var(--b2b-line); border-radius: 13px; padding: 16px; }
 .b2b-cform-acts { display: flex; justify-content: flex-end; gap: 9px; margin-top: 14px; }
+.b2b-cform-acts .kpi-cancel-btn {
+    display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+    height: var(--b2b-h-lg); padding: 0 18px; line-height: 1;
+    font-size: 13px; font-weight: 750; border-radius: var(--b2b-r-md);
+}
 
 
 /* --- responsiveness + required-reason affordances ------------------------- */
@@ -10936,8 +11452,8 @@ body.sam-active .hotbar-btn:hover {
     border-color: var(--sage-professional); background: var(--b2b-accent-tint);
     color: var(--sage-deep);
 }
-.b2b-pcard-head .b2b-linelabel { width: var(--b2b-h-sm); height: var(--b2b-h-sm); }
-.b2b-pcard-head .b2b-linelabel svg { width: 15px; height: 15px; stroke-width: 2.2; }
+.b2b-pc-acts .b2b-linelabel { width: var(--b2b-h-md); height: var(--b2b-h-md); }
+.b2b-pc-acts .b2b-linelabel svg { width: 15px; height: 15px; stroke-width: 2.2; }
 .b2b-vtable .b2b-linelabel { width: var(--b2b-h-sm); height: var(--b2b-h-sm); }
 .b2b-vtable .b2b-linelabel svg { width: 15px; height: 15px; stroke-width: 2.2; }
 
@@ -10946,21 +11462,37 @@ body.sam-active .hotbar-btn:hover {
     padding: 1px 6px; border-radius: 999px; background: #fdf3e1;
     color: #b7791f; font-size: 8.5px; font-weight: 800; letter-spacing: .04em;
 }
-.b2b-pcard.needs-reason { border-color: #f0dcb4; background: #fffdf8; }
+.b2b-pline.needs-reason { border-color: #f0dcb4; background: #fffdf8; }
 .b2b-tag-free.miss { border-color: #e0b970; background: #fffbf3; }
 .b2b-tag-free.miss:focus { border-color: #b7791f; box-shadow: 0 0 0 3px rgba(183,121,31,.14); }
 .b2b-req-note { margin-top: 4px; font-size: 11px; font-weight: 650; color: #b7791f; }
 
 /* --- responsive ----------------------------------------------------------- */
+/* Narrower than the columns can honestly hold: the header row goes away and each
+   row becomes its own labelled block, with data-k on the cell supplying the label
+   the header used to. A grid squeezed past its content just truncates. */
 @media (max-width: 1100px) {
-    .b2b-pgrid { grid-template-columns: 1fr 1fr 1fr 60px; }
-    .b2b-pnotes { grid-template-columns: 1fr; }
+    .b2b-items { --b2b-pcols: 1fr 1fr 1fr; }
+    .b2b-phead { display: none; }
+    .b2b-prow { align-items: end; gap: 9px 8px; }
+    .b2b-pcell { flex-direction: column; align-items: stretch; }
+    .b2b-pcell[data-k]::before {
+        content: attr(data-k);
+        font-size: 9.5px; font-weight: 800; letter-spacing: .08em;
+        text-transform: uppercase; color: var(--b2b-faint); margin-bottom: 4px;
+    }
+    .b2b-pc-sku { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 7px; }
+    /* Total and actions share the closing row rather than each taking one --
+       stacked, the total alone on a line reads as a stray field. */
+    .b2b-pc-tot  { grid-column: 1 / 2;  align-items: flex-start; }
+    .b2b-pc-acts { grid-column: 2 / -1; flex-direction: row; align-items: flex-end; flex-wrap: wrap; }
+    .b2b-pnote, .b2b-handling { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
     .b2b-q-card { flex-direction: column; align-items: stretch; gap: 12px; }
     .b2b-q-act { flex-direction: row; align-items: center; justify-content: space-between; }
     .b2b-q-act .b2b-btn { flex: 0 0 auto; }
-    .b2b-pgrid { grid-template-columns: 1fr 1fr; }
+    .b2b-items { --b2b-pcols: 1fr 1fr; }
     .b2b-summary { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
     .b2b-lrow { flex-wrap: wrap; }
     .b2b-lmain { flex: 1 0 100%; order: -1; }
@@ -11699,6 +12231,63 @@ body.sam-active .hotbar-btn:hover {
 }
 
 /* ============================================================
+   B2B CRM SETTINGS (CEO only) — gear button, modal, 3 tabs
+   ============================================================ */
+.crm-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 17px; height: 17px; padding: 0 5px; margin-left: 6px; border-radius: 999px; background: #dc2626; color: #fff; font-size: 10px; font-weight: 900; line-height: 1; }
+
+#crmModal .modal-header { display: flex; align-items: center; justify-content: space-between; }
+.crm-tabs { display: flex; gap: 4px; padding: 10px 18px 0; border-bottom: 1px solid #e5e8ec; background: #fff; }
+.crm-tab { position: relative; border: none; background: transparent; font-family: inherit; font-size: 13px; font-weight: 800; color: #6b7280; padding: 9px 14px; border-radius: 8px 8px 0 0; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; display: inline-flex; align-items: center; }
+.crm-tab:hover { color: #1a1c1e; }
+.crm-tab.active { color: #178048; border-bottom-color: #1f9d57; }
+.crm-tab .crm-badge { background: #dc2626; }
+
+.crm-help { font-size: 13px; color: #64707c; font-weight: 500; line-height: 1.5; margin: 2px 0 14px; }
+.crm-search { margin-bottom: 14px; }
+.crm-clist { display: flex; flex-direction: column; gap: 10px; }
+
+.crm-crow { background: #fff; border: 1px solid #e6ebe7; border-radius: 12px; padding: 13px 15px; }
+.crm-crow-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+.crm-co { font-size: 14px; color: #1a1c1e; display: inline-flex; align-items: center; gap: 8px; }
+.crm-newtag { background: #fef3c7; color: #92400e; font-size: 9px; font-weight: 900; letter-spacing: .5px; padding: 2px 6px; border-radius: 999px; }
+.crm-when { font-size: 12px; font-weight: 800; white-space: nowrap; }
+.crm-off { color: #9aa6ad; font-weight: 700; }
+.crm-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: #1a1c1e; cursor: pointer; user-select: none; }
+.crm-toggle input { width: 15px; height: 15px; accent-color: #1f9d57; cursor: pointer; }
+.crm-fields { margin: 10px 0 4px; display: flex; flex-direction: column; gap: 9px; }
+.crm-inline { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; font-size: 13px; color: #475569; font-weight: 600; }
+.crm-num { width: 64px; }
+.crm-num, .crm-sel, .crm-date { border: 1px solid #d1d5db; border-radius: 7px; padding: 6px 8px; font-size: 13px; font-family: inherit; outline: none; background: #fff; }
+.crm-num:focus, .crm-sel:focus, .crm-date:focus, .crm-note:focus { border-color: #1f9d57; box-shadow: 0 0 0 3px rgba(31,157,87,.15); }
+.crm-note { margin-top: 2px; }
+.crm-crow-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
+
+.crm-settings { max-width: 460px; }
+/* Divides notification settings from pricing ones -- they are both CEO-owned but
+   they are not the same kind of decision. */
+.crm-sec {
+    margin: 22px 0 12px; padding-top: 16px; border-top: 1px solid #eef2f6;
+    font-size: 10px; font-weight: 800; letter-spacing: .09em;
+    text-transform: uppercase; color: #9aa6ad;
+}
+.crm-fee { position: relative; max-width: 160px; }
+.crm-fee-$ {
+    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    font-size: 14px; font-weight: 700; color: #9aa6ad; pointer-events: none;
+}
+.crm-fee input { padding-left: 26px; font-variant-numeric: tabular-nums; }
+.crm-settings-acts { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+.crm-msg { font-size: 12.5px; font-weight: 700; color: #178048; }
+
+.crm-clear { text-align: center; padding: 40px 20px; color: #64707c; }
+.crm-clear-em { font-size: 34px; color: #1f9d57; }
+.crm-clear h4 { margin: 10px 0 4px; font-size: 16px; font-weight: 800; color: #1a1c1e; }
+.crm-clear p { margin: 0; font-size: 13px; }
+
+/* deal-modal header actions (SKU-label print + close) */
+.tool-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.b2b-deal-print { display: inline-flex; align-items: center; gap: 6px; }
+.b2b-deal-print svg { width: 15px; height: 15px; }
    JUMP TO — site-wide quick search (Ctrl K)
    ============================================================
    Three surfaces: the Search chip in the top bar, the pinned row at the top of

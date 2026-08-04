@@ -9,12 +9,12 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260804l">
+  <link rel="stylesheet" href="styles.css?v=20260804m">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260804l" defer></script>
+  <script src="speeks.js?v=20260804m" defer></script>
 </head>
 <body class="preload">
 
@@ -589,7 +589,7 @@
       <div class="ws-subtabs">
         <button class="ws-tab active" data-feature="widget-ops-marginguide" id="ops-tab-marginguide" onclick="switchOperationsTab('marginguide')"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg> Margin Guide</button>
         <button class="ws-tab" data-feature="widget-ops-callbacks" id="ops-tab-callbacks" onclick="switchOperationsTab('callbacks')"><svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.81.36 1.6.7 2.34a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.74-1.74a2 2 0 0 1 2.11-.45c.74.34 1.53.57 2.34.7A2 2 0 0 1 22 16.92z"/></svg> Customer Call Backs</button>
-        <button class="ws-tab dynamic-module-flex role-district-manager role-ceo role-tom role-manager role-owner-manager role-assistant-manager" data-feature="widget-ops-b2b" id="ops-tab-b2b" onclick="switchOperationsTab('b2b')"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg> B2B Deals</button>
+        <button class="ws-tab dynamic-module-flex role-district-manager role-ceo role-tom role-manager role-owner-manager role-assistant-manager role-employee role-training" data-feature="widget-ops-b2b" id="ops-tab-b2b" onclick="switchOperationsTab('b2b')"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg> Business-to-Business</button>
       </div>
 
       <div class="ws-panes">
@@ -684,7 +684,7 @@
                   <span class="cb-head-ico"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></span>
                   <div class="cb-head-titles">
                       <span class="cb-eyebrow">Operations</span>
-                      <span class="cb-head-title">B2B Deals</span>
+                      <span class="cb-head-title">Business-to-Business</span>
                       <span id="b2bSubtitle" class="cb-head-sub">Track bulk business deals from pickup through listing.</span>
                   </div>
               </div>
@@ -692,10 +692,15 @@
                   <div class="mb-view-toggle b2b-view-toggle">
                       <button id="b2bViewQueueBtn" class="mb-view-btn active" onclick="b2bSetView('queue')"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Needs You<span class="b2b-pip" id="b2bQueuePip" style="display:none;">0</span></button>
                       <button id="b2bViewPipelineBtn" class="mb-view-btn" onclick="b2bSetView('pipeline')"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="15" y="3" width="6" height="12" rx="1"/></svg>Pipeline</button>
-                      <button id="b2bViewClientsBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo" onclick="b2bSetView('clients')"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Clients</button>
+                      <button id="b2bViewFinishedBtn" class="mb-view-btn" onclick="b2bSetView('finished')"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>Completed</button>
+                      <button id="b2bViewClientsBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo role-tom" onclick="b2bSetView('clients')"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Clients</button>
                       <button id="b2bViewOverviewBtn" class="mb-view-btn dynamic-module-flex role-district-manager role-ceo" onclick="b2bSetView('overview')"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Overview</button>
                   </div>
                   <span id="b2bScopeChip" class="b2b-scope-chip" style="display:none;"></span>
+                  <button id="crmGearBtn" class="b2b-btn b2b-btn-secondary b2b-btn-head dynamic-module-flex role-ceo" onclick="crmOpen()" title="CRM notification settings">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                      CRM Settings<span class="crm-badge" id="crmGearBadge" style="display:none;">0</span>
+                  </button>
                   <button id="b2bNewBtn" class="b2b-btn b2b-btn-primary b2b-btn-head dynamic-module-flex role-district-manager role-ceo role-tom" onclick="b2bOpenCreate()">＋ New Deal</button>
               </div>
           </div>
@@ -708,6 +713,20 @@
       </div><!-- /.ws-panes -->
     </div><!-- /.ws-layout -->
   </div>
+
+<!-- ===== CRM SETTINGS MODAL (CEO only) — inside .main-content for the SPA router ===== -->
+<div class="modal-menu manage-menu crm-modal" id="crmModal">
+    <div class="modal-header">
+        <h3>⚙️ CRM Settings</h3>
+        <button class="modal-close-btn" onclick="closeAllModals()">✖</button>
+    </div>
+    <div class="crm-tabs" id="crmTabs">
+        <button class="crm-tab active" data-tab="clients" onclick="crmTab('clients')">Client List</button>
+        <button class="crm-tab" data-tab="new" onclick="crmTab('new')">New Clients <span class="crm-badge" id="crmTabBadge" style="display:none;">0</span></button>
+        <button class="crm-tab" data-tab="settings" onclick="crmTab('settings')">Notifications</button>
+    </div>
+    <div class="manage-content" id="crmBody"><div class="status-message">Loading…</div></div>
+</div>
 
 <!-- ===== B2B NEW DEAL MODAL (inside .main-content so the SPA router carries it) ===== -->
 <div class="modal-menu manage-menu" id="b2bCreateModal">
@@ -737,7 +756,13 @@
                 <span class="tool-head-sub" id="b2bDealSub"></span>
             </div>
         </div>
-        <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        <div class="tool-head-actions">
+            <button class="b2b-btn b2b-btn-secondary b2b-mini b2b-deal-print" id="b2bDealPrintBtn" style="display:none;" onclick="b2bPrintPickup()" title="Print the SKU label for this pickup">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                SKU Label
+            </button>
+            <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
     </div>
     <div class="manage-content" id="b2bDealBody"></div>
     <div class="manage-footer flex-end" id="b2bDealFooter"></div>
