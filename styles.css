@@ -3563,7 +3563,11 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
    soft shadow, no heavy coloured accent bar. Multi-line tooltips (title + desc)
    still work — they set their own inner text colours on this white ground. */
 .speeks-tooltip {
-    position: absolute;
+    /* Fixed, not absolute: while a modal is open the <body> is position:fixed with
+       a negative top (scroll lock), which shifts an absolutely-positioned child by
+       the locked scroll amount — that was the offset on every in-modal tooltip.
+       Fixed + viewport (client) coordinates in the JS positioners sidesteps it. */
+    position: fixed;
     background: #ffffff;
     color: var(--slate-charcoal, #1c1f23);
     padding: 10px 14px;
@@ -10210,7 +10214,7 @@ body.sam-active .hotbar-btn:hover {
 /* The container already draws the frame, so the empty state must not draw a
    second one inside it. */
 .b2b-items > .b2b-empty { border: 0; box-shadow: none; background: transparent; }
-/* Ten columns is a long way for the eye to travel; the row under the cursor
+/* A wide row is a long way for the eye to travel; the row under the cursor
    holding still is what stops you reading a price off the wrong line. */
 .b2b-pline:hover { background: #fbfcfd; }
 /* Row state as an inset bar rather than a border, so it costs no layout and
@@ -10414,6 +10418,153 @@ body.sam-active .hotbar-btn:hover {
     border-radius: 8px; border: 1px solid var(--b2b-line);
 }
 
+/* --- pricing spreadsheet -------------------------------------------------- */
+/* Pricing runs near-full-screen: a pallet can be thirty lines, so the sheet
+   wants the width for its columns and the height to show as many rows as it can.
+   The generic wide modal stays 1080; this one goes bigger and taller. */
+.b2b-deal-modal.b2b-modal-full {
+    width: min(1480px, 97vw); max-width: 97vw;
+    height: 92vh; max-height: 92vh;
+}
+/* Never clip the acts column on a narrow laptop -- scroll the body instead. */
+.b2b-deal-modal.b2b-modal-full > .manage-content { overflow-x: auto; }
+
+/* Two more columns than the card grid: disposition and the wipe flag are their
+   own cells here, and the notes fold away behind the ⋯ rather than into a drawer,
+   so a line is always exactly one row tall. */
+.b2b-items.b2b-ss {
+    /* Fifteen columns: the three required specs (CPU/RAM/Storage) sit inline
+       between Model and Condition so a keyboard pricer tabs straight across them.
+       Disposition is wide enough to spell out "No Residual Value". Wider than the
+       modal on a small laptop -- the body scrolls x (see .b2b-modal-full). */
+    --b2b-pcols: 64px 80px minmax(74px, 1fr) minmax(96px, 1.2fr) 94px 82px 94px 86px 44px 68px 68px 138px 42px 78px 76px;
+}
+/* True grid: drop the inter-cell gap and draw a hairline down every column
+   boundary. The row's own bottom border is the horizontal line, so together they
+   read as a spreadsheet rather than a list of chips. */
+.b2b-items.b2b-ss .b2b-prow { gap: 0; }
+.b2b-items.b2b-ss .b2b-pcell,
+.b2b-items.b2b-ss .b2b-phead > span {
+    border-right: 1px solid var(--b2b-line-2);
+    padding-left: 7px; padding-right: 5px; min-width: 0;
+}
+.b2b-items.b2b-ss .b2b-phead > span { display: flex; align-items: center; }
+.b2b-items.b2b-ss .b2b-phead > span.r { justify-content: flex-end; }
+.b2b-items.b2b-ss .b2b-phead > span.c { justify-content: center; }
+/* The cell already pads, so the field doesn't need its own wide inset -- keeps
+   narrow columns (specs, disposition) usable. */
+.b2b-items.b2b-ss .b2b-pcell input,
+.b2b-items.b2b-ss .b2b-pcell select { padding-left: 5px; padding-right: 4px; }
+/* The line's own edges close the grid -- no dangling border on the last column. */
+.b2b-items.b2b-ss .b2b-prow > *:last-child { border-right: 0; }
+.b2b-phead .c { text-align: center; }
+
+/* Inline spec cell: a clean input by default; the ∅ one-tap "none" fades in on
+   hover/focus, overlaid at the right edge so it never widens the cell or clutters
+   the grid at rest. */
+.b2b-pc-spec { position: relative; }
+.b2b-pc-spec input { width: 100%; }
+.b2b-spec-none {
+    position: absolute; right: 3px; top: 3px; bottom: 3px; width: 20px; padding: 0;
+    display: grid; place-items: center; border: 1px solid var(--b2b-line);
+    background: #fff; border-radius: 5px; color: var(--b2b-faint);
+    font-size: 13px; line-height: 1; cursor: pointer;
+    opacity: 0; pointer-events: none; transition: opacity .1s ease;
+}
+.b2b-pc-spec:hover .b2b-spec-none,
+.b2b-pc-spec:focus-within .b2b-spec-none { opacity: 1; pointer-events: auto; }
+.b2b-spec-none:hover { border-color: var(--sage-professional); color: var(--sage-deep); }
+/* Zebra banding earns its keep at spreadsheet density -- the eye tracks a row
+   across fifteen columns by its shade. State tints (recycle / needs-reason) and
+   the hover row still win, so banding never hides them. */
+.b2b-items.b2b-ss .b2b-pline:nth-child(even):not(:hover):not(.needs-reason):not(.b2b-scrap) {
+    background: #f9fbfc;
+}
+/* A blocked line flags itself in the Line cell too, next to the number, so it
+   reads as "not ready" without opening it. */
+.b2b-ss-flag {
+    flex: 0 0 auto; width: 6px; height: 6px; border-radius: 999px;
+    background: #e0b970; box-shadow: 0 0 0 2px #fcefd4;
+}
+.b2b-pc-disp { min-width: 0; }
+.b2b-pc-wipe { justify-content: center; }
+.b2b-ss-wipe {
+    display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.b2b-ss-wipe input {
+    width: 16px; height: 16px; margin: 0; cursor: pointer;
+    accent-color: var(--sage-professional);
+}
+
+/* Per-line detail sheet: specs, serials and notes open here over the grid, one
+   line at a time, instead of an inline drawer that would make the row tall. Its
+   own layer above the deal modal (z 300), with its own scrim. */
+#b2bItemSheet {
+    position: fixed; inset: 0; z-index: 360;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+    background: rgba(16, 24, 34, .42);
+}
+.b2b-isheet-panel {
+    display: flex; flex-direction: column;
+    width: min(600px, 100%); max-height: 88vh; overflow: hidden;
+    background: #fff; border: 1px solid var(--b2b-line); border-radius: 18px;
+    box-shadow: 0 30px 70px rgba(0, 0, 0, .28);
+}
+.b2b-isheet-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+    padding: 16px 18px 14px; border-bottom: 1px solid var(--b2b-line-2);
+}
+.b2b-isheet-id { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.b2b-isheet-sku {
+    flex: 0 0 auto; padding: 5px 9px; border-radius: 8px;
+    background: var(--b2b-accent-tint); color: var(--sage-deep);
+    font-size: 11.5px; font-weight: 800;
+}
+.b2b-isheet-name { font-size: 15px; font-weight: 800; color: #1a1c1e; letter-spacing: -.01em; }
+.b2b-isheet-meta { font-size: 11.5px; font-weight: 650; color: var(--b2b-muted); margin-top: 1px; }
+.b2b-isheet-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+.b2b-isheet-actions .b2b-linelabel { width: 32px; height: 32px; }
+.b2b-isheet-head .modal-close-btn {
+    flex: 0 0 auto; display: grid; place-items: center; width: 32px; height: 32px;
+    border: 1px solid var(--b2b-line); background: #fff; border-radius: 9px;
+    color: var(--b2b-muted); cursor: pointer;
+}
+.b2b-isheet-head .modal-close-btn svg { width: 16px; height: 16px; }
+.b2b-isheet-head .modal-close-btn:hover { background: #fcecec; color: #d1443b; border-color: #f7dada; }
+.b2b-isheet-block { margin: 12px 18px 0; }
+.b2b-isheet-body {
+    padding: 16px 18px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 16px;
+}
+.b2b-isheet-sec { display: flex; flex-direction: column; gap: 8px; }
+.b2b-isheet-sec > h5 {
+    margin: 0; font-size: 9.5px; font-weight: 800; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--b2b-faint);
+    display: flex; align-items: center; gap: 7px;
+}
+.b2b-isheet-foot {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 13px 18px; border-top: 1px solid var(--b2b-line-2); background: var(--b2b-surface);
+}
+.b2b-isheet-hint { font-size: 11.5px; color: var(--b2b-faint); }
+/* Spec input + its one-tap "No CPU/RAM/Storage" button share a row; the field
+   takes the room and the button stays compact. Wider spec cells so both fit. */
+.b2b-isheet-sec .b2b-specs { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.b2b-spec-row { display: flex; align-items: center; gap: 6px; }
+.b2b-spec-row input { flex: 1 1 auto; min-width: 0; }
+.b2b-spec-row .b2b-mini { flex: 0 0 auto; height: var(--b2b-h-md); white-space: nowrap; }
+/* Client notes is now a free-text area, no chips. */
+.b2b-isheet-sec textarea.b2b-tag-free { resize: vertical; min-height: 46px; line-height: 1.5; }
+.b2b-spec-miss { border-color: #e0b970 !important; background: #fffdf7; }
+/* The serial tally sits in the section heading here, not inside .b2b-serialf, so
+   give it the same pill treatment on its own. */
+.b2b-isheet-sec .b2b-serial-count {
+    padding: 1px 7px; border-radius: 999px; background: var(--b2b-accent-tint);
+    color: var(--sage-deep); font-size: 9.5px; letter-spacing: .03em;
+    font-variant-numeric: tabular-nums; text-transform: none;
+}
+.b2b-isheet-sec .b2b-serial-count.miss { background: #fdf3e1; color: #b7791f; }
+
 /* --- quote ---------------------------------------------------------------- */
 .b2b-sendbar {
     display: flex; flex-wrap: wrap; align-items: center; gap: 9px;
@@ -10461,6 +10612,9 @@ body.sam-active .hotbar-btn:hover {
     cursor: pointer; font-size: 11px; font-weight: 800; letter-spacing: .07em;
     text-transform: uppercase; color: var(--b2b-faint); margin-bottom: 12px;
 }
+/* The editing grid runs full-screen wide, but the quote itself is a document --
+   cap and centre it so the preview reads like the page the client receives. */
+.b2b-preview .b2b-doc { max-width: 860px; margin: 0 auto; }
 
 .b2b-doc {
     background: #fff; border: 1px solid var(--b2b-line);

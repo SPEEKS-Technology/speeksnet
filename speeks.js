@@ -249,6 +249,13 @@ function closeAllModals() {
         modal.classList.remove('show');
     });
 
+    // The B2B pricing detail sheet floats above the deal modal on its own layer,
+    // so closing the deal (Escape / overlay) has to take it down too.
+    if (typeof _b2bSheetId !== 'undefined' && _b2bSheetId != null) {
+        document.getElementById('b2bItemSheet')?.remove();
+        _b2bSheetId = null;
+    }
+
     // Side panels (Checklist / Goals / Cleaning) live outside .modal-menu, so
     // opening any modal (e.g. Listing Goals) must collapse them too.
     _closeSidePanels();
@@ -7899,10 +7906,20 @@ const B2B_NOTE_TAGS = ['Cracked', 'LCD Damage', 'No RAM', 'No HDD', 'Non-functio
 // can't be priced without knowing what's inside it; a box of cables has nothing
 // to describe. Mirrors SPECS_FOR in the edge function and the CHECK on the
 // table -- all three have to agree or a save fails on the round trip.
+// ADDING AN ITEM TYPE
+// -------------------
+// Item types live in three places that must agree, or a save fails on the round
+// trip: (1) here -- B2B_ITEM_TYPES (the picker) + B2B_SPECS_FOR (its spec set);
+// (2) the b2b-deals edge function -- ITEM_TYPES + SPECS_FOR; (3) the table's
+// b2b_deal_items_item_type_check CHECK constraint. Add the key to all three and
+// nothing else needs to change. A type's required specs (req:true below) render
+// as inline grid columns; optional specs live in the ⋯ detail sheet.
+//
+// 'laptop'/'desktop' were merged into 'computer'; the legacy keys stay mapped in
+// B2B_SPECS_FOR only so any pre-merge row still renders its specs.
 const B2B_ITEM_TYPES = [
-    { key: 'laptop',  label: 'Laptop'  },
-    { key: 'desktop', label: 'Desktop' },
-    { key: 'other',   label: 'Other'   },
+    { key: 'computer', label: 'Computer' },
+    { key: 'other',    label: 'Other'    },
 ];
 const B2B_SPEC_FIELDS = [
     { key: 'cpu',            label: 'CPU',            req: true,  hint: 'i5-1135G7' },
@@ -7912,9 +7929,10 @@ const B2B_SPEC_FIELDS = [
     { key: 'battery_health', label: 'Battery health', req: false, hint: '88%' },
 ];
 const B2B_SPECS_FOR = {
-    laptop:  ['cpu', 'ram', 'storage', 'gpu', 'battery_health'],
-    desktop: ['cpu', 'ram', 'storage', 'gpu'],
-    other:   [],
+    computer: ['cpu', 'ram', 'storage', 'gpu', 'battery_health'],
+    laptop:   ['cpu', 'ram', 'storage', 'gpu', 'battery_health'],
+    desktop:  ['cpu', 'ram', 'storage', 'gpu'],
+    other:    [],
 };
 
 // What happens to a line. `recycle` is scrap we dispose of; `no_residual` is
@@ -7925,11 +7943,16 @@ const B2B_DISPOSITIONS = [
     { key: 'purchase',    label: 'Purchase',          short: 'Buy',     tone: 'ok',
       hint: 'We pay the client for these.' },
     { key: 'no_residual', label: 'No residual value', short: 'No value', tone: 'info',
-      hint: 'Nothing to the client, but we may still resell it.' },
+      hint: "Not worth enough to pay the client for, but may still be worth listing. "
+          + "Price it out, then decide later whether to list it or recycle it." },
     { key: 'recycle',     label: 'Recycle',           short: 'Recycle', tone: 'neu',
       hint: 'Scrap. Disposed of responsibly, never listed.' },
 ];
 const B2B_DISP = Object.fromEntries(B2B_DISPOSITIONS.map(d => [d.key, d]));
+// How the pricing spreadsheet's inline disposition picker labels each option --
+// spelled out in full ("No Residual Value") rather than the terse chip `short`,
+// which stays in use on the card grid where space is tighter.
+const _B2B_DISP_SEL = { purchase: 'Purchase', no_residual: 'No Residual Value', recycle: 'Recycle' };
 
 // The marker that stands in for a serial when a device has none visible. Counts
 // as an entry, so a line still satisfies "one per unit".
@@ -8882,7 +8905,7 @@ function _b2bClientDrawer(id) {
 // ============================================================================
 let _crmTab      = 'clients';
 let _crmSearch   = '';
-let _crmSettings = { notify_email: '', enabled: true, overdue_only: false,
+let _crmSettings = { notify_email: '', enabled: true,
                      quote_ready_enabled: true, wipe_fee: 8 };
 const CRM_UNITS  = ['day', 'week', 'month'];
 
@@ -8905,7 +8928,6 @@ async function crmLoadSettings() {
         if (j && j.settings) _crmSettings = {
             notify_email: j.settings.notify_email || '',
             enabled: j.settings.enabled !== false,
-            overdue_only: !!j.settings.overdue_only,
             quote_ready_enabled: j.settings.quote_ready_enabled !== false,
             wipe_fee: Number(j.settings.wipe_fee ?? 8),
         };
@@ -9054,7 +9076,6 @@ function _crmSettingsHtml() {
         <label class="form-label-caps">Notification email</label>
         <input id="crmEmail" class="form-input-lg" type="email" value="${escapeHtml(s.notify_email || '')}" placeholder="ceo@speekstechnology.com">
         <label class="crm-toggle" style="margin-top:16px;"><input type="checkbox" id="crmEnabled" ${s.enabled ? 'checked' : ''}> Send reach-out reminders</label>
-        <label class="crm-toggle"><input type="checkbox" id="crmOverdue" ${s.overdue_only ? 'checked' : ''}> Only email once a client is overdue (skip the day it first comes due)</label>
         <label class="crm-toggle"><input type="checkbox" id="crmQuoteReady" ${s.quote_ready_enabled !== false ? 'checked' : ''}> Email me when a quote is priced and ready to send</label>
 
         <div class="crm-sec">Pricing</div>
@@ -9077,7 +9098,6 @@ function _crmSettingsHtml() {
 async function crmSaveSettings(btn) {
     const notify_email = document.getElementById('crmEmail')?.value.trim() || '';
     const enabled      = document.getElementById('crmEnabled')?.checked !== false;
-    const overdue_only = document.getElementById('crmOverdue')?.checked || false;
     const quote_ready_enabled = document.getElementById('crmQuoteReady')?.checked !== false;
     const wipe_fee     = parseFloat(document.getElementById('crmWipeFee')?.value) || 0;
     if (wipe_fee < 0) return alert("A wipe charge can't be negative — it comes off what we pay, not what they pay.");
@@ -9085,13 +9105,13 @@ async function crmSaveSettings(btn) {
         await _b2bBusy(btn, 'Saving…', async () => {
             const res = await fetch(B2B_OUTREACH_URL, {
                 method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: 'set_crm_settings', notify_email, enabled, overdue_only,
+                body: JSON.stringify({ action: 'set_crm_settings', notify_email, enabled,
                     quote_ready_enabled, wipe_fee, user: _b2bUser() }),
             });
             const out = await res.json().catch(() => ({}));
             if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
         });
-        _crmSettings = { notify_email, enabled, overdue_only, quote_ready_enabled, wipe_fee };
+        _crmSettings = { notify_email, enabled, quote_ready_enabled, wipe_fee };
         // The pricing screen reads the fee off the board payload, so refresh it
         // rather than leaving a stale figure on the next line someone flags.
         if (_b2bMeta) _b2bMeta.wipe_fee = wipe_fee;
@@ -9326,6 +9346,8 @@ function _b2bShowDeal(cfg) {
     if (pb) pb.style.display = ['pricing', 'quote', 'listing_location', 'listing', 'completed'].includes(cfg.stage) ? '' : 'none';
     const modal = document.getElementById('b2bDealModal');
     modal.classList.toggle('b2b-modal-wide', !!cfg.wide);
+    // Pricing runs near-full-screen so a long pickup reads as one dense sheet.
+    modal.classList.toggle('b2b-modal-full', !!cfg.full);
     closeAllModals();
     modal.classList.add('show');
     lockAndBlurScreen();
@@ -9337,6 +9359,8 @@ async function b2bOpenDeal(kind, id) {
     if (!deal) return;
     _b2bModalDeal = deal;
     _b2bModalItems = [];
+    // Default every screen to the card grid; only pricing opts into the sheet.
+    _b2bGridMode = 'cards';
     // Every stage past pricing needs the line items; fetch once up front.
     if (['pricing', 'quote', 'listing', 'view'].includes(kind)) {
         try {
@@ -9709,6 +9733,19 @@ function b2bItemSpec(id, field, value) {
     _b2bSyncReady(it);
 }
 
+// One-tap "None" for a required spec: stamps NO CPU / NO RAM / NO STORAGE so a
+// machine with the part pulled clears the gate without typing. Updates the inline
+// cell in place (no full repaint, so nothing steals focus) and re-validates.
+function b2bItemSpecNone(id, field, label) {
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    it[field] = 'NO ' + String(label).toUpperCase();
+    const inp = document.getElementById(`b2bPline-${id}`)?.querySelector(`[data-req-spec="${field}"]`);
+    if (inp) inp.value = it[field];
+    _b2bSyncReady(it);
+    b2bItemSave(id);
+}
+
 function b2bItemToggleTag(id, tag) {
     const it = _b2bLocalItem(id);
     if (!it) return;
@@ -9721,12 +9758,23 @@ function b2bItemToggleTag(id, tag) {
 }
 
 // The free-text box owns only the hand-typed part; the chips own the presets.
-// Recombine both into client_notes on every edit.
+// Recombine both into client_notes on every edit. (Used by the card grid, which
+// keeps the tag chips.)
 function b2bItemCustomNote(id, value) {
     const it = _b2bLocalItem(id);
     if (!it) return;
     const custom = String(value || '').split(';').map(s => s.trim()).filter(Boolean);
     it.client_notes = [..._b2bPresetNotes(it), ...custom].join('; ');
+    _b2bSyncReady(it);
+    _b2bPaintTotals();
+}
+
+// The pricing sheet dropped the tag chips: its client-notes field is the whole
+// note, edited straight into client_notes.
+function b2bItemClientNote(id, value) {
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    it.client_notes = value;
     _b2bSyncReady(it);
     _b2bPaintTotals();
 }
@@ -9750,21 +9798,31 @@ function _b2bSyncReady(it) {
     const line = document.getElementById(`b2bPline-${it.id}`);
     const blocked = _b2bItemBlocked(it);
 
-    const reason = _b2bMissingReason(it);
-    const free = line?.querySelector('.b2b-tag-free');
-    free?.classList.toggle('miss', reason);
-    const note = line?.querySelector('.b2b-req-note');
-    if (note) note.style.display = reason ? '' : 'none';
-
+    // Row-level state lives on the grid line either way (cards or spreadsheet):
+    // the inset "needs a reason" bar, the flagged detail button, the one-line
+    // summary of what's blocking it.
     line?.classList.toggle('needs-reason', blocked.length > 0);
     line?.querySelector('.b2b-notes-btn')?.classList.toggle('req', blocked.length > 0);
-
     const chip = line?.querySelector('.b2b-ready');
     if (chip) {
         chip.textContent = blocked.length ? blocked.join(' · ') : '';
         chip.style.display = blocked.length ? '' : 'none';
     }
-    const count = line?.querySelector('.b2b-serial-count');
+    // Inline required-spec cells (spreadsheet): flag each one that's still empty,
+    // so a cell clears its warning the moment it's filled.
+    line?.querySelectorAll('[data-req-spec]').forEach(inp => {
+        const k = inp.getAttribute('data-req-spec');
+        inp.classList.toggle('b2b-spec-miss', !String(it[k] ?? '').trim());
+    });
+
+    // The note fields themselves live in the cards drawer (inside the line) OR in
+    // the spreadsheet's detail sheet -- update wherever they actually are.
+    const scope = document.getElementById('b2bItemSheet') || line;
+    const reason = _b2bMissingReason(it);
+    scope?.querySelector('.b2b-tag-free')?.classList.toggle('miss', reason);
+    const note = scope?.querySelector('.b2b-req-note');
+    if (note) note.style.display = reason ? '' : 'none';
+    const count = scope?.querySelector('.b2b-serial-count');
     if (count) {
         const have = _b2bSerials(it).length, need = Number(it.quantity) || 1;
         count.textContent = `${have} of ${need}`;
@@ -9813,10 +9871,23 @@ function b2bDeleteItem(id) {
         });
 }
 
+// Pricing renders the dense spreadsheet; quote (and the read-only views) keep the
+// card/drawer grid. _b2bRepaintItems is shared, so one flag picks the renderer.
+let _b2bGridMode = 'cards';
+// The line whose detail sheet is open over the spreadsheet, if any.
+let _b2bSheetId = null;
+
 function _b2bRepaintItems() {
     const wrap = document.getElementById('b2bItemGrid');
-    if (wrap) wrap.innerHTML = _b2bItemCards();
+    if (wrap) wrap.innerHTML = _b2bGridMode === 'sheet' ? _b2bItemSheet() : _b2bItemCards();
     _b2bPaintTotals();
+    // Keep an open detail sheet in step with the grid it hangs off -- a tag or
+    // disposition change repaints both. If the line it belongs to is gone, so is
+    // the sheet.
+    if (_b2bSheetId != null) {
+        if (_b2bLocalItem(_b2bSheetId)) _b2bPaintItemSheet();
+        else b2bCloseItemSheet();
+    }
 }
 
 // Which lines have their notes open. Notes are the bulky part and most lines
@@ -10019,6 +10090,244 @@ function _b2bItemCards() {
     return head + rows;
 }
 
+// --- pricing spreadsheet ---------------------------------------------------
+// Same data as _b2bItemCards, but every line stays a single dense row: the
+// disposition and the wipe flag are their own columns, and the bulky per-line
+// detail (specs, serials, notes) opens behind the ⋯ in a focused sheet rather
+// than an inline drawer that grows the row. Quote keeps _b2bItemCards untouched.
+const _B2B_ICO_DETAIL = '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>'
+    + '<line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/>'
+    + '<line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>';
+const _B2B_ICO_X = '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>';
+
+function _b2bItemSheet() {
+    if (!_b2bModalItems.length) {
+        return `<div class="b2b-empty sm">
+            <div class="b2b-empty-t">No lines yet</div>
+            <div class="b2b-empty-s">Add the first item to start pricing this pickup.</div>
+        </div>`;
+    }
+
+    // The three required specs (CPU / RAM / Storage) are columns, not a detail
+    // view -- a keyboard pricer tabs straight across them. GPU and battery stay
+    // optional, so they live behind the ⋯ with serials and notes.
+    const reqSpecs = B2B_SPEC_FIELDS.filter(f => f.req);
+
+    const head = `
+        <div class="b2b-prow b2b-phead">
+            <span>Line</span><span>Type</span><span>Brand</span><span>Model</span>
+            ${reqSpecs.map(f => `<span>${escapeHtml(f.label)}</span>`).join('')}
+            <span>Condition</span>
+            <span class="r">Qty</span><span class="r">Value</span><span class="r">Offer</span>
+            <span>Handling</span><span class="c">Wipe</span><span class="r">Total</span><span></span>
+        </div>`;
+
+    const rows = _b2bModalItems.map(it => {
+        const disp    = _b2bDispOf(it);
+        const buy     = _b2bIsBuy(it);
+        const scrap   = _b2bIsScrap(it);
+        const need    = Number(it.quantity) || 1;
+        const blocked = _b2bItemBlocked(it);
+        const fee     = it.wipe_fee || _b2bWipeFee();
+        const carries = _b2bSpecsFor(it);
+        // A line "has detail" if the ⋯ sheet holds anything worth reopening for --
+        // serials, notes, or an optional spec (GPU/battery). The required specs
+        // are inline now, so they don't count toward the dot.
+        const hasDetail = !!(String(it.staff_notes || '').trim() || String(it.client_notes || '').trim()
+            || _b2bSerials(it).length || carries.some(f => !f.req && String(it[f.key] ?? '').trim()));
+
+        // CPU / RAM / Storage cells: an editable field for a type that carries
+        // them, a dash for one that doesn't (e.g. Other), each with a one-tap ∅
+        // that stamps NO CPU / NO RAM / NO STORAGE.
+        const specCells = reqSpecs.map(f => {
+            if (!carries.some(s => s.key === f.key)) {
+                return `<span class="b2b-pcell b2b-pc-spec" data-k="${escapeHtml(f.label)}"><span class="b2b-f-off">—</span></span>`;
+            }
+            const miss = !String(it[f.key] ?? '').trim();
+            return `<span class="b2b-pcell b2b-pc-spec" data-k="${escapeHtml(f.label)}">
+                <input data-req-spec="${f.key}" class="${miss ? 'b2b-spec-miss' : ''}" value="${escapeHtml(it[f.key] || '')}" placeholder="${escapeHtml(f.hint)}"
+                    oninput="b2bItemSpec('${it.id}','${f.key}',this.value)" onchange="b2bItemSave('${it.id}')">
+                <button class="b2b-spec-none" tabindex="-1" title="No ${escapeHtml(f.label)} — fills NO ${escapeHtml(f.label.toUpperCase())}"
+                    onclick="b2bItemSpecNone('${it.id}','${f.key}','${escapeHtml(f.label)}')">∅</button>
+            </span>`;
+        }).join('');
+
+        return `
+        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
+            <div class="b2b-prow">
+                <span class="b2b-pcell b2b-pc-sku" title="${escapeHtml(it.sku || '')}">
+                    <span class="b2b-mono">${escapeHtml(_b2bLineNo(it))}</span>
+                    ${blocked.length ? `<i class="b2b-ss-flag" title="${escapeHtml(blocked.join(', '))}"></i>` : ''}
+                </span>
+                <span class="b2b-pcell" data-k="Type">
+                    <select onchange="b2bItemType('${it.id}',this.value)">
+                        ${B2B_ITEM_TYPES.map(t => `<option value="${t.key}" ${(it.item_type || 'other') === t.key ? 'selected' : ''}>${t.label}</option>`).join('')}
+                    </select></span>
+                <span class="b2b-pcell" data-k="Brand">
+                    <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple"
+                        oninput="b2bItemInput('${it.id}','make',this.value)" onchange="b2bItemSave('${it.id}')"></span>
+                <span class="b2b-pcell" data-k="Model">
+                    <input value="${escapeHtml(it.model || '')}" placeholder="MacBook Air M2"
+                        oninput="b2bItemInput('${it.id}','model',this.value)" onchange="b2bItemSave('${it.id}')"></span>
+                ${specCells}
+                <span class="b2b-pcell" data-k="Condition">
+                    <select onchange="b2bItemCondition('${it.id}',this.value)">
+                        <option value="">—</option>
+                        ${B2B_CONDITIONS.map(c => `<option ${it.condition === c ? 'selected' : ''}>${c}</option>`).join('')}
+                    </select></span>
+                <span class="b2b-pcell n" data-k="Qty">
+                    <input type="number" min="1" step="1" value="${need}"
+                        oninput="b2bItemInput('${it.id}','quantity',this.value)" onchange="b2bItemSave('${it.id}')"></span>
+                <span class="b2b-pcell n" data-k="Value">
+                    ${scrap ? '<span class="b2b-f-off">—</span>'
+                          : `<input type="number" min="0" step="0.01" value="${Number(it.value) || 0}"
+                        oninput="b2bItemInput('${it.id}','value',this.value)" onchange="b2bItemSave('${it.id}')">`}</span>
+                <span class="b2b-pcell n" data-k="Offer">
+                    ${buy ? `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
+                        oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`
+                          : '<span class="b2b-f-off">—</span>'}</span>
+                <span class="b2b-pcell b2b-pc-disp" data-k="Handling">
+                    <select data-tip="${escapeHtml(B2B_DISP[disp].hint)}" onchange="b2bItemDisposition('${it.id}',this.value)">
+                        ${B2B_DISPOSITIONS.map(d => `<option value="${d.key}" ${disp === d.key ? 'selected' : ''}>${_B2B_DISP_SEL[d.key]}</option>`).join('')}
+                    </select></span>
+                <span class="b2b-pcell b2b-pc-wipe" data-k="Wipe">
+                    <label class="b2b-ss-wipe" title="Certified data wipe · ${_b2bMoney(fee, 2)}/unit">
+                        <input type="checkbox" ${it.wipe_required ? 'checked' : ''} onchange="b2bItemWipe('${it.id}',this.checked)"></label></span>
+                <span class="b2b-pcell n b2b-pc-tot" data-k="Total">
+                    <span class="b2b-f-calc" id="b2bLn-${it.id}">${buy ? _b2bMoney((Number(it.offer) || 0) * need, 2) : '—'}</span></span>
+                <span class="b2b-pcell b2b-pc-acts">
+                    <button class="b2b-notes-btn b2b-ss-more ${hasDetail ? 'has' : ''} ${blocked.length ? 'req' : ''}"
+                        title="${blocked.length ? 'Not ready — ' + escapeHtml(blocked.join(', ')) : 'Specs, serials, notes & label'}"
+                        onclick="b2bItemDetail('${it.id}')">
+                        ${_b2bIco(_B2B_ICO_DETAIL)}
+                        ${hasDetail ? '<i class="b2b-notes-dot"></i>' : ''}
+                    </button>
+                    <button class="b2b-x" title="Remove line" onclick="b2bDeleteItem('${it.id}')">${_b2bIco(_B2B_ICO_X)}</button>
+                </span>
+            </div>
+            <div class="b2b-ready" style="${blocked.length ? '' : 'display:none;'}">${escapeHtml(blocked.join(' · '))}</div>
+        </div>`;
+    }).join('');
+
+    return head + rows;
+}
+
+// --- pricing detail sheet --------------------------------------------------
+// The spreadsheet's ⋯ opens this over the grid: the type's spec fields, the
+// per-unit serials, and the staff / client notes -- everything that would make a
+// row tall. It reuses the very same per-field handlers as the cards drawer, so
+// edits save and re-validate identically; _b2bRepaintItems repaints it in step.
+function b2bItemDetail(id) {
+    if (!_b2bLocalItem(id)) return;
+    _b2bSheetId = id;
+    let el = document.getElementById('b2bItemSheet');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'b2bItemSheet';
+        document.body.appendChild(el);
+        // Click the dimmed area (never the panel) to close.
+        el.addEventListener('click', e => { if (e.target === el) b2bCloseItemSheet(); });
+    }
+    _b2bPaintItemSheet();
+    // Land the cursor on whatever is blocking the line, else the first field.
+    const focus = el.querySelector('.b2b-tag-free.miss, .b2b-spec-miss')
+        || el.querySelector('.b2b-isheet-body input, .b2b-isheet-body textarea');
+    focus?.focus();
+}
+
+function b2bCloseItemSheet() {
+    const wasOpen = _b2bSheetId != null;
+    document.getElementById('b2bItemSheet')?.remove();
+    _b2bSheetId = null;
+    // Repaint the grid so the row reflects anything changed in the sheet -- the
+    // ⋯ "has detail" dot, a serial count, a cleared block. Safe on close: no
+    // field is focused. Only the spreadsheet uses this sheet.
+    if (wasOpen && _b2bGridMode === 'sheet') _b2bRepaintItems();
+}
+
+function _b2bPaintItemSheet() {
+    const el = document.getElementById('b2bItemSheet');
+    const it = _b2bSheetId != null ? _b2bLocalItem(_b2bSheetId) : null;
+    if (!el || !it) return;
+    el.innerHTML = `<div class="b2b-isheet-panel" role="dialog" aria-modal="true" aria-label="Line detail">${_b2bItemSheetBody(it)}</div>`;
+}
+
+function _b2bItemSheetBody(it) {
+    const needs   = _b2bNeedsReason(it);
+    const missing = _b2bMissingReason(it);
+    // Required specs (CPU/RAM/Storage) are inline columns on the grid now; the
+    // sheet only carries the optional ones (GPU, battery health) alongside
+    // serials and notes.
+    const specs   = _b2bSpecsFor(it).filter(f => !f.req);
+    const serials = _b2bSerials(it);
+    const need    = Number(it.quantity) || 1;
+    const left    = need - serials.length;
+    const blocked = _b2bItemBlocked(it);
+    const typeLabel = (B2B_ITEM_TYPES.find(t => t.key === (it.item_type || 'other')) || {}).label || 'Other';
+
+    const specBlock = specs.length ? `
+        <div class="b2b-isheet-sec">
+            <h5>Optional specs</h5>
+            <div class="b2b-specs">
+                ${specs.map(f => `
+                    <div class="b2b-f b2b-spec">
+                        <label>${f.label}</label>
+                        <input value="${escapeHtml(it[f.key] || '')}" placeholder="${escapeHtml(f.hint)}"
+                            oninput="b2bItemSpec('${it.id}','${f.key}',this.value)" onchange="b2bItemSave('${it.id}')">
+                    </div>`).join('')}
+            </div>
+        </div>` : '';
+
+    return `
+        <div class="b2b-isheet-head">
+            <div class="b2b-isheet-id">
+                <span class="b2b-isheet-sku b2b-mono">${escapeHtml(it.sku || _b2bLineNo(it))}</span>
+                <div>
+                    <div class="b2b-isheet-name">${escapeHtml(_b2bItemName(it))}</div>
+                    <div class="b2b-isheet-meta">${escapeHtml(typeLabel)} · Qty ${need}${it.condition ? ' · ' + escapeHtml(it.condition) : ''} · ${escapeHtml(B2B_DISP[_b2bDispOf(it)].label)}</div>
+                </div>
+            </div>
+            <div class="b2b-isheet-actions">
+                ${_b2bLabelBtn(it)}
+                <button class="modal-close-btn" onclick="b2bCloseItemSheet()" aria-label="Close">${_b2bIco(_B2B_ICO_X)}</button>
+            </div>
+        </div>
+        ${blocked.length ? `<div class="b2b-note warn b2b-isheet-block"><span class="b2b-note-k">Not ready</span>${escapeHtml(blocked.join(' · '))}</div>` : ''}
+        <div class="b2b-isheet-body">
+            ${specBlock}
+            <div class="b2b-isheet-sec">
+                <h5>Serial numbers <span class="b2b-serial-count ${serials.length === need ? '' : 'miss'}">${serials.length} of ${need}</span> <span class="b2b-tag-int">one per unit</span></h5>
+                <div class="b2b-f b2b-serialf">
+                    <div class="b2b-serialrow">
+                        <input value="${escapeHtml(it.serials || '')}" placeholder="C02X1234, C02X5678 — comma separated"
+                            oninput="b2bItemSerials('${it.id}',this.value)" onchange="b2bItemSave('${it.id}')">
+                        ${left > 0 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',false)" title="This unit has no serial you can read">No Visible Serial</button>` : ''}
+                        ${left > 1 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',true)" title="Fill every remaining slot">Fill All ${left}</button>` : ''}
+                    </div>
+                </div>
+            </div>
+            <div class="b2b-isheet-sec">
+                <h5>Staff notes <span class="b2b-tag-int">internal</span></h5>
+                <div class="b2b-f">
+                    <input value="${escapeHtml(it.staff_notes || '')}" placeholder="Anything the team should know"
+                        oninput="b2bItemInput('${it.id}','staff_notes',this.value)" onchange="b2bItemSave('${it.id}')"></div>
+            </div>
+            <div class="b2b-isheet-sec">
+                <h5>Client notes ${needs ? '<span class="b2b-tag-req">reason required</span>' : '<span class="b2b-tag-ext">prints on the quote</span>'}</h5>
+                <div class="b2b-f">
+                    <textarea class="b2b-tag-free ${missing ? 'miss' : ''}" rows="2"
+                        placeholder="${needs ? 'Why is it ' + escapeHtml(it.condition) + '? This prints on the client quote' : 'Anything the client should see — prints on the quote'}"
+                        oninput="b2bItemClientNote('${it.id}',this.value)" onchange="b2bItemSave('${it.id}')">${escapeHtml(it.client_notes || '')}</textarea>
+                    <span class="b2b-req-note" style="${missing ? '' : 'display:none;'}">${escapeHtml(it.condition || '')} items need a reason before this can be quoted.</span>
+                </div>
+            </div>
+        </div>
+        <div class="b2b-isheet-foot">
+            <span class="b2b-isheet-hint">Changes save as you go.</span>
+            <button class="b2b-btn b2b-btn-primary" onclick="b2bCloseItemSheet()">Done</button>
+        </div>`;
+}
+
 function _b2bTotalsBar(showMargin) {
     return `
     <div class="b2b-totals">
@@ -10047,18 +10356,19 @@ function _b2bSendbackNote(deal) {
 }
 
 function _b2bStagePricing(deal) {
+    _b2bGridMode = 'sheet';
     _b2bShowDeal({
         stage: 'pricing',
         eyebrow: deal.ref,
         title: 'Price The Pickup',
         sub: 'Itemize what came in. Every change saves as you go.',
-        wide: true,
+        full: true,
         body: `
             ${_b2bSummary(deal)}
             ${_b2bSendbackNote(deal)}
             ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Picked up</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
             ${_b2bTotalsBar(true)}
-            <div id="b2bItemGrid" class="b2b-items">${_b2bItemCards()}</div>
+            <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
@@ -10078,8 +10388,21 @@ async function b2bSubmitPricing(id, btn) {
     // hunt for them, and the server would refuse anyway.
     const gaps = _b2bNotReady();
     if (gaps.length) {
-        gaps.forEach(it => _b2bNotesOpen.add(it.id));
-        _b2bRepaintItems();
+        if (_b2bGridMode === 'sheet') {
+            _b2bRepaintItems();
+            // Put the cursor on the first gap: a missing spec is an inline cell, a
+            // missing serial or condition reason lives in the ⋯ detail sheet.
+            const g = gaps[0];
+            const line = document.getElementById(`b2bPline-${g.id}`);
+            line?.scrollIntoView({ block: 'center' });
+            const missSpec = _b2bMissingSpecs(g)[0];
+            if (missSpec) line?.querySelector(`[data-req-spec="${missSpec.key}"]`)?.focus();
+            else b2bItemDetail(g.id);
+        } else {
+            // Cards mode fixes lines in the inline drawer.
+            gaps.forEach(it => _b2bNotesOpen.add(it.id));
+            _b2bRepaintItems();
+        }
         return _b2bSay(gaps.map(it => `${_b2bItemName(it)} (${_b2bItemBlocked(it).join(', ')})`).join(' · '), true);
     }
     if (!confirm('Submit this pricing? SKUs get assigned now so labels can be printed, '
@@ -10108,6 +10431,9 @@ function _b2bAwaitingApproval(deal) {
 const _b2bSendPrompted = new Set();
 
 function _b2bStageQuote(deal) {
+    // Same dense spreadsheet as pricing for editing the lines; the client-facing
+    // quote preview below it is what they review before emailing.
+    _b2bGridMode = 'sheet';
     const canAccept = _b2bCanAccept();
     const unsent = _b2bAwaitingApproval(deal);
     const sent = deal.quote_send_count
@@ -10129,7 +10455,7 @@ function _b2bStageQuote(deal) {
         sub: unsent
             ? 'Check it over, then send it to the client or send it back for changes.'
             : 'Edit freely while the client decides. Accepting locks the offers in as our cost.',
-        wide: true,
+        full: true,
         body: `
             ${_b2bSummary(deal)}
             ${banner}
@@ -10142,7 +10468,7 @@ function _b2bStageQuote(deal) {
                 <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
             </div>
             ${_b2bTotalsBar(true)}
-            <div id="b2bItemGrid" class="b2b-items">${_b2bItemCards()}</div>
+            <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
             <details class="b2b-preview" open>
                 <summary>Quote preview — this is what the client sees</summary>
@@ -12348,12 +12674,29 @@ document.body.appendChild(customTooltip);
 // than trailing the cursor — see _anchorTipBelow + the mousemove guard.
 let _tipAnchored = false;
 function _anchorTipBelow(el) {
+    // Viewport coordinates throughout — the tooltip is position:fixed, so
+    // getBoundingClientRect values are used as-is with no scroll offset.
     const r = el.getBoundingClientRect();
     const tw = customTooltip.offsetWidth;
-    let x = r.left + r.width / 2 - tw / 2 + window.scrollX;
-    x = Math.max(10, Math.min(x, window.scrollX + window.innerWidth - tw - 10));
+    let x = r.left + r.width / 2 - tw / 2;
+    x = Math.max(10, Math.min(x, window.innerWidth - tw - 10));
     customTooltip.style.left = x + 'px';
-    customTooltip.style.top = (r.bottom + 10 + window.scrollY) + 'px';
+    customTooltip.style.top = (r.bottom + 10) + 'px';
+}
+
+// Place a trailing (non-anchored) tooltip at the cursor straight away, so it
+// doesn't flash at wherever it was last shown before mousemove catches up.
+function _tipPlaceAtCursor(e) {
+    // Client (viewport) coordinates to match the fixed-position tooltip, so it
+    // lands at the cursor whether or not the page is scroll-locked behind a modal.
+    let x = e.clientX - customTooltip.offsetWidth - 15;
+    if (x < 10) x = 10;
+    let y = e.clientY + 15;
+    if (y + customTooltip.offsetHeight > window.innerHeight - 20) {
+        y = e.clientY - customTooltip.offsetHeight - 10;
+    }
+    customTooltip.style.left = x + 'px';
+    customTooltip.style.top = y + 'px';
 }
 
 document.addEventListener('mouseover', function(e) {
@@ -12378,6 +12721,7 @@ document.addEventListener('mouseover', function(e) {
         // Top-nav buttons: pin the tooltip beneath the button with a caret instead
         // of letting it trail the cursor (matches the Tools button / tab tooltips).
         if (genTip.closest('.top-nav')) { customTooltip.classList.add('anchored'); _tipAnchored = true; _anchorTipBelow(genTip); }
+        else { _tipPlaceAtCursor(e); }
         return;
     }
 
@@ -12490,12 +12834,13 @@ document.addEventListener('mouseover', function(e) {
 document.addEventListener('mousemove', function(e) {
     if (_tipAnchored) return;   // pinned under a nav button — don't trail the cursor
     if (customTooltip.classList.contains('show')) {
-        let x = e.pageX - customTooltip.offsetWidth - 15;
-        let y = e.pageY + 15;
+        // Client coords — the tooltip is position:fixed (see _tipPlaceAtCursor).
+        let x = e.clientX - customTooltip.offsetWidth - 15;
+        let y = e.clientY + 15;
 
         if (x < 10) x = 10;
         if (y + customTooltip.offsetHeight > window.innerHeight - 20) {
-            y = e.pageY - customTooltip.offsetHeight - 10;
+            y = e.clientY - customTooltip.offsetHeight - 10;
         }
 
         customTooltip.style.left = x + 'px';
