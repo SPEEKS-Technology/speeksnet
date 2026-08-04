@@ -55,6 +55,7 @@ const TICKER_URL        = `${_BASE}/ticker`;
 const KPI_MANAGE_URL    = `${_BASE}/kpi-manage`;
 const MONTHLY_BRIEF_URL = `${_BASE}/monthly-brief`;
 const B2B_URL           = `${_BASE}/b2b-deals`;
+const B2B_OUTREACH_URL  = `${_BASE}/b2b-outreach`;
 const CALLBACKS_URL     = `${_BASE}/customer-callbacks`;
 const BUYING_MARGIN_URL = `${_BASE}/buying-margin`;
 const RECYCLE_URL       = `${_BASE}/recycle-requests`;
@@ -73,6 +74,9 @@ const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 // rather than inside a feature that can be rebuilt out from under them.
 const STORE_CODES = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
 const STORE_DOTS  = { 'OVL': '🟣', 'LEE': '🔵', 'WSP': '🟢', 'MPL': '🟠', 'BAL': '🔴' };
+// Same muted per-store palette the KPI charts use, so a store reads the same
+// colour everywhere. Rendered as a CSS dot rather than an emoji.
+const STORE_TINTS = { OVL: '#7c6fd6', LEE: '#4e90cf', WSP: '#2ea36a', MPL: '#d99f43', BAL: '#d9776a', CORP: '#1a1c1e' };
 
 // --- WRITE HELPER ---
 // POST JSON to an edge function as a "simple" request: keeping Content-Type
@@ -246,6 +250,13 @@ function closeAllModals() {
     modals.forEach(modal => {
         modal.classList.remove('show');
     });
+
+    // The B2B pricing detail sheet floats above the deal modal on its own layer,
+    // so closing the deal (Escape / overlay) has to take it down too.
+    if (typeof _b2bSheetId !== 'undefined' && _b2bSheetId != null) {
+        document.getElementById('b2bItemSheet')?.remove();
+        _b2bSheetId = null;
+    }
 
     // Side panels (Checklist / Goals / Cleaning) live outside .modal-menu, so
     // opening any modal (e.g. Listing Goals) must collapse them too.
@@ -9625,7 +9636,7 @@ async function fetchAndRenderEmployeeKPIs() {
 //   quote             corp    email it; stays editable while the client haggles
 //   listing_location  corp    ONLY when CORP did the pricing
 //   listing           store   check off / scan each unit
-//   completed         --      terminal        (cancelled is the other terminal)
+//   completed         --      terminal        (declined is the other terminal)
 //
 // Accepting a quote is the hinge: offers freeze into cost, SKUs freeze, and the
 // deal routes onward. The edge function enforces every transition; this file
@@ -9644,7 +9655,12 @@ const B2B_STAGES = [
     { key: 'declined',         label: 'Declined',         tone: 'crit',    svg: '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>' },
 ];
 const B2B_STAGE      = Object.fromEntries(B2B_STAGES.map(s => [s.key, s]));
-const B2B_BOARD      = B2B_STAGES.filter(s => s.key !== 'declined').map(s => s.key);
+// The board is work in flight, so neither terminal stage gets a column. A
+// Completed one would also lie about its count: only the recent archive tail
+// rides along with the board payload, so it would read as "we have completed 40
+// deals" no matter how many there really are. The Completed view knows the true
+// total and says so.
+const B2B_BOARD      = B2B_STAGES.filter(s => s.key !== 'declined' && s.key !== 'completed').map(s => s.key);
 const B2B_LOCATIONS  = [...STORE_CODES, 'CORP'];
 
 // What the owner of each stage is being asked to do.
@@ -9652,7 +9668,7 @@ const B2B_ACTIONS = {
     pickup:           { cta: 'Sign Off Pickup', why: 'Pickup needs signing off',        kind: 'pickup'  },
     pricing_location: { cta: 'Assign Pricing',  why: 'Needs somewhere to be priced',    kind: 'assign'  },
     pricing:          { cta: 'Price Items',     why: 'Itemize and price the pickup',    kind: 'pricing' },
-    quote:            { cta: 'Open Quote',      why: 'Priced and ready to quote',       kind: 'quote'   },
+    quote:            { cta: 'Open Quote',      why: 'Out with the client',             kind: 'quote'   },
     listing_location: { cta: 'Assign Listing',  why: 'Accepted — pick a listing store', kind: 'listloc' },
     listing:          { cta: 'Open Listing',    why: 'List the items for resale',       kind: 'listing' },
 };
@@ -9666,9 +9682,65 @@ const B2B_CONDITIONS   = ['New', 'Like New', 'Good', 'Fair', 'For Parts'];
 const B2B_NOTE_TAGS = ['Cracked', 'LCD Damage', 'No RAM', 'No HDD', 'Non-functional',
                        'iCloud Locked', 'Scratched', 'Body Damage', 'Missing Charger'];
 
+// What kind of thing a line is, and which specs that kind carries. A machine
+// can't be priced without knowing what's inside it; a box of cables has nothing
+// to describe. Mirrors SPECS_FOR in the edge function and the CHECK on the
+// table -- all three have to agree or a save fails on the round trip.
+// ADDING AN ITEM TYPE
+// -------------------
+// Item types live in three places that must agree, or a save fails on the round
+// trip: (1) here -- B2B_ITEM_TYPES (the picker) + B2B_SPECS_FOR (its spec set);
+// (2) the b2b-deals edge function -- ITEM_TYPES + SPECS_FOR; (3) the table's
+// b2b_deal_items_item_type_check CHECK constraint. Add the key to all three and
+// nothing else needs to change. A type's required specs (req:true below) render
+// as inline grid columns; optional specs live in the ⋯ detail sheet.
+//
+// 'laptop'/'desktop' were merged into 'computer'; the legacy keys stay mapped in
+// B2B_SPECS_FOR only so any pre-merge row still renders its specs.
+const B2B_ITEM_TYPES = [
+    { key: 'computer', label: 'Computer' },
+    { key: 'other',    label: 'Other'    },
+];
+const B2B_SPEC_FIELDS = [
+    { key: 'cpu',            label: 'CPU',            req: true,  hint: 'i5-1135G7' },
+    { key: 'ram',            label: 'RAM',            req: true,  hint: '16GB' },
+    { key: 'storage',        label: 'Storage',        req: true,  hint: '512GB NVMe' },
+    { key: 'gpu',            label: 'GPU',            req: false, hint: 'Iris Xe / RTX 3060' },
+    { key: 'battery_health', label: 'Battery health', req: false, hint: '88%' },
+];
+const B2B_SPECS_FOR = {
+    computer: ['cpu', 'ram', 'storage', 'gpu', 'battery_health'],
+    laptop:   ['cpu', 'ram', 'storage', 'gpu', 'battery_health'],
+    desktop:  ['cpu', 'ram', 'storage', 'gpu'],
+    other:    [],
+};
+
+// What happens to a line. `recycle` is scrap we dispose of; `no_residual` is
+// worth nothing to the CLIENT but may still be worth something to us, so it
+// keeps a value and can be listed or recycled unit by unit. Conflating the two
+// is what the old recycle_only flag got wrong.
+const B2B_DISPOSITIONS = [
+    { key: 'purchase',    label: 'Purchase',          short: 'Buy',     tone: 'ok',
+      hint: 'We pay the client for these.' },
+    { key: 'no_residual', label: 'No residual value', short: 'No value', tone: 'info',
+      hint: "Not worth enough to pay the client for, but may still be worth listing. "
+          + "Price it out, then decide later whether to list it or recycle it." },
+    { key: 'recycle',     label: 'Recycle',           short: 'Recycle', tone: 'neu',
+      hint: 'Scrap. Disposed of responsibly, never listed.' },
+];
+const B2B_DISP = Object.fromEntries(B2B_DISPOSITIONS.map(d => [d.key, d]));
+// How the pricing spreadsheet's inline disposition picker labels each option --
+// spelled out in full ("No Residual Value") rather than the terse chip `short`,
+// which stays in use on the card grid where space is tighter.
+const _B2B_DISP_SEL = { purchase: 'Purchase', no_residual: 'No Residual Value', recycle: 'Recycle' };
+
+// The marker that stands in for a serial when a device has none visible. Counts
+// as an entry, so a line still satisfies "one per unit".
+const B2B_NO_SERIAL = 'NO SERIAL';
+
 let _b2bDeals        = [];
 let _b2bClients      = [];
-let _b2bView         = 'queue';     // queue | pipeline | clients | overview
+let _b2bView         = 'queue';     // queue | pipeline | finished | clients | overview
 let _b2bStoreFilter  = 'ALL';
 let _b2bLoading      = false;
 let _b2bModalDeal    = null;        // the deal open in the deal modal
@@ -9695,8 +9767,13 @@ function _b2bIsCorp()    { return B2B_CORP_ROLES.includes(_b2bRole()) || _b2bHas
 function _b2bIsDM()      { return _b2bRole() === 'district manager' || _b2bHasCorpDelegation(); }
 // Accepting a quote is deliberately NOT delegable -- it locks the money.
 function _b2bCanAccept()  { return B2B_ACCEPT_ROLES.includes(_b2bRole()); }
-function _b2bCanClients() { return ['ceo', 'district manager'].includes(_b2bRole()); }
+function _b2bCanClients() { return ['ceo', 'district manager', 'tom'].includes(_b2bRole()); }
+// CRM notification setup (cadences + who gets the reach-out emails) is CEO-only.
+function _b2bCanCrm() { return _b2bRole() === 'ceo'; }
 function _b2bCanOverview(){ return ['ceo', 'district manager'].includes(_b2bRole()); }
+// Employees / trainees help PRICE items but never escalate: no submit, no quote,
+// no listing/complete, no accept. Pricing-edit only.
+function _b2bIsEmployee(){ return ['employee', 'training'].includes(_b2bRole()); }
 
 // The stores this user acts for. An MSM covers both of theirs.
 function _b2bMyStores() {
@@ -9721,6 +9798,11 @@ function _b2bActionFor(deal) {
     if (st === 'completed' || st === 'declined') return null;
     const mine = _b2bMyStores();
 
+    // Employees/trainees may only help price their own store's pickups — no escalation.
+    if (_b2bIsEmployee()) {
+        return (st === 'pricing' && mine.includes(deal.pricing_store)) ? B2B_ACTIONS.pricing : null;
+    }
+
     if (st === 'pricing') {
         // CORP prices its own pickups; everything else belongs to the store.
         if (deal.pricing_store === 'CORP') return _b2bIsCorp() ? B2B_ACTIONS.pricing : null;
@@ -9731,7 +9813,13 @@ function _b2bActionFor(deal) {
         if (mine.includes(deal.listing_store)) return B2B_ACTIONS.listing;
         return _b2bIsDM() ? B2B_ACTIONS.listing : null;
     }
-    return _b2bIsCorp() ? B2B_ACTIONS[st] : null;
+    if (!_b2bIsCorp()) return null;
+    // An unsent quote is waiting on us, not the client. Same stage, different
+    // job -- and the queue card should say which one it is.
+    if (st === 'quote' && _b2bAwaitingApproval(deal)) {
+        return { cta: 'Review & Send', why: 'Priced — needs approving and sending', kind: 'quote' };
+    }
+    return B2B_ACTIONS[st] || null;
 }
 
 // What opening the card should show someone with no queued action.
@@ -9745,7 +9833,11 @@ function _b2bClickKind(deal) {
 // screen -- each still confirms first, because both are one-way doors.
 // Anything needing input (a store, a name, prices) is deliberately absent.
 function _b2bQuickAction(d) {
-    if (d.stage === 'quote' && _b2bCanAccept()) {
+    if (_b2bIsEmployee()) return null;   // employees never escalate from a card
+    // Only once it has actually gone out. "Mark Accepted" on a quote awaiting
+    // approval would be recording a decision from a client who has never seen
+    // it -- and it would skip the send, leaving no quote on record at all.
+    if (d.stage === 'quote' && !_b2bAwaitingApproval(d) && _b2bCanAccept()) {
         return { label: 'Mark Accepted', call: `b2bQuickAccept('${d.id}',this)` };
     }
     if (d.stage === 'listing' && d.total_units > 0 && _b2bOutstanding(d) === 0) {
@@ -9757,7 +9849,7 @@ function _b2bQuickAction(d) {
 async function b2bQuickAccept(id, btn) {
     const d = _b2bDealById(id);
     if (!d) return;
-    const msg = `Accept ${d.client?.company || 'this'} quote at ${_b2bMoney(d.total_offer, 2)}?\n\n`
+    const msg = `Accept ${d.client?.company || 'this'} quote at ${_b2bMoney(_b2bNetOffer(d), 2)}?\n\n`
         + 'The offers lock in as our cost and the items become inventory to list. This cannot be undone.';
     if (!confirm(msg)) return;
     try {
@@ -9810,14 +9902,23 @@ function _b2bDaysIn(deal) {
 }
 function _b2bAgeTone(days) { return days >= 7 ? 'crit' : days >= 4 ? 'warn' : 'ok'; }
 
-function _b2bStageChip(stage) {
+// Pass the deal where you have one: the quote stage covers two very different
+// situations -- waiting on us, or waiting on the client -- and the send count is
+// what tells them apart.
+function _b2bStageChip(stage, deal) {
     const s = B2B_STAGE[stage] || { label: stage, tone: 'neu' };
+    if (deal && _b2bAwaitingApproval(deal)) {
+        return '<span class="b2b-chip b2b-chip-warn">Awaiting Approval</span>';
+    }
+    if (stage === 'quote' && deal) {
+        return '<span class="b2b-chip b2b-chip-violet">Out For Quote</span>';
+    }
     return `<span class="b2b-chip b2b-chip-${s.tone}">${escapeHtml(s.label)}</span>`;
 }
 function _b2bStoreTag(code) {
     if (!code) return '<span class="b2b-store b2b-store-none">Unassigned</span>';
     if (code === 'CORP') return '<span class="b2b-store b2b-store-corp">CORP</span>';
-    return `<span class="b2b-store">${STORE_DOTS[code] || ''} ${escapeHtml(code)}</span>`;
+    return `<span class="b2b-store"><i class="b2b-dot" style="background:${STORE_TINTS[code] || '#94a3b8'}"></i>${escapeHtml(code)}</span>`;
 }
 // Stroke attributes go inline rather than relying on an ancestor rule: the
 // deal modals sit outside .b2b-panel / .cb-panel, so a bare <svg> there renders
@@ -9826,6 +9927,21 @@ function _b2bIco(svg, cls) {
     return `<svg viewBox="0 0 24 24" class="${cls || ''}" fill="none" stroke="currentColor"`
          + ` stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${svg}</svg>`;
 }
+// What we actually pay, and what it actually cost us -- the offer (or the cost
+// it froze into) less the certified-wipe charge, never below zero.
+//
+// EVERY summary of a deal's money goes through these. The quote, the approval
+// email and the pricing screen all show the net figure, so a board card showing
+// the gross would be the same deal wearing two different prices.
+//
+// net_offer is computed in the view; net cost is derived here from two columns
+// the board already returns, which beats adding a column and redeploying, and
+// uses the same clamp so the two cannot drift.
+const _b2bNetOffer = (d) => Number(d.net_offer ?? Math.max(0,
+    (Number(d.total_offer) || 0) - (Number(d.total_wipe_fee) || 0)));
+const _b2bNetCost  = (d) => Math.max(0,
+    (Number(d.total_cost) || 0) - (Number(d.total_wipe_fee) || 0));
+
 // Units still needing to be listed or recycled out.
 function _b2bOutstanding(deal) { return Number(deal.outstanding_units) || 0; }
 function _b2bListedPct(deal) {
@@ -9944,7 +10060,7 @@ async function b2bLoad() {
     _b2bLoading = true;
     try {
         const [deals, clients] = await Promise.all([
-            _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}`),
+            _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}&archive=${_b2bArchiveDepth}`),
             _b2bCanClients() || _b2bIsCorp() ? _b2bGet('clients=1') : Promise.resolve([]),
         ]);
         _b2bDeals   = deals.map(_b2bShapeDeal);
@@ -9961,12 +10077,13 @@ async function b2bLoad() {
 async function b2bRefresh() {
     try {
         const [deals, clients] = await Promise.all([
-            _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}`),
+            _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}&archive=${_b2bArchiveDepth}`),
             _b2bCanClients() || _b2bIsCorp() ? _b2bGet('clients=1') : Promise.resolve(_b2bClients),
         ]);
         _b2bDeals = deals.map(_b2bShapeDeal);
         _b2bClients = clients;
         b2bRender();
+        if (typeof crmRefreshBadge === 'function') crmRefreshBadge();
     } catch (_) { /* keep what's on screen */ }
 }
 
@@ -10005,7 +10122,8 @@ function b2bRender() {
 
     // Header chrome
     document.querySelectorAll('.b2b-view-toggle .mb-view-btn').forEach(b => b.classList.remove('active'));
-    const btn = { queue: 'b2bViewQueueBtn', pipeline: 'b2bViewPipelineBtn', clients: 'b2bViewClientsBtn', overview: 'b2bViewOverviewBtn' }[_b2bView];
+    const btn = { queue: 'b2bViewQueueBtn', pipeline: 'b2bViewPipelineBtn', finished: 'b2bViewFinishedBtn',
+                  clients: 'b2bViewClientsBtn', overview: 'b2bViewOverviewBtn' }[_b2bView];
     document.getElementById(btn)?.classList.add('active');
 
     const pip = document.getElementById('b2bQueuePip');
@@ -10034,6 +10152,7 @@ function b2bRender() {
     }
 
     if (_b2bView === 'pipeline')      body.innerHTML = _b2bRenderPipeline(scoped);
+    else if (_b2bView === 'finished') body.innerHTML = _b2bRenderFinished(scoped);
     else if (_b2bView === 'clients')  body.innerHTML = _b2bRenderClients();
     else if (_b2bView === 'overview') body.innerHTML = _b2bRenderOverview(scoped);
     else                              body.innerHTML = _b2bRenderQueue(scoped, queue);
@@ -10050,7 +10169,7 @@ function _b2bRenderQueue(scoped, queue) {
         const days  = _b2bDaysIn(d);
         const meta = [
             d.total_units ? `${d.total_units} unit${d.total_units === 1 ? '' : 's'}` : null,
-            d.total_offer ? `${_b2bMoney(d.total_offer)} offer` : null,
+            d.total_offer ? `${_b2bMoney(_b2bNetOffer(d))} offer` : null,
             d.pickup_date ? `Picked up ${_b2bDate(d.pickup_date)}` : null,
         ].filter(Boolean).map(t => `<span>${escapeHtml(t)}</span>`).join('');
         const bar = (d.stage === 'listing')
@@ -10062,7 +10181,7 @@ function _b2bRenderQueue(scoped, queue) {
                 <div class="b2b-q-top">
                     <span class="b2b-q-ref">${escapeHtml(d.ref)}</span>
                     <span class="b2b-q-co">${escapeHtml(d.client?.company || 'Unknown client')}</span>
-                    ${_b2bStageChip(d.stage)}
+                    ${_b2bStageChip(d.stage, d)}
                     ${_b2bStoreTag(d.listing_store || d.pricing_store)}
                 </div>
                 <div class="b2b-q-meta">${meta}<span class="b2b-age b2b-age-${_b2bAgeTone(days)}">${days}d in stage</span></div>
@@ -10091,9 +10210,9 @@ function _b2bRenderQueue(scoped, queue) {
                 <div class="b2b-f-row" onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')">
                     <span class="b2b-f-ref">${escapeHtml(d.ref)}</span>
                     <span class="b2b-f-co">${escapeHtml(d.client?.company || '')}</span>
-                    ${_b2bStageChip(d.stage)}
+                    ${_b2bStageChip(d.stage, d)}
                     ${_b2bStoreTag(d.listing_store || d.pricing_store)}
-                    <span class="b2b-f-val">${d.total_offer ? _b2bMoney(d.total_offer) : ''}</span>
+                    <span class="b2b-f-val">${d.total_offer ? _b2bMoney(_b2bNetOffer(d)) : ''}</span>
                 </div>`).join('')}
             </div>
         </div>` : '';
@@ -10109,17 +10228,32 @@ function _b2bRenderQueue(scoped, queue) {
 // --- view: Pipeline -------------------------------------------------------
 
 function _b2bRenderPipeline(scoped) {
-    let deals = scoped.filter(d => d.stage !== 'declined');
-    if (_b2bIsCorp() && _b2bStoreFilter !== 'ALL') {
+    const live = scoped.filter(d => !_b2bIsTerminal(d));
+    let deals = live;
+    if (_b2bIsCorp() && _b2bStoreFilter === 'NONE') {
+        deals = deals.filter(d => !d.pricing_store && !d.listing_store);
+    } else if (_b2bIsCorp() && _b2bStoreFilter !== 'ALL') {
         deals = deals.filter(d => d.pricing_store === _b2bStoreFilter || d.listing_store === _b2bStoreFilter);
     }
-    const cancelled = scoped.filter(d => d.stage === 'declined').length;
 
+    // A row of store bubbles read as clutter, and worse: filtering to a store
+    // silently hid every deal with no location assigned yet -- which is exactly
+    // the set waiting to be routed. A select keeps the header calm and makes
+    // "Unassigned" an explicit, findable choice rather than a blind spot.
+    //
+    // Counted off `live`, not the filtered set: taken from `deals` the number
+    // collapses to zero the moment you filter to a store, so the count vanished
+    // exactly when you were somewhere else and might want to jump back to it.
+    const unassigned = live.filter(d => !d.pricing_store && !d.listing_store).length;
     const filter = _b2bIsCorp() ? `
         <div class="b2b-filter">
-            <span class="b2b-filter-l">Store</span>
-            ${['ALL', ...B2B_LOCATIONS].map(c => `
-                <button class="b2b-filter-b ${_b2bStoreFilter === c ? 'on' : ''}" onclick="b2bSetStoreFilter('${c}')">${c === 'ALL' ? 'All' : c}</button>`).join('')}
+            <label class="b2b-filter-l" for="b2bStoreSelect">Store</label>
+            <select id="b2bStoreSelect" class="kpi-select b2b-filter-sel" onchange="b2bSetStoreFilter(this.value)">
+                <option value="ALL" ${_b2bStoreFilter === 'ALL' ? 'selected' : ''}>All stores</option>
+                <option value="NONE" ${_b2bStoreFilter === 'NONE' ? 'selected' : ''}>Unassigned${unassigned ? ` (${unassigned})` : ''}</option>
+                ${B2B_LOCATIONS.map(c => `
+                    <option value="${c}" ${_b2bStoreFilter === c ? 'selected' : ''}>${c === 'CORP' ? 'CORP' : c}</option>`).join('')}
+            </select>
         </div>` : '';
 
     const cols = B2B_BOARD.map(key => {
@@ -10139,7 +10273,7 @@ function _b2bRenderPipeline(scoped) {
                 <div class="b2b-card-co">${escapeHtml(d.client?.company || '')}</div>
                 ${bar}
                 <div class="b2b-card-foot">
-                    <span>${d.total_offer ? _b2bMoney(d.total_offer) : `${d.line_count || 0} lines`}</span>
+                    <span>${d.total_offer ? _b2bMoney(_b2bNetOffer(d)) : `${d.line_count || 0} lines`}</span>
                     <span class="b2b-age b2b-age-${_b2bAgeTone(days)}">${days}d</span>
                 </div>
                 ${act ? '<span class="b2b-card-pill">Needs you</span>' : ''}
@@ -10156,23 +10290,163 @@ function _b2bRenderPipeline(scoped) {
         </div>`;
     }).join('');
 
-    const notes = [];
-    if (cancelled) notes.push(`${cancelled} declined deal${cancelled === 1 ? '' : 's'} hidden`);
-    if (_b2bMeta?.archive_truncated) {
-        notes.push(`showing the ${_b2bMeta.archive_shown} most recent of ${_b2bMeta.archive_total} finished deals`);
-    }
-    const cancelNote = notes.length ? `<div class="b2b-archive-note">${escapeHtml(notes.join(" · "))}.</div>` : '';
-    // Seven columns are wider than most laptops, so the board scrolls inside
+    // The board is a picture of work in flight, so finished deals live in their
+    // own view rather than as an eighth column nobody scrolls to.
+    const finished = scoped.filter(d => _b2bIsTerminal(d)).length;
+    const note = finished
+        ? `<div class="b2b-archive-note">${finished} finished deal${finished === 1 ? '' : 's'} `
+          + `${finished === 1 ? 'is' : 'are'} kept in <button class="b2b-linkbtn" onclick="b2bSetView('finished')">Completed</button>.</div>`
+        : '';
+    // Six columns are wider than most laptops, so the board scrolls inside
     // its own wrapper rather than pushing the whole page sideways.
-    return `${filter}<div class="b2b-boardwrap"><div class="b2b-board">${cols}</div></div>${cancelNote}`;
+    return `${filter}<div class="b2b-boardwrap"><div class="b2b-board">${cols}</div></div>${note}`;
+}
+
+// --- view: Completed ------------------------------------------------------
+// Both terminal outcomes, because "what happened to that deal" is the same
+// question whether it closed out or fell through.
+//
+// Only the recent tail of finished deals rides along with the board payload --
+// the finished set grows without bound, and pulling all of it on every load to
+// service a view most people never open would be the wrong trade. So the tail
+// is what you get, and a deeper page is asked for explicitly.
+
+const B2B_ARCHIVE_STEPS = [40, 200, 500];   // last step is ARCHIVE_MAX in the edge fn
+let _b2bArchiveDepth = B2B_ARCHIVE_STEPS[0];
+let _b2bFinOutcome   = 'all';   // all | completed | declined
+let _b2bFinQuery     = '';
+
+function _b2bIsTerminal(d) { return d.stage === 'completed' || d.stage === 'declined'; }
+
+// Closed-out date. stage_changed_at is when it reached its terminal stage.
+function _b2bClosedAt(d) { return d.stage_changed_at || d.updated_at || d.created_at; }
+
+function _b2bFinishedRows(rows) {
+    if (!rows.length) {
+        return `<div class="b2b-doc-empty">${_b2bFinQuery || _b2bFinOutcome !== 'all'
+            ? 'No finished deals match that.'
+            : 'Nothing has finished yet. Deals land here once they complete or get declined.'}</div>`;
+    }
+    const body = rows.map(d => {
+        const done = (Number(d.listed_units) || 0) + (Number(d.recycled_units) || 0);
+        const sub  = d.stage === 'declined' && d.declined_reason
+            ? `<div class="b2b-doc-sub">${escapeHtml(d.declined_reason)}</div>` : '';
+        return `
+        <tr class="b2b-clickrow" onclick="b2bOpenDeal('view','${d.id}')">
+            <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
+            <td><b>${escapeHtml(d.client?.company || '')}</b>${sub}</td>
+            <td>${_b2bStageChip(d.stage, d)}</td>
+            <td>${_b2bStoreTag(d.listing_store || d.pricing_store)}</td>
+            <td class="c">${d.stage === 'completed' ? `${done} of ${d.total_units || 0}` : '—'}</td>
+            <td class="r b">${d.stage === 'completed' ? _b2bMoney(_b2bNetCost(d)) : '—'}</td>
+            <td class="r">${_b2bDate(_b2bClosedAt(d))}</td>
+        </tr>`;
+    }).join('');
+    return `<table class="cb-table b2b-ftable">
+            <thead><tr><th>Ref</th><th>Client</th><th>Outcome</th><th>Store</th>
+                <th class="c">Units</th><th class="r">Cost</th><th class="r">Closed</th></tr></thead>
+            <tbody>${body}</tbody>
+        </table>`;
+}
+
+// Applies the two filters to the scoped terminal set, newest first.
+function _b2bFinishedSet(scoped) {
+    const q = _b2bFinQuery.toLowerCase().trim();
+    return scoped
+        .filter(_b2bIsTerminal)
+        .filter(d => _b2bFinOutcome === 'all' || d.stage === _b2bFinOutcome)
+        .filter(d => !q
+            || (d.ref || '').toLowerCase().includes(q)
+            || (d.client?.company || '').toLowerCase().includes(q)
+            || (d.client?.acronym || '').toLowerCase().includes(q))
+        .sort((a, b) => new Date(_b2bClosedAt(b)) - new Date(_b2bClosedAt(a)));
+}
+
+function _b2bRenderFinished(scoped) {
+    const all  = scoped.filter(_b2bIsTerminal);
+    const rows = _b2bFinishedSet(scoped);
+    const won  = all.filter(d => d.stage === 'completed');
+    const lost = all.filter(d => d.stage === 'declined');
+
+    const tiles = `
+        <div class="b2b-tiles">
+            <div class="b2b-tile"><span class="b2b-tile-k">Completed</span><span class="b2b-tile-v">${won.length}</span><span class="b2b-tile-c">deals closed out</span></div>
+            <div class="b2b-tile"><span class="b2b-tile-k">Cost Locked In</span><span class="b2b-tile-v">${_b2bMoney(won.reduce((s, d) => s + _b2bNetCost(d), 0))}</span><span class="b2b-tile-c">across completed deals</span></div>
+            <div class="b2b-tile"><span class="b2b-tile-k">Units Handled</span><span class="b2b-tile-v">${won.reduce((n, d) => n + (Number(d.listed_units) || 0) + (Number(d.recycled_units) || 0), 0)}</span><span class="b2b-tile-c">listed or recycled</span></div>
+            <div class="b2b-tile ${lost.length ? 'warn' : ''}"><span class="b2b-tile-k">Declined</span><span class="b2b-tile-v">${lost.length}</span><span class="b2b-tile-c">deals that fell through</span></div>
+        </div>`;
+
+    // The search box is written once and only the rows below it repaint, so
+    // typing never loses focus.
+    const controls = `
+        <div class="b2b-filter">
+            <label class="b2b-filter-l" for="b2bFinOutcome">Outcome</label>
+            <select id="b2bFinOutcome" class="kpi-select b2b-filter-sel" onchange="b2bSetFinOutcome(this.value)">
+                <option value="all"       ${_b2bFinOutcome === 'all'       ? 'selected' : ''}>All outcomes</option>
+                <option value="completed" ${_b2bFinOutcome === 'completed' ? 'selected' : ''}>Completed${won.length ? ` (${won.length})` : ''}</option>
+                <option value="declined"  ${_b2bFinOutcome === 'declined'  ? 'selected' : ''}>Declined${lost.length ? ` (${lost.length})` : ''}</option>
+            </select>
+            <input id="b2bFinSearch" class="b2b-filter-search" autocomplete="off" placeholder="Search ref or client…"
+                value="${escapeHtml(_b2bFinQuery)}" oninput="_b2bPaintFinished()">
+        </div>`;
+
+    // The meta counts come from the server, which scopes to one store at most --
+    // an MSM covering two pulls ALL and narrows in _b2bInScope, so quoting those
+    // numbers at them would count stores they can't see. They get the offer
+    // without the arithmetic.
+    const exact  = _b2bIsCorp() || _b2bMyStores().length === 1;
+    const more   = B2B_ARCHIVE_STEPS.some(s => s > _b2bArchiveDepth)
+        ? ' <button class="b2b-linkbtn" onclick="b2bLoadDeeperArchive(this)">Load more</button>' : '';
+    const deeper = _b2bMeta?.archive_truncated
+        ? `<div class="b2b-archive-note">${exact
+            ? `Showing the ${_b2bMeta.archive_shown} most recently finished of ${_b2bMeta.archive_total}.`
+            : 'Older finished deals are not loaded yet.'}${more}</div>`
+        : '';
+
+    return `${tiles}${controls}
+        <div class="b2b-sec">
+            <div class="b2b-sec-h"><span>Finished Deals</span><span class="b2b-sec-n">${rows.length}</span></div>
+            <div id="b2bFinRows">${_b2bFinishedRows(rows)}</div>
+        </div>
+        ${deeper}`;
+}
+
+function b2bSetFinOutcome(v) { _b2bFinOutcome = v; _b2bPaintFinished(); }
+
+// Repaints only the rows, so the filters keep their focus and caret position.
+function _b2bPaintFinished() {
+    _b2bFinQuery = document.getElementById('b2bFinSearch')?.value || '';
+    const host = document.getElementById('b2bFinRows');
+    if (!host) return;
+    const rows = _b2bFinishedSet(_b2bDeals.filter(_b2bInScope));
+    host.innerHTML = _b2bFinishedRows(rows);
+    const n = host.parentElement?.querySelector('.b2b-sec-n');
+    if (n) n.textContent = rows.length;
+}
+
+// Walks the depth up one step and refetches. Deliberately manual: the deeper
+// pages are for looking something up, not for the default load.
+async function b2bLoadDeeperArchive(btn) {
+    const next = B2B_ARCHIVE_STEPS.find(s => s > _b2bArchiveDepth);
+    if (!next) return;
+    _b2bArchiveDepth = next;
+    await _b2bBusy(btn, 'Loading…', () => b2bRefresh());
 }
 
 // --- view: Clients (DM/CEO) ------------------------------------------------
 
+// Which client rows are expanded. A Set rather than a single id so two clients
+// can be compared side by side.
+const _b2bClientOpen = new Set();
+
 function _b2bRenderClients() {
     const editing = _b2bEditingClient ? _b2bClients.find(c => c.id === _b2bEditingClient) : null;
-    const rows = _b2bClients.length ? _b2bClients.map(c => `
-        <tr>
+    const rows = _b2bClients.length ? _b2bClients.map(c => {
+        const open = _b2bClientOpen.has(c.id);
+        return `
+        <tr id="b2bCRow-${c.id}" class="b2b-clickrow${open ? ' open' : ''}" onclick="b2bToggleClient('${c.id}')">
+            <td><button class="b2b-cexp" aria-expanded="${open}" aria-label="Show deals and history">${
+                _b2bIco('<polyline points="9 18 15 12 9 6"/>')}</button></td>
             <td><span class="b2b-mono b2b-acr">${escapeHtml(c.acronym)}</span></td>
             <td><b>${escapeHtml(c.company)}</b>${c.notes ? `<div class="b2b-doc-sub">${escapeHtml(c.notes)}</div>` : ''}</td>
             <td>${escapeHtml(c.contact || '—')}</td>
@@ -10180,17 +10454,18 @@ function _b2bRenderClients() {
             <td>${escapeHtml(c.contact_phone || '—')}</td>
             <td class="c">${c.open_count ? `<span class="b2b-chip b2b-chip-info">${c.open_count} open</span> ` : ''}${c.deal_count || 0}</td>
             <td class="r b2b-rowacts">
-                <button class="b2b-mini" onclick="b2bEditClient('${c.id}')">Edit</button>
-                <button class="b2b-mini danger" ${c.deal_count ? 'disabled title="Clients with deals on record cannot be deleted"' : ''} onclick="b2bDeleteClient('${c.id}')">Delete</button>
+                <button class="b2b-mini" onclick="event.stopPropagation();b2bEditClient('${c.id}')">Edit</button>
+                <button class="b2b-mini danger" ${c.deal_count ? 'disabled title="Clients with deals on record cannot be deleted"' : ''} onclick="event.stopPropagation();b2bDeleteClient('${c.id}')">Delete</button>
             </td>
-        </tr>`).join('')
-        : '<tr><td colspan="7" class="b2b-doc-empty">No clients yet — add the first one below.</td></tr>';
+        </tr>${open ? _b2bClientDrawer(c.id) : ''}`;
+    }).join('')
+        : '<tr><td colspan="8" class="b2b-doc-empty">No clients yet — add the first one below.</td></tr>';
 
     return `
         <div class="b2b-sec">
             <div class="b2b-sec-h"><span>Clients</span><span class="b2b-sec-n">${_b2bClients.length}</span></div>
             <table class="cb-table b2b-ctable">
-                <thead><tr><th>Acronym</th><th>Company</th><th>Contact</th><th>Email</th><th>Phone</th><th class="c">Deals</th><th></th></tr></thead>
+                <thead><tr><th class="b2b-th-exp"></th><th>Acronym</th><th>Company</th><th>Contact</th><th>Email</th><th>Phone</th><th class="c">Deals</th><th></th></tr></thead>
                 <tbody>${rows}</tbody>
             </table>
         </div>
@@ -10207,7 +10482,9 @@ function _b2bRenderClients() {
                     <div><label class="form-label-caps">Email</label>
                         <input id="b2bCfEmail" class="form-input-lg" value="${escapeHtml(editing?.contact_email || '')}"></div>
                     <div><label class="form-label-caps">Phone</label>
-                        <input id="b2bCfPhone" class="form-input-lg" value="${escapeHtml(editing?.contact_phone || '')}"></div>
+                        <input id="b2bCfPhone" class="form-input-lg" type="tel" inputmode="tel" maxlength="20"
+                            value="${escapeHtml(editing?.contact_phone || '')}" placeholder="(816) 555-0142"
+                            oninput="_b2bPhoneMask(this)"></div>
                     <div><label class="form-label-caps">Notes</label>
                         <input id="b2bCfNotes" class="form-input-lg" value="${escapeHtml(editing?.notes || '')}" placeholder="Anything worth remembering"></div>
                 </div>
@@ -10220,7 +10497,420 @@ function _b2bRenderClients() {
         </div>`;
 }
 
+// Expands in place rather than through b2bRender(), so opening a client doesn't
+// wipe whatever is half-typed in the add/edit form below the table.
+function b2bToggleClient(id) {
+    const row  = document.getElementById(`b2bCRow-${id}`);
+    const drop = document.getElementById(`b2bCDrop-${id}`);
+    if (drop) {
+        drop.remove();
+        _b2bClientOpen.delete(id);
+        row?.classList.remove('open');
+        row?.querySelector('.b2b-cexp')?.setAttribute('aria-expanded', 'false');
+        return;
+    }
+    if (!row) return;
+    _b2bClientOpen.add(id);
+    row.classList.add('open');
+    row.querySelector('.b2b-cexp')?.setAttribute('aria-expanded', 'true');
+    row.insertAdjacentHTML('afterend', _b2bClientDrawer(id));
+}
+
+// --- outreach (the mini CRM) ----------------------------------------------
+// A client can carry a cadence: every N months from a date you set. The daily
+// b2b-outreach sweep emails leadership when one comes due.
+//
+// The reminder goes to US, not to the client. The client-facing note is a mailto
+// from here, so it leaves the sender's own mailbox and the reply comes back to
+// them -- same reasoning as the quote. Auto-sending to a real business from the
+// reports address would put our outreach in a place nobody reads the answer.
+
+// Today in the store's timezone, as YYYY-MM-DD, so "due" means the same thing
+// here as it does in the edge function.
+function _b2bToday() {
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+}
+
+function _b2bDueIn(dateStr) {
+    if (!dateStr) return null;
+    const a = Date.parse(_b2bToday() + 'T00:00:00Z');
+    const b = Date.parse(dateStr + 'T00:00:00Z');
+    if (Number.isNaN(b)) return null;
+    return Math.round((b - a) / 86400000);   // negative = overdue
+}
+
+function _b2bDueLabel(dateStr) {
+    const d = _b2bDueIn(dateStr);
+    if (d === null) return { text: 'Not scheduled', tone: 'neu' };
+    if (d < 0)  return { text: `${-d} day${d === -1 ? '' : 's'} overdue`, tone: 'crit' };
+    if (d === 0) return { text: 'Due today', tone: 'warn' };
+    if (d <= 14) return { text: `Due in ${d} day${d === 1 ? '' : 's'}`, tone: 'warn' };
+    return { text: `Due ${_b2bDate(dateStr)}`, tone: 'ok' };
+}
+
+// Records that we actually reached out, which is what moves the schedule on.
+async function b2bLogTouch(id, btn) {
+    const c = _b2bClients.find(x => x.id === id);
+    if (!c) return;
+    const detail = prompt(`Log a check-in with ${c.company}.\n\n`
+        + 'Anything worth remembering? (optional — leave blank and it just records the date)', '');
+    if (detail === null) return;
+    try {
+        await _b2bBusy(btn, 'Saving…', async () => {
+            const res = await fetch(B2B_OUTREACH_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ action: 'log_touch', client_id: id, detail, user: _b2bUser() }),
+            });
+            const out = await res.json().catch(() => ({}));
+            if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
+        });
+        await b2bRefresh();
+    } catch (e) {
+        alert(`Couldn't log that check-in: ${e.message}`);
+    }
+}
+
+// Opens a draft in the sender's own mailbox. Plain text, because a mailto body
+// is plain text by RFC 6068 -- no markup survives the trip.
+function b2bDraftOutreach(id) {
+    const c = _b2bClients.find(x => x.id === id);
+    if (!c) return;
+    if (!c.contact_email) return alert(`${c.company} has no email address on file.`);
+
+    const me   = _b2bUser();
+    const who  = (c.contact || '').trim().split(/\s+/)[0];
+    const last = c.last_deal_at ? _b2bLongDate(String(c.last_deal_at).slice(0, 10)) : '';
+    const body = [
+        who ? `Hi ${who},` : 'Hello,',
+        '',
+        last
+            ? `I hope things are going well. We last worked together on a pickup in ${last}, and I wanted to check in and see whether you have any equipment coming out of service.`
+            : 'I hope things are going well. I wanted to check in and see whether you have any equipment coming out of service.',
+        '',
+        'If you do, we can look at it and get you a quote — no obligation either way. Happy to come to you for the pickup, same as before.',
+        '',
+        'Just let me know and I will get it scheduled.',
+        '',
+        'Best regards,',
+        me,
+        'SPEEKS Technology',
+    ].join('\n');
+    const subject = `Checking In From SPEEKS Technology`;
+
+    if (!confirm(`This opens a draft to ${c.contact_email} in your own email app.\n\n`
+        + 'Read it over and edit it before sending — it is a starting point, not a template to fire off.\n\n'
+        + `After you send it, use "Mark Reached Out" so the schedule moves on.`)) return;
+
+    window.location.href = `mailto:${encodeURIComponent(c.contact_email)}`
+        + `?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+// A client's history. The headline figures come from the server (the view rolls
+// them up over every deal on record); the deal list underneath can only show
+// what this session actually loaded, which is the open set plus the recent
+// finished tail -- so it says so when there is more behind it.
+function _b2bClientDrawer(id) {
+    const c = _b2bClients.find(x => x.id === id);
+    if (!c) return '';
+
+    const total = Number(c.deal_count) || 0;
+
+    // Six tiles of zeros says nothing a single sentence doesn't say better -- but
+    // a client with no deals yet is exactly who you might want to chase, so the
+    // outreach panel still belongs here.
+    if (!total) {
+        return `
+        <tr class="b2b-cdrop" id="b2bCDrop-${id}">
+            <td colspan="8">
+                <div class="b2b-doc-empty">No deals with ${escapeHtml(c.company)} yet.
+                    Start one with New Deal.</div>            </td>
+        </tr>`;
+    }
+
+    const mine = _b2bDeals
+        .filter(d => d.client_id === id && _b2bInScope(d))
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+    const stat = (k, v, sub) => `<div class="b2b-cstat"><span class="b2b-cstat-k">${k}</span>`
+        + `<span class="b2b-cstat-v">${v}</span>${sub ? `<span class="b2b-cstat-s">${sub}</span>` : ''}</div>`;
+
+    // The year, not "Feb 11" -- a lifetime figure sitting next to a bare day and
+    // month invites reading a three-year-old relationship as a recent one.
+    const since = c.first_deal_at ? new Date(c.first_deal_at) : null;
+    const stats = `
+        <div class="b2b-cstats">
+            ${stat('Deals All Time', total, `${Number(c.open_count) || 0} still open`)}
+            ${stat('Completed', Number(c.completed_count) || 0,
+                   `${Math.round(((Number(c.completed_count) || 0) / total) * 100)}% of their deals`)}
+            ${stat('Declined', Number(c.declined_count) || 0, 'fell through')}
+            ${stat('Lifetime Spend', _b2bMoney(c.lifetime_cost), 'cost of completed deals')}
+            ${stat('Units Handled', Number(c.lifetime_units) || 0, 'listed or recycled')}
+            ${stat('Client Since', since && !isNaN(since) ? since.getFullYear() : '—',
+                   c.last_deal_at ? `latest deal ${_b2bDate(c.last_deal_at)}` : '')}
+        </div>`;
+
+    const dealRows = mine.length ? mine.map(d => `
+        <div class="b2b-cd-row" onclick="event.stopPropagation();b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')">
+            <span class="b2b-mono b2b-cd-ref">${escapeHtml(d.ref)}</span>
+            ${_b2bStageChip(d.stage, d)}
+            ${_b2bStoreTag(d.listing_store || d.pricing_store)}
+            <span class="b2b-cd-units">${d.total_units ? `${d.total_units} unit${d.total_units === 1 ? '' : 's'}` : `${d.line_count || 0} lines`}</span>
+            <span class="b2b-cd-val">${d.stage === 'completed' ? _b2bMoney(_b2bNetCost(d))
+                : d.total_offer ? _b2bMoney(_b2bNetOffer(d)) : ''}</span>
+            <span class="b2b-cd-date">${_b2bDate(d.created_at)}</span>
+        </div>`).join('')
+        : '<div class="b2b-doc-empty">None of their deals are loaded right now — '
+          + 'open Completed and load more to reach the older ones.</div>';
+
+    const hidden = total > mine.length && mine.length
+        ? `<div class="b2b-archive-note">${total - mine.length} older deal${total - mine.length === 1 ? '' : 's'} not loaded.</div>`
+        : '';
+
+    return `
+        <tr class="b2b-cdrop" id="b2bCDrop-${id}">
+            <td colspan="8">
+                ${stats}                <div class="b2b-cd-h">Deals</div>
+                <div class="b2b-cdeals">${dealRows}</div>
+                ${hidden}
+            </td>
+        </tr>`;
+}
+
+// ============================================================================
+// CRM SETTINGS (CEO only) — the notification half of the mini CRM.
+// Three tabs: per-client cadence (Client List), a queue of unconfigured clients
+// (New Clients + badge), and the single email address all reach-out reminders
+// are sent to (Notifications). Cadence + email persist through b2b-outreach.
+// ============================================================================
+let _crmTab      = 'clients';
+let _crmSearch   = '';
+let _crmSettings = { notify_email: '', enabled: true,
+                     quote_ready_enabled: true, wipe_fee: 8 };
+const CRM_UNITS  = ['day', 'week', 'month'];
+
+function _crmNewClients() { return _b2bClients.filter(c => !c.outreach_reviewed_at); }
+
+// Badge on the gear button + the New Clients tab. Safe anywhere: no-ops when the
+// elements aren't present (e.g. other pages).
+function crmRefreshBadge() {
+    const n = _crmNewClients().length;
+    ['crmGearBadge', 'crmTabBadge'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.textContent = n; el.style.display = n > 0 ? '' : 'none'; }
+    });
+}
+
+async function crmLoadSettings() {
+    try {
+        const res = await fetch(`${B2B_OUTREACH_URL}?settings=1&v=${Date.now()}`);
+        const j = await res.json();
+        if (j && j.settings) _crmSettings = {
+            notify_email: j.settings.notify_email || '',
+            enabled: j.settings.enabled !== false,
+            quote_ready_enabled: j.settings.quote_ready_enabled !== false,
+            wipe_fee: Number(j.settings.wipe_fee ?? 8),
+        };
+    } catch (_) { /* keep what we have */ }
+}
+
+async function crmOpen() {
+    if (!_b2bCanCrm()) return;
+    const modal = document.getElementById('crmModal');
+    if (!modal) return;
+    _crmTab = 'clients'; _crmSearch = '';
+    document.getElementById('crmBody').innerHTML = '<div class="status-message">Loading…</div>';
+    closeAllModals();
+    modal.classList.add('show');
+    lockAndBlurScreen();
+    await crmLoadSettings();
+    if (!_b2bClients.length) { try { _b2bClients = await _b2bGet('clients=1'); } catch (_) {} }
+    crmSyncTabs();
+    crmRender();
+}
+
+function crmSyncTabs() {
+    document.querySelectorAll('#crmTabs .crm-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === _crmTab));
+    const n = _crmNewClients().length;
+    const tb = document.getElementById('crmTabBadge');
+    if (tb) { tb.textContent = n; tb.style.display = n > 0 ? '' : 'none'; }
+}
+
+function crmTab(t) { _crmTab = t; crmSyncTabs(); crmRender(); }
+
+function crmRender() {
+    const body = document.getElementById('crmBody');
+    if (!body) return;
+    if (_crmTab === 'settings') body.innerHTML = _crmSettingsHtml();
+    else if (_crmTab === 'new') body.innerHTML = _crmNewHtml();
+    else body.innerHTML = _crmClientsHtml();
+}
+
+function _crmFilter(list) {
+    const q = _crmSearch.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter(c => (c.company || '').toLowerCase().includes(q)
+        || (c.acronym || '').toLowerCase().includes(q)
+        || (c.contact || '').toLowerCase().includes(q));
+}
+
+function _crmClientsHtml() {
+    const list = _crmFilter(_b2bClients.slice().sort((a, b) => String(a.company).localeCompare(String(b.company))));
+    const rows = list.length ? list.map(_crmClientRow).join('') : '<div class="b2b-doc-empty">No clients match.</div>';
+    return `
+        <p class="crm-help">Set how often each client should get a check-in reminder and the day it starts from. Reminders email the address on the Notifications tab — nothing shows in the app.</p>
+        <input class="form-input-lg crm-search" placeholder="Search clients…" value="${escapeHtml(_crmSearch)}" oninput="_crmSearch=this.value;_crmRenderList()">
+        <div class="crm-clist" id="crmClist">${rows}</div>`;
+}
+// Re-render just the list on search so the search box keeps focus.
+function _crmRenderList() {
+    const el = document.getElementById('crmClist');
+    if (!el) return;
+    const list = _crmFilter(_b2bClients.slice().sort((a, b) => String(a.company).localeCompare(String(b.company))));
+    el.innerHTML = list.length ? list.map(_crmClientRow).join('') : '<div class="b2b-doc-empty">No clients match.</div>';
+}
+
+function _crmNewHtml() {
+    const list = _crmNewClients().sort((a, b) => String(a.company).localeCompare(String(b.company)));
+    if (!list.length) return `<div class="crm-clear"><div class="crm-clear-em">✓</div><h4>All caught up</h4>
+        <p>Every client has been set up. New clients you add show up here to configure their reminders.</p></div>`;
+    return `<p class="crm-help">New clients that haven't been set up yet. Give them a reminder cadence, or mark that they don't need one — either clears them from this list.</p>
+        <div class="crm-clist">${list.map(_crmClientRow).join('')}</div>`;
+}
+
+function _crmClientRow(c) {
+    const on = !!c.outreach_active;
+    const every = c.outreach_every || 1;
+    const unit = c.outreach_unit || 'week';
+    const due = on ? _b2bDueLabel(c.outreach_next_due) : null;
+    const newTag = !c.outreach_reviewed_at ? '<span class="crm-newtag">NEW</span>' : '';
+    return `
+    <div class="crm-crow" id="crmRow-${c.id}">
+        <div class="crm-crow-top">
+            <span class="crm-co"><b>${escapeHtml(c.company)}</b> <span class="b2b-mono b2b-acr">${escapeHtml(c.acronym)}</span>${newTag}</span>
+            <span class="crm-when">${on && due
+                ? `<span class="b2b-age b2b-age-${due.tone === 'crit' ? 'crit' : due.tone === 'warn' ? 'warn' : 'ok'}">${escapeHtml(due.text)}</span>`
+                : '<span class="crm-off">No reminders</span>'}</span>
+        </div>
+        <label class="crm-toggle"><input type="checkbox" id="crmOn-${c.id}" ${on ? 'checked' : ''} onchange="_crmToggle('${c.id}',this.checked)"> Remind me to check in on this client</label>
+        <div class="crm-fields" id="crmFields-${c.id}" ${on ? '' : 'style="display:none;"'}>
+            <span class="crm-inline">Every
+                <input type="number" min="1" max="365" id="crmEvery-${c.id}" value="${every}" class="crm-num">
+                <select id="crmUnit-${c.id}" class="crm-sel">${CRM_UNITS.map(u => `<option value="${u}" ${unit === u ? 'selected' : ''}>${u}s</option>`).join('')}</select>
+                starting <input type="date" id="crmStart-${c.id}" value="${escapeHtml(c.outreach_start || _b2bToday())}" class="crm-date">
+            </span>
+            <input id="crmNote-${c.id}" class="form-input-lg crm-note" placeholder="What to bring up (goes in the reminder email)" value="${escapeHtml(c.outreach_note || '')}">
+        </div>
+        <div class="crm-crow-acts">
+            <button class="b2b-btn b2b-btn-primary b2b-mini" onclick="crmSaveSchedule('${c.id}',this)">Save</button>
+            ${!c.outreach_reviewed_at ? `<button class="b2b-mini" onclick="crmMarkReviewed('${c.id}',this)">No reminders needed</button>` : ''}
+            ${on && c.contact_email ? `<button class="b2b-mini" onclick="b2bDraftOutreach('${c.id}')">Draft Email</button>` : ''}
+            ${on ? `<button class="b2b-mini" onclick="b2bLogTouch('${c.id}',this)">Mark Reached Out</button>` : ''}
+        </div>
+    </div>`;
+}
+function _crmToggle(id, on) { const f = document.getElementById('crmFields-' + id); if (f) f.style.display = on ? '' : 'none'; }
+
+async function crmSaveSchedule(id, btn) {
+    const on    = document.getElementById('crmOn-' + id)?.checked || false;
+    const every = document.getElementById('crmEvery-' + id)?.value || '';
+    const unit  = document.getElementById('crmUnit-' + id)?.value || 'month';
+    const start = document.getElementById('crmStart-' + id)?.value || '';
+    const note  = document.getElementById('crmNote-' + id)?.value || '';
+    if (on && !start) return alert('Pick the date the schedule should start from.');
+    if (on && (!every || Number(every) < 1)) return alert('Set how often the reminder should repeat.');
+    try {
+        await _b2bBusy(btn, 'Saving…', async () => {
+            const res = await fetch(B2B_OUTREACH_URL, {
+                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ action: 'set_schedule', client_id: id, active: on, start, every, unit, note }),
+            });
+            const out = await res.json().catch(() => ({}));
+            if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
+        });
+        await b2bRefresh();
+        crmSyncTabs(); crmRender();
+    } catch (e) { alert(`Couldn't save the schedule: ${e.message}`); }
+}
+
+async function crmMarkReviewed(id, btn) {
+    try {
+        await _b2bBusy(btn, 'Saving…', async () => {
+            const res = await fetch(B2B_OUTREACH_URL, {
+                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ action: 'mark_reviewed', client_id: id }),
+            });
+            const out = await res.json().catch(() => ({}));
+            if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
+        });
+        await b2bRefresh();
+        crmSyncTabs(); crmRender();
+    } catch (e) { alert(`Couldn't update that client: ${e.message}`); }
+}
+
+function _crmSettingsHtml() {
+    const s = _crmSettings;
+    return `
+    <p class="crm-help">Where every B2B notification is sent. Reach-out reminders and quote approvals both go to this one address — nothing appears inside the website.</p>
+    <div class="crm-settings">
+        <label class="form-label-caps">Notification email</label>
+        <input id="crmEmail" class="form-input-lg" type="email" value="${escapeHtml(s.notify_email || '')}" placeholder="ceo@speekstechnology.com">
+        <label class="crm-toggle" style="margin-top:16px;"><input type="checkbox" id="crmEnabled" ${s.enabled ? 'checked' : ''}> Send reach-out reminders</label>
+        <label class="crm-toggle"><input type="checkbox" id="crmQuoteReady" ${s.quote_ready_enabled !== false ? 'checked' : ''}> Email me when a quote is priced and ready to send</label>
+
+        <div class="crm-sec">Pricing</div>
+        <label class="form-label-caps">Certified data wipe, per device</label>
+        <div class="crm-fee">
+            <span class="crm-fee-$">$</span>
+            <input id="crmWipeFee" class="form-input-lg" type="number" min="0" step="0.01"
+                value="${Number(s.wipe_fee ?? 8).toFixed(2)}">
+        </div>
+        <p class="crm-help">Taken off what we pay the client, never billed to them. Changing this
+            only affects lines flagged from now on — a quote already priced keeps the figure it was quoted at.</p>
+
+        <div class="crm-settings-acts">
+            <button class="b2b-btn b2b-btn-primary" onclick="crmSaveSettings(this)">Save Settings</button>
+            <span class="crm-msg" id="crmSetMsg"></span>
+        </div>
+    </div>`;
+}
+
+async function crmSaveSettings(btn) {
+    const notify_email = document.getElementById('crmEmail')?.value.trim() || '';
+    const enabled      = document.getElementById('crmEnabled')?.checked !== false;
+    const quote_ready_enabled = document.getElementById('crmQuoteReady')?.checked !== false;
+    const wipe_fee     = parseFloat(document.getElementById('crmWipeFee')?.value) || 0;
+    if (wipe_fee < 0) return alert("A wipe charge can't be negative — it comes off what we pay, not what they pay.");
+    try {
+        await _b2bBusy(btn, 'Saving…', async () => {
+            const res = await fetch(B2B_OUTREACH_URL, {
+                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ action: 'set_crm_settings', notify_email, enabled,
+                    quote_ready_enabled, wipe_fee, user: _b2bUser() }),
+            });
+            const out = await res.json().catch(() => ({}));
+            if (!res.ok || out.success === false) throw new Error(out.error || `Request failed (HTTP ${res.status})`);
+        });
+        _crmSettings = { notify_email, enabled, quote_ready_enabled, wipe_fee };
+        // The pricing screen reads the fee off the board payload, so refresh it
+        // rather than leaving a stale figure on the next line someone flags.
+        if (_b2bMeta) _b2bMeta.wipe_fee = wipe_fee;
+        const m = document.getElementById('crmSetMsg');
+        if (m) { m.textContent = 'Saved.'; setTimeout(() => { const e = document.getElementById('crmSetMsg'); if (e) e.textContent = ''; }, 2500); }
+    } catch (e) { alert(`Couldn't save settings: ${e.message}`); }
+}
+
 function b2bEditClient(id) { _b2bEditingClient = id; b2bRender(); }
+
+// Digits only, formatted as a US number and capped at 10 digits. A phone field
+// that accepts prose is a phone field nobody can dial from.
+function _b2bPhoneMask(el) {
+    const d = el.value.replace(/\D/g, '').slice(0, 10);
+    el.value = d.length > 6 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`
+             : d.length > 3 ? `(${d.slice(0, 3)}) ${d.slice(3)}`
+             : d.length     ? `(${d}`
+             : '';
+}
 
 async function b2bSaveClient() {
     const company = document.getElementById('b2bCfCompany')?.value.trim();
@@ -10266,7 +10956,7 @@ function _b2bRenderOverview(scoped) {
         <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
             <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
             <td><b>${escapeHtml(d.client?.company || '')}</b></td>
-            <td>${_b2bStageChip(d.stage)}</td>
+            <td>${_b2bStageChip(d.stage, d)}</td>
             <td>${_b2bStoreTag(d.listing_store || d.pricing_store)}</td>
             <td class="r"><span class="b2b-age b2b-age-${_b2bAgeTone(_b2bDaysIn(d))}">${_b2bDaysIn(d)}d</span></td>
         </tr>`).join('');
@@ -10279,40 +10969,40 @@ function _b2bRenderOverview(scoped) {
             <td><b>${escapeHtml(d.client?.company || '')}</b></td>
             <td>${escapeHtml(d.client?.contact_email || '—')}</td>
             <td class="c">${d.quote_send_count ? `sent ${d.quote_send_count}×` : '<span class="b2b-age b2b-age-warn">not sent</span>'}</td>
-            <td class="r b">${_b2bMoney(d.total_offer)}</td>
+            <td class="r b">${_b2bMoney(_b2bNetOffer(d))}</td>
         </tr>`).join('');
 
     // Inventory bought and paid for that is not yet earning.
     const unlisted = live.filter(d => d.stage === 'listing' && _b2bOutstanding(d) > 0)
         .sort((a, b) => _b2bOutstanding(b) - _b2bOutstanding(a));
-    const unlistedTotal = unlisted.reduce((s, d) => s + (Number(d.total_cost) || 0), 0);
+    const unlistedTotal = unlisted.reduce((s, d) => s + _b2bNetCost(d), 0);
     const unlistedRows = unlisted.map(d => `
         <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
             <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
             <td><b>${escapeHtml(d.client?.company || '')}</b></td>
             <td>${_b2bStoreTag(d.listing_store)}</td>
             <td class="c">${_b2bOutstanding(d)} of ${d.total_units}</td>
-            <td class="r b">${_b2bMoney(d.total_cost)}</td>
+            <td class="r b">${_b2bMoney(_b2bNetCost(d))}</td>
         </tr>`).join('');
 
     const tiles = `
         <div class="b2b-tiles">
             <div class="b2b-tile"><span class="b2b-tile-k">In Flight</span><span class="b2b-tile-v">${live.length}</span><span class="b2b-tile-c">deals moving</span></div>
-            <div class="b2b-tile"><span class="b2b-tile-k">Out For Quote</span><span class="b2b-tile-v">${_b2bMoney(quotes.reduce((s, d) => s + (Number(d.total_offer) || 0), 0))}</span><span class="b2b-tile-c">${quotes.length} awaiting a decision</span></div>
+            <div class="b2b-tile"><span class="b2b-tile-k">Out For Quote</span><span class="b2b-tile-v">${_b2bMoney(quotes.reduce((s, d) => s + _b2bNetOffer(d), 0))}</span><span class="b2b-tile-c">${quotes.length} awaiting a decision</span></div>
             <div class="b2b-tile"><span class="b2b-tile-k">Unlisted Stock</span><span class="b2b-tile-v">${_b2bMoney(unlistedTotal)}</span><span class="b2b-tile-c">${unlisted.reduce((n, d) => n + _b2bOutstanding(d), 0)} units to list</span></div>
             <div class="b2b-tile ${stalled.length ? 'warn' : ''}"><span class="b2b-tile-k">Stalled</span><span class="b2b-tile-v">${stalled.length}</span><span class="b2b-tile-c">no movement in 7+ days</span></div>
         </div>`;
 
     return tiles
-        + card('Stalled Deals', 'Nothing has moved in a week or more',
+        + card('Stalled Deals', 'No movement in a week or more',
                '<th>Ref</th><th>Client</th><th>Stage</th><th>Store</th><th class="r">In stage</th>',
-               stalledRows, 'Everything is moving. 🎉')
+               stalledRows, 'Everything is moving')
         + card('Out For Quote', 'Priced and waiting on the client',
                '<th>Ref</th><th>Client</th><th>Email</th><th class="c">Sent</th><th class="r">Offer</th>',
-               quoteRows, 'No quotes are open right now.')
+               quoteRows, 'No quotes are open right now')
         + card('Bought But Not Listed', 'Inventory paid for and not yet earning',
                '<th>Ref</th><th>Client</th><th>Store</th><th class="c">Outstanding</th><th class="r">Cost</th>',
-               unlistedRows, 'Everything accepted has been listed.');
+               unlistedRows, 'Everything accepted has been listed');
 }
 
 // ---------------------------------------------------------------------------
@@ -10368,7 +11058,7 @@ function _b2bPaintPicklist() {
         <button class="b2b-pick ${c.id === _b2bCreateClientId ? 'on' : ''}" onclick="b2bPickClient('${c.id}')">
             <span class="b2b-pick-ac">${escapeHtml(c.acronym)}</span>
             <span class="b2b-pick-co">${escapeHtml(c.company)}</span>
-            <span class="b2b-pick-sub">${escapeHtml([c.contact, c.contact_email].filter(Boolean).join(' · '))}</span>
+            <span class="b2b-pick-sub">${_b2bIsCorp() ? escapeHtml([c.contact, c.contact_email].filter(Boolean).join(' · ')) : ''}</span>
             ${c.open_count ? `<span class="b2b-pick-n">${c.open_count} open</span>` : ''}
         </button>`).join('')
         : `<div class="b2b-pick-empty">No clients match${_b2bCanClients() ? ' — add one below.' : ' — ask a DM or CEO to add one.'}</div>`;
@@ -10430,8 +11120,14 @@ function _b2bShowDeal(cfg) {
     document.getElementById('b2bDealSub').textContent     = cfg.sub || '';
     document.getElementById('b2bDealBody').innerHTML      = cfg.body || '';
     document.getElementById('b2bDealFooter').innerHTML    = cfg.footer || '';
+    // SKU label print becomes available once the pickup is dropped at its
+    // assigned pricing location — i.e. from the pricing stage onward.
+    const pb = document.getElementById('b2bDealPrintBtn');
+    if (pb) pb.style.display = ['pricing', 'quote', 'listing_location', 'listing', 'completed'].includes(cfg.stage) ? '' : 'none';
     const modal = document.getElementById('b2bDealModal');
     modal.classList.toggle('b2b-modal-wide', !!cfg.wide);
+    // Pricing runs near-full-screen so a long pickup reads as one dense sheet.
+    modal.classList.toggle('b2b-modal-full', !!cfg.full);
     closeAllModals();
     modal.classList.add('show');
     lockAndBlurScreen();
@@ -10443,6 +11139,8 @@ async function b2bOpenDeal(kind, id) {
     if (!deal) return;
     _b2bModalDeal = deal;
     _b2bModalItems = [];
+    // Default every screen to the card grid; only pricing opts into the sheet.
+    _b2bGridMode = 'cards';
     // Every stage past pricing needs the line items; fetch once up front.
     if (['pricing', 'quote', 'listing', 'view'].includes(kind)) {
         try {
@@ -10460,20 +11158,28 @@ async function b2bOpenDeal(kind, id) {
     return _b2bStageView(deal);
 }
 
-// The identity block every stage screen opens with.
+// The identity block every stage screen opens with. A store prices and lists
+// the goods; talking to the client is corp's job, so the contact details are
+// corp-only -- a store never needs them and shouldn't be the one reaching out.
 function _b2bSummary(deal) {
     const rows = [
         ['Client',    escapeHtml(deal.client?.company || '—')],
         ['Reference', `<span class="b2b-mono">${escapeHtml(deal.ref)}</span>`],
-        ['Contact',   escapeHtml([deal.client?.contact, deal.client?.contact_email].filter(Boolean).join(' · ') || '—')],
+    ];
+    if (_b2bIsCorp()) {
+        rows.push(['Contact', escapeHtml([deal.client?.contact, deal.client?.contact_email].filter(Boolean).join(' · ') || '—')]);
+    }
+    rows.push(
         ['Picked up', deal.pickup_date ? _b2bDate(deal.pickup_date) : 'Not yet'],
         ['Pricing',   _b2bStoreTag(deal.pricing_store)],
-    ];
+    );
     if (deal.listing_store) rows.push(['Listing', _b2bStoreTag(deal.listing_store)]);
     if (deal.signed_by)     rows.push(['Signed by', escapeHtml(deal.signed_by)]);
     if (deal.delivered_by || deal.received_by) {
-        rows.push(['Custody', escapeHtml([deal.delivered_by ? `Delivered by ${deal.delivered_by}` : '',
-                                          deal.received_by ? `Received by ${deal.received_by}` : ''].filter(Boolean).join(' · '))]);
+        // Reads in the order it happened: who handed it over, then who took it in.
+        const handoff = deal.pricing_store === 'CORP' ? 'Dropped off by' : 'Picked up by';
+        rows.push(['Custody', escapeHtml([deal.delivered_by ? `${handoff} ${deal.delivered_by}` : '',
+                                          deal.received_by ? `received by ${deal.received_by}` : ''].filter(Boolean).join(', '))]);
     }
     return `<div class="b2b-summary">${rows.map(([k, v]) =>
         `<div class="b2b-sum-cell"><span class="b2b-sum-k">${k}</span><span class="b2b-sum-v">${v}</span></div>`).join('')}</div>`;
@@ -10543,14 +11249,14 @@ function _b2bStageAssign(deal) {
             <div class="b2b-loc-pick">
                 ${B2B_LOCATIONS.map(c => `
                     <button class="b2b-loc" data-loc="${c}" onclick="b2bPickLocation('${c}')">
-                        <span class="b2b-loc-dot">${c === 'CORP' ? '🏢' : (STORE_DOTS[c] || '')}</span>
+                        <span class="b2b-loc-dot" style="background:${STORE_TINTS[c] || '#94a3b8'}"></span>
                         <span class="b2b-loc-c">${c}</span>
                     </button>`).join('')}
             </div>
             <p class="b2b-hint">Pricing at CORP means the listing store gets chosen separately once the client accepts.</p>
             <div class="b2b-grid2" style="margin-top:14px;">
-                <div><label class="form-label-caps">Delivered By</label><input id="b2bAsDeliv" class="form-input-lg" placeholder="Who dropped it off"></div>
-                <div><label class="form-label-caps">Received By</label><input id="b2bAsRecv" class="form-input-lg" placeholder="Who took it in"></div>
+                <div><label class="form-label-caps">Handed Over By</label><input id="b2bAsDeliv" class="form-input-lg" placeholder="Who picked it up or dropped it off"></div>
+                <div><label class="form-label-caps">Received By</label><input id="b2bAsRecv" class="form-input-lg" placeholder="Who took it in at the location"></div>
             </div>`,
         footer: `
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
@@ -10591,7 +11297,9 @@ function _b2bCustomNotes(it) { return _b2bTagsOf(it.client_notes).filter(t => !B
 const B2B_REASON_CONDITIONS = ['Fair', 'For Parts'];
 function _b2bNeedsReason(it)   { return B2B_REASON_CONDITIONS.includes(it.condition); }
 function _b2bMissingReason(it) { return _b2bNeedsReason(it) && !String(it.client_notes || '').trim(); }
-function _b2bUnreasoned()      { return _b2bModalItems.filter(_b2bMissingReason); }
+// Deliberately no `unreasoned()` helper: a second, weaker gate alongside
+// _b2bNotReady() is one someone will reach for by mistake, and it is how the
+// accept path came to check reasons but not serials or specs.
 function _b2bItemName(it) { return [it.make, it.model].filter(Boolean).join(' ') || 'Untitled item'; }
 
 // Labels are printed per line, wherever a line is shown -- pricing, quoting,
@@ -10609,17 +11317,54 @@ function _b2bLabelBtn(it, cls) {
 }
 function _b2bLocalItem(id){ return _b2bModalItems.find(i => i.id === id); }
 
+// --- item shape helpers ----------------------------------------------------
+// Each of these has a twin in the edge function. Keep them in step: the server
+// re-checks everything, so a disagreement shows up as a save that fails after
+// the UI already said it was fine.
+
+const _b2bDispOf  = (it) => it.disposition || 'purchase';
+const _b2bIsBuy   = (it) => _b2bDispOf(it) === 'purchase';
+const _b2bIsScrap = (it) => _b2bDispOf(it) === 'recycle';
+
+// One entry per unit. Split on comma, drop the blanks -- so trailing commas and
+// double commas while typing don't count as units.
+function _b2bSerials(it)     { return String(it.serials || '').split(',').map(s => s.trim()).filter(Boolean); }
+function _b2bSerialsOk(it)   { return _b2bSerials(it).length === (Number(it.quantity) || 1); }
+
+function _b2bSpecsFor(it)    { return B2B_SPEC_FIELDS.filter(f => (B2B_SPECS_FOR[it.item_type || 'other'] || []).includes(f.key)); }
+function _b2bMissingSpecs(it) {
+    return _b2bSpecsFor(it).filter(f => f.req && !String(it[f.key] ?? '').trim());
+}
+// Everything blocking this line from being submitted, in one place, so the row
+// badge, the drawer and the submit button all agree on what "ready" means.
+function _b2bItemBlocked(it) {
+    const why = [];
+    if (_b2bMissingReason(it))     why.push(`${it.condition} needs a reason`);
+    if (_b2bMissingSpecs(it).length) why.push(_b2bMissingSpecs(it).map(f => f.label).join(', ') + ' missing');
+    if (!_b2bSerialsOk(it))        why.push(`${_b2bSerials(it).length} of ${Number(it.quantity) || 1} serials`);
+    return why;
+}
+function _b2bNotReady() { return _b2bModalItems.filter(it => _b2bItemBlocked(it).length); }
+
+// What a line costs us in certified wipes.
+function _b2bWipeTotal(it) {
+    return it.wipe_required ? (Number(it.wipe_fee) || 0) * (Number(it.quantity) || 1) : 0;
+}
+
 function _b2bItemTotals() {
-    let value = 0, offer = 0, units = 0;
+    let value = 0, offer = 0, units = 0, wipe = 0;
     _b2bModalItems.forEach(it => {
         const q = Number(it.quantity) || 1;
         units += q;
-        if (!it.recycle_only) {
-            value += (Number(it.value) || 0) * q;
-            offer += (Number(it.offer) || 0) * q;
-        }
+        // Recycle is worthless to us too; no_residual is free to the client but
+        // still has resale value, which is the whole point of the distinction.
+        if (!_b2bIsScrap(it)) value += (Number(it.value) || 0) * q;
+        offer += (Number(it.offer) || 0) * q;
+        wipe  += _b2bWipeTotal(it);
     });
-    return { value, offer, units, lines: _b2bModalItems.length };
+    // Clamped at the deal, not the line: a wipe on a $0 item still discounts
+    // against the rest, and we never end up charging the client money.
+    return { value, offer, wipe, net: Math.max(0, offer - wipe), units, lines: _b2bModalItems.length };
 }
 
 // Repaint just the numbers -- retyping the whole grid would eat focus.
@@ -10627,17 +11372,25 @@ function _b2bPaintTotals() {
     const t = _b2bItemTotals();
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
     set('b2bTotValue', _b2bMoney(t.value, 2));
-    set('b2bTotOffer', _b2bMoney(t.offer, 2));
+    set('b2bTotOffer', _b2bMoney(t.net, 2));
     set('b2bTotUnits', `${t.units} unit${t.units === 1 ? '' : 's'} · ${t.lines} line${t.lines === 1 ? '' : 's'}`);
-    const margin = t.value - t.offer;
+    // Margin is against what we actually pay, so the wipe discount improves it
+    // rather than being invisible.
+    const margin = t.value - t.net;
     const pct = t.value > 0 ? Math.round((margin / t.value) * 100) : 0;
     set('b2bTotMargin', `${_b2bMoney(margin, 2)} (${pct}%)`);
+    const wipeEl = document.getElementById('b2bTotWipe');
+    if (wipeEl) {
+        wipeEl.textContent = t.wipe ? `−${_b2bMoney(t.wipe, 2)}` : '—';
+        wipeEl.closest('.b2b-tot')?.classList.toggle('muted', !t.wipe);
+    }
     _b2bModalItems.forEach(it => {
         const el = document.getElementById(`b2bLn-${it.id}`);
-        if (el) el.textContent = it.recycle_only ? '—' : _b2bMoney((Number(it.offer) || 0) * (Number(it.quantity) || 1), 2);
+        if (el) el.textContent = _b2bIsBuy(it)
+            ? _b2bMoney((Number(it.offer) || 0) * (Number(it.quantity) || 1), 2) : '—';
     });
     const submit = document.getElementById('b2bPrSubmit');
-    if (submit) submit.disabled = _b2bModalItems.length === 0 || _b2bUnreasoned().length > 0;
+    if (submit) submit.disabled = _b2bModalItems.length === 0 || _b2bNotReady().length > 0;
     // On the quote screen the preview sits below the grid, so it can be redrawn
     // on every keystroke without touching whichever field has focus.
     _b2bPaintQuoteDoc();
@@ -10665,16 +11418,111 @@ function b2bItemSave(id) {
         make: it.make, model: it.model, condition: it.condition,
         staff_notes: it.staff_notes, client_notes: it.client_notes,
         quantity: it.quantity, value: it.value, offer: it.offer,
-        recycle_only: !!it.recycle_only,
+        item_type: it.item_type || 'other',
+        cpu: it.cpu, ram: it.ram, storage: it.storage, gpu: it.gpu, battery_health: it.battery_health,
+        serials: it.serials,
+        disposition: _b2bDispOf(it),
+        wipe_required: !!it.wipe_required,
+        // Hand the existing fee back so an unrelated edit can't re-snapshot the
+        // line at today's rate and move a price the client has already seen.
+        keep_wipe_fee: it.wipe_fee || 0,
     })).catch(e => _b2bSay(`Couldn't save that change: ${e.message}`, true));
 }
 
-function b2bItemRecycleOnly(id, on) {
+// Changing the type changes which spec fields exist, so the row is rebuilt --
+// safe, because a <select> has already blurred by the time this runs.
+function b2bItemType(id, value) {
     const it = _b2bLocalItem(id);
     if (!it) return;
-    it.recycle_only = on;
-    if (on) { it.value = 0; it.offer = 0; }
+    it.item_type = value;
+    // Drop specs the new type doesn't carry, mirroring what the server does. It
+    // would refuse the save otherwise, and the row would lie until a refresh.
+    const keep = B2B_SPECS_FOR[value] || [];
+    B2B_SPEC_FIELDS.forEach(f => { if (!keep.includes(f.key)) it[f.key] = null; });
+    if (keep.length) _b2bNotesOpen.add(id);   // the specs live in the drawer
     _b2bRepaintItems();
+    b2bItemSave(id);
+}
+
+function b2bItemDisposition(id, value) {
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    it.disposition = value;
+    // Only a purchase pays the client; only recycle is worthless to us as well.
+    if (value !== 'purchase') it.offer = 0;
+    if (value === 'recycle')  it.value = 0;
+    _b2bRepaintItems();
+    b2bItemSave(id);
+}
+
+async function b2bItemWipe(id, on) {
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    it.wipe_required = on;
+    // Take today's rate from the board payload; the server resolves it again
+    // and its answer wins, so this is only so the number appears immediately.
+    it.wipe_fee = on ? (it.wipe_fee || _b2bWipeFee()) : 0;
+    if (!on) it.wipe_fee = 0;
+    _b2bRepaintItems();
+    await b2bItemSave(id);
+    // Reconcile: the fee the server actually stored may differ from the guess.
+    _b2bRefreshItemFee(id);
+}
+
+// The global certified-wipe charge, as of the last board load.
+function _b2bWipeFee() { return Number(_b2bMeta?.wipe_fee ?? 8); }
+
+async function _b2bRefreshItemFee(id) {
+    if (!_b2bModalDeal) return;
+    try {
+        const rows = await _b2bGet(`deal_id=${encodeURIComponent(_b2bModalDeal.id)}`);
+        const fresh = rows.find(r => r.id === id);
+        const it = _b2bLocalItem(id);
+        if (!fresh || !it) return;
+        if (Number(fresh.wipe_fee) !== Number(it.wipe_fee)) {
+            it.wipe_fee = fresh.wipe_fee;
+            _b2bRepaintItems();
+        }
+    } catch (_) { /* the optimistic figure stands until the next load */ }
+}
+
+// Serials, one per unit. The button is the escape hatch for kit with no visible
+// serial -- without it a box of 50 cables would be 50 refusals to submit.
+function b2bItemSerials(id, value) {
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    it.serials = value;
+    _b2bSyncReady(it);
+}
+
+function b2bNoSerial(id, all) {
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    const have = _b2bSerials(it);
+    const need = (Number(it.quantity) || 1) - have.length;
+    if (need <= 0) return;
+    it.serials = [...have, ...Array(all ? need : 1).fill(B2B_NO_SERIAL)].join(', ');
+    _b2bRepaintItems();
+    b2bItemSave(id);
+}
+
+function b2bItemSpec(id, field, value) {
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    it[field] = value;
+    _b2bSyncReady(it);
+}
+
+// One-tap "None" for a required spec: stamps NO CPU / NO RAM / NO STORAGE so a
+// machine with the part pulled clears the gate without typing. Updates the inline
+// cell in place (no full repaint, so nothing steals focus) and re-validates.
+function b2bItemSpecNone(id, field, label) {
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    it[field] = 'NO ' + String(label).toUpperCase();
+    const inp = document.getElementById(`b2bPline-${id}`)?.querySelector(`[data-req-spec="${field}"]`);
+    if (inp) inp.value = it[field];
+    _b2bSyncReady(it);
     b2bItemSave(id);
 }
 
@@ -10690,13 +11538,24 @@ function b2bItemToggleTag(id, tag) {
 }
 
 // The free-text box owns only the hand-typed part; the chips own the presets.
-// Recombine both into client_notes on every edit.
+// Recombine both into client_notes on every edit. (Used by the card grid, which
+// keeps the tag chips.)
 function b2bItemCustomNote(id, value) {
     const it = _b2bLocalItem(id);
     if (!it) return;
     const custom = String(value || '').split(';').map(s => s.trim()).filter(Boolean);
     it.client_notes = [..._b2bPresetNotes(it), ...custom].join('; ');
-    _b2bSyncReason(it);
+    _b2bSyncReady(it);
+    _b2bPaintTotals();
+}
+
+// The pricing sheet dropped the tag chips: its client-notes field is the whole
+// note, edited straight into client_notes.
+function b2bItemClientNote(id, value) {
+    const it = _b2bLocalItem(id);
+    if (!it) return;
+    it.client_notes = value;
+    _b2bSyncReady(it);
     _b2bPaintTotals();
 }
 
@@ -10710,18 +11569,47 @@ function b2bItemCondition(id, value) {
     b2bItemSave(id);
 }
 
-// Typing is different: repainting mid-keystroke would steal focus, so just
-// flip the warning classes on the card in place.
-function _b2bSyncReason(it) {
-    const input = document.querySelector(`.b2b-tag-free[oninput*="${it.id}"]`);
-    const card = input?.closest('.b2b-pcard');
-    const missing = _b2bMissingReason(it);
-    input?.classList.toggle('miss', missing);
-    card?.classList.toggle('needs-reason', missing);
-    const note = card?.querySelector('.b2b-req-note');
-    if (note) note.style.display = missing ? '' : 'none';
+// Typing is different: repainting mid-keystroke would steal focus, so the
+// readiness warnings are flipped in place instead. Covers all three gates --
+// reason, specs and serials -- because they share one badge and one submit
+// button, and updating only some of them would leave the row contradicting
+// itself mid-keystroke.
+function _b2bSyncReady(it) {
+    const line = document.getElementById(`b2bPline-${it.id}`);
+    const blocked = _b2bItemBlocked(it);
+
+    // Row-level state lives on the grid line either way (cards or spreadsheet):
+    // the inset "needs a reason" bar, the flagged detail button, the one-line
+    // summary of what's blocking it.
+    line?.classList.toggle('needs-reason', blocked.length > 0);
+    line?.querySelector('.b2b-notes-btn')?.classList.toggle('req', blocked.length > 0);
+    const chip = line?.querySelector('.b2b-ready');
+    if (chip) {
+        chip.textContent = blocked.length ? blocked.join(' · ') : '';
+        chip.style.display = blocked.length ? '' : 'none';
+    }
+    // Inline required-spec cells (spreadsheet): flag each one that's still empty,
+    // so a cell clears its warning the moment it's filled.
+    line?.querySelectorAll('[data-req-spec]').forEach(inp => {
+        const k = inp.getAttribute('data-req-spec');
+        inp.classList.toggle('b2b-spec-miss', !String(it[k] ?? '').trim());
+    });
+
+    // The note fields themselves live in the cards drawer (inside the line) OR in
+    // the spreadsheet's detail sheet -- update wherever they actually are.
+    const scope = document.getElementById('b2bItemSheet') || line;
+    const reason = _b2bMissingReason(it);
+    scope?.querySelector('.b2b-tag-free')?.classList.toggle('miss', reason);
+    const note = scope?.querySelector('.b2b-req-note');
+    if (note) note.style.display = reason ? '' : 'none';
+    const count = scope?.querySelector('.b2b-serial-count');
+    if (count) {
+        const have = _b2bSerials(it).length, need = Number(it.quantity) || 1;
+        count.textContent = `${have} of ${need}`;
+        count.classList.toggle('miss', have !== need);
+    }
     const submit = document.getElementById('b2bPrSubmit');
-    if (submit) submit.disabled = _b2bModalItems.length === 0 || _b2bUnreasoned().length > 0;
+    if (submit) submit.disabled = _b2bModalItems.length === 0 || _b2bNotReady().length > 0;
 }
 
 // The server owns the line number and SKU, so this one has to wait -- but the
@@ -10731,10 +11619,15 @@ async function b2bAddItem(dealId, btn) {
         const out = await _b2bPost({
             action: 'add_item', deal_id: dealId, quantity: 1, value: 0, offer: 0,
         }, "Couldn't add a line");
+        // Must carry every field the grid reads: the optimistic row is what gets
+        // painted, and anything missing here reads as undefined until a refetch.
         _b2bModalItems.push({
             id: out.id, line_no: out.line_no, sku: out.sku, make: '', model: '', condition: '',
             staff_notes: '', client_notes: '', quantity: 1, value: 0, offer: 0,
-            recycle_only: false, listed_qty: 0, recycled_qty: 0,
+            item_type: 'other', cpu: null, ram: null, storage: null, gpu: null, battery_health: null,
+            serials: '', disposition: 'purchase',
+            wipe_required: false, wipe_fee: 0, wiped_qty: 0,
+            listed_qty: 0, recycled_qty: 0, listings: [],
         });
         _b2bDirty = true;
         _b2bRepaintItems();
@@ -10758,12 +11651,62 @@ function b2bDeleteItem(id) {
         });
 }
 
+// Pricing renders the dense spreadsheet; quote (and the read-only views) keep the
+// card/drawer grid. _b2bRepaintItems is shared, so one flag picks the renderer.
+let _b2bGridMode = 'cards';
+// The line whose detail sheet is open over the spreadsheet, if any.
+let _b2bSheetId = null;
+
 function _b2bRepaintItems() {
     const wrap = document.getElementById('b2bItemGrid');
-    if (wrap) wrap.innerHTML = _b2bItemCards();
+    if (wrap) wrap.innerHTML = _b2bGridMode === 'sheet' ? _b2bItemSheet() : _b2bItemCards();
     _b2bPaintTotals();
+    // Keep an open detail sheet in step with the grid it hangs off -- a tag or
+    // disposition change repaints both. If the line it belongs to is gone, so is
+    // the sheet.
+    if (_b2bSheetId != null) {
+        if (_b2bLocalItem(_b2bSheetId)) _b2bPaintItemSheet();
+        else b2bCloseItemSheet();
+    }
 }
 
+// Which lines have their notes open. Notes are the bulky part and most lines
+// never need them, so they fold away -- but a line still missing a required
+// reason is forced open, because hiding the thing blocking submission would be
+// the one case where collapsing costs more than it saves.
+const _b2bNotesOpen = new Set();
+
+function b2bToggleNotes(id) {
+    if (_b2bNotesOpen.has(id)) _b2bNotesOpen.delete(id); else _b2bNotesOpen.add(id);
+    _b2bRepaintItems();
+}
+
+// A one-line summary of what is folded away, so a closed row still says whether
+// there is anything in there worth opening.
+function _b2bNoteHint(it) {
+    const bits = [];
+    const specs = _b2bSpecsFor(it).map(f => String(it[f.key] ?? '').trim()).filter(Boolean);
+    if (specs.length) bits.push(specs.join(' · '));
+    const ser = _b2bSerials(it);
+    if (ser.length) bits.push(ser.length === 1 ? ser[0] : `${ser.length} serials`);
+    const client = String(it.client_notes || '').trim();
+    const staff  = String(it.staff_notes || '').trim();
+    if (client) bits.push(client);
+    if (staff)  bits.push(`internal: ${staff}`);
+    return bits.length ? bits.join(' · ') : 'No details yet';
+}
+
+// Just the line's own number in the grid. Every SKU on a deal shares the same
+// ACM-007- prefix and the deal ref is already in the modal header, so repeating
+// it down thirty rows spends the column on nothing. The full SKU is the cell's
+// tooltip, and it is what prints on the label.
+function _b2bLineNo(it) {
+    const parts = String(it.sku || '').split('-');
+    return parts.length > 1 ? parts[parts.length - 1] : String(it.line_no).padStart(4, '0');
+}
+
+// Rendered as a grid rather than a stack of cards: one row per line with the
+// columns aligned, the way anyone pricing a pallet expects to read it.
 function _b2bItemCards() {
     if (!_b2bModalItems.length) {
         return `<div class="b2b-empty sm">
@@ -10771,110 +11714,479 @@ function _b2bItemCards() {
             <div class="b2b-empty-s">Add the first item to start pricing this pickup.</div>
         </div>`;
     }
-    return _b2bModalItems.map(it => {
-        const rec  = !!it.recycle_only;
-        const tags = _b2bPresetNotes(it);
-        const needs = _b2bNeedsReason(it);
+
+    const head = `
+        <div class="b2b-prow b2b-phead">
+            <span>Line</span><span>Type</span><span>Brand</span><span>Model</span><span>Condition</span>
+            <span class="r">Qty</span><span class="r">Unit value</span><span class="r">Unit offer</span>
+            <span class="r">Line total</span><span></span>
+        </div>`;
+
+    const rows = _b2bModalItems.map(it => {
+        const disp    = _b2bDispOf(it);
+        const buy     = _b2bIsBuy(it);
+        const scrap   = _b2bIsScrap(it);
+        const tags    = _b2bPresetNotes(it);
+        const needs   = _b2bNeedsReason(it);
         const missing = _b2bMissingReason(it);
+        const blocked = _b2bItemBlocked(it);
+        // Forced open whenever something is blocking submission: hiding the thing
+        // you have to fix is the one case where folding costs more than it saves.
+        const open    = _b2bNotesOpen.has(it.id) || blocked.length > 0;
+        const free    = B2B_NOTE_TAGS.filter(t => !tags.includes(t));
+        const specs   = _b2bSpecsFor(it);
+        const serials = _b2bSerials(it);
+        const need    = Number(it.quantity) || 1;
+        const left    = need - serials.length;
+
+        const specBlock = specs.length ? `
+            <div class="b2b-specs">
+                ${specs.map(f => `
+                <div class="b2b-f b2b-spec">
+                    <label>${f.label}${f.req ? ' <span class="b2b-tag-req">required</span>' : ''}</label>
+                    <input value="${escapeHtml(it[f.key] || '')}" placeholder="${escapeHtml(f.hint)}"
+                        oninput="b2bItemSpec('${it.id}','${f.key}',this.value)" onchange="b2bItemSave('${it.id}')">
+                </div>`).join('')}
+            </div>` : '';
+
+        // Disposition and the wipe flag live here rather than in the row's action
+        // cluster: they are pricing decisions, not per-click controls, and five
+        // controls in one grid cell overflowed it. The row still reports their
+        // state through the chips beside the SKU.
+        const handling = `
+            <div class="b2b-handling">
+                <div class="b2b-f">
+                    <label>What happens to it</label>
+                    <select class="b2b-dispsel" onchange="b2bItemDisposition('${it.id}',this.value)">
+                        ${B2B_DISPOSITIONS.map(d => `<option value="${d.key}" ${disp === d.key ? 'selected' : ''}>${d.label}</option>`).join('')}
+                    </select>
+                    <span class="b2b-hint sm">${escapeHtml(B2B_DISP[disp].hint)}</span>
+                </div>
+                <div class="b2b-f">
+                    <label>Certified data wipe</label>
+                    <div class="b2b-wipewrap">
+                        <label class="b2b-rec-toggle b2b-wipetog">
+                            <input type="checkbox" ${it.wipe_required ? 'checked' : ''} onchange="b2bItemWipe('${it.id}',this.checked)">
+                            <span>${_b2bMoney(it.wipe_fee || _b2bWipeFee(), 2)} per unit${it.wipe_required && need > 1 ? ` · ${_b2bMoney(_b2bWipeTotal(it), 2)} total` : ''}</span>
+                        </label>
+                    </div>
+                    <span class="b2b-hint sm">Comes off what we pay them. They are never charged for it.</span>
+                </div>
+            </div>`;
+
+        const drawer = open ? `
+            <div class="b2b-pdrawer">
+                ${handling}
+                ${specBlock}
+                <div class="b2b-f b2b-serialf">
+                    <label>Serial numbers
+                        <span class="b2b-serial-count ${serials.length === need ? '' : 'miss'}">${serials.length} of ${need}</span>
+                        <span class="b2b-tag-int">one per unit, comma separated</span></label>
+                    <div class="b2b-serialrow">
+                        <input value="${escapeHtml(it.serials || '')}" placeholder="C02X1234, C02X5678"
+                            oninput="b2bItemSerials('${it.id}',this.value)" onchange="b2bItemSave('${it.id}')">
+                        ${left > 0 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',false)"
+                            title="This unit has no serial you can read">No Visible Serial</button>` : ''}
+                        ${left > 1 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',true)"
+                            title="Fill every remaining slot">Fill All ${left}</button>` : ''}
+                    </div>
+                </div>
+                <div class="b2b-pnote">
+                    <div class="b2b-f"><label>Staff notes <span class="b2b-tag-int">internal</span></label>
+                        <input value="${escapeHtml(it.staff_notes || '')}" placeholder="Anything the team should know"
+                            oninput="b2bItemInput('${it.id}','staff_notes',this.value)" onchange="b2bItemSave('${it.id}')"></div>
+                    <div class="b2b-f"><label>Client notes
+                        ${needs ? '<span class="b2b-tag-req">reason required</span>' : '<span class="b2b-tag-ext">prints on the quote</span>'}</label>
+                        <div class="b2b-chiprow">
+                            ${tags.map(t => `<span class="b2b-chip-tag">${escapeHtml(t)}<button title="Remove"
+                                onclick="b2bItemToggleTag('${it.id}','${escapeHtml(t)}')">×</button></span>`).join('')}
+                            ${free.length ? `
+                            <select class="b2b-tagsel" onchange="b2bItemToggleTag('${it.id}',this.value)">
+                                <option value="">${tags.length ? '＋ Another tag…' : '＋ Add a tag…'}</option>
+                                ${free.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
+                            </select>` : ''}
+                        </div>
+                        <input class="b2b-tag-free ${missing ? 'miss' : ''}" value="${escapeHtml(_b2bCustomNotes(it))}"
+                            placeholder="${needs ? 'Why is it ' + escapeHtml(it.condition) + '? Pick a tag or type it here' : "Anything the tags don't cover"}"
+                            oninput="b2bItemCustomNote('${it.id}',this.value)" onchange="b2bItemSave('${it.id}')">
+                        <span class="b2b-req-note" style="${missing ? '' : 'display:none;'}">${escapeHtml(it.condition || '')} items need a reason before this can be quoted.</span></div>
+                </div>
+            </div>` : '';
+
         return `
-        <div class="b2b-pcard ${rec ? 'rec' : ''} ${missing ? 'needs-reason' : ''}">
-            <div class="b2b-pcard-head">
-                <span class="b2b-mono b2b-pcard-sku">${escapeHtml(it.sku || `Line ${String(it.line_no).padStart(4, '0')}`)}</span>
-                ${_b2bLabelBtn(it)}
-                <label class="b2b-rec-toggle">
-                    <input type="checkbox" ${rec ? 'checked' : ''} onchange="b2bItemRecycleOnly('${it.id}',this.checked)">
-                    <span>Recycle only</span>
-                </label>
-                <button class="b2b-x" title="Remove line" onclick="b2bDeleteItem('${it.id}')">
-                    ${_b2bIco('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>')}
-                </button>
-            </div>
-            <div class="b2b-pgrid">
-                <div class="b2b-f"><label>Brand</label>
+        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
+            <div class="b2b-prow">
+                <span class="b2b-pcell b2b-pc-sku" title="${escapeHtml(it.sku || '')}">
+                    <span class="b2b-mono">${escapeHtml(_b2bLineNo(it))}</span>
+                    ${!buy ? `<span class="b2b-doc-rec ${scrap ? '' : 'nrv'}">${escapeHtml(B2B_DISP[disp].short)}</span>` : ''}
+                    ${it.wipe_required ? '<span class="b2b-doc-rec wipe" title="Certified data wipe">Wipe</span>' : ''}
+                </span>
+                <span class="b2b-pcell" data-k="Type">
+                    <select onchange="b2bItemType('${it.id}',this.value)">
+                        ${B2B_ITEM_TYPES.map(t => `<option value="${t.key}" ${(it.item_type || 'other') === t.key ? 'selected' : ''}>${t.label}</option>`).join('')}
+                    </select></span>
+                <span class="b2b-pcell" data-k="Brand">
                     <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple"
-                        oninput="b2bItemInput('${it.id}','make',this.value)" onchange="b2bItemSave('${it.id}')"></div>
-                <div class="b2b-f"><label>Model</label>
+                        oninput="b2bItemInput('${it.id}','make',this.value)" onchange="b2bItemSave('${it.id}')"></span>
+                <span class="b2b-pcell" data-k="Model">
                     <input value="${escapeHtml(it.model || '')}" placeholder="MacBook Air M2"
-                        oninput="b2bItemInput('${it.id}','model',this.value)" onchange="b2bItemSave('${it.id}')"></div>
-                <div class="b2b-f"><label>Condition</label>
+                        oninput="b2bItemInput('${it.id}','model',this.value)" onchange="b2bItemSave('${it.id}')"></span>
+                <span class="b2b-pcell" data-k="Condition">
                     <select onchange="b2bItemCondition('${it.id}',this.value)">
                         <option value="">—</option>
                         ${B2B_CONDITIONS.map(c => `<option ${it.condition === c ? 'selected' : ''}>${c}</option>`).join('')}
-                    </select></div>
-                <div class="b2b-f b2b-f-n"><label>Qty</label>
-                    <input type="number" min="1" step="1" value="${Number(it.quantity) || 1}"
-                        oninput="b2bItemInput('${it.id}','quantity',this.value)" onchange="b2bItemSave('${it.id}')"></div>
-                <div class="b2b-f b2b-f-n"><label>Unit value</label>
-                    ${rec ? '<div class="b2b-f-off">recycle</div>'
+                    </select></span>
+                <span class="b2b-pcell n" data-k="Qty">
+                    <input type="number" min="1" step="1" value="${need}"
+                        oninput="b2bItemInput('${it.id}','quantity',this.value)" onchange="b2bItemSave('${it.id}')"></span>
+                <span class="b2b-pcell n" data-k="Unit value">
+                    ${scrap ? '<span class="b2b-f-off">—</span>'
                           : `<input type="number" min="0" step="0.01" value="${Number(it.value) || 0}"
-                        oninput="b2bItemInput('${it.id}','value',this.value)" onchange="b2bItemSave('${it.id}')">`}</div>
-                <div class="b2b-f b2b-f-n"><label>Unit offer</label>
-                    ${rec ? '<div class="b2b-f-off">—</div>'
-                          : `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
-                        oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`}</div>
-                <div class="b2b-f b2b-f-n"><label>Line total</label>
-                    <div class="b2b-f-calc" id="b2bLn-${it.id}">${rec ? '—' : _b2bMoney((Number(it.offer) || 0) * (Number(it.quantity) || 1), 2)}</div></div>
+                        oninput="b2bItemInput('${it.id}','value',this.value)" onchange="b2bItemSave('${it.id}')">`}</span>
+                <span class="b2b-pcell n" data-k="Unit offer">
+                    ${buy ? `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
+                        oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`
+                          : '<span class="b2b-f-off">—</span>'}</span>
+                <span class="b2b-pcell n b2b-pc-tot" data-k="Line total">
+                    <span class="b2b-f-calc" id="b2bLn-${it.id}">${buy ? _b2bMoney((Number(it.offer) || 0) * need, 2) : '—'}</span></span>
+                <span class="b2b-pcell b2b-pc-acts">
+                    <button class="b2b-notes-btn ${open ? 'on' : ''} ${blocked.length ? 'req' : ''}"
+                        title="${blocked.length ? 'Not ready yet — ' + escapeHtml(blocked.join(', ')) : escapeHtml(_b2bNoteHint(it))}"
+                        onclick="b2bToggleNotes('${it.id}')">
+                        ${_b2bIco('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>')}
+                        ${(it.client_notes || it.staff_notes || it.serials) ? '<i class="b2b-notes-dot"></i>' : ''}
+                    </button>
+                    ${_b2bLabelBtn(it)}
+                    <button class="b2b-x" title="Remove line" onclick="b2bDeleteItem('${it.id}')">
+                        ${_b2bIco('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>')}
+                    </button>
+                </span>
             </div>
-            <div class="b2b-pnotes">
-                <div class="b2b-f"><label>Staff notes <span class="b2b-tag-int">internal</span></label>
-                    <input value="${escapeHtml(it.staff_notes || '')}" placeholder="Anything the team should know"
-                        oninput="b2bItemInput('${it.id}','staff_notes',this.value)" onchange="b2bItemSave('${it.id}')"></div>
-                <div class="b2b-f"><label>Client notes
-                    ${needs ? '<span class="b2b-tag-req">reason required</span>' : '<span class="b2b-tag-ext">prints on the quote</span>'}</label>
-                    <div class="b2b-tags">
-                        ${B2B_NOTE_TAGS.map(t => `<button class="b2b-tag ${tags.includes(t) ? 'on' : ''}" onclick="b2bItemToggleTag('${it.id}','${t}')">${t}</button>`).join('')}
-                    </div>
-                    <input class="b2b-tag-free ${missing ? 'miss' : ''}" value="${escapeHtml(_b2bCustomNotes(it))}"
-                        placeholder="${needs ? 'Why is it ' + escapeHtml(it.condition) + '? Pick a tag above or type it here' : "Add anything the tags don't cover"}"
-                        oninput="b2bItemCustomNote('${it.id}',this.value)" onchange="b2bItemSave('${it.id}')">
-                    ${missing ? `<span class="b2b-req-note">${escapeHtml(it.condition)} items need a reason before this can be quoted.</span>` : ''}</div>
-            </div>
+            <div class="b2b-ready" style="${blocked.length ? '' : 'display:none;'}">${escapeHtml(blocked.join(' · '))}</div>
+            ${drawer}
         </div>`;
     }).join('');
+
+    return head + rows;
+}
+
+// --- pricing spreadsheet ---------------------------------------------------
+// Same data as _b2bItemCards, but every line stays a single dense row: the
+// disposition and the wipe flag are their own columns, and the bulky per-line
+// detail (specs, serials, notes) opens behind the ⋯ in a focused sheet rather
+// than an inline drawer that grows the row. Quote keeps _b2bItemCards untouched.
+const _B2B_ICO_DETAIL = '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>'
+    + '<line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/>'
+    + '<line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>';
+const _B2B_ICO_X = '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>';
+
+function _b2bItemSheet() {
+    if (!_b2bModalItems.length) {
+        return `<div class="b2b-empty sm">
+            <div class="b2b-empty-t">No lines yet</div>
+            <div class="b2b-empty-s">Add the first item to start pricing this pickup.</div>
+        </div>`;
+    }
+
+    // The three required specs (CPU / RAM / Storage) are columns, not a detail
+    // view -- a keyboard pricer tabs straight across them. GPU and battery stay
+    // optional, so they live behind the ⋯ with serials and notes.
+    const reqSpecs = B2B_SPEC_FIELDS.filter(f => f.req);
+
+    const head = `
+        <div class="b2b-prow b2b-phead">
+            <span>Line</span><span>Type</span><span>Brand</span><span>Model</span>
+            ${reqSpecs.map(f => `<span>${escapeHtml(f.label)}</span>`).join('')}
+            <span>Condition</span>
+            <span class="r">Qty</span><span class="r">Value</span><span class="r">Offer</span>
+            <span>Handling</span><span class="c">Wipe</span><span class="r">Total</span><span></span>
+        </div>`;
+
+    const rows = _b2bModalItems.map(it => {
+        const disp    = _b2bDispOf(it);
+        const buy     = _b2bIsBuy(it);
+        const scrap   = _b2bIsScrap(it);
+        const need    = Number(it.quantity) || 1;
+        const blocked = _b2bItemBlocked(it);
+        const fee     = it.wipe_fee || _b2bWipeFee();
+        const carries = _b2bSpecsFor(it);
+        // A line "has detail" if the ⋯ sheet holds anything worth reopening for --
+        // serials, notes, or an optional spec (GPU/battery). The required specs
+        // are inline now, so they don't count toward the dot.
+        const hasDetail = !!(String(it.staff_notes || '').trim() || String(it.client_notes || '').trim()
+            || _b2bSerials(it).length || carries.some(f => !f.req && String(it[f.key] ?? '').trim()));
+
+        // CPU / RAM / Storage cells: an editable field for a type that carries
+        // them, a dash for one that doesn't (e.g. Other), each with a one-tap ∅
+        // that stamps NO CPU / NO RAM / NO STORAGE.
+        const specCells = reqSpecs.map(f => {
+            if (!carries.some(s => s.key === f.key)) {
+                return `<span class="b2b-pcell b2b-pc-spec" data-k="${escapeHtml(f.label)}"><span class="b2b-f-off">—</span></span>`;
+            }
+            const miss = !String(it[f.key] ?? '').trim();
+            return `<span class="b2b-pcell b2b-pc-spec" data-k="${escapeHtml(f.label)}">
+                <input data-req-spec="${f.key}" class="${miss ? 'b2b-spec-miss' : ''}" value="${escapeHtml(it[f.key] || '')}" placeholder="${escapeHtml(f.hint)}"
+                    oninput="b2bItemSpec('${it.id}','${f.key}',this.value)" onchange="b2bItemSave('${it.id}')">
+                <button class="b2b-spec-none" tabindex="-1" title="No ${escapeHtml(f.label)} — fills NO ${escapeHtml(f.label.toUpperCase())}"
+                    onclick="b2bItemSpecNone('${it.id}','${f.key}','${escapeHtml(f.label)}')">∅</button>
+            </span>`;
+        }).join('');
+
+        return `
+        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
+            <div class="b2b-prow">
+                <span class="b2b-pcell b2b-pc-sku" title="${escapeHtml(it.sku || '')}">
+                    <span class="b2b-mono">${escapeHtml(_b2bLineNo(it))}</span>
+                    ${blocked.length ? `<i class="b2b-ss-flag" title="${escapeHtml(blocked.join(', '))}"></i>` : ''}
+                </span>
+                <span class="b2b-pcell" data-k="Type">
+                    <select onchange="b2bItemType('${it.id}',this.value)">
+                        ${B2B_ITEM_TYPES.map(t => `<option value="${t.key}" ${(it.item_type || 'other') === t.key ? 'selected' : ''}>${t.label}</option>`).join('')}
+                    </select></span>
+                <span class="b2b-pcell" data-k="Brand">
+                    <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple"
+                        oninput="b2bItemInput('${it.id}','make',this.value)" onchange="b2bItemSave('${it.id}')"></span>
+                <span class="b2b-pcell" data-k="Model">
+                    <input value="${escapeHtml(it.model || '')}" placeholder="MacBook Air M2"
+                        oninput="b2bItemInput('${it.id}','model',this.value)" onchange="b2bItemSave('${it.id}')"></span>
+                ${specCells}
+                <span class="b2b-pcell" data-k="Condition">
+                    <select onchange="b2bItemCondition('${it.id}',this.value)">
+                        <option value="">—</option>
+                        ${B2B_CONDITIONS.map(c => `<option ${it.condition === c ? 'selected' : ''}>${c}</option>`).join('')}
+                    </select></span>
+                <span class="b2b-pcell n" data-k="Qty">
+                    <input type="number" min="1" step="1" value="${need}"
+                        oninput="b2bItemInput('${it.id}','quantity',this.value)" onchange="b2bItemSave('${it.id}')"></span>
+                <span class="b2b-pcell n" data-k="Value">
+                    ${scrap ? '<span class="b2b-f-off">—</span>'
+                          : `<input type="number" min="0" step="0.01" value="${Number(it.value) || 0}"
+                        oninput="b2bItemInput('${it.id}','value',this.value)" onchange="b2bItemSave('${it.id}')">`}</span>
+                <span class="b2b-pcell n" data-k="Offer">
+                    ${buy ? `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
+                        oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`
+                          : '<span class="b2b-f-off">—</span>'}</span>
+                <span class="b2b-pcell b2b-pc-disp" data-k="Handling">
+                    <select data-tip="${escapeHtml(B2B_DISP[disp].hint)}" onchange="b2bItemDisposition('${it.id}',this.value)">
+                        ${B2B_DISPOSITIONS.map(d => `<option value="${d.key}" ${disp === d.key ? 'selected' : ''}>${_B2B_DISP_SEL[d.key]}</option>`).join('')}
+                    </select></span>
+                <span class="b2b-pcell b2b-pc-wipe" data-k="Wipe">
+                    <label class="b2b-ss-wipe" title="Certified data wipe · ${_b2bMoney(fee, 2)}/unit">
+                        <input type="checkbox" ${it.wipe_required ? 'checked' : ''} onchange="b2bItemWipe('${it.id}',this.checked)"></label></span>
+                <span class="b2b-pcell n b2b-pc-tot" data-k="Total">
+                    <span class="b2b-f-calc" id="b2bLn-${it.id}">${buy ? _b2bMoney((Number(it.offer) || 0) * need, 2) : '—'}</span></span>
+                <span class="b2b-pcell b2b-pc-acts">
+                    <button class="b2b-notes-btn b2b-ss-more ${hasDetail ? 'has' : ''} ${blocked.length ? 'req' : ''}"
+                        title="${blocked.length ? 'Not ready — ' + escapeHtml(blocked.join(', ')) : 'Specs, serials, notes & label'}"
+                        onclick="b2bItemDetail('${it.id}')">
+                        ${_b2bIco(_B2B_ICO_DETAIL)}
+                        ${hasDetail ? '<i class="b2b-notes-dot"></i>' : ''}
+                    </button>
+                    <button class="b2b-x" title="Remove line" onclick="b2bDeleteItem('${it.id}')">${_b2bIco(_B2B_ICO_X)}</button>
+                </span>
+            </div>
+            <div class="b2b-ready" style="${blocked.length ? '' : 'display:none;'}">${escapeHtml(blocked.join(' · '))}</div>
+        </div>`;
+    }).join('');
+
+    return head + rows;
+}
+
+// --- pricing detail sheet --------------------------------------------------
+// The spreadsheet's ⋯ opens this over the grid: the type's spec fields, the
+// per-unit serials, and the staff / client notes -- everything that would make a
+// row tall. It reuses the very same per-field handlers as the cards drawer, so
+// edits save and re-validate identically; _b2bRepaintItems repaints it in step.
+function b2bItemDetail(id) {
+    if (!_b2bLocalItem(id)) return;
+    _b2bSheetId = id;
+    let el = document.getElementById('b2bItemSheet');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'b2bItemSheet';
+        document.body.appendChild(el);
+        // Click the dimmed area (never the panel) to close.
+        el.addEventListener('click', e => { if (e.target === el) b2bCloseItemSheet(); });
+    }
+    _b2bPaintItemSheet();
+    // Land the cursor on whatever is blocking the line, else the first field.
+    const focus = el.querySelector('.b2b-tag-free.miss, .b2b-spec-miss')
+        || el.querySelector('.b2b-isheet-body input, .b2b-isheet-body textarea');
+    focus?.focus();
+}
+
+function b2bCloseItemSheet() {
+    const wasOpen = _b2bSheetId != null;
+    document.getElementById('b2bItemSheet')?.remove();
+    _b2bSheetId = null;
+    // Repaint the grid so the row reflects anything changed in the sheet -- the
+    // ⋯ "has detail" dot, a serial count, a cleared block. Safe on close: no
+    // field is focused. Only the spreadsheet uses this sheet.
+    if (wasOpen && _b2bGridMode === 'sheet') _b2bRepaintItems();
+}
+
+function _b2bPaintItemSheet() {
+    const el = document.getElementById('b2bItemSheet');
+    const it = _b2bSheetId != null ? _b2bLocalItem(_b2bSheetId) : null;
+    if (!el || !it) return;
+    el.innerHTML = `<div class="b2b-isheet-panel" role="dialog" aria-modal="true" aria-label="Line detail">${_b2bItemSheetBody(it)}</div>`;
+}
+
+function _b2bItemSheetBody(it) {
+    const needs   = _b2bNeedsReason(it);
+    const missing = _b2bMissingReason(it);
+    // Required specs (CPU/RAM/Storage) are inline columns on the grid now; the
+    // sheet only carries the optional ones (GPU, battery health) alongside
+    // serials and notes.
+    const specs   = _b2bSpecsFor(it).filter(f => !f.req);
+    const serials = _b2bSerials(it);
+    const need    = Number(it.quantity) || 1;
+    const left    = need - serials.length;
+    const blocked = _b2bItemBlocked(it);
+    const typeLabel = (B2B_ITEM_TYPES.find(t => t.key === (it.item_type || 'other')) || {}).label || 'Other';
+
+    const specBlock = specs.length ? `
+        <div class="b2b-isheet-sec">
+            <h5>Optional specs</h5>
+            <div class="b2b-specs">
+                ${specs.map(f => `
+                    <div class="b2b-f b2b-spec">
+                        <label>${f.label}</label>
+                        <input value="${escapeHtml(it[f.key] || '')}" placeholder="${escapeHtml(f.hint)}"
+                            oninput="b2bItemSpec('${it.id}','${f.key}',this.value)" onchange="b2bItemSave('${it.id}')">
+                    </div>`).join('')}
+            </div>
+        </div>` : '';
+
+    return `
+        <div class="b2b-isheet-head">
+            <div class="b2b-isheet-id">
+                <span class="b2b-isheet-sku b2b-mono">${escapeHtml(it.sku || _b2bLineNo(it))}</span>
+                <div>
+                    <div class="b2b-isheet-name">${escapeHtml(_b2bItemName(it))}</div>
+                    <div class="b2b-isheet-meta">${escapeHtml(typeLabel)} · Qty ${need}${it.condition ? ' · ' + escapeHtml(it.condition) : ''} · ${escapeHtml(B2B_DISP[_b2bDispOf(it)].label)}</div>
+                </div>
+            </div>
+            <div class="b2b-isheet-actions">
+                ${_b2bLabelBtn(it)}
+                <button class="modal-close-btn" onclick="b2bCloseItemSheet()" aria-label="Close">${_b2bIco(_B2B_ICO_X)}</button>
+            </div>
+        </div>
+        ${blocked.length ? `<div class="b2b-note warn b2b-isheet-block"><span class="b2b-note-k">Not ready</span>${escapeHtml(blocked.join(' · '))}</div>` : ''}
+        <div class="b2b-isheet-body">
+            ${specBlock}
+            <div class="b2b-isheet-sec">
+                <h5>Serial numbers <span class="b2b-serial-count ${serials.length === need ? '' : 'miss'}">${serials.length} of ${need}</span> <span class="b2b-tag-int">one per unit</span></h5>
+                <div class="b2b-f b2b-serialf">
+                    <div class="b2b-serialrow">
+                        <input value="${escapeHtml(it.serials || '')}" placeholder="C02X1234, C02X5678 — comma separated"
+                            oninput="b2bItemSerials('${it.id}',this.value)" onchange="b2bItemSave('${it.id}')">
+                        ${left > 0 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',false)" title="This unit has no serial you can read">No Visible Serial</button>` : ''}
+                        ${left > 1 ? `<button class="b2b-mini" onclick="b2bNoSerial('${it.id}',true)" title="Fill every remaining slot">Fill All ${left}</button>` : ''}
+                    </div>
+                </div>
+            </div>
+            <div class="b2b-isheet-sec">
+                <h5>Staff notes <span class="b2b-tag-int">internal</span></h5>
+                <div class="b2b-f">
+                    <input value="${escapeHtml(it.staff_notes || '')}" placeholder="Anything the team should know"
+                        oninput="b2bItemInput('${it.id}','staff_notes',this.value)" onchange="b2bItemSave('${it.id}')"></div>
+            </div>
+            <div class="b2b-isheet-sec">
+                <h5>Client notes ${needs ? '<span class="b2b-tag-req">reason required</span>' : '<span class="b2b-tag-ext">prints on the quote</span>'}</h5>
+                <div class="b2b-f">
+                    <textarea class="b2b-tag-free ${missing ? 'miss' : ''}" rows="2"
+                        placeholder="${needs ? 'Why is it ' + escapeHtml(it.condition) + '? This prints on the client quote' : 'Anything the client should see — prints on the quote'}"
+                        oninput="b2bItemClientNote('${it.id}',this.value)" onchange="b2bItemSave('${it.id}')">${escapeHtml(it.client_notes || '')}</textarea>
+                    <span class="b2b-req-note" style="${missing ? '' : 'display:none;'}">${escapeHtml(it.condition || '')} items need a reason before this can be quoted.</span>
+                </div>
+            </div>
+        </div>
+        <div class="b2b-isheet-foot">
+            <span class="b2b-isheet-hint">Changes save as you go.</span>
+            <button class="b2b-btn b2b-btn-primary" onclick="b2bCloseItemSheet()">Done</button>
+        </div>`;
 }
 
 function _b2bTotalsBar(showMargin) {
     return `
     <div class="b2b-totals">
-        <div class="b2b-tot"><span class="b2b-tot-k">Lines</span><span class="b2b-tot-v" id="b2bTotUnits">—</span></div>
+        <div class="b2b-tot"><span class="b2b-tot-k">Items</span><span class="b2b-tot-v" id="b2bTotUnits">—</span></div>
         <div class="b2b-tot"><span class="b2b-tot-k">Resale value</span><span class="b2b-tot-v" id="b2bTotValue">—</span></div>
-        <div class="b2b-tot"><span class="b2b-tot-k">Total offer</span><span class="b2b-tot-v accent" id="b2bTotOffer">—</span></div>
+        <div class="b2b-tot muted"><span class="b2b-tot-k">Data wipes</span><span class="b2b-tot-v" id="b2bTotWipe">—</span></div>
+        <div class="b2b-tot"><span class="b2b-tot-k">We pay</span><span class="b2b-tot-v accent" id="b2bTotOffer">—</span></div>
         ${showMargin ? '<div class="b2b-tot"><span class="b2b-tot-k">Gross margin</span><span class="b2b-tot-v" id="b2bTotMargin">—</span></div>' : ''}
     </div>`;
 }
 
 // --- stage 3: pricing ------------------------------------------------------
 
+// A deal that came back from the approver leads with why. Whoever re-prices it
+// may not be whoever priced it the first time, so this has to be the first thing
+// on the screen rather than a line in a history somewhere.
+function _b2bSendbackNote(deal) {
+    if (!deal.sendback_note) return '';
+    const who = [deal.sendback_by, deal.sendback_at ? _b2bDate(deal.sendback_at) : '']
+        .filter(Boolean).join(' · ');
+    return `
+        <div class="b2b-note warn b2b-sentback">
+            <span class="b2b-note-k">Sent back for changes${who ? ` — ${escapeHtml(who)}` : ''}</span>
+            ${escapeHtml(deal.sendback_note)}
+        </div>`;
+}
+
 function _b2bStagePricing(deal) {
+    _b2bGridMode = 'sheet';
     _b2bShowDeal({
         stage: 'pricing',
         eyebrow: deal.ref,
         title: 'Price The Pickup',
         sub: 'Itemize what came in. Every change saves as you go.',
-        wide: true,
+        full: true,
         body: `
             ${_b2bSummary(deal)}
+            ${_b2bSendbackNote(deal)}
             ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Picked up</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
             ${_b2bTotalsBar(true)}
-            <div id="b2bItemGrid" class="b2b-items">${_b2bItemCards()}</div>
+            <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
-            <button class="b2b-btn b2b-btn-primary" id="b2bPrSubmit" ${_b2bModalItems.length ? '' : 'disabled'}
-                onclick="b2bSubmitPricing('${deal.id}',this)">Submit For Quoting</button>`,
+            ${_b2bIsEmployee()
+                ? '<span class="b2b-msg" style="color:var(--cb-muted);font-weight:600;">Prices save automatically — a manager or DM submits this for quoting.</span>'
+                : `<button class="b2b-btn b2b-btn-primary" id="b2bPrSubmit" ${_b2bModalItems.length ? '' : 'disabled'}
+                onclick="b2bSubmitPricing('${deal.id}',this)">Submit For Quoting</button>`}`,
         after: _b2bPaintTotals,
     });
 }
 
 async function b2bSubmitPricing(id, btn) {
+    if (_b2bIsEmployee()) return _b2bSay('Only a manager or DM can submit pricing for quoting.', true);
     if (!_b2bModalItems.length) return;
-    const gaps = _b2bUnreasoned();
+    // Named per line rather than a bare count -- "3 lines aren't ready" makes you
+    // hunt for them, and the server would refuse anyway.
+    const gaps = _b2bNotReady();
     if (gaps.length) {
-        return _b2bSay(`${gaps.length} line${gaps.length === 1 ? '' : 's'} marked Fair or For Parts still need a reason: `
-            + gaps.map(_b2bItemName).join(', '), true);
+        if (_b2bGridMode === 'sheet') {
+            _b2bRepaintItems();
+            // Put the cursor on the first gap: a missing spec is an inline cell, a
+            // missing serial or condition reason lives in the ⋯ detail sheet.
+            const g = gaps[0];
+            const line = document.getElementById(`b2bPline-${g.id}`);
+            line?.scrollIntoView({ block: 'center' });
+            const missSpec = _b2bMissingSpecs(g)[0];
+            if (missSpec) line?.querySelector(`[data-req-spec="${missSpec.key}"]`)?.focus();
+            else b2bItemDetail(g.id);
+        } else {
+            // Cards mode fixes lines in the inline drawer.
+            gaps.forEach(it => _b2bNotesOpen.add(it.id));
+            _b2bRepaintItems();
+        }
+        return _b2bSay(gaps.map(it => `${_b2bItemName(it)} (${_b2bItemBlocked(it).join(', ')})`).join(' · '), true);
     }
-    if (!confirm('Submit this pricing? SKUs get assigned now so labels can be printed, and a DM or CEO takes it from here.')) return;
+    if (!confirm('Submit this pricing? SKUs get assigned now so labels can be printed, '
+        + 'and the approver is emailed that a quote is ready to send.')) return;
     await _b2bBusy(btn, 'Submitting…', async () => {
         await _b2bPost({ action: 'submit_pricing', id, priced_by: _b2bUser() }, "Couldn't submit the pricing");
         _b2bDirty = false;
@@ -10887,21 +12199,47 @@ async function b2bSubmitPricing(id, btn) {
 // The quote stays fully editable while the client negotiates. Accepting is the
 // one-way door: offers freeze into cost and the goods become our inventory.
 
+// A quote that has never been emailed is waiting on the approver, not on the
+// client. Same stage either way -- the send count is the only thing that tells
+// them apart, and it is already on every deal.
+function _b2bAwaitingApproval(deal) {
+    return deal.stage === 'quote' && !Number(deal.quote_send_count);
+}
+
+// Deals whose send step has already been offered this session, so re-opening one
+// to re-read it doesn't trap you in the same dialog every time.
+const _b2bSendPrompted = new Set();
+
 function _b2bStageQuote(deal) {
+    // Same dense spreadsheet as pricing for editing the lines; the client-facing
+    // quote preview below it is what they review before emailing.
+    _b2bGridMode = 'sheet';
     const canAccept = _b2bCanAccept();
+    const unsent = _b2bAwaitingApproval(deal);
     const sent = deal.quote_send_count
         ? `Sent ${deal.quote_send_count}× · last ${_b2bDate(deal.quote_sent_at)}`
         : 'Not sent yet';
 
+    const banner = unsent ? `
+        <div class="b2b-note warn b2b-approve">
+            <span class="b2b-note-k">Awaiting approval</span>
+            This quote hasn't gone to the client yet.
+            ${canAccept ? 'Send it from your own mailbox, or send it back to pricing if something needs changing.'
+                        : 'A CEO, TOM or District Manager sends it out.'}
+        </div>` : '';
+
     _b2bShowDeal({
         stage: 'quote',
         eyebrow: deal.ref,
-        title: 'Quote',
-        sub: 'Edit freely while the client decides. Accepting locks the offers in as our cost.',
-        wide: true,
+        title: unsent ? 'Quote — Awaiting Approval' : 'Quote',
+        sub: unsent
+            ? 'Check it over, then send it to the client or send it back for changes.'
+            : 'Edit freely while the client decides. Accepting locks the offers in as our cost.',
+        full: true,
         body: `
             ${_b2bSummary(deal)}
-            <div class="b2b-sendbar">
+            ${banner}
+            <div class="b2b-sendbar${unsent ? ' urgent' : ''}">
                 <span class="b2b-sendbar-s">${escapeHtml(sent)}</span>
                 <input id="b2bQuoteTo" class="form-input-lg b2b-sendbar-i" placeholder="client@company.com"
                     value="${escapeHtml(deal.client?.contact_email || '')}">
@@ -10910,7 +12248,7 @@ function _b2bStageQuote(deal) {
                 <span class="b2b-sendbar-hint">Opens a draft in your mail app with the quote on your clipboard — paste it in and send.</span>
             </div>
             ${_b2bTotalsBar(true)}
-            <div id="b2bItemGrid" class="b2b-items">${_b2bItemCards()}</div>
+            <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
             <details class="b2b-preview" open>
                 <summary>Quote preview — this is what the client sees</summary>
@@ -10919,11 +12257,62 @@ function _b2bStageQuote(deal) {
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
+            ${canAccept ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bSendBack('${deal.id}')">Send Back For Changes</button>` : ''}
             ${canAccept
                 ? `<button class="b2b-btn b2b-btn-primary" onclick="b2bAcceptQuote('${deal.id}',this)">Mark Accepted</button>`
                 : '<span class="b2b-foot-note">Only a CEO, TOM or District Manager can accept a quote.</span>'}`,
-        after: () => { _b2bPaintTotals(); _b2bPaintQuoteDoc(); },
+        after: () => {
+            _b2bPaintTotals();
+            _b2bPaintQuoteDoc();
+            // The whole point of the approval step is that the quote goes out, so
+            // an approver opening an unsent one gets the send step put in front
+            // of them -- once, with a way straight back to reviewing it.
+            if (unsent && canAccept && !_b2bSendPrompted.has(deal.id)) {
+                _b2bSendPrompted.add(deal.id);
+                setTimeout(() => b2bSendQuote(deal.id, null, true), 260);
+            }
+        },
     });
+}
+
+// Send a quote back to pricing with a note. Same authority as accepting: saying
+// a quote isn't good enough is the same call as saying it is.
+function b2bSendBack(id) {
+    const deal = _b2bModalDeal;
+    if (!deal || !_b2bCanAccept()) return;
+    _b2bShowDeal({
+        stage: 'quote',
+        eyebrow: deal.ref,
+        title: 'Send Back For Changes',
+        sub: 'It returns to pricing with your note attached.',
+        body: `
+            <div class="b2b-note"><span class="b2b-note-k">What happens</span>
+                ${escapeHtml(deal.client?.company || 'This deal')} goes back to
+                ${escapeHtml(deal.pricing_store || 'the pricing store')} and drops off the approval queue.
+                Whoever picks it up sees your note before anything else.</div>
+            <label class="form-label-caps" style="margin-top:14px;">What needs changing? *</label>
+            <textarea id="b2bSendbackNote" class="form-input-lg" rows="4"
+                placeholder="The Latitudes look underpriced against recent comps — please recheck those two lines."></textarea>`,
+        footer: `
+            <span class="b2b-msg" id="b2bDealMsg"></span>
+            <button class="kpi-cancel-btn" onclick="b2bOpenDeal('quote','${deal.id}')">Back</button>
+            <button class="b2b-btn b2b-btn-danger" onclick="b2bConfirmSendBack('${deal.id}',this)">Send It Back</button>`,
+        after: () => document.getElementById('b2bSendbackNote')?.focus(),
+    });
+}
+
+async function b2bConfirmSendBack(id, btn) {
+    const note = document.getElementById('b2bSendbackNote')?.value.trim();
+    if (!note) return _b2bSay('Say what needs changing — that note is the whole point.', true);
+    try {
+        await _b2bBusy(btn, 'Sending back…', () =>
+            _b2bSend({ action: 'request_changes', id, note, sent_back_by: _b2bUser() }));
+        _b2bDirty = false;
+        closeAllModals();
+        await b2bRefresh();
+    } catch (e) {
+        _b2bSay(`Couldn't send it back: ${e.message}`, true);
+    }
 }
 
 // Keep the preview in step with the grid without stealing focus from it.
@@ -10947,29 +12336,86 @@ const _b2bCondClass = c => ({
     'New': 'ok', 'Like New': 'ok', 'Good': 'ok', 'Fair': 'warn', 'For Parts': 'bad',
 }[c] || 'neu');
 
+// --- shared quote maths and wording ----------------------------------------
+// All three renderers (screen, email HTML, plain text) go through these, so the
+// client cannot be shown three different numbers or three different stories
+// about what happens to their kit.
+
+function _b2bQuoteTotals(items) {
+    let subtotal = 0, wipe = 0, wipeUnits = 0;
+    items.forEach(it => {
+        const q = Number(it.quantity) || 1;
+        subtotal += (Number(it.offer) || 0) * q;
+        if (it.wipe_required) { wipe += (Number(it.wipe_fee) || 0) * q; wipeUnits += q; }
+    });
+    // Never negative: a wipe is a deduction from what we pay, never a bill.
+    return { subtotal, wipe, wipeUnits, net: Math.max(0, subtotal - wipe) };
+}
+
+// The specs go on the client's copy too. They are the justification for the
+// number beside them, so hiding them would make the quote harder to argue with
+// in the wrong direction.
+function _b2bQuoteDesc(it) {
+    return _b2bSpecsFor(it).map(f => String(it[f.key] ?? '').trim()).filter(Boolean).join(' · ');
+}
+
+// Only mention the outcomes actually present, so a straightforward purchase
+// quote doesn't carry two paragraphs of explanation it doesn't need.
+function _b2bQuoteFootNotes(items) {
+    const notes = ['Reply to this email to accept the quote or ask about any line.'];
+    if (items.some(it => _b2bDispOf(it) === 'no_residual')) {
+        notes.push('Items marked no residual value carry no offer — we take them away at no cost to you '
+            + 'and either refurbish them for resale or recycle them responsibly.');
+    }
+    if (items.some(_b2bIsScrap)) {
+        notes.push('Recycle items carry no offer and are disposed of responsibly at no cost to you.');
+    }
+    if (items.some(it => it.wipe_required)) {
+        notes.push('Certified data wipes are performed in-house to NIST 800-88 standards, with the charge '
+            + 'deducted from your payment — never billed separately.');
+    }
+    return notes;
+}
+
 // The client-facing quote. Deliberately carries no SKUs and no deal reference
 // -- those are ours, for labels and the floor. A client identifies their quote
 // by the date we collected their equipment.
 function _b2bQuoteDoc(deal, items) {
     const c = deal.client || {};
-    const total = items.reduce((s, it) => s + (it.recycle_only ? 0 : (Number(it.offer) || 0) * (Number(it.quantity) || 1)), 0);
+    const t = _b2bQuoteTotals(items);
     const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
     const picked = _b2bLongDate(deal.pickup_date);
 
     const rows = items.length ? items.map(it => {
         const qty = Number(it.quantity) || 1;
+        const buy = _b2bIsBuy(it);
+        const disp = _b2bDispOf(it);
+        const spec = _b2bQuoteDesc(it);
         return `<tr>
             <td>
                 <b>${escapeHtml(_b2bItemName(it))}</b>
                 ${it.condition ? `<span class="b2b-doc-cond ${_b2bCondClass(it.condition)}">${escapeHtml(it.condition)}</span>` : ''}
-                ${it.recycle_only ? '<span class="b2b-doc-rec">Recycle</span>' : ''}
+                ${!buy ? `<span class="b2b-doc-rec ${disp === 'recycle' ? '' : 'nrv'}">${escapeHtml(B2B_DISP[disp].label)}</span>` : ''}
+                ${it.wipe_required ? '<span class="b2b-doc-rec wipe">Certified wipe</span>' : ''}
+                ${spec ? `<div class="b2b-doc-sub">${escapeHtml(spec)}</div>` : ''}
                 ${it.client_notes ? `<div class="b2b-doc-sub">${escapeHtml(it.client_notes)}</div>` : ''}
             </td>
             <td class="c">${qty}</td>
-            <td class="r">${it.recycle_only ? '—' : _b2bMoney(it.offer, 2)}</td>
-            <td class="r b">${it.recycle_only ? '—' : _b2bMoney((Number(it.offer) || 0) * qty, 2)}</td>
+            <td class="r">${buy ? _b2bMoney(it.offer, 2) : '—'}</td>
+            <td class="r b">${buy ? _b2bMoney((Number(it.offer) || 0) * qty, 2) : '—'}</td>
         </tr>`;
     }).join('') : '<tr><td colspan="4" class="b2b-doc-empty">No line items yet.</td></tr>';
+
+    // Only shown when there is a deduction: an unnecessary "$0.00 of wipes" line
+    // invites a question about a service they didn't ask for.
+    const wipeRows = t.wipe ? `
+        <div class="b2b-doc-sub2">
+            <span>Subtotal</span><b>${_b2bMoney(t.subtotal, 2)}</b>
+        </div>
+        <div class="b2b-doc-sub2 minus">
+            <span>Certified data wipe · ${t.wipeUnits} device${t.wipeUnits === 1 ? '' : 's'}</span>
+            <b>−${_b2bMoney(t.wipe, 2)}</b>
+        </div>` : '';
 
     return `
     <div class="b2b-doc">
@@ -10988,13 +12434,13 @@ function _b2bQuoteDoc(deal, items) {
             <thead><tr><th>Description</th><th class="c">Qty</th><th class="r">Unit offer</th><th class="r">Line total</th></tr></thead>
             <tbody>${rows}</tbody>
         </table>
+        ${wipeRows}
         <div class="b2b-doc-total">
-            <span>Total offer</span>
-            <b>${_b2bMoney(total, 2)}</b>
+            <span>${t.wipe ? 'Total payable to you' : 'Total offer'}</span>
+            <b>${_b2bMoney(t.net, 2)}</b>
         </div>
         <div class="b2b-doc-foot">
-            Reply to this email to accept the quote or ask about any line.
-            Recycle-only items carry no offer and are disposed of responsibly at no cost to you.
+            ${_b2bQuoteFootNotes(items).map(escapeHtml).join(' ')}
         </div>
     </div>`;
 }
@@ -11005,7 +12451,7 @@ function _b2bQuoteDoc(deal, items) {
 // No SKUs, no deal reference; the pickup date is the client's handle on it.
 function _b2bQuoteInlineHtml(deal, items) {
     const c = deal.client || {};
-    const total = items.reduce((s, it) => s + (it.recycle_only ? 0 : (Number(it.offer) || 0) * (Number(it.quantity) || 1)), 0);
+    const t = _b2bQuoteTotals(items);
     const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
     const picked = _b2bLongDate(deal.pickup_date);
     const TH = 'padding:10px 12px;background:#e8f7ee;border-bottom:2px solid #1f9d57;'
@@ -11022,20 +12468,35 @@ function _b2bQuoteInlineHtml(deal, items) {
     const rows = items.map((it, i) => {
         const qty = Number(it.quantity) || 1;
         const tone = _b2bCondTone(it.condition);
+        const buy = _b2bIsBuy(it);
+        const disp = _b2bDispOf(it);
+        const spec = _b2bQuoteDesc(it);
+        // Scrap reads teal, no-residual reads blue: two different outcomes, and
+        // the client should be able to tell them apart at a glance.
+        const dispChip = disp === 'recycle' ? 'background:#e3f6f3;color:#0d8a7d;'
+                                            : 'background:#eaf1fb;color:#3a6ea8;';
         // Zebra has to be per-row inline; Gmail drops <style> blocks entirely.
         const zebra = i % 2 ? 'background:#fbfdfc;' : '';
         return `<tr style="${zebra}">
             <td style="${TD}">
                 <b>${escapeHtml(_b2bItemName(it))}</b>
                 ${it.condition ? `<span style="${CHIP}background:${tone.bg};color:${tone.fg};">${escapeHtml(it.condition)}</span>` : ''}
-                ${it.recycle_only ? `<span style="${CHIP}background:#e3f6f3;color:#0d8a7d;">Recycle</span>` : ''}
+                ${!buy ? `<span style="${CHIP}${dispChip}">${escapeHtml(B2B_DISP[disp].label)}</span>` : ''}
+                ${it.wipe_required ? `<span style="${CHIP}background:#f1ebfd;color:#6b46c1;">Certified wipe</span>` : ''}
+                ${spec ? `<div style="margin-top:4px;font-size:11.5px;color:#647082;">${escapeHtml(spec)}</div>` : ''}
                 ${it.client_notes ? `<div style="margin-top:4px;font-size:11.5px;color:#647082;">${escapeHtml(it.client_notes)}</div>` : ''}
             </td>
             <td style="${TD}text-align:center;">${qty}</td>
-            <td style="${TD}text-align:right;">${it.recycle_only ? '&mdash;' : _b2bMoney(it.offer, 2)}</td>
-            <td style="${TD}text-align:right;font-weight:bold;color:#178048;">${it.recycle_only ? '&mdash;' : _b2bMoney((Number(it.offer) || 0) * qty, 2)}</td>
+            <td style="${TD}text-align:right;">${buy ? _b2bMoney(it.offer, 2) : '&mdash;'}</td>
+            <td style="${TD}text-align:right;font-weight:bold;color:#178048;">${buy ? _b2bMoney((Number(it.offer) || 0) * qty, 2) : '&mdash;'}</td>
         </tr>`;
     }).join('');
+
+    const SUB = 'padding:7px 12px;font-size:12.5px;color:#647082;';
+    const wipeRows = t.wipe ? `
+      <tr><td style="${SUB}">Subtotal</td><td style="${SUB}text-align:right;font-weight:bold;color:#1a1c1e;">${_b2bMoney(t.subtotal, 2)}</td></tr>
+      <tr><td style="${SUB}">Certified data wipe &middot; ${t.wipeUnits} device${t.wipeUnits === 1 ? '' : 's'}</td>
+          <td style="${SUB}text-align:right;font-weight:bold;color:#6b46c1;">&minus;${_b2bMoney(t.wipe, 2)}</td></tr>` : '';
 
     return `<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:100%;font-family:'Segoe UI',Helvetica,Arial,sans-serif;background:#ffffff;border:1px solid #e6ebf1;border-top:3px solid #1f9d57;border-radius:14px;">
   <tr><td style="padding:22px 24px;border-bottom:1px solid #eef2f6;">
@@ -11064,15 +12525,16 @@ function _b2bQuoteInlineHtml(deal, items) {
           <th align="right" style="${TH}">Unit offer</th>
           <th align="right" style="${THR}">Line total</th></tr>
       ${rows}
+      ${wipeRows}
     </table></td></tr>
   <tr><td style="padding:14px 24px 0;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#e8f7ee;border-radius:12px;"><tr>
-      <td style="padding:14px 18px;font-size:11px;font-weight:bold;letter-spacing:.09em;text-transform:uppercase;color:#178048;">Total offer</td>
-      <td align="right" style="padding:14px 18px;font-size:22px;font-weight:bold;color:#178048;">${_b2bMoney(total, 2)}</td>
+      <td style="padding:14px 18px;font-size:11px;font-weight:bold;letter-spacing:.09em;text-transform:uppercase;color:#178048;">${t.wipe ? 'Total payable to you' : 'Total offer'}</td>
+      <td align="right" style="padding:14px 18px;font-size:22px;font-weight:bold;color:#178048;">${_b2bMoney(t.net, 2)}</td>
     </tr></table></td></tr>
   <tr><td style="padding:16px 24px;background:#f6f8fa;border-top:1px solid #eef2f6;font-size:11.5px;color:#647082;line-height:1.6;border-bottom-left-radius:13px;border-bottom-right-radius:13px;">
     <b style="color:#178048;">Reply to this email to accept the quote</b> or ask about any line.
-    Recycle-only items carry no offer and are disposed of responsibly at no cost to you.
+    ${_b2bQuoteFootNotes(items).slice(1).map(escapeHtml).join(' ')}
   </td></tr>
 </table>`;
 }
@@ -11082,11 +12544,14 @@ function _b2bQuoteInlineHtml(deal, items) {
 function _b2bQuoteText(deal, items) {
     const lines = items.map(it => {
         const qty = Number(it.quantity) || 1;
-        const amt = it.recycle_only ? 'recycle only, no offer' : _b2bMoney((Number(it.offer) || 0) * qty, 2);
-        const bits = [it.condition, it.client_notes].filter(Boolean).join(' · ');
+        const amt = _b2bIsBuy(it)
+            ? _b2bMoney((Number(it.offer) || 0) * qty, 2)
+            : `${B2B_DISP[_b2bDispOf(it)].label.toLowerCase()}, no offer`;
+        const bits = [_b2bQuoteDesc(it), it.condition, it.client_notes,
+                      it.wipe_required ? 'certified data wipe' : ''].filter(Boolean).join(' · ');
         return `  - ${_b2bItemName(it)} x${qty} — ${amt}${bits ? `\n      (${bits})` : ''}`;
     });
-    const total = items.reduce((s, it) => s + (it.recycle_only ? 0 : (Number(it.offer) || 0) * (Number(it.quantity) || 1)), 0);
+    const t = _b2bQuoteTotals(items);
     const picked = _b2bLongDate(deal.pickup_date);
     // null drops a line that doesn't apply; '' is a deliberate blank.
     return [
@@ -11097,10 +12562,11 @@ function _b2bQuoteText(deal, items) {
         '',
         ...lines,
         '',
-        `Total offer: ${_b2bMoney(total, 2)}`,
+        t.wipe ? `Subtotal: ${_b2bMoney(t.subtotal, 2)}` : null,
+        t.wipe ? `Certified data wipe (${t.wipeUnits} device${t.wipeUnits === 1 ? '' : 's'}): -${_b2bMoney(t.wipe, 2)}` : null,
+        `${t.wipe ? 'Total payable to you' : 'Total offer'}: ${_b2bMoney(t.net, 2)}`,
         '',
-        'Reply to this email to accept the quote or ask about any line.',
-        'Recycle-only items carry no offer and are disposed of responsibly at no cost to you.',
+        ..._b2bQuoteFootNotes(items),
         '',
         'Issued by SPEEKS Technology — authorized PayMore franchisee.',
     ].filter(l => l !== null).join('\n');
@@ -11153,9 +12619,15 @@ function _b2bQuoteSubject(deal) {
 
 // Step one: put the quote on the clipboard and explain the paste, so nobody
 // lands in an empty draft wondering where the quote went.
-async function b2bSendQuote(id, btn) {
+// `auto` marks the copy that opens by itself when an approver lands on an unsent
+// quote. It stays quiet about a missing address and offers a way back to the
+// quote, because the user didn't ask for it.
+async function b2bSendQuote(id, btn, auto) {
     const to = document.getElementById('b2bQuoteTo')?.value.trim();
-    if (!to) return _b2bSay('Enter an email address to open the quote against.', true);
+    if (!to) {
+        if (auto) return;
+        return _b2bSay('Enter an email address to open the quote against.', true);
+    }
     const deal = _b2bModalDeal;
     if (!deal) return;
 
@@ -11172,13 +12644,13 @@ async function b2bSendQuote(id, btn) {
         } catch (_) {
             try { await navigator.clipboard.writeText(text); copied = true; } catch (_) { /* no clipboard */ }
         }
-        _b2bShowSendStep(deal, to, copied);
+        _b2bShowSendStep(deal, to, copied, auto);
     });
 }
 
 const _b2bIsMac = () => /Mac|iP(hone|ad|od)/.test(navigator.platform || navigator.userAgent || '');
 
-function _b2bShowSendStep(deal, to, copied) {
+function _b2bShowSendStep(deal, to, copied, auto) {
     const paste = _b2bIsMac() ? 'Cmd + V' : 'Ctrl + V';
     const steps = copied ? [
         `Your email app opens a new draft to <b>${escapeHtml(to)}</b> with the subject already filled in.`,
@@ -11193,8 +12665,9 @@ function _b2bShowSendStep(deal, to, copied) {
     _b2bShowDeal({
         stage: 'quote',
         eyebrow: deal.ref,
-        title: 'Send This Quote',
-        sub: copied ? 'The quote is copied and ready to paste.' : 'The quote will be in the draft as plain text.',
+        title: auto ? 'This Quote Is Ready To Send' : 'Send This Quote',
+        sub: auto ? 'It has been priced and approved for sending. Review it first if you would rather.'
+             : copied ? 'The quote is copied and ready to paste.' : 'The quote will be in the draft as plain text.',
         body: `
             <div class="b2b-sendstep">
                 <div class="b2b-sendstep-ico">${_b2bIco('<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>')}</div>
@@ -11204,7 +12677,7 @@ function _b2bShowSendStep(deal, to, copied) {
             </div>`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
-            <button class="kpi-cancel-btn" onclick="b2bBackToQuote('${deal.id}')">Back</button>
+            <button class="kpi-cancel-btn" onclick="b2bBackToQuote('${deal.id}')">${auto ? 'Review The Quote First' : 'Back'}</button>
             <button class="b2b-btn b2b-btn-primary" onclick="b2bOpenDraft('${deal.id}','${escapeHtml(to).replace(/'/g, "\\'")}',${copied})">Open Email Draft</button>`,
     });
 }
@@ -11239,13 +12712,23 @@ async function b2bOpenDraft(id, to, copied) {
 }
 
 async function b2bAcceptQuote(id, btn) {
-    const gaps = _b2bUnreasoned();
+    // The same readiness gate as submitting, because the server runs the same
+    // one here -- checking only the reasons would let a line with two of five
+    // serials get all the way to a 400 from the accept call.
+    const gaps = _b2bNotReady();
     if (gaps.length) {
-        return _b2bSay(`${gaps.length} line${gaps.length === 1 ? '' : 's'} marked Fair or For Parts still need a reason: `
-            + gaps.map(_b2bItemName).join(', '), true);
+        gaps.forEach(it => _b2bNotesOpen.add(it.id));
+        _b2bRepaintItems();
+        return _b2bSay(gaps.map(it => `${_b2bItemName(it)} (${_b2bItemBlocked(it).join(', ')})`).join(' · '), true);
     }
     const t = _b2bItemTotals();
-    const msg = `Accept this quote at ${_b2bMoney(t.offer, 2)}?\n\n`
+    const unsent = _b2bModalDeal && _b2bAwaitingApproval(_b2bModalDeal);
+    const msg = `Accept this quote at ${_b2bMoney(t.net, 2)}?\n\n`
+        // Not blocked: a client can accept over the phone. But accepting a quote
+        // that was never sent leaves no record of what they agreed to, so it
+        // should be a deliberate choice rather than a slip.
+        + (unsent ? 'This quote has never been emailed, so there is no record of what the client saw. '
+                  + 'Send it first unless they have already agreed to these numbers.\n\n' : '')
         + 'The offers lock in as our cost, the SKUs freeze, and the items become inventory to list. '
         + 'This cannot be undone.';
     if (!confirm(msg)) return;
@@ -11273,12 +12756,12 @@ function _b2bStageListingLocation(deal) {
         body: `
             ${_b2bSummary(deal)}
             <div class="b2b-note ok"><span class="b2b-note-k">Accepted</span>
-                ${escapeHtml(deal.client?.company || '')} accepted ${_b2bMoney(deal.total_offer, 2)} across ${deal.total_units} unit${deal.total_units === 1 ? '' : 's'}.</div>
+                ${escapeHtml(deal.client?.company || '')} accepted ${_b2bMoney(_b2bNetOffer(deal), 2)} across ${deal.total_units} unit${deal.total_units === 1 ? '' : 's'}.</div>
             <label class="form-label-caps" style="margin-top:14px;">List At</label>
             <div class="b2b-loc-pick">
                 ${STORE_CODES.map(c => `
                     <button class="b2b-loc" data-loc="${c}" onclick="b2bPickLocation('${c}')">
-                        <span class="b2b-loc-dot">${STORE_DOTS[c] || ''}</span>
+                        <span class="b2b-loc-dot" style="background:${STORE_TINTS[c] || '#94a3b8'}"></span>
                         <span class="b2b-loc-c">${c}</span>
                     </button>`).join('')}
             </div>`,
@@ -11301,21 +12784,26 @@ function _b2bDone(it)      { return (Number(it.listed_qty) || 0) + (Number(it.re
 function _b2bSatisfied(it) { return _b2bDone(it) >= (Number(it.quantity) || 1); }
 function _b2bAllSatisfied(){ return _b2bModalItems.length > 0 && _b2bModalItems.every(_b2bSatisfied); }
 
+// Listing a unit is a two-scan handshake: our label identifies WHICH unit, then
+// the Shopify barcode records what it became. The id of the line waiting on its
+// second scan lives here.
+let _b2bPendingUnit = null;
+
+const B2B_SCAN_SVG = '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/>'
+    + '<path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>'
+    + '<line x1="7" y1="12" x2="7" y2="12"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="17" y1="8" x2="17" y2="16"/>';
+
 function _b2bStageListing(deal) {
+    _b2bPendingUnit = null;
     _b2bShowDeal({
         stage: 'listing',
         eyebrow: deal.ref,
         title: 'Listing',
-        sub: 'Scan or tick each unit as it goes live for resale.',
+        sub: 'Scan our label, then the Shopify barcode it went live under.',
         wide: true,
         body: `
             ${_b2bSummary(deal)}
-            <div class="b2b-scanbar">
-                <span class="b2b-scan-ico">${_b2bIco('<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="7" y2="12"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="17" y1="8" x2="17" y2="16"/>')}</span>
-                <input id="b2bScanIn" class="form-input-lg" autocomplete="off" placeholder="Scan a label, or type a SKU and press Enter"
-                    onkeydown="if(event.key==='Enter'){event.preventDefault();b2bScan('${deal.id}');}">
-                <span class="b2b-scan-msg" id="b2bScanMsg"></span>
-            </div>
+            <div id="b2bScanWrap">${_b2bScanBar(deal)}</div>
             <div id="b2bListProg">${_b2bListProgress()}</div>
             <div id="b2bListRows" class="b2b-list">${_b2bListRows()}</div>`,
         footer: `
@@ -11324,6 +12812,60 @@ function _b2bStageListing(deal) {
                 onclick="b2bCompleteDeal('${deal.id}',this)">Complete Deal</button>`,
         after: () => document.getElementById('b2bScanIn')?.focus(),
     });
+}
+
+// Two modes in one bar rather than a modal over the checklist: a hardware
+// scanner is a keyboard, so the operator's hands never leave it and the second
+// scan lands in the same always-focused field the first one did.
+function _b2bScanBar(deal) {
+    const it = _b2bPendingUnit ? _b2bLocalItem(_b2bPendingUnit) : null;
+    if (it) {
+        const unit = _b2bDone(it) + 1;
+        return `
+        <div class="b2b-scanbar pending">
+            <span class="b2b-scan-ico">${_b2bIco(B2B_SCAN_SVG)}</span>
+            <div class="b2b-scan-ask">
+                <span class="b2b-scan-ask-t">Now scan the Shopify barcode</span>
+                <span class="b2b-scan-ask-s">${escapeHtml(_b2bItemName(it))} · unit ${unit} of ${Number(it.quantity) || 1}</span>
+            </div>
+            <input id="b2bScanIn" class="form-input-lg b2b-scan-num" autocomplete="off" inputmode="numeric" maxlength="8"
+                placeholder="8-digit barcode"
+                oninput="_b2bScanTyped(this,'${deal.id}')"
+                onkeydown="if(event.key==='Enter'){event.preventDefault();b2bScan('${deal.id}');}
+                           if(event.key==='Escape'){b2bCancelPending();}">
+            <button class="b2b-btn b2b-btn-secondary" onclick="b2bCancelPending()">Cancel</button>
+            <span class="b2b-scan-msg" id="b2bScanMsg"></span>
+        </div>`;
+    }
+    return `
+        <div class="b2b-scanbar">
+            <span class="b2b-scan-ico">${_b2bIco(B2B_SCAN_SVG)}</span>
+            <input id="b2bScanIn" class="form-input-lg" autocomplete="off" placeholder="Scan one of our labels, or type a SKU and press Enter"
+                onkeydown="if(event.key==='Enter'){event.preventDefault();b2bScan('${deal.id}');}">
+            <span class="b2b-scan-msg" id="b2bScanMsg"></span>
+        </div>`;
+}
+
+// Repaints the bar and puts the caret back. Kept out of _b2bRepaintListing so a
+// half-typed barcode survives the row repaint that follows every tick.
+function _b2bRepaintScanBar() {
+    const wrap = document.getElementById('b2bScanWrap');
+    if (!wrap || !_b2bModalDeal) return;
+    wrap.innerHTML = _b2bScanBar(_b2bModalDeal);
+    document.getElementById('b2bScanIn')?.focus();
+}
+
+// Scanners vary on whether they send a terminating Enter. A Shopify barcode is
+// exactly 8 digits, so the field can submit itself the moment it has 8 -- which
+// also means the operator never has to reach for the keyboard.
+function _b2bScanTyped(el, dealId) {
+    el.value = el.value.replace(/\D/g, '').slice(0, 8);
+    if (el.value.length === 8) b2bScan(dealId);
+}
+
+function b2bCancelPending() {
+    _b2bPendingUnit = null;
+    _b2bRepaintScanBar();
 }
 
 function _b2bListProgress() {
@@ -11343,14 +12885,48 @@ function _b2bListRows() {
         const listed = Number(it.listed_qty) || 0;
         const recycled = Number(it.recycled_qty) || 0;
         const ok = _b2bSatisfied(it);
+        const waiting = _b2bPendingUnit === it.id;
+
+        // The barcodes are the evidence the units went live, so they are on the
+        // row rather than buried -- and each is individually removable, because
+        // a wrong one recorded is worse than one missing.
+        const codes = (it.listings || []).length ? `
+            <div class="b2b-lcodes">
+                ${it.listings.map(l => `
+                <span class="b2b-lcode" title="Listed by ${escapeHtml(l.listed_by || 'unknown')}">
+                    <span class="b2b-mono">${escapeHtml(l.shopify_barcode)}</span>
+                    <button class="b2b-lcode-x" title="Remove this barcode"
+                        onclick="b2bUnlistUnit('${it.id}','${l.id}')">×</button>
+                </span>`).join('')}
+            </div>` : '';
+
+        const scrap = _b2bIsScrap(it);
+        const disp  = _b2bDispOf(it);
+        const wiped = Number(it.wiped_qty) || 0;
+        // You may list exactly as many units as have been certified wiped. The
+        // server enforces the same rule; this is so the button says why.
+        const needsWipe = !!it.wipe_required && listed >= wiped;
+        const blockTitle = scrap ? 'Recycle lines are never listed'
+            : needsWipe ? `Certify a data wipe first — ${wiped} of ${qty} wiped`
+            : 'List one unit — asks for its Shopify barcode';
+
+        const wipeStrip = it.wipe_required ? `
+            <div class="b2b-lwipe ${wiped >= qty ? 'done' : ''}">
+                ${_b2bIco('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/>')}
+                <span><b>${wiped}</b> of ${qty} certified wiped</span>
+                ${wiped < qty ? `<button class="b2b-mini" onclick="b2bMarkWiped('${it.id}')">Mark Wiped</button>` : ''}
+            </div>` : '';
+
         return `
-        <div class="b2b-lrow ${ok ? 'done' : ''}" id="b2bLrow-${it.id}">
+        <div class="b2b-lrow ${ok ? 'done' : ''} ${waiting ? 'waiting' : ''}" id="b2bLrow-${it.id}">
             <span class="b2b-lcheck">${ok ? _b2bIco('<polyline points="20 6 9 17 4 12"/>') : ''}</span>
             <div class="b2b-lmain">
                 <div class="b2b-lname">${escapeHtml(_b2bItemName(it))}
-                    ${it.recycle_only ? '<span class="b2b-doc-rec">Recycle only</span>' : ''}
+                    ${!_b2bIsBuy(it) ? `<span class="b2b-doc-rec ${scrap ? '' : 'nrv'}">${escapeHtml(B2B_DISP[disp].label)}</span>` : ''}
                     ${it.condition ? `<span class="b2b-lcond">${escapeHtml(it.condition)}</span>` : ''}</div>
                 <div class="b2b-lsku b2b-mono">${escapeHtml(it.sku || '')}</div>
+                ${wipeStrip}
+                ${codes}
             </div>
             <div class="b2b-lcount">
                 <b>${listed}</b><span>/ ${qty} listed</span>
@@ -11358,12 +12934,46 @@ function _b2bListRows() {
             </div>
             <div class="b2b-lacts">
                 ${_b2bLabelBtn(it)}
-                <button class="b2b-step" ${listed <= 0 ? 'disabled' : ''} title="Undo one" onclick="b2bTick('${it.id}',-1)">−</button>
-                <button class="b2b-step up" ${ok ? 'disabled' : ''} title="Mark one listed" onclick="b2bTick('${it.id}',1)">+</button>
+                <button class="b2b-step" ${listed <= 0 ? 'disabled' : ''} title="Undo the last one" onclick="b2bUnlistUnit('${it.id}')">−</button>
+                <button class="b2b-step up" ${ok || scrap || needsWipe ? 'disabled' : ''}
+                    title="${escapeHtml(blockTitle)}"
+                    onclick="b2bAskShopify('${it.id}')">+</button>
                 <button class="b2b-recycle" ${ok ? 'disabled' : ''} title="Recycle units out" onclick="b2bRecycleUnits('${it.id}')">Recycle</button>
             </div>
         </div>`;
     }).join('');
+}
+
+// Certify N units wiped. Same optimistic-then-reconcile shape as recycling, and
+// on the same per-item queue -- the endpoint takes a delta, so order matters.
+function b2bMarkWiped(itemId) {
+    const it = _b2bLocalItem(itemId);
+    if (!it || !it.wipe_required) return;
+    const qty = Number(it.quantity) || 1;
+    const room = qty - (Number(it.wiped_qty) || 0);
+    if (room <= 0) return;
+    const raw = room === 1 ? '1' : prompt(
+        `How many "${_b2bItemName(it)}" units have been certified wiped?\n\n${room} still to do.`, String(room));
+    if (raw === null) return;
+    const units = Math.min(room, Math.max(1, parseInt(raw, 10) || 0));
+    if (!units) return;
+
+    const before = Number(it.wiped_qty) || 0;
+    it.wiped_qty = before + units;
+    _b2bDirty = true;
+    _b2bRepaintListing();
+
+    _b2bEnqueue(it.id, () => _b2bSend({ action: 'mark_wiped', id: it.id, units }))
+        .then(out => {
+            if (!out) return;
+            it.wiped_qty = out.wiped_qty;
+            _b2bRepaintListing();
+        })
+        .catch(e => {
+            it.wiped_qty = before;
+            _b2bRepaintListing();
+            _b2bScanFlash(e.message, true, it.id);
+        });
 }
 
 function _b2bRepaintListing() {
@@ -11388,56 +12998,131 @@ function _b2bScanFlash(msg, bad, itemId) {
     }
 }
 
-// A barcode scanner is a keyboard: the whole SKU arrives as fast keystrokes
-// ending in Enter, so this handles a scan and a typed SKU identically.
-// Everything needed to validate a scan is already in memory, so an unknown or
+// A barcode scanner is a keyboard: the whole code arrives as fast keystrokes,
+// so this handles a scan and typed input identically. Which of the two scans is
+// being read depends only on whether a line is already waiting.
+//
+// Everything needed to validate the first scan is in memory, so an unknown or
 // already-full SKU is rejected instantly and only real scans hit the network.
 function b2bScan(dealId) {
     const input = document.getElementById('b2bScanIn');
-    const sku = (input?.value || '').trim().toUpperCase();
+    const raw = (input?.value || '').trim();
     if (input) input.value = '';
-    if (!sku) return;
+    if (!raw) return;
+
+    // Second scan: the Shopify barcode for the unit we are holding.
+    if (_b2bPendingUnit) {
+        const it = _b2bLocalItem(_b2bPendingUnit);
+        if (!it) { _b2bPendingUnit = null; return _b2bRepaintScanBar(); }
+        if (!/^\d{8}$/.test(raw)) {
+            // Nearly always our own label scanned twice by mistake. Say which
+            // mistake it was, because "invalid barcode" would not.
+            const mine = _b2bModalItems.some(i => (i.sku || '').toUpperCase() === raw.toUpperCase());
+            return _b2bScanFlash(mine
+                ? "That's one of our labels — scan the Shopify listing's barcode instead."
+                : `A Shopify barcode is 8 digits; that was ${raw.length}.`, true, it.id);
+        }
+        if (it.listings?.some(l => l.shopify_barcode === raw)) {
+            return _b2bScanFlash(`${raw} is already recorded on this line.`, true, it.id);
+        }
+        return _b2bListUnit(it, raw);
+    }
+
+    // First scan: which line is this?
+    const sku = raw.toUpperCase();
     const it = _b2bModalItems.find(i => (i.sku || '').toUpperCase() === sku);
-    if (!it)             return _b2bScanFlash(`${sku} isn't a line on this deal.`, true);
-    if (_b2bSatisfied(it)) return _b2bScanFlash(`${sku} is already fully listed.`, true, it.id);
-    _b2bBumpListed(it, 1, () => _b2bScanFlash(`${sku} — ${it.listed_qty}/${it.quantity} listed`, false, it.id));
-    input?.focus();
+    if (!it)               return _b2bScanFlash(`${sku} isn't a line on this deal.`, true);
+    if (_b2bIsScrap(it))   return _b2bScanFlash(`${sku} is a recycle line — use Recycle instead of listing it.`, true, it.id);
+    if (it.wipe_required && (Number(it.listed_qty) || 0) >= (Number(it.wiped_qty) || 0)) {
+        return _b2bScanFlash(`${sku} needs a certified data wipe first — `
+            + `${Number(it.wiped_qty) || 0} of ${Number(it.quantity) || 1} wiped.`, true, it.id);
+    }
+    if (_b2bSatisfied(it)) return _b2bScanFlash(`${sku} is already fully accounted for.`, true, it.id);
+    b2bAskShopify(it.id);
 }
 
-function b2bTick(itemId, delta) {
+// Both routes into the second scan -- the scanned label and the manual "+" --
+// come through here, so a unit can never be ticked up without a barcode.
+function b2bAskShopify(itemId) {
     const it = _b2bLocalItem(itemId);
-    if (it) _b2bBumpListed(it, delta);
+    if (!it || _b2bIsScrap(it) || _b2bSatisfied(it)) return;
+    if (it.wipe_required && (Number(it.listed_qty) || 0) >= (Number(it.wiped_qty) || 0)) return;
+    _b2bPendingUnit = itemId;
+    _b2bRepaintScanBar();
+    _b2bRepaintListing();   // rows read _b2bPendingUnit to mark which one is waiting
 }
 
 // Apply locally, repaint now, then reconcile with the server. On failure the
 // line snaps back and says why, rather than the click having felt ignored.
-function _b2bBumpListed(it, delta, onOk) {
+function _b2bListUnit(it, code) {
     const qty = Number(it.quantity) || 1;
-    const before = { listed: Number(it.listed_qty) || 0, recycled: Number(it.recycled_qty) || 0 };
-    const next = before.listed + delta;
-    if (next < 0 || next + before.recycled > qty) return;
+    const before = { listed: Number(it.listed_qty) || 0, listings: (it.listings || []).slice() };
+    if (before.listed + (Number(it.recycled_qty) || 0) >= qty) return;
 
-    it.listed_qty = next;
+    // A temp id so an undo landing before the server replies still targets the
+    // right row; the reconcile below swaps in the real one.
+    it.listings = [...before.listings, { id: `tmp-${code}`, shopify_barcode: code, listed_by: _b2bUser() }];
+    it.listed_qty = before.listed + 1;
+    _b2bPendingUnit = null;
     _b2bDirty = true;
+    _b2bRepaintScanBar();
     _b2bRepaintListing();
-    if (onOk) onOk();
+    _b2bScanFlash(`${code} → ${it.sku || 'line'} · ${it.listed_qty} of ${qty} listed`, false, it.id);
     const done = _b2bAllSatisfied();
 
-    _b2bEnqueue(it.id, () => _b2bSend({ action: 'mark_listed', id: it.id, delta }))
+    _b2bEnqueue(it.id, () => _b2bSend({ action: 'list_unit', id: it.id, shopify_barcode: code }))
         .then(out => {
             if (!out) return;
             it.listed_qty = out.listed_qty;
             it.recycled_qty = out.recycled_qty;
+            it.listings = out.listings || it.listings;
             _b2bRepaintListing();
         })
         .catch(e => {
             it.listed_qty = before.listed;
-            it.recycled_qty = before.recycled;
+            it.listings = before.listings;
             _b2bRepaintListing();
             _b2bScanFlash(e.message, true, it.id);
         });
 
     if (done) _b2bCelebrate(_b2bModalDeal?.id);
+}
+
+// Undo one listed unit. Named barcodes come off individually; the bare "−"
+// takes the most recent, which is what "I just scanned that wrong" means.
+function b2bUnlistUnit(itemId, listingId) {
+    const it = _b2bLocalItem(itemId);
+    if (!it) return;
+    const list = it.listings || [];
+    const target = listingId ? list.find(l => l.id === listingId) : list[list.length - 1];
+    if (!target) return;
+    if (listingId && !confirm(`Remove Shopify barcode ${target.shopify_barcode} from this line?\n\n`
+        + 'The unit goes back on the checklist to be listed again.')) return;
+
+    const before = { listed: Number(it.listed_qty) || 0, listings: list.slice() };
+    it.listings = list.filter(l => l !== target);
+    it.listed_qty = Math.max(0, before.listed - 1);
+    _b2bDirty = true;
+    _b2bRepaintListing();
+
+    // A temp id means the insert is still in flight; the queue serialises them,
+    // so by the time this runs the server has a real row -- and no listing_id
+    // means "the most recent", which is that same row.
+    const realId = String(target.id).startsWith('tmp-') ? null : target.id;
+    _b2bEnqueue(it.id, () => _b2bSend({ action: 'unlist_unit', id: it.id, listing_id: realId || undefined }))
+        .then(out => {
+            if (!out) return;
+            it.listed_qty = out.listed_qty;
+            it.recycled_qty = out.recycled_qty;
+            it.listings = out.listings || it.listings;
+            _b2bRepaintListing();
+        })
+        .catch(e => {
+            it.listed_qty = before.listed;
+            it.listings = before.listings;
+            _b2bRepaintListing();
+            _b2bScanFlash(e.message, true, it.id);
+        });
 }
 
 function b2bRecycleUnits(itemId) {
@@ -11487,7 +13172,7 @@ function _b2bCelebrate(dealId) {
             <div class="b2b-cel-stats">
                 <div><b>${units - recycled}</b><span>listed</span></div>
                 ${recycled ? `<div><b>${recycled}</b><span>recycled</span></div>` : ''}
-                <div><b>${_b2bMoney(deal.total_cost || deal.total_offer)}</b><span>inventory cost</span></div>
+                <div><b>${_b2bMoney(deal.total_cost ? _b2bNetCost(deal) : _b2bNetOffer(deal))}</b><span>inventory cost</span></div>
             </div>
         </div>`;
     document.getElementById('b2bDealFooter').innerHTML = `
@@ -11507,17 +13192,24 @@ function _b2bStageView(deal) {
     const t = _b2bItemTotals();
     const rows = _b2bModalItems.map(it => {
         const qty = Number(it.quantity) || 1;
+        const buy = _b2bIsBuy(it);
+        const disp = _b2bDispOf(it);
+        const spec = _b2bQuoteDesc(it);
+        const ser = _b2bSerials(it);
         return `<tr>
             <td><b>${escapeHtml(_b2bItemName(it))}</b>
-                ${it.recycle_only ? '<span class="b2b-doc-rec">Recycle</span>' : ''}
+                ${!buy ? `<span class="b2b-doc-rec ${_b2bIsScrap(it) ? '' : 'nrv'}">${escapeHtml(B2B_DISP[disp].label)}</span>` : ''}
+                ${it.wipe_required ? `<span class="b2b-doc-rec wipe">Wipe ${Number(it.wiped_qty) || 0}/${qty}</span>` : ''}
+                ${spec ? `<div class="b2b-doc-sub">${escapeHtml(spec)}</div>` : ''}
                 ${it.client_notes ? `<div class="b2b-doc-sub">${escapeHtml(it.client_notes)}</div>` : ''}
                 ${it.staff_notes ? `<div class="b2b-doc-sub int">Internal: ${escapeHtml(it.staff_notes)}</div>` : ''}
+                ${ser.length ? `<div class="b2b-doc-sku b2b-mono">${escapeHtml(ser.join(', '))}</div>` : ''}
                 <div class="b2b-doc-sku b2b-mono">${escapeHtml(it.sku || '')}</div></td>
             <td class="c">${escapeHtml(it.condition || '—')}</td>
             <td class="c">${qty}</td>
             <td class="c">${_b2bDone(it)}/${qty}</td>
-            <td class="r">${it.recycle_only ? '—' : _b2bMoney(it.cost != null ? it.cost : it.offer, 2)}</td>
-            <td class="r b">${it.recycle_only ? '—' : _b2bMoney((Number(it.cost != null ? it.cost : it.offer) || 0) * qty, 2)}</td>
+            <td class="r">${buy ? _b2bMoney(it.cost != null ? it.cost : it.offer, 2) : '—'}</td>
+            <td class="r b">${buy ? _b2bMoney((Number(it.cost != null ? it.cost : it.offer) || 0) * qty, 2) : '—'}</td>
             <td class="r">${_b2bLabelBtn(it)}</td>
         </tr>`;
     }).join('');
@@ -11773,6 +13465,133 @@ function b2bPrintLabels(dealId, itemId) {
     if (!w) return alert('Allow pop-ups for this site to print labels.');
     w.document.write(doc);
     w.document.close();
+}
+
+// Full-page SKU label for a whole pickup: the deal ref, sized to fill the top
+// half of a portrait Letter page so it folds in half into a tent/hang tag.
+function b2bPrintPickup() {
+    const deal = _b2bModalDeal;
+    if (!deal) return;
+    const ref = deal.ref || '';
+    if (!ref) return alert('This pickup has no SKU yet — it gets one when it reaches pricing.');
+    const company = deal.company || deal.client?.company || '';
+    const when = deal.pickup_date ? _b2bDate(deal.pickup_date) : '';
+
+    // Size the ref to fit the usable width (~6.7in ≈ 480pt); monospace runs about
+    // 0.62em/char. Capped so short refs don't get comically large.
+    const size = Math.max(40, Math.min(150, Math.floor(480 / (ref.length * 0.62))));
+
+    const doc = `<!doctype html><html><head><meta charset="utf-8">
+<title>SKU ${escapeHtml(ref)}</title>
+<style>
+  @page { size: letter portrait; margin: 0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Inter','Segoe UI',Arial,sans-serif; background: #f4f7f9; }
+  .bar { position: sticky; top: 0; display: flex; gap: 12px; align-items: center;
+         padding: 12px 16px; background: #fff; border-bottom: 1px solid #e6ebf1; }
+  .bar b { font-size: 13px; font-weight: 800; color: #1a1c1e; }
+  .bar span { font-size: 12px; color: #94a3b8; }
+  .bar button.go { margin-left: auto; background: #1f9d57; border: 1px solid #1f9d57;
+         color: #fff; font: inherit; font-size: 12px; font-weight: 700; padding: 8px 15px;
+         border-radius: 9px; cursor: pointer; }
+  .page { width: 8.5in; height: 11in; margin: 0 auto; background: #fff; }
+  .top { height: 5.5in; padding: 0.55in 0.9in; display: flex; flex-direction: column;
+         align-items: center; justify-content: center; text-align: center;
+         border-bottom: 2px dashed #c7ced6; position: relative; }
+  .eyebrow { font-size: 26pt; font-weight: 800; letter-spacing: .22em;
+             text-transform: uppercase; color: #5a6b7b; }
+  .sku { font-family: 'Consolas','SFMono-Regular','Menlo',monospace; font-weight: 800;
+         letter-spacing: .01em; line-height: 1; color: #0f1720; margin: 0.22in 0;
+         white-space: nowrap; }
+  .co { font-size: 30pt; font-weight: 700; color: #1a1c1e; max-width: 100%;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta { font-size: 15pt; font-weight: 600; color: #6b7280; margin-top: 0.08in; }
+  @media print { body { background: #fff; } .bar { display: none; } .page { margin: 0; } }
+</style></head>
+<body>
+  <div class="bar">
+    <b>${escapeHtml(ref)}</b>
+    <span>Prints on the top half of a portrait page — fold in half and tape up.</span>
+    <button class="go" onclick="window.print()">Print</button>
+  </div>
+  <div class="page"><div class="top">
+    <div class="eyebrow">B2B Pickup</div>
+    <div class="sku" style="font-size:${size}pt;">${escapeHtml(ref)}</div>
+    ${company ? `<div class="co">${escapeHtml(company)}</div>` : ''}
+    ${when ? `<div class="meta">Picked up ${escapeHtml(when)}</div>` : ''}
+  </div></div>
+</body></html>`;
+
+    const w = window.open('', '_blank');
+    if (!w) return alert('Allow pop-ups for this site to print the label.');
+    w.document.write(doc);
+    w.document.close();
+}
+
+// ============================================================================
+// FEED REMINDER
+// ---------------------------------------------------------------------------
+// The QuickPortal feed reads its deadline cards off these hidden bubbles: the
+// CSS hides them with visibility/opacity, never display, because `display` is
+// the signal the feed uses to decide a reminder is live. Removing the element
+// would silently kill the card, so it stays in the DOM and just goes invisible.
+
+function _b2bBubbleEl() {
+    let b = document.getElementById('b2bAlertBubble');
+    if (b) return b;
+    // Hangs off the same parent as the shared claim bubble so it inherits the
+    // header's stacking context, like the aging bubble does.
+    const claim = document.getElementById('claimAlertBubble');
+    if (!claim || !claim.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'b2bAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; '
+        + 'background:linear-gradient(135deg, #1f9d57, #178048); color:white; '
+        + 'padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; '
+        + 'font-size:13px; box-shadow:0 10px 28px rgba(23,128,72,.38); '
+        + 'max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = `<span style="font-size:16px; flex-shrink:0; margin-top:2px;">📦</span>
+        <span id="b2bAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>
+        <button onclick="closeB2BAlertBubble()" class="daily-bubble-close" title="Dismiss">
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>`;
+    claim.parentElement.appendChild(b);
+    return b;
+}
+
+function closeB2BAlertBubble() {
+    const b = document.getElementById('b2bAlertBubble');
+    if (b) b.style.display = 'none';
+}
+
+// Runs on every page, so it has to be cheap and quiet: one scoped read, and it
+// bails immediately for anyone whose role has no B2B duties at all.
+async function checkB2BReminders() {
+    const role = _b2bRole();
+    if (!B2B_CORP_ROLES.includes(role) && !B2B_STORE_ROLES.includes(role) && !_b2bIsEmployee() && !_b2bHasCorpDelegation()) return;
+    const b = _b2bBubbleEl();
+    if (!b) return;
+    try {
+        const deals = (await _b2bGet(`store=${encodeURIComponent(_b2bFetchScope())}&archive=0`))
+            .map(_b2bShapeDeal).filter(_b2bInScope);
+        const mine = deals.filter(_b2bActionFor);
+        if (!mine.length) { b.style.display = 'none'; return; }
+
+        // Lead with the oldest, since that's the one actually holding things up.
+        const oldest = mine.reduce((a, d) => _b2bDaysIn(d) > _b2bDaysIn(a) ? d : a, mine[0]);
+        const stage = B2B_STAGE[oldest.stage]?.label || oldest.stage;
+        const t = document.getElementById('b2bAlertBubbleText');
+        if (t) {
+            const n = mine.length;
+            t.innerHTML = `<b>B2B deals need you</b><br>${n} deal${n === 1 ? '' : 's'} waiting`
+                + ` — oldest is ${escapeHtml(oldest.ref)} at ${escapeHtml(stage)}, ${_b2bDaysIn(oldest)}d in stage.`;
+            // The feed prefers an authored one-liner over scraping the bubble.
+            t.dataset.summary = `${n} deal${n === 1 ? '' : 's'} waiting · oldest ${oldest.ref} at ${stage}, ${_b2bDaysIn(oldest)}d`;
+        }
+        b.style.display = 'flex';
+    } catch (_) {
+        // a failed poll just leaves the bubble as it was
+    }
 }
 
 // ============================================================================
@@ -12642,12 +14461,29 @@ document.body.appendChild(customTooltip);
 // than trailing the cursor — see _anchorTipBelow + the mousemove guard.
 let _tipAnchored = false;
 function _anchorTipBelow(el) {
+    // Viewport coordinates throughout — the tooltip is position:fixed, so
+    // getBoundingClientRect values are used as-is with no scroll offset.
     const r = el.getBoundingClientRect();
     const tw = customTooltip.offsetWidth;
-    let x = r.left + r.width / 2 - tw / 2 + window.scrollX;
-    x = Math.max(10, Math.min(x, window.scrollX + window.innerWidth - tw - 10));
+    let x = r.left + r.width / 2 - tw / 2;
+    x = Math.max(10, Math.min(x, window.innerWidth - tw - 10));
     customTooltip.style.left = x + 'px';
-    customTooltip.style.top = (r.bottom + 10 + window.scrollY) + 'px';
+    customTooltip.style.top = (r.bottom + 10) + 'px';
+}
+
+// Place a trailing (non-anchored) tooltip at the cursor straight away, so it
+// doesn't flash at wherever it was last shown before mousemove catches up.
+function _tipPlaceAtCursor(e) {
+    // Client (viewport) coordinates to match the fixed-position tooltip, so it
+    // lands at the cursor whether or not the page is scroll-locked behind a modal.
+    let x = e.clientX - customTooltip.offsetWidth - 15;
+    if (x < 10) x = 10;
+    let y = e.clientY + 15;
+    if (y + customTooltip.offsetHeight > window.innerHeight - 20) {
+        y = e.clientY - customTooltip.offsetHeight - 10;
+    }
+    customTooltip.style.left = x + 'px';
+    customTooltip.style.top = y + 'px';
 }
 
 document.addEventListener('mouseover', function(e) {
@@ -12672,6 +14508,7 @@ document.addEventListener('mouseover', function(e) {
         // Top-nav buttons: pin the tooltip beneath the button with a caret instead
         // of letting it trail the cursor (matches the Tools button / tab tooltips).
         if (genTip.closest('.top-nav')) { customTooltip.classList.add('anchored'); _tipAnchored = true; _anchorTipBelow(genTip); }
+        else { _tipPlaceAtCursor(e); }
         return;
     }
 
@@ -12784,12 +14621,13 @@ document.addEventListener('mouseover', function(e) {
 document.addEventListener('mousemove', function(e) {
     if (_tipAnchored) return;   // pinned under a nav button — don't trail the cursor
     if (customTooltip.classList.contains('show')) {
-        let x = e.pageX - customTooltip.offsetWidth - 15;
-        let y = e.pageY + 15;
+        // Client coords — the tooltip is position:fixed (see _tipPlaceAtCursor).
+        let x = e.clientX - customTooltip.offsetWidth - 15;
+        let y = e.clientY + 15;
 
         if (x < 10) x = 10;
         if (y + customTooltip.offsetHeight > window.innerHeight - 20) {
-            y = e.pageY - customTooltip.offsetHeight - 10;
+            y = e.clientY - customTooltip.offsetHeight - 10;
         }
 
         customTooltip.style.left = x + 'px';
@@ -20846,7 +22684,7 @@ const FEATURE_CATALOG = [
     // in JS as well, and the edge function enforces the same roles on every write.
     { key: 'tool-margin-manage',       label: 'Margin Guide — Edit',           tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
-    { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'tom', 'manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'tom', 'manager', 'owner-manager', 'assistant-manager', 'employee', 'training'] },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
@@ -25560,6 +27398,7 @@ function _samReminderCfg() {
               : "openClaimsModal(); switchClaimsTab('view')" },
         { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "toggleRecycleInventory(); switchRecycleTab('view')" },
         { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging Inventory Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" },
+        { key: 'b2b', id: 'b2bAlertBubble', text: 'b2bAlertBubbleText', title: 'B2B Deals Waiting', urgency: 1, due: 'Action', cls: 'sam-due-amber', action: "window.location.href='operations.html#b2b'" },
         { key: 'margin', id: 'marginAlertBubble', text: 'marginAlertBubbleText', title: 'Margin Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#mreplies'" },
         // Preferred Purchases — feed-only, both directions. The owner's card is a
         // queue to work, so it keeps the amber "Review" badge and a Snooze.
@@ -25718,7 +27557,7 @@ const _RT_TOOL_CHECKS = {
     patch:         ['loadPatchNotes'],
     kpi:           ['checkKpiDueReminders'],
     preferred:     ['checkPreferredReminders'],
-    b2b:           ['_b2bRealtimeRefresh'],
+    b2b:           ['_b2bRealtimeRefresh', 'checkB2BReminders'],
     // Command Center + Listing Goals sources. Each re-fetches through its edge
     // fn and recomputes its update signature, so the pulsing dot / bar lights the
     // moment a write lands — no refresh or re-login. (scorecard fn, ebay-alerts
