@@ -12725,24 +12725,37 @@ body.sam-active .hotbar-btn:hover {
            color: #647082; text-transform: uppercase; letter-spacing: .04em; }
 .exp-ctl > span { white-space: nowrap; }
 .exp-ctl-ro b { font-size: 13px; color: #0f172a; text-transform: none; letter-spacing: 0; }
-.exp-btn-mail { padding: 8px 16px; }
+.exp-btn-mail { flex: 0 0 auto; }
+
+/* The footer arrows are inline SVGs with only a viewBox, so without an explicit
+   size they fall back to 300x150 and blow the button apart — same rule Box Order
+   and Recycle already carry for the identical arrow. */
+#expensesModal .btn-primary svg,
+#expensesModal .btn-secondary svg { width: 15px; height: 15px; flex: 0 0 auto; }
 
 .exp-input {
     font: inherit; font-size: 12.5px; font-weight: 600; color: #0f172a;
-    padding: 7px 9px; border-radius: 7px; border: 1px solid #cfd8e0; background: #fff;
+    padding: 7px 9px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff;
     width: 100%; box-sizing: border-box;
 }
-.exp-input:focus { outline: none; border-color: #4d8c6a; box-shadow: 0 0 0 3px rgba(77,140,106,.15); }
+.exp-input:focus { outline: none; border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(31,157,87,.12); }
 
+/* Small primary button — the site's established compact .btn-primary (12px /
+   7px 16px), so it reads as the same button as everything else, just smaller. */
 .exp-btn-sm {
-    font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; white-space: nowrap;
-    color: #fff; background: #4d8c6a; border: 1px solid #3f7a5a; border-radius: 7px; padding: 6px 12px;
+    font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap;
+    color: #fff; background: var(--sage-professional); border: none; border-radius: 10px;
+    padding: 7px 16px; box-shadow: 0 4px 12px rgba(31,157,87,.20);
+    transition: all .2s ease;
 }
-.exp-btn-sm:hover { background: #427a5c; }
-.exp-btn-sm.ghost { color: #475569; background: #f1f5f9; border-color: #e2e8f0; }
+.exp-btn-sm:hover { background: var(--sage-deep); transform: translateY(-1px); box-shadow: 0 6px 16px rgba(31,157,87,.28); }
+.exp-btn-sm.ghost {
+    color: #475569; background: #eef1f5; box-shadow: none;
+}
+.exp-btn-sm.ghost:hover { background: #e2e8f0; box-shadow: none; }
 
 .exp-msg { font-size: 11px; font-weight: 700; }
-.exp-msg.ok  { color: #15803d; }
+.exp-msg.ok  { color: var(--sage-deep); }
 .exp-msg.bad { color: #b91c1c; }
 
 /* summary strip */
@@ -12752,26 +12765,27 @@ body.sam-active .hotbar-btn:hover {
     border-radius: 10px; padding: 11px 13px;
 }
 .exp-cell.strong { background: #f4f7f5; border-color: #dfe7e2; }
-.exp-cell-l { font-size: 10px; font-weight: 900; letter-spacing: .07em; text-transform: uppercase; color: #8a94a3; }
+.exp-cell-l { font-size: 10.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: #8a94a3; }
 .exp-cell-v { font-size: 20px; font-weight: 800; color: #0f172a; margin-top: 3px; font-variant-numeric: tabular-nums; }
-.exp-cell.strong .exp-cell-v { color: #15803d; }
+.exp-cell.strong .exp-cell-v { color: var(--sage-deep); }
 .exp-cell-s { font-size: 11px; font-weight: 650; color: #8a94a3; margin-top: 2px; }
 
-/* tabs */
+/* tabs — the Box Order flagship's tab, not a bespoke pill */
 .exp-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
 .exp-tab {
-    font: inherit; font-size: 12px; font-weight: 800; cursor: pointer;
-    color: #647082; background: #f1f5f9; border: 1px solid #e2e8f0;
-    border-radius: 999px; padding: 7px 18px;
+    font: inherit; font-size: 12.5px; font-weight: 800; cursor: pointer;
+    color: #647082; background: #fff; border: 1.5px solid #e3e8ee;
+    border-radius: 10px; padding: 7px 18px; transition: all .2s ease;
 }
-.exp-tab.active { color: #fff; background: #4d8c6a; border-color: #3f7a5a; }
+.exp-tab:hover:not(.active) { background: #f6f8fa; }
+.exp-tab.active { color: #fff; background: var(--sage-professional); border-color: var(--sage-professional); }
 
 /* table — scrolls on its own so the modal never scrolls sideways */
 .exp-table-wrap { overflow-x: auto; border: 1px solid #eef1f5; border-radius: 10px; }
 .exp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .exp-table th {
-    text-align: left; padding: 9px 12px; font-size: 10px; font-weight: 900;
-    letter-spacing: .06em; text-transform: uppercase; color: #8a94a3;
+    text-align: left; padding: 9px 12px; font-size: 10.5px; font-weight: 800;
+    letter-spacing: .07em; text-transform: uppercase; color: #8a94a3;
     background: #f6f8fa; border-bottom: 1px solid #e9eef2; white-space: nowrap;
 }
 .exp-table td { padding: 9px 12px; border-bottom: 1px solid #f1f5f9; color: #334155; vertical-align: middle; }
@@ -12786,22 +12800,25 @@ body.sam-active .hotbar-btn:hover {
 }
 .exp-editing td { background: #f9fbfa; }
 .exp-edit-actions { display: flex; gap: 5px; justify-content: flex-end; }
+/* fixed box — the pencil and bin glyphs have different advance widths, so
+   padding alone rendered the two buttons 4px apart in size */
 .exp-ico {
+    display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0;
     font-size: 12px; line-height: 1; cursor: pointer; color: #64748b;
-    background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 6px;
-    padding: 5px 8px; margin-left: 4px;
+    background: #eef1f5; border: none; border-radius: 8px;
+    margin-left: 4px; transition: all .2s ease;
 }
-.exp-ico:hover { background: #e2e8f0; }
+.exp-ico:hover { background: #e2e8f0; color: #334155; }
 
 /* add-a-line panel */
 .exp-add { margin-top: 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 13px 15px; }
 .exp-add-t { font-size: 12px; font-weight: 800; color: #0f172a; margin-bottom: 10px; }
 .exp-add-grid { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
-.exp-add-grid label { display: flex; flex-direction: column; gap: 4px; flex: 0 1 130px; min-width: 0;
-                      font-size: 10px; font-weight: 900; letter-spacing: .05em;
-                      text-transform: uppercase; color: #8a94a3; }
+.exp-add-grid label { display: flex; flex-direction: column; gap: 5px; flex: 0 1 130px; min-width: 0;
+                      font-size: 11px; font-weight: 800; letter-spacing: .04em;
+                      text-transform: uppercase; color: #647082; }
 .exp-add-grid label.wide { flex: 1 1 200px; }
-.exp-add-btn { flex: 0 0 auto; padding: 8px 16px; }
+.exp-add-btn { flex: 0 0 auto; }
 .exp-add-note { font-size: 11px; font-weight: 650; color: #94a3b8; margin-top: 9px; }
 
 /* category manager */
