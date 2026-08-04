@@ -29639,13 +29639,15 @@ function _expCompose() {
         mileageRows.forEach(e => {
             const trip = [e.from_loc, e.to_loc].filter(Boolean).join(' to ');
             body += '  ' + _expPad(_expDate(e.entry_date), 8)
-                 + _expPad(e.description || trip || 'Trip', 30)
+                 + _expPad(e.description || trip || 'Trip', 33)
                  + _expPadL((Number(e.miles) || 0) + ' mi', 10)
                  + _expPadL('@ $' + _expRate(e.rate), 9)
                  + _expPadL(_expMoney(e.amount), 12) + '\n';
         });
-        body += '  ' + _expPad('', 38) + _expPadL(Math.round(miles * 10) / 10 + ' mi', 10)
-             + _expPadL('', 9) + _expPadL(_expMoney(mileageTotal), 12) + '\n\n';
+        // label sits right-aligned against the amount column so the subtotal
+        // reads as a total rather than an unlabelled trailing row
+        body += '  ' + _expPad('', 41) + _expPadL(Math.round(miles * 10) / 10 + ' mi', 10)
+             + _expPadL('Total', 9) + _expPadL(_expMoney(mileageTotal), 12) + '\n\n';
     }
 
     if (expenseRows.length) {
@@ -29656,7 +29658,7 @@ function _expCompose() {
                  + _expPad(e.description || '', 26)
                  + _expPadL(_expMoney(e.amount), 12) + '\n';
         });
-        body += '  ' + _expPad('', 60) + _expPadL(_expMoney(expenseTotal), 12) + '\n\n';
+        body += '  ' + _expPadL('Total', 60) + _expPadL(_expMoney(expenseTotal), 12) + '\n\n';
     }
 
     if (!mileageRows.length && !expenseRows.length) {
