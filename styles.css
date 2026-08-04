@@ -12288,6 +12288,8 @@ body.sam-active .hotbar-btn:hover {
 .tool-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .b2b-deal-print { display: inline-flex; align-items: center; gap: 6px; }
 .b2b-deal-print svg { width: 15px; height: 15px; }
+
+/* ============================================================
    JUMP TO — site-wide quick search (Ctrl K)
    ============================================================
    Three surfaces: the Search chip in the top bar, the pinned row at the top of
