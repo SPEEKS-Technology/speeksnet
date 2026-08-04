@@ -964,6 +964,11 @@ window.toggleToolsPanel = function(e) {
         // Fresh open starts with an empty search so a stale filter doesn't hide tools.
         const s = document.getElementById('toolsSearchInput');
         if (s) { s.value = ''; _toolsSearch(''); }
+        // ...and back at the top. The body is its own scroll container and the panel
+        // is only hidden by transform, so it keeps its scrollTop across close/open —
+        // and across sign-out, since that never reloads the dashboard.
+        const b = panel.querySelector('.tools-panel-body');
+        if (b) b.scrollTop = 0;
     }
 };
 
@@ -8224,8 +8229,11 @@ function handleSignOut() {
     // teardown/fetch window can't briefly paint role-gated controls (e.g. the green
     // ticker toggles) as the layout collapses.
     document.body.classList.remove('is-authenticated');
-    document.getElementById('checklistSidePanel')?.classList.remove('open');
-    document.getElementById('goalsSidePanel')?.classList.remove('open');
+    // Closes ALL four side panels, clears their nav-toggle active state and runs
+    // their stop callbacks. This used to hand-remove `open` from just the checklist
+    // and goals panels, which left the tools and audit panels open for the next
+    // person and left the checklist/audit sync polls running after sign-out.
+    _closeSidePanels();
     closeAllModals();
 
     // Drop the outgoing user's feed data. Signing back in as someone else on
