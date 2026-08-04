@@ -12206,6 +12206,43 @@ body.sam-active .hotbar-btn:hover {
 .dcc-row-v.w { color: #b45309; }
 .dcc-row-v.g { color: #15803d; }
 
+/* ── Sales Import (Shopify daily email → sheet) ────────────────────────────
+   Two surfaces for one action: a chip on the Command Center header line, and a
+   row at the foot of the Buying & selling block. Both are secondary to the
+   numbers around them — this is plumbing status, not a metric, so the dot
+   carries the state and the button stays quiet until hovered. */
+.si-line { display: flex; align-items: center; gap: 8px; padding-left: 12px;
+           margin-left: 4px; border-left: 1px solid #e3e9ee; }
+.si-txt  { font-size: 11.5px; font-weight: 700; color: #647082; white-space: nowrap; }
+.si-dot  { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: #cbd5e0; }
+.si-dot.si-good { background: #1f9d57; }
+.si-dot.si-warn { background: #d98324; }
+.si-dot.si-bad  { background: #c0392b; }
+.si-dot.si-mute { background: #cbd5e0; }
+
+.si-btn { font: inherit; font-size: 11px; font-weight: 750; letter-spacing: .01em;
+          color: #1f7a48; background: #f2f8f4; border: 1px solid #d6e6dc;
+          border-radius: 8px; padding: 5px 10px; cursor: pointer; white-space: nowrap;
+          transition: background .14s ease, border-color .14s ease, color .14s ease; }
+.si-btn:hover:not(:disabled) { background: #e6f2ec; border-color: #b9d8c8; color: #17603a; }
+.si-btn:disabled { opacity: .6; cursor: default; }
+
+/* The run result sits inline on the header line, so unlike .si-txt it must be
+   allowed to WRAP and must be width-capped — a nowrap run of free text here would
+   push the header out and scroll the panel sideways (see table-layout-blowout). */
+.si-msg { font-size: 11px; font-weight: 700; line-height: 1.35; padding: 4px 8px;
+          border-radius: 7px; max-width: 320px; white-space: normal;
+          overflow-wrap: anywhere; }
+.si-msg.ok  { color: #17603a; background: #f2f8f4; border: 1px solid #d6e6dc; }
+.si-msg.bad { color: #9b2c1f; background: #fdf3f1; border: 1px solid #f0d5cf; }
+
+@media (max-width: 720px) {
+  /* The header line is the first thing to run out of room; the row keeps the
+     full state so nothing is lost by dropping the chip's text here. */
+  .si-line { padding-left: 8px; margin-left: 0; }
+  .si-txt { display: none; }
+}
+
 /* categories at risk */
 .dcc-cats { display: flex; flex-direction: column; gap: 7px; }
 .dcc-cat { display: grid; grid-template-columns: 148px 1fr; gap: 11px; align-items: center;

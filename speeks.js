@@ -65,6 +65,7 @@ const AGING_INV_URL     = `${_BASE}/aging-inventory`;
 const EXPENSES_URL      = `${_BASE}/expenses`;
 const PREFERRED_URL     = `${_BASE}/preferred-purchases`;
 const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
+const SALES_INGEST_URL  = `${_BASE}/sales-ingest`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -9129,6 +9130,9 @@ async function fetchMasterDistrictDashboard() {
     const renderMasterBoard = (hubData, varData, scoreData, alertsData, weeklyResults) => {
         _dccRows = STORES.map(s => _dccRow(s, hubData, varData, scoreData, alertsData, weeklyResults));
         container.innerHTML = _dccBoardHtml(PORTAL_LINKS);
+        // Fills in the Sales Import line once it answers. Repaints via _dccRepaint
+        // (not this function), so there is no render loop.
+        fetchSalesImportStatus();
     };
 
     const cachedHtml = localStorage.getItem('speeksDistMasterHtml');
@@ -23975,6 +23979,7 @@ const FEATURE_CATALOG = [
     // Workspace tab stayed switched off at the role level.
     { key: 'widget-emp-weekly-kpis',   label: 'Weekly KPIs — dashboard widget tab', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    { key: 'dcc-sales-import',         label: 'District CC · Sales Import control', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     // The three district action-menu rows. Defaults mirror exactly what the
     // dashboard panels they replaced were gated to: Cleaning and Listing were
     // DM+CEO, Monthly Team Goals was DM-only. Delegation pairs each with the
@@ -30926,6 +30931,158 @@ function _dccEbayBlock(r) {
         }).join('') + '</div></div>';
 }
 
+// ---- Sales Import (Shopify daily email -> Sales Summary sheet) --------------
+// Normally nobody touches this: pg_cron runs it at 7am Central with an 8am retry.
+// The button exists for the mornings when a store's email lands late — one click
+// beats keying ten numbers in by hand. Backend re-checks the role by pin, so this
+// UI being visible is convenience, not the security boundary.
+let _salesImport = null;      // last status from the fn, or null before it loads
+let _siBusy = false;
+let _siMsg = null, _siMsgBad = false, _siMsgTimer = null;
+
+// A quiet line inside the panel rather than alert(), which would fight whatever
+// the DM is mid-scan on. Kept in state, not the DOM, so it survives the board
+// repaint that follows every run — same reasoning as _b2bSay.
+function _siSay(msg, bad) {
+    _siMsg = msg || null;
+    _siMsgBad = !!bad;
+    if (_siMsgTimer) clearTimeout(_siMsgTimer);
+    if (msg) _siMsgTimer = setTimeout(() => { _siMsg = null; _dccRepaint(); }, 7000);
+    _dccRepaint();
+}
+
+async function fetchSalesImportStatus() {
+    const pin = sessionStorage.getItem('speeksUserPin');
+    if (!pin) return;
+    try {
+        const r = await fetch(`${SALES_INGEST_URL}?action=status&v=${Date.now()}`, {
+            headers: { 'x-user-pin': pin }
+        });
+        const d = await r.json();
+        if (d && d.ok) { _salesImport = d; _dccRepaint(); }
+    } catch (_) { /* the panel just shows nothing rather than an error */ }
+}
+
+async function runSalesImport(ev) {
+    if (ev) ev.stopPropagation();
+    if (_siBusy) return;
+    const pin = sessionStorage.getItem('speeksUserPin');
+    if (!pin) return;
+
+    _siBusy = true;
+    _dccRepaint();                       // paints the buttons into their "Importing…" state
+    try {
+        const r = await fetch(SALES_INGEST_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({})
+        });
+        const d = await r.json();
+        _siBusy = false;
+
+        if (!d.ok) {
+            // "Invalid PIN" nearly always means the PIN was changed after this
+            // browser signed in — sessionStorage still holds the old one, and the
+            // backend looks users up BY pin so there is no row to find. Passing the
+            // raw message through sends people hunting for a fault in the import.
+            // Applies to every pin-authed tool, not just this one.
+            const raw = d.error || '';
+            _siSay(
+                /invalid pin/i.test(raw)
+                    ? 'Your saved sign-in is out of date — the PIN changed since you signed in. Sign out, sign back in, then run it again.'
+                    : /insufficient role/i.test(raw)
+                        ? 'This account is not a District Manager or CEO, so it cannot run the import.'
+                        : (raw || 'The import could not run.'),
+                true);
+        } else {
+            const s = d.summary || {};
+            const bits = [];
+            if (s.filled)    bits.push(`${s.filled} store-day${s.filled === 1 ? '' : 's'} filled in`);
+            if (s.corrected) bits.push(`${s.corrected} corrected`);
+            if (s.missing)   bits.push(`${s.missing} still to enter by hand`);
+            _siSay(bits.length ? 'Sales import — ' + bits.join(', ') + '.' : 'Sales import — already up to date.',
+                   !!s.missing);
+        }
+
+        await fetchSalesImportStatus();
+        // The fn already kicked sync-buysell, so the figures behind this panel have
+        // moved — pull them through rather than leaving stale numbers on screen.
+        if (typeof fetchMasterDistrictDashboard === 'function') fetchMasterDistrictDashboard();
+    } catch (err) {
+        _siBusy = false;
+        _siSay('The import could not be reached.', true);
+    }
+}
+
+// Repaint the board from rows already in memory. No-ops before the first load,
+// same guard _dccPick uses — the cached HTML restores clickable controls before
+// any data exists.
+function _dccRepaint() {
+    if (!_dccRows.length) return;
+    const el = document.getElementById('district-master-body');
+    if (el) el.innerHTML = _dccBoardHtml(_DCC_PORTAL_LINKS);
+}
+
+// "8/3" from "2026-08-03"; the year is noise at this size.
+function _siShortDate(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+    return m ? `${+m[2]}/${+m[3]}` : '';
+}
+
+function _siRelTime(iso) {
+    const t = Date.parse(iso);
+    if (!t) return '';
+    const mins = Math.round((Date.now() - t) / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.round(hrs / 24)}d ago`;
+}
+
+// The compact chip on the Command Center's header line.
+// The Sales Import chip on the Command Center header line. The single surface for
+// this: dot + state + button, with a run's outcome taking the line over briefly.
+function _siLineHtml() {
+    const btn = '<button type="button" class="si-btn" onclick="runSalesImport(event)"'
+        + (_siBusy ? ' disabled' : '') + '>' + (_siBusy ? 'Importing…' : 'Run import') + '</button>';
+
+    const open = '<span class="si-line" data-feature="dcc-sales-import">';
+
+    // A run's result owns the line for a few seconds, then it reverts to the
+    // derived status. Rendered before the _salesImport check so a run that fails
+    // immediately — a bad pin, say — still reports itself.
+    if (_siMsg) {
+        return open + '<span class="si-dot ' + (_siMsgBad ? 'si-bad' : 'si-good') + '"></span>'
+            + '<span class="si-msg ' + (_siMsgBad ? 'bad' : 'ok') + '">' + escapeHtml(_siMsg) + '</span>'
+            + btn + '</span>';
+    }
+    if (!_salesImport) return open + btn + '</span>';
+
+    const lr = _salesImport.lastRun;
+    const state = _salesImport.state;
+    let txt, cls, tip = '';
+    if (state === 'never')       { txt = 'Sales import has not run yet'; cls = 'si-mute'; }
+    else if (state === 'failed') { txt = 'Sales import failed';          cls = 'si-bad';  }
+    else if (state === 'attention') {
+        txt = `${lr.missing} to enter by hand`;
+        cls = 'si-warn';
+        // Which store/dates, on hover — the detail has to live somewhere, and a
+        // tooltip keeps it out of a line that has no room to grow.
+        const list = (lr.missingList || []).slice(0, 8)
+            .map(m => `${m.store} ${_siShortDate(m.date)}`).join(', ');
+        if (list) tip = ' title="Still blank in the sheet: ' + escapeHtml(list) + '"';
+    }
+    else {
+        txt = `Sales imported ${_siRelTime(lr.ranAt)}`;
+        cls = 'si-good';
+        if (lr.corrected) tip = ' title="' + lr.corrected + ' past day(s) restated on the last run"';
+    }
+
+    return open + '<span class="si-dot ' + cls + '"></span>'
+        + '<span class="si-txt"' + tip + '>' + escapeHtml(txt) + '</span>' + btn + '</span>';
+}
+
 function _dccBuyBlock(r) {
     return '<div class="dcc-block"><div class="dcc-sec">Buying &amp; selling'
         + (r.edited ? '<em>' + escapeHtml(r.edited) + '</em>' : '') + '</div><div class="dcc-rows">'
@@ -31025,7 +31182,7 @@ function _dccBoardHtml(portalLinks) {
         // that used to sit beside it only repeated what the rail groups already say.
         + '<div class="dcc-head-side"><span class="dcc-sum">'
         + '<b>' + _dccMoney(totGP) + '</b><i>of ' + _dccMoney(totGoal) + ' GP goal</i>'
-        + '</span></div></div>'
+        + '</span>' + _siLineHtml() + '</div></div>'
         + '<div class="dcc-body"><div class="dcc-grid">'
         + '<div class="dcc-rail">' + _dccRailHtml() + '</div>'
         + '<div class="dcc-pane">' + _dccPaneHtml(sel, portalLinks[_dccSel]) + '</div>'
