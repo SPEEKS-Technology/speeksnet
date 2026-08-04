@@ -35,9 +35,18 @@ body {
     background: var(--bg-app); 
     color: var(--text-dark); 
     line-height: 1.6; 
-    display: flex; 
-    min-height: 100vh; 
-    overflow-x: hidden; 
+    display: flex;
+    min-height: 100vh;
+    /* `clip`, not `hidden` — they look identical but behave differently here.
+       A non-visible overflow on ONE axis forces the other axis to compute to
+       `auto`, so `overflow-x: hidden` quietly turned <body> into a scroll
+       container. Any position:sticky descendant then anchors to <body>, which
+       never scrolls internally (the page scrolls on <html>), so sticky could
+       never engage anywhere on the site — which is why the Monthly Breakdown
+       and Store KPI headers had been given up on and set to position:static.
+       `clip` suppresses the same horizontal overflow WITHOUT creating a scroll
+       container, so sticky resolves against the viewport as intended. */
+    overflow-x: clip;
 }
 
 body.no-scroll {
@@ -2658,12 +2667,18 @@ select.bs-hidden-select:focus {
 .tools-nav-btn .tools-icon { width: 13px; height: 13px; stroke: #fff; }
 .tools-nav-label { font-size: 11px; font-weight: 700; color: #fff; text-transform: uppercase; letter-spacing: 0.5px; }
 
+/* --panel-top is set by _syncLayout() (initLayoutSync, speeks.js) from the nav's
+   measured height. The fallback is 64px to match .top-nav's min-height, so if the
+   script never runs the panel still hangs flush instead of floating. It used to be
+   104px, and when _syncLayout stopped running the panels detached from the header
+   by exactly that difference — a fallback that doesn't match the real layout turns
+   a JS failure into a visible one. */
 .tools-side-panel {
     position: fixed;
-    top: var(--panel-top, 104px);
+    top: var(--panel-top, 64px);
     right: 0;
     width: 270px;
-    height: calc(100vh - var(--panel-top, 104px));
+    height: calc(100vh - var(--panel-top, 64px));
     background: #fff;
     border-radius: 0 0 0 14px;
     box-shadow: -8px 0 32px rgba(0,0,0,0.13);
@@ -4021,6 +4036,94 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 
 /* ── overview: metrics × stores for the most-recent month ── */
 .mb-overview-cap { font-size: 12px; font-weight: 700; color: #64748b; padding: 2px 2px 10px 14px; letter-spacing: 0.2px; }
+/* =========================================================
+   MANAGE ROWS — the Monthly Breakdown's row catalog editor
+   ========================================================= */
+.mbm-sec {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+    color: #64707c; background: #f4f8f5;
+    padding: 7px 12px; margin: 14px 0 4px; border-radius: 8px;
+}
+.mbm-sec:first-child { margin-top: 0; }
+.mbm-sec-name  { flex: 0 0 auto; }
+.mbm-sec-count { flex: 1 1 auto; font-weight: 600; letter-spacing: 0; text-transform: none; color: #9aa6ad; }
+/* Kept quiet until the section is hovered — these are occasional admin actions,
+   not something to advertise above every group. */
+.mbm-sec-actions { flex: 0 0 auto; display: flex; gap: 6px; opacity: 0; transition: opacity .15s; }
+.mbm-sec:hover .mbm-sec-actions,
+.mbm-sec:focus-within .mbm-sec-actions { opacity: 1; }
+.mbm-sec-btn {
+    height: 24px; padding: 0 10px;
+    border: 1px solid #dbe4de; border-radius: 6px; background: #fff;
+    font-family: inherit; font-size: 10px; font-weight: 800;
+    letter-spacing: .04em; text-transform: uppercase; color: #56636e; cursor: pointer;
+    transition: background .15s, border-color .15s;
+}
+.mbm-sec-btn:hover { background: #e8f7ee; border-color: #9fdcbb; color: #178048; }
+.mbm-sec-btn.mbm-danger { color: var(--red-alert, #dc2626); border-color: #f3d3d3; }
+.mbm-sec-btn.mbm-danger:hover { background: #fdecec; border-color: #eab8b8; color: var(--red-alert, #dc2626); }
+
+/* the "move its rows where?" strip, revealed under a section by Delete */
+.mbm-sec-move {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 9px 12px; margin: -2px 0 6px;
+    background: #fdf7f7; border: 1px solid #f3d3d3; border-radius: 8px;
+}
+.mbm-sec-move-label { font-size: 11.5px; font-weight: 700; color: #56636e; }
+.mbm-sec-move select {
+    height: 28px; padding: 0 8px;
+    border: 1px solid #dbe4de; border-radius: 6px; background: #fff;
+    font-family: inherit; font-size: 12.5px; font-weight: 600; color: #1f2937;
+}
+.mbm-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 9px 12px; border-bottom: 1px solid #f0f4f1;
+}
+.mbm-row:hover { background: #fafcfb; }
+.mbm-row.is-retired { opacity: .5; }
+/* Label only — the key/type/flag chips that used to sit here were removed; their
+   styles went with them rather than lingering as dead rules. */
+.mbm-row-main { flex: 1 1 auto; min-width: 0; }
+.mbm-label { font-size: 13.5px; font-weight: 700; color: #1f2937; }
+.mbm-row-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+.mbm-btn { height: 28px; padding: 0 12px; font-size: 12px; }
+.mbm-danger { color: var(--red-alert, #dc2626); border-color: #f3d3d3; }
+.mbm-danger:hover { background: #fdecec; }
+.mbm-locked { font-size: 11px; font-weight: 700; color: #9aa6ad; padding-right: 6px; }
+
+/* the add / edit form, pinned above the list */
+.mbm-form {
+    border: 1px solid #cfe0d5; border-radius: 12px;
+    background: #f7faf8; padding: 14px 16px; margin-bottom: 16px;
+}
+.mbm-form-head { font-size: 13px; font-weight: 800; color: #1f2937; margin-bottom: 12px; }
+.mbm-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 10px 14px; margin-bottom: 10px;
+}
+.mbm-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mbm-field > span {
+    font-size: 10px; font-weight: 800; letter-spacing: .05em;
+    text-transform: uppercase; color: #64707c;
+}
+.mbm-field input, .mbm-field select {
+    height: 34px; box-sizing: border-box; padding: 0 10px;
+    border: 1px solid #dbe4de; border-radius: 8px; background: #fff;
+    font-family: inherit; font-size: 13px; font-weight: 600; color: #1f2937; outline: none;
+}
+.mbm-field input:focus, .mbm-field select:focus {
+    border-color: var(--sage-professional, #1f9d57);
+    box-shadow: 0 0 0 3px rgba(31,157,87,.14);
+}
+.mbm-field input:disabled { background: #f1f5f2; color: #9aa6ad; }
+.mbm-checks { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 12px; }
+.mbm-checks label { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; color: #374151; }
+.mbm-hint { color: #9aa6ad; font-weight: 500; }
+.mbm-form-foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.mbm-status { flex: 1 1 auto; font-size: 12px; font-weight: 700; color: #93a0aa; }
+.mbm-status.is-error { color: var(--red-alert, #dc2626); }
+
 .mb-table-overview .mb-th-metric { width: 25%; }
 .mb-table-overview .mb-th-val { width: 15%; }
 .mb-best  { background: #eaf6ee; color: #15803d; }
@@ -4528,10 +4631,10 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 /* Drop-down checklist panel — hangs flush from the right of the header */
 .checklist-side-panel {
     position: fixed;
-    top: var(--panel-top, 104px);
+    top: var(--panel-top, 64px);
     right: 0;
     width: 420px;
-    height: calc(100vh - var(--panel-top, 104px));
+    height: calc(100vh - var(--panel-top, 64px));
     background: white;
     border-radius: 0 0 0 14px;
     box-shadow: -8px 0 32px rgba(0,0,0,0.12);
@@ -4584,10 +4687,10 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
    ========================================================= */
 .goals-side-panel {
     position: fixed;
-    top: var(--panel-top, 104px);
+    top: var(--panel-top, 64px);
     right: 0;
     width: 420px;
-    height: calc(100vh - var(--panel-top, 104px));
+    height: calc(100vh - var(--panel-top, 64px));
     background: white;
     border-radius: 0 0 0 14px;
     box-shadow: -8px 0 32px rgba(0,0,0,0.12);
@@ -6353,6 +6456,177 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 /* =========================================================
    KPI MODAL FOOTER (Save All)
    ========================================================= */
+/* =========================================================
+   KPI COACHING NOTES
+   A collapsible bar per period, under that period's numbers.
+
+   The row is a <td colspan="24"> and everything inside is
+   width:100%, so the bar and the textarea run the full width
+   of the grid and line up with its edges. That's safe because
+   .kpi-full-table is `width: 100%; table-layout: fixed` — the
+   table is panel-width, not a wide horizontal scroller, so
+   "full table width" is also "fully visible".
+
+   Collapsed is the resting state: most periods never get a
+   note, so the default costs one bar's height instead of a
+   textarea's.
+   ========================================================= */
+.kpi-note-row > td {
+    padding: 0 !important;
+    background: #f7faf8;
+    border-top: 1px solid #e6ece8;
+}
+.kpi-note-box {
+    width: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+}
+
+/* --- the bar (always visible, and the toggle) --- */
+.kpi-note-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 9px 16px;
+    background: none;
+    border: 0;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 0;
+    transition: background .15s;
+}
+.kpi-note-head:hover { background: #eef5f0; }
+.kpi-note-head:focus-visible {
+    outline: 2px solid var(--sage-professional, #1f9d57);
+    outline-offset: -2px;
+}
+.kpi-note-chevron {
+    width: 14px; height: 14px; flex: 0 0 auto;
+    color: #7c8a95;
+    transition: transform .18s ease;
+}
+.kpi-note-box.is-open .kpi-note-chevron { transform: rotate(90deg); }
+.kpi-note-title {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: #56636e;
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
+/* Filled only when a note exists — the one glance that says "there's something
+   in here" without opening it. */
+.kpi-note-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #1f9d57;
+    flex: 0 0 auto;
+    display: none;
+}
+.kpi-note-box.has-note .kpi-note-dot { display: block; }
+/* The note's opening words, so a collapsed bar still tells you what's inside.
+   min-width:0 lets it actually shrink and ellipsis inside the flex row. */
+.kpi-note-preview {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #6b7885;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.kpi-note-box.is-open .kpi-note-preview { visibility: hidden; }
+.kpi-note-meta {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #93a0aa;
+    white-space: nowrap;
+    flex: 0 0 auto;
+    margin-left: auto;
+}
+
+/* --- the editor (only when expanded) --- */
+.kpi-note-body {
+    display: none;
+    flex-direction: column;
+    gap: 8px;
+    padding: 2px 16px 14px;
+}
+.kpi-note-box.is-open .kpi-note-body { display: flex; }
+
+.kpi-note-input {
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+    min-height: 62px;
+    padding: 10px 12px;
+    border: 1px solid #dbe4de;
+    border-radius: 10px;
+    background: #fff;
+    font-family: inherit;
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: #1f2937;
+    transition: border-color .15s, box-shadow .15s;
+}
+.kpi-note-input::placeholder { color: #a8b3bc; }
+.kpi-note-input:focus {
+    outline: none;
+    border-color: var(--sage-professional, #1f9d57);
+    box-shadow: 0 0 0 3px rgba(31,157,87,.14);
+}
+.kpi-note-foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    min-height: 26px;   /* reserved, so the box doesn't jolt when a status appears */
+}
+.kpi-note-status { font-size: 12px; font-weight: 700; color: #93a0aa; }
+.kpi-note-status.is-dirty { color: #c07f0c; }
+.kpi-note-status.is-saved { color: #178048; }
+.kpi-note-status.is-error { color: var(--red-alert, #dc2626); }
+.kpi-note-save {
+    height: 30px;
+    padding: 0 16px;
+    border: 1px solid #cfe0d5;
+    border-radius: 8px;
+    background: #fff;
+    color: #178048;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+    transition: background .15s, border-color .15s, opacity .15s;
+}
+.kpi-note-save:hover:not(:disabled) { background: #e8f7ee; border-color: #9fdcbb; }
+/* Disabled is the resting state (nothing to save), so it has to read as calm
+   rather than broken — no red, no hard fade. */
+.kpi-note-save:disabled { opacity: .45; cursor: default; }
+
+/* --- read-only view (DM, CEO, ASM, or any store that isn't yours) ---
+   Rendered as text, not a disabled textarea: a greyed-out input still reads as
+   "you could type here if something were different", which isn't true — nobody
+   above the store manager edits their coaching notes. */
+.kpi-note-read {
+    padding: 10px 12px;
+    border: 1px solid #e6ece8;
+    border-left: 3px solid #cfe0d5;
+    border-radius: 8px;
+    background: #fff;
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: #374151;
+    white-space: pre-wrap;   /* the manager's own line breaks are part of the note */
+    overflow-wrap: anywhere;
+}
+/* No hover affordance on a bar that only expands to text. */
+.kpi-note-box.is-readonly .kpi-note-head:hover { background: none; }
+
 .kpi-entry-modal-footer {
     display: flex;
     align-items: center;
@@ -6767,7 +7041,29 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 /* Monthly Brief pane flows as part of the page too: natural height, no inner scrollbar */
 .ws-panel-brief { height: auto !important; min-height: 0 !important; overflow: visible !important; }
 .ws-panel-brief .ws-scroll { overflow: visible; flex: none; min-height: 0; }
-.ws-panel-brief .mb-table thead th { position: static; }
+
+/* Freeze the header row (Metric + store names on Overview, Metric + months on
+   Store View) as the page scrolls.
+
+   .mb-table already declares `position: sticky; top: 0`, written for when this
+   pane had its own inner scrollbar. Once it was changed to flow with the page,
+   top:0 would have pinned the header underneath the fixed top nav — so it was
+   turned off with `position: static` rather than re-anchored. That's why the
+   header scrolled away.
+
+   Re-anchoring is the actual fix: stick it to --panel-top, the measured height
+   of the fixed nav (set by _syncLayout), so it comes to rest exactly on the
+   nav's bottom edge instead of behind it. The subtabs row isn't sticky, so
+   there's nothing else to clear.
+
+   overflow must stay visible on every ancestor above — an overflow-hidden
+   ancestor silently kills position: sticky, which is what the two rules above
+   are protecting. */
+.ws-panel-brief .mb-table thead th {
+    position: sticky;
+    top: var(--panel-top, 64px);
+    z-index: 6;   /* over .mb-section-row, which paints its own background */
+}
 
 /* underline tabs: flat row, active = sage underline + bold */
 .ws-subtabs { display: flex; gap: 2px; border-bottom: 2px solid #e5e8ec; }
@@ -6777,6 +7073,15 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 }
 .ws-tab:hover { color: var(--slate-charcoal); }
 .ws-tab.active { color: var(--sage-professional); border-bottom-color: var(--sage-professional); }
+
+/* Equal-width tabs across Workspace and Operations (both use .ws-subtabs).
+   Font size and weight were already uniform at 13px/700 — what made the row look
+   ragged was WIDTH, since each tab sized to its own label: 182 / 120 / 157 / 158.
+   flex:1 1 0 gives every tab an equal share of the row, so the active underline
+   is the same length whichever tab you're on, and the row stays even no matter
+   how many tabs a role can see. Basis 0, not auto, or the longest label would
+   still claim more room. */
+.ws-subtabs .ws-tab { flex: 1 1 0; justify-content: center; min-width: 0; }
 
 /* ============================================================================
    ANNOUNCEMENT DOCUMENT UPLOAD & DOCS TAB
@@ -7050,6 +7355,10 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 @media (max-width: 768px) {
     .ws-titlebar { flex-direction: column; align-items: stretch; }
     .ws-subtabs { overflow-x: auto; }
+    /* Narrow screens scroll the row instead of sharing it out — equal widths
+       here would crush "Customer Call Backs" into an ellipsis. Back to natural
+       width so each label stays readable and the row scrolls sideways. */
+    .ws-subtabs .ws-tab { flex: 0 0 auto; }
     .ws-panel { height: auto !important; min-height: 70vh; }
 }
 
@@ -7899,6 +8208,13 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .speeks-action-menu .sam-ann:hover .sam-markread-btn { opacity: 1; }
 .speeks-action-menu .sam-markread-btn:hover { color: var(--sage-professional); border-color: var(--sage-professional); background: var(--sam-sage-tint); }
 .speeks-action-menu .sam-markread-btn svg { width: 12px; height: 12px; stroke: currentColor; stroke-width: 2.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+/* A card can carry Snooze AND a completion (a task the app can't verify itself).
+   The completion is the one that ends it, so it reads as the primary of the two
+   and they can't be mistaken for each other. */
+.speeks-action-menu .sam-done-btn { color: var(--sage-professional); border-color: var(--sage-professional); background: var(--sam-sage-tint); opacity: 1; }
+.speeks-action-menu .sam-done-btn:hover { color: #fff; background: var(--sage-professional); border-color: var(--sage-professional); }
+.speeks-action-menu .sam-ann .sam-done-btn + .sam-done-btn,
+.speeks-action-menu .sam-snooze-btn + .sam-done-btn { margin-left: 6px; }
 .speeks-action-menu .sam-ann.rem { cursor: default; }
 .speeks-action-menu .sam-adot.urgent { background: var(--red-alert); box-shadow: 0 0 0 4px var(--sam-red-tint); }
 .speeks-action-menu .sam-adot.warn { background: var(--idea-gold); box-shadow: 0 0 0 4px var(--sam-gold-tint); }
@@ -8901,8 +9217,11 @@ body.sam-active .hotbar-btn:hover {
 #kpiWeeklyAlertBubble,
 #kpiMonthlyAlertBubble,
 #preferredOwnerAlertBubble,
+#preferredMineAlertBubble,
 #b2bAlertBubble,
-#preferredMineAlertBubble {
+#listingGoalAlertBubble,
+#listingGoalsDailyAlertBubble,
+#expenseFileAlertBubble {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
@@ -9005,7 +9324,7 @@ body.sam-active .hotbar-btn:hover {
 /* --- page can never be wider than the viewport ---------------------------
    body is display:flex, so .main-content is a flex item and its default
    min-width:auto refuses to shrink below the content's min-content width.
-   Paired with body{overflow-x:hidden} that lays content out past the right
+   Paired with body{overflow-x:clip} that lays content out past the right
    edge with NO way to scroll to it — you could only see it by zooming out.
    min-width:0 lets the column shrink so the deck fits the screen. */
 .main-content { min-width: 0; }
@@ -11649,18 +11968,35 @@ body.sam-active .hotbar-btn:hover {
     padding: 7px 9px; font-size: 11.5px; font-weight: 700; color: #0f172a;
 }
 
-/* --- the two-week flag review, the one thing the DM ACTS on here --- */
-.dmx-flag {
-    margin-top: 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    background: #fdf3e1; border: 1px solid #f3ddb0; border-radius: 9px; padding: 9px 12px;
+/* --- the DM's weekly goal input, the one thing the DM ACTS on here ---
+   Replaced .dmx-flag (the "missed 2 weeks — Lower −10 / Keep" prompt). The
+   ratchet that raised and flagged targets is gone; the DM types the number. */
+.dmx-goalset {
+    margin: 12px 0 4px; display: flex; align-items: center; justify-content: space-between;
+    gap: 14px; flex-wrap: wrap; border-radius: 10px; padding: 10px 13px;
+    background: #f4f7f5; border: 1px solid #dfe7e2;
 }
-.dmx-flag-t { font-size: 12px; font-weight: 750; color: #b45309; }
-.dmx-flag button {
-    font: inherit; font-size: 11.5px; font-weight: 800; cursor: pointer;
-    border-radius: 7px; padding: 6px 12px; border: 1px solid; background: #fff;
+/* Amber only while the week's number is still missing — once set it goes quiet. */
+.dmx-goalset.is-unset { background: #fdf3e1; border-color: #f3ddb0; }
+.dmx-goalset-l { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dmx-goalset-t { font-size: 12px; font-weight: 800; color: #0f172a; }
+.dmx-goalset-n { font-size: 11px; font-weight: 600; color: #8a94a3; }
+.dmx-goalset.is-unset .dmx-goalset-n { color: #b45309; }
+.dmx-goalset-r { display: flex; align-items: center; gap: 8px; }
+.dmx-goalset-i {
+    font: inherit; font-size: 14px; font-weight: 800; width: 88px; text-align: right;
+    padding: 6px 9px; border-radius: 7px; border: 1px solid #cfd8e0; background: #fff;
+    color: #0f172a; font-variant-numeric: tabular-nums;
 }
-.dmx-flag .dmx-lower { color: #b91c1c; border-color: #f3c9c9; }
-.dmx-flag .dmx-keep { color: #475569; border-color: #cfd8e0; }
+.dmx-goalset-i:focus { outline: none; border-color: #4d8c6a; box-shadow: 0 0 0 3px rgba(77,140,106,.15); }
+.dmx-goalset-b {
+    font: inherit; font-size: 11.5px; font-weight: 800; cursor: pointer; color: #fff;
+    border-radius: 7px; padding: 7px 15px; border: 1px solid #3f7a5a; background: #4d8c6a;
+}
+.dmx-goalset-b:hover { background: #427a5c; }
+.dmx-goalset-msg { font-size: 11px; font-weight: 700; min-width: 44px; }
+.dmx-goalset-msg.ok  { color: #15803d; }
+.dmx-goalset-msg.bad { color: #b91c1c; }
 
 .dmx-foot-note { font-size: 12px; font-weight: 600; color: #8a94a3; }
 
@@ -11862,7 +12198,10 @@ body.sam-active .hotbar-btn:hover {
    every numeral in the column ends on the same edge — $66,332 no longer sits
    26px right of 86.45 just because one of them is followed by a "%". */
 .dcc-row-v .u { flex: 0 0 26px; font-size: 10.5px; font-weight: 700; color: #8a94a3; }
-.dcc-row-v .n { flex: 0 0 auto; }
+/* The figure outranks its label (12.5px). Same size for both read as a flat wall
+   of text with nothing for the eye to land on. 14px is the largest step that
+   doesn't fight the panel's height-match against the chart beside it (+26px). */
+.dcc-row-v .n { flex: 0 0 auto; font-size: 14px; }
 .dcc-row-v.b { color: #b91c1c; }
 .dcc-row-v.w { color: #b45309; }
 .dcc-row-v.g { color: #15803d; }
@@ -12967,4 +13306,146 @@ body.sam-active .hotbar-btn:hover {
 .mg-rb-why b {
     font-weight: 800; color: var(--mg-faint); text-transform: uppercase;
     letter-spacing: .07em; font-size: 9.5px; margin-right: 4px;
+}
+
+/* =========================================================
+   EXPENSE REPORT tool (DM / MSM file, CEO reviews)
+   Follows the district console's visual language: a summary
+   strip, a light control row, then a table per tab.
+   ========================================================= */
+.exp-controls {
+    display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap;
+    padding: 0 0 14px; border-bottom: 1px solid #eef1f5; margin-bottom: 14px;
+}
+.exp-controls-sp { flex: 1 1 auto; }
+.exp-ctl { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 800;
+           color: #647082; text-transform: uppercase; letter-spacing: .04em; }
+.exp-ctl > span { white-space: nowrap; }
+.exp-ctl-ro b { font-size: 13px; color: #0f172a; text-transform: none; letter-spacing: 0; }
+/* Control-row primary — sized to sit level with the small button and the 34px
+   select beside it. Needs the #id to outrank .modal-menu.manage-menu .btn-primary. */
+.exp-btn-mail { flex: 0 0 auto; }
+#expensesModal .exp-btn-mail { font-size: 12px; padding: 7px 16px; line-height: 18px; }
+
+/* The footer arrows are inline SVGs with only a viewBox, so without an explicit
+   size they fall back to 300x150 and blow the button apart — same rule Box Order
+   and Recycle already carry for the identical arrow. */
+#expensesModal .btn-primary svg,
+#expensesModal .btn-secondary svg { width: 15px; height: 15px; flex: 0 0 auto; }
+
+.exp-input {
+    font: inherit; font-size: 12.5px; font-weight: 600; color: #0f172a;
+    padding: 7px 9px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff;
+    width: 100%; box-sizing: border-box;
+}
+.exp-input:focus { outline: none; border-color: var(--sage-professional); box-shadow: 0 0 0 3px rgba(31,157,87,.12); }
+
+/* Small primary button — the site's established compact .btn-primary (12px /
+   7px 16px), so it reads as the same button as everything else, just smaller. */
+.exp-btn-sm {
+    font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap;
+    color: #fff; background: var(--sage-professional); border: none; border-radius: 10px;
+    padding: 7px 16px; line-height: 18px; box-shadow: 0 4px 12px rgba(31,157,87,.20);
+    transition: all .2s ease;
+}
+.exp-btn-sm:hover { background: var(--sage-deep); transform: translateY(-1px); box-shadow: 0 6px 16px rgba(31,157,87,.28); }
+.exp-btn-sm.ghost {
+    color: #475569; background: #eef1f5; box-shadow: none;
+}
+.exp-btn-sm.ghost:hover { background: #e2e8f0; box-shadow: none; }
+
+.exp-msg { font-size: 11px; font-weight: 700; }
+.exp-msg.ok  { color: var(--sage-deep); }
+.exp-msg.bad { color: #b91c1c; }
+
+/* summary strip */
+.exp-strip { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.exp-cell {
+    flex: 1 1 150px; min-width: 0; background: #f6f8fa; border: 1px solid #eef1f5;
+    border-radius: 10px; padding: 11px 13px;
+}
+.exp-cell.strong { background: #f4f7f5; border-color: #dfe7e2; }
+.exp-cell-l { font-size: 10.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: #8a94a3; }
+.exp-cell-v { font-size: 20px; font-weight: 800; color: #0f172a; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.exp-cell.strong .exp-cell-v { color: var(--sage-deep); }
+.exp-cell-s { font-size: 11px; font-weight: 650; color: #8a94a3; margin-top: 2px; }
+
+/* tabs — the Box Order flagship's tab, not a bespoke pill */
+.exp-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.exp-tab {
+    font: inherit; font-size: 12.5px; font-weight: 800; cursor: pointer;
+    color: #647082; background: #fff; border: 1.5px solid #e3e8ee;
+    border-radius: 10px; padding: 7px 18px; transition: all .2s ease;
+}
+.exp-tab:hover:not(.active) { background: #f6f8fa; }
+.exp-tab.active { color: #fff; background: var(--sage-professional); border-color: var(--sage-professional); }
+
+/* table — scrolls on its own so the modal never scrolls sideways */
+.exp-table-wrap { overflow-x: auto; border: 1px solid #eef1f5; border-radius: 10px; }
+.exp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.exp-table th {
+    text-align: left; padding: 9px 12px; font-size: 10.5px; font-weight: 800;
+    letter-spacing: .07em; text-transform: uppercase; color: #8a94a3;
+    background: #f6f8fa; border-bottom: 1px solid #e9eef2; white-space: nowrap;
+}
+.exp-table td { padding: 9px 12px; border-bottom: 1px solid #f1f5f9; color: #334155; vertical-align: middle; }
+.exp-table tr:last-child td { border-bottom: 0; }
+.exp-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.exp-table .strong { font-weight: 800; color: #0f172a; }
+.exp-table .muted { color: #94a3b8; font-weight: 650; }
+.exp-none { text-align: center; color: #94a3b8; font-weight: 650; padding: 26px 0 !important; }
+.exp-cat {
+    display: inline-block; font-size: 11px; font-weight: 800; color: #475569;
+    background: #f1f5f9; border-radius: 999px; padding: 3px 10px;
+}
+.exp-editing td { background: #f9fbfa; }
+.exp-edit-actions { display: flex; gap: 5px; justify-content: flex-end; }
+/* Matches the Manager Checklist pair (.mcl-edit-btn / .mcl-del-btn), the site's
+   closest equivalent: a 26px edit + delete pair on a row. Fixed box because the
+   pencil and bin glyphs have different advance widths, so padding alone rendered
+   the two buttons 4px apart in size. */
+.exp-ico {
+    display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0;
+    font-size: 12px; line-height: 1; cursor: pointer; color: #475569;
+    background: #f1f5f9; border: none; border-radius: 6px;
+    margin-left: 4px; transition: all .2s ease;
+}
+.exp-ico:hover { background: #e2e8f0; color: #334155; }
+/* Destructive actions are red-tinted everywhere else on the site (.mcl-del-btn,
+   .bai-del, the scorecard's delete). A delete that looks identical to the edit
+   beside it is the one thing here that read as out of place. */
+.exp-ico.del { background: #fef2f2; color: #dc2626; }
+.exp-ico.del:hover { background: #fee2e2; color: #b91c1c; }
+
+/* add-a-line panel */
+.exp-add { margin-top: 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 13px 15px; }
+.exp-add-t { font-size: 12px; font-weight: 800; color: #0f172a; margin-bottom: 10px; }
+.exp-add-grid { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.exp-add-grid label { display: flex; flex-direction: column; gap: 5px; flex: 0 1 130px; min-width: 0;
+                      font-size: 11px; font-weight: 800; letter-spacing: .04em;
+                      text-transform: uppercase; color: #647082; }
+.exp-add-grid label.wide { flex: 1 1 200px; }
+.exp-add-btn { flex: 0 0 auto; }
+.exp-add-note { font-size: 11px; font-weight: 650; color: #94a3b8; margin-top: 9px; }
+
+/* category manager */
+.exp-cats { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 13px 15px; margin-bottom: 16px; }
+.exp-cats-sub { font-size: 11px; font-weight: 650; color: #8a94a3; margin: 0 0 11px; line-height: 1.45; }
+.exp-cat-row { display: flex; gap: 7px; align-items: center; margin-bottom: 7px; }
+.exp-cat-row .exp-input { flex: 1 1 auto; }
+.exp-cat-row.retired .exp-input { color: #94a3b8; background: #f1f5f9; }
+.exp-cat-tag { font-size: 10px; font-weight: 800; color: #b45309; background: #fef3c7;
+               border-radius: 999px; padding: 3px 9px; white-space: nowrap; }
+
+/* takeover views (category manager, email preview) — each replaces the whole
+   body rather than stacking under it, so only one job is on screen at a time */
+.exp-view { padding-top: 4px; }
+.exp-view-h { font-size: 13px; font-weight: 800; color: #0f172a; margin-bottom: 10px; }
+.exp-view-foot { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 14px; }
+.exp-view .exp-cats { margin-bottom: 0; }
+
+@media (max-width: 700px) {
+    .exp-add-grid label { flex: 1 1 100%; }
+    .exp-controls { gap: 10px; }
+    .exp-btn-mail { width: 100%; justify-content: center; }
 }

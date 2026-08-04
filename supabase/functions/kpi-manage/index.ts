@@ -105,6 +105,30 @@ function canEnterKPIs(role: string): boolean {
     || r.startsWith('owner') || r === 'ceo' || r === 'district manager';
 }
 
+// Coaching notes are WRITTEN by store management only — a narrower gate than
+// canEnterKPIs, and deliberately so.
+//
+// The numbers are a shared record: a DM or CEO helping a store, or covering for
+// an absent manager, legitimately enters them. A coaching note is not a record,
+// it's the store manager's own prep for a conversation with their team. Someone
+// above them editing it would be rewriting what that manager plans to say.
+//
+// So: no district manager, no CEO, no corp. They can still READ notes — the GET
+// path is unchanged and matches KPI visibility — they just can't change them.
+//
+// Assistant managers are excluded too: they enter KPIs, but the coaching
+// conversation belongs to the manager. (One line to add 'assistant manager' here
+// and to _KPI_NOTE_EDIT_ROLES in speeks.js if that turns out to be too tight.)
+//
+// Owner-managers count: at an owned store they ARE the store manager. Bare
+// 'owner' does not — that's a corp-level role, which is why this doesn't use the
+// r.startsWith('owner') that canEnterKPIs allows.
+function canEditNotes(role: string): boolean {
+  const r = (role || '').toLowerCase().trim();
+  return r === 'manager' || r === 'owner (manager)' || r === 'owner manager'
+    || r === 'multi-store manager';
+}
+
 function computeFields(entry: any) {
   const bv  = Number(entry.buying_value)          || 0;
   const bc  = Number(entry.buying_cost)           || 0;
@@ -226,6 +250,15 @@ Deno.serve(async (req) => {
       .eq('store', store).eq('period_type', periodType)
       .order('period_end_date', { ascending: false });
 
+    // Coaching notes for this store + period type, keyed by period so each
+    // period below can carry its own. One query for all of them rather than one
+    // per rendered period — there are at most a handful of rows per store.
+    const { data: noteRows } = await supabase
+      .from('kpi_notes').select('period_end_date, note, updated_by, updated_at')
+      .eq('store', store).eq('period_type', periodType);
+    const notesByDate: Record<string, any> = {};
+    (noteRows || []).forEach((n: any) => { notesByDate[n.period_end_date] = n; });
+
     // Group entries by date, then by employee name
     const byDate: Record<string, Record<string, any>> = {};
     (rawEntries || []).forEach((e: any) => {
@@ -263,10 +296,16 @@ Deno.serve(async (req) => {
       const namesForDate = editable
         ? [...new Set([...currentEmpNames, ...savedNames])].sort()
         : (savedNames.length > 0 ? savedNames : currentEmpNames);
+      const noteRow = notesByDate[date] || null;
       return {
         period_end_date: date,
         period_label:    formatLabel(periodType, date),
         is_editable:     isEditablePeriod(periodType, date),
+        // Notes ride along with the period they belong to. Always present as a
+        // string so the grid never has to null-check before rendering a box.
+        note:         noteRow?.note || '',
+        note_by:      noteRow?.updated_by || '',
+        note_at:      noteRow?.updated_at || null,
         // How many employees actually have a SAVED row for this period (raw DB
         // rows, not the synthesized roster). Drives the "KPIs still need filling
         // out" reminder — a period with saved_count 0 is untouched.
@@ -295,13 +334,22 @@ Deno.serve(async (req) => {
 
     const { store, period_type, period_end_date, employee_name, ...fields } = body;
     const storeUpper = (store || '').toUpperCase();
-    if (!storeUpper || !period_type || !period_end_date || !employee_name)
+    const action = String(body.action || '');
+    // employee_name is required for a numbers save but meaningless for a note,
+    // which belongs to the whole period — so check it per action rather than up
+    // front. Everything else is required either way.
+    if (!storeUpper || !period_type || !period_end_date)
+      return json({ error: 'Missing required fields' }, 400);
+    if (action !== 'save_note' && !employee_name)
       return json({ error: 'Missing required fields' }, 400);
 
     // Store-level scoping. Global roles (CEO / District Manager / Owner) may submit for
     // any store. A plain Manager or Assistant Manager is limited to their home store. A
     // Multi-Store Manager is limited to the stores they oversee (their DB `store` is only
     // their default home store, so check the managed-stores list instead).
+    // This is the gate for the NUMBERS. Coaching notes are stricter on both role
+    // and store and re-check for themselves in the save_note branch below — don't
+    // read this block as covering them.
     const roleLower = (user.role || '').toLowerCase().trim();
     if (roleLower === 'manager' || roleLower === 'assistant manager') {
       if (user.store !== storeUpper)
@@ -309,6 +357,60 @@ Deno.serve(async (req) => {
     } else if (roleLower === 'multi-store manager') {
       if (!MULTISTORE_MANAGER_STORES.includes(storeUpper))
         return json({ error: 'Cannot submit for a store you do not manage' }, 403);
+    }
+
+    // ── Coaching note ────────────────────────────────────────────────────────
+    // Deliberately BEFORE the period lock and exempt from it. The numbers lock
+    // when the period closes because reports have gone out on them; a note is
+    // written when the manager sits down to coach, which is always after that.
+    // Locking notes to the editable period would mean you can only write one
+    // about a week you haven't finished reviewing yet.
+    if (action === 'save_note') {
+      // Store management only — see canEditNotes. The scoping block above is about
+      // the NUMBERS and lets corp roles through to any store, so notes re-check
+      // both the role and the store here rather than inheriting that.
+      if (!canEditNotes(user.role))
+        return json({ error: 'Only a store manager can edit coaching notes.' }, 403);
+      // Every role that gets this far is tied to a store, so bind them to it. A
+      // multi-store manager is the manager of each store they oversee; everyone
+      // else is limited to their own.
+      const managedOk = roleLower === 'multi-store manager'
+        ? MULTISTORE_MANAGER_STORES.includes(storeUpper)
+        : (user.store || '').toUpperCase() === storeUpper;
+      if (!managedOk)
+        return json({ error: 'Cannot edit coaching notes for another store.' }, 403);
+
+      if (period_type !== 'weekly' && period_type !== 'monthly')
+        return json({ error: 'Invalid period_type' }, 400);
+      const note = String(body.note ?? '').trim();
+      if (note.length > 4000)
+        return json({ error: 'Note is too long (max 4000 characters).' }, 400);
+
+      // An emptied note is a delete, not a blank row: it keeps "has a note"
+      // honest for the grid's indicator, and leaves no empty rows behind.
+      if (!note) {
+        const { error: delErr } = await supabase.from('kpi_notes').delete()
+          .eq('store', storeUpper).eq('period_type', period_type)
+          .eq('period_end_date', period_end_date);
+        if (delErr) return json({ error: delErr.message }, 500);
+        return json({ success: true, note: '', note_by: '', note_at: null });
+      }
+
+      const { data: savedNote, error: noteErr } = await supabase
+        .from('kpi_notes')
+        .upsert({
+          store: storeUpper, period_type, period_end_date,
+          note, updated_by: user.name, updated_at: new Date().toISOString(),
+        }, { onConflict: 'store,period_type,period_end_date' })
+        .select().single();
+      if (noteErr) return json({ error: noteErr.message }, 500);
+
+      return json({
+        success: true,
+        note:    savedNote.note,
+        note_by: savedNote.updated_by,
+        note_at: savedNote.updated_at,
+      });
     }
 
     if (!isEditablePeriod(period_type, period_end_date))

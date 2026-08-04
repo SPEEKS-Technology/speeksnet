@@ -62,6 +62,7 @@ const RECYCLE_URL       = `${_BASE}/recycle-requests`;
 const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
 const VARIANCE_REPLIES_URL = `${_BASE}/variance-replies`;
 const AGING_INV_URL     = `${_BASE}/aging-inventory`;
+const EXPENSES_URL      = `${_BASE}/expenses`;
 const PREFERRED_URL     = `${_BASE}/preferred-purchases`;
 const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
@@ -974,6 +975,11 @@ window.toggleToolsPanel = function(e) {
         // Fresh open starts with an empty search so a stale filter doesn't hide tools.
         const s = document.getElementById('toolsSearchInput');
         if (s) { s.value = ''; _toolsSearch(''); }
+        // ...and back at the top. The body is its own scroll container and the panel
+        // is only hidden by transform, so it keeps its scrollTop across close/open —
+        // and across sign-out, since that never reloads the dashboard.
+        const b = panel.querySelector('.tools-panel-body');
+        if (b) b.scrollTop = 0;
     }
 };
 
@@ -1262,16 +1268,42 @@ function _syncLayout() {
     document.documentElement.style.setProperty('--panel-top', totalTop + 'px');
 }
 
-async function initTicker() {
-    if (_tickerIniting || _tickerShown) return;
-    _tickerIniting = true;
-    const ticker = document.getElementById('infoTicker');
-    if (!ticker) { _tickerIniting = false; return; }
-
+// Every right-hand side panel (Tools, Checklist, Goals) hangs off --panel-top,
+// so this has to run on EVERY page — not just the ones that happen to have
+// something else calling it.
+//
+// It didn't. The wiring lived inside initTicker(), below its
+// `if (!ticker) return` guard, and #infoTicker was removed site-wide on
+// 2026-07-23 — so initTicker has bailed before reaching it ever since, on all
+// five shells. That left --panel-top unset and the panels falling back to the
+// CSS default of 104px while the nav is 64px: a 40px gap with the panel floating
+// free of the header it's supposed to hang from. It only looked fine on the
+// dashboard because samInit() calls _syncLayout() separately, and samInit
+// returns early wherever there's no action menu — i.e. the other four pages.
+// Ctrl+K made it obvious by making those pages easy to reach.
+//
+// Idempotent: the flag means a second call can't stack a second observer.
+let _layoutSyncWired = false;
+function initLayoutSync() {
+    _syncLayout();                              // correct before first paint of any panel
+    if (_layoutSyncWired) return;
+    _layoutSyncWired = true;
+    // The nav grows when the greeting wraps and settles again once webfonts land,
+    // so measure once more after layout rather than trusting the first read.
     requestAnimationFrame(_syncLayout);
     const nav = document.querySelector('.top-nav');
     if (nav && window.ResizeObserver) new ResizeObserver(_syncLayout).observe(nav);
     window.addEventListener('resize', _syncLayout);
+}
+
+async function initTicker() {
+    if (_tickerIniting || _tickerShown) return;
+    _tickerIniting = true;
+    const ticker = document.getElementById('infoTicker');
+    // The layout sync used to be wired below this guard, which silently killed it
+    // when the ticker was retired — it lives in initLayoutSync() now, called
+    // unconditionally, and must stay out of here.
+    if (!ticker) { _tickerIniting = false; return; }
 
     // Wait until all 4 sources check in, or 12 s absolute max
     await Promise.race([
@@ -3218,6 +3250,195 @@ function _kpiStoreTotalRowHtml(entries) {
     return '<tr class="kpi-total-row">' + cells + '</tr>';
 }
 
+// ── Coaching notes ──────────────────────────────────────────────────────────
+// One free-text box per period, sitting under that period's numbers. Its own
+// row rather than a column, because it's about the whole store's week, not any
+// one employee's cell.
+//
+// Independent of the grid's Edit mode ON PURPOSE. Edit mode is a guarded state
+// for rewriting numbers (and only works on the current period); a note is
+// something you jot while reading, most often about a week that has already
+// locked. Making it wait for Edit would put a lock on the one thing that has no
+// reason to be locked — and would mean you could never annotate last week.
+// Collapsed by default: most periods never get a note, and an always-open
+// textarea under every one of them turns the grid into mostly empty boxes. So the
+// resting state is a single bar, and the editor only exists when asked for.
+//
+// The cost of collapsing is that an existing note can hide — so the bar carries
+// its own evidence: a filled dot, the author and date, and the note's opening
+// words. You can tell which periods have notes without opening any of them.
+//
+// Expanded state is remembered per period (module-level, not persisted) so the
+// re-renders that follow a numbers save don't slam the box shut mid-thought.
+const _kpiNotesOpen = new Set();
+
+// Who may WRITE a note. Must mirror canEditNotes() in the kpi-manage function —
+// the backend is the real gate, this only decides whether to draw an editor.
+// (Frontend and backend role lists drifting apart is what made every DM write to
+// the Margin Guide 403 for a week, so they get checked as a pair.)
+//
+// Narrower than KPI editing on purpose: a coaching note is the store manager's
+// prep for a conversation with their own team, so nobody above them edits it.
+// DM, CEO and corp read only; assistant managers read only.
+const _KPI_NOTE_EDIT_ROLES = new Set(['manager', 'owner (manager)', 'owner manager', 'multi-store manager']);
+
+// Editing also requires that the store on screen is actually theirs — a DM's
+// store picker and an MSM's routing both mean the grid can be showing a store
+// the viewer doesn't manage.
+function _kpiCanEditNotes() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (!_KPI_NOTE_EDIT_ROLES.has(role)) return false;
+    const onScreen = (_kpiResolveStore() || '').toUpperCase();
+    if (!onScreen) return false;
+    // An MSM manages every store in the list, not just the one whose dashboard
+    // they're currently on — _kpiResolveStore can legitimately show them either.
+    if (role === 'multi-store manager') return MULTISTORE_MANAGER_STORES.indexOf(onScreen) !== -1;
+    return (sessionStorage.getItem('speeksUserStore') || '').toUpperCase() === onScreen;
+}
+
+function _kpiNotePreview(note) {
+    const flat = String(note || '').replace(/\s+/g, ' ').trim();
+    return flat.length > 90 ? flat.slice(0, 89) + '…' : flat;
+}
+
+function _kpiToggleNote(pk) {
+    const box = document.getElementById('kpiNoteBox-' + pk);
+    if (!box) return;
+    const open = !box.classList.contains('is-open');
+    box.classList.toggle('is-open', open);
+    const head = document.getElementById('kpiNoteHead-' + pk);
+    if (head) head.setAttribute('aria-expanded', String(open));
+    if (open) {
+        _kpiNotesOpen.add(pk);
+        // Opening the bar is the request to write — put the cursor where the
+        // writing happens instead of making it a second click.
+        const ta = document.getElementById('kpiNote-' + pk);
+        if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    } else {
+        _kpiNotesOpen.delete(pk);
+    }
+}
+
+function _kpiNoteRowHtml(p) {
+    const pk    = p.period_end_date.replace(/-/g, '');
+    const note  = p.note || '';
+    const by    = p.note_by || '';
+    const at    = p.note_at ? _kpiNoteStamp(p.note_at) : '';
+    const meta  = (by && at) ? escapeHtml(by) + ' · ' + escapeHtml(at)
+                : by ? escapeHtml(by) : '';
+    const open  = _kpiNotesOpen.has(pk);
+    const canEdit = _kpiCanEditNotes();
+
+    // For a read-only viewer an empty period has nothing to show, so show
+    // nothing. Otherwise a DM's grid grows an "Coaching Notes — none" bar under
+    // every period of every store, which is pure noise for someone who couldn't
+    // fill it in anyway. Managers always get the bar: theirs is an invitation.
+    if (!canEdit && !note) return '';
+
+    // Read-only viewers (DM, CEO, ASM, anyone looking at a store that isn't
+    // theirs) get the note as text. No textarea, so there's no editor to type
+    // into and only discover on save that it wasn't allowed.
+    const body = canEdit
+        ? '<textarea class="kpi-note-input" id="kpiNote-' + pk + '" rows="3" maxlength="4000" ' +
+            'placeholder="What stood out this period? Wins to call out, patterns to work on, who to sit down with." ' +
+            'oninput="_kpiNoteDirty(\'' + pk + '\')" ' +
+            'onblur="_kpiSaveNote(\'' + p.period_end_date + '\')">' + escapeHtml(note) + '</textarea>' +
+          '<div class="kpi-note-foot">' +
+            '<span class="kpi-note-status" id="kpiNoteStatus-' + pk + '"></span>' +
+            '<button type="button" class="kpi-note-save" id="kpiNoteSave-' + pk + '" ' +
+              'onclick="_kpiSaveNote(\'' + p.period_end_date + '\')" disabled>Save Note</button>' +
+          '</div>'
+        : '<div class="kpi-note-read">' + escapeHtml(note) + '</div>';
+
+    return '<tr class="kpi-note-row"><td colspan="24">' +
+        '<div class="kpi-note-box' + (note ? ' has-note' : '') + (open ? ' is-open' : '') +
+            (canEdit ? '' : ' is-readonly') + '" id="kpiNoteBox-' + pk + '">' +
+          '<button type="button" class="kpi-note-head" id="kpiNoteHead-' + pk + '" ' +
+            'aria-expanded="' + open + '" aria-controls="kpiNoteBody-' + pk + '" ' +
+            'onclick="_kpiToggleNote(\'' + pk + '\')">' +
+            '<svg class="kpi-note-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>' +
+            '<span class="kpi-note-title">Coaching Notes</span>' +
+            '<span class="kpi-note-dot" aria-hidden="true"></span>' +
+            '<span class="kpi-note-preview" id="kpiNotePreview-' + pk + '">' + escapeHtml(_kpiNotePreview(note)) + '</span>' +
+            '<span class="kpi-note-meta" id="kpiNoteMeta-' + pk + '">' + meta + '</span>' +
+          '</button>' +
+          '<div class="kpi-note-body" id="kpiNoteBody-' + pk + '">' + body + '</div>' +
+        '</div></td></tr>';
+}
+
+// Short "when", in the store's timezone — a coaching note found weeks later
+// needs a date more than it needs a clock.
+function _kpiNoteStamp(iso) {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' });
+}
+
+function _kpiNoteDirty(pk) {
+    const st = document.getElementById('kpiNoteStatus-' + pk);
+    const bt = document.getElementById('kpiNoteSave-' + pk);
+    if (st) { st.textContent = 'Unsaved changes'; st.className = 'kpi-note-status is-dirty'; }
+    if (bt) bt.disabled = false;
+}
+
+// Saves without re-rendering the grid. A full reload here would tear the
+// textarea out from under the cursor on every blur — and blur is the common
+// save path, since the whole point is that you can type and move on.
+async function _kpiSaveNote(periodDate) {
+    const pk  = periodDate.replace(/-/g, '');
+    const ta  = document.getElementById('kpiNote-' + pk);
+    const st  = document.getElementById('kpiNoteStatus-' + pk);
+    const bt  = document.getElementById('kpiNoteSave-' + pk);
+    if (!ta) return;
+    const period = (_kpiPeriodsData || []).find(function(p) { return p.period_end_date === periodDate; });
+    const value  = ta.value.trim();
+    // Nothing changed — a blur with no edit shouldn't cost a round trip or
+    // flash a status the user didn't cause.
+    if (period && (period.note || '') === value) {
+        if (bt) bt.disabled = true;
+        if (st && st.classList.contains('is-dirty')) { st.textContent = ''; st.className = 'kpi-note-status'; }
+        return;
+    }
+    const store = _kpiResolveStore();
+    const pin   = sessionStorage.getItem('speeksUserPin');
+    if (!store || !pin) return;
+    if (st) { st.textContent = 'Saving…'; st.className = 'kpi-note-status'; }
+    if (bt) bt.disabled = true;
+    try {
+        // Same hard timeout as the row saves — a hung request would otherwise sit
+        // on "Saving…" with the button disabled and no way back.
+        const resp = await _kpiPostEntry({
+            action: 'save_note', store: store, period_type: _kpiCurrentTab,
+            period_end_date: periodDate, note: value,
+        }, pin);
+        const result = await resp.json();
+        if (!resp.ok || result.success === false) throw new Error(result.error || 'Save failed');
+        // Keep the in-memory period in step so the next blur sees no change, and
+        // so a tab switch back re-renders what was actually saved.
+        if (period) {
+            period.note    = result.note || '';
+            period.note_by = result.note_by || '';
+            period.note_at = result.note_at || null;
+        }
+        const meta = document.getElementById('kpiNoteMeta-' + pk);
+        if (meta) {
+            meta.textContent = (result.note_by && result.note_at)
+                ? result.note_by + ' · ' + _kpiNoteStamp(result.note_at)
+                : (result.note_by || '');
+        }
+        // The bar is what everyone sees once this collapses, so its preview and
+        // its has-a-note dot have to move with the save — not wait for a reload.
+        const prev = document.getElementById('kpiNotePreview-' + pk);
+        if (prev) prev.textContent = _kpiNotePreview(result.note || '');
+        const box = document.getElementById('kpiNoteBox-' + pk);
+        if (box) box.classList.toggle('has-note', !!(result.note || ''));
+        if (st) { st.textContent = 'Saved'; st.className = 'kpi-note-status is-saved'; }
+    } catch (e) {
+        if (st) { st.textContent = String(e.message || 'Could not save'); st.className = 'kpi-note-status is-error'; }
+        if (bt) bt.disabled = false;   // leave the way back open
+    }
+}
+
 function _kpiWeekRangeLabel(periodEndDate) {
     const end = new Date(periodEndDate + 'T12:00:00');
     const start = new Date(end);
@@ -3238,7 +3459,9 @@ function _kpiRenderWeekly(periods) {
     // Always show the current (editable) week plus any past weeks with saved data.
     // Rendering it even in view mode means clicking Edit just swaps its cells from
     // text to inputs IN PLACE — no new section appears, so nothing on the page shifts.
-    let visible = (periods || []).filter(function(p) { return p.is_editable || p.entries.some(function(e) { return e.id; }); });
+    // A period with a note but no numbers still has to render, or the note it
+    // holds becomes unreachable the moment it exists.
+    let visible = (periods || []).filter(function(p) { return p.is_editable || !!(p.note) || p.entries.some(function(e) { return e.id; }); });
     if (_kpiEditingPeriod) {
         const ep = periods.find(function(p) { return p.period_end_date === _kpiEditingPeriod; });
         if (ep && !visible.find(function(p) { return p.period_end_date === ep.period_end_date; })) visible.unshift(ep);
@@ -3262,6 +3485,7 @@ function _kpiRenderWeekly(periods) {
         tbody += _kpiAddSelfRowHtml(p, isEd);
         const hasSavedData = p.entries.some(function(e) { return e.id; });
         if (hasSavedData) tbody += _kpiStoreTotalRowHtml(p.entries);
+        tbody += _kpiNoteRowHtml(p);   // last: the week's numbers, then the week's notes
     });
     body.innerHTML = '<div class="kpi-grid-scroll-wrapper"><table class="kpi-entry-grid kpi-full-table">' + _kpiColgroupHtml() + '<tbody>' + tbody + '</tbody></table></div>';
 }
@@ -3342,8 +3566,17 @@ let _mbEditable = '';    // editable period_end_date
 let _mbEditing = false;
 let _mbView = null;          // 'overview' | 'store' (decided by role on first load)
 let _mbOverviewData = {};    // { store: { period_end_date: { metric_key: value } } }
-let _mbOverviewMonth = '';   // month shown in the overview (the editable/current one when open)
+let _mbOverviewMonth = '';   // newest month WITH data — the overview's default
 let _mbOverviewEditable = ''; // editable period_end_date (same across stores)
+// Month explicitly chosen in the Overview picker. '' means "follow the default",
+// so a fresh load always lands on the newest month rather than a stale pick.
+let _mbOverviewPick = '';
+// How many months the Overview picker offers. THIRTEEN, not twelve: twelve
+// entries reach back to the month AFTER the one you're comparing against, so the
+// same month last year — the whole point of the YoY rows — would be the first
+// month off the end of the list. The 13th is that month.
+// A display cap only; the fetch still loads every month on file.
+const MB_OVERVIEW_MONTHS = 13;
 
 function _mbMonthLabel(dateStr) {
     const d = new Date(dateStr + 'T12:00:00');
@@ -3361,7 +3594,12 @@ const MB_MONTH_WINDOW = 6; // how many recent months to show across the brief
 function _mbFmt(type, v) {
     if (v == null || v === '' || isNaN(Number(v))) return '—';
     const n = Number(v);
-    if (type === 'money')  return '$' + Math.round(n).toLocaleString();
+    // Sign OUTSIDE the symbol. Until YoY rows existed no money metric could go
+    // negative, so '$' + n rendered fine; a down year would have printed "$-1,274".
+    if (type === 'money') {
+        const r = Math.round(n);
+        return (r < 0 ? '-$' : '$') + Math.abs(r).toLocaleString();
+    }
     if (type === 'pct')    return n.toFixed(1) + '%';
     if (type === 'rating') return n.toFixed(1) + ' ★';
     if (type === 'int')    return Math.round(n).toLocaleString();
@@ -3369,7 +3607,15 @@ function _mbFmt(type, v) {
 }
 
 // Metrics where a DECREASE is good (lower = better). All others: increase = good.
-const _MB_INVERSE = new Set([
+//
+// These two Sets are now REBUILT FROM THE CATALOG on every load (see
+// _mbSyncMetricFlags) — the row's lower_is_better / no_shade columns are the
+// source of truth, so a row added in Manage Rows grades correctly without a
+// deploy. They start as the shipped values so the very first render, and any
+// fallback where the catalog can't be read, still grades the way it always did.
+// `let`, not `const`, purely so they can be reassigned; every .has() call site
+// is unchanged.
+let _MB_INVERSE = new Set([
     'avg_transaction_time', 'inventory_cost', 'inventory_cost_under_30', 'pct_inventory_over_30',
     'recycled_inventory', 'recycled_pct_inventory', 'inventory_confiscation',
     'refunds', 'discounts', 'return_rate', 'shipping_label_cost', 'shipping_cost_pct_sales',
@@ -3378,7 +3624,43 @@ const _MB_INVERSE = new Set([
 
 // Metrics that never get good/bad coloring — month-over-month or cross-store
 // comparison isn't meaningful for them (running totals / external rankings).
-const _MB_NO_SHADE = new Set(['google_score', 'google_reviews', 'paymore_ranking']);
+let _MB_NO_SHADE = new Set(['google_score', 'google_reviews', 'paymore_ranking']);
+
+// Adopt the catalog's grading flags. Called after every load, before render.
+// Older payloads (or the fallback catalog) carry no flags at all — in that case
+// keep whatever is already in the Sets rather than silently clearing them, which
+// would flip every "lower is better" metric to green-when-rising.
+function _mbSyncMetricFlags() {
+    if (!Array.isArray(_mbMetrics) || !_mbMetrics.length) return;
+    if (!_mbMetrics.some(m => 'lower_is_better' in m || 'no_shade' in m)) return;
+    _MB_INVERSE  = new Set(_mbMetrics.filter(m => m.lower_is_better).map(m => m.key));
+    _MB_NO_SHADE = new Set(_mbMetrics.filter(m => m.no_shade).map(m => m.key));
+}
+
+// True for any row the DM shouldn't be able to type into: the legacy spreadsheet
+// formulas (_MB_DERIVED) and anything the catalog marks derived.
+function _mbIsDerived(m) {
+    return _MB_DERIVED_KEYS.has(m.key) || (m && m.source === 'derived');
+}
+
+// A row whose VALUE IS ALREADY A CHANGE (YoY $ or YoY %), as opposed to a level.
+// These are graded on direction rather than ranked against the other stores —
+// see the shading block in _mbRenderOverview for why. yoy_prior is deliberately
+// excluded: it's last year's level, so ranking it is meaningful.
+function _mbIsChangeMetric(m) {
+    return !!m && (m.formula_key === 'yoy_pct' || m.formula_key === 'yoy_delta');
+}
+
+// Green when the change is in the good direction for this row, red when it
+// isn't, nothing at zero or with no data. Returns a class suffix (leading space)
+// so callers can append it to 'mb-val'.
+function _mbChangeCls(m, v) {
+    if (v == null || isNaN(Number(v))) return '';
+    const n = Number(v);
+    if (n === 0) return '';
+    const good = _MB_INVERSE.has(m.key) ? (n < 0) : (n > 0);
+    return good ? ' mb-best' : ' mb-worst';
+}
 
 // Derived metrics, replicating the Monthly KPI spreadsheet's cell formulas.
 // These are auto-calculated from the manually entered fields (and locked in edit
@@ -3412,6 +3694,91 @@ function _mbApplyDerived(values) {
         values[key] = (x == null || !isFinite(x)) ? null : x;
     });
     return values;
+}
+
+// ── Cross-period formulas ───────────────────────────────────────────────────
+// _MB_DERIVED above computes a value from OTHER VALUES IN THE SAME MONTH, and
+// those results are stored — they're saved alongside the numbers they came from.
+//
+// These are different: they reach into a DIFFERENT PERIOD, so they are computed
+// at render time and never stored. If someone corrects last July's buying, every
+// YoY built on it has to move with it; a stored copy would quietly go stale and
+// there would be nothing on screen to reveal that it had.
+//
+// The registry is parameterised on purpose. `yoy_pct` doesn't know about buying
+// — it takes the metric_key to compare as formula_arg. So "YoY Buying", "YoY NET
+// Sales" and "YoY Gross Profit" are three CATALOG ROWS, not three functions, and
+// a DM adds the next one from Manage Rows without touching this file.
+//
+// Signature: (arg, byMonth, month) -> number | null
+//   arg      the metric_key being compared (from the catalog row's formula_arg)
+//   byMonth  { 'YYYY-MM-DD': { metric_key: value } } for ONE store
+//   month    the period being rendered
+const _MB_FORMULAS = {
+    // Percent change against the same month one year earlier.
+    yoy_pct: (arg, byMonth, month) => {
+        const p = _mbYoyPair(arg, byMonth, month);
+        // A zero base has no meaningful percentage — "up from nothing" is
+        // infinite, not 100%, so show nothing rather than a made-up number.
+        if (!p || p.then === 0) return null;
+        return _mbR2((p.now - p.then) / Math.abs(p.then) * 100);
+    },
+    // Absolute change against the same month one year earlier, in the source
+    // metric's own unit. Unlike yoy_pct a zero base is fine here: "up $8,234
+    // from nothing" is a real, readable statement.
+    yoy_delta: (arg, byMonth, month) => {
+        const p = _mbYoyPair(arg, byMonth, month);
+        return p ? _mbR2(p.now - p.then) : null;
+    },
+    // The same month last year, as it stood — no arithmetic, just the number to
+    // compare against. Useful as a plain reference row beside the current month.
+    yoy_prior: (arg, byMonth, month) => {
+        const p = _mbYoyPair(arg, byMonth, month);
+        return p ? p.then : null;
+    },
+};
+
+// Shared lookup for every year-over-year formula: this month's value and the
+// same month last year, or null if either is missing. One place to get the
+// "is there a prior year at all" question right.
+function _mbYoyPair(arg, byMonth, month) {
+    if (!arg) return null;
+    const prev = _mbPriorYearKey(byMonth, month);
+    if (!prev) return null;
+    const now  = Number((byMonth[month] || {})[arg]);
+    const then = Number((byMonth[prev]  || {})[arg]);
+    if (!isFinite(now) || !isFinite(then)) return null;
+    return { now, then };
+}
+
+// The period_end_date exactly one year before `month`, if it's on file. Both are
+// month-ends, so this is "same month, previous year" — matched on the YYYY-MM
+// prefix rather than by subtracting days, which would miss Feb 29 and any
+// month-end whose day-of-month differs across years.
+function _mbPriorYearKey(byMonth, month) {
+    const m = String(month || '').match(/^(\d{4})-(\d{2})/);
+    if (!m) return null;
+    const target = (Number(m[1]) - 1) + '-' + m[2];
+    return Object.keys(byMonth || {}).find(k => k.slice(0, 7) === target) || null;
+}
+
+// Fill every cross-period row into one store's data, in memory only. Run after
+// each load so that rendering, the delta chips and the CSV export all read these
+// exactly like stored values and need no special-casing.
+function _mbApplyComputedRows(byMonth) {
+    if (!byMonth) return byMonth;
+    const computed = (_mbMetrics || []).filter(m =>
+        m.source === 'derived' && m.formula_key && m.formula_key !== 'legacy' && _MB_FORMULAS[m.formula_key]);
+    if (!computed.length) return byMonth;
+    Object.keys(byMonth).forEach(month => {
+        computed.forEach(m => {
+            let v = null;
+            try { v = _MB_FORMULAS[m.formula_key](m.formula_arg, byMonth, month); }
+            catch (e) { v = null; }   // one bad row must not blank the brief
+            byMonth[month][m.key] = (v == null || !isFinite(v)) ? null : v;
+        });
+    });
+    return byMonth;
 }
 
 // Live recompute while typing in edit mode: reads every metric input with the
@@ -3456,11 +3823,68 @@ function _mbSyncControls() {
     document.getElementById('mbViewStoreBtn')?.classList.toggle('active', _mbView === 'store');
     const sel = document.getElementById('mbStoreSelect');
     if (sel) sel.style.display = (_mbView === 'store' && canPickStore) ? '' : 'none';
+    // Manage Rows edits the catalog, which is the same on both views — but hide
+    // it mid-edit so the shape of the report can't change under an open form.
+    const rowsBtn = document.getElementById('mbRowsBtn');
+    if (rowsBtn) rowsBtn.style.display = (_mbCanManageRows() && !_mbEditing) ? '' : 'none';
+    _mbSyncOverviewMonths();
     const sub = document.getElementById('mbSubtitle');
     if (sub) {
         const store = (sel && canPickStore ? sel.value : null) || sessionStorage.getItem('speeksUserStore') || '';
         sub.textContent = _mbView === 'overview' ? 'All Stores' : (store + ' · Store View');
     }
+}
+
+// Month picker for the Overview. Store View already shows five months side by
+// side, so it needs no picker — this is Overview-only.
+//
+// Every month for every store is ALREADY in _mbOverviewData (the fetch pulls a
+// store's whole history), so changing months is a re-render off memory. No
+// refetch, no spinner.
+function _mbSyncOverviewMonths() {
+    const sel = document.getElementById('mbOverviewMonth');
+    if (!sel) return;
+    if (_mbView !== 'overview') { sel.style.display = 'none'; return; }
+
+    // Only months that actually carry values for some store. The API lists the
+    // open edit window in `months` before anything is entered for it, and an
+    // empty month in the picker is a dead end.
+    const months = new Set();
+    Object.keys(_mbOverviewData).forEach(s => {
+        const byMonth = _mbOverviewData[s] || {};
+        Object.keys(byMonth).forEach(mo => {
+            if (byMonth[mo] && Object.keys(byMonth[mo]).length) months.add(mo);
+        });
+    });
+    // Newest first, capped at a year. There are 23 months on file and growing;
+    // past a year the list is scrolling rather than choosing. This caps only the
+    // PICKER — nothing else is windowed, so the YoY rows still reach back into
+    // the full history for their prior-year figure.
+    const list = [...months].sort().reverse().slice(0, MB_OVERVIEW_MONTHS);
+    if (!list.length) { sel.style.display = 'none'; return; }
+
+    // A pick that no longer exists (store switch, fresh load) falls back to the
+    // newest month rather than leaving the select pointing at nothing.
+    if (_mbOverviewPick && list.indexOf(_mbOverviewPick) === -1) _mbOverviewPick = '';
+    const current = _mbOverviewPick || _mbOverviewMonth || list[0];
+
+    sel.innerHTML = list.map(mo =>
+        '<option value="' + mo + '"' + (mo === current ? ' selected' : '') + '>' + _mbMonthLabel(mo) + '</option>'
+    ).join('');
+    sel.value = current;
+    sel.style.display = '';
+    // While editing, the view is pinned to the open month — offering a picker
+    // that can't move would be a lie, and moving it mid-edit would silently
+    // retarget the inputs at a locked month.
+    sel.disabled = !!_mbEditing;
+    sel.title = _mbEditing ? 'Finish or cancel editing to change months' : 'View a previous month';
+}
+
+function mbSetOverviewMonth(month) {
+    if (_mbEditing) return;                  // guarded above, belt and braces
+    _mbOverviewPick = month || '';
+    _mbRenderOverview();
+    _mbSyncOverviewMonths();
 }
 
 function mbSetView(view) {
@@ -3482,6 +3906,9 @@ async function fetchMonthlyBriefOverview() {
     const body = document.getElementById('mbBody');
     if (!body) return;
     _mbEditing = false;
+    // A reload starts from the newest month. Keeping a stale pick across a view
+    // switch would silently reopen on an old month with no obvious cause.
+    _mbOverviewPick = '';
     body.innerHTML = '<div class="status-message">Syncing Performance Brief…</div>';
     // allSettled so one store being unreachable doesn't blank the whole overview
     const settled = await Promise.allSettled(MB_STORES.map(s =>
@@ -3508,6 +3935,10 @@ async function fetchMonthlyBriefOverview() {
         return;
     }
     _mbOverviewEditable = editable;
+    // Catalog flags first — _mbApplyComputedRows reads _mbMetrics to know which
+    // rows are computed, so it has to run after the metrics have landed.
+    _mbSyncMetricFlags();
+    Object.keys(_mbOverviewData).forEach(s => _mbApplyComputedRows(_mbOverviewData[s]));
     // Display the most recent month that has data (useful for everyone); editing
     // switches to the open edit window, which may still be awaiting entry.
     _mbOverviewMonth = [...dataMonths].sort().reverse()[0] || editable || '';
@@ -3530,6 +3961,8 @@ async function fetchMonthlyBriefStore() {
         _mbMonths   = d.months || [];
         _mbMetrics  = d.metrics || [];
         _mbEditable = d.editable_period || '';
+        _mbSyncMetricFlags();
+        _mbApplyComputedRows(_mbData);
         renderMonthlyBrief();
     } catch (e) {
         body.innerHTML = '<div class="status-message" style="color:var(--red-alert)">Failed to load brief.</div>';
@@ -3598,10 +4031,13 @@ function _mbRenderStore() {
                 // Value cell — editable month becomes an input in edit mode
                 if (_mbEditing && canEdit && mo === _mbEditable) {
                     const step = (m.type === 'int') ? '1' : (m.type === 'rating' ? '0.1' : '0.01');
-                    if (_MB_DERIVED_KEYS.has(m.key)) {
-                        // spreadsheet-formula cell — locked, fills itself from the other inputs
+                    if (_mbIsDerived(m)) {
+                        // Computed cell — locked. Either a spreadsheet formula that
+                        // fills itself from the other inputs, or a cross-period row
+                        // (YoY) that isn't stored at all and so has nothing to type.
+                        const auto = _MB_DERIVED_KEYS.has(m.key) ? 'Auto-calculated' : 'Calculated from history';
                         html += '<td class="mb-val mb-val-primary"><input class="mb-input mb-input-auto" type="number" disabled ' +
-                            'title="Auto-calculated" placeholder="auto" id="mb-in-' + m.key + '" value="' + (v != null ? v : '') + '"></td>';
+                            'title="' + auto + '" placeholder="auto" id="mb-in-' + m.key + '" value="' + (v != null ? v : '') + '"></td>';
                     } else {
                         html += '<td class="mb-val mb-val-primary"><input class="mb-input" type="number" step="' + step +
                             '" id="mb-in-' + m.key + '" value="' + (v != null ? v : '') + '" oninput="_mbLiveDerive(\'mb-in-\')"></td>';
@@ -3691,8 +4127,9 @@ function _mbRenderOverview() {
     const isDM = role === 'district manager';
     const canEdit = (isDM || role === 'ceo' || role === 'owner manager') && !!_mbOverviewEditable;
     const editing = _mbEditing && canEdit;
-    // View the most recent month that has data; while editing, switch to the open window.
-    const shownMonth = editing ? _mbOverviewEditable : _mbOverviewMonth;
+    // Editing always targets the open window. Otherwise: the month picked in the
+    // dropdown, falling back to the most recent one with data.
+    const shownMonth = editing ? _mbOverviewEditable : (_mbOverviewPick || _mbOverviewMonth);
 
     const editBtn = document.getElementById('mbEditBtn');
     if (editBtn) editBtn.style.display = (canEdit && !_mbEditing) ? 'inline-block' : 'none';
@@ -3724,9 +4161,16 @@ function _mbRenderOverview() {
                 const x = (_mbOverviewData[s] && _mbOverviewData[s][shownMonth] || {})[m.key];
                 return (x == null || isNaN(x)) ? null : Number(x);
             });
+            // A CHANGE metric is graded on direction, not on rank. Ranking asks
+            // "who has the biggest number" — fine for Buying, wrong for YoY
+            // Buying, where every store on the row may have grown. With only two
+            // stores holding a prior year, rank-shading is forced to paint one of
+            // them red: LEE grew $30,595 (+49%) and was marked worst for trailing
+            // OVL by $2,567. Sign is the honest signal — up is green, down is red.
+            const changeMetric = _mbIsChangeMetric(m);
             // best / worst store for this metric (only when not editing, ≥2 have data, and they differ)
             let bestIdx = -1, worstIdx = -1;
-            if (!editing && !_MB_NO_SHADE.has(m.key) && raw.filter(x => x != null).length >= 2) {
+            if (!editing && !changeMetric && !_MB_NO_SHADE.has(m.key) && raw.filter(x => x != null).length >= 2) {
                 const inv = _MB_INVERSE.has(m.key);
                 let best = inv ? Infinity : -Infinity, worst = inv ? -Infinity : Infinity;
                 raw.forEach((x, idx) => {
@@ -3740,9 +4184,10 @@ function _mbRenderOverview() {
             MB_STORES.forEach((s, idx) => {
                 if (editing) {
                     const step = (m.type === 'int') ? '1' : (m.type === 'rating' ? '0.1' : '0.01');
-                    if (_MB_DERIVED_KEYS.has(m.key)) {
+                    if (_mbIsDerived(m)) {
+                        const auto = _MB_DERIVED_KEYS.has(m.key) ? 'Auto-calculated' : 'Calculated from history';
                         html += '<td class="mb-val"><input class="mb-input mb-input-auto" type="number" disabled ' +
-                            'title="Auto-calculated" placeholder="auto" id="mb-ov-' + s + '-' + m.key + '" value="' + (raw[idx] != null ? raw[idx] : '') + '"></td>';
+                            'title="' + auto + '" placeholder="auto" id="mb-ov-' + s + '-' + m.key + '" value="' + (raw[idx] != null ? raw[idx] : '') + '"></td>';
                     } else {
                         html += '<td class="mb-val"><input class="mb-input" type="number" step="' + step +
                             '" id="mb-ov-' + s + '-' + m.key + '" value="' + (raw[idx] != null ? raw[idx] : '') +
@@ -3750,9 +4195,17 @@ function _mbRenderOverview() {
                     }
                 } else {
                     const ebayOverride = _mbEbayThresholdCls(m.key, raw[idx]);
-                    const cls = ebayOverride !== null
-                        ? ebayOverride
-                        : (idx === bestIdx ? 'mb-val mb-best' : (idx === worstIdx ? 'mb-val mb-worst' : 'mb-val'));
+                    let cls;
+                    if (ebayOverride !== null) {
+                        cls = ebayOverride;
+                    } else if (changeMetric) {
+                        // Direction, honouring the row's own "lower is better" —
+                        // a YoY of refunds should be green when it FALLS. Same
+                        // rule the store-view delta chips already use.
+                        cls = 'mb-val' + _mbChangeCls(m, raw[idx]);
+                    } else {
+                        cls = idx === bestIdx ? 'mb-val mb-best' : (idx === worstIdx ? 'mb-val mb-worst' : 'mb-val');
+                    }
                     html += '<td class="' + cls + '">' + _mbFmt(m.type, raw[idx]) + '</td>';
                 }
             });
@@ -4052,6 +4505,429 @@ function _exClose() {
     _exCtx = null;
 }
 
+// ── Manage Rows: the row catalog editor (DM / CEO / owner-manager) ──────────
+// The rows on this report are data, not code — monthly_brief_metrics. Values
+// stay in monthly_brief keyed by metric_key, which is already EAV, so adding a
+// row here needs no schema change and no deploy.
+let _mbmCatalog = [], _mbmInUse = new Set(), _mbmFormulas = [], _mbmEditingKey = null;
+// metric_key -> how many stored values it has. Drives how loudly a hard delete
+// warns; an empty row is a trivial cleanup, a populated one is irreversible.
+let _mbmInUseCounts = {};
+
+// Plain-English names for the calculations, so the dropdown doesn't show raw
+// formula keys. An unlisted key falls back to the key itself rather than
+// vanishing — a formula the app can run should always be selectable.
+const _MBM_FORMULA_LABELS = {
+    yoy_pct:   'Year over year — % change',
+    yoy_delta: 'Year over year — change in $ (or unit)',
+    yoy_prior: 'Year over year — same month last year',
+};
+
+function _mbCanManageRows() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return role === 'district manager' || role === 'ceo'
+        || role === 'owner manager' || role === 'owner (manager)';
+}
+
+async function mbOpenManageRows() {
+    if (!_mbCanManageRows()) return;
+    toggleModal('mbRowsModal');
+    _mbmEditingKey = null;
+    const form = document.getElementById('mbRowsForm');
+    if (form) form.style.display = 'none';
+    await _mbmLoad();
+}
+
+async function _mbmLoad() {
+    const body = document.getElementById('mbRowsBody');
+    if (body) body.innerHTML = '<div class="dmx-empty" style="padding:60px 0;">Syncing…</div>';
+    try {
+        const d = await fetch(MONTHLY_BRIEF_URL + '?catalog=1&v=' + Date.now()).then(r => r.json());
+        _mbmCatalog     = d.catalog || [];
+        _mbmInUse       = new Set(d.in_use || []);
+        _mbmInUseCounts = d.in_use_counts || {};
+        _mbmFormulas    = d.formulas || [];
+        _mbmRender();
+    } catch (e) {
+        if (body) body.innerHTML = '<div class="dmx-empty" style="padding:60px 0; color:var(--red-alert);">Could not load the row catalog.</div>';
+    }
+}
+
+function _mbmRender() {
+    const body = document.getElementById('mbRowsBody');
+    if (!body) return;
+    // Subtitle carries the standing rule (it used to be a footer note) plus the
+    // live count — same place every other tool modal explains itself.
+    const sub = document.getElementById('mbRowsSub');
+    const live = _mbmCatalog.filter(r => r.active).length;
+    if (sub) sub.textContent = 'Rows apply to every store. Hiding one keeps its history. · ' +
+        live + ' visible' + (_mbmCatalog.length > live ? ' · ' + (_mbmCatalog.length - live) + ' hidden' : '');
+
+    const sections = [], bySection = {};
+    _mbmCatalog.forEach(r => {
+        if (!bySection[r.section]) { bySection[r.section] = []; sections.push(r.section); }
+        bySection[r.section].push(r);
+    });
+    // Remembered so the section buttons can index into exactly what was drawn —
+    // recomputing the order in the handlers is how the two would drift apart.
+    _mbmSectionOrder = sections;
+
+    let html = '';
+    sections.forEach((sec, si) => {
+        // Sections are indexed rather than keyed by name: names contain spaces
+        // and ampersands ("Buying & Customers"), which don't survive being
+        // dropped into an element id or an inline onclick argument.
+        const count = bySection[sec].length;
+        html += '<div class="mbm-sec">' +
+            '<span class="mbm-sec-name">' + escapeHtml(sec) + '</span>' +
+            '<span class="mbm-sec-count">' + count + ' row' + (count === 1 ? '' : 's') + '</span>' +
+            '<span class="mbm-sec-actions">' +
+              '<button type="button" class="mbm-sec-btn" onclick="_mbmRenameSection(' + si + ')">Rename</button>' +
+              // Only offered when there's somewhere to send the rows. With one
+              // section left, deleting it would leave every row homeless.
+              (sections.length > 1
+                ? '<button type="button" class="mbm-sec-btn mbm-danger" onclick="_mbmDeleteSection(' + si + ')">Delete</button>'
+                : '') +
+            '</span>' +
+          '</div>' +
+          '<div class="mbm-sec-move" id="mbmSecMove-' + si + '" style="display:none;"></div>';
+        bySection[sec].forEach(r => {
+            const derived = r.source === 'derived';
+            const legacy  = derived && r.formula_key === 'legacy';
+            // Label only. The key, type, flags and formula used to sit here as
+            // chips, which made the list a wall of grey text — and all of it is
+            // already visible (and editable) one click away in the Edit form,
+            // which is where it's actually useful.
+            html += '<div class="mbm-row' + (r.active ? '' : ' is-retired') + '">' +
+                '<div class="mbm-row-main">' +
+                  '<span class="mbm-label">' + escapeHtml(r.label) + '</span>' +
+                '</div>' +
+                '<div class="mbm-row-actions">' +
+                  // The 13 spreadsheet formulas are wired to code in _MB_DERIVED;
+                  // editing their key or type from here would break that binding,
+                  // so they're read-only. Everything else is fair game.
+                  (legacy ? '<span class="mbm-locked">Built In</span>'
+                          : '<button type="button" class="btn-secondary mbm-btn" onclick="_mbmEdit(\'' + r.metric_key + '\')">Edit</button>') +
+                  (r.active
+                    ? (legacy ? '' : '<button type="button" class="btn-secondary mbm-btn" onclick="_mbmRetire(\'' + r.metric_key + '\')">Hide</button>')
+                    : '<button type="button" class="btn-secondary mbm-btn" onclick="_mbmRestore(\'' + r.metric_key + '\')">Show</button>') +
+                  // Hard delete sits beside Hide rather than replacing it: Hide
+                  // is the reversible one and stays the default, this is for a
+                  // row that shouldn't exist. Built-ins are excluded — they're
+                  // bound to code.
+                  (legacy ? '' : '<button type="button" class="btn-secondary mbm-btn mbm-danger" onclick="_mbmPurge(\'' + r.metric_key + '\')">Delete</button>') +
+                '</div>' +
+              '</div>';
+        });
+    });
+    body.innerHTML = html || '<div class="dmx-empty" style="padding:60px 0;">No rows yet.</div>';
+}
+
+// ---- sections -------------------------------------------------------------
+// A section has no record of its own; it exists only because rows carry its
+// name. So renaming and deleting are the same write — point the rows elsewhere —
+// and both go through the one `rename_section` action.
+let _mbmSectionOrder = [];
+
+async function _mbmSectionWrite(from, to, okMsg) {
+    const pin = sessionStorage.getItem('speeksUserPin');
+    if (!pin) { alert('Session expired — sign in again.'); return; }
+    try {
+        const resp = await fetch(MONTHLY_BRIEF_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({ action: 'rename_section', from, to }),
+        });
+        const result = await resp.json();
+        if (!resp.ok || result.error) throw new Error(result.error || 'Failed');
+        await _mbmLoad();
+        await fetchMonthlyBrief();   // the brief behind the modal is now stale
+    } catch (e) {
+        alert((okMsg || 'Could not update the section') + ': ' + (e.message || e));
+    }
+}
+
+function _mbmRenameSection(si) {
+    const from = _mbmSectionOrder[si];
+    if (!from) return;
+    const to = prompt('Rename this section.\n\nEvery row in it moves with the name.', from);
+    if (to === null) return;                       // cancelled
+    const next = String(to).trim();
+    if (!next || next === from) return;
+    // Renaming ONTO an existing section merges the two — worth saying out loud,
+    // because it looks like a rename and behaves like a merge.
+    if (_mbmSectionOrder.indexOf(next) !== -1 &&
+        !confirm('“' + next + '” already exists. Its rows and this section\'s will be combined.\n\nContinue?')) return;
+    _mbmSectionWrite(from, next, 'Could not rename the section');
+}
+
+// Delete needs a destination: the rows have to land somewhere, so this opens an
+// inline picker rather than a confirm that silently guesses.
+function _mbmDeleteSection(si) {
+    const sec  = _mbmSectionOrder[si];
+    const wrap = document.getElementById('mbmSecMove-' + si);
+    if (!sec || !wrap) return;
+    if (wrap.style.display !== 'none') { wrap.style.display = 'none'; return; }  // toggle shut
+    const others = _mbmSectionOrder.filter(s => s !== sec);
+    if (!others.length) return;
+    const n = (_mbmCatalog.filter(r => r.section === sec) || []).length;
+    wrap.innerHTML =
+        '<span class="mbm-sec-move-label">Move ' + n + ' row' + (n === 1 ? '' : 's') + ' to</span>' +
+        '<select id="mbmSecMoveTo-' + si + '">' +
+          others.map(s => '<option value="' + escapeHtml(s) + '">' + escapeHtml(s) + '</option>').join('') +
+        '</select>' +
+        '<button type="button" class="mbm-sec-btn mbm-danger" onclick="_mbmDoDeleteSection(' + si + ')">Move &amp; Delete</button>' +
+        '<button type="button" class="mbm-sec-btn" onclick="document.getElementById(\'mbmSecMove-' + si + '\').style.display=\'none\'">Cancel</button>';
+    wrap.style.display = '';
+}
+
+function _mbmDoDeleteSection(si) {
+    const from = _mbmSectionOrder[si];
+    const sel  = document.getElementById('mbmSecMoveTo-' + si);
+    if (!from || !sel || !sel.value) return;
+    _mbmSectionWrite(from, sel.value, 'Could not delete the section');
+}
+
+function _mbmNew()  { _mbmEditingKey = null; _mbmShowForm(null); }
+function _mbmEdit(key) {
+    const r = _mbmCatalog.find(x => x.metric_key === key);
+    if (!r) return;
+    _mbmEditingKey = key;
+    _mbmShowForm(r);
+}
+function _mbmCancel() {
+    _mbmEditingKey = null;
+    const form = document.getElementById('mbRowsForm');
+    if (form) form.style.display = 'none';
+}
+
+function _mbmShowForm(r) {
+    const form = document.getElementById('mbRowsForm');
+    if (!form) return;
+    const isNew = !r;
+    const v = k => (r && r[k] != null ? String(r[k]) : '');
+    const sections = [...new Set(_mbmCatalog.map(x => x.section))];
+    // Only manual rows can be compared year over year: a YoY of a YoY is
+    // meaningless, and the legacy formulas already recompute per month.
+    const sourceable = _mbmCatalog.filter(x => x.source === 'manual' && x.active);
+
+    form.innerHTML =
+      '<div class="mbm-form-head">' + (isNew ? 'Add a row' : 'Edit “' + escapeHtml(r.label) + '”') + '</div>' +
+      '<div class="mbm-grid">' +
+        '<label class="mbm-field"><span>Label</span>' +
+          '<input id="mbmLabel" type="text" maxlength="80" value="' + escapeHtml(v('label')) + '" placeholder="YoY Buying"></label>' +
+        '<label class="mbm-field"><span>Key</span>' +
+          '<input id="mbmKey" type="text" maxlength="60" value="' + escapeHtml(v('metric_key')) + '" placeholder="yoy_buying"' +
+          (isNew ? '' : ' disabled title="The key is what every stored value is filed under — it can\'t change"') + '></label>' +
+        // A real <select>, not an <input list=...> + <datalist>. The datalist
+        // version rendered as a plain text box: Chrome only reveals its arrow on
+        // focus and Firefox shows nothing, so the options were invisible unless
+        // you already knew to guess at them. Sections still have to be
+        // extensible, hence the "+ New section" escape hatch below.
+        '<label class="mbm-field"><span>Section</span>' +
+          '<select id="mbmSection" onchange="_mbmToggleSection()">' +
+            sections.map(s => '<option value="' + escapeHtml(s) + '"' +
+              (v('section') === s ? ' selected' : '') + '>' + escapeHtml(s) + '</option>').join('') +
+            '<option value="__new">+ New section…</option>' +
+          '</select></label>' +
+        '<label class="mbm-field" id="mbmSectionNewWrap" style="display:none;"><span>New section name</span>' +
+          '<input id="mbmSectionNew" type="text" maxlength="60" placeholder="Marketing"></label>' +
+        '<label class="mbm-field"><span>Format</span><select id="mbmType">' +
+          ['money', 'pct', 'int', 'rating', 'num'].map(t =>
+            '<option value="' + t + '"' + (v('type') === t ? ' selected' : '') + '>' + t + '</option>').join('') +
+        '</select></label>' +
+        '<label class="mbm-field"><span>Position</span>' +
+          '<input id="mbmOrder" type="number" step="1" value="' + (v('sort_order') || '999') + '" title="Lower numbers sort higher. Existing rows are spaced by 10."></label>' +
+        '<label class="mbm-field"><span>Value comes from</span><select id="mbmSource" onchange="_mbmToggleFormula()">' +
+          '<option value="manual"' + (v('source') !== 'derived' ? ' selected' : '') + '>Typed in each month</option>' +
+          '<option value="derived"' + (v('source') === 'derived' ? ' selected' : '') + '>Calculated</option>' +
+        '</select></label>' +
+      '</div>' +
+      '<div id="mbmFormulaWrap" class="mbm-grid" style="display:none;">' +
+        '<label class="mbm-field"><span>Calculation</span><select id="mbmFormula">' +
+          // Offered straight from what the app can actually evaluate (the fn's
+          // KNOWN_FORMULAS), minus 'legacy', which isn't a choice — it's the tag
+          // on the 13 built-in spreadsheet formulas.
+          _mbmFormulas.filter(f => f !== 'legacy').map(f =>
+            '<option value="' + f + '"' + (v('formula_key') === f ? ' selected' : '') + '>' +
+            escapeHtml(_MBM_FORMULA_LABELS[f] || f) + '</option>').join('') +
+        '</select></label>' +
+        '<label class="mbm-field"><span>Compare which row</span><select id="mbmFormulaArg">' +
+          sourceable.map(x => '<option value="' + x.metric_key + '"' + (v('formula_arg') === x.metric_key ? ' selected' : '') + '>' +
+            escapeHtml(x.label) + '</option>').join('') +
+        '</select></label>' +
+      '</div>' +
+      '<div class="mbm-checks">' +
+        '<label><input type="checkbox" id="mbmLower"' + (r && r.lower_is_better ? ' checked' : '') + '> Lower is better ' +
+          '<span class="mbm-hint">(green when it falls — refunds, defect rate)</span></label>' +
+        '<label><input type="checkbox" id="mbmNoShade"' + (r && r.no_shade ? ' checked' : '') + '> Never colour-grade ' +
+          '<span class="mbm-hint">(running totals, external rankings)</span></label>' +
+      '</div>' +
+      '<div class="mbm-form-foot">' +
+        '<span class="mbm-status" id="mbmStatus"></span>' +
+        '<button type="button" class="btn-secondary" onclick="_mbmCancel()">Cancel</button>' +
+        '<button type="button" class="btn-primary" onclick="_mbmSave()">' + (isNew ? 'Add Row' : 'Save Changes') + '</button>' +
+      '</div>';
+    form.style.display = 'block';
+    // The form is pinned above the list, so clicking Edit on a row 30 deep left
+    // the user staring at the same rows with the editor off-screen above them.
+    // .manage-content is the scroller (height:60vh), not the window.
+    const scroller = form.closest('.manage-content');
+    if (scroller) scroller.scrollTo({ top: 0, behavior: 'smooth' });
+    _mbmToggleFormula();
+    _mbmToggleSection();
+    // Auto-suggest a key from the label while adding, so nobody has to invent
+    // snake_case by hand — but never touch it once they've typed their own.
+    if (isNew) {
+        const lab = document.getElementById('mbmLabel'), key = document.getElementById('mbmKey');
+        let touched = false;
+        key.addEventListener('input', () => { touched = true; });
+        lab.addEventListener('input', () => {
+            if (touched) return;
+            key.value = lab.value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);
+        });
+        lab.focus();
+    }
+}
+
+function _mbmToggleFormula() {
+    const src = document.getElementById('mbmSource');
+    const wrap = document.getElementById('mbmFormulaWrap');
+    if (src && wrap) wrap.style.display = (src.value === 'derived') ? '' : 'none';
+}
+
+// Reveal the free-text box only when "+ New section" is chosen, and put the
+// cursor in it — picking that option IS the request to type a name.
+function _mbmToggleSection() {
+    const sel  = document.getElementById('mbmSection');
+    const wrap = document.getElementById('mbmSectionNewWrap');
+    if (!sel || !wrap) return;
+    const isNew = sel.value === '__new';
+    wrap.style.display = isNew ? '' : 'none';
+    if (isNew) { const el = document.getElementById('mbmSectionNew'); if (el) el.focus(); }
+}
+
+// The section as chosen: either an existing one, or whatever was typed into the
+// new-section box. Returns '' when "+ New section" is picked but left blank, so
+// the caller can complain rather than silently filing the row under "__new".
+function _mbmSectionValue() {
+    const sel = document.getElementById('mbmSection');
+    if (!sel) return '';
+    if (sel.value !== '__new') return sel.value;
+    return (document.getElementById('mbmSectionNew') || {}).value?.trim() || '';
+}
+
+async function _mbmSave() {
+    const pin = sessionStorage.getItem('speeksUserPin');
+    const st  = document.getElementById('mbmStatus');
+    const set = (msg, cls) => { if (st) { st.textContent = msg; st.className = 'mbm-status' + (cls ? ' ' + cls : ''); } };
+    if (!pin) { set('Session expired — sign in again.', 'is-error'); return; }
+
+    const source = document.getElementById('mbmSource').value;
+    const payload = {
+        action: 'save_metric',
+        metric_key: (_mbmEditingKey || document.getElementById('mbmKey').value || '').trim().toLowerCase(),
+        label:   document.getElementById('mbmLabel').value.trim(),
+        section: _mbmSectionValue(),
+        type:    document.getElementById('mbmType').value,
+        sort_order: Number(document.getElementById('mbmOrder').value),
+        lower_is_better: document.getElementById('mbmLower').checked,
+        no_shade:        document.getElementById('mbmNoShade').checked,
+        source,
+        formula_key: source === 'derived' ? document.getElementById('mbmFormula').value : null,
+        formula_arg: source === 'derived' ? document.getElementById('mbmFormulaArg').value : null,
+    };
+    if (!payload.label) { set('Give the row a label.', 'is-error'); return; }
+    if (!payload.metric_key) { set('Give the row a key.', 'is-error'); return; }
+    if (!payload.section) { set('Name the new section, or pick an existing one.', 'is-error'); return; }
+
+    set('Saving…');
+    try {
+        const resp = await fetch(MONTHLY_BRIEF_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify(payload),
+        });
+        const result = await resp.json();
+        if (!resp.ok || result.error) throw new Error(result.error || 'Save failed');
+        _mbmCancel();
+        await _mbmLoad();
+        // The brief behind the modal is now out of date — it was rendered from
+        // the old catalog and won't show the row that was just added.
+        await fetchMonthlyBrief();
+    } catch (e) {
+        set(String(e.message || 'Could not save'), 'is-error');
+    }
+}
+
+async function _mbmSetActive(key, active) {
+    const pin = sessionStorage.getItem('speeksUserPin');
+    if (!pin) return;
+    const row = _mbmCatalog.find(x => x.metric_key === key) || {};
+    const body = active
+        ? Object.assign({}, row, { action: 'save_metric', active: true })
+        : { action: 'delete_metric', metric_key: key };
+    try {
+        const resp = await fetch(MONTHLY_BRIEF_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify(body),
+        });
+        const result = await resp.json();
+        if (!resp.ok || result.error) throw new Error(result.error || 'Failed');
+        await _mbmLoad();
+        await fetchMonthlyBrief();
+    } catch (e) {
+        alert('Could not update the row: ' + (e.message || e));
+    }
+}
+
+function _mbmRetire(key) {
+    // Warn only when it would hide real numbers — hiding an unused row is
+    // harmless and shouldn't need a confirmation nobody reads.
+    const warn = _mbmInUse.has(key)
+        ? 'This row has data saved against it. Hiding it removes it from every store\'s report; the history is kept and comes back if you show it again.\n\nHide it?'
+        : 'Hide this row? It disappears from every store\'s report.';
+    if (!confirm(warn)) return;
+    _mbmSetActive(key, false);
+}
+function _mbmRestore(key) { _mbmSetActive(key, true); }
+
+// Hard delete — the row AND every value stored under it. The confirmation is
+// deliberately proportional: a row added by mistake carries nothing and gets a
+// one-line check; a row with history has to state the damage in figures, because
+// this is the one action here that can't be undone.
+async function _mbmPurge(key) {
+    const row = _mbmCatalog.find(x => x.metric_key === key);
+    if (!row) return;
+    const n = _mbmInUseCounts[key] || 0;
+    const msg = n
+        ? 'DELETE “' + row.label + '” permanently?\n\n' +
+          'This also destroys ' + n + ' saved value' + (n === 1 ? '' : 's') + ' across every store and every month. ' +
+          'It cannot be undone.\n\nTo keep the history instead, cancel and use Hide.'
+        : 'Delete “' + row.label + '” permanently?\n\nIt has no saved data, so nothing else is lost.';
+    if (!confirm(msg)) return;
+    // A second gate only when history is actually at stake — asking twice for an
+    // empty row would just train people to click through both.
+    if (n && !confirm('Last check: ' + n + ' value' + (n === 1 ? '' : 's') + ' will be deleted for good.')) return;
+
+    const pin = sessionStorage.getItem('speeksUserPin');
+    if (!pin) { alert('Session expired — sign in again.'); return; }
+    try {
+        const resp = await fetch(MONTHLY_BRIEF_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({ action: 'purge_metric', metric_key: key }),
+        });
+        const result = await resp.json();
+        if (!resp.ok || result.error) throw new Error(result.error || 'Delete failed');
+        await _mbmLoad();
+        await fetchMonthlyBrief();
+    } catch (e) {
+        alert('Could not delete the row: ' + (e.message || e));
+    }
+}
+
 function mbStartEdit() {
     _mbEditing = true;
     renderMonthlyBrief();
@@ -4130,6 +5006,10 @@ async function mbSaveOverview() {
         }));
         _mbEditing = false;
         _mbOverviewMonth = period; // the month we just entered is now the most recent with data
+        // Drop any earlier month the picker was parked on, so saving lands you on
+        // the numbers you just entered rather than bouncing back to the month you
+        // happened to be reviewing before you clicked Edit.
+        _mbOverviewPick = '';
         renderMonthlyBrief();
     } catch (e) {
         alert('Could not save: ' + e.message);
@@ -4148,7 +5028,9 @@ function _kpiRenderMonthly(periods) {
     // Always show the current (editable) month plus any past months with saved data.
     // Rendering it even in view mode means clicking Edit just swaps its cells from
     // text to inputs IN PLACE — no new section appears, so nothing on the page shifts.
-    let visible = (periods || []).filter(function(p) { return p.is_editable || p.entries.some(function(e) { return e.id; }); });
+    // A period with a note but no numbers still has to render, or the note it
+    // holds becomes unreachable the moment it exists.
+    let visible = (periods || []).filter(function(p) { return p.is_editable || !!(p.note) || p.entries.some(function(e) { return e.id; }); });
     if (_kpiEditingPeriod) {
         const ep = periods.find(function(p) { return p.period_end_date === _kpiEditingPeriod; });
         if (ep && !visible.find(function(p) { return p.period_end_date === ep.period_end_date; })) visible.unshift(ep);
@@ -4172,6 +5054,7 @@ function _kpiRenderMonthly(periods) {
         tbody += _kpiAddSelfRowHtml(p, isEd);
         const hasSavedData = p.entries.some(function(e) { return e.id; });
         if (hasSavedData) tbody += _kpiStoreTotalRowHtml(p.entries);
+        tbody += _kpiNoteRowHtml(p);   // last: the month's numbers, then the month's notes
     });
     body.innerHTML = '<div class="kpi-grid-scroll-wrapper"><table class="kpi-entry-grid kpi-full-table">' + _kpiColgroupHtml() + '<tbody>' + tbody + '</tbody></table></div>';
 }
@@ -4497,7 +5380,11 @@ async function _kpiLoadAll(tab) {
     const store = _kpiResolveStore();
     if (!store) return;
     const body = document.getElementById('kpiModalBody');
-    if (body) body.innerHTML = '<div class="kpi-empty-state">Loading…</div>';
+    // Never blank the grid out from under someone who is mid-entry. This used to
+    // paint "Loading…" over a half-filled form and then, if the fetch failed,
+    // replace it with an error — taking every typed number with it.
+    const editing = !!_kpiEditingPeriod;
+    if (body && !editing) body.innerHTML = '<div class="kpi-empty-state">Loading…</div>';
     try {
         const resp = await fetch(KPI_MANAGE_URL + '?store=' + store + '&period_type=' + tab + '&v=' + Date.now());
         const data = await resp.json();
@@ -4505,7 +5392,9 @@ async function _kpiLoadAll(tab) {
         if (tab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
         else                  _kpiRenderMonthly(_kpiPeriodsData);
     } catch(e) {
-        if (body) body.innerHTML = '<div class="kpi-empty-state" style="color:var(--red-alert)">Failed to load KPI data.</div>';
+        if (body && !editing) {
+            body.innerHTML = '<div class="kpi-empty-state" style="color:var(--red-alert)">Failed to load KPI data.</div>';
+        }
     }
 }
 
@@ -6076,29 +6965,75 @@ async function _kpiSavePeriod(periodDate) {
     if (!period) return;
     const saveBtn = document.getElementById('kpiSaveBtn');
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
-    for (let empIdx = 0; empIdx < period.entries.length; empIdx++) {
-        const entry   = period.entries[empIdx];
-        const reqBody = { store: store, period_type: _kpiCurrentTab, period_end_date: periodDate, employee_name: entry.employee_name };
-        _KPI_INPUT_FIELDS.forEach(function(f) {
-            const el = document.getElementById('kpi-' + pk + '-' + empIdx + '-' + f);
-            if (el && el.value !== '') reqBody[f] = _KPI_INT_FIELDS.has(f) ? parseInt(el.value) : parseFloat(el.value);
-        });
-        const hasData = _KPI_INPUT_FIELDS.some(function(f) { return reqBody[f] != null; });
-        if (!hasData) continue;
-        try {
-            const resp   = await fetch(KPI_MANAGE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-pin': pin }, body: JSON.stringify(reqBody) });
-            const result = await resp.json();
-            if (!resp.ok) throw new Error(result.error || 'Save failed');
-            period.entries[empIdx] = result.entry;
-            const s = document.getElementById('kpiS-' + pk + '-' + empIdx);
-            if (s) { s.textContent = '✓'; s.style.color = '#16a34a'; s.title = 'Saved'; }
-        } catch(e) {
-            const s = document.getElementById('kpiS-' + pk + '-' + empIdx);
-            if (s) { s.textContent = '✗'; s.style.color = 'var(--red-alert)'; s.title = String(e.message); }
+
+    let failed = 0, saved = 0;
+    const failedNames = [];
+    try {
+        for (let empIdx = 0; empIdx < period.entries.length; empIdx++) {
+            const entry   = period.entries[empIdx];
+            const reqBody = { store: store, period_type: _kpiCurrentTab, period_end_date: periodDate, employee_name: entry.employee_name };
+            _KPI_INPUT_FIELDS.forEach(function(f) {
+                const el = document.getElementById('kpi-' + pk + '-' + empIdx + '-' + f);
+                if (el && el.value !== '') reqBody[f] = _KPI_INT_FIELDS.has(f) ? parseInt(el.value) : parseFloat(el.value);
+            });
+            const hasData = _KPI_INPUT_FIELDS.some(function(f) { return reqBody[f] != null; });
+            if (!hasData) continue;
+            try {
+                const resp   = await _kpiPostEntry(reqBody, pin);
+                const result = await resp.json();
+                if (!resp.ok) throw new Error(result.error || 'Save failed');
+                period.entries[empIdx] = result.entry;
+                saved++;
+                const s = document.getElementById('kpiS-' + pk + '-' + empIdx);
+                if (s) { s.textContent = '✓'; s.style.color = '#16a34a'; s.title = 'Saved'; }
+            } catch(e) {
+                failed++;
+                failedNames.push(entry.employee_name);
+                const s = document.getElementById('kpiS-' + pk + '-' + empIdx);
+                if (s) { s.textContent = '✗'; s.style.color = 'var(--red-alert)'; s.title = String(e.message); }
+            }
         }
+    } finally {
+        // On the happy path the button is replaced wholesale when _kpiLoadAll
+        // re-renders the grid, so nothing here used to reset it. That left one
+        // way out: if anything threw — or the reload failed — the button stayed
+        // disabled on "Saving…" forever and the only escape was a refresh, which
+        // threw away everything typed. Always hand the button back.
+        const btn = document.getElementById('kpiSaveBtn');
+        if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
     }
+
+    if (failed) {
+        // Stay in edit mode and keep what is on screen. Reloading here would pull
+        // the grid back from the server and silently discard every row that did
+        // not save — the manager would watch their numbers vanish.
+        alert(failed + ' row' + (failed === 1 ? '' : 's') + ' could not be saved ('
+            + failedNames.join(', ') + ').\n\n'
+            + (saved ? saved + ' saved successfully. ' : '')
+            + 'Your entries are still on screen — press Save again to retry.');
+        return;
+    }
+
     _kpiEditingPeriod = null;
     await _kpiLoadAll(_kpiCurrentTab);
+}
+
+// One KPI row POST with a hard timeout. fetch() has no default timeout, so a
+// dropped connection mid-request left the save hanging indefinitely — the
+// "perpetual saving" the managers hit. An abort surfaces as a normal row
+// failure, which now keeps the typed values instead of discarding them.
+function _kpiPostEntry(reqBody, pin, ms) {
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), ms || 20000) : null;
+    return fetch(KPI_MANAGE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(reqBody),
+        signal: ctl ? ctl.signal : undefined,
+    }).catch(err => {
+        throw new Error(err && err.name === 'AbortError'
+            ? 'Timed out — check your connection and press Save again.' : (err.message || 'Network error'));
+    }).finally(() => { if (timer) clearTimeout(timer); });
 }
 
 function _kpiGetThisSunday() {
@@ -7250,7 +8185,7 @@ function injectGlobalAuth() {
                 <div class="auth-card">
                     <div class="auth-body">
                         <div class="auth-badge">Secure access</div>
-                        <h2>Welcome back</h2>
+                        <h2>Welcome Back</h2>
                         <p id="authSubtitle">Enter your 4-digit PIN to open the hub.</p>
                         <div id="pinInputContainer" class="pin-container">
                             <div class="pin-cells" id="pinCells">
@@ -7305,8 +8240,11 @@ function handleSignOut() {
     // teardown/fetch window can't briefly paint role-gated controls (e.g. the green
     // ticker toggles) as the layout collapses.
     document.body.classList.remove('is-authenticated');
-    document.getElementById('checklistSidePanel')?.classList.remove('open');
-    document.getElementById('goalsSidePanel')?.classList.remove('open');
+    // Closes ALL four side panels, clears their nav-toggle active state and runs
+    // their stop callbacks. This used to hand-remove `open` from just the checklist
+    // and goals panels, which left the tools and audit panels open for the next
+    // person and left the checklist/audit sync polls running after sign-out.
+    _closeSidePanels();
     closeAllModals();
 
     // Drop the outgoing user's feed data. Signing back in as someone else on
@@ -7351,30 +8289,23 @@ function handleSignOut() {
     }
     try { renderActionFeed(); } catch (_) { /* feed may not exist here */ }
 
-    // On the dashboard, sign out IN PLACE — no navigation at all, so it is
-    // instant. This is the mirror of signing IN, which has always transitioned
-    // in place (checkPIN hides the overlay and re-runs applyRoleBasedUI /
-    // initDashboardData rather than reloading), so both directions now use the
-    // same mechanism instead of one of them costing a full page load.
+    // Sign out ALWAYS hands off to index.html, which on the dashboard means a
+    // reload. It used to sign out in place there — instant, but nothing on the
+    // page was actually torn down. The feed's alert bubbles and every tool's
+    // cached payload are ordinary DOM and module state that outlive an in-place
+    // sign-out, so the next person briefly saw the previous person's
+    // notifications, and their data on opening a tool, until their own fetches
+    // landed. Clearing that by hand means naming every cache in the app and
+    // keeping the list current forever; a reload resets all of them at once,
+    // including tools added later. The other four pages already paid this page
+    // load — the dashboard was the only exception, which is why it was the only
+    // page with the glitch. replace() also keeps a signed-out Back button from
+    // returning to an authenticated URL.
     //
-    // Anywhere else we still hand off to index.html. An unauthenticated
-    // non-index page is a state the app has never had — the load-time gate
-    // redirects such a page to index before the overlay is ever shown — and
-    // inventing it to save one page load is not worth the risk. replace() also
-    // keeps a signed-out Back button from returning to an authenticated URL.
-    const page = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
-    if (page !== '' && page !== 'index.html') { location.replace('index.html'); return; }
-
-    // Reset the PIN field so the next person types into a clean form: value,
-    // painted cells, the shake/error state and any stuck button spinner.
-    const input = document.getElementById('pinInput');
-    if (input) input.value = '';
-    if (typeof _authPaintCells === 'function') _authPaintCells();
-    document.getElementById('pinCells')?.classList.remove('bad');
-    document.getElementById('unlockBtn')?.classList.remove('loading');
-    const err = document.getElementById('pinError');
-    if (err) err.style.display = 'none';
-    if (input) input.focus();
+    // The teardown above still matters: sessionStorage survives a reload, so
+    // those removeItem calls are what actually sign the user out, and the rest
+    // is a safety net if navigation is ever blocked.
+    location.replace('index.html');
 }
 
 // --- 17. MODULE: IDEA SUBMISSION MODAL ---
@@ -8251,7 +9182,7 @@ let currentAppDate = new Date().toLocaleDateString('en-US', { timeZone: 'America
 let currentDmGoalView = 'daily';
 let _l1SelectSeq = 0; // tracks order L1 was assigned, for FIFO when a 3rd L1 is picked
 let managerWeeklyEntries = []; // [{ name, listed }] — this week's # Listed per employee (from Weekly KPI)
-let managerWeeklyHistory = []; // [storeTotal, ...] completed weeks, oldest→newest (drives level-up bars)
+let managerWeeklyHistory = []; // [{total, target}, ...] completed weeks, oldest→newest (drives level-up bars)
 let _goalsAutosaveTimer = null;
 let _goalsChecklistDone = false;
 let _priorWeekGoals = {};      // idx → sum of this week's saved daily goals EXCLUDING today (today is live)
@@ -8278,17 +9209,15 @@ function _roleOf(btn) {
 const ListingGoalsEngine = {
     roleWeight: { B1: 5, B2: 8, L1: 25, L2: 25, L1_SHARED: 15 },
     saturdayFactor: 0.5,
-    step: 10,           // ratchet step (+listings/week) once a store levels up
-    ratchetWindow: 3,   // rolling weeks evaluated
-    needHits: 2,        // weeks at/above target within window to level up
-    needMiss: 2,        // weeks below target within window to flag for review
 
-    // Incremental: ±20 listings per person, anchored at 4 people = 190 (floor 150).
-    // 2→150, 3→170, 4→190, 5→210, 6→230. Mirrors baseForSize() in the
+    // SUGGESTED weekly total: ±20 listings per person, anchored at 4 people = 190
+    // (floor 150). 2→150, 3→170, 4→190, 5→210, 6→230. Mirrors baseForSize() in the
     // store-targets edge function so the frontend and server stay in lock-step.
-    // The MSM boost (+15 on stores an MSM covers) is added OUTSIDE this formula
-    // (server msmBoost / frontend _msmTargetBoost) so scale() — and therefore
-    // per-person daily goals — stays unboosted: regular listers don't absorb it.
+    //
+    // This is no longer the goal — the DM types the real number each Monday and
+    // that value drives everything (see scale's targetOverride). The ladder only
+    // prefills the DM's input for a store that has never had a week set, and
+    // stands in while the server target is still loading.
     weeklyTarget(size)       { return Math.max(150, 110 + 20 * size); },
     modelSize(rosterSize)    { return rosterSize >= 4 ? 4 : 3; },
 
@@ -8308,46 +9237,107 @@ const ListingGoalsEngine = {
         return 1;
     },
     weightFor(role, staffedCount) {
+        const isLister = /^L\d+$/.test(role);
         // On 2-person days the lister also covers the floor → reduced weight.
-        if (role === 'L1' && staffedCount <= 2) return this.roleWeight.L1_SHARED;
+        // This applies to ANY lister slot. It used to test `role === 'L1'` only, so
+        // a two-person day staffed as L1 + L2 scored them 15 and 25 — the same job
+        // on the same day with different goals.
+        if (isLister && staffedCount <= 2) return this.roleWeight.L1_SHARED;
         // L3, L4, … (rosters past 4 people) score like a dedicated lister.
-        if (this.roleWeight[role] == null && /^L\d+$/.test(role)) return this.roleWeight.L1;
+        if (isLister && this.roleWeight[role] == null) return this.roleWeight.L1;
         return this.roleWeight[role] || 0;
     },
-    scale(rosterSize) {
+    _DAY_FACTOR: { Mon:1, Tue:1, Wed:1, Thu:1, Fri:1, Sat:0.5 },
+    _allocCache: {},
+
+    // targetOverride is the DM's hand-set weekly goal for the store. When it is
+    // supplied the whole per-role distribution scales to THAT number, which is what
+    // makes the daily goals add back up to the goal the DM typed. The ladder is
+    // only the fallback for a store whose target hasn't loaded yet.
+    scale(rosterSize, targetOverride) {
         const size = this.modelSize(rosterSize);
-        const target = this.weeklyTarget(rosterSize);
+        const target = (targetOverride > 0) ? targetOverride : this.weeklyTarget(rosterSize);
         const wk = this.standardWeek(size);
-        const factor = { Mon:1, Tue:1, Wed:1, Thu:1, Fri:1, Sat:this.saturdayFactor };
         let cap = 0;
         for (const day in wk) {
             const roles = wk[day];
-            roles.forEach(r => { cap += this.weightFor(r, roles.length) * factor[day]; });
+            roles.forEach(r => { cap += this.weightFor(r, roles.length) * this._DAY_FACTOR[day]; });
         }
         return cap > 0 ? target / cap : 0;
     },
+
+    // Exact per-slot goals for a standard week, allocated so they sum to EXACTLY
+    // the DM's number.
+    //
+    // Rounding each person-day independently doesn't cancel out: a 190 week
+    // distributed to 189, a 200 week to 195. And no single scale factor can fix
+    // it — Mon/Tue/Wed are identical slots that round together, so for a 2-person
+    // roster the reachable totals jump straight from 195 to 205 and 200 is simply
+    // not on the list. Largest-remainder does fix it: floor everything, then hand
+    // the leftover listings out by biggest fractional part. scale() makes the
+    // UNROUNDED slots sum to the target, so this lands on the target exactly.
+    //
+    // The unit of allocation is an EQUIVALENCE CLASS — day factor + role weight +
+    // people staffed — not an individual day-slot. Two people in the same
+    // situation must always get the same number, and keying by day broke that two
+    // ways: Mon's L1 could win a leftover listing that Tue's L1 didn't, and on a
+    // day whose role mix isn't in the model one lister read from this table while
+    // the other fell through to plain rounding (L1 20, L2 19 — the reported bug).
+    // A whole class moves together, so the cost of a +1 is the class's size.
+    allocFor(rosterSize, target) {
+        const cacheKey = rosterSize + '|' + target;
+        if (this._allocCache[cacheKey]) return this._allocCache[cacheKey];
+        const wk = this.standardWeek(this.modelSize(rosterSize));
+        const sc = this.scale(rosterSize, target);
+
+        const classes = {};
+        for (const day in wk) {
+            const roles = wk[day];
+            const factor = this._DAY_FACTOR[day];
+            roles.forEach(r => {
+                const w = this.weightFor(r, roles.length);
+                const k = factor + '|' + w + '|' + roles.length;
+                if (!classes[k]) classes[k] = { k, exact: w * sc * factor, size: 0 };
+                classes[k].size++;
+            });
+        }
+
+        const list = Object.values(classes);
+        let used = 0;
+        list.forEach(c => { c.n = Math.floor(c.exact); used += c.n * c.size; });
+        let left = Math.round(target - used);
+        // Biggest fractional part first, but only take a class if the whole class
+        // fits in what's left — otherwise the week would overshoot the goal.
+        list.slice()
+            .sort((a, b) => (b.exact - Math.floor(b.exact)) - (a.exact - Math.floor(a.exact)))
+            .forEach(c => { if (left >= c.size) { c.n++; left -= c.size; } });
+
+        const map = {};
+        list.forEach(c => { map[c.k] = c.n; });
+        this._allocCache[cacheKey] = map;
+        return map;
+    },
     // The function the widgets call: goal for one role, on a date, given how
     // many people are staffed that day (needed for the shared-lister rule).
-    goalFor(role, dateStr, rosterSize, staffedCount) {
+    goalFor(role, dateStr, rosterSize, staffedCount, targetOverride) {
         if (!role || role === '-') return 0;
-        const g = this.weightFor(role, staffedCount) * this.scale(rosterSize) * this.dayFactorFromDate(dateStr);
-        return Math.round(g);
-    },
-    // Level-up / flag evaluation. actuals = weekly # Listed, oldest → newest.
-    ratchet(actuals, target) {
-        const win = (actuals || []).slice(-this.ratchetWindow);
-        const hits = win.filter(a => a >= target).length;
-        const miss = win.filter(a => a < target).length;
-        const lastTwo = (actuals || []).slice(-2);
-        const twoInARow = lastTwo.length === 2 && lastTwo.every(a => a < target);
-        return {
-            hits, miss, twoInARow,
-            levelUp: hits >= this.needHits,
-            flagged: (miss >= this.needMiss || twoInARow),
-            urgent: twoInARow,
-            nextTarget: target + this.step
-        };
+        // A standard staffed day reads its number straight off the exact allocation,
+        // so a normal week totals the DM's goal to the listing. The lookup is by
+        // day factor + weight + staffing, so anyone in the same situation — either
+        // lister on the same day, the same role on Mon and Tue — always matches.
+        const target = (targetOverride > 0) ? targetOverride : this.weeklyTarget(rosterSize);
+        const factor = this.dayFactorFromDate(dateStr);
+        const weight = this.weightFor(role, staffedCount);
+        const slot = this.allocFor(rosterSize, target)[factor + '|' + weight + '|' + staffedCount];
+        if (slot != null) return slot;
+        // Anything the model doesn't cover — an unusual role mix, a day with more or
+        // fewer people than the standard week — falls back to the plain calculation.
+        return Math.round(weight * this.scale(rosterSize, targetOverride) * factor);
     }
+    // NOTE: ratchet() lived here — it decided when a store "levelled up" (+10) or
+    // got flagged for DM review after two misses. Both it and its server twin are
+    // gone: the DM sets the number by hand each week, so nothing may move a target
+    // on its own, and the review / lower / raise prompts it fed are retired.
 };
 
 // Parse a listing-goal date into a LOCAL calendar day.
@@ -8417,7 +9407,12 @@ async function fetchLiveGoalsData() {
     const list = document.getElementById('goals-manager-body');
     if (!list) return;
     if (isMultiStoreManager()) return fetchLiveGoalsDataMS();
-    list.innerHTML = '<div class="status-message">Syncing Data...</div>';
+    // Only show the loading state on a COLD load. A refresh of an already-rendered
+    // roster repaints in place — blanking it out mid-edit is what made picking a
+    // role look like the data had been lost.
+    if (!list.querySelector('.role-dot')) {
+        list.innerHTML = '<div class="status-message">Syncing Data...</div>';
+    }
 
     goalsTargetStore = sessionStorage.getItem('speeksUserStore') || 'OVL';
     if (goalsTargetStore === 'ALL' || goalsTargetStore === 'CORP') goalsTargetStore = 'OVL'; 
@@ -8724,8 +9719,9 @@ async function saveGoalsData(silent = false) {
         const activeBtn = roleGroup?.querySelector('.role-dot.active');
         const role = _roleOf(activeBtn);
 
-        // Goal is derived from the role — never typed.
-        const goal = role !== '-' ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount)) : '';
+        // Goal is derived from the role — never typed. It scales to the weekly
+        // total the DM set for this store on Monday.
+        const goal = role !== '-' ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount, targetFor(goalsTargetStore))) : '';
 
         // Results now come from the Weekly KPI (# Listed); preserve any existing value.
         const existing = liveGoalsData.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
@@ -8737,6 +9733,9 @@ async function saveGoalsData(silent = false) {
     });
 
     try {
+        // Ignore the broadcast this write is about to trigger — it would come back
+        // and re-fetch the roster out from under whoever is picking roles.
+        if (typeof _rtMute === 'function') _rtMute('goals');
         const response = await fetch(GOALS_API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -8758,6 +9757,12 @@ async function saveGoalsData(silent = false) {
             if (!_goalsChecklistDone) {
                 _goalsChecklistDone = true;
                 markListingGoalsChecklistComplete();
+            }
+            // We muted our own broadcast, so clear our own daily reminder directly.
+            if (typeof checkListingGoalsDailyReminder === 'function') {
+                checkListingGoalsDailyReminder().then(() => {
+                    if (typeof renderActionFeed === 'function') renderActionFeed();
+                });
             }
         } else {
             if (status) { status.textContent = 'Save failed'; status.className = 'goals-save-status error'; }
@@ -8928,7 +9933,10 @@ function _setMSGoalsChrome(isMS) {
 async function fetchLiveGoalsDataMS() {
     const list = document.getElementById('goals-manager-body');
     if (!list) return;
-    list.innerHTML = '<div class="status-message">Syncing Data...</div>';
+    // Cold load only — see fetchLiveGoalsData.
+    if (!list.querySelector('.role-dot')) {
+        list.innerHTML = '<div class="status-message">Syncing Data...</div>';
+    }
     _setMSGoalsChrome(true);
 
     try {
@@ -9048,7 +10056,7 @@ function recomputeGoalDisplaysMS() {
             const group = document.getElementById(`roles-${store}-${idx}`);
             const activeBtn = group?.querySelector('.role-dot.active');
             const role = _roleOf(activeBtn);
-            const todayGoal = role !== '-' ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount) : 0;
+            const todayGoal = role !== '-' ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount, targetFor(store)) : 0;
 
             const disp = document.getElementById(`goal-display-${store}-${idx}`);
             if (disp) {
@@ -9095,7 +10103,7 @@ async function saveGoalsDataMS(silent = false) {
             const group = document.getElementById(`roles-${store}-${idx}`);
             const activeBtn = group?.querySelector('.role-dot.active');
             const role = _roleOf(activeBtn);
-            const goal = role !== '-' ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount)) : '';
+            const goal = role !== '-' ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount, targetFor(store))) : '';
             const existing = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
             const result = existing && existing.result != null ? String(existing.result) : '';
             if (role !== '-' || goal !== '' || result !== '') {
@@ -9104,6 +10112,8 @@ async function saveGoalsDataMS(silent = false) {
         });
 
         try {
+            // See saveGoalsData — don't let our own broadcast bounce back.
+            if (typeof _rtMute === 'function') _rtMute('goals');
             const response = await fetch(GOALS_API_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -9193,26 +10203,218 @@ function effectiveTeamSize(store) {
     if (t && typeof t.size === 'number') return t.size;
     return storeRosterSize(store);
 }
-// Last-4 completed-week listing totals (oldest→newest) for the bars.
+// Last-4 completed weeks for the bars, each carrying the goal that was in force
+// THAT week — so re-setting this Monday's number can't re-colour history.
 function weeksFor(store) {
-    return ((_storeTargets[store] && _storeTargets[store].weeks) || []).map(w => w.total);
+    return ((_storeTargets[store] && _storeTargets[store].weeks) || [])
+        .map(w => ({ total: w.total, target: w.target }));
 }
-// DM action on a flagged store: 'lower' (−10) or 'keep' (hold). Resolves the flag.
-async function dmGoalAction(store, action) {
+// Has the DM set THIS week's goal for the store by hand yet? `carried` means it is
+// running on a previous week's number, which still counts as "not set this week".
+function goalIsSetThisWeek(store) {
+    return !!(_storeTargets[store] && _storeTargets[store].manual);
+}
+// The ladder's suggestion, used to prefill the DM's input.
+function suggestedTargetFor(store) {
+    return (_storeTargets[store] && _storeTargets[store].suggested)
+        || (ListingGoalsEngine.weeklyTarget(storeRosterSize(store)) + _msmTargetBoost(store));
+}
+
+// DM writes a store's weekly listing goal. Replaces dmGoalAction(), which only
+// ever offered "lower −10" / "keep" on a store the ratchet had flagged — both the
+// ratchet and those prompts are gone; the DM just types the number now.
+async function dmSetListingGoal(store, target) {
+    const n = Math.round(Number(target));
+    if (!Number.isFinite(n) || n < 0 || n > 2000) return { error: 'Enter a number between 0 and 2000.' };
     try {
-        await fetch(STORE_TARGETS_URL, {
+        const resp = await fetch(STORE_TARGETS_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ store, action })
+            body: JSON.stringify({ store, target: n, name: sessionStorage.getItem('speeksUserName') || '' })
         });
-        await fetchStoreTarget(store);
-        // Repaint the district Listing Goals popup the DM pressed this from, and
-        // the rail item, whose subtitle counts flagged stores.
+        const row = await resp.json();
+        if (row && row.error) return { error: row.error };
+        if (row && row.store) _storeTargets[row.store] = row;
+        // Everything downstream of the target: the DM popup, the rail subtitle,
+        // the Monday reminder card, and any open goals widget whose per-person
+        // numbers now have to re-derive from the new weekly total.
         renderDmListingModal();
         _dmxSyncRail();
-    } catch (e) {}
+        // Order matters: the reminder card is derived from the bubble's display
+        // state, so refresh the bubble BEFORE the feed re-reads it — otherwise
+        // the card survives one render past the save that resolved it.
+        checkListingGoalReminders();
+        if (typeof renderActionFeed === 'function') renderActionFeed();
+        if (typeof recomputeGoalDisplays === 'function') recomputeGoalDisplays();
+        return { ok: true, target: row && row.target };
+    } catch (e) { return { error: 'Could not save — check your connection.' }; }
 }
-window.dmGoalAction = dmGoalAction;
+window.dmSetListingGoal = dmSetListingGoal;
+
+// --- MONDAY "SET THE WEEK'S GOALS" REMINDER (DM/CEO) -------------------------
+// Data-aware, like the KPI due reminders: it counts stores with no hand-set goal
+// for the current week and clears itself the moment the last one is saved. Feed
+// card only — no popup, no email. The bubble is an invisible state-carrier that
+// _samGatherReminders reads (see the RETIRED FLOATING ALERT TOASTS block).
+let _lgDueStarted = false;
+
+function _lgDueBubbleEl() {
+    let b = document.getElementById('listingGoalAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'listingGoalAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #4d8c6a, #2f5a44); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(47, 90, 68, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = '<span style="font-size:16px; flex-shrink:0; margin-top:2px;">🎯</span>'
+        + '<span id="listingGoalAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>'
+        + '<button onclick="document.getElementById(\'listingGoalAlertBubble\').style.display=\'none\'" class="daily-bubble-close" title="Dismiss">'
+        + '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>'
+        + '</button>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+
+function checkListingGoalReminders() {
+    const b = document.getElementById('listingGoalAlertBubble');
+    if (!_dmxIsDistrict()) { if (b) b.style.display = 'none'; return; }
+    if (!_lgDueStarted) { _lgDueStarted = true; setInterval(checkListingGoalReminders, 10 * 60 * 1000); }
+
+    // Due 8am Monday, store time — half an hour ahead of the stores' own 8:30am
+    // "set today's roles" nudge, so the weekly total is in place before anyone
+    // starts dividing it up. Only Monday morning is held back: once 8am passes the
+    // card stays up all week until every store is set, because missing Monday is
+    // exactly when the reminder matters most.
+    const nowC = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+    if (nowC.getDay() === 1 && nowC.getHours() < 8) { if (b) b.style.display = 'none'; return; }
+
+    // Only count stores whose target has actually loaded — before the first fetch
+    // lands every store looks unset, which would flash a card that isn't true.
+    const loaded = _DMX_STORES.filter(s => _storeTargets[s]);
+    if (!loaded.length) return;
+    const pending = loaded.filter(s => !goalIsSetThisWeek(s));
+
+    if (!pending.length) { if (b) b.style.display = 'none'; if (typeof renderActionFeed === 'function') renderActionFeed(); return; }
+
+    const el = _lgDueBubbleEl();
+    if (!el) return;
+    const t = document.getElementById('listingGoalAlertBubbleText');
+    const n = pending.length;
+    const list = pending.join(', ');
+    if (t) {
+        t.dataset.summary = n === 1
+            ? ('1 store still needs this week’s listing goal (' + list + ').')
+            : (n + ' stores still need this week’s listing goal: ' + list + '.');
+        // Identity for the snooze: re-setting one store changes the list, so the
+        // card breaks back through with the shorter list rather than staying buried.
+        t.dataset.sig = 'lg:' + list;
+        t.innerHTML = '<strong>Set This Week’s Listing Goals</strong><div style="margin-top:4px;">'
+            + escapeHtml(t.dataset.summary) + ' Open Listing Goals and enter each store’s weekly total.</div>';
+    }
+    el.style.display = 'flex';
+}
+window.checkListingGoalReminders = checkListingGoalReminders;
+
+// --- DAILY "SET TODAY'S LISTING GOALS" REMINDER (store side) -----------------
+// Managers and ASMs, from 9am store time, until today's roles are actually saved.
+// The check reads the SERVER's rows, not a per-user flag, so it is store-scoped by
+// construction: when the ASM sets them the manager's card clears too (instantly —
+// the goals broadcast re-runs this — and on the 10-minute poll as a backstop).
+const _LG_DAILY_ROLES = new Set([
+    'manager', 'owner (manager)', 'owner manager', 'assistant manager', 'multi-store manager'
+]);
+let _lgDailyStarted = false;
+
+function _lgDailyStores() {
+    if (typeof isMultiStoreManager === 'function' && isMultiStoreManager()) {
+        return MULTISTORE_MANAGER_STORES.slice();
+    }
+    const s = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
+    return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
+}
+
+// Is the day actually covered — a buyer AND a lister assigned?
+//
+// This is the bar for clearing the (un-snoozable) reminder, so it has to be
+// something a store can always reach. "Every available role assigned" can't be
+// used: the widget offers more roles than people on a 2- or 3-person roster, and
+// on a 4-person one it would demand full attendance every day — one person off
+// and five stores would be stuck behind an alert they can't dismiss. There is
+// also no way to mark someone as off, so "everyone has a role" is undetectable.
+// A buyer plus a lister is the minimum that makes a real trading day, and it is
+// reachable no matter how short-handed the store is.
+function _lgDayCovered(rows, todayStr) {
+    const todays = (Array.isArray(rows) ? rows : []).filter(r =>
+        normalizeGoalDate(r.date) === todayStr && r.role && r.role !== '-');
+    const roles = todays.map(r => String(r.role).trim().toUpperCase());
+    const hasBuyer  = roles.some(r => /^B\d+$/.test(r));
+    const hasLister = roles.some(r => /^L\d+$/.test(r));
+    return hasBuyer && hasLister;
+}
+
+function _lgDailyBubbleEl() {
+    let b = document.getElementById('listingGoalsDailyAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'listingGoalsDailyAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; padding:11px 14px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; z-index:998;';
+    b.innerHTML = '<span id="listingGoalsDailyAlertBubbleText"></span>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+
+async function checkListingGoalsDailyReminder() {
+    const hide = () => {
+        const b = document.getElementById('listingGoalsDailyAlertBubble');
+        if (b) b.style.display = 'none';
+    };
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (!_LG_DAILY_ROLES.has(role)) { hide(); return; }
+    if (!_lgDailyStarted) { _lgDailyStarted = true; setInterval(checkListingGoalsDailyReminder, 10 * 60 * 1000); }
+
+    // Store time, not the browser's — a manager on a laptop set to another zone
+    // must still get this at 8:30am Central.
+    const nowC = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+    if (nowC.getDay() === 0) { hide(); return; }   // closed Sundays — no goals to set
+    // Every open day at 8:30am. Compared in minutes so the half hour is exact.
+    if (nowC.getHours() * 60 + nowC.getMinutes() < 8 * 60 + 30) { hide(); return; }
+
+    const today = nowC.toLocaleDateString('en-US');
+    const stores = _lgDailyStores();
+    if (!stores.length) { hide(); return; }
+
+    const pending = [];
+    for (const s of stores) {
+        try {
+            const rows = await fetch(`${GOALS_API_URL}?store=${s}&v=${Date.now()}`).then(r => r.json());
+            if (!_lgDayCovered(rows, today)) pending.push(s);
+        } catch (_) { /* network hiccup — don't invent a reminder */ }
+    }
+    // This check does its own fetch, so it finishes AFTER the login sweep has
+    // already painted the feed — without this repaint the card sat in the DOM
+    // as a live bubble that no feed render ever picked up. checkKpiDueReminders
+    // repaints for exactly the same reason.
+    const paint = () => { if (typeof renderActionFeed === 'function') renderActionFeed(); };
+    if (!pending.length) { hide(); paint(); return; }
+
+    const el = _lgDailyBubbleEl();
+    if (!el) return;
+    const t = document.getElementById('listingGoalsDailyAlertBubbleText');
+    if (t) {
+        // An MSM covers two stores, so name whichever is outstanding; a single-store
+        // manager already knows which store is theirs.
+        const which = (stores.length > 1) ? (' for ' + pending.join(' & ')) : '';
+        t.dataset.summary = 'Today’s listing goals' + which
+            + ' aren’t set — assign each person working today a role. Needs at least a buyer and a lister.';
+        t.dataset.sig = 'lgd:' + today + ':' + pending.join(',');
+        t.textContent = t.dataset.summary;
+    }
+    el.style.display = 'flex';
+    paint();
+}
+window.checkListingGoalsDailyReminder = checkListingGoalsDailyReminder;
 
 // Completed-week store listing totals (oldest→newest) from the Weekly KPI.
 async function fetchStoreWeeklyHistory(store) {
@@ -9227,15 +10429,24 @@ async function fetchStoreWeeklyHistory(store) {
     } catch (e) { return []; }
 }
 
+// Weekly history arrives either as plain totals (callers reading the Weekly KPI
+// directly) or as { total, target } pairs from the store-targets function, each
+// carrying the goal that was in force THAT week. Judging a week against its own
+// goal is the whole point now that the DM re-sets the number every Monday — one
+// shared target would repaint all four bars every time this week's goal changed.
+function _luWeeks(history, fallbackTarget) {
+    return (history || []).map(w => (w && typeof w === 'object')
+        ? { total: w.total, target: w.target > 0 ? w.target : fallbackTarget }
+        : { total: w, target: fallbackTarget });
+}
+
 // Running 4-week listing view (manager + employee/ASM + DM widgets).
-// NOTE: the level-up ratchet logic stays server-side — the frontend only shows
-// the last four weeks of totals so the mechanism can't be gamed.
 function levelUpHtml(history, target) {
-    const last4 = history.slice(-4);
+    const last4 = _luWeeks(history, target).slice(-4);
     const padded = [...Array(Math.max(0, 4 - last4.length)).fill(null), ...last4];
-    const bars = padded.map(v => v == null
+    const bars = padded.map(w => w == null
         ? '<div class="lu-week empty"><span class="lu-week-num">–</span></div>'
-        : `<div class="lu-week ${v >= target ? 'green' : 'red'}"><span class="lu-week-num">${v}</span></div>`
+        : `<div class="lu-week ${w.total >= w.target ? 'green' : 'red'}"><span class="lu-week-num">${w.total}</span></div>`
     ).join('');
 
     return `
@@ -9271,6 +10482,10 @@ async function fetchDmGoalsData() {
         stores.forEach(s => { dmStoreHistory[s] = weeksFor(s); });
         renderDmListingModal();
         _dmxSyncRail();
+        // Targets have landed, so we can now tell which stores are missing this
+        // week's goal without flashing a card at a half-loaded state.
+        checkListingGoalReminders();
+        if (typeof renderActionFeed === 'function') renderActionFeed();
     } catch (e) {
         const cont = document.getElementById('dmListingBody');
         if (cont) cont.innerHTML = '<div class="dmx-empty" style="padding:60px 0; color:var(--red-alert);">Couldn\'t load the district roster. Close and reopen to retry.</div>';
@@ -14042,9 +15257,15 @@ function applyRoleBasedUI() {
         const requiredRoles = classes.filter(c => c.startsWith('role-'));
         const requiredStores = classes.filter(c => c.startsWith('store-'));
 
+        // A Multi-Store Manager logs in with the effective role 'manager' (see the
+        // login block), so `role-manager` can't distinguish them and there is no
+        // role class of their own. `role-multistore-manager` is that missing gate:
+        // it matches ONLY an MSM, letting something be shown to them without also
+        // showing it to every store manager.
         const passesRole = requiredRoles.length === 0 ||
             requiredRoles.includes(userRoleClass) ||
-            (userRoleClass === 'role-assistant-manager' && requiredRoles.includes('role-employee'));
+            (userRoleClass === 'role-assistant-manager' && requiredRoles.includes('role-employee')) ||
+            (requiredRoles.includes('role-multistore-manager') && isMultiStoreManager());
         const passesStore = requiredStores.length === 0 || requiredStores.includes(userStoreClass);
 
         let visible = passesRole && passesStore;
@@ -14344,7 +15565,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -14408,6 +15629,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
         closeAllModals();
         applyRoleBasedUI();
+        // Before anything can open a side panel: sets --panel-top so they hang
+        // flush from the nav on every page, not just the dashboard.
+        initLayoutSync();
         initDashboardData();
         initTicker();
         initWorkspace();
@@ -20450,7 +21674,7 @@ window.recomputeGoalDisplays = function() {
         const group = document.getElementById(`roles-${idx}`);
         const activeBtn = group?.querySelector('.role-dot.active');
         const role = _roleOf(activeBtn);
-        const todayGoal = role !== '-' ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount) : 0;
+        const todayGoal = role !== '-' ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount, targetFor(goalsTargetStore)) : 0;
 
         const disp = document.getElementById(`goal-display-${idx}`);
         if (disp) {
@@ -20469,7 +21693,36 @@ window.recomputeGoalDisplays = function() {
     if (todayEl) todayEl.innerText = todayTotal;
     const weekEl = document.getElementById('goals-total-actual');
     if (weekEl) weekEl.innerText = weekTotal;
+
+    _goalsResaveIfStale(dateStr);
 };
+
+// If the DM changes the weekly total AFTER a store has already picked its roles,
+// the saved daily goals still hold the numbers they were computed with — and the
+// district view, the employee widgets and the weekly report all read those saved
+// rows, not this screen. store-targets doesn't broadcast, so nothing tells an open
+// widget to catch up.
+//
+// So: whenever the displayed goals disagree with what's stored for today, write
+// the recomputed values back. Self-healing — one autosave and they agree, so this
+// can't loop. Only ever touches TODAY, and only in the manager's own editable
+// widget (the read-only views don't render goal-display-* nodes).
+function _goalsResaveIfStale(dateStr) {
+    if (!Array.isArray(liveGoalsData) || !liveGoalsData.length) return;
+    if (typeof scheduleGoalsAutosave !== 'function') return;
+    const stale = goalsRoster.some((emp, idx) => {
+        const group = document.getElementById(`roles-${idx}`);
+        const role = _roleOf(group?.querySelector('.role-dot.active'));
+        if (role === '-') return false;
+        const saved = liveGoalsData.find(r => r.employee === emp
+            && normalizeGoalDate(r.date) === dateStr && r.role === role);
+        if (!saved || saved.goal == null || saved.goal === '') return false;
+        const disp = document.getElementById(`goal-display-${idx}`);
+        const shown = disp ? parseInt(disp.innerText, 10) : NaN;
+        return Number.isFinite(shown) && parseInt(saved.goal, 10) !== shown;
+    });
+    if (stale) scheduleGoalsAutosave();
+}
 
 // --- PATCH NOTES ---
 function parsePatchDate(d) {
@@ -21518,6 +22771,38 @@ function _recycleMonthLabel(key) {
     return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 }
 
+// The month a notification should land on: the OLDEST row it covers. Clicking a
+// July "awaiting your review" in August opened the tool on August — the month
+// filter always defaulted to today — so the one line being nagged about was the
+// one line not on screen, and the tool looked empty. Oldest rather than newest
+// because the stale request is the one at risk; the fresher months are one click
+// away in a dropdown the user can see, while the old one is invisible.
+//
+// Returns '' when there is nothing to focus, which leaves the default alone.
+function _recycleFocusMonth(rows) {
+    const stamps = (rows || []).map(r => r && r.created_at).filter(Boolean);
+    if (!stamps.length) return '';
+    const oldest = stamps.reduce((a, b) => (new Date(a).getTime() <= new Date(b).getTime() ? a : b));
+    return _recycleMonthKey(oldest);
+}
+
+// Set by a notification just before it opens the tool; read once by
+// _buildRecycleViewFilters. sessionStorage, not a function argument, because the
+// open path runs through toggleModal → fetch → render and the month has to
+// survive that round trip. Same handoff the KPI due cards use for their tab.
+const _RECYCLE_FOCUS_KEY = 'speeksRecycleMonth';
+
+// Every notification route into the tool goes through here so the month handoff
+// can't be forgotten by one of them: the (invisible) bubble's own button, and
+// the Action Menu feed card.
+function openRecycleFocused() {
+    const t = document.getElementById('recycleAlertBubbleText');
+    const month = t && t.dataset ? (t.dataset.month || '') : '';
+    if (month) { try { sessionStorage.setItem(_RECYCLE_FOCUS_KEY, month); } catch (e) { /* filter just defaults */ } }
+    toggleRecycleInventory();
+    switchRecycleTab('view');
+}
+
 // Month dropdown options: every month present in `rows`, plus the current month.
 function _recycleMonthOptions(rows, selected) {
     const keys = new Set(rows.map(r => _recycleMonthKey(r.created_at)).filter(Boolean));
@@ -21699,8 +22984,22 @@ async function fetchMyRecycleRequests() {
 function _buildRecycleViewFilters(stores) {
     const mSel = document.getElementById('recycle-month-filter');
     if (mSel) {
-        const current = mSel.value || _recycleMonthKey(new Date());
+        // A notification's month wins over both the sticky selection and today's
+        // date — that's the whole point of arriving from one. Consumed once, so
+        // the next manual open goes back to the normal default instead of being
+        // yanked to an old month.
+        let pinned = '';
+        try {
+            pinned = sessionStorage.getItem(_RECYCLE_FOCUS_KEY) || '';
+            if (pinned) sessionStorage.removeItem(_RECYCLE_FOCUS_KEY);
+        } catch (e) { /* no pin, normal default applies */ }
+        const current = pinned || mSel.value || _recycleMonthKey(new Date());
         mSel.innerHTML = _recycleMonthOptions(_recycleMine, current);
+        // The options come from _recycleMine, which is scoped to the stores this
+        // viewer can see — an alert month outside that set would match nothing and
+        // silently drop the select onto its first option. Only re-assert the pin
+        // when it's actually there.
+        if (pinned && [...mSel.options].some(o => o.value === pinned)) mSel.value = pinned;
     }
     const row = document.getElementById('recycle-view-filter-row');
     const sel = document.getElementById('recycle-view-filter');
@@ -22204,7 +23503,12 @@ async function checkRecycleReminders() {
             // ever reordered, and because the same string is both the bubble body
             // and the Action Menu feed one-liner.
             const summary = parts.join(' · ').replace(/^[a-z]/, c => c.toUpperCase());
-            _recycleRenderBubble('♻️', 'Recycle requests need your review', summary + '.', summary);
+            // Land on the oldest line that's actually blocking a store. Replies
+            // are the fallback: they're information, not a block, so they only
+            // choose the month when there's no action item to beat them to it.
+            const blocking = needsReview.concat(pendingDelete);
+            _recycleRenderBubble('♻️', 'Recycle requests need your review', summary + '.', summary,
+                null, _recycleFocusMonth(blocking.length ? blocking : freshRep));
             return;
         }
 
@@ -22248,7 +23552,7 @@ async function checkRecycleReminders() {
             `${fresh.length} of your recycle request${fresh.length > 1 ? 's' : ''} ${fresh.length > 1 ? 'have' : 'has'} new activity from the DM${summary}.${noteTxt}`,
             // Compact feed line — counts first, so nothing useful is lost to the cap.
             `${fresh.length} reviewed by the DM${summary}` + (noted ? ` · ${noted} with a note` : ''),
-            fresh.map(r => r.store));
+            fresh.map(r => r.store), _recycleFocusMonth(fresh));
     } catch (e) { /* next poll retries */ }
 }
 
@@ -22294,11 +23598,15 @@ function closeRecycleAlertBubble() {
     if (b) b.style.display = 'none';
 }
 
-function _recycleRenderBubble(icon, title, bodyText, summary, stores) {
+function _recycleRenderBubble(icon, title, bodyText, summary, stores, focusMonth) {
     const b = _recycleBubbleEl();
     if (!b) return;
     const iconEl = document.getElementById('recycleAlertBubbleIcon');
     const textEl = document.getElementById('recycleAlertBubbleText');
+    // Month this alert is actually about → openRecycleFocused lands the tool
+    // there instead of on whatever month it happens to be today.
+    if (focusMonth) textEl.dataset.month = focusMonth;
+    else delete textEl.dataset.month;
     // Feed one-liner. Without this the Action Menu scrapes the bubble and repeats
     // the title, which is already the feed row's own title ("Recycle review").
     // The body alone is the useful part.
@@ -22314,7 +23622,7 @@ function _recycleRenderBubble(icon, title, bodyText, summary, stores) {
     textEl.innerHTML = `
         <div style="line-height:1.4;"><strong>${escapeHtml(title)}</strong></div>
         <div style="line-height:1.4; opacity:0.96;">${escapeHtml(bodyText)}</div>
-        <button onclick="closeRecycleAlertBubble(); toggleRecycleInventory(); switchRecycleTab('view');"
+        <button onclick="closeRecycleAlertBubble(); openRecycleFocused();"
             style="align-self:flex-start; background:rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.5); color:#fff; font-weight:800; font-size:12px; border-radius:8px; padding:6px 12px; cursor:pointer;"
             onmouseover="this.style.background='rgba(255,255,255,0.3)';" onmouseout="this.style.background='rgba(255,255,255,0.18)';">Open Recycle Requests</button>`;
     b.style.display = 'flex';
@@ -22387,6 +23695,11 @@ const EMAIL_LIST_GROUPS = [
         title: 'Box Orders',
         desc: 'Supplier address each store\'s box order email opens to.',
         lists: EMAIL_LIST_STORES.map(s => ({ key: `box_order_${s}`, label: s })),
+    },
+    {
+        title: 'Expense Reports',
+        desc: 'Who a monthly expense report is emailed to when the DM or MSM sends it.',
+        lists: [{ key: 'expense_report', label: 'Recipients' }],
     },
     {
         title: 'Weekly SPEEKS Reports',
@@ -22634,6 +23947,11 @@ const FEATURE_CATALOG = [
     { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
     { key: 'tool-feature-access',      label: 'Feature Access (This Tool)',    tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
+    // 'manager' here means the Multi-Store Manager — Feature Access has no MSM
+    // slug of its own (they log in as a manager). The panel link's
+    // role-multistore-manager class is what keeps ordinary managers out; this
+    // row only lets the DM/CEO switch it off for the MSM.
+    { key: 'tool-expenses',            label: 'Expense Report',                tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'manager'] },
     { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-manage-policies',     label: 'Manage Policies',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
@@ -23573,6 +24891,7 @@ const JUMP_KEYWORDS = {
     'tool-user-permissions':     'users permissions pin login accounts roles add user',
     'tool-feature-access':       'feature access hide show toggle delegation permissions',
     'tool-email-recipients':     'email recipients reports distribution who gets',
+    'tool-expenses':             'expense report expenses mileage miles reimbursement receipts monthly spend',
     'tool-performance-metrics':  'performance metrics alerts thresholds',
     'tool-company-records':      'records company files documents',
     'tool-manage-policies':      'policies process processes handbook documents',
@@ -23769,8 +25088,22 @@ function _jumpBuildIndex() {
 // ---- pins ------------------------------------------------------------------
 // The user chooses what sits at the top, rather than the box guessing from
 // history. localStorage, not sessionStorage: a pin is a standing preference.
+//
+// Namespaced per user. Store machines are shared and everyone signs in with a PIN
+// on the same browser, so a single 'speeksJumpPins' key meant one person's pins
+// were everyone's — the manager pinning Recycle Requests silently reordered the
+// box for every employee on that till. Same per-user keying the recycle seen marks
+// and the feed's dismissals already use (_recycleSeenKey, _samDismKey).
+//
+// Storage is still per-BROWSER: a user's pins don't follow them to another
+// machine. That's the same bargain every other localStorage preference here makes,
+// and pins are two clicks to recreate.
+function _jumpPinsKey() {
+    const u = (sessionStorage.getItem('speeksUserName') || 'anon').trim().toLowerCase();
+    return 'speeksJumpPins_' + u;
+}
 function _jumpPins() {
-    try { return JSON.parse(localStorage.getItem('speeksJumpPins') || '[]'); } catch (e) { return []; }
+    try { return JSON.parse(localStorage.getItem(_jumpPinsKey()) || '[]'); } catch (e) { return []; }
 }
 function _jumpIsPinned(id) { return _jumpPins().indexOf(id) !== -1; }
 
@@ -23780,7 +25113,13 @@ function _jumpTogglePin(id) {
     const pins = _jumpPins();
     const at = pins.indexOf(id);
     if (at === -1) pins.push(id); else pins.splice(at, 1);
-    try { localStorage.setItem('speeksJumpPins', JSON.stringify(pins)); } catch (e) { /* not worth failing over */ }
+    try {
+        localStorage.setItem(_jumpPinsKey(), JSON.stringify(pins));
+        // Drop the old shared list once someone sets their own. Deliberately NOT
+        // migrated into the first user's namespace: adopting it would hand one
+        // person the shared pins and re-create the bug one last time.
+        localStorage.removeItem('speeksJumpPins');
+    } catch (e) { /* not worth failing over */ }
     _jumpRender();
 }
 
@@ -25035,7 +26374,7 @@ function _vrMaybePopup() {
     const now = Date.now();
     const reviewSeen = _vrGetReviewSeen();
     const explainStores = [];   // stores with unexplained lines
-    let explainCount = 0, explainOverdue = false, explainDueSoon = false;
+    let explainCount = 0, explainOverdue = false, explainDueSoon = false, explainDueAt = 0;
     const replyStores = [];     // stores with DM notes still awaiting a reply
     let replyCount = 0, replyOverdue = false;
     const reviewedStores = [];  // DM reviewed, no reply needed — FYI until they look
@@ -25058,6 +26397,10 @@ function _vrMaybePopup() {
         if (unanswered > 0) {
             explainStores.push(store);
             explainCount += unanswered;
+            // Earliest deadline still outstanding — shown on the feed card so the
+            // manager sees WHEN without opening the tool. With several stores the
+            // soonest is the one that matters.
+            if (due && (!explainDueAt || due < explainDueAt)) explainDueAt = due;
             if (now > due) explainOverdue = true;
             else if (due - now < 24 * 3600 * 1000) explainDueSoon = true; // last day before the deadline
         }
@@ -25119,6 +26462,14 @@ function _vrMaybePopup() {
         fyiOnly ? 'New variance report to review'
                 : (overdue ? 'Variance replies overdue' : (explainDueSoon ? 'Variance replies due tomorrow' : 'Variance replies needed')),
         summary + '.', summary, coveredStores, fyiOnly);
+
+    // Deadline for the feed card's title. Stamped after the render (which rewrites
+    // innerHTML but leaves the element's dataset alone), same channel as data-fyi.
+    const _vrTextEl = document.getElementById('varianceAlertBubbleText');
+    if (_vrTextEl) {
+        if (explainDueAt) _vrTextEl.dataset.due = _samShortDate(explainDueAt);
+        else delete _vrTextEl.dataset.due;
+    }
 }
 
 // Same shared red bubble as the claim reminders, with a button into the tab.
@@ -26587,6 +27938,14 @@ function _agBuildStoreBubble(mine) {
         agTextEl.dataset.summary = body;
         const ss = [...new Set(stores.filter(Boolean))];
         if (ss.length) agTextEl.dataset.stores = ss.join(','); else delete agTextEl.dataset.stores;
+        // Soonest deadline still outstanding → the feed card's title, so the
+        // manager sees WHEN without opening the tool.
+        let due = 0;
+        mine.forEach(it => {
+            const d = it.due_at ? new Date(it.due_at).getTime() : 0;
+            if (d && (!due || d < due)) due = d;
+        });
+        if (due) agTextEl.dataset.due = _samShortDate(due); else delete agTextEl.dataset.due;
     }
 }
 
@@ -26934,6 +28293,9 @@ function renderActionFeed() {
     // Reminders are live task-nags, so theirs is a "Snooze" (quiets today, returns
     // tomorrow if still outstanding, auto-clears for good once the work is done).
     const snoozeBtn = onclick => `<button class="sam-markread-btn sam-snooze-btn" data-tip="Snoozes for today — comes back tomorrow if it's still outstanding, and disappears for good once the work is done." onclick="${onclick}"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>Snooze</button>`;
+    // Completion the app can't observe for itself — the only way this card ever
+    // goes away for good. Distinguished from Snooze so the two aren't confused.
+    const doneBtn = (onclick, label) => `<button class="sam-markread-btn sam-done-btn" data-tip="Clears this for good. Snooze only quiets it until tomorrow." onclick="${onclick}"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>${_samEsc(label || 'Mark done')}</button>`;
 
     // Build a keyed list of cards, then reconcile in place (see
     // _samReconcileFeed). renderActionFeed used to blow away and rebuild the whole
@@ -26955,8 +28317,13 @@ function renderActionFeed() {
             // Three shapes of trailing control: an explicit "Mark read" for
             // informational cards (readAction), Snooze for live task-nags, and
             // nothing at all for hard deadlines that must not be dismissed.
-            const ctrl = it.readAction ? readBtn(it.readAction)
-                : (it.noSnooze ? '' : snoozeBtn(`samDismissItem(event,'rem','${_samEsc(it.key)}')`));
+            // A fourth shape: a task the app cannot verify itself (filing an
+            // expense report leaves via the person's own mail client), so it gets
+            // BOTH — Snooze to quiet it today, and an explicit completion that is
+            // the only thing that clears it for good.
+            const snoozeHtml = it.noSnooze ? '' : snoozeBtn(`samDismissItem(event,'rem','${_samEsc(it.key)}')`);
+            const ctrl = it.doneAction ? (snoozeHtml + doneBtn(it.doneAction, it.doneLabel))
+                : (it.readAction ? readBtn(it.readAction) : snoozeHtml);
             desired.push({ key: 'rem:' + it.key, html: `<div class="sam-ann rem"${remClick}>
                 <span class="sam-adot ${dotcls}"></span>
                 <div class="sam-a-body">
@@ -27377,6 +28744,13 @@ function samCleanHotbar() {
 // One row per built-out deadline/reminder tool. `action` is the same "open the
 // tool" logic the old alert bubble ran on click — the hub + dashboard cards now
 // carry it so clicking a reminder jumps straight to its tool.
+// "Aug 11" — the short form the rest of the site uses for a deadline. Takes ms.
+function _samShortDate(ms) {
+    const d = new Date(Number(ms) || 0);
+    return isNaN(d.getTime()) || !ms
+        ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
 function _samReminderCfg() {
     // Variance flips between a real deadline and a "go and look" — a store marked
     // in the clear owes no replies but still has to read its numbers. data-fyi is
@@ -27384,9 +28758,16 @@ function _samReminderCfg() {
     // the title and the colour can't disagree with the text underneath them.
     const _vrT = document.getElementById('varianceAlertBubbleText');
     const _vrFyi = !!(_vrT && _vrT.dataset && _vrT.dataset.fyi);
+    // Deadlines stamped by _vrMaybePopup / _agBuildStoreBubble — the soonest one
+    // still outstanding. Appended to the title so the card answers "by when?"
+    // without being opened. Absent when nothing is actually owed (an FYI row).
+    const _vrDue = (_vrT && _vrT.dataset && _vrT.dataset.due) || '';
+    const _agT = document.getElementById('agingAlertBubbleText');
+    const _agDue = (_agT && _agT.dataset && _agT.dataset.due) || '';
     const cfg = [
         { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText',
-          title: _vrFyi ? 'Variance Report to Review' : 'Variance Replies Due',
+          title: _vrFyi ? 'Variance Report to Review'
+                        : 'Variance Replies Due' + (_vrDue ? ' — ' + _vrDue : ''),
           urgency: _vrFyi ? 1 : 2, due: _vrFyi ? 'Review' : 'Due',
           cls: _vrFyi ? 'sam-due-amber' : 'sam-due-red',
           action: "window.location.href='workspace.html#vreplies'" },
@@ -27396,8 +28777,12 @@ function _samReminderCfg() {
           action: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'district manager'
               ? "openClaimsOversight()"
               : "openClaimsModal(); switchClaimsTab('view')" },
-        { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "toggleRecycleInventory(); switchRecycleTab('view')" },
-        { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging Inventory Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" },
+        // openRecycleFocused, not the two calls inline: it also carries the alert's
+        // month across, so a card about a July request doesn't open on August.
+        { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "openRecycleFocused()" },
+        { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText',
+          title: 'Aging Inventory Review' + (_agDue ? ' — Due ' + _agDue : ''),
+          urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" },
         { key: 'b2b', id: 'b2bAlertBubble', text: 'b2bAlertBubbleText', title: 'B2B Deals Waiting', urgency: 1, due: 'Action', cls: 'sam-due-amber', action: "window.location.href='operations.html#b2b'" },
         { key: 'margin', id: 'marginAlertBubble', text: 'marginAlertBubbleText', title: 'Margin Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#mreplies'" },
         // Preferred Purchases — feed-only, both directions. The owner's card is a
@@ -27427,6 +28812,28 @@ function _samReminderCfg() {
         title: _moOd ? 'Monthly KPIs Overdue' : 'Monthly KPIs Due', urgency: _moOd ? 3 : 2,
         due: _moOd ? 'Overdue' : 'Due', cls: 'sam-due-red', noSnooze: true,
         action: "sessionStorage.setItem('speeksKpiTab','monthly'); window.location.href='workspace.html#kpis'" });
+    // DM/CEO only. Snoozable — unlike the KPI deadlines this is the DM's own
+    // admin task, and the card comes straight back if a store is still unset
+    // tomorrow (the sig is the pending-store list, so it also breaks through
+    // early whenever that list changes).
+    cfg.push({ key: 'listingGoals', id: 'listingGoalAlertBubble', text: 'listingGoalAlertBubbleText',
+        title: 'Set This Week’s Listing Goals', urgency: 2, due: 'Due', cls: 'sam-due-amber',
+        action: "openDmListingGoals()" });
+    // Store side, daily from 9am. Shared across the store: the card is derived from
+    // the saved rows, so whoever sets them clears it for the manager AND the ASM.
+    // noSnooze: the goals have to actually be entered — there is no "later" for
+    // this one, so the card stays put until the roles are in.
+    // DM + MSM, monthly. The app cannot tell whether the report was actually
+    // emailed (mailto hands it to their own mail client), so this one is cleared
+    // by the person saying so — Snooze quiets it for today, "Mark filed" is what
+    // ends it, and that assertion is stored server-side per person + month.
+    cfg.push({ key: 'expenseFile', id: 'expenseFileAlertBubble', text: 'expenseFileAlertBubbleText',
+        title: 'File Your Expense Report', urgency: 1, due: 'Due', cls: 'sam-due-amber',
+        doneAction: "expMarkFiled(event)", doneLabel: 'Mark filed',
+        action: "openExpenses()" });
+    cfg.push({ key: 'listingGoalsDaily', id: 'listingGoalsDailyAlertBubble', text: 'listingGoalsDailyAlertBubbleText',
+        title: 'Set Today’s Listing Goals', urgency: 2, due: 'Due', cls: 'sam-due-red', noSnooze: true,
+        action: "openListingGoals()" });
     return cfg;
 }
 
@@ -27513,7 +28920,8 @@ function _samGatherReminders() {
         out.push({
             type: 'rem', key: c.key, sig, title: c.title, snippet: sub || 'Needs your attention',
             due: c.due, dueCls: c.cls, urgency: c.urgency, read: false, dateMs: Date.now() + c.urgency,
-            action, noSnooze: !!c.noSnooze, noDue: !!c.noDue, readAction: c.readAction || ''
+            action, noSnooze: !!c.noSnooze, noDue: !!c.noDue, readAction: c.readAction || '',
+            doneAction: c.doneAction || '', doneLabel: c.doneLabel || ''
         });
     });
     return out;
@@ -27565,7 +28973,9 @@ const _RT_TOOL_CHECKS = {
     scorecard:     ['fetchScorecardData'],
     ebay:          ['fetchAlertsData'],
     buying:        ['fetchHubData'],
-    goals:         ['fetchLiveGoalsData', 'fetchAndRenderEmployeeGoals'],
+    // checkListingGoalsDailyReminder is here so that when ONE person at a store
+    // sets the roles, everyone else's "set today's goals" card clears at once.
+    goals:         ['fetchLiveGoalsData', 'fetchAndRenderEmployeeGoals', 'checkListingGoalsDailyReminder'],
 };
 
 // Re-run a tool's checks (sequentially, so any UI-refresh step runs after its
@@ -27584,10 +28994,23 @@ async function _rtRunCheck(tool) {
 // still surfaces. (The first connect is skipped — the login sweep already ran.)
 function _rtSweepAll() { Object.keys(_RT_TOOL_CHECKS).forEach(_rtRunCheck); }
 
+// --- SELF-ECHO SUPPRESSION ---
+// The edge fns broadcast to EVERY subscriber, the sender included. Without this,
+// a manager picking a role autosaved, the listing-goals fn echoed the change back
+// to that same browser, and the client dutifully re-ran fetchLiveGoalsData() —
+// which wiped the widget to "Syncing Data…" and rebuilt it from the server while
+// the manager was still choosing roles. A write you just made is not news to you.
+const _rtMuted = {};
+function _rtMute(tool, ms) { _rtMuted[tool] = Date.now() + (ms || 4000); }
+window._rtMute = _rtMute;
+
 function _rtHandlePing(payload) {
     const tool = payload && payload.tool;
     if (!tool) return;
     _rtLastPing = payload; _rtPingCount++;
+    // Our own write, still settling — ignore the echo. Other people's writes to the
+    // same tool inside this window are picked up by the 10-minute poll.
+    if (_rtMuted[tool] && Date.now() < _rtMuted[tool]) return;
     clearTimeout(_rtDebounce[tool]);
     _rtDebounce[tool] = setTimeout(() => _rtRunCheck(tool), 400);
 }
@@ -28622,17 +30045,20 @@ function _dmxStatCell(label, valueHtml, pct) {
 // — the target line is positioned from the bottom of the plot, so it has to
 // clear the label row. Change one and you change the other.
 function _dmxLevelUp(history, target) {
-    const last4 = (history || []).slice(-4);
+    const last4 = _luWeeks(history, target).slice(-4);
     const weeks = new Array(Math.max(0, 4 - last4.length)).fill(null).concat(last4);
-    const vals = weeks.filter(v => v != null);
+    const vals = weeks.filter(w => w != null).map(w => w.total);
     // Headroom so the tallest bar never touches the ceiling and the target line
     // stays inside the plot even when every week cleared it.
     const top = Math.max(target || 0, vals.length ? Math.max.apply(null, vals) : 0, 1) * 1.14;
     const TRACK = 64, LABEL = 15;
     const labels = ['4 wks ago', '3 wks ago', '2 wks ago', 'Last week'];
     let bars = '';
-    weeks.forEach(function (v, i) {
-        const k = v == null ? 'none' : (target && v >= target ? 'hit' : 'miss');
+    weeks.forEach(function (w, i) {
+        const v = w == null ? null : w.total;
+        // Each week is graded against the goal that was in force that week, not
+        // whatever the DM happens to have set today.
+        const k = w == null ? 'none' : (w.target && v >= w.target ? 'hit' : 'miss');
         // 3px floor so a zero week is still a visible mark, not a gap.
         const h = v == null ? 0 : Math.max(3, Math.round((v / top) * TRACK));
         bars += '<div class="dmx-lu-w">'
@@ -28737,7 +30163,10 @@ function _dmxListingStore(store) {
     return {
         store, target, emps, names, today, week, days, todayStr,
         pct: _dmxPct(week, target),
-        flag: (_storeTargets[store] && _storeTargets[store].flag) || 'none',
+        // Has the DM typed THIS week's number yet, or is the store still coasting
+        // on last week's / the ladder suggestion?
+        isSet: goalIsSetThisWeek(store),
+        suggested: suggestedTargetFor(store),
     };
 }
 
@@ -28756,13 +30185,13 @@ function renderDmListingModal() {
     const all = _DMX_STORES.map(_dmxListingStore);
     const listed = all.reduce((a, s) => a + s.week, 0);
     const target = all.reduce((a, s) => a + s.target, 0);
-    const flagged = all.filter(s => s.flag === 'flagged').length;
+    const unset = all.filter(s => !s.isSet).length;
 
     const sub = document.getElementById('dmListingSub');
     if (sub) {
         sub.textContent = listed + ' of ' + target + ' listed this week · '
             + _dmxPct(listed, target) + '%'
-            + (flagged ? ' · ' + flagged + ' flagged for review' : '');
+            + (unset ? ' · ' + unset + (unset === 1 ? ' store still needs' : ' stores still need') + ' this week’s goal' : '');
     }
 
     if (!all.some(s => s.names.length)) {
@@ -28782,6 +30211,11 @@ function renderDmListingModal() {
         + '<div class="dmx-ps">Target ' + sel.target + ' listings · ' + sel.week
         + ' this week · ' + sel.names.length + ' on roster</div>'
         + '</div><div class="dmx-ph-side">' + _dmxChip(sel.pct) + '</div></div>';
+
+    // The DM's Monday input. This is now the ONLY thing that sets a target —
+    // everything the stores see (per-role daily goals, the green/red bars) scales
+    // to whatever goes in this box.
+    pane += _dmxGoalSetter(sel);
 
     if (!sel.names.length) {
         pane += '<div class="dmx-empty">No roles set for ' + escapeHtml(sel.store) + ' this week.</div>';
@@ -28810,24 +30244,74 @@ function renderDmListingModal() {
         pane += '<td class="dmx-num">' + sel.week + '</td></tr></tbody></table>';
 
         pane += '<div style="margin-top:18px;">' + _dmxLevelUp(weeksFor(sel.store) || [], sel.target) + '</div>';
-
-        if (sel.flag === 'flagged') {
-            pane += '<div class="dmx-flag">'
-                + '<span class="dmx-flag-t">Missed goal 2 weeks running — your call:</span>'
-                + '<button type="button" class="dmx-lower" onclick="dmGoalAction(\'' + sel.store + '\',\'lower\')">Lower −10</button>'
-                + '<button type="button" class="dmx-keep" onclick="dmGoalAction(\'' + sel.store + '\',\'keep\')">Keep at ' + sel.target + '</button>'
-                + '</div>';
-        }
     }
 
     wrap.innerHTML = '<div class="dmx-strip">'
         + '<div class="dmx-cell"><div class="dmx-cell-l">District listed</div><div class="dmx-cell-v">' + listed + '</div></div>'
         + '<div class="dmx-cell"><div class="dmx-cell-l">District target</div><div class="dmx-cell-v">' + target + '</div></div>'
         + _dmxStatCell('Attainment', _dmxPct(listed, target) + '<small>%</small>', _dmxPct(listed, target))
-        + '<div class="dmx-cell"><div class="dmx-cell-l">Flagged for review</div><div class="dmx-cell-v">' + flagged + '</div></div>'
+        + '<div class="dmx-cell"><div class="dmx-cell-l">Goals set</div><div class="dmx-cell-v">'
+            + (all.length - unset) + '<small> / ' + all.length + '</small></div></div>'
         + '</div>'
         + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
 }
+
+// --- DM WEEKLY GOAL SETTER ---------------------------------------------------
+// One number per store per week. The store's managers still choose who is B1/B2/
+// L1/L2 each day; this is only the weekly total those role goals divide up.
+function _dmxGoalSetter(sel) {
+    const set = sel.isSet;
+    const val = sel.target;
+    const state = set ? 'is-set' : 'is-unset';
+    const note = set
+        ? 'Set for the week of ' + _dmxWeekLabel() + '.'
+        : 'Not set for the week of ' + _dmxWeekLabel() + ' — running on ' + val + ' until you set it.';
+    return '<div class="dmx-goalset ' + state + '">'
+        + '<div class="dmx-goalset-l">'
+            + '<span class="dmx-goalset-t">Weekly listing goal</span>'
+            + '<span class="dmx-goalset-n">' + escapeHtml(note) + '</span>'
+        + '</div>'
+        + '<div class="dmx-goalset-r">'
+            + '<input type="number" id="dmx-goal-input" class="dmx-goalset-i" min="0" max="2000" step="5"'
+                + ' value="' + val + '" data-store="' + escapeHtml(sel.store) + '"'
+                + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();dmxSaveGoal(this);}">'
+            + '<button type="button" class="dmx-goalset-b" onclick="dmxSaveGoal(this)">Save</button>'
+            + '<span class="dmx-goalset-msg" id="dmx-goal-msg"></span>'
+        + '</div>'
+        + '</div>';
+}
+
+// "Aug 3" for the Monday that starts the current week, in store time.
+function _dmxWeekLabel() {
+    const t = _storeTargets[_dmxSel.lg] || Object.values(_storeTargets)[0];
+    const ws = t && t.weekStart;
+    if (!ws) return 'this week';
+    const d = new Date(ws + 'T12:00:00');
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+async function dmxSaveGoal(btn) {
+    const box = document.getElementById('dmx-goal-input');
+    const msg = document.getElementById('dmx-goal-msg');
+    if (!box) return;
+    const store = box.dataset.store;
+    const show = (text, ok) => {
+        if (!msg) return;
+        msg.textContent = text;
+        msg.className = 'dmx-goalset-msg' + (ok ? ' ok' : ' bad');
+    };
+    show('Saving…', true);
+    const res = await dmSetListingGoal(store, box.value);
+    // dmSetListingGoal re-renders the whole modal on success, so the element this
+    // ran from is gone by now — re-find the message slot before writing to it.
+    const after = document.getElementById('dmx-goal-msg');
+    if (after) {
+        after.textContent = res.error ? res.error : 'Saved';
+        after.className = 'dmx-goalset-msg' + (res.error ? ' bad' : ' ok');
+        if (!res.error) setTimeout(() => { const m = document.getElementById('dmx-goal-msg'); if (m) m.textContent = ''; }, 2500);
+    }
+}
+window.dmxSaveGoal = dmxSaveGoal;
 
 // ---------------------------------------------------------------------------
 // CLEANING CHECKLIST (district)
@@ -29042,10 +30526,13 @@ function _dmxSyncRail() {
         const all = _DMX_STORES.map(_dmxListingStore);
         const listed = all.reduce((a, s) => a + s.week, 0);
         const target = all.reduce((a, s) => a + s.target, 0);
-        const flagged = all.filter(s => s.flag === 'flagged').length;
+        // The rail subtitle used to count ratchet-flagged stores. The ratchet is
+        // gone, so it now surfaces the DM's own outstanding task: whose goal is
+        // still unset for this week.
+        const unset = all.filter(s => !s.isSet).length;
         set('samDmListVal', listed + '/' + target);
-        set('samDmListSub', flagged
-            ? flagged + ' store' + (flagged === 1 ? '' : 's') + ' flagged for review'
+        set('samDmListSub', unset
+            ? unset + ' store' + (unset === 1 ? '' : 's') + ' need' + (unset === 1 ? 's' : '') + ' this week’s goal'
             : 'All five stores this week');
         bar('samDmListFill', _dmxPct(listed, target));
     }
@@ -29547,3 +31034,725 @@ function _dccPick(store) {
     const el = document.getElementById('district-master-body');
     if (el) el.innerHTML = _dccBoardHtml(_DCC_PORTAL_LINKS);
 }
+
+// ============================================================================
+// MODULE: EXPENSE REPORT  (DM / MSM file, CEO reviews)
+// ============================================================================
+// One report per person per month, holding two kinds of line: mileage and
+// ordinary expenses. The DM and MSM see only their own report; the CEO sees
+// everyone's via a person picker. Submitting is the site-standard "email
+// generator" — a To/Subject/Body preview plus a mailto: draft and a clipboard
+// failsafe (same shape as Box Order and the recycle report), so the report
+// leaves from the sender's own mailbox and the CEO can just hit reply.
+//
+// The edge fn pin-gates BOTH verbs, unlike most functions here: these are
+// people's reimbursement claims, not store operating data.
+
+let _expData = null;          // last GET payload
+let _expMonth = '';           // YYYY-MM-01 currently shown
+let _expPerson = '';          // whose report (CEO only can change it)
+let _expTab = 'mileage';      // 'mileage' | 'expense'
+let _expPreview = false;      // showing the email preview instead of the tables
+let _expEditId = null;        // line being edited inline
+let _expCatsOpen = false;     // category manager panel
+
+const _EXP_FALLBACK_TO = ['paul.kushnir@pikinvestments.com'];
+
+const _expRate = n => (Number(n) || 0).toFixed(2);
+
+const _expMoney = n => '$' + (Math.round((Number(n) || 0) * 100) / 100)
+    .toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// A `date` column comes back as YYYY-MM-DD; parsing that directly gives UTC
+// midnight, which renders as the previous day west of Greenwich.
+// MM/DD/YYYY — an expense claim is a financial record, so the date is written out
+// in full rather than as a friendly "Aug 3". Built from the parts, not from
+// toLocaleDateString, so it can't drift with the viewer's locale.
+const _expDate = s => {
+    if (!s) return '';
+    const [y, m, d] = String(s).slice(0, 10).split('-').map(Number);
+    if (!y || !m || !d) return '';
+    return String(m).padStart(2, '0') + '/' + String(d).padStart(2, '0') + '/' + y;
+};
+const _expMonthLabel = s => {
+    if (!s) return '';
+    const [y, m] = String(s).slice(0, 10).split('-').map(Number);
+    return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+};
+const _expThisMonth = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+};
+// Today in the local calendar, for date inputs (value must be YYYY-MM-DD).
+const _expToday = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+function _expCanManageCats() {
+    const r = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return r === 'ceo' || r === 'district manager';
+}
+// The rate is one global value, so this is "may change it for everyone".
+function _expCanEditRate() {
+    const r = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return r === 'ceo' || r === 'district manager';
+}
+function _expIsReviewer() { return !!(_expData && _expData.isReviewer); }
+
+// Sentinel for the "All" option in the person picker. Never sent to the server as
+// a person — it is a view over the roster the server already scoped for us.
+const _EXP_ALL = '__all__';
+function _expIsAll() { return _expPerson === _EXP_ALL; }
+
+async function openExpenses() {
+    closeAllModals();
+    toggleModal('expensesModal');
+    _expPreview = false; _expEditId = null; _expCatsOpen = false;
+    // Always open on your OWN report. A reviewer who last looked at someone else
+    // would otherwise come back to their report, and file against it by mistake.
+    // Cleared rather than set, so loadExpenses fills it from the server's `me`.
+    _expPerson = '';
+    // Drop the last payload too, or the modal still holds the previous render —
+    // a DM who was reviewing someone would see THAT person's lines for the
+    // moment before the new fetch lands. Nulling it makes loadExpenses paint its
+    // "Loading" placeholder instead.
+    _expData = null;
+    if (!_expMonth) _expMonth = _expThisMonth();
+    await loadExpenses();
+}
+window.openExpenses = openExpenses;
+
+async function loadExpenses() {
+    const body = document.getElementById('expBody');
+    if (body && !_expData) body.innerHTML = '<div class="status-message">Loading expenses…</div>';
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    try {
+        const q = `month=${encodeURIComponent(_expMonth || _expThisMonth())}`
+            + (_expPerson ? `&person=${encodeURIComponent(_expPerson)}` : '');
+        const r = await fetch(`${EXPENSES_URL}?${q}&v=${Date.now()}`, { headers: { 'x-user-pin': pin } });
+        const j = await r.json();
+        if (j && j.error) {
+            if (body) body.innerHTML = `<div class="dmx-empty" style="padding:50px 0;">${escapeHtml(j.error)}</div>`;
+            return;
+        }
+        _expData = j;
+        _expMonth = j.month;
+        if (!_expPerson) _expPerson = j.me;
+        await _fetchEmailLists();
+        renderExpenses();
+    } catch (e) {
+        if (body) body.innerHTML = '<div class="dmx-empty" style="padding:50px 0;">Could not load expenses — check your connection.</div>';
+    }
+}
+window.loadExpenses = loadExpenses;
+
+// Lines for whoever's report is on screen. The CEO's GET returns every person
+// for the month, so the person filter happens here.
+function _expRows(kind) {
+    const all = (_expData && _expData.entries) || [];
+    // In "All", the server payload is already scoped to this viewer's roster, so
+    // no person filter — just the kind.
+    return all.filter(e => (_expIsAll() || e.person === _expPerson) && (!kind || e.kind === kind));
+}
+function _expTotal(kind) {
+    return _expRows(kind).reduce((a, e) => a + (Number(e.amount) || 0), 0);
+}
+
+// ---- render -----------------------------------------------------------------
+function renderExpenses() {
+    const body = document.getElementById('expBody');
+    if (!body || !_expData) return;
+
+    const mileage = _expTotal('mileage');
+    const expense = _expTotal('expense');
+    const miles   = _expRows('mileage').reduce((a, e) => a + (Number(e.miles) || 0), 0);
+
+    const sub = document.getElementById('expSub');
+    if (sub) {
+        sub.textContent = _expMonthLabel(_expMonth) + ' · ' + _expMoney(mileage + expense) + ' total'
+            + (_expIsReviewer()
+                ? (_expIsAll() ? ' · everyone' : ' · reviewing ' + _expPerson)
+                : '');
+    }
+
+    // Both of these take over the whole body — you are either filing expenses,
+    // editing the catalog, or looking at the email, never two at once.
+    if (_expPreview) { body.innerHTML = _expPreviewHtml(); return; }
+    if (_expCatsOpen) { body.innerHTML = _expCatsHtml(); return; }
+
+    const nExp = _expRows('expense').length;
+    body.innerHTML =
+        _expControlsHtml()
+        + '<div class="exp-strip">'
+            + _expCell('Mileage', _expMoney(mileage), miles ? (Math.round(miles * 10) / 10) + ' mi' : 'No trips yet')
+            + _expCell('Expenses', _expMoney(expense), nExp + ' line' + (nExp === 1 ? '' : 's'))
+            + _expCell('Month total', _expMoney(mileage + expense), _expMonthLabel(_expMonth), true)
+        + '</div>'
+        + (_expCatsOpen ? _expCatsHtml() : '')
+        + '<div class="exp-tabs">'
+            + '<button type="button" class="exp-tab' + (_expTab === 'mileage' ? ' active' : '') + '" onclick="expSetTab(\'mileage\')">Mileage</button>'
+            + '<button type="button" class="exp-tab' + (_expTab === 'expense' ? ' active' : '') + '" onclick="expSetTab(\'expense\')">Expenses</button>'
+        + '</div>'
+        + (_expTab === 'mileage' ? _expMileageHtml() : _expExpenseHtml());
+}
+
+function _expCell(label, value, sub, strong) {
+    return '<div class="exp-cell' + (strong ? ' strong' : '') + '">'
+        + '<div class="exp-cell-l">' + label + '</div>'
+        + '<div class="exp-cell-v">' + value + '</div>'
+        + '<div class="exp-cell-s">' + escapeHtml(sub) + '</div></div>';
+}
+
+function _expControlsHtml() {
+    // Months that already have lines, plus the current one, newest first — so a
+    // fresh month is always reachable even before anything is entered in it.
+    const months = [...new Set([_expThisMonth(), _expMonth, ...((_expData && _expData.months) || [])])]
+        .filter(Boolean).sort().reverse();
+    const monthOpts = months.map(m =>
+        '<option value="' + m + '"' + (m === _expMonth ? ' selected' : '') + '>' + escapeHtml(_expMonthLabel(m)) + '</option>').join('');
+
+    const people = (_expData && _expData.people) || [];
+    // "All" is an overview across everyone the server let us see — for a DM that
+    // roster already excludes the CEO, so this can't widen what they can read.
+    const personSel = _expIsReviewer()
+        ? '<label class="exp-ctl"><span>Person</span><select class="kpi-select" onchange="expSetPerson(this.value)">'
+            + '<option value="' + _EXP_ALL + '"' + (_expIsAll() ? ' selected' : '') + '>All</option>'
+            + people.map(p => '<option value="' + escapeHtml(p) + '"' + (p === _expPerson ? ' selected' : '') + '>' + escapeHtml(p) + '</option>').join('')
+            + '</select></label>'
+        : '';
+
+    const rate = (_expData && _expData.rate) || 0;
+    // One global rate — the CEO and the DM may move it, everyone else reads it.
+    const rateCtl = _expCanEditRate()
+        ? '<label class="exp-ctl"><span>Mileage rate</span>'
+            + '<input type="number" id="exp-rate" class="exp-input" style="width:86px;" step="0.01" min="0" max="100" value="' + rate + '">'
+            + '<button type="button" class="exp-btn-sm" onclick="expSaveRate()">Save</button>'
+            + '<span class="exp-msg" id="exp-rate-msg"></span></label>'
+        : '<span class="exp-ctl exp-ctl-ro"><span>Mileage rate</span><b>$' + _expRate(rate) + '/mi</b></span>';
+
+    const cats = _expCanManageCats()
+        ? '<button type="button" class="exp-btn-sm" onclick="expToggleCats()">'
+            + (_expCatsOpen ? 'Close categories' : 'Manage categories') + '</button>'
+        : '';
+
+    return '<div class="exp-controls">'
+        + '<label class="exp-ctl"><span>Month</span><select class="kpi-select" onchange="expSetMonth(this.value)">' + monthOpts + '</select></label>'
+        + personSel + rateCtl
+        + '<span class="exp-controls-sp"></span>' + cats
+        // A report is filed by one person for one month, so there is nothing to
+        // email from the "All" overview.
+        + (_expIsAll() ? ''
+            : '<button type="button" class="btn-primary exp-btn-mail" onclick="expShowPreview()">'
+              + 'Email Report<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>')
+        + '</div>';
+}
+
+// A DM/MSM may only edit their own report; the CEO may edit anyone's.
+function _expCanEdit() {
+    // "All" is a read-only overview — a line has to belong to one person, so
+    // there is nothing sensible to add or edit against the aggregate.
+    if (_expIsAll()) return false;
+    // Your own report always. Someone else's only if the server says you may edit
+    // others (CEO) — reviewing on its own is look-but-don't-touch.
+    if (_expData && _expPerson === _expData.me) return true;
+    return !!(_expData && _expData.canEditOthers);
+}
+
+function _expMileageHtml() {
+    const rows = _expRows('mileage');
+    const canEdit = _expCanEdit();
+    const all = _expIsAll();
+    let html = '<div class="exp-table-wrap"><table class="exp-table"><thead><tr>'
+        + '<th>Date</th>' + (all ? '<th>Person</th>' : '') + '<th>Purpose</th><th>From</th><th>To</th>'
+        + '<th class="num">Miles</th><th class="num">Rate</th><th class="num">Amount</th>'
+        + (canEdit ? '<th></th>' : '') + '</tr></thead><tbody>';
+
+    if (!rows.length) {
+        html += '<tr><td colspan="' + (7 + (canEdit ? 1 : 0) + (all ? 1 : 0)) + '" class="exp-none">No mileage logged for '
+              + escapeHtml(_expMonthLabel(_expMonth)) + '.</td></tr>';
+    }
+    rows.forEach(e => {
+        if (_expEditId === e.id) { html += _expMileageEditRow(e); return; }
+        html += '<tr>'
+            + '<td>' + _expDate(e.entry_date) + '</td>'
+            + (all ? '<td class="strong">' + escapeHtml(e.person || '—') + '</td>' : '')
+            + '<td>' + escapeHtml(e.description || '—') + '</td>'
+            + '<td>' + escapeHtml(e.from_loc || '—') + '</td>'
+            + '<td>' + escapeHtml(e.to_loc || '—') + '</td>'
+            + '<td class="num">' + (Number(e.miles) || 0) + '</td>'
+            + '<td class="num muted">$' + _expRate(e.rate) + '</td>'
+            + '<td class="num strong">' + _expMoney(e.amount) + '</td>'
+            + (canEdit ? '<td class="num">' + _expRowActions(e.id) + '</td>' : '')
+            + '</tr>';
+    });
+    html += '</tbody></table></div>';
+    if (canEdit && _expEditId === null) html += _expMileageAddHtml();
+    return html;
+}
+
+function _expExpenseHtml() {
+    const rows = _expRows('expense');
+    const canEdit = _expCanEdit();
+    const all = _expIsAll();
+    let html = '<div class="exp-table-wrap"><table class="exp-table"><thead><tr>'
+        + '<th>Date</th>' + (all ? '<th>Person</th>' : '') + '<th>Category</th><th>Description</th><th class="num">Amount</th>'
+        + (canEdit ? '<th></th>' : '') + '</tr></thead><tbody>';
+
+    if (!rows.length) {
+        html += '<tr><td colspan="' + (4 + (canEdit ? 1 : 0) + (all ? 1 : 0)) + '" class="exp-none">No expenses logged for '
+              + escapeHtml(_expMonthLabel(_expMonth)) + '.</td></tr>';
+    }
+    rows.forEach(e => {
+        if (_expEditId === e.id) { html += _expExpenseEditRow(e); return; }
+        html += '<tr>'
+            + '<td>' + _expDate(e.entry_date) + '</td>'
+            + (all ? '<td class="strong">' + escapeHtml(e.person || '—') + '</td>' : '')
+            + '<td><span class="exp-cat">' + escapeHtml(e.category || '—') + '</span></td>'
+            + '<td>' + escapeHtml(e.description || '—') + '</td>'
+            + '<td class="num strong">' + _expMoney(e.amount) + '</td>'
+            + (canEdit ? '<td class="num">' + _expRowActions(e.id) + '</td>' : '')
+            + '</tr>';
+    });
+    html += '</tbody></table></div>';
+    if (canEdit && _expEditId === null) html += _expExpenseAddHtml();
+    return html;
+}
+
+function _expRowActions(id) {
+    return '<button type="button" class="exp-ico" title="Edit" onclick="expStartEdit(\'' + id + '\')">&#9998;</button>'
+         + '<button type="button" class="exp-ico del" title="Delete" onclick="expDeleteEntry(\'' + id + '\')">&#128465;</button>';
+}
+
+// ---- add / edit forms -------------------------------------------------------
+// Inputs carry an id so a re-render can read them back; values are read at save
+// time rather than tracked in state, matching the rest of the site's small forms.
+function _expCatOptions(selected) {
+    const cats = ((_expData && _expData.categories) || []).filter(c => c.active || c.name === selected);
+    return '<option value="">Category…</option>' + cats.map(c =>
+        '<option value="' + escapeHtml(c.name) + '"' + (c.name === selected ? ' selected' : '') + '>'
+        + escapeHtml(c.name) + '</option>').join('');
+}
+
+function _expMileageAddHtml() {
+    return '<div class="exp-add">'
+        + '<div class="exp-add-t">Add a trip</div>'
+        + '<div class="exp-add-grid">'
+        + '<label>Date<input type="date" id="exp-m-date" class="exp-input" value="' + _expToday() + '"></label>'
+        + '<label class="wide">Purpose<input type="text" id="exp-m-desc" class="exp-input" placeholder="Store visit, bank run…"></label>'
+        + '<label>From<input type="text" id="exp-m-from" class="exp-input" placeholder="OVL"></label>'
+        + '<label>To<input type="text" id="exp-m-to" class="exp-input" placeholder="LEE"></label>'
+        + '<label>Miles<input type="number" id="exp-m-miles" class="exp-input" step="0.1" min="0" placeholder="0.0"></label>'
+        + '<button type="button" class="btn-primary exp-add-btn" onclick="expAddMileage(this)">Add Trip</button>'
+        + '</div>'
+        + '<div class="exp-add-note">Reimbursement is calculated at the current rate ($'
+        + _expRate((_expData && _expData.rate) || 0) + '/mi) and locked to this trip.</div>'
+        + '<div class="exp-msg" id="exp-m-msg"></div></div>';
+}
+
+function _expExpenseAddHtml() {
+    return '<div class="exp-add">'
+        + '<div class="exp-add-t">Add an expense</div>'
+        + '<div class="exp-add-grid">'
+        + '<label>Date<input type="date" id="exp-e-date" class="exp-input" value="' + _expToday() + '"></label>'
+        + '<label>Category<select id="exp-e-cat" class="exp-input">' + _expCatOptions('') + '</select></label>'
+        + '<label class="wide">Description<input type="text" id="exp-e-desc" class="exp-input" placeholder="What was it for?"></label>'
+        + '<label>Amount<input type="number" id="exp-e-amt" class="exp-input" step="0.01" min="0" placeholder="0.00"></label>'
+        + '<button type="button" class="btn-primary exp-add-btn" onclick="expAddExpense(this)">Add Expense</button>'
+        + '</div>'
+        + '<div class="exp-msg" id="exp-e-msg"></div></div>';
+}
+
+function _expMileageEditRow(e) {
+    const i = (id, v, type, step) => '<input type="' + type + '" id="exp-ed-' + id + '" class="exp-input"'
+        + (step ? ' step="' + step + '" min="0"' : '') + ' value="' + escapeHtml(v == null ? '' : String(v)) + '">';
+    return '<tr class="exp-editing">'
+        + '<td>' + i('date', String(e.entry_date).slice(0, 10), 'date') + '</td>'
+        + '<td>' + i('desc', e.description, 'text') + '</td>'
+        + '<td>' + i('from', e.from_loc, 'text') + '</td>'
+        + '<td>' + i('to', e.to_loc, 'text') + '</td>'
+        + '<td class="num">' + i('miles', e.miles, 'number', '0.1') + '</td>'
+        + '<td class="num muted">$' + _expRate(e.rate) + '</td>'
+        + '<td class="num muted">recalculated</td>'
+        + '<td class="num exp-edit-actions">'
+            + '<button type="button" class="exp-btn-sm" onclick="expSaveEdit(\'' + e.id + '\',\'mileage\')">Save</button>'
+            + '<button type="button" class="exp-btn-sm ghost" onclick="expCancelEdit()">Cancel</button>'
+        + '</td></tr>';
+}
+
+function _expExpenseEditRow(e) {
+    return '<tr class="exp-editing">'
+        + '<td><input type="date" id="exp-ed-date" class="exp-input" value="' + String(e.entry_date).slice(0, 10) + '"></td>'
+        + '<td><select id="exp-ed-cat" class="exp-input">' + _expCatOptions(e.category) + '</select></td>'
+        + '<td><input type="text" id="exp-ed-desc" class="exp-input" value="' + escapeHtml(e.description || '') + '"></td>'
+        + '<td class="num"><input type="number" id="exp-ed-amt" class="exp-input" step="0.01" min="0" value="' + (Number(e.amount) || 0) + '"></td>'
+        + '<td class="num exp-edit-actions">'
+            + '<button type="button" class="exp-btn-sm" onclick="expSaveEdit(\'' + e.id + '\',\'expense\')">Save</button>'
+            + '<button type="button" class="exp-btn-sm ghost" onclick="expCancelEdit()">Cancel</button>'
+        + '</td></tr>';
+}
+
+// ---- actions ----------------------------------------------------------------
+async function _expPost(payload, msgId) {
+    const msg = msgId ? document.getElementById(msgId) : null;
+    const show = (text, ok) => { if (msg) { msg.textContent = text; msg.className = 'exp-msg' + (ok ? ' ok' : ' bad'); } };
+    show('Saving…', true);
+    try {
+        const r = await fetch(EXPENSES_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': sessionStorage.getItem('speeksUserPin') || '' },
+            body: JSON.stringify(payload),
+        });
+        const j = await r.json();
+        if (j && j.error) { show(j.error, false); return null; }
+        return j;
+    } catch (err) { show('Could not save — check your connection.', false); return null; }
+}
+
+const _expVal = id => (document.getElementById(id) || {}).value || '';
+
+async function expAddMileage(btn) {
+    if (btn) btn.disabled = true;
+    const j = await _expPost({
+        action: 'add_entry', kind: 'mileage', person: _expPerson,
+        entry_date: _expVal('exp-m-date'),
+        description: _expVal('exp-m-desc'),
+        from_loc: _expVal('exp-m-from'),
+        to_loc: _expVal('exp-m-to'),
+        miles: _expVal('exp-m-miles'),
+    }, 'exp-m-msg');
+    if (btn) btn.disabled = false;
+    if (j) await loadExpenses();
+}
+window.expAddMileage = expAddMileage;
+
+async function expAddExpense(btn) {
+    if (btn) btn.disabled = true;
+    const j = await _expPost({
+        action: 'add_entry', kind: 'expense', person: _expPerson,
+        entry_date: _expVal('exp-e-date'),
+        category: _expVal('exp-e-cat'),
+        description: _expVal('exp-e-desc'),
+        amount: _expVal('exp-e-amt'),
+    }, 'exp-e-msg');
+    if (btn) btn.disabled = false;
+    if (j) await loadExpenses();
+}
+window.expAddExpense = expAddExpense;
+
+function expStartEdit(id) { _expEditId = id; renderExpenses(); }
+function expCancelEdit() { _expEditId = null; renderExpenses(); }
+window.expStartEdit = expStartEdit;
+window.expCancelEdit = expCancelEdit;
+
+async function expSaveEdit(id, kind) {
+    const base = { action: 'update_entry', id, kind, person: _expPerson, entry_date: _expVal('exp-ed-date') };
+    const payload = kind === 'mileage'
+        ? Object.assign(base, {
+            description: _expVal('exp-ed-desc'), from_loc: _expVal('exp-ed-from'),
+            to_loc: _expVal('exp-ed-to'), miles: _expVal('exp-ed-miles'),
+        })
+        : Object.assign(base, {
+            category: _expVal('exp-ed-cat'), description: _expVal('exp-ed-desc'), amount: _expVal('exp-ed-amt'),
+        });
+    const j = await _expPost(payload);
+    if (j) { _expEditId = null; await loadExpenses(); }
+    else alert('Could not save that line. Check the date and amount.');
+}
+window.expSaveEdit = expSaveEdit;
+
+async function expDeleteEntry(id) {
+    if (!confirm('Delete this line? This cannot be undone.')) return;
+    const j = await _expPost({ action: 'delete_entry', id });
+    if (j) await loadExpenses();
+}
+window.expDeleteEntry = expDeleteEntry;
+
+async function expSaveRate() {
+    const j = await _expPost({ action: 'set_rate', rate: _expVal('exp-rate') }, 'exp-rate-msg');
+    if (!j) return;
+    const msg = document.getElementById('exp-rate-msg');
+    if (msg) { msg.textContent = 'Saved'; msg.className = 'exp-msg ok'; }
+    // Existing lines keep the rate they were filed at — only new ones pick this up.
+    await loadExpenses();
+}
+window.expSaveRate = expSaveRate;
+
+function expSetMonth(m) { _expMonth = m; _expEditId = null; _expPreview = false; loadExpenses(); }
+function expSetPerson(p) { _expPerson = p; _expEditId = null; _expPreview = false; renderExpenses(); }
+function expSetTab(t) { _expTab = t; _expEditId = null; renderExpenses(); }
+window.expSetMonth = expSetMonth;
+window.expSetPerson = expSetPerson;
+window.expSetTab = expSetTab;
+
+// ---- category manager (CEO / DM) --------------------------------------------
+function expToggleCats() { _expCatsOpen = !_expCatsOpen; _expPreview = false; _expEditId = null; renderExpenses(); }
+window.expToggleCats = expToggleCats;
+
+function _expCatsHtml() {
+    const cats = (_expData && _expData.categories) || [];
+    let rows = cats.map(c =>
+        '<div class="exp-cat-row' + (c.active ? '' : ' retired') + '">'
+        + '<input type="text" class="exp-input" value="' + escapeHtml(c.name) + '" data-cat-id="' + c.id + '">'
+        + (c.active ? '' : '<span class="exp-cat-tag">Retired</span>')
+        + '<button type="button" class="exp-btn-sm" onclick="expSaveCat(this)">Save</button>'
+        + '<button type="button" class="exp-btn-sm ghost" onclick="expDeleteCat(\'' + c.id + '\')">Delete</button>'
+        + '</div>').join('');
+    // Own view, so it carries its own heading and Back, exactly like the preview.
+    return '<div class="exp-view">'
+        + '<div class="exp-view-h">Expense categories</div>'
+        + '<div class="exp-cats">'
+        + '<div class="exp-cats-sub">Renaming a category also relabels every line already filed under it. '
+        + 'Deleting one that is still in use retires it instead, so old reports keep their labels.</div>'
+        + rows
+        + '<div class="exp-cat-row">'
+        + '<input type="text" class="exp-input" id="exp-cat-new" placeholder="New category name…">'
+        + '<button type="button" class="exp-btn-sm" onclick="expAddCat()">Add</button>'
+        + '</div>'
+        + '<div class="exp-msg" id="exp-cat-msg"></div></div>'
+        + '<div class="exp-view-foot">'
+        + '<button class="btn-secondary" onclick="expToggleCats()">'
+        + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>Back</button>'
+        + '</div></div>';
+}
+
+async function expSaveCat(btn) {
+    const input = btn.parentElement.querySelector('input[data-cat-id]');
+    if (!input) return;
+    const j = await _expPost({ action: 'save_category', id: input.dataset.catId, name: input.value }, 'exp-cat-msg');
+    if (j) await loadExpenses();
+}
+window.expSaveCat = expSaveCat;
+
+async function expAddCat() {
+    const j = await _expPost({ action: 'save_category', name: _expVal('exp-cat-new') }, 'exp-cat-msg');
+    if (j) await loadExpenses();
+}
+window.expAddCat = expAddCat;
+
+async function expDeleteCat(id) {
+    if (!confirm('Delete this category? If any expenses still use it, it will be retired instead so their labels survive.')) return;
+    const j = await _expPost({ action: 'delete_category', id }, 'exp-cat-msg');
+    if (!j) return;
+    const msg = document.getElementById('exp-cat-msg');
+    if (msg && j.retired) {
+        msg.textContent = 'Still used by ' + j.used + ' line' + (j.used === 1 ? '' : 's') + ' — retired instead of deleted.';
+        msg.className = 'exp-msg ok';
+    }
+    await loadExpenses();
+}
+window.expDeleteCat = expDeleteCat;
+
+// ---- email generator --------------------------------------------------------
+// Same shape as Box Order and the recycle report: build the report as plain text
+// once, show it as a preview, then hand it to the OS mail client via mailto: so
+// it leaves from the sender's own mailbox and the CEO can reply straight to them.
+// Copy is the failsafe for machines with no mail client bound to mailto:.
+function _expReportTo() { return _recipientsFor('expense_report', _EXP_FALLBACK_TO); }
+
+function _expPad(s, n) {
+    s = String(s == null ? '' : s);
+    return s.length >= n ? s.slice(0, n) : s + ' '.repeat(n - s.length);
+}
+function _expPadL(s, n) {
+    s = String(s == null ? '' : s);
+    return s.length >= n ? s.slice(0, n) : ' '.repeat(n - s.length) + s;
+}
+
+function _expCompose() {
+    const monthLabel = _expMonthLabel(_expMonth);
+    const mileageRows = _expRows('mileage');
+    const expenseRows = _expRows('expense');
+    const mileageTotal = _expTotal('mileage');
+    const expenseTotal = _expTotal('expense');
+    const miles = mileageRows.reduce((a, e) => a + (Number(e.miles) || 0), 0);
+
+    let body = 'Expense report for ' + _expPerson + ' — ' + monthLabel + '\n\n';
+
+    if (mileageRows.length) {
+        body += 'MILEAGE\n';
+        mileageRows.forEach(e => {
+            const trip = [e.from_loc, e.to_loc].filter(Boolean).join(' to ');
+            body += '  ' + _expPad(_expDate(e.entry_date) + ' -', 13)
+                 + _expPad(e.description || trip || 'Trip', 33)
+                 + _expPadL((Number(e.miles) || 0) + ' mi', 10)
+                 + _expPadL('@ $' + _expRate(e.rate), 9)
+                 + _expPadL(_expMoney(e.amount), 12) + '\n';
+        });
+        // "Total" leads the row. Sitting it next to the amount instead put it
+        // between the two figures, which read as "22 total 15.40".
+        body += '  ' + _expPad('Total', 46) + _expPadL(Math.round(miles * 10) / 10 + ' mi', 10)
+             + _expPadL('', 9) + _expPadL(_expMoney(mileageTotal), 12) + '\n\n';
+    }
+
+    if (expenseRows.length) {
+        body += 'EXPENSES\n';
+        expenseRows.forEach(e => {
+            body += '  ' + _expPad(_expDate(e.entry_date) + ' -', 13)
+                 + _expPad(e.category || '', 26)
+                 + _expPad(e.description || '', 26)
+                 + _expPadL(_expMoney(e.amount), 12) + '\n';
+        });
+        body += '  ' + _expPad('Total', 65) + _expPadL(_expMoney(expenseTotal), 12) + '\n\n';
+    }
+
+    if (!mileageRows.length && !expenseRows.length) {
+        body += 'No expenses or mileage were logged for this month.\n\n';
+    }
+
+    body += 'TOTAL DUE: ' + _expMoney(mileageTotal + expenseTotal) + '\n\n'
+         + 'Thank you,\n' + _expPerson;
+
+    return {
+        email: _expReportTo().join(','),
+        subject: 'Expense Report — ' + _expPerson + ' — ' + monthLabel,
+        body,
+    };
+}
+
+function _expPreviewHtml() {
+    const { email, subject, body } = _expCompose();
+    return '<div class="exp-view">'
+        + '<div class="exp-view-h">Email preview</div>'
+        + '<div class="box-order-email-preview">'
+        + escapeHtml('To: ' + email + '\nSubject: ' + subject + '\n\n' + body)
+        + '</div>'
+        + '<div class="exp-view-foot">'
+        + RECYCLE_MAIL_TIP
+        + '<button class="btn-secondary" onclick="expHidePreview()">'
+        + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>Back</button>'
+        + '<button class="btn-secondary" onclick="expCopyReport(this)">Copy</button>'
+        + '<button class="btn-primary" onclick="expSendReport()">Send Email'
+        + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>'
+        + '</div></div>';
+}
+
+function expShowPreview() { _expPreview = true; _expCatsOpen = false; _expEditId = null; renderExpenses(); }
+function expHidePreview() { _expPreview = false; renderExpenses(); }
+window.expShowPreview = expShowPreview;
+window.expHidePreview = expHidePreview;
+
+function expSendReport() {
+    const { email, subject, body } = _expCompose();
+    window.location.href = 'mailto:' + encodeURIComponent(email)
+        + '?subject=' + encodeURIComponent(subject)
+        + '&body=' + encodeURIComponent(body);
+}
+window.expSendReport = expSendReport;
+
+function expCopyReport(button) {
+    const { email, subject, body } = _expCompose();
+    const text = 'To: ' + email + '\nSubject: ' + subject + '\n\n' + body;
+    navigator.clipboard.writeText(text).then(() => {
+        const was = button.textContent;
+        button.textContent = 'Copied';
+        setTimeout(() => { button.textContent = was; }, 1600);
+    }).catch(() => alert('Could not copy. Select the preview text and copy it manually.'));
+}
+window.expCopyReport = expCopyReport;
+
+// ---- monthly "file your expense report" reminder ------------------------------
+// DM and MSM only (the CEO receives the reports, they don't file one). Unlike the
+// KPI nags this cannot be data-derived — the report leaves as a mailto handed to
+// the person's mail client, so the app never sees it sent. "Filed" is therefore
+// an assertion the person makes, stored server-side (expense_submissions) so it
+// survives filing from another machine and shows leadership who has filed.
+const _EXP_REMIND_ROLES = new Set(['district manager']);
+let _expRemindStarted = false;
+
+function _expRemindApplies() {
+    const r = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (_EXP_REMIND_ROLES.has(r)) return true;
+    // An MSM signs in with the effective role 'manager', so the flag is the only
+    // way to tell them apart from a store manager.
+    return typeof isMultiStoreManager === 'function' && isMultiStoreManager();
+}
+
+// The month being chased is the one that just CLOSED — you file August in
+// September. Central time, so the rollover matches the stores' day.
+function _expRemindMonth() {
+    const nowC = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+    const d = new Date(nowC.getFullYear(), nowC.getMonth() - 1, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
+function _expRemindBubbleEl() {
+    let b = document.getElementById('expenseFileAlertBubble');
+    if (b) return b;
+    const anchor = document.getElementById('claimAlertBubble');
+    if (!anchor || !anchor.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'expenseFileAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; padding:11px 14px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; z-index:998;';
+    b.innerHTML = '<span id="expenseFileAlertBubbleText"></span>';
+    anchor.parentElement.appendChild(b);
+    return b;
+}
+
+async function checkExpenseFileReminder() {
+    const hide = () => {
+        const b = document.getElementById('expenseFileAlertBubble');
+        if (b) b.style.display = 'none';
+    };
+    if (!_expRemindApplies()) { hide(); return; }
+    if (!_expRemindStarted) { _expRemindStarted = true; setInterval(checkExpenseFileReminder, 30 * 60 * 1000); }
+
+    const month = _expRemindMonth();
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (!pin) { hide(); return; }
+
+    let filed = [];
+    try {
+        const j = await fetch(`${EXPENSES_URL}?month=${encodeURIComponent(month)}&v=${Date.now()}`,
+            { headers: { 'x-user-pin': pin } }).then(r => r.json());
+        if (!j || j.error) { hide(); return; }   // never invent a nag from a failed fetch
+        filed = j.filedMonths || [];
+    } catch (_) { hide(); return; }
+
+    // Like the other async checks, this lands AFTER the login sweep painted the
+    // feed, so it has to repaint or the live bubble is never picked up.
+    const paint = () => { if (typeof renderActionFeed === 'function') renderActionFeed(); };
+
+    if (filed.indexOf(month) !== -1) { hide(); paint(); return; }
+
+    const el = _expRemindBubbleEl();
+    if (!el) return;
+    const t = document.getElementById('expenseFileAlertBubbleText');
+    if (t) {
+        const label = _expMonthLabel(month);
+        t.dataset.summary = `Your ${label} expense report hasn’t been filed yet — `
+            + 'check your mileage and expenses are in, email it, then mark it filed.';
+        t.dataset.month = month;
+        // Snooze signature: keyed to the month, so snoozing September's nag can't
+        // also swallow October's.
+        t.dataset.sig = 'expfile:' + month;
+        t.textContent = t.dataset.summary;
+    }
+    el.style.display = 'flex';
+    paint();
+}
+window.checkExpenseFileReminder = checkExpenseFileReminder;
+
+// "Mark filed" on the feed card. Writes the assertion, then re-checks so the card
+// clears from the same source of truth rather than being hidden optimistically.
+async function expMarkFiled(ev) {
+    if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+    const t = document.getElementById('expenseFileAlertBubbleText');
+    const month = (t && t.dataset && t.dataset.month) || _expRemindMonth();
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    const btn = ev && ev.currentTarget;
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    try {
+        const j = await fetch(EXPENSES_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({ action: 'mark_filed', month }),
+        }).then(r => r.json());
+        if (!j || j.error) throw new Error((j && j.error) || 'Could not save');
+        await checkExpenseFileReminder();
+    } catch (e) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Mark filed'; }
+        alert('Could not mark it filed — ' + (e.message || 'try again') + '.');
+    }
+}
+window.expMarkFiled = expMarkFiled;

@@ -17,6 +17,8 @@ const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const LIST_KEYS = new Set([
   "recycle_report",
   "weekly_leadership",
+  // expense_report: where a DM/MSM monthly expense report is emailed (the CEO).
+  "expense_report",
   ...STORES.map((s) => `box_order_${s}`),
   ...STORES.map((s) => `weekly_store_${s}`),
 ]);
