@@ -61,6 +61,7 @@ const RECYCLE_URL       = `${_BASE}/recycle-requests`;
 const FEATURE_ACCESS_URL = `${_BASE}/feature-access`;
 const VARIANCE_REPLIES_URL = `${_BASE}/variance-replies`;
 const AGING_INV_URL     = `${_BASE}/aging-inventory`;
+const EXPENSES_URL      = `${_BASE}/expenses`;
 const PREFERRED_URL     = `${_BASE}/preferred-purchases`;
 const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
@@ -3388,14 +3389,12 @@ async function _kpiSaveNote(periodDate) {
     if (st) { st.textContent = 'Saving…'; st.className = 'kpi-note-status'; }
     if (bt) bt.disabled = true;
     try {
-        const resp = await fetch(KPI_MANAGE_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
-            body: JSON.stringify({
-                action: 'save_note', store: store, period_type: _kpiCurrentTab,
-                period_end_date: periodDate, note: value,
-            }),
-        });
+        // Same hard timeout as the row saves — a hung request would otherwise sit
+        // on "Saving…" with the button disabled and no way back.
+        const resp = await _kpiPostEntry({
+            action: 'save_note', store: store, period_type: _kpiCurrentTab,
+            period_end_date: periodDate, note: value,
+        }, pin);
         const result = await resp.json();
         if (!resp.ok || result.success === false) throw new Error(result.error || 'Save failed');
         // Keep the in-memory period in step so the next blur sees no change, and
@@ -5365,7 +5364,11 @@ async function _kpiLoadAll(tab) {
     const store = _kpiResolveStore();
     if (!store) return;
     const body = document.getElementById('kpiModalBody');
-    if (body) body.innerHTML = '<div class="kpi-empty-state">Loading…</div>';
+    // Never blank the grid out from under someone who is mid-entry. This used to
+    // paint "Loading…" over a half-filled form and then, if the fetch failed,
+    // replace it with an error — taking every typed number with it.
+    const editing = !!_kpiEditingPeriod;
+    if (body && !editing) body.innerHTML = '<div class="kpi-empty-state">Loading…</div>';
     try {
         const resp = await fetch(KPI_MANAGE_URL + '?store=' + store + '&period_type=' + tab + '&v=' + Date.now());
         const data = await resp.json();
@@ -5373,7 +5376,9 @@ async function _kpiLoadAll(tab) {
         if (tab === 'weekly') _kpiRenderWeekly(_kpiPeriodsData);
         else                  _kpiRenderMonthly(_kpiPeriodsData);
     } catch(e) {
-        if (body) body.innerHTML = '<div class="kpi-empty-state" style="color:var(--red-alert)">Failed to load KPI data.</div>';
+        if (body && !editing) {
+            body.innerHTML = '<div class="kpi-empty-state" style="color:var(--red-alert)">Failed to load KPI data.</div>';
+        }
     }
 }
 
@@ -6944,29 +6949,75 @@ async function _kpiSavePeriod(periodDate) {
     if (!period) return;
     const saveBtn = document.getElementById('kpiSaveBtn');
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
-    for (let empIdx = 0; empIdx < period.entries.length; empIdx++) {
-        const entry   = period.entries[empIdx];
-        const reqBody = { store: store, period_type: _kpiCurrentTab, period_end_date: periodDate, employee_name: entry.employee_name };
-        _KPI_INPUT_FIELDS.forEach(function(f) {
-            const el = document.getElementById('kpi-' + pk + '-' + empIdx + '-' + f);
-            if (el && el.value !== '') reqBody[f] = _KPI_INT_FIELDS.has(f) ? parseInt(el.value) : parseFloat(el.value);
-        });
-        const hasData = _KPI_INPUT_FIELDS.some(function(f) { return reqBody[f] != null; });
-        if (!hasData) continue;
-        try {
-            const resp   = await fetch(KPI_MANAGE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-pin': pin }, body: JSON.stringify(reqBody) });
-            const result = await resp.json();
-            if (!resp.ok) throw new Error(result.error || 'Save failed');
-            period.entries[empIdx] = result.entry;
-            const s = document.getElementById('kpiS-' + pk + '-' + empIdx);
-            if (s) { s.textContent = '✓'; s.style.color = '#16a34a'; s.title = 'Saved'; }
-        } catch(e) {
-            const s = document.getElementById('kpiS-' + pk + '-' + empIdx);
-            if (s) { s.textContent = '✗'; s.style.color = 'var(--red-alert)'; s.title = String(e.message); }
+
+    let failed = 0, saved = 0;
+    const failedNames = [];
+    try {
+        for (let empIdx = 0; empIdx < period.entries.length; empIdx++) {
+            const entry   = period.entries[empIdx];
+            const reqBody = { store: store, period_type: _kpiCurrentTab, period_end_date: periodDate, employee_name: entry.employee_name };
+            _KPI_INPUT_FIELDS.forEach(function(f) {
+                const el = document.getElementById('kpi-' + pk + '-' + empIdx + '-' + f);
+                if (el && el.value !== '') reqBody[f] = _KPI_INT_FIELDS.has(f) ? parseInt(el.value) : parseFloat(el.value);
+            });
+            const hasData = _KPI_INPUT_FIELDS.some(function(f) { return reqBody[f] != null; });
+            if (!hasData) continue;
+            try {
+                const resp   = await _kpiPostEntry(reqBody, pin);
+                const result = await resp.json();
+                if (!resp.ok) throw new Error(result.error || 'Save failed');
+                period.entries[empIdx] = result.entry;
+                saved++;
+                const s = document.getElementById('kpiS-' + pk + '-' + empIdx);
+                if (s) { s.textContent = '✓'; s.style.color = '#16a34a'; s.title = 'Saved'; }
+            } catch(e) {
+                failed++;
+                failedNames.push(entry.employee_name);
+                const s = document.getElementById('kpiS-' + pk + '-' + empIdx);
+                if (s) { s.textContent = '✗'; s.style.color = 'var(--red-alert)'; s.title = String(e.message); }
+            }
         }
+    } finally {
+        // On the happy path the button is replaced wholesale when _kpiLoadAll
+        // re-renders the grid, so nothing here used to reset it. That left one
+        // way out: if anything threw — or the reload failed — the button stayed
+        // disabled on "Saving…" forever and the only escape was a refresh, which
+        // threw away everything typed. Always hand the button back.
+        const btn = document.getElementById('kpiSaveBtn');
+        if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
     }
+
+    if (failed) {
+        // Stay in edit mode and keep what is on screen. Reloading here would pull
+        // the grid back from the server and silently discard every row that did
+        // not save — the manager would watch their numbers vanish.
+        alert(failed + ' row' + (failed === 1 ? '' : 's') + ' could not be saved ('
+            + failedNames.join(', ') + ').\n\n'
+            + (saved ? saved + ' saved successfully. ' : '')
+            + 'Your entries are still on screen — press Save again to retry.');
+        return;
+    }
+
     _kpiEditingPeriod = null;
     await _kpiLoadAll(_kpiCurrentTab);
+}
+
+// One KPI row POST with a hard timeout. fetch() has no default timeout, so a
+// dropped connection mid-request left the save hanging indefinitely — the
+// "perpetual saving" the managers hit. An abort surfaces as a normal row
+// failure, which now keeps the typed values instead of discarding them.
+function _kpiPostEntry(reqBody, pin, ms) {
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), ms || 20000) : null;
+    return fetch(KPI_MANAGE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+        body: JSON.stringify(reqBody),
+        signal: ctl ? ctl.signal : undefined,
+    }).catch(err => {
+        throw new Error(err && err.name === 'AbortError'
+            ? 'Timed out — check your connection and press Save again.' : (err.message || 'Network error'));
+    }).finally(() => { if (timer) clearTimeout(timer); });
 }
 
 function _kpiGetThisSunday() {
@@ -10217,13 +10268,21 @@ function checkListingGoalReminders() {
     if (!_dmxIsDistrict()) { if (b) b.style.display = 'none'; return; }
     if (!_lgDueStarted) { _lgDueStarted = true; setInterval(checkListingGoalReminders, 10 * 60 * 1000); }
 
+    // Due 8am Monday, store time — half an hour ahead of the stores' own 8:30am
+    // "set today's roles" nudge, so the weekly total is in place before anyone
+    // starts dividing it up. Only Monday morning is held back: once 8am passes the
+    // card stays up all week until every store is set, because missing Monday is
+    // exactly when the reminder matters most.
+    const nowC = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+    if (nowC.getDay() === 1 && nowC.getHours() < 8) { if (b) b.style.display = 'none'; return; }
+
     // Only count stores whose target has actually loaded — before the first fetch
     // lands every store looks unset, which would flash a card that isn't true.
     const loaded = _DMX_STORES.filter(s => _storeTargets[s]);
     if (!loaded.length) return;
     const pending = loaded.filter(s => !goalIsSetThisWeek(s));
 
-    if (!pending.length) { if (b) b.style.display = 'none'; return; }
+    if (!pending.length) { if (b) b.style.display = 'none'; if (typeof renderActionFeed === 'function') renderActionFeed(); return; }
 
     const el = _lgDueBubbleEl();
     if (!el) return;
@@ -10304,10 +10363,11 @@ async function checkListingGoalsDailyReminder() {
     if (!_lgDailyStarted) { _lgDailyStarted = true; setInterval(checkListingGoalsDailyReminder, 10 * 60 * 1000); }
 
     // Store time, not the browser's — a manager on a laptop set to another zone
-    // must still get this at 9am Central.
+    // must still get this at 8:30am Central.
     const nowC = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
     if (nowC.getDay() === 0) { hide(); return; }   // closed Sundays — no goals to set
-    if (nowC.getHours() < 9) { hide(); return; }   // not due until 9am
+    // Every open day at 8:30am. Compared in minutes so the half hour is exact.
+    if (nowC.getHours() * 60 + nowC.getMinutes() < 8 * 60 + 30) { hide(); return; }
 
     const today = nowC.toLocaleDateString('en-US');
     const stores = _lgDailyStores();
@@ -10320,7 +10380,12 @@ async function checkListingGoalsDailyReminder() {
             if (!_lgDayCovered(rows, today)) pending.push(s);
         } catch (_) { /* network hiccup — don't invent a reminder */ }
     }
-    if (!pending.length) { hide(); return; }
+    // This check does its own fetch, so it finishes AFTER the login sweep has
+    // already painted the feed — without this repaint the card sat in the DOM
+    // as a live bubble that no feed render ever picked up. checkKpiDueReminders
+    // repaints for exactly the same reason.
+    const paint = () => { if (typeof renderActionFeed === 'function') renderActionFeed(); };
+    if (!pending.length) { hide(); paint(); return; }
 
     const el = _lgDailyBubbleEl();
     if (!el) return;
@@ -10335,6 +10400,7 @@ async function checkListingGoalsDailyReminder() {
         t.textContent = t.dataset.summary;
     }
     el.style.display = 'flex';
+    paint();
 }
 window.checkListingGoalsDailyReminder = checkListingGoalsDailyReminder;
 
@@ -13371,9 +13437,15 @@ function applyRoleBasedUI() {
         const requiredRoles = classes.filter(c => c.startsWith('role-'));
         const requiredStores = classes.filter(c => c.startsWith('store-'));
 
+        // A Multi-Store Manager logs in with the effective role 'manager' (see the
+        // login block), so `role-manager` can't distinguish them and there is no
+        // role class of their own. `role-multistore-manager` is that missing gate:
+        // it matches ONLY an MSM, letting something be shown to them without also
+        // showing it to every store manager.
         const passesRole = requiredRoles.length === 0 ||
             requiredRoles.includes(userRoleClass) ||
-            (userRoleClass === 'role-assistant-manager' && requiredRoles.includes('role-employee'));
+            (userRoleClass === 'role-assistant-manager' && requiredRoles.includes('role-employee')) ||
+            (requiredRoles.includes('role-multistore-manager') && isMultiStoreManager());
         const passesStore = requiredStores.length === 0 || requiredStores.includes(userStoreClass);
 
         let visible = passesRole && passesStore;
@@ -19782,7 +19854,36 @@ window.recomputeGoalDisplays = function() {
     if (todayEl) todayEl.innerText = todayTotal;
     const weekEl = document.getElementById('goals-total-actual');
     if (weekEl) weekEl.innerText = weekTotal;
+
+    _goalsResaveIfStale(dateStr);
 };
+
+// If the DM changes the weekly total AFTER a store has already picked its roles,
+// the saved daily goals still hold the numbers they were computed with — and the
+// district view, the employee widgets and the weekly report all read those saved
+// rows, not this screen. store-targets doesn't broadcast, so nothing tells an open
+// widget to catch up.
+//
+// So: whenever the displayed goals disagree with what's stored for today, write
+// the recomputed values back. Self-healing — one autosave and they agree, so this
+// can't loop. Only ever touches TODAY, and only in the manager's own editable
+// widget (the read-only views don't render goal-display-* nodes).
+function _goalsResaveIfStale(dateStr) {
+    if (!Array.isArray(liveGoalsData) || !liveGoalsData.length) return;
+    if (typeof scheduleGoalsAutosave !== 'function') return;
+    const stale = goalsRoster.some((emp, idx) => {
+        const group = document.getElementById(`roles-${idx}`);
+        const role = _roleOf(group?.querySelector('.role-dot.active'));
+        if (role === '-') return false;
+        const saved = liveGoalsData.find(r => r.employee === emp
+            && normalizeGoalDate(r.date) === dateStr && r.role === role);
+        if (!saved || saved.goal == null || saved.goal === '') return false;
+        const disp = document.getElementById(`goal-display-${idx}`);
+        const shown = disp ? parseInt(disp.innerText, 10) : NaN;
+        return Number.isFinite(shown) && parseInt(saved.goal, 10) !== shown;
+    });
+    if (stale) scheduleGoalsAutosave();
+}
 
 // --- PATCH NOTES ---
 function parsePatchDate(d) {
@@ -21757,6 +21858,11 @@ const EMAIL_LIST_GROUPS = [
         lists: EMAIL_LIST_STORES.map(s => ({ key: `box_order_${s}`, label: s })),
     },
     {
+        title: 'Expense Reports',
+        desc: 'Who a monthly expense report is emailed to when the DM or MSM sends it.',
+        lists: [{ key: 'expense_report', label: 'Recipients' }],
+    },
+    {
         title: 'Weekly SPEEKS Reports',
         desc: 'Monday morning performance emails (sent automatically).',
         lists: [
@@ -22002,6 +22108,11 @@ const FEATURE_CATALOG = [
     { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
     { key: 'tool-feature-access',      label: 'Feature Access (This Tool)',    tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
+    // 'manager' here means the Multi-Store Manager — Feature Access has no MSM
+    // slug of its own (they log in as a manager). The panel link's
+    // role-multistore-manager class is what keeps ordinary managers out; this
+    // row only lets the DM/CEO switch it off for the MSM.
+    { key: 'tool-expenses',            label: 'Expense Report',                tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'manager'] },
     { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-manage-policies',     label: 'Manage Policies',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
@@ -22941,6 +23052,7 @@ const JUMP_KEYWORDS = {
     'tool-user-permissions':     'users permissions pin login accounts roles add user',
     'tool-feature-access':       'feature access hide show toggle delegation permissions',
     'tool-email-recipients':     'email recipients reports distribution who gets',
+    'tool-expenses':             'expense report expenses mileage miles reimbursement receipts monthly spend',
     'tool-performance-metrics':  'performance metrics alerts thresholds',
     'tool-company-records':      'records company files documents',
     'tool-manage-policies':      'policies process processes handbook documents',
@@ -29029,3 +29141,566 @@ function _dccPick(store) {
     const el = document.getElementById('district-master-body');
     if (el) el.innerHTML = _dccBoardHtml(_DCC_PORTAL_LINKS);
 }
+
+// ============================================================================
+// MODULE: EXPENSE REPORT  (DM / MSM file, CEO reviews)
+// ============================================================================
+// One report per person per month, holding two kinds of line: mileage and
+// ordinary expenses. The DM and MSM see only their own report; the CEO sees
+// everyone's via a person picker. Submitting is the site-standard "email
+// generator" — a To/Subject/Body preview plus a mailto: draft and a clipboard
+// failsafe (same shape as Box Order and the recycle report), so the report
+// leaves from the sender's own mailbox and the CEO can just hit reply.
+//
+// The edge fn pin-gates BOTH verbs, unlike most functions here: these are
+// people's reimbursement claims, not store operating data.
+
+let _expData = null;          // last GET payload
+let _expMonth = '';           // YYYY-MM-01 currently shown
+let _expPerson = '';          // whose report (CEO only can change it)
+let _expTab = 'mileage';      // 'mileage' | 'expense'
+let _expPreview = false;      // showing the email preview instead of the tables
+let _expEditId = null;        // line being edited inline
+let _expCatsOpen = false;     // category manager panel
+
+const _EXP_FALLBACK_TO = ['paul.kushnir@pikinvestments.com'];
+
+const _expRate = n => (Number(n) || 0).toFixed(2);
+
+const _expMoney = n => '$' + (Math.round((Number(n) || 0) * 100) / 100)
+    .toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// A `date` column comes back as YYYY-MM-DD; parsing that directly gives UTC
+// midnight, which renders as the previous day west of Greenwich.
+const _expDate = s => {
+    if (!s) return '';
+    const [y, m, d] = String(s).slice(0, 10).split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};
+const _expMonthLabel = s => {
+    if (!s) return '';
+    const [y, m] = String(s).slice(0, 10).split('-').map(Number);
+    return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+};
+const _expThisMonth = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+};
+// Today in the local calendar, for date inputs (value must be YYYY-MM-DD).
+const _expToday = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+function _expCanManageCats() {
+    const r = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return r === 'ceo' || r === 'district manager';
+}
+function _expIsReviewer() { return !!(_expData && _expData.isReviewer); }
+
+async function openExpenses() {
+    closeAllModals();
+    toggleModal('expensesModal');
+    _expPreview = false; _expEditId = null; _expCatsOpen = false;
+    if (!_expMonth) _expMonth = _expThisMonth();
+    await loadExpenses();
+}
+window.openExpenses = openExpenses;
+
+async function loadExpenses() {
+    const body = document.getElementById('expBody');
+    if (body && !_expData) body.innerHTML = '<div class="status-message">Loading expenses…</div>';
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    try {
+        const q = `month=${encodeURIComponent(_expMonth || _expThisMonth())}`
+            + (_expPerson ? `&person=${encodeURIComponent(_expPerson)}` : '');
+        const r = await fetch(`${EXPENSES_URL}?${q}&v=${Date.now()}`, { headers: { 'x-user-pin': pin } });
+        const j = await r.json();
+        if (j && j.error) {
+            if (body) body.innerHTML = `<div class="dmx-empty" style="padding:50px 0;">${escapeHtml(j.error)}</div>`;
+            return;
+        }
+        _expData = j;
+        _expMonth = j.month;
+        if (!_expPerson) _expPerson = j.me;
+        await _fetchEmailLists();
+        renderExpenses();
+    } catch (e) {
+        if (body) body.innerHTML = '<div class="dmx-empty" style="padding:50px 0;">Could not load expenses — check your connection.</div>';
+    }
+}
+window.loadExpenses = loadExpenses;
+
+// Lines for whoever's report is on screen. The CEO's GET returns every person
+// for the month, so the person filter happens here.
+function _expRows(kind) {
+    const all = (_expData && _expData.entries) || [];
+    return all.filter(e => e.person === _expPerson && (!kind || e.kind === kind));
+}
+function _expTotal(kind) {
+    return _expRows(kind).reduce((a, e) => a + (Number(e.amount) || 0), 0);
+}
+
+// ---- render -----------------------------------------------------------------
+function renderExpenses() {
+    const body = document.getElementById('expBody');
+    if (!body || !_expData) return;
+
+    const mileage = _expTotal('mileage');
+    const expense = _expTotal('expense');
+    const miles   = _expRows('mileage').reduce((a, e) => a + (Number(e.miles) || 0), 0);
+
+    const sub = document.getElementById('expSub');
+    if (sub) {
+        sub.textContent = _expMonthLabel(_expMonth) + ' · ' + _expMoney(mileage + expense) + ' total'
+            + (_expIsReviewer() ? ' · reviewing ' + _expPerson : '');
+    }
+
+    if (_expPreview) { body.innerHTML = _expPreviewHtml(); return; }
+
+    const nExp = _expRows('expense').length;
+    body.innerHTML =
+        _expControlsHtml()
+        + '<div class="exp-strip">'
+            + _expCell('Mileage', _expMoney(mileage), miles ? (Math.round(miles * 10) / 10) + ' mi' : 'No trips yet')
+            + _expCell('Expenses', _expMoney(expense), nExp + ' line' + (nExp === 1 ? '' : 's'))
+            + _expCell('Month total', _expMoney(mileage + expense), _expMonthLabel(_expMonth), true)
+        + '</div>'
+        + (_expCatsOpen ? _expCatsHtml() : '')
+        + '<div class="exp-tabs">'
+            + '<button type="button" class="exp-tab' + (_expTab === 'mileage' ? ' active' : '') + '" onclick="expSetTab(\'mileage\')">Mileage</button>'
+            + '<button type="button" class="exp-tab' + (_expTab === 'expense' ? ' active' : '') + '" onclick="expSetTab(\'expense\')">Expenses</button>'
+        + '</div>'
+        + (_expTab === 'mileage' ? _expMileageHtml() : _expExpenseHtml());
+}
+
+function _expCell(label, value, sub, strong) {
+    return '<div class="exp-cell' + (strong ? ' strong' : '') + '">'
+        + '<div class="exp-cell-l">' + label + '</div>'
+        + '<div class="exp-cell-v">' + value + '</div>'
+        + '<div class="exp-cell-s">' + escapeHtml(sub) + '</div></div>';
+}
+
+function _expControlsHtml() {
+    // Months that already have lines, plus the current one, newest first — so a
+    // fresh month is always reachable even before anything is entered in it.
+    const months = [...new Set([_expThisMonth(), _expMonth, ...((_expData && _expData.months) || [])])]
+        .filter(Boolean).sort().reverse();
+    const monthOpts = months.map(m =>
+        '<option value="' + m + '"' + (m === _expMonth ? ' selected' : '') + '>' + escapeHtml(_expMonthLabel(m)) + '</option>').join('');
+
+    const people = (_expData && _expData.people) || [];
+    const personSel = _expIsReviewer()
+        ? '<label class="exp-ctl"><span>Person</span><select class="kpi-select" onchange="expSetPerson(this.value)">'
+            + people.map(p => '<option value="' + escapeHtml(p) + '"' + (p === _expPerson ? ' selected' : '') + '>' + escapeHtml(p) + '</option>').join('')
+            + '</select></label>'
+        : '';
+
+    const rate = (_expData && _expData.rate) || 0;
+    // Only the CEO may move the rate; everyone else sees what it is.
+    const isCeo = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'ceo';
+    const rateCtl = isCeo
+        ? '<label class="exp-ctl"><span>Mileage rate</span>'
+            + '<input type="number" id="exp-rate" class="exp-input" style="width:86px;" step="0.01" min="0" max="100" value="' + rate + '">'
+            + '<button type="button" class="exp-btn-sm" onclick="expSaveRate()">Save</button>'
+            + '<span class="exp-msg" id="exp-rate-msg"></span></label>'
+        : '<span class="exp-ctl exp-ctl-ro"><span>Mileage rate</span><b>$' + _expRate(rate) + '/mi</b></span>';
+
+    const cats = _expCanManageCats()
+        ? '<button type="button" class="exp-btn-sm" onclick="expToggleCats()">'
+            + (_expCatsOpen ? 'Close categories' : 'Manage categories') + '</button>'
+        : '';
+
+    return '<div class="exp-controls">'
+        + '<label class="exp-ctl"><span>Month</span><select class="kpi-select" onchange="expSetMonth(this.value)">' + monthOpts + '</select></label>'
+        + personSel + rateCtl
+        + '<span class="exp-controls-sp"></span>' + cats
+        + '<button type="button" class="btn-primary exp-btn-mail" onclick="expShowPreview()">'
+        + 'Email Report<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>'
+        + '</div>';
+}
+
+// A DM/MSM may only edit their own report; the CEO may edit anyone's.
+function _expCanEdit() {
+    return _expIsReviewer() || !!(_expData && _expPerson === _expData.me);
+}
+
+function _expMileageHtml() {
+    const rows = _expRows('mileage');
+    const canEdit = _expCanEdit();
+    let html = '<div class="exp-table-wrap"><table class="exp-table"><thead><tr>'
+        + '<th>Date</th><th>Purpose</th><th>From</th><th>To</th>'
+        + '<th class="num">Miles</th><th class="num">Rate</th><th class="num">Amount</th>'
+        + (canEdit ? '<th></th>' : '') + '</tr></thead><tbody>';
+
+    if (!rows.length) {
+        html += '<tr><td colspan="' + (canEdit ? 8 : 7) + '" class="exp-none">No mileage logged for '
+              + escapeHtml(_expMonthLabel(_expMonth)) + '.</td></tr>';
+    }
+    rows.forEach(e => {
+        if (_expEditId === e.id) { html += _expMileageEditRow(e); return; }
+        html += '<tr>'
+            + '<td>' + _expDate(e.entry_date) + '</td>'
+            + '<td>' + escapeHtml(e.description || '—') + '</td>'
+            + '<td>' + escapeHtml(e.from_loc || '—') + '</td>'
+            + '<td>' + escapeHtml(e.to_loc || '—') + '</td>'
+            + '<td class="num">' + (Number(e.miles) || 0) + '</td>'
+            + '<td class="num muted">$' + _expRate(e.rate) + '</td>'
+            + '<td class="num strong">' + _expMoney(e.amount) + '</td>'
+            + (canEdit ? '<td class="num">' + _expRowActions(e.id) + '</td>' : '')
+            + '</tr>';
+    });
+    html += '</tbody></table></div>';
+    if (canEdit && _expEditId === null) html += _expMileageAddHtml();
+    return html;
+}
+
+function _expExpenseHtml() {
+    const rows = _expRows('expense');
+    const canEdit = _expCanEdit();
+    let html = '<div class="exp-table-wrap"><table class="exp-table"><thead><tr>'
+        + '<th>Date</th><th>Category</th><th>Description</th><th class="num">Amount</th>'
+        + (canEdit ? '<th></th>' : '') + '</tr></thead><tbody>';
+
+    if (!rows.length) {
+        html += '<tr><td colspan="' + (canEdit ? 5 : 4) + '" class="exp-none">No expenses logged for '
+              + escapeHtml(_expMonthLabel(_expMonth)) + '.</td></tr>';
+    }
+    rows.forEach(e => {
+        if (_expEditId === e.id) { html += _expExpenseEditRow(e); return; }
+        html += '<tr>'
+            + '<td>' + _expDate(e.entry_date) + '</td>'
+            + '<td><span class="exp-cat">' + escapeHtml(e.category || '—') + '</span></td>'
+            + '<td>' + escapeHtml(e.description || '—') + '</td>'
+            + '<td class="num strong">' + _expMoney(e.amount) + '</td>'
+            + (canEdit ? '<td class="num">' + _expRowActions(e.id) + '</td>' : '')
+            + '</tr>';
+    });
+    html += '</tbody></table></div>';
+    if (canEdit && _expEditId === null) html += _expExpenseAddHtml();
+    return html;
+}
+
+function _expRowActions(id) {
+    return '<button type="button" class="exp-ico" title="Edit" onclick="expStartEdit(\'' + id + '\')">&#9998;</button>'
+         + '<button type="button" class="exp-ico" title="Delete" onclick="expDeleteEntry(\'' + id + '\')">&#128465;</button>';
+}
+
+// ---- add / edit forms -------------------------------------------------------
+// Inputs carry an id so a re-render can read them back; values are read at save
+// time rather than tracked in state, matching the rest of the site's small forms.
+function _expCatOptions(selected) {
+    const cats = ((_expData && _expData.categories) || []).filter(c => c.active || c.name === selected);
+    return '<option value="">Category…</option>' + cats.map(c =>
+        '<option value="' + escapeHtml(c.name) + '"' + (c.name === selected ? ' selected' : '') + '>'
+        + escapeHtml(c.name) + '</option>').join('');
+}
+
+function _expMileageAddHtml() {
+    return '<div class="exp-add">'
+        + '<div class="exp-add-t">Add a trip</div>'
+        + '<div class="exp-add-grid">'
+        + '<label>Date<input type="date" id="exp-m-date" class="exp-input" value="' + _expToday() + '"></label>'
+        + '<label class="wide">Purpose<input type="text" id="exp-m-desc" class="exp-input" placeholder="Store visit, bank run…"></label>'
+        + '<label>From<input type="text" id="exp-m-from" class="exp-input" placeholder="OVL"></label>'
+        + '<label>To<input type="text" id="exp-m-to" class="exp-input" placeholder="LEE"></label>'
+        + '<label>Miles<input type="number" id="exp-m-miles" class="exp-input" step="0.1" min="0" placeholder="0.0"></label>'
+        + '<button type="button" class="btn-primary exp-add-btn" onclick="expAddMileage(this)">Add Trip</button>'
+        + '</div>'
+        + '<div class="exp-add-note">Reimbursement is calculated at the current rate ($'
+        + _expRate((_expData && _expData.rate) || 0) + '/mi) and locked to this trip.</div>'
+        + '<div class="exp-msg" id="exp-m-msg"></div></div>';
+}
+
+function _expExpenseAddHtml() {
+    return '<div class="exp-add">'
+        + '<div class="exp-add-t">Add an expense</div>'
+        + '<div class="exp-add-grid">'
+        + '<label>Date<input type="date" id="exp-e-date" class="exp-input" value="' + _expToday() + '"></label>'
+        + '<label>Category<select id="exp-e-cat" class="exp-input">' + _expCatOptions('') + '</select></label>'
+        + '<label class="wide">Description<input type="text" id="exp-e-desc" class="exp-input" placeholder="What was it for?"></label>'
+        + '<label>Amount<input type="number" id="exp-e-amt" class="exp-input" step="0.01" min="0" placeholder="0.00"></label>'
+        + '<button type="button" class="btn-primary exp-add-btn" onclick="expAddExpense(this)">Add Expense</button>'
+        + '</div>'
+        + '<div class="exp-msg" id="exp-e-msg"></div></div>';
+}
+
+function _expMileageEditRow(e) {
+    const i = (id, v, type, step) => '<input type="' + type + '" id="exp-ed-' + id + '" class="exp-input"'
+        + (step ? ' step="' + step + '" min="0"' : '') + ' value="' + escapeHtml(v == null ? '' : String(v)) + '">';
+    return '<tr class="exp-editing">'
+        + '<td>' + i('date', String(e.entry_date).slice(0, 10), 'date') + '</td>'
+        + '<td>' + i('desc', e.description, 'text') + '</td>'
+        + '<td>' + i('from', e.from_loc, 'text') + '</td>'
+        + '<td>' + i('to', e.to_loc, 'text') + '</td>'
+        + '<td class="num">' + i('miles', e.miles, 'number', '0.1') + '</td>'
+        + '<td class="num muted">$' + _expRate(e.rate) + '</td>'
+        + '<td class="num muted">recalculated</td>'
+        + '<td class="num exp-edit-actions">'
+            + '<button type="button" class="exp-btn-sm" onclick="expSaveEdit(\'' + e.id + '\',\'mileage\')">Save</button>'
+            + '<button type="button" class="exp-btn-sm ghost" onclick="expCancelEdit()">Cancel</button>'
+        + '</td></tr>';
+}
+
+function _expExpenseEditRow(e) {
+    return '<tr class="exp-editing">'
+        + '<td><input type="date" id="exp-ed-date" class="exp-input" value="' + String(e.entry_date).slice(0, 10) + '"></td>'
+        + '<td><select id="exp-ed-cat" class="exp-input">' + _expCatOptions(e.category) + '</select></td>'
+        + '<td><input type="text" id="exp-ed-desc" class="exp-input" value="' + escapeHtml(e.description || '') + '"></td>'
+        + '<td class="num"><input type="number" id="exp-ed-amt" class="exp-input" step="0.01" min="0" value="' + (Number(e.amount) || 0) + '"></td>'
+        + '<td class="num exp-edit-actions">'
+            + '<button type="button" class="exp-btn-sm" onclick="expSaveEdit(\'' + e.id + '\',\'expense\')">Save</button>'
+            + '<button type="button" class="exp-btn-sm ghost" onclick="expCancelEdit()">Cancel</button>'
+        + '</td></tr>';
+}
+
+// ---- actions ----------------------------------------------------------------
+async function _expPost(payload, msgId) {
+    const msg = msgId ? document.getElementById(msgId) : null;
+    const show = (text, ok) => { if (msg) { msg.textContent = text; msg.className = 'exp-msg' + (ok ? ' ok' : ' bad'); } };
+    show('Saving…', true);
+    try {
+        const r = await fetch(EXPENSES_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': sessionStorage.getItem('speeksUserPin') || '' },
+            body: JSON.stringify(payload),
+        });
+        const j = await r.json();
+        if (j && j.error) { show(j.error, false); return null; }
+        return j;
+    } catch (err) { show('Could not save — check your connection.', false); return null; }
+}
+
+const _expVal = id => (document.getElementById(id) || {}).value || '';
+
+async function expAddMileage(btn) {
+    if (btn) btn.disabled = true;
+    const j = await _expPost({
+        action: 'add_entry', kind: 'mileage', person: _expPerson,
+        entry_date: _expVal('exp-m-date'),
+        description: _expVal('exp-m-desc'),
+        from_loc: _expVal('exp-m-from'),
+        to_loc: _expVal('exp-m-to'),
+        miles: _expVal('exp-m-miles'),
+    }, 'exp-m-msg');
+    if (btn) btn.disabled = false;
+    if (j) await loadExpenses();
+}
+window.expAddMileage = expAddMileage;
+
+async function expAddExpense(btn) {
+    if (btn) btn.disabled = true;
+    const j = await _expPost({
+        action: 'add_entry', kind: 'expense', person: _expPerson,
+        entry_date: _expVal('exp-e-date'),
+        category: _expVal('exp-e-cat'),
+        description: _expVal('exp-e-desc'),
+        amount: _expVal('exp-e-amt'),
+    }, 'exp-e-msg');
+    if (btn) btn.disabled = false;
+    if (j) await loadExpenses();
+}
+window.expAddExpense = expAddExpense;
+
+function expStartEdit(id) { _expEditId = id; renderExpenses(); }
+function expCancelEdit() { _expEditId = null; renderExpenses(); }
+window.expStartEdit = expStartEdit;
+window.expCancelEdit = expCancelEdit;
+
+async function expSaveEdit(id, kind) {
+    const base = { action: 'update_entry', id, kind, person: _expPerson, entry_date: _expVal('exp-ed-date') };
+    const payload = kind === 'mileage'
+        ? Object.assign(base, {
+            description: _expVal('exp-ed-desc'), from_loc: _expVal('exp-ed-from'),
+            to_loc: _expVal('exp-ed-to'), miles: _expVal('exp-ed-miles'),
+        })
+        : Object.assign(base, {
+            category: _expVal('exp-ed-cat'), description: _expVal('exp-ed-desc'), amount: _expVal('exp-ed-amt'),
+        });
+    const j = await _expPost(payload);
+    if (j) { _expEditId = null; await loadExpenses(); }
+    else alert('Could not save that line. Check the date and amount.');
+}
+window.expSaveEdit = expSaveEdit;
+
+async function expDeleteEntry(id) {
+    if (!confirm('Delete this line? This cannot be undone.')) return;
+    const j = await _expPost({ action: 'delete_entry', id });
+    if (j) await loadExpenses();
+}
+window.expDeleteEntry = expDeleteEntry;
+
+async function expSaveRate() {
+    const j = await _expPost({ action: 'set_rate', rate: _expVal('exp-rate') }, 'exp-rate-msg');
+    if (!j) return;
+    const msg = document.getElementById('exp-rate-msg');
+    if (msg) { msg.textContent = 'Saved'; msg.className = 'exp-msg ok'; }
+    // Existing lines keep the rate they were filed at — only new ones pick this up.
+    await loadExpenses();
+}
+window.expSaveRate = expSaveRate;
+
+function expSetMonth(m) { _expMonth = m; _expEditId = null; _expPreview = false; loadExpenses(); }
+function expSetPerson(p) { _expPerson = p; _expEditId = null; _expPreview = false; renderExpenses(); }
+function expSetTab(t) { _expTab = t; _expEditId = null; renderExpenses(); }
+window.expSetMonth = expSetMonth;
+window.expSetPerson = expSetPerson;
+window.expSetTab = expSetTab;
+
+// ---- category manager (CEO / DM) --------------------------------------------
+function expToggleCats() { _expCatsOpen = !_expCatsOpen; renderExpenses(); }
+window.expToggleCats = expToggleCats;
+
+function _expCatsHtml() {
+    const cats = (_expData && _expData.categories) || [];
+    let rows = cats.map(c =>
+        '<div class="exp-cat-row' + (c.active ? '' : ' retired') + '">'
+        + '<input type="text" class="exp-input" value="' + escapeHtml(c.name) + '" data-cat-id="' + c.id + '">'
+        + (c.active ? '' : '<span class="exp-cat-tag">Retired</span>')
+        + '<button type="button" class="exp-btn-sm" onclick="expSaveCat(this)">Save</button>'
+        + '<button type="button" class="exp-btn-sm ghost" onclick="expDeleteCat(\'' + c.id + '\')">Delete</button>'
+        + '</div>').join('');
+    return '<div class="exp-cats">'
+        + '<div class="exp-cats-h">Expense categories</div>'
+        + '<div class="exp-cats-sub">Renaming a category also relabels every line already filed under it. '
+        + 'Deleting one that is still in use retires it instead, so old reports keep their labels.</div>'
+        + rows
+        + '<div class="exp-cat-row">'
+        + '<input type="text" class="exp-input" id="exp-cat-new" placeholder="New category name…">'
+        + '<button type="button" class="exp-btn-sm" onclick="expAddCat()">Add</button>'
+        + '</div>'
+        + '<div class="exp-msg" id="exp-cat-msg"></div></div>';
+}
+
+async function expSaveCat(btn) {
+    const input = btn.parentElement.querySelector('input[data-cat-id]');
+    if (!input) return;
+    const j = await _expPost({ action: 'save_category', id: input.dataset.catId, name: input.value }, 'exp-cat-msg');
+    if (j) await loadExpenses();
+}
+window.expSaveCat = expSaveCat;
+
+async function expAddCat() {
+    const j = await _expPost({ action: 'save_category', name: _expVal('exp-cat-new') }, 'exp-cat-msg');
+    if (j) await loadExpenses();
+}
+window.expAddCat = expAddCat;
+
+async function expDeleteCat(id) {
+    if (!confirm('Delete this category? If any expenses still use it, it will be retired instead so their labels survive.')) return;
+    const j = await _expPost({ action: 'delete_category', id }, 'exp-cat-msg');
+    if (!j) return;
+    const msg = document.getElementById('exp-cat-msg');
+    if (msg && j.retired) {
+        msg.textContent = 'Still used by ' + j.used + ' line' + (j.used === 1 ? '' : 's') + ' — retired instead of deleted.';
+        msg.className = 'exp-msg ok';
+    }
+    await loadExpenses();
+}
+window.expDeleteCat = expDeleteCat;
+
+// ---- email generator --------------------------------------------------------
+// Same shape as Box Order and the recycle report: build the report as plain text
+// once, show it as a preview, then hand it to the OS mail client via mailto: so
+// it leaves from the sender's own mailbox and the CEO can reply straight to them.
+// Copy is the failsafe for machines with no mail client bound to mailto:.
+function _expReportTo() { return _recipientsFor('expense_report', _EXP_FALLBACK_TO); }
+
+function _expPad(s, n) {
+    s = String(s == null ? '' : s);
+    return s.length >= n ? s.slice(0, n) : s + ' '.repeat(n - s.length);
+}
+function _expPadL(s, n) {
+    s = String(s == null ? '' : s);
+    return s.length >= n ? s.slice(0, n) : ' '.repeat(n - s.length) + s;
+}
+
+function _expCompose() {
+    const monthLabel = _expMonthLabel(_expMonth);
+    const mileageRows = _expRows('mileage');
+    const expenseRows = _expRows('expense');
+    const mileageTotal = _expTotal('mileage');
+    const expenseTotal = _expTotal('expense');
+    const miles = mileageRows.reduce((a, e) => a + (Number(e.miles) || 0), 0);
+
+    let body = 'Expense report for ' + _expPerson + ' — ' + monthLabel + '\n\n';
+
+    if (mileageRows.length) {
+        body += 'MILEAGE\n';
+        mileageRows.forEach(e => {
+            const trip = [e.from_loc, e.to_loc].filter(Boolean).join(' to ');
+            body += '  ' + _expPad(_expDate(e.entry_date), 8)
+                 + _expPad(e.description || trip || 'Trip', 30)
+                 + _expPadL((Number(e.miles) || 0) + ' mi', 10)
+                 + _expPadL('@ $' + _expRate(e.rate), 9)
+                 + _expPadL(_expMoney(e.amount), 12) + '\n';
+        });
+        body += '  ' + _expPad('', 38) + _expPadL(Math.round(miles * 10) / 10 + ' mi', 10)
+             + _expPadL('', 9) + _expPadL(_expMoney(mileageTotal), 12) + '\n\n';
+    }
+
+    if (expenseRows.length) {
+        body += 'EXPENSES\n';
+        expenseRows.forEach(e => {
+            body += '  ' + _expPad(_expDate(e.entry_date), 8)
+                 + _expPad(e.category || '', 26)
+                 + _expPad(e.description || '', 26)
+                 + _expPadL(_expMoney(e.amount), 12) + '\n';
+        });
+        body += '  ' + _expPad('', 60) + _expPadL(_expMoney(expenseTotal), 12) + '\n\n';
+    }
+
+    if (!mileageRows.length && !expenseRows.length) {
+        body += 'No expenses or mileage were logged for this month.\n\n';
+    }
+
+    body += 'TOTAL DUE: ' + _expMoney(mileageTotal + expenseTotal) + '\n\n'
+         + 'Thank you,\n' + _expPerson;
+
+    return {
+        email: _expReportTo().join(','),
+        subject: 'Expense Report — ' + _expPerson + ' — ' + monthLabel,
+        body,
+    };
+}
+
+function _expPreviewHtml() {
+    const { email, subject, body } = _expCompose();
+    return '<div class="exp-preview-wrap">'
+        + '<div class="exp-preview-h">Email preview</div>'
+        + '<div class="box-order-email-preview">'
+        + escapeHtml('To: ' + email + '\nSubject: ' + subject + '\n\n' + body)
+        + '</div>'
+        + '<div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px; align-items:center;">'
+        + RECYCLE_MAIL_TIP
+        + '<button class="btn-secondary" onclick="expHidePreview()">'
+        + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>Back</button>'
+        + '<button class="btn-secondary" onclick="expCopyReport(this)">Copy</button>'
+        + '<button class="btn-primary" onclick="expSendReport()">Send Email'
+        + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>'
+        + '</div></div>';
+}
+
+function expShowPreview() { _expPreview = true; _expEditId = null; renderExpenses(); }
+function expHidePreview() { _expPreview = false; renderExpenses(); }
+window.expShowPreview = expShowPreview;
+window.expHidePreview = expHidePreview;
+
+function expSendReport() {
+    const { email, subject, body } = _expCompose();
+    window.location.href = 'mailto:' + encodeURIComponent(email)
+        + '?subject=' + encodeURIComponent(subject)
+        + '&body=' + encodeURIComponent(body);
+}
+window.expSendReport = expSendReport;
+
+function expCopyReport(button) {
+    const { email, subject, body } = _expCompose();
+    const text = 'To: ' + email + '\nSubject: ' + subject + '\n\n' + body;
+    navigator.clipboard.writeText(text).then(() => {
+        const was = button.textContent;
+        button.textContent = 'Copied';
+        setTimeout(() => { button.textContent = was; }, 1600);
+    }).catch(() => alert('Could not copy. Select the preview text and copy it manually.'));
+}
+window.expCopyReport = expCopyReport;
