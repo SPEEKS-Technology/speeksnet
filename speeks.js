@@ -28962,7 +28962,14 @@ const _RT_TOOL_CHECKS = {
     bmargin:       ['checkMarginReminders', 'checkMarginDmReminders'],
     comments:      ['fetchAndDisplayStoreComment'],
     announcements: ['loadCMS'],
-    patch:         ['loadPatchNotes'],
+    // checkForNewPatchNotes FIRST, and it is the one that matters: the feed's
+    // "New Patch Notes" row is gated on localStorage speeksUnseenPatchNotes_<user>,
+    // and checkPatchNotesBadge() (called only from here) is the sole writer of that
+    // flag. loadPatchNotes alone re-fetched the notes and moved _latestPatchKey to
+    // the new version, but left the flag untouched — so a published release pinged
+    // every client and no row appeared until the next login ran the sweep.
+    // loadPatchNotes still runs after, to refresh an already-open hub.
+    patch:         ['checkForNewPatchNotes', 'loadPatchNotes'],
     kpi:           ['checkKpiDueReminders'],
     preferred:     ['checkPreferredReminders'],
     b2b:           ['_b2bRealtimeRefresh', 'checkB2BReminders'],
