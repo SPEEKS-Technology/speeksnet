@@ -24543,7 +24543,7 @@ function _vrMaybePopup() {
     const now = Date.now();
     const reviewSeen = _vrGetReviewSeen();
     const explainStores = [];   // stores with unexplained lines
-    let explainCount = 0, explainOverdue = false, explainDueSoon = false;
+    let explainCount = 0, explainOverdue = false, explainDueSoon = false, explainDueAt = 0;
     const replyStores = [];     // stores with DM notes still awaiting a reply
     let replyCount = 0, replyOverdue = false;
     const reviewedStores = [];  // DM reviewed, no reply needed — FYI until they look
@@ -24566,6 +24566,10 @@ function _vrMaybePopup() {
         if (unanswered > 0) {
             explainStores.push(store);
             explainCount += unanswered;
+            // Earliest deadline still outstanding — shown on the feed card so the
+            // manager sees WHEN without opening the tool. With several stores the
+            // soonest is the one that matters.
+            if (due && (!explainDueAt || due < explainDueAt)) explainDueAt = due;
             if (now > due) explainOverdue = true;
             else if (due - now < 24 * 3600 * 1000) explainDueSoon = true; // last day before the deadline
         }
@@ -24627,6 +24631,14 @@ function _vrMaybePopup() {
         fyiOnly ? 'New variance report to review'
                 : (overdue ? 'Variance replies overdue' : (explainDueSoon ? 'Variance replies due tomorrow' : 'Variance replies needed')),
         summary + '.', summary, coveredStores, fyiOnly);
+
+    // Deadline for the feed card's title. Stamped after the render (which rewrites
+    // innerHTML but leaves the element's dataset alone), same channel as data-fyi.
+    const _vrTextEl = document.getElementById('varianceAlertBubbleText');
+    if (_vrTextEl) {
+        if (explainDueAt) _vrTextEl.dataset.due = _samShortDate(explainDueAt);
+        else delete _vrTextEl.dataset.due;
+    }
 }
 
 // Same shared red bubble as the claim reminders, with a button into the tab.
@@ -26095,6 +26107,14 @@ function _agBuildStoreBubble(mine) {
         agTextEl.dataset.summary = body;
         const ss = [...new Set(stores.filter(Boolean))];
         if (ss.length) agTextEl.dataset.stores = ss.join(','); else delete agTextEl.dataset.stores;
+        // Soonest deadline still outstanding → the feed card's title, so the
+        // manager sees WHEN without opening the tool.
+        let due = 0;
+        mine.forEach(it => {
+            const d = it.due_at ? new Date(it.due_at).getTime() : 0;
+            if (d && (!due || d < due)) due = d;
+        });
+        if (due) agTextEl.dataset.due = _samShortDate(due); else delete agTextEl.dataset.due;
     }
 }
 
@@ -26885,6 +26905,13 @@ function samCleanHotbar() {
 // One row per built-out deadline/reminder tool. `action` is the same "open the
 // tool" logic the old alert bubble ran on click — the hub + dashboard cards now
 // carry it so clicking a reminder jumps straight to its tool.
+// "Aug 11" — the short form the rest of the site uses for a deadline. Takes ms.
+function _samShortDate(ms) {
+    const d = new Date(Number(ms) || 0);
+    return isNaN(d.getTime()) || !ms
+        ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
 function _samReminderCfg() {
     // Variance flips between a real deadline and a "go and look" — a store marked
     // in the clear owes no replies but still has to read its numbers. data-fyi is
@@ -26892,9 +26919,16 @@ function _samReminderCfg() {
     // the title and the colour can't disagree with the text underneath them.
     const _vrT = document.getElementById('varianceAlertBubbleText');
     const _vrFyi = !!(_vrT && _vrT.dataset && _vrT.dataset.fyi);
+    // Deadlines stamped by _vrMaybePopup / _agBuildStoreBubble — the soonest one
+    // still outstanding. Appended to the title so the card answers "by when?"
+    // without being opened. Absent when nothing is actually owed (an FYI row).
+    const _vrDue = (_vrT && _vrT.dataset && _vrT.dataset.due) || '';
+    const _agT = document.getElementById('agingAlertBubbleText');
+    const _agDue = (_agT && _agT.dataset && _agT.dataset.due) || '';
     const cfg = [
         { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText',
-          title: _vrFyi ? 'Variance Report to Review' : 'Variance Replies Due',
+          title: _vrFyi ? 'Variance Report to Review'
+                        : 'Variance Replies Due' + (_vrDue ? ' — ' + _vrDue : ''),
           urgency: _vrFyi ? 1 : 2, due: _vrFyi ? 'Review' : 'Due',
           cls: _vrFyi ? 'sam-due-amber' : 'sam-due-red',
           action: "window.location.href='workspace.html#vreplies'" },
@@ -26907,7 +26941,9 @@ function _samReminderCfg() {
         // openRecycleFocused, not the two calls inline: it also carries the alert's
         // month across, so a card about a July request doesn't open on August.
         { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "openRecycleFocused()" },
-        { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText', title: 'Aging Inventory Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" },
+        { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText',
+          title: 'Aging Inventory Review' + (_agDue ? ' — Due ' + _agDue : ''),
+          urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" },
         { key: 'margin', id: 'marginAlertBubble', text: 'marginAlertBubbleText', title: 'Margin Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#mreplies'" },
         // Preferred Purchases — feed-only, both directions. The owner's card is a
         // queue to work, so it keeps the amber "Review" badge and a Snooze.
