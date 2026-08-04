@@ -11,14 +11,18 @@ const corsHeaders = {
 // too — these are people's reimbursement claims, not store operating data, so
 // they should not be readable by an unauthenticated request.
 const TOOL_ROLES = new Set(["ceo", "district manager", "multi-store manager"]);
-// Reviewers see and edit other people's reports. The CEO reviews everyone; the
-// DM reviews everyone EXCEPT the CEO — they file the MSM's and their own work so
-// the CEO doesn't have to, but the CEO's own claims stay private from them. That
+// Reviewers can LOOK AT other people's reports. The CEO reviews everyone; the DM
+// reviews everyone EXCEPT the CEO, whose own claims stay private from them. That
 // exclusion is enforced on every path below (list, read, write, delete), not just
-// by leaving the name out of the picker.
+// by leaving the name out of the picker. Editing is a separate, narrower right —
+// see EDITOR_ROLES.
 const REVIEWER_ROLES = new Set(["ceo", "district manager"]);
 // Reviewers who still must not see the CEO's own report.
 const EXCLUDES_CEO = new Set(["district manager"]);
+// Reviewing is READ-ONLY unless you are in here. The DM can look at anyone's
+// report bar the CEO's, but only the CEO may change someone else's lines —
+// everyone else edits only their own.
+const EDITOR_ROLES = new Set(["ceo"]);
 // Who may rename/add/remove categories.
 const CATALOG_ROLES = new Set(["ceo", "district manager"]);
 // Who may change the mileage reimbursement rate. It is a single global value, so
@@ -75,6 +79,7 @@ Deno.serve(async (req: Request) => {
   const me = String(user.name || "").trim();
   if (!TOOL_ROLES.has(role)) return json({ error: "Insufficient role" }, 403);
   const isReviewer = REVIEWER_ROLES.has(role);
+  const canEditOthers = EDITOR_ROLES.has(role);
 
   async function currentRate(): Promise<number> {
     const { data } = await supabase
@@ -109,22 +114,25 @@ Deno.serve(async (req: Request) => {
     return _visible;
   }
 
-  // May this user read/write that person's report at all?
-  async function canTouch(person: string): Promise<boolean> {
+  // May this user CHANGE that person's report? Your own always; someone else's
+  // only if you may edit others AND they are inside your visible roster. Note this
+  // is deliberately stricter than what you can read — a DM reviews the MSM's
+  // report but cannot alter it.
+  async function canWrite(person: string): Promise<boolean> {
     if (person === me) return true;
-    if (!isReviewer) return false;
+    if (!canEditOthers) return false;
     return (await visiblePeople()).includes(person);
   }
 
-  // A non-reviewer is pinned to their own report no matter what they ask for, and
-  // a reviewer may only name someone inside their visible roster — so a DM cannot
-  // write to the CEO's report by passing the name directly. null = refuse, rather
-  // than silently filing the line under the caller instead of who they named.
+  // Anyone who cannot edit others is pinned to their own report no matter what
+  // they ask for, and an editor may only name someone inside their visible roster.
+  // null = refuse, rather than silently filing the line under the caller instead
+  // of who they named.
   async function scopePerson(requested: unknown): Promise<string | null> {
-    if (!isReviewer) return me;
     const p = String(requested || "").trim();
-    if (!p) return me;
-    return (await canTouch(p)) ? p : null;
+    if (!p || p === me) return me;          // unnamed or yourself → your report
+    if (!canEditOthers) return null;        // named someone else, not allowed to
+    return (await canWrite(p)) ? p : null;
   }
 
   if (req.method === "GET") {
@@ -148,7 +156,7 @@ Deno.serve(async (req: Request) => {
     const months = [...new Set((mrows || []).map((r: any) => r.month_start))].sort().reverse();
 
     return json({
-      me, role, isReviewer, people, month, months,
+      me, role, isReviewer, canEditOthers, people, month, months,
       rate: await currentRate(),
       categories: await categories(),
       entries: entries || [],
@@ -223,7 +231,7 @@ Deno.serve(async (req: Request) => {
       if (!existing) return json({ error: "That line no longer exists." }, 404);
       // Re-checked against the visible roster, not just isReviewer — otherwise a
       // DM (now a reviewer) could edit a CEO line by passing its id.
-      if (!(await canTouch(String(existing.person)))) return json({ error: "Not your report." }, 403);
+      if (!(await canWrite(String(existing.person)))) return json({ error: "Not your report." }, 403);
       delete row.created_by;
       // An edit must never move a line to a different report. `row.person` was
       // computed for the add path and defaults to the caller, so a reviewer
@@ -241,7 +249,7 @@ Deno.serve(async (req: Request) => {
       const { data: existing } = await supabase
         .from("expense_entries").select("person").eq("id", id).maybeSingle();
       if (!existing) return json({ ok: true });
-      if (!(await canTouch(String(existing.person)))) return json({ error: "Not your report." }, 403);
+      if (!(await canWrite(String(existing.person)))) return json({ error: "Not your report." }, 403);
       const { error } = await supabase.from("expense_entries").delete().eq("id", id);
       if (error) return json({ error: error.message }, 500);
       return json({ ok: true });

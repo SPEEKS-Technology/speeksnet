@@ -29216,10 +29216,14 @@ const _expMoney = n => '$' + (Math.round((Number(n) || 0) * 100) / 100)
 
 // A `date` column comes back as YYYY-MM-DD; parsing that directly gives UTC
 // midnight, which renders as the previous day west of Greenwich.
+// MM/DD/YYYY — an expense claim is a financial record, so the date is written out
+// in full rather than as a friendly "Aug 3". Built from the parts, not from
+// toLocaleDateString, so it can't drift with the viewer's locale.
 const _expDate = s => {
     if (!s) return '';
     const [y, m, d] = String(s).slice(0, 10).split('-').map(Number);
-    return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    if (!y || !m || !d) return '';
+    return String(m).padStart(2, '0') + '/' + String(d).padStart(2, '0') + '/' + y;
 };
 const _expMonthLabel = s => {
     if (!s) return '';
@@ -29256,6 +29260,10 @@ async function openExpenses() {
     closeAllModals();
     toggleModal('expensesModal');
     _expPreview = false; _expEditId = null; _expCatsOpen = false;
+    // Always open on your OWN report. A reviewer who last looked at someone else
+    // would otherwise come back to their report, and file against it by mistake.
+    // Cleared rather than set, so loadExpenses fills it from the server's `me`.
+    _expPerson = '';
     if (!_expMonth) _expMonth = _expThisMonth();
     await loadExpenses();
 }
@@ -29391,7 +29399,10 @@ function _expCanEdit() {
     // "All" is a read-only overview — a line has to belong to one person, so
     // there is nothing sensible to add or edit against the aggregate.
     if (_expIsAll()) return false;
-    return _expIsReviewer() || !!(_expData && _expPerson === _expData.me);
+    // Your own report always. Someone else's only if the server says you may edit
+    // others (CEO) — reviewing on its own is look-but-don't-touch.
+    if (_expData && _expPerson === _expData.me) return true;
+    return !!(_expData && _expData.canEditOthers);
 }
 
 function _expMileageHtml() {
@@ -29708,7 +29719,7 @@ function _expCompose() {
         body += 'MILEAGE\n';
         mileageRows.forEach(e => {
             const trip = [e.from_loc, e.to_loc].filter(Boolean).join(' to ');
-            body += '  ' + _expPad(_expDate(e.entry_date), 8)
+            body += '  ' + _expPad(_expDate(e.entry_date), 12)
                  + _expPad(e.description || trip || 'Trip', 33)
                  + _expPadL((Number(e.miles) || 0) + ' mi', 10)
                  + _expPadL('@ $' + _expRate(e.rate), 9)
@@ -29716,19 +29727,19 @@ function _expCompose() {
         });
         // "Total" leads the row. Sitting it next to the amount instead put it
         // between the two figures, which read as "22 total 15.40".
-        body += '  ' + _expPad('Total', 41) + _expPadL(Math.round(miles * 10) / 10 + ' mi', 10)
+        body += '  ' + _expPad('Total', 45) + _expPadL(Math.round(miles * 10) / 10 + ' mi', 10)
              + _expPadL('', 9) + _expPadL(_expMoney(mileageTotal), 12) + '\n\n';
     }
 
     if (expenseRows.length) {
         body += 'EXPENSES\n';
         expenseRows.forEach(e => {
-            body += '  ' + _expPad(_expDate(e.entry_date), 8)
+            body += '  ' + _expPad(_expDate(e.entry_date), 12)
                  + _expPad(e.category || '', 26)
                  + _expPad(e.description || '', 26)
                  + _expPadL(_expMoney(e.amount), 12) + '\n';
         });
-        body += '  ' + _expPad('Total', 60) + _expPadL(_expMoney(expenseTotal), 12) + '\n\n';
+        body += '  ' + _expPad('Total', 64) + _expPadL(_expMoney(expenseTotal), 12) + '\n\n';
     }
 
     if (!mileageRows.length && !expenseRows.length) {
