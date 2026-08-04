@@ -12811,15 +12811,22 @@ body.sam-active .hotbar-btn:hover {
 }
 .exp-editing td { background: #f9fbfa; }
 .exp-edit-actions { display: flex; gap: 5px; justify-content: flex-end; }
-/* fixed box — the pencil and bin glyphs have different advance widths, so
-   padding alone rendered the two buttons 4px apart in size */
+/* Matches the Manager Checklist pair (.mcl-edit-btn / .mcl-del-btn), the site's
+   closest equivalent: a 26px edit + delete pair on a row. Fixed box because the
+   pencil and bin glyphs have different advance widths, so padding alone rendered
+   the two buttons 4px apart in size. */
 .exp-ico {
-    display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0;
-    font-size: 12px; line-height: 1; cursor: pointer; color: #64748b;
-    background: #eef1f5; border: none; border-radius: 8px;
+    display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0;
+    font-size: 12px; line-height: 1; cursor: pointer; color: #475569;
+    background: #f1f5f9; border: none; border-radius: 6px;
     margin-left: 4px; transition: all .2s ease;
 }
 .exp-ico:hover { background: #e2e8f0; color: #334155; }
+/* Destructive actions are red-tinted everywhere else on the site (.mcl-del-btn,
+   .bai-del, the scorecard's delete). A delete that looks identical to the edit
+   beside it is the one thing here that read as out of place. */
+.exp-ico.del { background: #fef2f2; color: #dc2626; }
+.exp-ico.del:hover { background: #fee2e2; color: #b91c1c; }
 
 /* add-a-line panel */
 .exp-add { margin-top: 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 13px 15px; }

@@ -29482,7 +29482,7 @@ function _expExpenseHtml() {
 
 function _expRowActions(id) {
     return '<button type="button" class="exp-ico" title="Edit" onclick="expStartEdit(\'' + id + '\')">&#9998;</button>'
-         + '<button type="button" class="exp-ico" title="Delete" onclick="expDeleteEntry(\'' + id + '\')">&#128465;</button>';
+         + '<button type="button" class="exp-ico del" title="Delete" onclick="expDeleteEntry(\'' + id + '\')">&#128465;</button>';
 }
 
 // ---- add / edit forms -------------------------------------------------------
