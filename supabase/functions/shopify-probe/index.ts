@@ -160,6 +160,38 @@ const CHECKS: { key: string; why: string; query: string }[] = [
     } }`,
   },
   {
+    key: "returnsColumn",
+    why: "The refunds tile needs a source. An invalid ShopifyQL column comes back in "
+       + "parseErrors rather than as a GraphQL error, so candidate names can be "
+       + "tried without breaking the query.",
+    query: `{ shopifyqlQuery(query: "FROM sales SHOW net_sales, returns GROUP BY day SINCE -4d UNTIL today ORDER BY day") {
+      parseErrors
+      tableData { rows }
+    } }`,
+  },
+  {
+    key: "returnsFunnel",
+    why: "Second candidate set: the full sales funnel. Whichever of these parses "
+       + "tells us how Shopify names returns on this dataset, and lets the tile "
+       + "show refunds the same way the daily emails would.",
+    query: `{ shopifyqlQuery(query: "FROM sales SHOW gross_sales, discounts, returns, net_sales, returned_item_quantity SINCE -4d UNTIL today") {
+      parseErrors
+      tableData { rows }
+    } }`,
+  },
+  {
+    key: "hourlyPace",
+    why: "Decides whether 'vs same weekday last week' can ship at all. Comparing "
+       + "today-so-far against last week's FULL day reads -60% district-wide at "
+       + "4:44pm, which looks like a collapse rather than an incomplete day. A "
+       + "pace-matched comparison needs sales grouped by hour; if hour is not a "
+       + "valid grouping the tile has to be relabelled instead.",
+    query: `{ shopifyqlQuery(query: "FROM sales SHOW net_sales, orders GROUP BY hour SINCE -8d UNTIL today ORDER BY hour") {
+      parseErrors
+      tableData { rows }
+    } }`,
+  },
+  {
     key: "ordersCountToday",
     why: "Whether a server-side count is available, so the dashboard need not page "
        + "through every order just to show a total.",
