@@ -332,9 +332,15 @@ async function refresh(sb: any, now: Date, force: boolean) {
 
   if (!same) {
     await sb.from("app_cache").upsert({ key: CACHE_KEY, payload, synced_at: new Date().toISOString() });
-    // The payload rides along with the ping, so open dashboards update from the
-    // broadcast itself instead of every client turning round and re-fetching.
-    await broadcastChange("live", payload);
+    // A BARE ping — deliberately no payload attached.
+    //
+    // Broadcasts reach every subscriber, so shipping the district payload down the
+    // channel would hand every employee all five stores' sales and margin and
+    // undo the server-side scoping on the read path. Each client re-fetches
+    // instead and gets only its own store. That costs one small request per open
+    // dashboard per CHANGE, not per minute, which is still far below the
+    // per-client polling this design set out to avoid.
+    await broadcastChange("live");
   }
 
   return {
@@ -379,7 +385,15 @@ function canon(v: any): string {
   return JSON.stringify(walk(v));
 }
 
-async function broadcastChange(tool: string, data?: unknown) {
+/**
+ * Ping every subscriber that this tool changed. Same shape as the other tools'
+ * broadcasts, so it plugs into the existing client registry.
+ *
+ * Never put store data in here. The channel is shared by every signed-in
+ * browser regardless of role, so anything in the payload is readable by
+ * everyone — which is exactly what the scoped read path exists to prevent.
+ */
+async function broadcastChange(tool: string) {
   try {
     const base = Deno.env.get("SUPABASE_URL")!;
     const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -390,7 +404,7 @@ async function broadcastChange(tool: string, data?: unknown) {
         messages: [{
           topic: "speeks-notify",
           event: "changed",
-          payload: { tool, store: null, ts: Date.now(), data },
+          payload: { tool, store: null, ts: Date.now() },
         }],
       }),
     });
