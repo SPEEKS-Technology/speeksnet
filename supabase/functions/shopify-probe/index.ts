@@ -148,6 +148,18 @@ const CHECKS: { key: string; why: string; query: string }[] = [
     } }`,
   },
   {
+    key: "cogsColumn",
+    why: "Does ShopifyQL expose a cost column directly, and does it agree with "
+       + "net_sales - gross_profit? LEE Aug 3 derives COGS 938.11 while the daily "
+       + "email that filled the sheet said 1003.10 — either a real restatement or "
+       + "two different cost definitions, and the dashboard must not disagree with "
+       + "the sheet without us knowing why. parseErrors names any invalid column.",
+    query: `{ shopifyqlQuery(query: "FROM sales SHOW net_sales, gross_profit, cost_of_goods_sold GROUP BY day SINCE -4d UNTIL today ORDER BY day") {
+      parseErrors
+      tableData { rows }
+    } }`,
+  },
+  {
     key: "ordersCountToday",
     why: "Whether a server-side count is available, so the dashboard need not page "
        + "through every order just to show a total.",

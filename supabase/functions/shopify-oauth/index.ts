@@ -88,16 +88,37 @@ type Creds = {
 // confusing "signature check failed" on a store that looked configured.
 let APPS: Record<string, { clientId?: string; clientSecret?: string; prevSecret?: string }> = {};
 let APPS_ERROR = "";
+let APPS_REPAIRED = false;
 {
   const raw = (Deno.env.get("SHOPIFY_APPS") || "").trim();
   if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") APPS = parsed;
-      else APPS_ERROR = "SHOPIFY_APPS is valid JSON but not an object";
-    } catch (err) {
-      APPS_ERROR = `SHOPIFY_APPS is not valid JSON: ${String(err)}`;
+    // Pasting pretty-printed JSON into a single-line secret field wraps long
+    // values, which puts a raw newline INSIDE a string literal — invalid JSON,
+    // and the error ("bad control character at position 444") gives no hint that
+    // a line break is the culprit. No client ID or secret legitimately contains
+    // whitespace, so retrying with control characters stripped is safe and makes
+    // the config survive a wrapped paste rather than silently falling back to
+    // the default app.
+    const attempts: [string, string][] = [
+      ["as-is", raw],
+      ["control-characters-stripped", raw.replace(/[\u0000-\u001F]/g, "")],
+    ];
+    let lastErr = "";
+    for (const [label, text] of attempts) {
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          APPS = parsed;
+          APPS_REPAIRED = label !== "as-is";
+          lastErr = "";
+          break;
+        }
+        lastErr = "valid JSON but not an object of shop -> credentials";
+      } catch (err) {
+        lastErr = String(err);
+      }
     }
+    if (lastErr) APPS_ERROR = `SHOPIFY_APPS could not be parsed: ${lastErr}`;
   }
 }
 
@@ -439,6 +460,9 @@ Deno.serve(async (req: Request) => {
       authorizeUrl: authorize,
       appsConfigured: Object.keys(APPS),
       appsError: APPS_ERROR || null,
+      // True when the secret only parsed after stripping line breaks. Harmless,
+      // but worth tidying so the stored value is real JSON.
+      appsNeededRepair: APPS_REPAIRED,
       inboundRequestUrl: req.url,
     });
   }
