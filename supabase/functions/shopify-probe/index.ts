@@ -32,7 +32,10 @@ const SECRET = "sp33ks-sync-k3y-2026-x9mq";
 
 // Shopify supports each version for about 12 months and deprecates aggressively.
 // Overridable so a version bump needs no redeploy.
-const API_VERSION = Deno.env.get("SHOPIFY_API_VERSION") || "2026-01";
+// 2026-07 is what the app itself is pinned to in the Dev Dashboard, so probe the
+// same version the real fetcher will use — a field renamed between versions would
+// otherwise show as "works" here and fail in production.
+const API_VERSION = Deno.env.get("SHOPIFY_API_VERSION") || "2026-07";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body, null, 2), {
@@ -107,14 +110,41 @@ const CHECKS: { key: string; why: string; query: string }[] = [
     } } }`,
   },
   {
-    key: "shopifyql",
-    why: "The BEST source for COGS if available — Shopify's own analytics aggregates, "
-       + "the same ones the Flow emails report, with cost recorded at time of sale. "
-       + "Expected to fail if it is Plus-gated or the field has been renamed.",
+    key: "shopifyqlShape",
+    why: "In 2026-07 the ShopifyQL response types changed (TableResponse is gone, "
+       + "parseErrors is a String). Introspect the real shape before concluding "
+       + "anything about availability — a malformed query fails identically to an "
+       + "unavailable feature.",
+    query: `{
+      tableData: __type(name: "ShopifyqlTableData") {
+        kind name
+        fields { name type {
+          kind name ofType { kind name ofType { kind name ofType { kind name } } }
+        } }
+      }
+    }`,
+  },
+  {
+    key: "shopifyqlData",
+    why: "The payoff: real net sales / gross profit / order counts per day straight "
+       + "from Shopify's analytics. If this returns rows, the dashboard's margin is "
+       + "trustworthy and historical days stay correct through refunds.",
+    query: `{ shopifyqlQuery(query: "FROM sales SHOW net_sales, gross_profit, orders GROUP BY day SINCE -7d UNTIL today ORDER BY day") {
+      parseErrors
+      tableData {
+        rows
+      }
+    } }`,
+  },
+  {
+    key: "shopifyqlMinimal",
+    why: "THE COGS QUESTION. Selects only fields that must exist on any response — "
+       + "__typename names the concrete type and parseErrors reports a bad query. "
+       + "If this succeeds, ShopifyQL is available and gross_profit is reachable, "
+       + "which means cost AT TIME OF SALE rather than current cost.",
     query: `{ shopifyqlQuery(query: "FROM sales SHOW net_sales, gross_profit, orders SINCE -7d UNTIL today") {
       __typename
-      ... on TableResponse { tableData { columns { name dataType } rowData } }
-      parseErrors { code message }
+      parseErrors
     } }`,
   },
   {
@@ -133,15 +163,37 @@ Deno.serve(async (req: Request) => {
     return json({ ok: false, error: "unauthorized" }, 401);
   }
 
-  const shop = Deno.env.get("SHOPIFY_PROBE_SHOP") || "";
-  const token = Deno.env.get("SHOPIFY_PROBE_TOKEN") || "";
+  // Preferred source: the token shopify-oauth stored at install time, so nobody
+  // ever copies a credential by hand. The env vars remain as a manual override
+  // for a store that was connected some other way.
+  let shop = Deno.env.get("SHOPIFY_PROBE_SHOP") || "";
+  let token = Deno.env.get("SHOPIFY_PROBE_TOKEN") || "";
+  let source = "env";
+
+  if (!token) {
+    const wanted = (url.searchParams.get("shop") || "").toLowerCase().trim();
+    const rest = `${Deno.env.get("SUPABASE_URL")}/rest/v1/shopify_stores`
+      + `?select=shop,access_token,scopes`
+      + (wanted ? `&shop=eq.${encodeURIComponent(wanted)}` : "")
+      + `&order=updated_at.desc&limit=1`;
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+    const res = await fetch(rest, { headers: { apikey: key, Authorization: `Bearer ${key}` } });
+    const rows = res.ok ? await res.json().catch(() => []) : [];
+    if (rows.length) {
+      shop = rows[0].shop;
+      token = rows[0].access_token;
+      source = "shopify_stores";
+    }
+  }
+
   if (!shop || !token) {
     return json({
       ok: false,
-      error: "SHOPIFY_PROBE_SHOP and/or SHOPIFY_PROBE_TOKEN are not set",
-      howToFix: "Supabase Dashboard -> Project Settings -> Edge Functions -> Secrets. "
-              + "SHOPIFY_PROBE_SHOP is the myshopify.com domain with no https://, "
-              + "SHOPIFY_PROBE_TOKEN is the Admin API access token (shpat_...).",
+      error: "no Shopify token available",
+      howToFix: "Run the install once: /shopify-oauth?shop=<store>.myshopify.com — it stores "
+              + "the token in shopify_stores and this probe picks it up automatically. "
+              + "Or set SHOPIFY_PROBE_SHOP / SHOPIFY_PROBE_TOKEN as edge function secrets "
+              + "to override.",
       apiVersion: API_VERSION,
     }, 400);
   }
@@ -167,14 +219,19 @@ Deno.serve(async (req: Request) => {
   return json({
     ok: true,
     shop,                       // domain only — never the token
+    tokenSource: source,
     apiVersion: API_VERSION,
     summary: {
       passed,
       failed: Object.keys(results).filter(k => !(results[k] as any).ok),
       // Plain-language read of the one answer that shapes the whole build.
       cogsVerdict:
-        (results.shopifyql as any)?.ok ? "ShopifyQL works — use it for COGS (cost at time of sale)"
-        : (results.lineItemCost as any)?.ok ? "No ShopifyQL; unitCost is readable — COGS computable from line items, with the current-cost caveat"
+        (results.shopifyqlMinimal as any)?.ok
+          ? "ShopifyQL reachable — prefer it for COGS (cost at time of sale). "
+            + "Check parseErrors in the payload before trusting gross_profit."
+        : (results.lineItemCost as any)?.ok
+          ? "No ShopifyQL; unitCost is readable — COGS computable from line items, "
+            + "with the current-cost caveat (recomputing an old day can drift)"
         : "Neither path confirmed — gross margin may have to stay sheet-derived",
     },
     checks: results,
