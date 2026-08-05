@@ -10003,6 +10003,174 @@ body.sam-active .hotbar-btn:hover {
     .cc-sum { min-width: 33%; }
 }
 
+/* =========================================================
+   LIVE DASHBOARD — today's Shopify sales
+   Three surfaces share this stylesheet: the manager Command Center's Live tab
+   (tiles in .cc-strip, detail in .cc-panel), the employee/ASM widget (tiles and
+   detail together inside .cc-panel) and the DM/CEO card above the district board.
+   Tiles reuse .cc-cell so a tile reads identically wherever it lands.
+   ========================================================= */
+/* The employee widget and the district card have no .cc-strip of their own, so the
+   tile row is bordered here instead of relying on the strip band above it. */
+.lv-strip, .lv-dist-strip {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 1px; background: #eef2f6;
+}
+.ec-widget .lv-strip, .lv-dist-strip {
+    border: 1px solid #e6ebf1; border-radius: 13px; overflow: hidden;
+}
+.lv-dist-strip { margin: 16px 20px 0; }
+.lv-dist-detail { padding: 16px 20px 18px; }
+/* Only fires in the employee widget, where the tiles and the detail are siblings
+   inside one panel. In the manager Command Center they live in different containers
+   and the strip band already provides the separation. */
+.lv-strip + .lv-detail { margin-top: 16px; }
+/* The one tile the eye should land on first. */
+.cc-cell.lv-accent { background: #f4faf6; }
+.cc-cell.lv-accent .sh-v { color: #146c3c; }
+.cc-cell.lv-accent .sh-stripe { background: #1f9d57; }
+.lv-strip .cc-cell .sh-v, .lv-dist-strip .cc-cell .sh-v { font-variant-numeric: tabular-nums; }
+
+/* Freshness line above the detail (store surfaces); the district card carries the
+   same thing in its header instead. */
+.lv-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; flex-wrap: wrap; margin-bottom: 14px;
+}
+.lv-head .lv-asof { font-size: 10.5px; font-weight: 650; color: #94a3b8; }
+.lv-fresh {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    color: #178048; background: #e8f7ee; border: 1px solid #c6ecd6;
+    border-radius: 999px; padding: 4px 10px; white-space: nowrap; flex: none;
+}
+/* A frozen number must never pass for a current one, so "stale" and "closed" look
+   different rather than just dropping the dot. */
+.lv-fresh.stale  { color: #b3760a; background: #fdf3e1; border-color: #eccf94; }
+.lv-fresh.closed { color: #647082; background: #f1f5f9; border-color: #e6ebf1; }
+.lv-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: #1f9d57; flex: none;
+    box-shadow: 0 0 0 3px rgba(31, 157, 87, .18);
+    animation: lvPulse 2.4s ease-in-out infinite;
+}
+@keyframes lvPulse {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(31, 157, 87, .18); }
+    50%      { box-shadow: 0 0 0 5px rgba(31, 157, 87, .05); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .lv-dot { animation: none; }
+}
+
+/* Supporting figures — deliberately quieter than the tiles above them. */
+.lv-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.lv-chip {
+    font-size: 11px; font-weight: 700; color: #647082;
+    background: #f6f8fa; border: 1px solid #e6ebf1; border-radius: 999px;
+    padding: 6px 12px; white-space: nowrap;
+}
+.lv-chip b { color: var(--slate-charcoal); font-weight: 850; font-variant-numeric: tabular-nums; }
+
+/* GP banked vs the monthly goal, with a tick marking where the selling month has
+   actually reached. Banked, never projected — the district board below projects, and
+   the two numbers look like a contradiction unless each says which it is. */
+.lv-goal { margin-top: 16px; }
+.lv-goal-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.lv-goal-lbl { font-size: 9.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: #647082; }
+.lv-goal-fig { font-size: 12px; font-weight: 650; color: #647082; font-variant-numeric: tabular-nums; }
+.lv-goal-fig b { font-size: 14px; font-weight: 850; color: var(--slate-charcoal); }
+.lv-goal-bar {
+    position: relative; height: 9px; margin-top: 8px;
+    background: #eef2f6; border-radius: 999px; overflow: hidden;
+}
+.lv-goal-bar i {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: linear-gradient(90deg, #1f9d57, #178048); border-radius: 999px;
+    transition: width .5s ease;
+}
+/* The expected-progress tick. Inside the bar's overflow:hidden so a 100%-elapsed
+   month cannot park it outside the rounded end. */
+.lv-goal-bar u {
+    position: absolute; top: -2px; bottom: -2px; width: 2px;
+    margin-left: -1px; background: #647082; opacity: .55; text-decoration: none;
+}
+.lv-goal-foot {
+    display: flex; justify-content: space-between; gap: 10px; margin-top: 6px;
+    font-size: 10px; font-weight: 700; color: #94a3b8; font-variant-numeric: tabular-nums;
+}
+
+/* Pace: 100 = exactly on track for the month. */
+.lv-pill {
+    display: inline-block; font-size: 10.5px; font-weight: 850;
+    border-radius: 7px; padding: 2px 7px; white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.lv-pill.good { background: #e8f7ee; color: #178048; }
+.lv-pill.warn { background: #fdf3e1; color: #b3760a; }
+.lv-pill.bad  { background: #fdecec; color: #dc2626; }
+.lv-pill.flat { background: #f1f5f9; color: #94a3b8; }
+
+/* Both widgets stand 530px so the card lines up with the Performance chart, and the
+   Buying tab is what needs that height — the Live tab's content is shorter, which
+   left a slab of white under it. Anchoring the last-order line to the bottom of the
+   panel turns that gap into a footer rule, which is what the line is anyway. */
+.lv-panel { display: flex; flex-direction: column; }
+.lv-panel > .lv-detail { flex: 1; display: flex; flex-direction: column; }
+/* margin-top:auto collapses to 0 once the content is tall enough to fill, so the
+   breathing room above the rule is padding, not margin. */
+.lv-detail > .lv-last { margin-top: auto; padding-top: 16px; }
+
+/* The line that makes the panel feel live rather than reported. */
+.lv-last {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-top: 16px; padding-top: 13px; border-top: 1px solid #eef2f6;
+    font-size: 12px; font-weight: 650; color: #647082;
+}
+.lv-last b { color: var(--slate-charcoal); font-weight: 850; font-variant-numeric: tabular-nums; }
+.lv-last.lv-quiet { color: #94a3b8; }
+.lv-err {
+    font-size: 12px; font-weight: 650; color: #b3760a; line-height: 1.5;
+    background: #fdf3e1; border: 1px solid #eccf94; border-left-width: 3px;
+    border-radius: 10px; padding: 12px 14px;
+}
+.lv-err b { display: block; color: var(--slate-charcoal); font-weight: 850; margin-bottom: 2px; }
+.lv-note { margin-top: 12px; font-size: 10.5px; font-weight: 650; color: #94a3b8; line-height: 1.5; }
+
+/* Five-store table (DM/CEO) and both-store table (Multi-Store Manager). */
+.lv-tbl-scroll { overflow-x: auto; }
+.lv-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.lv-tbl th {
+    text-align: right; padding: 0 10px 9px; white-space: nowrap;
+    font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+    color: #94a3b8; border-bottom: 1px solid #e6ebf1;
+}
+.lv-tbl td {
+    text-align: right; padding: 11px 10px; white-space: nowrap;
+    font-weight: 700; color: #647082; font-variant-numeric: tabular-nums;
+    border-bottom: 1px solid #f3f6f9;
+}
+.lv-tbl th:first-child, .lv-tbl td:first-child { text-align: left; padding-left: 0; }
+.lv-tbl th:last-child, .lv-tbl td:last-child { padding-right: 0; }
+.lv-tbl .lv-strongnum { color: var(--slate-charcoal); font-weight: 850; font-size: 13px; }
+.lv-store { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.lv-store b { color: var(--slate-charcoal); font-weight: 850; letter-spacing: .02em; }
+.lv-tint { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.lv-store-nm { color: #94a3b8; font-weight: 650; }
+.lv-of { color: #b0bac6; font-weight: 650; }
+.lv-tbl tfoot .lv-foot td {
+    border-bottom: none; border-top: 2px solid #e6ebf1;
+    padding-top: 12px; color: var(--slate-charcoal); font-weight: 850;
+}
+.lv-tbl .lv-row-errmsg { text-align: left; color: #b3760a; font-weight: 700; white-space: normal; }
+
+@media (max-width: 900px) {
+    /* The store name is the first thing to go: the code identifies the row and the
+       numbers are the point. */
+    .lv-store-nm, .lv-of { display: none; }
+}
+@media (max-width: 720px) {
+    .lv-strip, .lv-dist-strip { grid-template-columns: 1fr 1fr; }
+}
+
 /* Headline score strip — two equal bubbles: combined Audit+Scorecard, then eBay */
 .sh-scores { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 16px 20px 0; }
 .sh-score { position: relative; text-align: left; background: #f4faf6; border: 1px solid #e6ebf1;

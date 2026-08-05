@@ -66,6 +66,7 @@ const EXPENSES_URL      = `${_BASE}/expenses`;
 const PREFERRED_URL     = `${_BASE}/preferred-purchases`;
 const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
 const SALES_INGEST_URL  = `${_BASE}/sales-ingest`;
+const LIVE_URL          = `${_BASE}/shopify-live`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -8795,7 +8796,7 @@ function switchCommandTab(tab) {
     const btn = document.getElementById('cc-tab-' + tab);
     const collapse = btn && btn.classList.contains('active'); // clicking the open tab closes it
 
-    ['scorecard', 'ebay', 'buying'].forEach(t => {
+    ['live', 'scorecard', 'ebay', 'buying'].forEach(t => {
         const on = !collapse && t === tab;
         const b = document.getElementById('cc-tab-' + t);
         if (b) b.classList.toggle('active', on);
@@ -8820,7 +8821,7 @@ function switchCommandTab(tab) {
 }
 // Explicit "back to the one-line summary" (in addition to clicking the open tab again).
 function collapseCommand() {
-    ['scorecard', 'ebay', 'buying'].forEach(t => {
+    ['live', 'scorecard', 'ebay', 'buying'].forEach(t => {
         const b = document.getElementById('cc-tab-' + t); if (b) b.classList.remove('active');
         const strip = document.getElementById('cc-strip-' + t); if (strip) strip.classList.remove('cc-active');
         const panel = document.getElementById('cc-panel-' + t); if (panel) panel.classList.remove('cc-active');
@@ -8873,7 +8874,7 @@ function _ccSum(id, html, cls) {
 // ---- EMPLOYEE combined widget: Buying & Sales + Weekly KPIs (2 tabs, no summary) ----
 // Always expanded; defaults to Buying. Mirrors the manager Command Center's dot cue.
 function switchEmpTab(tab) {
-    ['buying', 'kpis'].forEach(t => {
+    ['live', 'buying', 'kpis'].forEach(t => {
         const on = t === tab;
         const b = document.getElementById('ec-tab-' + t); if (b) b.classList.toggle('active', on);
         const p = document.getElementById('ec-panel-' + t); if (p) p.classList.toggle('cc-active', on);
@@ -8885,11 +8886,16 @@ function switchEmpTab(tab) {
     const bsDate = document.getElementById('bs-last-updated');
     const kpiDate = document.getElementById('emp-kpi-period');
     const buying = tab === 'buying';
-    if (eyebrow) eyebrow.textContent = buying ? 'My Store · This Month' : 'Mine vs Store';
-    if (titleT) titleT.textContent = buying ? 'Buying & Sales' : 'Weekly KPIs';
+    const EYEBROW = { live: 'My Store · Today', buying: 'My Store · This Month', kpis: 'Mine vs Store' };
+    const TITLE   = { live: 'Live Dashboard',   buying: 'Buying & Sales',        kpis: 'Weekly KPIs' };
+    if (eyebrow) eyebrow.textContent = EYEBROW[tab] || EYEBROW.buying;
+    if (titleT) titleT.textContent = TITLE[tab] || TITLE.buying;
+    // The monthly goal chip belongs to Buying: the Live tab carries its own
+    // banked-vs-goal bar, so showing both would put two different goal figures on
+    // one header line.
     if (goalWrap) goalWrap.style.display = buying ? '' : 'none';
     if (bsDate) bsDate.style.display = buying ? '' : 'none';
-    if (kpiDate) kpiDate.style.display = buying ? 'none' : '';
+    if (kpiDate) kpiDate.style.display = tab === 'kpis' ? '' : 'none';
     _clearEmpUpdot(tab);
 }
 // Employee-widget update dot — same silent-seed / change-detect / clear-on-open logic
@@ -8932,8 +8938,400 @@ function _reconcileComboTabs(widgetEl, prefix, tabs, isEmployee) {
     }
 }
 function _reconcileCommandWidgets() {
-    _reconcileComboTabs(document.querySelector('.cc-widget:not(.ec-widget)'), 'cc', ['buying', 'ebay', 'scorecard'], false);
-    _reconcileComboTabs(document.getElementById('ecWidget'), 'ec', ['buying', 'kpis'], true);
+    _reconcileComboTabs(document.querySelector('.cc-widget:not(.ec-widget)'), 'cc', ['live', 'buying', 'ebay', 'scorecard'], false);
+    _reconcileComboTabs(document.getElementById('ecWidget'), 'ec', ['live', 'buying', 'kpis'], true);
+    _ccOpenDefaultTab();
+}
+
+// The manager Command Center used to open collapsed to its one-line summary. It now
+// opens on the Live Dashboard, because today's sales are the thing worth seeing
+// without a click.
+//
+// It picks the first VISIBLE tab rather than assuming Live is there: Feature Access
+// can switch cc-live off per role or per person, and a role without it would
+// otherwise land on a transparent panel and read as a broken widget.
+//
+// One-shot. _reconcileCommandWidgets runs again whenever feature overrides are
+// re-applied, and re-opening a widget the manager deliberately collapsed would be
+// the panel arguing with them.
+var _ccDefaultOpened = false;
+function _ccOpenDefaultTab() {
+    if (_ccDefaultOpened) return;
+    const widget = document.querySelector('.cc-widget:not(.ec-widget)');
+    if (!widget || getComputedStyle(widget).display === 'none') return;
+    const first = ['live', 'buying', 'ebay', 'scorecard'].find(t => {
+        const b = document.getElementById('cc-tab-' + t);
+        return b && getComputedStyle(b).display !== 'none';
+    });
+    if (!first) return;
+    _ccDefaultOpened = true;
+    switchCommandTab(first);      // nothing is active yet, so this opens rather than toggles
+}
+
+// ============================================================================
+// MODULE: LIVE DASHBOARD  (Shopify, refreshed every minute)
+// ============================================================================
+// Today's sales straight from the Shopify Admin API. A pg_cron job calls the
+// shopify-live edge function once a minute inside the buffered trading window
+// (Mon–Fri 8am–9pm, Sat 8am–6pm Central, closed Sunday) and writes
+// app_cache/shopify_live ONLY when a number actually moved — on a write it
+// broadcasts a bare ping and _RT_TOOL_CHECKS.live brings us straight back here.
+// The browser never talks to Shopify, and never polls per-minute.
+//
+// SCOPING IS THE EDGE FUNCTION'S JOB, not this file's. It resolves the caller's
+// role from their PIN and strips out every store they may not see before
+// responding — DM/CEO get the district roll-up, a manager/ASM/employee get their
+// own store, the MSM gets both of theirs. So there is no filtering below: what
+// arrives here is already only what this user is allowed to read.
+//
+// Managers, ASMs and employees deliberately see the SAME figures, cost and margin
+// included.
+//
+// Three surfaces, one payload:
+//   * manager Command Center — tiles in the tab strip, detail in the panel
+//   * employee / ASM widget  — tiles and detail together in the panel
+//   * DM & CEO               — five-store table above the District board
+// Store surfaces mount by CLASS, never id: the manager and employee widgets are
+// both in the DOM at once (one is display:none), so ids would collide — which is
+// exactly why renderBuyingSales already has to querySelectorAll every field.
+
+let _lvData = null;      // last successful payload
+let _lvErr  = '';        // message to show instead of numbers
+
+const _lvMoney = (n, cents) => '$' + (Number(n) || 0).toLocaleString('en-US', {
+    minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: cents ? 2 : 0
+});
+const _lvPct = n => (n === null || n === undefined || n === '')
+    ? '—' : (Math.round(Number(n) * 10) / 10).toFixed(1) + '%';
+
+// asOfCentral arrives as "YYYY-MM-DD HH:MM" already in Central, so the clock is
+// read off the string. Reformatting it through Date() would re-apply the viewer's
+// own timezone and show a manager in Kansas City the wrong hour.
+function _lvClock(asOf) {
+    const m = /(\d{2}):(\d{2})$/.exec(String(asOf || ''));
+    if (!m) return '';
+    let h = +m[1];
+    const ap = h >= 12 ? 'pm' : 'am';
+    h = h % 12 || 12;
+    return h + ':' + m[2] + ' ' + ap;
+}
+// Order timestamps come from Shopify as UTC ISO, so these two DO need converting —
+// pinned to Central rather than the viewer's clock so everyone in the company
+// reads the same time for the same order.
+function _lvOrderClock(iso) {
+    const t = Date.parse(iso);
+    if (!t) return '';
+    return new Date(t).toLocaleTimeString('en-US',
+        { timeZone: 'America/Chicago', hour: 'numeric', minute: '2-digit' }).toLowerCase();
+}
+function _lvCentralDay(iso) {
+    const t = Date.parse(iso);
+    if (!t) return '';
+    // en-CA formats as YYYY-MM-DD, which is the shape asOfCentral carries.
+    return new Date(t).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+}
+
+// 100 = exactly on track for the month: banked GP as a share of goal, against how
+// much of the SELLING month has gone. Sundays are excluded upstream, so day 5 of
+// August does not read as behind just because one of those days was a Sunday.
+function _lvPaceCls(idx) {
+    if (idx === null || idx === undefined) return 'flat';
+    if (idx >= 100) return 'good';
+    if (idx >= 85) return 'warn';
+    return 'bad';
+}
+// Per-store paceIndex is computed server-side; the district and MSM roll-ups carry
+// pctOfGoal but no index of their own, so derive it the same way rather than
+// leaving the column blank on the one row that summarises all the others.
+function _lvPace(pctOfGoal, elapsedPct) {
+    const p = Number(pctOfGoal), e = Number(elapsedPct);
+    if (!isFinite(p) || !isFinite(e) || e <= 0) return null;
+    return Math.round(p / e * 100);
+}
+
+function _lvTile(k, v, sub, accent) {
+    return '<div class="cc-cell' + (accent ? ' lv-accent' : '') + '">'
+        + '<span class="sh-stripe g"></span>'
+        + '<div class="sh-k">' + k + '</div>'
+        + '<div class="sh-v">' + v + '</div>'
+        + '<div class="sh-sub">' + (sub || '&nbsp;') + '</div></div>';
+}
+
+function _lvChip(k, v) {
+    return '<span class="lv-chip">' + k + ' <b>' + v + '</b></span>';
+}
+
+// GP banked against the monthly goal, with a tick showing where the selling month
+// has actually got to. No forecast is involved, which is the point: the District
+// board below projects to month-end (OVL can read 124% there against ~18% banked
+// here), so this bar spells out which of the two it is.
+function _lvGoalBar(gp, goal, pctOfGoal, elapsedPct, paceIdx) {
+    if (!goal) return '';
+    const banked = pctOfGoal === null || pctOfGoal === undefined ? 0 : Number(pctOfGoal);
+    const tick = Math.max(0, Math.min(100, Number(elapsedPct) || 0));
+    return '<div class="lv-goal">'
+        + '<div class="lv-goal-top">'
+        + '<span class="lv-goal-lbl">Gross profit banked this month</span>'
+        + '<span class="lv-goal-fig"><b>' + _lvMoney(gp, false) + '</b> of ' + _lvMoney(goal, false)
+        + ' <span class="lv-pill ' + _lvPaceCls(paceIdx) + '">'
+        + (paceIdx === null || paceIdx === undefined ? 'no goal set' : paceIdx + ' pace') + '</span></span>'
+        + '</div>'
+        + '<div class="lv-goal-bar"><i style="width:' + Math.max(0, Math.min(100, banked)) + '%"></i>'
+        + '<u style="left:' + tick + '%"></u></div>'
+        + '<div class="lv-goal-foot">'
+        + '<span>' + _lvPct(banked) + ' banked</span>'
+        + '<span>' + _lvPct(tick) + ' of the selling month gone</span>'
+        + '</div></div>';
+}
+
+// The line that makes the panel feel live rather than reported — and the fastest
+// way to notice the feed has stalled.
+function _lvLastOrder(m, asOf) {
+    if (!m.lastOrderAt) return '<div class="lv-last lv-quiet">No orders on record yet.</div>';
+    const sameDay = _lvCentralDay(m.lastOrderAt) === String(asOf || '').slice(0, 10);
+    if (!sameDay) {
+        return '<div class="lv-last lv-quiet">Nothing sold yet today &middot; last order was '
+            + escapeHtml(_lvCentralDay(m.lastOrderAt)) + '.</div>';
+    }
+    const rel = _siRelTime(m.lastOrderAt);
+    return '<div class="lv-last"><span class="lv-dot"></span>Last order <b>'
+        + _lvOrderClock(m.lastOrderAt) + '</b>'
+        + (m.lastOrderAmount ? ' &middot; <b>' + _lvMoney(m.lastOrderAmount, true) + '</b>' : '')
+        + (rel ? ' &middot; ' + rel : '') + '</div>';
+}
+
+function _lvStoreTiles(m, asOf) {
+    const mtdAov = m.mtdOrders > 0 ? m.mtdNet / m.mtdOrders : null;
+    return _lvTile('Net Sales Today', _lvMoney(m.netToday, true), 'through ' + _lvClock(asOf), true)
+        + _lvTile('Orders', String(m.ordersToday),
+            m.returnsToday > 0 ? _lvMoney(m.returnsToday, false) + ' refunded' : 'no refunds today')
+        + _lvTile('Average Order', m.aov === null ? '—' : _lvMoney(m.aov, true),
+            mtdAov === null ? '' : 'month average ' + _lvMoney(mtdAov, false))
+        + _lvTile('Gross Margin', _lvPct(m.marginToday), 'cost ' + _lvMoney(m.cogsToday, false));
+}
+
+function _lvStoreDetail(d, m) {
+    return '<div class="lv-chips">'
+        + _lvChip('Gross profit today', _lvMoney(m.gpToday, true))
+        + _lvChip('Net sales this month', _lvMoney(m.mtdNet, false))
+        + _lvChip('Margin this month', _lvPct(m.mtdMargin))
+        + _lvChip('Orders this month', String(m.mtdOrders))
+        + '</div>'
+        + _lvGoalBar(m.mtdGp, m.goal, m.pctOfGoal, d.month && d.month.elapsedPct, m.paceIndex)
+        + _lvLastOrder(m, d.asOfCentral);
+}
+
+// One store failing must never blank the panel for the rest — the edge function
+// already keeps a broken store out of the district totals and hands its error
+// down on the row, so say what happened instead of showing zeros as if they were
+// real sales.
+function _lvStoreError(m) {
+    // Shopify's message is raw text with no promise of ending in a full stop, so
+    // punctuate it before the reassurance — otherwise it reads as one run-on
+    // sentence ("429 throttled Every other store is unaffected").
+    const why = String(m.error || 'Shopify did not answer.').trim();
+    return '<div class="lv-err"><b>' + escapeHtml(m.code) + ' is not reporting.</b>'
+        + escapeHtml(why + (/[.!?]$/.test(why) ? '' : '.'))
+        + ' Every other store is unaffected.</div>';
+}
+
+// The MSM sees both of their stores at once and has no district roll-up, so the
+// tiles above the table are summed here rather than server-side.
+function _lvCombine(stores) {
+    const net = stores.reduce((a, m) => a + m.netToday, 0);
+    const cogs = stores.reduce((a, m) => a + m.cogsToday, 0);
+    const orders = stores.reduce((a, m) => a + m.ordersToday, 0);
+    const mtdNet = stores.reduce((a, m) => a + m.mtdNet, 0);
+    const mtdCogs = stores.reduce((a, m) => a + m.mtdCogs, 0);
+    const goal = stores.reduce((a, m) => a + m.goal, 0);
+    const mtdGp = mtdNet - mtdCogs;
+    return {
+        netToday: net, cogsToday: cogs, gpToday: net - cogs, ordersToday: orders,
+        returnsToday: stores.reduce((a, m) => a + m.returnsToday, 0),
+        marginToday: net > 0 ? (net - cogs) / net * 100 : null,
+        aov: orders > 0 ? net / orders : null,
+        mtdNet, mtdGp, mtdOrders: stores.reduce((a, m) => a + m.mtdOrders, 0),
+        mtdMargin: mtdNet > 0 ? mtdGp / mtdNet * 100 : null,
+        goal, pctOfGoal: goal > 0 ? mtdGp / goal * 100 : null,
+    };
+}
+
+function _lvRollupTiles(r, d, label) {
+    const days = d.month
+        ? d.month.sellingDaysElapsed + ' of ' + d.month.sellingDaysTotal + ' selling days'
+        : '';
+    return _lvTile('Net Sales Today', _lvMoney(r.netToday, true), 'through ' + _lvClock(d.asOfCentral), true)
+        + _lvTile('Orders', String(r.ordersToday),
+            r.aov === null ? label : 'average ' + _lvMoney(r.aov, true))
+        + _lvTile('Gross Margin', _lvPct(r.marginToday), 'profit ' + _lvMoney(r.gpToday, false))
+        + _lvTile('Month to Date', _lvMoney(r.mtdNet, false), days);
+}
+
+function _lvStoreRow(m, asOf, foot) {
+    // The roll-up row is not a store, so it gets no colour dot — the tints are the
+    // per-store palette the KPI charts use and inventing a sixth one for "District"
+    // would read as a sixth store.
+    const tint = STORE_TINTS[m.code]
+        ? '<i class="lv-tint" style="background:' + STORE_TINTS[m.code] + '"></i>' : '';
+    if (m.error) {
+        return '<tr class="lv-row-err"><td><span class="lv-store">' + tint
+            + '<b>' + escapeHtml(m.code) + '</b></span></td>'
+            + '<td colspan="7" class="lv-row-errmsg">not reporting &middot; '
+            + escapeHtml(m.error) + '</td></tr>';
+    }
+    const last = m.lastOrderAt && _lvCentralDay(m.lastOrderAt) === String(asOf || '').slice(0, 10)
+        ? _lvOrderClock(m.lastOrderAt) : '—';
+    return '<tr' + (foot ? ' class="lv-foot"' : '') + '><td><span class="lv-store">' + tint
+        + '<b>' + escapeHtml(m.code) + '</b><span class="lv-store-nm">'
+        + escapeHtml(m.name || '') + '</span></span></td>'
+        + '<td class="lv-strongnum">' + _lvMoney(m.netToday, true) + '</td>'
+        + '<td>' + m.ordersToday + '</td>'
+        + '<td>' + (m.aov === null ? '—' : _lvMoney(m.aov, true)) + '</td>'
+        + '<td>' + _lvPct(m.marginToday) + '</td>'
+        + '<td>' + _lvMoney(m.mtdGp, false) + '<span class="lv-of"> of ' + _lvMoney(m.goal, false) + '</span></td>'
+        + '<td><span class="lv-pill ' + _lvPaceCls(m.paceIndex) + '">'
+        + (m.paceIndex === null || m.paceIndex === undefined ? '—' : m.paceIndex) + '</span></td>'
+        + '<td>' + last + '</td></tr>';
+}
+
+function _lvTable(stores, d, rollup, rollupLabel) {
+    let html = '<div class="lv-tbl-scroll"><table class="lv-tbl"><thead><tr>'
+        + '<th>Store</th><th>Net today</th><th>Orders</th><th>Avg order</th>'
+        + '<th>Margin</th><th>GP this month</th><th>Pace</th><th>Last order</th>'
+        + '</tr></thead><tbody>';
+    // Fixed store order (the edge function returns it that way) — the team reads
+    // this list by position, so re-sorting it worst-first would cost more than the
+    // ranking gains. The pace column is what makes a bad store findable.
+    stores.forEach(m => { html += _lvStoreRow(m, d.asOfCentral, false); });
+    html += '</tbody>';
+    if (rollup) {
+        const r = Object.assign({}, rollup, {
+            code: rollupLabel, name: '',
+            paceIndex: _lvPace(rollup.pctOfGoal, d.month && d.month.elapsedPct),
+            // The freshest order across the stores, so a stalled feed shows up on the
+            // total line too rather than only in the row it belongs to.
+            lastOrderAt: stores.reduce((a, m) => (m.lastOrderAt && (!a || m.lastOrderAt > a)) ? m.lastOrderAt : a, null),
+        });
+        html += '<tfoot>' + _lvStoreRow(r, d.asOfCentral, true) + '</tfoot>';
+    }
+    return html + '</table></div>';
+}
+
+// "live" while the window is open and the cache is fresh; anything else says so
+// rather than letting a frozen number pass for a current one.
+function _lvFreshness(d) {
+    const age = d.syncedAt ? Math.round((Date.now() - Date.parse(d.syncedAt)) / 60000) : null;
+    if (!d.open) {
+        return '<span class="lv-fresh closed">closed'
+            + (age === null ? '' : ' &middot; last update ' + _siRelTime(d.syncedAt)) + '</span>';
+    }
+    // The cron runs every minute but only writes on a change, so a genuinely quiet
+    // stretch looks identical to a dead feed until it gets long. 20 minutes with no
+    // movement inside trading hours is worth flagging; 5 would cry wolf every
+    // lunchtime.
+    if (age !== null && age >= 20) {
+        return '<span class="lv-fresh stale">no change for ' + age + ' min</span>';
+    }
+    return '<span class="lv-fresh"><span class="lv-dot"></span>live</span>';
+}
+
+async function fetchLiveDashboard() {
+    // Nothing to paint into on this page — every mount lives on the dashboard.
+    if (!document.querySelector('.lv-detail, .lv-dist-detail')) return;
+    const pin = sessionStorage.getItem('speeksUserPin');
+    if (!pin) return;
+    try {
+        const r = await fetch(`${LIVE_URL}?v=${Date.now()}`, { headers: { 'x-user-pin': pin } });
+        const d = await r.json();
+        if (!r.ok || !d || d.ok === false) {
+            _lvErr = (d && d.error) || `Live sales are unavailable (HTTP ${r.status}).`;
+        } else if (d.pending) {
+            _lvErr = d.message || 'No live data yet — the first refresh has not run.';
+        } else {
+            _lvData = d;
+            _lvErr = '';
+        }
+    } catch (_) {
+        _lvErr = 'Live sales could not be reached.';
+    }
+    renderLiveDashboard();
+}
+
+function renderLiveDashboard() {
+    const strips = document.querySelectorAll('.lv-strip');
+    const details = document.querySelectorAll('.lv-detail');
+    const dStrip = document.querySelector('.lv-dist-strip');
+    const dDetail = document.querySelector('.lv-dist-detail');
+    if (!details.length && !dDetail) return;
+
+    if (!_lvData) {
+        const msg = '<div class="status-message">' + escapeHtml(_lvErr || 'Syncing live sales…') + '</div>';
+        strips.forEach(el => { el.innerHTML = ''; });
+        details.forEach(el => { el.innerHTML = msg; });
+        if (dStrip) dStrip.innerHTML = '';
+        if (dDetail) dDetail.innerHTML = msg;
+        return;
+    }
+
+    const d = _lvData;
+    const stores = d.stores || [];
+
+    // ---- DM / CEO: the five-store table ----
+    if (dDetail) {
+        if (d.district) {
+            if (dStrip) dStrip.innerHTML = _lvRollupTiles(d.district, d, 'no orders yet');
+            dDetail.innerHTML = _lvTable(stores, d, d.district, 'District')
+                + '<div class="lv-note">Banked so far this month, not projected to month-end &mdash; '
+                + 'the District Command Center below tracks the projection.</div>';
+        } else {
+            // Only reachable if a district card is on screen for a non-district role,
+            // which the role classes should already prevent. Say nothing rather than
+            // render an empty table.
+            if (dStrip) dStrip.innerHTML = '';
+            dDetail.innerHTML = '<div class="status-message">Not available for this role.</div>';
+        }
+    }
+    const asof = document.querySelector('.lv-card .lv-asof');
+    if (asof) asof.textContent = d.asOfCentral ? 'as of ' + _lvClock(d.asOfCentral) : '';
+    const fresh = document.querySelector('.lv-card .lv-freshness');
+    if (fresh) fresh.innerHTML = _lvFreshness(d);
+
+    // ---- store surfaces (manager Command Center + employee/ASM widget) ----
+    if (!details.length) return;
+
+    if (!stores.length) {
+        // A store code the roster doesn't recognise, or a Shopify app that was never
+        // installed for it. Naming the store beats an empty panel.
+        const who = (d.scope && d.scope.store) ? escapeHtml(d.scope.store) : 'your store';
+        strips.forEach(el => { el.innerHTML = ''; });
+        details.forEach(el => {
+            el.innerHTML = '<div class="status-message">No live sales feed for ' + who + ' yet.</div>';
+        });
+        return;
+    }
+
+    let tiles, detail;
+    if (stores.length === 1) {
+        const m = stores[0];
+        tiles = _lvStoreTiles(m, d.asOfCentral);
+        detail = m.error ? _lvStoreError(m) : _lvStoreDetail(d, m);
+    } else {
+        // Multi-Store Manager: both stores stacked, exactly as their checklist and
+        // Listing Goals already do — no dashboard switch to see the other one.
+        const healthy = stores.filter(m => !m.error);
+        const roll = _lvCombine(healthy.length ? healthy : stores);
+        tiles = _lvRollupTiles(roll, d, 'no orders yet');
+        detail = _lvTable(stores, d, roll, 'Both');
+    }
+
+    strips.forEach(el => { el.innerHTML = tiles; });
+    details.forEach(el => { el.innerHTML = '<div class="lv-head">' + _lvFreshness(d)
+        + '<span class="lv-asof">as of ' + _lvClock(d.asOfCentral) + ' Central</span></div>' + detail; });
+
+    // Collapsed Command Center summary line.
+    const roll = stores.length === 1 ? stores[0] : _lvCombine(stores.filter(m => !m.error));
+    _ccSum('cc-sum-live', _lvMoney(roll.netToday, false)
+        + ' <small>' + roll.ordersToday + (roll.ordersToday === 1 ? ' order' : ' orders') + '</small>');
 }
 
 // ============================================================================
@@ -15524,6 +15922,9 @@ function initDashboardData() {
         setTimeout(startReactionPolling, 3000);
 
         setTimeout(fetchHubData, 100);
+        // Early: it is the Command Center's default tab, so it is the first thing on
+        // screen and the one panel where "Syncing…" is most obvious.
+        setTimeout(fetchLiveDashboard, 150);
         setTimeout(fetchVarianceData, 300);
         setTimeout(fetchWeeklyKPIs, 500);
 
@@ -15561,6 +15962,19 @@ function initDashboardData() {
             if (hasCC && typeof fetchAlertsData === 'function') fetchAlertsData();
             if (hasEC && typeof fetchAndRenderEmployeeKPIs === 'function') fetchAndRenderEmployeeKPIs();
         }, 10 * 60 * 1000);
+        // SAFETY NET for the Live Dashboard, same reasoning as above: realtime is the
+        // real path. Skipped while the tab is in the background — a dashboard left open
+        // on a back office monitor for a week should not spend a request every five
+        // minutes on a panel nobody is looking at — and re-pulled the moment it comes
+        // back to the foreground, so returning to the tab never shows a stale number.
+        if (!window._lvSync) {
+            window._lvSync = setInterval(() => {
+                if (document.visibilityState === 'visible') fetchLiveDashboard();
+            }, 5 * 60 * 1000);
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') fetchLiveDashboard();
+            });
+        }
         setTimeout(fetchAndRenderEmployeeGoals, 1100);
         setTimeout(fetchAndRenderEmployeeKPIs, 1200);
         setTimeout(fetchAndDisplayStoreComment, 1500);
@@ -23966,9 +24380,15 @@ const FEATURE_CATALOG = [
     { key: 'widget-checklist-panel',   label: 'Checklist (Sidebar)',           tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'district-manager', 'assistant-manager'] },
     { key: 'widget-audit-panel',       label: 'Cleaning Checklist (Sidebar)',  tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-scorecard-alerts',  label: 'Command Center (Whole Widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    { key: 'cc-live',                  label: 'Command Center · Live Dashboard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'cc-scorecard',             label: 'Command Center · Scorecard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'cc-ebay',                  label: 'Command Center · eBay tab',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'cc-buying',                label: 'Command Center · Buying & Sales tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    // Live sales for the employee/ASM widget. On by default for both: showing the
+    // team the same figures as their manager, cost and margin included, is the
+    // decision this feature was built around — this row exists so a store that would
+    // rather not can switch it off, not as a default-off gate.
+    { key: 'widget-emp-live',          label: 'Live Dashboard tab (Employee/ASM)', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-buying-selling',    label: 'Buying & Sales tab (Employee)', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-listing-goals',     label: 'Listing Goals bar (Action Menu)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager', 'training'] },
     // Labels name the thing as it appears ON SCREEN. These two were "Weekly KPIs tab
@@ -23978,6 +24398,7 @@ const FEATURE_CATALOG = [
     // cost a real support round: KPIs were granted on the dashboard widget while the
     // Workspace tab stayed switched off at the role level.
     { key: 'widget-emp-weekly-kpis',   label: 'Weekly KPIs — dashboard widget tab', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'widget-district-live',     label: 'District Live Dashboard',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'dcc-sales-import',         label: 'District CC · Sales Import control', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     // The three district action-menu rows. Defaults mirror exactly what the
@@ -24885,6 +25306,9 @@ const JUMP_KEYWORDS = {
     'widget-listing-goals':      'listing goals listings ebay target',
     'widget-buying-selling':     'buying selling sales bought sold',
     'widget-district-command':   'district command center all stores overview',
+    'cc-live':                   'live dashboard today todays sales net sales orders average order aov gross margin cogs shopify real time right now how are we doing',
+    'widget-emp-live':           'live dashboard today todays sales net sales orders average order aov gross margin shopify real time right now how are we doing',
+    'widget-district-live':      'live dashboard today todays sales all stores district net sales orders margin pace shopify real time',
     'tool-claims-store':         'claim claims shopify usps ups damaged lost package item not received insurance',
     'tool-claims-oversight':     'claims oversight all stores review insurance',
     'tool-box-order':            'boxes box shipping supplies packaging tape order',
@@ -24923,6 +25347,13 @@ const JUMP_PLACES = [
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
     { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
     // --- dashboard panels (QuickPortal) --------------------------------------
+    // Live Dashboard needs THREE rows, one per surface, because each is a separate
+    // Feature Access key — a single row would be invisible to two of the three
+    // audiences. Only one is ever visible to any given user, so the box never shows
+    // duplicates.
+    { id: 'w-live',      label: 'Live Dashboard',       sub: 'QuickPortal', kind: 'panel', feature: 'cc-live',           page: 'index.html', run: () => _jumpToLive('cc-live') },
+    { id: 'w-emplive',   label: 'Live Dashboard',       sub: 'QuickPortal', kind: 'panel', feature: 'widget-emp-live',   page: 'index.html', run: () => _jumpToLive('widget-emp-live') },
+    { id: 'w-dlive',     label: 'District Live Dashboard', sub: 'QuickPortal', kind: 'panel', feature: 'widget-district-live', page: 'index.html' },
     { id: 'w-command',   label: 'Command Center',       sub: 'QuickPortal', kind: 'panel', feature: 'widget-scorecard-alerts', page: 'index.html' },
     { id: 'w-buying',    label: 'Buying & Sales',       sub: 'QuickPortal', kind: 'panel', feature: 'widget-buying-selling',   page: 'index.html' },
     { id: 'w-district',  label: 'District Command Center', sub: 'QuickPortal', kind: 'panel', feature: 'widget-district-command', page: 'index.html' },
@@ -25044,6 +25475,25 @@ function _jumpPlaceItems() {
         keys: (p.keys || '') + ' ' + (JUMP_KEYWORDS[p.feature] || ''),
         run: () => _jumpRunPlace(p),
     }));
+}
+
+// The Live Dashboard is a TAB inside a widget, so spotlighting the card is not
+// enough — if the user had collapsed the Command Center or switched to another tab,
+// scrolling to it would land them on whatever they were last looking at. Open the
+// tab first, then pulse.
+//
+// _jumpRunPlace calls `run` BEFORE its own page check, so the hop has to happen
+// here: this is reachable from Workspace and Operations too.
+function _jumpToLive(featureKey) {
+    if (_jumpPage() !== 'index.html') { location.href = 'index.html#jump=' + featureKey; return; }
+    const mgr = featureKey === 'cc-live';
+    const btn = document.getElementById(mgr ? 'cc-tab-live' : 'ec-tab-live');
+    // switchCommandTab treats a click on the OPEN tab as "collapse", so calling it
+    // unconditionally would close the very panel the search was asked to show.
+    if (btn && !btn.classList.contains('active')) {
+        if (mgr) switchCommandTab('live'); else switchEmpTab('live');
+    }
+    _jumpSpotlight(featureKey);
 }
 
 // Where a destination lives, as a URL. Tabs ride the plain hash their page
@@ -29012,6 +29462,11 @@ const _RT_TOOL_CHECKS = {
     scorecard:     ['fetchScorecardData'],
     ebay:          ['fetchAlertsData'],
     buying:        ['fetchHubData'],
+    // The Live Dashboard's ONLY fast path. shopify-live pings this the moment a
+    // Shopify number moves — and only then — so an open dashboard repaints within
+    // seconds of a sale without anybody polling per minute. The slow safety poll in
+    // initDashboardData is just there for a client whose socket never connected.
+    live:          ['fetchLiveDashboard'],
     // checkListingGoalsDailyReminder is here so that when ONE person at a store
     // sets the roles, everyone else's "set today's goals" card clears at once.
     goals:         ['fetchLiveGoalsData', 'fetchAndRenderEmployeeGoals', 'checkListingGoalsDailyReminder'],

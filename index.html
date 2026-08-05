@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260805a">
+  <link rel="stylesheet" href="styles.css?v=20260805b">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260805a" defer></script>
+  <script src="speeks.js?v=20260805b" defer></script>
 </head>
 
 <body class="preload">
@@ -896,6 +896,12 @@
 
         <div class="cc-tabbar">
             <div class="ew-seg cc-seg">
+                <!-- Live Dashboard is the DEFAULT open tab (see _ccOpenDefaultTab). It
+                     carries no .cc-updot: the other tabs' dot means "this changed since
+                     you last looked", which on a per-minute live feed would be lit
+                     permanently and therefore say nothing. Freshness is reported inside
+                     the panel instead, as an "as of" stamp that goes stale-flagged. -->
+                <button id="cc-tab-live" class="toggle-btn" type="button" onclick="switchCommandTab('live')" data-feature="cc-live">Live Dashboard</button>
                 <button id="cc-tab-buying" class="toggle-btn" type="button" onclick="switchCommandTab('buying')" data-feature="cc-buying">Buying &amp; Sales<span class="cc-updot" id="cc-updot-buying"></span></button>
                 <button id="cc-tab-ebay" class="toggle-btn" type="button" onclick="switchCommandTab('ebay')" data-feature="cc-ebay">eBay<span class="cc-updot" id="cc-updot-ebay"></span></button>
                 <button id="cc-tab-scorecard" class="toggle-btn" type="button" onclick="switchCommandTab('scorecard')" data-feature="cc-scorecard">Scorecard<span class="cc-updot" id="cc-updot-scorecard"></span></button>
@@ -908,6 +914,7 @@
 
         <!-- Collapsed default: one-line summary shown when no tab is open -->
         <div class="cc-summary" id="cc-summary">
+            <div class="cc-sum" id="cc-sum-live" data-feature="cc-live"><div class="cc-sum-k">Net Sales Today</div><div class="cc-sum-v">—</div></div>
             <div class="cc-sum" id="cc-sum-audit" data-feature="cc-scorecard"><div class="cc-sum-k">PayMore Audit</div><div class="cc-sum-v">—</div></div>
             <div class="cc-sum" id="cc-sum-score" data-feature="cc-scorecard"><div class="cc-sum-k">SPEEKS Scorecard</div><div class="cc-sum-v">—</div></div>
             <div class="cc-sum" id="cc-sum-ebay" data-feature="cc-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
@@ -917,6 +924,13 @@
         </div>
 
         <div class="cc-strips">
+            <!-- Live tiles and detail are both rendered by renderLiveDashboard() into
+                 CLASS hooks, not ids. The same markup has to appear in the manager
+                 Command Center and in the employee widget below, and the site already
+                 pays for that mistake once — bs-rev / bs-gp / bs-buy-val are duplicate
+                 ids across those two widgets, which is why renderBuyingSales has to
+                 querySelectorAll every field. Classes keep this one valid. -->
+            <div class="cc-strip s4 lv-strip" id="cc-strip-live" data-feature="cc-live"></div>
             <div class="cc-strip s3" id="cc-strip-scorecard" data-feature="cc-scorecard">
                 <div class="cc-cell" id="sh-score-audit"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
                 <div class="cc-cell" id="sh-score-mktg"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
@@ -936,6 +950,9 @@
         </div>
 
         <div class="cc-body">
+            <div class="cc-panel lv-panel" id="cc-panel-live" data-feature="cc-live">
+                <div class="lv-detail"><div class="status-message">Syncing live sales…</div></div>
+            </div>
             <div class="cc-panel" id="cc-panel-scorecard" data-feature="cc-scorecard">
                 <div id="sh-panel-audit"><div class="status-message">Syncing Data...</div></div>
                 <div id="sh-panel-mktg" class="sh-mktg-block"></div>
@@ -982,17 +999,22 @@
         </div>
     </div>
 
-      <!-- Combined EMPLOYEE widget: Buying & Sales + Weekly KPIs, two tabs (no summary
-           line), defaults to Buying & Sales. Managers see Buying/KPIs inside the
-           Command Center; this is the employee equivalent. Each tab is a toggleable
-           feature (widget-buying-selling / widget-emp-weekly-kpis). -->
+      <!-- Combined EMPLOYEE widget: Live Dashboard + Buying & Sales + Weekly KPIs,
+           three tabs (no summary line), defaults to Live Dashboard. Managers see the
+           same three inside the Command Center; this is the employee/ASM equivalent.
+           Each tab is a toggleable feature (widget-emp-live / widget-buying-selling /
+           widget-emp-weekly-kpis) — which is why switchEmpTab must never assume the
+           default tab is present. -->
       <div class="card employee-widget-card ew-airy cc-widget cc-expanded ec-widget dynamic-module-block role-employee" id="ecWidget">
           <div class="ew-head">
               <div class="ew-titles">
-                  <span class="ew-eyebrow" id="ec-eyebrow">My Store · This Month</span>
-                  <span class="ew-title"><span id="ec-title-text">Buying &amp; Sales</span> <span id="bs-last-updated" class="ew-date"></span><span id="emp-kpi-period" class="ew-date" style="display:none;"></span></span>
+                  <!-- Header defaults match the DEFAULT tab, which is now Live Dashboard.
+                       switchEmpTab swaps all four of these; they only have to agree with
+                       the tab that is open before anyone clicks. -->
+                  <span class="ew-eyebrow" id="ec-eyebrow">My Store · Today</span>
+                  <span class="ew-title"><span id="ec-title-text">Live Dashboard</span> <span id="bs-last-updated" class="ew-date" style="display:none;"></span><span id="emp-kpi-period" class="ew-date" style="display:none;"></span></span>
               </div>
-              <span class="ew-goal" id="ec-goal-wrap">Goal <b id="bs-goal"></b></span>
+              <span class="ew-goal" id="ec-goal-wrap" style="display:none;">Goal <b id="bs-goal"></b></span>
               <select id="bsStoreSelect" class="bs-hidden-select" onchange="renderBuyingSales()">
                   <option value="OVL">OVL</option>
                   <option value="LEE">LEE</option>
@@ -1004,13 +1026,22 @@
 
           <div class="cc-tabbar">
               <div class="ew-seg cc-seg">
-                  <button id="ec-tab-buying" class="toggle-btn active" type="button" onclick="switchEmpTab('buying')" data-feature="widget-buying-selling">Buying &amp; Sales<span class="cc-updot" id="ec-updot-buying"></span></button>
+                  <!-- ASMs and employees see the SAME live figures as their manager,
+                       cost and margin included — a deliberate decision, not an
+                       oversight. This widget has no summary strip of its own, so the
+                       live tiles render inside the panel here. -->
+                  <button id="ec-tab-live" class="toggle-btn active" type="button" onclick="switchEmpTab('live')" data-feature="widget-emp-live">Live Dashboard</button>
+                  <button id="ec-tab-buying" class="toggle-btn" type="button" onclick="switchEmpTab('buying')" data-feature="widget-buying-selling">Buying &amp; Sales<span class="cc-updot" id="ec-updot-buying"></span></button>
                   <button id="ec-tab-kpis" class="toggle-btn" type="button" onclick="switchEmpTab('kpis')" data-feature="widget-emp-weekly-kpis">Weekly KPIs<span class="cc-updot" id="ec-updot-kpis"></span></button>
               </div>
           </div>
 
           <div class="cc-body">
-              <div class="cc-panel cc-active" id="ec-panel-buying" data-feature="widget-buying-selling">
+              <div class="cc-panel cc-active lv-panel" id="ec-panel-live" data-feature="widget-emp-live">
+                  <div class="lv-strip"></div>
+                  <div class="lv-detail"><div class="status-message">Syncing live sales…</div></div>
+              </div>
+              <div class="cc-panel" id="ec-panel-buying" data-feature="widget-buying-selling">
                   <div class="ebs-body">
                       <div class="ebs-col ebs-buy">
                           <div class="ebs-cap">Buying (MTD)</div>
@@ -1066,8 +1097,26 @@
 
   </div>
 
+  <!-- District Live Dashboard. Its own card above the DCC board rather than a tab
+       inside it: the board is a rail-plus-pane built in JS around ONE selected store,
+       and today's five-store roll-up is a different question than "show me Westport".
+       Deliberately a SIBLING of the district section, not a child of it — nested
+       inside, a Feature Access rule hiding widget-district-command would silently
+       take this card with it however widget-district-live was set. -->
+  <div class="ew-airy lv-card dynamic-module-block role-district-manager role-ceo mb-30" data-feature="widget-district-live">
+      <div class="ew-head">
+          <div class="ew-titles">
+              <span class="ew-eyebrow">District &middot; Today</span>
+              <span class="ew-title">Live Dashboard <span class="ew-date lv-asof"></span></span>
+          </div>
+          <span class="lv-freshness"></span>
+      </div>
+      <div class="lv-dist-strip"></div>
+      <div class="lv-dist-detail"><div class="status-message">Syncing live sales&hellip;</div></div>
+  </div>
+
   <div class="dynamic-module-block role-district-manager role-ceo district-command-section" data-feature="widget-district-command">
-    
+
       <!-- The section heading lived here as an <h3> with a 🌐 on it. The panel now
            carries its own header (icon tile + eyebrow + title), so a second title
            immediately above it was saying the same thing twice. -->
