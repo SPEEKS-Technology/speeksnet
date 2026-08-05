@@ -50,14 +50,24 @@
 var SECRET      = 'sp33ks-sync-k3y-2026-x9mq';
 var SHEET_ID    = '1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8';  // Sales Summary 2026
 var TIMEZONE    = 'America/Chicago';
-var LOOKBACK    = 9;   // Gmail search window in days. 9 => a full 7-day reverify + slack.
-var REVERIFY    = 7;   // How many days back to actually compare/correct in the sheet.
+var LOOKBACK    = 9;   // Gmail search window in days. Each MTD email carries the whole
+                       // month, so this only needs to be long enough to fall back on an
+                       // older email if today's never arrived.
+// How many days back to compare/correct in the sheet. Wide enough to cover a full
+// month, because the emails are month-to-date: Shopify backdates a refund to the
+// original sale date, so a return processed three weeks later changes a day a
+// 7-day window had long since stopped looking at.
+//
+// A wide window is cheap and safe here: days the emails don't cover fall into
+// `unverified` when the sheet already holds a figure (silent), and only a day that
+// is BOTH uncovered and blank becomes an alertable `missing`.
+var REVERIFY    = 32;
 
 // Nothing before this date was ever sent to this mailbox, so a gap there is not a
 // gap — it is simply out of scope. Set to the first day the Gmail address was on
 // the Shopify recipient lists. Without it, the first week of running reports every
 // pre-go-live day as missing. Safe to leave in place permanently.
-var EXPECT_FROM = '2026-08-03';
+var EXPECT_FROM = '2026-08-01';
 
 // The sender address IS the store identity — no subject parsing needed.
 // Addresses and store mapping both confirmed by the user 2026-08-04.
@@ -383,15 +393,56 @@ function ingestSalesEmails(opts) {
 // real email shape only ever changes this function and the *_LABELS lists.
 function parseStoreEmail(msg) {
   var body = _plainBody(msg);
-  var rows = [];
 
-  var date = _periodDate(body, msg.getDate());
+  // Preferred: the month-to-date list, one dated row per day.
+  //   "August 01, 2026 — Net sales: $968.92 COGS: $539.38"
+  var rows = _parseDatedRows(body);
+  if (rows.length) return { rows: rows };
 
+  // Fallback: the original single-figure daily format, for any store whose Flow
+  // template has not been switched to the MTD list yet. Both formats coexist
+  // during the rollout and neither needs the other to be finished first.
+  var date  = _periodDate(body, msg.getDate());
   var sales = _findLabeled(body, SALES_LABELS);
   var cost  = _findLabeled(body, COST_LABELS);
+  if (sales == null && cost == null) return { rows: [] };
+  return { rows: [{ date: date, sales: sales, cost: cost }] };
+}
 
-  if (sales != null || cost != null) rows.push({ date: date, sales: sales, cost: cost });
-  return { rows: rows };
+// Splits a body into one row per dated figure set.
+//
+// Segments on the DATES rather than on newlines: once some templates' HTML is
+// flattened the whole list can arrive as a single line, and splitting by line
+// would then find one date and silently drop every other day.
+//
+// Dates being present per row is what makes this safe. A day Flow omits is simply
+// a day not reported — handled by the missing/unverified split — rather than
+// shifting every following day's figures onto the wrong row, which is what
+// positional parsing of an undated list would do, silently, for a whole month.
+//
+// CONSTRAINT: a header line must not carry figures. A "Reporting period: A to B"
+// header is fine (its segment holds no numbers and is skipped), but putting a
+// total on that line would attribute it to date B.
+function _parseDatedRows(body) {
+  var re = new RegExp(
+    '(20\\d{2}-\\d{2}-\\d{2}'
+    + '|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\\s+\\d{1,2},?\\s*20\\d{2}'
+    + '|\\d{1,2}\\/\\d{1,2}\\/20\\d{2})', 'gi');
+
+  var marks = [], m;
+  while ((m = re.exec(body)) !== null) marks.push({ idx: m.index, txt: m[0] });
+
+  var out = [];
+  for (var i = 0; i < marks.length; i++) {
+    var seg = body.slice(marks[i].idx, (i + 1 < marks.length) ? marks[i + 1].idx : body.length);
+    var d = _parseDateToken(marks[i].txt);
+    if (!d) continue;
+    var sales = _findLabeled(seg, SALES_LABELS);
+    var cost  = _findLabeled(seg, COST_LABELS);
+    if (sales == null && cost == null) continue;   // a header or footer date
+    out.push({ date: d, sales: sales, cost: cost });
+  }
+  return out;
 }
 
 // Gmail's getPlainBody() already strips most HTML, but scheduled Shopify reports

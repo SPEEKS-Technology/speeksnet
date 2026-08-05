@@ -23987,6 +23987,10 @@ const FEATURE_CATALOG = [
     { key: 'widget-dm-audit',          label: 'Cleaning Checklist (District)', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'widget-dm-goals',          label: 'Monthly Team Goals (District)', tab: 'widgets', group: 'Dashboard', def: ['district-manager'] },
     { key: 'widget-dm-listing-goals',  label: 'Listing Goals (District)',      tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    // Not a show/hide toggle like the rest — this one decides whether the Listing
+    // Goals bar opens the roster editor or the personal-goal popup. Only meaningful
+    // for ASMs; managers and above always get the editor. See _canAssignGoalRoles.
+    { key: 'listing-goals-assign',     label: 'Listing Goals · assign roles (ASM)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-weekly-kpis',    label: 'Store KPIs — Workspace tab',    tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
@@ -28664,13 +28668,36 @@ function _speeksRoleClass() {
     return 'role-' + r.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
 }
 // Employees / ASMs / trainees have PERSONAL listing goals; managers edit the roster.
+// This governs how the action-menu BAR reads only — an ASM keeps seeing their own
+// role and goal there. Which modal the bar OPENS is a separate question, answered
+// by _canAssignGoalRoles below, so granting an ASM the roster editor costs them
+// nothing at a glance.
 function _isPersonalGoalsUser() {
     return ['role-employee', 'role-assistant-manager', 'role-training'].includes(_speeksRoleClass());
 }
-// "Listing Goals" bar in the action menu: personal popup for employees, roster editor for managers.
+
+// May this user assign listing-goal roles for the store?
+//
+// ASMs are the only genuinely ambiguous case: they have their own listing goal AND
+// they supervise the floor. Rather than hardcode which side they sit on, it is a
+// Feature Access key, so it can be granted or revoked per person or per store
+// without a deploy. Employees and trainees never assign; manager and above always
+// do. Note the listing-goals function sends no pin and takes no role, so there is
+// no backend allow-list that has to be kept in step with this.
+function _canAssignGoalRoles() {
+    const cls = _speeksRoleClass();
+    if (cls === 'role-employee' || cls === 'role-training') return false;
+    if (cls !== 'role-assistant-manager') return true;
+    const ov = _featureOverrideFor('listing-goals-assign', cls,
+                                   sessionStorage.getItem('speeksUserName') || '');
+    return ov === null ? true : ov;      // ASMs may assign by default; DM can revoke
+}
+
+// "Listing Goals" bar in the action menu: roster editor for anyone who can assign,
+// personal popup for everyone else.
 function openListingGoals() {
-    if (_isPersonalGoalsUser()) toggleModal('empGoalsModal');
-    else toggleModal('listingGoalsModal');
+    if (_canAssignGoalRoles()) toggleModal('listingGoalsModal');
+    else toggleModal('empGoalsModal');
 }
 
 function samRefreshListing() {
