@@ -135,6 +135,22 @@ var GOAL_FILL_ROWS   = [1, 2];   // 1-indexed rows to paint
 var GOAL_GREEN = '#00ff00';
 var GOAL_RED   = '#ff5252';
 
+// Email when a figure already in the sheet moves by this much or more, up or down.
+// Restatements are applied silently by design, but a swing this size is worth
+// knowing about — it usually means a refund or a late-posting order against a day
+// that was already closed out.
+//
+// A day being filled for the FIRST time is not a change and never notifies, however
+// large: that is just the daily import doing its job. Only a figure that already
+// had a value and now has a different one counts.
+//
+// Sent straight from here rather than through the sales-ingest function, so it
+// fires on any run — cron, the button, or runImportNow() from the editor. Dry runs
+// never send. Note this recipient is a constant, NOT the email_recipients table
+// that feeds the missing-days alert, so changing it means editing and republishing.
+var NOTIFY_CHANGE_OVER = 150;
+var CHANGE_ALERT_TO    = 'ethan.kushnir@speekstechnology.com';
+
 // Candidate labels for the two numbers, most-specific first. Shopify's wording
 // varies by report type, so each number is matched against a list rather than
 // one hardcoded string. diagnoseShopifyEmails() prints every "label: $number"
@@ -193,7 +209,8 @@ function ingestSalesEmails(opts) {
       dryRun: !!opts.dryRun,
       written: [], corrected: [], unchanged: 0,
       missing: [], unverified: [], skipped: [], errors: [],
-      daysThru: [], goalColors: [], archived: 0
+      daysThru: [], goalColors: [], archived: 0,
+      materialChanges: [], notified: false
     };
 
     // Thread bookkeeping for the archive step. Keyed by thread id because Gmail
@@ -393,6 +410,33 @@ function ingestSalesEmails(opts) {
           report.daysThru.push(d);
         });
       });
+    }
+
+    // Flag any figure that moved by NOTIFY_CHANGE_OVER or more and email it. Runs
+    // over both buckets, but only counts changes where a value already existed —
+    // `written` entries can carry a mix (sales filled for the first time while cost
+    // was restated), so the test is per-change, not per-entry.
+    if (NOTIFY_CHANGE_OVER > 0) {
+      report.written.concat(report.corrected).forEach(function (e) {
+        (e.changes || []).forEach(function (c) {
+          if (c.from == null) return;                                  // first fill, not a change
+          if (Math.abs(c.to - c.from) < NOTIFY_CHANGE_OVER) return;
+          report.materialChanges.push({
+            store: e.store, date: e.date, field: c.field,
+            from: c.from, to: c.to,
+            delta: Math.round((c.to - c.from) * 100) / 100
+          });
+        });
+      });
+      if (report.materialChanges.length && !opts.dryRun) {
+        try {
+          _sendChangeAlert(report.materialChanges);
+          report.notified = true;
+        } catch (nerr) {
+          // Never fail an import over a notification.
+          report.errors.push({ error: 'change alert failed: ' + String(nerr && nerr.message || nerr) });
+        }
+      }
     }
 
     // Recolour the goal-tracking cells. Runs last, after the figures and the
@@ -636,6 +680,91 @@ function _blockBaseFor(col) {
     if (col >= b && col < b + 11 && (hit === null || b > hit)) hit = b;
   });
   return hit;
+}
+
+// ------------------------------------------------------------
+// Material-change email
+// ------------------------------------------------------------
+// One email per run listing every qualifying change, rather than one per change —
+// a busy morning would otherwise arrive as five separate emails.
+function _sendChangeAlert(list) {
+  var td = 'padding:9px 12px;border-bottom:1px solid #eaefeb;font-size:14px;';
+  var rows = list.map(function (m) {
+    var up = m.delta > 0;
+    return '<tr>'
+      + '<td style="' + td + 'font-weight:700;color:#1a1f24;">' + _fmtMD(m.date) + '</td>'
+      + '<td style="' + td + 'font-weight:700;color:#1a1f24;">' + m.store + '</td>'
+      + '<td style="' + td + 'color:#64707c;">' + (m.field === 'cost' ? 'Cost' : 'Sales') + '</td>'
+      + '<td style="' + td + 'color:#64707c;">' + _fmtUsd(m.from) + '</td>'
+      + '<td style="' + td + 'color:#1a1f24;font-weight:700;">' + _fmtUsd(m.to) + '</td>'
+      + '<td style="' + td + 'font-weight:800;color:' + (up ? '#17603a' : '#9b2c1f') + ';">'
+      + (up ? '+' : '') + _fmtUsd(m.delta) + '</td></tr>';
+  }).join('');
+
+  var one = list.length === 1 ? list[0] : null;
+  var subject = one
+    ? 'Sales import — ' + one.store + ' ' + _fmtMD(one.date) + ' ' + one.field
+      + ' changed by ' + (one.delta > 0 ? '+' : '') + _fmtUsd(one.delta)
+    : 'Sales import — ' + list.length + ' changes of ' + _fmtUsd(NOTIFY_CHANGE_OVER) + ' or more';
+
+  var html = '<div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif;'
+    + 'background:#f7faf8;padding:28px;">'
+    + '<div style="max-width:640px;margin:0 auto;background:#fff;border:1px solid #eaefeb;'
+    + 'border-radius:18px;overflow:hidden;">'
+    + '<div style="padding:20px 24px;border-bottom:1px solid #eaefeb;">'
+    + '<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#1f9d57;'
+    + 'font-weight:700;">Sales Import</div>'
+    + '<div style="font-size:17px;font-weight:700;color:#1a1f24;margin-top:3px;">'
+    + 'Figures already in the sheet have changed</div></div>'
+    + '<div style="padding:20px 24px;">'
+    + '<p style="margin:0 0 14px;color:#64707c;font-size:14px;line-height:1.5;">'
+    + 'Shopify now reports different numbers for the days below, and the sheet has been '
+    + 'updated to match. Usually a refund or a late-posting order against a day that was '
+    + 'already closed out.</p>'
+    + '<table style="width:100%;border-collapse:collapse;">'
+    + '<tr>'
+    + '<th style="' + td + 'text-align:left;font-size:11px;text-transform:uppercase;'
+    + 'letter-spacing:.06em;color:#9aa6ad;">Date of data</th>'
+    + '<th style="' + td + 'text-align:left;font-size:11px;text-transform:uppercase;'
+    + 'letter-spacing:.06em;color:#9aa6ad;">Store</th>'
+    + '<th style="' + td + 'text-align:left;font-size:11px;text-transform:uppercase;'
+    + 'letter-spacing:.06em;color:#9aa6ad;">Field</th>'
+    + '<th style="' + td + 'text-align:left;font-size:11px;text-transform:uppercase;'
+    + 'letter-spacing:.06em;color:#9aa6ad;">Was</th>'
+    + '<th style="' + td + 'text-align:left;font-size:11px;text-transform:uppercase;'
+    + 'letter-spacing:.06em;color:#9aa6ad;">Now</th>'
+    + '<th style="' + td + 'text-align:left;font-size:11px;text-transform:uppercase;'
+    + 'letter-spacing:.06em;color:#9aa6ad;">Change</th>'
+    + '</tr>' + rows + '</table>'
+    + '<p style="margin:16px 0 0;color:#9aa6ad;font-size:12px;">'
+    + 'Only changes of ' + _fmtUsd(NOTIFY_CHANGE_OVER) + ' or more are reported. '
+    + 'A day being filled in for the first time is not counted.</p>'
+    + '</div></div></div>';
+
+  // Plain-text alternative, for clients that will not render the HTML.
+  var plain = list.map(function (m) {
+    return _fmtMD(m.date) + '  ' + m.store + '  ' + m.field
+      + ': ' + _fmtUsd(m.from) + ' -> ' + _fmtUsd(m.to)
+      + '  (' + (m.delta > 0 ? '+' : '') + _fmtUsd(m.delta) + ')';
+  }).join('\n');
+
+  GmailApp.sendEmail(CHANGE_ALERT_TO, subject, plain, {
+    htmlBody: html,
+    name: 'SPEEKS Sales Import'
+  });
+}
+
+// NB: _money() above PARSES money out of text. These two format it.
+function _fmtUsd(n) {
+  var v = Number(n) || 0, neg = v < 0;
+  var p = Math.abs(v).toFixed(2).split('.');
+  p[0] = p[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return (neg ? '-$' : '$') + p.join('.');
+}
+
+function _fmtMD(iso) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  return m ? MONTHS[+m[2] - 1] + ' ' + (+m[3]) + ', ' + m[1] : String(iso || '');
 }
 
 // Paints each block's goal-tracking pair green (>= 100% of GP goal) or red (below).
