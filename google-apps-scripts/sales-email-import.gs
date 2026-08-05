@@ -119,6 +119,22 @@ var DAYS_THRU_LABEL  = /days?\s*thru\s*month/i;
 // in the inbox is the cheapest possible signal that a human should look at it.
 var ARCHIVE_AFTER_IMPORT = true;
 
+// Fill the goal-tracking cells green at or above 100% of GP goal, red below.
+//
+// "% of GP Goal" sits at base+4 on sheet row 1, with the GP Goal dollar figure
+// directly beneath it on row 2; both take the same fill. Bases here include TTL
+// (55), so the six columns are E, P, AA, AL, AW, BH.
+//
+// Only the FILL is touched, never a value or a formula — the percentage itself is
+// a formula off the day rows, so it updates on its own once the figures land.
+var COLOR_GOAL_CELLS = true;
+var GOAL_CELL_BASES  = [0, 11, 22, 33, 44, 55];   // OVL LEE WSP MPL BAL TTL
+var GOAL_PCT_ROW     = 1;        // 1-indexed sheet row holding the percentage
+var GOAL_FILL_ROWS   = [1, 2];   // 1-indexed rows to paint
+// Matched by eye to the green already on the sheet; adjust either to taste.
+var GOAL_GREEN = '#00ff00';
+var GOAL_RED   = '#ff5252';
+
 // Candidate labels for the two numbers, most-specific first. Shopify's wording
 // varies by report type, so each number is matched against a list rather than
 // one hardcoded string. diagnoseShopifyEmails() prints every "label: $number"
@@ -176,7 +192,8 @@ function ingestSalesEmails(opts) {
       ranAt: Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ssXXX"),
       dryRun: !!opts.dryRun,
       written: [], corrected: [], unchanged: 0,
-      missing: [], unverified: [], skipped: [], errors: [], daysThru: [], archived: 0
+      missing: [], unverified: [], skipped: [], errors: [],
+      daysThru: [], goalColors: [], archived: 0
     };
 
     // Thread bookkeeping for the archive step. Keyed by thread id because Gmail
@@ -374,6 +391,19 @@ function ingestSalesEmails(opts) {
         _syncDaysThru(t, opts.dryRun).forEach(function (d) {
           d.tab = tabName;
           report.daysThru.push(d);
+        });
+      });
+    }
+
+    // Recolour the goal-tracking cells. Runs last, after the figures and the
+    // day counter are in, so the percentage it reads is the current one.
+    if (COLOR_GOAL_CELLS) {
+      Object.keys(tabs).forEach(function (tabName) {
+        var t = tabs[tabName];
+        if (!t.sheet) return;
+        _syncGoalColors(t, opts.dryRun).forEach(function (c) {
+          c.tab = tabName;
+          report.goalColors.push(c);
         });
       });
     }
@@ -606,6 +636,49 @@ function _blockBaseFor(col) {
     if (col >= b && col < b + 11 && (hit === null || b > hit)) hit = b;
   });
   return hit;
+}
+
+// Paints each block's goal-tracking pair green (>= 100% of GP goal) or red (below).
+// A block whose percentage cannot be read is left exactly as it is rather than
+// guessed at — an unpainted cell is honest, a wrongly painted one is not.
+function _syncGoalColors(t, dryRun) {
+  var out = [];
+  for (var i = 0; i < GOAL_CELL_BASES.length; i++) {
+    var col = GOAL_CELL_BASES[i] + 4 + 1;                  // +4 = the goal column, +1 = 1-indexed
+    var pctCell = t.sheet.getRange(GOAL_PCT_ROW, col);
+    var pct = _asPercent(pctCell.getDisplayValue(), pctCell.getValue());
+    if (pct == null) continue;
+
+    var color = pct >= 100 ? GOAL_GREEN : GOAL_RED;
+    var painted = [];
+    for (var r = 0; r < GOAL_FILL_ROWS.length; r++) {
+      var cell = t.sheet.getRange(GOAL_FILL_ROWS[r], col);
+      painted.push(cell.getA1Notation());
+      // Skip the write when the fill is already right, so a no-op run does not
+      // rack up a dozen pointless setBackground calls.
+      if (!dryRun && String(cell.getBackground()).toLowerCase() !== color) cell.setBackground(color);
+    }
+    out.push({
+      cells: painted.join(' + '),
+      pct: Math.round(pct * 100) / 100,
+      color: pct >= 100 ? 'green' : 'red'
+    });
+  }
+  return out;
+}
+
+// A percent cell can arrive two ways: Sheets stores 124.04% as the number 1.2404,
+// but an unformatted cell might hold 124.04 outright. The DISPLAY value settles it
+// whenever it carries a "%"; only without one do we fall back to reading the raw
+// number as a fraction.
+function _asPercent(display, raw) {
+  var d = String(display == null ? '' : display).trim();
+  if (/%\s*$/.test(d)) {
+    var n = parseFloat(d.replace(/[^0-9.\-]/g, ''));
+    return isNaN(n) ? null : n;
+  }
+  var v = _num(raw);
+  return v == null ? null : v * 100;
 }
 
 // Sets every "Days Thru month" cell in a tab to the derived value. A store
