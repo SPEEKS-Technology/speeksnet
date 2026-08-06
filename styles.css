@@ -3404,6 +3404,19 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
 .role-dot.active { background: var(--slate-charcoal); color: #fff; border-color: var(--slate-charcoal); }
 .goals-edit-roles { display: flex; gap: 6px; align-items: center; }
 
+/* "Off" chip — same control as the role dots, but it means the opposite of a
+   role, so it reads as a pill rather than a circle and never turns green. */
+.role-dot.role-off {
+    width: auto; min-width: 30px; padding: 0 8px; border-radius: 999px;
+    border-style: dashed; font-size: 9px; letter-spacing: .3px;
+    margin-left: 4px;
+}
+.role-dot.role-off:hover { border-color: #94a3b8; color: #475569; }
+.role-dot.role-off.active {
+    background: #64748b; border-color: #64748b; border-style: solid; color: #fff;
+}
+.goal-auto-display.goal-off-set { background: #f1f5f9 !important; color: #64748b !important; border-color: #e2e8f0 !important; }
+
 .district-kpi-table-header, 
 #district-kpi-body .kpi-row {
     grid-template-columns: minmax(130px, 1.5fr) repeat(5, minmax(85px, 1fr)) !important;
@@ -8392,6 +8405,17 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 #listingGoalsModal .role-dot:hover { border-color: #1f9d57 !important; color: #178048 !important; }
 #listingGoalsModal .role-dot.active {
     background: #1f9d57 !important; border-color: #1f9d57 !important; color: #fff !important;
+}
+/* Off is not an achievement — keep it slate inside the airy modal too. */
+#listingGoalsModal .role-dot.role-off {
+    border-style: dashed !important; border-radius: 999px !important; padding: 0 9px !important; margin-left: 4px;
+}
+#listingGoalsModal .role-dot.role-off:hover { border-color: #94a3b8 !important; color: #475569 !important; }
+#listingGoalsModal .role-dot.role-off.active {
+    background: #64748b !important; border-color: #64748b !important; border-style: solid !important; color: #fff !important;
+}
+#listingGoalsModal .goal-auto-display.goal-off-set {
+    background: #f1f5f9 !important; color: #64748b !important; border-color: #e3e8ee !important;
 }
 #listingGoalsModal .goal-auto-display,
 #listingGoalsModal .goals-mgr-week {

@@ -9608,6 +9608,72 @@ function _roleOf(btn) {
     return String(r).trim().toUpperCase() || '-';
 }
 
+// "OFF" is stored in listing_goals.role like any other role, but it means the
+// opposite of one: this person is not in today. It exists so the daily reminder
+// can tell "nobody has touched this yet" apart from "every person is accounted
+// for" — see _lgCoverage.
+//
+// An OFF person carries no goal and does NOT count toward the day's staffed
+// head-count, which is what drives the shared-lister rule and the goal
+// allocation lookup. Marking someone off therefore can never move anyone else's
+// number — it only records that they were asked about.
+const GOALS_OFF = 'OFF';
+function _isOffRole(role) {
+    return String(role || '').trim().toUpperCase() === GOALS_OFF;
+}
+function _isWorkingRole(role) {
+    const r = String(role || '').trim().toUpperCase();
+    return !!r && r !== '-' && r !== GOALS_OFF;
+}
+// The role currently selected in one `.goals-edit-roles` group ('-' when none).
+function _activeRoleIn(group) {
+    return _roleOf(group ? group.querySelector('.role-dot.active') : null);
+}
+
+// The dots for one person: the store's role ladder plus the Off chip. Shared by
+// all three renderers (flip-card form, manager widget, MSM stacked widget) so
+// the Off chip can't be added to one and forgotten in the others.
+// `emp` lands inside a single-quoted JS string in an onclick, so escape it.
+function goalsRoleDotsHtml(roles, activeRole, emp, disabledAttr) {
+    const cur = String(activeRole || '').trim().toUpperCase();
+    const safeEmp = String(emp).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const dis = disabledAttr || '';
+    let html = '';
+    roles.forEach(r => {
+        html += `<button type="button" class="role-dot ${cur === r ? 'active' : ''}" data-role="${r}" ${dis} onclick="selectRole(this, '${safeEmp}', '${r}')">${r}</button>`;
+    });
+    html += `<button type="button" class="role-dot role-off ${cur === GOALS_OFF ? 'active' : ''}" data-role="${GOALS_OFF}" ${dis}`
+         + ` title="Off today — no goal, and they stop holding up the daily reminder"`
+         + ` onclick="selectRole(this, '${safeEmp}', '${GOALS_OFF}')">Off</button>`;
+    return html;
+}
+
+// Loose name match (exact, or same first name) — the roster comes from the auth
+// cache while the saved rows carry whatever name was on the row when it was
+// written. Same rule the weekly rollups already use.
+function _goalsSameName(a, b) {
+    const x = String(a || '').trim().toLowerCase();
+    const y = String(b || '').trim().toLowerCase();
+    if (!x || !y) return false;
+    if (x === y) return true;
+    const xf = x.split(' ')[0], yf = y.split(' ')[0];
+    return xf.length > 2 && yf.length > 2 && (xf.startsWith(yf) || yf.startsWith(xf));
+}
+
+// The roster the goal widgets show dots for: everyone in the store's user list
+// except the CEO and DM. One definition so the daily reminder judges coverage
+// against exactly the people the manager was given dots for.
+function goalsRosterFor(store) {
+    try {
+        const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
+        const excluded = ['ceo', 'district manager'];
+        return (auth.users || [])
+            .filter(u => userInStore(u, store) && !excluded.includes((u.role || '').toLowerCase()))
+            .map(u => u.name)
+            .filter(Boolean);
+    } catch (_) { return []; }
+}
+
 const ListingGoalsEngine = {
     roleWeight: { B1: 5, B2: 8, L1: 25, L2: 25, L1_SHARED: 15 },
     saturdayFactor: 0.5,
@@ -9821,14 +9887,8 @@ async function fetchLiveGoalsData() {
 
     try {
         // Build roster from auth cache — works for all stores immediately, no extra API call
-        const _authRaw = localStorage.getItem('speeksAuthCache');
-        if (_authRaw) {
-            const _authData = JSON.parse(_authRaw);
-            const _excluded = ['ceo', 'district manager'];
-            const _emps = (_authData.users || [])
-                .filter(u => userInStore(u, goalsTargetStore) && !_excluded.includes((u.role || '').toLowerCase()))
-                .map(u => u.name)
-                .filter(Boolean);
+        if (localStorage.getItem('speeksAuthCache')) {
+            const _emps = goalsRosterFor(goalsTargetStore);
             goalsRoster = _emps.length ? _emps : ['No Employees Found'];
         }
 
@@ -9940,7 +10000,7 @@ function renderGoalsScoreboard(viewType = 'daily') {
             <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; align-items: center;">
                 <div style="display: flex; flex-direction: column; gap: 4px;">
                     <span class="goals-roster-name" style="font-size: 13px; font-weight: 800; color: var(--slate-charcoal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${emp}</span>
-                    ${viewType === 'daily' && empRole !== '-' ? `<span class="goals-roster-badge" style="font-size: 10px; background: #e2e8f0; color: var(--slate-charcoal); padding: 3px 6px; border-radius: 4px; display: inline-block; width: fit-content;">${empRole}</span>` : ''}
+                    ${viewType === 'daily' && empRole !== '-' ? `<span class="goals-roster-badge" style="font-size: 10px; background: #e2e8f0; color: var(--slate-charcoal); padding: 3px 6px; border-radius: 4px; display: inline-block; width: fit-content;">${_isOffRole(empRole) ? 'Off' : empRole}</span>` : ''}
                 </div>
                 <div style="display: flex; justify-content: center;">
                     <span class="goals-roster-val target" style="font-size: 14px; text-align: center; font-weight: 900; color: var(--slate-charcoal); width: 36px; display: inline-block;">${empGoal || '-'}</span>
@@ -10045,7 +10105,7 @@ function buildGoalsEditForm() {
                 <button class="toggle-btn ${!editingYesterday ? 'active' : ''}" onclick="toggleEditDate(false)">Today</button>
                 <button class="toggle-btn ${editingYesterday ? 'active' : ''}" onclick="toggleEditDate(true)">Yesterday</button>
             </div>
-            <span class="goals-info-i" data-tip-title="How goals are set" data-tip-desc="Just pick each person's role — the goal fills in automatically.">i</span>
+            <span class="goals-info-i" data-tip-title="How goals are set" data-tip-desc="Just pick each person's role — the goal fills in automatically. Tap Off for anyone who isn't in today; the daily reminder clears once everyone has a role or an Off.">i</span>
         `;
     }
     
@@ -10063,13 +10123,9 @@ function buildGoalsEditForm() {
             return nameMatch && dateMatch;
         }) || { role: '', goal: '', result: '' };
 
-        let rolesHtml = '';
-        availableRoles.forEach(r => {
-            const isActive = targetRecord.role === r ? 'active' : '';
-            // If the goal is locked, we also lock the role from being changed
-            const disableRole = lockGoal ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : '';
-            rolesHtml += `<button type="button" class="role-dot ${isActive}" data-role="${r}" ${disableRole} onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
-        });
+        // If the goal is locked, we also lock the role from being changed
+        const disableRole = lockGoal ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : '';
+        const rolesHtml = goalsRoleDotsHtml(availableRoles, targetRecord.role, emp, disableRole);
 
         // If the goal is locked, we make the input unclickable and gray it out
         const disableGoalAttr = lockGoal ? 'disabled style="background: #f1f5f9; color: #94a3b8; border-color: #e2e8f0; cursor: not-allowed;"' : '';
@@ -10109,21 +10165,19 @@ async function saveGoalsData(silent = false) {
     let payloadEmployees = [];
 
     // How many people are staffed today — needed for the shared-lister rule.
+    // People marked Off are not staffed, so they must not inflate this.
     let staffedCount = 0;
     goalsRoster.forEach((emp, idx) => {
-        const group = document.getElementById(`roles-${idx}`);
-        if (group && group.querySelector('.role-dot.active')) staffedCount++;
+        if (_isWorkingRole(_activeRoleIn(document.getElementById(`roles-${idx}`)))) staffedCount++;
     });
     const rosterSize = effectiveTeamSize(goalsTargetStore);
 
     goalsRoster.forEach((emp, idx) => {
-        const roleGroup = document.getElementById(`roles-${idx}`);
-        const activeBtn = roleGroup?.querySelector('.role-dot.active');
-        const role = _roleOf(activeBtn);
+        const role = _activeRoleIn(document.getElementById(`roles-${idx}`));
 
         // Goal is derived from the role — never typed. It scales to the weekly
-        // total the DM set for this store on Monday.
-        const goal = role !== '-' ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount, targetFor(goalsTargetStore))) : '';
+        // total the DM set for this store on Monday. Off carries no goal.
+        const goal = _isWorkingRole(role) ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount, targetFor(goalsTargetStore))) : '';
 
         // Results now come from the Weekly KPI (# Listed); preserve any existing value.
         const existing = liveGoalsData.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
@@ -10262,11 +10316,7 @@ function renderManagerGoals() {
     goalsRoster.forEach((emp, idx) => {
         const rec = liveGoalsData.find(r => r.employee === emp && normalizeGoalDate(r.date) === todayStr) || { role: '' };
 
-        let rolesHtml = '';
-        availableRoles.forEach(r => {
-            const isActive = rec.role === r ? 'active' : '';
-            rolesHtml += `<button type="button" class="role-dot ${isActive}" data-role="${r}" onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
-        });
+        const rolesHtml = goalsRoleDotsHtml(availableRoles, rec.role, emp);
 
         // Weekly goal = this week's saved daily goals, excluding today (today is added live).
         _priorWeekGoals[idx] = priorWeekGoal(emp, todayStr, startOfWeek);
@@ -10342,14 +10392,9 @@ async function fetchLiveGoalsDataMS() {
     _setMSGoalsChrome(true);
 
     try {
-        const authData = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
-        const excluded = ['ceo', 'district manager'];
         _goalsMS = {};
         MULTISTORE_MANAGER_STORES.forEach(s => {
-            const emps = (authData.users || [])
-                .filter(u => userInStore(u, s) && !excluded.includes((u.role || '').toLowerCase()))
-                .map(u => u.name)
-                .filter(Boolean);
+            const emps = goalsRosterFor(s);
             _goalsMS[s] = { roster: emps.length ? emps : ['No Employees Found'], live: [], priorWeek: {}, history: [] };
         });
 
@@ -10399,11 +10444,7 @@ function renderManagerGoalsMS() {
         st.roster.forEach((emp, idx) => {
             const rec = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === todayStr) || { role: '' };
 
-            let rolesHtml = '';
-            availableRoles.forEach(r => {
-                const isActive = rec.role === r ? 'active' : '';
-                rolesHtml += `<button type="button" class="role-dot ${isActive}" data-role="${r}" onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
-            });
+            const rolesHtml = goalsRoleDotsHtml(availableRoles, rec.role, emp);
 
             st.priorWeek[idx] = priorWeekGoal(emp, todayStr, startOfWeek, st.live);
 
@@ -10447,23 +10488,21 @@ function recomputeGoalDisplaysMS() {
 
         let staffedCount = 0;
         st.roster.forEach((emp, idx) => {
-            const group = document.getElementById(`roles-${store}-${idx}`);
-            if (group && group.querySelector('.role-dot.active')) staffedCount++;
+            if (_isWorkingRole(_activeRoleIn(document.getElementById(`roles-${store}-${idx}`)))) staffedCount++;
         });
         const rosterSize = effectiveTeamSize(store);
 
         let todayTotal = 0;
         let weekTotal = 0;
         st.roster.forEach((emp, idx) => {
-            const group = document.getElementById(`roles-${store}-${idx}`);
-            const activeBtn = group?.querySelector('.role-dot.active');
-            const role = _roleOf(activeBtn);
-            const todayGoal = role !== '-' ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount, targetFor(store)) : 0;
+            const role = _activeRoleIn(document.getElementById(`roles-${store}-${idx}`));
+            const todayGoal = _isWorkingRole(role) ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount, targetFor(store)) : 0;
 
             const disp = document.getElementById(`goal-display-${store}-${idx}`);
             if (disp) {
-                disp.innerText = role === '-' ? '–' : todayGoal;
-                disp.classList.toggle('goal-auto-set', role !== '-');
+                disp.innerText = _isOffRole(role) ? 'Off' : (role === '-' ? '–' : todayGoal);
+                disp.classList.toggle('goal-auto-set', _isWorkingRole(role));
+                disp.classList.toggle('goal-off-set', _isOffRole(role));
             }
             todayTotal += todayGoal;
 
@@ -10495,17 +10534,14 @@ async function saveGoalsDataMS(silent = false) {
 
         let staffedCount = 0;
         st.roster.forEach((emp, idx) => {
-            const group = document.getElementById(`roles-${store}-${idx}`);
-            if (group && group.querySelector('.role-dot.active')) staffedCount++;
+            if (_isWorkingRole(_activeRoleIn(document.getElementById(`roles-${store}-${idx}`)))) staffedCount++;
         });
         const rosterSize = effectiveTeamSize(store);
 
         const payloadEmployees = [];
         st.roster.forEach((emp, idx) => {
-            const group = document.getElementById(`roles-${store}-${idx}`);
-            const activeBtn = group?.querySelector('.role-dot.active');
-            const role = _roleOf(activeBtn);
-            const goal = role !== '-' ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount, targetFor(store))) : '';
+            const role = _activeRoleIn(document.getElementById(`roles-${store}-${idx}`));
+            const goal = _isWorkingRole(role) ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount, targetFor(store))) : '';
             const existing = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
             const result = existing && existing.result != null ? String(existing.result) : '';
             if (role !== '-' || goal !== '' || result !== '') {
@@ -10543,6 +10579,15 @@ async function saveGoalsDataMS(silent = false) {
         const pulse = document.getElementById('goals-pulse-dot');
         if (pulse) pulse.style.display = 'none';
         if (status) { status.textContent = 'Saved ✓'; status.className = 'goals-save-status saved'; }
+        // We muted our own broadcast (see above), so nothing else will tell this
+        // tab the day is now covered — clear the daily reminder ourselves. The
+        // single-store save has always done this; the MSM path never did, so an
+        // MSM who set both stores kept the card until the 10-minute poll.
+        if (typeof checkListingGoalsDailyReminder === 'function') {
+            checkListingGoalsDailyReminder().then(() => {
+                if (typeof renderActionFeed === 'function') renderActionFeed();
+            });
+        }
     } else {
         if (status) { status.textContent = 'Save failed'; status.className = 'goals-save-status error'; }
         else if (!silent) alert("Error saving goals to server.");
@@ -10735,23 +10780,35 @@ function _lgDailyStores() {
     return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
 
-// Is the day actually covered — a buyer AND a lister assigned?
+// Is the day covered — has every person on the roster been given either a role
+// or an Off for today?
 //
-// This is the bar for clearing the (un-snoozable) reminder, so it has to be
-// something a store can always reach. "Every available role assigned" can't be
-// used: the widget offers more roles than people on a 2- or 3-person roster, and
-// on a 4-person one it would demand full attendance every day — one person off
-// and five stores would be stuck behind an alert they can't dismiss. There is
-// also no way to mark someone as off, so "everyone has a role" is undetectable.
-// A buyer plus a lister is the minimum that makes a real trading day, and it is
-// reachable no matter how short-handed the store is.
-function _lgDayCovered(rows, todayStr) {
+// The old bar was "a buyer AND a lister are assigned". It was picked because
+// there was no way to say someone wasn't in, so demanding a role for everyone
+// would have stranded short-handed stores behind a card they couldn't dismiss.
+// It backfired the other way instead: OVL, LEE and WSP regularly staff buyers
+// only, and on those days the card never cleared no matter how carefully the
+// roles were set — 22 store-days in the month before this was fixed. That is
+// the "it doesn't go away after submitting them" report.
+//
+// The Off chip removes the ambiguity that forced the weak rule, so the bar can
+// now be the honest one: everybody is either working a role or marked off. It
+// is always reachable (Off is uncapped) and it can't be satisfied by accident.
+//
+// Fallback: with no roster (cold auth cache) we can't know who is missing, so
+// fall back to the old buyer+lister test rather than clear a reminder we
+// haven't actually verified.
+function _lgCoverage(rows, todayStr, roster) {
     const todays = (Array.isArray(rows) ? rows : []).filter(r =>
         normalizeGoalDate(r.date) === todayStr && r.role && r.role !== '-');
-    const roles = todays.map(r => String(r.role).trim().toUpperCase());
-    const hasBuyer  = roles.some(r => /^B\d+$/.test(r));
-    const hasLister = roles.some(r => /^L\d+$/.test(r));
-    return hasBuyer && hasLister;
+    if (!Array.isArray(roster) || !roster.length) {
+        const roles = todays.map(r => String(r.role).trim().toUpperCase());
+        const hasBuyer  = roles.some(r => /^B\d+$/.test(r));
+        const hasLister = roles.some(r => /^L\d+$/.test(r));
+        return { covered: hasBuyer && hasLister, missing: [] };
+    }
+    const missing = roster.filter(n => !todays.some(r => _goalsSameName(r.employee, n)));
+    return { covered: missing.length === 0, missing };
 }
 
 function _lgDailyBubbleEl() {
@@ -10791,7 +10848,8 @@ async function checkListingGoalsDailyReminder() {
     for (const s of stores) {
         try {
             const rows = await fetch(`${GOALS_API_URL}?store=${s}&v=${Date.now()}`).then(r => r.json());
-            if (!_lgDayCovered(rows, today)) pending.push(s);
+            const cov = _lgCoverage(rows, today, goalsRosterFor(s));
+            if (!cov.covered) pending.push({ store: s, missing: cov.missing });
         } catch (_) { /* network hiccup — don't invent a reminder */ }
     }
     // This check does its own fetch, so it finishes AFTER the login sweep has
@@ -10807,10 +10865,22 @@ async function checkListingGoalsDailyReminder() {
     if (t) {
         // An MSM covers two stores, so name whichever is outstanding; a single-store
         // manager already knows which store is theirs.
-        const which = (stores.length > 1) ? (' for ' + pending.join(' & ')) : '';
+        const which = (stores.length > 1) ? (' for ' + pending.map(p => p.store).join(' & ')) : '';
+        // Naming who is still unaccounted for is what makes the card actionable —
+        // otherwise a manager who has "set them all" has no way to see the one
+        // person the reminder is still waiting on. First names: the card is narrow.
+        const waiting = pending
+            .map(p => {
+                const who = p.missing.map(n => String(n).trim().split(' ')[0]).join(', ');
+                if (!who) return '';
+                return (stores.length > 1 ? p.store + ': ' : '') + who;
+            })
+            .filter(Boolean)
+            .join(' · ');
         t.dataset.summary = 'Today’s listing goals' + which
-            + ' aren’t set — assign each person working today a role. Needs at least a buyer and a lister.';
-        t.dataset.sig = 'lgd:' + today + ':' + pending.join(',');
+            + ' aren’t finished — give everyone working a role, and tap Off for anyone who isn’t in today.'
+            + (waiting ? ' Still waiting on: ' + waiting + '.' : '');
+        t.dataset.sig = 'lgd:' + today + ':' + pending.map(p => p.store + '|' + p.missing.join(',')).join(';');
         t.textContent = t.dataset.summary;
     }
     el.style.display = 'flex';
@@ -11003,14 +11073,15 @@ async function fetchAndRenderEmployeeGoals() {
             }
         });
 
-        const roleTranslations = { 'B1': 'Buyer 1', 'B2': 'Buyer 2', 'L1': 'Lister 1', 'L2': 'Lister 2' };
+        const roleTranslations = { 'B1': 'Buyer 1', 'B2': 'Buyer 2', 'L1': 'Lister 1', 'L2': 'Lister 2', 'OFF': 'Off Today' };
         const displayRole = roleTranslations[todayRole] || todayRole;
 
         const roleDescriptions = {
             'B1': 'You\'re the lead buyer — first up for every customer who walks through the door. When someone comes in, that\'s your call.',
             'B2': 'You\'re the second buyer in rotation. Hang back and jump in the moment a second customer arrives.',
             'L1': 'Dedicated listing only — no buying, no shipping, no exceptions. Your entire focus today is getting items listed and nothing else.',
-            'L2': 'You\'re a primary lister throughout the day, but also serve as the emergency buyer when 4 or more separate customers are in the store at once.'
+            'L2': 'You\'re a primary lister throughout the day, but also serve as the emergency buyer when 4 or more separate customers are in the store at once.',
+            'OFF': 'You\'re marked off today — no listing goal. Enjoy the day.'
         };
         const roleDesc = roleDescriptions[todayRole] || '';
 
@@ -11038,8 +11109,10 @@ async function fetchAndRenderEmployeeGoals() {
             if (stat && stat.goal > 0) {
                 dailyBreakdownHtml += `<div class="emp-daily-pill pill-goal" title="${dRole ? escapeHtml(dRole) : 'Goal set'}">${dName}: ${stat.goal}</div>`;
             } else if (dIdx <= currentDayIdx) {
-                // A role can be set with a 0 goal (e.g. closed Sundays) — say so rather than "No role set".
-                const t = dRole ? `${escapeHtml(dRole)} — no goal (store closed)` : 'No role set';
+                // A role can be set with a 0 goal (a day off, or a closed Sunday) —
+                // say which rather than the misleading "No role set".
+                const t = _isOffRole(stat && stat.role) ? 'Off — no goal'
+                        : (dRole ? `${escapeHtml(dRole)} — no goal (store closed)` : 'No role set');
                 dailyBreakdownHtml += `<div class="emp-daily-pill pill-null" title="${t}">${dName}</div>`;
             } else {
                 dailyBreakdownHtml += `<div class="emp-daily-pill pill-future">${dName}</div>`;
@@ -21999,7 +22072,9 @@ window.toggleAuditPanel = function(event) {
 // --- ROLE SELECTION LOGIC ---
 // Per-role capacity: every role is 1-per-store. Extended lister roles (L3, L4, …
 // on big rosters) aren't listed here — the `|| 1` lookup below caps them too.
-const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1 };
+// OFF is the exception and must stay uncapped: any number of people can be off
+// on the same day, and a cap of 1 would lock the chip after the first one.
+const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1, OFF: Infinity };
 
 window.updateRoleLocks = function() {
     // Role capacity is per STORE. Normally the page shows one store's dots, so the
@@ -22080,8 +22155,7 @@ window.recomputeGoalDisplays = function() {
     if (!document.getElementById('goal-display-0') && !document.querySelector('.goal-auto-display')) return;
     let staffedCount = 0;
     goalsRoster.forEach((emp, idx) => {
-        const group = document.getElementById(`roles-${idx}`);
-        if (group && group.querySelector('.role-dot.active')) staffedCount++;
+        if (_isWorkingRole(_activeRoleIn(document.getElementById(`roles-${idx}`)))) staffedCount++;
     });
     const rosterSize = effectiveTeamSize(goalsTargetStore);
     const dateStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
@@ -22089,15 +22163,14 @@ window.recomputeGoalDisplays = function() {
     let todayTotal = 0;
     let weekTotal = 0;
     goalsRoster.forEach((emp, idx) => {
-        const group = document.getElementById(`roles-${idx}`);
-        const activeBtn = group?.querySelector('.role-dot.active');
-        const role = _roleOf(activeBtn);
-        const todayGoal = role !== '-' ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount, targetFor(goalsTargetStore)) : 0;
+        const role = _activeRoleIn(document.getElementById(`roles-${idx}`));
+        const todayGoal = _isWorkingRole(role) ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount, targetFor(goalsTargetStore)) : 0;
 
         const disp = document.getElementById(`goal-display-${idx}`);
         if (disp) {
-            disp.innerText = role === '-' ? '–' : todayGoal;
-            disp.classList.toggle('goal-auto-set', role !== '-');
+            disp.innerText = _isOffRole(role) ? 'Off' : (role === '-' ? '–' : todayGoal);
+            disp.classList.toggle('goal-auto-set', _isWorkingRole(role));
+            disp.classList.toggle('goal-off-set', _isOffRole(role));
         }
         todayTotal += todayGoal;
 
@@ -22129,9 +22202,9 @@ function _goalsResaveIfStale(dateStr) {
     if (!Array.isArray(liveGoalsData) || !liveGoalsData.length) return;
     if (typeof scheduleGoalsAutosave !== 'function') return;
     const stale = goalsRoster.some((emp, idx) => {
-        const group = document.getElementById(`roles-${idx}`);
-        const role = _roleOf(group?.querySelector('.role-dot.active'));
-        if (role === '-') return false;
+        const role = _activeRoleIn(document.getElementById(`roles-${idx}`));
+        // Off (and unset) carry no goal, so there is nothing that can go stale.
+        if (!_isWorkingRole(role)) return false;
         const saved = liveGoalsData.find(r => r.employee === emp
             && normalizeGoalDate(r.date) === dateStr && r.role === role);
         if (!saved || saved.goal == null || saved.goal === '') return false;
@@ -30699,7 +30772,7 @@ function renderDmListingModal() {
     });
 
     const sel = all.find(s => s.store === _dmxSel.lg) || all[0];
-    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2' };
+    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2', OFF: 'Off' };
     let pane = '<div class="dmx-ph"><div>'
         + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
         + '<div class="dmx-ps">Target ' + sel.target + ' listings · ' + sel.week
@@ -31482,8 +31555,22 @@ async function runSalesImport(ev) {
             if (s.filled)    bits.push(`${s.filled} store-day${s.filled === 1 ? '' : 's'} filled in`);
             if (s.corrected) bits.push(`${s.corrected} corrected`);
             if (s.missing)   bits.push(`${s.missing} still to enter by hand`);
-            _siSay(bits.length ? 'Sales import — ' + bits.join(', ') + '.' : 'Sales import — already up to date.',
-                   !!s.missing);
+            let msg = bits.length ? 'Sales import — ' + bits.join(', ') + '.' : 'Sales import — already up to date.';
+
+            // The same run also does BUYING (the Apps Script folds it in), so say
+            // so — otherwise half the work is invisible and a buying failure
+            // looks like a clean success.
+            const b = s.buying;
+            if (b && !b.ok) {
+                msg += ' Buying import failed.';
+            } else if (b) {
+                const bb = [];
+                if (b.filled)    bb.push(`${b.filled} day${b.filled === 1 ? '' : 's'} filled in`);
+                if (b.corrected) bb.push(`${b.corrected} corrected`);
+                if (b.missing)   bb.push(`${b.missing} still to enter`);
+                msg += bb.length ? ' Buying — ' + bb.join(', ') + '.' : ' Buying — already up to date.';
+            }
+            _siSay(msg, !!s.missing || !!(b && (!b.ok || b.missing)));
         }
 
         await fetchSalesImportStatus();
