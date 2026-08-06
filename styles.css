@@ -9876,13 +9876,22 @@ body.sam-active .hotbar-btn:hover {
    the row is already the max of the two and the height is stable by construction. The
    hard lock only clipped: the Buying panel needs 437px of the 378px it left, so the
    Sell Margin row fell outside the card entirely once GP (MTD) was added. */
-.ec-widget.cc-expanded { min-height: 530px; }
-.ec-widget .cc-panel { display: flex; flex-direction: column; justify-content: flex-start; overflow-y: auto; }
+/* Was .ec-widget — the employee widget is gone and .cc-widget.cc-expanded above
+   already sets the same min-height. The KPI panel keeps its own scroll: it is the
+   one panel whose content length depends on how many metrics a person has. */
+#cc-panel-kpis { display: flex; flex-direction: column; justify-content: flex-start; overflow-y: auto; }
 /* Keep the header one line so hiding the goal chip / a longer KPI title can't change its
    height (which would shift everything below on tab switch). */
-.ec-widget .ew-title { flex-wrap: nowrap; }
+.cc-widget .ew-title { flex-wrap: nowrap; }
 .cc-widget:not(.cc-expanded) .cc-strips,
 .cc-widget:not(.cc-expanded) .cc-body { display: none; }
+/* Weekly KPIs is the one tab with no tile strip of its own. Without this the strip
+   band stays in the layout as a blank stripe, because every strip lives in the same
+   grid cell and hiding them all leaves the cell at the tallest one's height. */
+.cc-widget.cc-nostrip .cc-strips { display: none; }
+/* Header right-hand group: the per-tab chips sit beside the "updated as of" line
+   rather than pushing it onto a second row. */
+.cc-head-r { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .cc-widget.cc-expanded .cc-summary { display: none; }
 .cc-updated { font-size: 10.5px; font-weight: 650; color: #94a3b8; text-align: right; white-space: nowrap; flex: none; }
 .cc-updated b { color: #647082; font-weight: 800; }
@@ -10034,13 +10043,14 @@ body.sam-active .hotbar-btn:hover {
    detail together inside .cc-panel) and the DM/CEO card above the district board.
    Tiles reuse .cc-cell so a tile reads identically wherever it lands.
    ========================================================= */
-/* The employee widget and the district card have no .cc-strip of their own, so the
-   tile row is bordered here instead of relying on the strip band above it. */
+/* The district card has no .cc-strip of its own, so its tile row is bordered here
+   instead of relying on the strip band above it. (The employee widget used to be
+   the other case; it now shares the Command Center's strip band.) */
 .lv-strip, .lv-dist-strip {
     display: grid; grid-template-columns: repeat(4, 1fr);
     gap: 1px; background: #eef2f6;
 }
-.ec-widget .lv-strip, .lv-dist-strip {
+.lv-dist-strip {
     border: 1px solid #e6ebf1; border-radius: 13px; overflow: hidden;
 }
 .lv-dist-strip { margin: 16px 20px 0; }

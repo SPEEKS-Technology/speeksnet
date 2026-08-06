@@ -7188,8 +7188,7 @@ function renderBuyingSales() {
     _ccSum('cc-sum-rev', `$${Math.round(_trackRev).toLocaleString()}`, '');
     _ccSum('cc-sum-goal', `${p}<small>%</small>`, p >= 100 ? 'good' : (p >= 80 ? 'warn' : 'bad'));
     const _buySig = `${Math.round(bP)}|${p}|${hubDataCache[`${store}BuyDate`] || ''}`;
-    _ccFlagUpdate('buying', _buySig);   // manager Command Center
-    _empFlagUpdate('buying', _buySig);  // employee combined widget
+    _ccFlagUpdate('buying', _buySig);   // one widget now, so one flag
 }
 
 function renderLiveData(d) {
@@ -8791,12 +8790,16 @@ async function fetchAlertsData() {
 // strip + detail; clicking the open tab again collapses back to the summary.
 // Pure view-switching — the fetch/render functions above own the data.
 // Three tabs: 'scorecard' (audit + SPEEKS Scorecard), 'ebay', 'buying'.
+// Every tab the one Command Center can show. Order matters in _ccOpenDefaultTab
+// only, where it decides which tab a role lands on.
+const CC_TABS = ['live', 'buying', 'ebay', 'scorecard', 'kpis'];
+
 function switchCommandTab(tab) {
     const widget = document.querySelector('.cc-widget');
     const btn = document.getElementById('cc-tab-' + tab);
     const collapse = btn && btn.classList.contains('active'); // clicking the open tab closes it
 
-    ['live', 'scorecard', 'ebay', 'buying'].forEach(t => {
+    CC_TABS.forEach(t => {
         const on = !collapse && t === tab;
         const b = document.getElementById('cc-tab-' + t);
         if (b) b.classList.toggle('active', on);
@@ -8809,19 +8812,40 @@ function switchCommandTab(tab) {
         if (panel) panel.classList.toggle('cc-active', on);
     });
     // Expand to chart height only while a tab is open; collapsed → natural summary height.
-    if (widget) widget.classList.toggle('cc-expanded', !collapse);
+    if (widget) {
+        widget.classList.toggle('cc-expanded', !collapse);
+        // Weekly KPIs has no tile strip. Every strip shares one grid cell, so leaving
+        // the band in place would show a blank stripe the height of the tallest one.
+        widget.classList.toggle('cc-nostrip', !collapse && !document.getElementById('cc-strip-' + tab));
+    }
     // The "View Full Breakdown" action is audit-specific; only on the Scorecard tab.
     const action = document.getElementById('sh-tab-action');
     if (action) action.style.display = (!collapse && tab === 'scorecard') ? '' : 'none';
     // Show the explicit "back to summary" control while a tab is open.
     const coll = document.getElementById('cc-collapse');
     if (coll) coll.style.display = collapse ? 'none' : '';
+    _ccHeaderFor(collapse ? null : tab);
     // Opening a tab means the manager has now seen it → clear its "updated" cue.
     if (!collapse) _clearCommandUpdot(tab);
 }
+
+// Header extras that belong to ONE tab. Carried over from the old employee widget,
+// which swapped its whole header per tab; here the title is generic ("OVL Command
+// Center") and only these three chips move.
+function _ccHeaderFor(tab) {
+    const show = (id, on) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = on ? '' : 'none';
+    };
+    // The goal chip is Buying's. The Live tab has its own banked-vs-goal bar, and
+    // two different goal figures on one header line read as a contradiction.
+    show('ec-goal-wrap', tab === 'buying');
+    show('bs-last-updated', tab === 'buying');
+    show('emp-kpi-period', tab === 'kpis');
+}
 // Explicit "back to the one-line summary" (in addition to clicking the open tab again).
 function collapseCommand() {
-    ['live', 'scorecard', 'ebay', 'buying'].forEach(t => {
+    CC_TABS.forEach(t => {
         const b = document.getElementById('cc-tab-' + t); if (b) b.classList.remove('active');
         const strip = document.getElementById('cc-strip-' + t); if (strip) strip.classList.remove('cc-active');
         const panel = document.getElementById('cc-panel-' + t); if (panel) panel.classList.remove('cc-active');
@@ -8829,6 +8853,7 @@ function collapseCommand() {
     const widget = document.querySelector('.cc-widget'); if (widget) widget.classList.remove('cc-expanded');
     const action = document.getElementById('sh-tab-action'); if (action) action.style.display = 'none';
     const coll = document.getElementById('cc-collapse'); if (coll) coll.style.display = 'none';
+    _ccHeaderFor(null);
 }
 // Back-compat alias in case anything still calls the old name.
 function switchStoreHealthTab(tab) { switchCommandTab(tab === 'mktg' ? 'scorecard' : tab); }
@@ -8871,75 +8896,25 @@ function _ccSum(id, html, cls) {
     el.className = 'cc-sum-v' + (cls ? ' ' + cls : '');
 }
 
-// ---- EMPLOYEE combined widget: Buying & Sales + Weekly KPIs (2 tabs, no summary) ----
-// Always expanded; defaults to Buying. Mirrors the manager Command Center's dot cue.
-function switchEmpTab(tab) {
-    ['live', 'buying', 'kpis'].forEach(t => {
-        const on = t === tab;
-        const b = document.getElementById('ec-tab-' + t); if (b) b.classList.toggle('active', on);
-        const p = document.getElementById('ec-panel-' + t); if (p) p.classList.toggle('cc-active', on);
-    });
-    // Swap the header to match the active tab (goal + date belong to Buying only).
-    const eyebrow = document.getElementById('ec-eyebrow');
-    const titleT = document.getElementById('ec-title-text');
-    const goalWrap = document.getElementById('ec-goal-wrap');
-    const bsDate = document.getElementById('bs-last-updated');
-    const kpiDate = document.getElementById('emp-kpi-period');
-    const buying = tab === 'buying';
-    const EYEBROW = { live: 'My Store · Today', buying: 'My Store · This Month', kpis: 'Mine vs Store' };
-    const TITLE   = { live: 'Live Dashboard',   buying: 'Buying & Sales',        kpis: 'Weekly KPIs' };
-    if (eyebrow) eyebrow.textContent = EYEBROW[tab] || EYEBROW.buying;
-    if (titleT) titleT.textContent = TITLE[tab] || TITLE.buying;
-    // The monthly goal chip belongs to Buying: the Live tab carries its own
-    // banked-vs-goal bar, so showing both would put two different goal figures on
-    // one header line.
-    if (goalWrap) goalWrap.style.display = buying ? '' : 'none';
-    if (bsDate) bsDate.style.display = buying ? '' : 'none';
-    if (kpiDate) kpiDate.style.display = tab === 'kpis' ? '' : 'none';
-    _clearEmpUpdot(tab);
-}
-// Employee-widget update dot — same silent-seed / change-detect / clear-on-open logic
-// as the manager Command Center, keyed separately (ec) and per store.
-var _ecSigCache = {};
-function _empFlagUpdate(tab, sig) {
-    _ecSigCache[tab] = (sig == null ? '' : String(sig));
-    const dot = document.getElementById('ec-updot-' + tab);
-    if (!dot) return;
-    const btn = document.getElementById('ec-tab-' + tab);
-    const open = btn && btn.classList.contains('active');
-    const key = 'ecSeen_' + _ccStore() + '_' + tab;
-    let last = localStorage.getItem(key);
-    if (last === '__test_prev__') last = null;
-    if (open || last === null) { localStorage.setItem(key, _ecSigCache[tab]); dot.classList.remove('show'); return; }
-    dot.classList.toggle('show', last !== _ecSigCache[tab]);
-}
-function _clearEmpUpdot(tab) {
-    const dot = document.getElementById('ec-updot-' + tab);
-    if (dot) dot.classList.remove('show');
-    if (_ecSigCache[tab] != null) localStorage.setItem('ecSeen_' + _ccStore() + '_' + tab, _ecSigCache[tab]);
-}
+// The employee/ASM widget was merged into the Command Center above. These two names
+// survive only because other call sites still use them; both now drive the single
+// widget. Kept rather than chased down so a missed caller degrades to a no-op
+// instead of a ReferenceError that takes the whole dashboard down.
+function switchEmpTab(tab) { switchCommandTab(tab); }
+function _empFlagUpdate(tab, sig) { _ccFlagUpdate(tab, sig); }
 
-// After role/feature UI is applied, keep the combined widgets coherent: hide the whole
-// widget if every tab was turned off, and (employee widget) make sure a visible tab is
-// active so a disabled default doesn't leave a blank body.
-function _reconcileComboTabs(widgetEl, prefix, tabs, isEmployee) {
+// After role/feature UI is applied: if every tab was switched off there is nothing
+// left to show, so hide the card rather than leave an empty shell with a header.
+function _reconcileComboTabs(widgetEl, prefix, tabs) {
     if (!widgetEl || getComputedStyle(widgetEl).display === 'none') return; // not shown for this user
     const visible = tabs.filter(t => {
         const b = document.getElementById(prefix + '-tab-' + t);
         return b && getComputedStyle(b).display !== 'none';
     });
-    if (!visible.length) { widgetEl.style.setProperty('display', 'none', 'important'); return; }
-    if (isEmployee) {
-        const activeOk = visible.some(t => {
-            const b = document.getElementById(prefix + '-tab-' + t);
-            return b.classList.contains('active');
-        });
-        if (!activeOk) switchEmpTab(visible[0]);
-    }
+    if (!visible.length) widgetEl.style.setProperty('display', 'none', 'important');
 }
 function _reconcileCommandWidgets() {
-    _reconcileComboTabs(document.querySelector('.cc-widget:not(.ec-widget)'), 'cc', ['live', 'buying', 'ebay', 'scorecard'], false);
-    _reconcileComboTabs(document.getElementById('ecWidget'), 'ec', ['live', 'buying', 'kpis'], true);
+    _reconcileComboTabs(document.querySelector('.cc-widget'), 'cc', CC_TABS);
     _ccOpenDefaultTab();
 }
 
@@ -8957,9 +8932,9 @@ function _reconcileCommandWidgets() {
 var _ccDefaultOpened = false;
 function _ccOpenDefaultTab() {
     if (_ccDefaultOpened) return;
-    const widget = document.querySelector('.cc-widget:not(.ec-widget)');
+    const widget = document.querySelector('.cc-widget');
     if (!widget || getComputedStyle(widget).display === 'none') return;
-    const first = ['live', 'buying', 'ebay', 'scorecard'].find(t => {
+    const first = CC_TABS.find(t => {
         const b = document.getElementById('cc-tab-' + t);
         return b && getComputedStyle(b).display !== 'none';
     });
@@ -11423,7 +11398,7 @@ async function fetchAndRenderEmployeeKPIs() {
             <div class="ekpi-grid">${_storeTiles}</div>
         `;
         // Employee widget "Weekly KPIs updated" dot — fires when a new week's numbers land.
-        _empFlagUpdate('kpis', `${pTxt}|${myData.buyVal}|${myData.conversion}|${myData.listed}|${myData.noDeals}`);
+        _ccFlagUpdate('kpis', `${pTxt}|${myData.buyVal}|${myData.conversion}|${myData.listed}|${myData.noDeals}`);
     } catch (e) {
         container.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to sync KPIs.</div>';
     }
@@ -16146,12 +16121,14 @@ function initDashboardData() {
         // matters if the realtime socket never connects (CDN blocked, etc.); it
         // re-pulls the sources so a change still surfaces within the interval.
         if (!window._ccDataSync) window._ccDataSync = setInterval(() => {
-            const hasCC = document.getElementById('cc-updot-buying');       // manager Command Center
-            const hasEC = document.getElementById('ec-updot-buying');       // employee combined widget
-            if ((hasCC || hasEC) && typeof fetchHubData === 'function') fetchHubData();
-            if (hasCC && typeof fetchScorecardData === 'function') fetchScorecardData();
-            if (hasCC && typeof fetchAlertsData === 'function') fetchAlertsData();
-            if (hasEC && typeof fetchAndRenderEmployeeKPIs === 'function') fetchAndRenderEmployeeKPIs();
+            // One widget, so each source is polled only if ITS tab is actually
+            // present for this user — a role without the Scorecard tab should not be
+            // re-pulling the scorecard every ten minutes.
+            const has = t => !!document.getElementById('cc-tab-' + t);
+            if (has('buying') && typeof fetchHubData === 'function') fetchHubData();
+            if (has('scorecard') && typeof fetchScorecardData === 'function') fetchScorecardData();
+            if (has('ebay') && typeof fetchAlertsData === 'function') fetchAlertsData();
+            if (has('kpis') && typeof fetchAndRenderEmployeeKPIs === 'function') fetchAndRenderEmployeeKPIs();
         }, 10 * 60 * 1000);
         // SAFETY NET for the Live Dashboard, same reasoning as above: realtime is the
         // real path. Skipped while the tab is in the background — a dashboard left open
@@ -24570,31 +24547,26 @@ const FEATURE_CATALOG = [
     { key: 'widget-goals-panel',       label: 'Goals & Initiatives (Sidebar)', tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'employee', 'training', 'assistant-manager'] },
     { key: 'widget-checklist-panel',   label: 'Checklist (Sidebar)',           tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'district-manager', 'assistant-manager'] },
     { key: 'widget-audit-panel',       label: 'Cleaning Checklist (Sidebar)',  tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'widget-scorecard-alerts',  label: 'Command Center (Whole Widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
-    { key: 'cc-live',                  label: 'Command Center · Live Dashboard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
-    { key: 'cc-scorecard',             label: 'Command Center · Scorecard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    // ONE Command Center for every role. Managers, ASMs and employees all get the
+    // same card; the per-tab rows below are the whole of the difference between
+    // them. There is no separate employee widget any more, and therefore no second
+    // set of keys that has to be kept in step with these.
+    //
+    // Live and Buying default ON for everyone: showing the team the same figures as
+    // their manager, cost and margin included, is the decision these panels were
+    // built around. Those rows exist so a store that would rather not can switch
+    // them off, not as a default-off gate.
+    { key: 'widget-scorecard-alerts',  label: 'Command Center (Whole Widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    { key: 'cc-live',                  label: 'Command Center · Live Dashboard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    { key: 'cc-buying',                label: 'Command Center · Buying & Sales tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     { key: 'cc-ebay',                  label: 'Command Center · eBay tab',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
-    { key: 'cc-buying',                label: 'Command Center · Buying & Sales tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
-    // The employee/ASM widget as a whole. Its three tabs each had a switch but the
-    // widget itself did not, so there was no way to hand an ASM the manager Command
-    // Center without ALSO leaving their own widget beside it — switching off all
-    // three tabs just left an empty shell with a header. Defaults match the role
-    // classes it already had, so adding this row changes nothing until it is used.
-    { key: 'widget-emp-command',       label: 'Employee/ASM Widget (Whole Widget)', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
-    // Live sales for the employee/ASM widget. On by default for both: showing the
-    // team the same figures as their manager, cost and margin included, is the
-    // decision this feature was built around — this row exists so a store that would
-    // rather not can switch it off, not as a default-off gate.
-    { key: 'widget-emp-live',          label: 'Live Dashboard tab (Employee/ASM)', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
-    { key: 'widget-buying-selling',    label: 'Buying & Sales tab (Employee)', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'cc-scorecard',             label: 'Command Center · Scorecard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    // Label names the thing as it appears ON SCREEN. It was once "Weekly KPIs (Tab)",
+    // indistinguishable in a filter box from the Workspace tab that had been renamed
+    // to "Store KPIs" — which cost a real support round when KPIs were granted on the
+    // widget while the Workspace tab stayed off at the role level.
+    { key: 'cc-kpis',                  label: 'Command Center · Weekly KPIs tab', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-listing-goals',     label: 'Listing Goals bar (Action Menu)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager', 'training'] },
-    // Labels name the thing as it appears ON SCREEN. These two were "Weekly KPIs tab
-    // (Employee)" and "Weekly KPIs (Tab)", which are indistinguishable in a filter
-    // box — and the Workspace tab was renamed to "Store KPIs" months ago, so
-    // searching Feature Access for what the tab actually says found nothing. That
-    // cost a real support round: KPIs were granted on the dashboard widget while the
-    // Workspace tab stayed switched off at the role level.
-    { key: 'widget-emp-weekly-kpis',   label: 'Weekly KPIs — dashboard widget tab', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-district-live',     label: 'District Live Dashboard',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'dcc-sales-import',         label: 'District CC · Sales Import control', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
@@ -25501,11 +25473,12 @@ const JUMP_KEYWORDS = {
     'widget-checklist-panel':    'checklist tasks todo to do my tasks',
     'widget-goals-panel':        'goals initiatives monthly team',
     'widget-listing-goals':      'listing goals listings ebay target',
-    'widget-buying-selling':     'buying selling sales bought sold',
     'widget-district-command':   'district command center all stores overview',
-    'cc-live':                   'live dashboard today todays sales net sales orders average order aov gross margin cogs shopify real time right now how are we doing',
-    'widget-emp-command':        'employee widget asm widget my store whole widget live buying sales weekly kpis card',
-    'widget-emp-live':           'live dashboard today todays sales net sales orders average order aov gross margin shopify real time right now how are we doing',
+    'cc-live':                   'live dashboard today todays sales yesterday net sales orders average order aov gross margin cogs shopify real time right now how are we doing',
+    'cc-buying':                 'buying selling sales bought sold buying and sales',
+    'cc-ebay':                   'ebay listings status performance top rated metrics',
+    'cc-scorecard':              'scorecard audit paymore practice score marketing',
+    'cc-kpis':                   'weekly kpis my kpis mine vs store employee kpis conversion no deals',
     'widget-district-live':      'live dashboard today todays sales all stores district net sales orders margin pace shopify real time',
     'tool-claims-store':         'claim claims shopify usps ups damaged lost package item not received insurance',
     'tool-claims-oversight':     'claims oversight all stores review insurance',
@@ -25545,15 +25518,17 @@ const JUMP_PLACES = [
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
     { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
     // --- dashboard panels (QuickPortal) --------------------------------------
-    // Live Dashboard needs THREE rows, one per surface, because each is a separate
-    // Feature Access key — a single row would be invisible to two of the three
-    // audiences. Only one is ever visible to any given user, so the box never shows
-    // duplicates.
+    // Live Dashboard needs TWO rows, not three: the store surface and the district
+    // card are separate Feature Access keys, and a single row would be invisible to
+    // one of the two audiences. It used to need three, when managers and employees
+    // had their own widgets and their own keys — the merge removed that row.
     { id: 'w-live',      label: 'Live Dashboard',       sub: 'QuickPortal', kind: 'panel', feature: 'cc-live',           page: 'index.html', run: () => _jumpToLive('cc-live') },
-    { id: 'w-emplive',   label: 'Live Dashboard',       sub: 'QuickPortal', kind: 'panel', feature: 'widget-emp-live',   page: 'index.html', run: () => _jumpToLive('widget-emp-live') },
     { id: 'w-dlive',     label: 'District Live Dashboard', sub: 'QuickPortal', kind: 'panel', feature: 'widget-district-live', page: 'index.html' },
     { id: 'w-command',   label: 'Command Center',       sub: 'QuickPortal', kind: 'panel', feature: 'widget-scorecard-alerts', page: 'index.html' },
-    { id: 'w-buying',    label: 'Buying & Sales',       sub: 'QuickPortal', kind: 'panel', feature: 'widget-buying-selling',   page: 'index.html' },
+    // Both are TABS in a collapsible card, so they need the same treatment Live has:
+    // spotlighting without opening the tab lands the search on a collapsed widget.
+    { id: 'w-buying',    label: 'Buying & Sales',       sub: 'QuickPortal', kind: 'panel', feature: 'cc-buying',               page: 'index.html', run: () => _jumpToCcTab('buying', 'cc-buying') },
+    { id: 'w-kpis',      label: 'Weekly KPIs',          sub: 'QuickPortal', kind: 'panel', feature: 'cc-kpis',                 page: 'index.html', run: () => _jumpToCcTab('kpis', 'cc-kpis') },
     { id: 'w-district',  label: 'District Command Center', sub: 'QuickPortal', kind: 'panel', feature: 'widget-district-command', page: 'index.html' },
     { id: 'w-listing',   label: 'Listing Goals',        sub: 'QuickPortal', kind: 'panel', feature: 'widget-listing-goals',    page: 'index.html' },
     { id: 'w-checklist', label: 'Checklist',            sub: 'QuickPortal', kind: 'panel', feature: 'widget-checklist-panel',  page: 'index.html' },
@@ -25682,17 +25657,15 @@ function _jumpPlaceItems() {
 //
 // _jumpRunPlace calls `run` BEFORE its own page check, so the hop has to happen
 // here: this is reachable from Workspace and Operations too.
-function _jumpToLive(featureKey) {
+function _jumpToCcTab(tab, featureKey) {
     if (_jumpPage() !== 'index.html') { location.href = 'index.html#jump=' + featureKey; return; }
-    const mgr = featureKey === 'cc-live';
-    const btn = document.getElementById(mgr ? 'cc-tab-live' : 'ec-tab-live');
+    const btn = document.getElementById('cc-tab-' + tab);
     // switchCommandTab treats a click on the OPEN tab as "collapse", so calling it
     // unconditionally would close the very panel the search was asked to show.
-    if (btn && !btn.classList.contains('active')) {
-        if (mgr) switchCommandTab('live'); else switchEmpTab('live');
-    }
+    if (btn && !btn.classList.contains('active')) switchCommandTab(tab);
     _jumpSpotlight(featureKey);
 }
+function _jumpToLive(featureKey) { _jumpToCcTab('live', featureKey || 'cc-live'); }
 
 // Where a destination lives, as a URL. Tabs ride the plain hash their page
 // already reads on load (workspace.html#aging); panels use #jump=<feature>,

@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260806f">
+  <link rel="stylesheet" href="styles.css?v=20260806g">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260806f" defer></script>
+  <script src="speeks.js?v=20260806g" defer></script>
 </head>
 
 <body class="preload">
@@ -884,14 +884,42 @@
 
 
   <div class="ew-dash dynamic-module-flex role-manager role-owner-manager role-employee employee-dashboard-row sh-dash-row">
-    <!-- ===== COMMAND CENTER (managers): Store Health + Buying & Sales, 3 tabs ===== -->
-    <div class="card employee-widget-card ew-airy cc-widget dynamic-module-block role-manager role-owner-manager" data-feature="widget-scorecard-alerts">
+    <!-- ===== COMMAND CENTER — ONE widget for every role =====
+         Managers, ASMs and employees all get this same card; which TABS they see is
+         the only difference, and that is entirely Feature Access (cc-live, cc-buying,
+         cc-ebay, cc-scorecard, cc-kpis).
+
+         There used to be a second, near-identical "employee widget" beside this one
+         with its own three tabs and its own four feature keys. That is why bs-rev /
+         bs-gp / bs-buy-val existed TWICE in this document and renderBuyingSales has
+         to querySelectorAll every field. One widget, one set of ids, four fewer
+         switches to reason about. -->
+    <div class="card employee-widget-card ew-airy cc-widget dynamic-module-block role-manager role-owner-manager role-employee" data-feature="widget-scorecard-alerts">
         <div class="ew-head">
             <div class="ew-titles">
                 <span class="ew-eyebrow"><span id="cc-store-eyebrow">—</span> · This Month</span>
                 <span class="ew-title"><span id="cc-store-name">Store</span> Command Center <span id="cc-week" class="ew-date"></span></span>
             </div>
-            <span class="cc-updated">Updated as of <b id="cc-updated">—</b></span>
+            <span class="cc-head-r">
+                <!-- Tab-specific header bits, shown by switchCommandTab. The goal chip
+                     belongs to Buying only: the Live tab carries its own banked-vs-goal
+                     bar, and two different goal figures on one header line read as a
+                     contradiction. -->
+                <span class="ew-date" id="bs-last-updated" style="display:none;"></span>
+                <span class="ew-date" id="emp-kpi-period" style="display:none;"></span>
+                <span class="ew-goal" id="ec-goal-wrap" style="display:none;">Goal <b id="bs-goal"></b></span>
+                <span class="cc-updated">Updated as of <b id="cc-updated">—</b></span>
+            </span>
+            <!-- Hidden store select. Not a control any more — _ccStore() and
+                 renderBuyingSales both read it, and applyRoleBasedUI pins it to the
+                 signed-in store. It moved here when the employee widget was removed. -->
+            <select id="bsStoreSelect" class="bs-hidden-select" onchange="renderBuyingSales()">
+                <option value="OVL">OVL</option>
+                <option value="LEE">LEE</option>
+                <option value="WSP">WSP</option>
+                <option value="MPL">MPL</option>
+                <option value="BAL">BAL</option>
+            </select>
         </div>
 
         <div class="cc-tabbar">
@@ -905,6 +933,7 @@
                 <button id="cc-tab-buying" class="toggle-btn" type="button" onclick="switchCommandTab('buying')" data-feature="cc-buying">Buying &amp; Sales<span class="cc-updot" id="cc-updot-buying"></span></button>
                 <button id="cc-tab-ebay" class="toggle-btn" type="button" onclick="switchCommandTab('ebay')" data-feature="cc-ebay">eBay<span class="cc-updot" id="cc-updot-ebay"></span></button>
                 <button id="cc-tab-scorecard" class="toggle-btn" type="button" onclick="switchCommandTab('scorecard')" data-feature="cc-scorecard">Scorecard<span class="cc-updot" id="cc-updot-scorecard"></span></button>
+                <button id="cc-tab-kpis" class="toggle-btn" type="button" onclick="switchCommandTab('kpis')" data-feature="cc-kpis">Weekly KPIs<span class="cc-updot" id="cc-updot-kpis"></span></button>
             </div>
             <div class="cc-tabbar-right">
                 <div id="sh-tab-action" class="cc-tab-action"></div>
@@ -996,100 +1025,20 @@
                     </div>
                 </div>
             </div>
+            <!-- Weekly KPIs. Came across from the old employee widget; defaults to
+                 employee + ASM in the catalog, so managers do not see it unless it is
+                 switched on (their Store KPIs live in Workspace). -->
+            <div class="cc-panel" id="cc-panel-kpis" data-feature="cc-kpis">
+                <div id="employee-kpi-widget-body" class="employee-kpi-body">
+                    <div class="status-message">Syncing Data...</div>
+                </div>
+            </div>
         </div>
     </div>
 
-      <!-- Combined EMPLOYEE widget: Live Dashboard + Buying & Sales + Weekly KPIs,
-           three tabs (no summary line), defaults to Live Dashboard. Managers see the
-           same three inside the Command Center; this is the employee/ASM equivalent.
-           Each tab is a toggleable feature (widget-emp-live / widget-buying-selling /
-           widget-emp-weekly-kpis) — which is why switchEmpTab must never assume the
-           default tab is present. -->
-      <div class="card employee-widget-card ew-airy cc-widget cc-expanded ec-widget dynamic-module-block role-employee" id="ecWidget" data-feature="widget-emp-command">
-          <div class="ew-head">
-              <div class="ew-titles">
-                  <!-- Header defaults match the DEFAULT tab, which is now Live Dashboard.
-                       switchEmpTab swaps all four of these; they only have to agree with
-                       the tab that is open before anyone clicks. -->
-                  <span class="ew-eyebrow" id="ec-eyebrow">My Store · Today</span>
-                  <span class="ew-title"><span id="ec-title-text">Live Dashboard</span> <span id="bs-last-updated" class="ew-date" style="display:none;"></span><span id="emp-kpi-period" class="ew-date" style="display:none;"></span></span>
-              </div>
-              <span class="ew-goal" id="ec-goal-wrap" style="display:none;">Goal <b id="bs-goal"></b></span>
-              <select id="bsStoreSelect" class="bs-hidden-select" onchange="renderBuyingSales()">
-                  <option value="OVL">OVL</option>
-                  <option value="LEE">LEE</option>
-                  <option value="WSP">WSP</option>
-                  <option value="MPL">MPL</option>
-                  <option value="BAL">BAL</option>
-              </select>
-          </div>
-
-          <div class="cc-tabbar">
-              <div class="ew-seg cc-seg">
-                  <!-- ASMs and employees see the SAME live figures as their manager,
-                       cost and margin included — a deliberate decision, not an
-                       oversight. This widget has no summary strip of its own, so the
-                       live tiles render inside the panel here. -->
-                  <button id="ec-tab-live" class="toggle-btn active" type="button" onclick="switchEmpTab('live')" data-feature="widget-emp-live">Live Dashboard</button>
-                  <button id="ec-tab-buying" class="toggle-btn" type="button" onclick="switchEmpTab('buying')" data-feature="widget-buying-selling">Buying &amp; Sales<span class="cc-updot" id="ec-updot-buying"></span></button>
-                  <button id="ec-tab-kpis" class="toggle-btn" type="button" onclick="switchEmpTab('kpis')" data-feature="widget-emp-weekly-kpis">Weekly KPIs<span class="cc-updot" id="ec-updot-kpis"></span></button>
-              </div>
-          </div>
-
-          <div class="cc-body">
-              <div class="cc-panel cc-active lv-panel" id="ec-panel-live" data-feature="widget-emp-live">
-                  <div class="lv-strip"></div>
-                  <div class="lv-detail"><div class="status-message">Syncing live sales…</div></div>
-              </div>
-              <div class="cc-panel" id="ec-panel-buying" data-feature="widget-buying-selling">
-                  <div class="ebs-body">
-                      <div class="ebs-col ebs-buy">
-                          <div class="ebs-cap">Buying (MTD)</div>
-                          <div class="ebs-mid">
-                              <div>
-                                  <div class="ebs-lbl">Value Purchased</div>
-                                  <div class="ebs-big" id="bs-buy-val">$0</div>
-                              </div>
-                              <div class="ebs-pace">
-                                  <div class="ebs-pace-lbl"><span>Tracking to month-end</span><span id="bs-buy-proj">$0</span></div>
-                                  <div class="ebs-pace-bar"><i id="bs-pace-fill"></i></div>
-                              </div>
-                          </div>
-                          <div class="ebs-rows">
-                              <div class="ebs-row"><span class="k">Buy Margin</span><span class="delta-badge delta-neutral" id="bs-buy-margin">0%</span></div>
-                          </div>
-                      </div>
-
-                      <div class="ebs-divider"></div>
-
-                      <div class="ebs-col ebs-sell">
-                          <div class="ebs-cap">Sales (MTD)</div>
-                          <div class="ebs-ring-group">
-                              <div class="ebs-ring-wrap">
-                                  <div class="progress-ring">
-                                      <svg viewBox="0 0 150 150"><circle class="bg" cx="75" cy="75" r="64"></circle><circle class="bar" id="bs-bar" cx="75" cy="75" r="64"></circle></svg>
-                                      <div class="percentage" id="bs-pct">0%</div>
-                                  </div>
-                              </div>
-                              <div class="ebs-ring-cap">of monthly goal</div>
-                          </div>
-                          <div class="ebs-rows">
-                              <div class="ebs-row"><span class="k">Rev (MTD)</span><span class="v" id="bs-rev">--</span></div>
-                              <div class="ebs-row"><span class="k">GP (MTD)</span><span class="v" id="bs-gp">--</span></div>
-                              <div class="ebs-row"><span class="k">GP Tracking</span><span class="v" id="bs-t-gp">--</span></div>
-                              <div class="ebs-row"><span class="k">Sell Margin</span><span class="delta-badge delta-neutral" id="bs-sell-margin">0%</span></div>
-                          </div>
-                      </div>
-                  </div>
-              </div>
-
-              <div class="cc-panel" id="ec-panel-kpis" data-feature="widget-emp-weekly-kpis">
-                  <div id="employee-kpi-widget-body" class="employee-kpi-body">
-                      <div class="status-message">Syncing Data...</div>
-                  </div>
-              </div>
-          </div>
-      </div>
+      <!-- The employee/ASM widget that used to sit here has been merged into the
+           Command Center above — one card for every role, tabs gated by Feature
+           Access. Its Weekly KPIs tab moved across as cc-panel-kpis. -->
 
       <!-- My Listing Goals moved to the "Listing Goals" bar in the action menu (opens
            #empGoalsModal). Weekly KPIs merged into the combined widget above. -->
