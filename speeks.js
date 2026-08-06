@@ -9066,22 +9066,12 @@ function _lvDayName(isoDay, long) {
     return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString('en-US',
         { weekday: long ? 'long' : 'short', month: long ? 'long' : 'short', day: 'numeric' });
 }
-// "Yesterday" only when it genuinely is. On a Monday the previous open day is
-// Saturday, and calling that yesterday would be a lie people act on.
-function _lvPrevChip(d) {
-    if (!d || !d.prev) return 'Yesterday';
-    const today = String(d.asOfCentral || '').slice(0, 10);
-    const gap = Date.parse(today + 'T00:00:00Z') - Date.parse(d.prev.date + 'T00:00:00Z');
-    if (gap === 86400000) return 'Yesterday';
-    const p = d.prev.date.split('-');
-    return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString('en-US', { weekday: 'long' });
-}
 function _lvToggle(d) {
     if (!d || !d.prev) return '';
     const btn = (mode, label) => '<button type="button" class="lv-mode'
         + (_lvMode === mode ? ' on' : '') + '" onclick="setLiveMode(\'' + mode + '\')">'
         + escapeHtml(label) + '</button>';
-    return '<span class="lv-modes">' + btn('today', 'Today') + btn('prev', _lvPrevChip(d)) + '</span>';
+    return '<span class="lv-modes">' + btn('today', 'Today') + btn('prev', 'Yesterday') + '</span>';
 }
 function setLiveMode(mode) {
     const next = mode === 'prev' ? 'prev' : 'today';
@@ -9203,16 +9193,7 @@ function _lvDayClose(v, d) {
         + '</b> with <b>' + v.ordersToday + (v.ordersToday === 1 ? ' order' : ' orders') + '</b>'
         + ' &middot; <b>' + _lvMoney(v.gpToday, true) + '</b> gross profit';
     if (v.returnsToday > 0) s += ' &middot; <b>' + _lvMoney(v.returnsToday, false) + '</b> refunded';
-    s += '.';
-    // A Sunday is skipped to get here because it is not a selling day, but it can
-    // still take online orders. Say so rather than letting the money disappear
-    // between two views.
-    if (v.skippedNet > 0 && d.prev.skipped && d.prev.skipped.length) {
-        s += ' <span class="lv-skip">' + escapeHtml(_lvDayName(d.prev.skipped[0], true))
-            + ' took ' + _lvMoney(v.skippedNet, false)
-            + ' online, which does not count as a selling day.</span>';
-    }
-    return s + '</div>';
+    return s + '.</div>';
 }
 
 // One store failing must never blank the panel for the rest — the edge function
@@ -9419,7 +9400,7 @@ function renderLiveDashboard() {
             : (d.asOfCentral ? 'last change ' + _lvClock(d.asOfCentral) : '');
     }
     const eyebrow = document.querySelector('.lv-card .lv-eyebrow');
-    if (eyebrow) eyebrow.innerHTML = 'District &middot; ' + (_lvIsPrev() ? _lvPrevChip(d) : 'Today');
+    if (eyebrow) eyebrow.innerHTML = 'District &middot; ' + (_lvIsPrev() ? 'Yesterday' : 'Today');
     const fresh = document.querySelector('.lv-card .lv-freshness');
     if (fresh) fresh.innerHTML = _lvFreshness(d);
     const dModes = document.querySelector('.lv-card .lv-modes-host');

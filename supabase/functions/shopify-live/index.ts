@@ -127,46 +127,34 @@ function sellingDays(c: Central): { total: number; elapsed: number } {
 const iso = (c: Central) =>
   `${c.y}-${String(c.m).padStart(2, "0")}-${String(c.d).padStart(2, "0")}`;
 
-// --- the previous open day --------------------------------------------------
-// "How did we finish yesterday" means the last day the stores were OPEN. Sunday
-// is a non-selling day everywhere else in this file (isOpen, sellingDays), so on
-// a Monday the useful answer is Saturday, not a column of zeros. The view always
-// prints the actual date, so nobody has to guess which day they are reading —
-// and anything that did sell on a skipped Sunday is carried through separately
-// rather than quietly vanishing.
+// --- yesterday ---------------------------------------------------------------
+// Literally the previous CALENDAR day, Sundays included. The stores are shut on
+// Sunday but the webstore is not, so a Sunday still has sales worth seeing — and
+// skipping it would mean Monday's "yesterday" silently showed Saturday, which is
+// a lie people would act on.
+//
+// Note this is deliberately NOT the same rule as sellingDays(): that one excludes
+// Sundays because it measures how much of the SELLING month has gone, which is
+// what a monthly goal is set against. Both rules are right for their own job.
 type PrevDay = {
   iso: string;          // the day being reported
-  skipped: string[];    // closed days jumped over to reach it
   sinceDays: number;    // how far the ShopifyQL window must reach back
   inMonth: boolean;     // false on the 1st, when it belongs to last month
   day: number;          // day-of-month, for the selling-day count
 };
 
-function prevOpenDay(c: Central): PrevDay {
-  const skipped: string[] = [];
-  const d = new Date(Date.UTC(c.y, c.m - 1, c.d));
-  const fmt = () => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`
+function prevDay(c: Central): PrevDay {
+  const d = new Date(Date.UTC(c.y, c.m - 1, c.d - 1));
+  const iso = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`
     + `-${String(d.getUTCDate()).padStart(2, "0")}`;
-  let found = "";
-  // Eight hops is more than enough for one Sunday; the bound just stops a bad
-  // clock spinning here forever.
-  for (let i = 0; i < 8 && !found; i++) {
-    d.setUTCDate(d.getUTCDate() - 1);
-    if (d.getUTCDay() === 0) { skipped.push(fmt()); continue; }
-    found = fmt();
-  }
-  const span = Math.round(
-    (Date.UTC(c.y, c.m - 1, c.d) - Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())) / 86400000,
-  );
   return {
-    iso: found,
-    skipped,
-    // On the 1st of a month this deliberately reaches into LAST month, which is
-    // why the accumulator in fetchStore filters rows by month rather than
-    // trusting the window to contain only in-month days.
-    sinceDays: Math.max(c.d - 1, span),
-    inMonth: found.slice(0, 7) === `${c.y}-${String(c.m).padStart(2, "0")}`,
-    day: Number(found.slice(8, 10)),
+    iso,
+    // On the 1st of a month this reaches into LAST month, which is why the
+    // accumulator in fetchStore filters rows by month rather than trusting the
+    // window to contain only in-month days.
+    sinceDays: Math.max(c.d - 1, 1),
+    inMonth: iso.slice(0, 7) === `${c.y}-${String(c.m).padStart(2, "0")}`,
+    day: d.getUTCDate(),
   };
 }
 
@@ -207,7 +195,6 @@ type DayMetrics = {
   mtdNet: number; mtdCogs: number; mtdGp: number; mtdOrders: number;
   mtdMargin: number | null;
   pctOfGoal: number | null; paceIndex: number | null;
-  skippedNet: number;   // sold on the closed day(s) jumped over, if any
 };
 
 type StoreMetrics = {
@@ -266,7 +253,7 @@ async function fetchStore(
     // subtracting everything dated after it rather than re-summing, so the two
     // figures can never disagree about which days they include.
     let afterNet = 0, afterCogs = 0, afterOrders = 0;
-    let pNet = 0, pCogs = 0, pOrders = 0, pReturns = 0, skippedNet = 0;
+    let pNet = 0, pCogs = 0, pOrders = 0, pReturns = 0;
 
     for (const r of rows) {
       const day = String(r.day).slice(0, 10);
@@ -290,7 +277,6 @@ async function fetchStore(
       if (day === pd.iso) {
         pNet = net; pCogs = cogs; pOrders = ord; pReturns = Math.abs(num(r.returns));
       }
-      if (pd.skipped.includes(day)) skippedNet += net;
     }
 
     base.mtdNet = round2(base.mtdNet);
@@ -329,7 +315,6 @@ async function fetchStore(
         // either way: the frontend overlays this object onto the live row, and a
         // MISSING key would let today's pace show through under a past date.
         pctOfGoal: null, paceIndex: null,
-        skippedNet: round2(skippedNet),
       };
     }
 
@@ -388,7 +373,6 @@ function rollPrev(healthy: StoreMetrics[], goal: number, elapsedPct: number): Da
     pctOfGoal,
     paceIndex: pctOfGoal !== null && elapsedPct > 0
       ? Math.round(pctOfGoal / elapsedPct * 100) : null,
-    skippedNet: sum(p => p.skippedNet),
   };
 }
 
@@ -414,10 +398,12 @@ async function refresh(sb: any, now: Date, force: boolean) {
 
   const goals = await loadGoals(sb);
   const sd = sellingDays(c);
-  const pd = prevOpenDay(c);
+  const pd = prevDay(c);
   // Selling days elapsed as at the close of that day — the same count, taken a
   // day earlier, so yesterday's pace is judged against yesterday's expectation
-  // rather than today's.
+  // rather than today's. Still Sunday-free: a Sunday adds sales but not a selling
+  // day, so a Sunday and the Saturday before it share an elapsed count. That is
+  // correct — the monthly goal is set against selling days.
   const psd = pd.inMonth ? sellingDays({ ...c, d: pd.day }) : null;
 
   const metrics = await Promise.all(
@@ -481,7 +467,6 @@ async function refresh(sb: any, now: Date, force: boolean) {
       ? {
         date: pd.iso,
         inMonth: pd.inMonth,
-        skipped: pd.skipped,
         sellingDaysElapsed: psd ? psd.elapsed : null,
         elapsedPct: round2(prevElapsedPct),
       }

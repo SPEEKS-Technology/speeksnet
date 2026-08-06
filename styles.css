@@ -10178,7 +10178,6 @@ body.sam-active .hotbar-btn:hover {
 /* How a finished day closed out. Sits in the same slot as the last-order line so
    the panel keeps its footer rule on both views. */
 .lv-last.lv-final { display: block; line-height: 1.6; }
-.lv-skip { color: #94a3b8; font-weight: 650; }
 .lv-err {
     font-size: 12px; font-weight: 650; color: #b3760a; line-height: 1.5;
     background: #fdf3e1; border: 1px solid #eccf94; border-left-width: 3px;
