@@ -9102,7 +9102,7 @@ function _lvLastOrder(m, asOf) {
 
 function _lvStoreTiles(m, asOf) {
     const mtdAov = m.mtdOrders > 0 ? m.mtdNet / m.mtdOrders : null;
-    return _lvTile('Net Sales Today', _lvMoney(m.netToday, true), 'through ' + _lvClock(asOf), true)
+    return _lvTile('Net Sales Today', _lvMoney(m.netToday, true), 'last change ' + _lvClock(asOf), true)
         + _lvTile('Orders', String(m.ordersToday),
             m.returnsToday > 0 ? _lvMoney(m.returnsToday, false) + ' refunded' : 'no refunds today')
         + _lvTile('Average Order', m.aov === null ? '—' : _lvMoney(m.aov, true),
@@ -9160,7 +9160,7 @@ function _lvRollupTiles(r, d, label) {
     const days = d.month
         ? d.month.sellingDaysElapsed + ' of ' + d.month.sellingDaysTotal + ' selling days'
         : '';
-    return _lvTile('Net Sales Today', _lvMoney(r.netToday, true), 'through ' + _lvClock(d.asOfCentral), true)
+    return _lvTile('Net Sales Today', _lvMoney(r.netToday, true), 'last change ' + _lvClock(d.asOfCentral), true)
         + _lvTile('Orders', String(r.ordersToday),
             r.aov === null ? label : 'average ' + _lvMoney(r.aov, true))
         + _lvTile('Gross Margin', _lvPct(r.marginToday), 'profit ' + _lvMoney(r.gpToday, false))
@@ -9292,7 +9292,7 @@ function renderLiveDashboard() {
         }
     }
     const asof = document.querySelector('.lv-card .lv-asof');
-    if (asof) asof.textContent = d.asOfCentral ? 'as of ' + _lvClock(d.asOfCentral) : '';
+    if (asof) asof.textContent = d.asOfCentral ? 'last change ' + _lvClock(d.asOfCentral) : '';
     const fresh = document.querySelector('.lv-card .lv-freshness');
     if (fresh) fresh.innerHTML = _lvFreshness(d);
 
@@ -9326,7 +9326,7 @@ function renderLiveDashboard() {
 
     strips.forEach(el => { el.innerHTML = tiles; });
     details.forEach(el => { el.innerHTML = '<div class="lv-head">' + _lvFreshness(d)
-        + '<span class="lv-asof">as of ' + _lvClock(d.asOfCentral) + ' Central</span></div>' + detail; });
+        + '<span class="lv-asof">last change ' + _lvClock(d.asOfCentral) + ' Central</span></div>' + detail; });
 
     // Collapsed Command Center summary line.
     const roll = stores.length === 1 ? stores[0] : _lvCombine(stores.filter(m => !m.error));

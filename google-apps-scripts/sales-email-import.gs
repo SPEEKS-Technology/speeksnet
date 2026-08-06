@@ -797,8 +797,12 @@ function ingestBuyingEmails(opts) {
       ranAt: Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ssXXX"),
       dryRun: !!opts.dryRun,
       written: [], corrected: [], unchanged: 0,
-      missing: [], unverified: [], skipped: [], errors: [], daysThru: []
+      missing: [], unverified: [], skipped: [], errors: [], daysThru: [], archived: 0
     };
+
+    // Thread bookkeeping for the archive step, same shape as the sales pass.
+    // Keyed by thread id because Gmail groups messages whose subject repeats.
+    var thrObj = {}, thrBad = {}, thrKeys = {};
 
     // Every store, for each of the last `back` days ending yesterday. Today is
     // never wanted: the report is generated an hour after close, so today's does
@@ -818,22 +822,37 @@ function ingestBuyingEmails(opts) {
     var messages = _searchBuyingMessages();
     for (var i = 0; i < messages.length; i++) {
       var msg = messages[i];
+
+      // Is this one of ours at all? The search matches on subject as well as
+      // sender to catch forwards, which can also drag in unrelated mail — and
+      // unrelated mail must never be touched, let alone archived.
+      var mine = String(msg.getFrom() || '').toLowerCase().indexOf(BUY_SENDER) !== -1
+        || /day end report/i.test(String(msg.getSubject() || ''));
+
+      var tid = null;
+      if (ARCHIVE_AFTER_IMPORT && mine) {
+        try { var th = msg.getThread(); tid = th.getId(); thrObj[tid] = th; } catch (_) { tid = null; }
+      }
+
       var parsed;
       try {
         parsed = parseBuyingEmail(msg);
       } catch (perr) {
         report.errors.push({ subject: msg.getSubject(), error: String(perr && perr.message || perr) });
+        if (tid) thrBad[tid] = true;
         continue;
       }
       if (!parsed.ok) {
         // Only worth reporting if it looked like one of ours; unrelated mail
         // caught by the subject search is silently ignored.
-        if (parsed.store || /day end report/i.test(String(msg.getSubject() || ''))) {
+        if (mine) {
           report.errors.push({ subject: msg.getSubject(), error: parsed.reason });
+          if (tid) thrBad[tid] = true;
         }
         continue;
       }
       var key = parsed.store + '|' + _iso(parsed.date);
+      if (tid) thrKeys[tid] = (thrKeys[tid] || []).concat(key);
       var prev = found[key];
       if (!prev || msg.getDate().getTime() >= prev.receivedAt) {
         found[key] = {
@@ -954,6 +973,32 @@ function ingestBuyingEmails(opts) {
       var filled = rowIdx >= 0 && _num(t.values[rowIdx][base + COL_BUY]) != null;
       (filled ? report.unverified : report.missing).push({ store: w.store, date: _iso(w.date) });
     });
+
+    // Archive the threads whose figures are safely in the sheet — same rules as
+    // the sales pass. Archiving only removes the INBOX label, and GmailApp
+    // searches all mail, so the 3-day window still re-reads these afterwards.
+    // Anything that failed to parse, or whose store/date could not be written,
+    // stays in the inbox on purpose: an unread report is the cheapest possible
+    // "a human should look at this" signal.
+    if (ARCHIVE_AFTER_IMPORT && !opts.dryRun) {
+      var problem = {};
+      report.skipped.forEach(function (s) {
+        if (s.store && s.date) problem[s.store + '|' + s.date] = true;
+      });
+      Object.keys(thrObj).forEach(function (tid) {
+        if (thrBad[tid]) return;
+        var keys = thrKeys[tid] || [];
+        if (!keys.length) return;                      // nothing parsed off it
+        for (var k = 0; k < keys.length; k++) if (problem[keys[k]]) return;
+        try {
+          thrObj[tid].moveToArchive();
+          report.archived++;
+        } catch (aerr) {
+          // Never fail the import over tidying up.
+          report.errors.push({ error: 'archive failed: ' + String(aerr && aerr.message || aerr) });
+        }
+      });
+    }
 
     return report;
   } finally {
@@ -1822,7 +1867,8 @@ function _logBuySummary(r) {
   if (!r || r.ok === false) { Logger.log('FAILED: ' + (r && r.error)); return; }
   Logger.log('\nfilled ' + r.written.length + ' / overwrote-existing ' + r.corrected.length
     + ' / unchanged ' + r.unchanged + ' / missing ' + r.missing.length
-    + ' / unverified ' + r.unverified.length + ' / errors ' + r.errors.length);
+    + ' / unverified ' + r.unverified.length + ' / errors ' + r.errors.length
+    + ' / archived ' + (r.archived || 0));
   r.written.concat(r.corrected).forEach(function (w) {
     Logger.log('  ' + w.store + ' ' + w.date + ': '
       + w.changes.map(function (c) { return c.field + ' ' + c.from + ' -> ' + c.to; }).join(', '));
