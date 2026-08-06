@@ -131,31 +131,13 @@ async function ingest(sb: any, p: Record<string, string>) {
     return { ok: false, error: "SALES_IMPORT_URL is not set — deploy sales-email-import.gs as a web app first" };
   }
 
-  let report: Report;
-  try {
-    const target = new URL(APPS_SCRIPT_URL);
-    target.searchParams.set("secret", SECRET);
-    target.searchParams.set("action", "ingest");
-    if (p.reverify) target.searchParams.set("reverify", p.reverify);
-    if (dryRun) target.searchParams.set("dryRun", "1");
-    // Apps Script /exec answers a 302 to googleusercontent for the body; fetch
-    // follows it by default, so read the final response as JSON.
-    const res = await fetch(target.toString(), { method: "POST", redirect: "follow" });
-    const txt = await res.text();
-    try {
-      report = JSON.parse(txt);
-    } catch (_) {
-      // An HTML body here almost always means the web app is not deployed with
-      // access=Anyone and Google served a sign-in page instead.
-      report = {
-        ok: false,
-        error: `Apps Script did not return JSON (HTTP ${res.status}). `
-          + `Check the web app is deployed with access=Anyone. First 200 chars: ${txt.slice(0, 200)}`,
-      };
-    }
-  } catch (err) {
-    report = { ok: false, error: `could not reach the Apps Script: ${String(err)}` };
-  }
+  const target = new URL(APPS_SCRIPT_URL);
+  target.searchParams.set("secret", SECRET);
+  target.searchParams.set("action", "ingest");
+  if (p.reverify) target.searchParams.set("reverify", p.reverify);
+  if (dryRun) target.searchParams.set("dryRun", "1");
+  const call = await callAppsScript(target);
+  const report: Report = call.report;
 
   const written = report.written ?? [];
   const corrected = report.corrected ?? [];
@@ -165,6 +147,14 @@ async function ingest(sb: any, p: Record<string, string>) {
   const unverified = report.unverified ?? [];
   const skipped = report.skipped ?? [];
   const errors = report.errors ?? [];
+
+  // The Apps Script runs the BUYING import in the same pass and hangs its report
+  // off `buying`. Pulled out here so it can share the alert: one email covers
+  // whichever feed fell short — sales, buying, or both.
+  const buy: any = report.buying ?? null;
+  const buyMissing = buy?.missing ?? [];
+  const buyErrors  = buy?.errors ?? [];
+  const buyBroke   = !!buy && buy.ok === false;
 
   // Persist before alerting/refreshing, so a failure in either still leaves a
   // record of what the import actually did.
@@ -189,9 +179,14 @@ async function ingest(sb: any, p: Record<string, string>) {
   let refreshed = false;
   if (!dryRun && (written.length || corrected.length)) refreshed = await kickSyncBuysell();
 
+  // Fires if EITHER feed needs a human — sales gaps, buying gaps, or both. The
+  // email renders only the sections that actually have something in them, so a
+  // buying-only morning does not arrive looking like a sales problem.
   let alert: any = null;
-  if (alerting && (missing.length || !report.ok || errors.length)) {
-    alert = await sendAlert(sb, report, missing, errors);
+  const worthAlerting = missing.length || !report.ok || errors.length
+    || buyMissing.length || buyErrors.length || buyBroke;
+  if (alerting && worthAlerting) {
+    alert = await sendAlert(sb, report, missing, errors, { missing: buyMissing, errors: buyErrors, broke: buyBroke, error: buy?.error });
     if (runId != null && alert?.ok) await sb.from("sales_ingest_runs").update({ alerted: true }).eq("id", runId);
   }
 
@@ -215,8 +210,24 @@ async function ingest(sb: any, p: Record<string, string>) {
       unverified: unverified.length,
       skipped: skipped.length,
       errors: errors.length,
+      // The Apps Script runs the BUYING import in the same pass and hangs its
+      // report off `buying`. Surfaced here so the manual button can say what it
+      // did — without this the buying half runs completely invisibly.
+      buying: report.buying
+        ? {
+            ok: report.buying.ok !== false,
+            error: report.buying.error ?? null,
+            filled: (report.buying.written ?? []).length,
+            corrected: (report.buying.corrected ?? []).length,
+            unchanged: report.buying.unchanged ?? 0,
+            missing: (report.buying.missing ?? []).length,
+            errors: (report.buying.errors ?? []).length,
+            daysThru: (report.buying.daysThru ?? []).filter((d: any) => !d.skipped).length,
+          }
+        : null,
     },
     written, corrected, missing, unverified, skipped, errors,
+    buying: report.buying ?? null,
   };
 }
 
@@ -281,36 +292,128 @@ async function broadcastChange(tool: string) {
   } catch (_) { /* best-effort */ }
 }
 
+// Calls the Apps Script /exec, retrying when Google hands back something that
+// isn't our JSON.
+//
+// Why this exists: 2 of the 14 runs before 2026-08-06 died on
+// "Apps Script did not return JSON (HTTP 404)" with a Google Docs HTML page in
+// the body. The web app was deployed correctly the whole time — /exec answers a
+// 302 to script.googleusercontent.com and that hop intermittently serves an
+// error page instead. Nothing about the request is wrong, so the same request a
+// few seconds later succeeds. Both times the 8am retry pass covered it, which is
+// precisely why nobody noticed.
+//
+// Retrying is safe because the import is idempotent: a value equal to what is
+// already in the cell counts as `unchanged` and writes nothing. So it does not
+// matter whether a lost response means the script never ran or ran and we missed
+// the answer.
+//
+// "another import is already running" is retried too — that is the script's own
+// LockService, and it means a previous attempt is still finishing. The backoff
+// is longer than a typical run (~8s) so the last attempt lands after it clears.
+async function callAppsScript(target: URL, attempts = 3): Promise<{ report: Report; tries: number }> {
+  let last = "";
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      const res = await fetch(target.toString(), { method: "POST", redirect: "follow" });
+      const txt = await res.text();
+      try {
+        const parsed = JSON.parse(txt) as Report;
+        if (/already running/i.test(String(parsed.error ?? ""))) {
+          last = String(parsed.error);
+        } else {
+          return { report: parsed, tries: i };
+        }
+      } catch (_) {
+        // An HTML body can also mean the web app is not deployed with
+        // access=Anyone — but that fails every time, so it surfaces after the
+        // last attempt with the body text intact.
+        last = `HTTP ${res.status}: ${txt.slice(0, 200)}`;
+      }
+    } catch (err) {
+      last = `could not reach the Apps Script: ${String(err)}`;
+    }
+    if (i < attempts) await new Promise((r) => setTimeout(r, i * 4000));
+  }
+  return {
+    report: {
+      ok: false,
+      error: `Apps Script did not return usable JSON after ${attempts} attempts. `
+        + `If this persists, check the web app is deployed with access=Anyone. Last response — ${last}`,
+    },
+    tries: attempts,
+  };
+}
+
 async function alertRecipients(sb: any): Promise<string[]> {
   const { data } = await sb.from("email_recipients").select("email").eq("list_key", ALERT_LIST_KEY);
   const list = (data ?? []).map((r: any) => r.email).filter(Boolean);
   return list.length ? list : ALERT_FALLBACK;
 }
 
-async function sendAlert(sb: any, report: Report, missing: any[], errors: any[]) {
-  const to = await alertRecipients(sb);
-
-  // Group by date so the email reads "8/3 — LEE, WSP" rather than a flat list.
+// Group by date so a block reads "8/3 — LEE, WSP" rather than a flat list.
+function missingRows(missing: any[]) {
   const byDate = new Map<string, string[]>();
   for (const m of missing) {
     if (!byDate.has(m.date)) byDate.set(m.date, []);
     byDate.get(m.date)!.push(m.store);
   }
-  const rows = [...byDate.entries()].sort().map(([date, stores]) => {
+  return [...byDate.entries()].sort().map(([date, stores]) => {
     const ordered = STORE_ORDER.filter(s => stores.includes(s));
     return `<tr>
       <td style="padding:8px 14px;border-bottom:1px solid #eaefeb;font-weight:600;color:#1a1f24;">${fmtDate(date)}</td>
       <td style="padding:8px 14px;border-bottom:1px solid #eaefeb;color:#64707c;">${ordered.join(", ")}</td>
     </tr>`;
   }).join("");
+}
 
-  const errBlock = errors.length
-    ? `<div style="margin-top:18px;padding:12px 14px;background:#fff8f0;border-left:3px solid #d98324;border-radius:6px;">
-         <div style="font-weight:600;color:#1a1f24;margin-bottom:6px;">Parse problems</div>
+// One feed's block. Returns "" when that feed is clean, so an email about
+// buying alone carries no sales heading and vice versa.
+function feedBlock(title: string, blurb: string, missing: any[], errors: any[]) {
+  if (!missing.length && !errors.length) return "";
+  const rows = missingRows(missing);
+  const errs = errors.length
+    ? `<div style="margin-top:10px;padding:10px 12px;background:#fff8f0;border-left:3px solid #d98324;border-radius:6px;">
+         <div style="font-weight:600;color:#1a1f24;margin-bottom:4px;font-size:13px;">Parse problems</div>
          ${errors.slice(0, 8).map((e: any) =>
-           `<div style="color:#64707c;font-size:13px;">${esc(e.store || "?")} — ${esc(e.error || "")}</div>`).join("")}
+           `<div style="color:#64707c;font-size:13px;">${esc(e.store || e.subject || "?")} — ${esc(e.error || "")}</div>`).join("")}
        </div>`
     : "";
+  return `<div style="margin-top:18px;">
+      <div style="font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#1f9d57;font-weight:700;margin-bottom:6px;">${esc(title)}</div>
+      ${rows ? `<p style="margin:0 0 10px;color:#64707c;font-size:14px;line-height:1.5;">${esc(blurb)}</p>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">${rows}</table>` : ""}
+      ${errs}
+    </div>`;
+}
+
+async function sendAlert(
+  sb: any, report: Report, missing: any[], errors: any[],
+  buying: { missing: any[]; errors: any[]; broke: boolean; error?: string } = { missing: [], errors: [], broke: false },
+) {
+  const to = await alertRecipients(sb);
+
+  const salesBlock = feedBlock(
+    "Selling", "The Shopify email never arrived for these, so the Sales tab is still blank.",
+    missing, errors);
+  const buyBlock = feedBlock(
+    "Buying", "No PayMore Day End Report arrived for these, so the Buy tab is still blank.",
+    buying.missing, buying.errors);
+
+  const buyFailBlock = buying.broke
+    ? `<div style="margin-top:18px;padding:12px 14px;background:#fdf0f0;border-left:3px solid #c0392b;border-radius:6px;">
+         <div style="font-weight:600;color:#1a1f24;margin-bottom:6px;">The buying import did not run</div>
+         <div style="color:#64707c;font-size:13px;">${esc(buying.error || "unknown error")}</div>
+       </div>`
+    : "";
+
+  // Name the feeds actually affected, so the subject and heading are honest when
+  // only one of the two fell short.
+  const hit: string[] = [];
+  if (missing.length || errors.length) hit.push("selling");
+  if (buying.missing.length || buying.errors.length || buying.broke) hit.push("buying");
+  const which = hit.length === 2 ? "Selling and buying" : hit.length === 1
+    ? (hit[0] === "buying" ? "Buying" : "Selling") : "Daily import";
 
   const failBlock = report.ok ? "" :
     `<div style="margin-top:18px;padding:12px 14px;background:#fdf0f0;border-left:3px solid #c0392b;border-radius:6px;">
@@ -321,26 +424,27 @@ async function sendAlert(sb: any, report: Report, missing: any[], errors: any[])
   const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f7faf8;padding:28px;">
     <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #eaefeb;border-radius:18px;overflow:hidden;">
       <div style="padding:20px 24px;border-bottom:1px solid #eaefeb;">
-        <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#1f9d57;font-weight:700;">Sales Import</div>
+        <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#1f9d57;font-weight:700;">Daily Import</div>
         <div style="font-size:17px;font-weight:700;color:#1a1f24;margin-top:3px;">Some numbers need entering by hand</div>
       </div>
       <div style="padding:20px 24px;">
         ${failBlock}
-        ${rows ? `<p style="margin:0 0 12px;color:#64707c;font-size:14px;line-height:1.5;">
-            The Shopify email never arrived for these, so the Sales Summary sheet is still blank.
-            Everything else imported normally.</p>
-          <table style="width:100%;border-collapse:collapse;font-size:14px;">${rows}</table>` : ""}
-        ${errBlock}
+        ${buyFailBlock}
+        ${salesBlock}
+        ${buyBlock}
         <p style="margin:18px 0 0;color:#9aa6ad;font-size:12px;">
-          Checked the last 7 days &middot; ${esc(report.ranAt || "")}
+          Selling re-checked month to date &middot; buying over the last 3 days &middot; ${esc(report.ranAt || "")}
         </p>
       </div>
     </div>
   </div>`;
 
-  const subject = report.ok
-    ? `Sales import — ${missing.length} entr${missing.length === 1 ? "y" : "ies"} need manual entry`
-    : `Sales import FAILED`;
+  const totalMissing = missing.length + buying.missing.length;
+  const subject = !report.ok
+    ? `Daily import FAILED`
+    : totalMissing
+      ? `${which} — ${totalMissing} entr${totalMissing === 1 ? "y" : "ies"} need manual entry`
+      : `${which} — import problem`;
 
   try {
     const res = await fetch(GMAIL_RELAY, {

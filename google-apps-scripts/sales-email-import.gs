@@ -159,6 +159,87 @@ var SALES_LABELS = ['net sales', 'total sales', 'gross sales', 'sales'];
 var COST_LABELS  = ['cost of goods sold', 'total cost', 'cogs', 'cost'];
 
 // ------------------------------------------------------------
+// BUYING import — PayMore "Day End Report"
+// ------------------------------------------------------------
+// Second feed into the same sheet. Deliberately simpler than the sales path:
+// buying figures never restate (user-confirmed 2026-08-06), so there is no MTD
+// list, no reverify window and no restatement handling — just yesterday.
+//
+// "Buy {Mon} {YY}" geometry, read off the live sheet 2026-08-06. Blocks are 5
+// columns apart, NOT the 11 of the Sales tab.
+//   0=Date  1=Buy  2=Sell  3=GM(formula)  4=week-total(formula)
+var BUY_COL_BASES = { OVL: 0, LEE: 5, WSP: 10, MPL: 15, BAL: 20 };
+var COL_BUY  = 1;   // base+1 "Buy"  = cash paid      <- email "Total Spent"
+var COL_SELL = 2;   // base+2 "Sell" = resale value   <- email "Estimated Value"
+
+// Field mapping confirmed by the user 2026-08-06. Longest/most specific wording
+// first, same discipline as SALES_LABELS — a bare "value" would match half the
+// report.
+var SPENT_LABELS = ['total spent', 'total spend', 'amount spent'];
+var ESTVAL_LABELS = ['estimated value', 'est. value', 'est value', 'estimated retail'];
+
+// Days back to consider, ending yesterday. The ask was "just the previous day";
+// this is 3 purely as a self-healing gap-filler, because the Apps Script /exec
+// endpoint has been throwing transient 404s (2 of the last 14 runs). Since the
+// figures never restate, re-reading an older email is idempotent — it lands as
+// `unchanged` — so a wider window costs nothing and covers a day when BOTH the
+// 7am pass and the 8am retry fail.
+var BUY_BACKFILL = 3;
+
+// "Days thru Month" on the Buy tab (E40 and its twins J/O/T/Y — one per store
+// block, at base+4). Advances daily like the Sales tab's counter, but it is NOT
+// the same number and must not be computed the same way:
+//
+//   Sales "Days Thru month" = the last day-of-month reached. Sundays included.
+//   Buy   "Days thru Month" = COUNT of non-Sunday days elapsed. Stores do not
+//                             buy on Sundays, and the row is pre-zeroed for
+//                             every Sunday in the month from the start.
+//
+// Verified against the live sheet: Aug'26 in-month 26 = 31−5 Sundays, Jul'26 27
+// = 31−4, Jun'26 26 = 30−4; and thru=4 on Aug 6 because Aug 1,3,4,5 are the
+// non-Sunday days with figures — the sales rule would have said 5. Both feed
+// tracking denominators, so an off-by-one silently skews the projection.
+var UPDATE_BUY_DAYS_THRU = true;
+var BUY_DAYS_THRU_COL    = 4;   // base+4, the column right of the merged label
+
+// PLANNED closures other than Sundays — holidays the stores shut for, as
+// 'YYYY-MM-DD'. These are excluded from "Days thru Month" exactly like Sundays.
+//
+// The distinction this list encodes, and the reason it cannot be inferred:
+//   PLANNED   (Sunday / holiday) -> nobody was meant to buy  -> does NOT count
+//   UNPLANNED (storm, outage)    -> we lost a buying day     -> DOES count
+// In the sheet both are a zero, so the data alone cannot tell them apart. A day
+// not named here is treated as unplanned, which is the safe default: an
+// unlisted holiday flatters nothing, it just makes the denominator one too big
+// and shows up in the cross-check below.
+//
+// Keep in step with the "Buying Days in Month" total that is still entered by
+// hand — _buyPlannedCheck() compares the two every run and reports a mismatch,
+// so a forgotten holiday surfaces at the start of the month rather than after
+// a month of skewed tracking.
+var BUY_CLOSED_DATES = [
+  // e.g. '2026-11-26',  // Thanksgiving
+  //      '2026-12-25',  // Christmas
+];
+
+function _isPlannedClosure(y, monthIdx, day) {
+  var d = new Date(y, monthIdx, day);
+  if (d.getDay() === 0) return true;                       // Sunday
+  var iso = y + '-' + ('0' + (monthIdx + 1)).slice(-2) + '-' + ('0' + day).slice(-2);
+  return BUY_CLOSED_DATES.indexOf(iso) !== -1;
+}
+
+// Non-Sunday, non-holiday days in the whole month — what the hand-entered
+// "Buying Days in Month" should equal.
+function _buyPlannedDaysInMonth(refDate) {
+  var y = refDate.getFullYear(), m = refDate.getMonth();
+  var dim = new Date(y, m + 1, 0).getDate();
+  var n = 0;
+  for (var d = 1; d <= dim; d++) if (!_isPlannedClosure(y, m, d)) n++;
+  return n;
+}
+
+// ------------------------------------------------------------
 // Web app entry points
 // ------------------------------------------------------------
 function doPost(e) { return _handle(e); }
@@ -169,12 +250,31 @@ function _handle(e) {
   if (p.secret !== SECRET) return _json({ ok: false, error: 'unauthorized' });
 
   var action = p.action || 'ingest';
+  var dryRun = p.dryRun === '1';
   try {
     if (action === 'diagnose') return _json(diagnoseShopifyEmails());
-    return _json(ingestSalesEmails({
+    if (action === 'diagnoseBuying') return _json(diagnoseBuyingEmails());
+    if (action === 'buying') return _json(ingestBuyingEmails({ dryRun: dryRun }));
+
+    var sales = ingestSalesEmails({
       reverify: p.reverify ? parseInt(p.reverify, 10) : REVERIFY,
-      dryRun:   p.dryRun === '1'
-    }));
+      dryRun:   dryRun
+    });
+
+    // One 7am run covers both feeds (user's call — the buying report lands at
+    // 10pm the night before, so it is ready by then). `buying=0` opts out.
+    //
+    // Buying is folded in AFTER sales and can never fail the response: a broken
+    // buying parse must not cost us the sales import, which is the load-bearing
+    // one. Its outcome rides along under `buying` for the caller to inspect.
+    if (p.buying !== '0') {
+      try {
+        sales.buying = ingestBuyingEmails({ dryRun: dryRun });
+      } catch (berr) {
+        sales.buying = { ok: false, error: String(berr && berr.message || berr) };
+      }
+    }
+    return _json(sales);
   } catch (err) {
     return _json({ ok: false, error: String(err && err.message || err) });
   }
@@ -542,6 +642,74 @@ function _findLabeled(body, labels) {
   return null;
 }
 
+// The money value belonging to `label`, refusing to read past the next field.
+//
+// `stopLabels` is the guard that matters. A pure distance window CANNOT work
+// here: whitespace gets collapsed before matching, so a label with no value of
+// its own sits one space away from the next field and quietly captures ITS
+// number — wrong data that looks perfectly fine in the sheet, rather than a
+// visible blank. Truncating at the next known label makes that impossible
+// regardless of how the HTML flattened.
+//
+// Requires a literal "$". The Day End Report writes its money with one, and
+// insisting on it keeps counters like "Transactions: 14" from being read as a
+// dollar figure.
+function _valueAfterLabel(text, label, stopLabels, win) {
+  var esc = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  var at = String(text).search(new RegExp(esc, 'i'));
+  if (at < 0) return null;
+  var seg = String(text).substr(at + label.length, win);
+  (stopLabels || []).forEach(function (lab) {
+    var e2 = lab.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var i2 = seg.search(new RegExp(e2, 'i'));
+    if (i2 >= 0) seg = seg.slice(0, i2);
+  });
+  var m = seg.match(/(\(?-?\$\s*[0-9][0-9,]*(?:\.[0-9]{1,2})?\)?)/);
+  return m ? _money(m[1]) : null;
+}
+
+// Same line first, then the whole body flattened.
+//
+// The Day End Report is an HTML table and getPlainBody() commonly drops each
+// cell onto its own line, so "Total Spent" and "$2,972.00" can land on
+// DIFFERENT lines where a same-line matcher finds nothing. The flattened pass
+// recovers that layout; the stop-labels keep it honest.
+function _findLabeledNear(body, labels, stopLabels, windowChars) {
+  var lines = String(body || '').split(/\r?\n/);
+  for (var li = 0; li < labels.length; li++) {
+    for (var i = 0; i < lines.length; i++) {
+      var v = _valueAfterLabel(lines[i], labels[li], stopLabels, 25);
+      if (v != null) return v;
+    }
+  }
+  var flat = String(body || '').replace(/\s+/g, ' ');
+  for (var lj = 0; lj < labels.length; lj++) {
+    var v2 = _valueAfterLabel(flat, labels[lj], stopLabels, windowChars || 60);
+    if (v2 != null) return v2;
+  }
+  return null;
+}
+
+// One Day End Report -> { store, date, buy, sell }.
+//
+// Store and date both come from the SUBJECT (see _buyParseSubject) — the body
+// is only read for the two figures. Returns an object carrying `ok:false` and a
+// reason rather than throwing, so one malformed email cannot abort the run.
+function parseBuyingEmail(msg) {
+  var sub = _buyParseSubject(msg.getSubject());
+  if (!sub.ok) return { ok: false, reason: sub.why, store: sub.store, date: sub.date };
+
+  // Each field stops at the other's label, so neither can borrow the other's
+  // number when one of them is missing from the report.
+  var body = _plainBody(msg);
+  var buy  = _findLabeledNear(body, SPENT_LABELS, ESTVAL_LABELS);
+  var sell = _findLabeledNear(body, ESTVAL_LABELS, SPENT_LABELS);
+  if (buy == null && sell == null) {
+    return { ok: false, reason: 'no "Total Spent" / "Estimated Value" figures found', store: sub.store, date: sub.date };
+  }
+  return { ok: true, store: sub.store, date: sub.date, buy: buy, sell: sell };
+}
+
 // Which day does this email actually report on?
 //
 // The 5 Shopify Flow templates are each worded differently and only ONE states
@@ -584,7 +752,11 @@ function _parseDateToken(s) {
   var m = String(s).match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
   if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
 
-  m = String(s).match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s*(20\d{2})\b/i);
+  // The ordinal suffix is not optional decoration — the PayMore Day End Report
+  // writes "August 5th 2026" in its subject, and without `(?:st|nd|rd|th)?` the
+  // day and the year stop being adjacent and this branch fails to match at all.
+  // Strictly more permissive, so the Shopify formats are unaffected.
+  m = String(s).match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(20\d{2})\b/i);
   if (m) {
     var mi = MONTHS.indexOf(m[1].charAt(0).toUpperCase() + m[1].substr(1, 2).toLowerCase());
     if (mi >= 0) return new Date(+m[3], mi, +m[2]);
@@ -604,6 +776,312 @@ function _money(s) {
   var n = parseFloat(s);
   if (isNaN(n)) return null;
   return neg ? -n : n;
+}
+
+// ------------------------------------------------------------
+// Buying ingest
+// ------------------------------------------------------------
+// Same report shape and the same safety guards as ingestSalesEmails (day matched
+// out of the block's own Date column, formulas never overwritten, LockService,
+// Chicago day math) — but against the "Buy {Mon} {YY}" tab and its 5-wide blocks.
+function ingestBuyingEmails(opts) {
+  opts = opts || {};
+  var back = opts.backfill || BUY_BACKFILL;
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) return { ok: false, error: 'another import is already running' };
+
+  try {
+    var report = {
+      ok: true, kind: 'buying',
+      ranAt: Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ssXXX"),
+      dryRun: !!opts.dryRun,
+      written: [], corrected: [], unchanged: 0,
+      missing: [], unverified: [], skipped: [], errors: [], daysThru: []
+    };
+
+    // Every store, for each of the last `back` days ending yesterday. Today is
+    // never wanted: the report is generated an hour after close, so today's does
+    // not exist yet and a partial day must never reach the sheet.
+    var wanted = {};
+    var today = _todayInTz();
+    for (var d = 1; d <= back; d++) {
+      var day = _addDays(today, -d);
+      for (var code in BUY_STORE_CODES) {
+        wanted[BUY_STORE_CODES[code] + '|' + _iso(day)] = { store: BUY_STORE_CODES[code], date: day };
+      }
+    }
+
+    // Later email wins, matching the sales path — if a store's report is ever
+    // re-sent, the newer copy supersedes.
+    var found = {};
+    var messages = _searchBuyingMessages();
+    for (var i = 0; i < messages.length; i++) {
+      var msg = messages[i];
+      var parsed;
+      try {
+        parsed = parseBuyingEmail(msg);
+      } catch (perr) {
+        report.errors.push({ subject: msg.getSubject(), error: String(perr && perr.message || perr) });
+        continue;
+      }
+      if (!parsed.ok) {
+        // Only worth reporting if it looked like one of ours; unrelated mail
+        // caught by the subject search is silently ignored.
+        if (parsed.store || /day end report/i.test(String(msg.getSubject() || ''))) {
+          report.errors.push({ subject: msg.getSubject(), error: parsed.reason });
+        }
+        continue;
+      }
+      var key = parsed.store + '|' + _iso(parsed.date);
+      var prev = found[key];
+      if (!prev || msg.getDate().getTime() >= prev.receivedAt) {
+        found[key] = {
+          store: parsed.store, date: parsed.date, buy: parsed.buy, sell: parsed.sell,
+          receivedAt: msg.getDate().getTime(), subject: msg.getSubject()
+        };
+      }
+    }
+
+    var ss = SpreadsheetApp.openById(SHEET_ID);
+    var tabs = {};
+
+    Object.keys(found).sort().forEach(function (key) {
+      var f = found[key];
+      if (!wanted[key]) return;                 // outside the window — ignore
+      var tabName = _buyTabNameFor(f.date);
+      if (!tabs[tabName]) {
+        var sh = ss.getSheetByName(tabName);
+        tabs[tabName] = sh ? { sheet: sh, values: sh.getDataRange().getValues() } : { sheet: null };
+      }
+      var t = tabs[tabName];
+      if (!t.sheet) {
+        report.skipped.push({ store: f.store, date: _iso(f.date), reason: 'no tab named "' + tabName + '"' });
+        delete wanted[key];
+        return;
+      }
+
+      var base = BUY_COL_BASES[f.store];
+      if (base == null) { report.skipped.push({ store: f.store, date: _iso(f.date), reason: 'unknown store' }); return; }
+
+      // Day located by matching the number in this block's own Date column. On
+      // the Buy tab this also keeps the write out of the B2B section further
+      // down, which reuses the same Buy/Sell/GM columns — _findDayRow stops at
+      // the TTL row well above it.
+      var rowIdx = _findDayRow(t.values, base, f.date.getDate());
+      if (rowIdx < 0) {
+        report.skipped.push({ store: f.store, date: _iso(f.date), reason: 'no row for day ' + f.date.getDate() + ' in ' + tabName });
+        delete wanted[key];
+        return;
+      }
+
+      var pair = [
+        { col: base + COL_BUY,  label: 'buy',  value: f.buy  },
+        { col: base + COL_SELL, label: 'sell', value: f.sell }
+      ];
+      var changes = [];
+      for (var pi = 0; pi < pair.length; pi++) {
+        var cell = pair[pi];
+        if (cell.value == null) continue;
+        var cur = _num(t.values[rowIdx][cell.col]);
+
+        // GM and the week-total column are formulas; Buy/Sell should not be. If
+        // one ever is, refuse — writing a literal over it breaks the sheet in a
+        // way nobody would notice for weeks.
+        var rng = t.sheet.getRange(rowIdx + 1, cell.col + 1);
+        if (rng.getFormula()) {
+          report.skipped.push({
+            store: f.store, date: _iso(f.date), field: cell.label,
+            reason: 'cell holds a formula (' + rng.getFormula() + ') — not overwriting'
+          });
+          continue;
+        }
+
+        if (cur != null && Math.abs(cur - cell.value) < 0.005) { report.unchanged++; continue; }
+        changes.push({ field: cell.label, from: cur, to: cell.value });
+        if (!opts.dryRun) {
+          rng.setValue(cell.value);
+          t.values[rowIdx][cell.col] = cell.value;
+        }
+      }
+
+      if (changes.length) {
+        var entry = { store: f.store, date: _iso(f.date), changes: changes };
+        // Buying does not restate, so a cell that already held a DIFFERENT
+        // number is not a normal correction — it means someone hand-keyed a
+        // value that disagrees with the report. Worth separating.
+        var overwrote = changes.some(function (c) { return c.from != null; });
+        if (overwrote) report.corrected.push(entry); else report.written.push(entry);
+      }
+      delete wanted[key];
+    });
+
+    // Advance each touched month's "Days thru Month" once the figures are in,
+    // so the counter reflects what was just written rather than the prior state.
+    if (UPDATE_BUY_DAYS_THRU) {
+      Object.keys(tabs).forEach(function (tabName) {
+        var t = tabs[tabName];
+        if (!t.sheet) return;
+        // Any date inside this tab's month serves as the weekday reference.
+        var ref = null;
+        Object.keys(found).forEach(function (k) {
+          if (!ref && _buyTabNameFor(found[k].date) === tabName) ref = found[k].date;
+        });
+        if (!ref) return;
+        _syncBuyDaysThru(t, ref, opts.dryRun).forEach(function (d) {
+          d.tab = tabName;
+          report.daysThru.push(d);
+        });
+        var chk = _buyPlannedCheck(t, ref);
+        if (chk) { chk.tab = tabName; (report.warnings = report.warnings || []).push(chk); }
+      });
+    }
+
+    // Whatever is still wanted had no email. The sheet decides whether that is
+    // actionable: a blank cell means somebody must key it in; a filled one means
+    // it was entered by hand and there is nothing to do.
+    Object.keys(wanted).forEach(function (key) {
+      var w = wanted[key];
+      var tabName = _buyTabNameFor(w.date);
+      var t = tabs[tabName];
+      if (!t) {
+        var sh = ss.getSheetByName(tabName);
+        t = tabs[tabName] = sh ? { sheet: sh, values: sh.getDataRange().getValues() } : { sheet: null };
+      }
+      if (!t.sheet) { report.skipped.push({ store: w.store, date: _iso(w.date), reason: 'no tab named "' + tabName + '"' }); return; }
+      var base = BUY_COL_BASES[w.store];
+      var rowIdx = _findDayRow(t.values, base, w.date.getDate());
+      var filled = rowIdx >= 0 && _num(t.values[rowIdx][base + COL_BUY]) != null;
+      (filled ? report.unverified : report.missing).push({ store: w.store, date: _iso(w.date) });
+    });
+
+    return report;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Sender OR subject. From 2026-08-07 these arrive straight from pmdev.site, but
+// the first day's were forwarded from another mailbox, so `from:` alone would
+// miss them. Keeping both also means a future re-forward cannot break the feed.
+function _searchBuyingMessages() {
+  var q = '(from:(' + BUY_SENDER + ') OR subject:("Day End Report")) newer_than:' + LOOKBACK + 'd';
+  var out = [];
+  GmailApp.search(q, 0, 200).forEach(function (thread) {
+    thread.getMessages().forEach(function (m) { out.push(m); });
+  });
+  out.sort(function (a, b) { return a.getDate().getTime() - b.getDate().getTime(); });
+  return out;
+}
+
+function _buyTabNameFor(date) {
+  return 'Buy ' + MONTHS[date.getMonth()] + ' ' + String(date.getFullYear()).slice(-2);
+}
+
+// Non-Sunday days elapsed for one store block — see UPDATE_BUY_DAYS_THRU.
+//
+// Counted 1..lastDay rather than "how many cells are filled", so a single
+// missed day cannot shrink the denominator and flatter the projection. Sundays
+// are skipped when finding lastDay too: they carry a pre-entered $0 for the
+// whole month ahead, so counting them would jump the figure to month-end on
+// day one.
+// Counted over the SPAN 1..lastDay rather than "cells that have a figure", and
+// that is what makes the unplanned-closure rule work: a storm day sitting inside
+// the span still counts whether it arrived as $0 or never arrived at all. Only
+// days named as planned closures drop out.
+//
+// Planned closures are also skipped when finding lastDay — they are pre-zeroed
+// for the whole month ahead, so counting them would jump the figure to month-end
+// on day one.
+//
+// One known lag: if the storm day is the MOST RECENT day, lastDay stops short of
+// it and it goes uncounted until any later day reports. It self-corrects, and
+// the month-end total is right either way. That is deliberate — advancing the
+// denominator off the calendar instead would penalise the store whenever an
+// email merely failed to arrive, which is the case the sales twin guards against.
+function _buyDaysThru(values, base, refDate) {
+  var y = refDate.getFullYear(), m = refDate.getMonth();
+  var last = 0;
+  for (var r = HEADER_ROWS; r < values.length; r++) {
+    var first = String(values[r][0]).trim().toUpperCase();
+    if (first === 'TTL' || first.indexOf('TRACKING') === 0) break;
+    var day = parseInt(values[r][base], 10);
+    if (isNaN(day) || day < 1 || day > 31) continue;
+    if (_isPlannedClosure(y, m, day)) continue;
+    if (_num(values[r][base + COL_BUY]) != null && day > last) last = day;
+  }
+  if (!last) return 0;
+  var n = 0;
+  for (var d = 1; d <= last; d++) if (!_isPlannedClosure(y, m, d)) n++;
+  return n;
+}
+
+// Cross-check: the hand-entered "Buying Days in Month" should equal the planned
+// working days BUY_CLOSED_DATES implies. A disagreement almost always means a
+// holiday is missing from the list (or was added to the sheet but not here), and
+// catching it on the 1st is worth far more than discovering it at month end.
+// Reports only — never writes, since that cell stays manual for now.
+function _buyPlannedCheck(t, refDate) {
+  var values = t.values;
+  var want = _buyPlannedDaysInMonth(refDate);
+  for (var r = 0; r < values.length; r++) {
+    for (var c = 0; c < Math.min(values[r].length, 8); c++) {
+      if (typeof values[r][c] !== 'string' || !/buying\s*days\s*in\s*month/i.test(values[r][c])) continue;
+      var cur = _num(values[r][BUY_COL_BASES.OVL + BUY_DAYS_THRU_COL] === undefined
+        ? null : values[r][BUY_COL_BASES.OVL + BUY_DAYS_THRU_COL]);
+      if (cur == null || cur === want) return null;
+      return {
+        note: 'Buying Days in Month disagrees with the closed-dates list',
+        sheet: cur, expected: want,
+        hint: cur < want
+          ? 'the sheet excludes ' + (want - cur) + ' more day(s) than BUY_CLOSED_DATES knows about — add the holiday(s)'
+          : 'BUY_CLOSED_DATES excludes ' + (cur - want) + ' day(s) the sheet still counts'
+      };
+    }
+  }
+  return null;
+}
+
+// Writes each store block's "Days thru Month". The label is merged across
+// B:D and appears ONCE, while the five values sit at base+4 per block — so the
+// row is located by label and the columns come from the block geometry, rather
+// than the sales approach of "find a label, write the cell beside it".
+//
+// Anything holding a formula is skipped and reported: on the Sales tab only the
+// first block is a literal and the rest chain off it, and the Buy tab may well
+// be wired the same way.
+function _syncBuyDaysThru(t, refDate, dryRun) {
+  var out = [];
+  var values = t.values;
+
+  var row = -1;
+  for (var r = 0; r < values.length && row < 0; r++) {
+    for (var c = 0; c < Math.min(values[r].length, 8); c++) {
+      // "Buying Days in Month" sits directly above and must NOT match — it is
+      // the month's total, not the elapsed count. The regex needs "days thru
+      // month" contiguously, so "Days in Month" falls through.
+      if (typeof values[r][c] === 'string' && DAYS_THRU_LABEL.test(values[r][c])) { row = r; break; }
+    }
+  }
+  if (row < 0) return out;
+
+  Object.keys(BUY_COL_BASES).forEach(function (store) {
+    var base = BUY_COL_BASES[store];
+    var col  = base + BUY_DAYS_THRU_COL;
+    var want = _buyDaysThru(values, base, refDate);
+    if (!want) return;                       // no buy data in this block yet
+
+    var rng = t.sheet.getRange(row + 1, col + 1);
+    if (rng.getFormula()) {
+      out.push({ store: store, a1: rng.getA1Notation(), skipped: 'holds a formula: ' + rng.getFormula() });
+      return;
+    }
+    var cur = _num(values[row][col]);
+    if (cur === want) return;
+    out.push({ store: store, a1: rng.getA1Notation(), from: cur, to: want });
+    if (!dryRun) { rng.setValue(want); values[row][col] = want; }
+  });
+  return out;
 }
 
 // ------------------------------------------------------------
@@ -1004,6 +1482,178 @@ function _labelPairs(body) {
   return pairs.slice(0, 60);
 }
 
+// ------------------------------------------------------------
+// Buying-email recon (read-only — writes nothing, changes nothing)
+// ------------------------------------------------------------
+// The daily BUYING reports all arrive from ONE address, unlike the Shopify sales
+// reports where the sender IS the store. So the store has to come out of the
+// subject or the body, and this dumps whatever is there so we can see which.
+//
+// Prints one sample per distinct subject shape rather than just the newest few:
+// the five Shopify sales templates each turned out to be worded differently, and
+// building a parser off a single sample cost us a round of rework.
+var BUY_SENDER = 'no-reply@pmdev.site';
+
+// The PayMore Day End Report puts the store CODE in its own subject line:
+//   "PayMore Stores - Day End Report PayMore Overland Park(KS01) August 5th 2026, 10:00 PM"
+// The code is the identifier to trust, not the store name — it is exact, it is
+// the same code family as the Shopify senders' local parts (ks01@paymore.com =
+// OVL), and it survives a "Fwd:" prefix. Store NAMES are the fragile path: "Lee"
+// and "Bal" appear inside ordinary words, and a renamed storefront would break
+// the map silently.
+//
+// Highest-stakes constant in the buying path, exactly as STORE_SENDERS is for
+// sales: swap two entries and one store's money lands in another's columns with
+// the sheet still looking entirely plausible.
+var BUY_STORE_CODES = { KS01: 'OVL', MO01: 'LEE', MO02: 'WSP', MO03: 'MPL', MO04: 'BAL' };
+
+// Every known code found in the text, as STORE names. Returns an array so the
+// caller can refuse on ambiguity rather than silently taking the first hit — a
+// forwarded email can quote another store's report underneath.
+function _buyStoresInText(text) {
+  var hay = String(text || '').toUpperCase();
+  var hits = [];
+  Object.keys(BUY_STORE_CODES).forEach(function (code) {
+    var store = BUY_STORE_CODES[code];
+    if (new RegExp('\\b' + code + '\\b').test(hay) && hits.indexOf(store) === -1) hits.push(store);
+  });
+  return hits;
+}
+
+// Store + covered date, both out of the subject. `ok` is false unless EXACTLY
+// one store matched and a date parsed — a caller must never guess past this.
+function _buyParseSubject(subject) {
+  var s = String(subject || '');
+  var stores = _buyStoresInText(s);
+  var date = _parseDateToken(s);
+  return {
+    store: stores.length === 1 ? stores[0] : null,
+    stores_matched: stores,
+    date: date,
+    ok: stores.length === 1 && !!date,
+    why: stores.length === 0 ? 'no store code in subject'
+       : stores.length > 1  ? 'ambiguous — subject names ' + stores.join(' and ')
+       : !date              ? 'no date in subject'
+       : ''
+  };
+}
+
+// Every way a store might be named in the body, so the dump says outright which
+// identification path is available instead of us eyeballing it.
+var BUY_STORE_HINTS = {
+  OVL: ['ovl', 'overland', 'ks01'],
+  LEE: ['lee', "lee's summit", 'lees summit', 'mo01'],
+  WSP: ['wsp', 'westport', 'mo02'],
+  MPL: ['mpl', 'maplewood', 'mo03'],
+  BAL: ['bal', 'ballwin', 'mo04']
+};
+
+// Same date shapes _parseDatedRows() segments on, counted without caring what
+// labels sit next to them.
+function _buyCountDates(body) {
+  var re = new RegExp(
+    '(20\\d{2}-\\d{2}-\\d{2}'
+    + '|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\\s+\\d{1,2},?\\s*20\\d{2}'
+    + '|\\d{1,2}\\/\\d{1,2}\\/20\\d{2})', 'gi');
+  var n = 0;
+  while (re.exec(String(body || '')) !== null) n++;
+  return n;
+}
+
+// Word-boundary matched, not substring: the 3-letter codes are short enough that
+// a plain indexOf finds "BAL" inside "balance" and "LEE" inside "fleet", which
+// would make the dump claim a store confidently on a coincidence.
+// More than one store in the result = the token is ambiguous, say so loudly.
+function _buyStoreGuess(text) {
+  var hay = String(text || '').toLowerCase();
+  var out = [];
+  Object.keys(BUY_STORE_HINTS).forEach(function (store) {
+    var hit = BUY_STORE_HINTS[store].filter(function (tok) {
+      var esc = tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp('\\b' + esc + '\\b', 'i').test(hay);
+    });
+    if (hit.length) {
+      out.push(store + ' (via ' + hit.map(function (t) { return '"' + t + '"'; }).join(', ') + ')');
+    }
+  });
+  return out;
+}
+
+function diagnoseBuyingEmails() {
+  // Subject as well as sender: the reports currently reach this mailbox as
+  // FORWARDS from another address, so `from:` alone finds nothing until the
+  // Gmail address is added to the PayMore recipient list. The subject survives
+  // forwarding (a "Fwd:" prefix and nothing else), so it catches both.
+  var q = '(from:(' + BUY_SENDER + ') OR subject:("Day End Report")) newer_than:' + LOOKBACK + 'd';
+  var msgs = [];
+  try {
+    GmailApp.search(q, 0, 200).forEach(function (t) {
+      t.getMessages().forEach(function (m) { msgs.push(m); });
+    });
+  } catch (e) {
+    Logger.log('search failed: ' + e);
+    return { ok: false, error: String(e) };
+  }
+  msgs.sort(function (a, b) { return a.getDate().getTime() - b.getDate().getTime(); });
+
+  Logger.log('=== ' + msgs.length + ' message(s) from ' + BUY_SENDER + ' in the last ' + LOOKBACK + ' days ===');
+  if (!msgs.length) {
+    Logger.log('NONE FOUND. Either nothing has arrived yet, or they are in spam.');
+    Logger.log('Try widening: diagnoseQuery("from:pmdev.site newer_than:30d")');
+    return { ok: true, messages_found: 0, samples: [] };
+  }
+
+  // One sample per subject shape — digits stripped so "… for Aug 5" and
+  // "… for Aug 6" collapse to the same template.
+  var bySubject = {};
+  msgs.forEach(function (m) {
+    var key = String(m.getSubject() || '').replace(/\d+/g, '#').trim();
+    bySubject[key] = m;   // newest wins, since msgs is oldest-first
+  });
+
+  var out = { ok: true, messages_found: msgs.length, distinct_subjects: Object.keys(bySubject).length, samples: [] };
+  Logger.log(out.distinct_subjects + ' distinct subject shape(s) — expecting 5 if the store is in the subject, 1 if not.\n');
+
+  Object.keys(bySubject).slice(0, 8).forEach(function (key) {
+    var m = bySubject[key];
+    var body = _plainBody(m);
+    var atts = m.getAttachments().map(function (a) { return a.getName() + ' (' + a.getContentType() + ')'; });
+    var sample = {
+      from: m.getFrom(),
+      subject: m.getSubject(),
+      received: Utilities.formatDate(m.getDate(), TIMEZONE, 'yyyy-MM-dd HH:mm'),
+      attachments: atts,
+      subject_parse: _buyParseSubject(m.getSubject()),
+      store_hint_subject: _buyStoreGuess(m.getSubject()),
+      store_hint_body: _buyStoreGuess(body),
+      // Two different questions. `date_marks` = how many dates are in the body,
+      // which is what says single-day vs month-to-date. `dated_rows_found` runs
+      // the SALES parser, so it reports 0 whenever the buying email words its
+      // figures differently — a 0 here next to a non-zero date_marks means the
+      // date segmentation already works and only the labels need adding.
+      date_marks: _buyCountDates(body),
+      dated_rows_found: (function () { try { return _parseDatedRows(body).length; } catch (e) { return 'err: ' + e; } })(),
+      label_number_pairs: _labelPairs(body),
+      body_first_2000: body.slice(0, 2000)
+    };
+    out.samples.push(sample);
+
+    Logger.log('\n--- ' + sample.subject + ' | ' + sample.received + ' ---');
+    var amb = function (h) { return h.length > 1 ? '   <-- AMBIGUOUS, matches ' + h.length + ' stores' : ''; };
+    var sp = sample.subject_parse;
+    Logger.log('SUBJECT PARSE -> store=' + sp.store + ' date=' + (sp.date ? _iso(sp.date) : null)
+      + ' ok=' + sp.ok + (sp.why ? '  (' + sp.why + ')' : ''));
+    Logger.log('name-based hint, SUBJECT: ' + (sample.store_hint_subject.join(', ') || 'NONE') + amb(sample.store_hint_subject));
+    Logger.log('name-based hint, BODY:    ' + (sample.store_hint_body.join(', ') || 'NONE') + amb(sample.store_hint_body));
+    Logger.log('attachments: ' + (atts.length ? atts.join(', ') : 'none'));
+    Logger.log('dates in body: ' + sample.date_marks + '  (1 = single-day, many = month-to-date)');
+    Logger.log('rows the SALES parser can already read: ' + sample.dated_rows_found);
+    Logger.log('label/number pairs seen:\n  ' + (sample.label_number_pairs.join('\n  ') || '(none)'));
+    Logger.log('body (first 2000 chars):\n' + sample.body_first_2000);
+  });
+  return out;
+}
+
 // Derives which store each sender address belongs to, instead of trusting the
 // guesses in STORE_SENDERS. For every email found, it parses the figures and
 // looks for the store whose sheet row for that same date already holds those
@@ -1147,4 +1797,43 @@ function runImportNow() {
     + ' / unchanged ' + r.unchanged + ' / missing ' + r.missing.length
     + ' / unverified ' + (r.unverified || []).length);
   return r;
+}
+
+// ---- buying twins of the two above -------------------------------------
+// ALWAYS run dryRunBuying() first and read the `written` entries: they show the
+// exact cell, the old value and the new one, so a wrong Buy-tab column or a
+// store code mapped to the wrong block is visible BEFORE anything is written.
+function dryRunBuying() {
+  var r = ingestBuyingEmails({ dryRun: true });
+  Logger.log(JSON.stringify(r, null, 2));
+  _logBuySummary(r);
+  return r;
+}
+
+// LIVE — writes to the Buy tab.
+function runBuyingImportNow() {
+  var r = ingestBuyingEmails({});
+  Logger.log(JSON.stringify(r, null, 2));
+  _logBuySummary(r);
+  return r;
+}
+
+function _logBuySummary(r) {
+  if (!r || r.ok === false) { Logger.log('FAILED: ' + (r && r.error)); return; }
+  Logger.log('\nfilled ' + r.written.length + ' / overwrote-existing ' + r.corrected.length
+    + ' / unchanged ' + r.unchanged + ' / missing ' + r.missing.length
+    + ' / unverified ' + r.unverified.length + ' / errors ' + r.errors.length);
+  r.written.concat(r.corrected).forEach(function (w) {
+    Logger.log('  ' + w.store + ' ' + w.date + ': '
+      + w.changes.map(function (c) { return c.field + ' ' + c.from + ' -> ' + c.to; }).join(', '));
+  });
+  r.errors.forEach(function (e) { Logger.log('  ERROR: ' + e.subject + ' — ' + e.error); });
+  (r.daysThru || []).forEach(function (d) {
+    Logger.log('  days-thru ' + d.tab + ' ' + d.a1 + ' (' + d.store + '): '
+      + (d.skipped ? 'skipped — ' + d.skipped : d.from + ' -> ' + d.to));
+  });
+  (r.warnings || []).forEach(function (w) {
+    Logger.log('  WARNING [' + w.tab + '] ' + w.note + ': sheet=' + w.sheet
+      + ' expected=' + w.expected + ' — ' + w.hint);
+  });
 }
