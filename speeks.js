@@ -24594,6 +24594,12 @@ const FEATURE_CATALOG = [
     { key: 'cc-scorecard',             label: 'Command Center · Scorecard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'cc-ebay',                  label: 'Command Center · eBay tab',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'cc-buying',                label: 'Command Center · Buying & Sales tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    // The employee/ASM widget as a whole. Its three tabs each had a switch but the
+    // widget itself did not, so there was no way to hand an ASM the manager Command
+    // Center without ALSO leaving their own widget beside it — switching off all
+    // three tabs just left an empty shell with a header. Defaults match the role
+    // classes it already had, so adding this row changes nothing until it is used.
+    { key: 'widget-emp-command',       label: 'Employee/ASM Widget (Whole Widget)', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     // Live sales for the employee/ASM widget. On by default for both: showing the
     // team the same figures as their manager, cost and margin included, is the
     // decision this feature was built around — this row exists so a store that would
@@ -25517,6 +25523,7 @@ const JUMP_KEYWORDS = {
     'widget-buying-selling':     'buying selling sales bought sold',
     'widget-district-command':   'district command center all stores overview',
     'cc-live':                   'live dashboard today todays sales net sales orders average order aov gross margin cogs shopify real time right now how are we doing',
+    'widget-emp-command':        'employee widget asm widget my store whole widget live buying sales weekly kpis card',
     'widget-emp-live':           'live dashboard today todays sales net sales orders average order aov gross margin shopify real time right now how are we doing',
     'widget-district-live':      'live dashboard today todays sales all stores district net sales orders margin pace shopify real time',
     'tool-claims-store':         'claim claims shopify usps ups damaged lost package item not received insurance',

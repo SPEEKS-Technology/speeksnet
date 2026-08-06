@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260806d">
+  <link rel="stylesheet" href="styles.css?v=20260806e">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260806d" defer></script>
+  <script src="speeks.js?v=20260806e" defer></script>
 </head>
 
 <body class="preload">
@@ -1005,7 +1005,7 @@
            Each tab is a toggleable feature (widget-emp-live / widget-buying-selling /
            widget-emp-weekly-kpis) — which is why switchEmpTab must never assume the
            default tab is present. -->
-      <div class="card employee-widget-card ew-airy cc-widget cc-expanded ec-widget dynamic-module-block role-employee" id="ecWidget">
+      <div class="card employee-widget-card ew-airy cc-widget cc-expanded ec-widget dynamic-module-block role-employee" id="ecWidget" data-feature="widget-emp-command">
           <div class="ew-head">
               <div class="ew-titles">
                   <!-- Header defaults match the DEFAULT tab, which is now Live Dashboard.
