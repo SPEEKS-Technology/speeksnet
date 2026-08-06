@@ -127,6 +127,49 @@ function sellingDays(c: Central): { total: number; elapsed: number } {
 const iso = (c: Central) =>
   `${c.y}-${String(c.m).padStart(2, "0")}-${String(c.d).padStart(2, "0")}`;
 
+// --- the previous open day --------------------------------------------------
+// "How did we finish yesterday" means the last day the stores were OPEN. Sunday
+// is a non-selling day everywhere else in this file (isOpen, sellingDays), so on
+// a Monday the useful answer is Saturday, not a column of zeros. The view always
+// prints the actual date, so nobody has to guess which day they are reading —
+// and anything that did sell on a skipped Sunday is carried through separately
+// rather than quietly vanishing.
+type PrevDay = {
+  iso: string;          // the day being reported
+  skipped: string[];    // closed days jumped over to reach it
+  sinceDays: number;    // how far the ShopifyQL window must reach back
+  inMonth: boolean;     // false on the 1st, when it belongs to last month
+  day: number;          // day-of-month, for the selling-day count
+};
+
+function prevOpenDay(c: Central): PrevDay {
+  const skipped: string[] = [];
+  const d = new Date(Date.UTC(c.y, c.m - 1, c.d));
+  const fmt = () => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`
+    + `-${String(d.getUTCDate()).padStart(2, "0")}`;
+  let found = "";
+  // Eight hops is more than enough for one Sunday; the bound just stops a bad
+  // clock spinning here forever.
+  for (let i = 0; i < 8 && !found; i++) {
+    d.setUTCDate(d.getUTCDate() - 1);
+    if (d.getUTCDay() === 0) { skipped.push(fmt()); continue; }
+    found = fmt();
+  }
+  const span = Math.round(
+    (Date.UTC(c.y, c.m - 1, c.d) - Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())) / 86400000,
+  );
+  return {
+    iso: found,
+    skipped,
+    // On the 1st of a month this deliberately reaches into LAST month, which is
+    // why the accumulator in fetchStore filters rows by month rather than
+    // trusting the window to contain only in-month days.
+    sinceDays: Math.max(c.d - 1, span),
+    inMonth: found.slice(0, 7) === `${c.y}-${String(c.m).padStart(2, "0")}`,
+    day: Number(found.slice(8, 10)),
+  };
+}
+
 // --- Shopify ----------------------------------------------------------------
 
 async function gql(shop: string, token: string, query: string) {
@@ -154,6 +197,19 @@ const num = (v: unknown) => {
 };
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+// The closed-out numbers for the previous open day. Field names deliberately
+// MIRROR the live ones (netToday, mtdNet, …) so the frontend can overlay this
+// object onto the store row and reuse every renderer unchanged, rather than
+// growing a second copy of each one that differs only in which key it reads.
+type DayMetrics = {
+  netToday: number; cogsToday: number; gpToday: number; ordersToday: number;
+  returnsToday: number; marginToday: number | null; aov: number | null;
+  mtdNet: number; mtdCogs: number; mtdGp: number; mtdOrders: number;
+  mtdMargin: number | null;
+  pctOfGoal: number | null; paceIndex: number | null;
+  skippedNet: number;   // sold on the closed day(s) jumped over, if any
+};
+
 type StoreMetrics = {
   code: string; name: string;
   netToday: number; cogsToday: number; gpToday: number; ordersToday: number;
@@ -162,11 +218,12 @@ type StoreMetrics = {
   mtdMargin: number | null;
   goal: number; pctOfGoal: number | null; paceIndex: number | null;
   lastOrderAt: string | null; lastOrderAmount: number | null;
+  prev: DayMetrics | null;
   error?: string;
 };
 
 async function fetchStore(
-  shop: string, token: string, c: Central, goal: number,
+  shop: string, token: string, c: Central, goal: number, pd: PrevDay,
 ): Promise<StoreMetrics> {
   const code = SHOP_TO_CODE[shop] ?? shop;
   const base: StoreMetrics = {
@@ -176,6 +233,7 @@ async function fetchStore(
     mtdNet: 0, mtdCogs: 0, mtdGp: 0, mtdOrders: 0, mtdMargin: null,
     goal, pctOfGoal: null, paceIndex: null,
     lastOrderAt: null, lastOrderAmount: null,
+    prev: null,
   };
 
   try {
@@ -183,7 +241,11 @@ async function fetchStore(
     // day. cost_of_goods_sold rather than net_sales - gross_profit, which
     // disagrees on about half of all days and would put the dashboard at odds
     // with the Sales Summary sheet staff already compare against.
-    const sinceDays = c.d - 1;
+    //
+    // The previous open day is in this SAME response — it always was, and was
+    // being folded into the MTD totals and then thrown away. Reporting it costs
+    // no extra Shopify call; only the window start moves, and only on the 1st.
+    const sinceDays = pd.sinceDays;
     const data = await gql(shop, token, `{
       shopifyqlQuery(query: "FROM sales SHOW net_sales, cost_of_goods_sold, orders, returns GROUP BY day SINCE -${sinceDays}d UNTIL today ORDER BY day") {
         parseErrors
@@ -198,17 +260,37 @@ async function fetchStore(
     if (q?.parseErrors?.length) throw new Error(`ShopifyQL: ${q.parseErrors.join("; ")}`);
     const rows: any[] = q?.tableData?.rows ?? [];
     const todayIso = iso(c);
+    const monthPrefix = `${c.y}-${String(c.m).padStart(2, "0")}`;
+
+    // Month-to-date as it stood at the CLOSE of the previous open day. Derived by
+    // subtracting everything dated after it rather than re-summing, so the two
+    // figures can never disagree about which days they include.
+    let afterNet = 0, afterCogs = 0, afterOrders = 0;
+    let pNet = 0, pCogs = 0, pOrders = 0, pReturns = 0, skippedNet = 0;
 
     for (const r of rows) {
+      const day = String(r.day).slice(0, 10);
       const net = num(r.net_sales), cogs = num(r.cost_of_goods_sold), ord = num(r.orders);
-      base.mtdNet += net; base.mtdCogs += cogs; base.mtdOrders += ord;
-      if (String(r.day).slice(0, 10) === todayIso) {
+
+      // The window reaches into last month on the 1st, so MTD is filtered by
+      // month here. Accumulating blind would have carried a December day into a
+      // January total the moment this feature widened the window.
+      if (day.slice(0, 7) === monthPrefix) {
+        base.mtdNet += net; base.mtdCogs += cogs; base.mtdOrders += ord;
+        if (day > pd.iso) { afterNet += net; afterCogs += cogs; afterOrders += ord; }
+      }
+
+      if (day === todayIso) {
         base.netToday = round2(net);
         base.cogsToday = round2(cogs);
         base.ordersToday = ord;
         // returns come back negative; show the magnitude.
         base.returnsToday = round2(Math.abs(num(r.returns)));
       }
+      if (day === pd.iso) {
+        pNet = net; pCogs = cogs; pOrders = ord; pReturns = Math.abs(num(r.returns));
+      }
+      if (pd.skipped.includes(day)) skippedNet += net;
     }
 
     base.mtdNet = round2(base.mtdNet);
@@ -223,6 +305,33 @@ async function fetchStore(
     base.aov = base.ordersToday > 0 ? round2(base.netToday / base.ordersToday) : null;
     base.mtdMargin = base.mtdNet > 0
       ? round2((base.mtdNet - base.mtdCogs) / base.mtdNet * 100) : null;
+
+    if (pd.iso) {
+      // When the previous open day belongs to last month there is no meaningful
+      // "month to date" to show beside it, so those fields go null and the UI
+      // drops the goal bar rather than printing a zero that looks like failure.
+      const pMtdNet = pd.inMonth ? round2(base.mtdNet - afterNet) : 0;
+      const pMtdCogs = pd.inMonth ? round2(base.mtdCogs - afterCogs) : 0;
+      base.prev = {
+        netToday: round2(pNet),
+        cogsToday: round2(pCogs),
+        gpToday: round2(pNet - pCogs),
+        ordersToday: pOrders,
+        returnsToday: round2(pReturns),
+        marginToday: pNet > 0 ? round2((pNet - pCogs) / pNet * 100) : null,
+        aov: pOrders > 0 ? round2(pNet / pOrders) : null,
+        mtdNet: pMtdNet,
+        mtdCogs: pMtdCogs,
+        mtdGp: round2(pMtdNet - pMtdCogs),
+        mtdOrders: pd.inMonth ? base.mtdOrders - afterOrders : 0,
+        mtdMargin: pMtdNet > 0 ? round2((pMtdNet - pMtdCogs) / pMtdNet * 100) : null,
+        // Filled in by refresh(), which is where the goal lives. Present as null
+        // either way: the frontend overlays this object onto the live row, and a
+        // MISSING key would let today's pace show through under a past date.
+        pctOfGoal: null, paceIndex: null,
+        skippedNet: round2(skippedNet),
+      };
+    }
 
     const last = data?.orders?.nodes?.[0];
     if (last) {
@@ -252,6 +361,37 @@ async function loadGoals(sb: any): Promise<Record<string, number>> {
   return out;
 }
 
+/**
+ * District/roll-up totals for the previous open day.
+ *
+ * Kept separate from the live roll-up above rather than generalised into one
+ * function: the live one also carries storesReporting, aov labelling and the
+ * last-order sweep, none of which mean anything on a closed day.
+ */
+function rollPrev(healthy: StoreMetrics[], goal: number, elapsedPct: number): DayMetrics | null {
+  const parts = healthy.map(m => m.prev).filter(Boolean) as DayMetrics[];
+  if (!parts.length) return null;
+  const sum = (f: (p: DayMetrics) => number) => round2(parts.reduce((a, p) => a + f(p), 0));
+  const net = sum(p => p.netToday), cogs = sum(p => p.cogsToday);
+  const orders = parts.reduce((a, p) => a + p.ordersToday, 0);
+  const mtdNet = sum(p => p.mtdNet), mtdCogs = sum(p => p.mtdCogs);
+  const mtdGp = round2(mtdNet - mtdCogs);
+  const pctOfGoal = goal > 0 ? round2(mtdGp / goal * 100) : null;
+  return {
+    netToday: net, cogsToday: cogs, gpToday: round2(net - cogs),
+    ordersToday: orders, returnsToday: sum(p => p.returnsToday),
+    marginToday: net > 0 ? round2((net - cogs) / net * 100) : null,
+    aov: orders > 0 ? round2(net / orders) : null,
+    mtdNet, mtdCogs, mtdGp,
+    mtdOrders: parts.reduce((a, p) => a + p.mtdOrders, 0),
+    mtdMargin: mtdNet > 0 ? round2(mtdGp / mtdNet * 100) : null,
+    pctOfGoal,
+    paceIndex: pctOfGoal !== null && elapsedPct > 0
+      ? Math.round(pctOfGoal / elapsedPct * 100) : null,
+    skippedNet: sum(p => p.skippedNet),
+  };
+}
+
 // --- refresh ----------------------------------------------------------------
 
 async function refresh(sb: any, now: Date, force: boolean) {
@@ -274,18 +414,29 @@ async function refresh(sb: any, now: Date, force: boolean) {
 
   const goals = await loadGoals(sb);
   const sd = sellingDays(c);
+  const pd = prevOpenDay(c);
+  // Selling days elapsed as at the close of that day — the same count, taken a
+  // day earlier, so yesterday's pace is judged against yesterday's expectation
+  // rather than today's.
+  const psd = pd.inMonth ? sellingDays({ ...c, d: pd.day }) : null;
 
   const metrics = await Promise.all(
-    stores.map((s: any) => fetchStore(s.shop, s.access_token, c, goals[SHOP_TO_CODE[s.shop]] ?? 0)),
+    stores.map((s: any) => fetchStore(s.shop, s.access_token, c, goals[SHOP_TO_CODE[s.shop]] ?? 0, pd)),
   );
 
   // Goal progress against SELLING-day progress, so "17% of goal" on day 5 reads
   // as slightly ahead rather than alarming. No forecast involved.
   const elapsedPct = sd.total > 0 ? sd.elapsed / sd.total * 100 : 0;
+  const prevElapsedPct = psd && sd.total > 0 ? psd.elapsed / sd.total * 100 : 0;
   for (const m of metrics) {
     if (m.goal > 0) {
       m.pctOfGoal = round2(m.mtdGp / m.goal * 100);
       m.paceIndex = elapsedPct > 0 ? Math.round(m.pctOfGoal / elapsedPct * 100) : null;
+      if (m.prev && pd.inMonth) {
+        m.prev.pctOfGoal = round2(m.prev.mtdGp / m.goal * 100);
+        m.prev.paceIndex = prevElapsedPct > 0
+          ? Math.round(m.prev.pctOfGoal / prevElapsedPct * 100) : null;
+      }
     }
   }
 
@@ -315,12 +466,26 @@ async function refresh(sb: any, now: Date, force: boolean) {
     pctOfGoal: dGoal > 0 ? round2((dMtdNet - dMtdCogs) / dGoal * 100) : null,
     storesReporting: healthy.length,
     storesTotal: ordered.length,
+    // Same overlay shape as a store's, summed over the stores that reported.
+    prev: rollPrev(healthy, dGoal, prevElapsedPct),
   };
 
   const payload = {
     asOfCentral: `${iso(c)} ${String(c.hour).padStart(2, "0")}:${String(c.minute).padStart(2, "0")}`,
     open,
     month: { sellingDaysTotal: sd.total, sellingDaysElapsed: sd.elapsed, elapsedPct: round2(elapsedPct) },
+    // Everything the UI needs to LABEL the previous-day view. The numbers ride on
+    // each store row; this is just which day it is and how far into the month it
+    // sat, which is identical for every store.
+    prev: pd.iso
+      ? {
+        date: pd.iso,
+        inMonth: pd.inMonth,
+        skipped: pd.skipped,
+        sellingDaysElapsed: psd ? psd.elapsed : null,
+        elapsedPct: round2(prevElapsedPct),
+      }
+      : null,
     district,
     stores: ordered,
   };
@@ -463,6 +628,7 @@ Deno.serve(async (req: Request) => {
     syncedAt: cached.synced_at,
     open: p.open,
     month: p.month,
+    prev: p.prev ?? null,
     // The district roll-up is withheld from store staff on the server. A store
     // employee gets their store and nothing else, whatever the frontend renders.
     district: scope.district ? p.district : null,

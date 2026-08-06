@@ -10062,6 +10062,30 @@ body.sam-active .hotbar-btn:hover {
     gap: 10px; flex-wrap: wrap; margin-bottom: 14px;
 }
 .lv-head .lv-asof { font-size: 10.5px; font-weight: 650; color: #94a3b8; }
+/* Freshness and date read as one phrase, so they stay together on the left and let
+   the day toggle sit at the far right rather than being pushed between them. */
+.lv-head-l { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.lv-head-r { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* Today / Yesterday. A segmented pair rather than a single "show yesterday"
+   button: with two labelled halves the current day is always stated, so a glance
+   can never mistake a finished day for the live one. */
+.lv-modes {
+    display: inline-flex; flex: none; gap: 2px; padding: 2px;
+    background: #f1f5f9; border: 1px solid #e6ebf1; border-radius: 999px;
+}
+.lv-mode {
+    font: inherit; font-size: 10.5px; font-weight: 800; letter-spacing: .02em;
+    color: #647082; background: none; border: 0; cursor: pointer;
+    border-radius: 999px; padding: 4px 12px; white-space: nowrap;
+    transition: background .16s ease, color .16s ease;
+}
+.lv-mode:hover { color: var(--slate-charcoal); }
+.lv-mode.on {
+    background: #fff; color: var(--slate-charcoal);
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .08);
+}
+.lv-mode:focus-visible { outline: 2px solid #1f9d57; outline-offset: 1px; }
 .lv-fresh {
     display: inline-flex; align-items: center; gap: 6px;
     font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
@@ -10151,6 +10175,10 @@ body.sam-active .hotbar-btn:hover {
 }
 .lv-last b { color: var(--slate-charcoal); font-weight: 850; font-variant-numeric: tabular-nums; }
 .lv-last.lv-quiet { color: #94a3b8; }
+/* How a finished day closed out. Sits in the same slot as the last-order line so
+   the panel keeps its footer rule on both views. */
+.lv-last.lv-final { display: block; line-height: 1.6; }
+.lv-skip { color: #94a3b8; font-weight: 650; }
 .lv-err {
     font-size: 12px; font-weight: 650; color: #b3760a; line-height: 1.5;
     background: #fdf3e1; border: 1px solid #eccf94; border-left-width: 3px;

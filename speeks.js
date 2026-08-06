@@ -8995,6 +8995,14 @@ function _ccOpenDefaultTab() {
 // both in the DOM at once (one is display:none), so ids would collide — which is
 // exactly why renderBuyingSales already has to querySelectorAll every field.
 
+// TODAY vs the previous open day. Every surface reads this one variable and the
+// toggle just flips it and re-renders, so the manager panel, the employee widget
+// and the district table can never end up showing different days at once.
+//
+// Deliberately NOT persisted. "Live" is what this tab is for; a mode that
+// survived a reload would leave someone staring at a past day believing it was
+// current, which is the one failure this panel exists to prevent.
+let _lvMode = 'today';   // 'today' | 'prev'
 let _lvData = null;      // last successful payload
 let _lvErr  = '';        // message to show instead of numbers
 
@@ -9029,6 +9037,64 @@ function _lvCentralDay(iso) {
     if (!t) return '';
     // en-CA formats as YYYY-MM-DD, which is the shape asOfCentral carries.
     return new Date(t).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+}
+
+// --- previous-day view ------------------------------------------------------
+// The edge function ships yesterday's closed-out figures under the SAME key names
+// as today's (netToday, mtdNet, …), so switching day is an overlay rather than a
+// second set of renderers. Everything the overlay does not carry — code, name,
+// goal, error — falls through from the live row.
+const _lvIsPrev = () => _lvMode === 'prev';
+function _lvView(m) {
+    return (_lvIsPrev() && m && m.prev) ? Object.assign({}, m, m.prev) : m;
+}
+// True whenever month-to-date figures mean something. On the 1st the previous
+// open day belongs to LAST month, so its "this month" numbers would all be zero —
+// which reads as a catastrophe rather than as a new month.
+function _lvHasMonth(d) {
+    return !_lvIsPrev() || !!(d && d.prev && d.prev.inMonth);
+}
+function _lvElapsedPct(d) {
+    if (_lvIsPrev()) return (d.prev && d.prev.elapsedPct) || 0;
+    return (d.month && d.month.elapsedPct) || 0;
+}
+// Built from the date components, never from Date.parse of a bare ISO string —
+// that parses as UTC and renders as the day before for anyone west of Greenwich.
+function _lvDayName(isoDay, long) {
+    const p = String(isoDay || '').split('-');
+    if (p.length !== 3) return '';
+    return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString('en-US',
+        { weekday: long ? 'long' : 'short', month: long ? 'long' : 'short', day: 'numeric' });
+}
+// "Yesterday" only when it genuinely is. On a Monday the previous open day is
+// Saturday, and calling that yesterday would be a lie people act on.
+function _lvPrevChip(d) {
+    if (!d || !d.prev) return 'Yesterday';
+    const today = String(d.asOfCentral || '').slice(0, 10);
+    const gap = Date.parse(today + 'T00:00:00Z') - Date.parse(d.prev.date + 'T00:00:00Z');
+    if (gap === 86400000) return 'Yesterday';
+    const p = d.prev.date.split('-');
+    return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString('en-US', { weekday: 'long' });
+}
+function _lvToggle(d) {
+    if (!d || !d.prev) return '';
+    const btn = (mode, label) => '<button type="button" class="lv-mode'
+        + (_lvMode === mode ? ' on' : '') + '" onclick="setLiveMode(\'' + mode + '\')">'
+        + escapeHtml(label) + '</button>';
+    return '<span class="lv-modes">' + btn('today', 'Today') + btn('prev', _lvPrevChip(d)) + '</span>';
+}
+function setLiveMode(mode) {
+    const next = mode === 'prev' ? 'prev' : 'today';
+    if (next === _lvMode) return;
+    _lvMode = next;
+    renderLiveDashboard();
+}
+// The stamp under the headline tile: when the number last moved, or which day
+// finished.
+function _lvStamp(d) {
+    return _lvIsPrev()
+        ? 'final &middot; ' + escapeHtml(_lvDayName(d.prev.date, false))
+        : 'last change ' + _lvClock(d.asOfCentral);
 }
 
 // 100 = exactly on track for the month: banked GP as a share of goal, against how
@@ -9100,25 +9166,53 @@ function _lvLastOrder(m, asOf) {
         + (rel ? ' &middot; ' + rel : '') + '</div>';
 }
 
-function _lvStoreTiles(m, asOf) {
-    const mtdAov = m.mtdOrders > 0 ? m.mtdNet / m.mtdOrders : null;
-    return _lvTile('Net Sales Today', _lvMoney(m.netToday, true), 'last change ' + _lvClock(asOf), true)
-        + _lvTile('Orders', String(m.ordersToday),
-            m.returnsToday > 0 ? _lvMoney(m.returnsToday, false) + ' refunded' : 'no refunds today')
-        + _lvTile('Average Order', m.aov === null ? '—' : _lvMoney(m.aov, true),
-            mtdAov === null ? '' : 'month average ' + _lvMoney(mtdAov, false))
-        + _lvTile('Gross Margin', _lvPct(m.marginToday), 'cost ' + _lvMoney(m.cogsToday, false));
+function _lvStoreTiles(v, d) {
+    const prev = _lvIsPrev();
+    const mtdAov = v.mtdOrders > 0 ? v.mtdNet / v.mtdOrders : null;
+    return _lvTile(prev ? 'Net Sales' : 'Net Sales Today', _lvMoney(v.netToday, true), _lvStamp(d), true)
+        + _lvTile('Orders', String(v.ordersToday),
+            v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) + ' refunded'
+                               : (prev ? 'no refunds' : 'no refunds today'))
+        + _lvTile('Average Order', v.aov === null ? '—' : _lvMoney(v.aov, true),
+            (mtdAov === null || !_lvHasMonth(d)) ? '' : 'month average ' + _lvMoney(mtdAov, false))
+        + _lvTile('Gross Margin', _lvPct(v.marginToday), 'cost ' + _lvMoney(v.cogsToday, false));
 }
 
-function _lvStoreDetail(d, m) {
-    return '<div class="lv-chips">'
-        + _lvChip('Gross profit today', _lvMoney(m.gpToday, true))
-        + _lvChip('Net sales this month', _lvMoney(m.mtdNet, false))
-        + _lvChip('Margin this month', _lvPct(m.mtdMargin))
-        + _lvChip('Orders this month', String(m.mtdOrders))
-        + '</div>'
-        + _lvGoalBar(m.mtdGp, m.goal, m.pctOfGoal, d.month && d.month.elapsedPct, m.paceIndex)
-        + _lvLastOrder(m, d.asOfCentral);
+function _lvStoreDetail(d, v) {
+    const prev = _lvIsPrev();
+    let chips = _lvChip(prev ? 'Gross profit on the day' : 'Gross profit today', _lvMoney(v.gpToday, true));
+    if (_lvHasMonth(d)) {
+        chips += _lvChip('Net sales this month', _lvMoney(v.mtdNet, false))
+            + _lvChip('Margin this month', _lvPct(v.mtdMargin))
+            + _lvChip('Orders this month', String(v.mtdOrders));
+    } else {
+        chips += _lvChip('Refunded', _lvMoney(v.returnsToday, false));
+    }
+    return '<div class="lv-chips">' + chips + '</div>'
+        + (_lvHasMonth(d)
+            ? _lvGoalBar(v.mtdGp, v.goal, v.pctOfGoal, _lvElapsedPct(d), v.paceIndex)
+            : '<div class="lv-note">This was the last day of the previous month, so '
+              + 'month-to-date and pace are not shown against it.</div>')
+        + (prev ? _lvDayClose(v, d) : _lvLastOrder(v, d.asOfCentral));
+}
+
+// The previous-day counterpart of the last-order line: how the day actually
+// closed out. No extra Shopify call — every figure here is already in the payload.
+function _lvDayClose(v, d) {
+    let s = '<div class="lv-last lv-final">Finished <b>' + escapeHtml(_lvDayName(d.prev.date, true))
+        + '</b> with <b>' + v.ordersToday + (v.ordersToday === 1 ? ' order' : ' orders') + '</b>'
+        + ' &middot; <b>' + _lvMoney(v.gpToday, true) + '</b> gross profit';
+    if (v.returnsToday > 0) s += ' &middot; <b>' + _lvMoney(v.returnsToday, false) + '</b> refunded';
+    s += '.';
+    // A Sunday is skipped to get here because it is not a selling day, but it can
+    // still take online orders. Say so rather than letting the money disappear
+    // between two views.
+    if (v.skippedNet > 0 && d.prev.skipped && d.prev.skipped.length) {
+        s += ' <span class="lv-skip">' + escapeHtml(_lvDayName(d.prev.skipped[0], true))
+            + ' took ' + _lvMoney(v.skippedNet, false)
+            + ' online, which does not count as a selling day.</span>';
+    }
+    return s + '</div>';
 }
 
 // One store failing must never blank the panel for the rest — the edge function
@@ -9157,62 +9251,83 @@ function _lvCombine(stores) {
 }
 
 function _lvRollupTiles(r, d, label) {
-    const days = d.month
-        ? d.month.sellingDaysElapsed + ' of ' + d.month.sellingDaysTotal + ' selling days'
+    const prev = _lvIsPrev();
+    const elapsed = prev ? (d.prev && d.prev.sellingDaysElapsed) : (d.month && d.month.sellingDaysElapsed);
+    const days = d.month && elapsed !== null && elapsed !== undefined
+        ? elapsed + ' of ' + d.month.sellingDaysTotal + ' selling days'
         : '';
-    return _lvTile('Net Sales Today', _lvMoney(r.netToday, true), 'last change ' + _lvClock(d.asOfCentral), true)
+    return _lvTile(prev ? 'Net Sales' : 'Net Sales Today', _lvMoney(r.netToday, true), _lvStamp(d), true)
         + _lvTile('Orders', String(r.ordersToday),
             r.aov === null ? label : 'average ' + _lvMoney(r.aov, true))
         + _lvTile('Gross Margin', _lvPct(r.marginToday), 'profit ' + _lvMoney(r.gpToday, false))
-        + _lvTile('Month to Date', _lvMoney(r.mtdNet, false), days);
+        // On the 1st there is no month behind the previous day, so this tile shows
+        // the day's own profit instead of a $0 month that reads as a dead store.
+        + (_lvHasMonth(d)
+            ? _lvTile('Month to Date', _lvMoney(r.mtdNet, false), days)
+            : _lvTile('Gross Profit', _lvMoney(r.gpToday, true), 'on the day'));
 }
 
-function _lvStoreRow(m, asOf, foot) {
+// `v` arrives already switched to the selected day by _lvTable — the roll-up row
+// has to be built from the same view before its pace is derived, so doing the
+// overlay here as well would apply it twice.
+function _lvStoreRow(v, d, foot) {
     // The roll-up row is not a store, so it gets no colour dot — the tints are the
     // per-store palette the KPI charts use and inventing a sixth one for "District"
     // would read as a sixth store.
-    const tint = STORE_TINTS[m.code]
-        ? '<i class="lv-tint" style="background:' + STORE_TINTS[m.code] + '"></i>' : '';
-    if (m.error) {
+    const tint = STORE_TINTS[v.code]
+        ? '<i class="lv-tint" style="background:' + STORE_TINTS[v.code] + '"></i>' : '';
+    if (v.error) {
         return '<tr class="lv-row-err"><td><span class="lv-store">' + tint
-            + '<b>' + escapeHtml(m.code) + '</b></span></td>'
+            + '<b>' + escapeHtml(v.code) + '</b></span></td>'
             + '<td colspan="7" class="lv-row-errmsg">not reporting &middot; '
-            + escapeHtml(m.error) + '</td></tr>';
+            + escapeHtml(v.error) + '</td></tr>';
     }
-    const last = m.lastOrderAt && _lvCentralDay(m.lastOrderAt) === String(asOf || '').slice(0, 10)
-        ? _lvOrderClock(m.lastOrderAt) : '—';
+    const asOf = d.asOfCentral;
+    // Last column: a live clock only means something today. On a finished day the
+    // useful end-of-day number in its place is what went back out in refunds.
+    const tail = _lvIsPrev()
+        ? (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—')
+        : (v.lastOrderAt && _lvCentralDay(v.lastOrderAt) === String(asOf || '').slice(0, 10)
+            ? _lvOrderClock(v.lastOrderAt) : '—');
+    const gp = _lvHasMonth(d)
+        ? _lvMoney(v.mtdGp, false) + '<span class="lv-of"> of ' + _lvMoney(v.goal, false) + '</span>'
+        : '—';
     return '<tr' + (foot ? ' class="lv-foot"' : '') + '><td><span class="lv-store">' + tint
-        + '<b>' + escapeHtml(m.code) + '</b><span class="lv-store-nm">'
-        + escapeHtml(m.name || '') + '</span></span></td>'
-        + '<td class="lv-strongnum">' + _lvMoney(m.netToday, true) + '</td>'
-        + '<td>' + m.ordersToday + '</td>'
-        + '<td>' + (m.aov === null ? '—' : _lvMoney(m.aov, true)) + '</td>'
-        + '<td>' + _lvPct(m.marginToday) + '</td>'
-        + '<td>' + _lvMoney(m.mtdGp, false) + '<span class="lv-of"> of ' + _lvMoney(m.goal, false) + '</span></td>'
-        + '<td><span class="lv-pill ' + _lvPaceCls(m.paceIndex) + '">'
-        + (m.paceIndex === null || m.paceIndex === undefined ? '—' : m.paceIndex) + '</span></td>'
-        + '<td>' + last + '</td></tr>';
+        + '<b>' + escapeHtml(v.code) + '</b><span class="lv-store-nm">'
+        + escapeHtml(v.name || '') + '</span></span></td>'
+        + '<td class="lv-strongnum">' + _lvMoney(v.netToday, true) + '</td>'
+        + '<td>' + v.ordersToday + '</td>'
+        + '<td>' + (v.aov === null ? '—' : _lvMoney(v.aov, true)) + '</td>'
+        + '<td>' + _lvPct(v.marginToday) + '</td>'
+        + '<td>' + gp + '</td>'
+        + '<td><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
+        + (v.paceIndex === null || v.paceIndex === undefined ? '—' : v.paceIndex) + '</span></td>'
+        + '<td>' + tail + '</td></tr>';
 }
 
 function _lvTable(stores, d, rollup, rollupLabel) {
+    const prev = _lvIsPrev();
     let html = '<div class="lv-tbl-scroll"><table class="lv-tbl"><thead><tr>'
-        + '<th>Store</th><th>Net today</th><th>Orders</th><th>Avg order</th>'
-        + '<th>Margin</th><th>GP this month</th><th>Pace</th><th>Last order</th>'
+        + '<th>Store</th><th>' + (prev ? 'Net sales' : 'Net today') + '</th>'
+        + '<th>Orders</th><th>Avg order</th><th>Margin</th>'
+        + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>Pace</th>'
+        + '<th>' + (prev ? 'Refunds' : 'Last order') + '</th>'
         + '</tr></thead><tbody>';
     // Fixed store order (the edge function returns it that way) — the team reads
     // this list by position, so re-sorting it worst-first would cost more than the
     // ranking gains. The pace column is what makes a bad store findable.
-    stores.forEach(m => { html += _lvStoreRow(m, d.asOfCentral, false); });
+    stores.forEach(m => { html += _lvStoreRow(_lvView(m), d, false); });
     html += '</tbody>';
     if (rollup) {
-        const r = Object.assign({}, rollup, {
+        const rv = _lvView(rollup);
+        const r = Object.assign({}, rv, {
             code: rollupLabel, name: '',
-            paceIndex: _lvPace(rollup.pctOfGoal, d.month && d.month.elapsedPct),
+            paceIndex: _lvPace(rv.pctOfGoal, _lvElapsedPct(d)),
             // The freshest order across the stores, so a stalled feed shows up on the
             // total line too rather than only in the row it belongs to.
             lastOrderAt: stores.reduce((a, m) => (m.lastOrderAt && (!a || m.lastOrderAt > a)) ? m.lastOrderAt : a, null),
         });
-        html += '<tfoot>' + _lvStoreRow(r, d.asOfCentral, true) + '</tfoot>';
+        html += '<tfoot>' + _lvStoreRow(r, d, true) + '</tfoot>';
     }
     return html + '</table></div>';
 }
@@ -9220,6 +9335,9 @@ function _lvTable(stores, d, rollup, rollupLabel) {
 // "live" while the window is open and the cache is fresh; anything else says so
 // rather than letting a frozen number pass for a current one.
 function _lvFreshness(d) {
+    // A finished day is not live and must never wear the pulsing dot — the whole
+    // point of that dot is that it means "these numbers are still moving".
+    if (_lvIsPrev()) return '<span class="lv-fresh closed">final</span>';
     const age = d.syncedAt ? Math.round((Date.now() - Date.parse(d.syncedAt)) / 60000) : null;
     if (!d.open) {
         return '<span class="lv-fresh closed">closed'
@@ -9279,10 +9397,13 @@ function renderLiveDashboard() {
     // ---- DM / CEO: the five-store table ----
     if (dDetail) {
         if (d.district) {
-            if (dStrip) dStrip.innerHTML = _lvRollupTiles(d.district, d, 'no orders yet');
+            if (dStrip) dStrip.innerHTML = _lvRollupTiles(_lvView(d.district), d, 'no orders yet');
             dDetail.innerHTML = _lvTable(stores, d, d.district, 'District')
-                + '<div class="lv-note">Banked so far this month, not projected to month-end &mdash; '
-                + 'the District Command Center below tracks the projection.</div>';
+                + (_lvHasMonth(d)
+                    ? '<div class="lv-note">Banked so far this month, not projected to month-end &mdash; '
+                      + 'the District Command Center below tracks the projection.</div>'
+                    : '<div class="lv-note">This was the last day of the previous month, so '
+                      + 'month-to-date and pace are not shown against it.</div>');
         } else {
             // Only reachable if a district card is on screen for a non-district role,
             // which the role classes should already prevent. Say nothing rather than
@@ -9292,9 +9413,17 @@ function renderLiveDashboard() {
         }
     }
     const asof = document.querySelector('.lv-card .lv-asof');
-    if (asof) asof.textContent = d.asOfCentral ? 'last change ' + _lvClock(d.asOfCentral) : '';
+    if (asof) {
+        asof.textContent = _lvIsPrev()
+            ? _lvDayName(d.prev.date, true)
+            : (d.asOfCentral ? 'last change ' + _lvClock(d.asOfCentral) : '');
+    }
+    const eyebrow = document.querySelector('.lv-card .lv-eyebrow');
+    if (eyebrow) eyebrow.innerHTML = 'District &middot; ' + (_lvIsPrev() ? _lvPrevChip(d) : 'Today');
     const fresh = document.querySelector('.lv-card .lv-freshness');
     if (fresh) fresh.innerHTML = _lvFreshness(d);
+    const dModes = document.querySelector('.lv-card .lv-modes-host');
+    if (dModes) dModes.innerHTML = _lvToggle(d);
 
     // ---- store surfaces (manager Command Center + employee/ASM widget) ----
     if (!details.length) return;
@@ -9313,22 +9442,30 @@ function renderLiveDashboard() {
     let tiles, detail;
     if (stores.length === 1) {
         const m = stores[0];
-        tiles = _lvStoreTiles(m, d.asOfCentral);
-        detail = m.error ? _lvStoreError(m) : _lvStoreDetail(d, m);
+        tiles = _lvStoreTiles(_lvView(m), d);
+        detail = m.error ? _lvStoreError(m) : _lvStoreDetail(d, _lvView(m));
     } else {
         // Multi-Store Manager: both stores stacked, exactly as their checklist and
         // Listing Goals already do — no dashboard switch to see the other one.
+        // Combine the VIEWS, so the pair total follows the selected day too.
         const healthy = stores.filter(m => !m.error);
-        const roll = _lvCombine(healthy.length ? healthy : stores);
+        const roll = _lvCombine((healthy.length ? healthy : stores).map(_lvView));
         tiles = _lvRollupTiles(roll, d, 'no orders yet');
         detail = _lvTable(stores, d, roll, 'Both');
     }
 
+    const stamp = _lvIsPrev()
+        ? escapeHtml(_lvDayName(d.prev.date, true))
+        : 'last change ' + _lvClock(d.asOfCentral) + ' Central';
+    details.forEach(el => { el.innerHTML = '<div class="lv-head">'
+        + '<span class="lv-head-l">' + _lvFreshness(d)
+        + '<span class="lv-asof">' + stamp + '</span></span>'
+        + _lvToggle(d) + '</div>' + detail; });
     strips.forEach(el => { el.innerHTML = tiles; });
-    details.forEach(el => { el.innerHTML = '<div class="lv-head">' + _lvFreshness(d)
-        + '<span class="lv-asof">last change ' + _lvClock(d.asOfCentral) + ' Central</span></div>' + detail; });
 
-    // Collapsed Command Center summary line.
+    // Collapsed Command Center summary line. Deliberately pinned to TODAY: the
+    // toggle lives inside the panel, so when the panel is shut there is nothing on
+    // screen to say which day this number belongs to.
     const roll = stores.length === 1 ? stores[0] : _lvCombine(stores.filter(m => !m.error));
     _ccSum('cc-sum-live', _lvMoney(roll.netToday, false)
         + ' <small>' + roll.ordersToday + (roll.ordersToday === 1 ? ' order' : ' orders') + '</small>');

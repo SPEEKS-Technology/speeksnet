@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260806c">
+  <link rel="stylesheet" href="styles.css?v=20260806d">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260806c" defer></script>
+  <script src="speeks.js?v=20260806d" defer></script>
 </head>
 
 <body class="preload">
@@ -1106,10 +1106,16 @@
   <div class="ew-airy lv-card dynamic-module-block role-district-manager role-ceo mb-30" data-feature="widget-district-live">
       <div class="ew-head">
           <div class="ew-titles">
-              <span class="ew-eyebrow">District &middot; Today</span>
+              <!-- The eyebrow, the date and the freshness pill are all rewritten by
+                   renderLiveDashboard when the Today/Yesterday toggle flips, so a
+                   past day can never be read under a header that says "Today". -->
+              <span class="ew-eyebrow lv-eyebrow">District &middot; Today</span>
               <span class="ew-title">Live Dashboard <span class="ew-date lv-asof"></span></span>
           </div>
-          <span class="lv-freshness"></span>
+          <span class="lv-head-r">
+              <span class="lv-modes-host"></span>
+              <span class="lv-freshness"></span>
+          </span>
       </div>
       <div class="lv-dist-strip"></div>
       <div class="lv-dist-detail"><div class="status-message">Syncing live sales&hellip;</div></div>
