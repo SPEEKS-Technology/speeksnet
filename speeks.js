@@ -7058,7 +7058,11 @@ async function fetchHubData() {
 
         hubDataCache = freshData;
 
-        if (document.getElementById('bs-buy-val')) renderBuyingSales();
+        // Used to be gated on #bs-buy-val, which the Buying & Sales tab owned and
+        // took with it. renderBuyingSales still fills the Command Center's
+        // "Updated as of" stamp and the CEO rings, and every write it makes is
+        // element-guarded, so it is now simply called.
+        renderBuyingSales();
         // The Live Dashboard's buying half reads hubDataCache directly, and the two
         // feeds arrive independently — whichever lands second has to repaint, or
         // the block sits on "Syncing the buying sheet" until the next sale.
@@ -7188,11 +7192,11 @@ function renderBuyingSales() {
     const _trackGp = parseNum(hubDataCache[`${store}TrackGP`]);
     const _trackRev = sellMarginNum > 0 ? (_trackGp / (sellMarginNum / 100)) : 0;
     document.querySelectorAll('#cc-track-rev').forEach(el => el.innerText = `$${Math.round(_trackRev).toLocaleString()}`);
-    _ccSum('cc-sum-buy', `$${Math.round(bP).toLocaleString()}`, '');
-    _ccSum('cc-sum-rev', `$${Math.round(_trackRev).toLocaleString()}`, '');
-    _ccSum('cc-sum-goal', `${p}<small>%</small>`, p >= 100 ? 'good' : (p >= 80 ? 'warn' : 'bad'));
-    const _buySig = `${Math.round(bP)}|${p}|${hubDataCache[`${store}BuyDate`] || ''}`;
-    _ccFlagUpdate('buying', _buySig);   // one widget now, so one flag
+    // The three collapsed-summary cells and the "this tab changed" dot went with
+    // the Buying & Sales tab. Everything above still runs: the elements it writes
+    // to are all queried, so the ones that no longer exist are silent no-ops, and
+    // the ones that do — #cc-updated on the Command Center header, and the CEO
+    // rings — still need filling.
 }
 
 function renderLiveData(d) {
@@ -8793,10 +8797,15 @@ async function fetchAlertsData() {
 // tab open; clicking a tab expands the widget to the chart height showing that tab's
 // strip + detail; clicking the open tab again collapses back to the summary.
 // Pure view-switching — the fetch/render functions above own the data.
-// Three tabs: 'scorecard' (audit + SPEEKS Scorecard), 'ebay', 'buying'.
 // Every tab the one Command Center can show. Order matters in _ccOpenDefaultTab
 // only, where it decides which tab a role lands on.
-const CC_TABS = ['live', 'buying', 'ebay', 'scorecard', 'kpis'];
+//
+// 'buying' was retired here: the Live Dashboard's Month view already showed value
+// purchased, buy margin, revenue and gross profit month-to-date and sell margin,
+// and its "Tracking to month-end" strip took the four projections that were the
+// only things left. Feature-override rows for the old cc-buying key are harmless
+// — nothing reads it any more.
+const CC_TABS = ['live', 'ebay', 'scorecard', 'kpis'];
 
 function switchCommandTab(tab) {
     const widget = document.querySelector('.cc-widget');
@@ -8841,10 +8850,8 @@ function _ccHeaderFor(tab) {
         const el = document.getElementById(id);
         if (el) el.style.display = on ? '' : 'none';
     };
-    // The goal chip is Buying's. The Live tab has its own banked-vs-goal bar, and
-    // two different goal figures on one header line read as a contradiction.
-    show('ec-goal-wrap', tab === 'buying');
-    show('bs-last-updated', tab === 'buying');
+    // Only one header extra survives the Buying & Sales tab's retirement — the
+    // goal chip and the buy-date stamp went with it.
     show('emp-kpi-period', tab === 'kpis');
 }
 // Explicit "back to the one-line summary" (in addition to clicking the open tab again).
@@ -25144,7 +25151,9 @@ const FEATURE_CATALOG = [
     // them off, not as a default-off gate.
     { key: 'widget-scorecard-alerts',  label: 'Command Center (Whole Widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     { key: 'cc-live',                  label: 'Command Center · Live Dashboard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
-    { key: 'cc-buying',                label: 'Command Center · Buying & Sales tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    // cc-buying was here. The tab is gone — buying is on the Live tab's Month view
+    // now — so the switch is gone too rather than left as a control that does
+    // nothing. Any stored override for the key is simply never read again.
     { key: 'cc-ebay',                  label: 'Command Center · eBay tab',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     { key: 'cc-scorecard',             label: 'Command Center · Scorecard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
     // Label names the thing as it appears ON SCREEN. It was once "Weekly KPIs (Tab)",
@@ -26093,8 +26102,7 @@ const JUMP_KEYWORDS = {
     'widget-goals-panel':        'goals initiatives monthly team',
     'widget-listing-goals':      'listing goals listings ebay target',
     'widget-district-command':   'district command center all stores overview',
-    'cc-live':                   'live dashboard today todays sales yesterday net sales orders average order aov gross margin cogs shopify real time right now how are we doing',
-    'cc-buying':                 'buying selling sales bought sold buying and sales',
+    'cc-live':                   'live dashboard today todays sales yesterday month to date mtd net sales orders average order aov gross margin cogs shopify real time right now how are we doing buying selling bought sold buy margin value purchased tracking',
     'cc-ebay':                   'ebay listings status performance top rated metrics',
     'cc-scorecard':              'scorecard audit paymore practice score marketing',
     'cc-kpis':                   'weekly kpis my kpis mine vs store employee kpis conversion no deals',
@@ -26146,7 +26154,10 @@ const JUMP_PLACES = [
     { id: 'w-command',   label: 'Command Center',       sub: 'QuickPortal', kind: 'panel', feature: 'widget-scorecard-alerts', page: 'index.html' },
     // Both are TABS in a collapsible card, so they need the same treatment Live has:
     // spotlighting without opening the tab lands the search on a collapsed widget.
-    { id: 'w-buying',    label: 'Buying & Sales',       sub: 'QuickPortal', kind: 'panel', feature: 'cc-buying',               page: 'index.html', run: () => _jumpToCcTab('buying', 'cc-buying') },
+    // "Buying" still has to find something — people will keep typing it — but the
+    // tab it used to open no longer exists, so it lands on the Live Dashboard where
+    // the figures actually are.
+    { id: 'w-buying',    label: 'Buying & Sales',       sub: 'QuickPortal', kind: 'panel', feature: 'cc-live',                 page: 'index.html', run: () => _jumpToLive('cc-live') },
     { id: 'w-kpis',      label: 'Weekly KPIs',          sub: 'QuickPortal', kind: 'panel', feature: 'cc-kpis',                 page: 'index.html', run: () => _jumpToCcTab('kpis', 'cc-kpis') },
     { id: 'w-district',  label: 'District Command Center', sub: 'QuickPortal', kind: 'panel', feature: 'widget-district-command', page: 'index.html' },
     { id: 'w-listing',   label: 'Listing Goals',        sub: 'QuickPortal', kind: 'panel', feature: 'widget-listing-goals',    page: 'index.html' },

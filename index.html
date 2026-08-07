@@ -886,14 +886,14 @@
   <div class="ew-dash dynamic-module-flex role-manager role-owner-manager role-employee employee-dashboard-row sh-dash-row">
     <!-- ===== COMMAND CENTER — ONE widget for every role =====
          Managers, ASMs and employees all get this same card; which TABS they see is
-         the only difference, and that is entirely Feature Access (cc-live, cc-buying,
-         cc-ebay, cc-scorecard, cc-kpis).
+         the only difference, and that is entirely Feature Access (cc-live, cc-ebay,
+         cc-scorecard, cc-kpis).
 
          There used to be a second, near-identical "employee widget" beside this one
-         with its own three tabs and its own four feature keys. That is why bs-rev /
-         bs-gp / bs-buy-val existed TWICE in this document and renderBuyingSales has
-         to querySelectorAll every field. One widget, one set of ids, four fewer
-         switches to reason about. -->
+         with its own three tabs and its own four feature keys, and a fifth tab here
+         for Buying & Sales. Both are gone: one widget, and buying now lives on the
+         Live Dashboard's Month view where it can be read against the selling it
+         pays for. -->
     <div class="card employee-widget-card ew-airy cc-widget dynamic-module-block role-manager role-owner-manager role-employee" data-feature="widget-scorecard-alerts">
         <div class="ew-head">
             <div class="ew-titles">
@@ -902,12 +902,11 @@
             </div>
             <span class="cc-head-r">
                 <!-- Tab-specific header bits, shown by switchCommandTab. The goal chip
-                     belongs to Buying only: the Live tab carries its own banked-vs-goal
-                     bar, and two different goal figures on one header line read as a
-                     contradiction. -->
-                <span class="ew-date" id="bs-last-updated" style="display:none;"></span>
+                     and the buy date came off with the Buying & Sales tab — the Live
+                     tab carries its own banked-vs-goal bar and stamps the buying sheet's
+                     date on the buying block itself, and two different goal figures on
+                     one header line read as a contradiction. -->
                 <span class="ew-date" id="emp-kpi-period" style="display:none;"></span>
-                <span class="ew-goal" id="ec-goal-wrap" style="display:none;">Goal <b id="bs-goal"></b></span>
                 <span class="cc-updated">Updated as of <b id="cc-updated">—</b></span>
             </span>
             <!-- Hidden store select. Not a control any more — _ccStore() and
@@ -935,8 +934,13 @@
                      be the one that removes the whole card. Feature Access still wins over
                      these, in both directions. Keep them in step with FEATURE_CATALOG's
                      `def` for the same key, and with the strip/panel/summary cells below. -->
+                <!-- Buying & Sales used to sit here. Every figure on it is now on the
+                     Live Dashboard's Month view: value purchased, buy margin, revenue
+                     and gross profit month-to-date and sell margin were already
+                     duplicated there, and the four month-end projections that were not
+                     became its "Tracking to month-end" strip. One fewer tab, one fewer
+                     Feature Access switch, and no figure lost. -->
                 <button id="cc-tab-live" class="toggle-btn role-manager role-owner-manager role-employee" type="button" onclick="switchCommandTab('live')" data-feature="cc-live">Live Dashboard</button>
-                <button id="cc-tab-buying" class="toggle-btn role-manager role-owner-manager role-employee" type="button" onclick="switchCommandTab('buying')" data-feature="cc-buying">Buying &amp; Sales<span class="cc-updot" id="cc-updot-buying"></span></button>
                 <button id="cc-tab-ebay" class="toggle-btn role-manager role-owner-manager" type="button" onclick="switchCommandTab('ebay')" data-feature="cc-ebay">eBay<span class="cc-updot" id="cc-updot-ebay"></span></button>
                 <button id="cc-tab-scorecard" class="toggle-btn role-manager role-owner-manager" type="button" onclick="switchCommandTab('scorecard')" data-feature="cc-scorecard">Scorecard<span class="cc-updot" id="cc-updot-scorecard"></span></button>
                 <button id="cc-tab-kpis" class="toggle-btn role-employee" type="button" onclick="switchCommandTab('kpis')" data-feature="cc-kpis">Weekly KPIs<span class="cc-updot" id="cc-updot-kpis"></span></button>
@@ -953,18 +957,18 @@
             <div class="cc-sum role-manager role-owner-manager" id="cc-sum-audit" data-feature="cc-scorecard"><div class="cc-sum-k">PayMore Audit</div><div class="cc-sum-v">—</div></div>
             <div class="cc-sum role-manager role-owner-manager" id="cc-sum-score" data-feature="cc-scorecard"><div class="cc-sum-k">SPEEKS Scorecard</div><div class="cc-sum-v">—</div></div>
             <div class="cc-sum role-manager role-owner-manager" id="cc-sum-ebay" data-feature="cc-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-buy" data-feature="cc-buying"><div class="cc-sum-k">Tracking Buying</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-rev" data-feature="cc-buying"><div class="cc-sum-k">Tracking Revenue</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-goal" data-feature="cc-buying"><div class="cc-sum-k">To Goal</div><div class="cc-sum-v">—</div></div>
+            <!-- Tracking Buying / Tracking Revenue / To Goal came off here with the
+                 Buying & Sales tab. They are month-end projections, and the collapsed
+                 summary is meant to say where things stand right now — the Month view
+                 carries all three under "Tracking to month-end". -->
         </div>
 
         <div class="cc-strips">
             <!-- Live tiles and detail are both rendered by renderLiveDashboard() into
-                 CLASS hooks, not ids. The same markup has to appear in the manager
-                 Command Center and in the employee widget below, and the site already
-                 pays for that mistake once — bs-rev / bs-gp / bs-buy-val are duplicate
-                 ids across those two widgets, which is why renderBuyingSales has to
-                 querySelectorAll every field. Classes keep this one valid. -->
+                 CLASS hooks, not ids, so the same markup can appear on more than one
+                 surface without colliding. That mattered when a second near-identical
+                 widget sat below this one; it still holds, and it is why the district
+                 card can reuse these renderers unchanged. -->
             <div class="cc-strip s4 lv-strip role-manager role-owner-manager role-employee" id="cc-strip-live" data-feature="cc-live"></div>
             <div class="cc-strip s3 role-manager role-owner-manager" id="cc-strip-scorecard" data-feature="cc-scorecard">
                 <div class="cc-cell" id="sh-score-audit"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
@@ -976,12 +980,7 @@
                 <div class="cc-cell" id="cc-ebay-perf"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
                 <div class="cc-cell" id="cc-ebay-top"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
             </div>
-            <div class="cc-strip s4 role-manager role-owner-manager role-employee" id="cc-strip-buying" data-feature="cc-buying">
-                <div class="cc-cell"><span class="sh-stripe g"></span><div class="sh-k">Tracking Buying</div><div class="sh-v"><span id="cc-track-buy">$0</span></div><div class="sh-sub">projected month-end</div></div>
-                <div class="cc-cell"><span class="sh-stripe g"></span><div class="sh-k">Buy Margin</div><div class="sh-v good" id="cc-buy-margin">0%</div><div class="sh-sub">on purchases</div></div>
-                <div class="cc-cell"><span class="sh-stripe g"></span><div class="sh-k">Tracking Revenue</div><div class="sh-v"><span id="cc-track-rev">$0</span></div><div class="sh-sub">projected month-end</div></div>
-                <div class="cc-cell"><span class="sh-stripe g"></span><div class="sh-k">Sell Margin</div><div class="sh-v good" id="cc-sell-margin">0%</div><div class="sh-sub">on sales</div></div>
-            </div>
+
         </div>
 
         <div class="cc-body">
@@ -995,42 +994,7 @@
             <div class="cc-panel role-manager role-owner-manager" id="cc-panel-ebay" data-feature="cc-ebay">
                 <div id="sh-panel-ebay"><div class="status-message">Syncing Data...</div></div>
             </div>
-            <div class="cc-panel role-manager role-owner-manager role-employee" id="cc-panel-buying" data-feature="cc-buying">
-                <div class="ebs-body cc-ebs">
-                    <div class="ebs-col ebs-buy">
-                        <div class="ebs-cap">Buying Pace (MTD)</div>
-                        <div class="ebs-mid">
-                            <div><div class="ebs-lbl">Value Purchased</div><div class="ebs-big"><span id="bs-buy-val">$0</span></div></div>
-                            <div class="ebs-pace">
-                                <div class="ebs-pace-lbl"><span>Tracking to month-end</span><span id="bs-buy-proj">$0</span></div>
-                                <div class="ebs-pace-bar"><i id="bs-pace-fill"></i></div>
-                                <div class="ebs-pace-dates"><span id="bs-pace-asof">—</span><span id="bs-pace-end">—</span></div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="ebs-divider"></div>
-                    <div class="ebs-col ebs-sell">
-                        <div class="ebs-cap">Sales (MTD)</div>
-                        <div class="ebs-ring-group">
-                            <div class="ebs-ring-wrap">
-                                <div class="progress-ring">
-                                    <svg viewBox="0 0 150 150"><circle class="bg" cx="75" cy="75" r="64"></circle><circle class="bar" id="bs-bar" cx="75" cy="75" r="64"></circle></svg>
-                                    <div class="percentage" id="bs-pct">0%</div>
-                                </div>
-                            </div>
-                            <div class="ebs-ring-cap">of monthly goal</div>
-                        </div>
-                        <div class="ebs-rows">
-                            <div class="ebs-row"><span class="k">Rev (MTD)</span><span class="v" id="bs-rev">--</span></div>
-                            <!-- GP banked so far, above the month-end projection. The ring
-                                 shows TRACKING attainment, so without this row there is
-                                 nothing on screen saying where the store actually stands today. -->
-                            <div class="ebs-row"><span class="k">GP (MTD)</span><span class="v" id="bs-gp">--</span></div>
-                            <div class="ebs-row"><span class="k">GP Tracking</span><span class="v" id="bs-t-gp">--</span></div>
-                        </div>
-                    </div>
-                </div>
-            </div>
+
             <!-- Weekly KPIs. Came across from the old employee widget; defaults to
                  employee + ASM in the catalog, so managers do not see it unless it is
                  switched on (their Store KPIs live in Workspace). -->
