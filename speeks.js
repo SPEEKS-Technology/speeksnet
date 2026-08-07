@@ -15822,18 +15822,9 @@ function applyRoleBasedUI() {
 
     document.querySelectorAll('.dynamic-module-flex, .dynamic-module-block, .dynamic-module').forEach(module => {
         const classes = Array.from(module.classList);
-        const requiredRoles = classes.filter(c => c.startsWith('role-'));
         const requiredStores = classes.filter(c => c.startsWith('store-'));
 
-        // A Multi-Store Manager logs in with the effective role 'manager' (see the
-        // login block), so `role-manager` can't distinguish them and there is no
-        // role class of their own. `role-multistore-manager` is that missing gate:
-        // it matches ONLY an MSM, letting something be shown to them without also
-        // showing it to every store manager.
-        const passesRole = requiredRoles.length === 0 ||
-            requiredRoles.includes(userRoleClass) ||
-            (userRoleClass === 'role-assistant-manager' && requiredRoles.includes('role-employee')) ||
-            (requiredRoles.includes('role-multistore-manager') && isMultiStoreManager());
+        const passesRole = _passesRoleClasses(classes, userRoleClass);
         const passesStore = requiredStores.length === 0 || requiredStores.includes(userStoreClass);
 
         let visible = passesRole && passesStore;
@@ -24800,15 +24791,48 @@ function _applySectionNavVisibility(userRoleClass, userName) {
     });
 }
 
-// Overrides on plain (non role-gated) elements — e.g. individual hotbar links,
-// which normally just inherit their bar's visibility. Only "off" does work
-// here; "on" simply falls back to the inherited default.
+/**
+ * Does this element's `role-*` class list admit the current role?
+ *
+ * Shared by the module pass and the plain-element pass so the two can never
+ * drift. No role classes at all means "everyone" — that is what most tagged
+ * elements want, and changing it would hide half the site.
+ *
+ * A Multi-Store Manager logs in with the effective role 'manager' (see the login
+ * block), so `role-manager` can't distinguish them and there is no role class of
+ * their own. `role-multistore-manager` is that missing gate: it matches ONLY an
+ * MSM, letting something be shown to them without also showing it to every store
+ * manager.
+ */
+function _passesRoleClasses(classes, userRoleClass) {
+    const required = Array.from(classes).filter(c => c.startsWith('role-'));
+    return required.length === 0 ||
+        required.includes(userRoleClass) ||
+        (userRoleClass === 'role-assistant-manager' && required.includes('role-employee')) ||
+        (required.includes('role-multistore-manager') && isMultiStoreManager());
+}
+
+/**
+ * Overrides on plain (non dynamic-module) elements — hotbar links, and the
+ * Command Center's tab buttons / strips / panels / summary cells.
+ *
+ * An element with NO role classes stays visible-by-default and only an explicit
+ * "off" hides it; that is how hotbar links have always worked, and they rely on
+ * inheriting their bar's visibility.
+ *
+ * An element that DOES carry role classes is gated by them first, exactly as a
+ * dynamic-module would be, with the override still winning either way. Without
+ * this, every Command Center tab was visible to every role the moment the widget
+ * itself became visible to everyone — an employee saw eBay and Scorecard, and the
+ * only switch that removed them was the one that removed the whole card.
+ */
 function _applyFeatureOverridesToPlainEls(userRoleClass, userName) {
     document.querySelectorAll('[data-feature]').forEach(el => {
         if (el.classList.contains('dynamic-module') || el.classList.contains('dynamic-module-flex') || el.classList.contains('dynamic-module-block')) return;
         const ov = _featureOverrideFor(el.getAttribute('data-feature'), userRoleClass, userName);
-        if (ov === false) el.style.setProperty('display', 'none', 'important');
-        else el.style.removeProperty('display');
+        const allowed = ov === null ? _passesRoleClasses(el.classList, userRoleClass) : ov;
+        if (allowed) el.style.removeProperty('display');
+        else el.style.setProperty('display', 'none', 'important');
     });
 }
 

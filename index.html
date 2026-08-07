@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260806g">
+  <link rel="stylesheet" href="styles.css?v=20260806h">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260806g" defer></script>
+  <script src="speeks.js?v=20260806h" defer></script>
 </head>
 
 <body class="preload">
@@ -929,11 +929,17 @@
                      you last looked", which on a per-minute live feed would be lit
                      permanently and therefore say nothing. Freshness is reported inside
                      the panel instead, as an "as of" stamp that goes stale-flagged. -->
-                <button id="cc-tab-live" class="toggle-btn" type="button" onclick="switchCommandTab('live')" data-feature="cc-live">Live Dashboard</button>
-                <button id="cc-tab-buying" class="toggle-btn" type="button" onclick="switchCommandTab('buying')" data-feature="cc-buying">Buying &amp; Sales<span class="cc-updot" id="cc-updot-buying"></span></button>
-                <button id="cc-tab-ebay" class="toggle-btn" type="button" onclick="switchCommandTab('ebay')" data-feature="cc-ebay">eBay<span class="cc-updot" id="cc-updot-ebay"></span></button>
-                <button id="cc-tab-scorecard" class="toggle-btn" type="button" onclick="switchCommandTab('scorecard')" data-feature="cc-scorecard">Scorecard<span class="cc-updot" id="cc-updot-scorecard"></span></button>
-                <button id="cc-tab-kpis" class="toggle-btn" type="button" onclick="switchCommandTab('kpis')" data-feature="cc-kpis">Weekly KPIs<span class="cc-updot" id="cc-updot-kpis"></span></button>
+                <!-- The role-* classes ARE the per-tab defaults. The card itself is now
+                     visible to every store role, so without them every tab would show to
+                     everyone and the only switch that removed eBay from an employee would
+                     be the one that removes the whole card. Feature Access still wins over
+                     these, in both directions. Keep them in step with FEATURE_CATALOG's
+                     `def` for the same key, and with the strip/panel/summary cells below. -->
+                <button id="cc-tab-live" class="toggle-btn role-manager role-owner-manager role-employee" type="button" onclick="switchCommandTab('live')" data-feature="cc-live">Live Dashboard</button>
+                <button id="cc-tab-buying" class="toggle-btn role-manager role-owner-manager role-employee" type="button" onclick="switchCommandTab('buying')" data-feature="cc-buying">Buying &amp; Sales<span class="cc-updot" id="cc-updot-buying"></span></button>
+                <button id="cc-tab-ebay" class="toggle-btn role-manager role-owner-manager" type="button" onclick="switchCommandTab('ebay')" data-feature="cc-ebay">eBay<span class="cc-updot" id="cc-updot-ebay"></span></button>
+                <button id="cc-tab-scorecard" class="toggle-btn role-manager role-owner-manager" type="button" onclick="switchCommandTab('scorecard')" data-feature="cc-scorecard">Scorecard<span class="cc-updot" id="cc-updot-scorecard"></span></button>
+                <button id="cc-tab-kpis" class="toggle-btn role-employee" type="button" onclick="switchCommandTab('kpis')" data-feature="cc-kpis">Weekly KPIs<span class="cc-updot" id="cc-updot-kpis"></span></button>
             </div>
             <div class="cc-tabbar-right">
                 <div id="sh-tab-action" class="cc-tab-action"></div>
@@ -943,13 +949,13 @@
 
         <!-- Collapsed default: one-line summary shown when no tab is open -->
         <div class="cc-summary" id="cc-summary">
-            <div class="cc-sum" id="cc-sum-live" data-feature="cc-live"><div class="cc-sum-k">Net Sales Today</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum" id="cc-sum-audit" data-feature="cc-scorecard"><div class="cc-sum-k">PayMore Audit</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum" id="cc-sum-score" data-feature="cc-scorecard"><div class="cc-sum-k">SPEEKS Scorecard</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum" id="cc-sum-ebay" data-feature="cc-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum" id="cc-sum-buy" data-feature="cc-buying"><div class="cc-sum-k">Tracking Buying</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum" id="cc-sum-rev" data-feature="cc-buying"><div class="cc-sum-k">Tracking Revenue</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum" id="cc-sum-goal" data-feature="cc-buying"><div class="cc-sum-k">To Goal</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-live" data-feature="cc-live"><div class="cc-sum-k">Net Sales Today</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager" id="cc-sum-audit" data-feature="cc-scorecard"><div class="cc-sum-k">PayMore Audit</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager" id="cc-sum-score" data-feature="cc-scorecard"><div class="cc-sum-k">SPEEKS Scorecard</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager" id="cc-sum-ebay" data-feature="cc-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-buy" data-feature="cc-buying"><div class="cc-sum-k">Tracking Buying</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-rev" data-feature="cc-buying"><div class="cc-sum-k">Tracking Revenue</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-goal" data-feature="cc-buying"><div class="cc-sum-k">To Goal</div><div class="cc-sum-v">—</div></div>
         </div>
 
         <div class="cc-strips">
@@ -959,18 +965,18 @@
                  pays for that mistake once — bs-rev / bs-gp / bs-buy-val are duplicate
                  ids across those two widgets, which is why renderBuyingSales has to
                  querySelectorAll every field. Classes keep this one valid. -->
-            <div class="cc-strip s4 lv-strip" id="cc-strip-live" data-feature="cc-live"></div>
-            <div class="cc-strip s3" id="cc-strip-scorecard" data-feature="cc-scorecard">
+            <div class="cc-strip s4 lv-strip role-manager role-owner-manager role-employee" id="cc-strip-live" data-feature="cc-live"></div>
+            <div class="cc-strip s3 role-manager role-owner-manager" id="cc-strip-scorecard" data-feature="cc-scorecard">
                 <div class="cc-cell" id="sh-score-audit"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
                 <div class="cc-cell" id="sh-score-mktg"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
                 <div class="cc-cell" id="cc-audit-standing"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
             </div>
-            <div class="cc-strip s3" id="cc-strip-ebay" data-feature="cc-ebay">
+            <div class="cc-strip s3 role-manager role-owner-manager" id="cc-strip-ebay" data-feature="cc-ebay">
                 <div class="cc-cell" id="sh-score-ebay"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
                 <div class="cc-cell" id="cc-ebay-perf"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
                 <div class="cc-cell" id="cc-ebay-top"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
             </div>
-            <div class="cc-strip s4" id="cc-strip-buying" data-feature="cc-buying">
+            <div class="cc-strip s4 role-manager role-owner-manager role-employee" id="cc-strip-buying" data-feature="cc-buying">
                 <div class="cc-cell"><span class="sh-stripe g"></span><div class="sh-k">Tracking Buying</div><div class="sh-v"><span id="cc-track-buy">$0</span></div><div class="sh-sub">projected month-end</div></div>
                 <div class="cc-cell"><span class="sh-stripe g"></span><div class="sh-k">Buy Margin</div><div class="sh-v good" id="cc-buy-margin">0%</div><div class="sh-sub">on purchases</div></div>
                 <div class="cc-cell"><span class="sh-stripe g"></span><div class="sh-k">Tracking Revenue</div><div class="sh-v"><span id="cc-track-rev">$0</span></div><div class="sh-sub">projected month-end</div></div>
@@ -979,17 +985,17 @@
         </div>
 
         <div class="cc-body">
-            <div class="cc-panel lv-panel" id="cc-panel-live" data-feature="cc-live">
+            <div class="cc-panel lv-panel role-manager role-owner-manager role-employee" id="cc-panel-live" data-feature="cc-live">
                 <div class="lv-detail"><div class="status-message">Syncing live sales…</div></div>
             </div>
-            <div class="cc-panel" id="cc-panel-scorecard" data-feature="cc-scorecard">
+            <div class="cc-panel role-manager role-owner-manager" id="cc-panel-scorecard" data-feature="cc-scorecard">
                 <div id="sh-panel-audit"><div class="status-message">Syncing Data...</div></div>
                 <div id="sh-panel-mktg" class="sh-mktg-block"></div>
             </div>
-            <div class="cc-panel" id="cc-panel-ebay" data-feature="cc-ebay">
+            <div class="cc-panel role-manager role-owner-manager" id="cc-panel-ebay" data-feature="cc-ebay">
                 <div id="sh-panel-ebay"><div class="status-message">Syncing Data...</div></div>
             </div>
-            <div class="cc-panel" id="cc-panel-buying" data-feature="cc-buying">
+            <div class="cc-panel role-manager role-owner-manager role-employee" id="cc-panel-buying" data-feature="cc-buying">
                 <div class="ebs-body cc-ebs">
                     <div class="ebs-col ebs-buy">
                         <div class="ebs-cap">Buying Pace (MTD)</div>
@@ -1028,7 +1034,7 @@
             <!-- Weekly KPIs. Came across from the old employee widget; defaults to
                  employee + ASM in the catalog, so managers do not see it unless it is
                  switched on (their Store KPIs live in Workspace). -->
-            <div class="cc-panel" id="cc-panel-kpis" data-feature="cc-kpis">
+            <div class="cc-panel role-employee" id="cc-panel-kpis" data-feature="cc-kpis">
                 <div id="employee-kpi-widget-body" class="employee-kpi-body">
                     <div class="status-message">Syncing Data...</div>
                 </div>
