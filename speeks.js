@@ -9046,7 +9046,8 @@ function _lvToggle(d) {
     const btn = (mode, label) => '<button type="button" class="lv-mode'
         + (_lvMode === mode ? ' on' : '') + '" onclick="setLiveMode(\'' + mode + '\')">'
         + escapeHtml(label) + '</button>';
-    return '<span class="lv-modes">' + btn('today', 'Today') + btn('prev', 'Yesterday') + '</span>';
+    return '<span class="lv-modes">' + btn('today', 'Today') + btn('prev', 'Yesterday') + '</span>'
+        + _lvSoundBtn();
 }
 function setLiveMode(mode) {
     const next = mode === 'prev' ? 'prev' : 'today';
@@ -9090,11 +9091,18 @@ function _lvPace(pctOfGoal, elapsedPct) {
 // The FIRST load has nothing to compare against and deliberately flags nothing —
 // otherwise opening the dashboard would light up every store at once and the
 // highlight would stop meaning "just now".
+// How long each sale or refund stays on screen, and how many can queue up.
+const LV_ACTIVITY_MS = 30000;
+const LV_ACTIVITY_MAX = 6;
+let _lvActTimer = null;
+
 let _lvSnap = null;    // code -> { net, orders, returns, lastOrderAt }
 let _lvPulse = {};     // code -> 'sale' | 'refund'; consumed by the next render
-let _lvEvent = null;   // sticky, so the activity line survives re-renders
+let _lvEvents = [];    // newest first; each lives LV_ACTIVITY_MS then goes
+let _lvEvSeq = 0;
 
 function _lvTrackChanges(d) {
+    let sold = false;
     const next = {};
     (d.stores || []).forEach(m => {
         next[m.code] = {
@@ -9111,67 +9119,162 @@ function _lvTrackChanges(d) {
             // "nothing happened" — the one event most worth surfacing.
             if (b.returns > a.returns) {
                 _lvPulse[code] = 'refund';
-                _lvEvent = { kind: 'refund', code, amount: b.returns - a.returns, at: '', ts: Date.now() };
+                _lvPush({ kind: 'refund', code, amount: b.returns - a.returns, at: '' });
             } else if (b.orders > a.orders || b.lastOrderAt > a.lastOrderAt) {
                 _lvPulse[code] = 'sale';
-                _lvEvent = { kind: 'sale', code, amount: b.net - a.net, at: b.lastOrderAt, ts: Date.now() };
+                _lvPush({ kind: 'sale', code, amount: b.net - a.net, at: b.lastOrderAt });
+                sold = true;
             }
         });
     }
     _lvSnap = next;
+    // One chime per pass, not one per store: five stores selling in the same
+    // minute is a good minute, not an alarm.
+    if (sold) _lvChime();
 }
 
-// One line under the table naming the newest activity. Falls back to the freshest
-// order in the payload so it says something on a cold load rather than sitting
-// blank until the first change comes through.
-// How long a sale or refund stays on screen.
-const LV_ACTIVITY_MS = 15000;
-let _lvActTimer = null;
+// Newest first, so a fresh sale enters at the left and pushes the rest along.
+function _lvPush(e) {
+    e.id = 'e' + (++_lvEvSeq);
+    e.ts = Date.now();
+    _lvEvents.unshift(e);
+    if (_lvEvents.length > LV_ACTIVITY_MAX) _lvEvents.length = LV_ACTIVITY_MAX;
+}
 
 /**
- * The "something just happened" line.
+ * The "something just happened" strip.
  *
- * A NOTIFICATION, not a status line: it exists to catch the eye of someone
- * watching the dashboard. It is therefore built only from an event this session
- * actually observed, never reconstructed from the payload — so signing in shows
- * nothing until something happens while you are there, rather than announcing a
- * sale that rang an hour ago as though it were news.
+ * NOTIFICATIONS, not a status line: they exist to catch the eye of someone
+ * watching the dashboard. Each is built only from an event this session actually
+ * observed, never reconstructed from the payload — so signing in shows nothing
+ * until something happens while you are there, rather than announcing a sale that
+ * rang an hour ago as though it were news.
+ *
+ * The markup is an empty container; _lvSyncActivity fills it. Rendering the chips
+ * inline would restart their fade on every unrelated re-render.
  */
 function _lvActivity() {
-    if (_lvIsPrev()) return '';   // a finished day has no "just now"
-    if (!_lvEvent || Date.now() - _lvEvent.ts >= LV_ACTIVITY_MS) return '';
-    const e = _lvEvent;
+    return '<div class="lv-activity-row"></div>';
+}
+
+function _lvChipHtml(e) {
     const refund = e.kind === 'refund';
-    return '<div class="lv-activity' + (refund ? ' refund' : '') + '">'
-        + '<span class="lv-adot"></span>'
+    return '<span class="lv-adot"></span>'
         + (refund ? 'Refund' : 'Sale') + ' &middot; <b>' + escapeHtml(e.code) + '</b>'
         + (e.amount > 0 ? ' &middot; <b>' + _lvMoney(e.amount, true) + '</b>' : '')
-        + (e.at ? ' &middot; ' + _lvOrderClock(e.at) : '')
-        + '</div>';
+        + (e.at ? ' &middot; ' + _lvOrderClock(e.at) : '');
 }
 
-// Take the line away once its 15 seconds are up. Nothing else re-renders on a
-// quiet dashboard, so without this the notification would sit there until the next
-// sale — which is the behaviour being fixed.
+/**
+ * Reconcile the chips against the live events, KEYED by event id.
+ *
+ * Deliberately not innerHTML: a chip's whole appearance (fade in, hold, fade out)
+ * is one 30-second CSS animation, and rewriting the row would restart it for every
+ * chip already on screen. Existing nodes are left alone; only new ones are
+ * inserted and expired ones removed.
+ */
+function _lvSyncActivity() {
+    const rows = document.querySelectorAll('.lv-activity-row');
+    if (!rows.length) return;
+    const now = Date.now();
+    _lvEvents = _lvEvents.filter(e => now - e.ts < LV_ACTIVITY_MS);
+    const live = _lvIsPrev() ? [] : _lvEvents;   // a finished day has no "just now"
+
+    rows.forEach(row => {
+        Array.from(row.children).forEach(el => {
+            if (!live.some(e => e.id === el.getAttribute('data-ev'))) el.remove();
+        });
+        live.forEach((e, i) => {
+            if (row.querySelector('[data-ev="' + e.id + '"]')) return;
+            const el = document.createElement('div');
+            el.setAttribute('data-ev', e.id);
+            el.className = 'lv-activity' + (e.kind === 'refund' ? ' refund' : '');
+            el.innerHTML = _lvChipHtml(e);
+            // A NEGATIVE delay starts the animation part-way through, so a chip
+            // recreated by a re-render resumes where its life actually is instead
+            // of getting a fresh 30 seconds.
+            el.style.animationDelay = '-' + ((now - e.ts) / 1000).toFixed(2) + 's';
+            row.insertBefore(el, row.children[i] || null);
+        });
+    });
+    _lvScheduleActivityExpiry();
+}
+
+// Wake up exactly when the oldest chip is due to go, and no more often.
 function _lvScheduleActivityExpiry() {
     if (_lvActTimer) { clearTimeout(_lvActTimer); _lvActTimer = null; }
-    if (!_lvEvent) return;
-    const left = LV_ACTIVITY_MS - (Date.now() - _lvEvent.ts);
-    if (left <= 0) { _lvEvent = null; _lvHideActivity(); return; }
-    _lvActTimer = setTimeout(() => { _lvEvent = null; _lvHideActivity(); }, left);
-}
-function _lvHideActivity() {
-    document.querySelectorAll('.lv-activity').forEach(el => {
-        el.classList.add('lv-agone');
-        // Let the fade finish before the node goes, or it vanishes mid-transition.
-        setTimeout(() => { if (el.parentNode) el.remove(); }, 420);
-    });
+    if (!_lvEvents.length) return;
+    const oldest = _lvEvents.reduce((a, e) => Math.min(a, e.ts), Infinity);
+    _lvActTimer = setTimeout(_lvSyncActivity,
+        Math.max(250, LV_ACTIVITY_MS - (Date.now() - oldest)));
 }
 
-// Extra class on the cell/tile that just moved, so the highlight lands on the
-// store it belongs to rather than the whole panel.
+// ---- chime ------------------------------------------------------------------
+// Synthesised rather than a sound file: no asset to host, nothing for the CSP to
+// block, and a couple of oscillators is a smaller payload than any mp3.
+//
+// OFF by default and remembered per browser. A dashboard that started dinging on
+// its own — on a shop-floor laptop, or five stores' worth of sales on the district
+// board — would be something people disable once and resent, so it is opt-in.
+let _lvAudio = null;
+const _lvSoundOn = () => localStorage.getItem('speeksLiveChime') === '1';
+
+function _lvChime() {
+    if (!_lvSoundOn()) return;
+    try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        _lvAudio = _lvAudio || new AC();
+        if (_lvAudio.state === 'suspended') _lvAudio.resume();
+        const t0 = _lvAudio.currentTime;
+        // Two struck partials a fifth apart, the second a beat later — reads as a
+        // shop bell rather than a system beep.
+        [[1046.5, 0], [1568.0, 0.09]].forEach(([freq, at]) => {
+            const osc = _lvAudio.createOscillator(), gain = _lvAudio.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, t0 + at);
+            gain.gain.setValueAtTime(0.0001, t0 + at);
+            gain.gain.exponentialRampToValueAtTime(0.16, t0 + at + 0.012);
+            gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.7);
+            osc.connect(gain); gain.connect(_lvAudio.destination);
+            osc.start(t0 + at); osc.stop(t0 + at + 0.75);
+        });
+    } catch (_) { /* audio is a nicety; never let it break the dashboard */ }
+}
+
+// Flipping the switch IS the user gesture browsers require before audio may play,
+// which is why the confirmation chime here is what unlocks the context for later
+// automatic ones.
+function toggleLiveSound() {
+    const on = !_lvSoundOn();
+    localStorage.setItem('speeksLiveChime', on ? '1' : '0');
+    if (on) _lvChime();
+    renderLiveDashboard();
+}
+
+// Speaker icon, filled when sound is on and struck through when off, so the state
+// is legible without hovering for the tooltip.
+function _lvSoundBtn() {
+    const on = _lvSoundOn();
+    const ico = on
+        ? '<path d="M4 7v4h3l4 3V4L7 7H4z"/><path d="M12.5 6.2a3.4 3.4 0 0 1 0 5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>'
+        : '<path d="M4 7v4h3l4 3V4L7 7H4z"/><path d="M12.2 6.8l3.2 4.4M15.4 6.8l-3.2 4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>';
+    return '<button type="button" class="lv-sound' + (on ? ' on' : '') + '"'
+        + ' onclick="toggleLiveSound()"'
+        + ' title="' + (on ? 'Chime on — click to mute' : 'Chime off — click to hear a ding on each sale') + '"'
+        + ' aria-pressed="' + (on ? 'true' : 'false') + '" aria-label="Sale chime">'
+        + '<svg viewBox="0 0 18 18" width="14" height="14" fill="currentColor" aria-hidden="true">'
+        + ico + '</svg></button>';
+}
+
+// Extra class on the value that just moved, so the highlight lands on the store it
+// belongs to rather than the whole panel. Two shapes: a rounded chip around the
+// figure in the table, and a plain wash across the tile on a store's own board.
 function _lvHit(code) {
     return (!_lvIsPrev() && _lvPulse[code]) ? ' lv-hit-' + _lvPulse[code] : '';
+}
+function _lvHitCell(code) {
+    return (!_lvIsPrev() && _lvPulse[code]) ? ' lv-cellhit-' + _lvPulse[code] : '';
 }
 
 function _lvTile(k, v, sub, accent, cls) {
@@ -9229,7 +9332,7 @@ function _lvStoreTiles(v, d) {
     const prev = _lvIsPrev();
     const mtdAov = v.mtdOrders > 0 ? v.mtdNet / v.mtdOrders : null;
     return _lvTile(prev ? 'Net Sales' : 'Net Sales Today', _lvMoney(v.netToday, true),
-            _lvStamp(d), true, _lvHit(v.code))
+            _lvStamp(d), true, _lvHitCell(v.code))
         + _lvTile('Orders', String(v.ordersToday),
             v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) + ' refunded'
                                : (prev ? 'no refunds' : 'no refunds today'))
@@ -9349,7 +9452,8 @@ function _lvStoreRow(v, d, foot) {
     return '<tr' + (foot ? ' class="lv-foot"' : '') + '><td><span class="lv-store">' + tint
         + '<b>' + escapeHtml(v.code) + '</b><span class="lv-store-nm">'
         + escapeHtml(v.name || '') + '</span></span></td>'
-        + '<td class="lv-strongnum' + _lvHit(v.code) + '">' + _lvMoney(v.netToday, true) + '</td>'
+        + '<td class="lv-strongnum"><span class="lv-netchip' + _lvHit(v.code) + '">'
+        + _lvMoney(v.netToday, true) + '</span></td>'
         // Cost and gross profit for the day itself. The single-store view has had
         // these all along (cost under the margin tile, GP as a chip); the table did
         // not, so the district read sales without the money actually made on them.
@@ -9488,7 +9592,10 @@ function renderLiveDashboard() {
     if (dModes) dModes.innerHTML = _lvToggle(d);
 
     // ---- store surfaces (manager Command Center + employee/ASM widget) ----
-    if (!details.length) return;
+    // Every exit from here on has to fall through to the tail below, which clears
+    // the pulse flags and fills the activity chips. Returning early skipped both,
+    // so on a DM's page — district card, no store panel — the chips never appeared.
+    if (!details.length) { _lvAfterRender(); return; }
 
     if (!stores.length) {
         // A store code the roster doesn't recognise, or a Shopify app that was never
@@ -9498,6 +9605,7 @@ function renderLiveDashboard() {
         details.forEach(el => {
             el.innerHTML = '<div class="status-message">No live sales feed for ' + who + ' yet.</div>';
         });
+        _lvAfterRender();
         return;
     }
 
@@ -9532,11 +9640,17 @@ function renderLiveDashboard() {
     _ccSum('cc-sum-live', _lvMoney(roll.netToday, false)
         + ' <small>' + roll.ordersToday + (roll.ordersToday === 1 ? ' order' : ' orders') + '</small>');
 
+    _lvAfterRender();
+}
+
+// Runs after every render path, however it exited.
+function _lvAfterRender() {
     // Consumed. The highlight is a CSS animation that plays when the element is
     // inserted, so leaving these set would replay it on every unrelated re-render
     // (a tab switch, the day toggle) and turn "just now" into background noise.
     _lvPulse = {};
-    _lvScheduleActivityExpiry();
+    // The chip rows exist now, so fill them from the live events.
+    _lvSyncActivity();
 }
 
 // ============================================================================
