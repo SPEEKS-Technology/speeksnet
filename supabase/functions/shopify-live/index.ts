@@ -446,6 +446,13 @@ async function refresh(sb: any, now: Date, force: boolean) {
     marginToday: dNet > 0 ? round2((dNet - dCogs) / dNet * 100) : null,
     aov: dOrders > 0 ? round2(dNet / dOrders) : null,
     mtdNet: dMtdNet,
+    // NOTE: no mtdCogs or mtdOrders here, unlike every store row and the
+    // previous-day roll-up. The month-to-date view needs both for the District
+    // line, and both are exactly recoverable from what IS sent — cost is
+    // mtdNet - mtdGp by definition, and the order count is the sum of the store
+    // rows already in the payload. _lvFillDistrictMtd does that on arrival.
+    // Adding them here would mean redeploying this function for a value the
+    // client can derive without error, so it stays as it is.
     mtdGp: round2(dMtdNet - dMtdCogs),
     mtdMargin: dMtdNet > 0 ? round2((dMtdNet - dMtdCogs) / dMtdNet * 100) : null,
     goal: dGoal,

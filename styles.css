@@ -10335,6 +10335,54 @@ body.sam-active .hotbar-btn:hover {
     .cc-cell.lv-cellhit-sale, .cc-cell.lv-cellhit-refund { animation: none; }
 }
 
+/* ---- the buying half of the Month and Yesterday views ---------------------- */
+/* A ruled caption that separates buying from selling without a second card round
+   it. The rule grows to fill whatever the two labels leave. */
+.lv-split { display: flex; align-items: center; gap: 12px; margin: 22px 0 12px; }
+.lv-split-l {
+    font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--slate-charcoal); white-space: nowrap;
+}
+.lv-split-r { font-size: 11px; font-weight: 650; color: #b0bac6; white-space: nowrap; order: 2; }
+.lv-split::after { content: ""; flex: 1; height: 1px; background: #e6ebf1; order: 1; }
+
+/* "Not entered yet" is a different statement from "$0 bought", and the dashed
+   edge is what says so before the sentence is read. */
+.lv-buy-empty {
+    background: #fbfdfc; border: 1px dashed #e0e7ec; border-radius: 10px;
+    padding: 20px; text-align: center; font-size: 12.5px; font-weight: 650; color: #647082;
+}
+.lv-buy-empty b { color: var(--slate-charcoal); font-weight: 800; }
+.lv-buy-note { font-size: 11px; font-weight: 650; color: #b0bac6; margin-top: 10px; }
+
+/* The buying table is five columns to the sell table's nine, so it must NOT
+   inherit that one's per-column widths or its 1080px floor. */
+.lv-tbl-buy { min-width: 720px; }
+.lv-tbl-buy th, .lv-tbl-buy td { width: auto; }
+.lv-tbl-buy th:first-child, .lv-tbl-buy td:first-child { width: 22%; }
+
+/* Bought against sold. Three states, not the pace pill's two: at 90-99% a store
+   is drifting rather than failing, and the gap is worth seeing before it opens. */
+.lv-ratio {
+    display: inline-block; min-width: 52px; padding: 5px 9px; border-radius: 999px;
+    font-size: 11.5px; font-weight: 800;
+}
+.lv-ratio.good { color: #14532d; background: #e6f4ec; }
+.lv-ratio.warn { color: #8a5a06; background: #fdf3e2; }
+.lv-ratio.bad  { color: #7f2418; background: #fbeae7; }
+
+/* The forecast tiles are grey-striped, not green: they are a projection, and
+   giving them the same accent as banked money would read as achieved. */
+.lv-fc-strip .sh-stripe { background: #94a3b8 !important; }
+.lv-fc-good { color: #1f9d57; font-weight: 800; }
+.lv-fc-bad  { color: #dc2626; font-weight: 800; }
+.lv-buy-strip, .lv-fc-strip {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+}
+@media (max-width: 760px) {
+    .lv-buy-strip, .lv-fc-strip { grid-template-columns: repeat(2, 1fr); }
+}
+
 /* Sales and refunds as they land, newest at the left, each shifting the rest along
    and expiring on its own clock. The row collapses to nothing when empty so a
    quiet dashboard carries no stray gap. */

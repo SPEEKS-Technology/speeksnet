@@ -7059,6 +7059,10 @@ async function fetchHubData() {
         hubDataCache = freshData;
 
         if (document.getElementById('bs-buy-val')) renderBuyingSales();
+        // The Live Dashboard's buying half reads hubDataCache directly, and the two
+        // feeds arrive independently — whichever lands second has to repaint, or
+        // the block sits on "Syncing the buying sheet" until the next sale.
+        if (typeof renderLiveDashboard === 'function') renderLiveDashboard();
         renderMonthlyGoalsBanner();
         renderDistrictGoals();
 
@@ -8977,7 +8981,7 @@ function _ccOpenDefaultTab() {
 // Deliberately NOT persisted. "Live" is what this tab is for; a mode that
 // survived a reload would leave someone staring at a past day believing it was
 // current, which is the one failure this panel exists to prevent.
-let _lvMode = 'today';   // 'today' | 'prev'
+let _lvMode = 'today';   // 'today' | 'prev' | 'mtd'
 let _lvData = null;      // last successful payload
 let _lvErr  = '';        // message to show instead of numbers
 
@@ -9020,8 +9024,37 @@ function _lvCentralDay(iso) {
 // second set of renderers. Everything the overlay does not carry — code, name,
 // goal, error — falls through from the live row.
 const _lvIsPrev = () => _lvMode === 'prev';
+const _lvIsMtd  = () => _lvMode === 'mtd';
+// A finished DAY is what the day columns mean in both of the other two modes, so
+// the third one is the same trick a second time: month-to-date figures copied
+// over the day fields. Everything month-scoped (mtdGp, goal, pctOfGoal,
+// paceIndex) is deliberately left alone — on this view the "GP this month"
+// column and the Gross profit column really are the same number, which is the
+// price of the three tabs staying one readable table.
 function _lvView(m) {
-    return (_lvIsPrev() && m && m.prev) ? Object.assign({}, m, m.prev) : m;
+    if (!m) return m;
+    if (_lvIsPrev() && m.prev) return Object.assign({}, m, m.prev);
+    if (_lvIsMtd()) {
+        // mtdCogs is only missing on district payloads written before the roll-up
+        // learned to sum it. Deriving it from net minus profit is exact, so an
+        // older cached payload renders correctly rather than showing $0 cost.
+        const cogs = (m.mtdCogs === null || m.mtdCogs === undefined)
+            ? (Number(m.mtdNet) || 0) - (Number(m.mtdGp) || 0) : m.mtdCogs;
+        return Object.assign({}, m, {
+            netToday: m.mtdNet, cogsToday: cogs, gpToday: m.mtdGp,
+            ordersToday: m.mtdOrders, marginToday: m.mtdMargin,
+            // Refunds are not carried month-to-date, and a day's figure shown
+            // against a month would be read as the month's.
+            returnsToday: null,
+            aov: m.mtdOrders > 0 ? m.mtdNet / m.mtdOrders : null,
+        });
+    }
+    return m;
+}
+// How many days the selected view covers — the divisor behind "average per day".
+function _lvDays(d) {
+    if (_lvIsPrev()) return (d.prev && d.prev.daysElapsed) || 1;
+    return (d.month && d.month.daysElapsed) || 1;
 }
 // True whenever month-to-date figures mean something. On the 1st the previous
 // open day belongs to LAST month, so its "this month" numbers would all be zero —
@@ -9046,20 +9079,46 @@ function _lvToggle(d) {
     const btn = (mode, label) => '<button type="button" class="lv-mode'
         + (_lvMode === mode ? ' on' : '') + '" onclick="setLiveMode(\'' + mode + '\')">'
         + escapeHtml(label) + '</button>';
-    return '<span class="lv-modes">' + btn('today', 'Today') + btn('prev', 'Yesterday') + '</span>';
+    return '<span class="lv-modes">' + btn('today', 'Today') + btn('prev', 'Yesterday')
+        + btn('mtd', 'Month') + '</span>';
 }
+const _LV_MODES = ['today', 'prev', 'mtd'];
 function setLiveMode(mode) {
-    const next = mode === 'prev' ? 'prev' : 'today';
+    const next = _LV_MODES.indexOf(mode) >= 0 ? mode : 'today';
     if (next === _lvMode) return;
     _lvMode = next;
     renderLiveDashboard();
 }
-// The stamp under the headline tile: when the number last moved, or which day
-// finished.
+// What the selected view is called in the eyebrow, and the date line beside the
+// title. Both are rewritten on every render so a past day or a whole month can
+// never be read under a header that still says "Today".
+function _lvModeName() {
+    return _lvIsMtd() ? 'This Month' : (_lvIsPrev() ? 'Yesterday' : 'Today');
+}
+function _lvHeadStamp(d) {
+    if (_lvIsPrev()) return _lvDayName(d.prev.date, true);
+    if (_lvIsMtd()) {
+        // Built from the date parts, never Date.parse of the bare string — that
+        // reads as UTC and names the wrong month for anyone west of Greenwich on
+        // the 1st.
+        const p = String(d.asOfCentral || '').slice(0, 10).split('-');
+        if (p.length !== 3) return 'month to date';
+        return new Date(+p[0], +p[1] - 1, 1).toLocaleDateString('en-US', { month: 'long' })
+            + ' 1–' + (+p[2]);
+    }
+    return d.asOfCentral ? 'last change ' + _lvClock(d.asOfCentral) : '';
+}
+
+// The stamp under the headline tile: when the number last moved, which day
+// finished, or how far into the month the figure reaches.
 function _lvStamp(d) {
-    return _lvIsPrev()
-        ? 'final &middot; ' + escapeHtml(_lvDayName(d.prev.date, false))
-        : 'last change ' + _lvClock(d.asOfCentral);
+    if (_lvIsPrev()) return 'final &middot; ' + escapeHtml(_lvDayName(d.prev.date, false));
+    if (_lvIsMtd()) {
+        return d.month
+            ? d.month.daysElapsed + ' of ' + d.month.daysTotal + ' days'
+            : 'month to date';
+    }
+    return 'last change ' + _lvClock(d.asOfCentral);
 }
 
 // 100 = exactly on track for the month: banked GP as a share of goal, against how
@@ -9369,35 +9428,65 @@ function _lvLastOrder(m, asOf) {
         + (rel ? ' &middot; ' + rel : '') + '</div>';
 }
 
+// The headline of whichever view is selected. Today and Yesterday read as a day;
+// Month drops the refunds line (not carried month-to-date) and trades the
+// month-average footnote for the day count the average is over.
+function _lvHeadKey() {
+    return _lvIsMtd() ? 'Net Sales This Month' : (_lvIsPrev() ? 'Net Sales' : 'Net Sales Today');
+}
 function _lvStoreTiles(v, d) {
     const prev = _lvIsPrev();
     const mtdAov = v.mtdOrders > 0 ? v.mtdNet / v.mtdOrders : null;
-    return _lvTile(prev ? 'Net Sales' : 'Net Sales Today', _lvMoney(v.netToday, true),
+    const orderSub = _lvIsMtd()
+        ? _lvDays(d) + ' days'
+        : (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) + ' refunded'
+                              : (prev ? 'no refunds' : 'no refunds today'));
+    return _lvTile(_lvHeadKey(), _lvMoney(v.netToday, true),
             _lvStamp(d), true, _lvHitCell(v.code))
-        + _lvTile('Orders', String(v.ordersToday),
-            v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) + ' refunded'
-                               : (prev ? 'no refunds' : 'no refunds today'))
+        + _lvTile('Orders', String(v.ordersToday), orderSub)
         + _lvTile('Average Order', v.aov === null ? '—' : _lvMoney(v.aov, true),
-            (mtdAov === null || !_lvHasMonth(d)) ? '' : 'month average ' + _lvMoney(mtdAov, false))
+            (mtdAov === null || !_lvHasMonth(d) || _lvIsMtd())
+                ? '' : 'month average ' + _lvMoney(mtdAov, false))
         + _lvTile('Gross Margin', _lvPct(v.marginToday), 'cost ' + _lvMoney(v.cogsToday, false));
 }
 
 function _lvStoreDetail(d, v) {
     const prev = _lvIsPrev();
-    let chips = _lvChip(prev ? 'Gross profit on the day' : 'Gross profit today', _lvMoney(v.gpToday, true));
-    if (_lvHasMonth(d)) {
-        chips += _lvChip('Net sales this month', _lvMoney(v.mtdNet, false))
-            + _lvChip('Margin this month', _lvPct(v.mtdMargin))
-            + _lvChip('Orders this month', String(v.mtdOrders));
+    // On the Month view the chips would restate the tiles directly above them, so
+    // they carry the day's shape instead: the best day, and what an average one
+    // looked like.
+    let chips;
+    if (_lvIsMtd()) {
+        const days = _lvDays(d);
+        chips = _lvChip('Days so far', String(days))
+            + _lvChip('Average day', _lvMoney((Number(v.netToday) || 0) / days, false))
+            + _lvChip('Average profit a day', _lvMoney((Number(v.gpToday) || 0) / days, false));
     } else {
-        chips += _lvChip('Refunded', _lvMoney(v.returnsToday, false));
+        chips = _lvChip(prev ? 'Gross profit on the day' : 'Gross profit today',
+            _lvMoney(v.gpToday, true));
+        if (_lvHasMonth(d)) {
+            chips += _lvChip('Net sales this month', _lvMoney(v.mtdNet, false))
+                + _lvChip('Margin this month', _lvPct(v.mtdMargin))
+                + _lvChip('Orders this month', String(v.mtdOrders));
+        } else {
+            chips += _lvChip('Refunded', _lvMoney(v.returnsToday, false));
+        }
     }
+    // The live "last order" clock belongs to today. A finished day gets its
+    // close-out line; a month gets neither, because the buying block below is the
+    // thing worth reading next.
+    let foot = '';
+    if (_lvIsMtd()) foot = '';
+    else if (prev) foot = _lvDayClose(v, d);
+    else foot = _lvLastOrder(v, d.asOfCentral);
+
     return '<div class="lv-chips">' + chips + '</div>'
         + (_lvHasMonth(d)
             ? _lvGoalBar(v.mtdGp, v.goal, v.pctOfGoal, _lvElapsedPct(d), v.paceIndex)
             : '<div class="lv-note">This was the last day of the previous month, so '
               + 'month-to-date and pace are not shown against it.</div>')
-        + (prev ? _lvDayClose(v, d) : _lvLastOrder(v, d.asOfCentral));
+        + foot
+        + _lvBuyBlock(d, [v]);
 }
 
 // The previous-day counterpart of the last-order line: how the day actually
@@ -9408,6 +9497,199 @@ function _lvDayClose(v, d) {
         + ' &middot; <b>' + _lvMoney(v.gpToday, true) + '</b> gross profit';
     if (v.returnsToday > 0) s += ' &middot; <b>' + _lvMoney(v.returnsToday, false) + '</b> refunded';
     return s + '.</div>';
+}
+
+// --- the buying half ---------------------------------------------------------
+// Selling comes from Shopify; buying comes from the Sales Summary sheet by way of
+// hubDataCache. They are joined here rather than in two widgets because the one
+// question worth asking of both at once — am I replacing stock as fast as I sell
+// it — cannot be asked of either alone.
+//
+// The join is possible because the hub payload carries wkBuy: a 31-slot array per
+// store, one entry per day of the CURRENT month, which nothing else in the site
+// reads. Summing it reproduces {store}BuyVal exactly, so a day, a span of days
+// and the month total all come off the same source and cannot disagree.
+//
+// The sheet is keyed by hand each morning, so it runs a day behind. That is
+// stated on the block rather than hidden, and today's view says "not entered yet"
+// instead of showing five stores that bought $0.
+const _LV_BUY_MIN_STORES = 2;   // below this a table of one row is worse than tiles
+
+function _lvHub() {
+    return (typeof hubDataCache !== 'undefined' && hubDataCache) ? hubDataCache : null;
+}
+function _lvBuyArr(key, code) {
+    const h = _lvHub();
+    const byStore = h && h[key];
+    const arr = byStore && byStore[code];
+    return Array.isArray(arr) ? arr : null;
+}
+// Which days of the month the selected view covers, 1-based and inclusive.
+// Returns null when the view has no buying to show at all.
+function _lvBuySpan(d) {
+    const elapsed = (d.month && d.month.daysElapsed) || 0;
+    if (_lvIsPrev()) {
+        // A previous day in LAST month has no slot in this month's array.
+        if (!(d.prev && d.prev.inMonth && d.prev.date)) return null;
+        const day = +String(d.prev.date).slice(8, 10);
+        return day > 0 ? { from: day, to: day } : null;
+    }
+    if (!elapsed) return null;
+    return _lvIsMtd() ? { from: 1, to: elapsed } : { from: elapsed, to: elapsed };
+}
+function _lvBuyFor(code, d) {
+    const span = _lvBuySpan(d);
+    const buy = _lvBuyArr('wkBuy', code);
+    if (!span || !buy) return null;
+    const mar = _lvBuyArr('wkBuyMarginPct', code);
+    const num = n => Number(n) || 0;
+    let bought = 0, paid = 0;
+    for (let day = span.from; day <= span.to; day++) {
+        const b = num(buy[day - 1]);
+        if (!b) continue;                       // a closed day, or one not keyed in yet
+        bought += b;
+        // wkBuyMarginPct is a FRACTION of that day's resale value. Margins cannot
+        // be averaged across days of different size, so cash paid is summed and
+        // the margin derived back out of the totals.
+        paid += b * (1 - num(mar && mar[day - 1]));
+    }
+    return { bought, paid, margin: bought > 0 ? (bought - paid) / bought * 100 : null };
+}
+function _lvBuySum(rows) {
+    const bought = rows.reduce((a, r) => a + r.bought, 0);
+    const paid = rows.reduce((a, r) => a + r.paid, 0);
+    return { bought, paid, margin: bought > 0 ? (bought - paid) / bought * 100 : null };
+}
+// Month-end projections — the only part of the old Buying & Sales tab that the
+// month-to-date view does not already say.
+function _lvFcFor(code) {
+    const h = _lvHub();
+    if (!h) return null;
+    const k = String(code).toLowerCase();
+    const n = v => { const x = parseNum(v); return isFinite(x) ? x : 0; };
+    return {
+        buyProj: n(h[k + 'BuyProj']), trackRev: n(h[k + 'TrackRev']),
+        trackGp: n(h[k + 'TrackGP']), goal: n(h[k + 'Goal']),
+    };
+}
+function _lvBuyDate() {
+    const h = _lvHub();
+    if (!h) return '';
+    // Every store is keyed on the same sheet, so any one of them dates the lot.
+    for (const c of ['ovl', 'lee', 'wsp', 'mpl', 'bal']) {
+        if (h[c + 'BuyDate']) return String(h[c + 'BuyDate']);
+    }
+    return '';
+}
+
+function _lvSplit(label, right) {
+    return '<div class="lv-split"><span class="lv-split-l">' + label + '</span>'
+        + '<span class="lv-split-r">' + (right || '') + '</span></div>';
+}
+// Bought against sold. Under 100% a store is selling stock faster than it is
+// replacing it, which is the whole reason the two halves share a screen.
+function _lvRatio(bought, sold) {
+    if (!sold) return '<span class="lv-quiet">—</span>';
+    const r = Math.round(bought / sold * 100);
+    const cls = r >= 100 ? 'good' : (r >= 90 ? 'warn' : 'bad');
+    return '<span class="lv-ratio ' + cls + '">' + r + '%</span>';
+}
+
+function _lvBuyBlock(d, views) {
+    // A month boundary, or a hub that has not answered yet. Say which.
+    if (!_lvHub()) {
+        return _lvSplit('Buying', '')
+            + '<div class="lv-buy-empty">Syncing the buying sheet&hellip;</div>';
+    }
+    const stamp = _lvIsPrev()
+        ? escapeHtml(_lvDayName(d.prev.date, true))
+        : (_lvIsMtd() ? 'month to date' : 'today');
+
+    if (_lvMode === 'today') {
+        const dt = _lvBuyDate();
+        return _lvSplit('Buying', stamp)
+            + '<div class="lv-buy-empty">Today&rsquo;s buys have not been entered yet.'
+            + (dt ? ' The sheet was last updated <b>' + escapeHtml(dt) + '</b> &mdash; the day&rsquo;s'
+                  + ' purchases usually land the following morning.' : '')
+            + '</div>';
+    }
+    if (!_lvBuySpan(d)) {
+        return _lvSplit('Buying', stamp)
+            + '<div class="lv-buy-empty">This day falls in the previous month, and the buying '
+            + 'sheet only carries the current one.</div>';
+    }
+
+    const rows = views.map(v => ({ v, b: _lvBuyFor(v.code, d) })).filter(r => r.b);
+    if (!rows.length) {
+        return _lvSplit('Buying', stamp)
+            + '<div class="lv-buy-empty">No buying recorded for this period yet.</div>';
+    }
+
+    let html = _lvSplit('Buying', stamp);
+    if (rows.length < _LV_BUY_MIN_STORES) {
+        const r = rows[0];
+        html += '<div class="lv-strip lv-buy-strip">'
+            + _lvTile('Bought', _lvMoney(r.b.bought, false), 'resale value', true)
+            + _lvTile('Cash Paid', _lvMoney(r.b.paid, false), 'out of the till')
+            + _lvTile('Buy Margin', _lvPct(r.b.margin), 'on purchases')
+            + _lvTile('Bought vs Sold', _lvRatio(r.b.bought, r.v.netToday), 'stock in against out')
+            + '</div>';
+    } else {
+        html += '<div class="lv-tbl-scroll"><table class="lv-tbl lv-tbl-buy"><thead><tr>'
+            + '<th>Store</th><th>Bought &middot; resale value</th><th>Cash paid</th>'
+            + '<th>Buy margin</th><th>Bought vs sold</th>'
+            + '</tr></thead><tbody>';
+        rows.forEach(r => {
+            const tint = STORE_TINTS[r.v.code]
+                ? '<i class="lv-tint" style="background:' + STORE_TINTS[r.v.code] + '"></i>' : '';
+            html += '<tr><td><span class="lv-store">' + tint + '<b>' + escapeHtml(r.v.code) + '</b>'
+                + '<span class="lv-store-nm">' + escapeHtml(r.v.name || '') + '</span></span></td>'
+                + '<td class="lv-strongnum">' + _lvMoney(r.b.bought, false) + '</td>'
+                + '<td class="lv-quietnum">' + _lvMoney(r.b.paid, false) + '</td>'
+                + '<td class="lv-boldnum">' + _lvPct(r.b.margin) + '</td>'
+                + '<td>' + _lvRatio(r.b.bought, r.v.netToday) + '</td></tr>';
+        });
+        const tot = _lvBuySum(rows.map(r => r.b));
+        const sold = rows.reduce((a, r) => a + (Number(r.v.netToday) || 0), 0);
+        html += '</tbody><tfoot><tr class="lv-foot"><td><span class="lv-store"><b>Total</b></span></td>'
+            + '<td class="lv-strongnum">' + _lvMoney(tot.bought, false) + '</td>'
+            + '<td class="lv-quietnum">' + _lvMoney(tot.paid, false) + '</td>'
+            + '<td class="lv-boldnum">' + _lvPct(tot.margin) + '</td>'
+            + '<td>' + _lvRatio(tot.bought, sold) + '</td></tr></tfoot></table></div>';
+    }
+
+    if (_lvIsMtd()) html += _lvForecast(views);
+    const dt = _lvBuyDate();
+    if (dt) {
+        html += '<div class="lv-buy-note">Buying is keyed into the Sales Summary sheet each '
+            + 'morning &mdash; last updated ' + escapeHtml(dt) + ', so it can run a day behind '
+            + 'the sales above.</div>';
+    }
+    return html;
+}
+
+// Everything the retired Buying & Sales tab had left once month-to-date covered
+// the rest: where the month lands if it carries on as it is.
+function _lvForecast(views) {
+    const fcs = views.map(v => _lvFcFor(v.code)).filter(Boolean);
+    if (!fcs.length) return '';
+    const add = f => fcs.reduce((a, x) => a + f(x), 0);
+    const buyProj = add(f => f.buyProj), trackRev = add(f => f.trackRev);
+    const trackGp = add(f => f.trackGp), goal = add(f => f.goal);
+    const pct = goal > 0 ? trackGp / goal * 100 : null;
+    return _lvSplit('Tracking to month-end', 'if the month carries on as it is')
+        + '<div class="lv-strip lv-fc-strip">'
+        + _lvTile('Tracking Buying', _lvMoney(buyProj, false), 'projected month-end')
+        + _lvTile('Tracking Revenue', _lvMoney(trackRev, false), 'projected month-end')
+        + _lvTile('Tracking Gross Profit', _lvMoney(trackGp, false),
+            goal ? 'against ' + _lvMoney(goal, false) : '')
+        // "Tracking to Goal", never plain "To Goal". The banked-vs-elapsed pace pill
+        // is on the same screen now and the two disagree by design — OVL reads 92%
+        // pace and 104% tracking. The word that separates them has to be in the
+        // label, because the numbers alone look like a contradiction.
+        + _lvTile('Tracking to Goal', _lvPct(pct),
+            '<span class="' + (pct >= 100 ? 'lv-fc-good' : 'lv-fc-bad') + '">where the month lands</span>')
+        + '</div>';
 }
 
 // One store failing must never blank the panel for the rest — the edge function
@@ -9451,16 +9733,26 @@ function _lvRollupTiles(r, d, label) {
     const days = d.month && elapsed !== null && elapsed !== undefined
         ? elapsed + ' of ' + d.month.daysTotal + ' days'
         : '';
-    return _lvTile(prev ? 'Net Sales' : 'Net Sales Today', _lvMoney(r.netToday, true), _lvStamp(d), true)
+    // The fourth tile answers "and where does that leave the month?". On the Month
+    // view the first tile IS the month, so repeating it there would waste the slot —
+    // it shows attainment against goal instead. On the 1st there is no month behind
+    // the previous day, so it falls back to the day's own profit rather than a $0
+    // month that reads as a dead district.
+    let last;
+    if (_lvIsMtd()) {
+        last = _lvTile('Against Goal', _lvPct(r.pctOfGoal),
+            r.goal ? 'of ' + _lvMoney(r.goal, false) : '');
+    } else if (_lvHasMonth(d)) {
+        last = _lvTile('Month to Date', _lvMoney(r.mtdNet, false), days);
+    } else {
+        last = _lvTile('Gross Profit', _lvMoney(r.gpToday, true), 'on the day');
+    }
+    return _lvTile(_lvHeadKey(), _lvMoney(r.netToday, true), _lvStamp(d), true)
         + _lvTile('Orders', String(r.ordersToday),
             r.aov === null ? label : 'average ' + _lvMoney(r.aov, true))
         + _lvTile('Gross Margin', _lvPct(r.marginToday),
             'profit ' + _lvMoney(r.gpToday, false) + ' &middot; cost ' + _lvMoney(r.cogsToday, false))
-        // On the 1st there is no month behind the previous day, so this tile shows
-        // the day's own profit instead of a $0 month that reads as a dead store.
-        + (_lvHasMonth(d)
-            ? _lvTile('Month to Date', _lvMoney(r.mtdNet, false), days)
-            : _lvTile('Gross Profit', _lvMoney(r.gpToday, true), 'on the day'));
+        + last;
 }
 
 // `v` arrives already switched to the selected day by _lvTable — the roll-up row
@@ -9482,11 +9774,15 @@ function _lvStoreRow(v, d, foot) {
     }
     const asOf = d.asOfCentral;
     // Last column: a live clock only means something today. On a finished day the
-    // useful end-of-day number in its place is what went back out in refunds.
-    const tail = _lvIsPrev()
-        ? (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—')
-        : (v.lastOrderAt && _lvCentralDay(v.lastOrderAt) === String(asOf || '').slice(0, 10)
-            ? _lvOrderClock(v.lastOrderAt) : '—');
+    // useful end-of-day number in its place is what went back out in refunds; over
+    // a month it is what an average day of it looked like, which is the figure that
+    // makes two stores of different size comparable.
+    const tail = _lvIsMtd()
+        ? _lvMoney((Number(v.netToday) || 0) / _lvDays(d), false)
+        : _lvIsPrev()
+            ? (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—')
+            : (v.lastOrderAt && _lvCentralDay(v.lastOrderAt) === String(asOf || '').slice(0, 10)
+                ? _lvOrderClock(v.lastOrderAt) : '—');
     const gp = _lvHasMonth(d)
         ? _lvMoney(v.mtdGp, false) + '<span class="lv-of"> of ' + _lvMoney(v.goal, false) + '</span>'
         : '—';
@@ -9512,12 +9808,13 @@ function _lvStoreRow(v, d, foot) {
 
 function _lvTable(stores, d, rollup, rollupLabel) {
     const prev = _lvIsPrev();
+    const tailHead = _lvIsMtd() ? 'Avg / day' : (prev ? 'Refunds' : 'Last order');
     let html = '<div class="lv-tbl-scroll"><table class="lv-tbl"><thead><tr>'
-        + '<th>Store</th><th>' + (prev ? 'Net sales' : 'Net today') + '</th>'
+        + '<th>Store</th><th>' + (_lvMode === 'today' ? 'Net today' : 'Net sales') + '</th>'
         + '<th>Cost</th><th>Gross profit</th>'
         + '<th>Orders</th><th>Margin</th>'
         + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>Pace</th>'
-        + '<th>' + (prev ? 'Refunds' : 'Last order') + '</th>'
+        + '<th>' + tailHead + '</th>'
         + '</tr></thead><tbody>';
     // Fixed store order (the edge function returns it that way) — the team reads
     // this list by position, so re-sorting it worst-first would cost more than the
@@ -9552,6 +9849,10 @@ function _lvFreshness(d) {
     // A finished day is not live and must never wear the pulsing dot — the whole
     // point of that dot is that it means "these numbers are still moving".
     if (_lvIsPrev()) return '<span class="lv-fresh closed">final</span>';
+    // A month with today still in it IS moving, so it keeps the dot — but calling
+    // it "open" would be read as the shop's trading state, which on this view is
+    // a question about one day, not thirty-one.
+    if (_lvIsMtd()) return '<span class="lv-fresh"><span class="lv-dot"></span>in progress</span>';
     return d.open
         ? '<span class="lv-fresh"><span class="lv-dot"></span>open</span>'
         : '<span class="lv-fresh closed">closed</span>';
@@ -9600,6 +9901,7 @@ function renderLiveDashboard() {
 
     const d = _lvData;
     const stores = d.stores || [];
+    _lvFillDistrictMtd(d, stores);
 
     // ---- DM / CEO: the five-store table ----
     if (dDetail) {
@@ -9612,7 +9914,8 @@ function renderLiveDashboard() {
                 + _lvActivity()
                 + (_lvHasMonth(d) ? ''
                     : '<div class="lv-note">This was the last day of the previous month, so '
-                      + 'month-to-date and pace are not shown against it.</div>');
+                      + 'month-to-date and pace are not shown against it.</div>')
+                + _lvBuyBlock(d, stores.filter(m => !m.error).map(_lvView));
         } else {
             // Only reachable if a district card is on screen for a non-district role,
             // which the role classes should already prevent. Say nothing rather than
@@ -9622,13 +9925,9 @@ function renderLiveDashboard() {
         }
     }
     const asof = document.querySelector('.lv-card .lv-asof');
-    if (asof) {
-        asof.textContent = _lvIsPrev()
-            ? _lvDayName(d.prev.date, true)
-            : (d.asOfCentral ? 'last change ' + _lvClock(d.asOfCentral) : '');
-    }
+    if (asof) asof.textContent = _lvHeadStamp(d);
     const eyebrow = document.querySelector('.lv-card .lv-eyebrow');
-    if (eyebrow) eyebrow.innerHTML = 'District &middot; ' + (_lvIsPrev() ? 'Yesterday' : 'Today');
+    if (eyebrow) eyebrow.innerHTML = 'District &middot; ' + _lvModeName();
     const fresh = document.querySelector('.lv-card .lv-freshness');
     if (fresh) fresh.innerHTML = _lvFreshness(d);
     const dModes = document.querySelector('.lv-card .lv-modes-host');
@@ -9666,14 +9965,15 @@ function renderLiveDashboard() {
         // Listing Goals already do — no dashboard switch to see the other one.
         // Combine the VIEWS, so the pair total follows the selected day too.
         const healthy = stores.filter(m => !m.error);
-        const roll = _lvCombine((healthy.length ? healthy : stores).map(_lvView));
+        const views = (healthy.length ? healthy : stores).map(_lvView);
+        const roll = _lvCombine(views);
         tiles = _lvRollupTiles(roll, d, 'no orders yet');
-        detail = _lvTable(stores, d, roll, 'Both') + _lvActivity();
+        detail = _lvTable(stores, d, roll, 'Both') + _lvActivity() + _lvBuyBlock(d, views);
     }
 
-    const stamp = _lvIsPrev()
-        ? escapeHtml(_lvDayName(d.prev.date, true))
-        : 'last change ' + _lvClock(d.asOfCentral) + ' Central';
+    const stamp = _lvMode === 'today'
+        ? 'last change ' + _lvClock(d.asOfCentral) + ' Central'
+        : escapeHtml(_lvHeadStamp(d));
     details.forEach(el => { el.innerHTML = '<div class="lv-head">'
         + '<span class="lv-head-l">' + _lvFreshness(d)
         + '<span class="lv-asof">' + stamp + '</span></span>'
@@ -9689,6 +9989,27 @@ function renderLiveDashboard() {
         + ' <small>' + roll.ordersToday + (roll.ordersToday === 1 ? ' order' : ' orders') + '</small>');
 
     _lvAfterRender();
+}
+
+// The district roll-up ships mtdNet and mtdGp but not mtdCogs or mtdOrders,
+// which the Month table needs for the District line — without them it prints
+// "undefined" in two columns.
+//
+// Derived here rather than added to the edge function, because both are exactly
+// recoverable: cost is net minus profit BY DEFINITION (mtdGp is computed as
+// mtdNet - mtdCogs upstream), and the order count is the sum of the store rows
+// sitting in the same payload. Nothing is estimated, so there is no reason to
+// redeploy a function that talks to Shopify for it.
+function _lvFillDistrictMtd(d, stores) {
+    const r = d && d.district;
+    if (!r) return;
+    const healthy = stores.filter(m => !m.error);
+    if (r.mtdCogs === null || r.mtdCogs === undefined) {
+        r.mtdCogs = Math.round(((Number(r.mtdNet) || 0) - (Number(r.mtdGp) || 0)) * 100) / 100;
+    }
+    if (r.mtdOrders === null || r.mtdOrders === undefined) {
+        r.mtdOrders = healthy.reduce((a, m) => a + (Number(m.mtdOrders) || 0), 0);
+    }
 }
 
 // Runs after every render path, however it exited.
