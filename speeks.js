@@ -31979,6 +31979,34 @@ function _dccMinutes(v) {
     return isNaN(n) ? null : n;
 }
 
+// Where an audit lost its points, by section. The catalog ships with the payload
+// and carries every item's section and point value, so this is derivable here —
+// summing it back up reproduces the function's own earned/possible to the point
+// on all five stores, which is the check that says the two agree.
+//
+// An item ABSENT from results was not scored, and is left out of both halves;
+// only a recorded 0 counts as points lost. Sections that lost nothing drop out,
+// so a clean store shows a short row and a struggling one a long one — the
+// length of the row is itself the signal.
+function _dccAuditSecs(audit, catalog) {
+    const items = ((catalog && catalog.audit_items) || []).filter(i => i.active);
+    const res = audit && audit.results;
+    if (!res || !items.length) return null;
+    const by = {};
+    items.forEach(i => {
+        if (!(i.item_id in res)) return;
+        const s = by[i.section] || (by[i.section] = { name: i.section, poss: 0, earn: 0 });
+        s.poss += Number(i.points) || 0;
+        s.earn += Number(res[i.item_id]) || 0;
+    });
+    // Half-points are real (a section came back -0.5), so this rounds rather than
+    // truncating and formats the ".0" off whole numbers at render time.
+    return Object.keys(by).map(n => by[n])
+        .map(s => ({ name: s.name, poss: s.poss, missed: Math.round((s.poss - s.earn) * 10) / 10 }))
+        .filter(s => s.missed > 0)
+        .sort((a, b) => b.missed - a.missed);
+}
+
 // --- normalise one store ----------------------------------------------------
 function _dccRow(store, hubData, varData, scoreData, alertsData, weeklyResults) {
     const k = store.toLowerCase();
@@ -32023,6 +32051,12 @@ function _dccRow(store, hubData, varData, scoreData, alertsData, weeklyResults) 
         edited: hubData[`${k}BuyDate`] || null,
         score: (parseFloat(sc.score) || 0) * 2,
         audit: sc.audit || null,
+        // The two breakdowns behind those two numbers. Both were already in this
+        // response and nothing read them: the categories the DM scored by hand,
+        // and the audit sections where points went missing.
+        scCats: (((sc.buckets || [])[0] || {}).categories || [])
+            .map(c => ({ name: c.name, score: parseFloat(c.score) })),
+        auditSecs: _dccAuditSecs(sc.audit, scoreData.catalog),
         week,
         salesPct: _dccPct(hubData[`${k}Pct`]),
         rev,
@@ -32653,9 +32687,24 @@ function _dcCatsHtml(r) {
 
 function _dcScoreHtml() {
     if (!_dccRows.length) return '<div class="dcc-empty">Syncing the district&hellip;</div>';
-    let html = '<div class="lv-tbl-scroll"><table class="lv-tbl dc-tbl"><thead><tr>'
-        + '<th>Store</th><th>Online &amp; Marketing</th><th>PayMore Audit</th>'
-        + '<th>Week of</th><th>Buying margin</th><th>Conversion</th></tr></thead><tbody>';
+    // Buying margin and conversion came off: they are weekly KPI figures wearing a
+    // scorecard's clothes, and both already have a column of their own on the store
+    // board. Week of came off too — every store is scored in the same sitting, so it
+    // was the same date printed five times. The space goes to what the two scores
+    // are actually MADE of.
+    //
+    // A column per category, taken from what the district actually scored rather
+    // than a fixed list: two of the catalog's four items are inactive today, and
+    // that can change in the Submit Scores tool without this file changing.
+    const catNames = [];
+    _dccRows.forEach(r => (r.scCats || []).forEach(c => {
+        if (c.name && catNames.indexOf(c.name) < 0) catNames.push(c.name);
+    }));
+
+    let html = '<div class="lv-tbl-scroll"><table class="lv-tbl dc-tbl dc-tbl-score"><thead><tr>'
+        + '<th>Store</th><th>Online &amp; Marketing</th>'
+        + catNames.map(n => '<th>' + escapeHtml(n) + '</th>').join('')
+        + '<th>PayMore Audit</th></tr></thead>';
     _dccRows.forEach(r => {
         // The audit chip stays clickable in place — openAuditBreakdown is a modal,
         // so it must stop the row's own drill-down from firing behind it.
@@ -32664,18 +32713,68 @@ function _dcScoreHtml() {
               + ' onclick="event.stopPropagation(); openAuditBreakdown(\'' + r.store + '\')"'
               + ' title="View the full audit breakdown">' + r.audit.pct + '%</button>'
             : '<span class="dc-muted">No data</span>';
-        html += _dcRowOpen(r.store) + _dcStoreCell(r.store)
+        // Categories are entered 0–5 and shown doubled, the same as the manager's
+        // own scorecard card — so a 5 reads as a 10 in both places rather than the
+        // district quietly using a second scale beside the /10 average.
+        const catCells = catNames.map(n => {
+            const c = (r.scCats || []).find(x => x.name === n);
+            if (!c || isNaN(c.score)) return _dcCell('—', 'dc-muted');
+            const v = c.score * 2;
+            const sev = v >= 8 ? 'dc-good' : (v >= 6 ? 'dc-warn' : 'dc-bad');
+            return _dcCell(_dcNum(v) + '<span class="lv-of"> / 10</span>', sev);
+        }).join('');
+        html += '<tbody class="dc-grp">'
+            + _dcRowOpen(r.store) + _dcStoreCell(r.store)
             + _dcCell(r.score.toFixed(1) + '<span class="lv-of"> / 10</span>',
                       _dcSev(_dccState(r, 'score')))
-            + _dcCell(audit)
-            + _dcCell('<span class="dc-muted">' + escapeHtml(r.week) + '</span>')
-            + _dcCell(r.wkM ? escapeHtml(String(r.wkM)) : '—')
-            + _dcCell(r.conv ? escapeHtml(String(r.conv)) : '—')
-            + '</tr>';
+            + catCells + _dcCell(audit) + '</tr>'
+            + '<tr class="dc-catrow" onclick="_dcDrill(\'' + r.store + '\')"'
+            + ' title="Open ' + escapeHtml(r.store) + '&rsquo;s full board">'
+            + '<td colspan="' + (catNames.length + 3) + '" class="dc-cats">'
+            + _dcAuditSecHtml(r) + '</td></tr></tbody>';
     });
-    return html + '</tbody></table></div>'
-        + '<div class="dc-note">Buying margin and conversion are the week&rsquo;s store averages. '
-        + 'Click a row for that store&rsquo;s full board, or the audit score for its breakdown.</div>';
+    // What is left of the caption is the one thing the table no longer says and
+    // cannot say per row: which week these scores are from. Printed once, because
+    // it is one sitting — and only when the stores really do agree.
+    const weeks = [];
+    _dccRows.forEach(r => { if (r.week && weeks.indexOf(r.week) < 0) weeks.push(r.week); });
+    return html + '</table></div>'
+        + (weeks.length === 1
+            ? '<div class="dc-note">Scored week of ' + escapeHtml(weeks[0]) + '.</div>' : '');
+}
+
+// Trims the ".0" off a whole score so a column of 10 / 8 / 7.5 stays readable.
+function _dcNum(n) {
+    return (Math.round(n * 10) / 10).toFixed(1).replace(/\.0$/, '');
+}
+
+// The audit's 165 points, said as where they went. Only sections that lost points
+// appear, worst first, so the leftmost chip is where the store gave up the most
+// and the row's length says roughly how much is wrong.
+function _dcAuditSecHtml(r) {
+    const label = '<span class="dc-catlab">Audit points missed</span>';
+    if (!r.audit) {
+        return '<div class="dc-catwrap">' + label
+            + '<span class="dc-cat">No audit submitted</span></div>';
+    }
+    const secs = r.auditSecs || [];
+    if (!secs.length) {
+        return '<div class="dc-catwrap">' + label
+            + '<span class="dc-cat dc-good">Full marks</span></div>';
+    }
+    // Tinted by the SHARE of its own section a store gave up, not the raw count:
+    // losing 3 of 4 points in Exterior is a worse miss than 3 of 46 in Back of
+    // House, and the raw number alone would say the opposite.
+    const chips = secs.map(s => {
+        const share = s.poss > 0 ? s.missed / s.poss : 0;
+        const cls = share >= 0.25 ? ' dc-bad' : (share >= 0.1 ? ' dc-warn' : '');
+        return '<span class="dc-cat' + cls + '"'
+            + ' title="' + escapeHtml(s.name) + ' &mdash; ' + _dcNum(s.poss - s.missed)
+            + ' of ' + _dcNum(s.poss) + ' points">'
+            + escapeHtml(s.name)
+            + '<span class="dc-pts">&minus;' + _dcNum(s.missed) + '</span></span>';
+    }).join('');
+    return '<div class="dc-catwrap">' + label + chips + '</div>';
 }
 
 // The one-line summary behind the tabs. Deliberately mixes the two feeds: today's

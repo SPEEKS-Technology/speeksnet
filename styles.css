@@ -4017,6 +4017,14 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
        / "HIGH") reads as two separate severities. */
     white-space: nowrap;
 }
+/* Scorecard tab: the points a section gave up, trailing its name. Heavier than
+   the name so a row of chips can be read as numbers first, names second. */
+.dc-pts { font-weight: 900; margin-left: 8px; opacity: .95; }
+
+/* Scorecard headers are category names, not one-word metrics, so they are allowed
+   to take two lines rather than forcing the table wider than the panel. */
+.dc-tbl-score th { white-space: normal; line-height: 1.35; }
+.dc-tbl-score { min-width: 880px; }
 .dc-cat.dc-bad  { background: #fbeae7; color: #7f2418; font-weight: 800; }
 .dc-cat.dc-warn { background: #fdf3e2; color: #8a5a06; font-weight: 800; }
 .dc-cat.dc-good { background: #e6f4ec; color: #14532d; font-weight: 750; }
