@@ -9122,27 +9122,39 @@ function _lvTrackChanges(d) {
 // One line under the table naming the newest activity. Falls back to the freshest
 // order in the payload so it says something on a cold load rather than sitting
 // blank until the first change comes through.
+// The dot pulses only when this line is reporting something we have not already
+// shown. renderLiveDashboard runs on every fetch and on every tab/day switch, so
+// animating unconditionally would restart the pulse on renders where nothing new
+// happened — and a dot that pulses at random stops meaning "just now".
+let _lvActSeen = '';
+
 function _lvActivity(d) {
     if (_lvIsPrev()) return '';   // a finished day has no "just now"
+    let cls = 'lv-activity', body = '';
+
     if (_lvEvent && _lvEvent.kind === 'refund') {
-        return '<div class="lv-activity refund"><span class="lv-adot"></span>Refund &middot; <b>'
-            + escapeHtml(_lvEvent.code) + '</b>'
-            + (_lvEvent.amount > 0 ? ' &middot; <b>' + _lvMoney(_lvEvent.amount, true) + '</b>' : '')
-            + '</div>';
+        cls += ' refund';
+        body = 'Refund &middot; <b>' + escapeHtml(_lvEvent.code) + '</b>'
+            + (_lvEvent.amount > 0 ? ' &middot; <b>' + _lvMoney(_lvEvent.amount, true) + '</b>' : '');
+        var sig = 'refund|' + _lvEvent.code + '|' + _lvEvent.amount;
+    } else {
+        let newest = null;
+        (d.stores || []).forEach(m => {
+            if (m.lastOrderAt && (!newest || m.lastOrderAt > newest.lastOrderAt)) newest = m;
+        });
+        if (!newest) return '';
+        // An order from a previous day is not "latest activity" — on a quiet morning
+        // that would present yesterday's last sale as if it had just happened.
+        if (_lvCentralDay(newest.lastOrderAt) !== String(d.asOfCentral || '').slice(0, 10)) return '';
+        body = 'Latest sale &middot; <b>' + escapeHtml(newest.code) + '</b>'
+            + (newest.lastOrderAmount ? ' &middot; <b>' + _lvMoney(newest.lastOrderAmount, true) + '</b>' : '')
+            + ' &middot; ' + _lvOrderClock(newest.lastOrderAt)
+            + ' <span class="lv-aq">' + _siRelTime(newest.lastOrderAt) + '</span>';
+        sig = 'sale|' + newest.code + '|' + newest.lastOrderAt;
     }
-    let newest = null;
-    (d.stores || []).forEach(m => {
-        if (m.lastOrderAt && (!newest || m.lastOrderAt > newest.lastOrderAt)) newest = m;
-    });
-    if (!newest) return '';
-    // An order from a previous day is not "latest activity" — on a quiet morning
-    // that would present yesterday's last sale as if it had just happened.
-    if (_lvCentralDay(newest.lastOrderAt) !== String(d.asOfCentral || '').slice(0, 10)) return '';
-    return '<div class="lv-activity"><span class="lv-adot"></span>Latest sale &middot; <b>'
-        + escapeHtml(newest.code) + '</b>'
-        + (newest.lastOrderAmount ? ' &middot; <b>' + _lvMoney(newest.lastOrderAmount, true) + '</b>' : '')
-        + ' &middot; ' + _lvOrderClock(newest.lastOrderAt)
-        + ' <span class="lv-aq">' + _siRelTime(newest.lastOrderAt) + '</span></div>';
+
+    if (sig !== _lvActSeen) { cls += ' lv-anew'; _lvActSeen = sig; }
+    return '<div class="' + cls + '"><span class="lv-adot"></span>' + body + '</div>';
 }
 
 // Extra class on the cell/tile that just moved, so the highlight lands on the
@@ -9332,10 +9344,10 @@ function _lvStoreRow(v, d, foot) {
         // not, so the district read sales without the money actually made on them.
         + '<td class="lv-quietnum">' + _lvMoney(v.cogsToday, false) + '</td>'
         + '<td class="lv-strongnum">' + _lvMoney(v.gpToday, false) + '</td>'
-        + '<td class="lv-mid">' + v.ordersToday + '</td>'
-        + '<td class="lv-boldnum lv-mid">' + _lvPct(v.marginToday) + '</td>'
+        + '<td>' + v.ordersToday + '</td>'
+        + '<td class="lv-boldnum">' + _lvPct(v.marginToday) + '</td>'
         + '<td>' + gp + '</td>'
-        + '<td class="lv-mid"><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
+        + '<td><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
         + (v.paceIndex === null || v.paceIndex === undefined ? '—' : v.paceIndex) + '</span></td>'
         + '<td>' + tail + '</td></tr>';
 }
@@ -9345,8 +9357,8 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     let html = '<div class="lv-tbl-scroll"><table class="lv-tbl"><thead><tr>'
         + '<th>Store</th><th>' + (prev ? 'Net sales' : 'Net today') + '</th>'
         + '<th>Cost</th><th>Gross profit</th>'
-        + '<th class="lv-mid">Orders</th><th class="lv-mid">Margin</th>'
-        + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th class="lv-mid">Pace</th>'
+        + '<th>Orders</th><th>Margin</th>'
+        + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>Pace</th>'
         + '<th>' + (prev ? 'Refunds' : 'Last order') + '</th>'
         + '</tr></thead><tbody>';
     // Fixed store order (the edge function returns it that way) — the team reads

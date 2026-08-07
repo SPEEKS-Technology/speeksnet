@@ -10204,27 +10204,26 @@ body.sam-active .hotbar-btn:hover {
    carries a name, not a number; the remaining columns then split what is left
    equally, which is what fixed layout does with unsized columns.
    min-width keeps that from crushing on a laptop — the wrapper scrolls instead. */
-.lv-tbl { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; min-width: 820px; }
-/* The store column deliberately takes a big share. The eight numeric columns were
-   already mathematically equal, but each one was far wider than its content, so
-   right-aligned figures of different lengths left ragged gaps that read as uneven.
-   Absorbing the slack into the one column that holds a NAME tightens the rest. */
-.lv-tbl th:first-child, .lv-tbl td:first-child { width: 30%; }
-/* Counts, percentages and the pace pill sit centred in their slot; money stays
-   right-aligned so the decimal points line up down the column. */
-.lv-tbl .lv-mid { text-align: center; }
+/* Nine equal columns, every one centred — headers and values alike.
+   Earlier attempts kept money right-aligned and gave the store column a bigger
+   share, which is the textbook layout but produced exactly the complaint it was
+   meant to fix: a left-aligned STORE header stranded at the far edge of a wide
+   column, and LAST ORDER pinned to the opposite edge, with visible voids beside
+   both. Equal widths plus centred content puts every header directly over its
+   own numbers and spaces the gaps identically.
+   Decimals no longer line up down a money column; with tabular-nums and figures
+   of similar magnitude that costs little, and even spacing was the ask. */
+.lv-tbl { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; min-width: 1080px; }
 .lv-tbl th {
-    text-align: right; padding: 0 10px 9px; white-space: nowrap;
+    text-align: center; padding: 0 8px 9px; white-space: nowrap;
     font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
     color: #94a3b8; border-bottom: 1px solid #e6ebf1;
 }
 .lv-tbl td {
-    text-align: right; padding: 11px 10px; white-space: nowrap;
+    text-align: center; padding: 11px 8px; white-space: nowrap;
     font-weight: 700; color: #647082; font-variant-numeric: tabular-nums;
     border-bottom: 1px solid #f3f6f9;
 }
-.lv-tbl th:first-child, .lv-tbl td:first-child { text-align: left; padding-left: 0; }
-.lv-tbl th:last-child, .lv-tbl td:last-child { padding-right: 0; }
 .lv-tbl .lv-strongnum { color: var(--slate-charcoal); font-weight: 850; font-size: 13px; }
 /* Cost is context for the two figures either side of it, not a headline — quieter
    so Net and Gross profit stay the numbers the eye lands on. */
@@ -10279,6 +10278,25 @@ body.sam-active .hotbar-btn:hover {
 }
 .lv-activity.refund { color: #b3760a; }
 .lv-activity.refund .lv-adot { background: #dc2626; box-shadow: 0 0 0 3px rgba(220, 38, 38, .16); }
+
+/* Pulses for 15 seconds after something new lands (6 runs of 2.5s), then simply
+   stops and settles back to the plain dot — the line stays, because "who sold
+   last" is still worth knowing once it is no longer breaking news. No timer to
+   cancel: the animation ends on its own, and .lv-anew is only emitted when the
+   reported event actually differs from the one already on screen. */
+@keyframes lvADot {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(31, 157, 87, .20); }
+    50%      { box-shadow: 0 0 0 8px rgba(31, 157, 87, .03); }
+}
+@keyframes lvADotRed {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(220, 38, 38, .20); }
+    50%      { box-shadow: 0 0 0 8px rgba(220, 38, 38, .03); }
+}
+.lv-activity.lv-anew .lv-adot { animation: lvADot 2.5s ease-in-out 6; }
+.lv-activity.refund.lv-anew .lv-adot { animation: lvADotRed 2.5s ease-in-out 6; }
+@media (prefers-reduced-motion: reduce) {
+    .lv-activity.lv-anew .lv-adot, .lv-activity.refund.lv-anew .lv-adot { animation: none; }
+}
 
 @media (max-width: 900px) {
     /* The store name is the first thing to go: the code identifies the row and the
