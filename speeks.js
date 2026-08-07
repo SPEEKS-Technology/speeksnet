@@ -9238,7 +9238,7 @@ function _lvStoreRow(v, d, foot) {
         // the header row or a broken store knocks the table out of alignment.
         return '<tr class="lv-row-err"><td><span class="lv-store">' + tint
             + '<b>' + escapeHtml(v.code) + '</b></span></td>'
-            + '<td colspan="9" class="lv-row-errmsg">not reporting &middot; '
+            + '<td colspan="7" class="lv-row-errmsg">not reporting &middot; '
             + escapeHtml(v.error) + '</td></tr>';
     }
     const asOf = d.asOfCentral;
@@ -9261,8 +9261,7 @@ function _lvStoreRow(v, d, foot) {
         + '<td class="lv-quietnum">' + _lvMoney(v.cogsToday, false) + '</td>'
         + '<td class="lv-strongnum">' + _lvMoney(v.gpToday, false) + '</td>'
         + '<td>' + v.ordersToday + '</td>'
-        + '<td>' + (v.aov === null ? '—' : _lvMoney(v.aov, true)) + '</td>'
-        + '<td>' + _lvPct(v.marginToday) + '</td>'
+        + '<td class="lv-boldnum">' + _lvPct(v.marginToday) + '</td>'
         + '<td>' + gp + '</td>'
         + '<td><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
         + (v.paceIndex === null || v.paceIndex === undefined ? '—' : v.paceIndex) + '</span></td>'
@@ -9274,7 +9273,7 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     let html = '<div class="lv-tbl-scroll"><table class="lv-tbl"><thead><tr>'
         + '<th>Store</th><th>' + (prev ? 'Net sales' : 'Net today') + '</th>'
         + '<th>Cost</th><th>Gross profit</th>'
-        + '<th>Orders</th><th>Avg order</th><th>Margin</th>'
+        + '<th>Orders</th><th>Margin</th>'
         + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>Pace</th>'
         + '<th>' + (prev ? 'Refunds' : 'Last order') + '</th>'
         + '</tr></thead><tbody>';
@@ -9363,10 +9362,11 @@ function renderLiveDashboard() {
     if (dDetail) {
         if (d.district) {
             if (dStrip) dStrip.innerHTML = _lvRollupTiles(_lvView(d.district), d, 'no orders yet');
+            // No footnote on the normal view — the column headers already say what
+            // the figures are. The month-boundary case still needs explaining,
+            // because "GP this month" and Pace go blank and that looks broken.
             dDetail.innerHTML = _lvTable(stores, d, d.district, 'District')
-                + (_lvHasMonth(d)
-                    ? '<div class="lv-note">Banked so far this month, not projected to month-end &mdash; '
-                      + 'the District Command Center below tracks the projection.</div>'
+                + (_lvHasMonth(d) ? ''
                     : '<div class="lv-note">This was the last day of the previous month, so '
                       + 'month-to-date and pace are not shown against it.</div>');
         } else {

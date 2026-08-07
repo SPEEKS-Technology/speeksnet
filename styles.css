@@ -10198,7 +10198,14 @@ body.sam-active .hotbar-btn:hover {
 
 /* Five-store table (DM/CEO) and both-store table (Multi-Store Manager). */
 .lv-tbl-scroll { overflow-x: auto; }
-.lv-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+/* table-layout:fixed makes the columns share the width evenly instead of each one
+   shrink-wrapping its content, which had "Gross profit" crowding "Orders" while
+   "GP this month" sprawled. The store column is given a bigger share because it
+   carries a name, not a number; the remaining columns then split what is left
+   equally, which is what fixed layout does with unsized columns.
+   min-width keeps that from crushing on a laptop — the wrapper scrolls instead. */
+.lv-tbl { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; min-width: 820px; }
+.lv-tbl th:first-child, .lv-tbl td:first-child { width: 19%; }
 .lv-tbl th {
     text-align: right; padding: 0 10px 9px; white-space: nowrap;
     font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
@@ -10215,6 +10222,9 @@ body.sam-active .hotbar-btn:hover {
 /* Cost is context for the two figures either side of it, not a headline — quieter
    so Net and Gross profit stay the numbers the eye lands on. */
 .lv-tbl .lv-quietnum { color: #94a3b8; }
+/* Margin: charcoal and heavy like Net and GP, but left at the body size so the
+   row still has a clear order of emphasis. */
+.lv-tbl .lv-boldnum { color: var(--slate-charcoal); font-weight: 850; }
 .lv-store { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
 .lv-store b { color: var(--slate-charcoal); font-weight: 850; letter-spacing: .02em; }
 .lv-tint { width: 8px; height: 8px; border-radius: 50%; flex: none; }
