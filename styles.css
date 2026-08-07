@@ -10565,10 +10565,17 @@ body.sam-active .hotbar-btn:hover {
 /* The buying table sits directly under the sell table and is read against it, so
    the two share a grid: the same 1080px floor and the same 13.5% store column,
    which puts both tables' left edge, right edge and first data column at the same
-   x at every width. Its four data columns then split the remaining 86.5% evenly —
-   two of the sell table's columns each. (It was 720px wide with a 22% store
-   column, so nothing lined up with anything.) */
+   x at every width. (It was 720px wide with a 22% store column, so nothing lined
+   up with anything.)
+   The sell table has NINE data columns since Refunds joined it, and nine does not
+   divide by four — so rather than four equal columns that land nowhere, each
+   buying column is pinned to a whole number of the sell table's: 2, 2, 2 and 3
+   of 9.611% (86.5/9). Every buying column edge then falls on a selling one. */
 .lv-tbl-buy { min-width: 1080px; }
+.lv-tbl-buy th:nth-child(2), .lv-tbl-buy td:nth-child(2),
+.lv-tbl-buy th:nth-child(3), .lv-tbl-buy td:nth-child(3),
+.lv-tbl-buy th:nth-child(4), .lv-tbl-buy td:nth-child(4) { width: 19.222%; }
+.lv-tbl-buy th:nth-child(5), .lv-tbl-buy td:nth-child(5) { width: 28.833%; }
 
 /* Bought against sold. Three states, not the pace pill's two: at 90-99% a store
    is drifting rather than failing, and the gap is worth seeing before it opens. */

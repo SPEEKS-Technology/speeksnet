@@ -9797,9 +9797,16 @@ function _lvRollupTiles(r, d, label, views) {
     } else {
         last = _lvTile('Gross Profit', _lvMoney(r.gpToday, true), 'On The Day');
     }
+    // Refunds rides under Orders, the way it already does on a single store's own
+    // tiles — it is the other half of the same count. Month is left alone: the feed
+    // carries returns per day, so there is no month figure to put there.
+    const avg = r.aov === null ? label : 'Average ' + _lvMoney(r.aov, true);
+    const ordersSub = (_lvIsMtd() || r.returnsToday === null || r.returnsToday === undefined)
+        ? avg
+        : _lvSubPair('Average', _lvMoney(r.aov, true),
+                     'Refunds', r.returnsToday > 0 ? _lvMoney(r.returnsToday, false) : 'none');
     return _lvTile(_lvHeadKey(), _lvMoney(r.netToday, true), _lvStamp(d), true)
-        + _lvTile('Orders', String(r.ordersToday),
-            r.aov === null ? label : 'Average ' + _lvMoney(r.aov, true))
+        + _lvTile('Orders', String(r.ordersToday), r.aov === null ? label : ordersSub)
         + _lvTile('Gross Margin', _lvPct(r.marginToday),
             _lvSubPair('Total Cost', _lvMoney(r.cogsToday, false),
                        'Total Profit', _lvMoney(r.gpToday, false)))
@@ -9818,20 +9825,21 @@ function _lvStoreRow(v, d, foot) {
     if (v.error) {
         // colspan spans every column EXCEPT the store cell — keep it in step with
         // the header row or a broken store knocks the table out of alignment.
+        // (It was 7 against eight columns; adding Refunds makes it nine.)
         return '<tr class="lv-row-err"><td><span class="lv-store">' + tint
             + '<b>' + escapeHtml(v.code) + '</b></span></td>'
-            + '<td colspan="7" class="lv-row-errmsg">not reporting &middot; '
+            + '<td colspan="9" class="lv-row-errmsg">not reporting &middot; '
             + escapeHtml(v.error) + '</td></tr>';
     }
     const asOf = d.asOfCentral;
-    // Last column: a live clock only means something today. On a finished day the
-    // useful end-of-day number in its place is what went back out in refunds; over
-    // a month it is what an average day of it looked like, which is the figure that
-    // makes two stores of different size comparable.
+    // Last column: a live clock only means something today. On a finished day it
+    // holds what an average order was worth; over a month, what an average day
+    // looked like — the figure that makes two stores of different size comparable.
+    const orders = Number(v.ordersToday) || 0;
     const tail = _lvIsMtd()
         ? _lvMoney((Number(v.netToday) || 0) / _lvDays(d), false)
         : _lvIsPrev()
-            ? (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—')
+            ? (orders > 0 ? _lvMoney((Number(v.netToday) || 0) / orders, true) : '—')
             : (v.lastOrderAt && _lvCentralDay(v.lastOrderAt) === String(asOf || '').slice(0, 10)
                 ? _lvOrderClock(v.lastOrderAt) : '—');
     const gp = _lvHasMonth(d)
@@ -9849,6 +9857,12 @@ function _lvStoreRow(v, d, foot) {
         // not, so the district read sales without the money actually made on them.
         + '<td class="lv-quietnum">' + _lvMoney(v.cogsToday, false) + '</td>'
         + '<td class="lv-strongnum">' + _lvMoney(v.gpToday, false) + '</td>'
+        // Refunds sits beside Orders because it is the other half of the same
+        // count — what came back out of the till against what went in. Month has
+        // no figure to show: the feed carries returns per DAY only.
+        + '<td class="lv-quietnum"' + (_lvIsMtd()
+            ? ' title="The live feed carries refunds per day, not month to date."' : '') + '>'
+        + (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—') + '</td>'
         + '<td>' + v.ordersToday + '</td>'
         + '<td class="lv-boldnum">' + _lvPct(v.marginToday) + '</td>'
         + '<td>' + gp + '</td>'
@@ -9859,7 +9873,11 @@ function _lvStoreRow(v, d, foot) {
 
 function _lvTable(stores, d, rollup, rollupLabel) {
     const prev = _lvIsPrev();
-    const tailHead = _lvIsMtd() ? 'Avg / day' : (prev ? 'Refunds' : 'Last order');
+    // Refunds has a column of its own now, so the tail column — which was Refunds
+    // on Yesterday — carries the day's average order instead. A live "last order"
+    // clock means nothing on a finished day, which is why that slot was never
+    // Last order here.
+    const tailHead = _lvIsMtd() ? 'Avg / day' : (prev ? 'Avg order' : 'Last order');
     // Named, the same way Buying below it is. Unlabelled, the table read as "the
     // dashboard" and Buying as an appendix to it; they are two halves of the same
     // question, so both get a header. Lives here so every surface that draws this
@@ -9868,7 +9886,7 @@ function _lvTable(stores, d, rollup, rollupLabel) {
         + '<div class="lv-tbl-scroll"><table class="lv-tbl"><thead><tr>'
         + '<th>Store</th><th>' + (_lvMode === 'today' ? 'Net today' : 'Net sales') + '</th>'
         + '<th>Cost</th><th>Gross profit</th>'
-        + '<th>Orders</th><th>Margin</th>'
+        + '<th>Refunds</th><th>Orders</th><th>Margin</th>'
         + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>Pace</th>'
         + '<th>' + tailHead + '</th>'
         + '</tr></thead><tbody>';
