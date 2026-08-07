@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260807a">
+  <link rel="stylesheet" href="styles.css?v=20260807b">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260807a" defer></script>
+  <script src="speeks.js?v=20260807b" defer></script>
 </head>
 
 <body class="preload">
@@ -894,7 +894,9 @@
          for Buying & Sales. Both are gone: one widget, and buying now lives on the
          Live Dashboard's Month view where it can be read against the selling it
          pays for. -->
-    <div class="card employee-widget-card ew-airy cc-widget dynamic-module-block role-manager role-owner-manager role-employee" data-feature="widget-scorecard-alerts">
+    <!-- id, not just the class: the district board below is a .cc-widget too now,
+         so every lookup in the tab machinery goes through these two ids. -->
+    <div class="card employee-widget-card ew-airy cc-widget dynamic-module-block role-manager role-owner-manager role-employee" id="ccWidget" data-feature="widget-scorecard-alerts">
         <div class="ew-head">
             <div class="ew-titles">
                 <span class="ew-eyebrow"><span id="cc-store-eyebrow">—</span> · This Month</span>
@@ -1016,48 +1018,103 @@
 
   </div>
 
-  <!-- District Live Dashboard. Its own card above the DCC board rather than a tab
-       inside it: the board is a rail-plus-pane built in JS around ONE selected store,
-       and today's five-store roll-up is a different question than "show me Westport".
-       Deliberately a SIBLING of the district section, not a child of it — nested
-       inside, a Feature Access rule hiding widget-district-command would silently
-       take this card with it however widget-district-live was set. -->
-  <div class="ew-airy lv-card dynamic-module-block role-district-manager role-ceo mb-30" data-feature="widget-district-live">
+  <!-- ===== DISTRICT COMMAND CENTER — one widget, the manager board's chrome =====
+       This was two stacked cards: a Live Dashboard, and a store-major board that put
+       one store's whole picture on screen at a time. They are now one tabbed widget
+       with the same shape as the store Command Center — same CSS classes, same
+       collapse behaviour, a "dc-" id prefix instead of "cc-".
+
+       Four of the five tabs are DIMENSION-major: one subject read across all five
+       stores, which is what makes an outlier findable. The fifth, Stores, is the old
+       store-major board kept whole — clicking any row on eBay or Scorecard jumps
+       there with that store selected, so drilling in is still one click.
+
+       Feature Access is unchanged: widget-district-command gates the card and
+       widget-district-live gates the Live tab. No new keys. -->
+  <div class="card ew-airy cc-widget dynamic-module-block role-district-manager role-ceo mb-30"
+       id="dcWidget" data-feature="widget-district-command">
       <div class="ew-head">
           <div class="ew-titles">
-              <!-- The eyebrow, the date and the freshness pill are all rewritten by
-                   renderLiveDashboard when the Today/Yesterday toggle flips, so a
-                   past day can never be read under a header that says "Today". -->
-              <span class="ew-eyebrow lv-eyebrow">District &middot; Today</span>
-              <span class="ew-title">Live Dashboard <span class="ew-date lv-asof"></span></span>
+              <span class="ew-eyebrow">District</span>
+              <span class="ew-title">Command Center <span class="ew-date" id="dc-scope">five stores</span></span>
           </div>
-          <span class="lv-head-r">
-              <span class="lv-modes-host"></span>
-              <span class="lv-freshness"></span>
-              <span class="lv-sound-host"></span>
-          </span>
-      </div>
-      <div class="lv-dist-strip"></div>
-      <div class="lv-dist-detail"><div class="status-message">Syncing live sales&hellip;</div></div>
-  </div>
-
-  <div class="dynamic-module-block role-district-manager role-ceo district-command-section" data-feature="widget-district-command">
-
-      <!-- The section heading lived here as an <h3> with a 🌐 on it. The panel now
-           carries its own header (icon tile + eyebrow + title), so a second title
-           immediately above it was saying the same thing twice. -->
-      <div id="district-master-body" class="mb-30">
-          <div class="dcc-empty">Syncing the district&hellip;</div>
-      </div>
-      <!-- Monthly Team Goals, Listing Goals and Cleaning Checklist used to be three
-           panels here. They are now action-menu items opening #dmGoalsModal,
-           #dmListingModal and #dmCleaningModal — see the DM DISTRICT TOOLS block in
-           speeks.js. What is left on this page is this board and the Performance
-           chart below. -->
-
       </div>
 
+      <div class="cc-tabbar">
+          <div class="ew-seg cc-seg">
+              <button id="dc-tab-live" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('live')" data-feature="widget-district-live">Live Dashboard</button>
+              <button id="dc-tab-ebay" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('ebay')">eBay</button>
+              <button id="dc-tab-scorecard" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('scorecard')">Scorecard</button>
+              <button id="dc-tab-stores" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('stores')">Stores</button>
+              <button id="dc-tab-kpis" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('kpis')">KPIs</button>
+          </div>
+          <div class="cc-tabbar-right">
+              <button id="dc-collapse" class="cc-collapse" type="button" onclick="collapseDistrict()" style="display:none;">&#9650; Summary</button>
+          </div>
+      </div>
 
+      <!-- Collapsed default: the district in one line. Today's selling comes from the
+           live feed, the rest from the same rows the tabs read. -->
+      <div class="cc-summary" id="dc-summary">
+          <div class="cc-sum" id="dc-sum-live"><div class="cc-sum-k">Net Sales Today</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-mtd"><div class="cc-sum-k">Month to Date</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-goal"><div class="cc-sum-k">Tracking to Goal</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-score"><div class="cc-sum-k">Scorecard</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-audit"><div class="cc-sum-k">PayMore Audit</div><div class="cc-sum-v">—</div></div>
+      </div>
+
+      <div class="cc-body">
+          <!-- Live keeps the .lv-card class on its inner wrapper: renderLiveDashboard
+               finds the eyebrow, date, freshness pill, day toggle and mute switch
+               through ".lv-card ...", and they had to come down out of the old card
+               header when this became a shared one. -->
+          <div class="cc-panel role-district-manager role-ceo" id="dc-panel-live" data-feature="widget-district-live">
+              <div class="lv-card lv-card-inner">
+                  <div class="lv-head">
+                      <span class="lv-head-l">
+                          <span class="lv-freshness"></span>
+                          <span class="ew-eyebrow lv-eyebrow">District &middot; Today</span>
+                          <span class="ew-date lv-asof"></span>
+                      </span>
+                      <span class="lv-head-r">
+                          <span class="lv-modes-host"></span>
+                          <span class="lv-sound-host"></span>
+                      </span>
+                  </div>
+                  <div class="lv-dist-strip"></div>
+                  <div class="lv-dist-detail"><div class="status-message">Syncing live sales&hellip;</div></div>
+              </div>
+          </div>
+
+          <div class="cc-panel" id="dc-panel-ebay">
+              <div id="dc-ebay-body"><div class="status-message">Syncing the district&hellip;</div></div>
+          </div>
+
+          <div class="cc-panel" id="dc-panel-scorecard">
+              <div id="dc-score-body"><div class="status-message">Syncing the district&hellip;</div></div>
+          </div>
+
+          <!-- The store-major board, unchanged. Monthly Team Goals, Listing Goals and
+               the Cleaning Checklist used to sit beside it; they are action-menu items
+               now (#dmGoalsModal, #dmListingModal, #dmCleaningModal). -->
+          <div class="cc-panel" id="dc-panel-stores">
+              <div id="district-master-body">
+                  <div class="dcc-empty">Syncing the district&hellip;</div>
+              </div>
+          </div>
+
+          <!-- District KPIs. fetchDistrictMonthlyKPIs and renderDistrictKPIs have
+               existed and been called on every DM load for months, but returned at
+               the first line because this container was never in the document. -->
+          <div class="cc-panel" id="dc-panel-kpis">
+              <div class="dc-kpi-head">
+                  <label for="dist-kpi-month">Month</label>
+                  <select id="dist-kpi-month" class="metric-dropdown" onchange="renderDistrictKPIs()"></select>
+              </div>
+              <div id="district-kpi-body"><div class="status-message">Syncing Data...</div></div>
+          </div>
+      </div>
   </div>
 
   <div class="ew-airy ew-perf mb-30">

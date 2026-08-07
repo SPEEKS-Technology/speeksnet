@@ -3926,7 +3926,89 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .gap-10 { gap: 10px; }
 .gap-8 { gap: 8px; }
 
+/* .district-command-section wrapped the DM board when it was its own section.
+   The board is a tab inside #dcWidget now and the wrapper is gone; the rule stays
+   only because other shells may still carry the class. */
 .district-command-section { margin-top: -15px; margin-bottom: 30px; display: flex; flex-direction: column; width: 100%; }
+
+/* ---- district Command Center ---------------------------------------------- */
+/* It borrows the store board's chrome wholesale (.cc-widget, .cc-tabbar,
+   .cc-summary, .cc-panel), so what is left here is only what is genuinely its
+   own: the five-store tables and the revived KPI header. */
+/* The store board was a standalone white card. Inside a tab panel of another card
+   that framing doubles up, so it is flattened rather than restyled. */
+.cc-panel .dcc { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.cc-panel .dcc-head { padding: 14px 20px 12px; }
+.cc-panel .dcc-body { background: transparent; padding: 0 20px 20px; }
+.lv-card-inner { padding: 16px 20px 20px; }
+.lv-card-inner .lv-head { margin-bottom: 14px; }
+
+/* The district tables are five or six columns, not the sell table's nine, so they
+   must not inherit its per-column widths or its 1080px floor. */
+.dc-tbl { min-width: 760px; }
+.dc-tbl th, .dc-tbl td { width: auto; }
+.dc-tbl th:first-child, .dc-tbl td:first-child { width: 15%; }
+
+/* A whole row is the drill-down target. It has to look like one before it is
+   hovered, which the cursor alone does not do. */
+.dc-tbl tr.dc-clickable { cursor: pointer; transition: background .12s; }
+.dc-tbl tr.dc-clickable:hover > td { background: #f4faf6; }
+.dc-tbl tr.dc-clickable:focus-visible { outline: 2px solid #178048; outline-offset: -2px; }
+.dc-tbl tr.dc-clickable:hover .lv-store b { color: #178048; }
+
+/* Scoped to the cell, not bare class selectors. `.lv-tbl td` sets colour and
+   weight at specificity (0,1,1); a bare `.dc-good` is (0,1,0) and loses, so every
+   severity silently rendered as ordinary body text. */
+.dc-tbl td.dc-good, .dc-good { color: #178048; font-weight: 800; }
+.dc-tbl td.dc-warn, .dc-warn { color: #b3760a; font-weight: 800; }
+.dc-tbl td.dc-bad,  .dc-bad  { color: #dc2626; font-weight: 850; }
+.dc-tbl td.dc-muted, .dc-muted { color: #94a3b8; font-weight: 650; }
+/* The chips sit inside a td, so they lose to it for the same reason. */
+.dc-tbl td .dc-cat, .dc-tbl td .dc-audit, .dc-tbl td .dc-muted { font-weight: 750; }
+
+/* Categories at risk is free text of unpredictable length in a nowrap table —
+   the one shape that silently breaks these layouts. Chips wrap inside the cell
+   instead. */
+.dc-tbl td.dc-cats { white-space: normal; text-align: left; padding: 9px 8px; }
+.dc-cat {
+    display: inline-block; margin: 2px 4px 2px 0; padding: 3px 9px; border-radius: 999px;
+    font-size: 10.5px; font-weight: 750; background: #f1f5f9; color: #647082;
+    max-width: 100%;
+}
+/* Severity first, in caps, then the categories it applies to. */
+.dc-cat b {
+    font-weight: 850; letter-spacing: .04em; text-transform: uppercase;
+    font-size: 9px; margin-right: 6px; opacity: .85;
+    /* The label is two words with a middot; letting it break mid-label ("PROJECTED ·"
+       / "HIGH") reads as two separate severities. */
+    white-space: nowrap;
+}
+.dc-cat.dc-bad  { background: #fbeae7; color: #7f2418; font-weight: 800; }
+.dc-cat.dc-warn { background: #fdf3e2; color: #8a5a06; font-weight: 800; }
+.dc-cat.dc-good { background: #e6f4ec; color: #14532d; font-weight: 750; }
+
+/* The audit score opens its own breakdown modal, so it is a button inside a
+   clickable row and has to read as the more specific target of the two. */
+.dc-audit {
+    font: inherit; font-weight: 850; background: transparent;
+    border: 1px solid #e6ebf1; border-radius: 999px; padding: 4px 11px; cursor: pointer;
+    transition: border-color .12s, background .12s;
+}
+.dc-audit:hover { background: #fff; }
+/* Explicit rather than relying on .dc-good/.dc-warn/.dc-bad reaching a button
+   inside a td — and the border takes the tint too, which is what makes the score
+   read as a verdict rather than a number in a box. */
+.dc-tbl td .dc-audit.dc-good { color: #178048; border-color: #bfe3cd; background: #f4faf6; }
+.dc-tbl td .dc-audit.dc-warn { color: #b3760a; border-color: #f0dcb4; background: #fdf8ee; }
+.dc-tbl td .dc-audit.dc-bad  { color: #dc2626; border-color: #f3c9c3; background: #fdf4f3; }
+
+.dc-note { font-size: 11.5px; font-weight: 650; color: #94a3b8; margin-top: 12px; padding: 0 2px; }
+
+.dc-kpi-head { display: flex; align-items: center; gap: 10px; padding: 14px 20px 4px; }
+.dc-kpi-head label {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    color: #647082;
+}
 .district-header-wrapper { margin-bottom: 15px; border-bottom: 2px solid #e2e8f0; padding-bottom: 15px; width: 100%; }
 .district-command-title { font-size: 20px; font-weight: 900; color: var(--slate-charcoal); letter-spacing: -0.5px; margin-bottom: 0; }
 

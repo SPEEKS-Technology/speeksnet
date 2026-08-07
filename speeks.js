@@ -8807,21 +8807,29 @@ async function fetchAlertsData() {
 // — nothing reads it any more.
 const CC_TABS = ['live', 'ebay', 'scorecard', 'kpis'];
 
-function switchCommandTab(tab) {
-    const widget = document.querySelector('.cc-widget');
-    const btn = document.getElementById('cc-tab-' + tab);
+// Both tabbed boards — the store Command Center and the district one — run on
+// this. They share every CSS class; only the id prefix and the tab list differ,
+// so the widget is found by ID rather than by .cc-widget, which now matches two
+// elements on a DM's page.
+const _CC_BOARD = { prefix: 'cc', tabs: () => CC_TABS, widget: 'ccWidget' };
+const _DC_BOARD = { prefix: 'dc', tabs: () => DC_TABS, widget: 'dcWidget' };
+
+function _tabSwitch(cfg, tab) {
+    const p = cfg.prefix;
+    const widget = document.getElementById(cfg.widget);
+    const btn = document.getElementById(p + '-tab-' + tab);
     const collapse = btn && btn.classList.contains('active'); // clicking the open tab closes it
 
-    CC_TABS.forEach(t => {
+    cfg.tabs().forEach(t => {
         const on = !collapse && t === tab;
-        const b = document.getElementById('cc-tab-' + t);
+        const b = document.getElementById(p + '-tab-' + t);
         if (b) b.classList.toggle('active', on);
         // Strips and panels are each stacked in one grid cell and toggled by class (opacity,
         // not display) so every tab reserves the height of the tallest — the card never
         // resizes when switching, and no hidden panel paints over the active one.
-        const strip = document.getElementById('cc-strip-' + t);
+        const strip = document.getElementById(p + '-strip-' + t);
         if (strip) strip.classList.toggle('cc-active', on);
-        const panel = document.getElementById('cc-panel-' + t);
+        const panel = document.getElementById(p + '-panel-' + t);
         if (panel) panel.classList.toggle('cc-active', on);
     });
     // Expand to chart height only while a tab is open; collapsed → natural summary height.
@@ -8829,17 +8837,22 @@ function switchCommandTab(tab) {
         widget.classList.toggle('cc-expanded', !collapse);
         // Weekly KPIs has no tile strip. Every strip shares one grid cell, so leaving
         // the band in place would show a blank stripe the height of the tallest one.
-        widget.classList.toggle('cc-nostrip', !collapse && !document.getElementById('cc-strip-' + tab));
+        widget.classList.toggle('cc-nostrip', !collapse && !document.getElementById(p + '-strip-' + tab));
     }
+    // Show the explicit "back to summary" control while a tab is open.
+    const coll = document.getElementById(p + '-collapse');
+    if (coll) coll.style.display = collapse ? 'none' : '';
+    return collapse;
+}
+
+function switchCommandTab(tab) {
+    const collapsed = _tabSwitch(_CC_BOARD, tab);
     // The "View Full Breakdown" action is audit-specific; only on the Scorecard tab.
     const action = document.getElementById('sh-tab-action');
-    if (action) action.style.display = (!collapse && tab === 'scorecard') ? '' : 'none';
-    // Show the explicit "back to summary" control while a tab is open.
-    const coll = document.getElementById('cc-collapse');
-    if (coll) coll.style.display = collapse ? 'none' : '';
-    _ccHeaderFor(collapse ? null : tab);
+    if (action) action.style.display = (!collapsed && tab === 'scorecard') ? '' : 'none';
+    _ccHeaderFor(collapsed ? null : tab);
     // Opening a tab means the manager has now seen it → clear its "updated" cue.
-    if (!collapse) _clearCommandUpdot(tab);
+    if (!collapsed) _clearCommandUpdot(tab);
 }
 
 // Header extras that belong to ONE tab. Carried over from the old employee widget,
@@ -8855,15 +8868,19 @@ function _ccHeaderFor(tab) {
     show('emp-kpi-period', tab === 'kpis');
 }
 // Explicit "back to the one-line summary" (in addition to clicking the open tab again).
-function collapseCommand() {
-    CC_TABS.forEach(t => {
-        const b = document.getElementById('cc-tab-' + t); if (b) b.classList.remove('active');
-        const strip = document.getElementById('cc-strip-' + t); if (strip) strip.classList.remove('cc-active');
-        const panel = document.getElementById('cc-panel-' + t); if (panel) panel.classList.remove('cc-active');
+function _tabCollapse(cfg) {
+    const p = cfg.prefix;
+    cfg.tabs().forEach(t => {
+        const b = document.getElementById(p + '-tab-' + t); if (b) b.classList.remove('active');
+        const strip = document.getElementById(p + '-strip-' + t); if (strip) strip.classList.remove('cc-active');
+        const panel = document.getElementById(p + '-panel-' + t); if (panel) panel.classList.remove('cc-active');
     });
-    const widget = document.querySelector('.cc-widget'); if (widget) widget.classList.remove('cc-expanded');
+    const widget = document.getElementById(cfg.widget); if (widget) widget.classList.remove('cc-expanded');
+    const coll = document.getElementById(p + '-collapse'); if (coll) coll.style.display = 'none';
+}
+function collapseCommand() {
+    _tabCollapse(_CC_BOARD);
     const action = document.getElementById('sh-tab-action'); if (action) action.style.display = 'none';
-    const coll = document.getElementById('cc-collapse'); if (coll) coll.style.display = 'none';
     _ccHeaderFor(null);
 }
 // Back-compat alias in case anything still calls the old name.
@@ -8925,8 +8942,10 @@ function _reconcileComboTabs(widgetEl, prefix, tabs) {
     if (!visible.length) widgetEl.style.setProperty('display', 'none', 'important');
 }
 function _reconcileCommandWidgets() {
-    _reconcileComboTabs(document.querySelector('.cc-widget'), 'cc', CC_TABS);
+    _reconcileComboTabs(document.getElementById('ccWidget'), 'cc', CC_TABS);
+    _reconcileComboTabs(document.getElementById('dcWidget'), 'dc', DC_TABS);
     _ccOpenDefaultTab();
+    _dcOpenDefaultTab();
 }
 
 // The manager Command Center used to open collapsed to its one-line summary. It now
@@ -8941,17 +8960,27 @@ function _reconcileCommandWidgets() {
 // re-applied, and re-opening a widget the manager deliberately collapsed would be
 // the panel arguing with them.
 var _ccDefaultOpened = false;
-function _ccOpenDefaultTab() {
-    if (_ccDefaultOpened) return;
-    const widget = document.querySelector('.cc-widget');
-    if (!widget || getComputedStyle(widget).display === 'none') return;
-    const first = CC_TABS.find(t => {
-        const b = document.getElementById('cc-tab-' + t);
+var _dcDefaultOpened = false;
+function _openDefaultTab(cfg, open) {
+    const widget = document.getElementById(cfg.widget);
+    if (!widget || getComputedStyle(widget).display === 'none') return false;
+    const first = cfg.tabs().find(t => {
+        const b = document.getElementById(cfg.prefix + '-tab-' + t);
         return b && getComputedStyle(b).display !== 'none';
     });
-    if (!first) return;
-    _ccDefaultOpened = true;
-    switchCommandTab(first);      // nothing is active yet, so this opens rather than toggles
+    if (!first) return false;
+    open(first);      // nothing is active yet, so this opens rather than toggles
+    return true;
+}
+function _ccOpenDefaultTab() {
+    if (_ccDefaultOpened) return;
+    if (_openDefaultTab(_CC_BOARD, switchCommandTab)) _ccDefaultOpened = true;
+}
+// The district board opens the same way, and on Live for the same reason: the
+// five-store roll-up is the thing worth seeing without a click.
+function _dcOpenDefaultTab() {
+    if (_dcDefaultOpened) return;
+    if (_openDefaultTab(_DC_BOARD, switchDistrictTab)) _dcDefaultOpened = true;
 }
 
 // ============================================================================
@@ -10021,6 +10050,9 @@ function _lvFillDistrictMtd(d, stores) {
 
 // Runs after every render path, however it exited.
 function _lvAfterRender() {
+    // Two of the district board's summary cells are today's selling, which only
+    // this module knows. Guarded because the district widget is DM/CEO only.
+    if (typeof _dcSummaryFill === 'function') _dcSummaryFill();
     // Consumed. The highlight is a CSS animation that plays when the element is
     // inserted, so leaving these set would replay it on every unrelated re-render
     // (a tab switch, the day toggle) and turn "just now" into background noise.
@@ -10223,6 +10255,9 @@ async function fetchMasterDistrictDashboard() {
     const renderMasterBoard = (hubData, varData, scoreData, alertsData, weeklyResults) => {
         _dccRows = STORES.map(s => _dccRow(s, hubData, varData, scoreData, alertsData, weeklyResults));
         container.innerHTML = _dccBoardHtml(PORTAL_LINKS);
+        // The eBay and Scorecard tabs and the collapsed summary are the same rows
+        // read across the district instead of down one store, so they fill here too.
+        renderDistrictTabs();
         // Fills in the Sales Import line once it answers. Repaints via _dccRepaint
         // (not this function), so there is no render loop.
         fetchSalesImportStatus();
@@ -32318,6 +32353,9 @@ function _dccRepaint() {
     if (!_dccRows.length) return;
     const el = document.getElementById('district-master-body');
     if (el) el.innerHTML = _dccBoardHtml(_DCC_PORTAL_LINKS);
+    // The eBay, Scorecard and summary panels read the same _dccRows, so they are
+    // stale the moment this is.
+    if (typeof renderDistrictTabs === 'function') renderDistrictTabs();
 }
 
 // "8/3" from "2026-08-03"; the year is noise at this size.
@@ -32471,15 +32509,17 @@ function _dccBoardHtml(portalLinks) {
     const totGP = _dccRows.reduce((a, r) => a + r.gpTrack, 0);
     const totGoal = _dccRows.reduce((a, r) => a + r.goal, 0);
 
+    // The icon tile and the "District / Command Center" title used to live here.
+    // This board is a TAB inside a card that carries that title now, so repeating
+    // it was the panel arguing with its own header. What is left is the two things
+    // the header does not say: the district's tracking GP against goal, and when
+    // the sales sheet last imported.
     return '<div class="dcc">'
         + '<div class="dcc-head">'
-        + '<span class="dcc-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20"/></svg></span>'
-        + '<div><div class="dcc-eyebrow">District</div><div class="dcc-title">Command Center</div></div>'
-        // The money is the headline and carries itself at size; the store count
-        // that used to sit beside it only repeated what the rail groups already say.
-        + '<div class="dcc-head-side"><span class="dcc-sum">'
+        + '<span class="dcc-sum">'
         + '<b>' + _dccMoney(totGP) + '</b><i>of ' + _dccMoney(totGoal) + ' GP goal</i>'
-        + '</span>' + _siLineHtml() + '</div></div>'
+        + '</span>'
+        + '<div class="dcc-head-side">' + _siLineHtml() + '</div></div>'
         + '<div class="dcc-body"><div class="dcc-grid">'
         + '<div class="dcc-rail">' + _dccRailHtml() + '</div>'
         + '<div class="dcc-pane">' + _dccPaneHtml(sel, portalLinks[_dccSel]) + '</div>'
@@ -32494,6 +32534,172 @@ function _dccPick(store) {
     _dccSel = store;
     const el = document.getElementById('district-master-body');
     if (el) el.innerHTML = _dccBoardHtml(_DCC_PORTAL_LINKS);
+}
+
+// ============================================================================
+// MODULE: DISTRICT COMMAND CENTER — TABS
+// ============================================================================
+// The DM page used to carry two stacked cards: a Live Dashboard, and a board
+// that put one store's whole picture on screen at a time. They answer opposite
+// questions — the store board is STORE-major (pick a store, see everything),
+// the manager Command Center is DIMENSION-major (pick a subject, see it) — which
+// is why they looked nothing alike.
+//
+// This makes the district board dimension-major and folds both cards into one
+// widget with the manager's own chrome: tabs, a collapsed one-line summary, and
+// Live open by default. The store-major view is not thrown away — it is the
+// "Stores" tab, and clicking any row on eBay or Scorecard jumps to it with that
+// store selected. Spotting the outlier and drilling into it are both one click.
+const DC_TABS = ['live', 'ebay', 'scorecard', 'stores', 'kpis'];
+
+function switchDistrictTab(tab) {
+    _tabSwitch(_DC_BOARD, tab);
+}
+function collapseDistrict() { _tabCollapse(_DC_BOARD); }
+
+// Row click on a district table: open the store's own board. Both halves of the
+// original design survive, and neither needs a modal.
+function _dcDrill(store) {
+    _dccPick(store);
+    switchDistrictTab('stores');
+    const w = document.getElementById('dcWidget');
+    if (w && typeof w.scrollIntoView === 'function') {
+        w.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+}
+
+function _dcCell(v, cls) { return '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + v + '</td>'; }
+// Store cell, clickable. The whole row is the target — a link inside one column
+// would be a smaller thing to hit and would not read as "this row goes somewhere".
+function _dcStoreCell(code) {
+    const tint = STORE_TINTS[code]
+        ? '<i class="lv-tint" style="background:' + STORE_TINTS[code] + '"></i>' : '';
+    return '<td><span class="lv-store">' + tint + '<b>' + escapeHtml(code) + '</b></span></td>';
+}
+function _dcRowOpen(code) {
+    return '<tr class="dc-clickable" tabindex="0" role="button"'
+        + ' onclick="_dcDrill(\'' + code + '\')"'
+        + ' onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();_dcDrill(\'' + code + '\');}"'
+        + ' title="Open ' + escapeHtml(code) + '&rsquo;s full board">';
+}
+// The severity classes the store board already uses, reused so a metric that is
+// red here is red there.
+function _dcSev(state) {
+    return state === 'b' ? 'dc-bad' : (state === 'w' ? 'dc-warn' : 'dc-good');
+}
+
+function _dcEbayHtml() {
+    if (!_dccRows.length) return '<div class="dcc-empty">Syncing the district&hellip;</div>';
+    const cell = (r, key, raw) => {
+        const v = _dccEbayPct(raw);
+        // A metric with nothing reported must never come out green. _dccState says
+        // null both for "fine" and for "not judged", so the value's own presence is
+        // what decides between them — the same test the store board uses.
+        return _dcCell(v == null ? '—' : v, v == null ? 'dc-muted' : _dcSev(_dccState(r, key)));
+    };
+    let html = '<div class="lv-tbl-scroll"><table class="lv-tbl dc-tbl"><thead><tr>'
+        + '<th>Store</th><th>Tracking</th><th>Defect rate</th><th>Cases closed</th>'
+        + '<th>Late shipment</th><th>Categories at risk</th></tr></thead><tbody>';
+    _dccRows.forEach(r => {
+        // The same four checks the store board runs, so "3 of 4 over" there and
+        // three red cells here are the same statement.
+        // The chip needs BOTH halves. "Active · very high" on its own says how bad
+        // without saying what, which is the half a DM acts on.
+        const cats = r.cats.length
+            ? r.cats.map(c => '<span class="dc-cat ' + _dcSev(c.s) + '">'
+                + '<b>' + escapeHtml(c.k) + '</b>' + escapeHtml(c.v) + '</span>').join('')
+            : '<span class="dc-cat dc-good">None flagged</span>';
+        html += _dcRowOpen(r.store) + _dcStoreCell(r.store)
+            + cell(r, 'track', r.track) + cell(r, 'defect', r.defect)
+            + cell(r, 'cases', r.cases) + cell(r, 'late', r.late)
+            + _dcCell(cats, 'dc-cats') + '</tr>';
+    });
+    return html + '</tbody></table></div>'
+        + '<div class="dc-note">Thresholds are eBay&rsquo;s own &mdash; tracking above 96%, defect '
+        + 'rate under 0.40%, cases closed under 0.24%, late shipment under 2.40%. '
+        + 'Click a row for that store&rsquo;s full board.</div>';
+}
+
+function _dcScoreHtml() {
+    if (!_dccRows.length) return '<div class="dcc-empty">Syncing the district&hellip;</div>';
+    let html = '<div class="lv-tbl-scroll"><table class="lv-tbl dc-tbl"><thead><tr>'
+        + '<th>Store</th><th>Online &amp; Marketing</th><th>PayMore Audit</th>'
+        + '<th>Week of</th><th>Buying margin</th><th>Conversion</th></tr></thead><tbody>';
+    _dccRows.forEach(r => {
+        // The audit chip stays clickable in place — openAuditBreakdown is a modal,
+        // so it must stop the row's own drill-down from firing behind it.
+        const audit = r.audit
+            ? '<button type="button" class="dc-audit ' + _dcSev(_dccState(r, 'audit')) + '"'
+              + ' onclick="event.stopPropagation(); openAuditBreakdown(\'' + r.store + '\')"'
+              + ' title="View the full audit breakdown">' + r.audit.pct + '%</button>'
+            : '<span class="dc-muted">No data</span>';
+        html += _dcRowOpen(r.store) + _dcStoreCell(r.store)
+            + _dcCell(r.score.toFixed(1) + '<span class="lv-of"> / 10</span>',
+                      _dcSev(_dccState(r, 'score')))
+            + _dcCell(audit)
+            + _dcCell('<span class="dc-muted">' + escapeHtml(r.week) + '</span>')
+            + _dcCell(r.wkM ? escapeHtml(String(r.wkM)) : '—')
+            + _dcCell(r.conv ? escapeHtml(String(r.conv)) : '—')
+            + '</tr>';
+    });
+    return html + '</tbody></table></div>'
+        + '<div class="dc-note">Buying margin and conversion are the week&rsquo;s store averages. '
+        + 'Click a row for that store&rsquo;s full board, or the audit score for its breakdown.</div>';
+}
+
+// The one-line summary behind the tabs. Deliberately mixes the two feeds: today's
+// selling from the live payload, everything else from the district rows.
+function _dcSummaryFill() {
+    const set = (id, html, cls) => {
+        const el = document.querySelector('#' + id + ' .cc-sum-v');
+        if (!el) return;
+        el.innerHTML = html;
+        el.className = 'cc-sum-v' + (cls ? ' ' + cls : '');
+    };
+    const live = _lvData && _lvData.district;
+    if (live) {
+        set('dc-sum-live', _lvMoney(live.netToday, false)
+            + ' <small>' + live.ordersToday
+            + (live.ordersToday === 1 ? ' order' : ' orders') + '</small>');
+        set('dc-sum-mtd', _lvMoney(live.mtdNet, false));
+    }
+    if (!_dccRows.length) return;
+    const n = _dccRows.length;
+    const gp = _dccRows.reduce((a, r) => a + r.gpTrack, 0);
+    const goal = _dccRows.reduce((a, r) => a + r.goal, 0);
+    const pct = goal > 0 ? gp / goal * 100 : 0;
+    set('dc-sum-goal', Math.round(pct) + '<small>%</small>',
+        pct >= 100 ? 'good' : (pct >= 80 ? 'warn' : 'bad'));
+
+    // "Stores flagged", not an average: one store failing eBay is the thing worth
+    // knowing, and averaging four percentages across five stores hides it.
+    const flagged = _dccRows.filter(r =>
+        ['track', 'defect', 'cases', 'late'].some(k => _dccState(r, k) === 'b')).length;
+    set('dc-sum-ebay', flagged
+        ? flagged + ' <small>' + (flagged === 1 ? 'store over' : 'stores over') + '</small>'
+        : 'All clear', flagged ? 'bad' : 'good');
+
+    const avg = f => _dccRows.reduce((a, r) => a + f(r), 0) / n;
+    const score = avg(r => r.score || 0);
+    set('dc-sum-score', score.toFixed(1) + '<small>/ 10</small>',
+        score >= 9 ? 'good' : (score >= 7 ? 'warn' : 'bad'));
+    const withAudit = _dccRows.filter(r => r.audit);
+    if (withAudit.length) {
+        const a = withAudit.reduce((x, r) => x + Number(r.audit.pct || 0), 0) / withAudit.length;
+        set('dc-sum-audit', a.toFixed(1) + '<small>%</small>',
+            a >= 90 ? 'good' : (a >= 84 ? 'warn' : 'bad'));
+    }
+}
+
+// Repaint every district panel from whatever is in memory. Safe to call before
+// either feed has answered — each piece guards itself and leaves its "syncing"
+// message in place.
+function renderDistrictTabs() {
+    const eb = document.getElementById('dc-ebay-body');
+    if (eb) eb.innerHTML = _dcEbayHtml();
+    const sc = document.getElementById('dc-score-body');
+    if (sc) sc.innerHTML = _dcScoreHtml();
+    _dcSummaryFill();
 }
 
 // ============================================================================
