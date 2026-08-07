@@ -10453,19 +10453,21 @@ body.sam-active .hotbar-btn:hover {
 .lv-tint { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .lv-store-nm { color: #94a3b8; font-weight: 650; }
 .lv-of { color: #b0bac6; font-weight: 650; }
-/* The roll-up line — District on the sell table, Total on the buying one. Its rule
-   used to be #e6ebf1, all but identical to the #f3f6f9 hairline under every store
-   row, so at a glance the total read as a sixth store. What separates it is the
-   rule AND the air: a heavier line hard against the last store still reads as one
-   more row, where the same line with space around it reads as a break. */
+/* The roll-up line — District on the sell table, Total on the buying one.
+   Deliberately the SAME rule as the one under the column headers: 1px #e6ebf1,
+   and drawn the same way, as a bottom border on the row above rather than a top
+   border on the roll-up. Under border-collapse the two edges merge into one line
+   either way, but drawing it identically to the header's is what guarantees it
+   lands identically — same weight, same colour, same full-table span.
+   The air around it is what makes it read as a break rather than one more row. */
+.lv-tbl tbody tr:last-child > td {
+    border-bottom: 1px solid #e6ebf1; padding-bottom: 16px;
+}
 .lv-tbl tfoot .lv-foot td {
-    border-bottom: none; border-top: 2px solid #b9c5d2;
-    padding-top: 18px; padding-bottom: 6px;
+    border-bottom: none; border-top: 0;
+    padding-top: 16px; padding-bottom: 6px;
     color: var(--slate-charcoal); font-weight: 850;
 }
-/* The gap belongs ABOVE the rule as well as below it, and a table cell cannot
-   carry margin — so the last body row gives it, on both tables. */
-.lv-tbl tbody tr:last-child > td { padding-bottom: 16px; }
 .lv-tbl .lv-row-errmsg { text-align: left; color: #b3760a; font-weight: 700; white-space: normal; }
 
 /* A sale (green) or a refund (red) just landed at this store: the WHOLE ROW washes
