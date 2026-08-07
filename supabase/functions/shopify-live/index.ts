@@ -107,21 +107,24 @@ function isOpen(c: Central): boolean {
 }
 
 /**
- * Selling days in the month, and how many have elapsed including today.
+ * Days in the month, and how many have elapsed including today. This is the
+ * denominator behind the pace pill: pace = (GP banked ÷ goal) ÷ (month elapsed),
+ * which is arithmetically the same as projected-month-end GP ÷ goal on a flat
+ * run rate.
  *
- * Calendar days would understate progress because the stores are shut on
- * Sundays — "17% of goal on day 5" only reads correctly next to how much of the
- * SELLING month has actually gone.
+ * CALENDAR days, Sundays included. This used to exclude Sundays as non-selling
+ * days, which was wrong in a way that quietly inflated every store's pace: the
+ * webstore trades on Sunday, so Sunday's gross profit landed in the numerator
+ * while Sunday itself was missing from the denominator — five days of earnings
+ * divided by four days. OVL on 2026-08-05 read 118 against the Buy/Sell sheet's
+ * 112.49% for the identical $13,970.91 of GP against the identical $77,000 goal;
+ * the whole gap was 26/4 versus 31/5.
+ *
+ * Matching the sheet is also the point: staff compare the two screens, and a
+ * dashboard that disagrees with the workbook reads as one of them being broken.
  */
-function sellingDays(c: Central): { total: number; elapsed: number } {
-  const inMonth = new Date(Date.UTC(c.y, c.m, 0)).getUTCDate();
-  let total = 0, elapsed = 0;
-  for (let d = 1; d <= inMonth; d++) {
-    if (new Date(Date.UTC(c.y, c.m - 1, d)).getUTCDay() === 0) continue;
-    total++;
-    if (d <= c.d) elapsed++;
-  }
-  return { total, elapsed };
+function monthDays(c: Central): { total: number; elapsed: number } {
+  return { total: new Date(Date.UTC(c.y, c.m, 0)).getUTCDate(), elapsed: c.d };
 }
 
 const iso = (c: Central) =>
@@ -397,14 +400,11 @@ async function refresh(sb: any, now: Date, force: boolean) {
   if (!stores?.length) return { ok: false, error: "no stores connected" };
 
   const goals = await loadGoals(sb);
-  const sd = sellingDays(c);
+  const sd = monthDays(c);
   const pd = prevDay(c);
-  // Selling days elapsed as at the close of that day — the same count, taken a
-  // day earlier, so yesterday's pace is judged against yesterday's expectation
-  // rather than today's. Still Sunday-free: a Sunday adds sales but not a selling
-  // day, so a Sunday and the Saturday before it share an elapsed count. That is
-  // correct — the monthly goal is set against selling days.
-  const psd = pd.inMonth ? sellingDays({ ...c, d: pd.day }) : null;
+  // The same count taken a day earlier, so yesterday's pace is judged against
+  // yesterday's expectation rather than today's.
+  const psd = pd.inMonth ? monthDays({ ...c, d: pd.day }) : null;
 
   const metrics = await Promise.all(
     stores.map((s: any) => fetchStore(s.shop, s.access_token, c, goals[SHOP_TO_CODE[s.shop]] ?? 0, pd)),
@@ -459,7 +459,7 @@ async function refresh(sb: any, now: Date, force: boolean) {
   const payload = {
     asOfCentral: `${iso(c)} ${String(c.hour).padStart(2, "0")}:${String(c.minute).padStart(2, "0")}`,
     open,
-    month: { sellingDaysTotal: sd.total, sellingDaysElapsed: sd.elapsed, elapsedPct: round2(elapsedPct) },
+    month: { daysTotal: sd.total, daysElapsed: sd.elapsed, elapsedPct: round2(elapsedPct) },
     // Everything the UI needs to LABEL the previous-day view. The numbers ride on
     // each store row; this is just which day it is and how far into the month it
     // sat, which is identical for every store.
@@ -467,7 +467,7 @@ async function refresh(sb: any, now: Date, force: boolean) {
       ? {
         date: pd.iso,
         inMonth: pd.inMonth,
-        sellingDaysElapsed: psd ? psd.elapsed : null,
+        daysElapsed: psd ? psd.elapsed : null,
         elapsedPct: round2(prevElapsedPct),
       }
       : null,

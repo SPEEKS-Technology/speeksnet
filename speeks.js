@@ -9092,8 +9092,8 @@ function _lvChip(k, v) {
     return '<span class="lv-chip">' + k + ' <b>' + v + '</b></span>';
 }
 
-// GP banked against the monthly goal, with a tick showing where the selling month
-// has actually got to. No forecast is involved, which is the point: the District
+// GP banked against the monthly goal, with a tick showing where the month has
+// actually got to. No forecast is involved, which is the point: the District
 // board below projects to month-end (OVL can read 124% there against ~18% banked
 // here), so this bar spells out which of the two it is.
 function _lvGoalBar(gp, goal, pctOfGoal, elapsedPct, paceIdx) {
@@ -9111,7 +9111,7 @@ function _lvGoalBar(gp, goal, pctOfGoal, elapsedPct, paceIdx) {
         + '<u style="left:' + tick + '%"></u></div>'
         + '<div class="lv-goal-foot">'
         + '<span>' + _lvPct(banked) + ' banked</span>'
-        + '<span>' + _lvPct(tick) + ' of the selling month gone</span>'
+        + '<span>' + _lvPct(tick) + ' of the month gone</span>'
         + '</div></div>';
 }
 
@@ -9208,9 +9208,9 @@ function _lvCombine(stores) {
 
 function _lvRollupTiles(r, d, label) {
     const prev = _lvIsPrev();
-    const elapsed = prev ? (d.prev && d.prev.sellingDaysElapsed) : (d.month && d.month.sellingDaysElapsed);
+    const elapsed = prev ? (d.prev && d.prev.daysElapsed) : (d.month && d.month.daysElapsed);
     const days = d.month && elapsed !== null && elapsed !== undefined
-        ? elapsed + ' of ' + d.month.sellingDaysTotal + ' selling days'
+        ? elapsed + ' of ' + d.month.daysTotal + ' days'
         : '';
     return _lvTile(prev ? 'Net Sales' : 'Net Sales Today', _lvMoney(r.netToday, true), _lvStamp(d), true)
         + _lvTile('Orders', String(r.ordersToday),
