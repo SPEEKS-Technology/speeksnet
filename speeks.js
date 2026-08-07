@@ -32623,10 +32623,16 @@ function _dcDrill(store) {
 function _dcCell(v, cls) { return '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + v + '</td>'; }
 // Store cell, clickable. The whole row is the target — a link inside one column
 // would be a smaller thing to hit and would not read as "this row goes somewhere".
-function _dcStoreCell(code) {
+// `sub` is a quiet second line under the code — the Scorecard tab hangs each
+// store's scored week there. It belongs per row, not in a caption: the stores are
+// scored in separate sittings and two of them can be a week apart.
+function _dcStoreCell(code, sub, subTitle) {
     const tint = STORE_TINTS[code]
         ? '<i class="lv-tint" style="background:' + STORE_TINTS[code] + '"></i>' : '';
-    return '<td><span class="lv-store">' + tint + '<b>' + escapeHtml(code) + '</b></span></td>';
+    return '<td><span class="lv-store">' + tint + '<b>' + escapeHtml(code) + '</b></span>'
+        + (sub ? '<span class="dc-sub"' + (subTitle ? ' title="' + escapeHtml(subTitle) + '"' : '')
+            + '>' + escapeHtml(sub) + '</span>' : '')
+        + '</td>';
 }
 function _dcRowOpen(code) {
     return '<tr class="dc-clickable" tabindex="0" role="button"'
@@ -32689,9 +32695,7 @@ function _dcScoreHtml() {
     if (!_dccRows.length) return '<div class="dcc-empty">Syncing the district&hellip;</div>';
     // Buying margin and conversion came off: they are weekly KPI figures wearing a
     // scorecard's clothes, and both already have a column of their own on the store
-    // board. Week of came off too — every store is scored in the same sitting, so it
-    // was the same date printed five times. The space goes to what the two scores
-    // are actually MADE of.
+    // board. The space goes to what the two scores are actually MADE of.
     //
     // A column per category, taken from what the district actually scored rather
     // than a fixed list: two of the catalog's four items are inactive today, and
@@ -32701,10 +32705,30 @@ function _dcScoreHtml() {
         if (c.name && catNames.indexOf(c.name) < 0) catNames.push(c.name);
     }));
 
-    let html = '<div class="lv-tbl-scroll"><table class="lv-tbl dc-tbl dc-tbl-score"><thead><tr>'
-        + '<th>Store</th><th>Online &amp; Marketing</th>'
-        + catNames.map(n => '<th>' + escapeHtml(n) + '</th>').join('')
-        + '<th>PayMore Audit</th></tr></thead>';
+    // Widths come from a <colgroup> rather than the first row, because the first
+    // row is now a spanning group header — under table-layout:fixed a colspan cell
+    // sizes nothing, so the columns would have collapsed onto their content.
+    // The store column carries two lines now, and the total is the headline of its
+    // own group — so neither is left narrower than the parts that add up to it.
+    const secW = catNames.length ? (46 / catNames.length) : 0;
+    const cols = '<colgroup><col style="width:18%"><col style="width:17%">'
+        + '<col style="width:19%">'
+        + catNames.map(() => '<col style="width:' + secW.toFixed(2) + '%">').join('')
+        + '</colgroup>';
+
+    // The two category columns are parts of the Total score, not two more metrics
+    // beside it. A header spanning the three, a rule under it and a tint band down
+    // the columns fences them as one block — the standard device for "these belong
+    // to that", and the only one that survives a store having four categories.
+    const span = catNames.length + 1;
+    let html = '<div class="lv-tbl-scroll"><table class="lv-tbl dc-tbl dc-tbl-score">'
+        + cols
+        + '<thead><tr class="dc-ghead"><th></th><th></th>'
+        + '<th colspan="' + span + '" class="dc-sc">Online &amp; Marketing scorecard</th></tr>'
+        + '<tr><th>Store</th><th>PayMore Audit</th>'
+        + '<th class="dc-sc">Total score</th>'
+        + catNames.map(n => '<th class="dc-sc dc-sc-part">' + escapeHtml(n) + '</th>').join('')
+        + '</tr></thead>';
     _dccRows.forEach(r => {
         // The audit chip stays clickable in place — openAuditBreakdown is a modal,
         // so it must stop the row's own drill-down from firing behind it.
@@ -32718,29 +32742,29 @@ function _dcScoreHtml() {
         // district quietly using a second scale beside the /10 average.
         const catCells = catNames.map(n => {
             const c = (r.scCats || []).find(x => x.name === n);
-            if (!c || isNaN(c.score)) return _dcCell('—', 'dc-muted');
+            if (!c || isNaN(c.score)) return _dcCell('—', 'dc-muted dc-sc dc-sc-part');
             const v = c.score * 2;
             const sev = v >= 8 ? 'dc-good' : (v >= 6 ? 'dc-warn' : 'dc-bad');
-            return _dcCell(_dcNum(v) + '<span class="lv-of"> / 10</span>', sev);
+            return _dcCell(_dcNum(v) + '<span class="lv-of"> / 10</span>',
+                           sev + ' dc-sc dc-sc-part');
         }).join('');
         html += '<tbody class="dc-grp">'
-            + _dcRowOpen(r.store) + _dcStoreCell(r.store)
+            + _dcRowOpen(r.store)
+            // The scored week hangs off the store, not off a caption under the
+            // table: the stores are scored in separate sittings and two of them
+            // can genuinely be a week apart.
+            + _dcStoreCell(r.store, r.week ? 'Week of ' + r.week : '',
+                           r.week ? 'Scorecard and audit as of the week of ' + r.week : '')
+            + _dcCell(audit)
             + _dcCell(r.score.toFixed(1) + '<span class="lv-of"> / 10</span>',
-                      _dcSev(_dccState(r, 'score')))
-            + catCells + _dcCell(audit) + '</tr>'
+                      _dcSev(_dccState(r, 'score')) + ' dc-sc')
+            + catCells + '</tr>'
             + '<tr class="dc-catrow" onclick="_dcDrill(\'' + r.store + '\')"'
             + ' title="Open ' + escapeHtml(r.store) + '&rsquo;s full board">'
             + '<td colspan="' + (catNames.length + 3) + '" class="dc-cats">'
             + _dcAuditSecHtml(r) + '</td></tr></tbody>';
     });
-    // What is left of the caption is the one thing the table no longer says and
-    // cannot say per row: which week these scores are from. Printed once, because
-    // it is one sitting — and only when the stores really do agree.
-    const weeks = [];
-    _dccRows.forEach(r => { if (r.week && weeks.indexOf(r.week) < 0) weeks.push(r.week); });
-    return html + '</table></div>'
-        + (weeks.length === 1
-            ? '<div class="dc-note">Scored week of ' + escapeHtml(weeks[0]) + '.</div>' : '');
+    return html + '</table></div>';
 }
 
 // Trims the ".0" off a whole score so a column of 10 / 8 / 7.5 stays readable.
@@ -32748,19 +32772,25 @@ function _dcNum(n) {
     return (Math.round(n * 10) / 10).toFixed(1).replace(/\.0$/, '');
 }
 
-// The audit's 165 points, said as where they went. Only sections that lost points
-// appear, worst first, so the leftmost chip is where the store gave up the most
-// and the row's length says roughly how much is wrong.
+// The audit's 165 points, said as where they went. Only sections that dropped
+// points appear, worst first, so the leftmost chip is the biggest giveaway and the
+// length of the row says roughly how much is wrong.
+//
+// Every chip is the same width. Section names run from "Exterior" to "Display
+// Cases & Merchandising", and at natural width the row was a ragged line of
+// blocks with the scores landing at a different x in each one. Fixed width puts
+// the scores in a column, which is the only way to read five stores of these
+// against each other.
 function _dcAuditSecHtml(r) {
-    const label = '<span class="dc-catlab">Audit points missed</span>';
+    const label = '<span class="dc-catlab">Audit points by section</span>';
     if (!r.audit) {
         return '<div class="dc-catwrap">' + label
-            + '<span class="dc-cat">No audit submitted</span></div>';
+            + '<span class="dc-cat dc-fix">No audit submitted</span></div>';
     }
     const secs = r.auditSecs || [];
     if (!secs.length) {
         return '<div class="dc-catwrap">' + label
-            + '<span class="dc-cat dc-good">Full marks</span></div>';
+            + '<span class="dc-cat dc-fix dc-good">Full marks</span></div>';
     }
     // Tinted by the SHARE of its own section a store gave up, not the raw count:
     // losing 3 of 4 points in Exterior is a worse miss than 3 of 46 in Back of
@@ -32768,11 +32798,12 @@ function _dcAuditSecHtml(r) {
     const chips = secs.map(s => {
         const share = s.poss > 0 ? s.missed / s.poss : 0;
         const cls = share >= 0.25 ? ' dc-bad' : (share >= 0.1 ? ' dc-warn' : '');
-        return '<span class="dc-cat' + cls + '"'
+        return '<span class="dc-cat dc-fix' + cls + '"'
             + ' title="' + escapeHtml(s.name) + ' &mdash; ' + _dcNum(s.poss - s.missed)
-            + ' of ' + _dcNum(s.poss) + ' points">'
-            + escapeHtml(s.name)
-            + '<span class="dc-pts">&minus;' + _dcNum(s.missed) + '</span></span>';
+            + ' of ' + _dcNum(s.poss) + ' points, ' + _dcNum(s.missed) + ' missed">'
+            + '<span class="dc-secnm">' + escapeHtml(s.name) + '</span>'
+            + '<span class="dc-pts">' + _dcNum(s.poss - s.missed) + '/'
+            + _dcNum(s.poss) + '</span></span>';
     }).join('');
     return '<div class="dc-catwrap">' + label + chips + '</div>';
 }

@@ -4017,14 +4017,42 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
        / "HIGH") reads as two separate severities. */
     white-space: nowrap;
 }
-/* Scorecard tab: the points a section gave up, trailing its name. Heavier than
-   the name so a row of chips can be read as numbers first, names second. */
-.dc-pts { font-weight: 900; margin-left: 8px; opacity: .95; }
+/* Scorecard tab: a section's score, trailing its name. Heavier than the name, and
+   pushed to the far edge of a fixed-width chip so the scores line up in a column
+   down the whole row rather than landing wherever each name happens to end. */
+.dc-cat.dc-fix {
+    display: inline-flex; align-items: baseline; justify-content: space-between;
+    gap: 10px; width: 238px;
+}
+/* Ellipsis is a backstop, not the plan — 238px clears the longest section name
+   there is ("Display Cases & Merchandising"). It is here so renaming a section in
+   the audit catalog can never widen the chips or break the column. */
+.dc-secnm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.dc-pts { font-weight: 900; flex: none; opacity: .95; font-variant-numeric: tabular-nums; }
 
 /* Scorecard headers are category names, not one-word metrics, so they are allowed
    to take two lines rather than forcing the table wider than the panel. */
 .dc-tbl-score th { white-space: normal; line-height: 1.35; }
 .dc-tbl-score { min-width: 880px; }
+
+/* The scored week, under the store code. */
+.dc-sub { display: block; margin-top: 3px; font-size: 10px; font-weight: 650; color: #a8b3c0; }
+
+/* The Total score and its categories are one block, not three metrics in a row.
+   A spanning header with a rule under it and a tint down the columns is the
+   device that says so — and unlike an indent or a marker per header it still
+   reads when the district scores four categories instead of two. */
+.dc-tbl-score .dc-ghead th {
+    padding: 0 8px 8px; border-bottom: 0; text-align: center;
+    font-size: 9px; letter-spacing: .1em; color: #b6c0ca;
+}
+.dc-tbl-score .dc-ghead th.dc-sc {
+    border-bottom: 1px solid #dde6e1; padding-bottom: 6px;
+}
+.dc-tbl-score th.dc-sc, .dc-tbl-score td.dc-sc { background: #fafcfb; }
+/* The parts are quieter than the total they add up to. */
+.dc-tbl-score th.dc-sc-part { color: #a8b3c0; font-size: 9px; }
+.dc-tbl-score td.dc-sc-part { font-size: 11.5px; }
 .dc-cat.dc-bad  { background: #fbeae7; color: #7f2418; font-weight: 800; }
 .dc-cat.dc-warn { background: #fdf3e2; color: #8a5a06; font-weight: 800; }
 .dc-cat.dc-good { background: #e6f4ec; color: #14532d; font-weight: 750; }
