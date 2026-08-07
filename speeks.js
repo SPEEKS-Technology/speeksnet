@@ -32617,7 +32617,7 @@ function _dcEbayHtml() {
     };
     let html = '<div class="lv-tbl-scroll"><table class="lv-tbl dc-tbl"><thead><tr>'
         + '<th>Store</th><th>Tracking</th><th>Defect rate</th><th>Cases closed</th>'
-        + '<th>Late shipment</th><th>Categories at risk</th></tr></thead><tbody>';
+        + '<th>Late shipment</th></tr></thead>';
     _dccRows.forEach(r => {
         // The same four checks the store board runs, so "3 of 4 over" there and
         // three red cells here are the same statement.
@@ -32627,12 +32627,22 @@ function _dcEbayHtml() {
             ? r.cats.map(c => '<span class="dc-cat ' + _dcSev(c.s) + '">'
                 + '<b>' + escapeHtml(c.k) + '</b>' + escapeHtml(c.v) + '</span>').join('')
             : '<span class="dc-cat dc-good">None flagged</span>';
-        html += _dcRowOpen(r.store) + _dcStoreCell(r.store)
+        // Each store is a two-row <tbody>: its four eBay checks, then the categories
+        // sitting behind them. As a sixth column the chips were free text of
+        // unpredictable length taking half the table for the softest thing on it,
+        // and squeezing the four numbers a DM actually reads across. Underneath,
+        // the chips get the full width and the numbers get their own.
+        html += '<tbody class="dc-grp">'
+            + _dcRowOpen(r.store) + _dcStoreCell(r.store)
             + cell(r, 'track', r.track) + cell(r, 'defect', r.defect)
-            + cell(r, 'cases', r.cases) + cell(r, 'late', r.late)
-            + _dcCell(cats, 'dc-cats') + '</tr>';
+            + cell(r, 'cases', r.cases) + cell(r, 'late', r.late) + '</tr>'
+            + '<tr class="dc-catrow" onclick="_dcDrill(\'' + r.store + '\')"'
+            + ' title="Open ' + escapeHtml(r.store) + '&rsquo;s full board">'
+            + '<td colspan="5" class="dc-cats">'
+            + '<span class="dc-catlab">Categories at risk</span>' + cats
+            + '</td></tr></tbody>';
     });
-    return html + '</tbody></table></div>'
+    return html + '</table></div>'
         + '<div class="dc-note">Thresholds are eBay&rsquo;s own &mdash; tracking above 96%, defect '
         + 'rate under 0.40%, cases closed under 0.24%, late shipment under 2.40%. '
         + 'Click a row for that store&rsquo;s full board.</div>';

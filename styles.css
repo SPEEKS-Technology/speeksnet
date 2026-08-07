@@ -3937,6 +3937,16 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
    own: the five-store tables and the revived KPI header. */
 /* The store board was a standalone white card. Inside a tab panel of another card
    that framing doubles up, so it is flattened rather than restyled. */
+/* The store Command Center stacks every panel in one grid cell so the card never
+   resizes on a tab switch. That works there because its tabs all describe one
+   store and come out near enough the same height. The district's do not: Live is
+   a five-store table plus the buying half, Stores is a whole board, eBay is five
+   rows. Reserving the tallest left the eBay and Scorecard tabs sitting under most
+   of a screen of white, so here only the open panel takes up space and the card
+   is as tall as whatever you are actually looking at. */
+#dcWidget .cc-panel:not(.cc-active) { display: none; }
+#dcWidget.cc-expanded { min-height: 0; }
+
 .cc-panel .dcc { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .cc-panel .dcc-head { padding: 14px 20px 12px; }
 .cc-panel .dcc-body { background: transparent; padding: 0 20px 20px; }
@@ -3970,6 +3980,23 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
    the one shape that silently breaks these layouts. Chips wrap inside the cell
    instead. */
 .dc-tbl td.dc-cats { white-space: normal; text-align: left; padding: 9px 8px; }
+
+/* ...and it is no longer a column. It sits UNDER its store's numbers, so each
+   store is a two-row <tbody>: hovering either row lights the pair, and the four
+   percentages get the width the chips were taking. */
+.dc-tbl tbody.dc-grp:hover > tr > td { background: #f4faf6; }
+.dc-tbl tbody.dc-grp:hover .lv-store b { color: #178048; }
+/* The two rows are one record — only the pair carries a rule under it. */
+.dc-tbl tbody.dc-grp > tr.dc-clickable > td { border-bottom: 0; padding-bottom: 6px; }
+.dc-tbl tr.dc-catrow { cursor: pointer; }
+.dc-tbl tr.dc-catrow > td.dc-cats { padding: 0 12px 11px; }
+/* The column header carried this label before; without it the chips would be a
+   loose row of colour with nothing saying what they are. */
+.dc-catlab {
+    display: inline-block; margin: 2px 8px 2px 0; vertical-align: middle;
+    font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase;
+    color: #b0bac6;
+}
 .dc-cat {
     display: inline-block; margin: 2px 4px 2px 0; padding: 3px 9px; border-radius: 999px;
     font-size: 10.5px; font-weight: 750; background: #f1f5f9; color: #647082;
