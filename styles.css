@@ -10185,6 +10185,13 @@ body.sam-active .hotbar-btn:hover {
 .cc-cell .sh-v.bad { color: #dc2626; }
 .cc-cell .sh-v.good { color: #178048; }
 .cc-cell .sh-sub { font-size: 10.5px; font-weight: 600; color: #647082; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Two figures in one sub-line (Total Cost / Total Profit). Real space between the
+   groups, and the label quieter than its number, so the eye reads two quantities
+   rather than one running phrase. */
+.lv-subpair { display: inline-flex; gap: 16px; }
+.lv-sp { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
+.lv-sp i { font-style: normal; font-weight: 650; color: #a3aeba; }
+.lv-sp { font-weight: 750; color: #56636f; }
 .cc-cell .sh-trend.up { color: #059669; font-weight: 800; }
 .cc-cell .sh-trend.dn { color: #dc2626; font-weight: 800; }
 .cc-cell .sh-dot { position: absolute; top: 10px; right: 10px; }

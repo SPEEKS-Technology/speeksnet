@@ -9141,23 +9141,23 @@ function _lvHeadStamp(d) {
         // reads as UTC and names the wrong month for anyone west of Greenwich on
         // the 1st.
         const p = String(d.asOfCentral || '').slice(0, 10).split('-');
-        if (p.length !== 3) return 'month to date';
+        if (p.length !== 3) return 'Month To Date';
         return new Date(+p[0], +p[1] - 1, 1).toLocaleDateString('en-US', { month: 'long' })
             + ' 1–' + (+p[2]);
     }
-    return d.asOfCentral ? 'last change ' + _lvClock(d.asOfCentral) : '';
+    return d.asOfCentral ? 'Last Change ' + _lvClock(d.asOfCentral) : '';
 }
 
 // The stamp under the headline tile: when the number last moved, which day
 // finished, or how far into the month the figure reaches.
 function _lvStamp(d) {
-    if (_lvIsPrev()) return 'final &middot; ' + escapeHtml(_lvDayName(d.prev.date, false));
+    if (_lvIsPrev()) return 'Final &middot; ' + escapeHtml(_lvDayName(d.prev.date, false));
     if (_lvIsMtd()) {
         return d.month
-            ? d.month.daysElapsed + ' of ' + d.month.daysTotal + ' days'
-            : 'month to date';
+            ? d.month.daysElapsed + ' Of ' + d.month.daysTotal + ' Days'
+            : 'Month To Date';
     }
-    return 'last change ' + _lvClock(d.asOfCentral);
+    return 'Last Change ' + _lvClock(d.asOfCentral);
 }
 
 // 100 = exactly on track for the month: banked GP as a share of goal, against how
@@ -9428,6 +9428,15 @@ function _lvChip(k, v) {
     return '<span class="lv-chip">' + k + ' <b>' + v + '</b></span>';
 }
 
+// Two figures in one tile sub-line. Run together as "profit $7,435 · cost $5,315"
+// they read as one phrase and the middot does not carry enough separation for two
+// different quantities — so each gets its own group, a quiet label and real space
+// between them. Cost leads: it is what the margin above is measured against.
+function _lvSubPair(k1, v1, k2, v2) {
+    const half = (k, v) => '<span class="lv-sp"><i>' + k + '</i>' + v + '</span>';
+    return '<span class="lv-subpair">' + half(k1, v1) + half(k2, v2) + '</span>';
+}
+
 // GP banked against the monthly goal, with a tick showing where the month has
 // actually got to. No forecast is involved, which is the point: the District
 // board below projects to month-end (OVL can read 124% there against ~18% banked
@@ -9477,16 +9486,16 @@ function _lvStoreTiles(v, d) {
     const prev = _lvIsPrev();
     const mtdAov = v.mtdOrders > 0 ? v.mtdNet / v.mtdOrders : null;
     const orderSub = _lvIsMtd()
-        ? _lvDays(d) + ' days'
-        : (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) + ' refunded'
-                              : (prev ? 'no refunds' : 'no refunds today'));
+        ? _lvDays(d) + ' Days'
+        : (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) + ' Refunded'
+                              : (prev ? 'No Refunds' : 'No Refunds Today'));
     return _lvTile(_lvHeadKey(), _lvMoney(v.netToday, true),
             _lvStamp(d), true, _lvHitCell(v.code))
         + _lvTile('Orders', String(v.ordersToday), orderSub)
         + _lvTile('Average Order', v.aov === null ? '—' : _lvMoney(v.aov, true),
             (mtdAov === null || !_lvHasMonth(d) || _lvIsMtd())
-                ? '' : 'month average ' + _lvMoney(mtdAov, false))
-        + _lvTile('Gross Margin', _lvPct(v.marginToday), 'cost ' + _lvMoney(v.cogsToday, false));
+                ? '' : 'Month Average ' + _lvMoney(mtdAov, false))
+        + _lvTile('Gross Margin', _lvPct(v.marginToday), 'Total Cost ' + _lvMoney(v.cogsToday, false));
 }
 
 function _lvStoreDetail(d, v) {
@@ -9647,7 +9656,7 @@ function _lvBuyBlock(d, views) {
     }
     const stamp = _lvIsPrev()
         ? escapeHtml(_lvDayName(d.prev.date, true))
-        : 'month to date';
+        : 'Month To Date';
     if (!_lvBuySpan(d)) {
         return _lvSplit('Buying', stamp)
             + '<div class="lv-buy-empty">This day falls in the previous month, and the buying '
@@ -9664,10 +9673,10 @@ function _lvBuyBlock(d, views) {
     if (rows.length < _LV_BUY_MIN_STORES) {
         const r = rows[0];
         html += '<div class="lv-strip lv-buy-strip">'
-            + _lvTile('Bought', _lvMoney(r.b.bought, false), 'resale value', true)
-            + _lvTile('Cash Paid', _lvMoney(r.b.paid, false), 'out of the till')
-            + _lvTile('Buy Margin', _lvPct(r.b.margin), 'on purchases')
-            + _lvTile('Bought vs Sold', _lvRatio(r.b.bought, r.v.netToday), 'stock in against out')
+            + _lvTile('Bought', _lvMoney(r.b.bought, false), 'Resale Value', true)
+            + _lvTile('Cash Paid', _lvMoney(r.b.paid, false), 'Out Of The Till')
+            + _lvTile('Buy Margin', _lvPct(r.b.margin), 'On Purchases')
+            + _lvTile('Bought vs Sold', _lvRatio(r.b.bought, r.v.netToday), 'Stock In Against Out')
             + '</div>';
     } else {
         html += '<div class="lv-tbl-scroll"><table class="lv-tbl lv-tbl-buy"><thead><tr>'
@@ -9714,16 +9723,16 @@ function _lvForecast(views) {
     const pct = goal > 0 ? trackGp / goal * 100 : null;
     return _lvSplit('Tracking to month-end', 'if the month carries on as it is')
         + '<div class="lv-strip lv-fc-strip">'
-        + _lvTile('Tracking Buying', _lvMoney(buyProj, false), 'projected month-end')
-        + _lvTile('Tracking Revenue', _lvMoney(trackRev, false), 'projected month-end')
+        + _lvTile('Tracking Buying', _lvMoney(buyProj, false), 'Projected Month-End')
+        + _lvTile('Tracking Revenue', _lvMoney(trackRev, false), 'Projected Month-End')
         + _lvTile('Tracking Gross Profit', _lvMoney(trackGp, false),
-            goal ? 'against ' + _lvMoney(goal, false) : '')
+            goal ? 'Against ' + _lvMoney(goal, false) : '')
         // "Tracking to Goal", never plain "To Goal". The banked-vs-elapsed pace pill
         // is on the same screen now and the two disagree by design — OVL reads 92%
         // pace and 104% tracking. The word that separates them has to be in the
         // label, because the numbers alone look like a contradiction.
         + _lvTile('Tracking to Goal', _lvPct(pct),
-            '<span class="' + (pct >= 100 ? 'lv-fc-good' : 'lv-fc-bad') + '">where the month lands</span>')
+            '<span class="' + (pct >= 100 ? 'lv-fc-good' : 'lv-fc-bad') + '">Where The Month Lands</span>')
         + '</div>';
 }
 
@@ -9766,7 +9775,7 @@ function _lvRollupTiles(r, d, label) {
     const prev = _lvIsPrev();
     const elapsed = prev ? (d.prev && d.prev.daysElapsed) : (d.month && d.month.daysElapsed);
     const days = d.month && elapsed !== null && elapsed !== undefined
-        ? elapsed + ' of ' + d.month.daysTotal + ' days'
+        ? elapsed + ' Of ' + d.month.daysTotal + ' Days'
         : '';
     // The fourth tile answers "and where does that leave the month?". On the Month
     // view the first tile IS the month, so repeating it there would waste the slot —
@@ -9776,17 +9785,18 @@ function _lvRollupTiles(r, d, label) {
     let last;
     if (_lvIsMtd()) {
         last = _lvTile('Against Goal', _lvPct(r.pctOfGoal),
-            r.goal ? 'of ' + _lvMoney(r.goal, false) : '');
+            r.goal ? 'Of ' + _lvMoney(r.goal, false) : '');
     } else if (_lvHasMonth(d)) {
-        last = _lvTile('Month to Date', _lvMoney(r.mtdNet, false), days);
+        last = _lvTile('Month to Date Revenue', _lvMoney(r.mtdNet, false), days);
     } else {
-        last = _lvTile('Gross Profit', _lvMoney(r.gpToday, true), 'on the day');
+        last = _lvTile('Gross Profit', _lvMoney(r.gpToday, true), 'On The Day');
     }
     return _lvTile(_lvHeadKey(), _lvMoney(r.netToday, true), _lvStamp(d), true)
         + _lvTile('Orders', String(r.ordersToday),
-            r.aov === null ? label : 'average ' + _lvMoney(r.aov, true))
+            r.aov === null ? label : 'Average ' + _lvMoney(r.aov, true))
         + _lvTile('Gross Margin', _lvPct(r.marginToday),
-            'profit ' + _lvMoney(r.gpToday, false) + ' &middot; cost ' + _lvMoney(r.cogsToday, false))
+            _lvSubPair('Total Cost', _lvMoney(r.cogsToday, false),
+                       'Total Profit', _lvMoney(r.gpToday, false)))
         + last;
 }
 
@@ -9941,7 +9951,7 @@ function renderLiveDashboard() {
     // ---- DM / CEO: the five-store table ----
     if (dDetail) {
         if (d.district) {
-            if (dStrip) dStrip.innerHTML = _lvRollupTiles(_lvView(d.district), d, 'no orders yet');
+            if (dStrip) dStrip.innerHTML = _lvRollupTiles(_lvView(d.district), d, 'No Orders Yet');
             // No footnote on the normal view — the column headers already say what
             // the figures are. The month-boundary case still needs explaining,
             // because "GP this month" and Pace go blank and that looks broken.
@@ -10002,7 +10012,7 @@ function renderLiveDashboard() {
         const healthy = stores.filter(m => !m.error);
         const views = (healthy.length ? healthy : stores).map(_lvView);
         const roll = _lvCombine(views);
-        tiles = _lvRollupTiles(roll, d, 'no orders yet');
+        tiles = _lvRollupTiles(roll, d, 'No Orders Yet');
         detail = _lvTable(stores, d, roll, 'Both') + _lvActivity() + _lvBuyBlock(d, views);
     }
 
