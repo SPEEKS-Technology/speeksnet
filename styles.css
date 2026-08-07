@@ -3956,8 +3956,15 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 }
 /* Centred, and the padding evened up with it — the extra 2px on the left was
    there to sit a left-aligned label off the cell divider, and off-centre by 2px
-   is more visible than off-edge by 2px ever was. */
-#dc-summary .cc-sum { text-align: center; padding-left: 16px; }
+   is more visible than off-edge by 2px ever was.
+   Tighter than the six-cell version too: this row carries SEVEN, and at the
+   shared 16/18px padding and 120px floor they wrapped to a second line by
+   1000px — a real content width on a 1280px screen once the sidebar is off. */
+#dc-summary .cc-sum { text-align: center; padding: 17px 10px 18px; min-width: 104px; }
+/* A point off the headline for the same reason. "$7,828 28 orders" is the widest
+   value here and still overran a seventh of 1000px at 22px; two points down it
+   fits, which is a cheaper trade than dropping the order count. */
+#dc-summary .cc-sum-v { font-size: 20px; }
 
 .cc-panel .dcc { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .cc-panel .dcc-head { padding: 14px 20px 12px; }

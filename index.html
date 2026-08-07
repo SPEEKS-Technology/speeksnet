@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260807u">
+  <link rel="stylesheet" href="styles.css?v=20260807v">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260807u" defer></script>
+  <script src="speeks.js?v=20260807v" defer></script>
 </head>
 
 <body class="preload">
@@ -1062,6 +1062,8 @@
       <div class="cc-summary" id="dc-summary">
           <div class="cc-sum" id="dc-sum-live"><div class="cc-sum-k">Net Sales Today</div><div class="cc-sum-v">—</div></div>
           <div class="cc-sum" id="dc-sum-mtd"><div class="cc-sum-k">Month to Date Revenue</div><div class="cc-sum-v">—</div></div>
+          <!-- Sits next to the revenue it came back out of. -->
+          <div class="cc-sum" id="dc-sum-refunds"><div class="cc-sum-k">Refunds &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
           <div class="cc-sum" id="dc-sum-goal"><div class="cc-sum-k">Company Tracking to Goal</div><div class="cc-sum-v">—</div></div>
           <div class="cc-sum" id="dc-sum-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
           <div class="cc-sum" id="dc-sum-score"><div class="cc-sum-k">Scorecard &middot; Company Avg</div><div class="cc-sum-v">—</div></div>

@@ -32872,6 +32872,14 @@ function _dcSummaryFill() {
         // money figures side by side have to say which is which. That is the key's
         // job here ("Month to Date Revenue"), so the value does not repeat it.
         set('dc-sum-mtd', _lvMoney(live.mtdNet, false));
+        // The month total on its own. It carried "· $695 today" as well, which is
+        // a seventh cell too many: at 1150px the value clipped to "$19,883 $6…"
+        // and the headline figure lost its own suffix. Today's refunds are a tab
+        // away on the Live view. Dashes on a cache written before the feed carried
+        // mtdReturns, rather than reporting a month of none.
+        if (live.mtdReturns !== null && live.mtdReturns !== undefined) {
+            set('dc-sum-refunds', _lvMoney(live.mtdReturns, false));
+        }
     }
     if (!_dccRows.length) return;
     const n = _dccRows.length;
