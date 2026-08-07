@@ -10224,6 +10224,10 @@ body.sam-active .hotbar-btn:hover {
     font-weight: 700; color: #647082; font-variant-numeric: tabular-nums;
     border-bottom: 1px solid #f3f6f9;
 }
+/* The store column reads left. It holds names of differing length, which centred
+   would leave every row starting at a different x and nothing to run the eye down.
+   The numeric columns stay centred — that is what made the header spacing even. */
+.lv-tbl th:first-child, .lv-tbl td:first-child { text-align: left; padding-left: 2px; }
 .lv-tbl .lv-strongnum { color: var(--slate-charcoal); font-weight: 850; font-size: 13px; }
 /* Cost is context for the two figures either side of it, not a headline — quieter
    so Net and Gross profit stay the numbers the eye lands on. */
@@ -10279,11 +10283,9 @@ body.sam-active .hotbar-btn:hover {
 .lv-activity.refund { color: #b3760a; }
 .lv-activity.refund .lv-adot { background: #dc2626; box-shadow: 0 0 0 3px rgba(220, 38, 38, .16); }
 
-/* Pulses for 15 seconds after something new lands (6 runs of 2.5s), then simply
-   stops and settles back to the plain dot — the line stays, because "who sold
-   last" is still worth knowing once it is no longer breaking news. No timer to
-   cancel: the animation ends on its own, and .lv-anew is only emitted when the
-   reported event actually differs from the one already on screen. */
+/* The dot pulses for the whole life of the line — which is only 15 seconds, since
+   the line is removed after that by _lvScheduleActivityExpiry. Infinite is safe
+   precisely because the element does not outlive the notification. */
 @keyframes lvADot {
     0%, 100% { box-shadow: 0 0 0 3px rgba(31, 157, 87, .20); }
     50%      { box-shadow: 0 0 0 8px rgba(31, 157, 87, .03); }
@@ -10292,10 +10294,13 @@ body.sam-active .hotbar-btn:hover {
     0%, 100% { box-shadow: 0 0 0 3px rgba(220, 38, 38, .20); }
     50%      { box-shadow: 0 0 0 8px rgba(220, 38, 38, .03); }
 }
-.lv-activity.lv-anew .lv-adot { animation: lvADot 2.5s ease-in-out 6; }
-.lv-activity.refund.lv-anew .lv-adot { animation: lvADotRed 2.5s ease-in-out 6; }
+.lv-activity .lv-adot { animation: lvADot 2.2s ease-in-out infinite; }
+.lv-activity.refund .lv-adot { animation: lvADotRed 2.2s ease-in-out infinite; }
+/* Fades on the way out rather than blinking off mid-glance. */
+.lv-activity { transition: opacity .4s ease; }
+.lv-activity.lv-agone { opacity: 0; }
 @media (prefers-reduced-motion: reduce) {
-    .lv-activity.lv-anew .lv-adot, .lv-activity.refund.lv-anew .lv-adot { animation: none; }
+    .lv-activity .lv-adot, .lv-activity.refund .lv-adot { animation: none; }
 }
 
 @media (max-width: 900px) {

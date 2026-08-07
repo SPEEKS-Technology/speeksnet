@@ -9065,11 +9065,13 @@ function _lvStamp(d) {
 // 100 = exactly on track for the month: banked GP as a share of goal, against how
 // much of the SELLING month has gone. Sundays are excluded upstream, so day 5 of
 // August does not read as behind just because one of those days was a Sunday.
+// Two states, not three. There used to be an amber 85-99 band, but pace answers a
+// yes/no question — are we on track for the month or not — and a colour that means
+// "nearly" invites reading 92 as fine. On or above 100 is green, anything under is
+// red. (.lv-pill.warn survives in the stylesheet for other callers.)
 function _lvPaceCls(idx) {
     if (idx === null || idx === undefined) return 'flat';
-    if (idx >= 100) return 'good';
-    if (idx >= 85) return 'warn';
-    return 'bad';
+    return idx >= 100 ? 'good' : 'bad';
 }
 // Per-store paceIndex is computed server-side; the district and MSM roll-ups carry
 // pctOfGoal but no index of their own, so derive it the same way rather than
@@ -9109,10 +9111,10 @@ function _lvTrackChanges(d) {
             // "nothing happened" — the one event most worth surfacing.
             if (b.returns > a.returns) {
                 _lvPulse[code] = 'refund';
-                _lvEvent = { kind: 'refund', code, amount: b.returns - a.returns };
+                _lvEvent = { kind: 'refund', code, amount: b.returns - a.returns, at: '', ts: Date.now() };
             } else if (b.orders > a.orders || b.lastOrderAt > a.lastOrderAt) {
                 _lvPulse[code] = 'sale';
-                _lvEvent = { kind: 'sale', code, amount: b.net - a.net, at: b.lastOrderAt };
+                _lvEvent = { kind: 'sale', code, amount: b.net - a.net, at: b.lastOrderAt, ts: Date.now() };
             }
         });
     }
@@ -9122,39 +9124,48 @@ function _lvTrackChanges(d) {
 // One line under the table naming the newest activity. Falls back to the freshest
 // order in the payload so it says something on a cold load rather than sitting
 // blank until the first change comes through.
-// The dot pulses only when this line is reporting something we have not already
-// shown. renderLiveDashboard runs on every fetch and on every tab/day switch, so
-// animating unconditionally would restart the pulse on renders where nothing new
-// happened — and a dot that pulses at random stops meaning "just now".
-let _lvActSeen = '';
+// How long a sale or refund stays on screen.
+const LV_ACTIVITY_MS = 15000;
+let _lvActTimer = null;
 
-function _lvActivity(d) {
+/**
+ * The "something just happened" line.
+ *
+ * A NOTIFICATION, not a status line: it exists to catch the eye of someone
+ * watching the dashboard. It is therefore built only from an event this session
+ * actually observed, never reconstructed from the payload — so signing in shows
+ * nothing until something happens while you are there, rather than announcing a
+ * sale that rang an hour ago as though it were news.
+ */
+function _lvActivity() {
     if (_lvIsPrev()) return '';   // a finished day has no "just now"
-    let cls = 'lv-activity', body = '';
+    if (!_lvEvent || Date.now() - _lvEvent.ts >= LV_ACTIVITY_MS) return '';
+    const e = _lvEvent;
+    const refund = e.kind === 'refund';
+    return '<div class="lv-activity' + (refund ? ' refund' : '') + '">'
+        + '<span class="lv-adot"></span>'
+        + (refund ? 'Refund' : 'Sale') + ' &middot; <b>' + escapeHtml(e.code) + '</b>'
+        + (e.amount > 0 ? ' &middot; <b>' + _lvMoney(e.amount, true) + '</b>' : '')
+        + (e.at ? ' &middot; ' + _lvOrderClock(e.at) : '')
+        + '</div>';
+}
 
-    if (_lvEvent && _lvEvent.kind === 'refund') {
-        cls += ' refund';
-        body = 'Refund &middot; <b>' + escapeHtml(_lvEvent.code) + '</b>'
-            + (_lvEvent.amount > 0 ? ' &middot; <b>' + _lvMoney(_lvEvent.amount, true) + '</b>' : '');
-        var sig = 'refund|' + _lvEvent.code + '|' + _lvEvent.amount;
-    } else {
-        let newest = null;
-        (d.stores || []).forEach(m => {
-            if (m.lastOrderAt && (!newest || m.lastOrderAt > newest.lastOrderAt)) newest = m;
-        });
-        if (!newest) return '';
-        // An order from a previous day is not "latest activity" — on a quiet morning
-        // that would present yesterday's last sale as if it had just happened.
-        if (_lvCentralDay(newest.lastOrderAt) !== String(d.asOfCentral || '').slice(0, 10)) return '';
-        body = 'Latest sale &middot; <b>' + escapeHtml(newest.code) + '</b>'
-            + (newest.lastOrderAmount ? ' &middot; <b>' + _lvMoney(newest.lastOrderAmount, true) + '</b>' : '')
-            + ' &middot; ' + _lvOrderClock(newest.lastOrderAt)
-            + ' <span class="lv-aq">' + _siRelTime(newest.lastOrderAt) + '</span>';
-        sig = 'sale|' + newest.code + '|' + newest.lastOrderAt;
-    }
-
-    if (sig !== _lvActSeen) { cls += ' lv-anew'; _lvActSeen = sig; }
-    return '<div class="' + cls + '"><span class="lv-adot"></span>' + body + '</div>';
+// Take the line away once its 15 seconds are up. Nothing else re-renders on a
+// quiet dashboard, so without this the notification would sit there until the next
+// sale — which is the behaviour being fixed.
+function _lvScheduleActivityExpiry() {
+    if (_lvActTimer) { clearTimeout(_lvActTimer); _lvActTimer = null; }
+    if (!_lvEvent) return;
+    const left = LV_ACTIVITY_MS - (Date.now() - _lvEvent.ts);
+    if (left <= 0) { _lvEvent = null; _lvHideActivity(); return; }
+    _lvActTimer = setTimeout(() => { _lvEvent = null; _lvHideActivity(); }, left);
+}
+function _lvHideActivity() {
+    document.querySelectorAll('.lv-activity').forEach(el => {
+        el.classList.add('lv-agone');
+        // Let the fade finish before the node goes, or it vanishes mid-transition.
+        setTimeout(() => { if (el.parentNode) el.remove(); }, 420);
+    });
 }
 
 // Extra class on the cell/tile that just moved, so the highlight lands on the
@@ -9188,7 +9199,7 @@ function _lvGoalBar(gp, goal, pctOfGoal, elapsedPct, paceIdx) {
         + '<span class="lv-goal-lbl">Gross profit banked this month</span>'
         + '<span class="lv-goal-fig"><b>' + _lvMoney(gp, false) + '</b> of ' + _lvMoney(goal, false)
         + ' <span class="lv-pill ' + _lvPaceCls(paceIdx) + '">'
-        + (paceIdx === null || paceIdx === undefined ? 'no goal set' : paceIdx + ' pace') + '</span></span>'
+        + (paceIdx === null || paceIdx === undefined ? 'no goal set' : paceIdx + '% pace') + '</span></span>'
         + '</div>'
         + '<div class="lv-goal-bar"><i style="width:' + Math.max(0, Math.min(100, banked)) + '%"></i>'
         + '<u style="left:' + tick + '%"></u></div>'
@@ -9348,7 +9359,7 @@ function _lvStoreRow(v, d, foot) {
         + '<td class="lv-boldnum">' + _lvPct(v.marginToday) + '</td>'
         + '<td>' + gp + '</td>'
         + '<td><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
-        + (v.paceIndex === null || v.paceIndex === undefined ? '—' : v.paceIndex) + '</span></td>'
+        + (v.paceIndex === null || v.paceIndex === undefined ? '—' : v.paceIndex + '%') + '</span></td>'
         + '<td>' + tail + '</td></tr>';
 }
 
@@ -9453,7 +9464,7 @@ function renderLiveDashboard() {
             // the figures are. The month-boundary case still needs explaining,
             // because "GP this month" and Pace go blank and that looks broken.
             dDetail.innerHTML = _lvTable(stores, d, d.district, 'District')
-                + _lvActivity(d)
+                + _lvActivity()
                 + (_lvHasMonth(d) ? ''
                     : '<div class="lv-note">This was the last day of the previous month, so '
                       + 'month-to-date and pace are not shown against it.</div>');
@@ -9504,7 +9515,7 @@ function renderLiveDashboard() {
         const healthy = stores.filter(m => !m.error);
         const roll = _lvCombine((healthy.length ? healthy : stores).map(_lvView));
         tiles = _lvRollupTiles(roll, d, 'no orders yet');
-        detail = _lvTable(stores, d, roll, 'Both') + _lvActivity(d);
+        detail = _lvTable(stores, d, roll, 'Both') + _lvActivity();
     }
 
     const stamp = _lvIsPrev()
@@ -9527,6 +9538,7 @@ function renderLiveDashboard() {
     // inserted, so leaving these set would replay it on every unrelated re-render
     // (a tab switch, the day toggle) and turn "just now" into background noise.
     _lvPulse = {};
+    _lvScheduleActivityExpiry();
 }
 
 // ============================================================================
