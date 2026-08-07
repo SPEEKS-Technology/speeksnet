@@ -332,7 +332,10 @@ Deno.serve(async (req) => {
     let body: any;
     try { body = await req.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
 
-    const { store, period_type, period_end_date, employee_name, ...fields } = body;
+    // `action` is pulled out with the other envelope keys so it can never reach
+    // the ...fields spread that becomes the row — there is no `action` column,
+    // and a save carrying one would fail the whole upsert.
+    const { store, period_type, period_end_date, employee_name, action: _action, ...fields } = body;
     const storeUpper = (store || '').toUpperCase();
     const action = String(body.action || '');
     // employee_name is required for a numbers save but meaningless for a note,
@@ -415,6 +418,28 @@ Deno.serve(async (req) => {
 
     if (!isEditablePeriod(period_type, period_end_date))
       return json({ error: 'Period is locked — only the current period is editable' }, 403);
+
+    // ── An emptied row is a delete ───────────────────────────────────────────
+    // Same rule as the coaching note above, and for the same reason: the grid
+    // offers no per-row delete control, so clearing every box is how a manager
+    // takes someone off a period they were keyed onto by mistake. Writing the
+    // row back all-null instead would leave a member of the roster looking
+    // entered — a ✓ in the status column, a row in saved_count, and the "KPIs
+    // due" reminder silenced — for a week nobody worked.
+    //
+    // Deliberately AFTER the period lock, unlike the note: this is the numbers,
+    // and a closed week's numbers have already gone out in a report. Deleting
+    // one is exactly the edit the lock exists to stop.
+    if (action === 'delete_entry') {
+      const { error: delErr } = await supabase.from('kpi_entries').delete()
+        .eq('store', storeUpper).eq('period_type', period_type)
+        .eq('period_end_date', period_end_date).eq('employee_name', employee_name);
+      if (delErr) return json({ error: delErr.message }, 500);
+      await broadcastChange('kpi', storeUpper);
+      // Hand back the same shape the GET synthesizes for someone with no row, so
+      // the client can drop it straight into the grid without a reload.
+      return json({ success: true, deleted: true, entry: computeFields({ employee_name }) });
+    }
 
     const pDate = new Date(period_end_date + 'T00:00:00');
     const row = {

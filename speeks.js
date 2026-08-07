@@ -6974,12 +6974,34 @@ async function _kpiSavePeriod(periodDate) {
         for (let empIdx = 0; empIdx < period.entries.length; empIdx++) {
             const entry   = period.entries[empIdx];
             const reqBody = { store: store, period_type: _kpiCurrentTab, period_end_date: periodDate, employee_name: entry.employee_name };
+            // A CLEARED box sends null, it does not go unsent. Omitting it left the
+            // column at whatever was there before — so emptying a figure and saving
+            // put the old number straight back on the next render, with a green tick
+            // claiming it had saved. An empty input is an instruction ("there is no
+            // number here"), and the only way to send that is to say it out loud.
+            let anyFilled = false;
             _KPI_INPUT_FIELDS.forEach(function(f) {
                 const el = document.getElementById('kpi-' + pk + '-' + empIdx + '-' + f);
-                if (el && el.value !== '') reqBody[f] = _KPI_INT_FIELDS.has(f) ? parseInt(el.value) : parseFloat(el.value);
+                // No input on screen for this field — stay silent about it rather
+                // than nulling a column the manager was never shown.
+                if (!el) return;
+                if (el.value === '') { reqBody[f] = null; return; }
+                reqBody[f] = _KPI_INT_FIELDS.has(f) ? parseInt(el.value) : parseFloat(el.value);
+                anyFilled = true;
             });
-            const hasData = _KPI_INPUT_FIELDS.some(function(f) { return reqBody[f] != null; });
-            if (!hasData) continue;
+            if (!anyFilled) {
+                // Every box on the row is empty. Nobody saved for this person yet
+                // means there is nothing to do — most of the roster is this, every
+                // save, which is why the row is skipped rather than written blank.
+                if (!entry.id) continue;
+                // But a row that DOES exist and has been emptied is a delete. The
+                // grid has no per-row delete control, so clearing the boxes is the
+                // only way to take someone off a period they were entered on by
+                // mistake, and it used to be skipped here — leaving the entry sitting
+                // in the table looking like it had been removed. Same rule the
+                // coaching note beside it already follows: emptied means gone.
+                reqBody.action = 'delete_entry';
+            }
             try {
                 const resp   = await _kpiPostEntry(reqBody, pin);
                 const result = await resp.json();
