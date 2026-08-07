@@ -4020,13 +4020,23 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 /* Scorecard tab: a section's score, trailing its name. Heavier than the name, and
    pushed to the far edge of a fixed-width chip so the scores line up in a column
    down the whole row rather than landing wherever each name happens to end. */
+/* One grid, as many equal columns as the busiest store needs (set inline, since
+   only the render knows the count). Equal columns beat a fixed pixel width: the
+   chips still match each other exactly, but the row scales to the space it has
+   instead of wrapping the moment a store loses points in one more section. */
+.dc-catgrid { flex: 1 1 auto; min-width: 0; display: grid; gap: 7px 10px; }
+/* The eBay tab's chips wrap; these must not. The label has to stay on the left
+   of the grid rather than being pushed onto a line of its own — otherwise the
+   grid starts at a different x on the stores that have most to say, and the
+   scores stop lining up down the table, which is the whole point of the grid. */
+.dc-tbl-score .dc-catwrap { flex-wrap: nowrap; }
+.dc-tbl-score .dc-catlab { flex: none; }
 .dc-cat.dc-fix {
-    display: inline-flex; align-items: baseline; justify-content: space-between;
-    gap: 10px; width: 238px;
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 8px; min-width: 0; width: auto;
 }
-/* Ellipsis is a backstop, not the plan — 238px clears the longest section name
-   there is ("Display Cases & Merchandising"). It is here so renaming a section in
-   the audit catalog can never widen the chips or break the column. */
+/* The names are what give: "Display Cases & Merchandising" clips before the score
+   does, because the score is the thing being compared down the column. */
 .dc-secnm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .dc-pts { font-weight: 900; flex: none; opacity: .95; font-variant-numeric: tabular-nums; }
 
@@ -4038,19 +4048,11 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 /* The scored week, under the store code. */
 .dc-sub { display: block; margin-top: 3px; font-size: 10px; font-weight: 650; color: #a8b3c0; }
 
-/* The Total score and its categories are one block, not three metrics in a row.
-   A spanning header with a rule under it and a tint down the columns is the
-   device that says so — and unlike an indent or a marker per header it still
-   reads when the district scores four categories instead of two. */
-.dc-tbl-score .dc-ghead th {
-    padding: 0 8px 8px; border-bottom: 0; text-align: center;
-    font-size: 9px; letter-spacing: .1em; color: #b6c0ca;
-}
-.dc-tbl-score .dc-ghead th.dc-sc {
-    border-bottom: 1px solid #dde6e1; padding-bottom: 6px;
-}
-.dc-tbl-score th.dc-sc, .dc-tbl-score td.dc-sc { background: #fafcfb; }
-/* The parts are quieter than the total they add up to. */
+/* The two categories are parts of the Total score beside them. That was fenced
+   with a spanning header and a tint band; both are gone — the tint read as a
+   panel rather than a grouping. What is left is weight: the parts are quieter
+   than the total they add up to, which is enough given they sit right next to
+   it and the header names them. */
 .dc-tbl-score th.dc-sc-part { color: #a8b3c0; font-size: 9px; }
 .dc-tbl-score td.dc-sc-part { font-size: 11.5px; }
 .dc-cat.dc-bad  { background: #fbeae7; color: #7f2418; font-weight: 800; }
