@@ -10256,31 +10256,32 @@ body.sam-active .hotbar-btn:hover {
 }
 .lv-tbl .lv-row-errmsg { text-align: left; color: #b3760a; font-weight: 700; white-space: normal; }
 
-/* A sale (green) or a refund (red) just landed at this store.
-   In the table the figure itself is wrapped so the highlight is a rounded chip
-   that pops and settles, rather than a full-bleed rectangle across the cell. The
-   padding is cancelled by an equal negative margin, so the chip costs no layout
-   when it is not lit. */
-.lv-netchip {
-    display: inline-block; border-radius: 9px;
-    padding: 4px 10px; margin: -4px -10px;
+/* A sale (green) or a refund (red) just landed at this store: the WHOLE ROW washes
+   over — twice quickly, then holding faint before it clears across 10 seconds. A
+   band the width of the table is caught peripherally; the old highlight on the
+   money cell alone had to be looked at directly to be noticed.
+   The tint is far lighter than that per-cell one was. It now covers roughly ten
+   times the area, and at the old strength one sale repainted half the panel. */
+@keyframes lvRowSale {
+    0%   { background: rgba(31, 157, 87, 0); }
+    6%   { background: rgba(31, 157, 87, .20); }
+    14%  { background: rgba(31, 157, 87, .06); }
+    22%  { background: rgba(31, 157, 87, .18); }
+    38%  { background: rgba(31, 157, 87, .09); }
+    100% { background: rgba(31, 157, 87, 0); }
 }
-@keyframes lvHitSale {
-    0%   { background: rgba(31, 157, 87, 0);   transform: scale(1);    box-shadow: 0 0 0 0 rgba(31, 157, 87, .40); }
-    7%   { background: rgba(31, 157, 87, .34); transform: scale(1.09); }
-    18%  { transform: scale(1); box-shadow: 0 0 0 9px rgba(31, 157, 87, 0); }
-    70%  { background: rgba(31, 157, 87, .17); }
-    100% { background: rgba(31, 157, 87, 0);   box-shadow: 0 0 0 0 rgba(31, 157, 87, 0); }
+@keyframes lvRowRefund {
+    0%   { background: rgba(220, 38, 38, 0); }
+    6%   { background: rgba(220, 38, 38, .18); }
+    14%  { background: rgba(220, 38, 38, .05); }
+    22%  { background: rgba(220, 38, 38, .16); }
+    38%  { background: rgba(220, 38, 38, .08); }
+    100% { background: rgba(220, 38, 38, 0); }
 }
-@keyframes lvHitRefund {
-    0%   { background: rgba(220, 38, 38, 0);   transform: scale(1);    box-shadow: 0 0 0 0 rgba(220, 38, 38, .36); }
-    7%   { background: rgba(220, 38, 38, .30); transform: scale(1.09); }
-    18%  { transform: scale(1); box-shadow: 0 0 0 9px rgba(220, 38, 38, 0); }
-    70%  { background: rgba(220, 38, 38, .15); }
-    100% { background: rgba(220, 38, 38, 0);   box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
-}
-.lv-hit-sale   { animation: lvHitSale 10s cubic-bezier(.22, .61, .36, 1) 1; }
-.lv-hit-refund { animation: lvHitRefund 10s cubic-bezier(.22, .61, .36, 1) 1; }
+/* Applied to the CELLS, not the tr. A row-level background paints behind the cell
+   boxes and browsers disagree about how it interacts with their borders. */
+.lv-tbl tr.lv-row-sale   > td { animation: lvRowSale 10s ease-out 1; }
+.lv-tbl tr.lv-row-refund > td { animation: lvRowRefund 10s ease-out 1; }
 
 /* The tile on a store's own dashboard is a whole card, so it takes a plain wash —
    no scale, which on a grid cell would ride over its neighbours. */
@@ -10297,7 +10298,7 @@ body.sam-active .hotbar-btn:hover {
 .cc-cell.lv-cellhit-sale   { animation: lvCellSale 10s ease-out 1; }
 .cc-cell.lv-cellhit-refund { animation: lvCellRefund 10s ease-out 1; }
 @media (prefers-reduced-motion: reduce) {
-    .lv-hit-sale, .lv-hit-refund,
+    .lv-tbl tr.lv-row-sale > td, .lv-tbl tr.lv-row-refund > td,
     .cc-cell.lv-cellhit-sale, .cc-cell.lv-cellhit-refund { animation: none; }
 }
 
@@ -10348,16 +10349,19 @@ body.sam-active .hotbar-btn:hover {
     .lv-adot::after { animation: none; }
 }
 
-/* Mute switch for the sale chime, beside the day toggle. */
+/* Mute switch for the sale chime. Sits last in the header, AFTER the open/closed
+   pill, and carries no chrome of its own: between the two pill groups with a
+   background and a border it read as an orphaned third pill competing with two
+   state readouts, when it is only a preference. */
 .lv-sound {
     display: inline-grid; place-items: center; flex: none;
-    width: 28px; height: 28px; padding: 0; cursor: pointer;
-    color: #94a3b8; background: #f1f5f9;
-    border: 1px solid #e6ebf1; border-radius: 999px;
-    transition: color .16s ease, background .16s ease, border-color .16s ease;
+    width: 26px; height: 26px; padding: 0; cursor: pointer;
+    color: #b0bac6; background: none; border: 0; border-radius: 999px;
+    transition: color .16s ease, background .16s ease;
 }
-.lv-sound:hover { color: #647082; }
-.lv-sound.on { color: #178048; background: #e8f7ee; border-color: #c6ecd6; }
+.lv-sound:hover { color: #647082; background: #f1f5f9; }
+.lv-sound.on { color: #1f9d57; }
+.lv-sound.on:hover { color: #178048; background: #e8f7ee; }
 .lv-sound:focus-visible { outline: 2px solid #1f9d57; outline-offset: 1px; }
 
 @media (max-width: 900px) {

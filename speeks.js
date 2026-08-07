@@ -9046,8 +9046,7 @@ function _lvToggle(d) {
     const btn = (mode, label) => '<button type="button" class="lv-mode'
         + (_lvMode === mode ? ' on' : '') + '" onclick="setLiveMode(\'' + mode + '\')">'
         + escapeHtml(label) + '</button>';
-    return '<span class="lv-modes">' + btn('today', 'Today') + btn('prev', 'Yesterday') + '</span>'
-        + _lvSoundBtn();
+    return '<span class="lv-modes">' + btn('today', 'Today') + btn('prev', 'Yesterday') + '</span>';
 }
 function setLiveMode(mode) {
     const next = mode === 'prev' ? 'prev' : 'today';
@@ -9227,17 +9226,28 @@ function _lvChime() {
         _lvAudio = _lvAudio || new AC();
         if (_lvAudio.state === 'suspended') _lvAudio.resume();
         const t0 = _lvAudio.currentTime;
-        // Two struck partials a fifth apart, the second a beat later — reads as a
-        // shop bell rather than a system beep.
-        [[1046.5, 0], [1568.0, 0.09]].forEach(([freq, at]) => {
+        // A two-note rising notification, the shape a phone uses for a message:
+        // E6 then A6, the second landing while the first is still ringing. Triangle
+        // waves through a gentle low-pass — a bare sine reads as a lab beep, and an
+        // unfiltered triangle is harsh at these frequencies.
+        const filter = _lvAudio.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 4200;
+        const out = _lvAudio.createGain();
+        out.gain.value = 0.5;
+        filter.connect(out); out.connect(_lvAudio.destination);
+
+        [[1318.5, 0], [1760.0, 0.11]].forEach(([freq, at]) => {
             const osc = _lvAudio.createOscillator(), gain = _lvAudio.createGain();
-            osc.type = 'sine';
+            osc.type = 'triangle';
             osc.frequency.setValueAtTime(freq, t0 + at);
+            // Exponential ramps only — a linear fade to zero clicks audibly, and
+            // exponentialRampToValueAtTime cannot touch exactly 0.
             gain.gain.setValueAtTime(0.0001, t0 + at);
-            gain.gain.exponentialRampToValueAtTime(0.16, t0 + at + 0.012);
-            gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.7);
-            osc.connect(gain); gain.connect(_lvAudio.destination);
-            osc.start(t0 + at); osc.stop(t0 + at + 0.75);
+            gain.gain.exponentialRampToValueAtTime(0.22, t0 + at + 0.008);
+            gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.38);
+            osc.connect(gain); gain.connect(filter);
+            osc.start(t0 + at); osc.stop(t0 + at + 0.42);
         });
     } catch (_) { /* audio is a nicety; never let it break the dashboard */ }
 }
@@ -9267,11 +9277,10 @@ function _lvSoundBtn() {
         + ico + '</svg></button>';
 }
 
-// Extra class on the value that just moved, so the highlight lands on the store it
-// belongs to rather than the whole panel. Two shapes: a rounded chip around the
-// figure in the table, and a plain wash across the tile on a store's own board.
-function _lvHit(code) {
-    return (!_lvIsPrev() && _lvPulse[code]) ? ' lv-hit-' + _lvPulse[code] : '';
+// Which store just moved, and how it should be marked. Two shapes: a band across
+// the whole row in the table, and a wash over the tile on a store's own board.
+function _lvHitRow(code) {
+    return (!_lvIsPrev() && _lvPulse[code]) ? 'lv-row-' + _lvPulse[code] : '';
 }
 function _lvHitCell(code) {
     return (!_lvIsPrev() && _lvPulse[code]) ? ' lv-cellhit-' + _lvPulse[code] : '';
@@ -9449,11 +9458,13 @@ function _lvStoreRow(v, d, foot) {
     const gp = _lvHasMonth(d)
         ? _lvMoney(v.mtdGp, false) + '<span class="lv-of"> of ' + _lvMoney(v.goal, false) + '</span>'
         : '—';
-    return '<tr' + (foot ? ' class="lv-foot"' : '') + '><td><span class="lv-store">' + tint
+    // The whole row flashes, not just the money cell — at a glance the eye catches
+    // the band across the table long before it resolves which column moved.
+    const rowCls = [foot ? 'lv-foot' : '', _lvHitRow(v.code)].filter(Boolean).join(' ');
+    return '<tr' + (rowCls ? ' class="' + rowCls + '"' : '') + '><td><span class="lv-store">' + tint
         + '<b>' + escapeHtml(v.code) + '</b><span class="lv-store-nm">'
         + escapeHtml(v.name || '') + '</span></span></td>'
-        + '<td class="lv-strongnum"><span class="lv-netchip' + _lvHit(v.code) + '">'
-        + _lvMoney(v.netToday, true) + '</span></td>'
+        + '<td class="lv-strongnum">' + _lvMoney(v.netToday, true) + '</td>'
         // Cost and gross profit for the day itself. The single-store view has had
         // these all along (cost under the margin tile, GP as a chip); the table did
         // not, so the district read sales without the money actually made on them.
@@ -9590,6 +9601,10 @@ function renderLiveDashboard() {
     if (fresh) fresh.innerHTML = _lvFreshness(d);
     const dModes = document.querySelector('.lv-card .lv-modes-host');
     if (dModes) dModes.innerHTML = _lvToggle(d);
+    // Sits AFTER the open/closed pill: it is a preference, not a state readout, and
+    // wedged between the two pill groups it read as an orphaned third pill.
+    const dSound = document.querySelector('.lv-card .lv-sound-host');
+    if (dSound) dSound.innerHTML = _lvSoundBtn();
 
     // ---- store surfaces (manager Command Center + employee/ASM widget) ----
     // Every exit from here on has to fall through to the tail below, which clears
@@ -9630,7 +9645,8 @@ function renderLiveDashboard() {
     details.forEach(el => { el.innerHTML = '<div class="lv-head">'
         + '<span class="lv-head-l">' + _lvFreshness(d)
         + '<span class="lv-asof">' + stamp + '</span></span>'
-        + _lvToggle(d) + '</div>' + detail; });
+        + '<span class="lv-head-r">' + _lvToggle(d) + _lvSoundBtn() + '</span>'
+        + '</div>' + detail; });
     strips.forEach(el => { el.innerHTML = tiles; });
 
     // Collapsed Command Center summary line. Deliberately pinned to TODAY: the

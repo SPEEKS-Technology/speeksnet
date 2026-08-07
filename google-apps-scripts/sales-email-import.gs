@@ -149,6 +149,10 @@ var GOAL_RED   = '#ff5252';
 // never send. Note this recipient is a constant, NOT the email_recipients table
 // that feeds the missing-days alert, so changing it means editing and republishing.
 var NOTIFY_CHANGE_OVER = 150;
+// Above this, the change is painted green (up) or red (down) in the email. Between
+// the two thresholds it is reported but left grey and tagged "minor", so a $160
+// tweak cannot look as urgent as a $900 one.
+var NOTIFY_BIG_CHANGE  = 300;
 var CHANGE_ALERT_TO    = 'ethan.kushnir@speekstechnology.com';
 
 // Candidate labels for the two numbers, most-specific first. Shopify's wording
@@ -1211,24 +1215,43 @@ function _blockBaseFor(col) {
 // One email per run listing every qualifying change, rather than one per change —
 // a busy morning would otherwise arrive as five separate emails.
 function _sendChangeAlert(list) {
-  var td = 'padding:9px 12px;border-bottom:1px solid #eaefeb;font-size:14px;';
+  // FOUR columns, not six. At six the table overflowed a phone: the Change column —
+  // the one number the email exists to deliver — was pushed off the right edge, and
+  // "Aug 5, 2026" wrapped onto three lines in a column squeezed to nothing. Mobile
+  // mail clients do not scroll a table sideways, they just clip it.
+  //
+  // Store and field share a cell, "was" and "now" share a cell, and the year is
+  // dropped: these are always recent days, and it was the longest thing in the
+  // narrowest column.
+  var td = 'padding:10px 8px;border-bottom:1px solid #eaefeb;font-size:14px;'
+         + 'vertical-align:top;';
   var rows = list.map(function (m) {
     var up = m.delta > 0;
+    // Colour only once a change is worth reacting to. Everything here already
+    // cleared the reporting threshold, so painting them all red and green made the
+    // small ones shout as loudly as the big ones.
+    var big = Math.abs(m.delta) >= NOTIFY_BIG_CHANGE;
+    var colour = !big ? '#64707c' : (up ? '#17603a' : '#9b2c1f');
     return '<tr>'
-      + '<td style="' + td + 'font-weight:700;color:#1a1f24;">' + _fmtMD(m.date) + '</td>'
-      + '<td style="' + td + 'font-weight:700;color:#1a1f24;">' + m.store + '</td>'
-      + '<td style="' + td + 'color:#64707c;">' + (m.field === 'cost' ? 'Cost' : 'Sales') + '</td>'
-      + '<td style="' + td + 'color:#64707c;">' + _fmtUsd(m.from) + '</td>'
-      + '<td style="' + td + 'color:#1a1f24;font-weight:700;">' + _fmtUsd(m.to) + '</td>'
-      + '<td style="' + td + 'font-weight:800;color:' + (up ? '#17603a' : '#9b2c1f') + ';">'
-      + (up ? '+' : '') + _fmtUsd(m.delta) + '</td></tr>';
+      + '<td style="' + td + 'font-weight:700;color:#1a1f24;white-space:nowrap;">'
+      + _fmtMDShort(m.date) + '</td>'
+      + '<td style="' + td + 'font-weight:700;color:#1a1f24;">' + m.store
+      + '<div style="font-weight:600;color:#9aa6ad;font-size:12px;margin-top:2px;">'
+      + (m.field === 'cost' ? 'Cost' : 'Sales') + '</div></td>'
+      + '<td style="' + td + 'color:#64707c;white-space:nowrap;">'
+      + _fmtUsd(m.from) + '<div style="color:#1a1f24;font-weight:700;margin-top:2px;">'
+      + _fmtUsd(m.to) + '</div></td>'
+      + '<td style="' + td + 'font-weight:800;text-align:right;white-space:nowrap;color:'
+      + colour + ';">' + (up ? '+' : '−') + _fmtUsd(Math.abs(m.delta))
+      + (big ? '' : '<div style="font-weight:600;color:#9aa6ad;font-size:12px;'
+        + 'margin-top:2px;">minor</div>') + '</td></tr>';
   }).join('');
 
   var one = list.length === 1 ? list[0] : null;
   var subject = one
     ? 'Sales import — ' + one.store + ' ' + _fmtMD(one.date) + ' ' + one.field
       + ' changed by ' + (one.delta > 0 ? '+' : '') + _fmtUsd(one.delta)
-    : 'Sales import — ' + list.length + ' changes of ' + _fmtUsd(NOTIFY_CHANGE_OVER) + ' or more';
+    : 'Sales import — ' + list.length + ' changes of ' + _fmtUsd0(NOTIFY_CHANGE_OVER) + ' or more';
 
   var html = '<div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif;'
     + 'background:#f7faf8;padding:28px;">'
@@ -1244,24 +1267,14 @@ function _sendChangeAlert(list) {
     + 'Shopify now reports different numbers for the days below, and the sheet has been '
     + 'updated to match. Usually a refund or a late-posting order against a day that was '
     + 'already closed out.</p>'
-    + '<table style="width:100%;border-collapse:collapse;">'
-    + '<tr>'
-    + '<th style="' + td + 'text-align:left;font-size:11px;text-transform:uppercase;'
-    + 'letter-spacing:.06em;color:#9aa6ad;">Date of data</th>'
-    + '<th style="' + td + 'text-align:left;font-size:11px;text-transform:uppercase;'
-    + 'letter-spacing:.06em;color:#9aa6ad;">Store</th>'
-    + '<th style="' + td + 'text-align:left;font-size:11px;text-transform:uppercase;'
-    + 'letter-spacing:.06em;color:#9aa6ad;">Field</th>'
-    + '<th style="' + td + 'text-align:left;font-size:11px;text-transform:uppercase;'
-    + 'letter-spacing:.06em;color:#9aa6ad;">Was</th>'
-    + '<th style="' + td + 'text-align:left;font-size:11px;text-transform:uppercase;'
-    + 'letter-spacing:.06em;color:#9aa6ad;">Now</th>'
-    + '<th style="' + td + 'text-align:left;font-size:11px;text-transform:uppercase;'
-    + 'letter-spacing:.06em;color:#9aa6ad;">Change</th>'
+    + '<table style="width:100%;border-collapse:collapse;table-layout:fixed;">'
+    + '<tr>' + _chTh('Day', '19%', '') + _chTh('Store', '26%', '')
+    + _chTh('Was &rarr; now', '30%', '') + _chTh('Change', '25%', 'text-align:right;')
     + '</tr>' + rows + '</table>'
-    + '<p style="margin:16px 0 0;color:#9aa6ad;font-size:12px;">'
-    + 'Only changes of ' + _fmtUsd(NOTIFY_CHANGE_OVER) + ' or more are reported. '
-    + 'A day being filled in for the first time is not counted.</p>'
+    + '<p style="margin:16px 0 0;color:#9aa6ad;font-size:12px;line-height:1.5;">'
+    + 'Reported once a figure moves by ' + _fmtUsd0(NOTIFY_CHANGE_OVER)
+    + ' or more; shown in green or red once it reaches ' + _fmtUsd0(NOTIFY_BIG_CHANGE)
+    + '. A day being filled in for the first time is not counted.</p>'
     + '</div></div></div>';
 
   // Plain-text alternative, for clients that will not render the HTML.
@@ -1288,6 +1301,28 @@ function _fmtUsd(n) {
 function _fmtMD(iso) {
   var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
   return m ? MONTHS[+m[2] - 1] + ' ' + (+m[3]) + ', ' + m[1] : String(iso || '');
+}
+
+// No year. These are always days from the last week or so, and "Aug 5, 2026" was
+// the longest string in the narrowest column of the change email.
+function _fmtMDShort(iso) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  return m ? MONTHS[+m[2] - 1] + ' ' + (+m[3]) : String(iso || '');
+}
+
+// Whole dollars, for thresholds quoted in prose — "$150.00 or more" reads like a
+// figure someone calculated rather than a round number someone chose.
+function _fmtUsd0(n) {
+  return '$' + String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+// Header cell for the change table. Widths are explicit because the table is
+// table-layout:fixed — that is what stops a long figure from stealing space and
+// pushing the Change column off a phone screen.
+function _chTh(label, width, extra) {
+  return '<th width="' + width + '" style="padding:0 8px 8px;border-bottom:1px solid #eaefeb;'
+    + 'text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;'
+    + 'color:#9aa6ad;font-weight:700;' + (extra || '') + '">' + label + '</th>';
 }
 
 // Paints each block's goal-tracking pair green (>= 100% of GP goal) or red (below).
