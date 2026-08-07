@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260807i">
+  <link rel="stylesheet" href="styles.css?v=20260807j">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260807i" defer></script>
+  <script src="speeks.js?v=20260807j" defer></script>
 </head>
 
 <body class="preload">
@@ -1043,10 +1043,9 @@
       <div class="cc-tabbar">
           <div class="ew-seg cc-seg">
               <button id="dc-tab-live" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('live')" data-feature="widget-district-live">Live Dashboard</button>
+              <button id="dc-tab-stores" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('stores')">Store Breakdown</button>
               <button id="dc-tab-ebay" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('ebay')">eBay</button>
               <button id="dc-tab-scorecard" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('scorecard')">Scorecard</button>
-              <button id="dc-tab-stores" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('stores')">Stores</button>
-              <button id="dc-tab-kpis" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('kpis')">KPIs</button>
           </div>
           <div class="cc-tabbar-right">
               <button id="dc-collapse" class="cc-collapse" type="button" onclick="collapseDistrict()" style="display:none;">&#9650; Summary</button>
@@ -1097,23 +1096,22 @@
 
           <!-- The store-major board, unchanged. Monthly Team Goals, Listing Goals and
                the Cleaning Checklist used to sit beside it; they are action-menu items
-               now (#dmGoalsModal, #dmListingModal, #dmCleaningModal). -->
+               now (#dmGoalsModal, #dmListingModal, #dmCleaningModal).
+               Sits second, right after Live: it is the tab a DM opens most, and the
+               one the eBay and Scorecard rows drill into. -->
           <div class="cc-panel" id="dc-panel-stores">
               <div id="district-master-body">
                   <div class="dcc-empty">Syncing the district&hellip;</div>
               </div>
           </div>
 
-          <!-- District KPIs. fetchDistrictMonthlyKPIs and renderDistrictKPIs have
-               existed and been called on every DM load for months, but returned at
-               the first line because this container was never in the document. -->
-          <div class="cc-panel" id="dc-panel-kpis">
-              <div class="dc-kpi-head">
-                  <label for="dist-kpi-month">Month</label>
-                  <select id="dist-kpi-month" class="metric-dropdown" onchange="renderDistrictKPIs()"></select>
-              </div>
-              <div id="district-kpi-body"><div class="status-message">Syncing Data...</div></div>
-          </div>
+          <!-- No KPIs tab. It held the month-by-month monthly-KPI grid
+               (fetchDistrictMonthlyKPIs / renderDistrictKPIs, which read
+               #district-kpi-body); with the container gone those return at their
+               first line again and make no network calls. The Store Breakdown tab
+               carries each store's weekly metrics, which is what a DM reads day to
+               day. Restoring the tab means putting the two elements back — see the
+               Scorecard panel above for the shape. -->
       </div>
   </div>
 

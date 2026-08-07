@@ -9632,6 +9632,11 @@ function _lvRatio(bought, sold) {
 }
 
 function _lvBuyBlock(d, views) {
+    // Today has no buying, ever: the day's purchases are keyed the following
+    // morning, so the block could only say so. It said exactly that for a while,
+    // which is a paragraph of chrome under every Today view explaining that there
+    // is nothing to show. Buying belongs to Yesterday and Month.
+    if (_lvMode === 'today') return '';
     // A month boundary, or a hub that has not answered yet. Say which.
     if (!_lvHub()) {
         return _lvSplit('Buying', '')
@@ -9639,16 +9644,7 @@ function _lvBuyBlock(d, views) {
     }
     const stamp = _lvIsPrev()
         ? escapeHtml(_lvDayName(d.prev.date, true))
-        : (_lvIsMtd() ? 'month to date' : 'today');
-
-    if (_lvMode === 'today') {
-        const dt = _lvBuyDate();
-        return _lvSplit('Buying', stamp)
-            + '<div class="lv-buy-empty">Today&rsquo;s buys have not been entered yet.'
-            + (dt ? ' The sheet was last updated <b>' + escapeHtml(dt) + '</b> &mdash; the day&rsquo;s'
-                  + ' purchases usually land the following morning.' : '')
-            + '</div>';
-    }
+        : 'month to date';
     if (!_lvBuySpan(d)) {
         return _lvSplit('Buying', stamp)
             + '<div class="lv-buy-empty">This day falls in the previous month, and the buying '
@@ -32602,7 +32598,11 @@ function _dccPick(store) {
 // Live open by default. The store-major view is not thrown away — it is the
 // "Stores" tab, and clicking any row on eBay or Scorecard jumps to it with that
 // store selected. Spotting the outlier and drilling into it are both one click.
-const DC_TABS = ['live', 'ebay', 'scorecard', 'stores', 'kpis'];
+// Store Breakdown sits second, right after Live: it is the tab a DM opens most,
+// and the one an eBay or Scorecard row drills into. There is no KPIs tab — the
+// month-by-month grid came off and each store's weekly metrics live inside the
+// breakdown.
+const DC_TABS = ['live', 'stores', 'ebay', 'scorecard'];
 
 function switchDistrictTab(tab) {
     _tabSwitch(_DC_BOARD, tab);
