@@ -10421,8 +10421,11 @@ body.sam-active .hotbar-btn:hover {
     font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
     color: #94a3b8; border-bottom: 1px solid #e6ebf1;
 }
+/* vertical-align:middle, not the initial baseline. A row is as tall as its tallest
+   cell, and the buying table's ratio pill is ~10px taller than plain text — on
+   baseline alignment every other cell in that row sat high in its band. */
 .lv-tbl td {
-    text-align: center; padding: 11px 8px; white-space: nowrap;
+    text-align: center; padding: 11px 8px; white-space: nowrap; vertical-align: middle;
     font-weight: 700; color: #647082; font-variant-numeric: tabular-nums;
     border-bottom: 1px solid #f3f6f9;
 }
@@ -10460,12 +10463,13 @@ body.sam-active .hotbar-btn:hover {
    either way, but drawing it identically to the header's is what guarantees it
    lands identically — same weight, same colour, same full-table span.
    The air around it is what makes it read as a break rather than one more row. */
-.lv-tbl tbody tr:last-child > td {
-    border-bottom: 1px solid #e6ebf1; padding-bottom: 16px;
-}
+.lv-tbl tbody tr:last-child > td { border-bottom: 1px solid #e6ebf1; }
+/* The extra room around the roll-up is SYMMETRIC. Hung on the bottom of the last
+   store row — or on just the top of this one — it pushed that row's content off
+   centre: the line has to be given its air by a taller row, not by padding one
+   side of one. */
 .lv-tbl tfoot .lv-foot td {
-    border-bottom: none; border-top: 0;
-    padding-top: 16px; padding-bottom: 6px;
+    border-bottom: none; border-top: 0; padding: 16px 8px;
     color: var(--slate-charcoal); font-weight: 850;
 }
 .lv-tbl .lv-row-errmsg { text-align: left; color: #b3760a; font-weight: 700; white-space: normal; }
@@ -10558,11 +10562,13 @@ body.sam-active .hotbar-btn:hover {
 .lv-buy-empty b { color: var(--slate-charcoal); font-weight: 800; }
 .lv-buy-note { font-size: 11px; font-weight: 650; color: #b0bac6; margin-top: 10px; }
 
-/* The buying table is five columns to the sell table's nine, so it must NOT
-   inherit that one's per-column widths or its 1080px floor. */
-.lv-tbl-buy { min-width: 720px; }
-.lv-tbl-buy th, .lv-tbl-buy td { width: auto; }
-.lv-tbl-buy th:first-child, .lv-tbl-buy td:first-child { width: 22%; }
+/* The buying table sits directly under the sell table and is read against it, so
+   the two share a grid: the same 1080px floor and the same 13.5% store column,
+   which puts both tables' left edge, right edge and first data column at the same
+   x at every width. Its four data columns then split the remaining 86.5% evenly —
+   two of the sell table's columns each. (It was 720px wide with a 22% store
+   column, so nothing lined up with anything.) */
+.lv-tbl-buy { min-width: 1080px; }
 
 /* Bought against sold. Three states, not the pace pill's two: at 90-99% a store
    is drifting rather than failing, and the gap is worth seeing before it opens. */
@@ -10582,6 +10588,8 @@ body.sam-active .hotbar-btn:hover {
 .lv-buy-strip, .lv-fc-strip {
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
 }
+/* Tracking to Goal moved up to the headline strip, so the forecast is three. */
+.lv-fc-strip.s3 { grid-template-columns: repeat(3, 1fr); }
 @media (max-width: 760px) {
     .lv-buy-strip, .lv-fc-strip { grid-template-columns: repeat(2, 1fr); }
 }

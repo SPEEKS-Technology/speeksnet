@@ -9703,25 +9703,33 @@ function _lvBuyBlock(d, views) {
 
 // Everything the retired Buying & Sales tab had left once month-to-date covered
 // the rest: where the month lands if it carries on as it is.
-function _lvForecast(views) {
-    const fcs = views.map(v => _lvFcFor(v.code)).filter(Boolean);
-    if (!fcs.length) return '';
+// The month-end projection, summed across whichever stores are on screen. Split
+// out because the headline strip's fourth tile shows the same "tracking to goal"
+// figure, and two places deriving it separately is two places to get it wrong.
+function _lvFcSum(views) {
+    const fcs = (views || []).map(v => _lvFcFor(v.code)).filter(Boolean);
+    if (!fcs.length) return null;
     const add = f => fcs.reduce((a, x) => a + f(x), 0);
-    const buyProj = add(f => f.buyProj), trackRev = add(f => f.trackRev);
     const trackGp = add(f => f.trackGp), goal = add(f => f.goal);
-    const pct = goal > 0 ? trackGp / goal * 100 : null;
-    return _lvSplit('Tracking to month-end', 'if the month carries on as it is')
-        + '<div class="lv-strip lv-fc-strip">'
-        + _lvTile('Tracking Buying', _lvMoney(buyProj, false), 'Projected Month-End')
-        + _lvTile('Tracking Revenue', _lvMoney(trackRev, false), 'Projected Month-End')
-        + _lvTile('Tracking Gross Profit', _lvMoney(trackGp, false),
-            goal ? 'Against ' + _lvMoney(goal, false) : '')
-        // "Tracking to Goal", never plain "To Goal". The banked-vs-elapsed pace pill
-        // is on the same screen now and the two disagree by design — OVL reads 92%
-        // pace and 104% tracking. The word that separates them has to be in the
-        // label, because the numbers alone look like a contradiction.
-        + _lvTile('Tracking to Goal', _lvPct(pct),
-            '<span class="' + (pct >= 100 ? 'lv-fc-good' : 'lv-fc-bad') + '">Where The Month Lands</span>')
+    return {
+        buyProj: add(f => f.buyProj), trackRev: add(f => f.trackRev),
+        trackGp, goal, pct: goal > 0 ? trackGp / goal * 100 : null,
+    };
+}
+
+function _lvForecast(views) {
+    const f = _lvFcSum(views);
+    if (!f) return '';
+    // "Tracking to Goal" has moved up to the headline strip, where it replaced
+    // "Against Goal" — banked attainment on day 7 of the month always reads as a
+    // disaster (18.9%) and answered a question nobody was asking. It is not
+    // repeated here; the three tiles left are the projections behind it.
+    return _lvSplit('Tracking to month-end', '')
+        + '<div class="lv-strip lv-fc-strip s3">'
+        + _lvTile('Tracking Buying', _lvMoney(f.buyProj, false), 'Projected Month-End')
+        + _lvTile('Tracking Revenue', _lvMoney(f.trackRev, false), 'Projected Month-End')
+        + _lvTile('Tracking Gross Profit', _lvMoney(f.trackGp, false),
+            f.goal ? 'Against ' + _lvMoney(f.goal, false) : '')
         + '</div>';
 }
 
@@ -9760,7 +9768,7 @@ function _lvCombine(stores) {
     };
 }
 
-function _lvRollupTiles(r, d, label) {
+function _lvRollupTiles(r, d, label, views) {
     const prev = _lvIsPrev();
     const elapsed = prev ? (d.prev && d.prev.daysElapsed) : (d.month && d.month.daysElapsed);
     const days = d.month && elapsed !== null && elapsed !== undefined
@@ -9773,8 +9781,17 @@ function _lvRollupTiles(r, d, label) {
     // month that reads as a dead district.
     let last;
     if (_lvIsMtd()) {
-        last = _lvTile('Against Goal', _lvPct(r.pctOfGoal),
-            r.goal ? 'Of ' + _lvMoney(r.goal, false) : '');
+        // Tracking, not banked. "Against Goal" was attainment so far, which on day
+        // 7 of a 31-day month reads as 18.9% and looks like a catastrophe every
+        // time — it answered a question nobody asks standing in August. Where the
+        // month LANDS is the one worth a headline slot. Falls back to attainment
+        // if the buying sheet has not answered, so the tile is never blank.
+        const f = _lvFcSum(views);
+        last = (f && f.pct !== null)
+            ? _lvTile('Tracking to Goal', _lvPct(f.pct),
+                f.goal ? 'Of ' + _lvMoney(f.goal, false) : '')
+            : _lvTile('Against Goal', _lvPct(r.pctOfGoal),
+                r.goal ? 'Of ' + _lvMoney(r.goal, false) : '');
     } else if (_lvHasMonth(d)) {
         last = _lvTile('Month to Date Revenue', _lvMoney(r.mtdNet, false), days);
     } else {
@@ -9945,7 +9962,8 @@ function renderLiveDashboard() {
     // ---- DM / CEO: the five-store table ----
     if (dDetail) {
         if (d.district) {
-            if (dStrip) dStrip.innerHTML = _lvRollupTiles(_lvView(d.district), d, 'No Orders Yet');
+            if (dStrip) dStrip.innerHTML = _lvRollupTiles(_lvView(d.district), d, 'No Orders Yet',
+                stores.filter(m => !m.error).map(_lvView));
             // No footnote on the normal view — the column headers already say what
             // the figures are. The month-boundary case still needs explaining,
             // because "GP this month" and Pace go blank and that looks broken.
@@ -10006,7 +10024,7 @@ function renderLiveDashboard() {
         const healthy = stores.filter(m => !m.error);
         const views = (healthy.length ? healthy : stores).map(_lvView);
         const roll = _lvCombine(views);
-        tiles = _lvRollupTiles(roll, d, 'No Orders Yet');
+        tiles = _lvRollupTiles(roll, d, 'No Orders Yet', views);
         detail = _lvTable(stores, d, roll, 'Both') + _lvActivity() + _lvBuyBlock(d, views);
     }
 
