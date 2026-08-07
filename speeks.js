@@ -9620,16 +9620,6 @@ function _lvFcFor(code) {
         trackGp: n(h[k + 'TrackGP']), goal: n(h[k + 'Goal']),
     };
 }
-function _lvBuyDate() {
-    const h = _lvHub();
-    if (!h) return '';
-    // Every store is keyed on the same sheet, so any one of them dates the lot.
-    for (const c of ['ovl', 'lee', 'wsp', 'mpl', 'bal']) {
-        if (h[c + 'BuyDate']) return String(h[c + 'BuyDate']);
-    }
-    return '';
-}
-
 function _lvSplit(label, right) {
     return '<div class="lv-split"><span class="lv-split-l">' + label + '</span>'
         + '<span class="lv-split-r">' + (right || '') + '</span></div>';
@@ -9639,7 +9629,10 @@ function _lvSplit(label, right) {
 function _lvRatio(bought, sold) {
     if (!sold) return '<span class="lv-quiet">—</span>';
     const r = Math.round(bought / sold * 100);
-    const cls = r >= 100 ? 'good' : (r >= 90 ? 'warn' : 'bad');
+    // Over 100% means more stock came in than went out. Even is fine, under is
+    // better — so this is a threshold, not a band: the old scale had it exactly
+    // backwards and called a district buying 154% of what it sold 'good'.
+    const cls = r > 100 ? 'bad' : 'good';
     return '<span class="lv-ratio ' + cls + '">' + r + '%</span>';
 }
 
@@ -9654,22 +9647,19 @@ function _lvBuyBlock(d, views) {
         return _lvSplit('Buying', '')
             + '<div class="lv-buy-empty">Syncing the buying sheet&hellip;</div>';
     }
-    const stamp = _lvIsPrev()
-        ? escapeHtml(_lvDayName(d.prev.date, true))
-        : 'Month To Date';
     if (!_lvBuySpan(d)) {
-        return _lvSplit('Buying', stamp)
+        return _lvSplit('Buying', '')
             + '<div class="lv-buy-empty">This day falls in the previous month, and the buying '
             + 'sheet only carries the current one.</div>';
     }
 
     const rows = views.map(v => ({ v, b: _lvBuyFor(v.code, d) })).filter(r => r.b);
     if (!rows.length) {
-        return _lvSplit('Buying', stamp)
+        return _lvSplit('Buying', '')
             + '<div class="lv-buy-empty">No buying recorded for this period yet.</div>';
     }
 
-    let html = _lvSplit('Buying', stamp);
+    let html = _lvSplit('Buying', '');
     if (rows.length < _LV_BUY_MIN_STORES) {
         const r = rows[0];
         html += '<div class="lv-strip lv-buy-strip">'
@@ -9703,12 +9693,11 @@ function _lvBuyBlock(d, views) {
     }
 
     if (_lvIsMtd()) html += _lvForecast(views);
-    const dt = _lvBuyDate();
-    if (dt) {
-        html += '<div class="lv-buy-note">Buying is keyed into the Sales Summary sheet each '
-            + 'morning &mdash; last updated ' + escapeHtml(dt) + ', so it can run a day behind '
-            + 'the sales above.</div>';
-    }
+    // No "last updated" footnote and no date on the Buying header. Both said the
+    // same thing — that the sheet is keyed each morning and can run a day behind —
+    // and Today no longer shows this block at all, which was the case the caveat
+    // existed for. The date itself is still on the hub payload as {store}BuyDate
+    // if it is ever wanted back.
     return html;
 }
 
