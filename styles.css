@@ -10104,7 +10104,8 @@ body.sam-active .hotbar-btn:hover {
 }
 /* A frozen number must never pass for a current one, so "stale" and "closed" look
    different rather than just dropping the dot. */
-.lv-fresh.stale  { color: #b3760a; background: #fdf3e1; border-color: #eccf94; }
+/* The amber "stale" variant is gone with the age readout — the pill is open or
+   closed and nothing else. */
 .lv-fresh.closed { color: #647082; background: #f1f5f9; border-color: #e6ebf1; }
 .lv-dot {
     width: 7px; height: 7px; border-radius: 50%; background: #1f9d57; flex: none;

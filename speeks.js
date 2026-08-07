@@ -9391,25 +9391,23 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     return html + '</table></div>';
 }
 
-// "live" while the window is open and the cache is fresh; anything else says so
-// rather than letting a frozen number pass for a current one.
+// Just the trading state: open or closed.
+//
+// This used to carry an age too — "closed · last update 14m ago", and an amber
+// "no change for 24 min" once a trading hour went quiet. Both were noise. The
+// cron only writes when a number MOVES, so a quiet morning produced the same
+// pill as a broken feed and it fired often enough to stop meaning anything.
+//
+// Nothing is lost: the header beside this pill still reads "last change 1:42 pm",
+// which is the same information stated as a fact rather than as an alarm — a
+// genuinely stalled feed shows up there as a timestamp that stops advancing.
 function _lvFreshness(d) {
     // A finished day is not live and must never wear the pulsing dot — the whole
     // point of that dot is that it means "these numbers are still moving".
     if (_lvIsPrev()) return '<span class="lv-fresh closed">final</span>';
-    const age = d.syncedAt ? Math.round((Date.now() - Date.parse(d.syncedAt)) / 60000) : null;
-    if (!d.open) {
-        return '<span class="lv-fresh closed">closed'
-            + (age === null ? '' : ' &middot; last update ' + _siRelTime(d.syncedAt)) + '</span>';
-    }
-    // The cron runs every minute but only writes on a change, so a genuinely quiet
-    // stretch looks identical to a dead feed until it gets long. 20 minutes with no
-    // movement inside trading hours is worth flagging; 5 would cry wolf every
-    // lunchtime.
-    if (age !== null && age >= 20) {
-        return '<span class="lv-fresh stale">no change for ' + age + ' min</span>';
-    }
-    return '<span class="lv-fresh"><span class="lv-dot"></span>live</span>';
+    return d.open
+        ? '<span class="lv-fresh"><span class="lv-dot"></span>open</span>'
+        : '<span class="lv-fresh closed">closed</span>';
 }
 
 async function fetchLiveDashboard() {
