@@ -8945,7 +8945,9 @@ function _reconcileCommandWidgets() {
     _reconcileComboTabs(document.getElementById('ccWidget'), 'cc', CC_TABS);
     _reconcileComboTabs(document.getElementById('dcWidget'), 'dc', DC_TABS);
     _ccOpenDefaultTab();
-    _dcOpenDefaultTab();
+    // The district board deliberately does NOT open a tab. It lands on its
+    // six-cell summary — the whole company in one line, which is the thing a DM
+    // or the CEO wants on sight; anything more specific is one click away.
 }
 
 // The manager Command Center used to open collapsed to its one-line summary. It now
@@ -8976,8 +8978,9 @@ function _ccOpenDefaultTab() {
     if (_ccDefaultOpened) return;
     if (_openDefaultTab(_CC_BOARD, switchCommandTab)) _ccDefaultOpened = true;
 }
-// The district board opens the same way, and on Live for the same reason: the
-// five-store roll-up is the thing worth seeing without a click.
+// The district board has no default tab — see _reconcileCommandWidgets. It opens
+// on its summary, so this is kept only as the one-line way back to opening on a
+// tab if that is ever wanted again.
 function _dcOpenDefaultTab() {
     if (_dcDefaultOpened) return;
     if (_openDefaultTab(_DC_BOARD, switchDistrictTab)) _dcDefaultOpened = true;
@@ -9400,7 +9403,7 @@ function _lvSoundBtn() {
         + ' title="' + (on ? 'Chime on — click to mute'
                            : 'Chime off — click to hear a chime on each sale, and a lower one on refunds') + '"'
         + ' aria-pressed="' + (on ? 'true' : 'false') + '" aria-label="Sale chime">'
-        + '<svg viewBox="0 0 18 18" width="14" height="14" fill="currentColor" aria-hidden="true">'
+        + '<svg viewBox="0 0 18 18" width="18" height="18" fill="currentColor" aria-hidden="true">'
         + ico + '</svg></button>';
 }
 
@@ -32822,6 +32825,9 @@ function _dcSummaryFill() {
         set('dc-sum-live', _lvMoney(live.netToday, false)
             + ' <small>' + live.ordersToday
             + (live.ordersToday === 1 ? ' order' : ' orders') + '</small>');
+        // Revenue, not profit — the cell beside it is GP against goal, and two
+        // money figures side by side have to say which is which. That is the key's
+        // job here ("Month to Date Revenue"), so the value does not repeat it.
         set('dc-sum-mtd', _lvMoney(live.mtdNet, false));
     }
     if (!_dccRows.length) return;
@@ -32837,8 +32843,8 @@ function _dcSummaryFill() {
     const flagged = _dccRows.filter(r =>
         ['track', 'defect', 'cases', 'late'].some(k => _dccState(r, k) === 'b')).length;
     set('dc-sum-ebay', flagged
-        ? flagged + ' <small>' + (flagged === 1 ? 'store over' : 'stores over') + '</small>'
-        : 'All clear', flagged ? 'bad' : 'good');
+        ? flagged + ' <small>' + (flagged === 1 ? 'Store Over' : 'Stores Over') + '</small>'
+        : 'All Clear', flagged ? 'bad' : 'good');
 
     const avg = f => _dccRows.reduce((a, r) => a + f(r), 0) / n;
     const score = avg(r => r.score || 0);

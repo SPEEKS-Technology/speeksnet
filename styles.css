@@ -3947,6 +3947,14 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 #dcWidget .cc-panel:not(.cc-active) { display: none; }
 #dcWidget.cc-expanded { min-height: 0; }
 
+/* Six cells across, and these keys carry the qualifier that makes the number
+   readable ("Company Avg", "to Goal") — exactly the part a single ellipsised line
+   eats first, and it clips by 1150px. They wrap instead, and every key reserves
+   two lines so the six values still sit on one baseline. */
+#dc-summary .cc-sum-k {
+    white-space: normal; overflow: visible; line-height: 1.35; min-height: 2.7em;
+}
+
 .cc-panel .dcc { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .cc-panel .dcc-head { padding: 14px 20px 12px; }
 .cc-panel .dcc-body { background: transparent; padding: 0 20px 20px; }
@@ -10605,9 +10613,12 @@ body.sam-active .hotbar-btn:hover {
    pill, and carries no chrome of its own: between the two pill groups with a
    background and a border it read as an orphaned third pill competing with two
    state readouts, when it is only a preference. */
+/* Sized to the day toggle beside it (31px tall), not to the 14px icon it used to
+   carry — as a small mark next to a full-height control it read as an afterthought
+   rather than a switch. */
 .lv-sound {
     display: inline-grid; place-items: center; flex: none;
-    width: 26px; height: 26px; padding: 0; cursor: pointer;
+    width: 31px; height: 31px; padding: 0; cursor: pointer;
     color: #b0bac6; background: none; border: 0; border-radius: 999px;
     transition: color .16s ease, background .16s ease;
 }
@@ -12744,15 +12755,23 @@ body.sam-active .hotbar-btn:hover {
 .dcc-group:first-child { margin-top: 0; }
 .dcc-group-n { margin-left: auto; color: #aab4bf; }
 
+/* The selection accent used to BE the left border — 3px, transparent when idle —
+   so every unselected card was drawn on three sides and open on the fourth. The
+   border is uniform now and the accent is a bar inside it, which also means
+   selecting a card no longer changes the weight of its edge. */
 .dcc-t {
+    position: relative; overflow: hidden;
     display: block; width: 100%; text-align: left; font: inherit; cursor: pointer; color: #0f172a;
-    background: #fff; border: 1px solid #e3e8ee; border-left: 3px solid transparent;
-    border-radius: 11px; padding: 10px 12px; margin-bottom: 6px;
+    background: #fff; border: 1px solid #e3e8ee;
+    border-radius: 11px; padding: 10px 12px 10px 14px; margin-bottom: 6px;
     transition: border-color .14s ease, background .14s ease;
 }
 .dcc-t:last-child { margin-bottom: 0; }
 .dcc-t:hover { border-color: #cfe6d9; }
-.dcc-t.sel { background: #e8f7ee; border-color: #b7e3c7; border-left-color: #1f9d57; }
+.dcc-t.sel { background: #e8f7ee; border-color: #b7e3c7; }
+.dcc-t.sel::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: #1f9d57;
+}
 .dcc-t-top { display: flex; align-items: baseline; gap: 8px; }
 .dcc-t-code { font-size: 13.5px; font-weight: 800; letter-spacing: .02em; }
 /* % to goal, right-aligned. Under goal is the one exception worth colouring —

@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260807j">
+  <link rel="stylesheet" href="styles.css?v=20260807k">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260807j" defer></script>
+  <script src="speeks.js?v=20260807k" defer></script>
 </head>
 
 <body class="preload">
@@ -1036,7 +1036,9 @@
       <div class="ew-head">
           <div class="ew-titles">
               <span class="ew-eyebrow">District</span>
-              <span class="ew-title">Command Center <span class="ew-date" id="dc-scope">five stores</span></span>
+              <!-- Same scope line the login screen prints on its rail (Stores 5 /
+                   Markets KC · STL), said as one phrase. -->
+              <span class="ew-title">Command Center <span class="ew-date" id="dc-scope">5 Stores &middot; 2 Markets &middot; KC &amp; STL</span></span>
           </div>
       </div>
 
@@ -1052,15 +1054,18 @@
           </div>
       </div>
 
-      <!-- Collapsed default: the district in one line. Today's selling comes from the
-           live feed, the rest from the same rows the tabs read. -->
+      <!-- What the board opens on: the whole company in one line. Today's selling
+           comes from the live feed, the rest from the same rows the tabs read.
+           Each key says exactly what its number is — a company average is not a
+           store's score, and tracking is not banked, so the label carries that
+           rather than leaving six bare figures to be guessed at. -->
       <div class="cc-summary" id="dc-summary">
           <div class="cc-sum" id="dc-sum-live"><div class="cc-sum-k">Net Sales Today</div><div class="cc-sum-v">—</div></div>
-          <div class="cc-sum" id="dc-sum-mtd"><div class="cc-sum-k">Month to Date</div><div class="cc-sum-v">—</div></div>
-          <div class="cc-sum" id="dc-sum-goal"><div class="cc-sum-k">Tracking to Goal</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-mtd"><div class="cc-sum-k">Month to Date Revenue</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-goal"><div class="cc-sum-k">Company Tracking to Goal</div><div class="cc-sum-v">—</div></div>
           <div class="cc-sum" id="dc-sum-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
-          <div class="cc-sum" id="dc-sum-score"><div class="cc-sum-k">Scorecard</div><div class="cc-sum-v">—</div></div>
-          <div class="cc-sum" id="dc-sum-audit"><div class="cc-sum-k">PayMore Audit</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-score"><div class="cc-sum-k">Scorecard &middot; Company Avg</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-audit"><div class="cc-sum-k">PayMore Audit &middot; Company Avg</div><div class="cc-sum-v">—</div></div>
       </div>
 
       <div class="cc-body">
