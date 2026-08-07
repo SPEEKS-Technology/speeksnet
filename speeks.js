@@ -9215,7 +9215,8 @@ function _lvRollupTiles(r, d, label) {
     return _lvTile(prev ? 'Net Sales' : 'Net Sales Today', _lvMoney(r.netToday, true), _lvStamp(d), true)
         + _lvTile('Orders', String(r.ordersToday),
             r.aov === null ? label : 'average ' + _lvMoney(r.aov, true))
-        + _lvTile('Gross Margin', _lvPct(r.marginToday), 'profit ' + _lvMoney(r.gpToday, false))
+        + _lvTile('Gross Margin', _lvPct(r.marginToday),
+            'profit ' + _lvMoney(r.gpToday, false) + ' &middot; cost ' + _lvMoney(r.cogsToday, false))
         // On the 1st there is no month behind the previous day, so this tile shows
         // the day's own profit instead of a $0 month that reads as a dead store.
         + (_lvHasMonth(d)
@@ -9233,9 +9234,11 @@ function _lvStoreRow(v, d, foot) {
     const tint = STORE_TINTS[v.code]
         ? '<i class="lv-tint" style="background:' + STORE_TINTS[v.code] + '"></i>' : '';
     if (v.error) {
+        // colspan spans every column EXCEPT the store cell — keep it in step with
+        // the header row or a broken store knocks the table out of alignment.
         return '<tr class="lv-row-err"><td><span class="lv-store">' + tint
             + '<b>' + escapeHtml(v.code) + '</b></span></td>'
-            + '<td colspan="7" class="lv-row-errmsg">not reporting &middot; '
+            + '<td colspan="9" class="lv-row-errmsg">not reporting &middot; '
             + escapeHtml(v.error) + '</td></tr>';
     }
     const asOf = d.asOfCentral;
@@ -9252,6 +9255,11 @@ function _lvStoreRow(v, d, foot) {
         + '<b>' + escapeHtml(v.code) + '</b><span class="lv-store-nm">'
         + escapeHtml(v.name || '') + '</span></span></td>'
         + '<td class="lv-strongnum">' + _lvMoney(v.netToday, true) + '</td>'
+        // Cost and gross profit for the day itself. The single-store view has had
+        // these all along (cost under the margin tile, GP as a chip); the table did
+        // not, so the district read sales without the money actually made on them.
+        + '<td class="lv-quietnum">' + _lvMoney(v.cogsToday, false) + '</td>'
+        + '<td class="lv-strongnum">' + _lvMoney(v.gpToday, false) + '</td>'
         + '<td>' + v.ordersToday + '</td>'
         + '<td>' + (v.aov === null ? '—' : _lvMoney(v.aov, true)) + '</td>'
         + '<td>' + _lvPct(v.marginToday) + '</td>'
@@ -9265,6 +9273,7 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     const prev = _lvIsPrev();
     let html = '<div class="lv-tbl-scroll"><table class="lv-tbl"><thead><tr>'
         + '<th>Store</th><th>' + (prev ? 'Net sales' : 'Net today') + '</th>'
+        + '<th>Cost</th><th>Gross profit</th>'
         + '<th>Orders</th><th>Avg order</th><th>Margin</th>'
         + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>Pace</th>'
         + '<th>' + (prev ? 'Refunds' : 'Last order') + '</th>'
