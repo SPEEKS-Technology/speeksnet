@@ -3954,6 +3954,10 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 #dc-summary .cc-sum-k {
     white-space: normal; overflow: visible; line-height: 1.35; min-height: 2.7em;
 }
+/* Centred, and the padding evened up with it — the extra 2px on the left was
+   there to sit a left-aligned label off the cell divider, and off-centre by 2px
+   is more visible than off-edge by 2px ever was. */
+#dc-summary .cc-sum { text-align: center; padding-left: 16px; }
 
 .cc-panel .dcc { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .cc-panel .dcc-head { padding: 14px 20px 12px; }
