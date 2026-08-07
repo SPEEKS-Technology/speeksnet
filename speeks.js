@@ -20172,8 +20172,16 @@ function siteCopyBtn(value, what) {
 // overflow-wrap:anywhere means even a long value with no spaces wraps rather
 // than pushes. A normal SKU sits well under the cap and still never breaks at
 // its own hyphens, so it stays readable and copyable in one piece.
-function siteSkuSpan(value, style = '', max = 230) {
-    return `<span style="display:inline-block; max-width:${max}px; overflow-wrap:anywhere; ${style}">${escapeHtml(value)}</span>`;
+// `min` is the floor the column may not be squeezed below. overflow-wrap:anywhere
+// is what stops a pathological SKU widening the column, but it does it by telling
+// the browser the value may break at ANY character — so min-content becomes one
+// character wide, and in a crowded table the column collapses and an ordinary
+// 14-character SKU stacks four letters to a line. A min-width raises that floor
+// back to one line's worth without giving up the cap at the other end.
+function siteSkuSpan(value, style = '', max = 230, min = 0) {
+    return `<span style="display:inline-block; max-width:${max}px;`
+        + (min ? ` min-width:${min}px;` : '')
+        + ` overflow-wrap:anywhere; ${style}">${escapeHtml(value)}</span>`;
 }
 
 function siteCopy(ev, btn) {
@@ -28456,14 +28464,21 @@ let _agClosedOpen = {};   // store → whether its "Closed Items" section is exp
 
 const _agMoney = v => (v == null || v === '') ? '—'
     : '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-// The "Date listed" field is typed by hand as DD/MM/YYYY (Ethan's preference —
-// hunting through a picker for a months-old date is slow). Lenient parse:
-// -, . or / separators, 2-digit years, and a US-style month-first entry is
-// auto-swapped when the day slot can only be a month (e.g. 16/03 vs 03/16).
-function _agParseDMY(s) {
+// The "Date listed" field is typed by hand rather than picked — hunting through
+// a picker for a months-old date is slow.
+//
+// MONTH FIRST. This was day-first, which read "23/03/2026" for 23 March and was
+// being misread as a date in the 23rd month by everyone using it. Every other
+// date on the site is US format, so this one being the exception was the whole
+// problem.
+//
+// Lenient parse: -, . or / separators, 2-digit years, and a day-first entry is
+// auto-swapped when the FIRST slot cannot be a month (23/03 → 03/23). Anyone with
+// the old habit still gets the date they meant, and 03/04 stays March 4th.
+function _agParseMDY(s) {
     const m = String(s || '').trim().match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
     if (!m) return null;
-    let d = +m[1], mo = +m[2], y = +m[3];
+    let mo = +m[1], d = +m[2], y = +m[3];
     if (y < 100) y += 2000;
     if (mo > 12 && d <= 12) { const t = d; d = mo; mo = t; }
     if (d < 1 || d > 31 || mo < 1 || mo > 12 || y < 2000 || y > 2100) return null;
@@ -28471,12 +28486,12 @@ function _agParseDMY(s) {
     if (dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
     return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
-function _agFmtDMY(iso) {
+function _agFmtMDY(iso) {
     if (!iso) return '';
     const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
-    return m ? `${m[3]}/${m[2]}/${m[1]}` : '';
+    return m ? `${m[2]}/${m[3]}/${m[1]}` : '';
 }
-// Shared oninput mask for the DD/MM/YYYY fields: digits only, the slashes are
+// Shared oninput mask for the MM/DD/YYYY fields: digits only, the slashes are
 // inserted automatically, capped at ##/##/####.
 const _AG_DATE_MASK = "const d=this.value.replace(/\\D/g,'').slice(0,8); this.value=d.length>4?d.slice(0,2)+'/'+d.slice(2,4)+'/'+d.slice(4):(d.length>2?d.slice(0,2)+'/'+d.slice(2):d);";
 const _agFmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
@@ -28657,7 +28672,10 @@ function _agStatusChip(it) {
 
 function _agTableHtml(items, canDm) {
     const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 14px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
-    let html = `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; min-width:${canDm ? 1020 : 940}px;">
+    // Widened by the SKU column's new floor — without this the extra width comes
+    // out of the Item and Notes columns instead, which is the squeeze that was
+    // breaking the SKUs in the first place.
+    let html = `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; min-width:${canDm ? 1100 : 1020}px;">
         <thead><tr>${th('Status')}${th('SKU')}${th('Item')}${th('Listed')}${th('Est. Value')}${th('Cost')}${th('Notes & Replies')}${canDm ? th('') : ''}</tr></thead><tbody>`;
     items.forEach(it => { html += _agRowHtml(it, canDm); });
     return html + `</tbody></table></div>`;
@@ -28673,7 +28691,7 @@ function _agRowHtml(it, canDm) {
             ${td(_agStatusChip(it))}
             ${td(inp('sku', it.sku, 'text', '140px'))}
             ${td(inp('title', it.title, 'text', '240px'))}
-            ${td(inp('date_created', _agFmtDMY(it.date_created), 'text', '105px', ` placeholder="DD/MM/YYYY" maxlength="10" oninput="${_AG_DATE_MASK}"`))}
+            ${td(inp('date_created', _agFmtMDY(it.date_created), 'text', '105px', ` placeholder="MM/DD/YYYY" maxlength="10" oninput="${_AG_DATE_MASK}"`))}
             ${td(inp('est_value', it.est_value, 'number', '90px'))}
             ${td(inp('cost', it.cost, 'number', '90px'))}
             ${td(_agThreadHtml(it, canDm, true))}
@@ -28693,9 +28711,9 @@ function _agRowHtml(it, canDm) {
     </div>`, 'white-space:nowrap;');
     return `<tr>
         ${td(_agStatusChip(it), 'min-width:150px;')}
-        ${td(siteSkuSpan(it.sku || '—', 'font-weight:700; color:#64748b;'))}
+        ${td(siteSkuSpan(it.sku || '—', 'font-weight:700; color:#64748b;', 230, 138))}
         ${td(`<span style="color:var(--slate-charcoal); font-weight:600;">${escapeHtml(it.title || '—')}</span>`, 'min-width:200px;')}
-        ${td(it.date_created ? `<span style="white-space:nowrap;">${_agFmtDMY(it.date_created)}${days != null ? ` <span style="color:#94a3b8; font-weight:700;">· ${days}d</span>` : ''}</span>` : '—')}
+        ${td(it.date_created ? `<span style="white-space:nowrap;">${_agFmtMDY(it.date_created)}${days != null ? ` <span style="color:#94a3b8; font-weight:700;">· ${days}d</span>` : ''}</span>` : '—')}
         ${td(`<span style="font-weight:800; white-space:nowrap;">${_agMoney(it.est_value)}</span>`)}
         ${td(`<span style="white-space:nowrap; color:#64748b;">${_agMoney(it.cost)}</span>`)}
         ${td(_agThreadHtml(it, canDm), 'min-width:300px; width:38%;')}
@@ -28945,8 +28963,8 @@ async function agSaveItemEdit(btn, itemId) {
     const dateRaw = get('date_created');
     let dateIso = '';
     if (dateRaw) {
-        dateIso = _agParseDMY(dateRaw);
-        if (!dateIso) { alert('Enter the listed date as DD/MM/YYYY (e.g. 16/03/2026).'); return; }
+        dateIso = _agParseMDY(dateRaw);
+        if (!dateIso) { alert('Enter the listed date as MM/DD/YYYY (e.g. 03/16/2026).'); return; }
     }
     // Changed DM notes (an emptied box means "no change" — notes are edited,
     // not deleted, from here).
@@ -29019,7 +29037,7 @@ function _agAddPanelHtml() {
         <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
             <div class="vr-up-field">${lbl('SKU')}<input type="text" id="ag-add-sku" class="vr-up-input" style="width:160px;" placeholder="KS01-…" value="${keep('ag-add-sku')}"></div>
             <div class="vr-up-field">${lbl('Item title')}<input type="text" id="ag-add-title" class="vr-up-input" style="width:280px;" placeholder="What is it?" value="${keep('ag-add-title')}"></div>
-            <div class="vr-up-field">${lbl('Date listed')}<input type="text" id="ag-add-date" class="vr-up-input" style="width:120px;" placeholder="DD/MM/YYYY" maxlength="10" oninput="${_AG_DATE_MASK}" value="${keep('ag-add-date')}"></div>
+            <div class="vr-up-field">${lbl('Date listed')}<input type="text" id="ag-add-date" class="vr-up-input" style="width:120px;" placeholder="MM/DD/YYYY" maxlength="10" oninput="${_AG_DATE_MASK}" value="${keep('ag-add-date')}"></div>
             <div class="vr-up-field">${lbl('Estimated value ($)')}<input type="number" step="0.01" id="ag-add-value" class="vr-up-input" style="width:120px;" value="${keep('ag-add-value')}"></div>
             <div class="vr-up-field">${lbl('Cost ($)')}<input type="number" step="0.01" id="ag-add-cost" class="vr-up-input" style="width:110px;" value="${keep('ag-add-cost')}"></div>
         </div>
@@ -29046,8 +29064,8 @@ async function agConfirmAdd(btn) {
     const dateRaw = val('ag-add-date');
     let dateIso = null;
     if (dateRaw) {
-        dateIso = _agParseDMY(dateRaw);
-        if (!dateIso) { alert('Enter the listed date as DD/MM/YYYY (e.g. 16/03/2026).'); return; }
+        dateIso = _agParseMDY(dateRaw);
+        if (!dateIso) { alert('Enter the listed date as MM/DD/YYYY (e.g. 03/16/2026).'); return; }
     }
     const old = btn.innerText;
     btn.disabled = true; btn.innerText = 'Adding…';

@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260807b">
+  <link rel="stylesheet" href="styles.css?v=20260807c">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -17,7 +17,7 @@
   <!-- SheetJS: parses the DM's variance-report Excel upload client-side.
        Vendored locally — the CDN copy kept getting blocked on some networks. -->
   <script src="xlsx.full.min.js?v=0.18.5"></script>
-  <script src="speeks.js?v=20260807b" defer></script>
+  <script src="speeks.js?v=20260807c" defer></script>
 </head>
 <body class="preload">
 
@@ -758,7 +758,11 @@
 
     <!-- ===== AGING INVENTORY PANE ===== -->
     <section class="ws-pane" id="ws-pane-aging">
-      <div class="card ws-tool-panel ws-panel">
+      <!-- ws-panel-aging: flows with the page rather than scrolling inside itself,
+           the way the Monthly Brief and Store KPIs panes do. Every row here carries
+           a whole note thread, so a row is ~190px and the standard pane height fit
+           barely three of them before the inner scrollbar took over. -->
+      <div class="card ws-tool-panel ws-panel ws-panel-aging">
           <div class="ws-head">
               <div class="ws-head-main">
                   <span class="ws-head-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>

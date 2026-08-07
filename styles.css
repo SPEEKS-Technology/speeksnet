@@ -7133,6 +7133,23 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .ws-panel-kpis .kpi-grid-section-header,
 .ws-panel-kpis .kpi-grid-th { position: static; }
 
+/* Aging Inventory rows are not rows — each carries a whole DM/store note thread
+   and runs to ~190px, so the shared calc(100vh - 250px) fit barely three before
+   the inner scrollbar took over and reviewing a store's list meant scrolling
+   inside a box inside a page.
+   The box now grows to fit its content and the PAGE scrolls, which is what the
+   Monthly Brief and Store KPIs panes beside it already do. min-height keeps it
+   from ever being SHORTER than it was. */
+.ws-panel-aging { height: auto !important; overflow: visible !important; min-height: calc(100vh - 250px); }
+.ws-panel-aging .ws-scroll { overflow: visible; flex: none; min-height: 0; }
+/* Losing the inner scroll would otherwise take the store picker and Add Item off
+   screen with it. .top-nav is position:fixed at 60px, so that is what this has to
+   clear — a sticky header at top:0 would slide underneath it. */
+.ws-panel-aging .ws-head {
+    position: sticky; top: 60px; z-index: 4;
+    background: #fff; border-bottom: 1px solid #eef2f6;
+}
+
 /* Monthly Brief pane flows as part of the page too: natural height, no inner scrollbar */
 .ws-panel-brief { height: auto !important; min-height: 0 !important; overflow: visible !important; }
 .ws-panel-brief .ws-scroll { overflow: visible; flex: none; min-height: 0; }
