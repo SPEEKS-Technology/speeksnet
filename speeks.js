@@ -9080,8 +9080,79 @@ function _lvPace(pctOfGoal, elapsedPct) {
     return Math.round(p / e * 100);
 }
 
-function _lvTile(k, v, sub, accent) {
-    return '<div class="cc-cell' + (accent ? ' lv-accent' : '') + '">'
+// --- "something just happened at MPL" ---------------------------------------
+// The payload is a snapshot, not an event stream, so a sale or a refund is derived
+// by diffing successive fetches. The cron writes only on a change and pings us, so
+// a fetch landing with a bigger order count really does mean a sale just rang.
+//
+// The FIRST load has nothing to compare against and deliberately flags nothing —
+// otherwise opening the dashboard would light up every store at once and the
+// highlight would stop meaning "just now".
+let _lvSnap = null;    // code -> { net, orders, returns, lastOrderAt }
+let _lvPulse = {};     // code -> 'sale' | 'refund'; consumed by the next render
+let _lvEvent = null;   // sticky, so the activity line survives re-renders
+
+function _lvTrackChanges(d) {
+    const next = {};
+    (d.stores || []).forEach(m => {
+        next[m.code] = {
+            net: Number(m.netToday) || 0, orders: Number(m.ordersToday) || 0,
+            returns: Number(m.returnsToday) || 0, lastOrderAt: m.lastOrderAt || '',
+        };
+    });
+    if (_lvSnap) {
+        Object.keys(next).forEach(code => {
+            const a = _lvSnap[code], b = next[code];
+            if (!a) return;
+            // Refunds are checked FIRST. A refund lowers net sales while the order
+            // count stays put, so testing for a sale first would let it pass as
+            // "nothing happened" — the one event most worth surfacing.
+            if (b.returns > a.returns) {
+                _lvPulse[code] = 'refund';
+                _lvEvent = { kind: 'refund', code, amount: b.returns - a.returns };
+            } else if (b.orders > a.orders || b.lastOrderAt > a.lastOrderAt) {
+                _lvPulse[code] = 'sale';
+                _lvEvent = { kind: 'sale', code, amount: b.net - a.net, at: b.lastOrderAt };
+            }
+        });
+    }
+    _lvSnap = next;
+}
+
+// One line under the table naming the newest activity. Falls back to the freshest
+// order in the payload so it says something on a cold load rather than sitting
+// blank until the first change comes through.
+function _lvActivity(d) {
+    if (_lvIsPrev()) return '';   // a finished day has no "just now"
+    if (_lvEvent && _lvEvent.kind === 'refund') {
+        return '<div class="lv-activity refund"><span class="lv-adot"></span>Refund &middot; <b>'
+            + escapeHtml(_lvEvent.code) + '</b>'
+            + (_lvEvent.amount > 0 ? ' &middot; <b>' + _lvMoney(_lvEvent.amount, true) + '</b>' : '')
+            + '</div>';
+    }
+    let newest = null;
+    (d.stores || []).forEach(m => {
+        if (m.lastOrderAt && (!newest || m.lastOrderAt > newest.lastOrderAt)) newest = m;
+    });
+    if (!newest) return '';
+    // An order from a previous day is not "latest activity" — on a quiet morning
+    // that would present yesterday's last sale as if it had just happened.
+    if (_lvCentralDay(newest.lastOrderAt) !== String(d.asOfCentral || '').slice(0, 10)) return '';
+    return '<div class="lv-activity"><span class="lv-adot"></span>Latest sale &middot; <b>'
+        + escapeHtml(newest.code) + '</b>'
+        + (newest.lastOrderAmount ? ' &middot; <b>' + _lvMoney(newest.lastOrderAmount, true) + '</b>' : '')
+        + ' &middot; ' + _lvOrderClock(newest.lastOrderAt)
+        + ' <span class="lv-aq">' + _siRelTime(newest.lastOrderAt) + '</span></div>';
+}
+
+// Extra class on the cell/tile that just moved, so the highlight lands on the
+// store it belongs to rather than the whole panel.
+function _lvHit(code) {
+    return (!_lvIsPrev() && _lvPulse[code]) ? ' lv-hit-' + _lvPulse[code] : '';
+}
+
+function _lvTile(k, v, sub, accent, cls) {
+    return '<div class="cc-cell' + (accent ? ' lv-accent' : '') + (cls || '') + '">'
         + '<span class="sh-stripe g"></span>'
         + '<div class="sh-k">' + k + '</div>'
         + '<div class="sh-v">' + v + '</div>'
@@ -9134,7 +9205,8 @@ function _lvLastOrder(m, asOf) {
 function _lvStoreTiles(v, d) {
     const prev = _lvIsPrev();
     const mtdAov = v.mtdOrders > 0 ? v.mtdNet / v.mtdOrders : null;
-    return _lvTile(prev ? 'Net Sales' : 'Net Sales Today', _lvMoney(v.netToday, true), _lvStamp(d), true)
+    return _lvTile(prev ? 'Net Sales' : 'Net Sales Today', _lvMoney(v.netToday, true),
+            _lvStamp(d), true, _lvHit(v.code))
         + _lvTile('Orders', String(v.ordersToday),
             v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) + ' refunded'
                                : (prev ? 'no refunds' : 'no refunds today'))
@@ -9254,16 +9326,16 @@ function _lvStoreRow(v, d, foot) {
     return '<tr' + (foot ? ' class="lv-foot"' : '') + '><td><span class="lv-store">' + tint
         + '<b>' + escapeHtml(v.code) + '</b><span class="lv-store-nm">'
         + escapeHtml(v.name || '') + '</span></span></td>'
-        + '<td class="lv-strongnum">' + _lvMoney(v.netToday, true) + '</td>'
+        + '<td class="lv-strongnum' + _lvHit(v.code) + '">' + _lvMoney(v.netToday, true) + '</td>'
         // Cost and gross profit for the day itself. The single-store view has had
         // these all along (cost under the margin tile, GP as a chip); the table did
         // not, so the district read sales without the money actually made on them.
         + '<td class="lv-quietnum">' + _lvMoney(v.cogsToday, false) + '</td>'
         + '<td class="lv-strongnum">' + _lvMoney(v.gpToday, false) + '</td>'
-        + '<td>' + v.ordersToday + '</td>'
-        + '<td class="lv-boldnum">' + _lvPct(v.marginToday) + '</td>'
+        + '<td class="lv-mid">' + v.ordersToday + '</td>'
+        + '<td class="lv-boldnum lv-mid">' + _lvPct(v.marginToday) + '</td>'
         + '<td>' + gp + '</td>'
-        + '<td><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
+        + '<td class="lv-mid"><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
         + (v.paceIndex === null || v.paceIndex === undefined ? '—' : v.paceIndex) + '</span></td>'
         + '<td>' + tail + '</td></tr>';
 }
@@ -9273,8 +9345,8 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     let html = '<div class="lv-tbl-scroll"><table class="lv-tbl"><thead><tr>'
         + '<th>Store</th><th>' + (prev ? 'Net sales' : 'Net today') + '</th>'
         + '<th>Cost</th><th>Gross profit</th>'
-        + '<th>Orders</th><th>Margin</th>'
-        + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>Pace</th>'
+        + '<th class="lv-mid">Orders</th><th class="lv-mid">Margin</th>'
+        + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th class="lv-mid">Pace</th>'
         + '<th>' + (prev ? 'Refunds' : 'Last order') + '</th>'
         + '</tr></thead><tbody>';
     // Fixed store order (the edge function returns it that way) — the team reads
@@ -9330,6 +9402,9 @@ async function fetchLiveDashboard() {
         } else if (d.pending) {
             _lvErr = d.message || 'No live data yet — the first refresh has not run.';
         } else {
+            // Diff against the previous fetch BEFORE it is replaced — this is the
+            // only place a sale or refund can be spotted.
+            _lvTrackChanges(d);
             _lvData = d;
             _lvErr = '';
         }
@@ -9366,6 +9441,7 @@ function renderLiveDashboard() {
             // the figures are. The month-boundary case still needs explaining,
             // because "GP this month" and Pace go blank and that looks broken.
             dDetail.innerHTML = _lvTable(stores, d, d.district, 'District')
+                + _lvActivity(d)
                 + (_lvHasMonth(d) ? ''
                     : '<div class="lv-note">This was the last day of the previous month, so '
                       + 'month-to-date and pace are not shown against it.</div>');
@@ -9416,7 +9492,7 @@ function renderLiveDashboard() {
         const healthy = stores.filter(m => !m.error);
         const roll = _lvCombine((healthy.length ? healthy : stores).map(_lvView));
         tiles = _lvRollupTiles(roll, d, 'no orders yet');
-        detail = _lvTable(stores, d, roll, 'Both');
+        detail = _lvTable(stores, d, roll, 'Both') + _lvActivity(d);
     }
 
     const stamp = _lvIsPrev()
@@ -9434,6 +9510,11 @@ function renderLiveDashboard() {
     const roll = stores.length === 1 ? stores[0] : _lvCombine(stores.filter(m => !m.error));
     _ccSum('cc-sum-live', _lvMoney(roll.netToday, false)
         + ' <small>' + roll.ordersToday + (roll.ordersToday === 1 ? ' order' : ' orders') + '</small>');
+
+    // Consumed. The highlight is a CSS animation that plays when the element is
+    // inserted, so leaving these set would replay it on every unrelated re-render
+    // (a tab switch, the day toggle) and turn "just now" into background noise.
+    _lvPulse = {};
 }
 
 // ============================================================================

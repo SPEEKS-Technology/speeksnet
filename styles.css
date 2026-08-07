@@ -10205,7 +10205,14 @@ body.sam-active .hotbar-btn:hover {
    equally, which is what fixed layout does with unsized columns.
    min-width keeps that from crushing on a laptop — the wrapper scrolls instead. */
 .lv-tbl { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; min-width: 820px; }
-.lv-tbl th:first-child, .lv-tbl td:first-child { width: 19%; }
+/* The store column deliberately takes a big share. The eight numeric columns were
+   already mathematically equal, but each one was far wider than its content, so
+   right-aligned figures of different lengths left ragged gaps that read as uneven.
+   Absorbing the slack into the one column that holds a NAME tightens the rest. */
+.lv-tbl th:first-child, .lv-tbl td:first-child { width: 30%; }
+/* Counts, percentages and the pace pill sit centred in their slot; money stays
+   right-aligned so the decimal points line up down the column. */
+.lv-tbl .lv-mid { text-align: center; }
 .lv-tbl th {
     text-align: right; padding: 0 10px 9px; white-space: nowrap;
     font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
@@ -10235,6 +10242,43 @@ body.sam-active .hotbar-btn:hover {
     padding-top: 12px; color: var(--slate-charcoal); font-weight: 850;
 }
 .lv-tbl .lv-row-errmsg { text-align: left; color: #b3760a; font-weight: 700; white-space: normal; }
+
+/* A sale (green) or a refund (red) just landed at this store. Fires once, on the
+   row it belongs to, and fades out — a highlight that stayed would stop meaning
+   "just now". Applied to the Net cell and to the Net Sales tile on a store's own
+   dashboard. */
+@keyframes lvHitSale {
+    0%   { background: rgba(31, 157, 87, .30); }
+    70%  { background: rgba(31, 157, 87, .16); }
+    100% { background: transparent; }
+}
+@keyframes lvHitRefund {
+    0%   { background: rgba(220, 38, 38, .24); }
+    70%  { background: rgba(220, 38, 38, .12); }
+    100% { background: transparent; }
+}
+.lv-hit-sale   { animation: lvHitSale 3s ease-out 1; }
+.lv-hit-refund { animation: lvHitRefund 3s ease-out 1; }
+/* The accent tile already carries a background, so the flash has to beat it. */
+.cc-cell.lv-accent.lv-hit-sale   { animation: lvHitSale 3s ease-out 1; }
+.cc-cell.lv-accent.lv-hit-refund { animation: lvHitRefund 3s ease-out 1; }
+@media (prefers-reduced-motion: reduce) {
+    .lv-hit-sale, .lv-hit-refund { animation: none; }
+}
+
+/* Who rang the newest sale, or took the newest refund. */
+.lv-activity {
+    display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+    margin-top: 13px; font-size: 11.5px; font-weight: 700; color: #647082;
+}
+.lv-activity b { color: var(--slate-charcoal); font-weight: 850; font-variant-numeric: tabular-nums; }
+.lv-activity .lv-aq { color: #94a3b8; font-weight: 650; }
+.lv-adot {
+    width: 7px; height: 7px; border-radius: 50%; background: #1f9d57; flex: none;
+    box-shadow: 0 0 0 3px rgba(31, 157, 87, .18);
+}
+.lv-activity.refund { color: #b3760a; }
+.lv-activity.refund .lv-adot { background: #dc2626; box-shadow: 0 0 0 3px rgba(220, 38, 38, .16); }
 
 @media (max-width: 900px) {
     /* The store name is the first thing to go: the code identifies the row and the
