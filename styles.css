@@ -10453,12 +10453,17 @@ body.sam-active .hotbar-btn:hover {
 .lv-of { color: #b0bac6; font-weight: 650; }
 /* The roll-up line — District on the sell table, Total on the buying one. Its rule
    used to be #e6ebf1, all but identical to the #f3f6f9 hairline under every store
-   row, so at a glance the total read as a sixth store. Darker and with air above
-   it, it separates. */
+   row, so at a glance the total read as a sixth store. What separates it is the
+   rule AND the air: a heavier line hard against the last store still reads as one
+   more row, where the same line with space around it reads as a break. */
 .lv-tbl tfoot .lv-foot td {
-    border-bottom: none; border-top: 2px solid #c2ccd8;
-    padding-top: 14px; color: var(--slate-charcoal); font-weight: 850;
+    border-bottom: none; border-top: 2px solid #b9c5d2;
+    padding-top: 18px; padding-bottom: 6px;
+    color: var(--slate-charcoal); font-weight: 850;
 }
+/* The gap belongs ABOVE the rule as well as below it, and a table cell cannot
+   carry margin — so the last body row gives it, on both tables. */
+.lv-tbl tbody tr:last-child > td { padding-bottom: 16px; }
 .lv-tbl .lv-row-errmsg { text-align: left; color: #b3760a; font-weight: 700; white-space: normal; }
 
 /* A sale (green) or a refund (red) just landed at this store: the WHOLE ROW washes

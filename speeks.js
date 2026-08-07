@@ -9843,7 +9843,12 @@ function _lvStoreRow(v, d, foot) {
 function _lvTable(stores, d, rollup, rollupLabel) {
     const prev = _lvIsPrev();
     const tailHead = _lvIsMtd() ? 'Avg / day' : (prev ? 'Refunds' : 'Last order');
-    let html = '<div class="lv-tbl-scroll"><table class="lv-tbl"><thead><tr>'
+    // Named, the same way Buying below it is. Unlabelled, the table read as "the
+    // dashboard" and Buying as an appendix to it; they are two halves of the same
+    // question, so both get a header. Lives here so every surface that draws this
+    // table gets it — district and Multi-Store Manager, on all three days.
+    let html = _lvSplit('Selling', '')
+        + '<div class="lv-tbl-scroll"><table class="lv-tbl"><thead><tr>'
         + '<th>Store</th><th>' + (_lvMode === 'today' ? 'Net today' : 'Net sales') + '</th>'
         + '<th>Cost</th><th>Gross profit</th>'
         + '<th>Orders</th><th>Margin</th>'
