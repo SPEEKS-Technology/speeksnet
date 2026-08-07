@@ -9593,23 +9593,48 @@ function _lvBuyFor(code, d) {
     const buy = _lvBuyArr('wkBuy', code);
     if (!span || !buy) return null;
     const mar = _lvBuyArr('wkBuyMarginPct', code);
+    const sell = _lvBuyArr('wkSell', code);
     const num = n => Number(n) || 0;
-    let bought = 0, paid = 0;
+    let bought = 0, paid = 0, sold = 0, lastBuyDay = 0;
     for (let day = span.from; day <= span.to; day++) {
+        // Selling accumulates over the WHOLE span, including days with no buying —
+        // a Sunday still trades on the webstore.
+        sold += num(sell && sell[day - 1]);
         const b = num(buy[day - 1]);
         if (!b) continue;                       // a closed day, or one not keyed in yet
         bought += b;
+        lastBuyDay = day;
         // wkBuyMarginPct is a FRACTION of that day's resale value. Margins cannot
         // be averaged across days of different size, so cash paid is summed and
         // the margin derived back out of the totals.
         paid += b * (1 - num(mar && mar[day - 1]));
     }
-    return { bought, paid, margin: bought > 0 ? (bought - paid) / bought * 100 : null };
+    // Bought vs sold has to compare the SAME DAYS on both sides, so selling comes
+    // from the sheet's own daily column and not from Shopify's month-to-date.
+    // Shopify includes today; the sheet's buying does not, because a day's
+    // purchases are keyed the following morning. Against a 7-day Shopify month a
+    // 6-day buy total read 15 points low across the district and turned LEE green
+    // at 87% when it was really 116%. The two feeds agree to the cent on a closed
+    // day, so this changes nothing except which days are counted.
+    // Only days up to the last one with buying count: a day the sheet has not
+    // reached yet has no buying to weigh its sales against.
+    if (lastBuyDay && lastBuyDay < span.to) {
+        sold = 0;
+        for (let day = span.from; day <= lastBuyDay; day++) sold += num(sell && sell[day - 1]);
+    }
+    return {
+        bought, paid, sold: sell ? sold : null,
+        margin: bought > 0 ? (bought - paid) / bought * 100 : null,
+    };
 }
 function _lvBuySum(rows) {
     const bought = rows.reduce((a, r) => a + r.bought, 0);
     const paid = rows.reduce((a, r) => a + r.paid, 0);
-    return { bought, paid, margin: bought > 0 ? (bought - paid) / bought * 100 : null };
+    // null if ANY store is missing its sell column — a partial denominator would
+    // read as a ratio rather than as missing data.
+    const sold = rows.some(r => r.sold === null) ? null
+        : rows.reduce((a, r) => a + r.sold, 0);
+    return { bought, paid, sold, margin: bought > 0 ? (bought - paid) / bought * 100 : null };
 }
 // Month-end projections — the only part of the old Buying & Sales tab that the
 // month-to-date view does not already say.
@@ -9669,7 +9694,7 @@ function _lvBuyBlock(d, views) {
             + _lvTile('Bought', _lvMoney(r.b.bought, false), 'Resale Value', true)
             + _lvTile('Cash Paid', _lvMoney(r.b.paid, false), 'Out Of The Till')
             + _lvTile('Buy Margin', _lvPct(r.b.margin), 'On Purchases')
-            + _lvTile('Bought vs Sold', _lvRatio(r.b.bought, r.v.netToday), 'Stock In Against Out')
+            + _lvTile('Bought vs Sold', _lvRatio(r.b.bought, r.b.sold), 'Stock In Against Out')
             + '</div>';
     } else {
         html += '<div class="lv-tbl-scroll"><table class="lv-tbl lv-tbl-buy"><thead><tr>'
@@ -9684,15 +9709,14 @@ function _lvBuyBlock(d, views) {
                 + '<td class="lv-strongnum">' + _lvMoney(r.b.bought, false) + '</td>'
                 + '<td class="lv-quietnum">' + _lvMoney(r.b.paid, false) + '</td>'
                 + '<td class="lv-boldnum">' + _lvPct(r.b.margin) + '</td>'
-                + '<td>' + _lvRatio(r.b.bought, r.v.netToday) + '</td></tr>';
+                + '<td>' + _lvRatio(r.b.bought, r.b.sold) + '</td></tr>';
         });
         const tot = _lvBuySum(rows.map(r => r.b));
-        const sold = rows.reduce((a, r) => a + (Number(r.v.netToday) || 0), 0);
         html += '</tbody><tfoot><tr class="lv-foot"><td><span class="lv-store"><b>Total</b></span></td>'
             + '<td class="lv-strongnum">' + _lvMoney(tot.bought, false) + '</td>'
             + '<td class="lv-quietnum">' + _lvMoney(tot.paid, false) + '</td>'
             + '<td class="lv-boldnum">' + _lvPct(tot.margin) + '</td>'
-            + '<td>' + _lvRatio(tot.bought, sold) + '</td></tr></tfoot></table></div>';
+            + '<td>' + _lvRatio(tot.bought, tot.sold) + '</td></tr></tfoot></table></div>';
     }
 
     if (_lvIsMtd()) html += _lvForecast(views);
