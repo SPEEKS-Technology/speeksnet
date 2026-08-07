@@ -10257,31 +10257,53 @@ body.sam-active .hotbar-btn:hover {
 .lv-tbl .lv-row-errmsg { text-align: left; color: #b3760a; font-weight: 700; white-space: normal; }
 
 /* A sale (green) or a refund (red) just landed at this store: the WHOLE ROW washes
-   over — twice quickly, then holding faint before it clears across 10 seconds. A
-   band the width of the table is caught peripherally; the old highlight on the
-   money cell alone had to be looked at directly to be noticed.
+   over. A band the width of the table is caught peripherally; the old highlight on
+   the money cell alone had to be looked at directly to be noticed.
    The tint is far lighter than that per-cell one was. It now covers roughly ten
-   times the area, and at the old strength one sale repainted half the panel. */
+   times the area, and at the old strength one sale repainted half the panel.
+
+   FIVE DECAYING PULSES over the 10 seconds, not one fade — roughly one every two
+   seconds, each fainter than the last. A single fade is only visible in the moment
+   you happen to look up; a slow repeat keeps catching the eye for as long as the
+   event is worth knowing about, and dies away on its own rather than stopping. */
 @keyframes lvRowSale {
     0%   { background: rgba(31, 157, 87, 0); }
-    6%   { background: rgba(31, 157, 87, .20); }
-    14%  { background: rgba(31, 157, 87, .06); }
-    22%  { background: rgba(31, 157, 87, .18); }
-    38%  { background: rgba(31, 157, 87, .09); }
+    4%   { background: rgba(31, 157, 87, .22); }
+    12%  { background: rgba(31, 157, 87, .07); }
+    20%  { background: rgba(31, 157, 87, .19); }
+    30%  { background: rgba(31, 157, 87, .06); }
+    40%  { background: rgba(31, 157, 87, .15); }
+    52%  { background: rgba(31, 157, 87, .05); }
+    62%  { background: rgba(31, 157, 87, .11); }
+    76%  { background: rgba(31, 157, 87, .04); }
+    86%  { background: rgba(31, 157, 87, .07); }
     100% { background: rgba(31, 157, 87, 0); }
 }
 @keyframes lvRowRefund {
     0%   { background: rgba(220, 38, 38, 0); }
-    6%   { background: rgba(220, 38, 38, .18); }
-    14%  { background: rgba(220, 38, 38, .05); }
-    22%  { background: rgba(220, 38, 38, .16); }
-    38%  { background: rgba(220, 38, 38, .08); }
+    4%   { background: rgba(220, 38, 38, .20); }
+    12%  { background: rgba(220, 38, 38, .06); }
+    20%  { background: rgba(220, 38, 38, .17); }
+    30%  { background: rgba(220, 38, 38, .05); }
+    40%  { background: rgba(220, 38, 38, .13); }
+    52%  { background: rgba(220, 38, 38, .04); }
+    62%  { background: rgba(220, 38, 38, .10); }
+    76%  { background: rgba(220, 38, 38, .03); }
+    86%  { background: rgba(220, 38, 38, .06); }
     100% { background: rgba(220, 38, 38, 0); }
 }
 /* Applied to the CELLS, not the tr. A row-level background paints behind the cell
    boxes and browsers disagree about how it interacts with their borders. */
-.lv-tbl tr.lv-row-sale   > td { animation: lvRowSale 10s ease-out 1; }
-.lv-tbl tr.lv-row-refund > td { animation: lvRowRefund 10s ease-out 1; }
+.lv-tbl tr.lv-row-sale   > td { animation: lvRowSale 10s ease-in-out 1; }
+.lv-tbl tr.lv-row-refund > td { animation: lvRowRefund 10s ease-in-out 1; }
+/* Rounded ends, so the wash reads as a pill laid across the row rather than a bar
+   ruled to the table edge. The radius goes on the two END cells only — the ones
+   that actually own the outside corners — and is larger than half the row height,
+   which caps each end as a semicircle whatever the row grows to. */
+.lv-tbl tr.lv-row-sale   > td:first-child,
+.lv-tbl tr.lv-row-refund > td:first-child { border-radius: 999px 0 0 999px; }
+.lv-tbl tr.lv-row-sale   > td:last-child,
+.lv-tbl tr.lv-row-refund > td:last-child  { border-radius: 0 999px 999px 0; }
 
 /* The tile on a store's own dashboard is a whole card, so it takes a plain wash —
    no scale, which on a grid cell would ride over its neighbours. */
