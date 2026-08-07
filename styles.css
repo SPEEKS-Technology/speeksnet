@@ -10237,7 +10237,18 @@ body.sam-active .hotbar-btn:hover {
 /* The store column reads left. It holds names of differing length, which centred
    would leave every row starting at a different x and nothing to run the eye down.
    The numeric columns stay centred — that is what made the header spacing even. */
-.lv-tbl th:first-child, .lv-tbl td:first-child { text-align: left; padding-left: 2px; }
+/* The 12px of air at each end of the row is for the FLASH, not the type. When a
+   sale lands the whole row washes over as a pill (see lvRowSale below), and with
+   the store dot sitting 2px off the edge the cap of that pill ran straight through
+   it. The pill cannot grow outwards — .lv-tbl-scroll clips at the table edge — so
+   the content moves in instead. */
+.lv-tbl th:first-child, .lv-tbl td:first-child { text-align: left; padding-left: 12px; }
+.lv-tbl th:last-child,  .lv-tbl td:last-child  { padding-right: 12px; }
+/* Those 20px come out of the store column's content box, and every cell is
+   white-space:nowrap — so without this the longest name (Overland Park) would
+   spill into the Net column rather than wrap. Fixed layout splits the rest
+   equally, so the other eight give up ~0.3% each. */
+.lv-tbl th:first-child, .lv-tbl td:first-child { width: 13.5%; }
 .lv-tbl .lv-strongnum { color: var(--slate-charcoal); font-weight: 850; font-size: 13px; }
 /* Cost is context for the two figures either side of it, not a headline — quieter
    so Net and Gross profit stay the numbers the eye lands on. */

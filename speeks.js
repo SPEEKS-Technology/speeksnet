@@ -9101,7 +9101,7 @@ let _lvEvents = [];    // newest first; each lives LV_ACTIVITY_MS then goes
 let _lvEvSeq = 0;
 
 function _lvTrackChanges(d) {
-    let sold = false;
+    let sold = false, refunded = false;
     const next = {};
     (d.stores || []).forEach(m => {
         next[m.code] = {
@@ -9119,6 +9119,7 @@ function _lvTrackChanges(d) {
             if (b.returns > a.returns) {
                 _lvPulse[code] = 'refund';
                 _lvPush({ kind: 'refund', code, amount: b.returns - a.returns, at: '' });
+                refunded = true;
             } else if (b.orders > a.orders || b.lastOrderAt > a.lastOrderAt) {
                 _lvPulse[code] = 'sale';
                 _lvPush({ kind: 'sale', code, amount: b.net - a.net, at: b.lastOrderAt });
@@ -9129,7 +9130,13 @@ function _lvTrackChanges(d) {
     _lvSnap = next;
     // One chime per pass, not one per store: five stores selling in the same
     // minute is a good minute, not an alarm.
+    //
+    // When both happened in the same pass only the sale sounds. The two are
+    // deliberately mirror images of each other, so played together they overlap
+    // into something that reads as neither — and a refund arriving alongside
+    // sales is the less urgent of the two. The row still flashes red either way.
     if (sold) _lvChime();
+    else if (refunded) _lvRefundChime();
 }
 
 // Newest first, so a fresh sale enters at the left and pushes the rest along.
@@ -9218,37 +9225,61 @@ function _lvScheduleActivityExpiry() {
 let _lvAudio = null;
 const _lvSoundOn = () => localStorage.getItem('speeksLiveChime') === '1';
 
-function _lvChime() {
-    if (!_lvSoundOn()) return;
-    try {
-        const AC = window.AudioContext || window.webkitAudioContext;
-        if (!AC) return;
-        _lvAudio = _lvAudio || new AC();
-        if (_lvAudio.state === 'suspended') _lvAudio.resume();
-        const t0 = _lvAudio.currentTime;
-        // A two-note rising notification, the shape a phone uses for a message:
-        // E6 then A6, the second landing while the first is still ringing. Triangle
-        // waves through a gentle low-pass — a bare sine reads as a lab beep, and an
-        // unfiltered triangle is harsh at these frequencies.
-        const filter = _lvAudio.createBiquadFilter();
-        filter.type = 'lowpass';
-        filter.frequency.value = 4200;
-        const out = _lvAudio.createGain();
-        out.gain.value = 0.5;
-        filter.connect(out); out.connect(_lvAudio.destination);
+// Open the shared context and a low-passed output bus. A bare sine reads as a lab
+// beep and an unfiltered triangle is harsh this high up, so everything goes
+// through the filter. Returns null when audio is unavailable or switched off,
+// which is every caller's cue to do nothing.
+function _lvBus(cutoff, level) {
+    if (!_lvSoundOn()) return null;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    _lvAudio = _lvAudio || new AC();
+    if (_lvAudio.state === 'suspended') _lvAudio.resume();
+    const filter = _lvAudio.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = cutoff;
+    const out = _lvAudio.createGain();
+    out.gain.value = level;
+    filter.connect(out); out.connect(_lvAudio.destination);
+    return filter;
+}
+// One note onto a bus. Exponential ramps only — a linear fade to zero clicks
+// audibly, and exponentialRampToValueAtTime can never touch exactly 0.
+function _lvNote(bus, type, freq, at, peak, attack, decay) {
+    const t = _lvAudio.currentTime + at;
+    const osc = _lvAudio.createOscillator(), gain = _lvAudio.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(peak, t + attack);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+    osc.connect(gain); gain.connect(bus);
+    osc.start(t); osc.stop(t + attack + decay + 0.06);
+}
 
-        [[1318.5, 0], [1760.0, 0.11]].forEach(([freq, at]) => {
-            const osc = _lvAudio.createOscillator(), gain = _lvAudio.createGain();
-            osc.type = 'triangle';
-            osc.frequency.setValueAtTime(freq, t0 + at);
-            // Exponential ramps only — a linear fade to zero clicks audibly, and
-            // exponentialRampToValueAtTime cannot touch exactly 0.
-            gain.gain.setValueAtTime(0.0001, t0 + at);
-            gain.gain.exponentialRampToValueAtTime(0.22, t0 + at + 0.008);
-            gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.38);
-            osc.connect(gain); gain.connect(filter);
-            osc.start(t0 + at); osc.stop(t0 + at + 0.42);
+// A SALE: two marimba notes, C6 into G6. Sine fundamentals with a quiet fourth
+// partial for the wooden knock, and a fast percussive decay — soft enough to sit
+// in a room all day, which the old rising doorbell pair was not.
+function _lvChime() {
+    try {
+        const bus = _lvBus(3000, 0.55);
+        if (!bus) return;
+        [[1046.5, 0], [1568.0, 0.085]].forEach(([freq, at]) => {
+            _lvNote(bus, 'sine', freq, at, 0.30, 0.005, 0.30);
+            _lvNote(bus, 'sine', freq * 4, at, 0.045, 0.004, 0.10);
         });
+    } catch (_) { /* audio is a nicety; never let it break the dashboard */ }
+}
+
+// A REFUND: the mirror image — B5 falling to E5, quieter and with a longer tail.
+// Deliberately the same shape as the sale chime played backwards, so which one
+// just happened is readable from across the room without looking up.
+function _lvRefundChime() {
+    try {
+        const bus = _lvBus(3200, 0.45);
+        if (!bus) return;
+        _lvNote(bus, 'triangle', 987.8, 0,    0.20, 0.008, 0.34);
+        _lvNote(bus, 'triangle', 659.3, 0.11, 0.20, 0.008, 0.44);
     } catch (_) { /* audio is a nicety; never let it break the dashboard */ }
 }
 
@@ -9271,7 +9302,8 @@ function _lvSoundBtn() {
         : '<path d="M4 7v4h3l4 3V4L7 7H4z"/><path d="M12.2 6.8l3.2 4.4M15.4 6.8l-3.2 4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>';
     return '<button type="button" class="lv-sound' + (on ? ' on' : '') + '"'
         + ' onclick="toggleLiveSound()"'
-        + ' title="' + (on ? 'Chime on — click to mute' : 'Chime off — click to hear a ding on each sale') + '"'
+        + ' title="' + (on ? 'Chime on — click to mute'
+                           : 'Chime off — click to hear a chime on each sale, and a lower one on refunds') + '"'
         + ' aria-pressed="' + (on ? 'true' : 'false') + '" aria-label="Sale chime">'
         + '<svg viewBox="0 0 18 18" width="14" height="14" fill="currentColor" aria-hidden="true">'
         + ico + '</svg></button>';
