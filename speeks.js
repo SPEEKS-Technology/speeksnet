@@ -17408,18 +17408,19 @@ function drawLeaderboard() {
 
     if (!rows.length) { wrapper.innerHTML = '<div class="status-message">No data yet.</div>'; return; }
 
-    const max = Math.max(...rows.map(r => r.val), 1);
     const fmt = v => '$' + Math.round(v).toLocaleString();
 
+    // No bars. This is a standings list — the rank column already gives the order
+    // and the money column already gives the size, so a bar scaled to the leader
+    // was a third encoding of what two columns had said, and the one that took the
+    // most room. (It also lost the .lbs-info wrapper, which existed only to stack
+    // the name over its bar.)
     wrapper.innerHTML = rows.map((r, i) => `
         <div class="lbs-row${r.store === myStore ? ' me' : ''}">
             <span class="lbs-rank${i === 0 ? ' g' : ''}">${i + 1}</span>
             <span class="lbs-store">
                 <span class="lbs-dot" style="background:${colors[r.store] || '#94a3b8'}"></span>
-                <span class="lbs-info">
-                    <span class="lbs-nm">${r.store}</span>
-                    <span class="lbs-bar"><i style="width:${Math.max(5, (r.val / max) * 100).toFixed(1)}%;background:${colors[r.store] || '#94a3b8'}"></i></span>
-                </span>
+                <span class="lbs-nm">${r.store}</span>
             </span>
             <span class="lbs-val">${fmt(r.val)}</span>
         </div>`).join('');
