@@ -3986,46 +3986,33 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
    percentages get the width the chips were taking. */
 .dc-tbl tbody.dc-grp:hover > tr > td { background: #f4faf6; }
 .dc-tbl tbody.dc-grp:hover .lv-store b { color: #178048; }
-/* The two rows are one record — only the pair carries a rule under it. */
-.dc-tbl tbody.dc-grp > tr.dc-clickable > td { border-bottom: 0; padding-bottom: 6px; }
+/* The two rows are one record — only the pair carries a rule under it. The air
+   above the numbers and below the chips is what separates one store from the
+   next: the chips are a wrapping block, so without it the previous store's last
+   chip sat almost against the next store's name. */
+.dc-tbl tbody.dc-grp > tr.dc-clickable > td { border-bottom: 0; padding: 17px 8px 7px; }
 .dc-tbl tr.dc-catrow { cursor: pointer; }
-.dc-tbl tr.dc-catrow > td.dc-cats { padding: 1px 12px 12px; }
+.dc-tbl tr.dc-catrow > td.dc-cats { padding: 0 12px 17px; }
 
-/* Two lines at most — Active, then Projected — with the labels in a fixed column
-   so they align down the whole table and the chips all start at one edge. That
-   alignment is most of what makes five stores of this readable at a glance. */
-.dc-cline { display: flex; align-items: baseline; gap: 10px; padding: 2px 0; }
-.dc-clbl {
-    flex: none; width: 66px; text-align: right;
-    font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+/* A flex row, not inline-blocks: the gap is then set once and stays even when
+   chips wrap onto a second line, where stacked margins would have doubled it. */
+.dc-catwrap { display: flex; flex-wrap: wrap; align-items: center; gap: 7px 10px; }
+.dc-catlab {
+    flex: none;
+    font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase;
     color: #b0bac6;
 }
-.dc-chips { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
-/* Colour is severity, fill is state: solid = already failing, outlined = forecast.
-   Both lines can hold either severity, which is why the fill has to carry state
-   rather than the hue. */
-.dc-chip {
-    display: inline-block; padding: 3px 10px; border-radius: 999px;
-    font-size: 11px; font-weight: 750; line-height: 1.45;
-    background: #f1f5f9; color: #647082; border: 1px solid transparent;
-    white-space: normal;
-}
-.dc-tbl td .dc-chip { font-weight: 750; }
-.dc-chip.dc-bad  { background: #fbeae7; color: #7f2418; }
-.dc-chip.dc-warn { background: #fdf3e2; color: #8a5a06; }
-.dc-cline-proj .dc-chip.dc-bad  { background: #fff; border-color: #f0cdc6; color: #a4483a; }
-.dc-cline-proj .dc-chip.dc-warn { background: #fff; border-color: #f0dcb4; color: #a8781c; }
-
-.dc-tbl td .dc-clear { font-size: 11px; font-weight: 700; color: #a8b3c0; }
 .dc-cat {
-    display: inline-block; margin: 2px 4px 2px 0; padding: 3px 9px; border-radius: 999px;
+    display: inline-block; margin: 0; padding: 4px 11px; border-radius: 999px;
     font-size: 10.5px; font-weight: 750; background: #f1f5f9; color: #647082;
     max-width: 100%;
 }
-/* Severity first, in caps, then the categories it applies to. */
+/* Severity first, in caps, then the categories it applies to. The gap between
+   the two is the one that has to be widest — it is the seam between the label
+   and its content, inside a pill that already sits beside other pills. */
 .dc-cat b {
     font-weight: 850; letter-spacing: .04em; text-transform: uppercase;
-    font-size: 9px; margin-right: 6px; opacity: .85;
+    font-size: 9px; margin-right: 9px; opacity: .85;
     /* The label is two words with a middot; letting it break mid-label ("PROJECTED ·"
        / "HIGH") reads as two separate severities. */
     white-space: nowrap;

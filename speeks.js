@@ -32638,42 +32638,17 @@ function _dcEbayHtml() {
     return html + '</table></div>';
 }
 
-// The categories a store is at risk in, said in two encodings instead of a
-// sentence. WHERE a chip sits gives active or projected; its COLOUR gives the
-// severity (red very high, amber high) and its FILL repeats the first — solid is
-// happening now, outlined is a forecast. That is all of "Active · very high"
-// without the words, and both halves survive: the value in `s` collapses
-// projected-very-high down to a warning (deliberately, so a forecast never sorts
-// the rail as a live failure), so the label is what severity is read from here.
-//
-// Splitting the comma list matters more than it looks. One chip per category
-// makes the row a set of like-sized units; as three variable-length pills of
-// running text it read as noise, which is the whole complaint.
+// One chip per severity bucket, each carrying BOTH halves. "Active · very high"
+// on its own says how bad without saying what, which is the half a DM acts on.
+// The wrapper is a flex row so the gaps between chips are set once, in CSS,
+// rather than by margins that double up where two chips wrap onto a new line.
 function _dcCatsHtml(r) {
-    // Kept in the same label column as the chips, so a clean store still lines up
-    // with the stores above and below it rather than starting somewhere new.
-    if (!r.cats.length) {
-        return '<div class="dc-cline"><span class="dc-clbl">At risk</span>'
-            + '<span class="dc-clear">None flagged</span></div>';
-    }
-    const line = (label, proj) => {
-        const list = r.cats.filter(c => (/^Projected/i.test(c.k)) === proj);
-        if (!list.length) return '';
-        const chips = list.map(c => {
-            const hue = /very high/i.test(c.k) ? 'dc-bad' : 'dc-warn';
-            // Colour and fill carry it visually; the title carries it in words, so
-            // very-high vs high is never a thing you can only get from a hue.
-            const tip = ' title="' + escapeHtml(_dccCap(c.k)) + '"';
-            return String(c.v).split(/,\s*/).filter(Boolean)
-                .map(n => '<span class="dc-chip ' + hue + '"' + tip + '>'
-                    + escapeHtml(n) + '</span>')
-                .join('');
-        }).join('');
-        return '<div class="dc-cline' + (proj ? ' dc-cline-proj' : '') + '">'
-            + '<span class="dc-clbl">' + label + '</span>'
-            + '<span class="dc-chips">' + chips + '</span></div>';
-    };
-    return line('Active', false) + line('Projected', true);
+    const chips = r.cats.length
+        ? r.cats.map(c => '<span class="dc-cat ' + _dcSev(c.s) + '">'
+            + '<b>' + escapeHtml(c.k) + '</b>' + escapeHtml(c.v) + '</span>').join('')
+        : '<span class="dc-cat dc-good">None flagged</span>';
+    return '<div class="dc-catwrap">'
+        + '<span class="dc-catlab">Categories at risk</span>' + chips + '</div>';
 }
 
 function _dcScoreHtml() {
