@@ -196,7 +196,7 @@ type DayMetrics = {
   netToday: number; cogsToday: number; gpToday: number; ordersToday: number;
   returnsToday: number; marginToday: number | null; aov: number | null;
   mtdNet: number; mtdCogs: number; mtdGp: number; mtdOrders: number;
-  mtdMargin: number | null;
+  mtdReturns: number; mtdMargin: number | null;
   pctOfGoal: number | null; paceIndex: number | null;
 };
 
@@ -205,7 +205,7 @@ type StoreMetrics = {
   netToday: number; cogsToday: number; gpToday: number; ordersToday: number;
   returnsToday: number; marginToday: number | null; aov: number | null;
   mtdNet: number; mtdCogs: number; mtdGp: number; mtdOrders: number;
-  mtdMargin: number | null;
+  mtdReturns: number; mtdMargin: number | null;
   goal: number; pctOfGoal: number | null; paceIndex: number | null;
   lastOrderAt: string | null; lastOrderAmount: number | null;
   prev: DayMetrics | null;
@@ -220,7 +220,7 @@ async function fetchStore(
     code, name: STORE_NAMES[code] ?? code,
     netToday: 0, cogsToday: 0, gpToday: 0, ordersToday: 0, returnsToday: 0,
     marginToday: null, aov: null,
-    mtdNet: 0, mtdCogs: 0, mtdGp: 0, mtdOrders: 0, mtdMargin: null,
+    mtdNet: 0, mtdCogs: 0, mtdGp: 0, mtdOrders: 0, mtdReturns: 0, mtdMargin: null,
     goal, pctOfGoal: null, paceIndex: null,
     lastOrderAt: null, lastOrderAmount: null,
     prev: null,
@@ -255,19 +255,24 @@ async function fetchStore(
     // Month-to-date as it stood at the CLOSE of the previous open day. Derived by
     // subtracting everything dated after it rather than re-summing, so the two
     // figures can never disagree about which days they include.
-    let afterNet = 0, afterCogs = 0, afterOrders = 0;
+    let afterNet = 0, afterCogs = 0, afterOrders = 0, afterReturns = 0;
     let pNet = 0, pCogs = 0, pOrders = 0, pReturns = 0;
 
     for (const r of rows) {
       const day = String(r.day).slice(0, 10);
       const net = num(r.net_sales), cogs = num(r.cost_of_goods_sold), ord = num(r.orders);
+      // Returns come back NEGATIVE from ShopifyQL; every figure below is a magnitude.
+      const ret = Math.abs(num(r.returns));
 
       // The window reaches into last month on the 1st, so MTD is filtered by
       // month here. Accumulating blind would have carried a December day into a
       // January total the moment this feature widened the window.
       if (day.slice(0, 7) === monthPrefix) {
         base.mtdNet += net; base.mtdCogs += cogs; base.mtdOrders += ord;
-        if (day > pd.iso) { afterNet += net; afterCogs += cogs; afterOrders += ord; }
+        base.mtdReturns += ret;
+        if (day > pd.iso) {
+          afterNet += net; afterCogs += cogs; afterOrders += ord; afterReturns += ret;
+        }
       }
 
       if (day === todayIso) {
@@ -275,15 +280,16 @@ async function fetchStore(
         base.cogsToday = round2(cogs);
         base.ordersToday = ord;
         // returns come back negative; show the magnitude.
-        base.returnsToday = round2(Math.abs(num(r.returns)));
+        base.returnsToday = round2(ret);
       }
       if (day === pd.iso) {
-        pNet = net; pCogs = cogs; pOrders = ord; pReturns = Math.abs(num(r.returns));
+        pNet = net; pCogs = cogs; pOrders = ord; pReturns = ret;
       }
     }
 
     base.mtdNet = round2(base.mtdNet);
     base.mtdCogs = round2(base.mtdCogs);
+    base.mtdReturns = round2(base.mtdReturns);
     base.gpToday = round2(base.netToday - base.cogsToday);
     base.mtdGp = round2(base.mtdNet - base.mtdCogs);
 
@@ -313,6 +319,7 @@ async function fetchStore(
         mtdCogs: pMtdCogs,
         mtdGp: round2(pMtdNet - pMtdCogs),
         mtdOrders: pd.inMonth ? base.mtdOrders - afterOrders : 0,
+        mtdReturns: pd.inMonth ? round2(base.mtdReturns - afterReturns) : 0,
         mtdMargin: pMtdNet > 0 ? round2((pMtdNet - pMtdCogs) / pMtdNet * 100) : null,
         // Filled in by refresh(), which is where the goal lives. Present as null
         // either way: the frontend overlays this object onto the live row, and a
@@ -372,6 +379,7 @@ function rollPrev(healthy: StoreMetrics[], goal: number, elapsedPct: number): Da
     aov: orders > 0 ? round2(net / orders) : null,
     mtdNet, mtdCogs, mtdGp,
     mtdOrders: parts.reduce((a, p) => a + p.mtdOrders, 0),
+    mtdReturns: sum(p => p.mtdReturns),
     mtdMargin: mtdNet > 0 ? round2(mtdGp / mtdNet * 100) : null,
     pctOfGoal,
     paceIndex: pctOfGoal !== null && elapsedPct > 0
@@ -446,6 +454,7 @@ async function refresh(sb: any, now: Date, force: boolean) {
     marginToday: dNet > 0 ? round2((dNet - dCogs) / dNet * 100) : null,
     aov: dOrders > 0 ? round2(dNet / dOrders) : null,
     mtdNet: dMtdNet,
+    mtdReturns: sum(m => m.mtdReturns),
     // NOTE: no mtdCogs or mtdOrders here, unlike every store row and the
     // previous-day roll-up. The month-to-date view needs both for the District
     // line, and both are exactly recoverable from what IS sent — cost is

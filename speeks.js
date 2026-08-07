@@ -9082,9 +9082,12 @@ function _lvView(m) {
         return Object.assign({}, m, {
             netToday: m.mtdNet, cogsToday: cogs, gpToday: m.mtdGp,
             ordersToday: m.mtdOrders, marginToday: m.mtdMargin,
-            // Refunds are not carried month-to-date, and a day's figure shown
-            // against a month would be read as the month's.
-            returnsToday: null,
+            // null, not 0, when the payload predates mtdReturns — a cache written
+            // by the old function would otherwise report every store as having
+            // refunded nothing all month, which is a wrong number rather than a
+            // missing one. The column dashes until the first refresh lands.
+            returnsToday: (m.mtdReturns === null || m.mtdReturns === undefined)
+                ? null : m.mtdReturns,
             aov: m.mtdOrders > 0 ? m.mtdNet / m.mtdOrders : null,
         });
     }
@@ -9798,10 +9801,9 @@ function _lvRollupTiles(r, d, label, views) {
         last = _lvTile('Gross Profit', _lvMoney(r.gpToday, true), 'On The Day');
     }
     // Refunds rides under Orders, the way it already does on a single store's own
-    // tiles — it is the other half of the same count. Month is left alone: the feed
-    // carries returns per day, so there is no month figure to put there.
+    // tiles — it is the other half of the same count.
     const avg = r.aov === null ? label : 'Average ' + _lvMoney(r.aov, true);
-    const ordersSub = (_lvIsMtd() || r.returnsToday === null || r.returnsToday === undefined)
+    const ordersSub = (r.returnsToday === null || r.returnsToday === undefined)
         ? avg
         : _lvSubPair('Average', _lvMoney(r.aov, true),
                      'Refunds', r.returnsToday > 0 ? _lvMoney(r.returnsToday, false) : 'none');
@@ -9858,10 +9860,10 @@ function _lvStoreRow(v, d, foot) {
         + '<td class="lv-quietnum">' + _lvMoney(v.cogsToday, false) + '</td>'
         + '<td class="lv-strongnum">' + _lvMoney(v.gpToday, false) + '</td>'
         // Refunds sits beside Orders because it is the other half of the same
-        // count — what came back out of the till against what went in. Month has
-        // no figure to show: the feed carries returns per DAY only.
-        + '<td class="lv-quietnum"' + (_lvIsMtd()
-            ? ' title="The live feed carries refunds per day, not month to date."' : '') + '>'
+        // count — what came back out of the till against what went in.
+        + '<td class="lv-quietnum"' + (v.returnsToday === null || v.returnsToday === undefined
+            ? ' title="This cache was written before the feed carried month-to-date'
+              + ' refunds — it fills in on the next refresh."' : '') + '>'
         + (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—') + '</td>'
         + '<td>' + v.ordersToday + '</td>'
         + '<td class="lv-boldnum">' + _lvPct(v.marginToday) + '</td>'
