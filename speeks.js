@@ -32615,37 +32615,65 @@ function _dcEbayHtml() {
         // what decides between them — the same test the store board uses.
         return _dcCell(v == null ? '—' : v, v == null ? 'dc-muted' : _dcSev(_dccState(r, key)));
     };
+    // The thresholds used to be spelled out in a paragraph under the table. They
+    // belong on the column they judge, where they answer "over what?" at the moment
+    // the question comes up, and cost the panel no height at all.
+    const th = (label, rule) => '<th title="eBay&rsquo;s threshold: ' + rule + '">'
+        + label + '</th>';
     let html = '<div class="lv-tbl-scroll"><table class="lv-tbl dc-tbl"><thead><tr>'
-        + '<th>Store</th><th>Tracking</th><th>Defect rate</th><th>Cases closed</th>'
-        + '<th>Late shipment</th></tr></thead>';
+        + '<th>Store</th>' + th('Tracking', 'above 96%') + th('Defect rate', 'under 0.40%')
+        + th('Cases closed', 'under 0.24%') + th('Late shipment', 'under 2.40%')
+        + '</tr></thead>';
     _dccRows.forEach(r => {
         // The same four checks the store board runs, so "3 of 4 over" there and
         // three red cells here are the same statement.
-        // The chip needs BOTH halves. "Active · very high" on its own says how bad
-        // without saying what, which is the half a DM acts on.
-        const cats = r.cats.length
-            ? r.cats.map(c => '<span class="dc-cat ' + _dcSev(c.s) + '">'
-                + '<b>' + escapeHtml(c.k) + '</b>' + escapeHtml(c.v) + '</span>').join('')
-            : '<span class="dc-cat dc-good">None flagged</span>';
-        // Each store is a two-row <tbody>: its four eBay checks, then the categories
-        // sitting behind them. As a sixth column the chips were free text of
-        // unpredictable length taking half the table for the softest thing on it,
-        // and squeezing the four numbers a DM actually reads across. Underneath,
-        // the chips get the full width and the numbers get their own.
         html += '<tbody class="dc-grp">'
             + _dcRowOpen(r.store) + _dcStoreCell(r.store)
             + cell(r, 'track', r.track) + cell(r, 'defect', r.defect)
             + cell(r, 'cases', r.cases) + cell(r, 'late', r.late) + '</tr>'
             + '<tr class="dc-catrow" onclick="_dcDrill(\'' + r.store + '\')"'
             + ' title="Open ' + escapeHtml(r.store) + '&rsquo;s full board">'
-            + '<td colspan="5" class="dc-cats">'
-            + '<span class="dc-catlab">Categories at risk</span>' + cats
-            + '</td></tr></tbody>';
+            + '<td colspan="5" class="dc-cats">' + _dcCatsHtml(r) + '</td></tr></tbody>';
     });
-    return html + '</table></div>'
-        + '<div class="dc-note">Thresholds are eBay&rsquo;s own &mdash; tracking above 96%, defect '
-        + 'rate under 0.40%, cases closed under 0.24%, late shipment under 2.40%. '
-        + 'Click a row for that store&rsquo;s full board.</div>';
+    return html + '</table></div>';
+}
+
+// The categories a store is at risk in, said in two encodings instead of a
+// sentence. WHERE a chip sits gives active or projected; its COLOUR gives the
+// severity (red very high, amber high) and its FILL repeats the first — solid is
+// happening now, outlined is a forecast. That is all of "Active · very high"
+// without the words, and both halves survive: the value in `s` collapses
+// projected-very-high down to a warning (deliberately, so a forecast never sorts
+// the rail as a live failure), so the label is what severity is read from here.
+//
+// Splitting the comma list matters more than it looks. One chip per category
+// makes the row a set of like-sized units; as three variable-length pills of
+// running text it read as noise, which is the whole complaint.
+function _dcCatsHtml(r) {
+    // Kept in the same label column as the chips, so a clean store still lines up
+    // with the stores above and below it rather than starting somewhere new.
+    if (!r.cats.length) {
+        return '<div class="dc-cline"><span class="dc-clbl">At risk</span>'
+            + '<span class="dc-clear">None flagged</span></div>';
+    }
+    const line = (label, proj) => {
+        const list = r.cats.filter(c => (/^Projected/i.test(c.k)) === proj);
+        if (!list.length) return '';
+        const chips = list.map(c => {
+            const hue = /very high/i.test(c.k) ? 'dc-bad' : 'dc-warn';
+            // Colour and fill carry it visually; the title carries it in words, so
+            // very-high vs high is never a thing you can only get from a hue.
+            const tip = ' title="' + escapeHtml(_dccCap(c.k)) + '"';
+            return String(c.v).split(/,\s*/).filter(Boolean)
+                .map(n => '<span class="dc-chip ' + hue + '"' + tip + '>'
+                    + escapeHtml(n) + '</span>')
+                .join('');
+        }).join('');
+        return '<div class="dc-cline' + (proj ? ' dc-cline-proj' : '') + '">'
+            + '<span class="dc-clbl">' + label + '</span>'
+            + '<span class="dc-chips">' + chips + '</span></div>';
+    };
+    return line('Active', false) + line('Projected', true);
 }
 
 function _dcScoreHtml() {
