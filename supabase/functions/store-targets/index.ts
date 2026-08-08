@@ -69,7 +69,8 @@ Deno.serve(async (req: Request) => {
   const thisMonday = mondayOf(todayStr);
 
   // Live roster COUNT for a store (excludes CEO / District Manager / Multi-Store
-  // Manager — the MSM contributes via the flat MSM_TARGET_BOOST instead).
+  // Manager — the MSM contributes via the flat MSM_TARGET_BOOST instead — and the
+  // Store board account, which is a TV rather than a person).
   async function rosterCount(store: string) {
     const { data } = await supabase.from("users").select("role").eq("store", store);
     // 'store' is the shop-floor board account — a TV, not a head. Counted here it
