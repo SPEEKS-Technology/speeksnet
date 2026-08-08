@@ -8673,7 +8673,11 @@ async function fetchScorecardData() {
                     <span class="sh-au-ticklab" style="left:${AUDIT_TARGET_PCT}%;">Target ${AUDIT_TARGET_PCT}%</span>
                 </div>
                 <div class="sh-au-scale-sp"></div>`;
-            if (_auAction) _auAction.innerHTML = `<button class="sh-view-btn" type="button" onclick="openAuditBreakdown('${targetStore}')">View Full Breakdown</button>`;
+            // Named for what it opens. "View Full Breakdown" sat in the tab bar
+            // with nothing beside it saying which of the two scores it belonged
+            // to — the tab holds Online & Marketing as well as the audit, and the
+            // breakdown is only ever the audit's 165 points.
+            if (_auAction) _auAction.innerHTML = `<button class="sh-view-btn" type="button" onclick="openAuditBreakdown('${targetStore}')">View Audit Breakdown</button>`;
         } else {
             if (_auTile) _auTile.innerHTML = `
                 <span class="sh-stripe" style="background:#cbd5e1;"></span>
@@ -20621,7 +20625,7 @@ function buildAuditSummaryHtml(audit, store) {
                 <span style="font-size:16px; font-weight:900; background:${c.bg}; color:${c.fg}; padding:4px 10px; border-radius:8px;">${audit.earned}/${audit.possible} · ${audit.pct}%</span>
             </div>
         </div>
-        <button onclick="openAuditBreakdown('${store}')" class="btn-secondary" style="margin-top:10px; width:100%; padding:8px; font-size:12px; font-weight:800;">View Full Breakdown</button>`;
+        <button onclick="openAuditBreakdown('${store}')" class="btn-secondary" style="margin-top:10px; width:100%; padding:8px; font-size:12px; font-weight:800;">View Audit Breakdown</button>`;
 }
 
 // =========================================================

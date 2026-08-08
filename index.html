@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260808s" defer></script>
+  <script src="speeks.js?v=20260808t" defer></script>
 </head>
 
 <body class="preload">
@@ -950,7 +950,14 @@
                 <button id="cc-tab-kpis" class="toggle-btn role-employee" type="button" onclick="switchCommandTab('kpis')" data-feature="cc-kpis">Weekly KPIs<span class="cc-updot" id="cc-updot-kpis"></span></button>
             </div>
             <div class="cc-tabbar-right">
-                <div id="sh-tab-action" class="cc-tab-action"></div>
+                <!-- Starts HIDDEN, like its sibling below. This holds the audit
+                     breakdown button, which belongs to the Scorecard tab only —
+                     switchCommandTab reveals it and every other path hides it.
+                     Without the default it was visible from page load, so a role
+                     with no Scorecard tab (employee, ASM) had no way to ever
+                     switch it off and saw it permanently, next to a collapsed
+                     summary it did not belong to. -->
+                <div id="sh-tab-action" class="cc-tab-action" style="display:none;"></div>
                 <button id="cc-collapse" class="cc-collapse" type="button" onclick="collapseCommand()" style="display:none;">▴ Summary</button>
             </div>
         </div>
