@@ -34,18 +34,27 @@
 //                    writes these; leave them blank, and never put a formula
 //                    here (the importer refuses to overwrite one, by design)
 //   AK4              =IF(COUNT(AF4:AJ4)=0,"",SUM(AF4:AJ4))      fill down
-//   AF35             =IFERROR(LOOKUP(2,1/(AF4:AF34<>""),AF4:AF34),0)   fill across
-//   AF36             =IFERROR(AF35/LOOKUP(2,1/(AF4:AF34<>""),$AE$4:$AE$34)
-//                             *DAY(EOMONTH(TODAY(),0)),0)             fill across
+//   AF35             =IFERROR(MAX(AF4:AF34),0)                  fill across
+//   AF36             =IFERROR(AF35/MAXIFS($AE$4:$AE$34,$AK$4:$AK$34,">0")
+//                             *DAY(EOMONTH(TODAY(),0)),0)       fill across
 //
-// Two traps in those formulas, both of which fail quietly:
-//   - AK must leave an empty day BLANK. A plain SUM writes 0 into all 31 rows on
-//     day one, and row 35 looks for the last NON-BLANK cell — with zeros
-//     everywhere it finds day 31 instead of the last day with figures.
+// Three traps in those formulas, all of which fail quietly:
+//   - ⚠️ DO NOT use the LOOKUP(2,1/(range<>""),range) "last non-blank" idiom here,
+//     which is what row 35 said first. It builds a lookup vector of one number and
+//     thirty #DIV/0! errors and asks Sheets to BINARY-SEARCH it, which is only
+//     reliable once the column is mostly full. On the first real import — a single
+//     figure at day 7 — every one of the six cells returned 0 while the data sat
+//     visible two inches above. MAX has no sorted-range assumption, and for a
+//     CUMULATIVE count the largest value IS the month to date.
+//   - AK must leave an empty day BLANK, because row 36 asks it which day the
+//     import last ran. A plain SUM writes 0 into all 31 rows on day one.
 //   - Row 36's denominator is CALENDAR days, not the Buy tab's "days thru month"
 //     (which excludes Sundays, because stores don't buy then). Customers leave
 //     reviews any day of the week, so the buying basis would overstate the
-//     projection by about a seventh.
+//     projection by about a seventh. It reads the TTL column, absolutely
+//     referenced so it survives the fill: all five stores import on the same day,
+//     so one shared denominator is simpler AND righter than each store hunting
+//     for its own.
 // ============================================================================
 
 /**
@@ -74,10 +83,9 @@ function addGoogleReviews(data) {
     // error nobody can see.
     if (!tab || tab.getMaxColumns() < 36) return data;
 
-    // Row 35 reads #N/A until the first figure lands — LOOKUP over an all-blank
-    // column, which is what a fresh month looks like. getValue() hands that back
-    // as the STRING "#N/A", so coerce here rather than trusting the sheet: the
-    // client treats 0 as "nothing yet" and anything non-numeric as 0 anyway.
+    // Coerce rather than trusting the sheet. A formula cell that errors hands
+    // getValue() back the STRING "#N/A", which would travel all the way to the
+    // browser as text; the client treats 0 as "nothing yet".
     var num = function (v) { var x = Number(v); return isFinite(x) ? x : 0; };
 
     var cols = { ovl: 'AF', lee: 'AG', wsp: 'AH', mpl: 'AI', bal: 'AJ' };

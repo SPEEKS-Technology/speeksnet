@@ -36,19 +36,26 @@
 //                    off each store's Day End Report. Hand-key a cell only to
 //                    cover a day whose report never arrived; the importer treats
 //                    a value that already matches as unchanged.
-//   AK4              =SUM(AF4:AJ4)                    (fill down to AK34)
-//   AK4              — better: =IF(COUNT(AF4:AJ4)=0,"",SUM(AF4:AJ4)), so a day
-//                    with nothing in it stays BLANK. A plain SUM writes 0 into
-//                    all 31 rows on day one, and row 35 below looks for the last
-//                    NON-BLANK cell — with zeros everywhere it finds day 31.
-//   AF35             =IFERROR(LOOKUP(2,1/(AF4:AF34<>""),AF4:AF34),0)  ← TTL: the
-//                    latest figure entered, which for a cumulative count IS the
-//                    month to date. Fill across AF35:AK35. The IFERROR matters:
-//                    an all-blank column returns #N/A, which is what the sheet
-//                    shows the morning a month starts.
-//   AF36             =IFERROR(AF35/LOOKUP(2,1/(AF4:AF34<>""),$AE$4:$AE$34)
+//   AK4              =IF(COUNT(AF4:AJ4)=0,"",SUM(AF4:AJ4))   (fill down to AK34)
+//                    An empty day must stay BLANK — row 36 asks this column which
+//                    day the import last ran, and a plain SUM writes 0 into all
+//                    31 rows on day one.
+//   AF35             =IFERROR(MAX(AF4:AF34),0)   ← TTL. Fill across AF35:AK35.
+//                    For a CUMULATIVE count the largest value IS the month to
+//                    date. ⚠️ NOT the LOOKUP(2,1/(range<>""),range) "last
+//                    non-blank" idiom, which is what this said first: it builds a
+//                    lookup vector of one number and thirty #DIV/0! errors and
+//                    asks Sheets to BINARY-SEARCH it, which is only reliable once
+//                    the column is mostly full. On the first real import — one
+//                    figure at day 7 — all six cells returned 0 with the data
+//                    visible two inches above them.
+//   AF36             =IFERROR(AF35/MAXIFS($AE$4:$AE$34,$AK$4:$AK$34,">0")
 //                             *DAY(EOMONTH(TODAY(),0)),0)          ← Tracking:
 //                    month-to-date ÷ days elapsed × days in month. Fill across.
+//                    The denominator reads the TTL column, absolutely referenced
+//                    so it survives the fill: all five stores import on the same
+//                    day, so one shared denominator is simpler AND righter than
+//                    each store hunting for its own.
 //
 // NOTE the denominator is CALENDAR days, not the Buy tab's "days thru month"
 // (which excludes Sundays because stores don't buy on them). Customers leave
@@ -89,9 +96,9 @@
     // getRange() throws on a column past the end of the sheet, so the width check
     // stays even inside the catch — a caught exception is still a wasted call.
     if (revTab && revTab.getMaxColumns() >= 36) {
-      // Row 35 reads #N/A until the first figure lands (LOOKUP over an all-blank
-      // column), and that would travel to the browser as the string "#N/A". Coerce
-      // here rather than trusting the sheet: the client treats 0 as "nothing yet".
+      // Coerce rather than trusting the sheet. A formula cell that errors hands
+      // getValue() back the STRING "#N/A", which would travel to the browser as
+      // text; the client treats 0 as "nothing yet".
       var revNum = function (v) { var x = Number(v); return isFinite(x) ? x : 0; };
       var revCols = { ovl: 'AF', lee: 'AG', wsp: 'AH', mpl: 'AI', bal: 'AJ' };
       Object.keys(revCols).forEach(function (s) {
