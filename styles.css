@@ -14224,15 +14224,11 @@ body.tv-body { display: block; background: #eef1f5; }
    space — on the other shells the sidebar layout does it. */
 .tv-main { padding: 84px 20px 20px; }
 
-/* Wordmark hard right, and nothing else in the bar. justify-content:end rather
-   than pushing with margin-left:auto: there is only one child, so aligning the
-   container is the honest way to say "this bar holds one thing". */
-.top-nav.tv-nav { justify-content: end; }
-/* .brand-area is the SIDEBAR's brand block in its base rule — 160px tall with a
-   40px top pad and a bottom border. .top-nav .brand-area already flattens it to
-   a flex row; these two just make sure nothing inherits back through. */
-.top-nav.tv-nav .brand-area { height: auto; padding: 0; border-bottom: 0; margin: 0; }
-.top-nav.tv-nav .brand-wordmark { font-size: 21px; }
+/* No rules for the bar itself, deliberately. It uses the site's own .nav-left /
+   .nav-right structure, so the wordmark sits where it sits on every other page
+   and the greeting stack is pushed right by the standard margin-left:auto. The
+   board differs from the other shells by what its header OMITS, not by how the
+   header is laid out — an override here would be a second nav to keep in step. */
 
 /* Same white card the widgets use, sized to the screen rather than to a column.
    No title, no tabs, no collapse control: there is one thing on this page and

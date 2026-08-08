@@ -2249,6 +2249,7 @@ function _tvGate() {
 // five pollers per TV, in five stores, around the clock — which is the exact
 // shape of the egress overage that had to be walked back once already.
 function initBoardPage() {
+    _setUserGreeting();
     fetchLiveDashboard();
     // Guarded on window._lvSync, the SAME flag initDashboardData uses, so the two
     // can never both be running against one page.
@@ -16729,13 +16730,21 @@ function cbRestoreEntry(id) {
 // 23. MODULE: ROLE-BASED UI & INITIALIZATION
 // ============================================================================
 
+// Split out of applyRoleBasedUI so the shop-floor board can greet its user
+// without running the rest of it — that function ends by kicking off a
+// feature-overrides fetch, and a page with no data-feature elements has nothing
+// to gate. One writer, so the wording can't drift between the two callers.
+function _setUserGreeting() {
+    const el = document.getElementById('userGreeting');
+    if (el) el.innerText = `Welcome ${sessionStorage.getItem('speeksUserName') || 'User'}!`;
+}
+
 function applyRoleBasedUI() {
     const userRole = sessionStorage.getItem('speeksUserRole') || 'employee';
     const userStore = sessionStorage.getItem('speeksUserStore') || 'ALL';
     const userName = sessionStorage.getItem('speeksUserName') || 'User';
 
-    const greetingEl = document.getElementById('userGreeting');
-    if (greetingEl) greetingEl.innerText = `Welcome ${userName}!`;
+    _setUserGreeting();
 
     const firstName = userName.split(' ')[0];
     // (Analytics Workspace header is a static V4 hero in workspace.html now —
