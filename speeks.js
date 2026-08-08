@@ -10105,10 +10105,23 @@ function _lvBuyBlock(d, views) {
             + _lvTile('Bought vs Sold', _lvRatio(r.b.bought, r.b.sold), 'Stock In Against Out')
             + '</div>';
     } else {
-        html += '<div class="lv-tbl-scroll"><table class="lv-tbl lv-tbl-buy"><thead><tr>'
+        // Google reviews live in THIS table, not the selling one above it: a review
+        // is left by somebody who came in to sell a device, so it belongs beside
+        // what was bought off them (user's call 2026-08-08).
+        //
+        // Month only, and hidden until the sheet carries figures — the count is
+        // month-to-date, so under Yesterday's buying it would be answering a
+        // different question from every other column in the row.
+        const revCodes = rows.map(r => r.v.code);
+        const showRev = _lvHasReviews(revCodes);
+        const revOf = code => { const f = _lvFcFor(code); return (f && f.reviews) || 0; };
+        html += '<div class="lv-tbl-scroll"><table class="lv-tbl lv-tbl-buy'
+            + (showRev ? ' lv-tbl-rev' : '') + '"><thead><tr>'
             + '<th>Store</th><th>Bought &middot; resale value</th><th>Cash paid</th>'
             + '<th>Buy margin</th><th>Bought vs sold</th>'
+            + (showRev ? '<th>Reviews</th>' : '')
             + '</tr></thead><tbody>';
+        const revCell = n => '<td class="lv-boldnum">' + (n > 0 ? _lvNum(n) : '—') + '</td>';
         rows.forEach(r => {
             const tint = STORE_TINTS[r.v.code]
                 ? '<i class="lv-tint" style="background:' + STORE_TINTS[r.v.code] + '"></i>' : '';
@@ -10119,14 +10132,19 @@ function _lvBuyBlock(d, views) {
                 + '<td class="lv-strongnum">' + _lvMoney(r.b.bought, false) + '</td>'
                 + '<td class="lv-quietnum">' + _lvMoney(r.b.paid, false) + '</td>'
                 + '<td class="lv-boldnum">' + _lvPct(r.b.margin) + '</td>'
-                + '<td>' + _lvRatio(r.b.bought, r.b.sold) + '</td></tr>';
+                + '<td>' + _lvRatio(r.b.bought, r.b.sold) + '</td>'
+                + (showRev ? revCell(revOf(r.v.code)) : '') + '</tr>';
         });
         const tot = _lvBuySum(rows.map(r => r.b));
         html += '</tbody><tfoot><tr class="lv-foot"><td><span class="lv-store"><b>Total</b></span></td>'
             + '<td class="lv-strongnum">' + _lvMoney(tot.bought, false) + '</td>'
             + '<td class="lv-quietnum">' + _lvMoney(tot.paid, false) + '</td>'
             + '<td class="lv-boldnum">' + _lvPct(tot.margin) + '</td>'
-            + '<td>' + _lvRatio(tot.bought, tot.sold) + '</td></tr></tfoot></table></div>';
+            + '<td>' + _lvRatio(tot.bought, tot.sold) + '</td>'
+            // The Total line is not a store, so its reviews are the sum of the rows
+            // above rather than a lookup on a code that has no hub key.
+            + (showRev ? revCell(revCodes.reduce((a, c) => a + revOf(c), 0)) : '')
+            + '</tr></tfoot></table></div>';
     }
 
     // Tracking to month-end used to hang off the bottom of this block, which put
@@ -10386,26 +10404,24 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     // dashboard" and Buying as an appendix to it; they are two halves of the same
     // question, so both get a header. Lives here so every surface that draws this
     // table gets it — district and Multi-Store Manager, on all three days.
-    // Google reviews are a month-to-date count, so the column belongs to the month
-    // view only — beside a day's takings it would be answering a different question.
-    const revCodes = stores.filter(m => !m.error).map(m => m.code);
-    const showRev = _lvHasReviews(revCodes);
-    const revOf = code => { const f = _lvFcFor(code); return (f && f.reviews) || 0; };
+    //
+    // Google reviews are NOT here. They sat in this table first, on the reasoning
+    // that it is the main one — but a review is left by somebody who came in to
+    // sell a device, so it belongs beside what was bought off them, not beside
+    // what was sold to somebody else. Moved to _lvBuyBlock (user's call).
     let html = _lvSplit('Selling', '')
-        + '<div class="lv-tbl-scroll"><table class="lv-tbl'
-        + (showRev ? ' lv-tbl-rev' : '') + '"><thead><tr>'
+        + '<div class="lv-tbl-scroll"><table class="lv-tbl"><thead><tr>'
         + '<th>Store</th><th>' + (_lvMode === 'today' ? 'Net today' : 'Net sales') + '</th>'
         + '<th>Cost</th><th>Gross profit</th>'
         + '<th>Refunds</th><th>Orders</th><th>Margin</th>'
         + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>Pace</th>'
-        + (showRev ? '<th>Reviews</th>' : '')
         + '<th>' + tailHead + '</th>'
         + '</tr></thead><tbody>';
     // Fixed store order (the edge function returns it that way) — the team reads
     // this list by position, so re-sorting it worst-first would cost more than the
     // ranking gains. The pace column is what makes a bad store findable.
     stores.forEach(m => {
-        html += _lvStoreRow(_lvView(m), d, false, showRev ? revOf(m.code) : null);
+        html += _lvStoreRow(_lvView(m), d, false, null);
     });
     html += '</tbody>';
     if (rollup) {
@@ -10417,10 +10433,7 @@ function _lvTable(stores, d, rollup, rollupLabel) {
             // total line too rather than only in the row it belongs to.
             lastOrderAt: stores.reduce((a, m) => (m.lastOrderAt && (!a || m.lastOrderAt > a)) ? m.lastOrderAt : a, null),
         });
-        // The roll-up is not a store, so its reviews are the sum of the rows above
-        // rather than a lookup on "District".
-        html += '<tfoot>' + _lvStoreRow(r, d, true,
-            showRev ? revCodes.reduce((a, c) => a + revOf(c), 0) : null) + '</tfoot>';
+        html += '<tfoot>' + _lvStoreRow(r, d, true, null) + '</tfoot>';
     }
     return html + '</table></div>';
 }

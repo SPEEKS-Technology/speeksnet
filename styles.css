@@ -10626,11 +10626,15 @@ body.sam-active .hotbar-btn:hover {
    SOLD sat in a column half again as wide as the three beside it, with its short
    pill marooned in the middle of the gap. Even columns won. */
 .lv-tbl-buy { min-width: 1080px; }
-/* Eleven columns instead of ten, once Google Reviews is in the sheet. 1080 was
-   sized for ten: at 1150px the extra column squeezed the numbers until Pace and
-   Reviews touched. Same answer as the base rule — give the table the width it
-   needs and let .lv-tbl-scroll scroll, rather than crushing the cells. */
-.lv-tbl.lv-tbl-rev { min-width: 1180px; }
+/* Google Reviews adds a SIXTH column to the buying table (it was in the selling
+   table first — see _lvBuyBlock for why it moved). No extra min-width: five data
+   columns still split the same 86.5%, and measured across 1000-1400px the tightest
+   gap between painted cell text stays comfortable, because the new column holds a
+   two-digit count and the four beside it hold money.
+   Raising this table alone to 1180 was the obvious move and is the wrong one: it
+   shares its 1080px floor and 13.5% store column with the selling table so that
+   both tables' left edge, right edge and first data column land on the same x at
+   every width. Widening one breaks that for a column that does not need it. */
 
 /* Bought against sold. Three states, not the pace pill's two: at 90-99% a store
    is drifting rather than failing, and the gap is worth seeing before it opens. */
