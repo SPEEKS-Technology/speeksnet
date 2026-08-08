@@ -10011,10 +10011,6 @@ function _lvFcFor(code) {
         // same place by the same kind of formula. Zero until the sheet carries them.
         reviews: n(h[k + 'Reviews']), reviewsProj: n(h[k + 'ReviewsProj']),
         reviewsGoal: n(h[k + 'ReviewsGoal']),
-        // How many a day is left to find, over the BUYING days remaining — the
-        // one figure here somebody can act on this afternoon. Summing it across
-        // stores is valid because every store shares the same denominator.
-        reviewsNeed: n(h[k + 'ReviewsNeed']),
     };
 }
 // The summary cell, on either board. Shown only once there is something to show:
@@ -10040,30 +10036,24 @@ function _lvSumReviews(id, fc) {
         pct === null ? '' : (pct >= 100 ? 'good' : (pct >= 80 ? 'warn' : 'bad')));
 }
 
-// "5 of 40 · 1.8 a day", or "5 of 40 so far" before there is a target to chase.
+// "5 of 40 · 35 to go", or "5 so far" before there is a target to chase.
 //
-// The rate is what a shift can act on: a projection says where the month lands if
-// nothing changes, and this says what changing it costs — per BUYING day, since
-// nobody is asking a customer for a review on a Sunday.
+// The remainder rather than a per-day rate, which is what this said first. A rate
+// has to be a whole number to be an instruction — nobody goes and gets 1.8
+// reviews — and rounding up flattened four of the five stores onto the same "2 a
+// day" while asking LEE for 40 where 21 would do. The count is exact, needs no
+// rounding, and the pace is already on the tile above it as the projection.
 //
-// "so far" is dropped when the rate is shown. Both would fit, but the sub-line is
-// a quarter of a strip wide and three clauses in it stopped being a glance.
+// Derived here rather than carried on the hub: it is goal minus banked, both of
+// which are already on the payload, and a second source for a subtraction is a
+// second thing to disagree.
 function _lvReviewSub(f) {
     const banked = _lvNum(f.reviews)
         + (f.reviewsGoal > 0 ? ' of ' + _lvNum(f.reviewsGoal) : '');
-    if (f.reviewsGoal > 0 && f.reviews >= f.reviewsGoal) return banked + ' &middot; goal met';
-    // No rate before the sheet carries one, and none once the month is out of
-    // buying days — "∞ a day" is not advice.
-    if (!(f.reviewsNeed > 0)) return banked + ' so far';
-    // ROUNDED UP, always: nobody can go and get 1.8 reviews (user's call, and it
-    // is what makes this an instruction rather than a statistic). Up rather than
-    // nearest because rounding 1.8 down to 1 is advice that misses the goal.
-    //
-    // ⚠️ The ceiling is applied HERE, not in the sheet. Row 37 stays exact so the
-    // workbook keeps a real number to do arithmetic with; only the thing a person
-    // reads off a tile gets rounded. Rounding at the source would quietly move the
-    // district's figure too, which is a sum of five already-rounded rates.
-    return banked + ' &middot; ' + _lvNum(Math.ceil(f.reviewsNeed)) + ' a day';
+    if (!(f.reviewsGoal > 0)) return banked + ' so far';
+    const toGo = f.reviewsGoal - f.reviews;
+    if (toGo <= 0) return banked + ' &middot; goal met';
+    return banked + ' &middot; ' + _lvNum(toGo) + ' to go';
 }
 
 function _lvSplit(label, right) {
@@ -10166,7 +10156,6 @@ function _lvFcSum(views) {
         buyProj: add(f => f.buyProj), trackRev: add(f => f.trackRev),
         trackGp, goal, pct: goal > 0 ? trackGp / goal * 100 : null,
         reviews: add(f => f.reviews), reviewsProj: add(f => f.reviewsProj), reviewsGoal,
-        reviewsNeed: add(f => f.reviewsNeed),
     };
 }
 

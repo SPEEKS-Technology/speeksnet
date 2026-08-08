@@ -33,34 +33,35 @@
 //   AF4:AJ34         CUMULATIVE month-to-date count per store   ← the importer
 //                    writes these; leave them blank, and never put a formula
 //                    here (the importer refuses to overwrite one, by design)
-//   AK4   =IF(COUNT(AF4:AJ4)=0,"",SUM(AF4:AJ4))                    fill down
-//   AF35  =IFERROR(MAX(AF4:AF34),0)                                fill across
-//   AF36  =IFERROR(AF35/_ELAPSED*_INMONTH,0)                       fill across
-//   AF37  =IFERROR(MAX(0,(AF$2-AF35)/MAX(1,_INMONTH-_ELAPSED)),0)  fill across
-//   AE37  "Need / buying day"
-//
-// where, written out in full (Sheets has no LET on old files, so both appear
-// inline in each formula):
-//   _ELAPSED  = NETWORKDAYS.INTL(EOMONTH(TODAY(),-1)+1,
-//                 EOMONTH(TODAY(),-1)+MAXIFS($AE$4:$AE$34,$AK$4:$AK$34,">0"),11)
-//   _INMONTH  = NETWORKDAYS.INTL(EOMONTH(TODAY(),-1)+1,EOMONTH(TODAY(),0),11)
+//   AK4   =IF(COUNT(AF4:AJ4)=0,"",SUM(AF4:AJ4))     fill down to AK34
+//   AF35  =IFERROR(MAX(AF4:AF34),0)                 fill across to AK35
+//   AF36  =IFERROR(AF35/$E$40*$E$39,0)              fill across to AK36
 //
 // BUYING DAYS, NOT CALENDAR DAYS (user's call 2026-08-08, and the righter one):
-// reviews come from someone at the counter asking for one, and the stores are shut
-// on Sundays. `11` is NETWORKDAYS.INTL's "Sunday only" weekend code, which is the
-// same rule the Buy tab's own "Days thru Month" uses.
+// a review comes from someone at the counter asking for one, and the stores are
+// shut on Sundays.
 //
-// Note this does NOT know about holidays, where the Buy tab's hand-kept "Buying
-// Days in Month" does (BUY_CLOSED_DATES in sales-email-import.gs). One closed
-// holiday makes this read one day long. Deliberate: reaching across to that cell
-// means hard-coding its address, and guessing an address is what took the hub down.
+// ⚠️ E40 and E39 are the Buy tab's OWN counters — "Days thru Month" and "Buying
+// Days in Month", cell addresses confirmed by the user, not guessed. Reusing them
+// rather than counting days here is the whole point:
+//   - They already exclude HOLIDAYS as well as Sundays (BUY_CLOSED_DATES in
+//     sales-email-import.gs, cross-checked every run by _buyPlannedCheck). A
+//     NETWORKDAYS.INTL rule of my own would only know about Sundays, and would
+//     read a day long after every holiday for the rest of the month.
+//   - Reviews and buying can then never disagree about how long a month is.
+//   - E40 tracks the last day the DATA covers, not the calendar, which is why the
+//     projection does not dip every morning before the 7am import runs. Reviews
+//     and buying ride the same email, so they advance together by construction.
+// Absolute refs so they survive the fill across — every store shares one
+// denominator, which is correct: they all import on the same day.
 //
-// _ELAPSED reads the last day the TTL column reported, so the projection is
-// measured over exactly the window the data covers — which is why it does not dip
-// every morning before the 7am import runs. Absolutely referenced so it survives
-// the fill across; all five stores import together, so they share a denominator.
+// There is deliberately NO per-buying-day rate row. It was built and removed the
+// same afternoon: a rate has to be whole to be an instruction, and rounding up
+// flattened four of five stores onto "2 a day" while asking LEE for 40 where 21
+// would do. The tile shows the remainder instead ("9 of 30 · 21 to go"), computed
+// in speeks.js from goal minus banked — both already on the payload.
 //
-// Three traps in those formulas, all of which fail quietly:
+// Two traps in those formulas, both of which fail quietly:
 //   - ⚠️ DO NOT use the LOOKUP(2,1/(range<>""),range) "last non-blank" idiom for
 //     row 35, which is what it said first. It builds a lookup vector of one number
 //     and thirty #DIV/0! errors and asks Sheets to BINARY-SEARCH it, which is only
@@ -68,11 +69,10 @@
 //     figure at day 7 — every one of the six cells returned 0 while the data sat
 //     visible two rows above. MAX has no sorted-range assumption, and for a
 //     CUMULATIVE count the largest value IS the month to date.
-//   - AK must leave an empty day BLANK, because _ELAPSED asks it which day the
-//     import last ran. A plain SUM writes 0 into all 31 rows on day one.
-//   - Row 37 needs MAX(0,…) on the numerator and MAX(1,…) on the denominator. A
-//     store past its goal would otherwise show a NEGATIVE daily rate, and the last
-//     buying day of the month would divide by zero.
+//   - AK must leave an empty day BLANK rather than showing 0, so the TTL column
+//     reads as "nothing yet" for days that have not imported. Nothing depends on
+//     it now that the denominator comes from E40, but a column of 31 zeros is a
+//     lie the moment anybody reads it.
 // ============================================================================
 
 /**
@@ -111,7 +111,6 @@ function addGoogleReviews(data) {
       var c = cols[s];
       data[s + 'Reviews']     = num(tab.getRange(c + '35').getValue());  // month to date
       data[s + 'ReviewsProj'] = num(tab.getRange(c + '36').getValue());  // projected month-end
-      data[s + 'ReviewsNeed'] = num(tab.getRange(c + '37').getValue());  // per buying day, to goal
       data[s + 'ReviewsGoal'] = num(tab.getRange(c + '2').getValue());   // monthly target
     });
   } catch (err) {
