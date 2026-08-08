@@ -9140,6 +9140,9 @@ const _lvMoney = (n, cents) => '$' + (Number(n) || 0).toLocaleString('en-US', {
 });
 const _lvPct = n => (n === null || n === undefined || n === '')
     ? '—' : (Math.round(Number(n) * 10) / 10).toFixed(1) + '%';
+// A plain count — Google reviews. Rounded because a projection is a fraction and
+// "34.7 reviews" is not a thing anybody counts.
+const _lvNum = n => Math.round(Number(n) || 0).toLocaleString('en-US');
 
 // asOfCentral arrives as "YYYY-MM-DD HH:MM" already in Central, so the clock is
 // read off the string. Reformatting it through Date() would re-apply the viewer's
@@ -9949,8 +9952,31 @@ function _lvFcFor(code) {
     return {
         buyProj: n(h[k + 'BuyProj']), trackRev: n(h[k + 'TrackRev']),
         trackGp: n(h[k + 'TrackGP']), goal: n(h[k + 'Goal']),
+        // Google reviews ride the same pipe as everything else here: keyed into the
+        // Sales Summary sheet, projected there, and served through the hub — so the
+        // one number asked to behave "like buying and selling" is computed in the
+        // same place by the same kind of formula. Zero until the sheet carries them.
+        reviews: n(h[k + 'Reviews']), reviewsProj: n(h[k + 'ReviewsProj']),
+        reviewsGoal: n(h[k + 'ReviewsGoal']),
     };
 }
+// The summary cell, on either board. Shown only once there is something to show:
+// an eighth cell reading "—" costs a row that already wraps at seven, and it
+// would sit there for the whole rollout saying nothing.
+function _lvSumReviews(id, fc) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const has = !!fc && (fc.reviews > 0 || fc.reviewsGoal > 0);
+    el.hidden = !has;
+    if (!has) return;
+    // Against the goal when there is one, so the number is readable without
+    // knowing what good looks like. Same three bands as Tracking to Goal.
+    const pct = fc.reviewsGoal > 0 ? (fc.reviewsProj / fc.reviewsGoal) * 100 : null;
+    _ccSum(id, _lvNum(fc.reviews)
+        + (fc.reviewsGoal > 0 ? ' <small>of ' + _lvNum(fc.reviewsGoal) + '</small>' : ''),
+        pct === null ? '' : (pct >= 100 ? 'good' : (pct >= 80 ? 'warn' : 'bad')));
+}
+
 function _lvSplit(label, right) {
     return '<div class="lv-split"><span class="lv-split-l">' + label + '</span>'
         + '<span class="lv-split-r">' + (right || '') + '</span></div>';
@@ -10046,9 +10072,11 @@ function _lvFcSum(views) {
     if (!fcs.length) return null;
     const add = f => fcs.reduce((a, x) => a + f(x), 0);
     const trackGp = add(f => f.trackGp), goal = add(f => f.goal);
+    const reviewsGoal = add(f => f.reviewsGoal);
     return {
         buyProj: add(f => f.buyProj), trackRev: add(f => f.trackRev),
         trackGp, goal, pct: goal > 0 ? trackGp / goal * 100 : null,
+        reviews: add(f => f.reviews), reviewsProj: add(f => f.reviewsProj), reviewsGoal,
     };
 }
 
@@ -10076,12 +10104,18 @@ function _lvForecast(views) {
     // "Against Goal" — banked attainment on day 7 of the month always reads as a
     // disaster (18.9%) and answered a question nobody was asking. It is not
     // repeated here; the three tiles left are the projections behind it.
+    // The reviews tile only appears once the sheet actually carries the numbers —
+    // a fourth tile reading "0 · Against 0" for however long the rollout takes
+    // would teach everyone to ignore that corner of the strip.
+    const hasReviews = f.reviews > 0 || f.reviewsProj > 0 || f.reviewsGoal > 0;
     return _lvSplit('Tracking to month-end', '')
-        + '<div class="lv-strip lv-fc-strip s3">'
+        + '<div class="lv-strip lv-fc-strip ' + (hasReviews ? 's4' : 's3') + '">'
         + _lvTile('Tracking Buying', _lvMoney(f.buyProj, false), 'Projected Month-End')
         + _lvTile('Tracking Revenue', _lvMoney(f.trackRev, false), 'Projected Month-End')
         + _lvTile('Tracking Gross Profit', _lvMoney(f.trackGp, false),
             f.goal ? 'Against ' + _lvMoney(f.goal, false) : '')
+        + (hasReviews ? _lvTile('Tracking Google Reviews', _lvNum(f.reviewsProj),
+            f.reviewsGoal ? 'Against ' + _lvNum(f.reviewsGoal) : 'Projected Month-End') : '')
         + '</div>';
 }
 
@@ -10184,7 +10218,21 @@ function _lvRollupTiles(r, d, label, views) {
 // `v` arrives already switched to the selected day by _lvTable — the roll-up row
 // has to be built from the same view before its pace is derived, so doing the
 // overlay here as well would apply it twice.
-function _lvStoreRow(v, d, foot) {
+// Does the Reviews column exist on this table? Only on the month view, and only
+// once the sheet is actually carrying the numbers — an empty column down every
+// row for however long the rollout takes teaches people to stop looking there.
+function _lvHasReviews(codes) {
+    if (!_lvIsMtd()) return false;
+    return (codes || []).some(c => {
+        const f = _lvFcFor(c);
+        return !!f && (f.reviews > 0 || f.reviewsGoal > 0);
+    });
+}
+
+// `rev` is the store's month-to-date Google reviews, or null for "no such
+// column" — passed in rather than looked up here because the roll-up row is not
+// a store and has to be summed by the caller.
+function _lvStoreRow(v, d, foot, rev) {
     // The roll-up row is not a store, so it gets no colour dot — the tints are the
     // per-store palette the KPI charts use and inventing a sixth one for "District"
     // would read as a sixth store.
@@ -10196,7 +10244,8 @@ function _lvStoreRow(v, d, foot) {
         // (It was 7 against eight columns; adding Refunds makes it nine.)
         return '<tr class="lv-row-err"><td><span class="lv-store">' + tint
             + '<b>' + escapeHtml(v.code) + '</b></span></td>'
-            + '<td colspan="9" class="lv-row-errmsg">not reporting &middot; '
+            + '<td colspan="' + (rev === null || rev === undefined ? 9 : 10)
+            + '" class="lv-row-errmsg">not reporting &middot; '
             + escapeHtml(v.error) + '</td></tr>';
     }
     const asOf = d.asOfCentral;
@@ -10237,6 +10286,8 @@ function _lvStoreRow(v, d, foot) {
         + '<td>' + gp + '</td>'
         + '<td><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
         + (v.paceIndex === null || v.paceIndex === undefined ? '—' : v.paceIndex + '%') + '</span></td>'
+        + (rev === null || rev === undefined ? ''
+            : '<td class="lv-boldnum">' + (rev > 0 ? _lvNum(rev) : '—') + '</td>')
         + '<td>' + tail + '</td></tr>';
 }
 
@@ -10251,18 +10302,27 @@ function _lvTable(stores, d, rollup, rollupLabel) {
     // dashboard" and Buying as an appendix to it; they are two halves of the same
     // question, so both get a header. Lives here so every surface that draws this
     // table gets it — district and Multi-Store Manager, on all three days.
+    // Google reviews are a month-to-date count, so the column belongs to the month
+    // view only — beside a day's takings it would be answering a different question.
+    const revCodes = stores.filter(m => !m.error).map(m => m.code);
+    const showRev = _lvHasReviews(revCodes);
+    const revOf = code => { const f = _lvFcFor(code); return (f && f.reviews) || 0; };
     let html = _lvSplit('Selling', '')
-        + '<div class="lv-tbl-scroll"><table class="lv-tbl"><thead><tr>'
+        + '<div class="lv-tbl-scroll"><table class="lv-tbl'
+        + (showRev ? ' lv-tbl-rev' : '') + '"><thead><tr>'
         + '<th>Store</th><th>' + (_lvMode === 'today' ? 'Net today' : 'Net sales') + '</th>'
         + '<th>Cost</th><th>Gross profit</th>'
         + '<th>Refunds</th><th>Orders</th><th>Margin</th>'
         + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>Pace</th>'
+        + (showRev ? '<th>Reviews</th>' : '')
         + '<th>' + tailHead + '</th>'
         + '</tr></thead><tbody>';
     // Fixed store order (the edge function returns it that way) — the team reads
     // this list by position, so re-sorting it worst-first would cost more than the
     // ranking gains. The pace column is what makes a bad store findable.
-    stores.forEach(m => { html += _lvStoreRow(_lvView(m), d, false); });
+    stores.forEach(m => {
+        html += _lvStoreRow(_lvView(m), d, false, showRev ? revOf(m.code) : null);
+    });
     html += '</tbody>';
     if (rollup) {
         const rv = _lvView(rollup);
@@ -10273,7 +10333,10 @@ function _lvTable(stores, d, rollup, rollupLabel) {
             // total line too rather than only in the row it belongs to.
             lastOrderAt: stores.reduce((a, m) => (m.lastOrderAt && (!a || m.lastOrderAt > a)) ? m.lastOrderAt : a, null),
         });
-        html += '<tfoot>' + _lvStoreRow(r, d, true) + '</tfoot>';
+        // The roll-up is not a store, so its reviews are the sum of the rows above
+        // rather than a lookup on "District".
+        html += '<tfoot>' + _lvStoreRow(r, d, true,
+            showRev ? revCodes.reduce((a, c) => a + revOf(c), 0) : null) + '</tfoot>';
     }
     return html + '</table></div>';
 }
@@ -10509,6 +10572,11 @@ function renderLiveDashboard() {
         _ccSum('cc-sum-goal', Math.round(fc.pct) + '<small>%</small>',
             fc.pct >= 100 ? 'good' : (fc.pct >= 80 ? 'warn' : 'bad'));
     }
+    // Month to date, not the projection: this line is the banked figures, and the
+    // tile inside the panel is where the month is heading. Stays hidden until the
+    // sheet carries reviews rather than showing an eighth cell reading "—" — the
+    // row already wraps to two lines on a narrow screen at seven.
+    _lvSumReviews('cc-sum-reviews', fc);
 
     _lvAfterRender();
 }
@@ -33379,6 +33447,10 @@ function _dcSummaryFill() {
     const pct = goal > 0 ? gp / goal * 100 : 0;
     set('dc-sum-goal', Math.round(pct) + '<small>%</small>',
         pct >= 100 ? 'good' : (pct >= 80 ? 'warn' : 'bad'));
+    // Company-wide Google reviews, summed from the same per-store hub figures the
+    // Live tab's table and tracking tile read — one source, so the two lines on
+    // this page cannot disagree. Hides itself until the sheet carries them.
+    _lvSumReviews('dc-sum-reviews', _lvFcSum(_dccRows.map(r => ({ code: r.store }))));
 
     // "Stores flagged", not an average: one store failing eBay is the thing worth
     // knowing, and averaging four percentages across five stores hides it.

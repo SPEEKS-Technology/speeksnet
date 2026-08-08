@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260808l">
+  <link rel="stylesheet" href="styles.css?v=20260808m">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260808l" defer></script>
+  <script src="speeks.js?v=20260808m" defer></script>
 </head>
 
 <body class="preload">
@@ -970,6 +970,10 @@
             <!-- Sits next to the revenue it came back out of. -->
             <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-refunds" data-feature="cc-live"><div class="cc-sum-k">Refunds &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
             <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-goal" data-feature="cc-live"><div class="cc-sum-k">Tracking to Goal</div><div class="cc-sum-v">—</div></div>
+            <!-- Google Reviews sits with the two figures that have a target, ahead of
+                 the three health readouts. Hidden until the sheet carries the numbers
+                 (see _ccSum callers) so it is not an eighth "—" during the rollout. -->
+            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-reviews" data-feature="cc-live" hidden><div class="cc-sum-k">Google Reviews &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
             <div class="cc-sum role-manager role-owner-manager" id="cc-sum-ebay" data-feature="cc-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
             <div class="cc-sum role-manager role-owner-manager" id="cc-sum-score" data-feature="cc-scorecard"><div class="cc-sum-k">SPEEKS Scorecard</div><div class="cc-sum-v">—</div></div>
             <div class="cc-sum role-manager role-owner-manager" id="cc-sum-audit" data-feature="cc-scorecard"><div class="cc-sum-k">PayMore Audit</div><div class="cc-sum-v">—</div></div>
@@ -1075,6 +1079,7 @@
           <!-- Sits next to the revenue it came back out of. -->
           <div class="cc-sum" id="dc-sum-refunds"><div class="cc-sum-k">Refunds &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
           <div class="cc-sum" id="dc-sum-goal"><div class="cc-sum-k">Company Tracking to Goal</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-reviews" hidden><div class="cc-sum-k">Google Reviews &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
           <div class="cc-sum" id="dc-sum-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
           <div class="cc-sum" id="dc-sum-score"><div class="cc-sum-k">Scorecard &middot; Company Avg</div><div class="cc-sum-v">—</div></div>
           <div class="cc-sum" id="dc-sum-audit"><div class="cc-sum-k">PayMore Audit &middot; Company Avg</div><div class="cc-sum-v">—</div></div>

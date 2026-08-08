@@ -10608,6 +10608,11 @@ body.sam-active .hotbar-btn:hover {
    SOLD sat in a column half again as wide as the three beside it, with its short
    pill marooned in the middle of the gap. Even columns won. */
 .lv-tbl-buy { min-width: 1080px; }
+/* Eleven columns instead of ten, once Google Reviews is in the sheet. 1080 was
+   sized for ten: at 1150px the extra column squeezed the numbers until Pace and
+   Reviews touched. Same answer as the base rule — give the table the width it
+   needs and let .lv-tbl-scroll scroll, rather than crushing the cells. */
+.lv-tbl.lv-tbl-rev { min-width: 1180px; }
 
 /* Bought against sold. Three states, not the pace pill's two: at 90-99% a store
    is drifting rather than failing, and the gap is worth seeing before it opens. */
@@ -10637,7 +10642,9 @@ body.sam-active .hotbar-btn:hover {
    top of the card, which is what lines the two bands up. The 1px side padding is
    the top strip's 1px border — without it these would each start a pixel left of
    the tile above and the columns would be a pixel wide. */
-.lv-fc-strip.s3 { padding: 0 1px; }
+   With Google Reviews the band is four tiles and fills the row; the padding is
+   still what lines column one up with the tile above it, so both counts take it. */
+.lv-fc-strip.s3, .lv-fc-strip.s4 { padding: 0 1px; }
 @media (max-width: 760px) {
     .lv-buy-strip, .lv-fc-strip { grid-template-columns: repeat(2, 1fr); }
 }
