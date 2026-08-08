@@ -2237,6 +2237,27 @@ function _tvGate() {
     return true;
 }
 
+// The board's whole init. A screen is not a session: it has one card, nobody to
+// click anything, and no feed, bubbles or panels for the rest of the dashboard
+// to paint into. Running the normal init here would fire ~30 fetches and start
+// five pollers per TV, in five stores, around the clock — which is the exact
+// shape of the egress overage that had to be walked back once already.
+function initBoardPage() {
+    fetchLiveDashboard();
+    // Guarded on window._lvSync, the SAME flag initDashboardData uses, so the two
+    // can never both be running against one page.
+    if (!window._lvSync) {
+        // No visibilitychange pairing here, unlike the dashboard's copy: that one
+        // skips hidden tabs to avoid spending requests on a panel nobody is
+        // looking at. A TV is the case where somebody always is.
+        window._lvSync = setInterval(fetchLiveDashboard, 5 * 60 * 1000);
+    }
+    // Realtime is the primary path on the board as everywhere else — a sale
+    // should reach the sales floor in seconds, not on the next five-minute tick.
+    // It answers only the `live` ping; see the board guard in _rtRunCheck.
+    initRealtimeNotifications();
+}
+
 async function checkPIN() {
     const pin = document.getElementById('pinInput').value;
     const err = document.getElementById('pinError');
@@ -17085,11 +17106,17 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelector('.sidebar-toggle')?.classList.add('collapsed'); 
     }
     
-    loadCMS();
-    injectGlobalAuth();
-    injectIdeaModal();
-    startAuthFetch();
-    
+    // Site-wide, except on the shop-floor board. A screen has no announcements to
+    // read, no PIN pad to pre-load the user list for, and no idea box — and cms is
+    // the very function whose polling had to be walked back once for egress.
+    // Running these on five TVs around the clock is that bill again, for nothing.
+    if (!_tvOnBoardPage()) {
+        loadCMS();
+        injectGlobalAuth();
+        injectIdeaModal();
+        startAuthFetch();
+    }
+
     if (document.getElementById('kbBody')) loadHotkeys();
     if (document.getElementById('content-container') && document.getElementById('docSearch')) { 
         loadDocs(); 
@@ -17108,6 +17135,9 @@ document.addEventListener("DOMContentLoaded", () => {
         if (authOverlay) authOverlay.style.display = 'none';
         document.body.style.overflow = '';
 
+        // Already on the board: it gets its own small init and nothing else.
+        if (_tvOnBoardPage()) { initBoardPage(); return; }
+
         closeAllModals();
         applyRoleBasedUI();
         // Before anything can open a side panel: sets --panel-top so they hang
@@ -17125,6 +17155,16 @@ document.addEventListener("DOMContentLoaded", () => {
         setInterval(applyKpiReminder, 60000);
         if (document.getElementById('mainKpiChart')) syncAllData();
     } else {
+        // sessionStorage dies with the browser process, so a TV that power-cycles
+        // overnight wakes with no session, on the one page in the site with no PIN
+        // pad of its own. It has to go find one.
+        //
+        // It always did — but only because injectGlobalAuth() put a hidden
+        // #authOverlay on every page, which is the condition the line below tests.
+        // The board no longer injects it (see the guard at the top of this
+        // handler), so the board now has to say where it goes. _tvGate() bounces it
+        // straight back here the moment the PIN is accepted.
+        if (_tvOnBoardPage()) { window.location.replace('index.html'); return; }
         if (!window.location.href.includes('index.html') && document.getElementById('authOverlay')) {
             window.location.href = "index.html"; 
             return;
@@ -30598,6 +30638,10 @@ const _RT_TOOL_CHECKS = {
 // fetch), then repaint the feed. Wrapped so nothing can kill the channel.
 async function _rtRunCheck(tool) {
     try {
+        // The shop-floor board subscribes for one reason: a sale landing. It has
+        // no feed, no bubbles and no tool panels for the other pings to refresh,
+        // so answering them would spend a fetch per write, per TV, for nothing.
+        if (_tvOnBoardPage() && tool !== 'live') return;
         const fns = _RT_TOOL_CHECKS[tool] || [];
         for (const name of fns) {
             try { if (typeof window[name] === 'function') await window[name](); }
