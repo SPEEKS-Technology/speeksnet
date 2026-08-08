@@ -196,21 +196,33 @@ var ESTVAL_LABELS = ['estimated value', 'est. value', 'est value', 'estimated re
 // which is what lets BUY_BACKFILL re-run harmlessly.
 var REVIEW_COL_BASES = { OVL: 31, LEE: 32, WSP: 33, MPL: 34, BAL: 35 };  // AF..AJ
 
-// ⚠️ NOT yet confirmed against a real email — every other label list in this file
-// was checked against real bodies before it was trusted, and this one has not
-// been. Run diagnoseBuyingReviews() and lock the wording it prints.
+// ✅ CONFIRMED against the real reports 2026-08-08. The wording is
+// "5-star reviews (Month to Date)", on its own line with the figure on the next
+// one as `*5*` — the asterisks are what getPlainBody() makes of the bold cell.
+// The line appeared with the Aug 7 reports; Aug 5 and earlier do not have it, so
+// a backfill over those days finds nothing and correctly writes nothing.
 //
-// Ordered most-specific first, and "google" is required in every candidate: a
-// bare "reviews" would match a heading, a footer link, or a line about review
-// requests sent. Stop labels keep a matched label from borrowing a neighbour's
-// number when the report carries the heading but no figure.
+// ⚠️ IT IS 5-STAR REVIEWS, NOT ALL REVIEWS. That is the only month-to-date figure
+// the report carries, so it is what the sheet column and its target mean.
+//
+// ⚠️ THE DANGEROUS NEIGHBOUR IS "Total reviews", THREE LINES ABOVE IT. That is the
+// DAY's count, rendered `*0▼ 100%*`, and it is the number a looser label list
+// would pick up — a whole number, in the right part of the report, that would
+// quietly overwrite the month with a day and then read as a collapse. So every
+// candidate below requires the month-to-date parenthetical: that phrase, not the
+// word "reviews", is what identifies the figure.
+//
+// Note there is no "Google" anywhere in the report — the earlier guess required
+// it in every candidate, which is precisely why it matched nothing.
 var REVIEW_LABELS = [
-  'google reviews mtd', 'mtd google reviews', 'google reviews this month',
-  'google reviews', 'google review count', 'new google reviews'
+  '5-star reviews (month to date)', '5 star reviews (month to date)',
+  '5-star reviews (mtd)', 'reviews (month to date)', 'reviews (mtd)'
 ];
-// Anything that could plausibly follow the label and be read as its value.
-var REVIEW_STOPS = ['google rating', 'average rating', 'star', 'total spent',
-  'estimated value', 'transactions'];
+// Where the segment after the label must stop. "PaytonAI Review insights" follows
+// immediately, and the paragraph under it opens "1 Star Reviews - Summary" — so a
+// month with no figure at all would otherwise read as 1.
+var REVIEW_STOPS = ['paytonai', 'review insights', 'star reviews',
+  'total reviews', 'total spent', 'estimated value'];
 
 // A review count that jumps by more than this in one day is not a review count —
 // it is an all-time total, a rating scaled up, or the wrong number entirely.
@@ -294,6 +306,10 @@ function _handle(e) {
   try {
     if (action === 'diagnose') return _json(diagnoseShopifyEmails());
     if (action === 'diagnoseBuying') return _json(diagnoseBuyingEmails());
+    // Read-only, and reachable over the web app rather than only from the Run
+    // dropdown — checking whether a wording still parses should not need a
+    // redeploy to find out, which is the loop that hid the first miss.
+    if (action === 'diagnoseReviews') return _json(diagnoseBuyingReviews());
     if (action === 'buying') return _json(ingestBuyingEmails({ dryRun: dryRun }));
 
     var sales = ingestSalesEmails({
@@ -747,14 +763,15 @@ function _countAfterLabel(text, label, stopLabels, win) {
     var i2 = seg.search(new RegExp(e2, 'i'));
     if (i2 >= 0) seg = seg.slice(0, i2);
   });
-  // The first number after the label, and it has to be a bare whole one. The two
-  // things most likely to sit next to the word "reviews" in a report like this
-  // are a star rating (4.8) and a money figure ($1,204.00), and either would land
-  // in the sheet looking entirely plausible. Refusing outright is right rather
-  // than skipping to the next number: the run reports a miss, which is visible,
-  // where a wrong count is not.
-  var m = seg.match(/(\$?)\s*(\d[\d,]*)(\.\d+)?/);
-  if (!m || m[1] || m[3]) return null;
+  // The first number after the label, and it has to be a bare whole one. Three
+  // things sit near a review figure in this report and none of them is the count:
+  // a star rating (4.8), a money figure ($1,204.00), and the day-over-day deltas
+  // the statistics block renders as "0▼ 100%". Any of them would land in the
+  // sheet looking entirely plausible. Refusing outright is right rather than
+  // skipping to the next number: the run reports a miss, which is visible, where
+  // a wrong count is not.
+  var m = seg.match(/(\$?)\s*(\d[\d,]*)(\.\d+)?\s*(%?)/);
+  if (!m || m[1] || m[3] || m[4]) return null;
   var n = parseInt(m[2].replace(/,/g, ''), 10);
   return isNaN(n) ? null : n;
 }
