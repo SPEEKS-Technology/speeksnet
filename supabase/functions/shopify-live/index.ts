@@ -573,7 +573,9 @@ function canon(v: any): string {
  *
  * Never put store data in here. The channel is shared by every signed-in
  * browser regardless of role, so anything in the payload is readable by
- * everyone — which is exactly what the scoped read path exists to prevent.
+ * everyone. The read path no longer withholds store data (see scopeFor), so
+ * that is not the live concern it once was — but the rule stands, because a
+ * gate restored there would be silently undone by a payload sent here.
  */
 async function broadcastChange(tool: string) {
   try {
