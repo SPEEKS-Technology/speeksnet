@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260808b">
+  <link rel="stylesheet" href="styles.css?v=20260808c">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260808b" defer></script>
+  <script src="speeks.js?v=20260808c" defer></script>
 </head>
 
 <body class="preload">
@@ -956,19 +956,21 @@
         <!-- Collapsed default: one-line summary shown when no tab is open -->
         <div class="cc-summary" id="cc-summary">
             <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-live" data-feature="cc-live"><div class="cc-sum-k">Net Sales Today</div><div class="cc-sum-v">—</div></div>
-            <!-- Refunds rides beside the takings here exactly as it does in the
-                 Orders tile and on the district summary — it is the other half of
-                 the day, and a sales figure quoted without it overstates it.
-                 Shares cc-live's feature key: it is the same tab's data, so one
-                 switch should not leave a stranded half. -->
-            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-refunds" data-feature="cc-live"><div class="cc-sum-k">Refunds Today</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum role-manager role-owner-manager" id="cc-sum-audit" data-feature="cc-scorecard"><div class="cc-sum-k">PayMore Audit</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum role-manager role-owner-manager" id="cc-sum-score" data-feature="cc-scorecard"><div class="cc-sum-k">SPEEKS Scorecard</div><div class="cc-sum-v">—</div></div>
+            <!-- Deliberately the SAME seven cells, in the same order, as the district
+                 summary above (#dc-summary) — the two rows are read by the same people
+                 and a different running order between them is a re-read every time.
+                 What differs is only the scope, and therefore the keys: no "Company"
+                 on the goal, no "· Company Avg" on the scorecard or audit, because
+                 every figure here is this one store's.
+                 The three live cells carry cc-live's feature key: one switch should
+                 never leave a stranded half-row of the same tab's data. -->
+            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-mtd" data-feature="cc-live"><div class="cc-sum-k">Month to Date Revenue</div><div class="cc-sum-v">—</div></div>
+            <!-- Sits next to the revenue it came back out of. -->
+            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-refunds" data-feature="cc-live"><div class="cc-sum-k">Refunds &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-goal" data-feature="cc-live"><div class="cc-sum-k">Tracking to Goal</div><div class="cc-sum-v">—</div></div>
             <div class="cc-sum role-manager role-owner-manager" id="cc-sum-ebay" data-feature="cc-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
-            <!-- Tracking Buying / Tracking Revenue / To Goal came off here with the
-                 Buying & Sales tab. They are month-end projections, and the collapsed
-                 summary is meant to say where things stand right now — the Month view
-                 carries all three under "Tracking to month-end". -->
+            <div class="cc-sum role-manager role-owner-manager" id="cc-sum-score" data-feature="cc-scorecard"><div class="cc-sum-k">SPEEKS Scorecard</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager" id="cc-sum-audit" data-feature="cc-scorecard"><div class="cc-sum-k">PayMore Audit</div><div class="cc-sum-v">—</div></div>
         </div>
 
         <div class="cc-strips">

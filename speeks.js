@@ -8784,8 +8784,14 @@ async function fetchAlertsData() {
         _countTile('cc-ebay-top', 'Top-Rated Metrics', _sevs.slice(4));
 
         // ---- Collapsed one-line summary + "updated" cue for the eBay tab ----
-        _ccSum('cc-sum-ebay', _ebVal, (_ebValCls || '').trim());
-        document.querySelectorAll('#cc-sum-ebay .cc-sum-v').forEach(el => { el.style.fontSize = '15px'; });
+        // Count large, words small — the district cell's shape ("2 Stores Over"),
+        // so the two summary rows scan the same way. The 15px override that used to
+        // sit here was for the old five-cell row, where the whole phrase was set at
+        // the value size and had to shrink to fit; the qualifier is <small> now, so
+        // it fits at the shared size and no longer reads as a different kind of cell.
+        const _ebSumVal = _crit > 0 ? `${_crit} <small>At Risk</small>`
+            : (_warn > 0 ? `${_warn} <small>Near Limit</small>` : 'Healthy');
+        _ccSum('cc-sum-ebay', _ebSumVal, (_ebValCls || '').trim());
         _ccFlagUpdate('ebay', `${_crit}|${_warn}|${_clear}`);
 
         // ---- eBay detail panel: two metric groups, contained stat cells ----
@@ -10195,11 +10201,24 @@ function renderLiveDashboard() {
     if (sumK) sumK.textContent = (!mineSum && d.district) ? 'District Net Sales Today' : 'Net Sales Today';
     _ccSum('cc-sum-live', _lvMoney(roll.netToday, false)
         + ' <small>' + roll.ordersToday + (roll.ordersToday === 1 ? ' order' : ' orders') + '</small>');
-    // Refunds beside the takings, the same pairing the Orders tile and the
-    // district summary already use. "none" rather than $0: a zero in a money slot
-    // reads as a figure that failed to load, and on most days this genuinely is
-    // nothing rather than an unknown.
-    _ccSum('cc-sum-refunds', roll.returnsToday > 0 ? _lvMoney(roll.returnsToday, false) : 'none');
+    // Revenue, not profit — the same reason the district's says so: two money
+    // figures side by side have to declare which is which, and that is the key's
+    // job, so the value does not repeat it.
+    _ccSum('cc-sum-mtd', _lvMoney(roll.mtdNet, false));
+    // Month to date, matching the district cell it sits in the same position as.
+    // Today's refunds are a tab away on the Live view; the month is the figure
+    // that belongs beside a month of revenue.
+    if (roll.mtdReturns !== null && roll.mtdReturns !== undefined) {
+        _ccSum('cc-sum-refunds', _lvMoney(roll.mtdReturns, false));
+    }
+    // Where the month LANDS, from the same projection as the fourth tile and the
+    // tracking band, so the collapsed line and the open panel cannot disagree.
+    // Same three colour bands as the district's.
+    const fc = mineSum ? _lvFcSum([_lvView(mineSum)]) : null;
+    if (fc && fc.pct !== null) {
+        _ccSum('cc-sum-goal', Math.round(fc.pct) + '<small>%</small>',
+            fc.pct >= 100 ? 'good' : (fc.pct >= 80 ? 'warn' : 'bad'));
+    }
 
     _lvAfterRender();
 }
