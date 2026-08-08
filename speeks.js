@@ -1529,7 +1529,10 @@ function populateUsersModal() {
     // Group users by role into collapsible bars (canonical role order first,
     // then any unrecognised role alphabetically). Rows keep their .user-manage-row
     // class so saveManageUsers() still reads every one regardless of grouping.
-    const ROLE_ORDER = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM'];
+    // Store LAST, and deliberately so: the list above it is people in seniority
+    // order, and a Store account is a screen on a sales floor — one per store,
+    // never a person. Grouping it at the bottom keeps the staff list readable.
+    const ROLE_ORDER = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM', 'Store'];
     const groups = {};
     const order = [];
     globalUsersData.forEach(u => {
@@ -1603,7 +1606,10 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
     row.className = 'user-manage-row';
 
     const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL', 'CORP'];
-    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM'];
+    // Must match ROLE_ORDER in populateManageUsers, including the trailing Store:
+    // a role that can be assigned but not grouped lands in the unrecognised
+    // bucket, and one that can be grouped but not assigned cannot be created.
+    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM', 'Store'];
 
     const storeOptions = stores.map(s => `<option value="${s}" ${(user.store || '').toUpperCase() === s ? 'selected' : ''}>${s}</option>`).join('');
     const roleOptions = roles.map(r => `<option value="${r}" ${(user.role || '').toLowerCase() === r.toLowerCase() ? 'selected' : ''}>${r}</option>`).join('');
@@ -16834,7 +16840,14 @@ const MULTISTORE_MANAGER_STORES = ['BAL', 'MPL'];
 // True if a directory user belongs to a given store's roster. A Multi-Store Manager
 // belongs to EVERY store they manage (not just their home store), so they're included
 // anywhere a regular store manager would be — variance, listing-goals roster, etc.
+// "Is this person part of this store's team?" — every caller is building a staff
+// roster (listing goals, the target ladder, the variance employee list), which is
+// why the Store role is turned away here rather than in each of them. A Store
+// account has a store, but it is a TV on the wall: counted as staff it would ask
+// the screen for a listing role every morning, and add a head to the roster that
+// moves the weekly target a full ±20 listings.
 function userInStore(user, storeCode) {
+    if (String(user.role || '').toLowerCase().trim() === 'store') return false;
     const store = String(storeCode || '').toUpperCase();
     if (String(user.store || '').toUpperCase() === store) return true;
     return String(user.role || '').toLowerCase() === 'multi-store manager'

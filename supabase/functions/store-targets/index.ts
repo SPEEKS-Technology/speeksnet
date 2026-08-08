@@ -72,7 +72,10 @@ Deno.serve(async (req: Request) => {
   // Manager — the MSM contributes via the flat MSM_TARGET_BOOST instead).
   async function rosterCount(store: string) {
     const { data } = await supabase.from("users").select("role").eq("store", store);
-    const excl = new Set(["ceo", "district manager", "multi-store manager"]);
+    // 'store' is the shop-floor board account — a TV, not a head. Counted here it
+    // would add a person to team_size and move the suggested target by a full
+    // ±20 listings (see baseForSize). Mirrors storeRosterSize/userInStore.
+    const excl = new Set(["ceo", "district manager", "multi-store manager", "store"]);
     return (data || []).filter((u: any) => !excl.has(String(u.role || "").toLowerCase().trim())).length;
   }
 
