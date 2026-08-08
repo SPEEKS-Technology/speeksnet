@@ -2255,6 +2255,11 @@ function _tvGate() {
 function initBoardPage() {
     _setUserGreeting();
     fetchLiveDashboard();
+    // The board's card has TWO halves. Selling comes from shopify-live above; the
+    // Buying block reads hubDataCache, which only fetchHubData fills — without
+    // this it sits on "Syncing the buying sheet…" for as long as the TV is on.
+    // It repaints the dashboard itself once the data lands.
+    fetchHubData();
     // Guarded on window._lvSync, the SAME flag initDashboardData uses, so the two
     // can never both be running against one page.
     if (!window._lvSync) {
@@ -2262,6 +2267,12 @@ function initBoardPage() {
         // skips hidden tabs to avoid spending requests on a panel nobody is
         // looking at. A TV is the case where somebody always is.
         window._lvSync = setInterval(fetchLiveDashboard, 5 * 60 * 1000);
+    }
+    // Buying gets its own, much slower net. The sheet is keyed once a morning, so
+    // five minutes would be 287 pointless requests a day per TV to catch one
+    // change; realtime (the `buying` ping) is what makes it prompt.
+    if (!window._lvBuySync) {
+        window._lvBuySync = setInterval(fetchHubData, 30 * 60 * 1000);
     }
     // Realtime is the primary path on the board as everywhere else — a sale
     // should reach the sales floor in seconds, not on the next five-minute tick.
@@ -30847,10 +30858,11 @@ const _RT_TOOL_CHECKS = {
 // fetch), then repaint the feed. Wrapped so nothing can kill the channel.
 async function _rtRunCheck(tool) {
     try {
-        // The shop-floor board subscribes for one reason: a sale landing. It has
-        // no feed, no bubbles and no tool panels for the other pings to refresh,
-        // so answering them would spend a fetch per write, per TV, for nothing.
-        if (_tvOnBoardPage() && tool !== 'live') return;
+        // The shop-floor board subscribes for the two things on its card: a sale
+        // landing (`live`) and the buying sheet moving (`buying`). It has no feed,
+        // no bubbles and no tool panels for the other pings to refresh, so
+        // answering them would spend a fetch per write, per TV, for nothing.
+        if (_tvOnBoardPage() && tool !== 'live' && tool !== 'buying') return;
         const fns = _RT_TOOL_CHECKS[tool] || [];
         for (const name of fns) {
             try { if (typeof window[name] === 'function') await window[name](); }
