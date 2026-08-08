@@ -820,6 +820,15 @@ function _reviewSanity(values, rcol, rowIdx, value) {
   if (value < 0) return 'negative review count (' + value + ')';
   var prev = null;
   for (var r = rowIdx - 1; r >= 0; r--) {
+    // ⚠️ STOP AT THE TOP OF THE DAY BLOCK. Walking up from a day row, the first
+    // row whose Date cell is not a day number is the header — and two rows above
+    // that sits the GOAL, a plausible whole number in the very same column,
+    // directly above the data. Without this the guard read the target as
+    // "yesterday's month-to-date" and refused every store on the first real run:
+    // "month-to-date reviews went DOWN (40 -> 5)". Column 0 is the tab's own Date
+    // column, the same one _findDayRow already trusts to locate a day.
+    var day = _num(values[r][0]);
+    if (day == null || day < 1 || day > 31) break;
     var v = _num(values[r][rcol]);
     if (v != null) { prev = v; break; }
   }
