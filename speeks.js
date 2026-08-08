@@ -2209,6 +2209,34 @@ function handlePINAutoTrigger() {
     }
 }
 
+// ── The Store role: a shop-floor display, not a person ──────────────────────
+//
+// One account per store, signed in on a TV on the sales floor. It is not someone
+// with a narrow set of permissions — it is a screen, so it gets exactly one page
+// and is kept on it. That is a redirect rather than a pile of role classes for
+// the same reason tv.html is its own file: a board that can only ever render one
+// card cannot accidentally show payroll to a customer.
+//
+// Deliberately NOT a security boundary. The role sees what any signed-in pin
+// sees (see scopeFor in shopify-live); this only decides where it lands.
+const TV_PAGE = 'tv.html';
+function _tvIsBoardRole() {
+    return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'store';
+}
+function _tvOnBoardPage() {
+    return /(^|\/)tv\.html$/i.test(String(window.location.pathname || ''));
+}
+// Returns true when it has started navigating — callers must stop what they were
+// doing, because the rest of a page init is pointless mid-redirect.
+function _tvGate() {
+    if (!_tvIsBoardRole() || _tvOnBoardPage()) return false;
+    // replace(), not href: nobody is standing at the TV pressing Back, and a
+    // history entry per load would let a stray remote-control press wander off
+    // the board with no way back.
+    window.location.replace(TV_PAGE);
+    return true;
+}
+
 async function checkPIN() {
     const pin = document.getElementById('pinInput').value;
     const err = document.getElementById('pinError');
@@ -2259,6 +2287,12 @@ async function checkPIN() {
             sessionStorage.setItem('speeksUserPin', matched.pin);
             // New-hire announcement baseline: blank for pre-existing users (no filtering).
             sessionStorage.setItem('speeksUserOnboardedAt', matched.onboarded_at || '');
+
+            // A shop-floor board signs in on the login page like everyone else and
+            // is sent straight to its own page. Before the dashboard init below, not
+            // after: there is no point building a QuickPortal nobody will see, and a
+            // half-built one is what would flash on the TV on the way past.
+            if (_tvGate()) return;
 
             const authOverlay = document.getElementById('authOverlay');
             if (authOverlay) authOverlay.style.display = 'none';
@@ -17063,6 +17097,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (sessionStorage.getItem('speeksUnlocked') === 'true') {
+        // A TV is left on for weeks and reloads on its own — power cut, browser
+        // restart, someone's overnight update. Every one of those has to land back
+        // on the board, not on a QuickPortal, so the gate runs on load and not
+        // only at login. First thing inside the branch: everything below it is
+        // page setup that a redirect makes pointless.
+        if (_tvGate()) return;
         document.body.classList.add('is-authenticated');
         const authOverlay = document.getElementById('authOverlay');
         if (authOverlay) authOverlay.style.display = 'none';

@@ -14209,3 +14209,54 @@ body.sam-active .hotbar-btn:hover {
     .exp-controls { gap: 10px; }
     .exp-btn-mail { width: 100%; justify-content: center; }
 }
+
+/* =========================================================
+   THE SHOP-FLOOR BOARD  (tv.html, Store role)
+   One card on a wall-mounted TV. Everything here is chrome —
+   the dashboard itself is the manager's, unmodified, so that
+   the board cannot drift away from what the team is looking
+   at on their own screens.
+   ========================================================= */
+/* body is display:flex site-wide for the sidebar shell; there is no sidebar
+   here, so the nav and the card stack instead of sitting side by side. */
+body.tv-body { display: block; background: #eef1f5; }
+/* The nav is position:fixed at 64px. Nothing else on the page reserves that
+   space — on the other shells the sidebar layout does it. */
+.tv-main { padding: 84px 20px 20px; }
+
+/* Wordmark hard right, and nothing else in the bar. justify-content:end rather
+   than pushing with margin-left:auto: there is only one child, so aligning the
+   container is the honest way to say "this bar holds one thing". */
+.top-nav.tv-nav { justify-content: end; }
+/* .brand-area is the SIDEBAR's brand block in its base rule — 160px tall with a
+   40px top pad and a bottom border. .top-nav .brand-area already flattens it to
+   a flex row; these two just make sure nothing inherits back through. */
+.top-nav.tv-nav .brand-area { height: auto; padding: 0; border-bottom: 0; margin: 0; }
+.top-nav.tv-nav .brand-wordmark { font-size: 21px; }
+
+/* Same white card the widgets use, sized to the screen rather than to a column.
+   No title, no tabs, no collapse control: there is one thing on this page and
+   naming it would only take room from it. */
+.tv-card {
+    background: #fff;
+    border: 1px solid #e6ebf1;
+    border-radius: 16px;
+    padding: 18px 22px 22px;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 8px 24px rgba(16, 24, 40, .05);
+    max-width: 1600px;
+    margin: 0 auto;
+}
+/* The strip is a plain grid in the widgets, bordered by the card around it.
+   Standing alone at the top of this card it needs its own edge, the same one the
+   district card's strip has. */
+.tv-card .lv-strip {
+    border: 1px solid #e6ebf1; border-radius: 13px; overflow: hidden;
+}
+
+/* A TV is read from across the room, not from a desk. This is the ONE knob for
+   that: everything on the page scales with it, because the card's contents are
+   the manager's dashboard and must not be restyled piecemeal.
+   Left at 1 deliberately — "exactly what the manager one looks like" was the
+   ask, and a board that disagrees with the screen in the office is worse than a
+   small one. Raise it here if the far wall needs it. */
+.tv-card { zoom: 1; }
