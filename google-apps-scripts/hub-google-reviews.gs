@@ -37,9 +37,15 @@
 //                    cover a day whose report never arrived; the importer treats
 //                    a value that already matches as unchanged.
 //   AK4              =SUM(AF4:AJ4)                    (fill down to AK34)
-//   AF35             =LOOKUP(2,1/(AF4:AF34<>""),AF4:AF34)          ← TTL: the
+//   AK4              — better: =IF(COUNT(AF4:AJ4)=0,"",SUM(AF4:AJ4)), so a day
+//                    with nothing in it stays BLANK. A plain SUM writes 0 into
+//                    all 31 rows on day one, and row 35 below looks for the last
+//                    NON-BLANK cell — with zeros everywhere it finds day 31.
+//   AF35             =IFERROR(LOOKUP(2,1/(AF4:AF34<>""),AF4:AF34),0)  ← TTL: the
 //                    latest figure entered, which for a cumulative count IS the
-//                    month to date. Fill across AF35:AK35.
+//                    month to date. Fill across AF35:AK35. The IFERROR matters:
+//                    an all-blank column returns #N/A, which is what the sheet
+//                    shows the morning a month starts.
 //   AF36             =IFERROR(AF35/LOOKUP(2,1/(AF4:AF34<>""),$AE$4:$AE$34)
 //                             *DAY(EOMONTH(TODAY(),0)),0)          ← Tracking:
 //                    month-to-date ÷ days elapsed × days in month. Fill across.
@@ -62,18 +68,37 @@
 
   // 4. GOOGLE REVIEWS  (Buy tab, AF-AJ; see the block comment above)
   //
-  // Guarded on the tab actually being that wide. getRange() THROWS on a column
-  // past the end of the sheet, and this runs inside getDashboardData() — so
-  // pasting this before the columns exist would take down buying, selling, the
-  // leaderboard and the whole Live Dashboard, not just reviews. With the guard,
-  // a sheet without the block simply returns no review keys, and every surface
-  // in speeks.js already treats "no keys" as "don't show reviews yet".
-  if (buyingSheet && buyingSheet.getMaxColumns() >= 36) {
-    var revCols = { ovl: 'AF', lee: 'AG', wsp: 'AH', mpl: 'AI', bal: 'AJ' };
-    Object.keys(revCols).forEach(function (s) {
-      var c = revCols[s];
-      data[s + 'Reviews']     = buyingSheet.getRange(c + '35').getValue();  // month to date
-      data[s + 'ReviewsProj'] = buyingSheet.getRange(c + '36').getValue();  // projected month-end
-      data[s + 'ReviewsGoal'] = buyingSheet.getRange(c + '2').getValue();   // monthly target
-    });
-  }
+  // ⚠️ THE WHOLE BLOCK IS INSIDE try/catch, AND THAT IS THE POINT.
+  //
+  // The first version of this read a `buyingSheet` variable, on the assumption
+  // that getDashboardData() had one under that name. It does not, and the
+  // ReferenceError took the ENTIRE hub down — buying, selling, the leaderboard
+  // and every Live Dashboard surface froze on their last cached payload for half
+  // an hour, for the sake of one bonus figure. A getMaxColumns() guard covered
+  // the failure that was anticipated (columns not there yet) and did nothing
+  // about the one that happened.
+  //
+  // So: this block reaches for NOTHING in the surrounding function — it opens the
+  // tab itself by name — and anything at all that goes wrong inside it costs
+  // reviews and nothing else. Every surface in speeks.js already treats "no review
+  // keys" as "don't show reviews yet", so failing silently here degrades to
+  // exactly the state before the feature existed.
+  try {
+    var revTab = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(
+      'Buy ' + Utilities.formatDate(new Date(), 'America/Chicago', 'MMM yy'));
+    // getRange() throws on a column past the end of the sheet, so the width check
+    // stays even inside the catch — a caught exception is still a wasted call.
+    if (revTab && revTab.getMaxColumns() >= 36) {
+      // Row 35 reads #N/A until the first figure lands (LOOKUP over an all-blank
+      // column), and that would travel to the browser as the string "#N/A". Coerce
+      // here rather than trusting the sheet: the client treats 0 as "nothing yet".
+      var revNum = function (v) { var x = Number(v); return isFinite(x) ? x : 0; };
+      var revCols = { ovl: 'AF', lee: 'AG', wsp: 'AH', mpl: 'AI', bal: 'AJ' };
+      Object.keys(revCols).forEach(function (s) {
+        var c = revCols[s];
+        data[s + 'Reviews']     = revNum(revTab.getRange(c + '35').getValue());  // month to date
+        data[s + 'ReviewsProj'] = revNum(revTab.getRange(c + '36').getValue());  // projected month-end
+        data[s + 'ReviewsGoal'] = revNum(revTab.getRange(c + '2').getValue());   // monthly target
+      });
+    }
+  } catch (revErr) { /* reviews are a bonus; never take the hub down for them */ }
