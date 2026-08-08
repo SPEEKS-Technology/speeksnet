@@ -9443,11 +9443,59 @@ function _lvActivityHolds(d) {
     return !!(d && d.open && !_lvIsPrev() && _lvMyCodes(d));
 }
 
+// A pinned strip survives a reload. Signing the board out and back in, or a TV
+// power-cycling overnight, would otherwise land on the empty strip that pinning
+// exists to prevent — and the first fetch after a reload deliberately flags
+// nothing (see _lvTrackChanges), so nothing would refill it until the next sale.
+//
+// localStorage, not sessionStorage: the two cases this is for are signing out
+// (which clears the session) and the browser restarting (which clears it again).
+// Same reason the one-time alert bubbles had to move.
+//
+// Replayed, never re-derived. These are events that were observed while somebody
+// was watching; restoring them invents nothing, which is why _lvTrackChanges can
+// still refuse to flag anything against an empty snapshot. They also cannot
+// re-chime — the chime fires on the diff, not on the render.
+const LV_ACT_KEY = 'speeksLvActivity';
+let _lvRestored = false;
+
+function _lvSaveEvents(day) {
+    try {
+        localStorage.setItem(LV_ACT_KEY, JSON.stringify({ day: day, events: _lvEvents }));
+    } catch (_) { /* private mode or quota — a strip is not worth an error */ }
+}
+
+function _lvRestoreEvents(day) {
+    try {
+        const raw = JSON.parse(localStorage.getItem(LV_ACT_KEY) || 'null');
+        // Today's only. A chip from yesterday announcing a sale "just now" is a
+        // lie, and on a board that has been on all night it is the first thing
+        // anyone would read.
+        if (!raw || !day || raw.day !== day || !Array.isArray(raw.events)) return;
+        _lvEvents = raw.events.slice(0, LV_ACTIVITY_KEEP);
+        // Ids restart at e1 on a fresh load, so the counter has to clear the
+        // highest restored one — otherwise the next sale is handed an id already
+        // on screen and the keyed reconciler treats it as drawn and skips it.
+        _lvEvents.forEach(e => {
+            const n = parseInt(String(e.id).replace(/^e/, ''), 10);
+            if (isFinite(n) && n > _lvEvSeq) _lvEvSeq = n;
+        });
+    } catch (_) { _lvEvents = []; }
+}
+
 function _lvSyncActivity() {
     const rows = document.querySelectorAll('.lv-activity-row');
     if (!rows.length) return;
     const now = Date.now();
     const hold = _lvActivityHolds(_lvData);
+    const day = String((_lvData && _lvData.asOfCentral) || '').slice(0, 10);
+    // Once per page load, and only where the strip pins. A ticker viewer restoring
+    // chips that are already minutes old would watch them flash in and expire on
+    // the spot, which is worse than the empty row they replaced.
+    if (hold && !_lvRestored) {
+        _lvRestored = true;
+        if (!_lvEvents.length) _lvRestoreEvents(day);
+    }
     // Closing hands the pinned chips back to the 30-second rule. Restamped
     // rather than dropped: they play one last life and fade out, instead of
     // disappearing all at once between two fetches.
@@ -9493,6 +9541,9 @@ function _lvSyncActivity() {
             row.insertBefore(el, row.children[i] || null);
         });
     });
+    // Only while pinned. A ticker's list is empty most of the time, and writing
+    // that over a board's saved chips is how a reload would come back blank.
+    if (hold) _lvSaveEvents(day);
     _lvScheduleActivityExpiry();
 }
 
