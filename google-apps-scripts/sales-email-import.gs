@@ -303,6 +303,16 @@ function _handle(e) {
 
   var action = p.action || 'ingest';
   var dryRun = p.dryRun === '1';
+
+  // An UNKNOWN action used to fall through to the live import — so a typo, or an
+  // action added here but not yet published (the /exec URL serves the deployed
+  // version, not the editor's), silently ran a full sales+buying write instead of
+  // whatever read-only thing was asked for. Refusing by name costs nothing and
+  // makes a deploy-drift miss say so.
+  if (['ingest', 'diagnose', 'diagnoseBuying', 'diagnoseReviews', 'buying'].indexOf(action) < 0) {
+    return _json({ ok: false, error: 'unknown action "' + action + '"' });
+  }
+
   try {
     if (action === 'diagnose') return _json(diagnoseShopifyEmails());
     if (action === 'diagnoseBuying') return _json(diagnoseBuyingEmails());
