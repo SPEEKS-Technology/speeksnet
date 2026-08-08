@@ -10173,8 +10173,14 @@ function _lvForecast(views) {
         + _lvTile('Tracking Revenue', _lvMoney(f.trackRev, false), 'Projected Month-End')
         + _lvTile('Tracking Gross Profit', _lvMoney(f.trackGp, false),
             f.goal ? 'Against ' + _lvMoney(f.goal, false) : '')
+        // The only tile whose sub-line carries a figure rather than a caption, and
+        // deliberately: the projection alone ("45") is the one number here nobody
+        // can sanity-check by eye, because unlike revenue there is no running total
+        // on screen anywhere else. Banked against target underneath it — "10 of 40
+        // so far" — is what makes 45 mean something.
         + (hasReviews ? _lvTile('Tracking Google Reviews', _lvNum(f.reviewsProj),
-            f.reviewsGoal ? 'Against ' + _lvNum(f.reviewsGoal) : 'Projected Month-End') : '')
+            _lvNum(f.reviews) + (f.reviewsGoal ? ' of ' + _lvNum(f.reviewsGoal) : '')
+            + ' so far') : '')
         + '</div>';
 }
 

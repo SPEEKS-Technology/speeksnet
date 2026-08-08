@@ -31,7 +31,11 @@
 //   AE2  "Goal"      AF2:AJ2   monthly review target per store  ← you set these
 //   AE3  "Date"      AF3:AK3   OVL  LEE  WSP  MPL  BAL  TTL
 //   AE4:AE34         day numbers 1-31 (copy the Date column from any block)
-//   AF4:AJ34         the CUMULATIVE month-to-date count per store  ← typed daily
+//   AF4:AJ34         the CUMULATIVE month-to-date count per store  ← written by
+//                    the daily importer (sales-email-import.gs), which reads it
+//                    off each store's Day End Report. Hand-key a cell only to
+//                    cover a day whose report never arrived; the importer treats
+//                    a value that already matches as unchanged.
 //   AK4              =SUM(AF4:AJ4)                    (fill down to AK34)
 //   AF35             =LOOKUP(2,1/(AF4:AF34<>""),AF4:AF34)          ← TTL: the
 //                    latest figure entered, which for a cumulative count IS the
@@ -45,9 +49,15 @@
 // reviews any day of the week, so using the buying basis would overstate the
 // projection by about a seventh.
 //
-// Once the daily report carries MTD reviews, the importer writes into these same
-// cells and nothing downstream changes — that is the whole reason this lives in
-// the sheet rather than being keyed into SPEEKSNET.
+// The daily report DOES now carry MTD reviews (confirmed 2026-08-08), so the
+// importer fills these cells and nothing downstream changed — which is the whole
+// reason this lives in the sheet rather than being keyed into SPEEKSNET. The only
+// thing still to do by hand is row 2, the monthly target per store.
+//
+// ORDER MATTERS ON THE FIRST RUN: add the block to the sheet BEFORE the importer
+// next runs, or it reports "the Google Reviews block (cols AE-AK) is not on this
+// tab yet" and skips reviews for that day (buying is unaffected — that guard
+// exists so a missing block cannot take the rest of the import down).
 // ============================================================================
 
   // 4. GOOGLE REVIEWS  (Buy tab, AF-AJ; see the block comment above)

@@ -182,6 +182,42 @@ var COL_SELL = 2;   // base+2 "Sell" = resale value   <- email "Estimated Value"
 var SPENT_LABELS = ['total spent', 'total spend', 'amount spent'];
 var ESTVAL_LABELS = ['estimated value', 'est. value', 'est value', 'estimated retail'];
 
+// ---- Google reviews ---------------------------------------------------------
+// The Day End Report now also carries the store's month-to-date Google review
+// count, so the one figure that was going to be hand-keyed every morning arrives
+// on the feed that is already running. It lands in its own block on the same Buy
+// tab (columns AE-AK, laid out in google-apps-scripts/hub-google-reviews.gs) at
+// the same day row as that morning's buy/sell, and the hub reads the block's TTL
+// and Tracking rows exactly like it reads buying's.
+//
+// CUMULATIVE, not the day's own count. Each report states the month to date as it
+// stood at that store's close, so writing one number per day builds the column
+// correctly with no arithmetic here — and re-reading an old email is idempotent,
+// which is what lets BUY_BACKFILL re-run harmlessly.
+var REVIEW_COL_BASES = { OVL: 31, LEE: 32, WSP: 33, MPL: 34, BAL: 35 };  // AF..AJ
+
+// ⚠️ NOT yet confirmed against a real email — every other label list in this file
+// was checked against real bodies before it was trusted, and this one has not
+// been. Run diagnoseBuyingReviews() and lock the wording it prints.
+//
+// Ordered most-specific first, and "google" is required in every candidate: a
+// bare "reviews" would match a heading, a footer link, or a line about review
+// requests sent. Stop labels keep a matched label from borrowing a neighbour's
+// number when the report carries the heading but no figure.
+var REVIEW_LABELS = [
+  'google reviews mtd', 'mtd google reviews', 'google reviews this month',
+  'google reviews', 'google review count', 'new google reviews'
+];
+// Anything that could plausibly follow the label and be read as its value.
+var REVIEW_STOPS = ['google rating', 'average rating', 'star', 'total spent',
+  'estimated value', 'transactions'];
+
+// A review count that jumps by more than this in one day is not a review count —
+// it is an all-time total, a rating scaled up, or the wrong number entirely.
+// Reported, never written. Five stores averaging a handful of reviews a month
+// makes anything past this impossible rather than merely surprising.
+var REVIEW_MAX_JUMP = 25;
+
 // Days back to consider, ending yesterday. The ask was "just the previous day";
 // this is 3 purely as a self-healing gap-filler, because the Apps Script /exec
 // endpoint has been throwing transient 404s (2 of the last 14 runs). Since the
@@ -694,7 +730,85 @@ function _findLabeledNear(body, labels, stopLabels, windowChars) {
   return null;
 }
 
-// One Day End Report -> { store, date, buy, sell }.
+// Same two passes as _findLabeledNear, for a COUNT rather than a money figure.
+//
+// A separate function rather than a flag on that one, because the two want
+// opposite things from the text: money must carry a "$" to be believed, and a
+// review count must NOT — insisting on the dollar sign is precisely what keeps
+// "Transactions: 14" out of the buy column, and allowing it here would let a
+// revenue figure into the reviews column just as easily.
+function _countAfterLabel(text, label, stopLabels, win) {
+  var esc = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  var at = String(text).search(new RegExp(esc, 'i'));
+  if (at < 0) return null;
+  var seg = String(text).substr(at + label.length, win);
+  (stopLabels || []).forEach(function (lab) {
+    var e2 = lab.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var i2 = seg.search(new RegExp(e2, 'i'));
+    if (i2 >= 0) seg = seg.slice(0, i2);
+  });
+  // The first number after the label, and it has to be a bare whole one. The two
+  // things most likely to sit next to the word "reviews" in a report like this
+  // are a star rating (4.8) and a money figure ($1,204.00), and either would land
+  // in the sheet looking entirely plausible. Refusing outright is right rather
+  // than skipping to the next number: the run reports a miss, which is visible,
+  // where a wrong count is not.
+  var m = seg.match(/(\$?)\s*(\d[\d,]*)(\.\d+)?/);
+  if (!m || m[1] || m[3]) return null;
+  var n = parseInt(m[2].replace(/,/g, ''), 10);
+  return isNaN(n) ? null : n;
+}
+
+function _findCountNear(body, labels, stopLabels, windowChars) {
+  var lines = String(body || '').split(/\r?\n/);
+  for (var li = 0; li < labels.length; li++) {
+    for (var i = 0; i < lines.length; i++) {
+      var v = _countAfterLabel(lines[i], labels[li], stopLabels, 25);
+      if (v != null) return v;
+    }
+  }
+  var flat = String(body || '').replace(/\s+/g, ' ');
+  for (var lj = 0; lj < labels.length; lj++) {
+    var v2 = _countAfterLabel(flat, labels[lj], stopLabels, windowChars || 60);
+    if (v2 != null) return v2;
+  }
+  return null;
+}
+
+// Is this plausibly a month-to-date review count for this day? Returns a reason
+// to REFUSE, or null to write.
+//
+// The failure this exists for is the quiet one: a label that matches the store's
+// ALL-TIME review total instead of the month's. It parses, it is a whole number,
+// it never decreases — everything a sane count does — and it would put an 800
+// into a column the hub divides by days elapsed, projecting a month-end figure
+// several thousand short of nothing and several thousand past believable.
+//
+// Two checks, both against the column's own history rather than a fixed ceiling,
+// because "normal" differs by store: a count may not go DOWN (month to date
+// cannot), and it may not jump further in one day than any store plausibly earns.
+// On an empty column neither can fire, which is the one case worth naming: the
+// first write of a month has nothing to be checked against and goes in on trust.
+function _reviewSanity(values, rcol, rowIdx, value) {
+  if (value < 0) return 'negative review count (' + value + ')';
+  var prev = null;
+  for (var r = rowIdx - 1; r >= 0; r--) {
+    var v = _num(values[r][rcol]);
+    if (v != null) { prev = v; break; }
+  }
+  if (prev == null) return null;
+  if (value < prev) {
+    return 'month-to-date reviews went DOWN (' + prev + ' -> ' + value
+      + '), so this is probably not a month-to-date figure';
+  }
+  if (value - prev > REVIEW_MAX_JUMP) {
+    return 'reviews jumped ' + (value - prev) + ' in a day (' + prev + ' -> ' + value
+      + '), past REVIEW_MAX_JUMP — likely an all-time total, not month to date';
+  }
+  return null;
+}
+
+// One Day End Report -> { store, date, buy, sell, reviews }.
 //
 // Store and date both come from the SUBJECT (see _buyParseSubject) — the body
 // is only read for the two figures. Returns an object carrying `ok:false` and a
@@ -711,7 +825,12 @@ function parseBuyingEmail(msg) {
   if (buy == null && sell == null) {
     return { ok: false, reason: 'no "Total Spent" / "Estimated Value" figures found', store: sub.store, date: sub.date };
   }
-  return { ok: true, store: sub.store, date: sub.date, buy: buy, sell: sell };
+  // Reviews are additive, never required. A report that predates the reviews line,
+  // or a wording this file has not learned yet, must leave buying working exactly
+  // as it did — the whole point of folding this in here rather than standing up a
+  // third feed for one number.
+  var reviews = _findCountNear(body, REVIEW_LABELS, REVIEW_STOPS);
+  return { ok: true, store: sub.store, date: sub.date, buy: buy, sell: sell, reviews: reviews };
 }
 
 // Which day does this email actually report on?
@@ -861,6 +980,7 @@ function ingestBuyingEmails(opts) {
       if (!prev || msg.getDate().getTime() >= prev.receivedAt) {
         found[key] = {
           store: parsed.store, date: parsed.date, buy: parsed.buy, sell: parsed.sell,
+          reviews: parsed.reviews,
           receivedAt: msg.getDate().getTime(), subject: msg.getSubject()
         };
       }
@@ -902,6 +1022,38 @@ function ingestBuyingEmails(opts) {
         { col: base + COL_BUY,  label: 'buy',  value: f.buy  },
         { col: base + COL_SELL, label: 'sell', value: f.sell }
       ];
+
+      // Google reviews ride the same row, in their own block further right. Two
+      // gates before the value is allowed to join the write list, both of which
+      // report rather than throw:
+      //
+      //   1. The block has to EXIST. getRange() throws on a column past the end
+      //      of the sheet, and this runs inside the import — so on a tab that has
+      //      not had the reviews columns added yet, an unguarded read would take
+      //      down buy and sell too, for a number that is a bonus.
+      //   2. The figure has to behave like a month-to-date count. See
+      //      _reviewSanity; a wrong number here is invisible in a way a missing
+      //      one is not.
+      var rcol = REVIEW_COL_BASES[f.store];
+      if (f.reviews != null && rcol != null) {
+        if (t.sheet.getMaxColumns() <= rcol) {
+          report.skipped.push({
+            store: f.store, date: _iso(f.date), field: 'reviews',
+            reason: 'the Google Reviews block (cols AE-AK) is not on "' + tabName + '" yet'
+          });
+        } else {
+          var rWhy = _reviewSanity(t.values, rcol, rowIdx, f.reviews);
+          if (rWhy) {
+            (report.warnings = report.warnings || []).push({
+              store: f.store, date: _iso(f.date), field: 'reviews',
+              value: f.reviews, reason: rWhy
+            });
+          } else {
+            pair.push({ col: rcol, label: 'reviews', value: f.reviews });
+          }
+        }
+      }
+
       var changes = [];
       for (var pi = 0; pi < pair.length; pi++) {
         var cell = pair[pi];
@@ -1730,6 +1882,73 @@ function diagnoseBuyingEmails() {
     Logger.log('rows the SALES parser can already read: ' + sample.dated_rows_found);
     Logger.log('label/number pairs seen:\n  ' + (sample.label_number_pairs.join('\n  ') || '(none)'));
     Logger.log('body (first 2000 chars):\n' + sample.body_first_2000);
+  });
+  return out;
+}
+
+/**
+ * What does the Day End Report actually call the review count?
+ *
+ * REVIEW_LABELS is the only label list in this file that was written before
+ * anybody had read a matching email, so it is a guess until this says otherwise.
+ * Run it from the Run dropdown (no deploy needed — a diagnostic executes the
+ * editor's code, unlike anything reached through /exec) and read the log.
+ *
+ * Prints every line containing "review" verbatim, then what the parser makes of
+ * the whole body. The two answers to look for:
+ *   MATCHED  <n>   -> the wording is already in REVIEW_LABELS. Nothing to do.
+ *   NO MATCH       -> copy the exact wording out of the lines above into
+ *                     REVIEW_LABELS, most specific first.
+ *
+ * Digits are NOT masked here, unlike diagnoseBuyingEmails: the number IS the
+ * thing being verified, and one look at it against the store's Google page
+ * settles month-to-date versus all-time faster than any heuristic.
+ */
+function diagnoseBuyingReviews() {
+  var q = '(from:(' + BUY_SENDER + ') OR subject:("Day End Report")) newer_than:' + LOOKBACK + 'd';
+  var msgs = [];
+  try {
+    GmailApp.search(q, 0, 200).forEach(function (t) {
+      t.getMessages().forEach(function (m) { msgs.push(m); });
+    });
+  } catch (e) {
+    Logger.log('search failed: ' + e);
+    return { ok: false, error: String(e) };
+  }
+  msgs.sort(function (a, b) { return b.getDate().getTime() - a.getDate().getTime(); });
+
+  Logger.log('=== ' + msgs.length + ' Day End Report(s) in the last ' + LOOKBACK + ' days ===');
+  if (!msgs.length) {
+    Logger.log('NONE FOUND — see diagnoseBuyingEmails() for why (they may still be arriving forwarded).');
+    return { ok: true, messages_found: 0, samples: [] };
+  }
+
+  // One per STORE, newest first, so all five wordings are visible at once — the
+  // five Shopify templates each turned out worded differently, and there is no
+  // reason to assume these five agree either.
+  var byStore = {};
+  msgs.forEach(function (m) {
+    var sub = _buyParseSubject(m.getSubject());
+    var k = sub.store || ('?' + String(m.getSubject() || '').replace(/\d+/g, '#').trim());
+    if (!byStore[k]) byStore[k] = m;       // msgs is newest-first
+  });
+
+  var out = { ok: true, messages_found: msgs.length, samples: [] };
+  Object.keys(byStore).forEach(function (store) {
+    var m = byStore[store];
+    var body = _plainBody(m);
+    var lines = body.split(/\r?\n/).filter(function (l) { return /review/i.test(l); });
+    var parsed = _findCountNear(body, REVIEW_LABELS, REVIEW_STOPS);
+    out.samples.push({ store: store, subject: m.getSubject(), review_lines: lines, parsed: parsed });
+
+    Logger.log('\n--- ' + store + ' | ' + m.getSubject() + ' ---');
+    Logger.log(lines.length
+      ? 'lines mentioning "review":\n  ' + lines.join('\n  ')
+      : 'NO LINE MENTIONS "review" — this store\'s report does not carry it yet.');
+    Logger.log(parsed == null
+      ? 'parser: NO MATCH  <-- add the exact wording above to REVIEW_LABELS'
+      : 'parser: MATCHED ' + parsed + '  <-- check this against the store\'s Google page. '
+        + 'It must be THIS MONTH\'s count, not all-time.');
   });
   return out;
 }
