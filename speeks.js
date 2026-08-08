@@ -10104,7 +10104,26 @@ function renderLiveDashboard() {
     }
 
     let tiles, detail;
-    if (stores.length === 1) {
+    if (d.district) {
+        // The store Command Center's Live tab shows the DISTRICT board — the same
+        // renderers, the same five-store table, the same buying half — not just the
+        // signed-in store. It replaced the Buying & Sales tab, and the figures that
+        // tab carried are all here; showing them district-wide is what the store
+        // teams asked for, so a store can see where it stands next to the others
+        // rather than only against its own goal.
+        //
+        // The card is still "{STORE} Command Center": eBay, Scorecard and Weekly
+        // KPIs beside it remain that store's own. Only this tab is district-wide.
+        //
+        // Whether the district arrives at all is the SERVER's decision — see
+        // scopeFor in shopify-live. This branch renders what it was given and
+        // grants nothing; a payload with no district still falls through to the
+        // single-store and Multi-Store Manager branches below exactly as before.
+        const views = stores.filter(m => !m.error).map(_lvView);
+        tiles = _lvRollupTiles(_lvView(d.district), d, 'No Orders Yet', views);
+        detail = _lvForecast(views) + _lvTable(stores, d, d.district, 'District')
+            + _lvActivity() + _lvBuyBlock(d, views);
+    } else if (stores.length === 1) {
         const m = stores[0];
         tiles = _lvStoreTiles(_lvView(m), d);
         detail = m.error ? _lvStoreError(m) : _lvStoreDetail(d, _lvView(m));
@@ -10133,7 +10152,16 @@ function renderLiveDashboard() {
     // Collapsed Command Center summary line. Deliberately pinned to TODAY: the
     // toggle lives inside the panel, so when the panel is shut there is nothing on
     // screen to say which day this number belongs to.
-    const roll = stores.length === 1 ? stores[0] : _lvCombine(stores.filter(m => !m.error));
+    // Follows the panel: if the tab shows the district, so does the one line that
+    // stands in for it when the tab is shut. A collapsed summary quoting one
+    // store's takings above a panel showing five would be the worse of the two.
+    const roll = d.district ? d.district
+        : (stores.length === 1 ? stores[0] : _lvCombine(stores.filter(m => !m.error)));
+    // And SAY it is the district. The card is titled "{STORE} Command Center", so a
+    // bare "Net Sales Today" under that heading reads as this store's takings —
+    // which is the one wrong conclusion this number can produce.
+    const sumK = document.querySelector('#cc-sum-live .cc-sum-k');
+    if (sumK) sumK.textContent = d.district ? 'District Net Sales Today' : 'Net Sales Today';
     _ccSum('cc-sum-live', _lvMoney(roll.netToday, false)
         + ' <small>' + roll.ordersToday + (roll.ordersToday === 1 ? ' order' : ' orders') + '</small>');
 

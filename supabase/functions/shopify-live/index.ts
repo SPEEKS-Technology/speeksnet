@@ -5,13 +5,21 @@
 //
 //   ?secret=<sync>   pg_cron, once a minute. Talks to Shopify, writes app_cache,
 //                    broadcasts on change. The ONLY path that calls Shopify.
-//   x-user-pin       the browser. Reads the cache and scopes it to that person's
-//                    store. Never calls Shopify, never sees a token.
+//   x-user-pin       the browser. Reads the cache. Never calls Shopify, never
+//                    sees a token.
 //
 // Shopify tokens live in shopify_stores (service-role only) and are never
-// returned, logged, or reachable from the client. A store's numbers are chosen
-// by the pin's OWN store on the server, so hiding a tab in the frontend is not
-// load-bearing.
+// returned, logged, or reachable from the client. That has not changed and is
+// the part that matters.
+//
+// WHAT DID CHANGE: the read path used to hand a store employee their own store
+// and nothing else. It now returns all five stores and the district roll-up to
+// every signed-in user — see scopeFor. The Live Dashboard replaced the Buying &
+// Sales tab on the store Command Center, and it is shown district-wide on
+// purpose so a store can see where it stands against the others. So the pin is
+// still an authentication check, but it is no longer an authorization one: any
+// valid pin sees the whole district's sales, cost, margin, goals and buying.
+// Whoever can open the site can read those numbers.
 //
 // REFRESH WINDOW (America/Chicago, computed here so DST needs no second cron)
 //   Stores open 10-7 Mon-Fri, 10-4 Sat, closed Sun. A two-hour buffer each side
@@ -60,11 +68,17 @@ const STORE_NAMES: Record<string, string> = {
   MPL: "Maplewood", BAL: "Ballwin",
 };
 
+// UNUSED as of the district-for-everyone change — scopeFor no longer consults
+// them. Kept deliberately, not overlooked: they are the two facts a restored
+// gate would need, and re-deriving them from scratch is how the KPI role-gate
+// bug happened. Delete them only when the decision to show every store to
+// everyone is settled for good.
+//
 // Everyone at CORP sees the district. Kept as a role list too, because role and
-// store have drifted apart before (see the KPI role-gate bug).
+// store have drifted apart before.
 const DISTRICT_ROLES = ["ceo", "district manager", "tom"];
-// The Multi-Store Manager runs BAL and MPL, and sees both stacked — the same
-// scoping the checklist, audit panel and Listing Goals already use.
+// The Multi-Store Manager runs BAL and MPL — the same scoping the checklist,
+// audit panel and Listing Goals still use.
 const MSM_STORES = ["BAL", "MPL"];
 
 const json = (body: unknown, status = 200) =>
@@ -500,12 +514,14 @@ async function refresh(sb: any, now: Date, force: boolean) {
     await sb.from("app_cache").upsert({ key: CACHE_KEY, payload, synced_at: new Date().toISOString() });
     // A BARE ping — deliberately no payload attached.
     //
-    // Broadcasts reach every subscriber, so shipping the district payload down the
-    // channel would hand every employee all five stores' sales and margin and
-    // undo the server-side scoping on the read path. Each client re-fetches
-    // instead and gets only its own store. That costs one small request per open
-    // dashboard per CHANGE, not per minute, which is still far below the
-    // per-client polling this design set out to avoid.
+    // The original reason was scoping: a broadcast reaches every subscriber, so
+    // putting the district payload on the channel would have undone the
+    // per-store filtering the read path did. That filtering is gone (see
+    // scopeFor), so the ping stays bare for the two reasons that outlived it —
+    // the channel is shared by every signed-in client and is the wrong place to
+    // put anything a future gate might need to withhold, and a re-fetch costs
+    // one small request per open dashboard per CHANGE rather than per minute,
+    // which is still far below the per-client polling this design replaced.
     await broadcastChange("live");
   }
 
@@ -579,12 +595,33 @@ async function broadcastChange(tool: string) {
 
 // --- read path (browser) ----------------------------------------------------
 
-function scopeFor(role: string, store: string): { codes: string[]; district: boolean } {
-  const r = role.toLowerCase().trim();
-  const s = (store || "").toUpperCase().trim();
-  if (DISTRICT_ROLES.includes(r) || s === "CORP") return { codes: STORE_ORDER, district: true };
-  if (r === "multi-store manager") return { codes: MSM_STORES, district: false };
-  return { codes: STORE_ORDER.includes(s) ? [s] : [], district: false };
+/**
+ * What a signed-in user may read. Now: everything, for everyone.
+ *
+ * This used to be a real authorization gate — district roles got all five
+ * stores and the roll-up, a Multi-Store Manager got their two, and everyone
+ * else got exactly their own store, chosen server-side so that hiding the tab
+ * in the frontend was not load-bearing.
+ *
+ * That gate is gone by request. The Live Dashboard replaced Buying & Sales on
+ * the store Command Center, and managers, assistant managers and employees are
+ * meant to see the district board there — all five stores' net sales, cost,
+ * gross profit, margin, refunds, goals, pace, and the buying half with each
+ * store's cash paid and buy margin. A store seeing itself beside the other four
+ * is the point of the change.
+ *
+ * Read that plainly before touching it: there is no longer any per-store
+ * filtering on this endpoint. A valid pin returns the whole district. If a
+ * future role must NOT see another store's numbers, this function is where that
+ * has to come back — the frontend's role classes hide the tab, not the data,
+ * and anyone who can reach the endpoint with a pin can read the payload.
+ *
+ * `role` and `store` are kept in the signature: they are still echoed back in
+ * `scope` for the frontend, and restoring a gate here should not also mean
+ * rethreading the call site.
+ */
+function scopeFor(_role: string, _store: string): { codes: string[]; district: boolean } {
+  return { codes: STORE_ORDER, district: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -630,8 +667,9 @@ Deno.serve(async (req: Request) => {
     open: p.open,
     month: p.month,
     prev: p.prev ?? null,
-    // The district roll-up is withheld from store staff on the server. A store
-    // employee gets their store and nothing else, whatever the frontend renders.
+    // Everyone gets the roll-up now — see scopeFor. Still routed through `scope`
+    // rather than reading p.district directly, so re-introducing a gate is a
+    // change to one function and not to this response shape.
     district: scope.district ? p.district : null,
     stores,
     scope: { role: user.role, store: user.store, district: scope.district },
