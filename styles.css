@@ -10665,8 +10665,16 @@ body.sam-active .hotbar-btn:hover {
     90%  { opacity: 1; }
     100% { opacity: 0; transform: translateY(-3px); }
 }
+/* Pinned: the entrance only, holding where lvChipLife would start fading. Used
+   on a store dashboard while the shop is open, where the strip is a running
+   record of the day rather than a 30-second ticker. See _lvActivityHolds. */
+.lv-activity.pinned { animation: lvChipIn .5s ease-out both; }
+@keyframes lvChipIn {
+    from { opacity: 0; transform: translateY(5px) scale(.96); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
 @media (prefers-reduced-motion: reduce) {
-    .lv-activity { animation: none; }
+    .lv-activity, .lv-activity.pinned { animation: none; }
 }
 .lv-activity b { color: var(--slate-charcoal); font-weight: 850; font-variant-numeric: tabular-nums; }
 .lv-activity .lv-aq { color: #94a3b8; font-weight: 650; }
@@ -10680,14 +10688,74 @@ body.sam-active .hotbar-btn:hover {
 }
 .lv-activity.refund { color: #b3760a; background: #fdf3e1; border-color: #f0dcb4; }
 
-/* Same radar ping as the OPEN dot. Safe to run infinitely: the chip it sits in is
-   removed after 30 seconds, so the animation cannot outlive the notification. */
+/* Same radar ping as the OPEN dot. On a ticker chip it cannot outlive the
+   notification, because the chip goes after 30 seconds. A PINNED chip does
+   outlive it, so it drops the ping at the same 30-second mark (.aged, set in
+   _lvSyncActivity) — a chip from an hour ago still pulsing "just now" is the
+   screen crying wolf all afternoon. */
 .lv-adot::after { animation: lvPing 1.9s cubic-bezier(.22, .61, .36, 1) infinite; }
+.lv-activity.aged .lv-adot::after { animation: none; opacity: 0; }
 .lv-activity.refund .lv-adot,
 .lv-activity.refund .lv-adot::after { background: #dc2626; }
 @media (prefers-reduced-motion: reduce) {
     .lv-adot::after { animation: none; }
 }
+
+/* =========================================================
+   LIVE DASHBOARD — FULL SCREEN
+   The same board, with the page taken away. Built on open and
+   destroyed on close (see openLiveFullscreen), so nothing here
+   is on the page unless somebody asked for it.
+   ========================================================= */
+.lv-fs {
+    position: fixed; inset: 0; z-index: 100001;   /* over the login overlay's 100000 */
+    background: #eef1f5;
+    display: flex; flex-direction: column;
+    overflow: auto;
+}
+.lv-fs-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 22px; flex: none;
+}
+.lv-fs-title {
+    font-size: 13px; font-weight: 850; letter-spacing: .06em;
+    text-transform: uppercase; color: #647082;
+}
+.lv-fs-close {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; padding: 0;
+    background: #fff; color: #647082;
+    border: 1px solid #e6ebf1; border-radius: 10px; cursor: pointer;
+    transition: color .15s ease, border-color .15s ease;
+}
+.lv-fs-close:hover { color: var(--slate-charcoal); border-color: #cfd8e3; }
+/* Same white card as the shop-floor board, for the same reason: this IS that
+   board, so it should not arrive looking like a third design. */
+.lv-fs-card {
+    background: #fff; border: 1px solid #e6ebf1; border-radius: 16px;
+    padding: 18px 22px 22px;
+    margin: 0 20px 20px; max-width: 1600px; width: calc(100% - 40px);
+    align-self: center;
+}
+.lv-fs-card .lv-strip {
+    border: 1px solid #e6ebf1; border-radius: 13px; overflow: hidden;
+}
+/* The page behind is inert while this is up — it is fixed and opaque, but a
+   scroll wheel over it would still move it underneath. Both elements: the ROOT
+   is what scrolls, so locking body alone also leaves a scrollbar gutter beside
+   a view that is meant to be the whole window. */
+html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
+
+/* The button that opens it, sized and coloured as the mute switch beside it —
+   both are controls for how you are LOOKING at the board, not readouts. */
+.lv-full {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 31px; height: 31px; padding: 0; margin-left: 2px;
+    background: none; border: 0; border-radius: 9px;
+    color: #9aa6b6; cursor: pointer;
+    transition: color .15s ease, background .15s ease;
+}
+.lv-full:hover { color: var(--slate-charcoal); background: #f1f5f9; }
 
 /* Mute switch for the sale chime. Sits last in the header, AFTER the open/closed
    pill, and carries no chrome of its own: between the two pill groups with a

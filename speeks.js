@@ -1062,6 +1062,10 @@ document.addEventListener('keydown', (e) => {
     // viewer, camera, then modals — dismissing a picture must never take the
     // audit down with it. Search sits on top: it opens OVER whatever you had.
     if (typeof _jumpOpen !== 'undefined' && _jumpOpen) { closeJumpSearch(); return; }
+    // Above the rest: it covers the whole window, so it is the layer you mean.
+    // (Only reached when real fullscreen was refused — inside it, Esc is the
+    // browser's and exits fullscreen, which closes this via fullscreenchange.)
+    if (document.getElementById('lvFullscreen')) { closeLiveFullscreen(); return; }
     const ex = document.getElementById('exportRangeModal');
     if (ex && ex.classList.contains('open')) { _exClose(); return; }
     const lb = document.getElementById('auditPhotoLightbox');
@@ -9290,27 +9294,27 @@ function _lvPace(pctOfGoal, elapsedPct) {
 // How long each sale or refund stays on screen, and how many can queue up.
 const LV_ACTIVITY_MS = 30000;
 const LV_ACTIVITY_MAX = 6;
+// How many stay pinned on a store dashboard while the shop is open — see
+// _lvActivityHolds. Below LV_ACTIVITY_MAX on purpose: the queue can hold one
+// more than the strip shows, so the newest never has to wait for a slot.
+const LV_ACTIVITY_KEEP = 5;
 let _lvActTimer = null;
+let _lvHeld = false;   // was the strip pinned on the previous sync
 
 let _lvSnap = null;    // code -> { net, orders, returns, lastOrderAt }
 let _lvPulse = {};     // code -> 'sale' | 'refund'; consumed by the next render
 let _lvEvents = [];    // newest first; each lives LV_ACTIVITY_MS then goes
 let _lvEvSeq = 0;
 
-// Which stores' events are worth a NOISE. Everyone sees the whole district now,
-// so without this a manager at Overland Park hears a chime for a sale in
-// Ballwin — five times the sound, none of it theirs to react to, and the thing
-// gets muted once and stays muted.
+// Which store codes belong to the person looking. Two callers, both asking the
+// same question: the chime (is this worth a NOISE) and the activity strip (is
+// this a shop floor, where recent sales should stay put).
 //
-// Audio only. The row still flashes and the activity feed still lists every
-// store, because seeing the district is the point of the board; this is about
-// which of it is worth looking up for.
-//
-// Returns null for "no filtering", deliberately, so the fallbacks all land on
-// the old behaviour: a corp-level account (DM/CEO, store CORP) has no row of
-// its own in the table and the whole district IS theirs, and a payload with no
-// scope at all must not silence anybody.
-function _lvChimeCodes(d) {
+// Returns null for "no store of their own", deliberately, so both fallbacks land
+// on the district behaviour rather than on nothing: a corp-level account (DM/CEO,
+// store CORP) has no row in the table and the whole district IS theirs, and a
+// payload with no scope at all must not silence or empty anybody's view.
+function _lvMyCodes(d) {
     const scope = d && d.scope;
     if (!scope) return null;
     // An MSM's `store` is only their home store, but they run both — same reason
@@ -9327,7 +9331,10 @@ function _lvChimeCodes(d) {
 
 function _lvTrackChanges(d) {
     let sold = false, refunded = false;
-    const mine = _lvChimeCodes(d);
+    // Audio only. The row still flashes and the feed still lists every store,
+    // because seeing the district is the point; this is about which of it is
+    // worth looking up for.
+    const mine = _lvMyCodes(d);
     const audible = code => !mine || mine.has(String(code).toUpperCase());
     const next = {};
     (d.stores || []).forEach(m => {
@@ -9408,40 +9415,89 @@ function _lvChipHtml(e) {
  * chip already on screen. Existing nodes are left alone; only new ones are
  * inserted and expired ones removed.
  */
+// Does the strip HOLD its chips, or let each one fade after 30 seconds?
+//
+// On a shop floor the question the strip answers is "how are we doing today",
+// and a 30-second ticker answers it with an empty row for most of the day. So a
+// store dashboard keeps its most recent few and they stay put while the shop is
+// open. A district viewer keeps the ticker: five stores' worth of pinned chips
+// is a list, not a signal, and the DM already has the table for the standings.
+//
+// Closed, or looking at a finished day, it is a ticker again for everyone —
+// nothing is happening, so nothing should look like it just did.
+function _lvActivityHolds(d) {
+    return !!(d && d.open && !_lvIsPrev() && _lvMyCodes(d));
+}
+
 function _lvSyncActivity() {
     const rows = document.querySelectorAll('.lv-activity-row');
     if (!rows.length) return;
     const now = Date.now();
-    _lvEvents = _lvEvents.filter(e => now - e.ts < LV_ACTIVITY_MS);
+    const hold = _lvActivityHolds(_lvData);
+    // Closing hands the pinned chips back to the 30-second rule. Restamped
+    // rather than dropped: they play one last life and fade out, instead of
+    // disappearing all at once between two fetches.
+    if (_lvHeld && !hold) _lvEvents.forEach(e => { e.ts = now; });
+    _lvHeld = hold;
+
+    _lvEvents = hold
+        ? _lvEvents.slice(0, LV_ACTIVITY_KEEP)
+        : _lvEvents.filter(e => now - e.ts < LV_ACTIVITY_MS);
     const live = _lvIsPrev() ? [] : _lvEvents;   // a finished day has no "just now"
+
+    // A pinned chip stops claiming to be news once it is older than the ticker
+    // window: the dot's ping is a "just happened" cue, and left running on a
+    // chip from an hour ago it is the screen crying wolf all afternoon.
+    const aged = e => hold && (now - e.ts) >= LV_ACTIVITY_MS;
+    // A NEGATIVE delay starts the animation part-way through, so a chip
+    // recreated by a re-render resumes where its life actually is instead of
+    // getting a fresh 30 seconds. Pinned chips only ever play their entrance,
+    // so they start at 0 whenever they were stamped.
+    const delay = e => hold ? '0s' : '-' + ((now - e.ts) / 1000).toFixed(2) + 's';
 
     rows.forEach(row => {
         Array.from(row.children).forEach(el => {
-            if (!live.some(e => e.id === el.getAttribute('data-ev'))) el.remove();
+            const e = live.find(x => x.id === el.getAttribute('data-ev'));
+            if (!e) { el.remove(); return; }
+            // Toggling `pinned` swaps which animation applies; because it is a
+            // different animation NAME, the browser restarts it — which is
+            // exactly what un-pinning at closing time wants.
+            if (el.classList.contains('pinned') !== hold) {
+                el.classList.toggle('pinned', hold);
+                el.style.animationDelay = delay(e);
+            }
+            el.classList.toggle('aged', aged(e));
         });
         live.forEach((e, i) => {
             if (row.querySelector('[data-ev="' + e.id + '"]')) return;
             const el = document.createElement('div');
             el.setAttribute('data-ev', e.id);
-            el.className = 'lv-activity' + (e.kind === 'refund' ? ' refund' : '');
+            el.className = 'lv-activity' + (e.kind === 'refund' ? ' refund' : '')
+                + (hold ? ' pinned' : '') + (aged(e) ? ' aged' : '');
             el.innerHTML = _lvChipHtml(e);
-            // A NEGATIVE delay starts the animation part-way through, so a chip
-            // recreated by a re-render resumes where its life actually is instead
-            // of getting a fresh 30 seconds.
-            el.style.animationDelay = '-' + ((now - e.ts) / 1000).toFixed(2) + 's';
+            el.style.animationDelay = delay(e);
             row.insertBefore(el, row.children[i] || null);
         });
     });
     _lvScheduleActivityExpiry();
 }
 
-// Wake up exactly when the oldest chip is due to go, and no more often.
+// Wake up exactly when the strip next changes, and no more often. Two things
+// are due at the same 30-second mark depending on the mode: a ticker chip
+// expiring, or a pinned chip losing its "just now" ping.
 function _lvScheduleActivityExpiry() {
     if (_lvActTimer) { clearTimeout(_lvActTimer); _lvActTimer = null; }
     if (!_lvEvents.length) return;
-    const oldest = _lvEvents.reduce((a, e) => Math.min(a, e.ts), Infinity);
-    _lvActTimer = setTimeout(_lvSyncActivity,
-        Math.max(250, LV_ACTIVITY_MS - (Date.now() - oldest)));
+    const now = Date.now();
+    let due = Infinity;
+    _lvEvents.forEach(e => {
+        const left = e.ts + LV_ACTIVITY_MS - now;
+        if (left > 0) due = Math.min(due, left);
+    });
+    // Pinned and all of them already past the window: nothing is scheduled to
+    // change, and the next fetch is what will move this on.
+    if (!isFinite(due)) return;
+    _lvActTimer = setTimeout(_lvSyncActivity, Math.max(250, due));
 }
 
 // ---- chime ------------------------------------------------------------------
@@ -9536,6 +9592,96 @@ function _lvSoundBtn() {
         + ' aria-pressed="' + (on ? 'true' : 'false') + '" aria-label="Sale chime">'
         + '<svg viewBox="0 0 18 18" width="18" height="18" fill="currentColor" aria-hidden="true">'
         + ico + '</svg></button>';
+}
+
+// ---- full-screen view -------------------------------------------------------
+// The same board the Store role gets on a TV, on demand, for anyone signed in as
+// themselves — a second monitor on the counter, or just a proper look at the
+// numbers without the rest of the page around them.
+//
+// The panel is NOT moved. A fresh .lv-strip / .lv-detail pair goes in the
+// overlay and renderLiveDashboard fills every mount it can find, so this view is
+// the same code as the one behind it and cannot drift from it. The mounts are
+// created on open and destroyed on close rather than sitting hidden in the page:
+// a permanent extra .lv-detail would change what `details.length` means on a
+// DM's page, where the store-surface branch is skipped precisely because there
+// are none.
+let _lvFsClosing = false;
+
+function _lvFsEl() { return document.getElementById('lvFullscreen'); }
+
+function openLiveFullscreen() {
+    if (_lvFsEl()) return;
+    const el = document.createElement('div');
+    el.id = 'lvFullscreen';
+    el.className = 'lv-fs';
+    el.innerHTML = '<div class="lv-fs-bar">'
+        + '<span class="lv-fs-title">Live Dashboard</span>'
+        + '<button type="button" class="lv-fs-close" onclick="closeLiveFullscreen()"'
+        + ' title="Close (Esc)" aria-label="Close full screen">'
+        + '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"'
+        + ' stroke-width="2.2" stroke-linecap="round" aria-hidden="true">'
+        + '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+        + '</button></div>'
+        + '<div class="lv-fs-card"><div class="lv-strip"></div><div class="lv-detail"></div></div>';
+    document.body.appendChild(el);
+    // Both elements, as the login overlay does: it is the ROOT that scrolls, so
+    // locking only body leaves the page moving behind this and keeps a scrollbar
+    // gutter beside a view that is supposed to be the whole window.
+    document.documentElement.classList.add('lv-fs-open');
+    document.body.classList.add('lv-fs-open');
+    // Real fullscreen on top of the overlay when the browser allows it — this is
+    // called from a click, which is the gesture it requires. Best-effort: if it
+    // is refused the overlay alone still covers the window, which is the whole
+    // ask, so the rejection is swallowed rather than reported.
+    document.addEventListener('fullscreenchange', _lvFsWatch);
+    try {
+        if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+    } catch (_) { /* not available; the overlay stands on its own */ }
+    renderLiveDashboard();
+}
+
+function closeLiveFullscreen() {
+    const el = _lvFsEl();
+    if (!el) return;
+    // Leaving fullscreen fires fullscreenchange, which calls back here. The flag
+    // makes the second pass a no-op instead of a loop.
+    if (_lvFsClosing) return;
+    _lvFsClosing = true;
+    document.removeEventListener('fullscreenchange', _lvFsWatch);
+    try {
+        if (document.fullscreenElement === el && document.exitFullscreen) {
+            document.exitFullscreen().catch(() => {});
+        }
+    } catch (_) { /* nothing to exit */ }
+    el.remove();
+    document.documentElement.classList.remove('lv-fs-open');
+    document.body.classList.remove('lv-fs-open');
+    _lvFsClosing = false;
+}
+
+function toggleLiveFullscreen() {
+    if (_lvFsEl()) closeLiveFullscreen(); else openLiveFullscreen();
+}
+
+// Esc inside real fullscreen is taken by the browser and never reaches the page,
+// so it exits fullscreen and this brings the overlay down with it. Also covers
+// leaving fullscreen by any other means (F11, the browser's own chrome).
+//
+// Bound on open and unbound on close, not once at module scope: a listener
+// registered while this file is merely being READ is a side effect of loading
+// it, which costs nothing at runtime but means the module cannot be loaded
+// without a DOM at all.
+function _lvFsWatch() {
+    if (!document.fullscreenElement && _lvFsEl()) closeLiveFullscreen();
+}
+
+function _lvFullBtn() {
+    return '<button type="button" class="lv-full" onclick="toggleLiveFullscreen()"'
+        + ' title="Full screen" aria-label="View the live dashboard full screen">'
+        + '<svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor"'
+        + ' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        + '<path d="M7 2H2v5M11 2h5v5M7 16H2v-5M11 16h5v-5"/></svg></button>';
 }
 
 // Which store just moved, and how it should be marked. Two shapes: a band across
@@ -10230,7 +10376,7 @@ function renderLiveDashboard() {
     // Sits AFTER the open/closed pill: it is a preference, not a state readout, and
     // wedged between the two pill groups it read as an orphaned third pill.
     const dSound = document.querySelector('.lv-card .lv-sound-host');
-    if (dSound) dSound.innerHTML = _lvSoundBtn();
+    if (dSound) dSound.innerHTML = _lvSoundBtn() + _lvFullBtn();
 
     // ---- store surfaces (manager Command Center + employee/ASM widget) ----
     // Every exit from here on has to fall through to the tail below, which clears
@@ -10300,11 +10446,20 @@ function renderLiveDashboard() {
     const stamp = _lvMode === 'today'
         ? 'last change ' + _lvClock(d.asOfCentral) + ' Central'
         : escapeHtml(_lvHeadStamp(d));
-    details.forEach(el => { el.innerHTML = '<div class="lv-head">'
-        + '<span class="lv-head-l">' + _lvFreshness(d)
-        + '<span class="lv-asof">' + stamp + '</span></span>'
-        + '<span class="lv-head-r">' + _lvToggle(d) + _lvSoundBtn() + '</span>'
-        + '</div>' + detail; });
+    details.forEach(el => {
+        // Two mounts don't offer the full-screen button: the one already inside
+        // the full-screen view, and the shop-floor board (.tv-card), which is a
+        // full screen with nothing to return to. Asked of the DOM rather than of
+        // the page — the board is identified by the card it renders into, which
+        // keeps this module from reaching into the auth section for _tvOnBoardPage.
+        const bare = !!el.closest('#lvFullscreen, .tv-card');
+        el.innerHTML = '<div class="lv-head">'
+            + '<span class="lv-head-l">' + _lvFreshness(d)
+            + '<span class="lv-asof">' + stamp + '</span></span>'
+            + '<span class="lv-head-r">' + _lvToggle(d) + _lvSoundBtn()
+            + (bare ? '' : _lvFullBtn()) + '</span>'
+            + '</div>' + detail;
+    });
     strips.forEach(el => { el.innerHTML = tiles; });
 
     // Collapsed Command Center summary line. Deliberately pinned to TODAY: the
