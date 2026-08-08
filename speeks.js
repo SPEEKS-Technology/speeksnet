@@ -8825,8 +8825,9 @@ async function fetchAlertsData() {
 // tab open; clicking a tab expands the widget to the chart height showing that tab's
 // strip + detail; clicking the open tab again collapses back to the summary.
 // Pure view-switching — the fetch/render functions above own the data.
-// Every tab the one Command Center can show. Order matters in _ccOpenDefaultTab
-// only, where it decides which tab a role lands on.
+// Every tab the one Command Center can show. Order is display order only — no
+// board opens a tab on load any more, so it no longer decides where a role lands.
+// (_ccOpenDefaultTab still reads it, but nothing calls that.)
 //
 // 'buying' was retired here: the Live Dashboard's Month view already showed value
 // purchased, buy margin, revenue and gross profit month-to-date and sell margin,
@@ -8972,17 +8973,25 @@ function _reconcileComboTabs(widgetEl, prefix, tabs) {
 function _reconcileCommandWidgets() {
     _reconcileComboTabs(document.getElementById('ccWidget'), 'cc', CC_TABS);
     _reconcileComboTabs(document.getElementById('dcWidget'), 'dc', DC_TABS);
-    _ccOpenDefaultTab();
-    // The district board deliberately does NOT open a tab. It lands on its
-    // six-cell summary — the whole company in one line, which is the thing a DM
-    // or the CEO wants on sight; anything more specific is one click away.
+    // NEITHER board opens a tab. Both land on their seven-cell summary — the whole
+    // picture in one line, which is what anyone wants on sight; anything more
+    // specific is one click away.
+    //
+    // The store board used to open the Live Dashboard here. Now that its summary
+    // carries the same seven cells as the district's, opening a tab over it buried
+    // the one line that answers "how are we doing" before you have asked anything.
+    // Both boards behave the same way for every role, which is also one fewer rule
+    // to hold: a Command Center opens as a summary.
+    //
+    // Nothing is lost by not opening: every panel's data is fetched on page load,
+    // not on tab open (see the setTimeout block in the post-login sequence), and
+    // switchCommandTab is purely presentational. The summary fills either way.
 }
 
-// The manager Command Center used to open collapsed to its one-line summary. It now
-// opens on the Live Dashboard, because today's sales are the thing worth seeing
-// without a click.
+// Kept as the one-line way back to opening on a tab, for either board, if that is
+// ever wanted again — see _reconcileCommandWidgets for why neither calls it.
 //
-// It picks the first VISIBLE tab rather than assuming Live is there: Feature Access
+// Picks the first VISIBLE tab rather than assuming Live is there: Feature Access
 // can switch cc-live off per role or per person, and a role without it would
 // otherwise land on a transparent panel and read as a broken widget.
 //
@@ -9006,9 +9015,6 @@ function _ccOpenDefaultTab() {
     if (_ccDefaultOpened) return;
     if (_openDefaultTab(_CC_BOARD, switchCommandTab)) _ccDefaultOpened = true;
 }
-// The district board has no default tab — see _reconcileCommandWidgets. It opens
-// on its summary, so this is kept only as the one-line way back to opening on a
-// tab if that is ever wanted again.
 function _dcOpenDefaultTab() {
     if (_dcDefaultOpened) return;
     if (_openDefaultTab(_DC_BOARD, switchDistrictTab)) _dcDefaultOpened = true;
@@ -16912,8 +16918,9 @@ function initDashboardData() {
         setTimeout(startReactionPolling, 3000);
 
         setTimeout(fetchHubData, 100);
-        // Early: it is the Command Center's default tab, so it is the first thing on
-        // screen and the one panel where "Syncing…" is most obvious.
+        // Early, and NOT because a tab is open on it — no Command Center opens a tab
+        // any more. It feeds three of the summary's seven cells, which is the first
+        // thing on screen, so it is the one fetch whose delay is most visible.
         setTimeout(fetchLiveDashboard, 150);
         setTimeout(fetchVarianceData, 300);
         setTimeout(fetchWeeklyKPIs, 500);

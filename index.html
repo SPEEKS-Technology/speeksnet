@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260808c">
+  <link rel="stylesheet" href="styles.css?v=20260808d">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260808c" defer></script>
+  <script src="speeks.js?v=20260808d" defer></script>
 </head>
 
 <body class="preload">
@@ -925,11 +925,13 @@
 
         <div class="cc-tabbar">
             <div class="ew-seg cc-seg">
-                <!-- Live Dashboard is the DEFAULT open tab (see _ccOpenDefaultTab). It
-                     carries no .cc-updot: the other tabs' dot means "this changed since
-                     you last looked", which on a per-minute live feed would be lit
-                     permanently and therefore say nothing. Freshness is reported inside
-                     the panel instead, as an "as of" stamp that goes stale-flagged. -->
+                <!-- NO tab opens by default — the card lands on its summary line, the
+                     same as the district board (see _reconcileCommandWidgets).
+                     Live Dashboard carries no .cc-updot: the other tabs' dot means
+                     "this changed since you last looked", which on a per-minute live
+                     feed would be lit permanently and therefore say nothing. Freshness
+                     is reported inside the panel instead, as an "as of" stamp that goes
+                     stale-flagged. -->
                 <!-- The role-* classes ARE the per-tab defaults. The card itself is now
                      visible to every store role, so without them every tab would show to
                      everyone and the only switch that removed eBay from an employee would
