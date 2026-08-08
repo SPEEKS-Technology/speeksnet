@@ -10489,6 +10489,23 @@ body.sam-active .hotbar-btn:hover {
 }
 .lv-tbl .lv-row-errmsg { text-align: left; color: #b3760a; font-weight: 700; white-space: normal; }
 
+/* THE READER'S OWN STORE, in a table of five that otherwise look alike.
+   A point up on the row and on its headline figures — enough to find without
+   counting down the codes, not so much that the table stops being a comparison.
+   Deliberately size and weight only, no background: the row tint is already
+   spoken for by the sale/refund flash (lvRowSale below), and a permanent wash
+   under one row would either swallow that flash or fight it.
+   Sizes are absolute, not `em`: .lv-strongnum already overrides the cell's font
+   size, so a relative bump here would be silently ignored on exactly the three
+   figures most worth lifting. */
+.lv-tbl tr.lv-row-mine > td { font-size: 13px; }
+.lv-tbl tr.lv-row-mine .lv-strongnum { font-size: 14px; }
+.lv-tbl tr.lv-row-mine .lv-boldnum { font-size: 13.5px; }
+.lv-tbl tr.lv-row-mine .lv-store b { font-size: 13.5px; }
+/* The store's full name is set grey to keep it behind the code; on this one row
+   it carries the recognition, so it comes up out of the wash a little. */
+.lv-tbl tr.lv-row-mine .lv-store-nm { color: #7b8798; }
+
 /* A sale (green) or a refund (red) just landed at this store: the WHOLE ROW washes
    over. A band the width of the table is caught peripherally; the old highlight on
    the money cell alone had to be looked at directly to be noticed.

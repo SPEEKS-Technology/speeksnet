@@ -9453,6 +9453,23 @@ function _lvHitCell(code) {
     return (!_lvIsPrev() && _lvPulse[code]) ? ' lv-cellhit-' + _lvPulse[code] : '';
 }
 
+// "You are here." The store tables list five stores that look alike at a glance,
+// and the one a manager or employee actually works at is the row they came to
+// find — without a mark they count down the codes every time.
+//
+// Set once per render from scope.store (see _lvOwnStore). Null for a DM or the
+// CEO, who sign in against CORP and have no row of their own — so the district
+// card is never marked, without that having to be special-cased at the call site.
+//
+// Module-level rather than threaded through _lvTable → _lvStoreRow → the buying
+// row, because it is the same fact for every row of every table in one pass, and
+// a parameter that has to be passed identically through four call sites is a
+// parameter that will eventually be passed differently through one of them.
+let _lvOwnCode = null;
+function _lvMineRow(code) {
+    return (_lvOwnCode && code === _lvOwnCode) ? 'lv-row-mine' : '';
+}
+
 function _lvTile(k, v, sub, accent, cls) {
     return '<div class="cc-cell' + (accent ? ' lv-accent' : '') + (cls || '') + '">'
         + '<span class="sh-stripe g"></span>'
@@ -9739,7 +9756,9 @@ function _lvBuyBlock(d, views) {
         rows.forEach(r => {
             const tint = STORE_TINTS[r.v.code]
                 ? '<i class="lv-tint" style="background:' + STORE_TINTS[r.v.code] + '"></i>' : '';
-            html += '<tr><td><span class="lv-store">' + tint + '<b>' + escapeHtml(r.v.code) + '</b>'
+            const mine = _lvMineRow(r.v.code);
+            html += '<tr' + (mine ? ' class="' + mine + '"' : '') + '>'
+                + '<td><span class="lv-store">' + tint + '<b>' + escapeHtml(r.v.code) + '</b>'
                 + '<span class="lv-store-nm">' + escapeHtml(r.v.name || '') + '</span></span></td>'
                 + '<td class="lv-strongnum">' + _lvMoney(r.b.bought, false) + '</td>'
                 + '<td class="lv-quietnum">' + _lvMoney(r.b.paid, false) + '</td>'
@@ -9945,7 +9964,8 @@ function _lvStoreRow(v, d, foot) {
         : '—';
     // The whole row flashes, not just the money cell — at a glance the eye catches
     // the band across the table long before it resolves which column moved.
-    const rowCls = [foot ? 'lv-foot' : '', _lvHitRow(v.code)].filter(Boolean).join(' ');
+    const rowCls = [foot ? 'lv-foot' : '', _lvHitRow(v.code), _lvMineRow(v.code)]
+        .filter(Boolean).join(' ');
     return '<tr' + (rowCls ? ' class="' + rowCls + '"' : '') + '><td><span class="lv-store">' + tint
         + '<b>' + escapeHtml(v.code) + '</b><span class="lv-store-nm">'
         + escapeHtml(v.name || '') + '</span></span></td>'
@@ -10074,6 +10094,10 @@ function renderLiveDashboard() {
     const d = _lvData;
     const stores = d.stores || [];
     _lvFillDistrictMtd(d, stores);
+    // Before ANY table is built — every row renderer reads it. Reset each pass
+    // rather than set once: the payload can change scope on a re-login without a
+    // reload, and a stale code would mark somebody else's store as yours.
+    _lvOwnCode = (_lvOwnStore(d, stores) || {}).code || null;
 
     // ---- DM / CEO: the five-store table ----
     if (dDetail) {
