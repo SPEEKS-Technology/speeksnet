@@ -10011,6 +10011,10 @@ function _lvFcFor(code) {
         // same place by the same kind of formula. Zero until the sheet carries them.
         reviews: n(h[k + 'Reviews']), reviewsProj: n(h[k + 'ReviewsProj']),
         reviewsGoal: n(h[k + 'ReviewsGoal']),
+        // How many a day is left to find, over the BUYING days remaining — the
+        // one figure here somebody can act on this afternoon. Summing it across
+        // stores is valid because every store shares the same denominator.
+        reviewsNeed: n(h[k + 'ReviewsNeed']),
     };
 }
 // The summary cell, on either board. Shown only once there is something to show:
@@ -10034,6 +10038,28 @@ function _lvSumReviews(id, fc) {
     _ccSum(id, _lvNum(fc.reviews)
         + (fc.reviewsGoal > 0 ? ' <small>of ' + _lvNum(fc.reviewsGoal) + '</small>' : ''),
         pct === null ? '' : (pct >= 100 ? 'good' : (pct >= 80 ? 'warn' : 'bad')));
+}
+
+// "5 of 40 · 1.8 a day", or "5 of 40 so far" before there is a target to chase.
+//
+// The rate is what a shift can act on: a projection says where the month lands if
+// nothing changes, and this says what changing it costs — per BUYING day, since
+// nobody is asking a customer for a review on a Sunday.
+//
+// "so far" is dropped when the rate is shown. Both would fit, but the sub-line is
+// a quarter of a strip wide and three clauses in it stopped being a glance.
+function _lvReviewSub(f) {
+    const banked = _lvNum(f.reviews)
+        + (f.reviewsGoal > 0 ? ' of ' + _lvNum(f.reviewsGoal) : '');
+    if (f.reviewsGoal > 0 && f.reviews >= f.reviewsGoal) return banked + ' &middot; goal met';
+    // No rate before the sheet carries one, and none once the month is out of
+    // buying days — "∞ a day" is not advice.
+    if (!(f.reviewsNeed > 0)) return banked + ' so far';
+    // One decimal, because the honest answer is usually a fraction: rounding 1.4
+    // up to 2 overstates the ask by 40% and rounding it down to 1 misses goal.
+    const rate = f.reviewsNeed < 10
+        ? String(Math.round(f.reviewsNeed * 10) / 10) : _lvNum(f.reviewsNeed);
+    return banked + ' &middot; ' + rate + ' a day';
 }
 
 function _lvSplit(label, right) {
@@ -10136,6 +10162,7 @@ function _lvFcSum(views) {
         buyProj: add(f => f.buyProj), trackRev: add(f => f.trackRev),
         trackGp, goal, pct: goal > 0 ? trackGp / goal * 100 : null,
         reviews: add(f => f.reviews), reviewsProj: add(f => f.reviewsProj), reviewsGoal,
+        reviewsNeed: add(f => f.reviewsNeed),
     };
 }
 
@@ -10173,14 +10200,13 @@ function _lvForecast(views) {
         + _lvTile('Tracking Revenue', _lvMoney(f.trackRev, false), 'Projected Month-End')
         + _lvTile('Tracking Gross Profit', _lvMoney(f.trackGp, false),
             f.goal ? 'Against ' + _lvMoney(f.goal, false) : '')
-        // The only tile whose sub-line carries a figure rather than a caption, and
+        // The only tile whose sub-line carries figures rather than a caption, and
         // deliberately: the projection alone ("45") is the one number here nobody
         // can sanity-check by eye, because unlike revenue there is no running total
-        // on screen anywhere else. Banked against target underneath it — "10 of 40
-        // so far" — is what makes 45 mean something.
+        // on screen anywhere else. Banked against target makes 45 mean something —
+        // and the rate makes it something a shift can do about it today.
         + (hasReviews ? _lvTile('Tracking Google Reviews', _lvNum(f.reviewsProj),
-            _lvNum(f.reviews) + (f.reviewsGoal ? ' of ' + _lvNum(f.reviewsGoal) : '')
-            + ' so far') : '')
+            _lvReviewSub(f)) : '')
         + '</div>';
 }
 
