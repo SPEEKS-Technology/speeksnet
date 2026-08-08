@@ -10055,11 +10055,15 @@ function _lvReviewSub(f) {
     // No rate before the sheet carries one, and none once the month is out of
     // buying days — "∞ a day" is not advice.
     if (!(f.reviewsNeed > 0)) return banked + ' so far';
-    // One decimal, because the honest answer is usually a fraction: rounding 1.4
-    // up to 2 overstates the ask by 40% and rounding it down to 1 misses goal.
-    const rate = f.reviewsNeed < 10
-        ? String(Math.round(f.reviewsNeed * 10) / 10) : _lvNum(f.reviewsNeed);
-    return banked + ' &middot; ' + rate + ' a day';
+    // ROUNDED UP, always: nobody can go and get 1.8 reviews (user's call, and it
+    // is what makes this an instruction rather than a statistic). Up rather than
+    // nearest because rounding 1.8 down to 1 is advice that misses the goal.
+    //
+    // ⚠️ The ceiling is applied HERE, not in the sheet. Row 37 stays exact so the
+    // workbook keeps a real number to do arithmetic with; only the thing a person
+    // reads off a tile gets rounded. Rounding at the source would quietly move the
+    // district's figure too, which is a sum of five already-rounded rates.
+    return banked + ' &middot; ' + _lvNum(Math.ceil(f.reviewsNeed)) + ' a day';
 }
 
 function _lvSplit(label, right) {
