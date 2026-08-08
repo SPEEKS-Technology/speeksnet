@@ -9297,8 +9297,38 @@ let _lvPulse = {};     // code -> 'sale' | 'refund'; consumed by the next render
 let _lvEvents = [];    // newest first; each lives LV_ACTIVITY_MS then goes
 let _lvEvSeq = 0;
 
+// Which stores' events are worth a NOISE. Everyone sees the whole district now,
+// so without this a manager at Overland Park hears a chime for a sale in
+// Ballwin — five times the sound, none of it theirs to react to, and the thing
+// gets muted once and stays muted.
+//
+// Audio only. The row still flashes and the activity feed still lists every
+// store, because seeing the district is the point of the board; this is about
+// which of it is worth looking up for.
+//
+// Returns null for "no filtering", deliberately, so the fallbacks all land on
+// the old behaviour: a corp-level account (DM/CEO, store CORP) has no row of
+// its own in the table and the whole district IS theirs, and a payload with no
+// scope at all must not silence anybody.
+function _lvChimeCodes(d) {
+    const scope = d && d.scope;
+    if (!scope) return null;
+    // An MSM's `store` is only their home store, but they run both — same reason
+    // userInStore has a branch for them.
+    if (String(scope.role || '').toLowerCase().trim() === 'multi-store manager') {
+        return new Set(MULTISTORE_MANAGER_STORES);
+    }
+    const own = String(scope.store || '').toUpperCase();
+    if (!own) return null;
+    const codes = (d.stores || []).map(m => String(m.code).toUpperCase());
+    if (!codes.includes(own)) return null;
+    return new Set([own]);
+}
+
 function _lvTrackChanges(d) {
     let sold = false, refunded = false;
+    const mine = _lvChimeCodes(d);
+    const audible = code => !mine || mine.has(String(code).toUpperCase());
     const next = {};
     (d.stores || []).forEach(m => {
         next[m.code] = {
@@ -9313,14 +9343,16 @@ function _lvTrackChanges(d) {
             // Refunds are checked FIRST. A refund lowers net sales while the order
             // count stays put, so testing for a sale first would let it pass as
             // "nothing happened" — the one event most worth surfacing.
+            // The pulse and the feed entry are unconditional — only the flags
+            // that decide whether anything is HEARD are scoped.
             if (b.returns > a.returns) {
                 _lvPulse[code] = 'refund';
                 _lvPush({ kind: 'refund', code, amount: b.returns - a.returns, at: '' });
-                refunded = true;
+                if (audible(code)) refunded = true;
             } else if (b.orders > a.orders || b.lastOrderAt > a.lastOrderAt) {
                 _lvPulse[code] = 'sale';
                 _lvPush({ kind: 'sale', code, amount: b.net - a.net, at: b.lastOrderAt });
-                sold = true;
+                if (audible(code)) sold = true;
             }
         });
     }
