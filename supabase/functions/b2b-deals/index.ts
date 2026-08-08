@@ -89,11 +89,14 @@ const ITEM_COLS = [
   "wipe_required", "wipe_fee", "wiped_qty",
 ].join(",");
 
-const ITEM_TYPES = ["laptop", "desktop", "other"];
+// `computer` folds the old laptop/desktop split into one type; the legacy two
+// stay accepted so a not-yet-migrated row can still save.
+const ITEM_TYPES = ["computer", "laptop", "desktop", "other"];
 const DISPOSITIONS = ["purchase", "no_residual", "recycle"];
 // Which spec fields each type carries. `other` carries none -- a box of cables
 // has no CPU, and the CHECK on the table refuses one.
 const SPECS_FOR: Record<string, string[]> = {
+  computer: ["cpu", "ram", "storage", "gpu", "battery_health"],
   laptop: ["cpu", "ram", "storage", "gpu", "battery_health"],
   desktop: ["cpu", "ram", "storage", "gpu"],
   other: [],
