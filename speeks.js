@@ -9819,6 +9819,23 @@ function _lvStoreError(m) {
 
 // The MSM sees both of their stores at once and has no district roll-up, so the
 // tiles above the table are summed here rather than server-side.
+// The signed-in user's OWN store row, out of a district payload.
+//
+// The Live tab shows the district table, but the tiles above it and the
+// collapsed summary line are that person's own store — you open your Command
+// Center to see how YOU are doing, and read the district underneath for context.
+// Without this the top of a store's card quoted five stores' takings under its
+// own name.
+//
+// Null when there is no such row: a DM or CEO signs in against CORP, and a code
+// that is not in the payload (a store not yet connected to Shopify) must not
+// silently resolve to somebody else's numbers. Callers fall back to the district.
+function _lvOwnStore(d, stores) {
+    const code = String((d.scope && d.scope.store) || '').toUpperCase();
+    if (!code) return null;
+    return (stores || []).find(m => String(m.code).toUpperCase() === code && !m.error) || null;
+}
+
 function _lvCombine(stores) {
     const net = stores.reduce((a, m) => a + m.netToday, 0);
     const cogs = stores.reduce((a, m) => a + m.cogsToday, 0);
@@ -10120,8 +10137,19 @@ function renderLiveDashboard() {
         // grants nothing; a payload with no district still falls through to the
         // single-store and Multi-Store Manager branches below exactly as before.
         const views = stores.filter(m => !m.error).map(_lvView);
-        tiles = _lvRollupTiles(_lvView(d.district), d, 'No Orders Yet', views);
-        detail = _lvForecast(views) + _lvTable(stores, d, d.district, 'District')
+        // TILES AND TRACKING BAND: this person's own store. TABLES: the district.
+        // You open your own Command Center to see how your store is doing and read
+        // the other four underneath for context, not the reverse.
+        //
+        // The tracking band goes with the tiles, not the tables, because the
+        // fourth tile IS "Tracking to Goal" — the same projection the band's third
+        // tile divides by the goal. Split them and the two would disagree an inch
+        // apart: a store tracking 104% of its own $77,000 above a band quoting the
+        // district's $301,976 against $332,000.
+        const mine = _lvOwnStore(d, stores);
+        const own = mine ? [_lvView(mine)] : views;
+        tiles = _lvRollupTiles(mine ? _lvView(mine) : _lvView(d.district), d, 'No Orders Yet', own);
+        detail = _lvForecast(own) + _lvTable(stores, d, d.district, 'District')
             + _lvActivity() + _lvBuyBlock(d, views);
     } else if (stores.length === 1) {
         const m = stores[0];
@@ -10152,18 +10180,26 @@ function renderLiveDashboard() {
     // Collapsed Command Center summary line. Deliberately pinned to TODAY: the
     // toggle lives inside the panel, so when the panel is shut there is nothing on
     // screen to say which day this number belongs to.
-    // Follows the panel: if the tab shows the district, so does the one line that
-    // stands in for it when the tab is shut. A collapsed summary quoting one
-    // store's takings above a panel showing five would be the worse of the two.
-    const roll = d.district ? d.district
-        : (stores.length === 1 ? stores[0] : _lvCombine(stores.filter(m => !m.error)));
-    // And SAY it is the district. The card is titled "{STORE} Command Center", so a
-    // bare "Net Sales Today" under that heading reads as this store's takings —
-    // which is the one wrong conclusion this number can produce.
+    // Follows the TILES, not the table: this person's own store. The card is
+    // titled "{STORE} Command Center", so a figure sitting under that heading is
+    // read as that store's — and on a collapsed card there is no table visible to
+    // correct the impression. The district is one click away inside the panel.
+    //
+    // Falls back to the district only when there is no own-store row to show
+    // (CORP, or a store not in the payload), and says so when it does rather than
+    // passing five stores off as one.
+    const mineSum = _lvOwnStore(d, stores);
+    const roll = mineSum || (d.district ? d.district
+        : (stores.length === 1 ? stores[0] : _lvCombine(stores.filter(m => !m.error))));
     const sumK = document.querySelector('#cc-sum-live .cc-sum-k');
-    if (sumK) sumK.textContent = d.district ? 'District Net Sales Today' : 'Net Sales Today';
+    if (sumK) sumK.textContent = (!mineSum && d.district) ? 'District Net Sales Today' : 'Net Sales Today';
     _ccSum('cc-sum-live', _lvMoney(roll.netToday, false)
         + ' <small>' + roll.ordersToday + (roll.ordersToday === 1 ? ' order' : ' orders') + '</small>');
+    // Refunds beside the takings, the same pairing the Orders tile and the
+    // district summary already use. "none" rather than $0: a zero in a money slot
+    // reads as a figure that failed to load, and on most days this genuinely is
+    // nothing rather than an unknown.
+    _ccSum('cc-sum-refunds', roll.returnsToday > 0 ? _lvMoney(roll.returnsToday, false) : 'none');
 
     _lvAfterRender();
 }
