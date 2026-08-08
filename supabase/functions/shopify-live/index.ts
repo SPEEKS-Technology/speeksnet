@@ -29,9 +29,10 @@
 //   Outside it: refresh only if the cache is over 5 minutes stale, which is what
 //   "every five minutes after close" means without a second schedule.
 //
-// COST: one ShopifyQL query plus one last-order query per store, ~4 points each
-// against a 2000-point bucket restoring at 100/s. A per-minute pass over five
-// stores is nowhere near a limit.
+// COST: one ShopifyQL query plus one recent-orders query per store, ~10 points
+// each against a 2000-point bucket restoring at 100/s — and each store is its own
+// shop with its own bucket. A per-minute pass over five stores is nowhere near a
+// limit.
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -63,6 +64,10 @@ const SHOP_TO_CODE: Record<string, string> = {
   "paymore-ballwin.myshopify.com": "BAL",
 };
 const STORE_ORDER = ["OVL", "LEE", "WSP", "MPL", "BAL"];
+// How many of today's orders ride along on each store row, for the activity strip
+// to open with. Matches what that strip pins (LV_ACTIVITY_KEEP in speeks.js) —
+// fetching more would only be trimmed on arrival.
+const RECENT_ORDERS = 5;
 const STORE_NAMES: Record<string, string> = {
   OVL: "Overland Park", LEE: "Lees Summit", WSP: "Westport",
   MPL: "Maplewood", BAL: "Ballwin",
@@ -144,6 +149,18 @@ function monthDays(c: Central): { total: number; elapsed: number } {
 const iso = (c: Central) =>
   `${c.y}-${String(c.m).padStart(2, "0")}-${String(c.d).padStart(2, "0")}`;
 
+// Which Central day an order timestamp falls on. Shopify stamps createdAt in UTC,
+// so a 7pm sale is already "tomorrow" there for five hours every evening — the
+// exact hours the stores are still open. en-CA formats as YYYY-MM-DD, which is
+// what everything else here compares against. Hoisted because it runs per order.
+const DAY_FMT = new Intl.DateTimeFormat("en-CA", {
+  timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
+});
+const centralDay = (ts: string) => {
+  const d = new Date(ts);
+  return isNaN(d.getTime()) ? "" : DAY_FMT.format(d);
+};
+
 // --- yesterday ---------------------------------------------------------------
 // Literally the previous CALENDAR day, Sundays included. The stores are shut on
 // Sunday but the webstore is not, so a Sunday still has sales worth seeing — and
@@ -222,6 +239,12 @@ type StoreMetrics = {
   mtdReturns: number; mtdMargin: number | null;
   goal: number; pctOfGoal: number | null; paceIndex: number | null;
   lastOrderAt: string | null; lastOrderAmount: number | null;
+  // Today's last few orders, newest first. The activity strip on a store dashboard
+  // pins the most recent sales, and derived-by-diffing alone means it can only ever
+  // show what happened while that page was open — so a screen switched on at noon,
+  // or signed back in after a break, sat empty next to a till that had been ringing
+  // all morning. This is the same list the strip would have built for itself.
+  recentOrders: { at: string; amount: number }[];
   prev: DayMetrics | null;
   error?: string;
 };
@@ -237,6 +260,7 @@ async function fetchStore(
     mtdNet: 0, mtdCogs: 0, mtdGp: 0, mtdOrders: 0, mtdReturns: 0, mtdMargin: null,
     goal, pctOfGoal: null, paceIndex: null,
     lastOrderAt: null, lastOrderAmount: null,
+    recentOrders: [],
     prev: null,
   };
 
@@ -255,7 +279,7 @@ async function fetchStore(
         parseErrors
         tableData { rows }
       }
-      orders(first: 1, reverse: true, sortKey: CREATED_AT) {
+      orders(first: ${RECENT_ORDERS}, reverse: true, sortKey: CREATED_AT) {
         nodes { createdAt currentTotalPriceSet { shopMoney { amount } } }
       }
     }`);
@@ -342,11 +366,23 @@ async function fetchStore(
       };
     }
 
-    const last = data?.orders?.nodes?.[0];
+    const nodes: any[] = data?.orders?.nodes ?? [];
+    const last = nodes[0];
     if (last) {
       base.lastOrderAt = last.createdAt ?? null;
       base.lastOrderAmount = round2(num(last.currentTotalPriceSet?.shopMoney?.amount));
     }
+    // TODAY's only. The connection returns the newest orders full stop, so a store
+    // that has not sold anything yet this morning would otherwise hand the strip
+    // five of yesterday's — announced, on a shop floor, as what is happening now.
+    // Filtered here rather than with a `query:` argument so the same response keeps
+    // serving lastOrderAt, which deliberately survives an empty day.
+    base.recentOrders = nodes
+      .filter(o => o?.createdAt && centralDay(o.createdAt) === todayIso)
+      .map(o => ({
+        at: String(o.createdAt),
+        amount: round2(num(o.currentTotalPriceSet?.shopMoney?.amount)),
+      }));
   } catch (err) {
     // One store failing must not blank the other four. The row carries its own
     // error and the district totals simply exclude it.

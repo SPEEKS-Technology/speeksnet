@@ -9443,44 +9443,50 @@ function _lvActivityHolds(d) {
     return !!(d && d.open && !_lvIsPrev() && _lvMyCodes(d));
 }
 
-// A pinned strip survives a reload. Signing the board out and back in, or a TV
-// power-cycling overnight, would otherwise land on the empty strip that pinning
-// exists to prevent — and the first fetch after a reload deliberately flags
-// nothing (see _lvTrackChanges), so nothing would refill it until the next sale.
+// A pinned strip OPENS with today's most recent sales, whether or not anybody was
+// watching when they rang.
 //
-// localStorage, not sessionStorage: the two cases this is for are signing out
-// (which clears the session) and the browser restarting (which clears it again).
-// Same reason the one-time alert bubbles had to move.
+// Diffing alone can only ever show what happened while the page was open, so a
+// screen switched on at noon — or signed back in after a break, or a TV that
+// power-cycled overnight — sat empty next to a till that had been busy all
+// morning, and the first fetch after a load deliberately flags nothing so there
+// was nothing to refill it either.
 //
-// Replayed, never re-derived. These are events that were observed while somebody
-// was watching; restoring them invents nothing, which is why _lvTrackChanges can
-// still refuse to flag anything against an empty snapshot. They also cannot
-// re-chime — the chime fires on the diff, not on the render.
-const LV_ACT_KEY = 'speeksLvActivity';
-let _lvRestored = false;
+// These are the store's real orders, off the payload, not a replay of what this
+// browser happened to see: correct on a machine that has never loaded the page
+// before, and no local copy to go stale. Stamped with the order's OWN time, which
+// is what stops a sale from three hours ago pulsing as if it just landed —
+// _lvSyncActivity ages anything past the ticker window on sight.
+//
+// Once only, on the first sync that has data. Re-seeding every fetch would hand a
+// second id to an order the diff path had already pushed, and the strip is keyed
+// by id — two chips, one sale.
+//
+// Sales only: Shopify's order list has no refunds in it. A refund seen before a
+// reload is not restored, which is the one thing lost by deriving this from the
+// payload instead of remembering it locally.
+let _lvSeeded = false;
 
-function _lvSaveEvents(day) {
-    try {
-        localStorage.setItem(LV_ACT_KEY, JSON.stringify({ day: day, events: _lvEvents }));
-    } catch (_) { /* private mode or quota — a strip is not worth an error */ }
-}
-
-function _lvRestoreEvents(day) {
-    try {
-        const raw = JSON.parse(localStorage.getItem(LV_ACT_KEY) || 'null');
-        // Today's only. A chip from yesterday announcing a sale "just now" is a
-        // lie, and on a board that has been on all night it is the first thing
-        // anyone would read.
-        if (!raw || !day || raw.day !== day || !Array.isArray(raw.events)) return;
-        _lvEvents = raw.events.slice(0, LV_ACTIVITY_KEEP);
-        // Ids restart at e1 on a fresh load, so the counter has to clear the
-        // highest restored one — otherwise the next sale is handed an id already
-        // on screen and the keyed reconciler treats it as drawn and skips it.
-        _lvEvents.forEach(e => {
-            const n = parseInt(String(e.id).replace(/^e/, ''), 10);
-            if (isFinite(n) && n > _lvEvSeq) _lvEvSeq = n;
+function _lvSeedEvents(d) {
+    const mine = _lvMyCodes(d);
+    if (!mine) return;
+    const out = [];
+    (d.stores || []).forEach(m => {
+        if (!mine.has(String(m.code).toUpperCase())) return;
+        (m.recentOrders || []).forEach(o => {
+            const ts = Date.parse(o.at);
+            if (!isFinite(ts)) return;
+            // Keyed by store and order time so the id is stable across renders and
+            // cannot collide with the diff path's own "e1, e2, …" sequence.
+            out.push({
+                id: 'o' + m.code + String(o.at).replace(/\D/g, ''),
+                kind: 'sale', code: m.code, amount: Number(o.amount) || 0,
+                at: o.at, ts: ts,
+            });
         });
-    } catch (_) { _lvEvents = []; }
+    });
+    out.sort((a, b) => b.ts - a.ts);
+    _lvEvents = out.slice(0, LV_ACTIVITY_KEEP);
 }
 
 function _lvSyncActivity() {
@@ -9488,13 +9494,12 @@ function _lvSyncActivity() {
     if (!rows.length) return;
     const now = Date.now();
     const hold = _lvActivityHolds(_lvData);
-    const day = String((_lvData && _lvData.asOfCentral) || '').slice(0, 10);
-    // Once per page load, and only where the strip pins. A ticker viewer restoring
-    // chips that are already minutes old would watch them flash in and expire on
-    // the spot, which is worse than the empty row they replaced.
-    if (hold && !_lvRestored) {
-        _lvRestored = true;
-        if (!_lvEvents.length) _lvRestoreEvents(day);
+    // Once per page load, and only where the strip pins. A ticker viewer seeded
+    // with chips that are already hours old would watch five of them flash in and
+    // expire on the spot, which is worse than the empty row they replaced.
+    if (hold && !_lvSeeded) {
+        _lvSeeded = true;
+        if (!_lvEvents.length) _lvSeedEvents(_lvData);
     }
     // Closing hands the pinned chips back to the 30-second rule. Restamped
     // rather than dropped: they play one last life and fade out, instead of
@@ -9541,9 +9546,6 @@ function _lvSyncActivity() {
             row.insertBefore(el, row.children[i] || null);
         });
     });
-    // Only while pinned. A ticker's list is empty most of the time, and writing
-    // that over a board's saved chips is how a reload would come back blank.
-    if (hold) _lvSaveEvents(day);
     _lvScheduleActivityExpiry();
 }
 
@@ -10023,6 +10025,12 @@ function _lvSumReviews(id, fc) {
     // Against the goal when there is one, so the number is readable without
     // knowing what good looks like. Same three bands as Tracking to Goal.
     const pct = fc.reviewsGoal > 0 ? (fc.reviewsProj / fc.reviewsGoal) * 100 : null;
+    // Banked against target, and no projection — even though the colour band IS
+    // the projection, which does mean green can sit beside a number that has not
+    // got there yet. Adding "· tracking 137" was measured: it needs about 70px the
+    // cell does not have, and below roughly 1150px it pushes into its neighbour.
+    // These cells are sized for one figure each, the row already wraps at seven,
+    // and the pairing has a proper home one band down in the tracking tile.
     _ccSum(id, _lvNum(fc.reviews)
         + (fc.reviewsGoal > 0 ? ' <small>of ' + _lvNum(fc.reviewsGoal) + '</small>' : ''),
         pct === null ? '' : (pct >= 100 ? 'good' : (pct >= 80 ? 'warn' : 'bad')));
