@@ -10492,12 +10492,30 @@ body.sam-active .hotbar-btn:hover {
 /* THE READER'S OWN STORE, in a table of five that otherwise look alike.
    A point up on the row and on its headline figures — enough to find without
    counting down the codes, not so much that the table stops being a comparison.
-   Deliberately size and weight only, no background: the row tint is already
-   spoken for by the sale/refund flash (lvRowSale below), and a permanent wash
-   under one row would either swallow that flash or fight it.
    Sizes are absolute, not `em`: .lv-strongnum already overrides the cell's font
    size, so a relative bump here would be silently ignored on exactly the three
-   figures most worth lifting. */
+   figures most worth lifting.
+
+   Size alone turned out to be invisible — half a point across a row nobody is
+   measuring reads as nothing at all, and on a store screen the row you are
+   looking for is the whole reason the table is there. So it now also carries an
+   accent rail and a faint wash.
+
+   ⚠️ THE WASH GOES ON THE ROW, THE FLASH IS ON THE CELLS. That is the one thing
+   here that cannot be swapped. lvRowSale animates `background` on `> td`, and its
+   0%/100% frames are TRANSPARENT — so a permanent wash on the same cells would be
+   overridden for the whole 10 seconds and the row would blink bare between each of
+   the five pulses. Painted on the tr it sits behind the cell boxes instead: the
+   flash washes over it and it is still there underneath afterwards.
+
+   The rail is an inset shadow rather than a border so it costs no layout, and
+   because a shadow paints ON TOP of the animated background it survives the flash
+   rather than being covered by it. Sage, not the store's own tint: the tint dot
+   already says "which store", and this has to say "yours". */
+.lv-tbl tr.lv-row-mine { background: rgba(90, 141, 59, 0.055); }
+.lv-tbl tr.lv-row-mine > td:first-child {
+    box-shadow: inset 3px 0 0 var(--sage-professional);
+}
 .lv-tbl tr.lv-row-mine > td { font-size: 13px; }
 .lv-tbl tr.lv-row-mine .lv-strongnum { font-size: 14px; }
 .lv-tbl tr.lv-row-mine .lv-boldnum { font-size: 13.5px; }
