@@ -9553,7 +9553,8 @@ function _lvStoreDetail(d, v) {
     else if (prev) foot = _lvDayClose(v, d);
     else foot = _lvLastOrder(v, d.asOfCentral);
 
-    return '<div class="lv-chips">' + chips + '</div>'
+    return _lvForecast([v])
+        + '<div class="lv-chips">' + chips + '</div>'
         + (_lvHasMonth(d)
             ? _lvGoalBar(v.mtdGp, v.goal, v.pctOfGoal, _lvElapsedPct(d), v.paceIndex)
             : '<div class="lv-note">This was the last day of the previous month, so '
@@ -9741,7 +9742,10 @@ function _lvBuyBlock(d, views) {
             + '<td>' + _lvRatio(tot.bought, tot.sold) + '</td></tr></tfoot></table></div>';
     }
 
-    if (_lvIsMtd()) html += _lvForecast(views);
+    // Tracking to month-end used to hang off the bottom of this block, which put
+    // the projections at the very foot of the card — below the buying table, past
+    // two tables' worth of scrolling. They now sit directly under the headline
+    // tiles instead; see _lvForecast.
     // No "last updated" footnote and no date on the Buying header. Both said the
     // same thing — that the sheet is keyed each morning and can run a day behind —
     // and Today no longer shows this block at all, which was the case the caveat
@@ -9766,7 +9770,24 @@ function _lvFcSum(views) {
     };
 }
 
+// Sits at the TOP of the detail, immediately under the four headline tiles —
+// Month only, so every caller can ask for it unconditionally.
+//
+// It used to be the last thing on the card, under the buying table. That put the
+// three numbers that say where the month LANDS below two full tables of where it
+// has been, and on a laptop they were under the fold entirely. Where the month is
+// heading belongs beside where it stands, not after it.
+//
+// Not merged into the headline strip itself, though the two bands now touch. Two
+// reasons. Those four tiles are banked money and these three are projections —
+// $650,494 of tracking buying dropped into the same undifferentiated row as
+// $114,199 of banked net sales invites exactly the wrong reading, and the rule
+// between them is what keeps it honest. And the manager Command Center stacks
+// every tab's strip in one grid area, so a second row here would make the band
+// taller on the Scorecard and eBay tabs too, which show one row and would gain a
+// band of empty space under it.
 function _lvForecast(views) {
+    if (!_lvIsMtd()) return '';
     const f = _lvFcSum(views);
     if (!f) return '';
     // "Tracking to Goal" has moved up to the headline strip, where it replaced
@@ -10028,17 +10049,21 @@ function renderLiveDashboard() {
     // ---- DM / CEO: the five-store table ----
     if (dDetail) {
         if (d.district) {
-            if (dStrip) dStrip.innerHTML = _lvRollupTiles(_lvView(d.district), d, 'No Orders Yet',
-                stores.filter(m => !m.error).map(_lvView));
+            // Hoisted: the tiles, the forecast band and the buying table are all
+            // built from the same healthy-store views, and deriving it three times
+            // is three chances for them to disagree about who is reporting.
+            const dViews = stores.filter(m => !m.error).map(_lvView);
+            if (dStrip) dStrip.innerHTML = _lvRollupTiles(_lvView(d.district), d, 'No Orders Yet', dViews);
             // No footnote on the normal view — the column headers already say what
             // the figures are. The month-boundary case still needs explaining,
             // because "GP this month" and Pace go blank and that looks broken.
-            dDetail.innerHTML = _lvTable(stores, d, d.district, 'District')
+            dDetail.innerHTML = _lvForecast(dViews)
+                + _lvTable(stores, d, d.district, 'District')
                 + _lvActivity()
                 + (_lvHasMonth(d) ? ''
                     : '<div class="lv-note">This was the last day of the previous month, so '
                       + 'month-to-date and pace are not shown against it.</div>')
-                + _lvBuyBlock(d, stores.filter(m => !m.error).map(_lvView));
+                + _lvBuyBlock(d, dViews);
         } else {
             // Only reachable if a district card is on screen for a non-district role,
             // which the role classes should already prevent. Say nothing rather than
@@ -10091,7 +10116,8 @@ function renderLiveDashboard() {
         const views = (healthy.length ? healthy : stores).map(_lvView);
         const roll = _lvCombine(views);
         tiles = _lvRollupTiles(roll, d, 'No Orders Yet', views);
-        detail = _lvTable(stores, d, roll, 'Both') + _lvActivity() + _lvBuyBlock(d, views);
+        detail = _lvForecast(views) + _lvTable(stores, d, roll, 'Both')
+            + _lvActivity() + _lvBuyBlock(d, views);
     }
 
     const stamp = _lvMode === 'today'
