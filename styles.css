@@ -11784,6 +11784,64 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
    "it lands here" and costs no layout. */
 .b2b-pline.b2b-dropto { box-shadow: inset 0 3px 0 var(--sage-professional); }
 
+/* --- signature capture ---------------------------------------------------- */
+/* The QR and its explanation sit side by side: the code is useless without the
+   sentence telling you it is your own phone you are scanning with. */
+.b2b-signq {
+    display: flex; gap: 16px; align-items: center; margin-top: 14px;
+    padding: 14px; background: var(--b2b-surface);
+    border: 1px solid var(--b2b-line); border-radius: 12px;
+}
+.b2b-signq-qr {
+    flex: 0 0 auto; width: 132px; height: 132px; display: grid; place-items: center;
+    background: #fff; border: 1px solid var(--b2b-line); border-radius: 10px; padding: 6px;
+}
+.b2b-signq-qr svg { width: 100%; height: 100%; display: block; }
+.b2b-signq-wait { font-size: 11px; color: var(--b2b-faint); }
+.b2b-signq-txt b { font-size: 14px; font-weight: 800; color: #1a1c1e; }
+.b2b-signq-txt p { margin: 5px 0 9px; font-size: 12.5px; color: var(--b2b-muted); line-height: 1.5; }
+.b2b-signq-note { font-size: 11.5px; font-style: italic; color: var(--b2b-faint); }
+.b2b-qr-fail { font-size: 11px; color: var(--b2b-muted); text-align: center; line-height: 1.5; word-break: break-all; }
+
+/* The captured signature, shown at its own aspect rather than stretched: it is
+   evidence, and evidence should not be distorted to fit a box. */
+.b2b-signed { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.b2b-sig-img {
+    max-width: min(420px, 100%); height: auto; background: #fff;
+    border: 1px solid var(--b2b-line); border-radius: 8px;
+}
+
+/* The pad itself. Sized by CSS but drawn at the canvas's own resolution, so a
+   signature taken on a small phone is not a blurry upscale of a small bitmap. */
+.b2b-sign-pad { position: relative; margin-top: 12px; }
+.b2b-sign-pad canvas {
+    display: block; width: 100%; height: 34vh; min-height: 200px;
+    background: #fff; border: 2px dashed var(--b2b-line);
+    border-radius: 12px; touch-action: none;   /* or the browser pans instead of drawing */
+    cursor: crosshair;
+}
+.b2b-sign-hint {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    pointer-events: none; font-size: 15px; color: #c3ccd4; letter-spacing: .04em;
+    transition: opacity .15s ease;
+}
+/* visibility as well as opacity: a transparent element can still be picked up by
+   a screenshot mid-transition, and this one sits directly over the signature. */
+.b2b-sign-hint.gone { opacity: 0; visibility: hidden; }
+/* The line a signature sits on, the way a paper form has one. */
+.b2b-sign-name {
+    margin: 8px 2px 0; padding-top: 7px; border-top: 1px solid var(--b2b-line);
+    font-size: 12px; color: var(--b2b-muted);
+}
+.b2b-sign-who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.b2b-sign-who b { font-size: 17px; font-weight: 800; color: #1a1c1e; }
+.b2b-sign-who span { font-size: 12.5px; color: var(--b2b-muted); }
+/* Bigger than body copy: this is the sentence being signed, and it is the whole
+   reason the client is holding the phone. */
+.b2b-sign-ack {
+    margin: 12px 0 0; font-size: 13.5px; line-height: 1.55; color: #1a1c1e;
+}
+
 /* "3 / 12" -- the denominator is context, not a second number to read. */
 .b2b-tile-of { font-size: .62em; font-weight: 700; color: var(--b2b-faint); }
 

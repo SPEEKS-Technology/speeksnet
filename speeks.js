@@ -7022,7 +7022,13 @@ function _mgRenderAdmin(body) {
 function initOperations() {
     if (!document.querySelector('.ops-wrap')) return;
     const hash = (window.location.hash || '').replace('#', '');
-    let initial = ['marginguide', 'callbacks', 'b2b'].includes(hash) ? hash : 'marginguide';
+    // #b2b-sign-<dealId> is the B2B signing QR: open the B2B tab, and park the
+    // id for b2bLoad() to act on once the deals are actually here. The deal
+    // cannot be looked up yet -- this runs before the first fetch.
+    const sign = hash.match(/^b2b-sign-([A-Za-z0-9-]{6,})$/);
+    if (sign) _b2bPendingSign = sign[1];
+    let initial = sign ? 'b2b'
+        : ['marginguide', 'callbacks', 'b2b'].includes(hash) ? hash : 'marginguide';
     const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
     if (!tabVisible('ops-tab-' + initial)) {
         const firstVisible = Array.from(document.querySelectorAll('[id^="ops-tab-"]'))
@@ -13192,6 +13198,14 @@ async function b2bLoad() {
         _b2bDeals   = deals.map(_b2bShapeDeal);
         _b2bClients = clients;
         b2bRender();
+        // A signing QR was scanned. Consume it before opening, so a refresh
+        // doesn't reopen the pad over a deal that has since been signed off.
+        if (_b2bPendingSign) {
+            const id = _b2bPendingSign;
+            _b2bPendingSign = null;
+            try { history.replaceState(null, '', location.pathname + '#b2b'); } catch (_) {}
+            b2bOpenSign(id);
+        }
     } catch (e) {
         body.innerHTML = `<div class="status-message" style="color:var(--red-alert);">Couldn't load B2B deals. ${escapeHtml(e.message)}</div>`;
     } finally {
@@ -13319,8 +13333,21 @@ function _b2bFlash(cell) {
 // real ping gets to skip the work.
 async function _b2bSyncOpenDeal(ping) {
     const deal = _b2bModalDeal;
+    if (!deal) return;
+
+    // The pickup screen has no grid, but it is the one waiting on a phone: the
+    // QR is on screen precisely so someone can sign somewhere else. Reopen it so
+    // the signature appears without anybody refreshing.
+    if (deal.stage === 'pickup' && document.getElementById('b2bSignQR')) {
+        if (ping && ping.deal && ping.deal !== deal.id) return;
+        await b2bRefresh();
+        const fresh = _b2bDealById(deal.id);
+        if (fresh && (fresh.signature_path || fresh.signature_skipped_by)) b2bOpenDeal('pickup', deal.id);
+        return;
+    }
+
     const grid = document.getElementById('b2bItemGrid');
-    if (!deal || !grid) return;         // not a line-item screen; nothing to sync
+    if (!grid) return;                  // not a line-item screen; nothing to sync
 
     ping = ping || {};
     // A write to some other deal costs nothing, and our own echo is ignored
@@ -14537,10 +14564,17 @@ function _b2bStagePickup(deal) {
                     <input id="b2bPuDate" type="date" class="form-input-lg" value="${today}">
                 </div>
             </div>
+            ${_b2bSignBlock(deal)}
             <label class="b2b-ack">
                 <input type="checkbox" id="b2bPuAck" onchange="document.getElementById('b2bPuGo').disabled=!this.checked">
                 <span>The client confirms the items above were collected by SPEEKS Technology on the date shown.</span>
             </label>`,
+        after: () => {
+            // Only worth drawing when there is nothing signed yet.
+            if (!deal.signature_path && !deal.signature_skipped_by) {
+                _b2bPaintQR(document.getElementById('b2bSignQR'), _b2bSignUrl(deal.id));
+            }
+        },
         footer: `
             <button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;"
                 onclick="b2bPrintHoldingLabel('${deal.id}')">Print Holding Label</button>
@@ -14757,6 +14791,242 @@ function _b2bNoteLine(it) {
         + (client ? part('b2b-nh-c', 'Client', client) : '')
         + (staff  ? part('b2b-nh-s', 'Staff',  staff)  : '')
         + `</div>`;
+}
+
+// What the pickup screen shows for the signature: the QR to collect one, the
+// signature once collected, or the bypass once someone has recorded why there
+// isn't going to be one.
+function _b2bSignBlock(deal) {
+    if (deal.signature_path) {
+        const who = [deal.signature_by, deal.signature_at ? _b2bDate(deal.signature_at) : '']
+            .filter(Boolean).join(' · ');
+        return `
+            <div class="b2b-note ok b2b-signed">
+                <span class="b2b-note-k">Signed by the client${who ? ` — captured by ${escapeHtml(who)}` : ''}</span>
+                <img class="b2b-sig-img" alt="Client signature"
+                    src="${B2B_URL}?signature=${encodeURIComponent(deal.id)}&v=${encodeURIComponent(deal.signature_at || '')}">
+                <button class="b2b-mini" onclick="b2bRetakeSign('${deal.id}')">Take it again</button>
+            </div>`;
+    }
+    if (deal.signature_skipped_by) {
+        return `
+            <div class="b2b-note warn">
+                <span class="b2b-note-k">Signed off without a signature — ${escapeHtml(deal.signature_skipped_by)}</span>
+                ${escapeHtml(deal.signature_skipped_reason || '')}
+            </div>`;
+    }
+    return `
+        <div class="b2b-signq">
+            <div class="b2b-signq-qr" id="b2bSignQR"><span class="b2b-signq-wait">Drawing code…</span></div>
+            <div class="b2b-signq-txt">
+                <b>Have the client sign</b>
+                <p>Scan this with your phone, then hand it to them. It opens this
+                   same deal — you'll sign in with your PIN first if the phone hasn't already.</p>
+                ${_b2bCanAccept() ? `<button class="b2b-mini" onclick="b2bSkipSign('${deal.id}')">Continue without a signature</button>`
+                                  : '<span class="b2b-signq-note">A CEO, TOM or DM can sign off without one.</span>'}
+            </div>
+        </div>`;
+}
+
+// Reopening the pad on the desktop is not useful -- it is the phone that has the
+// client in front of it -- so this just clears the way for another scan.
+function b2bRetakeSign(id) {
+    if (!confirm('Take the signature again?\n\nThe QR code comes back so the client can sign on a phone. '
+        + 'The signature already on file stays until a new one replaces it.')) return;
+    const deal = _b2bDealById(id);
+    if (deal) { deal.signature_path = null; b2bOpenDeal('pickup', id); }
+}
+
+async function b2bSkipSign(id) {
+    if (!_b2bCanAccept()) return;
+    const reason = prompt('Sign off this pickup WITHOUT a client signature.\n\n'
+        + 'Say why — this is recorded against your name and is what the signature '
+        + 'would otherwise have proved.');
+    if (reason === null) return;
+    if (!reason.trim()) return alert('A reason is required to skip the signature.');
+    try {
+        await _b2bSend({ action: 'skip_signature', id, reason: reason.trim() });
+        await b2bRefresh();
+        b2bOpenDeal('pickup', id);
+    } catch (e) {
+        alert(`Couldn't record that: ${e.message}`);
+    }
+}
+
+// --- signature capture -----------------------------------------------------
+// The pickup screen shows a QR. A staff member scans it with their own phone,
+// which opens THIS app at #b2b-sign-<dealId>, signs in with their PIN if the
+// phone hasn't already, and hands the phone to the client to sign.
+//
+// Nothing here is public. The phone is an ordinary signed-in session, which is
+// why there is no token to mint, no anonymous write path, and no second shell
+// to keep in step with this one.
+
+// A deal id waiting for the pane to finish loading. The deep link arrives before
+// _b2bDeals exists, so the hash is parked here and b2bLoad() picks it up.
+let _b2bPendingSign = null;
+
+// qrcode-generator from CDN, the same way _rtEnsureClient loads supabase-js and
+// the XLSX loader loads its own. Hand-rolling this is not the same proposition
+// as the Code 128 encoder next door -- QR needs Reed-Solomon and mask selection,
+// and getting either subtly wrong produces a code that scans on your phone and
+// not on someone else's.
+let _b2bQrLoading = null;
+function _b2bEnsureQR() {
+    if (typeof window.qrcode === 'function') return Promise.resolve(window.qrcode);
+    if (_b2bQrLoading) return _b2bQrLoading;
+    const srcs = [
+        'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js',
+        'https://unpkg.com/qrcode-generator@1.4.4/qrcode.js',
+    ];
+    _b2bQrLoading = new Promise((resolve, reject) => {
+        const tryNext = (i) => {
+            if (i >= srcs.length) { _b2bQrLoading = null; return reject(new Error('QR library unavailable')); }
+            const s = document.createElement('script');
+            s.src = srcs[i];
+            s.onload = () => typeof window.qrcode === 'function' ? resolve(window.qrcode) : tryNext(i + 1);
+            s.onerror = () => tryNext(i + 1);
+            document.head.appendChild(s);
+        };
+        tryNext(0);
+    });
+    return _b2bQrLoading;
+}
+
+function _b2bSignUrl(dealId) {
+    const base = location.href.replace(/#.*$/, '').replace(/[^/]*$/, '');
+    return `${base}operations.html#b2b-sign-${dealId}`;
+}
+
+// Draws into whatever element is passed, so the caller owns the layout.
+async function _b2bPaintQR(el, text) {
+    if (!el) return;
+    try {
+        const qrcode = await _b2bEnsureQR();
+        // Type 0 = pick the smallest version that fits; M correction survives a
+        // phone camera at an angle without bloating the code.
+        const qr = qrcode(0, 'M');
+        qr.addData(text);
+        qr.make();
+        el.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 8, scalable: true });
+    } catch (_) {
+        // The link is the fallback, and it is a real one: it can be typed, or
+        // sent to the phone another way.
+        el.innerHTML = `<div class="b2b-qr-fail">Couldn't draw the QR code.<br>
+            <span class="b2b-mono">${escapeHtml(text)}</span></div>`;
+    }
+}
+
+// --- the phone's side ------------------------------------------------------
+
+let _b2bSigCtx = null, _b2bSigDrawn = false;
+
+function b2bOpenSign(dealId) {
+    const deal = _b2bDealById(dealId);
+    if (!deal) return alert("That deal is no longer open for signing.");
+    if (deal.stage !== 'pickup') {
+        return alert(`${deal.ref} has already been signed off.`);
+    }
+    _b2bModalDeal = deal;
+    _b2bSigDrawn = false;
+    _b2bShowDeal({
+        stage: 'pickup',
+        eyebrow: deal.ref,
+        title: 'Client Signature',
+        sub: 'Hand the phone to the client.',
+        wide: true,
+        body: `
+            <div class="b2b-sign-who">
+                <b>${escapeHtml(deal.client?.company || '')}</b>
+                ${deal.pickup_date ? `<span>Collected ${escapeHtml(_b2bDate(deal.pickup_date))}</span>` : ''}
+            </div>
+            ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Items collected</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
+            <!-- Word for word the acknowledgement the pickup screen already
+                 asks staff to tick. The client is signing that sentence, so it
+                 has to be the sentence, not a paraphrase of it. -->
+            <p class="b2b-sign-ack">The client confirms the items above were collected by
+                SPEEKS Technology on the date shown.</p>
+            <div class="b2b-sign-pad">
+                <canvas id="b2bSigPad" width="900" height="320"></canvas>
+                <span class="b2b-sign-hint" id="b2bSigHint">Sign here</span>
+            </div>
+            <div class="b2b-sign-name">${escapeHtml(deal.signed_by || 'Signature')}</div>`,
+        footer: `
+            <span class="b2b-msg" id="b2bDealMsg"></span>
+            <button class="kpi-cancel-btn" onclick="b2bClearSign()">Clear</button>
+            <button class="b2b-btn b2b-btn-primary" id="b2bSigSave"
+                onclick="b2bSaveSign('${deal.id}',this)">Save Signature</button>`,
+        after: _b2bInitSigPad,
+    });
+}
+
+// Pointer events, not mouse+touch: one code path covers a finger, a stylus and
+// a mouse, and it is the only one that gets pressure-less styluses right.
+function _b2bInitSigPad() {
+    const cv = document.getElementById('b2bSigPad');
+    if (!cv) return;
+    // Draw at the canvas's own resolution regardless of how CSS sizes it, so a
+    // signature captured on a small phone is not a blurry upscale.
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.lineWidth = 3.5;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#111';
+    _b2bSigCtx = ctx;
+
+    let drawing = false;
+    const at = (ev) => {
+        const r = cv.getBoundingClientRect();
+        return [(ev.clientX - r.left) * (cv.width / r.width),
+                (ev.clientY - r.top) * (cv.height / r.height)];
+    };
+    cv.addEventListener('pointerdown', (ev) => {
+        drawing = true;
+        cv.setPointerCapture(ev.pointerId);
+        const [x, y] = at(ev);
+        ctx.beginPath(); ctx.moveTo(x, y);
+        // A tap with no drag is still a mark, and some people "sign" with one.
+        ctx.lineTo(x + 0.01, y); ctx.stroke();
+        _b2bSigDrawn = true;
+        document.getElementById('b2bSigHint')?.classList.add('gone');
+        ev.preventDefault();
+    });
+    cv.addEventListener('pointermove', (ev) => {
+        if (!drawing) return;
+        const [x, y] = at(ev);
+        ctx.lineTo(x, y); ctx.stroke();
+        ev.preventDefault();
+    });
+    const stop = (ev) => { drawing = false; if (ev) ev.preventDefault(); };
+    cv.addEventListener('pointerup', stop);
+    cv.addEventListener('pointercancel', stop);
+    cv.addEventListener('pointerleave', stop);
+}
+
+function b2bClearSign() {
+    const cv = document.getElementById('b2bSigPad');
+    if (!cv || !_b2bSigCtx) return;
+    _b2bSigCtx.fillStyle = '#fff';
+    _b2bSigCtx.fillRect(0, 0, cv.width, cv.height);
+    _b2bSigDrawn = false;
+    document.getElementById('b2bSigHint')?.classList.remove('gone');
+}
+
+async function b2bSaveSign(id, btn) {
+    if (!_b2bSigDrawn) return _b2bSay('Ask the client to sign first.', true);
+    const cv = document.getElementById('b2bSigPad');
+    if (!cv) return;
+    await _b2bBusy(btn, 'Saving…', async () => {
+        await _b2bPost({ action: 'capture_signature', id, image: cv.toDataURL('image/png') },
+            "Couldn't save the signature");
+        closeAllModals();
+        await b2bRefresh();
+        // The phone's job is done in one screen; say so rather than dropping the
+        // person back onto a board they did not come here for.
+        alert('Signature saved. You can hand the phone back.');
+    });
 }
 
 // --- moving a deal between stores ------------------------------------------
