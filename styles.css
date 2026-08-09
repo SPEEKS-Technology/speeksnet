@@ -11750,6 +11750,17 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
     font-weight: 700; color: #3a6ea8;
     background: #f4f8fd; border: 1px solid #dce8f6;
 }
+/* Per-line margin. Plain by default on purpose -- what counts as a good margin
+   is a buying judgement the Margin Guide owns, not something to colour-code
+   here. Only a negative one is flagged, because that isn't a judgement call:
+   the offer is above what the kit is worth to us. */
+.b2b-f-mgn {
+    display: flex; align-items: center; justify-content: flex-end; flex: 0 0 auto;
+    height: var(--b2b-h-md); padding: 0 8px; border-radius: var(--b2b-r-sm);
+    font-size: 12.5px; font-variant-numeric: tabular-nums;
+    font-weight: 700; color: var(--b2b-muted);
+}
+.b2b-f-mgn.bad { color: #d1443b; background: #fcecec; border: 1px solid #f3d4d1; }
 .b2b-tag-int {
     padding: 1px 6px; border-radius: 999px; background: #f1f5f9;
     color: var(--b2b-muted); font-size: 8.5px; letter-spacing: .04em;
@@ -11768,20 +11779,37 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
    wants the width for its columns and the height to show as many rows as it can.
    The generic wide modal stays 1080; this one goes bigger and taller. */
 .b2b-deal-modal.b2b-modal-full {
-    width: min(1480px, 97vw); max-width: 97vw;
+    /* 99vw, not 97: sixteen honest columns come to ~1354px and 97vw of a 1440px
+       screen leaves 1335 of usable width after .manage-content's padding, so the
+       sheet panned sideways on the commonest desktop size for the sake of 20px.
+       This is a full-bleed working surface -- it already takes 92vh -- so the
+       margin is better spent on the grid than on the backdrop. */
+    width: min(1480px, 99vw); max-width: 99vw;
     height: 92vh; max-height: 92vh;
 }
 /* Never clip the acts column on a narrow laptop -- scroll the body instead. */
-.b2b-deal-modal.b2b-modal-full > .manage-content { overflow-x: auto; }
+.b2b-deal-modal.b2b-modal-full > .manage-content {
+    overflow-x: auto;
+    /* Narrower gutters than the standard 20px, side to side only. The grid was
+       overflowing a 1440px screen by about 15px, and 20px of padding either side
+       of a sixteen-column sheet buys nothing that a readable Model column
+       doesn't buy more of. padding-top is untouched: .b2b-phead's top:-20px
+       cancels exactly that value. */
+    padding-left: 10px; padding-right: 10px;
+}
 
 /* Two more columns than the card grid: disposition and the wipe flag are their
    own cells here, and the notes fold away behind the ⋯ rather than into a drawer,
    so a line is always exactly one row tall. */
 .b2b-items.b2b-ss {
-    /* Fifteen columns: the three required specs (CPU/RAM/Storage) sit inline
+    /* Sixteen columns: the three required specs (CPU/RAM/Storage) sit inline
        between Model and Condition so a keyboard pricer tabs straight across them.
        Disposition is wide enough to spell out "No Residual Value". Wider than the
        modal on a small laptop -- the body scrolls x (see .b2b-modal-full).
+       Margin came later and had to be paid for: Line and Type gave back what
+       they were not using, and Brand/Model dropped their minimums, so the whole
+       sheet still fits a 1440px screen without panning. The actions column holds
+       three buttons now (copy 28 + detail 28 + delete 26, gaps 3).
        The number columns are sized from their content and not by eye: a cell
        spends 13px on padding and its hairline before the input, the input
        another 9px, and a tabular digit at 12.5px is about 8.6px. So Qty at 58px
@@ -11791,7 +11819,7 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
        "$12,000.00" is ten characters. Handling at 150px is simply what
        "No Residual Value" plus a select arrow measures -- at 138px it truncated
        to "No Residual Valu". */
-    --b2b-pcols: 64px 100px minmax(74px, 1fr) minmax(96px, 1.2fr) 94px 82px 94px 94px 58px 80px 80px 150px 42px 100px 76px;
+    --b2b-pcols: 56px 100px minmax(74px, 1fr) minmax(96px, 1.2fr) 94px 74px 94px 90px 58px 80px 80px 62px 142px 38px 100px 102px;
 }
 /* True grid: drop the inter-cell gap and draw a hairline down every column
    boundary. The row's own bottom border is the horizontal line, so together they
@@ -11848,11 +11876,16 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
    truncated than shown on top of a delete button. */
 .b2b-items.b2b-ss .b2b-pc-tot > .b2b-f-calc,
 .b2b-items.b2b-ss .b2b-pc-tot > .b2b-f-resale,
-.b2b-items.b2b-ss .b2b-pc-tot > .b2b-f-off {
+.b2b-items.b2b-ss .b2b-pc-tot > .b2b-f-off,
+.b2b-items.b2b-ss .b2b-pc-mgn > .b2b-f-mgn,
+.b2b-items.b2b-ss .b2b-pc-mgn > .b2b-f-off {
     display: block; flex: 1 1 auto; min-width: 0;
     padding: 0 6px; text-align: right; line-height: var(--b2b-h-md);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* Copy sits at the far end of the row from delete: they are one pixel-perfect
+   misclick apart otherwise, and one of them is destructive. */
+.b2b-ss-copy svg { width: 13px; height: 13px; }
 .b2b-pc-disp { min-width: 0; }
 .b2b-pc-wipe { justify-content: center; }
 .b2b-ss-wipe {

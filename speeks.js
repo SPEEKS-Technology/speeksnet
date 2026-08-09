@@ -14255,7 +14255,13 @@ function _b2bSummary(deal) {
         ['Reference', `<span class="b2b-mono">${escapeHtml(deal.ref)}</span>`],
     ];
     if (_b2bIsCorp()) {
+        // The phone was already being fetched and never shown, so anyone needing
+        // to actually ring the client had to go back out to the Clients list.
+        // It is a separate cell rather than a third item in the Contact string:
+        // a number you are about to dial should be its own thing to read, not
+        // the tail of a run-on line.
         rows.push(['Contact', escapeHtml([deal.client?.contact, deal.client?.contact_email].filter(Boolean).join(' · ') || '—')]);
+        if (deal.client?.contact_phone) rows.push(['Phone', escapeHtml(deal.client.contact_phone)]);
     }
     rows.push(
         ['Picked up', deal.pickup_date ? _b2bDate(deal.pickup_date) : 'Not yet'],
@@ -14449,6 +14455,42 @@ function _b2bLineTotalHtml(it) {
     return `<span class="${t.cls}" id="b2bLn-${it.id}" title="${escapeHtml(t.tip)}">${t.text}</span>`;
 }
 
+// Margin on one line: what we keep of its resale value after paying for it.
+// The deal-level figure was already on the totals bar, but that averages a good
+// buy and a bad one into something that looks fine -- and the decision being
+// made on this screen is per line, not per pallet.
+//
+// A no-residual line is 100% by construction: it has resale value and we pay
+// nothing for it. Recycle has neither, so there is no ratio to show.
+//
+// Deliberately no "good / bad" thresholds. What counts as an acceptable margin
+// is a buying decision this code has no business asserting -- and there is a
+// Margin Guide tool that owns that question. The one thing flagged is a NEGATIVE
+// margin, which isn't a judgement call: it means the offer exceeds what the
+// thing is worth to us.
+function _b2bLineMargin(it) {
+    const q = Number(it.quantity) || 1;
+    const value = _b2bIsScrap(it) ? 0 : (Number(it.value) || 0) * q;
+    const offer = _b2bIsBuy(it) ? (Number(it.offer) || 0) * q : 0;
+    if (value <= 0) {
+        return { cls: 'b2b-f-off', text: '—',
+                 tip: _b2bIsScrap(it) ? 'Recycled — no resale value to measure against'
+                                      : 'Set a unit value to see the margin' };
+    }
+    const pct = Math.round(((value - offer) / value) * 100);
+    return {
+        cls: pct < 0 ? 'b2b-f-mgn bad' : 'b2b-f-mgn',
+        text: `${pct}%`,
+        tip: pct < 0
+            ? `We would pay ${_b2bMoney(offer, 2)} for something worth ${_b2bMoney(value, 2)} to us`
+            : `${_b2bMoney(value - offer, 2)} of ${_b2bMoney(value, 2)} resale value`,
+    };
+}
+function _b2bLineMarginHtml(it) {
+    const m = _b2bLineMargin(it);
+    return `<span class="${m.cls}" id="b2bMg-${it.id}" title="${escapeHtml(m.tip)}">${m.text}</span>`;
+}
+
 // A one-line preview of whatever was written about this line.
 //
 // Client notes print on the client's quote; staff notes never leave the
@@ -14559,6 +14601,14 @@ function _b2bPaintTotals() {
         el.className = t.cls;
         el.title = t.tip;
         el.textContent = t.text;
+        // Margin moves with value and offer, so it repaints on the same pass.
+        const mel = document.getElementById(`b2bMg-${it.id}`);
+        if (mel) {
+            const m = _b2bLineMargin(it);
+            mel.className = m.cls;
+            mel.title = m.tip;
+            mel.textContent = m.text;
+        }
     });
     const submit = document.getElementById('b2bPrSubmit');
     if (submit) submit.disabled = _b2bModalItems.length === 0 || _b2bNotReady().length > 0;
@@ -14803,6 +14853,49 @@ async function b2bAddItem(dealId, btn) {
         _b2bDirty = true;
         _b2bRepaintItems();
         document.getElementById(`b2bMake-${out.id}`)?.focus();
+    });
+}
+
+// Duplicate a line. A pallet is usually twenty near-identical machines, so
+// re-typing brand, model, specs, condition and price for each one was the single
+// slowest thing about pricing.
+//
+// Copies everything that describes the KIND of thing, and nothing that
+// identifies a particular unit or records what has happened to it:
+//   * the SKU and line number come from the server, which mints fresh ones
+//   * serials are per unit, so a copied serial would be a lie -- and a wrong one
+//     that reads as real, which is worse than a blank
+//   * listing, recycling and wipe progress belong to the original units
+// The wipe FLAG copies (it is a property of the kit) but the fee is re-snapshotted
+// by the server rather than carried over, the same as any other new line.
+async function b2bCopyItem(id, btn) {
+    const src = _b2bLocalItem(id);
+    if (!src) return;
+    await _b2bBusy(btn, '', async () => {
+        const copy = {
+            make: src.make, model: src.model, condition: src.condition,
+            staff_notes: src.staff_notes, client_notes: src.client_notes,
+            quantity: src.quantity, value: src.value, offer: src.offer,
+            item_type: src.item_type || 'other',
+            cpu: src.cpu, ram: src.ram, storage: src.storage,
+            gpu: src.gpu, battery_health: src.battery_health,
+            disposition: _b2bDispOf(src), wipe_required: !!src.wipe_required,
+        };
+        const out = await _b2bPost({ action: 'add_item', deal_id: _b2bModalDeal.id, ...copy },
+            "Couldn't copy that line");
+        // Same rule as b2bAddItem: the optimistic row is what gets painted, so it
+        // has to carry every field the grid reads.
+        _b2bModalItems.push({
+            ...copy, id: out.id, line_no: out.line_no, sku: out.sku,
+            serials: '', wipe_fee: src.wipe_required ? (src.wipe_fee || _b2bWipeFee()) : 0,
+            wiped_qty: 0, listed_qty: 0, recycled_qty: 0, listings: [],
+        });
+        _b2bDirty = true;
+        _b2bRepaintItems();
+        _b2bPaintTotals();
+        // Straight to the serials, because that is the one thing a copy cannot
+        // fill in and the one thing that blocks submitting.
+        b2bItemDetail(out.id);
     });
 }
 
@@ -15051,6 +15144,10 @@ const _B2B_ICO_DETAIL = '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12
     + '<line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/>'
     + '<line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>';
 const _B2B_ICO_X = '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>';
+// Feather "copy": two offset sheets. Reads as duplicate rather than as the
+// clipboard sense of copy, which is what this does.
+const _B2B_ICO_COPY = '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>'
+    + '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>';
 
 function _b2bItemSheet() {
     if (!_b2bModalItems.length) {
@@ -15070,7 +15167,7 @@ function _b2bItemSheet() {
             <span>Line</span><span>Type</span><span>Brand</span><span>Model</span>
             ${reqSpecs.map(f => `<span>${escapeHtml(f.label)}</span>`).join('')}
             <span>Condition</span>
-            <span class="r">Qty</span><span class="r">Value</span><span class="r">Offer</span>
+            <span class="r">Qty</span><span class="r">Value</span><span class="r">Offer</span><span class="r">Margin</span>
             <span>Handling</span><span class="c">Wipe</span><span class="r">Total</span><span></span>
         </div>`;
 
@@ -15115,11 +15212,16 @@ function _b2bItemSheet() {
                     <select onchange="b2bItemType('${it.id}',this.value)">
                         ${B2B_ITEM_TYPES.map(t => `<option value="${t.key}" ${(it.item_type || 'other') === t.key ? 'selected' : ''}>${t.label}</option>`).join('')}
                     </select></span>
+                <!-- title as well as value: these two are the narrowest text
+                     columns on the sheet and "OptiPlex 7080 Micro" does not fit
+                     in one, so hovering has to be able to tell you the rest. -->
                 <span class="b2b-pcell" data-k="Brand">
                     <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple"
+                        title="${escapeHtml(it.make || '')}"
                         oninput="b2bItemInput('${it.id}','make',this.value)" onchange="b2bItemSave('${it.id}')"></span>
                 <span class="b2b-pcell" data-k="Model">
                     <input value="${escapeHtml(it.model || '')}" placeholder="MacBook Air M2"
+                        title="${escapeHtml(it.model || '')}"
                         oninput="b2bItemInput('${it.id}','model',this.value)" onchange="b2bItemSave('${it.id}')"></span>
                 ${specCells}
                 <span class="b2b-pcell" data-k="Condition">
@@ -15138,6 +15240,8 @@ function _b2bItemSheet() {
                     ${buy ? `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
                         oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`
                           : '<span class="b2b-f-off">—</span>'}</span>
+                <span class="b2b-pcell n b2b-pc-mgn" data-k="Margin">
+                    ${_b2bLineMarginHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-disp" data-k="Handling">
                     <select data-tip="${escapeHtml(B2B_DISP[disp].hint)}" onchange="b2bItemDisposition('${it.id}',this.value)">
                         ${B2B_DISPOSITIONS.map(d => `<option value="${d.key}" ${disp === d.key ? 'selected' : ''}>${_B2B_DISP_SEL[d.key]}</option>`).join('')}
@@ -15148,6 +15252,8 @@ function _b2bItemSheet() {
                 <span class="b2b-pcell n b2b-pc-tot" data-k="Total">
                     ${_b2bLineTotalHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-acts">
+                    <button class="b2b-notes-btn b2b-ss-copy" title="Copy this line — everything but the serials"
+                        onclick="b2bCopyItem('${it.id}',this)">${_b2bIco(_B2B_ICO_COPY)}</button>
                     <button class="b2b-notes-btn b2b-ss-more ${hasDetail ? 'has' : ''} ${blocked.length ? 'req' : ''}"
                         title="${blocked.length ? 'Not ready — ' + escapeHtml(blocked.join(', ')) : 'Specs, serials, notes & label'}"
                         onclick="b2bItemDetail('${it.id}')">
