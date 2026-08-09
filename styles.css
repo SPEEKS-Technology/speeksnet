@@ -11762,6 +11762,14 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 }
 .b2b-f-mgn.bad { color: #d1443b; background: #fcecec; border: 1px solid #f3d4d1; }
 
+/* A cell someone else just changed. Brief and low-contrast on purpose: it says
+   "this moved under you", which you need to notice once, not be alarmed by. */
+@keyframes b2bSynced {
+    0%   { background: #dff0e4; box-shadow: inset 0 0 0 1px #8fd0a5; }
+    100% { background: transparent; box-shadow: inset 0 0 0 1px transparent; }
+}
+.b2b-pcell.b2b-synced { animation: b2bSynced 1.5s ease-out; border-radius: 4px; }
+
 /* Reads as a sentence, not a data cell: it answers one question and the store
    tags inside it have to sit on the text baseline rather than stack. */
 .b2b-where { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }

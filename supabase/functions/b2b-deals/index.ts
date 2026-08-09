@@ -240,7 +240,16 @@ const skuFor = (acronym: string, dealNo: number, lineNo: number) =>
 // — no table data ever travels over realtime, so the RLS-locked tables stay
 // closed to the anon client). The store is a hint for client-side filtering.
 // Wrapped so a broadcast failure can never break the write it follows.
-async function broadcastChange(tool: string, store: string | null) {
+// `about` carries which deal moved and who moved it. Two people pricing one
+// pallet both have the sheet open, and without it every write meant either
+// refetching on any B2B change anywhere or -- what actually happened -- dropping
+// the change entirely. Both fields are hints for the client and nothing more:
+// no table data travels over realtime.
+async function broadcastChange(
+  tool: string,
+  store: string | null,
+  about?: { deal?: string | null; by?: string | null },
+) {
   try {
     const url = Deno.env.get("SUPABASE_URL")!;
     const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -255,7 +264,13 @@ async function broadcastChange(tool: string, store: string | null) {
         messages: [{
           topic: "speeks-notify",
           event: "changed",
-          payload: { tool, store: store ? String(store).toUpperCase() : null, ts: Date.now() },
+          payload: {
+            tool,
+            store: store ? String(store).toUpperCase() : null,
+            deal: about?.deal || null,
+            by: about?.by || null,
+            ts: Date.now(),
+          },
         }],
       }),
     });
@@ -520,7 +535,7 @@ Deno.serve(async (req: Request) => {
         if (action === "delete_item") {
           const { error } = await supabase.from("b2b_deal_items").delete().eq("id", itemId);
           if (error) return jsonResponse({ success: false, error: error.message }, 500);
-          await broadcastChange("b2b", dealStore(deal));
+          await broadcastChange("b2b", dealStore(deal), { deal: deal.id, by: str(body.user, 80, "User") });
           return jsonResponse({ success: true });
         }
 
@@ -569,7 +584,7 @@ Deno.serve(async (req: Request) => {
         if (action === "update_item") {
           const { error } = await supabase.from("b2b_deal_items").update(fields).eq("id", itemId);
           if (error) return jsonResponse({ success: false, error: error.message }, 500);
-          await broadcastChange("b2b", dealStore(deal));
+          await broadcastChange("b2b", dealStore(deal), { deal: deal.id, by: str(body.user, 80, "User") });
           return jsonResponse({ success: true });
         }
 
@@ -588,7 +603,7 @@ Deno.serve(async (req: Request) => {
           sku: skuFor(deal.client?.acronym || "B2B", deal.deal_no, lineNo),
         }).select("id, line_no, sku").single();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
-        await broadcastChange("b2b", dealStore(deal));
+        await broadcastChange("b2b", dealStore(deal), { deal: deal.id, by: str(body.user, 80, "User") });
         return jsonResponse({ success: true, id: data.id, line_no: data.line_no, sku: data.sku });
       }
 

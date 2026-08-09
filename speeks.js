@@ -5643,6 +5643,7 @@ function switchOperationsTab(name) {
         _startCbSync();
     } else if (name === 'b2b') {
         b2bLoad();
+        _startB2bSync();
     } else if (name === 'marginguide') {
         mgLoad();
     }
@@ -13179,9 +13180,166 @@ function _b2bDealById(id) { return _b2bDeals.find(d => d.id === id) || null; }
 function _b2bRealtimeRefresh() {
     const pane = document.getElementById('ops-pane-b2b');
     if (!pane || !pane.classList.contains('active') || document.hidden) return;
-    if (document.getElementById('b2bDealModal')?.classList.contains('show')) return;
     if (document.getElementById('b2bCreateModal')?.classList.contains('show')) return;
+    // An open deal used to end the function here, so an inbound change was
+    // dropped -- and never picked up afterwards either, because b2bCloseDeal
+    // only re-fetches when YOU edited something. Two people pricing one pallet
+    // were editing divergent snapshots with last-write-wins per field.
+    if (document.getElementById('b2bDealModal')?.classList.contains('show')) {
+        return _b2bSyncOpenDeal(typeof _rtLastPing === 'object' ? _rtLastPing : null);
+    }
     b2bRefresh();
+}
+
+// B2B had no poll at all -- unlike Call Backs right next door -- so a browser
+// whose socket never connected learned nothing, ever: no board updates and no
+// "needs you" bubble. This is the floor under the realtime path, not a
+// replacement for it, which is why a minute is frequent enough.
+let _b2bSyncInterval = null;
+function _startB2bSync() {
+    if (_b2bSyncInterval) return;
+    _b2bSyncInterval = setInterval(() => {
+        const pane = document.getElementById('ops-pane-b2b');
+        if (!pane || !pane.classList.contains('active') || document.hidden) return;
+        if (document.getElementById('b2bCreateModal')?.classList.contains('show')) return;
+        if (document.getElementById('b2bDealModal')?.classList.contains('show')) {
+            // No ping to go on, so no deal filter and no author to skip. That
+            // distinction matters: passing the last ping here would compare the
+            // open deal against whatever happened to move most recently and
+            // usually decide there was nothing to do.
+            return _b2bSyncOpenDeal(null);
+        }
+        b2bRefresh();
+    }, 60000);
+}
+
+// --- live collaborative pricing -------------------------------------------
+// Which cell on the sheet holds each field. The cells carry data-k already (the
+// responsive layout uses it for labels), so the grid needs no extra markup for
+// this -- and a row can be patched value by value instead of being rebuilt,
+// which is what makes it possible to update someone's screen while they type.
+const _B2B_SYNC_CELL = {
+    item_type: 'Type', make: 'Brand', model: 'Model', condition: 'Condition',
+    cpu: 'CPU', ram: 'RAM', storage: 'Storage',
+    quantity: 'Qty', value: 'Value', offer: 'Offer',
+    shipping_cost: 'Ship /unit', disposition: 'Handling',
+};
+const _B2B_SYNC_FIELDS = Object.keys(_B2B_SYNC_CELL);
+const _B2B_CELL_FIELD = Object.fromEntries(
+    Object.entries(_B2B_SYNC_CELL).map(([field, k]) => [k, field]));
+
+function _b2bCellFor(itemId, field) {
+    const row = document.getElementById(`b2bPline-${itemId}`);
+    if (!row) return null;
+    const k = _B2B_SYNC_CELL[field];
+    return k ? row.querySelector(`.b2b-pcell[data-k="${k}"]`) : null;
+}
+
+// Remember the caret well enough to put it back after a full rebuild: which
+// line, which field, and where in the text. Losing your place mid-price is
+// worse than the stale data this is fixing.
+function _b2bFocusSpot() {
+    const el = document.activeElement;
+    const cell = el && el.closest && el.closest('.b2b-pcell');
+    const row = cell && cell.closest('.b2b-pline');
+    if (!row || !row.id.startsWith('b2bPline-')) return null;
+    const k = cell.getAttribute('data-k');
+    return {
+        id: row.id.slice('b2bPline-'.length),
+        k,
+        // The half-typed text itself, so a rebuild can hand it back. Without
+        // this the caret survives but the words under it do not.
+        field: _B2B_CELL_FIELD[k] || null,
+        value: el.value,
+        start: el.selectionStart, end: el.selectionEnd,
+    };
+}
+function _b2bRestoreFocus(spot) {
+    if (!spot) return;
+    const row = document.getElementById(`b2bPline-${spot.id}`);
+    const el = row && row.querySelector(`.b2b-pcell[data-k="${spot.k}"] input, .b2b-pcell[data-k="${spot.k}"] select`);
+    if (!el) return;
+    el.focus();
+    try { if (spot.start != null) el.setSelectionRange(spot.start, spot.end); } catch (_) { /* selects have no range */ }
+}
+
+function _b2bFlash(cell) {
+    if (!cell) return;
+    cell.classList.remove('b2b-synced');
+    void cell.offsetWidth;          // restart the animation on a repeat change
+    cell.classList.add('b2b-synced');
+    setTimeout(() => cell.classList.remove('b2b-synced'), 1600);
+}
+
+// Pull the line items again and fold them into the open sheet.
+//
+// `ping` is the realtime payload when one prompted this, and null when the
+// safety poll did. Only a real ping carries a deal id and an author, so only a
+// real ping gets to skip the work.
+async function _b2bSyncOpenDeal(ping) {
+    const deal = _b2bModalDeal;
+    const grid = document.getElementById('b2bItemGrid');
+    if (!deal || !grid) return;         // not a line-item screen; nothing to sync
+
+    ping = ping || {};
+    // A write to some other deal costs nothing, and our own echo is ignored
+    // outright -- the edge fn broadcasts to every subscriber, sender included.
+    if (ping.deal && ping.deal !== deal.id) return;
+    if (ping.by && ping.by === _b2bUser()) return;
+
+    let fresh;
+    try { fresh = await _b2bGet(`deal_id=${encodeURIComponent(deal.id)}`); }
+    catch (_) { return; }               // transient; the poll will come round again
+
+    const who = ping.by ? ` by ${ping.by}` : '';
+    const byId = new Map(fresh.map(i => [i.id, i]));
+    const sameLines = fresh.length === _b2bModalItems.length
+        && _b2bModalItems.every(i => byId.has(i.id));
+
+    if (!sameLines) {
+        // A line arrived or went. There is no patching that -- rebuild, but put
+        // the caret AND the half-typed text back. Taking the server's copy
+        // wholesale would otherwise discard an edit that has not been saved
+        // yet, which is the very thing the value-patch path below protects.
+        const spot = _b2bFocusSpot();
+        _b2bModalItems = fresh;
+        if (spot && spot.field) {
+            const mine = _b2bModalItems.find(i => i.id === spot.id);
+            if (mine) mine[spot.field] = spot.value;
+        }
+        _b2bRepaintItems();
+        _b2bRestoreFocus(spot);
+        return _b2bSay(`Line items updated${who}.`);
+    }
+
+    const active = document.activeElement;
+    let changed = 0;
+    _b2bModalItems.forEach(local => {
+        const remote = byId.get(local.id);
+        if (!remote) return;
+        _B2B_SYNC_FIELDS.forEach(f => {
+            if (String(remote[f] ?? '') === String(local[f] ?? '')) return;
+            const cell = _b2bCellFor(local.id, f);
+            const input = cell && cell.querySelector('input, select');
+            // The one field they are typing in is left alone -- theirs is the
+            // newer edit, and it is about to be saved over this anyway.
+            if (input && input === active) return;
+            local[f] = remote[f];
+            if (input) input.value = remote[f] ?? '';
+            _b2bFlash(cell);
+            changed++;
+        });
+        // Fields with no cell of their own still have to track, or the next save
+        // from this browser would post them back stale.
+        ['serials', 'staff_notes', 'client_notes', 'wipe_required', 'wipe_fee',
+         'gpu', 'battery_health', 'listed_qty', 'recycled_qty', 'wiped_qty'].forEach(f => {
+            if (String(remote[f] ?? '') !== String(local[f] ?? '')) { local[f] = remote[f]; changed++; }
+        });
+    });
+
+    if (!changed) return;
+    _b2bPaintTotals();
+    _b2bSay(`${changed} change${changed === 1 ? '' : 's'} came in${who}.`);
 }
 
 // --- render controller ----------------------------------------------------
