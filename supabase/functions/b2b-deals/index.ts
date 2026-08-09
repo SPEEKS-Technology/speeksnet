@@ -835,6 +835,14 @@ Deno.serve(async (req: Request) => {
           // Cleared because it is no longer true -- someone has to price it
           // again, and the queue reads this to decide the stage is unowned.
           priced_by: null,
+          // Back to zero for the same reason. Until the quote stage is split in
+          // two, "has this been sent yet" is how the app tells awaiting-approval
+          // apart from out-with-the-client, in five separate places. Leaving the
+          // count set meant a re-submitted quote came back reading "Out For
+          // Quote" -- as though the client already had the corrected numbers.
+          // quote_sent_at is deliberately kept: when it last went out is still
+          // true, and is the only record of it once this resets.
+          quote_send_count: 0,
           sendback_note: str(body.note, 2000, "A note saying what needs changing", true),
           sendback_by: str(body.sent_back_by, 120, "Sent back by"),
           sendback_at: new Date().toISOString(),

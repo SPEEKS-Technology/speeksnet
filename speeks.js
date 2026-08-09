@@ -14036,8 +14036,15 @@ function _b2bRenderOverview(scoped) {
             <td class="r"><span class="b2b-age b2b-age-${_b2bAgeTone(_b2bDaysIn(d))}">${_b2bDaysIn(d)}d</span></td>
         </tr>`).join('');
 
-    // Quotes out with the client, oldest first.
+    // Quotes, oldest first. Two very different states share this one stage
+    // until it is split in two: still to be approved internally, and genuinely
+    // out with the client. The tile used to add both together and call the
+    // total "awaiting a decision", which claimed the client was sitting on
+    // money nobody had sent them -- while the table directly below said "not
+    // sent" about those same deals.
     const quotes = live.filter(d => d.stage === 'quote').sort((a, b) => _b2bDaysIn(b) - _b2bDaysIn(a));
+    const toApprove  = quotes.filter(_b2bAwaitingApproval);
+    const withClient = quotes.filter(d => !_b2bAwaitingApproval(d));
     const quoteRows = quotes.map(d => `
         <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
             <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
@@ -14063,7 +14070,7 @@ function _b2bRenderOverview(scoped) {
     const tiles = `
         <div class="b2b-tiles">
             <div class="b2b-tile"><span class="b2b-tile-k">In Flight</span><span class="b2b-tile-v">${live.length}</span><span class="b2b-tile-c">deals moving</span></div>
-            <div class="b2b-tile"><span class="b2b-tile-k">Out For Quote</span><span class="b2b-tile-v">${_b2bMoney(quotes.reduce((s, d) => s + _b2bNetOffer(d), 0))}</span><span class="b2b-tile-c">${quotes.length} awaiting a decision</span></div>
+            <div class="b2b-tile"><span class="b2b-tile-k">Out For Quote</span><span class="b2b-tile-v">${_b2bMoney(withClient.reduce((s, d) => s + _b2bNetOffer(d), 0))}</span><span class="b2b-tile-c">${withClient.length} awaiting a client decision${toApprove.length ? ` · ${toApprove.length} still to approve` : ''}</span></div>
             <div class="b2b-tile"><span class="b2b-tile-k">Unlisted Stock</span><span class="b2b-tile-v">${_b2bMoney(unlistedTotal)}</span><span class="b2b-tile-c">${unlisted.reduce((n, d) => n + _b2bOutstanding(d), 0)} units to list</span></div>
             <div class="b2b-tile ${stalled.length ? 'warn' : ''}"><span class="b2b-tile-k">Stalled</span><span class="b2b-tile-v">${stalled.length}</span><span class="b2b-tile-c">no movement in 7+ days</span></div>
         </div>`;
@@ -14072,7 +14079,7 @@ function _b2bRenderOverview(scoped) {
         + card('Stalled Deals', 'No movement in a week or more',
                '<th>Ref</th><th>Client</th><th>Stage</th><th>Store</th><th class="r">In stage</th>',
                stalledRows, 'Everything is moving')
-        + card('Out For Quote', 'Priced and waiting on the client',
+        + card('Open Quotes', 'Waiting on approval, or out with the client',
                '<th>Ref</th><th>Client</th><th>Email</th><th class="c">Sent</th><th class="r">Offer</th>',
                quoteRows, 'No quotes are open right now')
         + card('Bought But Not Listed', 'Inventory paid for and not yet earning',
@@ -14290,6 +14297,8 @@ function _b2bStagePickup(deal) {
                 <span>The client confirms the items above were collected by SPEEKS Technology on the date shown.</span>
             </label>`,
         footer: `
+            <button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;"
+                onclick="b2bPrintHoldingLabel('${deal.id}')">Print Holding Label</button>
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
             <button class="b2b-btn b2b-btn-primary" id="b2bPuGo" disabled onclick="b2bSignPickup('${deal.id}',this)">Sign &amp; Mark Picked Up</button>`,
     });
@@ -14334,6 +14343,8 @@ function _b2bStageAssign(deal) {
                 <div><label class="form-label-caps">Received By</label><input id="b2bAsRecv" class="form-input-lg" placeholder="Who took it in at the location"></div>
             </div>`,
         footer: `
+            <button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;"
+                onclick="b2bPrintHoldingLabel('${deal.id}')">Print Holding Label</button>
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
             <button class="b2b-btn b2b-btn-primary" id="b2bAsGo" disabled onclick="b2bAssignPricing('${deal.id}',this)">Send To Pricing</button>`,
     });
@@ -16537,6 +16548,120 @@ function _b2bBarcodeSvg(data) {
 
 // One label per physical unit: a qty-5 line prints 5 identical labels, so each
 // scan during listing ticks that line up by one.
+// A tag for the pallet itself, for the stretch between "we collected it" and
+// "it has been priced".
+//
+// The per-unit labels can't cover this: b2bPrintLabels keys off it.sku, and
+// SKUs are not minted until pricing is submitted, so a pickup waiting to be
+// routed has nothing printable at all -- it sits in a back room identified by
+// nothing. deal.ref exists from creation, which is what this prints.
+//
+// Two formats. The letter sheet is the one that matters: this gets taped to a
+// skid and read from across a room, which is a different job from a device
+// label. The 2.25in version is there for when the label printer is what's to
+// hand -- it's the same stock the item labels use.
+function b2bPrintHoldingLabel(dealId) {
+    const deal = _b2bDealById(dealId) || _b2bModalDeal;
+    if (!deal) return;
+
+    const client = deal.client?.company || '—';
+    const acr    = deal.client?.acronym || '';
+    const where  = deal.pricing_store || 'Not yet assigned';
+    const picked = deal.pickup_date ? _b2bDate(deal.pickup_date) : '—';
+    const desc   = deal.pickup_desc || 'No description recorded';
+
+    const doc = `<!doctype html><html><head><meta charset="utf-8">
+<title>Holding ${escapeHtml(deal.ref)}</title>
+<style id="pageSize">@page { size: letter; margin: 0.4in; }</style>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Inter','Segoe UI',Arial,sans-serif; background: #f4f7f9; }
+  .bar { position: sticky; top: 0; display: flex; gap: 8px; align-items: center;
+         padding: 12px 16px; background: #fff; border-bottom: 1px solid #e6ebf1; }
+  .bar b { font-size: 13px; font-weight: 800; color: #1a1c1e; margin-right: 6px; }
+  .bar button { font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+                padding: 7px 13px; border-radius: 9px; border: 1px solid #e6ebf1;
+                background: #fff; color: #647082; }
+  .bar button.on { background: #e8f7ee; border-color: #1f9d57; color: #178048; }
+  .bar button.go { background: #1f9d57; border-color: #1f9d57; color: #fff; margin-left: auto; }
+  .sheet { padding: 20px; display: flex; justify-content: center; }
+
+  .tag { width: 7.7in; background: #fff; border: 2px solid #111; padding: 0.34in 0.4in; }
+  .tag .hd { font-size: 15pt; font-weight: 800; letter-spacing: .22em;
+             text-transform: uppercase; border-bottom: 2px solid #111; padding-bottom: 0.1in; }
+  .tag .co { font-size: 34pt; font-weight: 800; line-height: 1.05; margin-top: 0.16in; }
+  .tag .bc { display: block; width: 100%; height: 1.15in; fill: #000; margin-top: 0.16in; }
+  .tag .rf { font-family: 'Consolas','SFMono-Regular',monospace; font-size: 26pt;
+             font-weight: 700; letter-spacing: .1em; text-align: center; margin-top: 0.02in; }
+  .tag .gr { display: flex; gap: 0.4in; margin-top: 0.2in; border-top: 1px solid #111; padding-top: 0.14in; }
+  .tag .gr > div { flex: 1; }
+  .tag .k { font-size: 9pt; font-weight: 800; letter-spacing: .12em;
+            text-transform: uppercase; color: #444; }
+  .tag .v { font-size: 15pt; font-weight: 700; margin-top: 0.03in; }
+  .tag .ds { font-size: 12pt; margin-top: 0.16in; line-height: 1.35; }
+  .tag .ft { font-size: 9.5pt; color: #444; margin-top: 0.2in;
+             border-top: 1px solid #ccc; padding-top: 0.1in; }
+
+  /* Label-printer stock: only what identifies the pallet survives the shrink. */
+  body.sm .sheet { padding: 16px; }
+  body.sm .tag { width: 2.25in; height: 1in; padding: 0.05in 0.07in; border-width: 1px;
+                 display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  body.sm .tag .hd { font-size: 6pt; letter-spacing: .14em; border: 0; padding: 0; }
+  body.sm .tag .co { font-size: 7.5pt; margin: 0; max-width: 100%;
+                     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body.sm .tag .bc { height: 0.34in; margin-top: 0.02in; }
+  body.sm .tag .rf { font-size: 9pt; margin: 0; letter-spacing: .04em; }
+  body.sm .tag .gr, body.sm .tag .ds, body.sm .tag .ft { display: none; }
+
+  @media print {
+    body { background: #fff; }
+    .bar { display: none; }
+    .sheet { padding: 0; display: block; }
+    .tag { width: 100%; }
+    body.sm .tag { width: 2.25in; }
+  }
+</style></head>
+<body>
+  <div class="bar">
+    <b>${escapeHtml(deal.ref)}</b>
+    <button id="b1" class="on" onclick="setSize(false)">Full page</button>
+    <button id="b2" onclick="setSize(true)">2.25 × 1 in</button>
+    <button class="go" onclick="window.print()">Print</button>
+  </div>
+  <div class="sheet">
+    <div class="tag">
+      <div class="hd">Holding — Awaiting Pricing</div>
+      <div class="co">${escapeHtml(client)}${acr ? ` (${escapeHtml(acr)})` : ''}</div>
+      ${_b2bBarcodeSvg(deal.ref)}
+      <div class="rf">${escapeHtml(deal.ref)}</div>
+      <div class="gr">
+        <div><div class="k">Picked Up</div><div class="v">${escapeHtml(picked)}</div></div>
+        <div><div class="k">Price It At</div><div class="v">${escapeHtml(where)}</div></div>
+        <div><div class="k">Released By</div><div class="v">${escapeHtml(deal.signed_by || '—')}</div></div>
+      </div>
+      <div class="ds"><b>Contents:</b> ${escapeHtml(desc)}</div>
+      <div class="ft">Do not process or list these items until this deal has been priced and the
+        client has accepted the quote. Look the reference up in Operations &rarr; Business-to-Business.</div>
+    </div>
+  </div>
+<script>
+  function setSize(small) {
+    document.body.classList.toggle('sm', small);
+    document.getElementById('b1').className = small ? '' : 'on';
+    document.getElementById('b2').className = small ? 'on' : '';
+    document.getElementById('pageSize').textContent = small
+      ? '@page { size: 2.25in 1in; margin: 0; }'
+      : '@page { size: letter; margin: 0.4in; }';
+  }
+<\/script>
+</body></html>`;
+
+    const w = window.open('', '_blank');
+    if (!w) return alert('Allow pop-ups for this site to print the holding label.');
+    w.document.write(doc);
+    w.document.close();
+}
+
 function b2bPrintLabels(dealId, itemId) {
     const deal = _b2bDealById(dealId) || _b2bModalDeal;
     if (!deal) return;
