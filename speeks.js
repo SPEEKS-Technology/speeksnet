@@ -14412,7 +14412,8 @@ function _b2bLabelBtn(it, cls) {
     const n = Number(it.quantity) || 1;
     return `<button class="b2b-linelabel ${cls || ''}" onclick="event.stopPropagation();b2bPrintLabels('${_b2bModalDeal?.id}','${it.id}')"
         aria-label="Print labels for ${escapeHtml(it.sku)}"
-        data-tip="Print ${n} label${n === 1 ? '' : 's'} for ${escapeHtml(it.sku)}">${_b2bIco(B2B_ICO_BARCODE)}</button>`;
+        data-tip="${n === 1 ? `Print the label for ${escapeHtml(it.sku)}`
+                            : `Print labels for ${escapeHtml(it.sku)} — it asks how many`}">${_b2bIco(B2B_ICO_BARCODE)}</button>`;
 }
 function _b2bLocalItem(id){ return _b2bModalItems.find(i => i.id === id); }
 
@@ -15114,13 +15115,16 @@ function _b2bItemCards() {
                 <span class="b2b-pcell n b2b-pc-tot" data-k="Line total">
                     ${_b2bLineTotalHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-acts">
+                    <!-- Print leads, delete trails, and the two are never
+                         neighbours: they were one misclick apart and only one of
+                         them can be undone. -->
+                    ${_b2bLabelBtn(it)}
                     <button class="b2b-notes-btn ${open ? 'on' : ''} ${blocked.length ? 'req' : ''}"
                         title="${blocked.length ? 'Not ready yet — ' + escapeHtml(blocked.join(', ')) : escapeHtml(_b2bNoteHint(it))}"
                         onclick="b2bToggleNotes('${it.id}')">
                         ${_b2bIco('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>')}
                         ${(it.client_notes || it.staff_notes || it.serials) ? '<i class="b2b-notes-dot"></i>' : ''}
                     </button>
-                    ${_b2bLabelBtn(it)}
                     <button class="b2b-x" title="Remove line" onclick="b2bDeleteItem('${it.id}')">
                         ${_b2bIco('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>')}
                     </button>
@@ -16219,12 +16223,16 @@ function _b2bListRows() {
                 ${recycled ? `<span class="b2b-lrec">${recycled} recycled</span>` : ''}
             </div>
             <div class="b2b-lacts">
-                ${_b2bLabelBtn(it)}
+                <!-- The steppers are what this screen is FOR -- scan, +, scan, + --
+                     and the label button was sitting directly in front of them.
+                     It moves to the end, past Recycle, where reaching for it is a
+                     deliberate act rather than something on the way to +. -->
                 <button class="b2b-step" ${listed <= 0 ? 'disabled' : ''} title="Undo the last one" onclick="b2bUnlistUnit('${it.id}')">−</button>
                 <button class="b2b-step up" ${ok || scrap || needsWipe ? 'disabled' : ''}
                     title="${escapeHtml(blockTitle)}"
                     onclick="b2bAskShopify('${it.id}')">+</button>
                 <button class="b2b-recycle" ${ok ? 'disabled' : ''} title="Recycle units out" onclick="b2bRecycleUnits('${it.id}')">Recycle</button>
+                ${_b2bLabelBtn(it)}
             </div>
         </div>`;
     }).join('');
@@ -16780,26 +16788,68 @@ function b2bPrintHoldingLabel(dealId) {
     w.document.close();
 }
 
-function b2bPrintLabels(dealId, itemId) {
+function b2bPrintLabels(dealId, itemId, count) {
     const deal = _b2bDealById(dealId) || _b2bModalDeal;
     if (!deal) return;
     const source = itemId ? _b2bModalItems.filter(i => i.id === itemId) : _b2bModalItems;
     const labels = [];
-    source.forEach(it => {
-        if (!it.sku) return;
-        const n = Math.max(1, Number(it.quantity) || 1);
-        for (let i = 0; i < n; i++) labels.push(it);
-    });
-    if (!labels.length) {
-        return alert('No SKUs to print yet — they get assigned when the pricing is submitted.');
+
+    if (itemId) {
+        // One line: ask how many. A qty-20 line used to print twenty labels
+        // whether you wanted twenty or the one you just tore. The default is the
+        // outstanding count, because that is how many are still to be handled --
+        // and once a line is fully listed it falls to 1, which is the reprint
+        // case. Skipped entirely for a single-unit line; there is nothing to ask.
+        const it = source[0];
+        if (it && it.sku) {
+            const qty  = Math.max(1, Number(it.quantity) || 1);
+            const done = (Number(it.listed_qty) || 0) + (Number(it.recycled_qty) || 0);
+            const left = Math.max(1, qty - done);
+            let n = Number(count) || 0;
+            if (!n) {
+                if (qty === 1) {
+                    n = 1;
+                } else {
+                    const raw = prompt(
+                        `How many labels for "${_b2bItemName(it)}"?\n\n`
+                        + `${qty} unit${qty === 1 ? '' : 's'} on the line`
+                        + `${done ? `, ${left} still to handle` : ''}.`, String(left));
+                    if (raw === null) return;
+                    n = parseInt(raw, 10) || 0;
+                }
+            }
+            n = Math.min(qty, Math.max(1, n));
+            for (let i = 0; i < n; i++) labels.push(it);
+        }
+    } else {
+        source.forEach(it => {
+            if (!it.sku) return;
+            const n = Math.max(1, Number(it.quantity) || 1);
+            for (let i = 0; i < n; i++) labels.push(it);
+        });
     }
 
-    const cells = labels.map(it => `
+    if (!labels.length) {
+        return alert('No SKUs to print yet — a line gets one as soon as it is added.');
+    }
+
+    // What happens to the unit, on the unit. A recycle line printed labels
+    // indistinguishable from a purchase, so once the paperwork was off the pallet
+    // there was nothing on the box itself saying "this must not be listed".
+    // Styled for a mono thermal printer rather than with colour: recycle is
+    // knocked out of solid black, no-residual is boxed, a purchase is plain.
+    const DISP_LABEL = { purchase: 'Purchased', no_residual: 'No Residual Value', recycle: 'Recycle' };
+    const DISP_CLASS = { purchase: 'buy', no_residual: 'nrv', recycle: 'rec' };
+    const cells = labels.map(it => {
+        const d = _b2bDispOf(it);
+        return `
         <div class="lb">
             ${_b2bBarcodeSvg(it.sku)}
             <div class="sku">${escapeHtml(it.sku)}</div>
             <div class="desc">${escapeHtml(_b2bItemName(it))}</div>
-        </div>`).join('');
+            <div class="disp ${DISP_CLASS[d] || 'buy'}">${escapeHtml(DISP_LABEL[d] || DISP_LABEL.purchase)}</div>
+        </div>`;
+    }).join('');
 
     const doc = `<!doctype html><html><head><meta charset="utf-8">
 <title>Labels ${escapeHtml(deal.ref)}</title>
@@ -16821,17 +16871,33 @@ function b2bPrintLabels(dealId, itemId) {
   .lb { width: 2.25in; height: 1in; padding: 0.05in 0.07in; background: #fff;
         border: 1px dashed #cbd5e1; display: flex; flex-direction: column;
         align-items: center; justify-content: center; overflow: hidden; }
-  .lb .bc { display: block; width: 100%; height: 0.42in; fill: #000; }
+  /* 0.38in, down from 0.42, to pay for the description growing and the handling
+     line arriving. Still ~9.5mm of bar height, comfortably over what Code 128
+     needs to scan. */
+  .lb .bc { display: block; width: 100%; height: 0.38in; fill: #000; }
   .lb .sku { font-family: 'Consolas','SFMono-Regular',monospace; font-size: 10pt;
              font-weight: 700; letter-spacing: .04em; line-height: 1.1; margin-top: 0.03in; }
-  .lb .desc { font-size: 6.5pt; color: #333; line-height: 1.1; margin-top: 0.01in;
+  /* Was 6.5pt, which the label printers were not reproducing legibly. */
+  .lb .desc { font-size: 8pt; color: #000; line-height: 1.1; margin-top: 0.01in;
               max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* No colour: these go to a mono thermal printer, so the three outcomes are
+     told apart by weight and inversion instead. Recycle is the one that must be
+     unmissable -- it means do not list this -- so it takes the solid block. */
+  .lb .disp { margin-top: 0.025in; font-size: 7.5pt; font-weight: 800;
+              letter-spacing: .06em; text-transform: uppercase; line-height: 1.1;
+              max-width: 100%; white-space: nowrap; overflow: hidden; }
+  .lb .disp.buy { color: #000; }
+  .lb .disp.nrv { color: #000; border: 1pt solid #000; padding: 0 0.045in; border-radius: 2pt; }
+  .lb .disp.rec { background: #000; color: #fff; padding: 0.008in 0.055in; border-radius: 2pt; }
 
-  /* The short stock has no room for a description line. */
+  /* The short stock has no room for the description as well, and between the two
+     the handling is the one that changes what you DO with the unit -- the SKU
+     above it already says exactly which line it is. */
   body.sm .lb { height: 0.75in; }
-  body.sm .lb .bc { height: 0.34in; }
+  body.sm .lb .bc { height: 0.30in; }
   body.sm .lb .sku { font-size: 9pt; }
   body.sm .lb .desc { display: none; }
+  body.sm .lb .disp { font-size: 7pt; margin-top: 0.02in; }
 
   @media print {
     body { background: #fff; }
