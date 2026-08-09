@@ -93,6 +93,8 @@ const DEAL_COLS = [
   "priced_by", "quote_sent_at", "quote_send_count", "accepted_at", "accepted_by",
   "declined_at", "declined_by", "declined_reason", "declined_category",
   "sendback_note", "sendback_by", "sendback_at",
+  "signature_path", "signature_at", "signature_by",
+  "signature_skipped_by", "signature_skipped_reason",
   "created_by", "created_at", "updated_at", "stage_changed_at",
   "company", "acronym", "contact", "contact_email", "contact_phone",
   "line_count", "total_units", "listed_units", "recycled_units", "outstanding_units",
@@ -485,6 +487,17 @@ Deno.serve(async (req: Request) => {
         const deal = await getDeal(supabase, String(body.id || ""));
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
         if (deal.stage !== "pickup") return jsonResponse({ success: false, error: "This pickup has already been signed off." }, 409);
+        // Either the client signed, or someone said in writing why they didn't.
+        // Never silently neither -- that is the whole value of the signature, and
+        // it is the one part of this a client-side role check cannot provide.
+        // Enforced on the transition rather than as a CHECK on the table, because
+        // deals predating 0022 have neither and must not be rewritten.
+        if (!deal.signature_path && !deal.signature_skipped_by) {
+          return jsonResponse({
+            success: false,
+            error: "This pickup needs the client's signature — or a recorded reason for going without one.",
+          }, 409);
+        }
         const { error } = await supabase.from("b2b_deals").update({
           stage: "pricing_location",
           pickup_desc: str(body.pickup_desc, 2000, "Pickup description"),
@@ -494,6 +507,83 @@ Deno.serve(async (req: Request) => {
         }).eq("id", deal.id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("b2b", null);
+        return jsonResponse({ success: true });
+      }
+
+      // ========================================================== signature
+      // Captured on a staff member's phone, which scanned the QR on the pickup
+      // screen and is therefore a signed-in session like any other -- there is
+      // no public route here and no anonymous write path.
+      //
+      // Stored in a PRIVATE bucket, so nothing hands back a URL: the path goes
+      // on the deal and `signature=<id>` below streams the bytes back through
+      // this function.
+      if (action === "capture_signature") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "pickup") {
+          return jsonResponse({ success: false, error: "This pickup has already been signed off." }, 409);
+        }
+
+        // A data URI from a canvas. Refused rather than coerced if it is not a
+        // PNG: the bucket only accepts image/png, and a mismatch there fails
+        // late and unhelpfully.
+        const raw = String(body.image || "");
+        const m = raw.match(/^data:image\/png;base64,([A-Za-z0-9+/=]+)$/);
+        if (!m) return jsonResponse({ success: false, error: "That doesn't look like a signature image." }, 400);
+        let bytes: Uint8Array;
+        try {
+          bytes = Uint8Array.from(atob(m[1]), (c) => c.charCodeAt(0));
+        } catch (_) {
+          return jsonResponse({ success: false, error: "The signature image was malformed." }, 400);
+        }
+        // The bucket caps at 2MB; catching it here gives a sentence instead of a
+        // storage error. A real signature is tens of kilobytes.
+        if (!bytes.length || bytes.length > 2_000_000) {
+          return jsonResponse({ success: false, error: "The signature image is the wrong size." }, 400);
+        }
+
+        // Timestamped rather than fixed at "<deal>.png": re-signing keeps the
+        // earlier attempt in the bucket instead of overwriting evidence.
+        const path = `${deal.id}/${Date.now()}.png`;
+        const up = await supabase.storage.from("b2b-signatures")
+          .upload(path, bytes, { contentType: "image/png", upsert: false });
+        if (up.error) return jsonResponse({ success: false, error: up.error.message }, 500);
+
+        const { error } = await supabase.from("b2b_deals").update({
+          signature_path: path,
+          signature_at: new Date().toISOString(),
+          signature_by: str(body.user, 120, "User"),
+          // Signing clears an earlier skip: the deal is no longer unsigned, and
+          // leaving the bypass on the row would misreport it forever.
+          signature_skipped_by: null,
+          signature_skipped_reason: null,
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        // The deal id is what lets the desktop that is showing the QR notice.
+        await broadcastChange("b2b", null, { deal: deal.id, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true, signature_at: new Date().toISOString() });
+      }
+
+      // Sign off without a signature. Corp only, and the reason is mandatory --
+      // a skip with no reason is indistinguishable from an oversight, which is
+      // exactly the thing a signature exists to rule out.
+      if (action === "skip_signature") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "pickup") {
+          return jsonResponse({ success: false, error: "This pickup has already been signed off." }, 409);
+        }
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can sign off without a signature." }, 403);
+        }
+        const { error } = await supabase.from("b2b_deals").update({
+          signature_skipped_by: str(body.user, 120, "User") || "Unknown",
+          signature_skipped_reason: str(body.reason, 1000, "A reason for skipping the signature", true),
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", null, { deal: deal.id, by: str(body.user, 80, "User") });
         return jsonResponse({ success: true });
       }
 
@@ -1110,6 +1200,24 @@ Deno.serve(async (req: Request) => {
 
   try {
     const url = new URL(req.url);
+
+    // ?signature=<deal id> → the signature image itself.
+    //
+    // The bucket is private, so this is the only way to see one. Streamed rather
+    // than redirected to a signed URL: a signed URL is a link that keeps working
+    // after it leaves the page, and this is the one asset here where that is
+    // worth avoiding.
+    const sigFor = url.searchParams.get("signature");
+    if (sigFor) {
+      const { data: d } = await supabase.from("b2b_deals")
+        .select("signature_path").eq("id", sigFor).maybeSingle();
+      if (!d?.signature_path) return jsonResponse({ success: false, error: "No signature on that deal." }, 404);
+      const dl = await supabase.storage.from("b2b-signatures").download(d.signature_path);
+      if (dl.error || !dl.data) return jsonResponse({ success: false, error: "Couldn't read the signature." }, 500);
+      return new Response(await dl.data.arrayBuffer(), {
+        headers: { ...corsHeaders, "Content-Type": "image/png", "Cache-Control": "private, max-age=60" },
+      });
+    }
 
     // ?clients=1 → the directory, with deal counts rolled up in the view
     if (url.searchParams.get("clients")) {

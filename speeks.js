@@ -2362,6 +2362,18 @@ async function checkPIN() {
             // and store notes out of the next person's feed.
             if (typeof loadCMS === 'function') loadCMS();
             if (typeof fetchAndDisplayStoreComment === 'function') fetchAndDisplayStoreComment();
+
+            // Open whatever the URL asked for. These run on page load and on SPA
+            // navigation but not here, so signing in ON a deep link silently lost
+            // it: operations.html#b2b landed on the default tab, because the load
+            // path that honours the hash sits inside the already-unlocked branch
+            // and this one never reached it.
+            //
+            // It matters now because the B2B signing QR is exactly that -- a link
+            // handed to a phone that has never signed in, which is the one case
+            // guaranteed to take this path.
+            if (document.querySelector('.ws-wrap') && typeof initWorkspace === 'function') initWorkspace();
+            if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
         } else {
             err.innerText = "Incorrect PIN. Please try again.";
             err.style.display = 'block';
