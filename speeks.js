@@ -14400,6 +14400,78 @@ function _b2bLocalItem(id){ return _b2bModalItems.find(i => i.id === id); }
 const _b2bDispOf  = (it) => it.disposition || 'purchase';
 const _b2bIsBuy   = (it) => _b2bDispOf(it) === 'purchase';
 const _b2bIsScrap = (it) => _b2bDispOf(it) === 'recycle';
+const _b2bIsNrv   = (it) => _b2bDispOf(it) === 'no_residual';
+
+// What the Total column shows for one line, in one place because three screens
+// render it and a fourth repaints it -- the last time money was expressed
+// independently in several spots, half of them ended up showing gross where the
+// rest showed net.
+//
+// A purchase line shows what we pay. Recycle is worth nothing to anyone, so it
+// stays a dash. No-residual costs us nothing but still carries resale value,
+// and dashing that out hid a real number: six monitors worth $270 to us read as
+// an empty row, which is what prompted the report. It renders in the same blue
+// as the row's bar and the client-facing chip so it cannot be misread as money
+// owed to the client.
+function _b2bLineTotal(it) {
+    const q = Number(it.quantity) || 1;
+    if (_b2bIsBuy(it)) {
+        return { cls: 'b2b-f-calc', text: _b2bMoney((Number(it.offer) || 0) * q, 2),
+                 tip: 'What we pay the client for this line' };
+    }
+    if (_b2bIsScrap(it)) {
+        return { cls: 'b2b-f-off', text: '—', tip: 'Scrapped — no value to us or to the client' };
+    }
+    const resale = (Number(it.value) || 0) * q;
+    return { cls: 'b2b-f-resale', text: resale ? _b2bMoney(resale, 2) : '—',
+             tip: 'Resale value to us — the client is paid nothing for this line' };
+}
+function _b2bLineTotalHtml(it) {
+    const t = _b2bLineTotal(it);
+    return `<span class="${t.cls}" id="b2bLn-${it.id}" title="${escapeHtml(t.tip)}">${t.text}</span>`;
+}
+
+// A one-line preview of whatever was written about this line.
+//
+// Client notes print on the client's quote; staff notes never leave the
+// building. Both sit behind the ⋯ sheet, so scanning a thirty-line pallet for
+// "which lines did the client say something about" meant opening thirty
+// sheets -- which is what was reported. An earlier version of this always
+// rendered, including a "No details yet" placeholder, and that is what made it
+// cost height on every row; this one returns nothing when there is nothing to
+// say, so only the handful of annotated lines pay for it.
+//
+// Client leads, because that is the half that reaches the client.
+//
+// Named apart from _b2bNoteHint, which already exists and returns a plain-text
+// summary for the card grid's tooltip. Two `function` declarations of one name
+// do not collide loudly -- the later simply wins -- so this would have rendered
+// that tooltip string, unwrapped, into the row.
+function _b2bNoteLine(it) {
+    const client = String(it.client_notes || '').trim();
+    const staff  = String(it.staff_notes || '').trim();
+    if (!client && !staff) return '';
+    const part = (cls, label, text) =>
+        `<span class="${cls}" title="${escapeHtml(label + ': ' + text)}"><b>${label}</b>${escapeHtml(text)}</span>`;
+    return `<div class="b2b-pnote-hint">`
+        + (client ? part('b2b-nh-c', 'Client', client) : '')
+        + (staff  ? part('b2b-nh-s', 'Staff',  staff)  : '')
+        + `</div>`;
+}
+
+// The key to the coloured bars down the left of the sheet. Always rendered
+// rather than only when a non-purchase line exists: the grid repaints on its
+// own (_b2bRepaintItems touches #b2bItemGrid alone), so a legend that appeared
+// and disappeared with the data would go stale the moment someone changed a
+// line's handling without a full redraw.
+function _b2bDispLegend() {
+    return `<div class="b2b-disp-key">
+        <b>Row colours</b>
+        <span class="k-nrv"><i></i><em>No residual value</em> — nothing to the client, may still be resold</span>
+        <span class="k-scrap"><i></i><em>Recycle</em> — scrapped, never listed</span>
+        <span class="k-block"><i></i><em>Not ready</em> — something on the line is still missing</span>
+    </div>`;
+}
 
 // One entry per unit. Split on comma, drop the blanks -- so trailing commas and
 // double commas while typing don't count as units.
@@ -14461,8 +14533,14 @@ function _b2bPaintTotals() {
     }
     _b2bModalItems.forEach(it => {
         const el = document.getElementById(`b2bLn-${it.id}`);
-        if (el) el.textContent = _b2bIsBuy(it)
-            ? _b2bMoney((Number(it.offer) || 0) * (Number(it.quantity) || 1), 2) : '—';
+        if (!el) return;
+        // Class and title move with the text: changing a line's handling changes
+        // which of the three meanings this cell has, and a repaint that updated
+        // only the number would leave the previous meaning's styling behind.
+        const t = _b2bLineTotal(it);
+        el.className = t.cls;
+        el.title = t.tip;
+        el.textContent = t.text;
     });
     const submit = document.getElementById('b2bPrSubmit');
     if (submit) submit.disabled = _b2bModalItems.length === 0 || _b2bNotReady().length > 0;
@@ -14889,7 +14967,7 @@ function _b2bItemCards() {
             </div>` : '';
 
         return `
-        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
+        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
             <div class="b2b-prow">
                 <span class="b2b-pcell b2b-pc-sku" title="${escapeHtml(it.sku || '')}">
                     <span class="b2b-mono">${escapeHtml(_b2bLineNo(it))}</span>
@@ -14923,7 +15001,7 @@ function _b2bItemCards() {
                         oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`
                           : '<span class="b2b-f-off">—</span>'}</span>
                 <span class="b2b-pcell n b2b-pc-tot" data-k="Line total">
-                    <span class="b2b-f-calc" id="b2bLn-${it.id}">${buy ? _b2bMoney((Number(it.offer) || 0) * need, 2) : '—'}</span></span>
+                    ${_b2bLineTotalHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-acts">
                     <button class="b2b-notes-btn ${open ? 'on' : ''} ${blocked.length ? 'req' : ''}"
                         title="${blocked.length ? 'Not ready yet — ' + escapeHtml(blocked.join(', ')) : escapeHtml(_b2bNoteHint(it))}"
@@ -14937,6 +15015,7 @@ function _b2bItemCards() {
                     </button>
                 </span>
             </div>
+            ${open ? '' : _b2bNoteLine(it)}
             <div class="b2b-ready" style="${blocked.length ? '' : 'display:none;'}">${escapeHtml(blocked.join(' · '))}</div>
             ${drawer}
         </div>`;
@@ -15008,7 +15087,7 @@ function _b2bItemSheet() {
         }).join('');
 
         return `
-        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
+        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
             <div class="b2b-prow">
                 <span class="b2b-pcell b2b-pc-sku" title="${escapeHtml(it.sku || '')}">
                     <span class="b2b-mono">${escapeHtml(_b2bLineNo(it))}</span>
@@ -15049,7 +15128,7 @@ function _b2bItemSheet() {
                     <label class="b2b-ss-wipe" title="Certified data wipe · ${_b2bMoney(fee, 2)}/unit">
                         <input type="checkbox" ${it.wipe_required ? 'checked' : ''} onchange="b2bItemWipe('${it.id}',this.checked)"></label></span>
                 <span class="b2b-pcell n b2b-pc-tot" data-k="Total">
-                    <span class="b2b-f-calc" id="b2bLn-${it.id}">${buy ? _b2bMoney((Number(it.offer) || 0) * need, 2) : '—'}</span></span>
+                    ${_b2bLineTotalHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-acts">
                     <button class="b2b-notes-btn b2b-ss-more ${hasDetail ? 'has' : ''} ${blocked.length ? 'req' : ''}"
                         title="${blocked.length ? 'Not ready — ' + escapeHtml(blocked.join(', ')) : 'Specs, serials, notes & label'}"
@@ -15060,6 +15139,7 @@ function _b2bItemSheet() {
                     <button class="b2b-x" title="Remove line" onclick="b2bDeleteItem('${it.id}')">${_b2bIco(_B2B_ICO_X)}</button>
                 </span>
             </div>
+            ${_b2bNoteLine(it)}
             <div class="b2b-ready" style="${blocked.length ? '' : 'display:none;'}">${escapeHtml(blocked.join(' · '))}</div>
         </div>`;
     }).join('');
@@ -15224,6 +15304,7 @@ function _b2bStagePricing(deal) {
             ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Picked up</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
             ${_b2bTotalsBar(true)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
+            ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
@@ -15324,6 +15405,7 @@ function _b2bStageQuote(deal) {
             </div>
             ${_b2bTotalsBar(true)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
+            ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
             <details class="b2b-preview" open>
                 <summary>Quote preview — this is what the client sees</summary>

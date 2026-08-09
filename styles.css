@@ -11467,12 +11467,24 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 /* Sticky against .manage-content, which is the modal's scroll container --
    thirty rows in, you still need to know which column you are typing into. */
 .b2b-phead {
-    position: sticky; top: 0; z-index: 3;
+    /* A sticky offset is inset by the scroll container's padding; the content
+       it scrolls is not. .manage-content pads 20px, so top:0 pinned the header
+       20px down from the top of the scrollport and left a 20px band in which
+       the row above kept sliding over it -- which is a good part of what "the
+       header isn't sticking properly" looked like. Pulling it up by that same
+       padding pins it flush with the top edge, and rows pass behind it. */
+    position: sticky; top: -20px; z-index: 3;
     padding: 7px var(--b2b-prow-pad);
-    background: var(--b2b-surface); border-bottom: 1px solid var(--b2b-line);
+    /* Opaque and a shade deeper than both the rows it covers (white) and the
+       panel behind it -- it used to be var(--b2b-surface), the same colour as
+       the scroll container, with no shadow, so once it pinned it dissolved and
+       rows appeared to slide out of nowhere. The shadow is what says "this is
+       floating above the content" rather than "this is the first row". */
+    background: #eaeff5; border-bottom: 1px solid var(--b2b-line);
+    box-shadow: 0 4px 10px -7px rgba(16, 24, 34, .5);
     border-radius: 11px 11px 0 0;
     font-size: 9.5px; font-weight: 800; letter-spacing: .08em;
-    text-transform: uppercase; color: var(--b2b-faint);
+    text-transform: uppercase; color: var(--b2b-muted);
 }
 .b2b-phead .r { text-align: right; }
 
@@ -11493,9 +11505,55 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 /* Prefixed, not `.rec`: a bare global `.rec` exists (the all-time-records card)
    and was leaking its border, radius and overflow into every recycle row --
    invisible while these rows were cards themselves, obvious once they weren't. */
-.b2b-pline.b2b-scrap { box-shadow: inset 3px 0 0 #b8ddd6; }
+/* Same three colours the client-facing chips use (.b2b-doc-rec): teal is scrap,
+   blue is "no residual value to you, but we may resell it". No-residual had no
+   bar at all, so the two non-purchase outcomes -- which mean very different
+   things to both the client and to us -- were told apart by the presence or
+   absence of an unexplained green line. The legend under the sheet names them. */
+.b2b-pline.b2b-scrap { box-shadow: inset 3px 0 0 #7fc5bb; }
+.b2b-pline.b2b-nrv   { box-shadow: inset 3px 0 0 #8fb4de; }
 .b2b-pline.needs-reason { background: #fffdf7; box-shadow: inset 3px 0 0 #e0b970; }
 .b2b-pline.needs-reason:hover { background: #fffbf1; }
+
+/* Whatever was written about a line, on the line. One row tall and clipped
+   rather than wrapped: at thirty lines a note that wraps to three rows moves
+   every price below it, and the full text is on the title and in the ⋯ sheet.
+   Indented past the state bar so it reads as belonging to the row above. */
+.b2b-pnote-hint {
+    display: flex; gap: 14px; min-width: 0;
+    padding: 0 var(--b2b-prow-pad) 6px calc(var(--b2b-prow-pad) + 3px);
+    margin-top: -2px; font-size: 11px; line-height: 1.45;
+}
+.b2b-pnote-hint > span {
+    display: inline-flex; align-items: baseline; gap: 5px; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.b2b-pnote-hint b {
+    flex: 0 0 auto; font-size: 8.5px; font-weight: 800; letter-spacing: .07em;
+    text-transform: uppercase; padding: 1px 5px; border-radius: 999px;
+}
+/* Client notes are quoted back to the client, staff notes never leave the
+   building -- worth telling apart at a glance, not just by reading them. */
+.b2b-nh-c   { color: var(--b2b-muted); }
+.b2b-nh-c b { background: #eaf1fb; color: #3a6ea8; }
+.b2b-nh-s   { color: var(--b2b-faint); }
+.b2b-nh-s b { background: #f1f5f9; color: #64748b; }
+
+/* Reads as a footnote to the sheet, not a control: the bars are the primary
+   signal and this is only here so a first-time pricer can decode them. */
+.b2b-disp-key {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px;
+    margin: 8px 2px 0; font-size: 10.5px; color: var(--b2b-faint);
+}
+.b2b-disp-key b { font-weight: 800; letter-spacing: .07em; text-transform: uppercase; font-size: 9.5px; }
+.b2b-disp-key span { display: inline-flex; align-items: center; gap: 6px; }
+.b2b-disp-key i {
+    width: 3px; height: 13px; border-radius: 2px; background: currentColor; font-style: normal;
+}
+.b2b-disp-key .k-scrap { color: #7fc5bb; }
+.b2b-disp-key .k-nrv   { color: #8fb4de; }
+.b2b-disp-key .k-block { color: #e0b970; }
+.b2b-disp-key em { font-style: normal; color: var(--b2b-muted); }
 
 .b2b-pcell { display: flex; align-items: center; min-width: 0; }
 .b2b-pcell input, .b2b-pcell select {
@@ -11515,6 +11573,14 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 }
 .b2b-pcell input::placeholder { color: #c3ccd4; }
 .b2b-pcell.n input { text-align: right; font-variant-numeric: tabular-nums; }
+/* Chrome reserves ~13px inside every type=number for spin buttons nobody uses
+   here -- you type a quantity, you don't nudge it one at a time. In a 44px Qty
+   cell that was most of the usable width, and because the field is right
+   aligned it truncated the LEADING digit: 12 units read as a plausible 2.
+   Same treatment as .kpi-grid-input, for the same reason. */
+.b2b-pcell input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+.b2b-pcell input[type="number"]::-webkit-outer-spin-button,
+.b2b-pcell input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .b2b-pcell select { padding-left: 5px; }
 
 .b2b-pc-sku {
@@ -11666,7 +11732,7 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 }
 .b2b-f-n input { text-align: right; font-variant-numeric: tabular-nums; }
 /* Read-only cells stand in for an input, so they take the same box. */
-.b2b-f-calc, .b2b-f-off {
+.b2b-f-calc, .b2b-f-off, .b2b-f-resale {
     display: flex; align-items: center; justify-content: flex-end; flex: 0 0 auto;
     height: var(--b2b-h-md); padding: 0 10px; border-radius: var(--b2b-r-sm);
     font-size: 12.5px; font-variant-numeric: tabular-nums;
@@ -11676,6 +11742,14 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
     background: var(--b2b-surface); border: 1px solid var(--b2b-line-2);
 }
 .b2b-f-off { color: var(--b2b-faint); font-style: italic; border: 1px solid transparent; }
+/* A no-residual line's total is resale value to US, not money owed to the
+   client. Same blue as that row's bar and the client-facing chip, and
+   deliberately not the heavy near-black of .b2b-f-calc -- someone scanning the
+   Total column for what this pallet costs should be able to skip these. */
+.b2b-f-resale {
+    font-weight: 700; color: #3a6ea8;
+    background: #f4f8fd; border: 1px solid #dce8f6;
+}
 .b2b-tag-int {
     padding: 1px 6px; border-radius: 999px; background: #f1f5f9;
     color: var(--b2b-muted); font-size: 8.5px; letter-spacing: .04em;
@@ -11707,8 +11781,17 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
     /* Fifteen columns: the three required specs (CPU/RAM/Storage) sit inline
        between Model and Condition so a keyboard pricer tabs straight across them.
        Disposition is wide enough to spell out "No Residual Value". Wider than the
-       modal on a small laptop -- the body scrolls x (see .b2b-modal-full). */
-    --b2b-pcols: 64px 80px minmax(74px, 1fr) minmax(96px, 1.2fr) 94px 82px 94px 86px 44px 68px 68px 138px 42px 78px 76px;
+       modal on a small laptop -- the body scrolls x (see .b2b-modal-full).
+       The number columns are sized from their content and not by eye: a cell
+       spends 13px on padding and its hairline before the input, the input
+       another 9px, and a tabular digit at 12.5px is about 8.6px. So Qty at 58px
+       holds four digits and Value/Offer at 80px hold six -- $12,000 is an
+       ordinary line here, and the old 68px stopped at five.
+       Total is wider again at 100px because it carries the formatting too:
+       "$12,000.00" is ten characters. Handling at 150px is simply what
+       "No Residual Value" plus a select arrow measures -- at 138px it truncated
+       to "No Residual Valu". */
+    --b2b-pcols: 64px 100px minmax(74px, 1fr) minmax(96px, 1.2fr) 94px 82px 94px 94px 58px 80px 80px 150px 42px 100px 76px;
 }
 /* True grid: drop the inter-cell gap and draw a hairline down every column
    boundary. The row's own bottom border is the horizontal line, so together they
@@ -11756,6 +11839,19 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .b2b-ss-flag {
     flex: 0 0 auto; width: 6px; height: 6px; border-radius: 999px;
     background: #e0b970; box-shadow: 0 0 0 2px #fcefd4;
+}
+/* In the sheet the total is sized by its column, not by its content. The pill
+   is flex: 0 0 auto, so a line total wide enough to outgrow the column used to
+   keep growing and slide out over the actions cell, covering the ✕. Here it
+   shrinks to the track and clips with an ellipsis instead -- the full figure is
+   still in the totals bar, and a number that no longer fits is better shown as
+   truncated than shown on top of a delete button. */
+.b2b-items.b2b-ss .b2b-pc-tot > .b2b-f-calc,
+.b2b-items.b2b-ss .b2b-pc-tot > .b2b-f-resale,
+.b2b-items.b2b-ss .b2b-pc-tot > .b2b-f-off {
+    display: block; flex: 1 1 auto; min-width: 0;
+    padding: 0 6px; text-align: right; line-height: var(--b2b-h-md);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .b2b-pc-disp { min-width: 0; }
 .b2b-pc-wipe { justify-content: center; }
@@ -12280,23 +12376,41 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 /* --- responsive ----------------------------------------------------------- */
 /* Narrower than the columns can honestly hold: the header row goes away and each
    row becomes its own labelled block, with data-k on the cell supplying the label
-   the header used to. A grid squeezed past its content just truncates. */
+   the header used to. A grid squeezed past its content just truncates.
+   Everything here is scoped :not(.b2b-ss) -- see the note below. */
 @media (max-width: 1100px) {
-    .b2b-items { --b2b-pcols: 1fr 1fr 1fr; }
-    .b2b-phead { display: none; }
-    .b2b-prow { align-items: end; gap: 9px 8px; }
-    .b2b-pcell { flex-direction: column; align-items: stretch; }
-    .b2b-pcell[data-k]::before {
+    .b2b-items:not(.b2b-ss) { --b2b-pcols: 1fr 1fr 1fr; }
+    .b2b-items:not(.b2b-ss) .b2b-phead { display: none; }
+    .b2b-items:not(.b2b-ss) .b2b-prow { align-items: end; gap: 9px 8px; }
+    .b2b-items:not(.b2b-ss) .b2b-pcell { flex-direction: column; align-items: stretch; }
+    .b2b-items:not(.b2b-ss) .b2b-pcell[data-k]::before {
         content: attr(data-k);
         font-size: 9.5px; font-weight: 800; letter-spacing: .08em;
         text-transform: uppercase; color: var(--b2b-faint); margin-bottom: 4px;
     }
-    .b2b-pc-sku { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 7px; }
+    .b2b-items:not(.b2b-ss) .b2b-pc-sku { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 7px; }
     /* Total and actions share the closing row rather than each taking one --
        stacked, the total alone on a line reads as a stray field. */
-    .b2b-pc-tot  { grid-column: 1 / 2;  align-items: flex-start; }
-    .b2b-pc-acts { grid-column: 2 / -1; flex-direction: row; align-items: flex-end; flex-wrap: wrap; }
+    .b2b-items:not(.b2b-ss) .b2b-pc-tot  { grid-column: 1 / 2;  align-items: flex-start; }
+    .b2b-items:not(.b2b-ss) .b2b-pc-acts { grid-column: 2 / -1; flex-direction: row; align-items: flex-end; flex-wrap: wrap; }
     .b2b-pnote, .b2b-handling { grid-template-columns: 1fr; }
+}
+
+/* The spreadsheet does NOT stack at narrow widths, and the rules above are
+   scoped away from it for that reason.
+   They were written for the card grid, before the sheet existed, and applied to
+   it by accident. The result was the worst of both: .b2b-items.b2b-ss (0,2,0)
+   outranks .b2b-items (0,1,0), so the fifteen fixed columns survived while the
+   header -- matched by the unqualified .b2b-phead -- did not. A 1280px laptop at
+   125% Windows scaling is 1024 CSS px, which is where most of this was reported
+   from: fifteen unlabelled columns and no header.
+   The sheet already has the right answer for narrow widths -- .b2b-modal-full's
+   manage-content scrolls x, so the columns keep their honest sizes and you pan
+   across them with the header still pinned above. Stacking fifteen columns into
+   labelled blocks would make one line thirty rows tall, which is precisely what
+   the spreadsheet layout exists to avoid. */
+@media (max-width: 1100px) {
+    .b2b-items.b2b-ss .b2b-phead { display: grid; }
 }
 @media (max-width: 760px) {
     .b2b-q-card { flex-direction: column; align-items: stretch; gap: 12px; }
