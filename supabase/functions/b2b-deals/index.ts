@@ -17,14 +17,21 @@ const corsHeaders = {
 //   pricing           store   itemize and price: type, specs, one serial per
 //                             unit, a disposition, and whether it needs a
 //                             certified data wipe
-//   quote             corp    two phases in one stage, told apart by
-//                             quote_send_count: at 0 it is awaiting approval
-//                             (the approver was emailed when it arrived, and
-//                             can send it back to pricing with a note); once
-//                             emailed it is out with the client. Goes out from
-//                             the quoter's own mailbox as a mailto draft so
-//                             replies reach them; stays editable throughout,
-//                             and only a CEO/TOM/DM may accept or send back
+//   review            corp    priced and waiting on a CEO/TOM/DM: they either
+//                             send it (which approves it) or send it back to
+//                             pricing with a note. The approver is emailed the
+//                             moment it lands here
+//   quote             corp    emailed to the client, waiting on their answer.
+//                             Goes out from the quoter's own mailbox as a mailto
+//                             draft so replies reach them. Both stages stay
+//                             editable, and only a CEO/TOM/DM may send, accept
+//                             or send back
+//
+//                             These were one stage until 0018, told apart by
+//                             quote_send_count. One counter standing in for two
+//                             states was read in five places in the UI, made the
+//                             Overview contradict its own table, and meant a
+//                             send-back had to remember to reset it
 //   listing_location  corp    ONLY when pricing happened at CORP
 //   listing           store   two scans per unit -- our label says which unit,
 //                             the Shopify barcode records what it became; a
@@ -67,10 +74,15 @@ const TERMINAL = ["completed", "declined"];
 const ARCHIVE_DEFAULT = 40;
 const ARCHIVE_MAX = 500;
 
+// Must stay in step with the b2b_stage_rank() SQL function, which three CHECK
+// constraints use to decide what a row at a given stage is required to have.
 const STAGE_RANK: Record<string, number> = {
   declined: 0, pickup: 1, pricing_location: 2, pricing: 3,
-  quote: 4, listing_location: 5, listing: 6, completed: 7,
+  review: 4, quote: 5, listing_location: 6, listing: 7, completed: 8,
 };
+// The two stages where line items stay editable alongside pricing: a quote is
+// negotiable right up until someone accepts it.
+const OPEN_STAGES = ["pricing", "review", "quote"];
 
 // The column list the board needs. Selecting * from a view with rollups drags
 // along everything; naming them keeps the payload predictable.
@@ -487,8 +499,8 @@ Deno.serve(async (req: Request) => {
       }
 
       // ============================================================== items
-      // Editable through `pricing` AND `quote` — the quote stays open while the
-      // client negotiates, right up until someone accepts it.
+      // Editable through pricing, review AND quote — see OPEN_STAGES. A quote
+      // stays open while the client negotiates, right up until someone accepts.
 
       if (action === "add_item" || action === "update_item" || action === "delete_item") {
         const itemId = String(body.id || "");
@@ -501,7 +513,7 @@ Deno.serve(async (req: Request) => {
           deal = await getDeal(supabase, it.deal_id);
         }
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
-        if (deal.stage !== "pricing" && deal.stage !== "quote") {
+        if (!OPEN_STAGES.includes(deal.stage)) {
           return jsonResponse({ success: false, error: "Line items can only be changed while pricing or quoting." }, 409);
         }
 
@@ -603,7 +615,10 @@ Deno.serve(async (req: Request) => {
         }
 
         const { error } = await supabase.from("b2b_deals").update({
-          stage: "quote",
+          // `review`, not `quote`: pricing being finished means it is waiting on
+          // an approver, and nothing has gone to the client yet. Sending is what
+          // makes it a quote.
+          stage: "review",
           priced_by: str(body.priced_by, 120, "Priced by"),
           // Clearing it here means a deal sent back for changes and re-submitted
           // doesn't keep showing the old note as if it were still outstanding.
@@ -619,13 +634,28 @@ Deno.serve(async (req: Request) => {
       }
 
       // The quote goes out from the quoter's own mailbox via a mailto draft, so
-      // the client's reply reaches the person who priced it. This just records
-      // that it went out, for the stage clock and the Overview.
+      // the client's reply reaches the person who priced it. This records that
+      // it went out, for the stage clock and the Overview.
+      //
+      // Sending from `review` IS the approval -- there is no separate approve
+      // button, because approving a quote and not sending it would leave the
+      // deal in exactly the state it was already in. So the same role gate as
+      // accepting applies on that edge. Re-sending an already-sent quote is not
+      // an approval and stays open to whoever has the deal in front of them.
       if (action === "send_quote") {
         const deal = await getDeal(supabase, String(body.id || ""));
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
-        if (deal.stage !== "quote") return jsonResponse({ success: false, error: "Only a deal in the quote stage can be sent." }, 409);
+        if (deal.stage !== "review" && deal.stage !== "quote") {
+          return jsonResponse({ success: false, error: "Only a deal awaiting approval or already quoted can be sent." }, 409);
+        }
+        if (deal.stage === "review") {
+          const role = String(body.role || "").toLowerCase().trim();
+          if (!ACCEPT_ROLES.includes(role)) {
+            return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can send a quote to the client." }, 403);
+          }
+        }
         const { error } = await supabase.from("b2b_deals").update({
+          stage: "quote",
           quote_sent_at: new Date().toISOString(),
           quote_send_count: Math.min(1000, (deal.quote_send_count || 0) + 1),
         }).eq("id", deal.id);
@@ -638,7 +668,12 @@ Deno.serve(async (req: Request) => {
       if (action === "accept_quote") {
         const deal = await getDeal(supabase, String(body.id || ""));
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
-        if (deal.stage !== "quote") return jsonResponse({ success: false, error: "Only a deal in the quote stage can be accepted." }, 409);
+        // `quote` specifically, not `review`: a client cannot accept a quote
+        // they were never sent. The UI has always hidden Accept on an unsent
+        // quote; now the server agrees with it rather than trusting it.
+        if (deal.stage !== "quote") {
+          return jsonResponse({ success: false, error: "This quote hasn't been sent to the client yet." }, 409);
+        }
         const role = String(body.role || "").toLowerCase().trim();
         if (!ACCEPT_ROLES.includes(role)) {
           return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can accept a quote." }, 403);
@@ -843,8 +878,11 @@ Deno.serve(async (req: Request) => {
       if (action === "request_changes") {
         const deal = await getDeal(supabase, String(body.id || ""));
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
-        if (deal.stage !== "quote") {
-          return jsonResponse({ success: false, error: "Only a deal in the quote stage can be sent back." }, 409);
+        // From review (the normal case) or from quote -- a client coming back
+        // with "can you re-look at the laptops" needs the same road home, and
+        // that was possible before the stage split too.
+        if (deal.stage !== "review" && deal.stage !== "quote") {
+          return jsonResponse({ success: false, error: "Only a quote awaiting approval or out with the client can be sent back." }, 409);
         }
         const role = String(body.role || "").toLowerCase().trim();
         if (!ACCEPT_ROLES.includes(role)) {
@@ -855,14 +893,12 @@ Deno.serve(async (req: Request) => {
           // Cleared because it is no longer true -- someone has to price it
           // again, and the queue reads this to decide the stage is unowned.
           priced_by: null,
-          // Back to zero for the same reason. Until the quote stage is split in
-          // two, "has this been sent yet" is how the app tells awaiting-approval
-          // apart from out-with-the-client, in five separate places. Leaving the
-          // count set meant a re-submitted quote came back reading "Out For
-          // Quote" -- as though the client already had the corrected numbers.
-          // quote_sent_at is deliberately kept: when it last went out is still
-          // true, and is the only record of it once this resets.
-          quote_send_count: 0,
+          // quote_send_count is deliberately NOT reset any more. It had to be,
+          // while it was doubling as the awaiting-approval flag -- otherwise a
+          // re-submitted quote came back claiming the client already had the
+          // corrected numbers. The stage carries that now, so the counter is
+          // back to being plain history: how many times this deal has actually
+          // been emailed to the client, which zeroing it would destroy.
           sendback_note: str(body.note, 2000, "A note saying what needs changing", true),
           sendback_by: str(body.sent_back_by, 120, "Sent back by"),
           sendback_at: new Date().toISOString(),
@@ -879,7 +915,9 @@ Deno.serve(async (req: Request) => {
       if (action === "decline") {
         const deal = await getDeal(supabase, String(body.id || ""));
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
-        if (STAGE_RANK[deal.stage] >= 6) {
+        // 7 is `listing` under the post-0018 numbering -- the same boundary this
+        // has always drawn, moved up one because `review` was inserted below it.
+        if (STAGE_RANK[deal.stage] >= 7) {
           return jsonResponse({ success: false, error: "This deal was already accepted — the goods are ours, so it can't be declined." }, 409);
         }
         if (deal.stage === "declined") {
@@ -910,7 +948,11 @@ Deno.serve(async (req: Request) => {
         // constraint.
         const stage = (deal.accepted_at && deal.listing_store) ? "listing"
           : deal.accepted_at ? "listing_location"
-          : deal.priced_by ? "quote"
+          // Priced, so it is at least at review. Whether it got as far as the
+          // client is the one thing the row itself still records -- this is the
+          // last remaining read of quote_send_count as a state, and it is the
+          // right one: reopening must put the deal back where it died.
+          : deal.priced_by ? ((deal.quote_send_count || 0) > 0 ? "quote" : "review")
           : deal.pricing_store ? "pricing"
           : deal.signed_at ? "pricing_location"
           : "pickup";

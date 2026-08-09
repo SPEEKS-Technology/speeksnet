@@ -12723,7 +12723,8 @@ const B2B_STAGES = [
     { key: 'pickup',           label: 'Pickup Sign-Off',  tone: 'warn',   svg: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>' },
     { key: 'pricing_location', label: 'Pricing Location', tone: 'info',   svg: '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>' },
     { key: 'pricing',          label: 'Pricing',          tone: 'info',   svg: '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>' },
-    { key: 'quote',            label: 'Quote',            tone: 'violet', svg: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>' },
+    { key: 'review',           label: 'Awaiting Approval', tone: 'warn',  svg: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>' },
+    { key: 'quote',            label: 'Out For Quote',    tone: 'violet', svg: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>' },
     { key: 'listing_location', label: 'Listing Location', tone: 'warn',   svg: '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>' },
     { key: 'listing',          label: 'Listing',          tone: 'teal',   svg: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>' },
     { key: 'completed',        label: 'Completed',        tone: 'ok',     svg: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>' },
@@ -12743,6 +12744,7 @@ const B2B_ACTIONS = {
     pickup:           { cta: 'Sign Off Pickup', why: 'Pickup needs signing off',        kind: 'pickup'  },
     pricing_location: { cta: 'Assign Pricing',  why: 'Needs somewhere to be priced',    kind: 'assign'  },
     pricing:          { cta: 'Price Items',     why: 'Itemize and price the pickup',    kind: 'pricing' },
+    review:           { cta: 'Review & Send',   why: 'Priced — needs approving and sending', kind: 'quote' },
     quote:            { cta: 'Open Quote',      why: 'Out with the client',             kind: 'quote'   },
     listing_location: { cta: 'Assign Listing',  why: 'Accepted — pick a listing store', kind: 'listloc' },
     listing:          { cta: 'Open Listing',    why: 'List the items for resale',       kind: 'listing' },
@@ -12901,11 +12903,9 @@ function _b2bActionFor(deal) {
         return _b2bIsDM() ? B2B_ACTIONS.listing : null;
     }
     if (!_b2bIsCorp()) return null;
-    // An unsent quote is waiting on us, not the client. Same stage, different
-    // job -- and the queue card should say which one it is.
-    if (st === 'quote' && _b2bAwaitingApproval(deal)) {
-        return { cta: 'Review & Send', why: 'Priced — needs approving and sending', kind: 'quote' };
-    }
+    // `review` and `quote` used to be one stage with an ad-hoc action literal
+    // spliced in here for the unsent half. They are separate stages now, so both
+    // are ordinary B2B_ACTIONS lookups.
     return B2B_ACTIONS[st] || null;
 }
 
@@ -12921,10 +12921,11 @@ function _b2bClickKind(deal) {
 // Anything needing input (a store, a name, prices) is deliberately absent.
 function _b2bQuickAction(d) {
     if (_b2bIsEmployee()) return null;   // employees never escalate from a card
-    // Only once it has actually gone out. "Mark Accepted" on a quote awaiting
-    // approval would be recording a decision from a client who has never seen
-    // it -- and it would skip the send, leaving no quote on record at all.
-    if (d.stage === 'quote' && !_b2bAwaitingApproval(d) && _b2bCanAccept()) {
+    // `quote` means sent. "Mark Accepted" on a deal still at `review` would be
+    // recording a decision from a client who has never seen it -- and it would
+    // skip the send, leaving no quote on record at all. The server refuses it
+    // too, now that the two states are separate stages.
+    if (d.stage === 'quote' && _b2bCanAccept()) {
         return { label: 'Mark Accepted', call: `b2bQuickAccept('${d.id}',this)` };
     }
     if (d.stage === 'listing' && d.total_units > 0 && _b2bOutstanding(d) === 0) {
@@ -12989,17 +12990,13 @@ function _b2bDaysIn(deal) {
 }
 function _b2bAgeTone(days) { return days >= 7 ? 'crit' : days >= 4 ? 'warn' : 'ok'; }
 
-// Pass the deal where you have one: the quote stage covers two very different
-// situations -- waiting on us, or waiting on the client -- and the send count is
-// what tells them apart.
-function _b2bStageChip(stage, deal) {
+// The `deal` argument used to matter here: the quote stage covered two
+// situations and the send count was what told them apart. They are separate
+// stages now, each with its own label and tone in B2B_STAGES, so the chip is a
+// plain lookup. The parameter stays because a dozen call sites pass it and it
+// costs nothing to keep the signature.
+function _b2bStageChip(stage, _deal) {
     const s = B2B_STAGE[stage] || { label: stage, tone: 'neu' };
-    if (deal && _b2bAwaitingApproval(deal)) {
-        return '<span class="b2b-chip b2b-chip-warn">Awaiting Approval</span>';
-    }
-    if (stage === 'quote' && deal) {
-        return '<span class="b2b-chip b2b-chip-violet">Out For Quote</span>';
-    }
     return `<span class="b2b-chip b2b-chip-${s.tone}">${escapeHtml(s.label)}</span>`;
 }
 function _b2bStoreTag(code) {
@@ -14048,21 +14045,22 @@ function _b2bRenderOverview(scoped) {
             <td class="r"><span class="b2b-age b2b-age-${_b2bAgeTone(_b2bDaysIn(d))}">${_b2bDaysIn(d)}d</span></td>
         </tr>`).join('');
 
-    // Quotes, oldest first. Two very different states share this one stage
-    // until it is split in two: still to be approved internally, and genuinely
-    // out with the client. The tile used to add both together and call the
-    // total "awaiting a decision", which claimed the client was sitting on
-    // money nobody had sent them -- while the table directly below said "not
-    // sent" about those same deals.
-    const quotes = live.filter(d => d.stage === 'quote').sort((a, b) => _b2bDaysIn(b) - _b2bDaysIn(a));
-    const toApprove  = quotes.filter(_b2bAwaitingApproval);
-    const withClient = quotes.filter(d => !_b2bAwaitingApproval(d));
+    // Two stages, oldest first. The tile used to add both together and call the
+    // total "awaiting a decision", which claimed the client was sitting on money
+    // nobody had sent them -- while the table below said "not sent" about those
+    // same deals. They are separate stages now, so the split is just a filter.
+    const byAge = (a, b) => _b2bDaysIn(b) - _b2bDaysIn(a);
+    const toApprove  = live.filter(d => d.stage === 'review').sort(byAge);
+    const withClient = live.filter(d => d.stage === 'quote').sort(byAge);
+    const quotes = [...toApprove, ...withClient];
     const quoteRows = quotes.map(d => `
         <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
             <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
             <td><b>${escapeHtml(d.client?.company || '')}</b></td>
             <td>${escapeHtml(d.client?.contact_email || '—')}</td>
-            <td class="c">${d.quote_send_count ? `sent ${d.quote_send_count}×` : '<span class="b2b-age b2b-age-warn">not sent</span>'}</td>
+            <td class="c">${d.stage === 'review'
+                ? '<span class="b2b-age b2b-age-warn">to approve</span>'
+                : `sent ${d.quote_send_count || 1}×`}</td>
             <td class="r b">${_b2bMoney(_b2bNetOffer(d))}</td>
         </tr>`).join('');
 
@@ -14217,7 +14215,7 @@ function _b2bShowDeal(cfg) {
     // SKU label print becomes available once the pickup is dropped at its
     // assigned pricing location — i.e. from the pricing stage onward.
     const pb = document.getElementById('b2bDealPrintBtn');
-    if (pb) pb.style.display = ['pricing', 'quote', 'listing_location', 'listing', 'completed'].includes(cfg.stage) ? '' : 'none';
+    if (pb) pb.style.display = ['pricing', 'review', 'quote', 'listing_location', 'listing', 'completed'].includes(cfg.stage) ? '' : 'none';
     const modal = document.getElementById('b2bDealModal');
     modal.classList.toggle('b2b-modal-wide', !!cfg.wide);
     // Pricing runs near-full-screen so a long pickup reads as one dense sheet.
@@ -15525,11 +15523,10 @@ async function b2bSubmitPricing(id, btn) {
 // The quote stays fully editable while the client negotiates. Accepting is the
 // one-way door: offers freeze into cost and the goods become our inventory.
 
-// A quote that has never been emailed is waiting on the approver, not on the
-// client. Same stage either way -- the send count is the only thing that tells
-// them apart, and it is already on every deal.
+// Waiting on the approver rather than on the client. This was derived from
+// quote_send_count in five places; it is a stage now, and this reads it in one.
 function _b2bAwaitingApproval(deal) {
-    return deal.stage === 'quote' && !Number(deal.quote_send_count);
+    return deal.stage === 'review';
 }
 
 // Deals whose send step has already been offered this session, so re-opening one
@@ -15579,7 +15576,9 @@ function _b2bStageQuote(deal) {
         </div>` : '';
 
     _b2bShowDeal({
-        stage: 'quote',
+        // The deal's own stage, so the header icon matches and the print
+        // whitelist sees review as well as quote.
+        stage: deal.stage,
         eyebrow: deal.ref,
         title: unsent ? 'Quote — Awaiting Approval' : 'Quote',
         sub: unsent
@@ -15633,7 +15632,9 @@ function b2bSendBack(id) {
     const deal = _b2bModalDeal;
     if (!deal || !_b2bCanAccept()) return;
     _b2bShowDeal({
-        stage: 'quote',
+        // The deal's own stage, so the header icon matches and the print
+        // whitelist sees review as well as quote.
+        stage: deal.stage,
         eyebrow: deal.ref,
         title: 'Send Back For Changes',
         sub: 'It returns to pricing with your note attached.',
@@ -16020,7 +16021,9 @@ function _b2bShowSendStep(deal, to, copied, auto) {
     ];
 
     _b2bShowDeal({
-        stage: 'quote',
+        // The deal's own stage, so the header icon matches and the print
+        // whitelist sees review as well as quote.
+        stage: deal.stage,
         eyebrow: deal.ref,
         title: auto ? 'This Quote Is Ready To Send' : 'Send This Quote',
         sub: auto ? 'It has been priced and approved for sending. Review it first if you would rather.'
