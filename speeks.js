@@ -12813,7 +12813,13 @@ const B2B_DISP = Object.fromEntries(B2B_DISPOSITIONS.map(d => [d.key, d]));
 // How the pricing spreadsheet's inline disposition picker labels each option --
 // spelled out in full ("No Residual Value") rather than the terse chip `short`,
 // which stays in use on the card grid where space is tighter.
-const _B2B_DISP_SEL = { purchase: 'Purchase', no_residual: 'No Residual Value', recycle: 'Recycle' };
+// "No Residual" rather than the full "No Residual Value": with Ship /unit and
+// Margin added, the full string was the single widest thing on the sheet and was
+// costing 22px that Qty needed to show a fourth digit. Nothing is lost -- there
+// is only one thing it can mean here, the legend under the sheet spells it out
+// in full, and the client-facing chip and the printed label both still say
+// "No Residual Value".
+const _B2B_DISP_SEL = { purchase: 'Purchase', no_residual: 'No Residual', recycle: 'Recycle' };
 
 // The marker that stands in for a serial when a device has none visible. Counts
 // as an entry, so a line still satisfies "one per unit".
@@ -14473,18 +14479,24 @@ function _b2bLineMargin(it) {
     const q = Number(it.quantity) || 1;
     const value = _b2bIsScrap(it) ? 0 : (Number(it.value) || 0) * q;
     const offer = _b2bIsBuy(it) ? (Number(it.offer) || 0) * q : 0;
+    // Same definition as the deal-level figure in _b2bItemTotals: what the line
+    // costs us, which is the offer plus the freight. If these two used different
+    // definitions the sheet would disagree with its own totals bar.
+    const ship = (Number(it.shipping_cost) || 0) * q;
+    const outlay = offer + ship;
     if (value <= 0) {
         return { cls: 'b2b-f-off', text: '—',
                  tip: _b2bIsScrap(it) ? 'Recycled — no resale value to measure against'
                                       : 'Set a unit value to see the margin' };
     }
-    const pct = Math.round(((value - offer) / value) * 100);
+    const pct = Math.round(((value - outlay) / value) * 100);
+    const shipNote = ship ? ` (incl. ${_b2bMoney(ship, 2)} shipping)` : '';
     return {
         cls: pct < 0 ? 'b2b-f-mgn bad' : 'b2b-f-mgn',
         text: `${pct}%`,
         tip: pct < 0
-            ? `We would pay ${_b2bMoney(offer, 2)} for something worth ${_b2bMoney(value, 2)} to us`
-            : `${_b2bMoney(value - offer, 2)} of ${_b2bMoney(value, 2)} resale value`,
+            ? `This line costs us ${_b2bMoney(outlay, 2)}${shipNote} and is worth ${_b2bMoney(value, 2)}`
+            : `${_b2bMoney(value - outlay, 2)} of ${_b2bMoney(value, 2)} resale value${shipNote}`,
     };
 }
 function _b2bLineMarginHtml(it) {
@@ -14560,7 +14572,7 @@ function _b2bWipeTotal(it) {
 }
 
 function _b2bItemTotals() {
-    let value = 0, offer = 0, units = 0, wipe = 0;
+    let value = 0, offer = 0, units = 0, wipe = 0, ship = 0;
     _b2bModalItems.forEach(it => {
         const q = Number(it.quantity) || 1;
         units += q;
@@ -14569,10 +14581,19 @@ function _b2bItemTotals() {
         if (!_b2bIsScrap(it)) value += (Number(it.value) || 0) * q;
         offer += (Number(it.offer) || 0) * q;
         wipe  += _b2bWipeTotal(it);
+        // No disposition test: a pallet of scrap costs the same to move.
+        ship  += (Number(it.shipping_cost) || 0) * q;
     });
     // Clamped at the deal, not the line: a wipe on a $0 item still discounts
     // against the rest, and we never end up charging the client money.
-    return { value, offer, wipe, net: Math.max(0, offer - wipe), units, lines: _b2bModalItems.length };
+    //
+    // `net` is what the CLIENT gets and shipping is deliberately absent from it:
+    // what it costs us to move the goods is not their business and must never
+    // move their number. `outlay` is what the deal costs US, which is the figure
+    // margin is measured against.
+    const net = Math.max(0, offer - wipe);
+    return { value, offer, wipe, ship, net, outlay: net + ship,
+             units, lines: _b2bModalItems.length };
 }
 
 // Repaint just the numbers -- retyping the whole grid would eat focus.
@@ -14582,15 +14603,24 @@ function _b2bPaintTotals() {
     set('b2bTotValue', _b2bMoney(t.value, 2));
     set('b2bTotOffer', _b2bMoney(t.net, 2));
     set('b2bTotUnits', `${t.units} unit${t.units === 1 ? '' : 's'} · ${t.lines} line${t.lines === 1 ? '' : 's'}`);
-    // Margin is against what we actually pay, so the wipe discount improves it
-    // rather than being invisible.
-    const margin = t.value - t.net;
+    // Margin is against what the deal actually costs us: the wipe discount
+    // improves it, shipping erodes it. Measuring against the offer alone was
+    // fine until shipping existed, and would now overstate every deal we have
+    // to pay freight on -- which is the number Paul asked to see.
+    const margin = t.value - t.outlay;
     const pct = t.value > 0 ? Math.round((margin / t.value) * 100) : 0;
     set('b2bTotMargin', `${_b2bMoney(margin, 2)} (${pct}%)`);
     const wipeEl = document.getElementById('b2bTotWipe');
     if (wipeEl) {
         wipeEl.textContent = t.wipe ? `−${_b2bMoney(t.wipe, 2)}` : '—';
         wipeEl.closest('.b2b-tot')?.classList.toggle('muted', !t.wipe);
+    }
+    const shipEl = document.getElementById('b2bTotShip');
+    if (shipEl) {
+        // "+" because it adds to what the deal costs us, where the wipe line
+        // above reads "−". The two sit next to each other and pull opposite ways.
+        shipEl.textContent = t.ship ? `+${_b2bMoney(t.ship, 2)}` : '—';
+        shipEl.closest('.b2b-tot')?.classList.toggle('muted', !t.ship);
     }
     _b2bModalItems.forEach(it => {
         const el = document.getElementById(`b2bLn-${it.id}`);
@@ -14624,7 +14654,7 @@ function b2bItemInput(id, field, value) {
     const it = _b2bLocalItem(id);
     if (!it) return;
     it[field] = (field === 'quantity') ? Math.max(1, parseInt(value, 10) || 1)
-              : (field === 'value' || field === 'offer') ? (parseFloat(value) || 0)
+              : (field === 'value' || field === 'offer' || field === 'shipping_cost') ? (parseFloat(value) || 0)
               : value;
     _b2bPaintTotals();
 }
@@ -14639,7 +14669,7 @@ function b2bItemSave(id) {
         action: 'update_item', id,
         make: it.make, model: it.model, condition: it.condition,
         staff_notes: it.staff_notes, client_notes: it.client_notes,
-        quantity: it.quantity, value: it.value, offer: it.offer,
+        quantity: it.quantity, value: it.value, offer: it.offer, shipping_cost: it.shipping_cost || 0,
         item_type: it.item_type || 'other',
         cpu: it.cpu, ram: it.ram, storage: it.storage, gpu: it.gpu, battery_health: it.battery_health,
         serials: it.serials,
@@ -14846,7 +14876,7 @@ async function b2bAddItem(dealId, btn) {
         _b2bModalItems.push({
             id: out.id, line_no: out.line_no, sku: out.sku, make: '', model: '', condition: '',
             staff_notes: '', client_notes: '', quantity: 1, value: 0, offer: 0,
-            item_type: 'other', cpu: null, ram: null, storage: null, gpu: null, battery_health: null,
+            item_type: 'other', cpu: null, ram: null, storage: null, gpu: null, battery_health: null, shipping_cost: 0,
             serials: '', disposition: 'purchase',
             wipe_required: false, wipe_fee: 0, wiped_qty: 0,
             listed_qty: 0, recycled_qty: 0, listings: [],
@@ -14876,7 +14906,7 @@ async function b2bCopyItem(id, btn) {
         const copy = {
             make: src.make, model: src.model, condition: src.condition,
             staff_notes: src.staff_notes, client_notes: src.client_notes,
-            quantity: src.quantity, value: src.value, offer: src.offer,
+            quantity: src.quantity, value: src.value, offer: src.offer, shipping_cost: src.shipping_cost || 0,
             item_type: src.item_type || 'other',
             cpu: src.cpu, ram: src.ram, storage: src.storage,
             gpu: src.gpu, battery_health: src.battery_health,
@@ -15171,7 +15201,9 @@ function _b2bItemSheet() {
             <span>Line</span><span>Type</span><span>Brand</span><span>Model</span>
             ${reqSpecs.map(f => `<span>${escapeHtml(f.label)}</span>`).join('')}
             <span>Condition</span>
-            <span class="r">Qty</span><span class="r">Value</span><span class="r">Offer</span><span class="r">Margin</span>
+            <span class="r">Qty</span><span class="r">Value</span><span class="r">Offer</span>
+            <span class="r" title="What it costs us to move one of these. Never shown to the client.">Ship /unit</span>
+            <span class="r">Margin</span>
             <span>Handling</span><span class="c">Wipe</span><span class="r">Total</span><span></span>
         </div>`;
 
@@ -15244,6 +15276,13 @@ function _b2bItemSheet() {
                     ${buy ? `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
                         oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`
                           : '<span class="b2b-f-off">—</span>'}</span>
+                <!-- Priced even on a recycle line: scrap costs the same to move,
+                     and Paul is reading this to work out what the pallet is
+                     really worth to us. -->
+                <span class="b2b-pcell n" data-k="Ship /unit">
+                    <input type="number" min="0" step="0.01" value="${Number(it.shipping_cost) || 0}"
+                        title="Our freight cost per unit — never shown to the client"
+                        oninput="b2bItemInput('${it.id}','shipping_cost',this.value)" onchange="b2bItemSave('${it.id}')"></span>
                 <span class="b2b-pcell n b2b-pc-mgn" data-k="Margin">
                     ${_b2bLineMarginHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-disp" data-k="Handling">
@@ -15398,6 +15437,9 @@ function _b2bTotalsBar(showMargin) {
         <div class="b2b-tot"><span class="b2b-tot-k">Resale value</span><span class="b2b-tot-v" id="b2bTotValue">—</span></div>
         <div class="b2b-tot muted"><span class="b2b-tot-k">Data wipes</span><span class="b2b-tot-v" id="b2bTotWipe">—</span></div>
         <div class="b2b-tot"><span class="b2b-tot-k">We pay</span><span class="b2b-tot-v accent" id="b2bTotOffer">—</span></div>
+        <!-- Sits after "We pay" deliberately: it is a cost of ours that lands
+             on top of the offer, not a deduction from it like the wipes. -->
+        <div class="b2b-tot muted"><span class="b2b-tot-k">Shipping</span><span class="b2b-tot-v" id="b2bTotShip">—</span></div>
         ${showMargin ? '<div class="b2b-tot"><span class="b2b-tot-k">Gross margin</span><span class="b2b-tot-v" id="b2bTotMargin">—</span></div>' : ''}
     </div>`;
 }
@@ -15494,6 +15536,30 @@ function _b2bAwaitingApproval(deal) {
 // to re-read it doesn't trap you in the same dialog every time.
 const _b2bSendPrompted = new Set();
 
+// Where the goods physically are, and where they are going.
+//
+// Paul, reviewing a quote: "Need to show what location the product is at ... I
+// need to know where it's at and where it's going to go." Both facts were
+// already in _b2bSummary, but that is a grid of eight small cells you scan past;
+// this is a question asked once per deal and it should answer itself.
+//
+// The interesting case is CORP: pricing there means the listing store is chosen
+// separately after the client accepts, so there genuinely is no answer to the
+// second half yet, and saying so is better than showing "Unassigned".
+function _b2bWhereLine(deal) {
+    if (!deal.pricing_store) return '';
+    const at = deal.pricing_store;
+    const to = deal.listing_store || (at === 'CORP' ? null : at);
+    const going = to
+        ? (to === at ? 'lists where it already is' : `lists at ${_b2bStoreTag(to)}`)
+        : 'listing store is chosen once the client accepts';
+    return `
+        <div class="b2b-note b2b-where">
+            <span class="b2b-note-k">Where it is</span>
+            ${_b2bStoreTag(at)} <span class="b2b-where-go">— ${going}</span>
+        </div>`;
+}
+
 function _b2bStageQuote(deal) {
     // Same dense spreadsheet as pricing for editing the lines; the client-facing
     // quote preview below it is what they review before emailing.
@@ -15522,6 +15588,7 @@ function _b2bStageQuote(deal) {
         full: true,
         body: `
             ${_b2bSummary(deal)}
+            ${_b2bWhereLine(deal)}
             ${banner}
             <div class="b2b-sendbar${unsent ? ' urgent' : ''}">
                 <span class="b2b-sendbar-s">${escapeHtml(sent)}</span>

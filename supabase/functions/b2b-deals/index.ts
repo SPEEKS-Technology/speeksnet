@@ -85,14 +85,24 @@ const DEAL_COLS = [
   "company", "acronym", "contact", "contact_email", "contact_phone",
   "line_count", "total_units", "listed_units", "recycled_units", "outstanding_units",
   "wiped_units", "total_value", "total_offer", "total_cost", "total_wipe_fee", "net_offer",
+  "total_shipping",
 ].join(",");
+
+// Who to ring at the client. Corp business: a store prices and lists the goods,
+// it never contacts the client, and every screen that shows these is already
+// gated on _b2bIsCorp(). Hiding them in the UI while still shipping them to the
+// browser only hides them from the person, not from the page -- so a request
+// scoped to one store gets the board without them.
+const CONTACT_COLS = ["contact", "contact_email", "contact_phone"];
+const SCOPED_DEAL_COLS = DEAL_COLS.split(",")
+  .filter((c) => !CONTACT_COLS.includes(c)).join(",");
 
 const ITEM_COLS = [
   "id", "deal_id", "line_no", "sku", "make", "model", "condition",
   "staff_notes", "client_notes", "quantity", "value", "offer", "cost",
   "disposition", "listed_qty", "recycled_qty", "created_at",
   "item_type", "cpu", "ram", "storage", "gpu", "battery_health", "serials",
-  "wipe_required", "wipe_fee", "wiped_qty",
+  "wipe_required", "wipe_fee", "wiped_qty", "shipping_cost",
 ].join(",");
 
 // `computer` folds the old laptop/desktop split into one type; the legacy two
@@ -530,6 +540,10 @@ Deno.serve(async (req: Request) => {
           // value to us either. Mirrors the two disposition CHECKs exactly.
           value: disposition === "recycle" ? 0 : money(body.value, "Unit value"),
           offer: disposition === "purchase" ? money(body.offer, "Unit offer") : 0,
+          // Ours, per unit, and NOT conditional on disposition: a pallet of scrap
+          // still costs money to move. It never reaches the client -- it reduces
+          // what the deal is worth to us, not what we pay them.
+          shipping_cost: money(body.shipping_cost, "Shipping cost"),
           wipe_required: wipeRequired,
           // Snapshotted per line rather than read live at render time: changing
           // the global fee must not silently reprice a quote already sent. Kept
@@ -959,6 +973,7 @@ Deno.serve(async (req: Request) => {
             qty_value_total: it.disposition === "recycle" ? 0 : it.value * it.quantity,
             qty_offer_total: it.offer * it.quantity,
             qty_wipe_total: it.wipe_required ? it.wipe_fee * it.quantity : 0,
+            qty_shipping_total: it.shipping_cost * it.quantity,
             outstanding: Math.max(0, it.quantity - done),
             satisfied: done >= it.quantity,
           };
@@ -972,18 +987,23 @@ Deno.serve(async (req: Request) => {
     // unbounded half, so only the recent tail rides along; ?archive=N pages
     // deeper and the response says when it truncated.
     const store = String(url.searchParams.get("store") || "ALL").toUpperCase();
+    const oneStore = !!store && store !== "ALL";
     const archiveWanted = Math.min(ARCHIVE_MAX, Math.max(0, intOr(url.searchParams.get("archive"), ARCHIVE_DEFAULT)));
-    const scoped = (q: any) => (store && store !== "ALL")
+    const scoped = (q: any) => oneStore
       ? q.or(`pricing_store.eq.${store},listing_store.eq.${store}`)
       : q;
+    // A board scoped to one store is a store user's board, and they have no
+    // business with the client's contact details -- see CONTACT_COLS. Corp asks
+    // for ALL and still gets them.
+    const cols = oneStore ? SCOPED_DEAL_COLS : DEAL_COLS;
 
     const openQ = scoped(
-      supabase.from("b2b_deal_list").select(DEAL_COLS)
+      supabase.from("b2b_deal_list").select(cols)
         .not("stage", "in", `(${TERMINAL.join(",")})`)
         .order("created_at", { ascending: false }).limit(2000),
     );
     const archiveQ = scoped(
-      supabase.from("b2b_deal_list").select(DEAL_COLS)
+      supabase.from("b2b_deal_list").select(cols)
         .in("stage", TERMINAL)
         .order("stage_changed_at", { ascending: false }).limit(Math.max(1, archiveWanted)),
     );

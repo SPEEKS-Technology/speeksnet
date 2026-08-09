@@ -11761,6 +11761,12 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
     font-weight: 700; color: var(--b2b-muted);
 }
 .b2b-f-mgn.bad { color: #d1443b; background: #fcecec; border: 1px solid #f3d4d1; }
+
+/* Reads as a sentence, not a data cell: it answers one question and the store
+   tags inside it have to sit on the text baseline rather than stack. */
+.b2b-where { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.b2b-where-go { color: var(--b2b-muted); font-size: 12.5px; }
+.b2b-where-go .b2b-store { margin-left: 2px; }
 .b2b-tag-int {
     padding: 1px 6px; border-radius: 999px; background: #f1f5f9;
     color: var(--b2b-muted); font-size: 8.5px; letter-spacing: .04em;
@@ -11806,10 +11812,13 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
        between Model and Condition so a keyboard pricer tabs straight across them.
        Disposition is wide enough to spell out "No Residual Value". Wider than the
        modal on a small laptop -- the body scrolls x (see .b2b-modal-full).
-       Margin came later and had to be paid for: Line and Type gave back what
-       they were not using, and Brand/Model dropped their minimums, so the whole
-       sheet still fits a 1440px screen without panning. The actions column holds
-       three buttons now (copy 28 + detail 28 + delete 26, gaps 3).
+       Margin and Ship /unit came later and had to be paid for: Line and Type
+       gave back what they were not using, Brand/Model dropped their minimums,
+       and every other column was re-cut to its real content, so the whole sheet
+       still fits a 1440px screen without panning. The actions column holds three
+       buttons now (copy 28 + detail 28 + delete 26, gaps 3).
+       Seventeen columns is about the ceiling at this width: an eighteenth means
+       either panning at 1440 or moving something into the detail sheet.
        The number columns are sized from their content and not by eye: a cell
        spends 13px on padding and its hairline before the input, the input
        another 9px, and a tabular digit at 12.5px is about 8.6px. So Qty at 58px
@@ -11819,7 +11828,7 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
        "$12,000.00" is ten characters. Handling at 150px is simply what
        "No Residual Value" plus a select arrow measures -- at 138px it truncated
        to "No Residual Valu". */
-    --b2b-pcols: 56px 100px minmax(74px, 1fr) minmax(96px, 1.2fr) 94px 74px 94px 90px 58px 80px 80px 62px 142px 38px 100px 102px;
+    --b2b-pcols: 56px 100px minmax(64px, 1fr) minmax(84px, 1.2fr) 90px 70px 90px 88px 58px 76px 76px 72px 58px 122px 36px 96px 102px;
 }
 /* True grid: drop the inter-cell gap and draw a hairline down every column
    boundary. The row's own bottom border is the horizontal line, so together they
