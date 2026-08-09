@@ -4,14 +4,17 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 // ============================================================================
 // B2B mini-CRM: everything B2B sends by email, plus the outreach schedule.
 //
-// Two mails, one recipient. Both go to the single notify_email the CEO sets in
-// CRM Settings -- deliberately one address, so there is no question about who
-// is expected to act:
+// Two mails:
 //
 //   * the daily outreach digest -- clients whose cadence ("every N days/weeks/
-//     months from a set date") has come due
+//     months from a set date") has come due. One recipient, the notify_email the
+//     CEO sets in CRM Settings, deliberately: a reach-out reminder addressed to
+//     everybody is a reminder nobody owns
 //   * quote-ready -- fired by b2b-deals the moment pricing is submitted, so the
-//     approver knows a quote is sitting waiting on them
+//     approver knows a quote is sitting waiting on them. This one goes to the
+//     `b2b_quote_ready` list in email_recipients, because managers asked to be
+//     told as well as the CEO, and falls back to notify_email while that list is
+//     empty
 //
 // It deliberately does NOT email the clients themselves. The ask was for "alerts
 // they can set up via email to reach out to clients", and a reminder is what a
@@ -119,6 +122,25 @@ async function loadSettings(sb: any) {
   } catch (_) {
     return { notify_email: null, enabled: true, overdue_only: false, quote_ready_enabled: true, wipe_fee: 8 };
   }
+}
+
+// Who hears that a quote is ready. Managers asked to be told too, not just the
+// CEO, so this reads the same email_recipients table the weekly reports and the
+// recycle report use -- one place to manage every list, and an allowlist UI that
+// already exists.
+//
+// Falls back to the single CRM Settings address when the list is empty, which is
+// also what happens the moment before anyone has added themselves. Losing the
+// notification entirely because a list was never populated would be a worse
+// failure than sending it to one person.
+async function quoteReadyTo(sb: any, fallback: string | null): Promise<string[]> {
+  try {
+    const { data } = await sb.from("email_recipients")
+      .select("email").eq("list_key", "b2b_quote_ready").limit(200);
+    const list = (data || []).map((r: any) => String(r.email || "").trim()).filter(Boolean);
+    if (list.length) return [...new Set(list)];
+  } catch (_) { /* fall through to the single address */ }
+  return fallback ? [fallback] : [];
 }
 
 // "Every 2 weeks" / "Every 3 months" / "Every 10 days"
@@ -263,7 +285,11 @@ const money = (n: unknown) =>
 async function sendQuoteReady(sb: any, dealId: string) {
   const settings = await loadSettings(sb);
   if (!settings.quote_ready_enabled) return jsonResponse({ success: true, sent: false, reason: "quote-ready email is switched off" });
-  if (!settings.notify_email) return jsonResponse({ success: true, sent: false, reason: "no notification email set" });
+  // The list first, the single CRM Settings address as the floor. Bailing on
+  // notify_email alone would now be wrong: a populated list is a perfectly good
+  // answer even with no fallback address set.
+  const to = await quoteReadyTo(sb, settings.notify_email);
+  if (!to.length) return jsonResponse({ success: true, sent: false, reason: "nobody is set to receive quote-ready email" });
 
   const { data: d } = await sb.from("b2b_deal_list")
     .select("id,ref,company,contact,contact_email,pickup_date,pricing_store,priced_by," +
@@ -332,8 +358,8 @@ async function sendQuoteReady(sb: any, dealId: string) {
   </table>
 </td></tr></table></div>`;
 
-  const res = await sendEmail([settings.notify_email], `B2B Quote Ready: ${d.company} (${d.ref})`, html);
-  return jsonResponse({ success: true, sent: res.ok, to: settings.notify_email, relay: res.status });
+  const res = await sendEmail(to, `B2B Quote Ready: ${d.company} (${d.ref})`, html);
+  return jsonResponse({ success: true, sent: res.ok, to, relay: res.status });
 }
 
 Deno.serve(async (req: Request) => {

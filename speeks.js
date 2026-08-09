@@ -26302,6 +26302,12 @@ const EMAIL_LIST_GROUPS = [
             ...EMAIL_LIST_STORES.map(s => ({ key: `weekly_store_${s}`, label: `${s} manager report` })),
         ],
     },
+    {
+        title: 'B2B Quote Ready',
+        desc: 'Told the moment a pickup is priced and a quote is waiting on approval. '
+            + 'Leave this empty and it falls back to the single address in CRM Settings.',
+        lists: [{ key: 'b2b_quote_ready', label: 'Recipients' }],
+    },
 ];
 
 async function openEmailRecipients() {
