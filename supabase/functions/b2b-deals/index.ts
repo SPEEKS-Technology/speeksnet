@@ -596,15 +596,24 @@ Deno.serve(async (req: Request) => {
           .select("line_no").eq("deal_id", deal.id)
           .order("line_no", { ascending: false }).limit(1).maybeSingle();
         const lineNo = (last?.line_no || 0) + 1;
+        // Its own query: after a reorder the highest sort_order is not on the
+        // highest line_no. Without this the row takes the column default of 0
+        // and sorts BEFORE everything -- it would look appended, then jump to the
+        // top of the sheet the next time the deal was opened.
+        const { data: lastSort } = await supabase.from("b2b_deal_items")
+          .select("sort_order").eq("deal_id", deal.id)
+          .order("sort_order", { ascending: false }).limit(1).maybeSingle();
+        const sortOrder = (Number(lastSort?.sort_order) || 0) + 10;
         const { data, error } = await supabase.from("b2b_deal_items").insert({
           ...fields,
           deal_id: deal.id,
           line_no: lineNo,
+          sort_order: sortOrder,
           sku: skuFor(deal.client?.acronym || "B2B", deal.deal_no, lineNo),
-        }).select("id, line_no, sku").single();
+        }).select("id, line_no, sku, sort_order").single();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("b2b", dealStore(deal), { deal: deal.id, by: str(body.user, 80, "User") });
-        return jsonResponse({ success: true, id: data.id, line_no: data.line_no, sku: data.sku });
+        return jsonResponse({ success: true, id: data.id, line_no: data.line_no, sku: data.sku, sort_order: data.sort_order });
       }
 
       // Move a deal to another store mid-flight.

@@ -12845,7 +12845,7 @@ const B2B_DISP = Object.fromEntries(B2B_DISPOSITIONS.map(d => [d.key, d]));
 // How the pricing spreadsheet's inline disposition picker labels each option --
 // spelled out in full ("No Residual Value") rather than the terse chip `short`,
 // which stays in use on the card grid where space is tighter.
-// "No Residual" rather than the full "No Residual Value": with Ship /unit and
+// "No Residual" rather than the full "No Residual Value": with Ship and
 // Margin added, the full string was the single widest thing on the sheet and was
 // costing 22px that Qty needed to show a fourth digit. Nothing is lost -- there
 // is only one thing it can mean here, the legend under the sheet spells it out
@@ -13251,7 +13251,7 @@ const _B2B_SYNC_CELL = {
     item_type: 'Type', make: 'Brand', model: 'Model', condition: 'Condition',
     cpu: 'CPU', ram: 'RAM', storage: 'Storage',
     quantity: 'Qty', value: 'Value', offer: 'Offer',
-    shipping_cost: 'Ship /unit', disposition: 'Handling',
+    shipping_cost: 'Ship', disposition: 'Handling',
 };
 const _B2B_SYNC_FIELDS = Object.keys(_B2B_SYNC_CELL);
 const _B2B_CELL_FIELD = Object.fromEntries(
@@ -13339,6 +13339,23 @@ async function _b2bSyncOpenDeal(ping) {
         _b2bRepaintItems();
         _b2bRestoreFocus(spot);
         return _b2bSay(`Line items updated${who}.`);
+    }
+
+    // Same lines, but possibly in a different order -- someone dragged the sheet
+    // while we had it open. That is not a value change, so the patch loop below
+    // would never notice it, and our copy would stay in the old order until the
+    // deal was reopened. Reordering is a rebuild, same as a line arriving.
+    const freshIds = fresh.map(i => i.id).join(',');
+    if (_b2bModalItems.map(i => i.id).join(',') !== freshIds) {
+        const spot = _b2bFocusSpot();
+        const byLocal = new Map(_b2bModalItems.map(i => [i.id, i]));
+        // Keep OUR objects, in THEIR order: a half-typed field is unsaved and
+        // must survive a reorder someone else made.
+        _b2bModalItems = fresh.map(r => Object.assign(byLocal.get(r.id) || r, { sort_order: r.sort_order }));
+        _b2bRepaintItems();
+        _b2bRestoreFocus(spot);
+        _b2bPaintQuoteDoc();
+        return _b2bSay(`Lines were reordered${who}.`);
     }
 
     const active = document.activeElement;
@@ -14458,12 +14475,13 @@ function _b2bSummary(deal) {
         ['Reference', `<span class="b2b-mono">${escapeHtml(deal.ref)}</span>`],
     ];
     if (_b2bIsCorp()) {
-        // The phone was already being fetched and never shown, so anyone needing
-        // to actually ring the client had to go back out to the Clients list.
-        // It is a separate cell rather than a third item in the Contact string:
-        // a number you are about to dial should be its own thing to read, not
-        // the tail of a run-on line.
-        rows.push(['Contact', escapeHtml([deal.client?.contact, deal.client?.contact_email].filter(Boolean).join(' · ') || '—')]);
+        // One fact per cell. The phone was already being fetched and never shown,
+        // so anyone needing to ring the client went back out to the Clients list.
+        // Adding it also forced the email out of the Contact cell: name and email
+        // were joined with a "·", and in a cell this narrow that wrapped and left
+        // a separator dangling at the end of the line.
+        rows.push(['Contact', escapeHtml(deal.client?.contact || '—')]);
+        if (deal.client?.contact_email) rows.push(['Email', escapeHtml(deal.client.contact_email)]);
         if (deal.client?.contact_phone) rows.push(['Phone', escapeHtml(deal.client.contact_phone)]);
     }
     rows.push(
@@ -15220,6 +15238,7 @@ async function b2bAddItem(dealId, btn) {
             id: out.id, line_no: out.line_no, sku: out.sku, make: '', model: '', condition: '',
             staff_notes: '', client_notes: '', quantity: 1, value: 0, offer: 0,
             item_type: 'other', cpu: null, ram: null, storage: null, gpu: null, battery_health: null, shipping_cost: 0,
+            sort_order: out.sort_order,
             serials: '', disposition: 'purchase',
             wipe_required: false, wipe_fee: 0, wiped_qty: 0,
             listed_qty: 0, recycled_qty: 0, listings: [],
@@ -15260,7 +15279,7 @@ async function b2bCopyItem(id, btn) {
         // Same rule as b2bAddItem: the optimistic row is what gets painted, so it
         // has to carry every field the grid reads.
         _b2bModalItems.push({
-            ...copy, id: out.id, line_no: out.line_no, sku: out.sku,
+            ...copy, id: out.id, line_no: out.line_no, sku: out.sku, sort_order: out.sort_order,
             serials: '', wipe_fee: src.wipe_required ? (src.wipe_fee || _b2bWipeFee()) : 0,
             wiped_qty: 0, listed_qty: 0, recycled_qty: 0, listings: [],
         });
@@ -15547,7 +15566,7 @@ function _b2bItemSheet() {
             ${reqSpecs.map(f => `<span>${escapeHtml(f.label)}</span>`).join('')}
             <span>Condition</span>
             <span class="r">Qty</span><span class="r">Value</span><span class="r">Offer</span>
-            <span class="r" title="What it costs us to move one of these. Never shown to the client.">Ship /unit</span>
+            <span class="r" title="What it costs us to move one of these, per unit. Never shown to the client.">Ship</span>
             <span class="r">Margin</span>
             <span>Handling</span><span class="c">Wipe</span><span class="r">Total</span><span></span>
         </div>`;
@@ -15628,7 +15647,7 @@ function _b2bItemSheet() {
                 <!-- Priced even on a recycle line: scrap costs the same to move,
                      and Paul is reading this to work out what the pallet is
                      really worth to us. -->
-                <span class="b2b-pcell n" data-k="Ship /unit">
+                <span class="b2b-pcell n" data-k="Ship">
                     <input type="number" min="0" step="0.01" value="${Number(it.shipping_cost) || 0}"
                         title="Our freight cost per unit — never shown to the client"
                         oninput="b2bItemInput('${it.id}','shipping_cost',this.value)" onchange="b2bItemSave('${it.id}')"></span>

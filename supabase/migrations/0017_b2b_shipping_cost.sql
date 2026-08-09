@@ -14,8 +14,8 @@
 -- Per UNIT, like value, offer and wipe_fee. Every money column on b2b_deal_items
 -- is per unit and gets multiplied by quantity; a single flat one would be the
 -- one field on the sheet that behaves differently from its neighbours, which is
--- a trap for whoever prices the next deal. The column header says "Ship /unit"
--- so the entry is unambiguous at the point of typing.
+-- a trap for whoever prices the next deal. The column header reads "Ship", like
+-- Value and Offer beside it which are also per unit, and its tooltip says so.
 --
 -- The view is REPLACEd rather than dropped: total_shipping is appended after
 -- net_offer, and Postgres permits new columns at the end of a

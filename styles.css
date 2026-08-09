@@ -11510,8 +11510,13 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
    bar at all, so the two non-purchase outcomes -- which mean very different
    things to both the client and to us -- were told apart by the presence or
    absence of an unexplained green line. The legend under the sheet names them. */
-.b2b-pline.b2b-scrap { box-shadow: inset 3px 0 0 #7fc5bb; }
-.b2b-pline.b2b-nrv   { box-shadow: inset 3px 0 0 #8fb4de; }
+/* Exactly the foreground colours of the matching .b2b-doc-rec chips -- teal
+   #0d8a7d for scrap, blue #3a6ea8 for no-residual. A 3px stripe wants the
+   saturated tone, not the pale chip background, and using the chip's own colour
+   is what makes the legend swatch and the client-facing chip read as one system
+   rather than three near-misses. */
+.b2b-pline.b2b-scrap { box-shadow: inset 3px 0 0 #0d8a7d; }
+.b2b-pline.b2b-nrv   { box-shadow: inset 3px 0 0 #3a6ea8; }
 .b2b-pline.needs-reason { background: #fffdf7; box-shadow: inset 3px 0 0 #e0b970; }
 .b2b-pline.needs-reason:hover { background: #fffbf1; }
 
@@ -11533,9 +11538,14 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
     text-transform: uppercase; padding: 1px 5px; border-radius: 999px;
 }
 /* Client notes are quoted back to the client, staff notes never leave the
-   building -- worth telling apart at a glance, not just by reading them. */
+   building -- worth telling apart at a glance, not just by reading them.
+   Deliberately NOT the blue chip pair: in this module blue already means "no
+   residual value", and borrowing it for "the client said something" would put
+   two unrelated meanings on one colour. Both are neutral slate, following
+   .b2b-tag-int, and told apart by weight -- which is the honest difference,
+   since one of these is louder than the other only in consequence. */
 .b2b-nh-c   { color: var(--b2b-muted); }
-.b2b-nh-c b { background: #eaf1fb; color: #3a6ea8; }
+.b2b-nh-c b { background: #e2e8f0; color: #475569; }
 .b2b-nh-s   { color: var(--b2b-faint); }
 .b2b-nh-s b { background: #f1f5f9; color: #64748b; }
 
@@ -11543,15 +11553,15 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
    signal and this is only here so a first-time pricer can decode them. */
 .b2b-disp-key {
     display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px;
-    margin: 8px 2px 0; font-size: 10.5px; color: var(--b2b-faint);
+    margin: 8px 2px 0; font-size: 11px; color: var(--b2b-faint);
 }
 .b2b-disp-key b { font-weight: 800; letter-spacing: .07em; text-transform: uppercase; font-size: 9.5px; }
 .b2b-disp-key span { display: inline-flex; align-items: center; gap: 6px; }
 .b2b-disp-key i {
     width: 3px; height: 13px; border-radius: 2px; background: currentColor; font-style: normal;
 }
-.b2b-disp-key .k-scrap { color: #7fc5bb; }
-.b2b-disp-key .k-nrv   { color: #8fb4de; }
+.b2b-disp-key .k-scrap { color: #0d8a7d; }
+.b2b-disp-key .k-nrv   { color: #3a6ea8; }
 .b2b-disp-key .k-block { color: #e0b970; }
 .b2b-disp-key em { font-style: normal; color: var(--b2b-muted); }
 
@@ -11746,9 +11756,11 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
    client. Same blue as that row's bar and the client-facing chip, and
    deliberately not the heavy near-black of .b2b-f-calc -- someone scanning the
    Total column for what this pallet costs should be able to skip these. */
+/* The no-residual chip's own pair, so a resale figure and the chip that explains
+   it are the same blue. */
 .b2b-f-resale {
     font-weight: 700; color: #3a6ea8;
-    background: #f4f8fd; border: 1px solid #dce8f6;
+    background: #eaf1fb; border: 1px solid #d3e2f5;
 }
 /* Per-line margin. Plain by default on purpose -- what counts as a good margin
    is a buying judgement the Margin Guide owns, not something to colour-code
@@ -11781,8 +11793,10 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 
 /* A cell someone else just changed. Brief and low-contrast on purpose: it says
    "this moved under you", which you need to notice once, not be alarmed by. */
+/* The same tint/border pair the module already uses for a positive state
+   (.b2b-notes-btn.on), rather than a second green invented for this. */
 @keyframes b2bSynced {
-    0%   { background: #dff0e4; box-shadow: inset 0 0 0 1px #8fd0a5; }
+    0%   { background: var(--b2b-accent-tint); box-shadow: inset 0 0 0 1px #cfeada; }
     100% { background: transparent; box-shadow: inset 0 0 0 1px transparent; }
 }
 .b2b-pcell.b2b-synced { animation: b2bSynced 1.5s ease-out; border-radius: 4px; }
@@ -11837,7 +11851,7 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
        between Model and Condition so a keyboard pricer tabs straight across them.
        Disposition is wide enough to spell out "No Residual Value". Wider than the
        modal on a small laptop -- the body scrolls x (see .b2b-modal-full).
-       Margin and Ship /unit came later and had to be paid for: Line and Type
+       Margin and Ship came later and had to be paid for: Line and Type
        gave back what they were not using, Brand/Model dropped their minimums,
        and every other column was re-cut to its real content, so the whole sheet
        still fits a 1440px screen without panning. The actions column holds three
