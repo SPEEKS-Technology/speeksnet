@@ -12785,13 +12785,42 @@ const B2B_ITEM_TYPES = [
     { key: 'computer', label: 'Computer' },
     { key: 'other',    label: 'Other'    },
 ];
+// `pick` is a suggestion list, not a constraint -- these render as <datalist>,
+// which is a dropdown you can also type past. A hard <select> was the wrong
+// answer here: the field has to stay open to whatever actually walks in, and
+// the CHECK on the table is a length limit, not an enum.
+//
+// The lists come from what the live data already shows people typing. Storage
+// held "NO STORAGE" and battery health held "BAD" and "Fair" alongside
+// percentages, which is the drift this is meant to stop: one obvious option to
+// click beats three spellings of the same idea.
 const B2B_SPEC_FIELDS = [
-    { key: 'cpu',            label: 'CPU',            req: true,  hint: 'i5-1135G7' },
-    { key: 'ram',            label: 'RAM',            req: true,  hint: '16GB' },
-    { key: 'storage',        label: 'Storage',        req: true,  hint: '512GB NVMe' },
-    { key: 'gpu',            label: 'GPU',            req: false, hint: 'Iris Xe / RTX 3060' },
-    { key: 'battery_health', label: 'Battery health', req: false, hint: '88%' },
+    { key: 'cpu',            label: 'CPU',            req: true,  hint: 'i5-1135G7',
+      pick: ['i3', 'i5', 'i7', 'i9', 'Ryzen 3', 'Ryzen 5', 'Ryzen 7', 'Ryzen 9',
+             'Apple M1', 'Apple M2', 'Apple M3', 'Celeron', 'Pentium', 'Xeon'] },
+    { key: 'ram',            label: 'RAM',            req: true,  hint: '16GB',
+      pick: ['4GB', '8GB', '12GB', '16GB', '24GB', '32GB', '64GB', 'NO RAM'] },
+    { key: 'storage',        label: 'Storage',        req: true,  hint: '512GB NVMe',
+      pick: ['128GB', '256GB', '512GB', '1TB', '2TB', '256GB NVMe', '512GB NVMe',
+             '1TB NVMe', '500GB HDD', '1TB HDD', 'NO STORAGE'] },
+    { key: 'gpu',            label: 'GPU',            req: false, hint: 'Iris Xe / RTX 3060',
+      pick: ['Integrated', 'Iris Xe', 'UHD Graphics', 'Radeon', 'GTX 1650',
+             'RTX 3050', 'RTX 3060', 'RTX 4060', 'Quadro'] },
+    { key: 'battery_health', label: 'Battery health', req: false, hint: '88%',
+      pick: ['Good', 'Fair', 'Poor', 'Bad', 'No battery', 'Not tested'] },
 ];
+// Brands that keep coming back. Same rule: a suggestion, never a restriction.
+const B2B_BRANDS = ['Acer', 'Apple', 'ASUS', 'Dell', 'HP', 'Lenovo', 'LG', 'Microsoft',
+    'MSI', 'Razer', 'Samsung', 'Sony', 'Thinkpad', 'Toshiba'];
+
+// One <datalist> per suggestion set, mounted once per grid rather than once per
+// row: thirty lines would otherwise repeat the same options thirty times.
+function _b2bDatalists() {
+    const list = (id, opts) =>
+        `<datalist id="${id}">${opts.map(o => `<option value="${escapeHtml(o)}"></option>`).join('')}</datalist>`;
+    return list('b2bdl-make', B2B_BRANDS)
+        + B2B_SPEC_FIELDS.filter(f => f.pick).map(f => list(`b2bdl-${f.key}`, f.pick)).join('');
+}
 const B2B_SPECS_FOR = {
     computer: ['cpu', 'ram', 'storage', 'gpu', 'battery_health'],
     laptop:   ['cpu', 'ram', 'storage', 'gpu', 'battery_health'],
@@ -14235,12 +14264,24 @@ function _b2bRenderOverview(scoped) {
             <td class="r b">${_b2bMoney(_b2bNetCost(d))}</td>
         </tr>`).join('');
 
+    // Certified wipes across everything in flight. A wipe promised at pricing is
+    // a debt from that moment: we have discounted the client for it, and the
+    // units cannot be listed until someone certifies it.
+    const wipesSold = live.reduce((n, d) => n + (Number(d.wipe_units) || 0), 0);
+    const wipesDone = live.reduce((n, d) => n + (Number(d.wiped_units) || 0), 0);
+    const wipesOwed = Math.max(0, wipesSold - wipesDone);
+    const wipeFees  = live.reduce((s, d) => s + (Number(d.total_wipe_fee) || 0), 0);
+
     const tiles = `
         <div class="b2b-tiles">
             <div class="b2b-tile"><span class="b2b-tile-k">In Flight</span><span class="b2b-tile-v">${live.length}</span><span class="b2b-tile-c">deals moving</span></div>
             <div class="b2b-tile"><span class="b2b-tile-k">Out For Quote</span><span class="b2b-tile-v">${_b2bMoney(withClient.reduce((s, d) => s + _b2bNetOffer(d), 0))}</span><span class="b2b-tile-c">${withClient.length} awaiting a client decision${toApprove.length ? ` · ${toApprove.length} still to approve` : ''}</span></div>
             <div class="b2b-tile"><span class="b2b-tile-k">Unlisted Stock</span><span class="b2b-tile-v">${_b2bMoney(unlistedTotal)}</span><span class="b2b-tile-c">${unlisted.reduce((n, d) => n + _b2bOutstanding(d), 0)} units to list</span></div>
             <div class="b2b-tile ${stalled.length ? 'warn' : ''}"><span class="b2b-tile-k">Stalled</span><span class="b2b-tile-v">${stalled.length}</span><span class="b2b-tile-c">no movement in 7+ days</span></div>
+            <!-- Certified wipes, which we charge for and therefore owe. Counted
+                 across everything in flight, since a wipe promised at pricing is
+                 outstanding until someone certifies it during listing. -->
+            <div class="b2b-tile ${wipesOwed ? 'warn' : ''}"><span class="b2b-tile-k">Certified Wipes</span><span class="b2b-tile-v">${wipesDone}<span class="b2b-tile-of"> / ${wipesSold}</span></span><span class="b2b-tile-c">${wipesOwed ? `${wipesOwed} still to certify` : 'all certified'} · ${_b2bMoney(wipeFees)} discounted</span></div>
         </div>`;
 
     return tiles
@@ -15277,7 +15318,7 @@ function _b2bItemCards() {
                         ${B2B_ITEM_TYPES.map(t => `<option value="${t.key}" ${(it.item_type || 'other') === t.key ? 'selected' : ''}>${t.label}</option>`).join('')}
                     </select></span>
                 <span class="b2b-pcell" data-k="Brand">
-                    <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple"
+                    <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple" list="b2bdl-make"
                         oninput="b2bItemInput('${it.id}','make',this.value)" onchange="b2bItemSave('${it.id}')"></span>
                 <span class="b2b-pcell" data-k="Model">
                     <input value="${escapeHtml(it.model || '')}" placeholder="MacBook Air M2"
@@ -15322,7 +15363,9 @@ function _b2bItemCards() {
         </div>`;
     }).join('');
 
-    return head + rows;
+    // Mounted once for the whole grid, not per row -- thirty lines would
+    // otherwise repeat the same option lists thirty times.
+    return _b2bDatalists() + head + rows;
 }
 
 // --- pricing spreadsheet ---------------------------------------------------
@@ -15387,6 +15430,7 @@ function _b2bItemSheet() {
             const miss = !String(it[f.key] ?? '').trim();
             return `<span class="b2b-pcell b2b-pc-spec" data-k="${escapeHtml(f.label)}">
                 <input data-req-spec="${f.key}" class="${miss ? 'b2b-spec-miss' : ''}" value="${escapeHtml(it[f.key] || '')}" placeholder="${escapeHtml(f.hint)}"
+                    ${f.pick ? `list="b2bdl-${f.key}"` : ''}
                     oninput="b2bItemSpec('${it.id}','${f.key}',this.value)" onchange="b2bItemSave('${it.id}')">
                 <button class="b2b-spec-none" tabindex="-1" title="No ${escapeHtml(f.label)} — fills NO ${escapeHtml(f.label.toUpperCase())}"
                     onclick="b2bItemSpecNone('${it.id}','${f.key}','${escapeHtml(f.label)}')">∅</button>
@@ -15408,7 +15452,7 @@ function _b2bItemSheet() {
                      columns on the sheet and "OptiPlex 7080 Micro" does not fit
                      in one, so hovering has to be able to tell you the rest. -->
                 <span class="b2b-pcell" data-k="Brand">
-                    <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple"
+                    <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple" list="b2bdl-make"
                         title="${escapeHtml(it.make || '')}"
                         oninput="b2bItemInput('${it.id}','make',this.value)" onchange="b2bItemSave('${it.id}')"></span>
                 <span class="b2b-pcell" data-k="Model">
@@ -15467,7 +15511,9 @@ function _b2bItemSheet() {
         </div>`;
     }).join('');
 
-    return head + rows;
+    // Mounted once for the whole grid, not per row -- thirty lines would
+    // otherwise repeat the same option lists thirty times.
+    return _b2bDatalists() + head + rows;
 }
 
 // --- pricing detail sheet --------------------------------------------------
@@ -16428,11 +16474,17 @@ function _b2bListRows() {
             : needsWipe ? `Certify a data wipe first — ${wiped} of ${qty} wiped`
             : 'List one unit — asks for its Shopify barcode';
 
+        // Certifying a wipe is a claim we have charged the client for and may
+        // have to stand behind, so only corp records it. The store still sees
+        // the flag and the count -- they need to know the line is blocked and
+        // why, and hiding it would just make the disabled "+" inexplicable.
         const wipeStrip = it.wipe_required ? `
             <div class="b2b-lwipe ${wiped >= qty ? 'done' : ''}">
                 ${_b2bIco('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/>')}
                 <span><b>${wiped}</b> of ${qty} certified wiped</span>
-                ${wiped < qty ? `<button class="b2b-mini" onclick="b2bMarkWiped('${it.id}')">Mark Wiped</button>` : ''}
+                ${wiped >= qty ? ''
+                  : _b2bIsCorp() ? `<button class="b2b-mini" onclick="b2bMarkWiped('${it.id}')">Mark Wiped</button>`
+                  : '<span class="b2b-lwipe-note">Corp records the certification</span>'}
             </div>` : '';
 
         return `
@@ -16471,6 +16523,9 @@ function _b2bListRows() {
 function b2bMarkWiped(itemId) {
     const it = _b2bLocalItem(itemId);
     if (!it || !it.wipe_required) return;
+    // Corp only. The button is already hidden for a store, so this is the guard
+    // against a stale tab whose role changed under it.
+    if (!_b2bIsCorp()) return _b2bSay('Only corp can certify a data wipe.', true);
     const qty = Number(it.quantity) || 1;
     const room = qty - (Number(it.wiped_qty) || 0);
     if (room <= 0) return;

@@ -11762,6 +11762,13 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 }
 .b2b-f-mgn.bad { color: #d1443b; background: #fcecec; border: 1px solid #f3d4d1; }
 
+/* "3 / 12" -- the denominator is context, not a second number to read. */
+.b2b-tile-of { font-size: .62em; font-weight: 700; color: var(--b2b-faint); }
+
+/* Stands where the Mark Wiped button would be for a store user, so the row
+   explains its own blocked "+" instead of just refusing to work. */
+.b2b-lwipe-note { font-size: 11px; font-style: italic; color: var(--b2b-faint); }
+
 /* A cell someone else just changed. Brief and low-contrast on purpose: it says
    "this moved under you", which you need to notice once, not be alarmed by. */
 @keyframes b2bSynced {

@@ -97,7 +97,7 @@ const DEAL_COLS = [
   "company", "acronym", "contact", "contact_email", "contact_phone",
   "line_count", "total_units", "listed_units", "recycled_units", "outstanding_units",
   "wiped_units", "total_value", "total_offer", "total_cost", "total_wipe_fee", "net_offer",
-  "total_shipping",
+  "total_shipping", "wipe_units",
 ].join(",");
 
 // Who to ring at the client. Corp business: a store prices and lists the goods,
@@ -784,6 +784,13 @@ Deno.serve(async (req: Request) => {
         } else if (action === "mark_wiped") {
           if (!item.wipe_required) {
             return jsonResponse({ success: false, error: "This line wasn't quoted for a certified wipe." }, 409);
+          }
+          // Certifying a wipe is a claim we charged the client for. Same corp
+          // roles that approve and accept a quote; the store still lists the
+          // units, it just doesn't get to say the wipe happened.
+          const role = String(body.role || "").toLowerCase().trim();
+          if (!ACCEPT_ROLES.includes(role)) {
+            return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can certify a data wipe." }, 403);
           }
           const units = count(body.units, 1, 100000, "Units", 1);
           const room = qty - item.wiped_qty;
