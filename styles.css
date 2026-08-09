@@ -11762,6 +11762,16 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 }
 .b2b-f-mgn.bad { color: #d1443b; background: #fcecec; border: 1px solid #f3d4d1; }
 
+/* The Line cell doubles as the drag handle. Only this cell, not the row: the
+   row is fifteen editable fields and a drag must not begin when someone is
+   selecting text in one of them. */
+.b2b-pc-grab { cursor: grab; }
+.b2b-pc-grab:active { cursor: grabbing; }
+.b2b-pline.b2b-dragging { opacity: .45; }
+/* The line being dragged over gets a rule on top, which is the convention for
+   "it lands here" and costs no layout. */
+.b2b-pline.b2b-dropto { box-shadow: inset 0 3px 0 var(--sage-professional); }
+
 /* "3 / 12" -- the denominator is context, not a second number to read. */
 .b2b-tile-of { font-size: .62em; font-weight: 700; color: var(--b2b-faint); }
 

@@ -114,7 +114,7 @@ const ITEM_COLS = [
   "staff_notes", "client_notes", "quantity", "value", "offer", "cost",
   "disposition", "listed_qty", "recycled_qty", "created_at",
   "item_type", "cpu", "ram", "storage", "gpu", "battery_health", "serials",
-  "wipe_required", "wipe_fee", "wiped_qty", "shipping_cost",
+  "wipe_required", "wipe_fee", "wiped_qty", "shipping_cost", "sort_order",
 ].join(",");
 
 // `computer` folds the old laptop/desktop split into one type; the legacy two
@@ -607,6 +607,45 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true, id: data.id, line_no: data.line_no, sku: data.sku });
       }
 
+      // Rewrite the display order of a deal's lines.
+      //
+      // Takes the full id list rather than "move X above Y": the client already
+      // knows the order it is showing, and sending it whole means a reorder can
+      // never half-apply and leave the sheet in a state nobody chose.
+      //
+      // Only ids belonging to THIS deal are written -- an id from somewhere else
+      // in the payload is ignored rather than trusted, and the count check
+      // afterwards catches a stale client that has lines we don't.
+      if (action === "reorder_items") {
+        const deal = await getDeal(supabase, String(body.deal_id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (!OPEN_STAGES.includes(deal.stage)) {
+          return jsonResponse({ success: false, error: "Line items can only be reordered while pricing or quoting." }, 409);
+        }
+        const order = Array.isArray(body.order) ? body.order.map((v: unknown) => String(v || "")) : [];
+        if (!order.length) return jsonResponse({ success: false, error: "No order was sent." }, 400);
+        if (order.length > 5000) return jsonResponse({ success: false, error: "That is too many lines to reorder." }, 400);
+
+        const { data: mine } = await supabase.from("b2b_deal_items")
+          .select("id").eq("deal_id", deal.id).limit(5000);
+        const ours = new Set((mine || []).map((r: any) => r.id));
+        const seen = new Set<string>();
+        const clean = order.filter((id) => ours.has(id) && !seen.has(id) && seen.add(id));
+        if (clean.length !== ours.size) {
+          return jsonResponse({
+            success: false,
+            error: "That list is out of date — reopen the deal and try again.",
+          }, 409);
+        }
+        for (let i = 0; i < clean.length; i++) {
+          const { error } = await supabase.from("b2b_deal_items")
+            .update({ sort_order: (i + 1) * 10 }).eq("id", clean[i]).eq("deal_id", deal.id);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        }
+        await broadcastChange("b2b", dealStore(deal), { deal: deal.id, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true, ordered: clean.length });
+      }
+
       // ============================================================== quoting
 
       if (action === "submit_pricing") {
@@ -1015,6 +1054,7 @@ Deno.serve(async (req: Request) => {
       const [{ data, error }, { data: listings, error: lErr }] = await Promise.all([
         supabase.from("b2b_deal_items")
           .select(ITEM_COLS).eq("deal_id", dealId)
+          .order("sort_order", { ascending: true })
           .order("line_no", { ascending: true }).limit(5000),
         supabase.from("b2b_item_listings")
           .select("id,item_id,shopify_barcode,listed_by,listed_at").eq("deal_id", dealId)

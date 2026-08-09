@@ -14729,6 +14729,66 @@ function _b2bNoteLine(it) {
         + `</div>`;
 }
 
+// --- reordering the sheet --------------------------------------------------
+// Drag a line by its number. The Line cell is the handle rather than the whole
+// row, because the row is fifteen editable fields and dragging must not start
+// when someone selects text in one of them.
+//
+// The order is stored on the item (sort_order) rather than derived from line_no:
+// line_no is baked into printed SKUs. And because the quote renderers walk the
+// same _b2bModalItems array, arranging the sheet arranges the client's quote --
+// grouping the laptops together reads better to them too.
+let _b2bDragId = null;
+
+function b2bDragStart(ev, id) {
+    _b2bDragId = id;
+    try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', id); } catch (_) {}
+    document.getElementById(`b2bPline-${id}`)?.classList.add('b2b-dragging');
+}
+function b2bDragEnd() {
+    document.querySelectorAll('.b2b-pline.b2b-dragging, .b2b-pline.b2b-dropto')
+        .forEach(r => r.classList.remove('b2b-dragging', 'b2b-dropto'));
+    _b2bDragId = null;
+}
+function b2bDragOver(ev, id) {
+    if (!_b2bDragId || _b2bDragId === id) return;
+    ev.preventDefault();                       // without this the drop never fires
+    try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+    const row = document.getElementById(`b2bPline-${id}`);
+    document.querySelectorAll('.b2b-pline.b2b-dropto').forEach(r => {
+        if (r !== row) r.classList.remove('b2b-dropto');
+    });
+    row?.classList.add('b2b-dropto');
+}
+async function b2bDrop(ev, id) {
+    ev.preventDefault();
+    const from = _b2bDragId;
+    b2bDragEnd();
+    if (!from || from === id) return;
+    const items = _b2bModalItems;
+    const a = items.findIndex(i => i.id === from);
+    const b = items.findIndex(i => i.id === id);
+    if (a < 0 || b < 0) return;
+
+    const before = items.slice();
+    items.splice(b, 0, items.splice(a, 1)[0]);
+    _b2bRepaintItems();
+    _b2bPaintQuoteDoc();                       // the quote follows the sheet
+
+    try {
+        await _b2bSend({ action: 'reorder_items', deal_id: _b2bModalDeal.id,
+                         order: items.map(i => i.id) });
+        _b2bDirty = true;
+    } catch (e) {
+        // Put it back rather than leaving the screen showing an order the server
+        // rejected -- the next person to open this deal would see the old one.
+        _b2bModalItems = before;
+        _b2bRepaintItems();
+        _b2bPaintQuoteDoc();
+        _b2bSay(`Couldn't save the new order: ${e.message}`, true);
+    }
+}
+
 // The key to the coloured bars down the left of the sheet. Always rendered
 // rather than only when a non-purchase line exists: the grid repaints on its
 // own (_b2bRepaintItems touches #b2bItemGrid alone), so a legend that appeared
@@ -15440,7 +15500,10 @@ function _b2bItemSheet() {
         return `
         <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
             <div class="b2b-prow">
-                <span class="b2b-pcell b2b-pc-sku" title="${escapeHtml(it.sku || '')}">
+                <span class="b2b-pcell b2b-pc-sku b2b-pc-grab" draggable="true"
+                    title="${escapeHtml(it.sku || '')} — drag to reorder"
+                    ondragstart="b2bDragStart(event,'${it.id}')" ondragend="b2bDragEnd()"
+                    ondragover="b2bDragOver(event,'${it.id}')" ondrop="b2bDrop(event,'${it.id}')">
                     <span class="b2b-mono">${escapeHtml(_b2bLineNo(it))}</span>
                     ${blocked.length ? `<i class="b2b-ss-flag" title="${escapeHtml(blocked.join(', '))}"></i>` : ''}
                 </span>
