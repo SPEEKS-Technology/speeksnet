@@ -14729,6 +14729,92 @@ function _b2bNoteLine(it) {
         + `</div>`;
 }
 
+// --- moving a deal between stores ------------------------------------------
+// Corp only, and only while the goods are somewhere a move makes sense. The
+// button says which hand-off it is about, because "Move" alone is ambiguous on
+// a deal that has both a pricing store and a listing store.
+function _b2bTransferKind(deal) {
+    if (['pricing', 'review', 'quote'].includes(deal.stage)) return 'pricing';
+    if (['listing_location', 'listing'].includes(deal.stage)) return 'listing';
+    return null;
+}
+function _b2bMoveBtn(deal) {
+    if (!_b2bCanAccept()) return '';
+    const kind = _b2bTransferKind(deal);
+    if (!kind) return '';
+    return `<button class="b2b-btn b2b-btn-secondary" onclick="b2bOpenTransfer('${deal.id}')">
+        Move ${kind === 'pricing' ? 'Pricing' : 'Listing'} Store</button>`;
+}
+
+function b2bOpenTransfer(id) {
+    const deal = _b2bDealById(id) || _b2bModalDeal;
+    if (!deal || !_b2bCanAccept()) return;
+    const kind = _b2bTransferKind(deal);
+    if (!kind) return;
+    const at = kind === 'pricing' ? deal.pricing_store : deal.listing_store;
+    // Listing can only land on a real store; pricing may also sit at CORP.
+    const options = kind === 'pricing' ? B2B_LOCATIONS : STORE_CODES;
+    const listed = Number(deal.listed_units) || 0;
+
+    _b2bTransferPick = null;
+    _b2bShowDeal({
+        stage: deal.stage,
+        eyebrow: deal.ref,
+        title: kind === 'pricing' ? 'Move Pricing Store' : 'Move Listing Store',
+        sub: kind === 'pricing'
+            ? 'Send this pickup somewhere else to be priced.'
+            : 'Move the remaining units to another store to be listed.',
+        wide: true,
+        body: `
+            ${_b2bSummary(deal)}
+            ${_b2bWhereLine(deal)}
+            ${listed && kind === 'listing' ? `
+                <div class="b2b-note warn">
+                    <span class="b2b-note-k">${listed} unit${listed === 1 ? '' : 's'} already listed</span>
+                    Those stay recorded against their Shopify barcodes and do not move.
+                    Only what is left to list follows the deal.
+                </div>` : ''}
+            <label class="form-label-caps" style="margin-top:14px;">Move To</label>
+            <div class="b2b-loc-pick">
+                ${options.filter(c => c !== at).map(c => `
+                    <button class="b2b-loc" data-loc="${c}" onclick="b2bPickTransfer('${c}')">
+                        <span class="b2b-loc-dot" style="background:${STORE_TINTS[c] || '#94a3b8'}"></span>
+                        <span class="b2b-loc-c">${c}</span>
+                    </button>`).join('')}
+            </div>
+            <label class="form-label-caps" style="margin-top:14px;">Why (optional)</label>
+            <input id="b2bMoveNote" class="form-input-lg" placeholder="e.g. LEE is backed up until Friday">
+            <p class="b2b-hint">The move is recorded with your name against it, so the trail
+                survives the deal being reopened later.</p>`,
+        footer: `
+            <span class="b2b-msg" id="b2bDealMsg"></span>
+            <button class="kpi-cancel-btn" onclick="b2bOpenDeal('${_b2bClickKind(deal)}','${deal.id}')">Cancel</button>
+            <button class="b2b-btn b2b-btn-primary" id="b2bMoveGo" disabled
+                onclick="b2bDoTransfer('${deal.id}',this)">Move</button>`,
+    });
+}
+
+let _b2bTransferPick = null;
+function b2bPickTransfer(code) {
+    _b2bTransferPick = code;
+    document.querySelectorAll('.b2b-loc').forEach(b => b.classList.toggle('on', b.dataset.loc === code));
+    const go = document.getElementById('b2bMoveGo');
+    if (go) { go.disabled = false; go.textContent = `Move To ${code}`; }
+}
+
+async function b2bDoTransfer(id, btn) {
+    if (!_b2bTransferPick) return;
+    const to = _b2bTransferPick;
+    await _b2bBusy(btn, 'Moving…', async () => {
+        await _b2bPost({
+            action: 'transfer_location', id, to_store: to,
+            note: document.getElementById('b2bMoveNote')?.value.trim(),
+        }, "Couldn't move the deal");
+        closeAllModals();
+        await b2bRefresh();
+    });
+}
+
 // --- reordering the sheet --------------------------------------------------
 // Drag a line by its number. The Line cell is the handle rather than the whole
 // row, because the row is fifteen editable fields and dragging must not start
@@ -15743,6 +15829,7 @@ function _b2bStagePricing(deal) {
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
+            ${_b2bMoveBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
             ${_b2bIsEmployee()
                 ? '<span class="b2b-msg" style="color:var(--cb-muted);font-weight:600;">Prices save automatically — a manager or DM submits this for quoting.</span>'
@@ -15874,6 +15961,7 @@ function _b2bStageQuote(deal) {
             </details>`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
+            ${_b2bMoveBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
             ${canAccept ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bSendBack('${deal.id}')">Send Back For Changes</button>` : ''}
             ${canAccept
@@ -16434,6 +16522,7 @@ function _b2bStageListing(deal) {
             <div id="b2bListProg">${_b2bListProgress()}</div>
             <div id="b2bListRows" class="b2b-list">${_b2bListRows()}</div>`,
         footer: `
+            ${_b2bMoveBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
             <button class="b2b-btn b2b-btn-primary" id="b2bListDone" ${_b2bAllSatisfied() ? '' : 'disabled'}
                 onclick="b2bCompleteDeal('${deal.id}',this)">Complete Deal</button>`,

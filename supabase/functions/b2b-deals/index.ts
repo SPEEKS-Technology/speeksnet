@@ -607,6 +607,70 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true, id: data.id, line_no: data.line_no, sku: data.sku });
       }
 
+      // Move a deal to another store mid-flight.
+      //
+      // Two different moves share this action because they are the same act at
+      // different points: before the client accepts, the pricing store is who
+      // holds the goods; after, the listing store is. Which one is editable is
+      // decided by the stage, not by the caller -- a payload asking to change
+      // the pricing store of a deal that is already listing is refused rather
+      // than obeyed, because the goods are not there any more.
+      //
+      // Corp only, same roles that approve a quote: this decides which building
+      // physical stock sits in.
+      if (action === "transfer_location") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can move a deal between stores." }, 403);
+        }
+
+        // pricing while it is being priced or quoted; listing once it is there.
+        const kind = OPEN_STAGES.includes(deal.stage) ? "pricing"
+          : (deal.stage === "listing_location" || deal.stage === "listing") ? "listing"
+          : null;
+        if (!kind) {
+          return jsonResponse({
+            success: false,
+            error: "A deal can only be moved while it is being priced, quoted or listed.",
+          }, 409);
+        }
+
+        // The listing store must be a real store; pricing may also sit at CORP.
+        const to = oneOf(String(body.to_store ?? "").toUpperCase(),
+          kind === "pricing" ? PRICING_LOCATIONS : STORES,
+          "Store")!;
+        const from = kind === "pricing" ? deal.pricing_store : deal.listing_store;
+        if (from === to) {
+          return jsonResponse({ success: false, error: `This deal is already at ${to}.` }, 409);
+        }
+
+        const patch: Record<string, unknown> = kind === "pricing"
+          ? { pricing_store: to }
+          : { listing_store: to };
+        // Moving a CORP-priced deal to a store before acceptance also settles
+        // where it will be listed, which is the whole reason it was going to
+        // stop at listing_location. Leaving that stale would route it to a
+        // store it is no longer at.
+        if (kind === "pricing" && deal.stage !== "quote" && deal.listing_store) {
+          patch.listing_store = to === "CORP" ? null : to;
+        }
+        const { error } = await supabase.from("b2b_deals").update(patch).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+
+        // Logged after the move, and a logging failure does not undo it: the
+        // goods have physically moved either way, and a missing audit line is
+        // better than a deal whose record disagrees with the building.
+        await supabase.from("b2b_deal_transfers").insert({
+          deal_id: deal.id, kind, from_store: from, to_store: to,
+          moved_by: str(body.user, 120, "User"),
+          note: str(body.note, 1000, "Note"),
+        });
+        await broadcastChange("b2b", to, { deal: deal.id, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true, kind, from_store: from, to_store: to });
+      }
+
       // Rewrite the display order of a deal's lines.
       //
       // Takes the full id list rather than "move X above Y": the client already
