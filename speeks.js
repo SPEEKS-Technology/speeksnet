@@ -12751,7 +12751,13 @@ const B2B_ACTIONS = {
 const B2B_CORP_ROLES   = ['district manager', 'ceo', 'tom'];
 const B2B_ACCEPT_ROLES = ['ceo', 'tom', 'district manager'];   // may lock a quote
 const B2B_STORE_ROLES  = ['manager', 'owner (manager)', 'owner manager', 'assistant manager'];
-const B2B_CONDITIONS   = ['New', 'Like New', 'Good', 'Fair', 'For Parts'];
+// 'For Parts' was renamed to 'Broken' -- same meaning, plainer word. It is gone
+// from the picker but still recognised by the reason gate and the tone maps
+// below: existing rows were migrated, and a row saved in the window between
+// this shipping and that running would otherwise stop asking for a reason,
+// silently. Same treatment the retired laptop/desktop item types get.
+const B2B_CONDITIONS   = ['New', 'Like New', 'Good', 'Fair', 'Broken'];
+const B2B_COND_LEGACY  = ['For Parts'];
 // Preset client-facing note tags. Joined with '; ' rather than ',' so a typed
 // note containing a comma doesn't get re-parsed into phantom tags on reload.
 const B2B_NOTE_TAGS = ['Cracked', 'LCD Damage', 'No RAM', 'No HDD', 'Non-functional',
@@ -14377,10 +14383,11 @@ function _b2bTagsOf(str)  { return String(str || '').split(';').map(s => s.trim(
 function _b2bPresetNotes(it) { return _b2bTagsOf(it.client_notes).filter(t => B2B_NOTE_TAGS.includes(t)); }
 function _b2bCustomNotes(it) { return _b2bTagsOf(it.client_notes).filter(t => !B2B_NOTE_TAGS.includes(t)).join('; '); }
 
-// Anything downgraded to Fair or For Parts has to say why: that note prints on
+// Anything downgraded to Fair or Broken has to say why: that note prints on
 // the quote and is the only thing standing between a low offer and an argument
-// with the client later.
-const B2B_REASON_CONDITIONS = ['Fair', 'For Parts'];
+// with the client later. Keeps the legacy 'For Parts' spelling so the gate can
+// never quietly stop firing on an older row -- see B2B_COND_LEGACY.
+const B2B_REASON_CONDITIONS = ['Fair', 'Broken', ...B2B_COND_LEGACY];
 function _b2bNeedsReason(it)   { return B2B_REASON_CONDITIONS.includes(it.condition); }
 function _b2bMissingReason(it) { return _b2bNeedsReason(it) && !String(it.client_notes || '').trim(); }
 // Deliberately no `unreasoned()` helper: a second, weaker gate alongside
@@ -15490,18 +15497,23 @@ function _b2bPaintQuoteDoc() {
 }
 
 // Condition earns a tinted chip on the quote, using the same semantic tones as
-// the rest of the app: emerald for sound, amber for Fair, red for For Parts.
+// the rest of the app: emerald for sound, amber for Fair, red for Broken.
 // The client can read the state of their equipment down the column at a glance.
+// 'For Parts' is the retired spelling of Broken and keeps its tone, so a row
+// written before the rename still reads red rather than falling to the grey
+// default.
 const B2B_COND_TONE = {
     'New':       { bg: '#e8f7ee', fg: '#178048' },
     'Like New':  { bg: '#e8f7ee', fg: '#178048' },
     'Good':      { bg: '#e8f7ee', fg: '#178048' },
     'Fair':      { bg: '#fdf3e1', fg: '#b7791f' },
+    'Broken':    { bg: '#fcecec', fg: '#d1443b' },
     'For Parts': { bg: '#fcecec', fg: '#d1443b' },
 };
 const _b2bCondTone = c => B2B_COND_TONE[c] || { bg: '#f1f5f9', fg: '#647082' };
 const _b2bCondClass = c => ({
-    'New': 'ok', 'Like New': 'ok', 'Good': 'ok', 'Fair': 'warn', 'For Parts': 'bad',
+    'New': 'ok', 'Like New': 'ok', 'Good': 'ok', 'Fair': 'warn',
+    'Broken': 'bad', 'For Parts': 'bad',
 }[c] || 'neu');
 
 // --- shared quote maths and wording ----------------------------------------

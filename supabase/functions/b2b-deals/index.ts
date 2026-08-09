@@ -52,7 +52,13 @@ const SECRET = "sp33ks-sync-k3y-2026-x9mq";
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const PRICING_LOCATIONS = [...STORES, "CORP"];
 const ACCEPT_ROLES = ["ceo", "tom", "district manager"];
-const REASON_CONDITIONS = ["Fair", "For Parts"];
+// 'For Parts' was renamed to 'Broken' -- same meaning, plainer word. The old
+// spelling stays recognised here: existing rows were migrated, but a row saved
+// between this deploying and that running would otherwise stop being asked for
+// a reason, and it would stop silently. Must match B2B_REASON_CONDITIONS in
+// speeks.js -- if these two disagree, the gate passes on one side and fails on
+// the other.
+const REASON_CONDITIONS = ["Fair", "Broken", "For Parts"];
 const DECLINE_CATEGORIES = ["client_declined", "client_unresponsive", "withdrawn", "not_viable", "other"];
 const TERMINAL = ["completed", "declined"];
 
@@ -296,7 +302,7 @@ function serialList(v: unknown): string[] {
   return String(v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 }
 
-// A line downgraded to Fair or For Parts must carry a client-facing reason --
+// A line downgraded to Fair or Broken must carry a client-facing reason --
 // it prints on the quote and is what justifies the low offer.
 function unreasonedNames(items: any[]): string | null {
   return namesOf(items.filter((it) =>
@@ -324,7 +330,7 @@ function itemGaps(items: any[]): string | null {
   const reasons = unreasonedNames(items);
   const serials = unserialledNames(items);
   const specs = unspeccedNames(items);
-  if (reasons) parts.push(`marked Fair or For Parts and need a reason: ${reasons}`);
+  if (reasons) parts.push(`marked Fair or Broken and need a reason: ${reasons}`);
   if (specs) parts.push(`missing CPU, RAM or storage: ${specs}`);
   if (serials) parts.push(`need one serial per unit (use "No visible serial" where there isn't one): ${serials}`);
   if (!parts.length) return null;
