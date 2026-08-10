@@ -14,6 +14,7 @@ const corsHeaders = {
 // - weekly_leadership: Monday weekly report, leadership copy (DM/CEO)
 // - weekly_store_<STORE>: Monday weekly report, per-store manager copy
 // - usage_report:      nightly 8pm site-usage report (DM/CEO)
+// - cash_report:       7am cash-on-hand table off the Day End Report
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const LIST_KEYS = new Set([
   "recycle_report",
@@ -25,6 +26,8 @@ const LIST_KEYS = new Set([
   // Email Recipients tool — an orphan nobody can edit without SQL.
   "sales_import_alert",
   "usage_report",
+  // cash_report: the 7am cash-on-hand table (Paul).
+  "cash_report",
   ...STORES.map((s) => `box_order_${s}`),
   ...STORES.map((s) => `weekly_store_${s}`),
 ]);

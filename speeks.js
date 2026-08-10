@@ -26355,6 +26355,11 @@ const EMAIL_LIST_GROUPS = [
         desc: 'Nightly 8pm usage email, plus the Saturday and month-end summaries (sent automatically).',
         lists: [{ key: 'usage_report', label: 'Recipients' }],
     },
+    {
+        title: 'Cash On Hand',
+        desc: '7am closing-cash table, read off each store\'s Day End Report.',
+        lists: [{ key: 'cash_report', label: 'Recipients' }],
+    },
 ];
 
 async function openEmailRecipients() {
