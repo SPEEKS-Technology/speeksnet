@@ -113,6 +113,37 @@ function addGoogleReviews(data) {
       data[s + 'ReviewsProj'] = num(tab.getRange(c + '36').getValue());  // projected month-end
       data[s + 'ReviewsGoal'] = num(tab.getRange(c + '2').getValue());   // monthly target
     });
+
+    // ---- the DAY COLUMN, so the dashboard can see movement ------------------
+    // Rows 35 and 36 above are the month's total and its projection: two numbers
+    // that both go UP and never say whether anything happened yesterday. A store
+    // that has not been asking for reviews for three days looks identical to one
+    // that got four on the 2nd and stopped.
+    //
+    // AF4:AJ34 is already a per-day cumulative column, so the movement is sitting
+    // right there — this just carries it across. Shaped as { OVL: [...31] } to
+    // match wkBuy / wkSell / wkBuyMarginPct exactly, which is what _lvBuyArr in
+    // speeks.js already knows how to read.
+    //
+    // ONE getValues() for the whole block. Thirty-one getValue() calls per store
+    // would be 155 round trips to the sheet on a hub that runs every 10 minutes.
+    //
+    // ⚠️ A blank day stays NULL, and must not become 0. The counts are cumulative,
+    // so a real 0 (a store that genuinely has none yet) and a day the importer has
+    // not reached are different facts, and collapsing them would make every store
+    // read as "no movement" for the whole back half of the month.
+    var grid = tab.getRange('AF4:AJ34').getValues();
+    var codes = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    var daily = {};
+    codes.forEach(function (code, ci) {
+      daily[code] = grid.map(function (row) {
+        var v = row[ci];
+        if (v === '' || v === null || v === undefined) return null;
+        var x = Number(v);
+        return isFinite(x) ? x : null;
+      });
+    });
+    data.wkReviews = daily;
   } catch (err) {
     // Deliberately swallowed. Reviews are a bonus figure; the hub is not.
   }

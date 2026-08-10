@@ -67,6 +67,7 @@ const PREFERRED_URL     = `${_BASE}/preferred-purchases`;
 const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
 const SALES_INGEST_URL  = `${_BASE}/sales-ingest`;
 const LIVE_URL          = `${_BASE}/shopify-live`;
+const USAGE_URL         = `${_BASE}/usage`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -98,6 +99,163 @@ async function postWrite(url, payload) {
         throw new Error(data.error || `Request failed (HTTP ${res.status})`);
     }
     return data;
+}
+
+// --- USAGE TELEMETRY ---
+// Records which surfaces each person actually opens, so the nightly 8pm usage
+// report can answer "who was on the floor today, and did any of them open the
+// Margin Guide". Nothing else on the site records a read — every existing
+// signal is a side effect of someone WRITING something.
+//
+// Volume discipline matters here (see the July egress overage): we keep ONE row
+// per surface per session, not one per click. Re-opening a tool bumps a counter
+// on the row already in the map, and the whole map is re-sent on each flush —
+// the ingest function upserts on (session_id, event, feature), so a re-send
+// overwrites rather than accumulating. A busy session is ~40 rows, flushed a
+// handful of times an hour.
+const _usageRows = new Map();   // 'event|feature' -> row (cumulative for the session)
+let _usageDirty  = new Set();   // keys changed since the last successful flush
+let _usageTimer  = null;
+
+// One id per browser session, minted on first use and kept in sessionStorage so
+// a page navigation between the shells continues the same session rather than
+// starting a new one. Also what makes "sessions per user per day" countable.
+function _usageSessionId() {
+    let id = sessionStorage.getItem('speeksSessionId');
+    if (!id) {
+        id = (crypto.randomUUID && crypto.randomUUID()) ||
+             (Date.now() + '-' + Math.random().toString(36).slice(2));
+        sessionStorage.setItem('speeksSessionId', id);
+    }
+    return id;
+}
+
+// THE tracked-surface list, and the only one (Ethan 2026-08-08). An ALLOW-list,
+// not a deny-list: anything absent here is never queued and never sent, so the
+// default for a new tool is "not tracked" and adding one is a deliberate line.
+//
+// The list is short on purpose. Tools with a due date attached (Store KPIs,
+// Variance Replies, Aging Inventory) get opened because the deadline forces it,
+// so their numbers say nothing about whether anyone chose the site; tools that
+// leave their own write-trail in the database (checklists, the audit, claims,
+// recycle) are already countable without a beacon. What is left is the reading
+// and reference material — the surfaces that were completely invisible before.
+//
+// Values double as the human labels used in the report.
+const USAGE_TRACK = Object.assign(Object.create(null), {
+    'session':          'Signed in',
+    // Announcements themselves are NOT beaconed: `announcement_reads` already
+    // records who marked each post read, which is a stronger signal than having
+    // the feed open, and the report counts readers rather than openers.
+    'annDocsModal':     'Documents',
+    'patchNotesModal':  'Patch Notes',
+    // reference tools
+    'hotkeysDropdown':  'Hotkeys & Commands',
+    'quickMsgDropdown': 'Quick Messages',
+    'calendarDropdown': 'Strategic Calendar',
+    // the counter tools. NOTE there is deliberately no event for merely opening
+    // the Margin Guide tab or landing on the policy library — visiting a page is
+    // not using it. The tracked moment is a category AND an item picked (someone
+    // at the counter with a customer), and a document actually opened.
+    'mg:lookup':        'Margin Guide',
+    'ops:callbacks':    'Customer Call Backs',
+    'doc:open':         'Processes & Policies',
+    // stats page + the home KPI charts
+    'page:stats':       'Stats & Awards page',
+    'chart:home':       'KPI Charts',
+});
+
+// The only public entry point. Never throws, never blocks the UI, and no-ops
+// entirely for a signed-out page so the login screen stays silent.
+function trackUsage(event, feature, label) {
+    try {
+        if (sessionStorage.getItem('speeksUnlocked') !== 'true') return;
+        if (!feature || !USAGE_TRACK[feature]) return;
+        const key = event + '|' + feature;
+        const row = _usageRows.get(key);
+        if (row) {
+            row.opens++;
+        } else {
+            // `at` is the FIRST open of this surface, so first/last activity in
+            // the report reflects when the person did the thing rather than
+            // whenever the flush timer next fired.
+            _usageRows.set(key, {
+                event, feature,
+                label: label || feature,
+                opens: 1,
+                at: new Date().toISOString()
+            });
+        }
+        _usageDirty.add(key);
+        if (!_usageTimer) _usageTimer = setTimeout(_usageFlush, 30000);
+    } catch (_) { /* telemetry must never break a click */ }
+}
+
+async function _usageFlush() {
+    _usageTimer = null;
+    if (!_usageDirty.size) return;
+    const sending = _usageDirty;
+    _usageDirty = new Set();
+    const events = [];
+    sending.forEach(k => { const r = _usageRows.get(k); if (r) events.push(r); });
+    if (!events.length) return;
+    try {
+        await postWrite(USAGE_URL, {
+            user: sessionStorage.getItem('speeksUserName') || '',
+            role: sessionStorage.getItem('speeksUserRole') || '',
+            store: sessionStorage.getItem('speeksUserStore') || '',
+            sessionId: _usageSessionId(),
+            events
+        });
+    } catch (_) {
+        // Put them back so the next flush retries. Because opens is cumulative
+        // and the server upserts, a duplicate send is harmless.
+        sending.forEach(k => _usageDirty.add(k));
+        if (!_usageTimer) _usageTimer = setTimeout(_usageFlush, 30000);
+    }
+}
+
+// Catch the tab closing / being backgrounded, otherwise the last 30s of a
+// session — often the interesting part — is lost. pagehide is the reliable one
+// on mobile Safari, where unload never fires.
+window.addEventListener('pagehide', () => { _usageFlush(); });
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') _usageFlush();
+});
+
+function _usageLabel(key) { return USAGE_TRACK[key] || key; }
+
+// A document in the library is an <a> straight out to Drive — it never routes
+// through a modal or a tab, so a delegated click is the only place to see it.
+// This, not the page visit, IS the Processes & Policies signal.
+document.addEventListener('click', (e) => {
+    try {
+        const el = e.target && e.target.closest && e.target.closest('.doc-card');
+        if (el) trackUsage('open', 'doc:open', _usageLabel('doc:open'));
+    } catch (_) { /* never break a click */ }
+}, true);
+
+// The two chart dropdowns fire loadKpiData() from inline onchange, which init
+// also calls — so they're caught here instead, where only a real change event
+// arrives. Delegated, so it needs no init ordering and costs nothing off the
+// dashboard.
+document.addEventListener('change', (e) => {
+    try {
+        const id = (e.target && e.target.id) || '';
+        if (id === 'metricSelector' || id === 'dmChartStoreSelector') {
+            trackUsage('open', 'chart:home', _usageLabel('chart:home'));
+        }
+    } catch (_) { /* never break a control */ }
+}, true);
+
+// Stats & Awards is the one page where arriving IS the action — there is nothing
+// to open, you read what's on it. Everywhere else a visit is only intent, and
+// the tracked event is whatever the person actually did once they were there.
+function _trackPageVisit() {
+    try {
+        const page = (String(location.pathname || '').split('/').pop() || 'index.html').toLowerCase();
+        if (page === 'stats.html') trackUsage('open', 'page:stats', _usageLabel('page:stats'));
+    } catch (_) { /* never break a page load */ }
 }
 
 // --- 2. NAV COMPACT MODE ---
@@ -315,7 +473,9 @@ function toggleModal(modalId, badgeId = null) {
     if (!isOpen) {
         dropdown.classList.add('show');
         lockAndBlurScreen();
-        
+        // Most tools open through here, so this one hook covers them. Only the
+        // opening half counts — closing a modal isn't usage.
+        trackUsage('open', modalId, _usageLabel(modalId));
     }
 }
 
@@ -625,6 +785,7 @@ function openDocsModal() {
     if (!modal) return;
     modal.classList.add('show');
     lockAndBlurScreen();
+    trackUsage('open', 'annDocsModal', _usageLabel('annDocsModal'));
     // #docsdemo on the URL loads sample files so the view can be checked before real
     // ones pile up. Opt-in and client-side only — nothing is stored, nobody else sees it.
     if (/docsdemo/i.test(window.location.hash) && !_annDocsCache.some(d => d._demo)) _annDemoDocs();
@@ -2330,6 +2491,13 @@ async function checkPIN() {
             sessionStorage.setItem('speeksUserPin', matched.pin);
             // New-hire announcement baseline: blank for pre-existing users (no filtering).
             sessionStorage.setItem('speeksUserOnboardedAt', matched.onboarded_at || '');
+
+            // The foundation of the nightly usage report: without this there is no
+            // record anywhere that a person opened the site at all. Recorded above
+            // the TV gate on purpose — board sessions are logged and filtered out
+            // when the report runs, rather than being dropped at source where we
+            // could never tell a quiet store from a broken beacon.
+            trackUsage('signin', 'session', _usageLabel('session'));
 
             // A shop-floor board signs in on the login page like everyone else and
             // is sent straight to its own page. Before the dashboard init below, not
@@ -5637,6 +5805,9 @@ function switchOperationsTab(name) {
     document.getElementById('ops-tab-' + name)?.classList.add('active');
     document.getElementById('ops-pane-' + name)?.classList.add('active');
     try { history.replaceState(null, '', 'operations.html#' + name); } catch (e) {}
+    // Margin Guide and Customer Call Backs are read-only tools — this tab hook
+    // is the ONLY record that anyone ever used them.
+    trackUsage('open', 'ops:' + name, _usageLabel('ops:' + name));
 
     if (name === 'callbacks') {
         cbLoad();
@@ -6079,6 +6250,12 @@ function _mgBind() {
         _mgState.deviceId = Number.isFinite(id) ? id : null;   // "" = back to unchosen
         _mgState.cond = null;
         _mgState.proj = '';
+        // A category AND an item chosen is the moment the guide is actually being
+        // used — someone is standing at the counter with something in front of
+        // them. Opening the tab proves only that they found it. Clearing the
+        // picker back to "" is not a lookup, so only a real id counts, and repeat
+        // lookups fold into `opens` — the count of items priced this session.
+        if (_mgState.deviceId) trackUsage('open', 'mg:lookup', _usageLabel('mg:lookup'));
         mgRender();
     });
 
@@ -7418,21 +7595,29 @@ function switchPageTab(tab) {
     if (tab === 'records') renderRecords();
 }
 
+// The chart draws itself on page load, so rendering it proves nothing. Every
+// hook below is a CONTROL the reader had to reach for — mode, timeframe, metric,
+// leaderboard — which is the only honest evidence anyone looked at it. They all
+// report one surface: the question is whether the chart gets used, not which
+// button. loadKpiData() is deliberately NOT hooked; init calls it too.
 function setChartMode(mode) {
+    trackUsage('open', 'chart:home', _usageLabel('chart:home'));
     currentChartMode = mode;
     document.getElementById('btn-chart-avg')?.classList.toggle('active', mode === 'averages');
     document.getElementById('btn-chart-emp')?.classList.toggle('active', mode === 'employees');
     loadKpiData(); 
 }
 
-function setTimeframe(t) { 
-    currentTimeframe = t; 
+function setTimeframe(t) {
+    trackUsage('open', 'chart:home', _usageLabel('chart:home'));
+    currentTimeframe = t;
     document.getElementById('btn-4week')?.classList.toggle('active', t === '4-Week'); 
     document.getElementById('btn-monthly')?.classList.toggle('active', t === 'Monthly'); 
     loadKpiData(); 
 }
 
 function switchLeaderboardMetric(metric) {
+    trackUsage('open', 'chart:home', _usageLabel('chart:home'));
     currentLeaderboardMetric = metric;
     
     const revBtn = document.getElementById('lb-tab-rev');
@@ -9893,7 +10078,7 @@ function _lvStoreDetail(d, v) {
     else if (prev) foot = _lvDayClose(v, d);
     else foot = _lvLastOrder(v, d.asOfCentral);
 
-    return _lvForecast([v])
+    return _lvForecast([v], d)
         + '<div class="lv-chips">' + chips + '</div>'
         + (_lvHasMonth(d)
             ? _lvGoalBar(v.mtdGp, v.goal, v.pctOfGoal, _lvElapsedPct(d), v.paceIndex)
@@ -10017,26 +10202,99 @@ function _lvFcFor(code) {
         reviewsGoal: n(h[k + 'ReviewsGoal']),
     };
 }
+// Has this store's review count moved? The hub carries AF4:AJ34 as `wkReviews`,
+// a CUMULATIVE per-day count, so "no reviews yesterday" is simply two consecutive
+// filled days holding the same number.
+//
+// SUNDAYS ARE SKIPPED on both sides of the comparison (user's call 2026-08-09):
+// the stores are shut, nobody is at the counter to ask, and counting a Sunday
+// would flag all five stores every Monday morning for doing nothing wrong. Any
+// day the importer has not reached is skipped too — a blank is missing data, not
+// a flat day, which is why the hub sends null there rather than 0.
+//
+// Returns null rather than false when there is not enough history to judge (the
+// 1st of the month, or a fresh sheet). Silence is not a finding.
+function _lvReviewStale(code) {
+    const arr = _lvBuyArr('wkReviews', code);
+    if (!arr) return null;
+    const now = new Date();
+    const y = now.getFullYear(), mo = now.getMonth();
+    const filled = [];
+    for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (v === null || v === undefined || v === '') continue;
+        if (new Date(y, mo, i + 1).getDay() === 0) continue;
+        filled.push({ day: i + 1, val: Number(v) || 0 });
+    }
+    if (filled.length < 2) return null;
+    const last = filled[filled.length - 1], prev = filled[filled.length - 2];
+    // <= rather than ===: a correction that revises a count DOWN is still a day
+    // with nothing gained, and a store should not clear the flag by losing one.
+    return { stale: last.val <= prev.val, last, prev };
+}
+
+// The same flat-day flag on the collapsed summary line (user's call 2026-08-09).
+// The Tracking tile only exists once the Live tab is OPEN, and both boards land
+// collapsed — so on the surface everyone actually sees on sign-in, the alert was
+// not there at all. This is the one place it has to fire.
+//
+// The note goes in a sibling of .cc-sum-v, never inside it: that element is
+// nowrap with an ellipsis, so a second line placed in it would be clipped to
+// nothing. Rebuilt rather than toggled because both boards re-render this cell
+// on every poll.
+function _lvSumFlat(cell, codes) {
+    const old = cell.querySelector('.cc-sum-flat-n');
+    if (old) old.remove();
+    const flat = codes.filter(c => { const s = _lvReviewStale(c); return s && s.stale; });
+    cell.classList.toggle('cc-sum-flat', !!flat.length);
+    if (!flat.length) return;
+    const n = document.createElement('div');
+    n.className = 'cc-sum-flat-n';
+    // One store knows which store it is, so the sentence is the whole message.
+    //
+    // A district board does NOT get the store pills here (Ethan 2026-08-09). Three
+    // of them wrapped to a second and third line inside a 104px summary cell and
+    // read as debris. The count plus a pointer is the same instruction in one
+    // predictable line, and the Month tab's buying table already carries a Reviews
+    // column per store — which is where the DM has to go to see the numbers anyway
+    // (the tracking TILE is Month-only too: _lvForecast returns '' unless _lvIsMtd).
+    // The tile keeps the pills: it has four times the width.
+    //
+    // "See" rather than "Check": measured, and "3 Stores · Check Month Tab" is the
+    // one wording that wraps at 1000px, which is a real content width. The shorter
+    // verb holds one line from 1000px up. Below that the sentence above it wraps
+    // too and nothing short of cutting words fixes it.
+    n.innerHTML = 'Nothing New Yesterday'
+        + (codes.length === 1 ? ''
+            : '<span class="cc-sum-flat-w">' + flat.length
+              + (flat.length === 1 ? ' Store' : ' Stores') + ' &middot; See Month Tab</span>');
+    cell.appendChild(n);
+}
+
 // The summary cell, on either board. Shown only once there is something to show:
 // an eighth cell reading "—" costs a row that already wraps at seven, and it
 // would sit there for the whole rollout saying nothing.
-function _lvSumReviews(id, fc) {
+function _lvSumReviews(id, fc, codes) {
     const el = document.getElementById(id);
     if (!el) return;
     const has = !!fc && (fc.reviews > 0 || fc.reviewsGoal > 0);
     el.hidden = !has;
     if (!has) return;
+    _lvSumFlat(el, codes || []);
     // Against the goal when there is one, so the number is readable without
     // knowing what good looks like. Same three bands as Tracking to Goal.
     const pct = fc.reviewsGoal > 0 ? (fc.reviewsProj / fc.reviewsGoal) * 100 : null;
-    // Banked against target, and no projection — even though the colour band IS
-    // the projection, which does mean green can sit beside a number that has not
-    // got there yet. Adding "· tracking 137" was measured: it needs about 70px the
-    // cell does not have, and below roughly 1150px it pushes into its neighbour.
-    // These cells are sized for one figure each, the row already wraps at seven,
-    // and the pairing has a proper home one band down in the tracking tile.
+    // Banked, target and projection in one cell (user's call 2026-08-09): the
+    // colour band has always BEEN the projection, so without it green could sit
+    // beside a number nowhere near the goal and look like a mistake.
+    //
+    // "9/31" not "9 of 31". An earlier attempt at this appended "· tracking 137"
+    // to the long form and needed about 70px the cell has not got — below roughly
+    // 1150px it pushed into its neighbour. The slash buys back most of that, and
+    // the projection carries no separator of its own.
     _ccSum(id, _lvNum(fc.reviews)
-        + (fc.reviewsGoal > 0 ? ' <small>of ' + _lvNum(fc.reviewsGoal) + '</small>' : ''),
+        + (fc.reviewsGoal > 0 ? '<small>/' + _lvNum(fc.reviewsGoal) + '</small>' : '')
+        + (fc.reviewsProj > 0 ? ' <small>tracking ' + _lvNum(fc.reviewsProj) + '</small>' : ''),
         pct === null ? '' : (pct >= 100 ? 'good' : (pct >= 80 ? 'warn' : 'bad')));
 }
 
@@ -10053,11 +10311,13 @@ function _lvSumReviews(id, fc) {
 // second thing to disagree.
 function _lvReviewSub(f) {
     const banked = _lvNum(f.reviews)
-        + (f.reviewsGoal > 0 ? ' of ' + _lvNum(f.reviewsGoal) : '');
-    if (!(f.reviewsGoal > 0)) return banked + ' so far';
+        + (f.reviewsGoal > 0 ? ' Of ' + _lvNum(f.reviewsGoal) : '');
+    // Title Case, like every other sub-line on the strip ("$5,768 So Far") and
+    // like the rest of the email and the boards.
+    if (!(f.reviewsGoal > 0)) return banked + ' So Far';
     const toGo = f.reviewsGoal - f.reviews;
-    if (toGo <= 0) return banked + ' &middot; goal met';
-    return banked + ' &middot; ' + _lvNum(toGo) + ' to go';
+    if (toGo <= 0) return banked + ' &middot; Goal Met';
+    return banked + ' &middot; ' + _lvNum(toGo) + ' To Go';
 }
 
 function _lvSplit(label, right) {
@@ -10098,6 +10358,22 @@ function _lvBuyBlock(d, views) {
         return _lvSplit('Buying', '')
             + '<div class="lv-buy-empty">No buying recorded for this period yet.</div>';
     }
+
+    // A CLOSED DAY buys nothing, and the block used to render the whole table
+    // anyway: five rows of $0 bought, $0 paid, a dashed margin and 0% bought-vs-
+    // sold. Every Monday the Yesterday tab therefore reported the district as
+    // having had a catastrophic day, when the stores were simply shut.
+    //
+    // Nothing is drawn now — not even a line explaining the absence, which is
+    // still a paragraph of chrome about something that did not happen. The view
+    // just becomes selling, which is the whole of that day's trade anyway, and
+    // reads like the Live Dashboard with yesterday's figures in it. Same reason
+    // Today has no buying block at all.
+    //
+    // Tested on every store rather than on the calendar: a holiday closure reads
+    // exactly the same way in the sheet, and the day the stores open on a Sunday
+    // this stops applying by itself.
+    if (_lvIsPrev() && rows.every(r => !r.b.bought)) return '';
 
     let html = _lvSplit('Buying', '');
     if (rows.length < _LV_BUY_MIN_STORES) {
@@ -10197,7 +10473,7 @@ function _lvFcSum(views) {
 // every tab's strip in one grid area, so a second row here would make the band
 // taller on the Scorecard and eBay tabs too, which show one row and would gain a
 // band of empty space under it.
-function _lvForecast(views) {
+function _lvForecast(views, d) {
     if (!_lvIsMtd()) return '';
     const f = _lvFcSum(views);
     if (!f) return '';
@@ -10209,19 +10485,62 @@ function _lvForecast(views) {
     // a fourth tile reading "0 · Against 0" for however long the rollout takes
     // would teach everyone to ignore that corner of the strip.
     const hasReviews = f.reviews > 0 || f.reviewsProj > 0 || f.reviewsGoal > 0;
+    // Every tile in this band is a PROJECTION, and a projection with nothing
+    // banked beside it cannot be sanity-checked (user's call 2026-08-09) — the
+    // reviews tile has read "45" over "10 of 40 · 30 to go" since it shipped, and
+    // it was the only one you could weigh by eye. So each tile now carries its
+    // month-to-date underneath, on the same "so far" pattern. That also retires
+    // "Projected Month-End" as a sub-line: the band's own header already says it,
+    // three times over.
+    //
+    // Revenue and GP come off the views, which _lvView has already mapped to the
+    // month in MTD mode. Buying is not a Shopify figure at all — it is summed out
+    // of the sheet's daily arrays, the same call the buying table makes, so the
+    // two cannot disagree.
+    const mtdRev = views.reduce((a, v) => a + (Number(v.netToday) || 0), 0);
+    const mtdGp = views.reduce((a, v) => a + (Number(v.gpToday) || 0), 0);
+    // Null on a month boundary, when _lvBuySpan has no slot to read — the tile
+    // falls back to naming itself rather than printing "$0 So Far".
+    const buys = d ? views.map(v => _lvBuyFor(v.code, d)).filter(Boolean) : [];
+    const mtdBuy = buys.length ? _lvBuySum(buys).bought : null;
+    const soFar = n => _lvMoney(n, false) + ' So Far';
+
+    // Stores that got through a whole open day without a new review. Computed
+    // once: it drives both the tile's class and its sub-line.
+    const flat = views.map(v => v.code)
+        .filter(code => { const s = _lvReviewStale(code); return s && s.stale; });
+    // One store looking at its own board already knows which store it is, so it
+    // gets the sentence. A district board names them, because the pulse on its
+    // own would only say "somebody".
+    const flatNote = !flat.length ? ''
+        : views.length === 1
+            ? '<span class="lv-rev-flat-n">Nothing New Yesterday</span>'
+            : '<span class="lv-rev-flat-n">Nothing New Yesterday</span>'
+              + flat.map(c => '<span class="lv-rev-pill">' + escapeHtml(c) + '</span>').join('');
     return _lvSplit('Tracking to month-end', '')
         + '<div class="lv-strip lv-fc-strip ' + (hasReviews ? 's4' : 's3') + '">'
-        + _lvTile('Tracking Buying', _lvMoney(f.buyProj, false), 'Projected Month-End')
-        + _lvTile('Tracking Revenue', _lvMoney(f.trackRev, false), 'Projected Month-End')
+        + _lvTile('Tracking Buying', _lvMoney(f.buyProj, false),
+            mtdBuy === null ? 'Projected Month-End' : soFar(mtdBuy))
+        + _lvTile('Tracking Revenue', _lvMoney(f.trackRev, false), soFar(mtdRev))
         + _lvTile('Tracking Gross Profit', _lvMoney(f.trackGp, false),
-            f.goal ? 'Against ' + _lvMoney(f.goal, false) : '')
+            soFar(mtdGp) + (f.goal ? ' · Goal ' + _lvMoney(f.goal, false) : ''))
         // The only tile whose sub-line carries figures rather than a caption, and
         // deliberately: the projection alone ("45") is the one number here nobody
         // can sanity-check by eye, because unlike revenue there is no running total
         // on screen anywhere else. Banked against target makes 45 mean something —
         // and the rate makes it something a shift can do about it today.
+        // A store that went a whole open day without a single new review gets the
+        // tile pulsed red (user's call 2026-08-09). The two figures on it both
+        // only ever go UP, so neither could say that a store has stopped asking —
+        // a store that got four on the 2nd and nothing since looks identical to
+        // one still working at it.
+        //
+        // On a district view the pulse alone would say "somebody, somewhere", so
+        // the stale stores are named as pills: the DM's next action is a phone
+        // call, and it needs a number to ring.
         + (hasReviews ? _lvTile('Tracking Google Reviews', _lvNum(f.reviewsProj),
-            _lvReviewSub(f)) : '')
+            _lvReviewSub(f) + flatNote, '', flat.length ? ' lv-rev-flat' : '')
+            : '')
         + '</div>';
 }
 
@@ -10525,7 +10844,7 @@ function renderLiveDashboard() {
             // No footnote on the normal view — the column headers already say what
             // the figures are. The month-boundary case still needs explaining,
             // because "GP this month" and Pace go blank and that looks broken.
-            dDetail.innerHTML = _lvForecast(dViews)
+            dDetail.innerHTML = _lvForecast(dViews, d)
                 + _lvTable(stores, d, d.district, 'District')
                 + _lvActivity()
                 + (_lvHasMonth(d) ? ''
@@ -10600,7 +10919,7 @@ function renderLiveDashboard() {
         const mine = _lvOwnStore(d, stores);
         const own = mine ? [_lvView(mine)] : views;
         tiles = _lvRollupTiles(mine ? _lvView(mine) : _lvView(d.district), d, 'No Orders Yet', own);
-        detail = _lvForecast(own) + _lvTable(stores, d, d.district, 'District')
+        detail = _lvForecast(own, d) + _lvTable(stores, d, d.district, 'District')
             + _lvActivity() + _lvBuyBlock(d, views);
     } else if (stores.length === 1) {
         const m = stores[0];
@@ -10614,7 +10933,7 @@ function renderLiveDashboard() {
         const views = (healthy.length ? healthy : stores).map(_lvView);
         const roll = _lvCombine(views);
         tiles = _lvRollupTiles(roll, d, 'No Orders Yet', views);
-        detail = _lvForecast(views) + _lvTable(stores, d, roll, 'Both')
+        detail = _lvForecast(views, d) + _lvTable(stores, d, roll, 'Both')
             + _lvActivity() + _lvBuyBlock(d, views);
     }
 
@@ -10668,7 +10987,8 @@ function renderLiveDashboard() {
     // Where the month LANDS, from the same projection as the fourth tile and the
     // tracking band, so the collapsed line and the open panel cannot disagree.
     // Same three colour bands as the district's.
-    const fc = mineSum ? _lvFcSum([_lvView(mineSum)]) : null;
+    const mineView = mineSum ? _lvView(mineSum) : null;
+    const fc = mineView ? _lvFcSum([mineView]) : null;
     if (fc && fc.pct !== null) {
         _ccSum('cc-sum-goal', Math.round(fc.pct) + '<small>%</small>',
             fc.pct >= 100 ? 'good' : (fc.pct >= 80 ? 'warn' : 'bad'));
@@ -10677,7 +10997,7 @@ function renderLiveDashboard() {
     // tile inside the panel is where the month is heading. Stays hidden until the
     // sheet carries reviews rather than showing an eighth cell reading "—" — the
     // row already wraps to two lines on a narrow screen at seven.
-    _lvSumReviews('cc-sum-reviews', fc);
+    _lvSumReviews('cc-sum-reviews', fc, mineView ? [mineView.code] : []);
 
     _lvAfterRender();
 }
@@ -17519,6 +17839,10 @@ document.addEventListener("DOMContentLoaded", () => {
         // only at login. First thing inside the branch: everything below it is
         // page setup that a redirect makes pointless.
         if (_tvGate()) return;
+        // Two pages are whole destinations rather than a tool inside one, so the
+        // visit IS the usage signal. Recorded here — past the TV gate, inside the
+        // signed-in branch — so a board and the login screen never count.
+        _trackPageVisit();
         document.body.classList.add('is-authenticated');
         const authOverlay = document.getElementById('authOverlay');
         if (authOverlay) authOverlay.style.display = 'none';
@@ -18561,7 +18885,9 @@ window.toggleGoalsPanel = function(event) {
     const toggle = document.querySelector('.gi-nav-toggle');
     if (toggle) toggle.classList.toggle('panel-active', isOpen);
     if (!isOpen) _closePrevMonths();
-    if (isOpen) _closeSidePanels('goalsSidePanel');
+    if (isOpen) {
+        _closeSidePanels('goalsSidePanel');
+    }
 };
 
 // --- Edit Modal ---
@@ -23781,6 +24107,7 @@ function togglePatchNotes() {
     if (!isOpen) {
         modal.classList.add('show');
         lockAndBlurScreen();
+        trackUsage('open', 'patchNotesModal', _usageLabel('patchNotesModal'));
         switchAnnTab('patchnotes');
     }
 }
@@ -25628,6 +25955,15 @@ const EMAIL_LIST_GROUPS = [
             ...EMAIL_LIST_STORES.map(s => ({ key: `weekly_store_${s}`, label: `${s} manager report` })),
         ],
     },
+    // Every list a report READS must appear here as well as in the edge fn's
+    // LIST_KEYS, or it becomes an orphan only SQL can change — which is exactly
+    // what happened to sales_import_alert. The backend has allowed usage_report
+    // since day one; this row is what makes it editable.
+    {
+        title: 'Site Usage Reports',
+        desc: 'Nightly 8pm usage email, plus the Saturday and month-end summaries (sent automatically).',
+        lists: [{ key: 'usage_report', label: 'Recipients' }],
+    },
 ];
 
 async function openEmailRecipients() {
@@ -25866,11 +26202,25 @@ const FEATURE_CATALOG = [
     { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
     { key: 'tool-feature-access',      label: 'Feature Access (This Tool)',    tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
-    // 'manager' here means the Multi-Store Manager — Feature Access has no MSM
-    // slug of its own (they log in as a manager). The panel link's
-    // role-multistore-manager class is what keeps ordinary managers out; this
-    // row only lets the DM/CEO switch it off for the MSM.
-    { key: 'tool-expenses',            label: 'Expense Report',                tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'manager'] },
+    // TWO rows for one tool, sharing the `tool-expenses` stem the way the claims
+    // and preferred-purchase pairs do. One key carrying both role classes made the
+    // MGR column DISHONEST: it read as "on for the whole manager role" while the
+    // role-multistore-manager class silently admitted only the MSM, so the switch
+    // that should have granted it to another manager was not the one anybody would
+    // reach for (Ethan 2026-08-09). Split, the DM row means what it says and the
+    // MGR column on the second row is a real switch — turning it on beats the role
+    // class, which is how every other tool already behaves.
+    //
+    // The second row's def is 'multistore-manager' — not a role COLUMN (there isn't
+    // one; they sign in as a manager) but a token _faDefaultFor understands, so the
+    // per-user tab can say "role default: visible" for Joseph and match what the
+    // `role-multistore-manager` class on the link actually does. An empty def was
+    // tried first and made his row read "hidden" while he plainly had the tool.
+    //
+    // CEO dropped from both (Ethan 2026-08-09) — they no longer file or review here.
+    // The edge fn still admits the role; this only takes the tool off their panel.
+    { key: 'tool-expenses',            label: 'Expense Report (DM)',           tab: 'tools', group: 'Admin', def: ['district-manager'] },
+    { key: 'tool-expenses-mgr',        label: 'Expense Report (Manager)',      tab: 'tools', group: 'Admin', def: ['multistore-manager'] },
     { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-manage-policies',     label: 'Manage Policies',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
@@ -26114,6 +26464,10 @@ function _featureEffectiveVisible(featureKey, userRoleClass, userName) {
     const slug = String(userRoleClass || '').replace(/^role-/, '');
     if (feat.def.includes(slug)) return true;
     if (slug === 'assistant-manager' && feat.def.includes('employee')) return true;
+    // Same MSM rule _passesRoleClasses applies to the DOM, so this off-page
+    // resolution (Jump To, section nav) can't disagree with the page itself.
+    if (feat.def.includes('multistore-manager') && typeof isMultiStoreManager === 'function'
+        && isMultiStoreManager()) return true;
     return false;
 }
 
@@ -26404,8 +26758,19 @@ function _faSyncTabButtons() {
     });
 }
 
-function _faDefaultFor(feat, roleSlug) {
-    return feat.def === 'all' ? true : feat.def.includes(roleSlug);
+// `isMsm` exists because the Multi-Store Manager signs in with the effective role
+// 'manager' and so has no column of its own in this grid, while the DOM has always
+// been able to single them out with `role-multistore-manager`. A catalog entry can
+// now say the same thing by putting 'multistore-manager' in its def.
+//
+// Without this the user tab told a flat lie: Joseph HAD the Expense Report (the
+// role class admits him) and his row read "role default: hidden", because the tab
+// squashes his role to 'manager' before asking (Ethan spotted it 2026-08-09).
+// Deliberately NOT wired into the role columns — an ordinary manager really does
+// not get these, so the MGR chip staying off is the truth there.
+function _faDefaultFor(feat, roleSlug, isMsm) {
+    if (feat.def === 'all') return true;
+    return feat.def.includes(roleSlug) || (!!isMsm && feat.def.includes('multistore-manager'));
 }
 
 function _faRoleOverride(key, slug) {
@@ -26704,7 +27069,8 @@ function _faUserRowsHtml() {
     const u = _faUsers.find(x => x.name.toLowerCase() === _faUser);
     // effective role slug (Multi-Store Manager logs in with role 'manager')
     let roleSlug = u ? String(u.role || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-') : '';
-    if (roleSlug === 'multi-store-manager') roleSlug = 'manager';
+    const isMsm = roleSlug === 'multi-store-manager';
+    if (isMsm) roleSlug = 'manager';
     // Group features into collapsible cards (collapsed by default; a filter
     // expands the matches) so one user's exceptions aren't one huge scroll. A
     // "N set" badge on each card surfaces where this user already has overrides.
@@ -26725,7 +27091,7 @@ function _faUserRowsHtml() {
             let inherited = null;
             if (roleSlug) {
                 const roleOvr = _faRoleOverride(f.key, roleSlug);
-                inherited = roleOvr === null ? _faDefaultFor(f, roleSlug) : roleOvr;
+                inherited = roleOvr === null ? _faDefaultFor(f, roleSlug, isMsm) : roleOvr;
             }
             const seg = (val, txt) => {
                 const active = (ovr === null && val === 'default') || (ovr === true && val === 'on') || (ovr === false && val === 'off');
@@ -26862,7 +27228,10 @@ const JUMP_KEYWORDS = {
     'tool-user-permissions':     'users permissions pin login accounts roles add user',
     'tool-feature-access':       'feature access hide show toggle delegation permissions',
     'tool-email-recipients':     'email recipients reports distribution who gets',
+    // Both halves of the split answer the same search — only one is ever visible
+    // to a given person, so they can never both come back in one result list.
     'tool-expenses':             'expense report expenses mileage miles reimbursement receipts monthly spend',
+    'tool-expenses-mgr':         'expense report expenses mileage miles reimbursement receipts monthly spend',
     'tool-performance-metrics':  'performance metrics alerts thresholds',
     'tool-company-records':      'records company files documents',
     'tool-manage-policies':      'policies process processes handbook documents',
@@ -32770,6 +33139,13 @@ function _dccRow(store, hubData, varData, scoreData, alertsData, weeklyResults) 
         sellM,
         buyTrack: Math.round(parseFloat(hubData[`${k}BuyProj`])) || 0,
         buyM: _dccPct(hubData[`${k}BuyMargin`]),
+        // Google reviews come off the same hub keys the Live tab's tracking tile,
+        // the district Reviews column and both summary cells read, so the four
+        // surfaces cannot disagree. Zero until the sheet carries them — see the
+        // guard in _dccReviewBlock.
+        reviews: Math.round(parseFloat(hubData[`${k}Reviews`])) || 0,
+        reviewsProj: Math.round(parseFloat(hubData[`${k}ReviewsProj`])) || 0,
+        reviewsGoal: Math.round(parseFloat(hubData[`${k}ReviewsGoal`])) || 0,
         vari: parseFloat(vr.total) || 0,
         variRange: (typeof formatVarianceRange === 'function') ? formatVarianceRange(vr.dateFrom, vr.dateTo) : '',
         period: wk.periodLabel || '',
@@ -33190,6 +33566,30 @@ function _dccBuyBlock(r) {
         + '</div></div>';
 }
 
+// Google reviews, in the same shape as the Live tab's tracking tile: what is
+// banked, where the month is heading, and how many are left. Renders NOTHING at
+// all until the sheet carries reviews — the same rule _lvHasReviews and
+// _lvSumReviews follow, so no surface shows an empty row for the length of the
+// rollout.
+//
+// Deliberately outside _dccChecks: those states drive the rail's ranking and the
+// "stores flagged" count, and a metric this new should not decide which store
+// reads as worst of five. The tracking figure still carries its own colour.
+function _dccReviewBlock(r) {
+    if (!r.reviews && !r.reviewsGoal) return '';
+    const togo = Math.max(0, r.reviewsGoal - r.reviews);
+    const state = r.reviewsGoal > 0 ? (_dccTier(r.reviewsProj, r.reviewsGoal, 'min') || 'g') : null;
+    return '<div class="dcc-block"><div class="dcc-sec">Google reviews'
+        + (r.reviewsGoal ? '<em>Goal ' + r.reviewsGoal + '</em>' : '') + '</div><div class="dcc-rows">'
+        // MTD is the banked count; the sub-line is the same "10 of 40 · 30 to go"
+        // the tracking tile carries, and the remainder is derived rather than
+        // read from a hub key (see the reviewsNeed note in the reviews memory).
+        + _dccStatRow('Reviews (MTD)', String(r.reviews), '', null,
+                      r.reviewsGoal ? r.reviews + ' of ' + r.reviewsGoal + ' · ' + togo + ' to go' : '')
+        + _dccStatRow('Reviews tracking', String(r.reviewsProj), '', state)
+        + '</div></div>';
+}
+
 function _dccWeekBlock(r) {
     // Percent units are appended here rather than baked into the value, matching
     // what renderLineStat used to do for conversion and margin.
@@ -33233,9 +33633,12 @@ function _dccPaneHtml(r, portalLink) {
     // eBay leads when the account is in trouble: a suspension outranks a margin
     // point. Otherwise the money leads. Same blocks either way.
     const ebayBroken = ['track', 'defect', 'cases', 'late'].some(x => _dccState(r, x));
+    // Reviews sit with the money either way — same monthly cadence, same
+    // tracking-to-goal shape. The block returns '' when the sheet has no reviews
+    // yet, and join() drops it.
     const blocks = ebayBroken
-        ? [_dccEbayBlock(r), _dccBuyBlock(r), _dccWeekBlock(r), _dccCatBlock(r)]
-        : [_dccBuyBlock(r), _dccWeekBlock(r), _dccEbayBlock(r), _dccCatBlock(r)];
+        ? [_dccEbayBlock(r), _dccBuyBlock(r), _dccReviewBlock(r), _dccWeekBlock(r), _dccCatBlock(r)]
+        : [_dccBuyBlock(r), _dccReviewBlock(r), _dccWeekBlock(r), _dccEbayBlock(r), _dccCatBlock(r)];
 
     return '<div class="dcc-ph"><div>'
         + '<div class="dcc-pt">' + escapeHtml(r.store) + '</div>'
@@ -33551,15 +33954,27 @@ function _dcSummaryFill() {
     // Company-wide Google reviews, summed from the same per-store hub figures the
     // Live tab's table and tracking tile read — one source, so the two lines on
     // this page cannot disagree. Hides itself until the sheet carries them.
-    _lvSumReviews('dc-sum-reviews', _lvFcSum(_dccRows.map(r => ({ code: r.store }))));
+    _lvSumReviews('dc-sum-reviews', _lvFcSum(_dccRows.map(r => ({ code: r.store }))),
+        _dccRows.map(r => r.store));
 
     // "Stores flagged", not an average: one store failing eBay is the thing worth
     // knowing, and averaging four percentages across five stores hides it.
-    const flagged = _dccRows.filter(r =>
-        ['track', 'defect', 'cases', 'late'].some(k => _dccState(r, k) === 'b')).length;
-    set('dc-sum-ebay', flagged
-        ? flagged + ' <small>' + (flagged === 1 ? 'Store Over' : 'Stores Over') + '</small>'
-        : 'All Clear', flagged ? 'bad' : 'good');
+    //
+    // Danger and risk are counted separately and named (user's call 2026-08-09).
+    // "2 Stores Over" collapsed a store that has breached a threshold together
+    // with one drifting toward it, and those call for different phone calls. A
+    // store in danger outranks one at risk, so a mixed district reports the
+    // danger — the risk is still there when the danger clears.
+    const ebayKeys = ['track', 'defect', 'cases', 'late'];
+    const danger = _dccRows.filter(r => ebayKeys.some(k => _dccState(r, k) === 'b')).length;
+    const risk = _dccRows.filter(r => !ebayKeys.some(k => _dccState(r, k) === 'b')
+        && ebayKeys.some(k => _dccState(r, k) === 'w')).length;
+    const plural = n => n === 1 ? 'Store' : 'Stores';
+    set('dc-sum-ebay',
+        danger ? danger + ' <small>' + plural(danger) + ' In Danger</small>'
+        : risk ? risk + ' <small>' + plural(risk) + ' At Risk</small>'
+        : 'All Clear',
+        danger ? 'bad' : risk ? 'warn' : 'good');
 
     const avg = f => _dccRows.reduce((a, r) => a + f(r), 0) / n;
     const score = avg(r => r.score || 0);

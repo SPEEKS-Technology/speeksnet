@@ -7249,6 +7249,19 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
     background: #fff; border-bottom: 1px solid #eef2f6;
 }
 
+/* Variance Replies gets the Aging treatment for the same reason: a row here is a
+   line item plus a whole gm_note → dm_note → reply thread, so the shared pane
+   height showed a handful and put the rest behind an inner scrollbar — a box
+   scrolling inside a page, with the store picker and period select scrolling out
+   of reach the moment you went looking. Grows to fit, page scrolls, header pinned
+   under the fixed .top-nav at 60px. */
+.ws-panel-vreplies { height: auto !important; overflow: visible !important; min-height: calc(100vh - 250px); }
+.ws-panel-vreplies .ws-scroll { overflow: visible; flex: none; min-height: 0; }
+.ws-panel-vreplies .ws-head {
+    position: sticky; top: 60px; z-index: 4;
+    background: #fff; border-bottom: 1px solid #eef2f6;
+}
+
 /* Monthly Brief pane flows as part of the page too: natural height, no inner scrollbar */
 .ws-panel-brief { height: auto !important; min-height: 0 !important; overflow: visible !important; }
 .ws-panel-brief .ws-scroll { overflow: visible; flex: none; min-height: 0; }
@@ -10184,11 +10197,35 @@ body.sam-active .hotbar-btn:hover {
 }
 .cc-sum { flex: 1 1 0; background: #f6faf7; padding: 17px 16px 18px 18px; min-width: 120px; }
 .cc-sum-k { font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #647082; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* "Through Yesterday" under the two tracking-to-goal keys. The percentage is a
+   projection built on figures that lag a day — a day's buying is keyed the
+   following morning — and the cell had no way to say so, which made it look
+   like a live number that had simply stopped moving.
+   A BLOCK line under the key, not a suffix on it: .cc-sum-k is nowrap with an
+   ellipsis, so anything appended inline vanished at the first narrow window. */
+.cc-sum-thru { display: block; margin-top: 2px; font-size: 8.5px; font-weight: 700; letter-spacing: .04em; color: #94a3b8; }
 .cc-sum-v { font-size: 22px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; margin-top: 7px; color: var(--slate-charcoal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cc-sum-v small { font-size: 11px; font-weight: 700; color: #94a3b8; }
 .cc-sum-v.warn { color: #d97706; }
 .cc-sum-v.bad { color: #dc2626; }
 .cc-sum-v.good { color: #178048; }
+
+/* Google Reviews went a whole open day without moving. Same animation, same rail
+   and the same resting pink as the Tracking tile, so the two surfaces read as one
+   alert rather than two — this one just happens to be the surface everybody
+   actually lands on, since both boards open collapsed.
+   position:relative for the inset rail: .cc-sum is a plain flex child otherwise. */
+.cc-sum.cc-sum-flat { position: relative; animation: lvRevFlat 9s ease-out 1 both; box-shadow: inset 3px 0 0 #d64545; }
+.cc-sum-flat-n { margin-top: 6px; font-size: 9px; font-weight: 800; letter-spacing: .02em; line-height: 1.35; color: #b23636; }
+/* The row is flex with stretched cells, so this cell growing takes the other six
+   with it. That is the intended trade: one extra line across a strip that is
+   already 90px tall, in exchange for the alert being on the collapsed view.
+   The district's second line is a fixed shape — a count and a pointer — rather
+   than a run of store pills, which wrapped three deep in a 104px cell. */
+.cc-sum-flat-w { display: block; margin-top: 3px; font-weight: 700; color: #94a3b8; }
+@media (prefers-reduced-motion: reduce) {
+    .cc-sum.cc-sum-flat { animation: none; background: rgba(214, 69, 69, .045); }
+}
 
 /* Per-tab summary strip — all three stacked in one grid cell, only the active one shown
    (opacity, not display) so the strip row always reserves the tallest tab's height. */
@@ -10516,10 +10553,11 @@ body.sam-active .hotbar-btn:hover {
 .lv-tbl tr.lv-row-mine > td:first-child {
     box-shadow: inset 3px 0 0 var(--sage-professional);
 }
-.lv-tbl tr.lv-row-mine > td { font-size: 13px; }
-.lv-tbl tr.lv-row-mine .lv-strongnum { font-size: 14px; }
-.lv-tbl tr.lv-row-mine .lv-boldnum { font-size: 13.5px; }
-.lv-tbl tr.lv-row-mine .lv-store b { font-size: 13.5px; }
+/* The row used to be set half a point larger throughout as well. The rail and the
+   wash already say "yours" without touching the type, and scaling four different
+   number classes made this one row sit out of rhythm with the four above it —
+   every column's figures stopped lining up on the same baseline weight. Type
+   stays at table size (user's call 2026-08-09). */
 /* The store's full name is set grey to keep it behind the code; on this one row
    it carries the recognition, so it comes up out of the wash a little. */
 .lv-tbl tr.lv-row-mine .lv-store-nm { color: #7b8798; }
@@ -10534,6 +10572,58 @@ body.sam-active .hotbar-btn:hover {
    seconds, each fainter than the last. A single fade is only visible in the moment
    you happen to look up; a slow repeat keeps catching the eye for as long as the
    event is worth knowing about, and dies away on its own rather than stopping. */
+/* GOOGLE REVIEWS WENT A DAY FLAT — the tracking tile pulses red.
+   Modelled on lvRowSale below rather than a steady blink: decaying pulses catch
+   the eye on sign-in and then stop, where a permanent flash becomes wallpaper
+   inside a week and a single fade is only seen if you happen to be looking.
+   Four pulses over 9s, then it rests as a quiet red-tinted card so the state is
+   still legible to somebody who walked up late. */
+@keyframes lvRevFlat {
+    0%   { background: rgba(214, 69, 69, .03); }
+    5%   { background: rgba(214, 69, 69, .20); }
+    16%  { background: rgba(214, 69, 69, .04); }
+    27%  { background: rgba(214, 69, 69, .16); }
+    40%  { background: rgba(214, 69, 69, .04); }
+    52%  { background: rgba(214, 69, 69, .12); }
+    66%  { background: rgba(214, 69, 69, .04); }
+    78%  { background: rgba(214, 69, 69, .08); }
+    100% { background: rgba(214, 69, 69, .045); }
+}
+.cc-cell.lv-rev-flat {
+    animation: lvRevFlat 9s ease-out 1 both;
+    box-shadow: inset 3px 0 0 #d64545;
+}
+.cc-cell.lv-rev-flat .sh-stripe { background: #d64545; }
+/* .sh-sub is a single nowrap line with an ellipsis — every other tile's sub is a
+   short caption. This one carries a sentence and, on a district board, a row of
+   store pills, so it has to be allowed to wrap or the pills are simply clipped
+   off the right-hand edge. Scoped to the flagged tile; every other sub keeps the
+   one-line rule that stops a long caption from changing the strip's height. */
+.cc-cell.lv-rev-flat .sh-sub { white-space: normal; overflow: visible; text-overflow: clip; }
+.lv-rev-flat-n {
+    display: block;
+    color: #b23636;
+    font-weight: 700;
+    margin-top: 2px;
+}
+.lv-rev-pill {
+    display: inline-block;
+    background: #fcecec;
+    color: #b23636;
+    border: 1px solid #f6d5d5;
+    border-radius: 99px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .4px;
+    padding: 1px 7px;
+    margin: 3px 4px 0 0;
+}
+/* Somebody who has asked not to be moved at gets the colour and the rail, and
+   none of the motion. */
+@media (prefers-reduced-motion: reduce) {
+    .cc-cell.lv-rev-flat { animation: none; background: rgba(214, 69, 69, .045); }
+}
+
 @keyframes lvRowSale {
     0%   { background: rgba(31, 157, 87, 0); }
     4%   { background: rgba(31, 157, 87, .22); }
