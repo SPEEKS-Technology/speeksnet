@@ -14,8 +14,18 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 // the same minute would race the import that produces the data. Standalone use
 // is still supported for re-sends and testing (?day=, ?dryRun=1, ?force=1).
 //
-// The day reported is the day the report COVERS — yesterday. Cash balances are a
-// closing position, so the morning email is last night's count.
+// The day reported is the day the report COVERS — normally yesterday. Cash
+// balances are a closing position, so the morning email is last night's count.
+//
+// SUNDAY IS CLOSED, so the week runs:
+//   Tue–Sat  yesterday, as normal
+//   Sunday   nothing sent at all
+//   Monday   SATURDAY's close, skipping over the shut day
+// Retargeting Sunday's send at Saturday instead of suppressing it would look
+// equivalent and is not: both Sunday and Monday would then report Saturday, the
+// send record is keyed on the day reported, and Monday's run would hit the
+// already-sent guard and go silent. A missing Monday email is a worse failure
+// than a missing Sunday one, because Monday is the day somebody is looking.
 // ============================================================================
 
 const SECRET = 'sp33ks-sync-k3y-2026-x9mq';
@@ -72,6 +82,19 @@ const prettyDay = (day: string) =>
   new Date(day + 'T12:00:00Z').toLocaleDateString('en-US',
     { timeZone: 'UTC', weekday: 'long', month: 'long', day: 'numeric' });
 
+// 0 = Sunday. Read at noon UTC so this is the calendar day's own weekday and not
+// some timezone's opinion of it — the same reason every other date helper here
+// parses at T12:00:00Z rather than bare.
+const dowOf = (day: string) => new Date(day + 'T12:00:00Z').getUTCDay();
+
+// The last day the stores were actually open before `today`. Only Sunday is
+// closed, so this steps back one extra day exactly once, on Mondays.
+function lastOpenDay(today: string): string {
+  let d = addDays(today, -1);
+  while (dowOf(d) === 0) d = addDays(d, -1);
+  return d;
+}
+
 const heroTile = () => {
   const bar = (h: number) =>
     `<td width="4" valign="bottom" style="padding:0 2px;"><div style="width:4px;height:${h}px;background:#6ee7a7;border-radius:2px;font-size:0;line-height:0;">&nbsp;</div></td>`;
@@ -88,7 +111,7 @@ const badge = (s: string) =>
 const th = (t: string, align = 'center', w = '') =>
   `<th${w ? ` width="${w}"` : ''} align="${align}" style="font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:${C.faint};background:${C.soft};padding:10px 8px;text-align:${align};border-bottom:1px solid ${C.line};">${t}</th>`;
 
-function buildEmail(day: string, rows: Record<string, any>, missing: string[]) {
+function buildEmail(day: string, rows: Record<string, any>, missing: string[], carried = false) {
   const sum = (k: string) => STORES.reduce((a, s) =>
     rows[s] && rows[s][k] !== null && rows[s][k] !== undefined ? a + Number(rows[s][k]) : a, 0);
   const anyData = STORES.some(s => rows[s]);
@@ -138,7 +161,7 @@ function buildEmail(day: string, rows: Record<string, any>, missing: string[]) {
       <td valign="middle" style="padding-left:13px;">
         <div style="font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:#6ee7a7;">Speeks Technology</div>
         <div style="font-size:20px;font-weight:800;letter-spacing:-.02em;color:#ffffff;margin-top:2px;">Cash On Hand</div>
-        <div style="font-size:12.5px;font-weight:600;color:rgba(255,255,255,.66);margin-top:2px;">Close of ${prettyDay(day)}</div>
+        <div style="font-size:12.5px;font-weight:600;color:rgba(255,255,255,.66);margin-top:2px;">Close of ${prettyDay(day)}${carried ? ' &middot; stores closed Sunday' : ''}</div>
       </td>
     </tr></table>
   </td></tr>
@@ -173,11 +196,26 @@ Deno.serve(async (req: Request) => {
 
   const sb = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
 
-  // Default to yesterday: the Day End Report covers the day it is sent, and this
-  // runs the following morning.
-  const day = url.searchParams.get('day') || addDays(centralToday(), -1);
+  // Default to the last OPEN day: the Day End Report covers the day it is sent,
+  // and this runs the following morning — except on Monday, when yesterday was
+  // a shut Sunday and Saturday's close is the real last count.
+  const today = centralToday();
+  const asked = url.searchParams.get('day');
+  const day = asked || lastOpenDay(today);
   const dryRun = url.searchParams.get('dryRun') === '1';
   const force = url.searchParams.get('force') === '1';
+  // True only when we stepped over a closed Sunday, i.e. Monday's email. Says so
+  // in the email, so a Saturday date landing on a Monday reads as intended
+  // rather than as a report that failed to refresh.
+  const carried = !asked && day !== addDays(today, -1);
+
+  // Sunday: send nothing. Saturday's count goes out tomorrow instead. dryRun and
+  // force still render/send, so this is testable and re-sendable on any day.
+  if (!dryRun && !force && !asked && dowOf(today) === 0) {
+    return new Response(JSON.stringify({
+      ok: true, skipped: 'sunday — stores closed; Saturday goes out Monday', today, day,
+    }, null, 2), { headers: cors });
+  }
 
   try {
     // Already sent for this day? The 8am retry runs the same chain, and a merely
@@ -200,15 +238,20 @@ Deno.serve(async (req: Request) => {
     });
     const missing = STORES.filter(s => !rows[s]);
 
-    const html = buildEmail(day, rows, missing);
+    const html = buildEmail(day, rows, missing, carried);
     if (dryRun) return new Response(html, { headers: { ...cors, 'Content-Type': 'text/html' } });
 
     // Nothing at all reached us. Still send — a silent morning is
     // indistinguishable from "no news is good news", and the whole point of a
     // daily number is noticing the day it stops arriving.
+    // ?to= sends this run somewhere else and touches nothing about the real
+    // list. Without it the only way to prove the relay works is to mail the
+    // actual recipient, which makes every test a live send — the reason the
+    // weekly report and b2b-outreach both carry the same override.
+    const override = (url.searchParams.get('to') || '').split(',').map(s => s.trim()).filter(Boolean);
     const { data: recips } = await sb.from('email_recipients').select('email').eq('list_key', LIST_KEY);
     const to = (recips || []).map((r: any) => r.email).filter(Boolean);
-    const sendTo = to.length ? to : FALLBACK_TO;
+    const sendTo = override.length ? override : (to.length ? to : FALLBACK_TO);
 
     const total = STORES.reduce((a, s) => (rows[s] && rows[s].total != null) ? a + Number(rows[s].total) : a, 0);
     const subject = missing.length === STORES.length
@@ -216,12 +259,18 @@ Deno.serve(async (req: Request) => {
       : `Cash on hand — ${prettyDay(day)} — ${usd(total)}`;
 
     const relay = await sendEmail(sendTo, subject, html);
-    await sb.from('cash_report_sends').upsert({
-      day, sent_at: new Date().toISOString(), recipients: sendTo, stores: STORES.length - missing.length,
-    }, { onConflict: 'day' });
+    // A ?to= test must NOT be recorded as the day's send. Recording it would
+    // make the real 7am run see the day as already handled and stay silent —
+    // testing the email would be the thing that stopped it arriving.
+    if (!override.length) {
+      await sb.from('cash_report_sends').upsert({
+        day, sent_at: new Date().toISOString(), recipients: sendTo, stores: STORES.length - missing.length,
+      }, { onConflict: 'day' });
+    }
 
     return new Response(JSON.stringify({
-      ok: true, day, to: sendTo, stores: STORES.length - missing.length, missing, relay,
+      ok: true, day, carried, to: sendTo, test: override.length > 0,
+      stores: STORES.length - missing.length, missing, relay,
     }, null, 2), { headers: cors });
   } catch (e) {
     return new Response(JSON.stringify({ ok: false, day, error: String((e as Error)?.message || e) }, null, 2),
