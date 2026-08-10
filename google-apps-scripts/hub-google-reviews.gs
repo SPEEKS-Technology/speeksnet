@@ -1,0 +1,111 @@
+// ============================================================================
+// GOOGLE REVIEWS → hub payload
+//
+// Paste the block below into getDashboardData() in the Apps Script project
+// "SPEEKSNET 2.0 Sales Summary" (bound to the Sales Summary sheet), just before
+// its `return data;`. Then Deploy → Manage deployments → pencil → Version:
+// "New version" → Deploy.
+//
+// ⚠️ SAVING IS NOT DEPLOYING. The /exec URL serves the deployed VERSION, so the
+// hub keeps returning the old payload until you publish a new one. This is the
+// same trap that hid the MPL date fix for a day.
+//
+// ---------------------------------------------------------------------------
+// WHAT THE SHEET NEEDS FIRST
+//
+// A Google Reviews block on the `Buy {Mon} {YY}` tab, in the columns to the
+// right of the TTL block (the tab currently ends at AD). On the Buy tab rather
+// than a new tab of its own so it carries forward when you duplicate the tab
+// each month, and so it is on the page you already open every morning.
+//
+// VERIFIED row geometry of that tab (confirmed against the live hub payload,
+// not assumed — ovlBuyVal reads C35 and equals the month total, ovlBuyProj
+// reads C36 and equals the projection):
+//     row 1   store titles          row 35  TTL
+//     row 3   column headers        row 36  Tracking
+//     rows 4-34  days 1-31
+//
+// So the reviews block mirrors it exactly:
+//
+//   AE1  "Google Reviews"
+//   AE2  "Goal"      AF2:AJ2   monthly review target per store  ← you set these
+//   AE3  "Date"      AF3:AK3   OVL  LEE  WSP  MPL  BAL  TTL
+//   AE4:AE34         day numbers 1-31 (copy the Date column from any block)
+//   AF4:AJ34         the CUMULATIVE month-to-date count per store  ← written by
+//                    the daily importer (sales-email-import.gs), which reads it
+//                    off each store's Day End Report. Hand-key a cell only to
+//                    cover a day whose report never arrived; the importer treats
+//                    a value that already matches as unchanged.
+//   AK4              =IF(COUNT(AF4:AJ4)=0,"",SUM(AF4:AJ4))   (fill down to AK34)
+//                    An empty day must stay BLANK — row 36 asks this column which
+//                    day the import last ran, and a plain SUM writes 0 into all
+//                    31 rows on day one.
+//   AF35             =IFERROR(MAX(AF4:AF34),0)   ← TTL. Fill across AF35:AK35.
+//                    For a CUMULATIVE count the largest value IS the month to
+//                    date. ⚠️ NOT the LOOKUP(2,1/(range<>""),range) "last
+//                    non-blank" idiom, which is what this said first: it builds a
+//                    lookup vector of one number and thirty #DIV/0! errors and
+//                    asks Sheets to BINARY-SEARCH it, which is only reliable once
+//                    the column is mostly full. On the first real import — one
+//                    figure at day 7 — all six cells returned 0 with the data
+//                    visible two inches above them.
+//   AF36             =IFERROR(AF35/MAXIFS($AE$4:$AE$34,$AK$4:$AK$34,">0")
+//                             *DAY(EOMONTH(TODAY(),0)),0)          ← Tracking:
+//                    month-to-date ÷ days elapsed × days in month. Fill across.
+//                    The denominator reads the TTL column, absolutely referenced
+//                    so it survives the fill: all five stores import on the same
+//                    day, so one shared denominator is simpler AND righter than
+//                    each store hunting for its own.
+//
+// NOTE the denominator is CALENDAR days, not the Buy tab's "days thru month"
+// (which excludes Sundays because stores don't buy on them). Customers leave
+// reviews any day of the week, so using the buying basis would overstate the
+// projection by about a seventh.
+//
+// The daily report DOES now carry MTD reviews (confirmed 2026-08-08), so the
+// importer fills these cells and nothing downstream changed — which is the whole
+// reason this lives in the sheet rather than being keyed into SPEEKSNET. The only
+// thing still to do by hand is row 2, the monthly target per store.
+//
+// ORDER MATTERS ON THE FIRST RUN: add the block to the sheet BEFORE the importer
+// next runs, or it reports "the Google Reviews block (cols AE-AK) is not on this
+// tab yet" and skips reviews for that day (buying is unaffected — that guard
+// exists so a missing block cannot take the rest of the import down).
+// ============================================================================
+
+  // 4. GOOGLE REVIEWS  (Buy tab, AF-AJ; see the block comment above)
+  //
+  // ⚠️ THE WHOLE BLOCK IS INSIDE try/catch, AND THAT IS THE POINT.
+  //
+  // The first version of this read a `buyingSheet` variable, on the assumption
+  // that getDashboardData() had one under that name. It does not, and the
+  // ReferenceError took the ENTIRE hub down — buying, selling, the leaderboard
+  // and every Live Dashboard surface froze on their last cached payload for half
+  // an hour, for the sake of one bonus figure. A getMaxColumns() guard covered
+  // the failure that was anticipated (columns not there yet) and did nothing
+  // about the one that happened.
+  //
+  // So: this block reaches for NOTHING in the surrounding function — it opens the
+  // tab itself by name — and anything at all that goes wrong inside it costs
+  // reviews and nothing else. Every surface in speeks.js already treats "no review
+  // keys" as "don't show reviews yet", so failing silently here degrades to
+  // exactly the state before the feature existed.
+  try {
+    var revTab = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(
+      'Buy ' + Utilities.formatDate(new Date(), 'America/Chicago', 'MMM yy'));
+    // getRange() throws on a column past the end of the sheet, so the width check
+    // stays even inside the catch — a caught exception is still a wasted call.
+    if (revTab && revTab.getMaxColumns() >= 36) {
+      // Coerce rather than trusting the sheet. A formula cell that errors hands
+      // getValue() back the STRING "#N/A", which would travel to the browser as
+      // text; the client treats 0 as "nothing yet".
+      var revNum = function (v) { var x = Number(v); return isFinite(x) ? x : 0; };
+      var revCols = { ovl: 'AF', lee: 'AG', wsp: 'AH', mpl: 'AI', bal: 'AJ' };
+      Object.keys(revCols).forEach(function (s) {
+        var c = revCols[s];
+        data[s + 'Reviews']     = revNum(revTab.getRange(c + '35').getValue());  // month to date
+        data[s + 'ReviewsProj'] = revNum(revTab.getRange(c + '36').getValue());  // projected month-end
+        data[s + 'ReviewsGoal'] = revNum(revTab.getRange(c + '2').getValue());   // monthly target
+      });
+    }
+  } catch (revErr) { /* reviews are a bonus; never take the hub down for them */ }
