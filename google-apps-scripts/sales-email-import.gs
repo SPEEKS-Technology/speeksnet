@@ -359,7 +359,9 @@ function _handle(e) {
   // version, not the editor's), silently ran a full sales+buying write instead of
   // whatever read-only thing was asked for. Refusing by name costs nothing and
   // makes a deploy-drift miss say so.
-  if (['ingest', 'diagnose', 'diagnoseBuying', 'diagnoseReviews', 'buying'].indexOf(action) < 0) {
+  if (['ingest', 'diagnose', 'diagnoseBuying', 'diagnoseReviews', 'buying',
+       'diagnoseWeekly', 'diagnoseSummary', 'weekly', 'rehearseShift',
+       'backfillConversions', 'verifyConversions'].indexOf(action) < 0) {
     return _json({ ok: false, error: 'unknown action "' + action + '"' });
   }
 
@@ -370,6 +372,26 @@ function _handle(e) {
     // dropdown — checking whether a wording still parses should not need a
     // redeploy to find out, which is the loop that hid the first miss.
     if (action === 'diagnoseReviews') return _json(diagnoseBuyingReviews());
+    // Weekly-summary groundwork, both read-only. See the recon section at the
+    // bottom of this file.
+    if (action === 'diagnoseWeekly')  return _json(diagnoseWeeklyEmails());
+    if (action === 'diagnoseSummary') return _json(diagnoseSummaryTab());
+    // The Summary tab is its own weekly job (Mondays), NOT folded into the daily
+    // ingest the way buying is: it shifts four week blocks up, so a stray extra
+    // run is the one thing it must never get.
+    if (action === 'weekly') {
+      return _json(ingestWeeklySummary({
+        dryRun: dryRun, force: p.force === '1', inPlace: p.inPlace === '1',
+        tab: p.tab || null, weekEnd: p.weekEnd || null
+      }));
+    }
+    if (action === 'rehearseShift') return _json(rehearseWeeklyShift());
+    if (action === 'backfillConversions') {
+      return _json(backfillConversions({ dryRun: dryRun, days: p.days ? parseInt(p.days, 10) : 45 }));
+    }
+    if (action === 'verifyConversions') {
+      return _json(verifyConversionWeek({ weekEnd: p.weekEnd || null }));
+    }
     if (action === 'buying') return _json(ingestBuyingEmails({ dryRun: dryRun }));
 
     var sales = ingestSalesEmails({
@@ -920,7 +942,12 @@ function parseBuyingEmail(msg) {
   // never be able to cost the buying import. Every field is independently
   // optional and a total miss returns three nulls.
   var cash = _parseCash(body);
-  return { ok: true, store: sub.store, date: sub.date, buy: buy, sell: sell, reviews: reviews, cash: cash };
+  // Conversion fractions, likewise optional. They do not go to the Buy tab at
+  // all — they are banked on the Conversions tab so the weekly run can total a
+  // month of them into Summary S and U.
+  var conv = _convFromBody(body);
+  return { ok: true, store: sub.store, date: sub.date, buy: buy, sell: sell,
+    reviews: reviews, cash: cash, cust: conv.cust, dev: conv.dev };
 }
 
 // The three closing-cash figures. Returns an object of three nullable numbers
@@ -1069,7 +1096,20 @@ function ingestBuyingEmails(opts) {
       // sender to catch forwards, which can also drag in unrelated mail — and
       // unrelated mail must never be touched, let alone archived.
       var mine = String(msg.getFrom() || '').toLowerCase().indexOf(BUY_SENDER) !== -1
-        || /day end report/i.test(String(msg.getSubject() || ''));
+        || DAY_END_SUBJECT.test(String(msg.getSubject() || ''));
+
+      // pmdev.site does not only send the Day End Report. The WEEKLY report goes
+      // out from the same address on Saturday evenings, and its subject carries a
+      // store code and a date in exactly the same shape — so _buyParseSubject
+      // accepts it, the body says "Total Spent" and "Estimated Value" just like
+      // the daily one, and its WEEK totals land in Saturday's Buy/Sell cells.
+      // Both reports fire an hour after close, minutes apart, and the later one
+      // wins: a coin flip, not a rare edge case. The weekly pass owns these
+      // emails, so leave them alone AND unarchived (no tid taken below).
+      if (!DAY_END_SUBJECT.test(String(msg.getSubject() || ''))) {
+        report.ignored = (report.ignored || 0) + 1;
+        continue;
+      }
 
       var tid = null;
       if (ARCHIVE_AFTER_IMPORT && mine) {
@@ -1100,6 +1140,7 @@ function ingestBuyingEmails(opts) {
         found[key] = {
           store: parsed.store, date: parsed.date, buy: parsed.buy, sell: parsed.sell,
           reviews: parsed.reviews, cash: parsed.cash,
+          cust: parsed.cust, dev: parsed.dev,
           receivedAt: msg.getDate().getTime(), subject: msg.getSubject()
         };
       }
@@ -1116,6 +1157,12 @@ function ingestBuyingEmails(opts) {
       // the sheet at all, so a missing tab, a formula in the way or a day row
       // that cannot be located must not cost the morning's cash figures — every
       // one of those returns early below.
+      // Banked before any Buy-tab work, for the same reason as cash: a missing
+      // tab or an unlocatable day row must not cost the morning's conversions,
+      // which live on a different tab entirely and are the only record feeding
+      // Summary S/U.
+      _convWrite(ss, f.store, f.date, f.cust, f.dev, opts.dryRun, report);
+
       if (!_cashEmpty(f.cash)) {
         report.cash.push({
           store: f.store, date: _iso(f.date),
@@ -1862,6 +1909,12 @@ function _labelPairs(body) {
 // building a parser off a single sample cost us a round of rework.
 var BUY_SENDER = 'no-reply@pmdev.site';
 
+// Which of pmdev.site's reports is this? The address alone is not enough — the
+// Saturday WEEKLY report shares the sender, the subject shape (store code +
+// date) and the money labels, so anything that does not say "Day End Report" is
+// somebody else's email. See the skip in ingestBuyingEmails.
+var DAY_END_SUBJECT = /day\s*end\s*report/i;
+
 // The PayMore Day End Report puts the store CODE in its own subject line:
 //   "PayMore Stores - Day End Report PayMore Overland Park(KS01) August 5th 2026, 10:00 PM"
 // The code is the identifier to trust, not the store name — it is exact, it is
@@ -2338,7 +2391,8 @@ function _logBuySummary(r) {
   Logger.log('\nfilled ' + r.written.length + ' / overwrote-existing ' + r.corrected.length
     + ' / unchanged ' + r.unchanged + ' / missing ' + r.missing.length
     + ' / unverified ' + r.unverified.length + ' / errors ' + r.errors.length
-    + ' / archived ' + (r.archived || 0));
+    + ' / archived ' + (r.archived || 0)
+    + ' / ignored-not-day-end ' + (r.ignored || 0));
   r.written.concat(r.corrected).forEach(function (w) {
     Logger.log('  ' + w.store + ' ' + w.date + ': '
       + w.changes.map(function (c) { return c.field + ' ' + c.from + ' -> ' + c.to; }).join(', '));
@@ -2352,4 +2406,1271 @@ function _logBuySummary(r) {
     Logger.log('  WARNING [' + w.tab + '] ' + w.note + ': sheet=' + w.sheet
       + ' expected=' + w.expected + ' — ' + w.hint);
   });
+}
+
+// ============================================================
+// WEEKLY SUMMARY recon (read-only — writes nothing, archives nothing)
+// ============================================================
+// Groundwork for automating the "Summary" tab, which is hand-filled every week.
+// Two questions have to be answered before any of it can be written:
+//
+//   1. What is actually IN the Saturday weekly report, verbatim? The daily
+//      parser cannot be reused blind: the weekly report renders most of its
+//      figures as a value ABOVE its label (a stat card), not beside it, so the
+//      same-line matching that reads the Day End Report will miss them.
+//   2. Which Summary cells are formulas? A value written over a formula breaks
+//      the sheet in a way nobody notices for weeks — the import already refuses
+//      to do it, but the map has to be known first to place the writes at all.
+//
+// Both are reachable over the web app as well as the Run dropdown, so answering
+// them does not need a redeploy each time (see the deploy-drift note on _handle).
+var WEEKLY_SUBJECT  = /weekly\s*report/i;
+var WEEKLY_LOOKBACK = 14;   // days; the forwarded copies are a few days old
+var SUMMARY_STORES  = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+
+// Same sender-OR-subject shape as the buying search, for the same reason: the
+// first copies to reach this mailbox were forwards, so `from:` alone finds none.
+function _searchWeeklyMessages() {
+  var q = '(from:(' + BUY_SENDER + ') OR subject:("Weekly Report")) newer_than:' + WEEKLY_LOOKBACK + 'd';
+  var out = [];
+  GmailApp.search(q, 0, 200).forEach(function (thread) {
+    thread.getMessages().forEach(function (m) { out.push(m); });
+  });
+  out = out.filter(function (m) { return WEEKLY_SUBJECT.test(String(m.getSubject() || '')); });
+  out.sort(function (a, b) { return a.getDate().getTime() - b.getDate().getTime(); });
+  return out;
+}
+
+/**
+ * Dumps the weekly reports whole. Deliberately NOT summarised into label/value
+ * pairs the way diagnoseBuyingEmails does: the figures we need sit in stat cards
+ * ("80%" on one line, "52/65" on the next, "Customer Conversion Rate" under
+ * that), and a pair extractor drops exactly the layout that has to be seen.
+ *
+ * Newest copy per store only — five bodies, not fourteen days of them.
+ */
+function diagnoseWeeklyEmails() {
+  var msgs = _searchWeeklyMessages();
+  var out = { ok: true, messages_found: msgs.length, samples: [] };
+
+  var newest = {};
+  msgs.forEach(function (m) {
+    var sub = _buyParseSubject(m.getSubject());
+    var key = sub.store || ('unknown:' + m.getSubject());
+    newest[key] = m;   // list is date-ascending, so the last write is the newest
+  });
+
+  Object.keys(newest).sort().forEach(function (key) {
+    var m = newest[key];
+    var body = _plainBody(m);
+    var sub  = _buyParseSubject(m.getSubject());
+    out.samples.push({
+      store_from_subject: sub.store,
+      date_from_subject:  sub.date ? _iso(sub.date) : null,
+      subject_parse_why:  sub.why,
+      from:     m.getFrom(),
+      subject:  m.getSubject(),
+      received: Utilities.formatDate(m.getDate(), TIMEZONE, 'yyyy-MM-dd HH:mm'),
+      attachments: m.getAttachments().map(function (a) { return a.getName(); }),
+      body_chars: body.length,
+      body: body.slice(0, 20000)
+    });
+    Logger.log('\n=== ' + key + ' | ' + m.getSubject() + ' | '
+      + Utilities.formatDate(m.getDate(), TIMEZONE, 'yyyy-MM-dd HH:mm') + ' ===');
+    Logger.log(body.slice(0, 20000));
+  });
+  return out;
+}
+
+// The Summary tab, by header content rather than by name — the name is a guess
+// and the tab is the one thing here nobody has verified yet.
+function _findSummarySheet(ss) {
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    var sh = sheets[i];
+    var probe = sh.getRange(1, 1, Math.min(12, sh.getMaxRows()),
+      Math.min(40, sh.getMaxColumns())).getValues();
+    for (var r = 0; r < probe.length; r++) {
+      for (var c = 0; c < probe[r].length; c++) {
+        if (/paymore\s*rank/i.test(String(probe[r][c] || ''))) return sh;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * The Summary tab's structure, formulas included.
+ *
+ * `mask` is one character per column A..(last): 'f' = formula, '.' = a literal
+ * value somebody typed, '-' = empty. That is the whole point of this function —
+ * it says which columns an importer may write and which it must leave alone,
+ * and it says it for every week block, so a formula that exists in three blocks
+ * and not the fourth shows up as the inconsistency it is.
+ */
+function diagnoseSummaryTab() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var sh = _findSummarySheet(ss);
+  var out = {
+    ok: true,
+    all_tabs: ss.getSheets().map(function (s) { return s.getName(); })
+  };
+  if (!sh) { out.ok = false; out.error = 'no tab has a "PayMore Rank" header'; return out; }
+
+  var nCols = Math.min(sh.getMaxColumns(), 40);
+  var nRows = Math.min(sh.getMaxRows(), 80);
+  var vals  = sh.getRange(1, 1, nRows, nCols).getDisplayValues();
+  var forms = sh.getRange(1, 1, nRows, nCols).getFormulas();
+
+  out.tab = sh.getName();
+  out.rows = sh.getMaxRows();
+  out.cols = sh.getMaxColumns();
+  out.blocks = [];
+
+  function mask(r) {
+    var s = '';
+    for (var c = 0; c < nCols; c++) {
+      s += forms[r][c] ? 'f' : (String(vals[r][c] || '').trim() ? '.' : '-');
+    }
+    return s;
+  }
+  function rowCells(r) {
+    var o = [];
+    for (var c = 0; c < nCols; c++) {
+      var f = forms[r][c], v = String(vals[r][c] || '').trim();
+      if (!f && !v) continue;
+      o.push(_a1col(c) + (r + 1) + '=' + (f ? f : v));
+    }
+    return o;
+  }
+
+  // A block is anchored on its OVL row; the title/header rows sit above it and
+  // Company closes it. Found by scanning rather than assuming the 9-row stride,
+  // so an inserted row shows up instead of silently shifting every write.
+  for (var r = 0; r < nRows; r++) {
+    if (String(vals[r][0] || '').trim().toUpperCase() !== 'OVL') continue;
+    var block = {
+      ovl_row: r + 1,
+      title_row:  r - 2 >= 0 ? rowCells(r - 2) : [],   // "July | 13-19 | MTD ..."
+      header_row: r - 1 >= 0 ? rowCells(r - 1) : [],   // "Revenue | COGS | GP ..."
+      row_masks: [],
+      cells: []
+    };
+    for (var k = 0; k < 6 && r + k < nRows; k++) {
+      var label = String(vals[r + k][0] || '').trim();
+      block.row_masks.push((label || '(blank)') + ' r' + (r + k + 1) + ' ' + mask(r + k));
+      block.cells.push({ label: label, row: r + k + 1, cells: rowCells(r + k) });
+    }
+    out.blocks.push(block);
+  }
+
+  out.column_key = 'mask index 0 = col A; f=formula . =typed value - =empty';
+  Logger.log('tab: ' + out.tab + '  (' + out.rows + ' rows x ' + out.cols + ' cols)');
+  out.blocks.forEach(function (b) {
+    Logger.log('\n--- block starting row ' + b.ovl_row + ' ---');
+    Logger.log('title : ' + b.title_row.join(' | '));
+    Logger.log('header: ' + b.header_row.join(' | '));
+    b.row_masks.forEach(function (m) { Logger.log('  ' + m); });
+    b.cells.forEach(function (c) { Logger.log('  ' + c.label + ': ' + c.cells.join(' | ')); });
+  });
+  return out;
+}
+
+// ============================================================
+// WEEKLY SUMMARY import — the Summary tab, Mondays 7:30am Central
+// ============================================================
+// Fills the week block the user hand-keyed every Sunday. Three sources, and
+// which one a column comes from is not a style choice:
+//
+//   Sales tab  -> B, C          (the sheet's own daily figures, summed Sun..Sat)
+//   Buy tab    -> O, P, Q       (ditto; the email agrees to the dollar, but the
+//                                sheet is there even when an email is not)
+//   The email  -> R, T, V, Y, Z, AA, AB   (nowhere else carries these)
+//
+// Left alone, always: D and E are formulas; G, H, J, K, M, X and AC are the
+// user's to key in. They are CLEARED on the new block rather than left holding
+// last week's numbers — blank reads as "still needs you", a stale figure does
+// not. S and U (MTD conversions) are deferred; the daily fractions that would
+// feed them are being captured separately.
+//
+// The week is SUN..SAT, matching what the weekly report itself covers ("Aug 2 -
+// Aug 8"). The sheet used to run Mon..Sun, which agreed with the email only
+// because the stores are shut on Sundays; aligning the two removes that
+// coincidence, and lets the email's own stated period be checked against the
+// week being written instead of assumed compatible.
+//
+// It also takes the last day of the week off the critical path: the week closes
+// on Saturday, whose figures the daily import files on Sunday morning — so the
+// Monday run is never waiting on anything written that same morning.
+var SUMMARY_TAB       = 'Summary';   // NOT by content — "Copy of Summary" sits next to it
+var SUMMARY_BLOCKS    = 4;           // the running 4-week window
+var MONTHS_FULL = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+
+// 0-indexed columns on the Summary tab.
+var SUM_C = {
+  REV: 1, COGS: 2, GP: 3, MARGIN: 4,
+  RET_W: 6, RET_M: 7, EBAY_W: 9, EBAY_M: 10, RANK: 12,
+  BUYVAL: 14, BMARG_W: 15, BMARG_M: 16,
+  CUST_W: 17, CUST_M: 18, DEV_W: 19, DEV_M: 20, TRAFFIC: 21,
+  LINE_ITEMS: 23, QTY: 24, VALUE: 25, PROC_ITEMS: 26, PROC_VAL: 27, B2B: 28
+};
+
+// Cleared on the new block, in the order they appear. D/E and the Company row's
+// SUMs are absent on purpose: clearing a formula cell destroys it.
+var SUM_CLEAR_STORE = [SUM_C.REV, SUM_C.COGS, SUM_C.RET_W, SUM_C.RET_M, SUM_C.EBAY_W,
+  SUM_C.EBAY_M, SUM_C.RANK, SUM_C.BUYVAL, SUM_C.BMARG_W, SUM_C.BMARG_M, SUM_C.CUST_W,
+  SUM_C.CUST_M, SUM_C.DEV_W, SUM_C.DEV_M, SUM_C.TRAFFIC, SUM_C.LINE_ITEMS, SUM_C.QTY,
+  SUM_C.VALUE, SUM_C.PROC_ITEMS, SUM_C.PROC_VAL, SUM_C.B2B];
+var SUM_CLEAR_COMPANY = [SUM_C.RET_W, SUM_C.RET_M, SUM_C.EBAY_W, SUM_C.EBAY_M, SUM_C.RANK,
+  SUM_C.BMARG_W, SUM_C.BMARG_M, SUM_C.CUST_W, SUM_C.CUST_M, SUM_C.DEV_W, SUM_C.DEV_M];
+
+// Written as a ratio and formatted, not as a rounded whole number — the Company
+// row's rates are computed from these, and rounding first makes them wrong.
+// Also normalises BAL's T35, which holds a bare 93 where every neighbour is 93%.
+var SUM_PCT_COLS = [SUM_C.BMARG_W, SUM_C.BMARG_M, SUM_C.CUST_W, SUM_C.CUST_M,
+  SUM_C.DEV_W, SUM_C.DEV_M];
+
+// Only "PayMore Stores - Weekly Report". The SPEEKS weekly report emails also say
+// "Weekly Report" in their subject and land in the same mailbox — they were in
+// the search results the first time this ran.
+var WEEKLY_SUBJECT_TAG = /paymore\s+stores\s*-\s*weekly\s+report/i;
+
+// ------------------------------------------------------------
+// Entry point
+// ------------------------------------------------------------
+function ingestWeeklySummary(opts) {
+  opts = opts || {};
+  _WK_TABS = {};   // per-run cache; a second call in the same execution must re-read
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) return { ok: false, error: 'another import is already running' };
+
+  try {
+    var report = {
+      ok: true, kind: 'weekly',
+      ranAt: Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ssXXX"),
+      dryRun: !!opts.dryRun,
+      week: null, shifted: false, written: [], skipped: [], missingEmails: [],
+      incomplete: [], warnings: [], errors: [], archived: 0
+    };
+
+    // The most recently COMPLETED Sun..Sat week — the same window the weekly
+    // report covers, so the sheet block and the email now describe exactly the
+    // same days. Expressed as "the last Saturday before today" so a manual run on
+    // any day of the week still targets the same week.
+    var today = _todayInTz();
+    var end = _addDays(today, -1);
+    while (end.getDay() !== 6) end = _addDays(end, -1);   // 6 = Saturday
+
+    // `weekEnd` targets a specific week. Only used to rehearse a shift against a
+    // copy of the tab — a week other than the current one is otherwise a mistake,
+    // so it must name a Saturday and it says so loudly when it does not.
+    if (opts.weekEnd) {
+      var wanted = new Date(opts.weekEnd + 'T12:00:00');
+      if (isNaN(wanted.getTime())) return { ok: false, error: 'weekEnd is not a date: ' + opts.weekEnd };
+      if (wanted.getDay() !== 6) {
+        return { ok: false, error: 'weekEnd ' + opts.weekEnd + ' is not a Saturday' };
+      }
+      end = new Date(wanted.getFullYear(), wanted.getMonth(), wanted.getDate());
+    }
+    var start = _addDays(end, -6);
+    var label = _summaryWeekLabel(start, end);
+    report.week = { start: _iso(start), end: _iso(end), month: label.month, range: label.range };
+
+    // `tab` exists so the shift — the one destructive thing here — can be
+    // rehearsed on a duplicate of the Summary tab before it runs on the real one.
+    // A dry run cannot cover it: the shift is a copyTo, so there is nothing to
+    // inspect until it has actually happened.
+    var tabName = opts.tab || SUMMARY_TAB;
+    var ss = SpreadsheetApp.openById(SHEET_ID);
+    var sh = ss.getSheetByName(tabName);
+    if (!sh) { report.ok = false; report.error = 'no tab named "' + tabName + '"'; return report; }
+    report.tab = tabName;
+
+    var values = sh.getDataRange().getValues();
+    var blocks = _summaryBlocks(values);
+    if (blocks.length !== SUMMARY_BLOCKS) {
+      report.ok = false;
+      report.error = 'expected ' + SUMMARY_BLOCKS + ' week blocks on "' + SUMMARY_TAB
+        + '", found ' + blocks.length + ' — refusing to write';
+      return report;
+    }
+
+    // Figures first, sheet second: nothing is shifted until we know the week can
+    // actually be filled. A shift that runs and then fails leaves the tab with
+    // last week duplicated and no way to tell from looking at it.
+    var emails = _weeklyEmailsByStore(report, start, end);
+    var figures = {};
+    SUMMARY_STORES.forEach(function (store) {
+      figures[store] = _weeklyFiguresFor(ss, store, start, end, emails[store], report);
+    });
+
+    var blocked = report.incomplete.length > 0;
+    if (blocked && !opts.force) {
+      report.ok = false;
+      report.error = 'the week is not complete in the sheet yet — nothing written. '
+        + 'Re-run once the daily import has filled the gaps, or pass force=1.';
+      return report;
+    }
+
+    // Idempotent: a retry, or a second manual run, must not shift a fourth time.
+    // The newest block's own range label is the marker.
+    //
+    // ⚠️ Compared on the DISPLAYED text, never the raw value. "3-9" typed into a
+    // cell is parsed by Sheets as a date (March 9), so the raw value is a Date
+    // that can never equal the string "3-9" — the check silently returned false
+    // and the run would have shifted a week early, dropping the oldest block and
+    // duplicating this one. "13-19" and "27 - 2" are not valid dates and stay
+    // text, so the column holds both types and only the display is comparable.
+    var newest = blocks[blocks.length - 1];
+    var shown = sh.getRange(newest.titleRow + 1, 1, 1, 2).getDisplayValues()[0];
+    var already = String(shown[1] || '').trim() === label.range
+      && String(shown[0] || '').trim() === label.month;
+
+    // `inPlace` overwrites the bottom block whatever it is currently labelled.
+    // Needed for the Mon..Sun -> Sun..Sat changeover: the block holding "3-9" and
+    // the week "2-8" are the same seven days under two definitions, and a shift
+    // would file them as two different weeks and push a real one off the top.
+    var inPlace = already || !!opts.inPlace;
+    if (already) {
+      report.warnings.push({ note: 'block already labelled ' + label.month + ' ' + label.range
+        + ' — updating it in place, not shifting' });
+    } else if (opts.inPlace) {
+      report.warnings.push({ note: 'inPlace — overwriting the bottom block (currently "'
+        + shown[0] + ' ' + shown[1] + '") without shifting' });
+    } else if (!opts.dryRun) {
+      _summaryShiftUp(sh, blocks);
+      report.shifted = true;
+    } else {
+      report.shifted = 'would shift';
+    }
+
+    // The clear only makes sense AFTER a shift, where the new block is holding a
+    // copy of last week and a leftover figure would read as this week's. On an
+    // update in place there is nothing stale to remove, and clearing would wipe
+    // the columns the user keys by hand (Return %, eBay %, Rank, Line Items, B2B)
+    // for a week they have already filled in.
+    _summaryWriteBlock(sh, newest, label, figures, opts.dryRun, report, !inPlace);
+    _summaryCheckFormulas(sh, blocks, report);
+    _weeklyArchive(emails, opts, report);
+    return report;
+
+  } catch (err) {
+    return { ok: false, kind: 'weekly', error: String(err && err.message || err) };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ------------------------------------------------------------
+// Block geometry
+// ------------------------------------------------------------
+// Located by scanning column A for OVL..BAL followed by Company, never by the
+// 9-row stride — an inserted row would otherwise shift every write by one and
+// overwrite the wrong week, which is the same trap _findDayRow exists for.
+function _summaryBlocks(values) {
+  var out = [];
+  for (var r = 2; r < values.length; r++) {
+    if (String(values[r][0] || '').trim().toUpperCase() !== SUMMARY_STORES[0]) continue;
+    if (r + SUMMARY_STORES.length >= values.length) continue;
+
+    var rows = {}, ok = true;
+    for (var k = 0; k < SUMMARY_STORES.length; k++) {
+      if (String(values[r + k][0] || '').trim().toUpperCase() !== SUMMARY_STORES[k]) { ok = false; break; }
+      rows[SUMMARY_STORES[k]] = r + k;
+    }
+    if (!ok) continue;
+    var comp = r + SUMMARY_STORES.length;
+    if (!/^company$/i.test(String(values[comp][0] || '').trim())) continue;
+
+    out.push({ titleRow: r - 2, headerRow: r - 1, firstRow: r, rows: rows, companyRow: comp });
+  }
+  return out;
+}
+
+// Oldest block out, everything up one, newest block left holding a copy of the
+// week before it (which the caller then clears and overwrites).
+//
+// copyTo, not setValues: it carries formats AND rewrites the relative formulas,
+// so D22 =B22-C22 lands as D13 =B13-C13. A values-only shift would move last
+// week's numbers up while leaving the formulas pointing at their old rows.
+//
+// Only the six DATA rows move, plus the month/range labels in A and B. The title
+// row also carries a merged X:AC banner and the header row is identical in every
+// block, so copying either would risk a merge error for nothing — the rest of
+// the title row is per-block formulas (G2 =B2) that are already in place.
+function _summaryShiftUp(sh, blocks) {
+  var width = sh.getMaxColumns();
+  for (var i = 0; i < blocks.length - 1; i++) {
+    var from = blocks[i + 1], to = blocks[i];
+    sh.getRange(from.titleRow + 1, 1, 1, 2)
+      .copyTo(sh.getRange(to.titleRow + 1, 1, 1, 2));
+    sh.getRange(from.firstRow + 1, 1, SUMMARY_STORES.length + 1, width)
+      .copyTo(sh.getRange(to.firstRow + 1, 1, SUMMARY_STORES.length + 1, width));
+  }
+}
+
+// "August" + "3-9", or "July- August" + "27 - 2" across a month boundary. Both
+// spellings, spacing included, copied from what is already in the sheet.
+function _summaryWeekLabel(start, end) {
+  var same = start.getMonth() === end.getMonth();
+  return {
+    month: same ? MONTHS_FULL[start.getMonth()]
+                : MONTHS_FULL[start.getMonth()] + '- ' + MONTHS_FULL[end.getMonth()],
+    range: same ? start.getDate() + '-' + end.getDate()
+                : start.getDate() + ' - ' + end.getDate()
+  };
+}
+
+// ------------------------------------------------------------
+// The figures
+// ------------------------------------------------------------
+function _weeklyFiguresFor(ss, store, start, end, email, report) {
+  var f = { store: store };
+
+  // --- Sales tab: revenue and cost, Sun..Sat. A week can straddle two months,
+  // so this walks days and picks the tab per day rather than reading one tab.
+  var rev = 0, cogs = 0, gaps = [];
+  for (var d = new Date(start); d <= end; d = _addDays(d, 1)) {
+    var cells = _dayCells(ss, _tabNameFor(d), SALES_COL_BASES[store], d, [COL_SALES, COL_COST]);
+    if (!cells || cells[0] == null || cells[1] == null) { gaps.push(_iso(d)); continue; }
+    rev += cells[0]; cogs += cells[1];
+  }
+  if (gaps.length) {
+    report.incomplete.push({ store: store, field: 'revenue/cost', missing_days: gaps,
+      hint: 'the daily sales import has not filled these yet' });
+  }
+  // Rounded because these are sums of floats: 15974.339999999998 displays as
+  // $15,974.34 and is harmless, but it is the value an export or a comparison
+  // would see, and "why does the sheet say .339999" is a question worth never
+  // being asked.
+  f.revenue = _round2(rev); f.cogs = _round2(cogs);
+
+  // --- Buy tab: the week, and the month-to-date the week ends in.
+  var wk = _buySpanTotals(ss, store, start, end, report, 'buy/sell');
+  f.weekBuy = _round2(wk.buy); f.weekSell = _round2(wk.sell);
+
+  var mStart = new Date(end.getFullYear(), end.getMonth(), 1);
+  // Labelled apart from the week's own gaps: the two spans overlap, so the same
+  // missing day is reported by both and reads as a duplicate rather than as the
+  // two different columns it actually spoils (O/P vs Q).
+  var mtd = _buySpanTotals(ss, store, mStart, end, report, 'buy/sell (MTD)');
+  f.mtdBuy = _round2(mtd.buy); f.mtdSell = _round2(mtd.sell);
+
+  f.buyMarginWeek = f.weekSell > 0 ? (f.weekSell - f.weekBuy) / f.weekSell : null;
+  f.buyMarginMtd  = f.mtdSell  > 0 ? (f.mtdSell  - f.mtdBuy)  / f.mtdSell  : null;
+
+  // --- MTD conversions, from the daily ledger. Same as-of date as Q: the 1st
+  // through the week's end, in the month the week ends in.
+  //
+  // A single missing day is refused rather than absorbed. Summing a short
+  // denominator produces a plausible rate that is quietly wrong, and there is
+  // nothing in the cell afterwards to say so — whereas an empty S with the days
+  // named in the report is fixable.
+  var conv = _convMtd(ss, store, mStart, end);
+  f.convMissing = conv.missing;
+  if (conv.noTab) {
+    report.warnings.push({ store: store, field: 'S/U',
+      reason: 'no "' + CONV_TAB + '" tab yet — run backfillConversions first' });
+  } else if (conv.missing.length) {
+    report.warnings.push({ store: store, field: 'S/U',
+      reason: 'no daily conversions banked for ' + conv.missing.length + ' day(s) this month',
+      missing_days: conv.missing });
+  } else {
+    f.custMtd = conv.custDen > 0 ? conv.custNum / conv.custDen : null;
+    f.devMtd  = conv.devDen  > 0 ? conv.devNum  / conv.devDen  : null;
+    f.convTotals = conv;
+  }
+
+  // --- Email. A store with no email for THIS week gets its sheet-derived
+  // columns and nothing else; the rest are reported rather than guessed at.
+  if (!email) {
+    report.missingEmails.push({ store: store, week: _iso(start) + '..' + _iso(end) });
+    return f;
+  }
+  f.custNum = email.cust ? email.cust.num : null;
+  f.custDen = email.cust ? email.cust.den : null;
+  f.devNum  = email.dev  ? email.dev.num  : null;
+  f.devDen  = email.dev  ? email.dev.den  : null;
+  f.custRate = (f.custDen) ? f.custNum / f.custDen : null;
+  f.devRate  = (f.devDen)  ? f.devNum  / f.devDen  : null;
+  f.traffic  = f.custDen;
+  f.qty            = email.availCount;
+  f.value          = email.availProjection;
+  f.processedItems = email.processedItems;
+  f.processedValue = email.processedValue;
+
+  // The email and the Buy tab compute the same week from different systems. They
+  // matched to the dollar on every store when this was built, so a disagreement
+  // now is worth surfacing rather than silently preferring one.
+  if (email.estValue != null && Math.abs(email.estValue - f.weekSell) > 1) {
+    report.warnings.push({ store: store, note: 'Estimated Value disagrees with the Buy tab',
+      email: email.estValue, sheet: f.weekSell });
+  }
+  if (email.estMargin != null && f.buyMarginWeek != null
+      && Math.abs(email.estMargin - f.buyMarginWeek) > 0.01) {
+    report.warnings.push({ store: store, note: 'Gross Margin disagrees with the Buy tab',
+      email: email.estMargin, sheet: f.buyMarginWeek });
+  }
+  return f;
+}
+
+// Buy/Sell summed over a date span, tab picked per day so a span can cross a
+// month boundary. Missing days are reported, not silently treated as zero — a
+// gap understates the total in a way that looks like a bad week.
+function _buySpanTotals(ss, store, start, end, report, fieldLabel) {
+  var buy = 0, sell = 0, gaps = [];
+  for (var d = new Date(start); d <= end; d = _addDays(d, 1)) {
+    var cells = _dayCells(ss, _buyTabNameFor(d), BUY_COL_BASES[store], d, [COL_BUY, COL_SELL]);
+    if (!cells || cells[0] == null || cells[1] == null) {
+      if (d.getDay() !== 0) gaps.push(_iso(d));   // Sundays are shut; a blank is normal
+      continue;
+    }
+    buy += cells[0]; sell += cells[1];
+  }
+  if (gaps.length && report) {
+    report.incomplete.push({ store: store, field: fieldLabel || 'buy/sell', missing_days: gaps,
+      hint: 'the daily buying import has not filled these yet' });
+  }
+  return { buy: buy, sell: sell };
+}
+
+// One day's cells out of a monthly tab, row located by the day number in the
+// block's own Date column. Tab values are cached per run — a 7-day span across
+// two stores would otherwise re-read the same sheet fourteen times.
+var _WK_TABS = {};
+function _dayCells(ss, tabName, base, date, cols) {
+  if (base == null) return null;
+  if (!(tabName in _WK_TABS)) {
+    var sh = ss.getSheetByName(tabName);
+    _WK_TABS[tabName] = sh ? sh.getDataRange().getValues() : null;
+  }
+  var values = _WK_TABS[tabName];
+  if (!values) return null;
+  var row = _findDayRow(values, base, date.getDate());
+  if (row < 0) return null;
+  return cols.map(function (c) { return _num(values[row][base + c]); });
+}
+
+// ------------------------------------------------------------
+// Writing
+// ------------------------------------------------------------
+function _summaryWriteBlock(sh, block, label, figures, dryRun, report, clearFirst) {
+  // Title first, so a half-finished run is still labelled with the week it was
+  // trying to write rather than the week it just shifted up.
+  //
+  // Forced to plain text: left alone, "10-16" would be swallowed as October 16
+  // and "3-9" as March 9 — which is exactly how the existing cells came to hold
+  // dates. Writing them as text also makes the idempotency check above compare
+  // like with like from here on.
+  _sumLabel(sh, block.titleRow, 0, label.month, 'title.month', dryRun, report);
+  _sumLabel(sh, block.titleRow, 1, label.range, 'title.range', dryRun, report);
+
+  SUMMARY_STORES.forEach(function (store) {
+    var r = block.rows[store], f = figures[store] || {};
+    if (clearFirst) SUM_CLEAR_STORE.forEach(function (c) { _sumClear(sh, r, c, dryRun, report); });
+
+    _sumSet(sh, r, SUM_C.REV,        f.revenue,        store + '.revenue', dryRun, report);
+    _sumSet(sh, r, SUM_C.COGS,       f.cogs,           store + '.cogs', dryRun, report);
+    _sumSet(sh, r, SUM_C.BUYVAL,     f.weekSell,       store + '.buyingValue', dryRun, report);
+    _sumSet(sh, r, SUM_C.BMARG_W,    f.buyMarginWeek,  store + '.margin', dryRun, report);
+    _sumSet(sh, r, SUM_C.BMARG_M,    f.buyMarginMtd,   store + '.marginMTD', dryRun, report);
+    _sumSet(sh, r, SUM_C.CUST_W,     f.custRate,       store + '.custConver', dryRun, report);
+    _sumSet(sh, r, SUM_C.CUST_M,     f.custMtd,        store + '.custConverMTD', dryRun, report);
+    _sumSet(sh, r, SUM_C.DEV_W,      f.devRate,        store + '.devConver', dryRun, report);
+    _sumSet(sh, r, SUM_C.DEV_M,      f.devMtd,         store + '.devConverMTD', dryRun, report);
+    _sumSet(sh, r, SUM_C.TRAFFIC,    f.traffic,        store + '.traffic', dryRun, report);
+    _sumSet(sh, r, SUM_C.QTY,        f.qty,            store + '.qtyOfItems', dryRun, report);
+    _sumSet(sh, r, SUM_C.VALUE,      f.value,          store + '.value', dryRun, report);
+    _sumSet(sh, r, SUM_C.PROC_ITEMS, f.processedItems, store + '.processedItems', dryRun, report);
+    _sumSet(sh, r, SUM_C.PROC_VAL,   f.processedValue, store + '.processedValue', dryRun, report);
+  });
+
+  // Company row. B/C/D/E/O/V/X..AC are already SUM formulas and are left alone;
+  // these six are typed by hand today. Rates are weighted — the sum of the
+  // numerators over the sum of the denominators, not the mean of five percentages.
+  var r = block.companyRow;
+  if (clearFirst) SUM_CLEAR_COMPANY.forEach(function (c) { _sumClear(sh, r, c, dryRun, report); });
+
+  var t = { weekBuy: 0, weekSell: 0, mtdBuy: 0, mtdSell: 0,
+            custNum: 0, custDen: 0, devNum: 0, devDen: 0,
+            mCustNum: 0, mCustDen: 0, mDevNum: 0, mDevDen: 0 };
+  var haveCust = false, haveDev = false, everyStoreHasMtd = true;
+  SUMMARY_STORES.forEach(function (store) {
+    var f = figures[store] || {};
+    t.weekBuy += f.weekBuy || 0; t.weekSell += f.weekSell || 0;
+    t.mtdBuy  += f.mtdBuy  || 0; t.mtdSell  += f.mtdSell  || 0;
+    if (f.custDen) { t.custNum += f.custNum; t.custDen += f.custDen; haveCust = true; }
+    if (f.devDen)  { t.devNum  += f.devNum;  t.devDen  += f.devDen;  haveDev = true; }
+    // The company MTD rate is only meaningful if EVERY store contributed a full
+    // month; one store short would weight the total towards the others.
+    if (f.convTotals) {
+      t.mCustNum += f.convTotals.custNum; t.mCustDen += f.convTotals.custDen;
+      t.mDevNum  += f.convTotals.devNum;  t.mDevDen  += f.convTotals.devDen;
+    } else {
+      everyStoreHasMtd = false;
+    }
+  });
+
+  _sumSet(sh, r, SUM_C.BMARG_W, t.weekSell > 0 ? (t.weekSell - t.weekBuy) / t.weekSell : null,
+    'Company.margin', dryRun, report);
+  _sumSet(sh, r, SUM_C.BMARG_M, t.mtdSell > 0 ? (t.mtdSell - t.mtdBuy) / t.mtdSell : null,
+    'Company.marginMTD', dryRun, report);
+  _sumSet(sh, r, SUM_C.CUST_W, haveCust ? t.custNum / t.custDen : null,
+    'Company.custConver', dryRun, report);
+  _sumSet(sh, r, SUM_C.DEV_W, haveDev ? t.devNum / t.devDen : null,
+    'Company.devConver', dryRun, report);
+  _sumSet(sh, r, SUM_C.CUST_M, everyStoreHasMtd && t.mCustDen > 0 ? t.mCustNum / t.mCustDen : null,
+    'Company.custConverMTD', dryRun, report);
+  _sumSet(sh, r, SUM_C.DEV_M, everyStoreHasMtd && t.mDevDen > 0 ? t.mDevNum / t.mDevDen : null,
+    'Company.devConverMTD', dryRun, report);
+}
+
+// Every write goes through here, and every write refuses a formula cell. The
+// Company row's SUMs and the store rows' D/E are one column index away from
+// cells we do write, and a literal dropped on one of them breaks the tab in a
+// way nobody would notice for weeks.
+function _sumSet(sh, rowIdx, col, value, label, dryRun, report) {
+  var a1 = _a1col(col) + (rowIdx + 1);
+  // A field that parsed to nothing has to SAY so. Silence here reads exactly like
+  // a field that was never meant to be written, and the two need different fixes.
+  if (value == null || value === '') {
+    report.skipped.push({ field: label, cell: a1, reason: 'no value — not written' });
+    return;
+  }
+  var rng = sh.getRange(rowIdx + 1, col + 1);
+  if (rng.getFormula()) {
+    report.skipped.push({ field: label, cell: a1,
+      reason: 'cell holds a formula (' + rng.getFormula() + ') — not overwriting' });
+    return;
+  }
+  // `from` is what makes a dry run reviewable: on the first run the target block
+  // is the one already filled by hand, so from -> to IS the comparison.
+  report.written.push({ field: label, cell: a1, from: rng.getDisplayValue(), to: value });
+  if (dryRun) return;
+  rng.setValue(value);
+  if (SUM_PCT_COLS.indexOf(col) !== -1) rng.setNumberFormat('0%');
+}
+
+// The week labels. Text format is set BEFORE the value, or Sheets parses the
+// string on the way in and the format change arrives too late to stop it.
+function _sumLabel(sh, rowIdx, col, text, label, dryRun, report) {
+  var rng = sh.getRange(rowIdx + 1, col + 1);
+  report.written.push({ field: label, cell: _a1col(col) + (rowIdx + 1),
+    from: rng.getDisplayValue(), to: text });
+  if (dryRun) return;
+  rng.setNumberFormat('@');
+  rng.setValue(text);
+}
+
+function _sumClear(sh, rowIdx, col, dryRun, report) {
+  var rng = sh.getRange(rowIdx + 1, col + 1);
+  if (rng.getFormula()) {
+    report.skipped.push({ field: 'clear', cell: _a1col(col) + (rowIdx + 1),
+      reason: 'formula cell — left alone' });
+    return;
+  }
+  if (!dryRun) rng.clearContent();
+}
+
+// A block is only as good as the formulas nobody writes. D/E and the Company
+// SUMs are invisible when they go missing — the cell just reads empty, and the
+// next shift copies that emptiness up into the running window.
+//
+// Not repaired, only reported: a formula appearing on its own would be a bigger
+// surprise than one going missing. (Seen for real — a hand-clear of the block
+// took V36's =SUM(V31:V35) with it while every other formula survived.)
+function _summaryCheckFormulas(sh, blocks, report) {
+  var newest = blocks[blocks.length - 1], prev = blocks[blocks.length - 2];
+  if (!prev) return;
+  var width = Math.min(sh.getMaxColumns(), 34);
+  var pRows = sh.getRange(prev.firstRow + 1, 1, SUMMARY_STORES.length + 1, width).getFormulas();
+  var nRows = sh.getRange(newest.firstRow + 1, 1, SUMMARY_STORES.length + 1, width).getFormulas();
+
+  for (var r = 0; r < pRows.length; r++) {
+    for (var c = 0; c < width; c++) {
+      if (pRows[r][c] && !nRows[r][c]) {
+        report.warnings.push({
+          note: 'formula missing', cell: _a1col(c) + (newest.firstRow + r + 1),
+          expected_like: pRows[r][c] + ' (the block above has one here)'
+        });
+      }
+    }
+  }
+}
+
+// ------------------------------------------------------------
+// The weekly email
+// ------------------------------------------------------------
+// Archived once the week is written, so the mailbox shows what has NOT been
+// handled yet — same idea as the daily passes.
+//
+// Three things it will not archive, each for its own reason:
+//   - anything on a dry run, or a run that wrote nothing;
+//   - a store whose figures did not make it into the sheet, which is precisely
+//     the mail somebody needs to still be able to find;
+//   - the SPEEKS weekly report emails. They match `subject:"Weekly Report"` and
+//     so come back in the same search, but they are the user's own reading —
+//     hence the PayMore-specific subject test, not the search, as the gate.
+function _weeklyArchive(emails, opts, report) {
+  if (!ARCHIVE_AFTER_IMPORT || opts.dryRun) return;
+
+  var wrote = {};
+  report.written.forEach(function (w) { wrote[String(w.field).split('.')[0]] = true; });
+
+  SUMMARY_STORES.forEach(function (store) {
+    var e = emails[store];
+    if (!e || !e.thread) return;
+    if (!wrote[store]) {
+      report.warnings.push({ store: store, note: 'nothing written for this store — its email '
+        + 'is left in the inbox' });
+      return;
+    }
+    try {
+      e.thread.moveToArchive();
+      report.archived++;
+    } catch (err) {
+      report.errors.push({ store: store, error: 'archive failed: ' + String(err && err.message || err) });
+    }
+  });
+}
+
+
+// Only emails whose OWN stated period is the week being written. Now that the
+// block and the report cover the same Sun..Sat days, this is an exact match
+// rather than a compatibility argument — and it is what stops a fortnight-old
+// report, or a re-sent one, from filling a week it does not describe.
+function _weeklyEmailsByStore(report, start, end) {
+  var out = {};
+  _searchWeeklyMessages().forEach(function (msg) {
+    if (!WEEKLY_SUBJECT_TAG.test(String(msg.getSubject() || ''))) return;
+    var p;
+    try { p = parseWeeklyEmail(msg); } catch (e) {
+      report.errors.push({ subject: msg.getSubject(), error: String(e && e.message || e) });
+      return;
+    }
+    if (!p.ok) { report.errors.push({ subject: msg.getSubject(), error: p.why }); return; }
+    if (_iso(p.periodStart) !== _iso(start) || _iso(p.periodEnd) !== _iso(end)) return;
+    var prev = out[p.store];
+    if (!prev || msg.getDate().getTime() >= prev.receivedAt) {
+      p.receivedAt = msg.getDate().getTime();
+      try { p.thread = msg.getThread(); } catch (_) { p.thread = null; }
+      out[p.store] = p;
+    }
+  });
+  return out;
+}
+
+/** One weekly report -> every figure the Summary tab needs from it. */
+function parseWeeklyEmail(msg) {
+  var subject = String(msg.getSubject() || '');
+  var stores = _buyStoresInText(subject);
+  if (stores.length !== 1) {
+    return { ok: false, why: stores.length ? 'ambiguous — subject names ' + stores.join(' and ')
+                                           : 'no store code in subject' };
+  }
+  var period = _wkPeriod(subject);
+  if (!period) return { ok: false, why: 'no "Mon D - Mon D, YYYY" period in subject' };
+
+  var lines = _wkLines(_plainBody(msg));
+
+  var out = { ok: true, store: stores[0], periodStart: period.start, periodEnd: period.end };
+
+  // --- Buying Statistics. Bounded at PaytonAI: everything past it is prose,
+  // including store names and figures quoted out of customer reviews.
+  var bs = _wkIdx(lines, /^buying statistics$/i, 0);
+  var stop = _wkIdx(lines, /^paytonai/i, bs < 0 ? 0 : bs);
+  if (bs < 0) return { ok: false, why: 'no "Buying Statistics" section' };
+  if (stop < 0) stop = lines.length;
+
+  var ci = _wkLabelIdx(lines, 'customer conversion rate', bs, stop);
+  var di = _wkLabelIdx(lines, 'device conversion rate', bs, stop);
+  out.cust = ci >= 0 ? _wkFraction(lines, ci) : null;
+  out.dev  = di >= 0 ? _wkFraction(lines, di) : null;
+
+  out.estValue  = _wkMoney(_wkAfter(lines, 'estimated value', bs, stop));
+  out.estMargin = _wkPct(_wkAfter(lines, 'estimated gross margin', bs, stop));
+  out.totalSpent = _wkMoney(_wkAfter(lines, 'total spent', bs, stop));
+
+  // --- Inventory Snapshot -> the "Available" card.
+  var av = _wkAvailable(lines);
+  out.availCount = av.count; out.availCost = av.cost; out.availProjection = av.projection;
+  if (av.why) out.availWhy = av.why;
+
+  // --- Processed Stats. ⚠️ "Devices Processed" is ALSO a column header in the
+  // Team Production table a few lines above, and "Total Value" would then read
+  // one buyer's row. Anchored past the section heading, and matched as a whole
+  // line, which the wide table header can never be.
+  var ps = _wkIdx(lines, /^processed stats$/i, 0);
+  if (ps >= 0) {
+    out.processedItems = _wkInt(_wkAfter(lines, 'devices processed', ps, lines.length));
+    out.processedValue = _wkMoney(_wkAfter(lines, 'total value', ps, lines.length));
+  }
+  return out;
+}
+
+// "Aug 2 - Aug 8, 2026" -> {start, end}. The year is stated once, at the end; a
+// week spanning New Year has a start month LATER than its end month, which is
+// the only signal that the start belongs to the previous year.
+function _wkPeriod(subject) {
+  var m = String(subject).match(
+    /([A-Za-z]{3,9})\.?\s+(\d{1,2})\s*[-‐-―]\s*([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s*(20\d{2})/);
+  if (!m) return null;
+  var m1 = _wkMonthIdx(m[1]), m2 = _wkMonthIdx(m[3]);
+  if (m1 < 0 || m2 < 0) return null;
+  var year = parseInt(m[5], 10);
+  return {
+    start: new Date(m1 > m2 ? year - 1 : year, m1, parseInt(m[2], 10)),
+    end:   new Date(year, m2, parseInt(m[4], 10))
+  };
+}
+
+function _wkMonthIdx(name) {
+  var n = String(name).slice(0, 3).toLowerCase();
+  for (var i = 0; i < MONTHS.length; i++) if (MONTHS[i].toLowerCase() === n) return i;
+  return -1;
+}
+
+// Body -> the lines every reader below works on.
+//
+// ⚠️ Two things happen here, and the second one is why the parser silently read
+// nothing out of the real emails for a while.
+//
+//   1. Blank lines go: every rule is "the line before" or "the line after".
+//   2. **Asterisks go.** getPlainBody() renders the report's bold table cells as
+//      `* 6/7 *` and `*$ 670▼ 82%*`. A copy FORWARDED through Outlook is
+//      re-rendered and arrives as a clean `78/95` — so a parser built and tested
+//      against forwarded samples passes, then finds nothing at all once the
+//      reports start arriving direct from pmdev.site. Every weekly sample used
+//      to build this was forwarded; the daily backfill is what exposed it, on
+//      exactly the three days that came direct.
+//
+// Stripped once, here, rather than tolerated in a dozen anchored regexes.
+function _wkLines(body) {
+  return String(body || '').split(/\r?\n/)
+    .map(function (l) { return l.replace(/\*/g, ' ').replace(/[ \t]+/g, ' ').trim(); })
+    .filter(function (l) { return l; });
+}
+
+function _wkIdx(lines, re, from) {
+  for (var i = Math.max(0, from || 0); i < lines.length; i++) if (re.test(lines[i])) return i;
+  return -1;
+}
+
+// Whole-line equality, not "contains". Every label in this email sits alone on
+// its line, and "contains" is what makes a wide table header match a field name.
+function _wkLabelIdx(lines, label, from, to) {
+  for (var i = Math.max(0, from); i < Math.min(lines.length, to); i++) {
+    if (lines[i].toLowerCase() === label) return i;
+  }
+  return -1;
+}
+
+// The value belongs to the line AFTER its label — except on the conversion
+// cards, where it comes before. Hence two readers, not one.
+function _wkAfter(lines, label, from, to) {
+  var i = _wkLabelIdx(lines, label, from, to);
+  if (i < 0 || i + 1 >= lines.length) return null;
+  return _wkLevels(lines[i + 1])[0] || null;
+}
+
+// "78/95" on its own line, within a card's height of the label above it.
+function _wkFraction(lines, labelIdx) {
+  for (var i = labelIdx - 1; i >= Math.max(0, labelIdx - 3); i--) {
+    var m = lines[i].replace(/,/g, '').match(/^(\d+)\s*\/\s*(\d+)$/);
+    if (m) return { num: parseInt(m[1], 10), den: parseInt(m[2], 10) };
+  }
+  return null;
+}
+
+// Strips the trend deltas and returns the LEVELS in order:
+//   "1,326▲ 14.6% $ 37,513▲ 17.5% $ 87,994▲ 16.7%"  ->  ["1,326", "$ 37,513", "$ 87,994"]
+// Every figure in this email is followed by its own change, so a reader that
+// does not do this reads growth as level — "52%▲ 2%" would parse as 2%.
+function _wkLevels(line) {
+  return String(line || '').split(/[▲▼]\s*[\d.,]+\s*%/)
+    .map(function (s) { return s.trim(); })
+    .filter(function (s) { return s; });
+}
+
+function _wkMoney(tok) {
+  if (tok == null) return null;
+  var m = String(tok).replace(/,/g, '').match(/\$\s*(-?\d+(?:\.\d+)?)/);
+  return m ? parseFloat(m[1]) : null;
+}
+function _wkPct(tok) {
+  if (tok == null) return null;
+  var m = String(tok).match(/(-?\d+(?:\.\d+)?)\s*%/);
+  return m ? parseFloat(m[1]) / 100 : null;
+}
+function _wkInt(tok) {
+  if (tok == null) return null;
+  if (String(tok).indexOf('$') !== -1) return null;   // a count is never money
+  var m = String(tok).replace(/,/g, '').match(/(-?\d+)/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+// The "Available" card out of the Inventory Snapshot — NOT "In Queue" above it
+// or "Live" below, both of which carry the same three fields.
+//
+// The card's own header is required and read, rather than assuming the order:
+// Cost and Projection are adjacent money columns, so if they were ever swapped
+// upstream the Value column would fill with cost and still look like a number.
+// The $-shape check below is what actually catches that.
+function _wkAvailable(lines) {
+  var snap = _wkIdx(lines, /^inventory snapshot$/i, 0);
+  if (snap < 0) return { why: 'no "Inventory Snapshot" section' };
+  var av = _wkIdx(lines, /^available$/i, snap);
+  if (av < 0) return { why: 'no "Available" card' };
+
+  // Tolerant of what sat between the words before _wkLines stripped it: direct
+  // emails render this header as "*Device Count* *Cost* *Projection*", so a
+  // plain \s+ between the words matched only forwarded copies.
+  var hdr = -1;
+  for (var i = av; i < Math.min(lines.length, av + 6); i++) {
+    if (/device\W*count\W+cost\W+projection/i.test(lines[i])) { hdr = i; break; }
+  }
+  if (hdr < 0) return { why: 'the Available card is not laid out as "Device Count Cost Projection"' };
+
+  var lv = _wkLevels(lines[hdr + 1]);
+  if (lv.length < 3) return { why: 'Available row has ' + lv.length + ' figures, expected 3' };
+  if (lv[0].indexOf('$') !== -1 || lv[1].indexOf('$') === -1 || lv[2].indexOf('$') === -1) {
+    return { why: 'Available row is not count/money/money — the columns may have moved' };
+  }
+  return { count: _wkInt(lv[0]), cost: _wkMoney(lv[1]), projection: _wkMoney(lv[2]) };
+}
+
+function _round2(n) { return Math.round(n * 100) / 100; }
+
+// ============================================================
+// DAILY CONVERSIONS — the ledger behind Summary S and U
+// ============================================================
+// The Summary tab wants month-to-date customer and device conversion, and the
+// weekly report has no MTD figure for either. The DAILY report does carry the
+// day's fractions ("9/11", "36/51"), so MTD is the sum of the numerators over
+// the sum of the denominators — exact, not apportioned.
+//
+// It cannot be recovered from the Summary blocks themselves: a month is never a
+// whole number of weeks (Aug 1 sits in the Jul 26–Aug 1 week), the older blocks
+// hold rounded rates, and only four weeks are kept. Same reason Q is computed
+// from the Buy tab rather than from the blocks.
+//
+// So the fractions are banked daily, in this workbook, on their own hidden tab.
+// The alternative was a Supabase table — but the weekly run lives in Apps Script
+// and only ever PUSHES to Supabase; making it read back would add a secret and a
+// new way for the Monday job to fail, for numbers whose only consumer is a tab in
+// the same file.
+//
+// ⚠️ This is a VISIT-weighted rate: a customer who comes in twice counts twice.
+// The report publishes no MTD figure of its own, so this is the definition — if
+// PayMoreOS ever shows one and dedupes across the month, the two will disagree
+// legitimately.
+var CONV_TAB = 'Conversions';
+var CONV_BASES = { OVL: 1, LEE: 5, WSP: 9, MPL: 13, BAL: 17 };   // 0-indexed; A = Date
+var CONV_FIELDS = ['custNum', 'custDen', 'devNum', 'devDen'];
+var CONV_HEADER_ROWS = 2;
+
+// Created on first use and hidden — it is a ledger, not something to read.
+function _convTab(ss, create) {
+  var sh = ss.getSheetByName(CONV_TAB);
+  if (sh || !create) return sh;
+
+  sh = ss.insertSheet(CONV_TAB);
+  var top = ['Date'], sub = [''];
+  SUMMARY_STORES.forEach(function (store) {
+    top.push(store, '', '', '');
+    sub.push('Cust Conv', 'Cust Total', 'Dev Conv', 'Dev Total');
+  });
+  sh.getRange(1, 1, 1, top.length).setValues([top]).setFontWeight('bold');
+  sh.getRange(2, 1, 1, sub.length).setValues([sub]).setFontWeight('bold');
+  sh.setFrozenRows(CONV_HEADER_ROWS);
+  // Dates as literal text. A "3-9" in this workbook already became March 9 once;
+  // an ISO string sorts correctly and cannot be reinterpreted.
+  sh.getRange(CONV_HEADER_ROWS + 1, 1, sh.getMaxRows() - CONV_HEADER_ROWS, 1).setNumberFormat('@');
+  sh.hideSheet();
+  return sh;
+}
+
+// Row for one ISO date, appended in date order if it is new. Located by matching
+// the date text, never by offset from the top — the same rule the day-row lookups
+// on the Buy and Sales tabs follow.
+function _convRow(sh, iso, create) {
+  var last = sh.getLastRow();
+  if (last >= CONV_HEADER_ROWS + 1) {
+    var col = sh.getRange(CONV_HEADER_ROWS + 1, 1, last - CONV_HEADER_ROWS, 1).getDisplayValues();
+    for (var i = 0; i < col.length; i++) {
+      if (String(col[i][0]).trim() === iso) return CONV_HEADER_ROWS + 1 + i;
+    }
+  }
+  if (!create) return -1;
+  var row = Math.max(last + 1, CONV_HEADER_ROWS + 1);
+  sh.getRange(row, 1).setNumberFormat('@').setValue(iso);
+  return row;
+}
+
+// One store-day. Idempotent: re-reading the same report rewrites the same four
+// numbers, which is what lets the daily backfill window overlap harmlessly.
+function _convWrite(ss, store, date, cust, dev, dryRun, report) {
+  if (!cust && !dev) return;
+  var base = CONV_BASES[store];
+  if (base == null) return;
+
+  var iso = _iso(date);
+  var vals0 = [
+    cust ? cust.num : null, cust ? cust.den : null,
+    dev ? dev.num : null, dev ? dev.den : null
+  ];
+
+  // On a dry run before the tab exists there is nothing to diff against, but the
+  // values still have to be VISIBLE — a dry run that reports "0 store-days"
+  // because it could not open a sheet reads exactly like a parser that found
+  // nothing, which is the one thing a dry run is for telling apart.
+  var sh = _convTab(ss, !dryRun);
+  if (!sh) {
+    (report.conversions = report.conversions || []).push({
+      store: store, date: iso, changes: ['(no tab yet) ' + vals0.join('/')]
+    });
+    return;
+  }
+
+  var row = _convRow(sh, iso, !dryRun);
+  if (row < 0) return;
+
+  var vals = [
+    cust ? cust.num : null, cust ? cust.den : null,
+    dev ? dev.num : null, dev ? dev.den : null
+  ];
+  var changed = [];
+  for (var i = 0; i < vals.length; i++) {
+    if (vals[i] == null) continue;
+    var rng = sh.getRange(row, base + i + 1);
+    var cur = _num(rng.getValue());
+    if (cur === vals[i]) continue;
+    changed.push(CONV_FIELDS[i] + ' ' + cur + '->' + vals[i]);
+    if (!dryRun) rng.setValue(vals[i]);
+  }
+  if (changed.length) {
+    (report.conversions = report.conversions || []).push({
+      store: store, date: iso, changes: changed
+    });
+  }
+}
+
+// Month-to-date, summed over days 1..end. Sundays are never counted as missing:
+// the stores are shut, so there is no report and nothing to add.
+function _convMtd(ss, store, monthStart, end) {
+  var out = { custNum: 0, custDen: 0, devNum: 0, devDen: 0, missing: [] };
+  var sh = _convTab(ss, false);
+  if (!sh) { out.noTab = true; return out; }
+
+  var base = CONV_BASES[store];
+  var last = sh.getLastRow();
+  if (last < CONV_HEADER_ROWS + 1) { out.noTab = true; return out; }
+
+  var dates = sh.getRange(CONV_HEADER_ROWS + 1, 1, last - CONV_HEADER_ROWS, 1).getDisplayValues();
+  var data  = sh.getRange(CONV_HEADER_ROWS + 1, base + 1, last - CONV_HEADER_ROWS, 4).getValues();
+  var byDate = {};
+  for (var i = 0; i < dates.length; i++) byDate[String(dates[i][0]).trim()] = data[i];
+
+  for (var d = new Date(monthStart); d <= end; d = _addDays(d, 1)) {
+    if (d.getDay() === 0) continue;
+    var row = byDate[_iso(d)];
+    var cd = row ? _num(row[1]) : null, dd = row ? _num(row[3]) : null;
+    if (cd == null || dd == null) { out.missing.push(_iso(d)); continue; }
+    out.custNum += _num(row[0]) || 0; out.custDen += cd;
+    out.devNum  += _num(row[2]) || 0; out.devDen  += dd;
+  }
+  return out;
+}
+
+// The two fractions out of a Day End or Weekly report body. Bounded to the
+// Buying Statistics section: past it the review prose quotes numbers freely, and
+// the Team Production table is full of x/y-shaped pairs.
+function _convFromBody(body) {
+  var lines = _wkLines(body);
+
+  var from = _wkIdx(lines, /^buying statistics$/i, 0);
+  if (from < 0) return {};
+  var to = _wkIdx(lines, /^(review statistics|paytonai)/i, from);
+  if (to < 0) to = lines.length;
+
+  var ci = _wkLabelIdx(lines, 'customer conversion rate', from, to);
+  var di = _wkLabelIdx(lines, 'device conversion rate', from, to);
+  return {
+    cust: ci >= 0 ? _wkFraction(lines, ci) : null,
+    dev:  di >= 0 ? _wkFraction(lines, di) : null
+  };
+}
+
+/**
+ * Re-reads every Day End Report still in the mailbox and banks its fractions.
+ *
+ * Idempotent, so the window can be as wide as you like. Note what it CANNOT do:
+ * a day whose report never reached this mailbox is simply absent, and the sum
+ * would then run on a short denominator — which is why _convMtd reports the gaps
+ * and the weekly run refuses to write S/U while any remain.
+ */
+function backfillConversions(opts) {
+  opts = opts || {};
+  var days = opts.days || 45;
+  var report = { ok: true, kind: 'conversions-backfill', days: days,
+    dryRun: !!opts.dryRun, conversions: [], warnings: [], errors: [],
+    examined: 0, seen: 0, byDate: {} };
+
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var q = '(from:(' + BUY_SENDER + ') OR subject:("Day End Report")) newer_than:' + days + 'd';
+  var msgs = [];
+  GmailApp.search(q, 0, 400).forEach(function (t) {
+    t.getMessages().forEach(function (m) { msgs.push(m); });
+  });
+
+  msgs.forEach(function (msg) {
+    if (!DAY_END_SUBJECT.test(String(msg.getSubject() || ''))) return;
+    report.examined++;
+    var sub = _buyParseSubject(msg.getSubject());
+    if (!sub.ok) { report.errors.push({ subject: msg.getSubject(), error: sub.why }); return; }
+    var f = _convFromBody(_plainBody(msg));
+    if (!f.cust && !f.dev) {
+      report.warnings.push({ subject: msg.getSubject(), note: 'no conversion fractions found' });
+      return;
+    }
+    report.seen++;
+    report.byDate[_iso(sub.date)] = (report.byDate[_iso(sub.date)] || 0) + 1;
+    _convWrite(ss, sub.store, sub.date, f.cust, f.dev, opts.dryRun, report);
+  });
+
+  Logger.log(JSON.stringify(report, null, 2));
+  return report;
+}
+
+function dryRunConversionsBackfill() { return backfillConversions({ dryRun: true }); }
+function runConversionsBackfill()    { return backfillConversions({}); }
+
+/**
+ * Proves the premise the MTD figure rests on: that a week of banked DAILY
+ * fractions adds up to the WEEKLY report's own fraction for the same days.
+ *
+ * If they agree per store, then summing a month of dailies is a sound way to get
+ * a month's rate, and S/U can be trusted. If they disagree, the daily and weekly
+ * figures are counting different things and no amount of arithmetic fixes it —
+ * which is worth finding out before the column is filled in, not after.
+ *
+ * Read-only.
+ */
+function verifyConversionWeek(opts) {
+  opts = opts || {};
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+
+  var end = _todayInTz();
+  end = _addDays(end, -1);
+  while (end.getDay() !== 6) end = _addDays(end, -1);
+  if (opts.weekEnd) {
+    var w = new Date(opts.weekEnd + 'T12:00:00');
+    if (!isNaN(w.getTime())) end = new Date(w.getFullYear(), w.getMonth(), w.getDate());
+  }
+  var start = _addDays(end, -6);
+
+  var out = { ok: true, week: _iso(start) + '..' + _iso(end), stores: [] };
+  var report = { warnings: [], errors: [] };
+  var emails = _weeklyEmailsByStore(report, start, end);
+
+  SUMMARY_STORES.forEach(function (store) {
+    // _convMtd over the WEEK rather than the month — same summing, narrower span.
+    var daily = _convMtd(ss, store, start, end);
+    var e = emails[store];
+    var row = {
+      store: store,
+      daily_cust: daily.custNum + '/' + daily.custDen,
+      email_cust: e && e.cust ? e.cust.num + '/' + e.cust.den : null,
+      daily_dev: daily.devNum + '/' + daily.devDen,
+      email_dev: e && e.dev ? e.dev.num + '/' + e.dev.den : null,
+      missing_days: daily.missing
+    };
+    row.cust_match = row.email_cust != null && row.daily_cust === row.email_cust;
+    row.dev_match  = row.email_dev  != null && row.daily_dev  === row.email_dev;
+    out.stores.push(row);
+  });
+
+  out.all_match = out.stores.every(function (s) { return s.cust_match && s.dev_match; });
+  out.emails_seen = Object.keys(emails).length;
+  Logger.log(JSON.stringify(out, null, 2));
+  return out;
+}
+
+// ------------------------------------------------------------
+// Shift rehearsal
+// ------------------------------------------------------------
+// The shift is the one destructive step, and a dry run cannot show it: copyTo
+// either happened or it did not, and only the result is inspectable. So it gets
+// rehearsed for real, on a throwaway duplicate, targeting NEXT week so the
+// labels genuinely differ and a shift is genuinely triggered.
+//
+// Reports the before and after of all four blocks' labels plus one column of
+// formulas, which is what proves copyTo re-pointed them (D =B31-C31 must become
+// =B22-C22, not follow the data up unchanged).
+var SHIFT_TEST_TAB = 'Summary SHIFT TEST';
+
+function rehearseWeeklyShift(opts) {
+  opts = opts || {};
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+
+  var old = ss.getSheetByName(SHIFT_TEST_TAB);
+  if (old) ss.deleteSheet(old);
+  var src = ss.getSheetByName(SUMMARY_TAB);
+  if (!src) return { ok: false, error: 'no tab named "' + SUMMARY_TAB + '"' };
+  var copy = src.copyTo(ss).setName(SHIFT_TEST_TAB);
+
+  // Next Saturday, so the target week differs from whatever the copy's bottom
+  // block is labelled and the run has to shift rather than update in place.
+  var end = _todayInTz();
+  while (end.getDay() !== 6) end = _addDays(end, 1);
+
+  var out = { ok: true, tab: SHIFT_TEST_TAB, targetWeekEnd: _iso(end) };
+  out.before = _shiftSnapshot(copy);
+  // force: next week has no figures yet, and this is about the shift, not them.
+  out.run = ingestWeeklySummary({ tab: SHIFT_TEST_TAB, weekEnd: _iso(end), force: true });
+  out.after = _shiftSnapshot(copy);
+  Logger.log(JSON.stringify(out, null, 2));
+  return out;
+}
+
+function _shiftSnapshot(sh) {
+  var values = sh.getDataRange().getValues();
+  var blocks = _summaryBlocks(values);
+  return blocks.map(function (b) {
+    var shown = sh.getRange(b.titleRow + 1, 1, 1, 2).getDisplayValues()[0];
+    var ovl = sh.getRange(b.firstRow + 1, 1, 1, 30);
+    return {
+      label: String(shown[0]).trim() + ' | ' + String(shown[1]).trim(),
+      ovl_revenue: ovl.getDisplayValues()[0][SUM_C.REV],
+      ovl_gp_formula: sh.getRange(b.firstRow + 1, SUM_C.GP + 1).getFormula(),
+      ovl_traffic: ovl.getDisplayValues()[0][SUM_C.TRAFFIC],
+      ovl_rank_manual: ovl.getDisplayValues()[0][SUM_C.RANK],
+      company_rev_formula: sh.getRange(b.companyRow + 1, SUM_C.REV + 1).getFormula()
+    };
+  });
+}
+
+// ------------------------------------------------------------
+// Run-dropdown entry points
+// ------------------------------------------------------------
+function dryRunWeeklySummary() {
+  var r = ingestWeeklySummary({ dryRun: true });
+  Logger.log(JSON.stringify(r, null, 2));
+  return r;
+}
+
+function runWeeklySummaryNow() {
+  var r = ingestWeeklySummary({});
+  Logger.log(JSON.stringify(r, null, 2));
+  return r;
+}
+
+// 0-indexed column number -> A1 letters.
+function _a1col(c) {
+  var s = '';
+  c += 1;
+  while (c > 0) { var m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = (c - m - 1) / 26; }
+  return s;
 }
