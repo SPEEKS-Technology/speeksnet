@@ -34,6 +34,9 @@ const corsHeaders = {
 // secret guards weekly-report, which emails real store managers, and the Gmail
 // relay. The browser gets the pin path below instead.
 const SECRET = "sp33ks-sync-k3y-2026-x9mq";
+// The 7am cash email. Called from this run rather than by a cron of its own —
+// see the cash block below for why.
+const CASH_REPORT_URL = (Deno.env.get("SUPABASE_URL") || "") + "/functions/v1/cash-report";
 
 // The DM/CEO button re-checks the REAL role by pin, because hiding a control in
 // the frontend is not a security boundary. Mirrors email-recipients exactly; the
@@ -190,6 +193,43 @@ async function ingest(sb: any, p: Record<string, string>) {
     if (runId != null && alert?.ok) await sb.from("sales_ingest_runs").update({ alerted: true }).eq("id", runId);
   }
 
+  // ---- cash on hand -------------------------------------------------------
+  // The Day End Report carries the closing count as well as buying and reviews.
+  // It does NOT go to the sheet — it lands here, and the 7am email reads it.
+  //
+  // Wrapped whole: cash is a bonus rider on this run and must never be able to
+  // fail the import that carries it. Same rule the Apps Script applies to
+  // reviews, enforced again on this side because the failure modes differ (a
+  // schema change, a dead relay) and neither is worth losing today's sales over.
+  let cash: any = null;
+  try {
+    const rows = ((report.buying && report.buying.cash) || []) as any[];
+    if (!dryRun && rows.length) {
+      const up = rows
+        .filter((r) => r && r.store && r.date)
+        .map((r) => ({
+          day: r.date, store: String(r.store).toUpperCase(),
+          drawer: r.drawer ?? null, safe: r.safe ?? null, total: r.total ?? null,
+          source: "day_end_report", updated_at: new Date().toISOString(),
+        }));
+      const { error } = await sb.from("store_cash").upsert(up, { onConflict: "day,store" });
+      cash = { stored: error ? 0 : up.length, error: error ? error.message : null };
+
+      // Then mail it — chained off the import rather than given a cron of its
+      // own, because a second job at 7:00 would race the run that produces the
+      // data. cash-report is idempotent per day, so the 8am retry re-enters here
+      // and correctly does nothing.
+      if (!error) {
+        const u = new URL(CASH_REPORT_URL);
+        u.searchParams.set("secret", SECRET);
+        const res = await fetch(u.toString());
+        cash.mailed = res.ok ? await res.json().catch(() => ({ ok: true })) : `HTTP ${res.status}`;
+      }
+    }
+  } catch (e) {
+    cash = { error: String((e as Error)?.message || e) };
+  }
+
   // Ping the client so the Command Center's import line updates without a
   // reload — the broadcast-as-ping pattern used by the other tools.
   if (!dryRun) await broadcastChange("salesimport");
@@ -202,6 +242,9 @@ async function ingest(sb: any, p: Record<string, string>) {
     dryRun,
     refreshed,
     alerted: !!alert?.ok,
+    // What the cash rider did, so a run that quietly stopped storing cash is
+    // visible in the run record rather than only in its absence from the email.
+    cash,
     summary: {
       filled: written.length,
       corrected: corrected.length,

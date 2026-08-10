@@ -27091,9 +27091,14 @@ const EMAIL_LIST_GROUPS = [
         desc: 'Nightly 8pm usage email, plus the Saturday and month-end summaries (sent automatically).',
         lists: [{ key: 'usage_report', label: 'Recipients' }],
     },
+    {
+        title: 'Cash On Hand',
+        desc: '7am closing-cash table, read off each store\'s Day End Report.',
+        lists: [{ key: 'cash_report', label: 'Recipients' }],
+    },
     // Last because it is the one operational alert here rather than a scheduled
     // report. b2b_quote_ready had to be added to LIST_KEYS in the same breath:
-    // the allowlist arrived on the other branch, and without it this row would
+    // the allowlist arrived on another branch, and without it this row would
     // render and then refuse every address with "Unknown list".
     {
         title: 'B2B Quote Ready',

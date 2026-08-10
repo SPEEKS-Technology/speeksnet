@@ -224,6 +224,56 @@ var REVIEW_LABELS = [
 var REVIEW_STOPS = ['paytonai', 'review insights', 'star reviews',
   'total reviews', 'total spent', 'estimated value'];
 
+// ---- CASH ON HAND ----------------------------------------------------------
+// The fourth thing this report carries: the closing count. Three figures per
+// store, in their own cards near the bottom — "Safe Balance", "Cash Balance"
+// (whose own sub-heading reads "Cash Drawer Cash count bills") and "Total Cash
+// on Hand". They do NOT go to the sheet; they go to `store_cash` in Supabase by
+// way of the run report, and the 7am cash email reads them from there.
+//
+// CONFIRMED against all 5 real bodies by diagnoseCashSection() on 2026-08-09.
+// Every store's Cash Management block reads, in this order:
+//
+//     Buying Drawer Balance     <- NOT us
+//     PayStation Balance        <- NOT us
+//     Safe Balance
+//     Cash Balance              <- the drawer, per its own "Cash Drawer Cash
+//     Cash Drawer Cash count bills    count bills" sub-heading
+//     Total Cash on Hand
+//
+// ⚠️ THE LABELS ARE DELIBERATELY EXACT, NOT FORGIVING. An earlier draft listed
+// 'drawer balance' as a fallback for the drawer — which is a substring of
+// "Buying Drawer Balance", a different pot of money sitting two lines above the
+// one we want. It read correctly only because 'cash balance' happened to come
+// first in the array, i.e. the right answer was being protected by nothing but
+// list order. A loose synonym here does not degrade to "no figure", it degrades
+// to "a confident wrong figure", which is the one outcome a cash report must
+// never produce. If a label ever stops matching, the fix is to read a fresh
+// diagnoseCashSection() dump and put the report's real wording here — never to
+// widen these into the neighbours.
+//
+// The second dangerous neighbour is the DENOMINATION GRID beneath each figure:
+// "$100 X 6", "$50 X 0", "$20 X 70" — real dollar amounts in the right part of
+// the report. What protects us is that the value regex takes the FIRST $-figure
+// after the label (the card's own total), plus the stop labels below so a card
+// with no figure of its own cannot reach into the next card's.
+//
+// The trend deltas ("▲ 0%", "▼ 65.7%") that follow each figure carry no dollar
+// sign, so the money matcher steps over them for free.
+var CASH_DRAWER_LABELS = ['cash balance'];
+var CASH_SAFE_LABELS   = ['safe balance'];
+var CASH_TOTAL_LABELS  = ['total cash on hand'];
+// Every card stops at every other card, at the grid heading that follows, and at
+// the two balances above the block that are not ours.
+var CASH_STOPS = ['safe balance', 'cash balance', 'total cash on hand',
+  'cash drawer cash count', 'total bills', 'denomination',
+  'buying drawer balance', 'paystation balance'];
+
+// The report sends its own total, and we store what it sends. But if that total
+// disagrees with drawer + safe by more than this, something has been read from
+// the wrong card — reported as a warning, never silently corrected.
+var CASH_TOTAL_TOLERANCE = 1;
+
 // A review count that jumps by more than this in one day is not a review count —
 // it is an all-time total, a rating scaled up, or the wrong number entirely.
 // Reported, never written. Five stores averaging a handful of reviews a month
@@ -866,7 +916,37 @@ function parseBuyingEmail(msg) {
   // as it did — the whole point of folding this in here rather than standing up a
   // third feed for one number.
   var reviews = _findCountNear(body, REVIEW_LABELS, REVIEW_STOPS);
-  return { ok: true, store: sub.store, date: sub.date, buy: buy, sell: sell, reviews: reviews };
+  // Cash is additive in exactly the same way, and for the same reason: it must
+  // never be able to cost the buying import. Every field is independently
+  // optional and a total miss returns three nulls.
+  var cash = _parseCash(body);
+  return { ok: true, store: sub.store, date: sub.date, buy: buy, sell: sell, reviews: reviews, cash: cash };
+}
+
+// The three closing-cash figures. Returns an object of three nullable numbers
+// plus `why` when the report's own total disagrees with drawer + safe.
+//
+// Each field passes the other two as stop labels, so a card that is present but
+// empty cannot borrow the next card's number — the same guard the buy/sell pair
+// needed, and for the same reason: getPlainBody() collapses the whitespace that
+// would otherwise separate them.
+function _parseCash(body) {
+  var drawer = _findLabeledNear(body, CASH_DRAWER_LABELS, CASH_STOPS);
+  var safe   = _findLabeledNear(body, CASH_SAFE_LABELS,   CASH_STOPS);
+  var total  = _findLabeledNear(body, CASH_TOTAL_LABELS,  CASH_STOPS);
+
+  var why = null;
+  if (total != null && drawer != null && safe != null &&
+      Math.abs(total - (drawer + safe)) > CASH_TOTAL_TOLERANCE) {
+    // Not corrected — a total that does not add up is the signal that one of the
+    // three was read off the wrong card, and quietly recomputing it would erase
+    // the only evidence.
+    why = 'total ' + total + ' != drawer ' + drawer + ' + safe ' + safe;
+  }
+  return { drawer: drawer, safe: safe, total: total, why: why };
+}
+function _cashEmpty(c) {
+  return !c || (c.drawer == null && c.safe == null && c.total == null);
 }
 
 // Which day does this email actually report on?
@@ -956,7 +1036,10 @@ function ingestBuyingEmails(opts) {
       ranAt: Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ssXXX"),
       dryRun: !!opts.dryRun,
       written: [], corrected: [], unchanged: 0,
-      missing: [], unverified: [], skipped: [], errors: [], daysThru: [], archived: 0
+      missing: [], unverified: [], skipped: [], errors: [], daysThru: [], archived: 0,
+      // Closing cash per store per day. Carried OUT of this script rather than
+      // written to the sheet — sales-ingest lands it in `store_cash`.
+      cash: []
     };
 
     // Thread bookkeeping for the archive step, same shape as the sales pass.
@@ -1016,7 +1099,7 @@ function ingestBuyingEmails(opts) {
       if (!prev || msg.getDate().getTime() >= prev.receivedAt) {
         found[key] = {
           store: parsed.store, date: parsed.date, buy: parsed.buy, sell: parsed.sell,
-          reviews: parsed.reviews,
+          reviews: parsed.reviews, cash: parsed.cash,
           receivedAt: msg.getDate().getTime(), subject: msg.getSubject()
         };
       }
@@ -1028,6 +1111,23 @@ function ingestBuyingEmails(opts) {
     Object.keys(found).sort().forEach(function (key) {
       var f = found[key];
       if (!wanted[key]) return;                 // outside the window — ignore
+
+      // CASH IS COLLECTED BEFORE ANY SHEET WORK, deliberately. It does not go to
+      // the sheet at all, so a missing tab, a formula in the way or a day row
+      // that cannot be located must not cost the morning's cash figures — every
+      // one of those returns early below.
+      if (!_cashEmpty(f.cash)) {
+        report.cash.push({
+          store: f.store, date: _iso(f.date),
+          drawer: f.cash.drawer, safe: f.cash.safe, total: f.cash.total
+        });
+        if (f.cash.why) {
+          (report.warnings = report.warnings || []).push({
+            store: f.store, date: _iso(f.date), field: 'cash', reason: f.cash.why
+          });
+        }
+      }
+
       var tabName = _buyTabNameFor(f.date);
       if (!tabs[tabName]) {
         var sh = ss.getSheetByName(tabName);
@@ -1985,6 +2085,86 @@ function diagnoseBuyingReviews() {
       ? 'parser: NO MATCH  <-- add the exact wording above to REVIEW_LABELS'
       : 'parser: MATCHED ' + parsed + '  <-- check this against the store\'s Google page. '
         + 'It must be THIS MONTH\'s count, not all-time.');
+  });
+  return out;
+}
+
+/**
+ * What does the Day End Report actually call the three cash figures?
+ *
+ * The cash label lists were written from a SCREENSHOT of the rendered email, so
+ * they are a guess until this says otherwise — exactly the state REVIEW_LABELS
+ * was in before diagnoseBuyingReviews() proved the report never says "Google".
+ * Run it from the Run dropdown; a diagnostic executes the editor's code, so no
+ * deploy is involved.
+ *
+ * Prints every line mentioning cash, safe or a balance, then what the parser
+ * makes of the body. What to look for per store:
+ *   drawer/safe/total all MATCHED and the total adds up  -> done, nothing to do.
+ *   NO MATCH on a field  -> copy the exact wording from the lines above into the
+ *                           matching CASH_*_LABELS, most specific first.
+ *   MATCHED but the number is 100 / 50 / 20  -> it has read the denomination
+ *                           grid. Add whatever sits between the label and the
+ *                           grid to CASH_STOPS.
+ *
+ * Digits are deliberately NOT masked: the figures are the thing being verified,
+ * and one look at them against the store's own count settles it instantly.
+ */
+function diagnoseCashSection() {
+  var q = '(from:(' + BUY_SENDER + ') OR subject:("Day End Report")) newer_than:' + LOOKBACK + 'd';
+  var msgs = [];
+  try {
+    GmailApp.search(q, 0, 200).forEach(function (t) {
+      t.getMessages().forEach(function (m) { msgs.push(m); });
+    });
+  } catch (e) {
+    Logger.log('search failed: ' + e);
+    return { ok: false, error: String(e) };
+  }
+  msgs.sort(function (a, b) { return b.getDate().getTime() - a.getDate().getTime(); });
+
+  Logger.log('=== ' + msgs.length + ' Day End Report(s) in the last ' + LOOKBACK + ' days ===');
+  if (!msgs.length) {
+    Logger.log('NONE FOUND — see diagnoseBuyingEmails() for why.');
+    return { ok: true, messages_found: 0, samples: [] };
+  }
+
+  // One per store, newest first. The five reports are generated from one
+  // template, unlike the Shopify five — but that is an assumption worth testing
+  // once rather than trusting.
+  var byStore = {};
+  msgs.forEach(function (m) {
+    var sub = _buyParseSubject(m.getSubject());
+    var k = sub.store || ('?' + String(m.getSubject() || '').replace(/\d+/g, '#').trim());
+    if (!byStore[k]) byStore[k] = m;
+  });
+
+  var out = { ok: true, messages_found: msgs.length, samples: [] };
+  Object.keys(byStore).forEach(function (store) {
+    var m = byStore[store];
+    var body = _plainBody(m);
+    var lines = body.split(/\r?\n/).filter(function (l) {
+      return /cash|safe|balance|on hand/i.test(l);
+    });
+    var c = _parseCash(body);
+    out.samples.push({ store: store, subject: m.getSubject(), cash_lines: lines, parsed: c });
+
+    Logger.log('\n--- ' + store + ' | ' + m.getSubject() + ' ---');
+    Logger.log(lines.length
+      ? 'lines mentioning cash/safe/balance:\n  ' + lines.join('\n  ')
+      : 'NO LINE MENTIONS cash, safe or balance — this store\'s report may not carry the section.');
+    Logger.log('parser: drawer=' + (c.drawer == null ? 'NO MATCH' : c.drawer)
+      + '  safe=' + (c.safe == null ? 'NO MATCH' : c.safe)
+      + '  total=' + (c.total == null ? 'NO MATCH' : c.total));
+    if (c.why) Logger.log('  ⚠ ' + c.why + '  <-- one of the three came off the wrong card');
+    // The grid beneath each figure is the failure worth naming outright, because
+    // 100 and 50 are perfectly plausible drawer totals.
+    [['drawer', c.drawer], ['safe', c.safe], ['total', c.total]].forEach(function (p) {
+      if (p[1] === 100 || p[1] === 50 || p[1] === 20 || p[1] === 10 || p[1] === 5 || p[1] === 1) {
+        Logger.log('  ⚠ ' + p[0] + ' = ' + p[1] + ' is a BILL DENOMINATION. It has read the'
+          + ' count grid, not the card total — widen CASH_STOPS.');
+      }
+    });
   });
   return out;
 }
