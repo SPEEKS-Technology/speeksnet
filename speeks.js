@@ -66,6 +66,7 @@ const EXPENSES_URL      = `${_BASE}/expenses`;
 const PREFERRED_URL     = `${_BASE}/preferred-purchases`;
 const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
 const SALES_INGEST_URL  = `${_BASE}/sales-ingest`;
+const SUMMARY_WEEKLY_URL = `${_BASE}/summary-weekly`;
 const LIVE_URL          = `${_BASE}/shopify-live`;
 const USAGE_URL         = `${_BASE}/usage`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
@@ -26650,7 +26651,8 @@ const FEATURE_CATALOG = [
     { key: 'widget-listing-goals',     label: 'Listing Goals bar (Action Menu)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager', 'training'] },
     { key: 'widget-district-live',     label: 'District Live Dashboard',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
-    { key: 'dcc-sales-import',         label: 'District CC · Sales Import control', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    { key: 'dcc-sales-import',         label: 'District CC · Daily Import control', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    { key: 'dcc-weekly-summary',       label: 'District CC · Weekly Summary control', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     // The three district action-menu rows. Defaults mirror exactly what the
     // dashboard panels they replaced were gated to: Cleaning and Listing were
     // DM+CEO, Monthly Team Goals was DM-only. Delegation pairs each with the
@@ -33872,6 +33874,102 @@ async function runSalesImport(ev) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Weekly Summary control — the second button on the same header line.
+//
+// Kept apart from the sales-import one above rather than folded into it, for the
+// same reason the two edge functions are separate: the daily import is
+// idempotent, while this one SHIFTS four week blocks up. Two buttons that read
+// alike but do very different things is exactly the confusion the labels below
+// exist to prevent.
+//
+// No status chip, because summary-weekly deliberately persists no run history —
+// writing to sales_ingest_runs would make a Monday weekly run present itself as
+// the last DAILY import in the line next door. The outcome of a run owns the
+// line for a few seconds and that is the whole state this surface has.
+// ---------------------------------------------------------------------------
+let _swBusy = false;
+let _swMsg = null, _swMsgBad = false, _swMsgTimer = null;
+
+function _swSay(msg, bad) {
+    _swMsg = msg || null;
+    _swMsgBad = !!bad;
+    if (_swMsgTimer) clearTimeout(_swMsgTimer);
+    if (msg) _swMsgTimer = setTimeout(() => { _swMsg = null; _dccRepaint(); }, 9000);
+    _dccRepaint();
+}
+
+async function runWeeklySummary(ev) {
+    if (ev) ev.stopPropagation();
+    if (_swBusy) return;
+    const pin = sessionStorage.getItem('speeksUserPin');
+    if (!pin) return;
+
+    // Confirmed because this one is not free to press twice in the way the daily
+    // import is. Pressing it when the latest week is not already the bottom
+    // block rolls the oldest of the four weeks off the top, and the columns that
+    // are keyed by hand go with it.
+    if (!confirm(
+        'Update the Summary tab with the latest completed week (Sunday to Saturday)?\n\n'
+        + 'If that week is not already the bottom block, all four weeks shift up and the '
+        + 'oldest one rolls off. Running it again for the same week is safe — it just '
+        + 'rewrites that block.')) return;
+
+    _swBusy = true;
+    _dccRepaint();
+    try {
+        const r = await fetch(SUMMARY_WEEKLY_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({})
+        });
+        const d = await r.json();
+        _swBusy = false;
+
+        if (!d.ok) {
+            const raw = d.error || '';
+            _swSay(
+                /invalid pin/i.test(raw)
+                    ? 'Your saved sign-in is out of date — the PIN changed since you signed in. Sign out, sign back in, then run it again.'
+                    : /insufficient role/i.test(raw)
+                        ? 'This account is not a District Manager or CEO, so it cannot run the weekly summary.'
+                        : (raw || 'The weekly summary could not run.'),
+                true);
+        } else {
+            const wk = d.week ? `${_siShortDate(d.week.start)}–${_siShortDate(d.week.end)}` : 'the latest week';
+            const bits = [];
+            bits.push(d.shifted === true ? 'weeks shifted up' : 'updated in place');
+            if (d.writtenCount) bits.push(`${d.writtenCount} cells written`);
+            if (d.archived)     bits.push(`${d.archived} report${d.archived === 1 ? '' : 's'} archived`);
+            // Problems are the reason a run can succeed and still need somebody —
+            // a store's report missing, a figure that would not parse.
+            if (d.problems)     bits.push(`${d.problems} to check`);
+            _swSay(`Weekly summary ${wk} — ` + bits.join(', ') + '.', !!d.problems);
+        }
+    } catch (err) {
+        _swBusy = false;
+        _swSay('The weekly summary could not be reached.', true);
+    }
+}
+
+function _swLineHtml() {
+    const btn = '<button type="button" class="si-btn" onclick="runWeeklySummary(event)"'
+        + ' title="Writes the latest finished week (Sunday to Saturday) into the Summary tab'
+        + ' and shifts the four-week window. Runs by itself every Monday at 7:30am."'
+        + (_swBusy ? ' disabled' : '') + '>' + (_swBusy ? 'Updating…' : 'Run weekly summary') + '</button>';
+
+    const open = '<span class="si-line" data-feature="dcc-weekly-summary">';
+
+    if (_swMsg) {
+        return open + '<span class="si-dot ' + (_swMsgBad ? 'si-bad' : 'si-good') + '"></span>'
+            + '<span class="si-msg ' + (_swMsgBad ? 'bad' : 'ok') + '">' + escapeHtml(_swMsg) + '</span>'
+            + btn + '</span>';
+    }
+    // Just the button at rest. There is no status to carry here anyway — this
+    // control keeps no run history, by design.
+    return open + btn + '</span>';
+}
+
 // Repaint the board from rows already in memory. No-ops before the first load,
 // same guard _dccPick uses — the cached HTML restores clickable controls before
 // any data exists.
@@ -33903,10 +34001,33 @@ function _siRelTime(iso) {
 
 // The compact chip on the Command Center's header line.
 // The Sales Import chip on the Command Center header line. The single surface for
-// this: dot + state + button, with a run's outcome taking the line over briefly.
+// this: a button, with a run's outcome taking the line over briefly.
 function _siLineHtml() {
+    // "Run daily import", not "Run import": there are two buttons on this line
+    // now and they do different jobs — this one pulls yesterday's selling and
+    // buying into the month tabs, the other rewrites a week of the Summary tab.
+    // The status text used to sit beside the button; the line now carries two
+    // controls and reads better as just the two. Nothing is lost — the state
+    // moves into the button's own tooltip, and the dot below still shows when
+    // something needs attention.
+    const state = _salesImport ? _salesImport.state : null;
+    const lr = _salesImport ? _salesImport.lastRun : null;
+    let hover = 'Pulls the Shopify and PayMore daily emails into this month\'s Sales and Buy'
+        + ' tabs. Runs by itself every morning at 7am.';
+    if (state === 'never')          hover = 'Has not run yet. ' + hover;
+    else if (state === 'failed')    hover = 'The last run FAILED. ' + hover;
+    else if (state === 'attention') {
+        const list = (lr.missingList || []).slice(0, 8)
+            .map(m => `${m.store} ${_siShortDate(m.date)}`).join(', ');
+        hover = `${lr.missing} still to enter by hand${list ? ' (' + list + ')' : ''}. ` + hover;
+    } else if (lr) {
+        hover = `Last imported ${_siRelTime(lr.ranAt)}`
+            + (lr.corrected ? `, ${lr.corrected} past day(s) restated` : '') + '. ' + hover;
+    }
+
     const btn = '<button type="button" class="si-btn" onclick="runSalesImport(event)"'
-        + (_siBusy ? ' disabled' : '') + '>' + (_siBusy ? 'Importing…' : 'Run import') + '</button>';
+        + ' title="' + escapeHtml(hover) + '"'
+        + (_siBusy ? ' disabled' : '') + '>' + (_siBusy ? 'Importing…' : 'Run daily import') + '</button>';
 
     const open = '<span class="si-line" data-feature="dcc-sales-import">';
 
@@ -33918,30 +34039,12 @@ function _siLineHtml() {
             + '<span class="si-msg ' + (_siMsgBad ? 'bad' : 'ok') + '">' + escapeHtml(_siMsg) + '</span>'
             + btn + '</span>';
     }
-    if (!_salesImport) return open + btn + '</span>';
-
-    const lr = _salesImport.lastRun;
-    const state = _salesImport.state;
-    let txt, cls, tip = '';
-    if (state === 'never')       { txt = 'Sales import has not run yet'; cls = 'si-mute'; }
-    else if (state === 'failed') { txt = 'Sales import failed';          cls = 'si-bad';  }
-    else if (state === 'attention') {
-        txt = `${lr.missing} to enter by hand`;
-        cls = 'si-warn';
-        // Which store/dates, on hover — the detail has to live somewhere, and a
-        // tooltip keeps it out of a line that has no room to grow.
-        const list = (lr.missingList || []).slice(0, 8)
-            .map(m => `${m.store} ${_siShortDate(m.date)}`).join(', ');
-        if (list) tip = ' title="Still blank in the sheet: ' + escapeHtml(list) + '"';
-    }
-    else {
-        txt = `Sales imported ${_siRelTime(lr.ranAt)}`;
-        cls = 'si-good';
-        if (lr.corrected) tip = ' title="' + lr.corrected + ' past day(s) restated on the last run"';
-    }
-
-    return open + '<span class="si-dot ' + cls + '"></span>'
-        + '<span class="si-txt"' + tip + '>' + escapeHtml(txt) + '</span>' + btn + '</span>';
+    // The dot survives ONLY for the states that need acting on. A green "all
+    // fine" dot beside a button is decoration; an amber one is the only thing
+    // telling anybody that store-days are still sitting blank in the sheet, and
+    // that signal was the reason this chip existed in the first place.
+    const bad = state === 'failed' ? 'si-bad' : state === 'attention' ? 'si-warn' : null;
+    return open + (bad ? '<span class="si-dot ' + bad + '"></span>' : '') + btn + '</span>';
 }
 
 function _dccBuyBlock(r) {
@@ -34072,7 +34175,7 @@ function _dccBoardHtml(portalLinks) {
         + '<span class="dcc-sum">'
         + '<b>' + _dccMoney(totGP) + '</b><i>of ' + _dccMoney(totGoal) + ' GP goal</i>'
         + '</span>'
-        + '<div class="dcc-head-side">' + _siLineHtml() + '</div></div>'
+        + '<div class="dcc-head-side">' + _siLineHtml() + _swLineHtml() + '</div></div>'
         + '<div class="dcc-body"><div class="dcc-grid">'
         + '<div class="dcc-rail">' + _dccRailHtml() + '</div>'
         + '<div class="dcc-pane">' + _dccPaneHtml(sel, portalLinks[_dccSel]) + '</div>'

@@ -13151,7 +13151,12 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .dcc-ico svg { width: 19px; height: 19px; }
 .dcc-eyebrow { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: #8a94a3; }
 .dcc-title { font-size: 18px; font-weight: 800; letter-spacing: -.012em; line-height: 1.1; color: #0f172a; }
-.dcc-head-side { margin-left: auto; display: flex; align-items: center; gap: 9px; }
+/* Wraps because this side now carries TWO controls (daily import, weekly
+   summary), and a run's result can take either line over with a sentence. Left
+   as nowrap it pushes the header wider than the panel and scrolls it sideways —
+   see the table-layout-blowout note. */
+.dcc-head-side { margin-left: auto; display: flex; align-items: center;
+                 flex-wrap: wrap; justify-content: flex-end; gap: 9px 12px; }
 /* District money is the header's headline: the total carries at size, the goal
    trails it as a caption on the same baseline. */
 .dcc-sum { display: flex; align-items: baseline; gap: 7px; }
@@ -13262,29 +13267,38 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .dcc-row-v.g { color: #15803d; }
 
 /* ── Sales Import (Shopify daily email → sheet) ────────────────────────────
-   Two surfaces for one action: a chip on the Command Center header line, and a
-   row at the foot of the Buying & selling block. Both are secondary to the
-   numbers around them — this is plumbing status, not a metric, so the dot
-   carries the state and the button stays quiet until hovered. */
+   Two controls on the Command Center header line — the daily import and the
+   weekly Summary update. Both are secondary to the numbers around them: this is
+   plumbing, not a metric, so they are just buttons. The state each one used to
+   spell out now lives in its tooltip, and a dot appears only when something
+   actually needs acting on. */
 .si-line { display: flex; align-items: center; gap: 8px; padding-left: 12px;
            margin-left: 4px; border-left: 1px solid #e3e9ee; }
-.si-txt  { font-size: 11.5px; font-weight: 700; color: #647082; white-space: nowrap; }
+/* One rule separates the controls from the district total; a second one between
+   two adjacent buttons just reads as clutter. */
+.si-line + .si-line { border-left: none; padding-left: 0; margin-left: 0; }
 .si-dot  { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: #cbd5e0; }
 .si-dot.si-good { background: #1f9d57; }
 .si-dot.si-warn { background: #d98324; }
 .si-dot.si-bad  { background: #c0392b; }
 .si-dot.si-mute { background: #cbd5e0; }
 
+/* min-width, not padding, is what makes the two match: the labels differ in
+   length ("Run daily import" / "Run weekly summary") and both swap to a shorter
+   word mid-run ("Importing…"), so anything width-of-content jitters as it goes.
+   Sized to the longest label and centred. */
 .si-btn { font: inherit; font-size: 11px; font-weight: 750; letter-spacing: .01em;
           color: #1f7a48; background: #f2f8f4; border: 1px solid #d6e6dc;
           border-radius: 8px; padding: 5px 10px; cursor: pointer; white-space: nowrap;
+          min-width: 132px; text-align: center;
           transition: background .14s ease, border-color .14s ease, color .14s ease; }
 .si-btn:hover:not(:disabled) { background: #e6f2ec; border-color: #b9d8c8; color: #17603a; }
 .si-btn:disabled { opacity: .6; cursor: default; }
 
-/* The run result sits inline on the header line, so unlike .si-txt it must be
-   allowed to WRAP and must be width-capped — a nowrap run of free text here would
-   push the header out and scroll the panel sideways (see table-layout-blowout). */
+/* The run result sits inline on the header line, and unlike the buttons beside
+   it, it must be allowed to WRAP and must be width-capped — a nowrap run of free
+   text here would push the header out and scroll the panel sideways (see
+   table-layout-blowout). */
 .si-msg { font-size: 11px; font-weight: 700; line-height: 1.35; padding: 4px 8px;
           border-radius: 7px; max-width: 320px; white-space: normal;
           overflow-wrap: anywhere; }
@@ -13292,10 +13306,9 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .si-msg.bad { color: #9b2c1f; background: #fdf3f1; border: 1px solid #f0d5cf; }
 
 @media (max-width: 720px) {
-  /* The header line is the first thing to run out of room; the row keeps the
-     full state so nothing is lost by dropping the chip's text here. */
+  /* The header line is the first thing to run out of room. The buttons stay —
+     they are the whole control now — so only the divider padding gives way. */
   .si-line { padding-left: 8px; margin-left: 0; }
-  .si-txt { display: none; }
 }
 
 /* categories at risk */

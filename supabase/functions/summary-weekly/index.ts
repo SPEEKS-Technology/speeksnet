@@ -20,20 +20,27 @@
 // Script, which runs as the account that receives the emails and so needs no
 // OAuth. This function owns orchestration and the alert only.
 //
-// Auth: verify_jwt=false, ?secret= for pg_cron. No pin path yet — nothing in the
-// UI triggers this.
+// Auth: verify_jwt=false, with two paths — ?secret= for pg_cron, and an
+// x-user-pin header re-checked against the users table for the DM/CEO button.
 // ============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-user-pin",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
-// Same machine secret as the rest of the chain. Never put it in speeks.js.
+// Same machine secret as the rest of the chain. Never put it in speeks.js — it
+// also guards weekly-report, which emails real store managers. The browser gets
+// the pin path below instead.
 const SECRET = "sp33ks-sync-k3y-2026-x9mq";
+
+// The button re-checks the REAL role by pin, because hiding a control in the
+// frontend is not a security boundary. Mirrors sales-ingest; the users table
+// stores "CEO" / "District Manager", hence the lowercasing.
+const ADMIN_ROLES = ["ceo", "district manager"];
 
 // The sales-email-import Apps Script web app. Shares SALES_IMPORT_URL with
 // sales-ingest deliberately — there is one /exec serving both actions, and a
@@ -76,12 +83,35 @@ Deno.serve(async (req: Request) => {
     } catch (_) { /* query params only */ }
   }
 
-  if (p.secret !== SECRET) return json({ ok: false, error: "unauthorized" }, 401);
-
   const sb = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
+
+  // Two callers, two auth paths.
+  if (p.secret === SECRET) {
+    // pg_cron. Trust the params as given.
+  } else {
+    const pin = req.headers.get("x-user-pin") || "";
+    if (!pin) return json({ ok: false, error: "unauthorized" }, 401);
+    const { data: user } = await sb.from("users").select("name, role").eq("pin", pin).single();
+    if (!user) return json({ ok: false, error: "Invalid PIN" }, 401);
+    if (!ADMIN_ROLES.includes(String(user.role || "").toLowerCase().trim())) {
+      return json({ ok: false, error: "Insufficient role" }, 403);
+    }
+    // A human clicking Run owns the outcome on screen, so never email an alert
+    // for it — the alert exists for the unattended Monday run nobody is watching.
+    //
+    // The testing overrides are stripped too, deliberately: weekEnd and tab
+    // point the run at a different week or a different sheet, and inPlace
+    // suppresses the shift. They are for a console, not for a button that any
+    // DM can press.
+    p.actor = String(user.name || "");
+    p.trigger = "manual";
+    p.alert = "0";
+    delete p.weekEnd; delete p.tab; delete p.inPlace; delete p.force;
+  }
+
   return json(await runWeekly(sb, p));
 });
 
