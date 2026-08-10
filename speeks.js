@@ -656,6 +656,13 @@ async function loadCMS() {
 
         // Feed the Action Menu deck + the hub from the same data (no extra fetch).
         window._samAnnData = data.announcements || [];
+        // Which of those the onboarding cutoff auto-archived. The hub already
+        // honours it (its Unread filter tests !hidden); the dashboard feed had no
+        // concept of it, so an announcement predating the user's start date was
+        // hidden in the hub and still counted in the feed's pip — 13 unread on the
+        // deck against 2 in the hub, for anyone with onboarded_at set. Derived
+        // here rather than recomputed there so the two can never drift again.
+        window._samAnnHidden = new Set(hubAnn.filter(a => a.hidden).map(a => String(a.rowId)));
         try { if (typeof renderActionFeed === 'function') renderActionFeed(); } catch (e) { console.warn('Action Menu feed failed:', e); }
         try { if (typeof renderHubFeed === 'function') renderHubFeed(); } catch (e) { console.warn('Hub feed failed:', e); }
 
@@ -8545,6 +8552,7 @@ function handleSignOut() {
     // this tab would otherwise flash their announcements and store notes before
     // the new fetches resolve.
     window._samAnnData = [];
+    window._samAnnHidden = new Set();
     window._samStoreNotes = [];
 
     // Sign-out shows the login overlay rather than reloading, so module state
@@ -12430,7 +12438,12 @@ function _lgDueBubbleEl() {
 
 function checkListingGoalReminders() {
     const b = document.getElementById('listingGoalAlertBubble');
-    if (!_dmxIsDistrict()) { if (b) b.style.display = 'none'; return; }
+    // DISTRICT MANAGER ONLY — not _dmxIsDistrict(), which is true for the CEO as
+    // well and had him nagged weekly about an admin task that is not his to do.
+    // Setting each store's weekly total is the DM's job; the CEO reads the result
+    // on the District widget. Everything else district-scoped stays shared.
+    const _role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (_role !== 'district manager') { if (b) b.style.display = 'none'; return; }
     if (!_lgDueStarted) { _lgDueStarted = true; setInterval(checkListingGoalReminders, 10 * 60 * 1000); }
 
     // Due 8am Monday, store time — half an hour ahead of the stores' own 8:30am
@@ -30972,7 +30985,11 @@ function renderActionFeed() {
     const feed = document.getElementById('samFeed');
     if (!feed) return; // not a manager / menu not present
 
-    const anns = (window._samAnnData || []).map(it => {
+    // Auto-archived by the onboarding cutoff — see _samAnnHidden in loadCMS.
+    // Dropped here rather than at each use, so the pip, the feed list and the
+    // priority hero all agree with what the hub shows under "Unread".
+    const _annHidden = window._samAnnHidden || new Set();
+    const anns = (window._samAnnData || []).filter(it => !_annHidden.has(String(it.rowId))).map(it => {
         const p = _samParseAnn(it);
         const d = it.date ? new Date(it.date) : null;
         return {
@@ -31612,10 +31629,11 @@ function _samReminderCfg() {
         title: _moOd ? 'Monthly KPIs Overdue' : 'Monthly KPIs Due', urgency: _moOd ? 3 : 2,
         due: _moOd ? 'Overdue' : 'Due', cls: 'sam-due-red', noSnooze: true,
         action: "sessionStorage.setItem('speeksKpiTab','monthly'); window.location.href='workspace.html#kpis'" });
-    // DM/CEO only. Snoozable — unlike the KPI deadlines this is the DM's own
-    // admin task, and the card comes straight back if a store is still unset
-    // tomorrow (the sig is the pending-store list, so it also breaks through
-    // early whenever that list changes).
+    // DM ONLY (checkListingGoalReminders gates it — the CEO does not set these).
+    // Snoozable — unlike the KPI deadlines this is the DM's own admin task, and
+    // the card comes straight back if a store is still unset tomorrow (the sig is
+    // the pending-store list, so it also breaks through early whenever that list
+    // changes).
     cfg.push({ key: 'listingGoals', id: 'listingGoalAlertBubble', text: 'listingGoalAlertBubbleText',
         title: 'Set This Week’s Listing Goals', urgency: 2, due: 'Due', cls: 'sam-due-amber',
         action: "openDmListingGoals()" });
