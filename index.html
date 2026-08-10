@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260809s">
+  <link rel="stylesheet" href="styles.css?v=20260809f">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260809t" defer></script>
+  <script src="speeks.js?v=20260809f" defer></script>
 </head>
 
 <body class="preload">
@@ -976,7 +976,7 @@
             <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-mtd" data-feature="cc-live"><div class="cc-sum-k">Month to Date Revenue</div><div class="cc-sum-v">—</div></div>
             <!-- Sits next to the revenue it came back out of. -->
             <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-refunds" data-feature="cc-live"><div class="cc-sum-k">Refunds &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-goal" data-feature="cc-live"><div class="cc-sum-k">Tracking to Goal</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-goal" data-feature="cc-live"><div class="cc-sum-k">Tracking to Goal <span class="cc-sum-thru">Through Yesterday</span></div><div class="cc-sum-v">—</div></div>
             <!-- Google Reviews sits with the two figures that have a target, ahead of
                  the three health readouts. Hidden until the sheet carries the numbers
                  (see _ccSum callers) so it is not an eighth "—" during the rollout. -->
@@ -1085,7 +1085,7 @@
           <div class="cc-sum" id="dc-sum-mtd"><div class="cc-sum-k">Month to Date Revenue</div><div class="cc-sum-v">—</div></div>
           <!-- Sits next to the revenue it came back out of. -->
           <div class="cc-sum" id="dc-sum-refunds"><div class="cc-sum-k">Refunds &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
-          <div class="cc-sum" id="dc-sum-goal"><div class="cc-sum-k">Company Tracking to Goal</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-goal"><div class="cc-sum-k">Company Tracking to Goal <span class="cc-sum-thru">Through Yesterday</span></div><div class="cc-sum-v">—</div></div>
           <div class="cc-sum" id="dc-sum-reviews" hidden><div class="cc-sum-k">Google Reviews &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
           <div class="cc-sum" id="dc-sum-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
           <div class="cc-sum" id="dc-sum-score"><div class="cc-sum-k">Scorecard &middot; Company Avg</div><div class="cc-sum-v">—</div></div>
@@ -2014,7 +2014,15 @@
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-owner-manager" data-feature="tool-user-permissions" onclick="_closeToolsPanel(); toggleManageUsers();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></span>User Permissions</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-feature-access" onclick="_closeToolsPanel(); openFeatureAccess();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></span>Feature Access</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-email-recipients" onclick="_closeToolsPanel(); openEmailRecipients();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></span>Email Recipients</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-multistore-manager" data-feature="tool-expenses" onclick="_closeToolsPanel(); openExpenses();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l3-2 3 2 3-2 3 2 3-2V2l-3 2-3-2-3 2-3-2z"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg></span>Expense Report</a>
+      <!-- Two rows for ONE tool, sharing the tool-expenses stem the way the claims
+           and preferred-purchase pairs do. Both open the same modal; the edge fn
+           decides the powers from the caller's PIN, so nothing here grants anything.
+           The split exists for FEATURE ACCESS: one key carrying both role-district-manager
+           and role-multistore-manager made the MGR column a lie — it read as "on for
+           managers" while the role class silently admitted only the MSM, and switching
+           it on for an ordinary manager did nothing you could predict. -->
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-expenses" onclick="_closeToolsPanel(); openExpenses();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l3-2 3 2 3-2 3 2 3-2V2l-3 2-3-2-3 2-3-2z"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg></span>Expense Report</a>
+      <a class="tools-item dynamic-module-flex role-multistore-manager" data-feature="tool-expenses-mgr" onclick="_closeToolsPanel(); openExpenses();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l3-2 3 2 3-2 3 2 3-2V2l-3 2-3-2-3 2-3-2z"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg></span>Expense Report</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-performance-metrics" onclick="_closeToolsPanel(); toggleManageAlerts();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></span>Performance Metrics</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-company-records" onclick="_closeToolsPanel(); toggleManageRecords();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></span>Company Records</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-manage-policies" onclick="_closeToolsPanel(); toggleManageDocs();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></span>Manage Policies</a>
