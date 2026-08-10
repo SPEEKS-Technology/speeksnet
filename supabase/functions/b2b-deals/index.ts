@@ -52,7 +52,13 @@ const SECRET = "sp33ks-sync-k3y-2026-x9mq";
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const PRICING_LOCATIONS = [...STORES, "CORP"];
 const ACCEPT_ROLES = ["ceo", "tom", "district manager"];
-const REASON_CONDITIONS = ["Fair", "For Parts"];
+// 'For Parts' was renamed to 'Broken' -- same meaning, plainer word. The old
+// spelling stays recognised here: existing rows were migrated, but a row saved
+// between this deploying and that running would otherwise stop being asked for
+// a reason, and it would stop silently. Must match B2B_REASON_CONDITIONS in
+// speeks.js -- if these two disagree, the gate passes on one side and fails on
+// the other.
+const REASON_CONDITIONS = ["Fair", "Broken", "For Parts"];
 const DECLINE_CATEGORIES = ["client_declined", "client_unresponsive", "withdrawn", "not_viable", "other"];
 const TERMINAL = ["completed", "declined"];
 
@@ -89,11 +95,14 @@ const ITEM_COLS = [
   "wipe_required", "wipe_fee", "wiped_qty",
 ].join(",");
 
-const ITEM_TYPES = ["laptop", "desktop", "other"];
+// `computer` folds the old laptop/desktop split into one type; the legacy two
+// stay accepted so a not-yet-migrated row can still save.
+const ITEM_TYPES = ["computer", "laptop", "desktop", "other"];
 const DISPOSITIONS = ["purchase", "no_residual", "recycle"];
 // Which spec fields each type carries. `other` carries none -- a box of cables
 // has no CPU, and the CHECK on the table refuses one.
 const SPECS_FOR: Record<string, string[]> = {
+  computer: ["cpu", "ram", "storage", "gpu", "battery_health"],
   laptop: ["cpu", "ram", "storage", "gpu", "battery_health"],
   desktop: ["cpu", "ram", "storage", "gpu"],
   other: [],
@@ -293,7 +302,7 @@ function serialList(v: unknown): string[] {
   return String(v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 }
 
-// A line downgraded to Fair or For Parts must carry a client-facing reason --
+// A line downgraded to Fair or Broken must carry a client-facing reason --
 // it prints on the quote and is what justifies the low offer.
 function unreasonedNames(items: any[]): string | null {
   return namesOf(items.filter((it) =>
@@ -321,7 +330,7 @@ function itemGaps(items: any[]): string | null {
   const reasons = unreasonedNames(items);
   const serials = unserialledNames(items);
   const specs = unspeccedNames(items);
-  if (reasons) parts.push(`marked Fair or For Parts and need a reason: ${reasons}`);
+  if (reasons) parts.push(`marked Fair or Broken and need a reason: ${reasons}`);
   if (specs) parts.push(`missing CPU, RAM or storage: ${specs}`);
   if (serials) parts.push(`need one serial per unit (use "No visible serial" where there isn't one): ${serials}`);
   if (!parts.length) return null;
@@ -832,6 +841,14 @@ Deno.serve(async (req: Request) => {
           // Cleared because it is no longer true -- someone has to price it
           // again, and the queue reads this to decide the stage is unowned.
           priced_by: null,
+          // Back to zero for the same reason. Until the quote stage is split in
+          // two, "has this been sent yet" is how the app tells awaiting-approval
+          // apart from out-with-the-client, in five separate places. Leaving the
+          // count set meant a re-submitted quote came back reading "Out For
+          // Quote" -- as though the client already had the corrected numbers.
+          // quote_sent_at is deliberately kept: when it last went out is still
+          // true, and is the only record of it once this resets.
+          quote_send_count: 0,
           sendback_note: str(body.note, 2000, "A note saying what needs changing", true),
           sendback_by: str(body.sent_back_by, 120, "Sent back by"),
           sendback_at: new Date().toISOString(),

@@ -13071,7 +13071,13 @@ const B2B_ACTIONS = {
 const B2B_CORP_ROLES   = ['district manager', 'ceo', 'tom'];
 const B2B_ACCEPT_ROLES = ['ceo', 'tom', 'district manager'];   // may lock a quote
 const B2B_STORE_ROLES  = ['manager', 'owner (manager)', 'owner manager', 'assistant manager'];
-const B2B_CONDITIONS   = ['New', 'Like New', 'Good', 'Fair', 'For Parts'];
+// 'For Parts' was renamed to 'Broken' -- same meaning, plainer word. It is gone
+// from the picker but still recognised by the reason gate and the tone maps
+// below: existing rows were migrated, and a row saved in the window between
+// this shipping and that running would otherwise stop asking for a reason,
+// silently. Same treatment the retired laptop/desktop item types get.
+const B2B_CONDITIONS   = ['New', 'Like New', 'Good', 'Fair', 'Broken'];
+const B2B_COND_LEGACY  = ['For Parts'];
 // Preset client-facing note tags. Joined with '; ' rather than ',' so a typed
 // note containing a comma doesn't get re-parsed into phantom tags on reload.
 const B2B_NOTE_TAGS = ['Cracked', 'LCD Damage', 'No RAM', 'No HDD', 'Non-functional',
@@ -14356,8 +14362,15 @@ function _b2bRenderOverview(scoped) {
             <td class="r"><span class="b2b-age b2b-age-${_b2bAgeTone(_b2bDaysIn(d))}">${_b2bDaysIn(d)}d</span></td>
         </tr>`).join('');
 
-    // Quotes out with the client, oldest first.
+    // Quotes, oldest first. Two very different states share this one stage
+    // until it is split in two: still to be approved internally, and genuinely
+    // out with the client. The tile used to add both together and call the
+    // total "awaiting a decision", which claimed the client was sitting on
+    // money nobody had sent them -- while the table directly below said "not
+    // sent" about those same deals.
     const quotes = live.filter(d => d.stage === 'quote').sort((a, b) => _b2bDaysIn(b) - _b2bDaysIn(a));
+    const toApprove  = quotes.filter(_b2bAwaitingApproval);
+    const withClient = quotes.filter(d => !_b2bAwaitingApproval(d));
     const quoteRows = quotes.map(d => `
         <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
             <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
@@ -14383,7 +14396,7 @@ function _b2bRenderOverview(scoped) {
     const tiles = `
         <div class="b2b-tiles">
             <div class="b2b-tile"><span class="b2b-tile-k">In Flight</span><span class="b2b-tile-v">${live.length}</span><span class="b2b-tile-c">deals moving</span></div>
-            <div class="b2b-tile"><span class="b2b-tile-k">Out For Quote</span><span class="b2b-tile-v">${_b2bMoney(quotes.reduce((s, d) => s + _b2bNetOffer(d), 0))}</span><span class="b2b-tile-c">${quotes.length} awaiting a decision</span></div>
+            <div class="b2b-tile"><span class="b2b-tile-k">Out For Quote</span><span class="b2b-tile-v">${_b2bMoney(withClient.reduce((s, d) => s + _b2bNetOffer(d), 0))}</span><span class="b2b-tile-c">${withClient.length} awaiting a client decision${toApprove.length ? ` · ${toApprove.length} still to approve` : ''}</span></div>
             <div class="b2b-tile"><span class="b2b-tile-k">Unlisted Stock</span><span class="b2b-tile-v">${_b2bMoney(unlistedTotal)}</span><span class="b2b-tile-c">${unlisted.reduce((n, d) => n + _b2bOutstanding(d), 0)} units to list</span></div>
             <div class="b2b-tile ${stalled.length ? 'warn' : ''}"><span class="b2b-tile-k">Stalled</span><span class="b2b-tile-v">${stalled.length}</span><span class="b2b-tile-c">no movement in 7+ days</span></div>
         </div>`;
@@ -14392,7 +14405,7 @@ function _b2bRenderOverview(scoped) {
         + card('Stalled Deals', 'No movement in a week or more',
                '<th>Ref</th><th>Client</th><th>Stage</th><th>Store</th><th class="r">In stage</th>',
                stalledRows, 'Everything is moving')
-        + card('Out For Quote', 'Priced and waiting on the client',
+        + card('Open Quotes', 'Waiting on approval, or out with the client',
                '<th>Ref</th><th>Client</th><th>Email</th><th class="c">Sent</th><th class="r">Offer</th>',
                quoteRows, 'No quotes are open right now')
         + card('Bought But Not Listed', 'Inventory paid for and not yet earning',
@@ -14562,7 +14575,13 @@ function _b2bSummary(deal) {
         ['Reference', `<span class="b2b-mono">${escapeHtml(deal.ref)}</span>`],
     ];
     if (_b2bIsCorp()) {
+        // The phone was already being fetched and never shown, so anyone needing
+        // to actually ring the client had to go back out to the Clients list.
+        // It is a separate cell rather than a third item in the Contact string:
+        // a number you are about to dial should be its own thing to read, not
+        // the tail of a run-on line.
         rows.push(['Contact', escapeHtml([deal.client?.contact, deal.client?.contact_email].filter(Boolean).join(' · ') || '—')]);
+        if (deal.client?.contact_phone) rows.push(['Phone', escapeHtml(deal.client.contact_phone)]);
     }
     rows.push(
         ['Picked up', deal.pickup_date ? _b2bDate(deal.pickup_date) : 'Not yet'],
@@ -14610,6 +14629,8 @@ function _b2bStagePickup(deal) {
                 <span>The client confirms the items above were collected by SPEEKS Technology on the date shown.</span>
             </label>`,
         footer: `
+            <button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;"
+                onclick="b2bPrintHoldingLabel('${deal.id}')">Print Holding Label</button>
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
             <button class="b2b-btn b2b-btn-primary" id="b2bPuGo" disabled onclick="b2bSignPickup('${deal.id}',this)">Sign &amp; Mark Picked Up</button>`,
     });
@@ -14654,6 +14675,8 @@ function _b2bStageAssign(deal) {
                 <div><label class="form-label-caps">Received By</label><input id="b2bAsRecv" class="form-input-lg" placeholder="Who took it in at the location"></div>
             </div>`,
         footer: `
+            <button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;"
+                onclick="b2bPrintHoldingLabel('${deal.id}')">Print Holding Label</button>
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
             <button class="b2b-btn b2b-btn-primary" id="b2bAsGo" disabled onclick="b2bAssignPricing('${deal.id}',this)">Send To Pricing</button>`,
     });
@@ -14686,10 +14709,11 @@ function _b2bTagsOf(str)  { return String(str || '').split(';').map(s => s.trim(
 function _b2bPresetNotes(it) { return _b2bTagsOf(it.client_notes).filter(t => B2B_NOTE_TAGS.includes(t)); }
 function _b2bCustomNotes(it) { return _b2bTagsOf(it.client_notes).filter(t => !B2B_NOTE_TAGS.includes(t)).join('; '); }
 
-// Anything downgraded to Fair or For Parts has to say why: that note prints on
+// Anything downgraded to Fair or Broken has to say why: that note prints on
 // the quote and is the only thing standing between a low offer and an argument
-// with the client later.
-const B2B_REASON_CONDITIONS = ['Fair', 'For Parts'];
+// with the client later. Keeps the legacy 'For Parts' spelling so the gate can
+// never quietly stop firing on an older row -- see B2B_COND_LEGACY.
+const B2B_REASON_CONDITIONS = ['Fair', 'Broken', ...B2B_COND_LEGACY];
 function _b2bNeedsReason(it)   { return B2B_REASON_CONDITIONS.includes(it.condition); }
 function _b2bMissingReason(it) { return _b2bNeedsReason(it) && !String(it.client_notes || '').trim(); }
 // Deliberately no `unreasoned()` helper: a second, weaker gate alongside
@@ -14708,7 +14732,8 @@ function _b2bLabelBtn(it, cls) {
     const n = Number(it.quantity) || 1;
     return `<button class="b2b-linelabel ${cls || ''}" onclick="event.stopPropagation();b2bPrintLabels('${_b2bModalDeal?.id}','${it.id}')"
         aria-label="Print labels for ${escapeHtml(it.sku)}"
-        data-tip="Print ${n} label${n === 1 ? '' : 's'} for ${escapeHtml(it.sku)}">${_b2bIco(B2B_ICO_BARCODE)}</button>`;
+        data-tip="${n === 1 ? `Print the label for ${escapeHtml(it.sku)}`
+                            : `Print labels for ${escapeHtml(it.sku)} — it asks how many`}">${_b2bIco(B2B_ICO_BARCODE)}</button>`;
 }
 function _b2bLocalItem(id){ return _b2bModalItems.find(i => i.id === id); }
 
@@ -14720,6 +14745,114 @@ function _b2bLocalItem(id){ return _b2bModalItems.find(i => i.id === id); }
 const _b2bDispOf  = (it) => it.disposition || 'purchase';
 const _b2bIsBuy   = (it) => _b2bDispOf(it) === 'purchase';
 const _b2bIsScrap = (it) => _b2bDispOf(it) === 'recycle';
+const _b2bIsNrv   = (it) => _b2bDispOf(it) === 'no_residual';
+
+// What the Total column shows for one line, in one place because three screens
+// render it and a fourth repaints it -- the last time money was expressed
+// independently in several spots, half of them ended up showing gross where the
+// rest showed net.
+//
+// A purchase line shows what we pay. Recycle is worth nothing to anyone, so it
+// stays a dash. No-residual costs us nothing but still carries resale value,
+// and dashing that out hid a real number: six monitors worth $270 to us read as
+// an empty row, which is what prompted the report. It renders in the same blue
+// as the row's bar and the client-facing chip so it cannot be misread as money
+// owed to the client.
+function _b2bLineTotal(it) {
+    const q = Number(it.quantity) || 1;
+    if (_b2bIsBuy(it)) {
+        return { cls: 'b2b-f-calc', text: _b2bMoney((Number(it.offer) || 0) * q, 2),
+                 tip: 'What we pay the client for this line' };
+    }
+    if (_b2bIsScrap(it)) {
+        return { cls: 'b2b-f-off', text: '—', tip: 'Scrapped — no value to us or to the client' };
+    }
+    const resale = (Number(it.value) || 0) * q;
+    return { cls: 'b2b-f-resale', text: resale ? _b2bMoney(resale, 2) : '—',
+             tip: 'Resale value to us — the client is paid nothing for this line' };
+}
+function _b2bLineTotalHtml(it) {
+    const t = _b2bLineTotal(it);
+    return `<span class="${t.cls}" id="b2bLn-${it.id}" title="${escapeHtml(t.tip)}">${t.text}</span>`;
+}
+
+// Margin on one line: what we keep of its resale value after paying for it.
+// The deal-level figure was already on the totals bar, but that averages a good
+// buy and a bad one into something that looks fine -- and the decision being
+// made on this screen is per line, not per pallet.
+//
+// A no-residual line is 100% by construction: it has resale value and we pay
+// nothing for it. Recycle has neither, so there is no ratio to show.
+//
+// Deliberately no "good / bad" thresholds. What counts as an acceptable margin
+// is a buying decision this code has no business asserting -- and there is a
+// Margin Guide tool that owns that question. The one thing flagged is a NEGATIVE
+// margin, which isn't a judgement call: it means the offer exceeds what the
+// thing is worth to us.
+function _b2bLineMargin(it) {
+    const q = Number(it.quantity) || 1;
+    const value = _b2bIsScrap(it) ? 0 : (Number(it.value) || 0) * q;
+    const offer = _b2bIsBuy(it) ? (Number(it.offer) || 0) * q : 0;
+    if (value <= 0) {
+        return { cls: 'b2b-f-off', text: '—',
+                 tip: _b2bIsScrap(it) ? 'Recycled — no resale value to measure against'
+                                      : 'Set a unit value to see the margin' };
+    }
+    const pct = Math.round(((value - offer) / value) * 100);
+    return {
+        cls: pct < 0 ? 'b2b-f-mgn bad' : 'b2b-f-mgn',
+        text: `${pct}%`,
+        tip: pct < 0
+            ? `We would pay ${_b2bMoney(offer, 2)} for something worth ${_b2bMoney(value, 2)} to us`
+            : `${_b2bMoney(value - offer, 2)} of ${_b2bMoney(value, 2)} resale value`,
+    };
+}
+function _b2bLineMarginHtml(it) {
+    const m = _b2bLineMargin(it);
+    return `<span class="${m.cls}" id="b2bMg-${it.id}" title="${escapeHtml(m.tip)}">${m.text}</span>`;
+}
+
+// A one-line preview of whatever was written about this line.
+//
+// Client notes print on the client's quote; staff notes never leave the
+// building. Both sit behind the ⋯ sheet, so scanning a thirty-line pallet for
+// "which lines did the client say something about" meant opening thirty
+// sheets -- which is what was reported. An earlier version of this always
+// rendered, including a "No details yet" placeholder, and that is what made it
+// cost height on every row; this one returns nothing when there is nothing to
+// say, so only the handful of annotated lines pay for it.
+//
+// Client leads, because that is the half that reaches the client.
+//
+// Named apart from _b2bNoteHint, which already exists and returns a plain-text
+// summary for the card grid's tooltip. Two `function` declarations of one name
+// do not collide loudly -- the later simply wins -- so this would have rendered
+// that tooltip string, unwrapped, into the row.
+function _b2bNoteLine(it) {
+    const client = String(it.client_notes || '').trim();
+    const staff  = String(it.staff_notes || '').trim();
+    if (!client && !staff) return '';
+    const part = (cls, label, text) =>
+        `<span class="${cls}" title="${escapeHtml(label + ': ' + text)}"><b>${label}</b>${escapeHtml(text)}</span>`;
+    return `<div class="b2b-pnote-hint">`
+        + (client ? part('b2b-nh-c', 'Client', client) : '')
+        + (staff  ? part('b2b-nh-s', 'Staff',  staff)  : '')
+        + `</div>`;
+}
+
+// The key to the coloured bars down the left of the sheet. Always rendered
+// rather than only when a non-purchase line exists: the grid repaints on its
+// own (_b2bRepaintItems touches #b2bItemGrid alone), so a legend that appeared
+// and disappeared with the data would go stale the moment someone changed a
+// line's handling without a full redraw.
+function _b2bDispLegend() {
+    return `<div class="b2b-disp-key">
+        <b>Row colours</b>
+        <span class="k-nrv"><i></i><em>No residual value</em> — nothing to the client, may still be resold</span>
+        <span class="k-scrap"><i></i><em>Recycle</em> — scrapped, never listed</span>
+        <span class="k-block"><i></i><em>Not ready</em> — something on the line is still missing</span>
+    </div>`;
+}
 
 // One entry per unit. Split on comma, drop the blanks -- so trailing commas and
 // double commas while typing don't count as units.
@@ -14781,8 +14914,22 @@ function _b2bPaintTotals() {
     }
     _b2bModalItems.forEach(it => {
         const el = document.getElementById(`b2bLn-${it.id}`);
-        if (el) el.textContent = _b2bIsBuy(it)
-            ? _b2bMoney((Number(it.offer) || 0) * (Number(it.quantity) || 1), 2) : '—';
+        if (!el) return;
+        // Class and title move with the text: changing a line's handling changes
+        // which of the three meanings this cell has, and a repaint that updated
+        // only the number would leave the previous meaning's styling behind.
+        const t = _b2bLineTotal(it);
+        el.className = t.cls;
+        el.title = t.tip;
+        el.textContent = t.text;
+        // Margin moves with value and offer, so it repaints on the same pass.
+        const mel = document.getElementById(`b2bMg-${it.id}`);
+        if (mel) {
+            const m = _b2bLineMargin(it);
+            mel.className = m.cls;
+            mel.title = m.tip;
+            mel.textContent = m.text;
+        }
     });
     const submit = document.getElementById('b2bPrSubmit');
     if (submit) submit.disabled = _b2bModalItems.length === 0 || _b2bNotReady().length > 0;
@@ -15030,6 +15177,49 @@ async function b2bAddItem(dealId, btn) {
     });
 }
 
+// Duplicate a line. A pallet is usually twenty near-identical machines, so
+// re-typing brand, model, specs, condition and price for each one was the single
+// slowest thing about pricing.
+//
+// Copies everything that describes the KIND of thing, and nothing that
+// identifies a particular unit or records what has happened to it:
+//   * the SKU and line number come from the server, which mints fresh ones
+//   * serials are per unit, so a copied serial would be a lie -- and a wrong one
+//     that reads as real, which is worse than a blank
+//   * listing, recycling and wipe progress belong to the original units
+// The wipe FLAG copies (it is a property of the kit) but the fee is re-snapshotted
+// by the server rather than carried over, the same as any other new line.
+async function b2bCopyItem(id, btn) {
+    const src = _b2bLocalItem(id);
+    if (!src) return;
+    await _b2bBusy(btn, '', async () => {
+        const copy = {
+            make: src.make, model: src.model, condition: src.condition,
+            staff_notes: src.staff_notes, client_notes: src.client_notes,
+            quantity: src.quantity, value: src.value, offer: src.offer,
+            item_type: src.item_type || 'other',
+            cpu: src.cpu, ram: src.ram, storage: src.storage,
+            gpu: src.gpu, battery_health: src.battery_health,
+            disposition: _b2bDispOf(src), wipe_required: !!src.wipe_required,
+        };
+        const out = await _b2bPost({ action: 'add_item', deal_id: _b2bModalDeal.id, ...copy },
+            "Couldn't copy that line");
+        // Same rule as b2bAddItem: the optimistic row is what gets painted, so it
+        // has to carry every field the grid reads.
+        _b2bModalItems.push({
+            ...copy, id: out.id, line_no: out.line_no, sku: out.sku,
+            serials: '', wipe_fee: src.wipe_required ? (src.wipe_fee || _b2bWipeFee()) : 0,
+            wiped_qty: 0, listed_qty: 0, recycled_qty: 0, listings: [],
+        });
+        _b2bDirty = true;
+        _b2bRepaintItems();
+        _b2bPaintTotals();
+        // Straight to the serials, because that is the one thing a copy cannot
+        // fill in and the one thing that blocks submitting.
+        b2bItemDetail(out.id);
+    });
+}
+
 function b2bDeleteItem(id) {
     const it = _b2bLocalItem(id);
     if (!it) return;
@@ -15209,7 +15399,7 @@ function _b2bItemCards() {
             </div>` : '';
 
         return `
-        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
+        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
             <div class="b2b-prow">
                 <span class="b2b-pcell b2b-pc-sku" title="${escapeHtml(it.sku || '')}">
                     <span class="b2b-mono">${escapeHtml(_b2bLineNo(it))}</span>
@@ -15243,20 +15433,24 @@ function _b2bItemCards() {
                         oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`
                           : '<span class="b2b-f-off">—</span>'}</span>
                 <span class="b2b-pcell n b2b-pc-tot" data-k="Line total">
-                    <span class="b2b-f-calc" id="b2bLn-${it.id}">${buy ? _b2bMoney((Number(it.offer) || 0) * need, 2) : '—'}</span></span>
+                    ${_b2bLineTotalHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-acts">
+                    <!-- Print leads, delete trails, and the two are never
+                         neighbours: they were one misclick apart and only one of
+                         them can be undone. -->
+                    ${_b2bLabelBtn(it)}
                     <button class="b2b-notes-btn ${open ? 'on' : ''} ${blocked.length ? 'req' : ''}"
                         title="${blocked.length ? 'Not ready yet — ' + escapeHtml(blocked.join(', ')) : escapeHtml(_b2bNoteHint(it))}"
                         onclick="b2bToggleNotes('${it.id}')">
                         ${_b2bIco('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>')}
                         ${(it.client_notes || it.staff_notes || it.serials) ? '<i class="b2b-notes-dot"></i>' : ''}
                     </button>
-                    ${_b2bLabelBtn(it)}
                     <button class="b2b-x" title="Remove line" onclick="b2bDeleteItem('${it.id}')">
                         ${_b2bIco('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>')}
                     </button>
                 </span>
             </div>
+            ${open ? '' : _b2bNoteLine(it)}
             <div class="b2b-ready" style="${blocked.length ? '' : 'display:none;'}">${escapeHtml(blocked.join(' · '))}</div>
             ${drawer}
         </div>`;
@@ -15274,6 +15468,10 @@ const _B2B_ICO_DETAIL = '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12
     + '<line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/>'
     + '<line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>';
 const _B2B_ICO_X = '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>';
+// Feather "copy": two offset sheets. Reads as duplicate rather than as the
+// clipboard sense of copy, which is what this does.
+const _B2B_ICO_COPY = '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>'
+    + '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>';
 
 function _b2bItemSheet() {
     if (!_b2bModalItems.length) {
@@ -15293,7 +15491,7 @@ function _b2bItemSheet() {
             <span>Line</span><span>Type</span><span>Brand</span><span>Model</span>
             ${reqSpecs.map(f => `<span>${escapeHtml(f.label)}</span>`).join('')}
             <span>Condition</span>
-            <span class="r">Qty</span><span class="r">Value</span><span class="r">Offer</span>
+            <span class="r">Qty</span><span class="r">Value</span><span class="r">Offer</span><span class="r">Margin</span>
             <span>Handling</span><span class="c">Wipe</span><span class="r">Total</span><span></span>
         </div>`;
 
@@ -15328,7 +15526,7 @@ function _b2bItemSheet() {
         }).join('');
 
         return `
-        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
+        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
             <div class="b2b-prow">
                 <span class="b2b-pcell b2b-pc-sku" title="${escapeHtml(it.sku || '')}">
                     <span class="b2b-mono">${escapeHtml(_b2bLineNo(it))}</span>
@@ -15338,11 +15536,16 @@ function _b2bItemSheet() {
                     <select onchange="b2bItemType('${it.id}',this.value)">
                         ${B2B_ITEM_TYPES.map(t => `<option value="${t.key}" ${(it.item_type || 'other') === t.key ? 'selected' : ''}>${t.label}</option>`).join('')}
                     </select></span>
+                <!-- title as well as value: these two are the narrowest text
+                     columns on the sheet and "OptiPlex 7080 Micro" does not fit
+                     in one, so hovering has to be able to tell you the rest. -->
                 <span class="b2b-pcell" data-k="Brand">
                     <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple"
+                        title="${escapeHtml(it.make || '')}"
                         oninput="b2bItemInput('${it.id}','make',this.value)" onchange="b2bItemSave('${it.id}')"></span>
                 <span class="b2b-pcell" data-k="Model">
                     <input value="${escapeHtml(it.model || '')}" placeholder="MacBook Air M2"
+                        title="${escapeHtml(it.model || '')}"
                         oninput="b2bItemInput('${it.id}','model',this.value)" onchange="b2bItemSave('${it.id}')"></span>
                 ${specCells}
                 <span class="b2b-pcell" data-k="Condition">
@@ -15361,6 +15564,8 @@ function _b2bItemSheet() {
                     ${buy ? `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
                         oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`
                           : '<span class="b2b-f-off">—</span>'}</span>
+                <span class="b2b-pcell n b2b-pc-mgn" data-k="Margin">
+                    ${_b2bLineMarginHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-disp" data-k="Handling">
                     <select data-tip="${escapeHtml(B2B_DISP[disp].hint)}" onchange="b2bItemDisposition('${it.id}',this.value)">
                         ${B2B_DISPOSITIONS.map(d => `<option value="${d.key}" ${disp === d.key ? 'selected' : ''}>${_B2B_DISP_SEL[d.key]}</option>`).join('')}
@@ -15369,8 +15574,10 @@ function _b2bItemSheet() {
                     <label class="b2b-ss-wipe" title="Certified data wipe · ${_b2bMoney(fee, 2)}/unit">
                         <input type="checkbox" ${it.wipe_required ? 'checked' : ''} onchange="b2bItemWipe('${it.id}',this.checked)"></label></span>
                 <span class="b2b-pcell n b2b-pc-tot" data-k="Total">
-                    <span class="b2b-f-calc" id="b2bLn-${it.id}">${buy ? _b2bMoney((Number(it.offer) || 0) * need, 2) : '—'}</span></span>
+                    ${_b2bLineTotalHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-acts">
+                    <button class="b2b-notes-btn b2b-ss-copy" title="Copy this line — everything but the serials"
+                        onclick="b2bCopyItem('${it.id}',this)">${_b2bIco(_B2B_ICO_COPY)}</button>
                     <button class="b2b-notes-btn b2b-ss-more ${hasDetail ? 'has' : ''} ${blocked.length ? 'req' : ''}"
                         title="${blocked.length ? 'Not ready — ' + escapeHtml(blocked.join(', ')) : 'Specs, serials, notes & label'}"
                         onclick="b2bItemDetail('${it.id}')">
@@ -15380,6 +15587,7 @@ function _b2bItemSheet() {
                     <button class="b2b-x" title="Remove line" onclick="b2bDeleteItem('${it.id}')">${_b2bIco(_B2B_ICO_X)}</button>
                 </span>
             </div>
+            ${_b2bNoteLine(it)}
             <div class="b2b-ready" style="${blocked.length ? '' : 'display:none;'}">${escapeHtml(blocked.join(' · '))}</div>
         </div>`;
     }).join('');
@@ -15544,6 +15752,7 @@ function _b2bStagePricing(deal) {
             ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Picked up</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
             ${_b2bTotalsBar(true)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
+            ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
@@ -15644,6 +15853,7 @@ function _b2bStageQuote(deal) {
             </div>
             ${_b2bTotalsBar(true)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
+            ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
             <details class="b2b-preview" open>
                 <summary>Quote preview — this is what the client sees</summary>
@@ -15717,18 +15927,23 @@ function _b2bPaintQuoteDoc() {
 }
 
 // Condition earns a tinted chip on the quote, using the same semantic tones as
-// the rest of the app: emerald for sound, amber for Fair, red for For Parts.
+// the rest of the app: emerald for sound, amber for Fair, red for Broken.
 // The client can read the state of their equipment down the column at a glance.
+// 'For Parts' is the retired spelling of Broken and keeps its tone, so a row
+// written before the rename still reads red rather than falling to the grey
+// default.
 const B2B_COND_TONE = {
     'New':       { bg: '#e8f7ee', fg: '#178048' },
     'Like New':  { bg: '#e8f7ee', fg: '#178048' },
     'Good':      { bg: '#e8f7ee', fg: '#178048' },
     'Fair':      { bg: '#fdf3e1', fg: '#b7791f' },
+    'Broken':    { bg: '#fcecec', fg: '#d1443b' },
     'For Parts': { bg: '#fcecec', fg: '#d1443b' },
 };
 const _b2bCondTone = c => B2B_COND_TONE[c] || { bg: '#f1f5f9', fg: '#647082' };
 const _b2bCondClass = c => ({
-    'New': 'ok', 'Like New': 'ok', 'Good': 'ok', 'Fair': 'warn', 'For Parts': 'bad',
+    'New': 'ok', 'Like New': 'ok', 'Good': 'ok', 'Fair': 'warn',
+    'Broken': 'bad', 'For Parts': 'bad',
 }[c] || 'neu');
 
 // --- shared quote maths and wording ----------------------------------------
@@ -16328,12 +16543,16 @@ function _b2bListRows() {
                 ${recycled ? `<span class="b2b-lrec">${recycled} recycled</span>` : ''}
             </div>
             <div class="b2b-lacts">
-                ${_b2bLabelBtn(it)}
+                <!-- The steppers are what this screen is FOR -- scan, +, scan, + --
+                     and the label button was sitting directly in front of them.
+                     It moves to the end, past Recycle, where reaching for it is a
+                     deliberate act rather than something on the way to +. -->
                 <button class="b2b-step" ${listed <= 0 ? 'disabled' : ''} title="Undo the last one" onclick="b2bUnlistUnit('${it.id}')">−</button>
                 <button class="b2b-step up" ${ok || scrap || needsWipe ? 'disabled' : ''}
                     title="${escapeHtml(blockTitle)}"
                     onclick="b2bAskShopify('${it.id}')">+</button>
                 <button class="b2b-recycle" ${ok ? 'disabled' : ''} title="Recycle units out" onclick="b2bRecycleUnits('${it.id}')">Recycle</button>
+                ${_b2bLabelBtn(it)}
             </div>
         </div>`;
     }).join('');
@@ -16775,26 +16994,182 @@ function _b2bBarcodeSvg(data) {
 
 // One label per physical unit: a qty-5 line prints 5 identical labels, so each
 // scan during listing ticks that line up by one.
-function b2bPrintLabels(dealId, itemId) {
+// A tag for the pallet itself, for the stretch between "we collected it" and
+// "it has been priced".
+//
+// The per-unit labels can't cover this: b2bPrintLabels keys off it.sku, and
+// SKUs are not minted until pricing is submitted, so a pickup waiting to be
+// routed has nothing printable at all -- it sits in a back room identified by
+// nothing. deal.ref exists from creation, which is what this prints.
+//
+// Two formats. The letter sheet is the one that matters: this gets taped to a
+// skid and read from across a room, which is a different job from a device
+// label. The 2.25in version is there for when the label printer is what's to
+// hand -- it's the same stock the item labels use.
+function b2bPrintHoldingLabel(dealId) {
+    const deal = _b2bDealById(dealId) || _b2bModalDeal;
+    if (!deal) return;
+
+    const client = deal.client?.company || '—';
+    const acr    = deal.client?.acronym || '';
+    const where  = deal.pricing_store || 'Not yet assigned';
+    const picked = deal.pickup_date ? _b2bDate(deal.pickup_date) : '—';
+    const desc   = deal.pickup_desc || 'No description recorded';
+
+    const doc = `<!doctype html><html><head><meta charset="utf-8">
+<title>Holding ${escapeHtml(deal.ref)}</title>
+<style id="pageSize">@page { size: letter; margin: 0.4in; }</style>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Inter','Segoe UI',Arial,sans-serif; background: #f4f7f9; }
+  .bar { position: sticky; top: 0; display: flex; gap: 8px; align-items: center;
+         padding: 12px 16px; background: #fff; border-bottom: 1px solid #e6ebf1; }
+  .bar b { font-size: 13px; font-weight: 800; color: #1a1c1e; margin-right: 6px; }
+  .bar button { font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+                padding: 7px 13px; border-radius: 9px; border: 1px solid #e6ebf1;
+                background: #fff; color: #647082; }
+  .bar button.on { background: #e8f7ee; border-color: #1f9d57; color: #178048; }
+  .bar button.go { background: #1f9d57; border-color: #1f9d57; color: #fff; margin-left: auto; }
+  .sheet { padding: 20px; display: flex; justify-content: center; }
+
+  .tag { width: 7.7in; background: #fff; border: 2px solid #111; padding: 0.34in 0.4in; }
+  .tag .hd { font-size: 15pt; font-weight: 800; letter-spacing: .22em;
+             text-transform: uppercase; border-bottom: 2px solid #111; padding-bottom: 0.1in; }
+  .tag .co { font-size: 34pt; font-weight: 800; line-height: 1.05; margin-top: 0.16in; }
+  .tag .bc { display: block; width: 100%; height: 1.15in; fill: #000; margin-top: 0.16in; }
+  .tag .rf { font-family: 'Consolas','SFMono-Regular',monospace; font-size: 26pt;
+             font-weight: 700; letter-spacing: .1em; text-align: center; margin-top: 0.02in; }
+  .tag .gr { display: flex; gap: 0.4in; margin-top: 0.2in; border-top: 1px solid #111; padding-top: 0.14in; }
+  .tag .gr > div { flex: 1; }
+  .tag .k { font-size: 9pt; font-weight: 800; letter-spacing: .12em;
+            text-transform: uppercase; color: #444; }
+  .tag .v { font-size: 15pt; font-weight: 700; margin-top: 0.03in; }
+  .tag .ds { font-size: 12pt; margin-top: 0.16in; line-height: 1.35; }
+  .tag .ft { font-size: 9.5pt; color: #444; margin-top: 0.2in;
+             border-top: 1px solid #ccc; padding-top: 0.1in; }
+
+  /* Label-printer stock: only what identifies the pallet survives the shrink. */
+  body.sm .sheet { padding: 16px; }
+  body.sm .tag { width: 2.25in; height: 1in; padding: 0.05in 0.07in; border-width: 1px;
+                 display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  body.sm .tag .hd { font-size: 6pt; letter-spacing: .14em; border: 0; padding: 0; }
+  body.sm .tag .co { font-size: 7.5pt; margin: 0; max-width: 100%;
+                     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body.sm .tag .bc { height: 0.34in; margin-top: 0.02in; }
+  body.sm .tag .rf { font-size: 9pt; margin: 0; letter-spacing: .04em; }
+  body.sm .tag .gr, body.sm .tag .ds, body.sm .tag .ft { display: none; }
+
+  @media print {
+    body { background: #fff; }
+    .bar { display: none; }
+    .sheet { padding: 0; display: block; }
+    .tag { width: 100%; }
+    body.sm .tag { width: 2.25in; }
+  }
+</style></head>
+<body>
+  <div class="bar">
+    <b>${escapeHtml(deal.ref)}</b>
+    <button id="b1" class="on" onclick="setSize(false)">Full page</button>
+    <button id="b2" onclick="setSize(true)">2.25 × 1 in</button>
+    <button class="go" onclick="window.print()">Print</button>
+  </div>
+  <div class="sheet">
+    <div class="tag">
+      <div class="hd">Holding — Awaiting Pricing</div>
+      <div class="co">${escapeHtml(client)}${acr ? ` (${escapeHtml(acr)})` : ''}</div>
+      ${_b2bBarcodeSvg(deal.ref)}
+      <div class="rf">${escapeHtml(deal.ref)}</div>
+      <div class="gr">
+        <div><div class="k">Picked Up</div><div class="v">${escapeHtml(picked)}</div></div>
+        <div><div class="k">Price It At</div><div class="v">${escapeHtml(where)}</div></div>
+        <div><div class="k">Released By</div><div class="v">${escapeHtml(deal.signed_by || '—')}</div></div>
+      </div>
+      <div class="ds"><b>Contents:</b> ${escapeHtml(desc)}</div>
+      <div class="ft">Do not process or list these items until this deal has been priced and the
+        client has accepted the quote. Look the reference up in Operations &rarr; Business-to-Business.</div>
+    </div>
+  </div>
+<script>
+  function setSize(small) {
+    document.body.classList.toggle('sm', small);
+    document.getElementById('b1').className = small ? '' : 'on';
+    document.getElementById('b2').className = small ? 'on' : '';
+    document.getElementById('pageSize').textContent = small
+      ? '@page { size: 2.25in 1in; margin: 0; }'
+      : '@page { size: letter; margin: 0.4in; }';
+  }
+<\/script>
+</body></html>`;
+
+    const w = window.open('', '_blank');
+    if (!w) return alert('Allow pop-ups for this site to print the holding label.');
+    w.document.write(doc);
+    w.document.close();
+}
+
+function b2bPrintLabels(dealId, itemId, count) {
     const deal = _b2bDealById(dealId) || _b2bModalDeal;
     if (!deal) return;
     const source = itemId ? _b2bModalItems.filter(i => i.id === itemId) : _b2bModalItems;
     const labels = [];
-    source.forEach(it => {
-        if (!it.sku) return;
-        const n = Math.max(1, Number(it.quantity) || 1);
-        for (let i = 0; i < n; i++) labels.push(it);
-    });
-    if (!labels.length) {
-        return alert('No SKUs to print yet — they get assigned when the pricing is submitted.');
+
+    if (itemId) {
+        // One line: ask how many. A qty-20 line used to print twenty labels
+        // whether you wanted twenty or the one you just tore. The default is the
+        // outstanding count, because that is how many are still to be handled --
+        // and once a line is fully listed it falls to 1, which is the reprint
+        // case. Skipped entirely for a single-unit line; there is nothing to ask.
+        const it = source[0];
+        if (it && it.sku) {
+            const qty  = Math.max(1, Number(it.quantity) || 1);
+            const done = (Number(it.listed_qty) || 0) + (Number(it.recycled_qty) || 0);
+            const left = Math.max(1, qty - done);
+            let n = Number(count) || 0;
+            if (!n) {
+                if (qty === 1) {
+                    n = 1;
+                } else {
+                    const raw = prompt(
+                        `How many labels for "${_b2bItemName(it)}"?\n\n`
+                        + `${qty} unit${qty === 1 ? '' : 's'} on the line`
+                        + `${done ? `, ${left} still to handle` : ''}.`, String(left));
+                    if (raw === null) return;
+                    n = parseInt(raw, 10) || 0;
+                }
+            }
+            n = Math.min(qty, Math.max(1, n));
+            for (let i = 0; i < n; i++) labels.push(it);
+        }
+    } else {
+        source.forEach(it => {
+            if (!it.sku) return;
+            const n = Math.max(1, Number(it.quantity) || 1);
+            for (let i = 0; i < n; i++) labels.push(it);
+        });
     }
 
-    const cells = labels.map(it => `
+    if (!labels.length) {
+        return alert('No SKUs to print yet — a line gets one as soon as it is added.');
+    }
+
+    // What happens to the unit, on the unit. A recycle line printed labels
+    // indistinguishable from a purchase, so once the paperwork was off the pallet
+    // there was nothing on the box itself saying "this must not be listed".
+    // Styled for a mono thermal printer rather than with colour: recycle is
+    // knocked out of solid black, no-residual is boxed, a purchase is plain.
+    const DISP_LABEL = { purchase: 'Purchased', no_residual: 'No Residual Value', recycle: 'Recycle' };
+    const DISP_CLASS = { purchase: 'buy', no_residual: 'nrv', recycle: 'rec' };
+    const cells = labels.map(it => {
+        const d = _b2bDispOf(it);
+        return `
         <div class="lb">
             ${_b2bBarcodeSvg(it.sku)}
             <div class="sku">${escapeHtml(it.sku)}</div>
             <div class="desc">${escapeHtml(_b2bItemName(it))}</div>
-        </div>`).join('');
+            <div class="disp ${DISP_CLASS[d] || 'buy'}">${escapeHtml(DISP_LABEL[d] || DISP_LABEL.purchase)}</div>
+        </div>`;
+    }).join('');
 
     const doc = `<!doctype html><html><head><meta charset="utf-8">
 <title>Labels ${escapeHtml(deal.ref)}</title>
@@ -16816,17 +17191,33 @@ function b2bPrintLabels(dealId, itemId) {
   .lb { width: 2.25in; height: 1in; padding: 0.05in 0.07in; background: #fff;
         border: 1px dashed #cbd5e1; display: flex; flex-direction: column;
         align-items: center; justify-content: center; overflow: hidden; }
-  .lb .bc { display: block; width: 100%; height: 0.42in; fill: #000; }
+  /* 0.38in, down from 0.42, to pay for the description growing and the handling
+     line arriving. Still ~9.5mm of bar height, comfortably over what Code 128
+     needs to scan. */
+  .lb .bc { display: block; width: 100%; height: 0.38in; fill: #000; }
   .lb .sku { font-family: 'Consolas','SFMono-Regular',monospace; font-size: 10pt;
              font-weight: 700; letter-spacing: .04em; line-height: 1.1; margin-top: 0.03in; }
-  .lb .desc { font-size: 6.5pt; color: #333; line-height: 1.1; margin-top: 0.01in;
+  /* Was 6.5pt, which the label printers were not reproducing legibly. */
+  .lb .desc { font-size: 8pt; color: #000; line-height: 1.1; margin-top: 0.01in;
               max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* No colour: these go to a mono thermal printer, so the three outcomes are
+     told apart by weight and inversion instead. Recycle is the one that must be
+     unmissable -- it means do not list this -- so it takes the solid block. */
+  .lb .disp { margin-top: 0.025in; font-size: 7.5pt; font-weight: 800;
+              letter-spacing: .06em; text-transform: uppercase; line-height: 1.1;
+              max-width: 100%; white-space: nowrap; overflow: hidden; }
+  .lb .disp.buy { color: #000; }
+  .lb .disp.nrv { color: #000; border: 1pt solid #000; padding: 0 0.045in; border-radius: 2pt; }
+  .lb .disp.rec { background: #000; color: #fff; padding: 0.008in 0.055in; border-radius: 2pt; }
 
-  /* The short stock has no room for a description line. */
+  /* The short stock has no room for the description as well, and between the two
+     the handling is the one that changes what you DO with the unit -- the SKU
+     above it already says exactly which line it is. */
   body.sm .lb { height: 0.75in; }
-  body.sm .lb .bc { height: 0.34in; }
+  body.sm .lb .bc { height: 0.30in; }
   body.sm .lb .sku { font-size: 9pt; }
   body.sm .lb .desc { display: none; }
+  body.sm .lb .disp { font-size: 7pt; margin-top: 0.02in; }
 
   @media print {
     body { background: #fff; }
