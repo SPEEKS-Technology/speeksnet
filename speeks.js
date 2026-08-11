@@ -27431,6 +27431,11 @@ const EMAIL_LIST_GROUPS = [
             ...EMAIL_LIST_STORES.map(s => ({ key: `weekly_store_${s}`, label: `${s} manager report` })),
         ],
     },
+    {
+        title: 'Unlisted Inventory Weekly Update',
+        desc: 'Monday 9am backlog report — the pile per store, and what it would take to clear it.',
+        lists: [{ key: 'unlisted_report', label: 'Recipients' }],
+    },
     // Every list a report READS must appear here as well as in the edge fn's
     // LIST_KEYS, or it becomes an orphan only SQL can change — which is exactly
     // what happened to sales_import_alert. The backend has allowed usage_report

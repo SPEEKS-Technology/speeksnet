@@ -34,6 +34,10 @@ const GMAIL_RELAY = Deno.env.get("GMAIL_RELAY_URL") ||
 // The name on the hero and in the subject line. The function SLUG stays
 // `unlisted-backlog` — renaming it would orphan the two pg_cron jobs.
 const REPORT_NAME = "Unlisted Inventory Weekly Update";
+// Who it goes to is managed from the DM's Email Recipients tool, under this
+// list key. TO_DEFAULT is only the floor: if the list is empty or the lookup
+// fails, the report still sends rather than silently going nowhere.
+const RECIPIENT_LIST = "unlisted_report";
 const TO_DEFAULT = ["ethan.kushnir@speekstechnology.com"];
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const SEND_HOUR_CENTRAL = 9;   // the pg_cron pair covers CDT and CST; this picks the right one
@@ -412,6 +416,14 @@ function build(d: any) {
 }
 
 // ---------------------------------------------------------------------------
+async function loadRecipients(sb: any): Promise<string[]> {
+  const { data, error } = await sb.from("email_recipients")
+    .select("email").eq("list_key", RECIPIENT_LIST);
+  if (error) return TO_DEFAULT;
+  const list = (data || []).map((r: Row) => String(r.email)).filter(Boolean);
+  return list.length ? list : TO_DEFAULT;
+}
+
 async function sendEmail(to: string[], subject: string, html: string) {
   const res = await fetch(GMAIL_RELAY, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -446,7 +458,8 @@ Deno.serve(async (req: Request) => {
 
     if (q("dryRun") === "1") return new Response(html, { headers: { "Content-Type": "text/html" } });
 
-    const to = q("to") ? [q("to")!] : TO_DEFAULT;
+    // ?to= still overrides everything, for a one-off send to a single address.
+    const to = q("to") ? [q("to")!] : await loadRecipients(sb);
     const rangeLabel = `${fmtMD(d.weekStart)}–${fmtMD(d.weekEnd)}`;
     const sent = await sendEmail(to, `${REPORT_NAME} — Week of ${rangeLabel}`, html);
     return jsonRes({ ok: true, weekEnd: ymd(d.weekEnd), to, readings: d.readings, sent });
