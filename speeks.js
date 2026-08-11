@@ -33181,7 +33181,7 @@ function renderDmListingModal() {
     let rail = '<button type="button" class="dmx-t' + (_dmxSel.lg === 'EFF' ? ' sel' : '')
         + '" onclick="dmxShowEfficiency()">'
         + '<span class="dmx-t-code">Results</span>'
-        + '<span class="dmx-t-mid"><span class="dmx-t-val">Last Week</span></span>'
+        + '<span class="dmx-t-mid"><span class="dmx-t-val dmx-t-sub">Last Week</span></span>'
         + '</button>';
     all.forEach(s => {
         rail += _dmxTab('lg', s.store, s.week + ' / ' + s.target, s.pct);
@@ -33216,22 +33216,28 @@ function renderDmListingModal() {
     if (!sel.names.length) {
         pane += '<div class="dmx-empty">No roles set for ' + escapeHtml(sel.store) + ' this week.</div>';
     } else {
-        pane += '<table class="dmx-tbl"><thead><tr><th>Employee &amp; role</th>';
+        // Role gets its own column rather than trailing the name. As a sibling of
+        // the name its left edge moved with the length of every name above it, so
+        // five pills sat at five different x positions and the eye had to hunt
+        // for today's roles — the one thing this table is scanned for.
+        pane += '<table class="dmx-tbl"><thead><tr><th>Employee</th><th>Role</th>';
         sel.days.forEach(d => { pane += '<th style="text-align:right;">' + escapeHtml(d.label) + '</th>'; });
         pane += '<th style="text-align:right;">Week</th></tr></thead><tbody>';
         sel.names.forEach(n => {
             const e = sel.emps[n];
             const wk = Object.values(e.byDay).reduce((a, g) => a + g, 0);
             const badge = e.role !== '-'
-                ? '<span class="dmx-role">' + escapeHtml(roleName[e.role] || e.role) + '</span>' : '';
-            pane += '<tr><td><span class="dmx-name">' + escapeHtml(n) + '</span>' + badge + '</td>';
+                ? '<span class="dmx-role">' + escapeHtml(roleName[e.role] || e.role) + '</span>'
+                : '<span class="dmx-mute" style="font-size:11px;">–</span>';
+            pane += '<tr><td><span class="dmx-name">' + escapeHtml(n) + '</span></td>'
+                 + '<td class="dmx-rolecol">' + badge + '</td>';
             sel.days.forEach(d => {
                 const v = e.byDay[d.key];
                 pane += '<td class="dmx-num' + (v ? '' : ' dmx-mute') + '">' + (v || '–') + '</td>';
             });
             pane += '<td class="dmx-num">' + wk + '</td></tr>';
         });
-        pane += '<tr class="dmx-tot"><td>Total</td>';
+        pane += '<tr class="dmx-tot"><td>Total</td><td></td>';
         sel.days.forEach(d => {
             let t = 0;
             sel.names.forEach(n => { t += sel.emps[n].byDay[d.key] || 0; });
@@ -33419,7 +33425,7 @@ function _dmxEfficiencyPane() {
         // rather than printing a number that reads as a verdict.
         const thin = r.assignedDays > 0 && r.assignedDays < (r.people.length * 4);
         t += '<tr><td class="dmx-cl"><span class="dmx-name">' + escapeHtml(r.store) + '</span>'
-            + (thin ? '<span class="dmx-role">' + r.assignedDays + ' of ' + (r.people.length * 6) + ' days set</span>' : '')
+            + (thin ? '<span class="dmx-role">' + r.assignedDays + ' of ' + (r.people.length * 6) + ' roles set</span>' : '')
             + '</td>'
             + '<td class="dmx-num">' + r.hours + '</td>'
             + '<td class="dmx-num dmx-mute">' + r.capacity + '</td>'
@@ -33449,9 +33455,10 @@ function _dmxEfficiencyPane() {
         + '<b>Staffed For</b> is the sum of the daily goals actually handed out — off days, callouts '
         + 'and no-shows drop out of it on their own, so a short-handed week is judged on the '
         + 'week it really had. <b>Efficiency</b> is what they listed against that number.'
-        + '<br><span style="color:#b45309;"><b>“X of Y days set”</b> means the store only picked roles on '
-        + 'some of its person-days. Days with no role carry no goal, so the efficiency for that store '
-        + 'is measured against a shorter week than it worked — read it with suspicion.</span>'
+        + '<br><span style="color:#b45309;"><b>“X of Y roles set”</b> means the store left people without a '
+        + 'role on some days. Nobody can be measured on a day they were never given a seat, so those days '
+        + 'carry no goal and drop out of Staffed For — which makes that store’s efficiency a reading of a '
+        + 'shorter week than it worked. It cuts both ways: it can flatter as easily as it can punish.</span>'
         + '</div>';
 }
 

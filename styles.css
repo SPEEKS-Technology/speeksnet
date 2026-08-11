@@ -13030,10 +13030,14 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .dmx-goalset-n { font-size: 11px; font-weight: 600; color: #8a94a3; }
 .dmx-goalset.is-unset .dmx-goalset-n { color: #b45309; }
 .dmx-goalset-r { display: flex; align-items: center; gap: 8px; }
+/* Sized to sit flush with .dmx-goalset-b beside it — same font-size, vertical
+   padding, radius and line-height, so the pair reads as one control. A number
+   input reserves room for its own spinner inside the padding, which is why the
+   horizontal padding is trimmed and the width pinned rather than left to grow. */
 .dmx-goalset-i {
-    font: inherit; font-size: 14px; font-weight: 800; width: 88px; text-align: right;
-    padding: 6px 9px; border-radius: 7px; border: 1px solid #cfd8e0; background: #fff;
-    color: #0f172a; font-variant-numeric: tabular-nums;
+    font: inherit; font-size: 11px; font-weight: 800; width: 60px; text-align: center;
+    line-height: 1.6; padding: 5px 6px; border-radius: 6px; border: 1px solid #cfd8e0;
+    background: #fff; color: #0f172a; font-variant-numeric: tabular-nums;
 }
 .dmx-goalset-i:focus { outline: none; border-color: #4d8c6a; box-shadow: 0 0 0 3px rgba(77,140,106,.15); }
 .dmx-goalset-b {
@@ -14640,3 +14644,17 @@ body.tv-body { display: block; background: #eef1f5; }
     background: #fff; color: #647082; border-color: #cfd8e0;
 }
 .dmx-goalset-b.dmx-b-off:hover { background: #f4f7f5; color: #0f172a; }
+
+/* Role in its own column: fixed width so every pill starts at the same x, and a
+   little breathing room before the day numbers begin. */
+.dmx-tbl td.dmx-rolecol { width: 96px; white-space: nowrap; padding-right: 16px; }
+.dmx-tbl td.dmx-rolecol .dmx-role { margin-left: 0; }
+
+/* The Results rail tab carries a word, not a count like its store siblings, so
+   it sits quieter — smaller, lighter, and set off from the label. (.dmx-t lays
+   its two halves out in a row, so no display change here would take.) */
+.dmx-t .dmx-t-val.dmx-t-sub {
+    font-size: 10px; font-weight: 700; letter-spacing: .01em;
+    color: #8a94a3; text-transform: none; padding-left: 4px;
+}
+.dmx-t.sel .dmx-t-val.dmx-t-sub { color: #4d8c6a; }
