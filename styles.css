@@ -10893,6 +10893,22 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .lv-sound.on { color: #1f9d57; }
 .lv-sound.on:hover { color: #178048; background: #e8f7ee; }
 .lv-sound:focus-visible { outline: 2px solid #1f9d57; outline-offset: 1px; }
+/* Switched on, but the browser is still holding audio back until this page gets
+   touched. Amber rather than green so a wall TV that has been power-cycled reads
+   as "needs a tap", not as working — the failure is otherwise only detectable by
+   noticing hours of silence. Pulses, because nobody inspects a speaker icon. */
+.lv-sound.blocked, .lv-sound.on.blocked { color: #c2860b; }
+.lv-sound.blocked:hover, .lv-sound.on.blocked:hover { color: #a06f08; background: #fdf6e3; }
+.lv-sound.blocked::after {
+    content: ''; position: absolute; width: 6px; height: 6px; border-radius: 50%;
+    background: #c2860b; transform: translate(11px, -10px);
+    animation: lvSoundNudge 1.9s ease-in-out infinite;
+}
+.lv-sound { position: relative; }
+@keyframes lvSoundNudge { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) {
+    .lv-sound.blocked::after { animation: none; }
+}
 
 @media (max-width: 900px) {
     /* The store name is the first thing to go: the code identifies the row and the

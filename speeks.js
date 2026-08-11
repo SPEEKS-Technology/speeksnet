@@ -9621,15 +9621,33 @@ function _lvMyCodes(d) {
     return new Set([own]);
 }
 
+// The amount of the order the store's `lastOrderAt` just moved to, read off the
+// payload's own order list.
+//
+// The net delta used to be the only source, and it is a poor one: a sale landing
+// in the same poll window as a refund nets out to zero or below, and the chip
+// then rendered as a bare "Sale · BAL" with no figure on it at all. The order
+// list already carries the real number for today's last few orders.
+function _lvOrderAmount(m, at) {
+    if (!m || !at) return 0;
+    const hit = (m.recentOrders || []).find(o => o && o.at === at);
+    return hit ? (Number(hit.amount) || 0) : 0;
+}
+
 function _lvTrackChanges(d) {
     let sold = false, refunded = false;
-    // Audio only. The row still flashes and the feed still lists every store,
-    // because seeing the district is the point; this is about which of it is
-    // worth looking up for.
+    // Your own store(s). Scopes BOTH the chime and the activity chips: a shop
+    // floor watching four other stores' sales scroll past learns nothing from
+    // them, and on a store account there is no district table for those chips to
+    // refer back to. The row PULSE stays district-wide — it lands on a table row
+    // you can actually see, so it is only ever shown where it means something.
+    // Null (DM/CEO/corp, or a payload with no scope) still means "all of it".
     const mine = _lvMyCodes(d);
-    const audible = code => !mine || mine.has(String(code).toUpperCase());
+    const ours = code => !mine || mine.has(String(code).toUpperCase());
+    const byCode = {};
     const next = {};
     (d.stores || []).forEach(m => {
+        byCode[m.code] = m;
         next[m.code] = {
             net: Number(m.netToday) || 0, orders: Number(m.ordersToday) || 0,
             returns: Number(m.returnsToday) || 0, lastOrderAt: m.lastOrderAt || '',
@@ -9642,16 +9660,27 @@ function _lvTrackChanges(d) {
             // Refunds are checked FIRST. A refund lowers net sales while the order
             // count stays put, so testing for a sale first would let it pass as
             // "nothing happened" — the one event most worth surfacing.
-            // The pulse and the feed entry are unconditional — only the flags
-            // that decide whether anything is HEARD are scoped.
             if (b.returns > a.returns) {
                 _lvPulse[code] = 'refund';
-                _lvPush({ kind: 'refund', code, amount: b.returns - a.returns, at: '' });
-                if (audible(code)) refunded = true;
+                // Shopify gives no per-refund timestamp in this payload, so the
+                // moment we saw it is the honest stamp — and it is what the person
+                // watching actually wants: when it came through.
+                if (ours(code)) {
+                    _lvPush({ kind: 'refund', code, amount: b.returns - a.returns,
+                              at: new Date().toISOString() });
+                    refunded = true;
+                }
             } else if (b.orders > a.orders || b.lastOrderAt > a.lastOrderAt) {
                 _lvPulse[code] = 'sale';
-                _lvPush({ kind: 'sale', code, amount: b.net - a.net, at: b.lastOrderAt });
-                if (audible(code)) sold = true;
+                if (ours(code)) {
+                    // Order's own amount first, net delta second. Falling back to
+                    // "now" for the time as well means a chip can never come out as
+                    // just a store name with nothing beside it.
+                    const amt = _lvOrderAmount(byCode[code], b.lastOrderAt) || (b.net - a.net);
+                    _lvPush({ kind: 'sale', code, amount: amt,
+                              at: b.lastOrderAt || new Date().toISOString() });
+                    sold = true;
+                }
             }
         });
     }
@@ -9849,11 +9878,66 @@ function _lvScheduleActivityExpiry() {
 // Synthesised rather than a sound file: no asset to host, nothing for the CSP to
 // block, and a couple of oscillators is a smaller payload than any mp3.
 //
-// OFF by default and remembered per browser. A dashboard that started dinging on
-// its own — on a shop-floor laptop, or five stores' worth of sales on the district
-// board — would be something people disable once and resent, so it is opt-in.
+// ON by default, remembered per browser, opt-OUT (Ethan, 2026-08-11).
+//
+// It was opt-in on the theory that a dashboard which starts dinging on its own is
+// something people mute once and resent. In practice the opposite happened: the
+// chime is the entire point of the shop-floor board, nobody thinks to go looking
+// for a speaker icon, and every TV sat silent. A '0' is stored on mute, so anyone
+// who does turn it off stays off; only an unset value now means on.
+//
+// Note this does NOT make sound audible on its own — browsers still require one
+// interaction per page load before audio may play. See _lvArmAudioUnlock.
 let _lvAudio = null;
-const _lvSoundOn = () => localStorage.getItem('speeksLiveChime') === '1';
+const _lvSoundOn = () => localStorage.getItem('speeksLiveChime') !== '0';
+
+// Browsers refuse to start an AudioContext until the page has been interacted
+// with, and the preference is remembered per browser while the permission is NOT.
+// So a shop-floor TV that had its chime switched on weeks ago wakes from a power
+// cut with the speaker icon lit and no sound coming out of it — the context is
+// created suspended and stays that way, because nobody ever touches a wall TV.
+//
+// This arms a one-shot unlock on the first interaction of any kind. Flipping the
+// toggle already worked (that click IS a gesture); this makes any other click,
+// key or tap do the same job, so the board recovers the moment someone walks past
+// it rather than needing the toggle cycled off and on.
+let _lvUnlockArmed = false;
+function _lvArmAudioUnlock() {
+    if (_lvUnlockArmed) return;
+    _lvUnlockArmed = true;
+    const unlock = () => {
+        // Cleared first so a resume that doesn't take (it can be refused) leaves
+        // the next render free to arm a fresh listener instead of giving up.
+        _lvUnlockArmed = false;
+        try { if (_lvAudio && _lvAudio.state === 'suspended') _lvAudio.resume(); } catch (_) {}
+        // Repaint so the "tap to enable" state on the speaker clears itself.
+        if (typeof renderLiveDashboard === 'function') { try { renderLiveDashboard(); } catch (_) {} }
+    };
+    ['pointerdown', 'keydown', 'touchstart'].forEach(ev =>
+        document.addEventListener(ev, unlock, { once: true, passive: true }));
+}
+
+// Sound is switched on but the browser has not let us make any yet.
+function _lvAudioBlocked() {
+    return _lvSoundOn() && !!_lvAudio && _lvAudio.state === 'suspended';
+}
+
+// Open the context at RENDER time, not at first-sale time.
+//
+// Built lazily inside _lvBus, the context did not exist until something tried to
+// chime — so the very first sale of the day was the one that discovered the
+// browser had blocked audio, and it was already silent by then. Opening it up
+// front means the speaker icon can tell the truth from the moment the board
+// loads, and the unlock is armed long before there is anything to miss.
+function _lvPrimeAudio() {
+    if (!_lvSoundOn()) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    try {
+        _lvAudio = _lvAudio || new AC();
+        if (_lvAudio.state === 'suspended') { _lvAudio.resume(); _lvArmAudioUnlock(); }
+    } catch (_) { /* audio is a nicety; never let it break the dashboard */ }
+}
 
 // Open the shared context and a low-passed output bus. A bare sine reads as a lab
 // beep and an unfiltered triangle is harsh this high up, so everything goes
@@ -9864,7 +9948,9 @@ function _lvBus(cutoff, level) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return null;
     _lvAudio = _lvAudio || new AC();
-    if (_lvAudio.state === 'suspended') _lvAudio.resume();
+    // resume() without a prior user gesture is a no-op in Chrome, so arm the
+    // one-shot unlock rather than assuming this worked. See _lvArmAudioUnlock.
+    if (_lvAudio.state === 'suspended') { _lvAudio.resume(); _lvArmAudioUnlock(); }
     const filter = _lvAudio.createBiquadFilter();
     filter.type = 'lowpass';
     filter.frequency.value = cutoff;
@@ -9927,13 +10013,18 @@ function toggleLiveSound() {
 // is legible without hovering for the tooltip.
 function _lvSoundBtn() {
     const on = _lvSoundOn();
+    // Lit but muted by the browser. Saying "on" here would be a lie the person
+    // only discovers by noticing hours of silence, which is exactly how a TV ends
+    // up thought of as broken.
+    const blocked = _lvAudioBlocked();
     const ico = on
         ? '<path d="M4 7v4h3l4 3V4L7 7H4z"/><path d="M12.5 6.2a3.4 3.4 0 0 1 0 5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>'
         : '<path d="M4 7v4h3l4 3V4L7 7H4z"/><path d="M12.2 6.8l3.2 4.4M15.4 6.8l-3.2 4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>';
-    return '<button type="button" class="lv-sound' + (on ? ' on' : '') + '"'
+    return '<button type="button" class="lv-sound' + (on ? ' on' : '') + (blocked ? ' blocked' : '') + '"'
         + ' onclick="toggleLiveSound()"'
-        + ' title="' + (on ? 'Chime on — click to mute'
-                           : 'Chime off — click to hear a chime on each sale, and a lower one on refunds') + '"'
+        + ' title="' + (blocked ? 'Chime on, but this screen has not been touched since it loaded — tap anywhere to let it play'
+                       : on ? 'Chime on — click to mute'
+                            : 'Chime off — click to hear a chime on each sale, and a lower one on refunds') + '"'
         + ' aria-pressed="' + (on ? 'true' : 'false') + '" aria-label="Sale chime">'
         + '<svg viewBox="0 0 18 18" width="18" height="18" fill="currentColor" aria-hidden="true">'
         + ico + '</svg></button>';
@@ -11123,6 +11214,8 @@ function _lvAfterRender() {
     _lvPulse = {};
     // The chip rows exist now, so fill them from the live events.
     _lvSyncActivity();
+    // Find out whether audio is actually available BEFORE a sale needs it.
+    _lvPrimeAudio();
 }
 
 // ============================================================================
@@ -26738,9 +26831,11 @@ function renderMyRecycleTable() {
         // replies indented in green. Nothing is ever overwritten by a new note.
         const thread = Array.isArray(r.note_thread) && r.note_thread.length
             ? r.note_thread
-            : [ // legacy rows from before threading
-                ...(r.dm_note ? [{ role: 'dm', text: r.dm_note, by: r.dm_note_by }] : []),
-                ...(r.mgr_reply ? [{ role: 'mgr', text: r.mgr_reply, by: r.mgr_reply_by }] : []),
+            // Legacy rows from before threading. The mirror columns carry the
+            // stamps too, so a pre-thread note still dates itself.
+            : [
+                ...(r.dm_note ? [{ role: 'dm', text: r.dm_note, by: r.dm_note_by, at: r.dm_note_at }] : []),
+                ...(r.mgr_reply ? [{ role: 'mgr', text: r.mgr_reply, by: r.mgr_reply_by, at: r.mgr_reply_at }] : []),
             ];
         // A dot lands on the specific note that's new — only for messages from
         // the OTHER side (your own notes are never "new" to you).
@@ -26751,7 +26846,15 @@ function renderMyRecycleTable() {
             // callout. These two boxes were the original, hand-inlined here;
             // the styling now lives in one place so a note reads the same in
             // every tool that shows one.
-            const by = n.by ? ` <span class="site-note-by">— ${escapeHtml(n.by)}</span>` : '';
+            // Date the note, not just the author. A thread can run for weeks
+            // after the request was filed (the row's own Date column is when the
+            // SKU was submitted, which is often nothing like when the DM wrote
+            // back), so "— Ethan Kushnir" alone left no way to tell a reply from
+            // yesterday apart from one from last month.
+            const stamp = n.at ? fmtDate(n.at) : '';
+            const by = (n.by || stamp)
+                ? ` <span class="site-note-by">— ${escapeHtml(n.by || '')}${n.by && stamp ? ' · ' : ''}${stamp}</span>`
+                : '';
             return n.role === 'dm'
                 ? `<div class="site-note">${noteDot}💬 ${escapeHtml(n.text || '')}${by}</div>`
                 : `<div class="site-note-reply">${noteDot}↩ ${escapeHtml(n.text || '')}${by}</div>`;
@@ -27066,12 +27169,28 @@ async function checkRecycleReminders() {
                 const days = Math.floor((Date.now() - new Date(r.created_at).getTime()) / 86400000);
                 return `${(r.store || '').toUpperCase()} ${short}${days >= 2 ? ` (${days}d)` : ''}`;
             };
+            // A reply names its line for the same reason a review does, but dates
+            // itself by the REPLY rather than the submission: the useful question
+            // is "when did they write back", and the row's own Date column already
+            // carries the submission date. "1 reply to your notes" pointed at a
+            // month with nothing outstanding in it and no way to tell which line
+            // it meant.
+            const _rcReplyLabel = r => {
+                const sku = String(r.sku || '').trim();
+                const short = sku.length > 24 ? sku.slice(0, 23) + '…' : (sku || 'no SKU');
+                const d = r.mgr_reply_at ? new Date(r.mgr_reply_at) : null;
+                const when = d && !isNaN(d.getTime())
+                    ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+                return `${(r.store || '').toUpperCase()} ${short}${when ? ` (${when})` : ''}`;
+            };
             const parts = [];
             if (needsReview.length)   parts.push(needsReview.length <= 2
                 ? `awaiting your review: ${needsReview.map(_rcLabel).join(', ')}`
                 : `${needsReview.length} awaiting your review from ${storeList(needsReview)}`);
             if (pendingDelete.length) parts.push(`${pendingDelete.length} delete request${pendingDelete.length > 1 ? 's' : ''} awaiting approval`);
-            if (freshRep.length)      parts.push(`${freshRep.length} ${freshRep.length > 1 ? 'replies' : 'reply'} to your notes`);
+            if (freshRep.length)      parts.push(freshRep.length <= 2
+                ? `replied to your note: ${freshRep.map(_rcReplyLabel).join(', ')}`
+                : `${freshRep.length} replies to your notes`);
             // "awaiting your review: …" is the one part that can open with a letter
             // (the others all start with a count), and it's always first — so the
             // sentence was starting lowercase. Capitalise the assembled string
@@ -27085,6 +27204,15 @@ async function checkRecycleReminders() {
             const blocking = needsReview.concat(pendingDelete);
             _recycleRenderBubble('♻️', 'Recycle requests need your review', summary + '.', summary,
                 null, _recycleFocusMonth(blocking.length ? blocking : freshRep));
+            // Nothing is actually blocked — this is only a manager writing back.
+            // The feed card reads its title off this flag so it stops promising a
+            // "Review" the DM then can't find (every line already reviewed, the
+            // card pointing at July). Mirrors the variance bubble's data-fyi.
+            const rTextEl = document.getElementById('recycleAlertBubbleText');
+            if (rTextEl) {
+                if (blocking.length) delete rTextEl.dataset.replyonly;
+                else rTextEl.dataset.replyonly = '1';
+            }
             return;
         }
 
@@ -29201,6 +29329,7 @@ function _vrSelectedPeriodId() {
 
 function vrOnStoreChange() {
     _vrUploadOpen = false; _vrParsed = null; _vrEditing = false; _vrDrafts = {};
+    _vrSelBuyers = new Set(); _vrAllClear = false; _vrView = 'people';
     if (_vrIsDM() && _vrPeriods.length) {
         // all stores are already loaded — just resolve within the picked range
         const pid = _vrSelectedPeriodId();
@@ -29225,6 +29354,7 @@ async function vrOpenPeriod(pid) {
         _vrCurrent = json;
         _vrEditing = false;
         _vrDrafts = {};
+        _vrView = 'people';   // land on the work, not the reference view
         renderVarianceReplies();
     } catch (e) {
         if (body) body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load that period.</div>';
@@ -29377,14 +29507,33 @@ function renderVarianceReplies() {
     }
 
     const p = _vrCurrent.period;
-    const items = _vrCurrent.items || [];
+    const allRows = _vrCurrent.items || [];
+    // A period aimed at specific buyers has two views. The default is the one
+    // with the work in it: just those buyers' lines, worst variance first. The
+    // toggle shows the whole store's report as read-only reference — every line
+    // at/below the cutoff, no note boxes, so what is actually owed stays
+    // unambiguous. A whole-store period (selected_buyers null) has one view and
+    // no toggle, exactly as before.
+    const targeted = Array.isArray(p.selected_buyers) && p.selected_buyers.length > 0;
+    const storeView = targeted && _vrView === 'store';
+    const items = targeted
+        ? (storeView
+            ? allRows.slice().sort((a, b) => (a.variance_pct ?? 0) - (b.variance_pct ?? 0))
+            : allRows.filter(i => i.needs_reply !== false)
+                     .sort((a, b) => (a.variance_pct ?? 0) - (b.variance_pct ?? 0)))
+        : allRows;
+    if (targeted) html += _vrViewToggleHtml(p, allRows, storeView);
+    // Nothing was owed this period. The manager still gets the report to read —
+    // that is the whole point of an all-clear upload rather than no upload.
+    if (p.all_clear) html += _vrAllClearBannerHtml(p);
     // A manager whose store is "in the clear" views the report read-only — no
     // reply obligation — so they can't edit notes (canGm off) but still see the
     // line items, team variance and download. A banner explains it.
-    const mgrCleared = _vrIsManager() && _vrStoreCleared(p.store);
-    if (mgrCleared) html += _vrMgrClearedBannerHtml(p.store);
-    const canGm = _vrIsManager() && !mgrCleared;
-    const canDm = _vrIsDM();
+    // The store-wide view of a targeted report is read-only for the same reason.
+    const mgrCleared = _vrIsManager() && (_vrStoreCleared(p.store) || p.all_clear);
+    if (mgrCleared && !p.all_clear) html += _vrMgrClearedBannerHtml(p.store);
+    const canGm = _vrIsManager() && !mgrCleared && !storeView;
+    const canDm = _vrIsDM() && !storeView;
 
     // The reply cycle reveals columns as each side takes its turn:
     //   1. Managers fill GM Notes (extra-wide while it's the only note column);
@@ -29711,7 +29860,82 @@ function vrToggleUpload() {
     _vrParsed = null;
     _vrFileName = '';
     _vrRawFileB64 = '';
+    _vrSelBuyers = new Set();
+    _vrAllClear = false;
     renderVarianceReplies();
+}
+
+// Which of a targeted period's two views is showing. Resets to the people view
+// on every store/period change, because that is where the work is.
+let _vrView = 'people';
+function vrSetView(v) {
+    if (_vrView === v) return;
+    _vrView = v;
+    _vrEditing = false;   // the store view has no note boxes to be mid-edit in
+    renderVarianceReplies();
+}
+
+function _vrViewToggleHtml(p, allRows, storeView) {
+    const owed = allRows.filter(i => i.needs_reply !== false).length;
+    const names = (p.selected_buyers || []).map(n => String(n).split(' ')[0]).join(', ');
+    const tab = (v, label, on) => `<button type="button" onclick="vrSetView('${v}')"
+        style="font-size:11.5px; font-weight:800; padding:6px 13px; border-radius:8px; cursor:pointer;
+        border:1.5px solid ${on ? '#93c5fd' : '#e2e8f0'}; background:${on ? '#eff6ff' : '#fff'}; color:${on ? '#1d4ed8' : '#64748b'};">${label}</button>`;
+    return `<div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-bottom:12px;">
+        ${tab('people', `Needs replies · ${owed}`, !storeView)}
+        ${tab('store', 'Whole store', storeView)}
+        <span style="font-size:11.5px; font-weight:600; color:#94a3b8;">${
+            storeView
+                ? 'Every line at ' + _VR_VARIANCE_CUTOFF + '% or worse — read only.'
+                : (names ? 'Replies requested from ' + escapeHtml(names) + '.' : '')
+        }</span>
+    </div>`;
+}
+
+function _vrAllClearBannerHtml(p) {
+    const who = p.all_clear_by ? ' by ' + escapeHtml(p.all_clear_by) : '';
+    return `<div style="display:flex; align-items:center; gap:9px; background:#f0fdf4; border:1.5px solid #a7f3d0;
+        border-radius:10px; padding:10px 14px; margin-bottom:12px; font-size:12.5px; font-weight:700; color:#166534;">
+        <span style="font-size:15px;">✓</span>
+        <span>All clear for this period${who} — nothing here needs a reply. Worth a read either way.</span>
+    </div>`;
+}
+
+// The pick-list: one row per buyer in the file, worst variance first, with the
+// evidence to decide on — how many lines are at/below the cutoff, how many are
+// merely negative, and how bad their worst one is. Ticking nobody keeps the old
+// whole-store behaviour, which is why that is the resting state.
+function _vrBuyerPickerHtml() {
+    const rows = _vrBuyerSummary(_vrParsed);
+    if (!rows.length) return '';
+    const cells = rows.map(b => {
+        const on = _vrSelBuyers.has(b.name);
+        const n = _vrBuyerReplyLines(b).length;
+        return `<label style="display:flex; align-items:center; gap:9px; padding:7px 10px; border-radius:8px; cursor:pointer;
+                background:${on ? '#eff6ff' : '#fff'}; border:1.5px solid ${on ? '#93c5fd' : '#e2e8f0'};">
+            <input type="checkbox" ${on ? 'checked' : ''} ${_vrAllClear ? 'disabled' : ''}
+                onchange="vrToggleBuyer(${JSON.stringify(b.name).replace(/"/g, '&quot;')})"
+                style="width:15px; height:15px; cursor:pointer; accent-color:#2563eb;">
+            <span style="flex:1; min-width:0;">
+                <span style="display:block; font-size:12.5px; font-weight:800; color:var(--slate-charcoal); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(b.name)}</span>
+                <span style="display:block; font-size:10.5px; font-weight:600; color:#94a3b8;">
+                    ${b.major} at ${_VR_VARIANCE_CUTOFF}%+ · ${b.minor} smaller · worst ${_vrFmtPct(b.worst)}
+                </span>
+            </span>
+            ${on ? `<span style="font-size:10.5px; font-weight:800; color:#1d4ed8; white-space:nowrap;">${n} line${n === 1 ? '' : 's'}</span>` : ''}
+        </label>`;
+    }).join('');
+    return `<div style="margin-top:12px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:7px;">
+            <span class="vr-up-label" style="margin:0;">Who needs to reply?</span>
+            <label style="display:flex; align-items:center; gap:7px; font-size:11.5px; font-weight:700; color:${_vrAllClear ? '#16a34a' : '#94a3b8'}; cursor:pointer;">
+                <input type="checkbox" ${_vrAllClear ? 'checked' : ''} onchange="vrToggleAllClear()"
+                    style="width:15px; height:15px; cursor:pointer; accent-color:#16a34a;">
+                Store is all clear — no replies needed
+            </label>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:7px; ${_vrAllClear ? 'opacity:.45; pointer-events:none;' : ''}">${cells}</div>
+    </div>`;
 }
 
 function _vrUploadPanelHtml() {
@@ -29724,14 +29948,35 @@ function _vrUploadPanelHtml() {
     const curTo = (document.getElementById('vr-up-to') || {}).value || '';
     let preview = '';
     if (_vrParsed) {
-        if (_vrParsed.items.length) {
+        if (_vrParsed.items.length || (_vrParsed.minor || []).length) {
             const pcts = _vrParsed.items.map(i => i.variance_pct).filter(v => v != null);
+            const set = _vrUploadSet();
+            const owed = set.items.filter(i => i.needs_reply).length;
+            const cta = _vrAllClear
+                ? `Upload as all clear to ${store} →`
+                : _vrSelBuyers.size
+                ? `Upload ${owed} line${owed === 1 ? '' : 's'} for ${_vrSelBuyers.size} buyer${_vrSelBuyers.size === 1 ? '' : 's'} →`
+                : `Upload ${owed} items to ${store} →`;
             preview = `<div style="margin-top:10px; font-size:12px; font-weight:600; color:#334155;">
-                ✅ Parsed <b>${_vrParsed.items.length}</b> line item${_vrParsed.items.length > 1 ? 's' : ''} at ${_VR_VARIANCE_CUTOFF}% or worse${pcts.length ? ` · variance ${_vrFmtPct(Math.max(...pcts))} to ${_vrFmtPct(Math.min(...pcts))}` : ''}${_vrParsed.aboveCutoff ? ` · <span style="color:#94a3b8;">${_vrParsed.aboveCutoff} line${_vrParsed.aboveCutoff > 1 ? 's' : ''} above the cutoff left out</span>` : ''}${_vrParsed.skipped ? ` · <span style="color:#d97706;">${_vrParsed.skipped} row${_vrParsed.skipped > 1 ? 's' : ''} skipped (no order # / SKU)</span>` : ''}
-                <button class="btn-primary" style="margin-left:12px; font-size:12px; padding:7px 16px;" onclick="vrConfirmUpload(this)">Upload ${_vrParsed.items.length} items to ${store} →</button>
+                ✅ Parsed <b>${_vrParsed.items.length}</b> line item${_vrParsed.items.length === 1 ? '' : 's'} at ${_VR_VARIANCE_CUTOFF}% or worse${pcts.length ? ` · variance ${_vrFmtPct(Math.max(...pcts))} to ${_vrFmtPct(Math.min(...pcts))}` : ''}${_vrParsed.skipped ? ` · <span style="color:#d97706;">${_vrParsed.skipped} row${_vrParsed.skipped > 1 ? 's' : ''} skipped (no order # / SKU)</span>` : ''}
+            </div>
+            ${_vrBuyerPickerHtml()}
+            <div style="margin-top:12px;">
+                <button class="btn-primary" style="font-size:12px; padding:7px 16px;" onclick="vrConfirmUpload(this)">${cta}</button>
+                <span style="margin-left:10px; font-size:11.5px; color:#94a3b8; font-weight:600;">${
+                    _vrAllClear ? 'Manager is still notified to review — nothing to answer.'
+                    : _vrSelBuyers.size ? 'Everyone else’s lines upload as read-only context.'
+                    : 'No buyers picked — the whole store replies, as before.'
+                }</span>
             </div>`;
         } else if (_vrParsed.aboveCutoff) {
-            preview = `<div style="margin-top:10px; font-size:12px; font-weight:700; color:#d97706;">No line items at ${_VR_VARIANCE_CUTOFF}% variance or worse in this file — nothing needs a manager reply. (${_vrParsed.aboveCutoff} line${_vrParsed.aboveCutoff > 1 ? 's' : ''} above the cutoff.)</div>`;
+            preview = `<div style="margin-top:10px; font-size:12px; font-weight:700; color:#16a34a;">
+                    Nothing negative in this file — the store is in the clear for this period.
+                </div>
+                <div style="margin-top:10px;">
+                    <button class="btn-primary" style="font-size:12px; padding:7px 16px;" onclick="_vrAllClear=true; vrConfirmUpload(this)">Upload as all clear to ${store} →</button>
+                    <span style="margin-left:10px; font-size:11.5px; color:#94a3b8; font-weight:600;">Manager is still notified to review the report.</span>
+                </div>`;
         } else {
             preview = `<div style="margin-top:10px; font-size:12px; font-weight:700; color:#dc2626;">Couldn't find any line items — make sure the workbook has a sheet (e.g. "Detail") with an Order ID and SKU header row.</div>`;
         }
@@ -29849,7 +30094,8 @@ function _vrParseRows(rows) {
         else if (n.includes('repl')) set('mgr_reply', c);       // "Replies to DM Notes" — check before "dm note"
         else if (n.includes('dm note')) set('dm_note', c);
     });
-    const items = [];
+    const items = [];      // at/below the cutoff — the report, as before
+    const minor = [];      // negative but above the cutoff — the top-up pool
     let skipped = 0, aboveCutoff = 0;
     for (let i = headerIdx + 1; i < rows.length; i++) {
         const row = rows[i] || [];
@@ -29861,10 +30107,8 @@ function _vrParseRows(rows) {
             continue;
         }
         const variancePct = _vrParseVariance(get('variance_pct'));
-        // Only lines at -10% or worse need a manager explanation — the rest of
-        // the report is noise here, so drop them at parse time.
-        if (variancePct == null || variancePct > _VR_VARIANCE_CUTOFF) { aboveCutoff++; continue; }
-        items.push({
+        if (variancePct == null) { aboveCutoff++; continue; }
+        const line = {
             order_number: orderNumber || null,
             sku: sku || null,
             item_title: get('item_title') || null,
@@ -29874,9 +30118,50 @@ function _vrParseRows(rows) {
             gm_note: get('gm_note') || null,
             dm_note: get('dm_note') || null,
             mgr_reply: get('mgr_reply') || null,
-        });
+        };
+        // Lines at/below -10% are the report. Lines that are merely negative used
+        // to be dropped here; they are now kept aside, because a buyer singled out
+        // for replies gets topped up to twelve lines from their own next-worst,
+        // and a buyer's whole negative count is what makes the pick-list useful.
+        // Positive lines are still discarded — nothing on this screen is about them.
+        if (variancePct <= _VR_VARIANCE_CUTOFF) items.push(line);
+        else if (variancePct < 0) minor.push(line);
+        else aboveCutoff++;
     }
-    return { items, skipped, aboveCutoff };
+    return { items, minor, skipped, aboveCutoff };
+}
+
+// How many lines one singled-out buyer should have to explain.
+//
+// Ethan's rule: someone with only four lines below -10% gets their twelve worst
+// instead, which still contains those four but is enough of an exercise to be
+// worth doing. It is a FLOOR, not a cap — a buyer with twenty lines below the
+// cutoff keeps all twenty, because dropping eight genuinely bad lines to hit a
+// round number would be indefensible.
+const _VR_BUYER_MIN_LINES = 12;
+
+// Per-buyer roll-up of a parsed file, worst first. Drives the pick-list.
+function _vrBuyerSummary(parsed) {
+    const by = {};
+    const add = (line, major) => {
+        const name = (line.buyer_name || '').trim() || '(no buyer)';
+        const b = by[name] || (by[name] = { name, major: 0, minor: 0, worst: 0, lines: [] });
+        b[major ? 'major' : 'minor']++;
+        b.lines.push(line);
+        if (line.variance_pct < b.worst) b.worst = line.variance_pct;
+    };
+    (parsed.items || []).forEach(l => add(l, true));
+    (parsed.minor || []).forEach(l => add(l, false));
+    return Object.values(by).sort((a, b) => a.worst - b.worst);
+}
+
+// The lines a selected buyer actually has to answer for: every line at/below the
+// cutoff, topped up with their next-worst negatives to _VR_BUYER_MIN_LINES.
+function _vrBuyerReplyLines(summary) {
+    const sorted = summary.lines.slice().sort((a, b) => a.variance_pct - b.variance_pct);
+    const major = sorted.filter(l => l.variance_pct <= _VR_VARIANCE_CUTOFF);
+    if (major.length >= _VR_BUYER_MIN_LINES) return major;
+    return sorted.slice(0, Math.min(_VR_BUYER_MIN_LINES, sorted.length));
 }
 
 // "-25.00%" → -25; "-0.25" (an unformatted Excel percent) → -25; "-25" → -25.
@@ -29897,6 +30182,8 @@ function vrCancelUpload() {
     _vrParsed = null;
     _vrFileName = '';
     _vrRawFileB64 = '';
+    _vrSelBuyers = new Set();
+    _vrAllClear = false;
     renderVarianceReplies();
 }
 
@@ -29905,11 +30192,57 @@ function vrClearFile() {
     _vrParsed = null;
     _vrFileName = '';
     _vrRawFileB64 = '';
+    _vrSelBuyers = new Set();
+    _vrAllClear = false;
     renderVarianceReplies();
 }
 
+// Which buyers the DM has ticked for this upload, and whether they have declared
+// the whole store clear. Both reset with the parse (vrCancelUpload / vrClearFile).
+let _vrSelBuyers = new Set();
+let _vrAllClear = false;
+
+function vrToggleBuyer(name) {
+    if (_vrSelBuyers.has(name)) _vrSelBuyers.delete(name); else _vrSelBuyers.add(name);
+    _vrAllClear = false;   // picking somebody is the opposite of all-clear
+    renderVarianceReplies();
+}
+function vrToggleAllClear() {
+    _vrAllClear = !_vrAllClear;
+    if (_vrAllClear) _vrSelBuyers = new Set();
+    renderVarianceReplies();
+}
+
+// Turn the parse plus the DM's picks into the exact rows to upload.
+//
+// Three shapes, and the first two are new:
+//   all clear   — every cutoff line goes up as CONTEXT. The manager is still told
+//                 a report landed and can still read it; nothing is owed.
+//   buyers      — the picked buyers' lines are the obligation; every other cutoff
+//                 line rides along as context so the whole-store view is complete.
+//   nobody      — unchanged: the whole store's cutoff lines, all owed.
+function _vrUploadSet() {
+    const all = _vrParsed.items || [];
+    if (_vrAllClear) return { items: all.map(l => ({ ...l, needs_reply: false })), buyers: [] };
+    if (!_vrSelBuyers.size) return { items: all.map(l => ({ ...l, needs_reply: true })), buyers: null };
+    const owed = new Set();
+    _vrBuyerSummary(_vrParsed)
+        .filter(b => _vrSelBuyers.has(b.name))
+        .forEach(b => _vrBuyerReplyLines(b).forEach(l => owed.add(l)));
+    // Context lines are cutoff lines only — a minor negative belonging to nobody
+    // in particular has no reason to be stored.
+    const context = all.filter(l => !owed.has(l)).map(l => ({ ...l, needs_reply: false }));
+    const obligation = [...owed].map(l => ({ ...l, needs_reply: true }));
+    return {
+        items: obligation.concat(context),
+        buyers: [..._vrSelBuyers],
+    };
+}
+
 async function vrConfirmUpload(btn) {
-    if (!_vrParsed || !_vrParsed.items.length) return;
+    // An all-clear upload is the one case with no cutoff lines to send, so it
+    // must not be blocked by the "nothing parsed" guard.
+    if (!_vrParsed || (!_vrParsed.items.length && !_vrAllClear)) return;
     const store = (document.getElementById('vr-store-select') || {}).value || '';
     const timeframe = '';
     const from = (document.getElementById('vr-up-from') || {}).value;
@@ -29921,13 +30254,19 @@ async function vrConfirmUpload(btn) {
     try {
         const res = await fetch(VARIANCE_REPLIES_URL, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                action: 'upload_period', store, date_from: from, date_to: to, timeframe,
-                uploaded_by: sessionStorage.getItem('speeksUserName') || null,
-                items: _vrParsed.items,
-                raw_file_b64: _vrRawFileB64 || null,
-                raw_file_name: _vrFileName || null,
-            }),
+            body: JSON.stringify((() => {
+                const set = _vrUploadSet();
+                return {
+                    action: 'upload_period', store, date_from: from, date_to: to, timeframe,
+                    uploaded_by: sessionStorage.getItem('speeksUserName') || null,
+                    items: set.items,
+                    selected_buyers: set.buyers,
+                    all_clear: _vrAllClear,
+                    all_clear_by: _vrAllClear ? (sessionStorage.getItem('speeksUserName') || null) : null,
+                    raw_file_b64: _vrRawFileB64 || null,
+                    raw_file_name: _vrFileName || null,
+                };
+            })()),
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Upload failed');
@@ -30932,6 +31271,36 @@ function _agState(it) {
 const _agAwaitingStore = it => ['purple', 'yellow'].includes(_agState(it));
 const _agOverdue = it => _agAwaitingStore(it) && it.due_at && Date.now() > new Date(it.due_at).getTime();
 
+// Item ids that were UNREAD at the moment the DM opened this view. Opening marks
+// them read, but the chips keep saying "New Reply" for the rest of this load —
+// otherwise the blue chip would vanish in the same frame it appeared and the DM
+// would have no idea which rows the notification had sent them for. Same trick
+// as _recycleSeenBefore. The notification itself reads the real dm_seen_at, so
+// it clears immediately; only the on-screen labelling lags on purpose.
+let _agDmSeenBefore = new Set();
+
+// A store reply the DM has NOT looked at yet.
+//
+// State alone ("the store spoke last") used to mean "your review", forever. But
+// the DM replying is optional by design: if they read the reply and it needs
+// nothing further, the item is parked until it sells or they follow up later.
+// With no record of having looked, those items nagged every single sign-in —
+// BAL had six where Joseph answered "repriced" / "fixed new title" on Aug 1 and
+// the queue never emptied. aging_items.dm_seen_at is stamped when the DM opens
+// the tool (and by the fn when they post a note), so this reads strictly as
+// "newer than the last time I looked at this item".
+function _agNewStoreReply(it) {
+    if (!it || it.status !== 'open' || _agState(it) !== 'dm') return false;
+    const notes = it.notes || [];
+    let last = 0;
+    for (let i = notes.length - 1; i >= 0; i--) {
+        if (notes[i].author_side === 'store') { last = new Date(notes[i].created_at).getTime(); break; }
+    }
+    if (!last) return false;
+    const seen = it.dm_seen_at ? new Date(it.dm_seen_at).getTime() : 0;
+    return last > seen;
+}
+
 // Row-edit mode enter/leave — in-progress note-edit drafts don't outlive it.
 function _agClearNeDrafts() {
     Object.keys(_agDrafts).forEach(k => { if (k.startsWith('ne|')) delete _agDrafts[k]; });
@@ -30954,6 +31323,7 @@ async function loadAgingInventory() {
         const json = await res.json();
         if (!json.success) throw new Error(json.error);
         _agItems = json.data || [];
+        _agDmSeenBefore = new Set(); // fresh load → fresh "what was new when I opened it"
         // Keep the reminder cache in step so the dots clear the moment a reply
         // is visible here (instead of waiting for the next 10-minute poll).
         if (_agIsStoreUser()) {
@@ -30964,14 +31334,44 @@ async function loadAgingInventory() {
         // owns it (dynamic-module-block + role-district-manager); clearing the
         // inline style it set would re-hide the dropdown.
         renderAgingInventory();
+        _agMarkDmSeenVisible();
     } catch (e) {
         body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load the aging inventory report.</div>';
     }
 }
 
+// Mark the store the DM is actually LOOKING at as read — not all five. The
+// notification routes them to one store at a time (longest-waiting first), so
+// stamping the whole district on open would silently swallow replies at four
+// stores they never saw.
+async function _agMarkDmSeenVisible() {
+    if (!_agIsDM()) return;
+    const shown = new Set(_agViewStores().map(s => String(s || '').toUpperCase()));
+    const fresh = _agItems.filter(it =>
+        shown.has(String(it.store || '').toUpperCase()) && _agNewStoreReply(it));
+    if (!fresh.length) return;
+    const ids = fresh.map(it => it.id);
+    ids.forEach(id => _agDmSeenBefore.add(id));
+    // Optimistic: the chips, subtitle, bubble and feed card all read dm_seen_at,
+    // so update locally first and let the POST catch up. If it fails the items
+    // simply come back unread next load — the safe direction to fail in.
+    const stamp = new Date().toISOString();
+    fresh.forEach(it => { it.dm_seen_at = stamp; });
+    renderAgingInventory();
+    try {
+        await fetch(AGING_INV_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'mark_dm_seen', ids }),
+        });
+    } catch (e) { /* next open re-stamps */ }
+    if (typeof _agRetractBubbleIfDone === 'function') _agRetractBubbleIfDone();
+    if (typeof renderActionFeed === 'function') renderActionFeed();
+}
+
 function agOnStoreChange() {
     _agAddOpen = false; _agEditItem = null; _agDrafts = {}; _agJustAdded = ''; _agStoreEdit = null;
     renderAgingInventory(); // all stores are already loaded — just re-filter
+    _agMarkDmSeenVisible(); // switching stores is looking at that store
 }
 
 // The stores the current render shows (the DM flips with the dropdown; a store
@@ -30992,8 +31392,10 @@ function _agVisibleStores() {
 function _agSubtitleText() {
     const open = _agItems.filter(it => it.status === 'open');
     if (_agIsDM()) {
-        const waiting = open.filter(it => _agState(it) === 'dm').length;
-        return waiting ? `${waiting} repl${waiting > 1 ? 'ies' : 'y'} waiting on your review` : '';
+        // Unread only — a reply the DM has already read and left alone isn't
+        // "waiting on your review", it's parked (see _agNewStoreReply).
+        const waiting = open.filter(_agNewStoreReply).length;
+        return waiting ? `${waiting} new repl${waiting > 1 ? 'ies' : 'y'} to review` : '';
     }
     const mine = open.filter(_agAwaitingStore);
     if (!mine.length) return '';
@@ -31080,7 +31482,19 @@ function _agStatusChip(it) {
     if (s === 'new') return chip('🆕 New — Awaiting DM note', '#6d28d9', '#ede9fe', '#c4b5fd');
     if (s === 'purple') return chip(`📩 Reply Needed${due}`, '#6d28d9', '#ede9fe', '#c4b5fd') + overdue;
     if (s === 'yellow') return chip(`↩ Follow-Up — Reply Needed${due}`, '#a16207', '#fef9c3', '#fde047') + overdue;
-    return chip('⏳ Waiting on the DM', '#475569', '#f1f5f9', '#e2e8f0');
+    // One state, three readings. To the store it means "the ball is with the DM"
+    // — nothing owed, calm grey. To the DM it splits: a reply they haven't read
+    // is the work the notification is about (blue, because purple/yellow/green/
+    // red are all spoken for by the spreadsheet colour key), while a reply they
+    // HAVE read and chose not to answer is parked — the item just waits to sell
+    // or for the DM's next follow-up, so it must not keep reading as a to-do.
+    if (!_agIsDM()) return chip('⏳ Waiting on the DM', '#475569', '#f1f5f9', '#e2e8f0');
+    // _agDmSeenBefore: unread when this view opened. Opening marks them read, so
+    // without the snapshot the blue chip would disappear in the same frame it
+    // rendered and the DM couldn't tell which rows the notification meant.
+    return (_agNewStoreReply(it) || _agDmSeenBefore.has(it.id))
+        ? chip('📬 New Reply', '#1d4ed8', '#eff6ff', '#bfdbfe')
+        : chip('✓ Read — Waiting on Sale', '#475569', '#f1f5f9', '#e2e8f0');
 }
 
 function _agTableHtml(items, canDm) {
@@ -31311,7 +31725,7 @@ function _agRetractBubbleIfDone() {
     if (_agCurrentAckKey !== 'speeksAGAckDm') return;
     const b = document.getElementById('agingAlertBubble');
     if (!b || b.style.display === 'none') return;
-    if (_agItems.some(it => it.status === 'open' && _agState(it) === 'dm')) return;
+    if (_agItems.some(_agNewStoreReply)) return;
     b.style.display = 'none';
     _agPopShownThisSession = false;
     _agCurrentAckKey = null;
@@ -31566,7 +31980,7 @@ function _agIsFollowUp(it, side) {
 function _agPendingMembers(items, side) {
     const rel = side === 'store'
         ? (items || []).filter(_agAwaitingStore)
-        : (items || []).filter(it => it.status === 'open' && _agState(it) === 'dm');
+        : (items || []).filter(_agNewStoreReply); // unread replies only — see _agNewStoreReply
     const wantSide = side === 'store' ? 'dm' : 'store';
     return rel.map(it => {
         const notes = it.notes || [];
@@ -31730,6 +32144,9 @@ async function checkAgingInvDmReminders() {
         // early won't ping the DM until the deadline passes.
         const reviewable = (json.data || []).filter(it => {
             if (it.status !== 'open' || _agState(it) !== 'dm') return false;
+            // Only replies the DM hasn't read yet. Reading is the acknowledgement:
+            // choosing not to answer is a valid outcome and must not re-nag.
+            if (!_agNewStoreReply(it)) return false;
             // Ongoing back-and-forth: ping the DM as soon as the store replies —
             // the deadline gate is only for the store's initial reply window.
             if (_agIsFollowUp(it, 'dm')) return true;
@@ -31737,7 +32154,19 @@ async function checkAgingInvDmReminders() {
             return it.due_at && new Date(it.due_at).getTime() <= Date.now();
         });
         const members = _agPendingMembers(reviewable, 'dm');
-        if (!members.length) return;
+        if (!members.length) {
+            // Nothing left to review — drop the bubble so the feed card goes with
+            // it. Returning bare left a stale "replies to review" row up for the
+            // rest of the session after the work was finished (on this device or
+            // another), the same trap already fixed on recycle and claims aging.
+            const ab = document.getElementById('agingAlertBubble');
+            if (ab && getComputedStyle(ab).display !== 'none') {
+                ab.style.display = 'none';
+                _agPopShownThisSession = false;
+                if (typeof _positionAgingAlert === 'function') _positionAgingAlert();
+            }
+            return;
+        }
         const acked = _agAckedSet('speeksAGAckDm');
         if (members.every(m => acked.has(m))) return; // all replies already reviewed/acknowledged
         if (_agPopShownThisSession) return;            // already up this session (poll guard)
@@ -32517,6 +32946,9 @@ function _samReminderCfg() {
     const _vrDue = (_vrT && _vrT.dataset && _vrT.dataset.due) || '';
     const _agT = document.getElementById('agingAlertBubbleText');
     const _agDue = (_agT && _agT.dataset && _agT.dataset.due) || '';
+    // Recycle: reply-only vs something actually awaiting a verdict (see below).
+    const _rcT = document.getElementById('recycleAlertBubbleText');
+    const _rcReplyOnly = !!(_rcT && _rcT.dataset && _rcT.dataset.replyonly);
     const cfg = [
         { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText',
           title: _vrFyi ? 'Variance Report to Review'
@@ -32532,10 +32964,25 @@ function _samReminderCfg() {
               : "openClaimsModal(); switchClaimsTab('view')" },
         // openRecycleFocused, not the two calls inline: it also carries the alert's
         // month across, so a card about a July request doesn't open on August.
-        { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "openRecycleFocused()" },
+        // data-replyonly: no line is actually awaiting a verdict, a manager just
+        // wrote back on one. Calling that "Review" sent the DM hunting through a
+        // month for work that did not exist. Same shape as the variance FYI flip.
+        { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText',
+          title: _rcReplyOnly ? 'Recycle Reply' : 'Recycle Review',
+          urgency: 1, due: _rcReplyOnly ? 'Reply' : 'Review',
+          cls: _rcReplyOnly ? 'sam-due-grey' : 'sam-due-amber', action: "openRecycleFocused()" },
+        // closeAgingAlertBubble() FIRST, not just the navigation: that function is
+        // the only thing that writes the acknowledged members to speeksAGAck*, and
+        // its two original callers (the ✕ and the "Open Aging Inventory" button)
+        // both live inside #agingAlertBubble — which the retired-toasts block hides
+        // with visibility:hidden. So the ack path had no reachable caller left and
+        // the card came back every single sign-in no matter what the DM did with
+        // it. Clicking through the card is the acknowledgement now, exactly as the
+        // toast's button used to be.
         { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText',
           title: 'Aging Inventory Review' + (_agDue ? ' — Due ' + _agDue : ''),
-          urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" },
+          urgency: 1, due: 'Review', cls: 'sam-due-amber',
+          action: "closeAgingAlertBubble(); window.location.href='workspace.html#aging'" },
         { key: 'b2b', id: 'b2bAlertBubble', text: 'b2bAlertBubbleText', title: 'B2B Deals Waiting', urgency: 1, due: 'Action', cls: 'sam-due-amber', action: "window.location.href='operations.html#b2b'" },
         { key: 'margin', id: 'marginAlertBubble', text: 'marginAlertBubbleText', title: 'Margin Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#mreplies'" },
         // Preferred Purchases — feed-only, both directions. The owner's card is a

@@ -132,8 +132,13 @@ Deno.serve(async (req: Request) => {
         }).select().single();
         if (nErr) return jsonResponse({ success: false, error: nErr.message }, 500);
         // A DM note (opening or follow-up) restarts the store's one-week clock.
+        // It also puts the ball back in the store's court, so anything the DM had
+        // pending on this item is answered — stamp it seen so the review queue
+        // does not keep listing an item the DM has just replied to.
         if (side === "dm") {
-          await supabase.from("aging_items").update({ due_at: replyDue() }).eq("id", itemId);
+          await supabase.from("aging_items")
+            .update({ due_at: replyDue(), dm_seen_at: new Date().toISOString() })
+            .eq("id", itemId);
         }
         await broadcastChange("aging", item.store);
         return jsonResponse({ success: true, note_id: note.id });
@@ -187,6 +192,25 @@ Deno.serve(async (req: Request) => {
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("aging", row?.store ?? null);
         return jsonResponse({ success: true });
+      }
+
+      // ---- DM opened the tool: stamp the items they just looked at ----
+      // The DM answering a store reply is optional. If they read it and it needs
+      // nothing more, the item is parked until it sells or they follow up — so
+      // "the store replied last" cannot mean "your review" forever. The review
+      // queue is store-replies-newer-than-this-stamp, which means looking is what
+      // clears it, and only a genuinely new reply brings the item back.
+      // No broadcast: this is a read receipt, not a change other clients care
+      // about, and pinging here would bounce every open session on every open.
+      if (action === "mark_dm_seen") {
+        const ids: string[] = Array.isArray(body.ids)
+          ? body.ids.map((v: unknown) => String(v)).filter(Boolean) : [];
+        if (!ids.length) return jsonResponse({ success: true, updated: 0 });
+        const seenAt = new Date().toISOString();
+        const { error } = await supabase.from("aging_items")
+          .update({ dm_seen_at: seenAt }).in("id", ids);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        return jsonResponse({ success: true, updated: ids.length, dm_seen_at: seenAt });
       }
 
       // ---- DM deletes an item added by mistake (notes cascade) ----

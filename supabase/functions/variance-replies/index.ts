@@ -139,9 +139,18 @@ Deno.serve(async (req: Request) => {
         if (!store || !dateFrom || !dateTo) {
           return jsonResponse({ success: false, error: "store, date_from and date_to are required" }, 400);
         }
-        if (!items.length) {
+        // An all-clear period legitimately has nothing to reply to. It is still a
+        // real upload: the manager is notified and reviews the report, they just
+        // owe no explanations.
+        const allClear = body.all_clear === true;
+        if (!items.length && !allClear) {
           return jsonResponse({ success: false, error: "No line items to upload" }, 400);
         }
+        // NULL = whole-store report (every line is an obligation), which is the
+        // legacy shape and still what an upload with no buyers picked produces.
+        const selectedBuyers = Array.isArray(body.selected_buyers)
+          ? body.selected_buyers.map((b: unknown) => String(b).trim()).filter(Boolean)
+          : null;
         const due = new Date();
         due.setDate(due.getDate() + MANAGER_REPLY_DAYS);
         const { data: period, error: pErr } = await supabase.from("variance_reply_periods").insert({
@@ -151,6 +160,10 @@ Deno.serve(async (req: Request) => {
           timeframe: body.timeframe ? String(body.timeframe) : null,
           uploaded_by: body.uploaded_by ? String(body.uploaded_by).trim() : null,
           manager_due_at: due.toISOString(),
+          selected_buyers: selectedBuyers,
+          all_clear: allClear,
+          all_clear_by: allClear && body.all_clear_by ? String(body.all_clear_by).trim() : null,
+          all_clear_at: allClear ? new Date().toISOString() : null,
         }).select().single();
         if (pErr) return jsonResponse({ success: false, error: pErr.message }, 500);
 
@@ -167,6 +180,9 @@ Deno.serve(async (req: Request) => {
           gm_note: it.gm_note ? String(it.gm_note).trim() : null,
           dm_note: it.dm_note ? String(it.dm_note).trim() : null,
           mgr_reply: it.mgr_reply ? String(it.mgr_reply).trim() : null,
+          // Absent = true, so an older client (or a whole-store upload) keeps the
+          // behaviour where every imported line is an obligation.
+          needs_reply: it.needs_reply === false ? false : true,
         }));
         const { error: iErr } = await supabase.from("variance_reply_items").insert(rows);
         if (iErr) {
@@ -322,10 +338,14 @@ Deno.serve(async (req: Request) => {
   const counts: Record<string, { items: number; answered: number; awaiting_reply: number; mgr_replied: number }> = {};
   if (ids.length) {
     const { data: items, error: iErr } = await supabase.from("variance_reply_items")
-      .select("period_id, gm_note, dm_note, mgr_reply, dm_reply_requested").in("period_id", ids);
+      .select("period_id, gm_note, dm_note, mgr_reply, dm_reply_requested, needs_reply").in("period_id", ids);
     if (iErr) return jsonResponse({ success: false, error: iErr.message }, 500);
     (items || []).forEach((it: any) => {
       const c = (counts[it.period_id] = counts[it.period_id] || { items: 0, answered: 0, awaiting_reply: 0, mgr_replied: 0 });
+      // Context lines are visible in the whole-store view but are nobody's
+      // homework — counting them would leave a period permanently "unanswered"
+      // and keep the manager's dot lit forever.
+      if (it.needs_reply === false) return;
       c.items++;
       if (it.gm_note) c.answered++;
       // only notes the DM flagged as needing a response nag the manager;
