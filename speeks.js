@@ -17415,13 +17415,13 @@ function _b2bStageListing(deal) {
         eyebrow: deal.ref,
         title: 'Listing',
         sub: 'Scan our label, then the Shopify barcode it went live under.',
-        wide: true,
+        full: true,
         body: `
             ${_b2bSummary(deal)}
             ${_b2bModalItems.length ? _b2bDealStatsHtml(_b2bModalItems, deal) : ''}
             <div id="b2bScanWrap">${_b2bScanBar(deal)}</div>
             <div id="b2bListProg">${_b2bListProgress()}</div>
-            <div id="b2bListRows" class="b2b-list">${_b2bListRows()}</div>`,
+            <div id="b2bListRows" class="b2b-items b2b-ss b2b-lgrid">${_b2bListRows()}</div>`,
         footer: `
             ${_b2bMoveBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
@@ -17496,17 +17496,62 @@ function _b2bListProgress() {
         </div>`;
 }
 
+// The listing sheet is the pricing grid's read-only twin: one dense row per
+// line showing everything the lister needs to build the Shopify listing --
+// specs, serials, condition, value and cost -- with the list / recycle / label
+// actions where the fields would be. Wipe certification and the recorded
+// barcodes drop to a strip under the row.
 function _b2bListRows() {
-    return _b2bModalItems.map(it => {
+    if (!_b2bModalItems.length) {
+        return `<div class="b2b-empty sm"><div class="b2b-empty-t">Nothing to list</div></div>`;
+    }
+    // The three required specs get their own columns (as on the pricing sheet);
+    // the optional ones (GPU, battery) ride under the item name.
+    const reqSpecs = B2B_SPEC_FIELDS.filter(f => f.req);
+    const head = `
+        <div class="b2b-prow b2b-phead">
+            <span>Line</span><span>Item</span>
+            ${reqSpecs.map(f => `<span>${escapeHtml(f.label)}</span>`).join('')}
+            <span>Serials</span>
+            <span class="r">Value</span><span class="r">Cost</span>
+            <span class="c">Listed</span><span></span>
+        </div>`;
+
+    const rows = _b2bModalItems.map(it => {
         const qty = Number(it.quantity) || 1;
         const listed = Number(it.listed_qty) || 0;
         const recycled = Number(it.recycled_qty) || 0;
         const ok = _b2bSatisfied(it);
         const waiting = _b2bPendingUnit === it.id;
+        const scrap = _b2bIsScrap(it);
+        const disp  = _b2bDispOf(it);
+        const wiped = Number(it.wiped_qty) || 0;
+        const carries = _b2bSpecsFor(it);
+        const serials = _b2bSerials(it);
+        const extra = _b2bSpecsFor(it).filter(f => !f.req).map(f => it[f.key]).filter(Boolean);
+        const lineValue = scrap ? 0 : (Number(it.value) || 0) * qty;
+        const lineCost  = _b2bIsBuy(it) ? (Number(it.cost != null ? it.cost : it.offer) || 0) * qty : 0;
 
-        // The barcodes are the evidence the units went live, so they are on the
-        // row rather than buried -- and each is individually removable, because
-        // a wrong one recorded is worse than one missing.
+        // You may list exactly as many units as have been certified wiped. The
+        // server enforces the same rule; this is so the button says why.
+        const needsWipe = !!it.wipe_required && listed >= wiped;
+        const blockTitle = scrap ? 'Recycle lines are never listed'
+            : needsWipe ? `Certify a data wipe first — ${wiped} of ${qty} wiped`
+            : 'List one unit — asks for its Shopify barcode';
+
+        // Corp-only wipe certification; the store still sees the flag/count so a
+        // disabled "+" is never inexplicable.
+        const wipeStrip = it.wipe_required ? `
+            <div class="b2b-lwipe ${wiped >= qty ? 'done' : ''}">
+                ${_b2bIco('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/>')}
+                <span><b>${wiped}</b> of ${qty} certified wiped</span>
+                ${wiped >= qty ? ''
+                  : _b2bIsCorp() ? `<button class="b2b-mini" onclick="b2bMarkWiped('${it.id}')">Mark Wiped</button>`
+                  : '<span class="b2b-lwipe-note">Corp records the certification</span>'}
+            </div>` : '';
+
+        // The barcodes are the evidence the units went live -- each individually
+        // removable, because a wrong one recorded is worse than one missing.
         const codes = (it.listings || []).length ? `
             <div class="b2b-lcodes">
                 ${it.listings.map(l => `
@@ -17517,67 +17562,38 @@ function _b2bListRows() {
                 </span>`).join('')}
             </div>` : '';
 
-        const scrap = _b2bIsScrap(it);
-        const disp  = _b2bDispOf(it);
-        const wiped = Number(it.wiped_qty) || 0;
-
-        // Per-line money for the lister: the line's resale value and what we paid
-        // for it (nothing on a no-residual line, and a scrap line has neither).
-        const lineValue = scrap ? 0 : (Number(it.value) || 0) * qty;
-        const lineCost  = _b2bIsBuy(it) ? (Number(it.cost != null ? it.cost : it.offer) || 0) * qty : 0;
-        const vc = scrap ? '' : `
-                <div class="b2b-lvc"><span>Value <b>${_b2bMoney(lineValue)}</b></span>`
-                + `<span>Cost <b>${_b2bMoney(lineCost)}</b></span></div>`;
-        // You may list exactly as many units as have been certified wiped. The
-        // server enforces the same rule; this is so the button says why.
-        const needsWipe = !!it.wipe_required && listed >= wiped;
-        const blockTitle = scrap ? 'Recycle lines are never listed'
-            : needsWipe ? `Certify a data wipe first — ${wiped} of ${qty} wiped`
-            : 'List one unit — asks for its Shopify barcode';
-
-        // Certifying a wipe is a claim we have charged the client for and may
-        // have to stand behind, so only corp records it. The store still sees
-        // the flag and the count -- they need to know the line is blocked and
-        // why, and hiding it would just make the disabled "+" inexplicable.
-        const wipeStrip = it.wipe_required ? `
-            <div class="b2b-lwipe ${wiped >= qty ? 'done' : ''}">
-                ${_b2bIco('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/>')}
-                <span><b>${wiped}</b> of ${qty} certified wiped</span>
-                ${wiped >= qty ? ''
-                  : _b2bIsCorp() ? `<button class="b2b-mini" onclick="b2bMarkWiped('${it.id}')">Mark Wiped</button>`
-                  : '<span class="b2b-lwipe-note">Corp records the certification</span>'}
-            </div>` : '';
-
         return `
-        <div class="b2b-lrow ${ok ? 'done' : ''} ${waiting ? 'waiting' : ''}" id="b2bLrow-${it.id}">
-            <span class="b2b-lcheck">${ok ? _b2bIco('<polyline points="20 6 9 17 4 12"/>') : ''}</span>
-            <div class="b2b-lmain">
-                <div class="b2b-lname">${escapeHtml(_b2bItemName(it))}
-                    ${!_b2bIsBuy(it) ? `<span class="b2b-doc-rec ${scrap ? '' : 'nrv'}">${escapeHtml(B2B_DISP[disp].label)}</span>` : ''}
-                    ${it.condition ? `<span class="b2b-lcond">${escapeHtml(it.condition)}</span>` : ''}</div>
-                <div class="b2b-lsku b2b-mono">${escapeHtml(it.sku || '')}</div>
-                ${vc}
-                ${wipeStrip}
-                ${codes}
+        <div class="b2b-pline b2b-lline ${ok ? 'b2b-lok' : ''} ${scrap ? 'b2b-scrap' : ''} ${waiting ? 'b2b-lwait' : ''}" id="b2bLrow-${it.id}">
+            <div class="b2b-prow">
+                <span class="b2b-pcell b2b-pc-sku" title="${escapeHtml(it.sku || '')}">
+                    ${ok ? `<span class="b2b-lcheck">${_b2bIco('<polyline points="20 6 9 17 4 12"/>')}</span>` : ''}
+                    <span class="b2b-mono">${escapeHtml(_b2bLineNo(it))}</span>
+                </span>
+                <span class="b2b-pcell b2b-lc-item">
+                    <span class="b2b-lc-name"><b>${escapeHtml(_b2bItemName(it))}</b>
+                        ${it.condition ? `<span class="b2b-lcond">${escapeHtml(it.condition)}</span>` : ''}
+                        ${!_b2bIsBuy(it) ? `<span class="b2b-doc-rec ${scrap ? '' : 'nrv'}">${escapeHtml(B2B_DISP[disp].label)}</span>` : ''}</span>
+                    ${extra.length ? `<span class="b2b-lc-sub">${escapeHtml(extra.join(' · '))}</span>` : ''}
+                </span>
+                ${reqSpecs.map(f => `<span class="b2b-pcell b2b-lc-spec">${carries.some(s => s.key === f.key) && String(it[f.key] || '').trim() ? escapeHtml(it[f.key]) : '<span class="b2b-f-off">—</span>'}</span>`).join('')}
+                <span class="b2b-pcell b2b-lc-serials">${serials.length ? escapeHtml(serials.join(', ')) : '<span class="b2b-f-off">—</span>'}</span>
+                <span class="b2b-pcell n">${scrap ? '<span class="b2b-f-off">—</span>' : _b2bMoney(lineValue)}</span>
+                <span class="b2b-pcell n">${_b2bIsBuy(it) ? _b2bMoney(lineCost) : '<span class="b2b-f-off">—</span>'}</span>
+                <span class="b2b-pcell b2b-lc-prog">
+                    <button class="b2b-step" ${listed <= 0 ? 'disabled' : ''} title="Undo the last one" onclick="b2bUnlistUnit('${it.id}')">−</button>
+                    <span class="b2b-lc-count"><b>${listed}</b>/${qty}${recycled ? `<i>+${recycled} rec</i>` : ''}</span>
+                    <button class="b2b-step up" ${ok || scrap || needsWipe ? 'disabled' : ''} title="${escapeHtml(blockTitle)}" onclick="b2bAskShopify('${it.id}')">+</button>
+                </span>
+                <span class="b2b-pcell b2b-pc-acts">
+                    <button class="b2b-recycle" ${ok ? 'disabled' : ''} title="Recycle units out" onclick="b2bRecycleUnits('${it.id}')">Recycle</button>
+                    ${_b2bLabelBtn(it)}
+                </span>
             </div>
-            <div class="b2b-lcount">
-                <b>${listed}</b><span>/ ${qty} listed</span>
-                ${recycled ? `<span class="b2b-lrec">${recycled} recycled</span>` : ''}
-            </div>
-            <div class="b2b-lacts">
-                <!-- The steppers are what this screen is FOR -- scan, +, scan, + --
-                     and the label button was sitting directly in front of them.
-                     It moves to the end, past Recycle, where reaching for it is a
-                     deliberate act rather than something on the way to +. -->
-                <button class="b2b-step" ${listed <= 0 ? 'disabled' : ''} title="Undo the last one" onclick="b2bUnlistUnit('${it.id}')">−</button>
-                <button class="b2b-step up" ${ok || scrap || needsWipe ? 'disabled' : ''}
-                    title="${escapeHtml(blockTitle)}"
-                    onclick="b2bAskShopify('${it.id}')">+</button>
-                <button class="b2b-recycle" ${ok ? 'disabled' : ''} title="Recycle units out" onclick="b2bRecycleUnits('${it.id}')">Recycle</button>
-                ${_b2bLabelBtn(it)}
-            </div>
+            ${(wipeStrip || codes) ? `<div class="b2b-lextra">${wipeStrip}${codes}</div>` : ''}
         </div>`;
     }).join('');
+
+    return head + rows;
 }
 
 // Certify N units wiped. Same optimistic-then-reconcile shape as recycling, and
