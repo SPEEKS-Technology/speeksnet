@@ -11388,133 +11388,110 @@ function goalsRosterFor(store) {
     } catch (_) { return []; }
 }
 
+// CAPACITY MODEL. A person's daily goal is their SHIFT HOURS × the RATE of the
+// seat they are in that day, taken down to a goal by goal_factor. That is the
+// whole calculation — a manager can check it in their head.
+//
+// What this replaced, and why none of it survived:
+//
+//   roleWeight / scale / allocFor  — the old engine started from the store's
+//     WEEKLY number and divided it back out across a hypothetical "standard
+//     week", using largest-remainder so the person-days summed to the DM's
+//     figure exactly. Elegant, and wrong end first: it meant a person's goal
+//     depended on how many people the model imagined were working, not on their
+//     own hours, so the same lister scored 25 one day and 15 the next because
+//     someone else was off. Under capacity a lister's day is 18 because they
+//     have 8 hours at 3/hr — full stop.
+//
+//   L1_SHARED  — the shared-lister rule existed to dock a lister on a thin day.
+//     Capacity handles it without a special case: fewer people means fewer hours
+//     means a smaller store goal, and the lister who is ALSO covering the floor
+//     is a Buyer, at a buyer's rate.
+//
+//   weeklyTarget's ladder (±20/person, floor 150)  — see the server. Retired.
+//
+// The daily goals no longer sum to the store's weekly goal by construction, and
+// that is deliberate: the gap between "what we planned Monday" and "what we
+// actually staffed" is the efficiency signal the whole model exists to produce.
 const ListingGoalsEngine = {
-    roleWeight: { B1: 5, B2: 8, L1: 25, L2: 25, L1_SHARED: 15 },
-    saturdayFactor: 0.5,
-
-    // SUGGESTED weekly total: ±20 listings per person, anchored at 4 people = 190
-    // (floor 150). 2→150, 3→170, 4→190, 5→210, 6→230. Mirrors baseForSize() in the
-    // store-targets edge function so the frontend and server stay in lock-step.
-    //
-    // This is no longer the goal — the DM types the real number each Monday and
-    // that value drives everything (see scale's targetOverride). The ladder only
-    // prefills the DM's input for a store that has never had a week set, and
-    // stands in while the server target is still loading.
-    weeklyTarget(size)       { return Math.max(150, 110 + 20 * size); },
-    modelSize(rosterSize)    { return rosterSize >= 4 ? 4 : 3; },
-
-    // Standard staffed week, used ONLY to calibrate the scale so a normal week
-    // sums to the weekly target. Day-to-day goals use the live roles selected.
-    standardWeek(size) {
-        return size >= 4
-            ? { Mon:['B1','B2','L1'], Tue:['B1','B2','L1'], Wed:['B1','B2','L1'],
-                Thu:['B1','B2','L1'], Fri:['B1','B2','L1','L2'], Sat:['B1','B2','L1','L2'] }
-            : { Mon:['B1','L1'], Tue:['B1','L1'], Wed:['B1','L1'],
-                Thu:['B1','B2','L1'], Fri:['B1','B2','L1'], Sat:['B1','B2','L1'] };
+    // Mirrors the listing_config table. Overwritten wholesale by the server on
+    // the first store-targets fetch (applyConfig) — these values only stand in
+    // for the second before that lands, and must never be edited to "tune" the
+    // model: change the DB row, which carries the reasoning in its note column.
+    cfg: {
+        hours_per_day: 8,
+        rate_buyer_1: 0.5, rate_buyer_2: 1.0, rate_lister: 3.0, rate_new_hire: 1.0,
+        saturday_factor: 0.5, goal_factor: 0.75,
+        hours_full_time: 40, open_days: 6,
     },
+    _newHires: {},   // store → Set of names inside the new-hire ramp this week
+
+    // Absorb one store-targets row. Safe to call with anything, including the
+    // pre-capacity payload a cached page might still be holding.
+    applyConfig(row) {
+        if (!row) return;
+        if (row.cfg) Object.assign(this.cfg, row.cfg);
+        if (row.store) this._newHires[row.store] = new Set(row.newHires || []);
+    },
+    isNewHire(store, employee) {
+        const s = this._newHires[store];
+        return !!(s && employee && s.has(employee));
+    },
+
+    // Line items per hour for a seat. L1, L2, L3 … are all dedicated listers and
+    // all score the same — the number after the L is a slot label, not a rank.
+    rateFor(role, isNewHire) {
+        const r = String(role || '').trim().toUpperCase();
+        if (!_isWorkingRole(r)) return 0;
+        if (r === 'B1') return this.cfg.rate_buyer_1;
+        if (r === 'B2') return this.cfg.rate_buyer_2;
+        return isNewHire ? this.cfg.rate_new_hire : this.cfg.rate_lister;
+    },
+
+    // Saturday is shorter and the busiest buy day, so it produces about half a
+    // weekday's listings. Sunday is closed.
+    //
+    // Parsed through goalDateObj, not `new Date(dateStr)`: a bare ISO date parses
+    // as UTC midnight, i.e. 7pm Central the day before, which would read Saturday
+    // as Friday and hand out full-weekday goals on the busiest day of the week.
     dayFactorFromDate(dateStr) {
-        const dow = new Date(dateStr).getDay(); // 0 Sun .. 6 Sat
-        if (dow === 6) return this.saturdayFactor; // Saturday: shorter + busiest
-        if (dow === 0) return 0;                   // closed Sundays
+        const dow = goalDateObj(dateStr).getDay();   // 0 Sun .. 6 Sat
+        if (dow === 6) return this.cfg.saturday_factor;
+        if (dow === 0) return 0;
         return 1;
     },
-    weightFor(role, staffedCount) {
-        const isLister = /^L\d+$/.test(role);
-        // On 2-person days the lister also covers the floor → reduced weight.
-        // This applies to ANY lister slot. It used to test `role === 'L1'` only, so
-        // a two-person day staffed as L1 + L2 scored them 15 and 25 — the same job
-        // on the same day with different goals.
-        if (isLister && staffedCount <= 2) return this.roleWeight.L1_SHARED;
-        // L3, L4, … (rosters past 4 people) score like a dedicated lister.
-        if (isLister && this.roleWeight[role] == null) return this.roleWeight.L1;
-        return this.roleWeight[role] || 0;
-    },
-    _DAY_FACTOR: { Mon:1, Tue:1, Wed:1, Thu:1, Fri:1, Sat:0.5 },
-    _allocCache: {},
 
-    // targetOverride is the DM's hand-set weekly goal for the store. When it is
-    // supplied the whole per-role distribution scales to THAT number, which is what
-    // makes the daily goals add back up to the goal the DM typed. The ladder is
-    // only the fallback for a store whose target hasn't loaded yet.
-    scale(rosterSize, targetOverride) {
-        const size = this.modelSize(rosterSize);
-        const target = (targetOverride > 0) ? targetOverride : this.weeklyTarget(rosterSize);
-        const wk = this.standardWeek(size);
-        let cap = 0;
-        for (const day in wk) {
-            const roles = wk[day];
-            roles.forEach(r => { cap += this.weightFor(r, roles.length) * this._DAY_FACTOR[day]; });
-        }
-        return cap > 0 ? target / cap : 0;
-    },
-
-    // Exact per-slot goals for a standard week, allocated so they sum to EXACTLY
-    // the DM's number.
+    // The function the widgets call. opts carries { employee, store } so a person
+    // inside the new-hire ramp scores at the new-hire rate; both are optional and
+    // their absence just means "not a new hire".
     //
-    // Rounding each person-day independently doesn't cancel out: a 190 week
-    // distributed to 189, a 200 week to 195. And no single scale factor can fix
-    // it — Mon/Tue/Wed are identical slots that round together, so for a 2-person
-    // roster the reachable totals jump straight from 195 to 205 and 200 is simply
-    // not on the list. Largest-remainder does fix it: floor everything, then hand
-    // the leftover listings out by biggest fractional part. scale() makes the
-    // UNROUNDED slots sum to the target, so this lands on the target exactly.
-    //
-    // The unit of allocation is an EQUIVALENCE CLASS — day factor + role weight +
-    // people staffed — not an individual day-slot. Two people in the same
-    // situation must always get the same number, and keying by day broke that two
-    // ways: Mon's L1 could win a leftover listing that Tue's L1 didn't, and on a
-    // day whose role mix isn't in the model one lister read from this table while
-    // the other fell through to plain rounding (L1 20, L2 19 — the reported bug).
-    // A whole class moves together, so the cost of a +1 is the class's size.
-    allocFor(rosterSize, target) {
-        const cacheKey = rosterSize + '|' + target;
-        if (this._allocCache[cacheKey]) return this._allocCache[cacheKey];
-        const wk = this.standardWeek(this.modelSize(rosterSize));
-        const sc = this.scale(rosterSize, target);
-
-        const classes = {};
-        for (const day in wk) {
-            const roles = wk[day];
-            const factor = this._DAY_FACTOR[day];
-            roles.forEach(r => {
-                const w = this.weightFor(r, roles.length);
-                const k = factor + '|' + w + '|' + roles.length;
-                if (!classes[k]) classes[k] = { k, exact: w * sc * factor, size: 0 };
-                classes[k].size++;
-            });
-        }
-
-        const list = Object.values(classes);
-        let used = 0;
-        list.forEach(c => { c.n = Math.floor(c.exact); used += c.n * c.size; });
-        let left = Math.round(target - used);
-        // Biggest fractional part first, but only take a class if the whole class
-        // fits in what's left — otherwise the week would overshoot the goal.
-        list.slice()
-            .sort((a, b) => (b.exact - Math.floor(b.exact)) - (a.exact - Math.floor(a.exact)))
-            .forEach(c => { if (left >= c.size) { c.n++; left -= c.size; } });
-
-        const map = {};
-        list.forEach(c => { map[c.k] = c.n; });
-        this._allocCache[cacheKey] = map;
-        return map;
+    // rosterSize / staffedCount / targetOverride are GONE from the signature. No
+    // one else's presence changes your number any more.
+    goalFor(role, dateStr, opts) {
+        const o = opts || {};
+        const rate = this.rateFor(role, this.isNewHire(o.store, o.employee));
+        if (!rate) return 0;
+        return Math.round(
+            this.cfg.hours_per_day * rate * this.dayFactorFromDate(dateStr) * this.cfg.goal_factor
+        );
     },
-    // The function the widgets call: goal for one role, on a date, given how
-    // many people are staffed that day (needed for the shared-lister rule).
-    goalFor(role, dateStr, rosterSize, staffedCount, targetOverride) {
-        if (!role || role === '-') return 0;
-        // A standard staffed day reads its number straight off the exact allocation,
-        // so a normal week totals the DM's goal to the listing. The lookup is by
-        // day factor + weight + staffing, so anyone in the same situation — either
-        // lister on the same day, the same role on Mon and Tue — always matches.
-        const target = (targetOverride > 0) ? targetOverride : this.weeklyTarget(rosterSize);
-        const factor = this.dayFactorFromDate(dateStr);
-        const weight = this.weightFor(role, staffedCount);
-        const slot = this.allocFor(rosterSize, target)[factor + '|' + weight + '|' + staffedCount];
-        if (slot != null) return slot;
-        // Anything the model doesn't cover — an unusual role mix, a day with more or
-        // fewer people than the standard week — falls back to the plain calculation.
-        return Math.round(weight * this.scale(rosterSize, targetOverride) * factor);
+
+    // Rough weekly capacity goal for a store of `size` full-timers. ONLY a
+    // placeholder for the moment before the server's real figure arrives — it
+    // assumes everyone is full-time and nobody is ramping, so it will differ from
+    // the real number at any store with a part-timer, a floater or a new hire.
+    // Mirrors capacityFrom() in the store-targets edge function.
+    weeklyTarget(size) {
+        const c = this.cfg;
+        const effDays = (c.open_days - 1) + c.saturday_factor;
+        const eff = size * c.hours_full_time * (effDays / c.open_days);
+        const seat = c.hours_per_day * effDays;
+        const b1 = Math.min(eff, seat);
+        const b2 = Math.min(eff - b1, seat);
+        const l = Math.max(0, eff - b1 - b2);
+        return Math.round(
+            (b1 * c.rate_buyer_1 + b2 * c.rate_buyer_2 + l * c.rate_lister) * c.goal_factor
+        );
     }
     // NOTE: ratchet() lived here — it decided when a store "levelled up" (+10) or
     // got flagged for DM review after two misses. Both it and its server twin are
@@ -11889,9 +11866,10 @@ async function saveGoalsData(silent = false) {
     goalsRoster.forEach((emp, idx) => {
         const role = _activeRoleIn(document.getElementById(`roles-${idx}`));
 
-        // Goal is derived from the role — never typed. It scales to the weekly
-        // total the DM set for this store on Monday. Off carries no goal.
-        const goal = _isWorkingRole(role) ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount, targetFor(goalsTargetStore))) : '';
+        // Goal is derived from the role — never typed. It is this person's shift
+        // hours at their seat's rate; nobody else's presence moves it. Off carries
+        // no goal.
+        const goal = _isWorkingRole(role) ? String(ListingGoalsEngine.goalFor(role, targetDateStr, { employee: emp, store: goalsTargetStore })) : '';
 
         // Results now come from the Weekly KPI (# Listed); preserve any existing value.
         const existing = liveGoalsData.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
@@ -12210,7 +12188,7 @@ function recomputeGoalDisplaysMS() {
         let weekTotal = 0;
         st.roster.forEach((emp, idx) => {
             const role = _activeRoleIn(document.getElementById(`roles-${store}-${idx}`));
-            const todayGoal = _isWorkingRole(role) ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount, targetFor(store)) : 0;
+            const todayGoal = _isWorkingRole(role) ? ListingGoalsEngine.goalFor(role, dateStr, { employee: emp, store }) : 0;
 
             const disp = document.getElementById(`goal-display-${store}-${idx}`);
             if (disp) {
@@ -12255,7 +12233,7 @@ async function saveGoalsDataMS(silent = false) {
         const payloadEmployees = [];
         st.roster.forEach((emp, idx) => {
             const role = _activeRoleIn(document.getElementById(`roles-${store}-${idx}`));
-            const goal = _isWorkingRole(role) ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount, targetFor(store))) : '';
+            const goal = _isWorkingRole(role) ? String(ListingGoalsEngine.goalFor(role, targetDateStr, { employee: emp, store })) : '';
             const existing = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
             const result = existing && existing.result != null ? String(existing.result) : '';
             if (role !== '-' || goal !== '' || result !== '') {
@@ -12308,31 +12286,27 @@ async function saveGoalsDataMS(silent = false) {
     }
 }
 
-// Roster size for a store (from auth cache), used to pick the weekly target.
+// Roster size for a store (from auth cache). Only feeds the placeholder weekly
+// figure shown before the server's capacity number arrives.
+//
+// The Multi-Store Manager is now COUNTED here. Under the old ladder they were
+// excluded and each of their stores got a flat +15 instead, because a person
+// splitting their week across two stores isn't worth a full ±20 to either. The
+// capacity model needs no such fudge: the MSM appears in both stores at
+// part-time hours, which is the literal truth of how the week is split. Mirrors
+// rosterFor() in the store-targets edge function.
 function storeRosterSize(store) {
     try {
         const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
-        // MSM excluded from the per-person ladder — they contribute via the
-        // flat _msmTargetBoost instead (mirrors rosterCount in store-targets fn).
-        const excluded = ['ceo', 'district manager', 'multi-store manager'];
+        const excluded = ['ceo', 'district manager'];
         return (auth.users || []).filter(u =>
             userInStore(u, store) &&
             !excluded.includes((u.role || '').toLowerCase())
         ).length || 4;
     } catch (e) { return 4; }
 }
-
-// Flat listings boost for stores covered by a Multi-Store Manager (the MSM
-// doesn't count as a full ±20 person on either store's ladder). Mirrors
-// msmBoost() / MSM_TARGET_BOOST in the store-targets edge fn — keep in sync.
-function _msmTargetBoost(store) {
-    if (!MULTISTORE_MANAGER_STORES.includes(String(store || '').toUpperCase())) return 0;
-    try {
-        const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
-        const hasMsm = (auth.users || []).some(u => (u.role || '').toLowerCase() === 'multi-store manager');
-        return hasMsm ? 15 : 0;
-    } catch (e) { return 15; }
-}
+// NOTE: _msmTargetBoost() lived here — the flat +15 for a store covered by a
+// Multi-Store Manager. Retired with the ladder; see storeRosterSize above.
 
 // Persisted per-store target + flag + last-4-week totals (server-side ratchet).
 let _storeTargets = {}; // store -> { target, base, flag, weeks:[{week,total}] }
@@ -12340,21 +12314,23 @@ let _storeTargets = {}; // store -> { target, base, flag, weeks:[{week,total}] }
 async function fetchStoreTarget(store) {
     try {
         const r = await fetch(`${STORE_TARGETS_URL}?store=${store}&v=${Date.now()}`).then(x => x.json());
-        if (r && r.store) _storeTargets[r.store] = r;
+        if (r && r.store) { _storeTargets[r.store] = r; ListingGoalsEngine.applyConfig(r); }
         return r;
     } catch (e) { return null; }
 }
 async function fetchAllStoreTargets() {
     try {
         const arr = await fetch(`${STORE_TARGETS_URL}?v=${Date.now()}`).then(x => x.json());
-        if (Array.isArray(arr)) arr.forEach(r => { if (r && r.store) _storeTargets[r.store] = r; });
+        if (Array.isArray(arr)) arr.forEach(r => {
+            if (r && r.store) { _storeTargets[r.store] = r; ListingGoalsEngine.applyConfig(r); }
+        });
         return arr || [];
     } catch (e) { return []; }
 }
 // Current weekly target for a store (server value; falls back to roster-derived base).
 function targetFor(store) {
     return (_storeTargets[store] && _storeTargets[store].target)
-        || (ListingGoalsEngine.weeklyTarget(storeRosterSize(store)) + _msmTargetBoost(store));
+        || ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
 }
 // Effective team size for goal math. Prefers the server's settled size, which
 // honors the timing rule (a subtraction shrinks the goal immediately, an addition
@@ -12378,7 +12354,7 @@ function goalIsSetThisWeek(store) {
 // The ladder's suggestion, used to prefill the DM's input.
 function suggestedTargetFor(store) {
     return (_storeTargets[store] && _storeTargets[store].suggested)
-        || (ListingGoalsEngine.weeklyTarget(storeRosterSize(store)) + _msmTargetBoost(store));
+        || ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
 }
 
 // DM writes a store's weekly listing goal. Replaces dmGoalAction(), which only
@@ -24323,7 +24299,7 @@ window.recomputeGoalDisplays = function() {
     let weekTotal = 0;
     goalsRoster.forEach((emp, idx) => {
         const role = _activeRoleIn(document.getElementById(`roles-${idx}`));
-        const todayGoal = _isWorkingRole(role) ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount, targetFor(goalsTargetStore)) : 0;
+        const todayGoal = _isWorkingRole(role) ? ListingGoalsEngine.goalFor(role, dateStr, { employee: emp, store: goalsTargetStore }) : 0;
 
         const disp = document.getElementById(`goal-display-${idx}`);
         if (disp) {
