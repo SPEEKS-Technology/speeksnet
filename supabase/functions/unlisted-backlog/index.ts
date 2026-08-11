@@ -1,7 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
-// UNLISTED BACKLOG — Monday 9:00am Central, covering the week that just ended.
+// UNLISTED INVENTORY WEEKLY UPDATE — Monday 9:00am Central, covering the week
+// that just ended. (Function slug stays `unlisted-backlog`; the pg_cron jobs
+// point at it by name.)
 //
 // One question: how long until each store's unlisted pile reaches zero?
 //
@@ -29,6 +31,9 @@ const SECRET = Deno.env.get("SYNC_SECRET") || "sp33ks-sync-k3y-2026-x9mq";
 const GMAIL_RELAY = Deno.env.get("GMAIL_RELAY_URL") ||
   "https://script.google.com/macros/s/AKfycby4Y2l3DJ6fQCrpFuwTTXKeaD3QV5DbLhf7jmberZCUFx86VaaE6vb9Bs_CweNh3K9VtQ/exec";
 
+// The name on the hero and in the subject line. The function SLUG stays
+// `unlisted-backlog` — renaming it would orphan the two pg_cron jobs.
+const REPORT_NAME = "Unlisted Inventory Weekly Update";
 const TO_DEFAULT = ["ethan.kushnir@speekstechnology.com"];
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const SEND_HOUR_CENTRAL = 9;   // the pg_cron pair covers CDT and CST; this picks the right one
@@ -227,7 +232,7 @@ const wrapEmail = (title: string, range: string, body: string, foot: string) => 
   </td></tr>
   <tr><td style="height:3px;background:${C.sage};font-size:0;line-height:0;">&nbsp;</td></tr>
   <tr><td style="padding:22px;">${body}</td></tr>
-  <tr><td style="padding:16px;text-align:center;color:${C.faint};font-size:10.5px;line-height:1.6;border-top:1px solid ${C.line};background:${C.footBg};">${foot}</td></tr>
+  ${foot ? `<tr><td style="padding:16px;text-align:center;color:${C.faint};font-size:10.5px;line-height:1.6;border-top:1px solid ${C.line};background:${C.footBg};">${foot}</td></tr>` : ""}
 </table></td></tr></table></body></html>`;
 
 const sectionLabel = (t: string, note = "") =>
@@ -239,7 +244,7 @@ const sectionLabel = (t: string, note = "") =>
 const tile = (label: string, value: string, sub: string) =>
   `<td class="gtile" width="33%" valign="top" style="padding:6px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.soft};border:1px solid ${C.line};border-radius:${C.rBox}px;"><tr><td style="padding:14px;">
     <div style="font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.5px;color:${C.faint};">${label}</div>
-    <div style="font-size:23px;font-weight:900;color:${C.charcoal};margin-top:5px;">${value}</div>
+    <div style="font-size:23px;font-weight:900;color:${C.charcoal};margin-top:5px;text-align:center;">${value}</div>
     <div style="font-size:11px;font-weight:700;color:${C.muted};margin-top:3px;">${sub}</div>
   </td></tr></table></td>`;
 
@@ -350,9 +355,9 @@ function build(d: any) {
   const goalPct = totGoal ? Math.round((totListed / totGoal) * 100) : 0;
 
   const glance = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-    ${tile("Unlisted Now", money(d.totalPile), `line items across ${d.rows.length} stores`)}
-    ${tile("Weekly Change", signed(d.totalChange), `<b style="color:${clr(d.totalChange)}">${d.totalChange > 0 ? "growing" : "shrinking"}</b> · ${growing} of ${d.rows.length} grew`)}
-    ${tile("Listed Last Week", money(totListed), `against ${money(totGoal)} goal · <b style="color:${goalPct >= 100 ? C.green : C.amber}">${goalPct}%</b>`)}
+    ${tile("Unlisted Now", money(d.totalPile), `Line items across ${d.rows.length} stores`)}
+    ${tile("Weekly Change", signed(d.totalChange), `<b style="color:${clr(d.totalChange)}">${d.totalChange > 0 ? "Growing" : "Shrinking"}</b> · ${growing} of ${d.rows.length} grew`)}
+    ${tile("Listed Last Week", money(totListed), `Against ${money(totGoal)} goal · <b style="color:${goalPct >= 100 ? C.green : C.amber}">${goalPct}%</b>`)}
   </tr></table>`;
 
   const body = `
@@ -363,7 +368,7 @@ function build(d: any) {
 
   ${sectionLabel("Where each store stands", "Unlisted line items, and how last week went.")}
   ${boxed(
-    `<thead><tr>${th("Store")}${th("Unlisted", "now")}${th("Change", "per week")}${th("Listed", "last week")}${th("Goal", "last week")}</tr></thead>
+    `<thead><tr>${th("Store")}${th("Unlisted", "This Week")}${th("Change", "Per Week")}${th("Listed", "Last Week")}${th("Goal", "Last Week")}</tr></thead>
      <tbody>${standsRows}</tbody>
      <tfoot><tr>
        ${td(`<b style="font-weight:900;color:${C.charcoal};">District</b>`, `background:${C.soft};border-bottom:none;`)}
@@ -377,7 +382,7 @@ function build(d: any) {
 
   ${sectionLabel("What it would take to clear", "The weekly listing rate that holds the pile flat, against each store's own best week.")}
   ${boxed(
-    `<thead><tr>${th("Store")}${th("Break-even", "per week")}${th("Best week", `last ${BEST_WEEKS}`)}${th("Verdict")}</tr></thead>
+    `<thead><tr>${th("Store")}${th("Break-even", "Per Week")}${th("Best Week", `Last ${BEST_WEEKS}`)}${th("Verdict")}</tr></thead>
      <tbody>${clearRows}</tbody>`,
     `<col style="width:16%"><col style="width:26%"><col style="width:24%"><col style="width:34%">`,
   )}
@@ -385,12 +390,16 @@ function build(d: any) {
   ${sectionLabel("Last week by store")}
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;overflow:hidden;border-collapse:separate;">${roll}</table>`;
 
-  const foot = `Unlisted counts from the weekly sales summary${d.priorAt ? ` · change measured over ${d.weeksBetween.toFixed(1)} week${d.weeksBetween === 1 ? "" : "s"} between readings` : ""}.
-    Listed counts from the weekly Store KPIs; goals from the capacity model.
-    Break-even is derived from the pile so it always reconciles with it: ${AVG_WEEKS}-week average listed + weekly pile growth.
-    ${d.readings < 3 ? `<br><b style="color:${C.flagInk};">Only ${d.readings} pile reading${d.readings === 1 ? "" : "s"} exist so far — the rates firm up as weeks accumulate.</b>` : ""}`;
+  // The provenance note (where each number comes from) is gone at Ethan's
+  // request — he knows the sources. What stays is the one line that changes how
+  // you should READ the numbers: with only a couple of pile readings the rates
+  // are noisy, and nothing else on the page says so. It renders no footer band
+  // at all once there are enough readings, which is the normal case.
+  const foot = d.readings < 3
+    ? `<b style="color:${C.flagInk};">Only ${d.readings} pile reading${d.readings === 1 ? "" : "s"} exist so far — the rates firm up as weeks accumulate.</b>`
+    : "";
 
-  return wrapEmail("Unlisted Backlog", `Week of ${rangeLabel}`, body, foot);
+  return wrapEmail(REPORT_NAME, `Week of ${rangeLabel}`, body, foot);
 }
 
 // ---------------------------------------------------------------------------
@@ -430,7 +439,7 @@ Deno.serve(async (req: Request) => {
 
     const to = q("to") ? [q("to")!] : TO_DEFAULT;
     const rangeLabel = `${fmtMD(d.weekStart)}–${fmtMD(d.weekEnd)}`;
-    const sent = await sendEmail(to, `Unlisted Backlog — Week of ${rangeLabel}`, html);
+    const sent = await sendEmail(to, `${REPORT_NAME} — Week of ${rangeLabel}`, html);
     return jsonRes({ ok: true, weekEnd: ymd(d.weekEnd), to, readings: d.readings, sent });
   } catch (err: any) {
     return jsonRes({ ok: false, error: String(err?.message ?? err), stack: String(err?.stack ?? "").slice(0, 400) }, 500);
