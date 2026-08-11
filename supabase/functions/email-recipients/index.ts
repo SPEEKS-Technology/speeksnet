@@ -28,6 +28,10 @@ const LIST_KEYS = new Set([
   "usage_report",
   // cash_report: the 7am cash-on-hand table (Paul).
   "cash_report",
+  // b2b_quote_ready: who hears that a B2B pickup has been priced and a quote is
+  // waiting on approval. Read by b2b-outreach's sendQuoteReady, which falls back
+  // to the single CRM Settings address while this list is empty.
+  "b2b_quote_ready",
   ...STORES.map((s) => `box_order_${s}`),
   ...STORES.map((s) => `weekly_store_${s}`),
 ]);
