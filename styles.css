@@ -14643,20 +14643,34 @@ body.tv-body { display: block; background: #eef1f5; }
     color: #b45309; background: #fdf3e1;
 }
 
-/* Two vertical rules that group the eight columns into what they mean, rather
-   than ruling every column and turning the table into a grid:
-     Store · Hours          | what the store IS
-     Ceiling · Goal · Listed | the plan and the outcome
+/* Ruled to match the Live Dashboard table (.lv-tbl), which is the house style
+   for a figures table on this site — SAME token everywhere, 1px #e6ebf1, used for
+   the header rule and the roll-up rule alike. Drawing every line from one colour
+   is what stops a table looking like it was assembled from three decisions.
+   Row separators stay at the fainter #f3f6f8 inherited from .dmx-tbl, exactly as
+   .lv-tbl keeps its body rules lighter than its structural ones. */
+.dmx-tbl-c th { border-bottom-color: #e6ebf1; }
+
+/* Two vertical rules only, grouping the eight columns into what they mean rather
+   than ruling every one and turning the table into a grid:
+     Store · Hours                     | what the store IS
+     Ceiling · Goal · Listed           | the plan and the outcome
      Staffed For · Efficiency · Result | the fair reading of it
-   Column 3 is Ceiling and column 6 is Staffed For, so the borders land in the
-   gap before each group. */
+   Column 3 is Ceiling and column 6 is Staffed For, so each border lands in the
+   gap before its group. */
 .dmx-tbl-c th:nth-child(3), .dmx-tbl-c td:nth-child(3),
 .dmx-tbl-c th:nth-child(6), .dmx-tbl-c td:nth-child(6) {
-    border-left: 1px solid #eef1f5;
+    border-left: 1px solid #e6ebf1;
 }
-/* Separate the district total from the stores it sums. Overrides the generic
-   .dmx-tot rule, which is a shade too faint once the verticals are in. */
-.dmx-tbl-c tr.dmx-tot td { border-top: 1px solid #e2e8f0; }
+
+/* The district roll-up. The line alone is not what separates it — .lv-tbl gives
+   its roll-up row 16px of SYMMETRIC padding, and that air is what makes the rule
+   read as a break instead of one more row divider. Padding one side only pushes
+   the row's own content off centre. */
+.dmx-tbl-c tr.dmx-tot td {
+    border-top: 1px solid #e6ebf1;
+    padding-top: 16px; padding-bottom: 16px;
+}
 
 /* The two week buttons hold labels of very different lengths ("Last Week" vs
    "Jul 27 – Aug 2"), so they get a shared minimum width — otherwise the pair
