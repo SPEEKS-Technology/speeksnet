@@ -11544,12 +11544,30 @@ function _goalsSameName(a, b) {
 // The roster the goal widgets show dots for: everyone in the store's user list
 // except the CEO and DM. One definition so the daily reminder judges coverage
 // against exactly the people the manager was given dots for.
+// Roles that are not a pair of hands on the shop floor, so they never get a
+// listing role or count toward a store's capacity. Mirrors NON_STAFF_ROLES in the
+// store-targets edge function.
+//
+// ONE definition, used by both the roster and the size count — they disagreed
+// before, storeRosterSize dropping the Multi-Store Manager while goalsRosterFor
+// kept them.
+//
+// 'store' (the shop-floor BOARD account — a TV, not a person) is belt-and-braces
+// here: userInStore already rejects it, as of bf262cd on 2026-08-08. Managers
+// reported seeing the Team accounts in the role picker on 2026-08-10, which this
+// did NOT cause and does not fix — those clients are running JS cached from
+// before that commit. Kept anyway so the intent is legible beside the capacity
+// model rather than resting on a guard three call layers away.
+const GOALS_NON_STAFF_ROLES = ['ceo', 'district manager', 'store'];
+function _goalsIsStaffRole(role) {
+    return !GOALS_NON_STAFF_ROLES.includes(String(role || '').toLowerCase().trim());
+}
+
 function goalsRosterFor(store) {
     try {
         const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
-        const excluded = ['ceo', 'district manager'];
         return (auth.users || [])
-            .filter(u => userInStore(u, store) && !excluded.includes((u.role || '').toLowerCase()))
+            .filter(u => userInStore(u, store) && _goalsIsStaffRole(u.role))
             .map(u => u.name)
             .filter(Boolean);
     } catch (_) { return []; }
@@ -12473,10 +12491,8 @@ async function saveGoalsDataMS(silent = false) {
 function storeRosterSize(store) {
     try {
         const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
-        const excluded = ['ceo', 'district manager'];
         return (auth.users || []).filter(u =>
-            userInStore(u, store) &&
-            !excluded.includes((u.role || '').toLowerCase())
+            userInStore(u, store) && _goalsIsStaffRole(u.role)
         ).length || 4;
     } catch (e) { return 4; }
 }
