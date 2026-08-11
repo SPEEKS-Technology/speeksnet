@@ -243,9 +243,9 @@ const sectionLabel = (t: string, note = "") =>
 
 const tile = (label: string, value: string, sub: string) =>
   `<td class="gtile" width="33%" valign="top" style="padding:6px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.soft};border:1px solid ${C.line};border-radius:${C.rBox}px;"><tr><td style="padding:14px;">
-    <div style="font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.5px;color:${C.faint};">${label}</div>
+    <div style="font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.5px;color:${C.faint};text-align:center;">${label}</div>
     <div style="font-size:23px;font-weight:900;color:${C.charcoal};margin-top:5px;text-align:center;">${value}</div>
-    <div style="font-size:11px;font-weight:700;color:${C.muted};margin-top:3px;">${sub}</div>
+    <div style="font-size:11px;font-weight:700;color:${C.muted};margin-top:3px;text-align:center;">${sub}</div>
   </td></tr></table></td>`;
 
 const badge = (s: string) =>
@@ -360,11 +360,20 @@ function build(d: any) {
     ${tile("Listed Last Week", money(totListed), `Against ${money(totGoal)} goal · <b style="color:${goalPct >= 100 ? C.green : C.amber}">${goalPct}%</b>`)}
   </tr></table>`;
 
+  // The callout takes the colour of the news it carries. Any store growing is a
+  // bad week however encouragingly the sentence ends, and a green box saying so
+  // reads as reassurance the numbers don't support. Green is reserved for the
+  // week every pile shrinks.
+  const good = growing === 0;
+  const callout = good
+    ? { bg: C.tint, ring: "#c6ecd6", ink: "#146c3c" }
+    : { bg: "#fcecec", ring: "#f6d5d5", ink: "#a32e2e" };
+
   const body = `
   ${glance}
 
-  <div style="margin-top:10px;background:${C.tint};border:1px solid #c6ecd6;border-radius:${C.rBox}px;padding:14px 16px;
-      font-size:13px;line-height:1.55;color:#146c3c;font-weight:600;">${caption}</div>
+  <div style="margin-top:10px;background:${callout.bg};border:1px solid ${callout.ring};border-radius:${C.rBox}px;padding:14px 16px;
+      font-size:13px;line-height:1.55;color:${callout.ink};font-weight:600;">${caption}</div>
 
   ${sectionLabel("Where each store stands", "Unlisted line items, and how last week went.")}
   ${boxed(
