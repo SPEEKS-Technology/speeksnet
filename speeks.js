@@ -29370,7 +29370,10 @@ async function vrOpenPeriod(pid) {
 function _vrSubtitleText() {
     if (!_vrCurrent || !_vrCurrent.period) return '';
     const p = _vrCurrent.period;
-    // Cleared managers have no reply deadline — don't nag them with one.
+    // An all-clear period owes nobody a reply, so it has no deadline to show.
+    // The banner in the body already says what's going on; a "replies due"
+    // date next to it would only contradict it.
+    if (p.all_clear) return '';
     const items = _vrCurrent.items || [];
     const answered = items.filter(i => i.gm_note).length;
     const due = new Date(p.manager_due_at);
@@ -29457,11 +29460,16 @@ function renderVarianceReplies() {
     // at/below the cutoff, no note boxes, so what is actually owed stays
     // unambiguous. A whole-store period (selected_buyers null) has one view and
     // no toggle, exactly as before.
+    // The store view is strictly the -10%-or-worse report. A targeted upload
+    // also stores lines ABOVE the cutoff — the top-up that brings a light buyer
+    // to twelve — and those belong to that person's exercise, not to the store's
+    // variance picture, so they are filtered out here.
     const targeted = Array.isArray(p.selected_buyers) && p.selected_buyers.length > 0;
     const storeView = targeted && _vrView === 'store';
     const items = targeted
         ? (storeView
-            ? allRows.slice().sort((a, b) => (a.variance_pct ?? 0) - (b.variance_pct ?? 0))
+            ? allRows.filter(i => Number(i.variance_pct ?? 0) <= _VR_VARIANCE_CUTOFF)
+                     .sort((a, b) => (a.variance_pct ?? 0) - (b.variance_pct ?? 0))
             : allRows.filter(i => i.needs_reply !== false)
                      .sort((a, b) => (a.variance_pct ?? 0) - (b.variance_pct ?? 0)))
         : allRows;
@@ -29586,6 +29594,15 @@ function renderVarianceReplies() {
             ${showReplyCol ? td(_vrNoteCell(it, 'mgr_reply', canGm && !!it.dm_note && !!it.dm_reply_requested && _vrEditing, it.dm_note && it.dm_reply_requested ? 'Reply to the DM note…' : '')) : ''}
         </tr>`;
     });
+    // A targeted upload can filter down to nothing in the store view — a buyer
+    // picked for their top-12 exercise may have no line at the cutoff at all.
+    // An empty grid under a header row reads as broken, so say it plainly.
+    if (!items.length) {
+        const cols = 6 + (showGmCol ? 1 : 0) + (showDmCol ? 1 : 0) + (showReplyCol ? 1 : 0);
+        html += `<tr><td colspan="${cols}" style="padding:28px 14px; text-align:center; font-size:12px; font-weight:600; color:#94a3b8;">
+            ${storeView ? `No lines at ${_VR_VARIANCE_CUTOFF}% or worse in this report.` : 'Nothing needs a reply on this report.'}
+        </td></tr>`;
+    }
     html += `</tbody></table></div>`;
     body.innerHTML = html;
     _vrUpdateProgressLine();
@@ -29763,8 +29780,12 @@ function vrSetView(v) {
 function _vrViewToggleHtml(p, allRows, storeView) {
     const owed = allRows.filter(i => i.needs_reply !== false).length;
     const names = (p.selected_buyers || []).map(n => String(n).split(' ')[0]).join(', ');
+    // Both tabs get the same footprint — a wide enough min-width that the
+    // longer label ("Needs replies · 128") still fits — so switching views
+    // doesn't shuffle the row.
     const tab = (v, label, on) => `<button type="button" onclick="vrSetView('${v}')"
         style="font-size:11.5px; font-weight:800; padding:6px 13px; border-radius:8px; cursor:pointer;
+        min-width:150px; text-align:center; flex:0 0 auto;
         border:1.5px solid ${on ? '#93c5fd' : '#e2e8f0'}; background:${on ? '#eff6ff' : '#fff'}; color:${on ? '#1d4ed8' : '#64748b'};">${label}</button>`;
     return `<div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-bottom:12px;">
         ${tab('people', `Needs replies · ${owed}`, !storeView)}
