@@ -184,11 +184,16 @@ Deno.serve(async (req: Request) => {
           // behaviour where every imported line is an obligation.
           needs_reply: it.needs_reply === false ? false : true,
         }));
-        const { error: iErr } = await supabase.from("variance_reply_items").insert(rows);
-        if (iErr) {
-          // don't leave a header without lines
-          await supabase.from("variance_reply_periods").delete().eq("id", period.id);
-          return jsonResponse({ success: false, error: iErr.message }, 500);
+        // An all-clear period can legitimately have no rows at all, so only insert
+        // when there is something to insert — an empty insert is a pointless round
+        // trip at best and an error at worst.
+        if (rows.length) {
+          const { error: iErr } = await supabase.from("variance_reply_items").insert(rows);
+          if (iErr) {
+            // don't leave a header without lines
+            await supabase.from("variance_reply_periods").delete().eq("id", period.id);
+            return jsonResponse({ success: false, error: iErr.message }, 500);
+          }
         }
 
         // Stash the original workbook so managers can download the full report
