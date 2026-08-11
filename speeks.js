@@ -14874,6 +14874,7 @@ function _b2bRenderCreate() {
                 <div><label class="form-label-caps">Acronym *</label><input id="b2bNcAcronym" class="form-input-lg b2b-mono" maxlength="6" placeholder="ACM" oninput="this.value=this.value.toUpperCase()"></div>
                 <div><label class="form-label-caps">Contact</label><input id="b2bNcContact" class="form-input-lg" placeholder="Dana Reyes"></div>
                 <div><label class="form-label-caps">Email</label><input id="b2bNcEmail" class="form-input-lg" placeholder="dana@acme.com"></div>
+                <div><label class="form-label-caps">Phone</label><input id="b2bNcPhone" class="form-input-lg" placeholder="(816) 555-0142"></div>
             </div>
             <p class="b2b-hint">The acronym leads every SKU we print for this client, so it locks once they have a quoted deal.</p>
             <button class="b2b-btn b2b-btn-secondary" onclick="b2bCreateClientInline()">Add Client</button>
@@ -14939,6 +14940,7 @@ async function b2bCreateClientInline() {
         action: 'create_client', company, acronym,
         contact: document.getElementById('b2bNcContact')?.value.trim(),
         contact_email: document.getElementById('b2bNcEmail')?.value.trim(),
+        contact_phone: document.getElementById('b2bNcPhone')?.value.trim(),
     }, "Couldn't add the client");
     _b2bClients = await _b2bGet('clients=1');
     _b2bCreateClientId = out.id;
