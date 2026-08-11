@@ -118,17 +118,46 @@ const _usageRows = new Map();   // 'event|feature' -> row (cumulative for the se
 let _usageDirty  = new Set();   // keys changed since the last successful flush
 let _usageTimer  = null;
 
-// One id per browser session, minted on first use and kept in sessionStorage so
-// a page navigation between the shells continues the same session rather than
-// starting a new one. Also what makes "sessions per user per day" countable.
+// One id per browser session PER DAY, kept in sessionStorage so a navigation
+// between the shells continues the same session rather than starting a new one.
+//
+// ⚠️ The per-day part is not cosmetic. sessionStorage lives as long as the TAB,
+// and a store device is a tab that never closes — so a single id was covering
+// days or weeks. Since the ingest upserts on (session_id, event, feature), every
+// one of that person's days collapsed onto the row's original `day` and they
+// vanished from every later report. Rolling the id at the Central day boundary
+// is what makes "sessions per user per day" mean anything.
 function _usageSessionId() {
+    // Central, not UTC: a UTC day boundary would roll the id at 7pm, mid-shift.
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
     let id = sessionStorage.getItem('speeksSessionId');
-    if (!id) {
+    if (!id || sessionStorage.getItem('speeksSessionDay') !== today) {
         id = (crypto.randomUUID && crypto.randomUUID()) ||
              (Date.now() + '-' + Math.random().toString(36).slice(2));
         sessionStorage.setItem('speeksSessionId', id);
+        sessionStorage.setItem('speeksSessionDay', today);
     }
     return id;
+}
+
+// Record that this person was on the site today.
+//
+// ⚠️ This exists because 'signin' fires ONLY where the PIN is typed, and
+// sessionStorage keeps a tab signed in indefinitely — so anyone on a device that
+// stays open never fired it again and was absent from the usage report entirely.
+// Found 2026-08-10: the report said one person used the site on a day when four
+// managers had between them filed 39 checklist completions.
+//
+// Same event name as the PIN path on purpose. The report counts presence as "any
+// event that day", so reusing 'signin' means no server change, and the upsert
+// key makes it exactly one row per person per day however many pages they open.
+function _usagePresence() {
+    try {
+        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+        if (sessionStorage.getItem('speeksPresenceDay') === today) return;
+        sessionStorage.setItem('speeksPresenceDay', today);
+        trackUsage('signin', 'session', _usageLabel('session'));
+    } catch (_) { /* telemetry must never break a page load */ }
 }
 
 // THE tracked-surface list, and the only one (Ethan 2026-08-08). An ALLOW-list,
@@ -18370,6 +18399,9 @@ document.addEventListener("DOMContentLoaded", () => {
         // visit IS the usage signal. Recorded here — past the TV gate, inside the
         // signed-in branch — so a board and the login screen never count.
         _trackPageVisit();
+        // …and the fact that they were here at all. The PIN path can't carry this
+        // on its own: a tab that stays open never returns to it. See _usagePresence.
+        _usagePresence();
         document.body.classList.add('is-authenticated');
         const authOverlay = document.getElementById('authOverlay');
         if (authOverlay) authOverlay.style.display = 'none';
@@ -33194,8 +33226,9 @@ function renderDmListingModal() {
             + '<div class="dmx-cell"><div class="dmx-cell-l">District listed</div><div class="dmx-cell-v">' + listed + '</div></div>'
             + '<div class="dmx-cell"><div class="dmx-cell-l">District target</div><div class="dmx-cell-v">' + target + '</div></div>'
             + _dmxStatCell('Attainment', _dmxPct(listed, target) + '<small>%</small>', _dmxPct(listed, target))
-            + '<div class="dmx-cell"><div class="dmx-cell-l">Stretch factor</div><div class="dmx-cell-v">'
-                + Math.round((ListingGoalsEngine.cfg.goal_factor || 0.75) * 100) + '<small>%</small></div></div>'
+            // No stretch-factor cell here. It is ONE number for all five stores,
+            // so a district strip is the wrong place to imply otherwise — and the
+            // control that sets it already states it on every store pane.
             + '</div>'
             + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
         return;
@@ -33371,8 +33404,8 @@ window.dmxShowEfficiency = dmxShowEfficiency;
 // "Under · 93%" next to an amber "Under · 79%": the colour said one thing and
 // the word said another. Efficiency has exactly one threshold — you either beat
 // the capacity you had that week or you didn't — so the chip says only that.
-function _dmxEffChip(pct) {
-    if (pct == null) return '<span class="dmx-mute">No roles set</span>';
+function _dmxEffChip(pct, emptyText) {
+    if (pct == null) return '<span class="dmx-mute">' + escapeHtml(emptyText || 'No roles set') + '</span>';
     const above = pct >= 100;
     return '<span class="dmx-st ' + (above ? 'dmx-good' : 'dmx-warn') + '">'
         + _DMX_ICO[above ? 'good' : 'warn']
@@ -33419,7 +33452,14 @@ function _dmxEfficiencyPane() {
 
     rows.forEach(r => {
         // efficiency comes back as a ratio (1.08) or null when nothing was staffed.
-        const pct = r.efficiency == null ? null : Math.round(r.efficiency * 100);
+        //
+        // ⚠️ An in-progress week has NO efficiency, because Listed comes from the
+        // weekly KPI and that is not filed until the week ends. The server
+        // faithfully returns 0/45 = 0, and printing that gave every store a red
+        // "Below target · 0%" — which read as the button being broken rather than
+        // as the week not being over. Suppress it and say which it is.
+        const pending = isThisWeek && !r.actual;
+        const pct = (pending || r.efficiency == null) ? null : Math.round(r.efficiency * 100);
         // Fewer than four days per person means most of the week carried no goal
         // at all, so the denominator is short and the ratio flatters. Flag it
         // rather than printing a number that reads as a verdict.
@@ -33430,36 +33470,29 @@ function _dmxEfficiencyPane() {
             + '<td class="dmx-num">' + r.hours + '</td>'
             + '<td class="dmx-num dmx-mute">' + r.capacity + '</td>'
             + '<td class="dmx-num">' + r.planned + '</td>'
-            + '<td class="dmx-num">' + r.actual + '</td>'
+            + '<td class="dmx-num' + (pending ? ' dmx-mute' : '') + '">' + (pending ? '–' : r.actual) + '</td>'
             + '<td class="dmx-num">' + r.adjusted + '</td>'
             + '<td class="dmx-num">' + (pct == null ? '–' : pct + '%') + '</td>'
-            + '<td>' + _dmxEffChip(pct) + '</td></tr>';
+            + '<td>' + _dmxEffChip(pct, pending ? 'KPI not filed yet' : 'No roles set') + '</td></tr>';
     });
 
     const sum = (k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
     const dAdj = sum('adjusted'), dAct = sum('actual');
-    const dPct = dAdj ? _dmxPct(dAct, dAdj) : null;
+    // Same rule as a row: an unfinished week has nothing to divide.
+    const dPending = isThisWeek && !dAct;
+    const dPct = (dPending || !dAdj) ? null : _dmxPct(dAct, dAdj);
     t += '<tr class="dmx-tot"><td class="dmx-cl">District</td>'
         + '<td class="dmx-num">' + sum('hours') + '</td>'
         + '<td class="dmx-num">' + sum('capacity') + '</td>'
         + '<td class="dmx-num">' + sum('planned') + '</td>'
-        + '<td class="dmx-num">' + dAct + '</td>'
+        + '<td class="dmx-num' + (dPending ? ' dmx-mute' : '') + '">' + (dPending ? '–' : dAct) + '</td>'
         + '<td class="dmx-num">' + dAdj + '</td>'
         + '<td class="dmx-num">' + (dPct == null ? '–' : dPct + '%') + '</td>'
-        + '<td>' + _dmxEffChip(dPct) + '</td></tr></tbody></table>';
+        + '<td>' + _dmxEffChip(dPct, dPending ? 'KPI not filed yet' : 'No roles set') + '</td></tr></tbody></table>';
 
-    return head + t
-        + '<div class="dmx-ps" style="margin-top:14px; line-height:1.7;">'
-        + '<b>Ceiling</b> is everything this roster could list if every hour went perfectly. '
-        + '<b>Goal</b> is the stretch factor applied to that, frozen Monday morning. '
-        + '<b>Staffed For</b> is the sum of the daily goals actually handed out — off days, callouts '
-        + 'and no-shows drop out of it on their own, so a short-handed week is judged on the '
-        + 'week it really had. <b>Efficiency</b> is what they listed against that number.'
-        + '<br><span style="color:#b45309;"><b>“X of Y roles set”</b> means the store left people without a '
-        + 'role on some days. Nobody can be measured on a day they were never given a seat, so those days '
-        + 'carry no goal and drop out of Staffed For — which makes that store’s efficiency a reading of a '
-        + 'shorter week than it worked. It cuts both ways: it can flatter as easily as it can punish.</span>'
-        + '</div>';
+    // No explanatory paragraphs (user, 2026-08-10). The column headers carry the
+    // meaning, and the "X of Y roles set" tag carries the one caveat they cannot.
+    return head + t;
 }
 
 // "Aug 3" for the Monday that starts the current week, in store time.
