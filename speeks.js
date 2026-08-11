@@ -15720,13 +15720,18 @@ function _b2bItemTotals() {
     _b2bModalItems.forEach(it => {
         const q = Number(it.quantity) || 1;
         units += q;
-        // Recycle is worthless to us too; no_residual is free to the client but
-        // still has resale value, which is the whole point of the distinction.
-        if (!_b2bIsScrap(it)) value += (Number(it.value) || 0) * q;
+        // Only a purchase carries resale value into the deal total. Recycle is
+        // worthless; a no-residual line's value is speculative -- we realise it
+        // only if we later choose to list it -- so it stays on the line but off
+        // the total (and its freight comes off with it, below).
+        if (_b2bIsBuy(it)) value += (Number(it.value) || 0) * q;
         offer += (Number(it.offer) || 0) * q;
         wipe  += _b2bWipeTotal(it);
-        // No disposition test: a pallet of scrap costs the same to move.
-        ship  += (Number(it.shipping_cost) || 0) * q;
+        // Shipping is the cost of moving goods we are committed to -- bought, or
+        // being scrapped. A no-residual line isn't committed to anything yet, so
+        // its freight stays off the total until we decide to sell it. Scrap still
+        // costs the same to haul, so it keeps counting.
+        if (!_b2bIsNrv(it)) ship += (Number(it.shipping_cost) || 0) * q;
     });
     // Clamped at the deal, not the line: a wipe on a $0 item still discounts
     // against the rest, and we never end up charging the client money.
