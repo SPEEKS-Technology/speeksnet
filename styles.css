@@ -14647,9 +14647,14 @@ body.tv-body { display: block; background: #eef1f5; }
    for a figures table on this site — SAME token everywhere, 1px #e6ebf1, used for
    the header rule and the roll-up rule alike. Drawing every line from one colour
    is what stops a table looking like it was assembled from three decisions.
-   Row separators stay at the fainter #f3f6f8 inherited from .dmx-tbl, exactly as
-   .lv-tbl keeps its body rules lighter than its structural ones. */
+
+   Only THREE horizontal lines exist here: under the header, above the district
+   roll-up, and none in between. Five stores is few enough that the eye tracks a
+   row without help, so the per-row separators .dmx-tbl draws by default were
+   pure noise — and worse, they made the roll-up rule read as one more of them
+   instead of a break. Rows are separated by the columns, not by rules. */
 .dmx-tbl-c th { border-bottom-color: #e6ebf1; }
+.dmx-tbl-c td { border-bottom: 0; }
 
 /* Two vertical rules only, grouping the eight columns into what they mean rather
    than ruling every one and turning the table into a grid:
