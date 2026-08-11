@@ -14471,44 +14471,62 @@ function _b2bStatDerive(o) {
 // purchase-disposition lines on an accepted deal; listed value is resale value
 // actually listed; to-do value is resale value still to list once the deal is
 // locked into listing (accepted, not yet completed).
+// Per-deal figures, unscoped by acceptance so they read as a live estimate
+// while pricing/quoting and settle into the real numbers once accepted. Est.
+// value is the resale value of everything we'd list (anything not scrapped);
+// cost is what we pay the client (purchase lines). Listed / to-do split by
+// listing progress -- to-do only once the deal is locked into listing.
 function _b2bDealStatRaw(items, deal) {
-    const accepted = !!(deal && deal.accepted_at);
-    const toList   = accepted && deal.stage !== 'completed';
-    const o = { items_purchased: 0, value_purchased: 0, cost_purchased: 0, wipe_purchased: 0,
-                ship_purchased: 0, listed_value: 0, todo_value: 0, total_shipping: 0 };
+    const toList = !!(deal && deal.accepted_at) && deal.stage !== 'completed';
+    const o = { items_purchased: 0, value_purchased: 0, cost_purchased: 0,
+                listed_value: 0, todo_value: 0, total_shipping: 0, est_value: 0 };
     (items || []).forEach(it => {
         const q  = Number(it.quantity) || 0;
         const v  = Number(it.value) || 0;
         const lq = Number(it.listed_qty) || 0;
         const rq = Number(it.recycled_qty) || 0;
+        o.total_shipping += (Number(it.shipping_cost) || 0) * q;
         o.listed_value   += v * lq;
         if (toList) o.todo_value += v * Math.max(0, q - lq - rq);
-        o.total_shipping += (Number(it.shipping_cost) || 0) * q;
-        if (_b2bIsBuy(it) && accepted) {
+        if (!_b2bIsScrap(it)) o.est_value += v * q;            // resale value of listable goods
+        if (_b2bIsBuy(it)) {
             o.items_purchased += q;
             o.value_purchased += v * q;
-            o.cost_purchased  += (Number(it.cost != null ? it.cost : it.offer) || 0) * q;
-            if (it.wipe_required) o.wipe_purchased += (Number(it.wipe_fee) || 0) * q;
-            o.ship_purchased  += (Number(it.shipping_cost) || 0) * q;
+            o.cost_purchased  += (Number(it.cost != null ? it.cost : it.offer) || 0) * q;  // what we pay
         }
     });
     return o;
 }
 
-// The per-deal stat tiles: the same set as the client drawer plus total shipping.
-function _b2bDealStatsHtml(items, deal) {
+// The per-deal stat tiles: the client set plus estimated value/cost and total
+// shipping. Tiles reconcile: Est. Value − Est. Cost − Total Shipping = Margin.
+function _b2bDealStatsInner(items, deal) {
     const o = _b2bDealStatRaw(items, deal);
-    const s = _b2bStatDerive(o);
+    const margin = o.est_value - o.cost_purchased - o.total_shipping;
+    const avg = o.items_purchased > 0 ? o.value_purchased / o.items_purchased : 0;
     return `
         <div class="b2b-cd-h">Deal Stats</div>
         <div class="b2b-cstats">
-            ${_b2bStatTile('Items Purchased', s.items, 'units bought')}
-            ${_b2bStatTile('Listed Value', _b2bMoney(s.listed), 'resale value listed')}
-            ${_b2bStatTile('To-Do Value', _b2bMoney(s.todo), 'resale value to list')}
-            ${_b2bStatTile('Total Margin', _b2bMoney(s.margin), 'resale − paid − shipping')}
-            ${_b2bStatTile('Avg Value / Item', _b2bMoney(s.avg), 'per purchased item')}
+            ${_b2bStatTile('Est. Value', _b2bMoney(o.est_value), 'resale value of the goods')}
+            ${_b2bStatTile('Est. Cost', _b2bMoney(o.cost_purchased), 'what we pay the client')}
+            ${_b2bStatTile('Items Purchased', o.items_purchased, 'units bought')}
+            ${_b2bStatTile('Listed Value', _b2bMoney(o.listed_value), 'resale value listed')}
+            ${_b2bStatTile('To-Do Value', _b2bMoney(o.todo_value), 'resale value to list')}
+            ${_b2bStatTile('Total Margin', _b2bMoney(margin), 'value − cost − shipping')}
+            ${_b2bStatTile('Avg Value / Item', _b2bMoney(avg), 'per purchased item')}
             ${_b2bStatTile('Total Shipping', _b2bMoney(o.total_shipping), 'to move the goods')}
         </div>`;
+}
+
+function _b2bDealStatsHtml(items, deal) {
+    return `<div id="b2bDealStats">${_b2bDealStatsInner(items, deal)}</div>`;
+}
+
+// Repaint the block in place -- from the pricing/quote totals pass and the
+// listing scan repaint -- so the figures track live edits and listing progress.
+function _b2bPaintDealStats() {
+    const el = document.getElementById('b2bDealStats');
+    if (el && _b2bModalDeal) el.innerHTML = _b2bDealStatsInner(_b2bModalItems, _b2bModalDeal);
 }
 
 function _b2bClientDrawer(id) {
@@ -15863,6 +15881,8 @@ function _b2bPaintTotals() {
     });
     const submit = document.getElementById('b2bPrSubmit');
     if (submit) submit.disabled = _b2bModalItems.length === 0 || _b2bNotReady().length > 0;
+    // The deal-stats block (pricing/quote) tracks the same live edits.
+    _b2bPaintDealStats();
     // On the quote screen the preview sits below the grid, so it can be redrawn
     // on every keystroke without touching whichever field has focus.
     _b2bPaintQuoteDoc();
@@ -16704,7 +16724,8 @@ function _b2bStagePricing(deal) {
             ${_b2bTotalsBar(true)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
-            <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>`,
+            <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
+            ${_b2bDealStatsHtml(_b2bModalItems, deal)}`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
             ${_b2bMoveBtn(deal)}
@@ -16833,6 +16854,7 @@ function _b2bStageQuote(deal) {
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
             ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
+            ${_b2bDealStatsHtml(_b2bModalItems, deal)}
             <details class="b2b-preview" open>
                 <summary>Quote preview — this is what the client sees</summary>
                 <div id="b2bQuoteDoc">${_b2bQuoteDoc(deal, _b2bModalItems)}</div>
@@ -17589,6 +17611,8 @@ function _b2bRepaintListing() {
     const prog = document.getElementById('b2bListProg');
     if (rows) rows.innerHTML = _b2bListRows();
     if (prog) prog.innerHTML = _b2bListProgress();
+    // Listed / to-do value shift as units go up, so the stat block moves with them.
+    _b2bPaintDealStats();
     const done = document.getElementById('b2bListDone');
     if (done) done.disabled = !_b2bAllSatisfied();
 }
