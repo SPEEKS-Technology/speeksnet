@@ -1801,23 +1801,20 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
         ['floater',   `Floater · ${_lc.hours_floater || 25}h`],
     ].map(([v, label]) => `<option value="${v}" ${scheduleValue === v ? 'selected' : ''}>${label}</option>`).join('');
 
-    // Hire date starts the new-hire ramp — for those weeks the person lists at
-    // the new-hire rate when given a lister seat. The server stamps today's date
-    // on any brand-new PIN, so this is only ever for correcting one.
-    const hireVal = user.hire_date ? String(user.hire_date).slice(0, 10) : '';
-    const ramping = ListingGoalsEngine.hireRampEndsOn(hireVal);
-
+    // hire_date is deliberately NOT edited here (user, 2026-08-10). It is stamped
+    // server-side the moment a new PIN is saved, which starts the two-week
+    // new-hire ramp on its own, and an existing person keeps theirs — so the
+    // field would be a box nobody ever needs to touch. saveManageUsers therefore
+    // omits the key entirely, which the auth function reads as "leave it alone".
+    // Correcting a wrong start date is a backend job.
     row.innerHTML = `
-        <input type="text" class="u-name" placeholder="Full Name" value="${user.name}" style="flex: 1.7;">
-        <input type="text" class="u-pin" placeholder="PIN" maxlength="4" value="${user.pin}" style="flex: 1; max-width: 74px;" oninput="this.value = this.value.replace(/[^0-9]/g, '').slice(0,4)">
-        <select class="u-store" style="flex: 0.9;">${storeOptions}</select>
-        <select class="u-role" style="flex: 1.4;">${roleOptions}</select>
-        <select class="u-schedule" style="flex: 1.2;" title="Sets this person's weekly hours, which is what their store's listing capacity is built from. A floater can be claimed by any store in their market.">${scheduleOptions}</select>
-        <input type="date" class="u-hire" value="${hireVal}" style="flex: 1; max-width: 140px;"
-               title="${ramping ? 'New-hire ramp — lists at the new-hire rate until ' + ramping : 'Hire date. Starts a ' + (_lc.new_hire_weeks || 2) + '-week new-hire ramp.'}">
+        <input type="text" class="u-name" placeholder="Full Name" value="${user.name}" style="flex: 2;">
+        <input type="text" class="u-pin" placeholder="PIN" maxlength="4" value="${user.pin}" style="flex: 1; max-width: 78px;" oninput="this.value = this.value.replace(/[^0-9]/g, '').slice(0,4)">
+        <select class="u-store" style="flex: 1;">${storeOptions}</select>
+        <select class="u-role" style="flex: 1.5;">${roleOptions}</select>
+        <select class="u-schedule" style="flex: 1.3;" title="Weekly hours — what this person's store listing capacity is built from. A floater can be claimed by any store in their market.">${scheduleOptions}</select>
         <button class="del-btn" onclick="this.parentElement.remove()" title="Delete User"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     `;
-    if (ramping) row.classList.add('mu-ramping');
     if (target) {
         // Rendering into a role group during populate.
         target.appendChild(row);
@@ -1846,18 +1843,19 @@ async function saveManageUsers() {
         // here is destroyed. Send the schedule fields explicitly; the server
         // falls back to the stored value only when a key is absent entirely.
         const schedule = row.querySelector('.u-schedule')?.value || 'full_time';
-        const hire = row.querySelector('.u-hire')?.value || '';
 
         if (name || pin) {
             if (pin.length !== 4) {
                 alert(`Error: The PIN for ${name || 'a user'} must be exactly 4 digits.`);
                 valid = false;
             }
+            // No hire_date key: the server keeps an existing person's date and
+            // stamps today on a brand-new PIN. Sending '' would do the same, but
+            // omitting it says "this client does not manage that field" out loud.
             updatedUsers.push({
                 name, pin, store, role,
                 employment_type: schedule === 'part_time' ? 'part_time' : 'full_time',
                 can_float: schedule === 'floater',
-                hire_date: hire,
             });
         }
     });
@@ -11390,9 +11388,10 @@ function goalsRoleDotsHtml(roles, activeRole, emp, disabledAttr, store) {
     // A floater another store has already claimed today can't be given a role
     // here. Greyed with where he went, not hidden — a manager who can't see
     // where he is will just ring round asking, and the answer is the point.
+    // No tooltip — the pill says everything it needs to (user, 2026-08-10).
     const held = _goalsFloaterHeldBy(store, emp);
     if (held) {
-        return `<span class="goals-floater-away" title="${escapeHtml(emp)} is at ${held} today. Whoever gets to him first has him — ask ${held} to drop him if you need him.">At ${held} today</span>`;
+        return `<span class="goals-floater-away">At ${escapeHtml(held)} today</span>`;
     }
     let html = '';
     roles.forEach(r => {
@@ -11578,20 +11577,6 @@ const ListingGoalsEngine = {
         return !!(s && employee && s.has(employee));
     },
 
-    // When a hire date's ramp runs out, or '' if it already has. Used by the
-    // User Permissions row to say so out loud — the ramp quietly changes a
-    // person's lister goal from 18 to 6, and an unexplained 6 looks like a bug.
-    // Answers from the DATE, not from _newHires, because that map is only
-    // populated for stores whose target has been fetched.
-    hireRampEndsOn(hireDate) {
-        if (!hireDate) return '';
-        const d = goalDateObj(hireDate);
-        if (isNaN(d.getTime())) return '';
-        const end = new Date(d);
-        end.setDate(end.getDate() + (this.cfg.new_hire_weeks || 2) * 7);
-        if (end <= new Date()) return '';
-        return end.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    },
 
     // Line items per hour for a seat. L1, L2, L3 … are all dedicated listers and
     // all score the same — the number after the L is a slot label, not a rank.
@@ -33154,10 +33139,11 @@ function _dmxListingStore(store) {
     return {
         store, target, emps, names, today, week, days, todayStr,
         pct: _dmxPct(week, target),
-        // Has the DM typed THIS week's number yet, or is the store still coasting
-        // on last week's / the ladder suggestion?
         isSet: goalIsSetThisWeek(store),
+        // What the capacity model says this roster is worth: the ceiling, and the
+        // stretch factor applied to it. Both come from the server.
         suggested: suggestedTargetFor(store),
+        capacity: (_storeTargets[store] && _storeTargets[store].capacity) || 0,
     };
 }
 
@@ -33190,23 +33176,42 @@ function renderDmListingModal() {
         return;
     }
 
-    let rail = '';
+    // Efficiency sits at the top of the rail as its own destination — it is a
+    // district read, not a store's, so it doesn't belong inside a store pane.
+    let rail = '<button type="button" class="dmx-t' + (_dmxSel.lg === 'EFF' ? ' sel' : '')
+        + '" onclick="dmxShowEfficiency()">'
+        + '<span class="dmx-t-code">Effic.</span>'
+        + '<span class="dmx-t-mid"><span class="dmx-t-val">last week</span></span>'
+        + '</button>';
     all.forEach(s => {
         rail += _dmxTab('lg', s.store, s.week + ' / ' + s.target, s.pct);
     });
 
+    let pane;
+    if (_dmxSel.lg === 'EFF') {
+        pane = _dmxEfficiencyPane();
+        wrap.innerHTML = '<div class="dmx-strip">'
+            + '<div class="dmx-cell"><div class="dmx-cell-l">District listed</div><div class="dmx-cell-v">' + listed + '</div></div>'
+            + '<div class="dmx-cell"><div class="dmx-cell-l">District target</div><div class="dmx-cell-v">' + target + '</div></div>'
+            + _dmxStatCell('Attainment', _dmxPct(listed, target) + '<small>%</small>', _dmxPct(listed, target))
+            + '<div class="dmx-cell"><div class="dmx-cell-l">Stretch factor</div><div class="dmx-cell-v">'
+                + Math.round((ListingGoalsEngine.cfg.goal_factor || 0.75) * 100) + '<small>%</small></div></div>'
+            + '</div>'
+            + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
+        return;
+    }
+
     const sel = all.find(s => s.store === _dmxSel.lg) || all[0];
     const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2', OFF: 'Off' };
-    let pane = '<div class="dmx-ph"><div>'
+    pane = '<div class="dmx-ph"><div>'
         + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
-        + '<div class="dmx-ps">Target ' + sel.target + ' listings · ' + sel.week
-        + ' this week · ' + sel.names.length + ' on roster</div>'
+        + '<div class="dmx-ps">Goal ' + sel.target + ' listings · ceiling ' + (sel.capacity || '–')
+        + ' · ' + sel.week + ' this week · ' + sel.names.length + ' on roster</div>'
         + '</div><div class="dmx-ph-side">' + _dmxChip(sel.pct) + '</div></div>';
 
-    // The DM's Monday input. This is now the ONLY thing that sets a target —
-    // everything the stores see (per-role daily goals, the green/red bars) scales
-    // to whatever goes in this box.
-    pane += _dmxGoalSetter(sel);
+    // The stretch factor, not a per-store number. The goal itself is derived from
+    // who is rostered — there is nothing left here to type by hand.
+    pane += _dmxFactorSetter(all);
 
     if (!sel.names.length) {
         pane += '<div class="dmx-empty">No roles set for ' + escapeHtml(sel.store) + ' this week.</div>';
@@ -33247,28 +33252,178 @@ function renderDmListingModal() {
         + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
 }
 
-// --- DM WEEKLY GOAL SETTER ---------------------------------------------------
-// One number per store per week. The store's managers still choose who is B1/B2/
-// L1/L2 each day; this is only the weekly total those role goals divide up.
-function _dmxGoalSetter(sel) {
-    const set = sel.isSet;
-    const val = sel.target;
-    const state = set ? 'is-set' : 'is-unset';
-    const note = set
-        ? 'Set for the week of ' + _dmxWeekLabel() + '.'
-        : 'Not set for the week of ' + _dmxWeekLabel() + ' — running on ' + val + ' until you set it.';
-    return '<div class="dmx-goalset ' + state + '">'
+// --- DM STRETCH FACTOR -------------------------------------------------------
+// Replaces the per-store "type this week's goal" box. That box predated the
+// capacity model and fought it: the whole point of deriving a goal from who is
+// actually rostered is that nobody hand-types it afterwards.
+//
+// What is left is the ONE dial the model has — what fraction of a store's
+// ceiling its weekly goal should be. Raising it pushes every store by the same
+// proportion of what its own people can do, which is the honest way to push for
+// growth; the old ratchet raised whichever store had a lucky fortnight.
+//
+// Saving re-freezes THIS week for every store at the new number (see the server).
+// Past weeks are untouched, so history can't re-colour itself.
+function _dmxFactorSetter(all) {
+    const f = ListingGoalsEngine.cfg.goal_factor || 0.75;
+    const pctTxt = Math.round(f * 100) + '%';
+    const preview = all.map(s => escapeHtml(s.store) + ' ' + s.suggested).join('  ·  ');
+    return '<div class="dmx-goalset is-set">'
         + '<div class="dmx-goalset-l">'
-            + '<span class="dmx-goalset-t">Weekly listing goal</span>'
-            + '<span class="dmx-goalset-n">' + escapeHtml(note) + '</span>'
+            + '<span class="dmx-goalset-t">Stretch factor · ' + pctTxt + ' of capacity</span>'
+            + '<span class="dmx-goalset-n">Every store’s weekly goal is this share of what its roster could list. '
+                + 'Saving applies it to the week of ' + escapeHtml(_dmxWeekLabel()) + ' — earlier weeks keep the number they ran on.</span>'
+            + '<span class="dmx-goalset-n" style="margin-top:6px;"><b>Now:</b> ' + preview + '</span>'
         + '</div>'
         + '<div class="dmx-goalset-r">'
-            + '<input type="number" id="dmx-goal-input" class="dmx-goalset-i" min="0" max="2000" step="5"'
-                + ' value="' + val + '" data-store="' + escapeHtml(sel.store) + '"'
-                + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();dmxSaveGoal(this);}">'
-            + '<button type="button" class="dmx-goalset-b" onclick="dmxSaveGoal(this)">Save</button>'
+            + '<input type="number" id="dmx-factor-input" class="dmx-goalset-i" min="0.3" max="1.2" step="0.01"'
+                + ' value="' + f + '"'
+                + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();dmxSaveFactor();}">'
+            + '<button type="button" class="dmx-goalset-b" onclick="dmxSaveFactor()">Apply</button>'
             + '<span class="dmx-goalset-msg" id="dmx-goal-msg"></span>'
         + '</div>'
+        + '</div>';
+}
+
+async function dmxSaveFactor() {
+    const box = document.getElementById('dmx-factor-input');
+    const say = (text, ok) => {
+        const m = document.getElementById('dmx-goal-msg');
+        if (!m) return;
+        m.textContent = text;
+        m.className = 'dmx-goalset-msg' + (ok ? ' ok' : ' bad');
+    };
+    if (!box) return;
+    const v = Number(box.value);
+    if (!Number.isFinite(v) || v < 0.3 || v > 1.2) {
+        say('Enter a factor between 0.30 and 1.20', false);
+        return;
+    }
+    say('Applying…', true);
+    try {
+        const resp = await fetch(STORE_TARGETS_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'factor', value: v, name: sessionStorage.getItem('speeksUserName') || '' }),
+        });
+        const j = await resp.json();
+        if (j.error) { say(j.error, false); return; }
+        // Re-read every store so the rail, the strip and the preview all move
+        // together — the factor changed all five, not just the selected one.
+        await fetchAllStoreTargets();
+        renderDmListingModal();
+        say('Applied', true);
+        setTimeout(() => { const m = document.getElementById('dmx-goal-msg'); if (m) m.textContent = ''; }, 2500);
+    } catch (e) { say('Could not reach the server.', false); }
+}
+window.dmxSaveFactor = dmxSaveFactor;
+
+// --- DM EFFICIENCY VIEW ------------------------------------------------------
+// One row per store: what the roster could do, what the week's goal is, what the
+// team was actually staffed to do, what they listed, and the ratio.
+//
+// "Efficient" is measured against the ADJUSTED number, not the goal. A store
+// that lost two people to callouts should not be marked down for a week it was
+// never staffed to win — adjusted is the sum of the daily goals actually handed
+// out, so off days and gaps fall out of it on their own.
+let _dmxCap = {};        // weekStart → [breakdown rows]
+let _dmxCapWeek = null;  // which week the Efficiency view is showing
+
+// The Monday of the most recently COMPLETED week — the default, because this
+// week has no filed KPI yet and would read as 0% for everyone.
+function _dmxLastWeekStart() {
+    const { start } = _dmxWeekDays();
+    const d = new Date(start);
+    d.setDate(d.getDate() - 7);
+    return d.toLocaleDateString('en-CA');
+}
+
+async function _dmxFetchCap(weekStart) {
+    if (_dmxCap[weekStart]) return _dmxCap[weekStart];
+    try {
+        const r = await fetch(`${STORE_TARGETS_URL}?action=capacity&week=${weekStart}&v=${Date.now()}`)
+            .then(x => x.json());
+        _dmxCap[weekStart] = Array.isArray(r) ? r : [];
+    } catch (e) { _dmxCap[weekStart] = []; }
+    return _dmxCap[weekStart];
+}
+
+// Load a week and repaint. Kept separate from the render so the render itself
+// stays synchronous like every other pane in this modal.
+async function dmxShowEfficiency(weekStart) {
+    _dmxCapWeek = weekStart || _dmxLastWeekStart();
+    _dmxSel.lg = 'EFF';
+    await _dmxFetchCap(_dmxCapWeek);
+    renderDmListingModal();
+}
+window.dmxShowEfficiency = dmxShowEfficiency;
+
+function _dmxEfficiencyPane() {
+    const week = _dmxCapWeek || _dmxLastWeekStart();
+    const rows = _dmxCap[week];
+    const label = new Date(week + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+    let head = '<div class="dmx-ph"><div>'
+        + '<div class="dmx-pt">Efficiency</div>'
+        + '<div class="dmx-ps">Week of ' + escapeHtml(label) + ' · measured against the capacity each store actually had</div>'
+        + '</div><div class="dmx-ph-side">'
+        + '<button type="button" class="dmx-goalset-b" onclick="dmxShowEfficiency(\'' + _dmxLastWeekStart() + '\')">Last week</button> '
+        + '<button type="button" class="dmx-goalset-b" onclick="dmxShowEfficiency(\'' + _dmxWeekDays().start.toLocaleDateString('en-CA') + '\')">This week</button>'
+        + '</div></div>';
+
+    if (!rows) return head + '<div class="dmx-empty">Loading the week…</div>';
+    if (!rows.length) return head + '<div class="dmx-empty">No capacity data for this week.</div>';
+
+    let t = '<table class="dmx-tbl"><thead><tr>'
+        + '<th>Store</th>'
+        + '<th style="text-align:right;">Hours</th>'
+        + '<th style="text-align:right;">Ceiling</th>'
+        + '<th style="text-align:right;">Goal</th>'
+        + '<th style="text-align:right;">Staffed for</th>'
+        + '<th style="text-align:right;">Listed</th>'
+        + '<th style="text-align:right;">Efficiency</th>'
+        + '<th>Verdict</th></tr></thead><tbody>';
+
+    rows.forEach(r => {
+        // efficiency comes back as a ratio (1.08) or null when nothing was staffed.
+        const eff = r.efficiency;
+        const pct = eff == null ? null : Math.round(eff * 100);
+        const verdict = pct == null
+            ? '<span class="dmx-mute">Not staffed</span>'
+            : _dmxChip(pct, (pct >= 100 ? 'Efficient' : 'Under') + ' · ' + pct + '%');
+        // A week where hardly any roles were set makes efficiency meaningless —
+        // an unassigned day carries no goal, so the denominator is short and the
+        // ratio flatters. Say so rather than printing a number that reads as a win.
+        const thin = r.assignedDays > 0 && r.assignedDays < (r.people.length * 4);
+        t += '<tr><td><span class="dmx-name">' + escapeHtml(r.store) + '</span>'
+            + (thin ? '<span class="dmx-role" title="Only ' + r.assignedDays + ' person-days had a role set — the ratio is flattered by the missing ones.">thin roles</span>' : '')
+            + '</td>'
+            + '<td class="dmx-num">' + r.hours + '</td>'
+            + '<td class="dmx-num dmx-mute">' + r.capacity + '</td>'
+            + '<td class="dmx-num">' + r.planned + '</td>'
+            + '<td class="dmx-num">' + r.adjusted + '</td>'
+            + '<td class="dmx-num">' + r.actual + '</td>'
+            + '<td class="dmx-num">' + (pct == null ? '–' : pct + '%') + '</td>'
+            + '<td>' + verdict + '</td></tr>';
+    });
+
+    const sum = (k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
+    const dAdj = sum('adjusted'), dAct = sum('actual');
+    t += '<tr class="dmx-tot"><td>District</td>'
+        + '<td class="dmx-num">' + sum('hours') + '</td>'
+        + '<td class="dmx-num">' + sum('capacity') + '</td>'
+        + '<td class="dmx-num">' + sum('planned') + '</td>'
+        + '<td class="dmx-num">' + dAdj + '</td>'
+        + '<td class="dmx-num">' + dAct + '</td>'
+        + '<td class="dmx-num">' + _dmxPct(dAct, dAdj) + '%</td>'
+        + '<td></td></tr></tbody></table>';
+
+    return head + t
+        + '<div class="dmx-ps" style="margin-top:14px; line-height:1.6;">'
+        + '<b>Goal</b> is the stretch factor applied to the ceiling, frozen Monday. '
+        + '<b>Staffed for</b> is the sum of the daily goals actually handed out that week, so off days, '
+        + 'callouts and no-shows come out of it automatically. '
+        + '<b>Efficiency</b> is what they listed against that — over 100% means they beat the capacity they had.'
         + '</div>';
 }
 
@@ -33281,28 +33436,11 @@ function _dmxWeekLabel() {
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-async function dmxSaveGoal(btn) {
-    const box = document.getElementById('dmx-goal-input');
-    const msg = document.getElementById('dmx-goal-msg');
-    if (!box) return;
-    const store = box.dataset.store;
-    const show = (text, ok) => {
-        if (!msg) return;
-        msg.textContent = text;
-        msg.className = 'dmx-goalset-msg' + (ok ? ' ok' : ' bad');
-    };
-    show('Saving…', true);
-    const res = await dmSetListingGoal(store, box.value);
-    // dmSetListingGoal re-renders the whole modal on success, so the element this
-    // ran from is gone by now — re-find the message slot before writing to it.
-    const after = document.getElementById('dmx-goal-msg');
-    if (after) {
-        after.textContent = res.error ? res.error : 'Saved';
-        after.className = 'dmx-goalset-msg' + (res.error ? ' bad' : ' ok');
-        if (!res.error) setTimeout(() => { const m = document.getElementById('dmx-goal-msg'); if (m) m.textContent = ''; }, 2500);
-    }
-}
-window.dmxSaveGoal = dmxSaveGoal;
+// NOTE: dmxSaveGoal() lived here — it posted the DM's hand-typed weekly number
+// for one store. Retired with the input box: the goal is derived from who is
+// rostered, so the only thing left to set is the stretch factor (dmxSaveFactor).
+// dmSetListingGoal() is kept as the writer behind it and is still what the
+// server's POST expects; nothing in the UI calls it now.
 
 // ---------------------------------------------------------------------------
 // CLEANING CHECKLIST (district)

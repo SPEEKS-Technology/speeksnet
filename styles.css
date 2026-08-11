@@ -14614,10 +14614,5 @@ body.tv-body { display: block; background: #eef1f5; }
     font-size: 10px; font-weight: 700; letter-spacing: 0.01em;
     color: #94a3b8; background: #f1f5f9;
     border: 1px dashed #cbd5e1; border-radius: 20px;
-    padding: 4px 10px; white-space: nowrap; cursor: help;
+    padding: 4px 10px; white-space: nowrap;
 }
-
-/* A user in their new-hire ramp — their lister goal is the new-hire rate, and an
-   unexplained lower number reads as a bug unless the row says why. */
-#manageUsersList .user-manage-row.mu-ramping { border-color: #f0d9a8; background: #fffdf7; }
-#manageUsersList .user-manage-row .u-hire { color: #64748b; }

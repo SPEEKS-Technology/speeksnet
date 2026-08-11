@@ -482,6 +482,48 @@ Deno.serve(async (req: Request) => {
     let body: any;
     try { body = JSON.parse(await req.text()); } catch { return json({ error: "Invalid JSON" }, 400); }
 
+    // ---- DM sets the stretch factor ----------------------------------------
+    // goal_factor is the ONE dial on the model: what fraction of a roster's
+    // ceiling the week's goal is. It replaced the per-store number the DM used
+    // to type, because typing a store's goal by hand fought the whole point of
+    // deriving it from staffing.
+    //
+    // Saving it RE-FREEZES the current week for every store at the new number.
+    // Without that it would change nothing visible: listing_goal_weeks holds a
+    // row per store per week and that row wins over the computed suggestion, so
+    // the stores would keep running last Monday's figure. Past weeks are left
+    // exactly as they were — history must not re-colour itself.
+    //
+    // ⚠️ No role check here, and none on the goal POST below either: this whole
+    // function is verify_jwt:false and unauthenticated, so a gate on one action
+    // would be theatre. The modal is DM-gated in the UI. Worth closing properly
+    // (the x-user-pin + server-side role re-check pattern from summary-weekly)
+    // if this function ever holds anything more sensitive.
+    if (body.action === "factor") {
+      const f = Number(body.value);
+      if (!Number.isFinite(f) || f < 0.3 || f > 1.2) {
+        return json({ error: "Stretch factor must be between 0.30 and 1.20" }, 400);
+      }
+      const rounded = Math.round(f * 100) / 100;
+      const { error: cErr } = await supabase.from("listing_config")
+        .update({ value: rounded, updated_at: new Date().toISOString() })
+        .eq("key", "goal_factor");
+      if (cErr) return json({ error: cErr.message }, 500);
+      _cfg = null;   // the cached config for this request is now stale
+
+      const cfg = await config();
+      const applied: Record<string, number> = {};
+      for (const s of STORES) {
+        const cap = capacityFrom(await rosterFor(s), thisMonday, cfg);
+        applied[s] = cap.goal;
+        await supabase.from("listing_goal_weeks").upsert({
+          store: s, week_start: thisMonday, target: cap.goal,
+          set_by: body.name || "Capacity model", set_at: new Date().toISOString(),
+        }, { onConflict: "store,week_start" });
+      }
+      return json({ ok: true, goal_factor: rounded, applied });
+    }
+
     const store = String(body.store || "").toUpperCase();
     if (!STORES.includes(store)) return json({ error: "Unknown store" }, 400);
 
