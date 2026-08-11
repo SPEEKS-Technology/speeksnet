@@ -1,0 +1,455 @@
+<title>Listing capacity sandbox</title>
+<style>
+  :root {
+    --bg:#f6f8f7; --card:#fff; --ink:#1f2933; --muted:#6b7a86; --line:#e3e9e6;
+    --sage:#2f7a5f; --sage-soft:#e8f2ed; --amber:#b8860b; --red:#c0392b;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:28px 20px 60px; background:var(--bg); color:var(--ink);
+         font:15px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
+  .wrap { max-width:1180px; margin:0 auto; }
+  h1 { font-size:22px; margin:0 0 4px; letter-spacing:-.01em; }
+  .sub { color:var(--muted); font-size:13px; margin:0 0 22px; }
+  .note { background:#fff8e6; border:1px solid #f0e0b0; border-radius:10px;
+          padding:12px 14px; font-size:13px; margin:0 0 22px; color:#6b5518; }
+  .note b { color:#4a3a10; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px;
+          padding:18px 20px 20px; margin-bottom:18px; }
+  .head { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:14px; }
+  .head h2 { font-size:17px; margin:0; }
+  .pill { font-size:12px; background:var(--sage-soft); color:var(--sage);
+          padding:3px 9px; border-radius:20px; font-weight:600; }
+  .scroll { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; min-width:760px; font-size:13px; }
+  th, td { padding:7px 8px; text-align:center; border-bottom:1px solid var(--line); }
+  th:first-child, td:first-child { text-align:left; white-space:nowrap; padding-left:2px; }
+  thead th { font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+             color:var(--muted); font-weight:600; }
+  tbody tr:last-child td { border-bottom:none; }
+  .who { font-weight:600; }
+  .tag { font-size:10.5px; color:var(--muted); font-weight:400; display:block; }
+  select { font:inherit; font-size:12px; padding:3px 4px; border:1px solid var(--line);
+           border-radius:6px; background:#fff; color:var(--ink); width:64px; }
+  .g { display:block; font-size:11px; color:var(--sage); font-weight:700; margin-top:2px;
+       min-height:14px; }
+  .g.zero { color:var(--muted); font-weight:400; }
+  tfoot td { font-weight:700; border-top:2px solid var(--line); border-bottom:none;
+             padding-top:10px; }
+  .totals { margin-top:14px; display:flex; gap:26px; flex-wrap:wrap; font-size:13px;
+            align-items:baseline; }
+  .totals div span { color:var(--muted); font-size:11.5px; text-transform:uppercase;
+                     letter-spacing:.04em; display:block; }
+  .big { font-size:20px; font-weight:700; }
+  .verdict { font-weight:600; }
+  .ok { color:var(--sage); } .under { color:var(--amber); } .over { color:var(--red); }
+  code { background:#eef2f0; padding:1px 5px; border-radius:4px; font-size:12.5px; }
+</style>
+
+<div class="wrap">
+<h1>Listing capacity sandbox</h1>
+<p class="sub">Real rosters, real hours, and the real <code>ListingGoalsEngine</code> lifted out of
+<code>speeks.js</code> at build time — not a reimplementation. Change anyone's seat on any day and
+watch the week move.</p>
+
+<div class="note">
+<b>What to look for.</b> A weekday lister is 18, backup buyer 6, lead buyer 3 — and a Saturday is
+half of each. Nobody's number changes when you change someone else's; that is the whole point of
+the rewrite. The <b>week total will not equal the store goal</b>, and that gap is the measurement:
+the goal is 75% of what the roster <i>could</i> do, the week total is what you actually staffed.
+</div>
+
+<div id="stores"></div>
+</div>
+
+<script>
+const GOALS_OFF = 'OFF';
+function _isWorkingRole(role) {
+    const r = String(role || '').trim().toUpperCase();
+    return !!r && r !== '-' && r !== GOALS_OFF;
+}
+
+function goalDateObj(s) {
+    const str = String(s || '').trim();
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str);
+    if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+    return new Date(str);
+}
+
+const ListingGoalsEngine = {
+    // Mirrors the listing_config table. Overwritten wholesale by the server on
+    // the first store-targets fetch (applyConfig) — these values only stand in
+    // for the second before that lands, and must never be edited to "tune" the
+    // model: change the DB row, which carries the reasoning in its note column.
+    cfg: {
+        hours_per_day: 8,
+        rate_buyer_1: 0.5, rate_buyer_2: 1.0, rate_lister: 3.0, rate_new_hire: 1.0,
+        saturday_factor: 0.5, goal_factor: 0.75,
+        hours_full_time: 40, open_days: 6,
+    },
+    _newHires: {},   // store → Set of names inside the new-hire ramp this week
+
+    // Absorb one store-targets row. Safe to call with anything, including the
+    // pre-capacity payload a cached page might still be holding.
+    applyConfig(row) {
+        if (!row) return;
+        if (row.cfg) Object.assign(this.cfg, row.cfg);
+        if (row.store) this._newHires[row.store] = new Set(row.newHires || []);
+    },
+    isNewHire(store, employee) {
+        const s = this._newHires[store];
+        return !!(s && employee && s.has(employee));
+    },
+
+    // Line items per hour for a seat. L1, L2, L3 … are all dedicated listers and
+    // all score the same — the number after the L is a slot label, not a rank.
+    rateFor(role, isNewHire) {
+        const r = String(role || '').trim().toUpperCase();
+        if (!_isWorkingRole(r)) return 0;
+        if (r === 'B1') return this.cfg.rate_buyer_1;
+        if (r === 'B2') return this.cfg.rate_buyer_2;
+        return isNewHire ? this.cfg.rate_new_hire : this.cfg.rate_lister;
+    },
+
+    // Saturday is shorter and the busiest buy day, so it produces about half a
+    // weekday's listings. Sunday is closed.
+    //
+    // Parsed through goalDateObj, not `new Date(dateStr)`: a bare ISO date parses
+    // as UTC midnight, i.e. 7pm Central the day before, which would read Saturday
+    // as Friday and hand out full-weekday goals on the busiest day of the week.
+    dayFactorFromDate(dateStr) {
+        const dow = goalDateObj(dateStr).getDay();   // 0 Sun .. 6 Sat
+        if (dow === 6) return this.cfg.saturday_factor;
+        if (dow === 0) return 0;
+        return 1;
+    },
+
+    // The function the widgets call. opts carries { employee, store } so a person
+    // inside the new-hire ramp scores at the new-hire rate; both are optional and
+    // their absence just means "not a new hire".
+    //
+    // rosterSize / staffedCount / targetOverride are GONE from the signature. No
+    // one else's presence changes your number any more.
+    goalFor(role, dateStr, opts) {
+        const o = opts || {};
+        const rate = this.rateFor(role, this.isNewHire(o.store, o.employee));
+        if (!rate) return 0;
+        return Math.round(
+            this.cfg.hours_per_day * rate * this.dayFactorFromDate(dateStr) * this.cfg.goal_factor
+        );
+    },
+
+    // Rough weekly capacity goal for a store of `size` full-timers. ONLY a
+    // placeholder for the moment before the server's real figure arrives — it
+    // assumes everyone is full-time and nobody is ramping, so it will differ from
+    // the real number at any store with a part-timer, a floater or a new hire.
+    // Mirrors capacityFrom() in the store-targets edge function.
+    weeklyTarget(size) {
+        const c = this.cfg;
+        const effDays = (c.open_days - 1) + c.saturday_factor;
+        const eff = size * c.hours_full_time * (effDays / c.open_days);
+        const seat = c.hours_per_day * effDays;
+        const b1 = Math.min(eff, seat);
+        const b2 = Math.min(eff - b1, seat);
+        const l = Math.max(0, eff - b1 - b2);
+        return Math.round(
+            (b1 * c.rate_buyer_1 + b2 * c.rate_buyer_2 + l * c.rate_lister) * c.goal_factor
+        );
+    }
+    // NOTE: ratchet() lived here — it decided when a store "levelled up" (+10) or
+    // got flagged for DM review after two misses. Both it and its server twin are
+    // gone: the DM sets the number by hand each week, so nothing may move a target
+    // on its own, and the review / lower / raise prompts it fed are retired.
+};
+
+const STORES = [
+ {
+  "store": "OVL",
+  "hours": 145,
+  "capacity": 201,
+  "planned": 151,
+  "target": 151,
+  "people": [
+   {
+    "name": "Nick Hettinger",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Dan Ohanesian",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Rorie Moore",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Zach Marchesano",
+    "hours": 25,
+    "employment": "floater",
+    "newHire": false,
+    "floater": true
+   }
+  ]
+ },
+ {
+  "store": "LEE",
+  "hours": 140,
+  "capacity": 187,
+  "planned": 140,
+  "target": 140,
+  "people": [
+   {
+    "name": "Jurell Guild",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Ethan Frye",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Caleb Starr",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Drew Nyman",
+    "hours": 20,
+    "employment": "part_time",
+    "newHire": false,
+    "floater": false
+   }
+  ]
+ },
+ {
+  "store": "WSP",
+  "hours": 160,
+  "capacity": 242,
+  "planned": 181,
+  "target": 181,
+  "people": [
+   {
+    "name": "Eli Kushnir",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Jon Rodriguez",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Duncan Holsted",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Josiah Dixon",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   }
+  ]
+ },
+ {
+  "store": "MPL",
+  "hours": 140,
+  "capacity": 187,
+  "planned": 140,
+  "target": 140,
+  "people": [
+   {
+    "name": "Calvin Meadows",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Noah Webb",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Olivia Huxtable",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Joseph Ortega",
+    "hours": 20,
+    "employment": "part_time",
+    "newHire": false,
+    "floater": false
+   }
+  ]
+ },
+ {
+  "store": "BAL",
+  "hours": 140,
+  "capacity": 164,
+  "planned": 123,
+  "target": 123,
+  "people": [
+   {
+    "name": "Garrett Burnell",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Zach Marbs",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Joseph Ortega",
+    "hours": 20,
+    "employment": "part_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Bret Daubert",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": true,
+    "floater": false
+   }
+  ]
+ }
+];
+
+// Monday-start week, labelled with this week's real dates so the Saturday factor
+// lands on a real Saturday.
+const monday = (() => {
+  const n = new Date();
+  const d = new Date(n.getFullYear(), n.getMonth(), n.getDate());
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return d;
+})();
+const DAYS = Array.from({length:6}, (_, i) => {
+  const d = new Date(monday); d.setDate(monday.getDate() + i);
+  return { label: d.toLocaleDateString('en-US',{weekday:'short'}),
+           date: d.toLocaleDateString('en-US'),
+           sat: d.getDay() === 6 };
+});
+
+// Seed a REALISTIC week, not a full one — nobody works all six days.
+//
+// Days present come from the person's own hours (40h = 5 days, 25h = 3, 20h = 3
+// rounded up from 2.5), days off are staggered so the store is never empty, and
+// each day's seats are then handed out in the engine's own priority order:
+// B1 first, then B2, then everyone left is a lister. Coverage should land near
+// 100% — if it does not, the model and the staffing disagree, which is the whole
+// thing worth looking at.
+const ROLES = ['-','B1','B2','L1','L2','L3','OFF'];
+const SEATS = ['B1','B2','L1','L2','L3','L4'];
+const state = {};
+STORES.forEach(s => {
+  ListingGoalsEngine.applyConfig({
+    store: s.store,
+    newHires: s.people.filter(p => p.newHire).map(p => p.name),
+  });
+
+  const present = s.people.map((p, i) => {
+    const days = Math.max(1, Math.min(DAYS.length, Math.round(p.hours / 8)));
+    const off = new Set();
+    for (let k = 0; k < DAYS.length - days; k++) off.add((i + k * 2) % DAYS.length);
+    return DAYS.map((_, d) => !off.has(d));
+  });
+
+  state[s.store] = s.people.map(() => DAYS.map(() => GOALS_OFF));
+  DAYS.forEach((_, d) => {
+    let seat = 0;
+    s.people.forEach((p, i) => {
+      if (!present[i][d]) return;
+      state[s.store][i][d] = SEATS[seat] || 'L4';
+      seat++;
+    });
+  });
+});
+
+function render() {
+  document.getElementById('stores').innerHTML = STORES.map((s, si) => {
+    const rows = s.people.map((p, pi) => {
+      const cells = DAYS.map((d, di) => {
+        const role = state[s.store][pi][di];
+        const g = ListingGoalsEngine.goalFor(role, d.date, { employee: p.name, store: s.store });
+        return '<td><select data-s="'+si+'" data-p="'+pi+'" data-d="'+di+'">' +
+          ROLES.map(r => '<option'+(r===role?' selected':'')+'>'+r+'</option>').join('') +
+          '</select><span class="g'+(g?'':' zero')+'">'+(g||'—')+'</span></td>';
+      }).join('');
+      const tags = [];
+      if (p.employment === 'part_time') tags.push('part-time · 20h');
+      else if (p.floater) tags.push('floater · '+p.hours+'h');
+      else tags.push('full-time · 40h');
+      if (p.newHire) tags.push('new hire — lister rate 1/hr');
+      const wk = DAYS.reduce((t,d,di) =>
+        t + ListingGoalsEngine.goalFor(state[s.store][pi][di], d.date, { employee:p.name, store:s.store }), 0);
+      return '<tr><td class="who">'+p.name+'<span class="tag">'+tags.join(' · ')+'</span></td>' +
+             cells + '<td><b>'+wk+'</b></td></tr>';
+    }).join('');
+
+    const dayTotals = DAYS.map((d, di) => s.people.reduce((t,p,pi) =>
+      t + ListingGoalsEngine.goalFor(state[s.store][pi][di], d.date, { employee:p.name, store:s.store }), 0));
+    const weekTotal = dayTotals.reduce((a,b)=>a+b,0);
+    const pct = s.target ? Math.round((weekTotal / s.target) * 100) : 0;
+    const cls = pct >= 97 && pct <= 108 ? 'ok' : (pct < 97 ? 'under' : 'over');
+
+    return '<div class="card"><div class="head"><h2>'+s.store+'</h2>' +
+      '<span class="pill">'+s.hours+' roster hours</span>' +
+      '<span class="pill">ceiling '+s.capacity+'</span>' +
+      '<span class="pill">goal '+s.target+'</span></div>' +
+      '<div class="scroll"><table><thead><tr><th>Who</th>' +
+      DAYS.map(d=>'<th>'+d.label+(d.sat?' ½':'')+'</th>').join('') +
+      '<th>Week</th></tr></thead><tbody>'+rows+'</tbody>' +
+      '<tfoot><tr><td>Staffed total</td>' + dayTotals.map(t=>'<td>'+t+'</td>').join('') +
+      '<td>'+weekTotal+'</td></tr></tfoot></table></div>' +
+      '<div class="totals">' +
+      '<div><span>Capacity ceiling</span><b class="big">'+s.capacity+'</b></div>' +
+      '<div><span>Week goal (75%)</span><b class="big">'+s.target+'</b></div>' +
+      '<div><span>As staffed above</span><b class="big">'+weekTotal+'</b></div>' +
+      '<div><span>Coverage</span><b class="big verdict '+cls+'">'+pct+'%</b></div>' +
+      '</div></div>';
+  }).join('');
+}
+
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (t.tagName !== 'SELECT') return;
+  state[STORES[t.dataset.s].store][t.dataset.p][t.dataset.d] = t.value;
+  render();
+});
+
+render();
+</script>
