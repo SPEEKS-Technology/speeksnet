@@ -12377,6 +12377,9 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .b2b-lname { font-size: 13px; font-weight: 750; color: #1a1c1e; }
 .b2b-lcond { margin-left: 7px; font-size: 10.5px; font-weight: 700; color: var(--b2b-muted); }
 .b2b-lsku { font-size: 10.5px; color: var(--b2b-faint); margin-top: 2px; }
+/* Per-line resale value + what we paid, for the lister. */
+.b2b-lvc { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 4px; font-size: 11.5px; color: var(--b2b-muted); }
+.b2b-lvc b { color: #1a1c1e; font-weight: 800; font-variant-numeric: tabular-nums; }
 
 /* The line currently mid-handshake, so it is obvious which row the scan bar is
    asking about when the checklist is long. */

@@ -17520,6 +17520,14 @@ function _b2bListRows() {
         const scrap = _b2bIsScrap(it);
         const disp  = _b2bDispOf(it);
         const wiped = Number(it.wiped_qty) || 0;
+
+        // Per-line money for the lister: the line's resale value and what we paid
+        // for it (nothing on a no-residual line, and a scrap line has neither).
+        const lineValue = scrap ? 0 : (Number(it.value) || 0) * qty;
+        const lineCost  = _b2bIsBuy(it) ? (Number(it.cost != null ? it.cost : it.offer) || 0) * qty : 0;
+        const vc = scrap ? '' : `
+                <div class="b2b-lvc"><span>Value <b>${_b2bMoney(lineValue)}</b></span>`
+                + `<span>Cost <b>${_b2bMoney(lineCost)}</b></span></div>`;
         // You may list exactly as many units as have been certified wiped. The
         // server enforces the same rule; this is so the button says why.
         const needsWipe = !!it.wipe_required && listed >= wiped;
@@ -17548,6 +17556,7 @@ function _b2bListRows() {
                     ${!_b2bIsBuy(it) ? `<span class="b2b-doc-rec ${scrap ? '' : 'nrv'}">${escapeHtml(B2B_DISP[disp].label)}</span>` : ''}
                     ${it.condition ? `<span class="b2b-lcond">${escapeHtml(it.condition)}</span>` : ''}</div>
                 <div class="b2b-lsku b2b-mono">${escapeHtml(it.sku || '')}</div>
+                ${vc}
                 ${wipeStrip}
                 ${codes}
             </div>
