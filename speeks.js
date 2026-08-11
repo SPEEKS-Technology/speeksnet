@@ -14438,6 +14438,79 @@ function b2bDraftOutreach(id) {
 // them up over every deal on record); the deal list underneath can only show
 // what this session actually loaded, which is the open set plus the recent
 // finished tail -- so it says so when there is more behind it.
+// --- client & deal stat tiles ---------------------------------------------
+// One tile renderer + one derivation, shared by the client drawer (fed the
+// b2b_client_list rollups) and the per-deal blocks (fed sums computed from the
+// loaded line items), so both read identically and the margin/average formula
+// lives in exactly one place.
+function _b2bStatTile(k, v, sub) {
+    return `<div class="b2b-cstat"><span class="b2b-cstat-k">${k}</span>`
+         + `<span class="b2b-cstat-v">${v}</span>${sub ? `<span class="b2b-cstat-s">${sub}</span>` : ''}</div>`;
+}
+
+// Margin + average from the raw rollup figures. Margin is resale value less what
+// we actually paid (cost, minus the wipe charge that came off the client's
+// payout) less freight -- the same definition the pricing totals bar uses.
+function _b2bStatDerive(o) {
+    const items = Number(o.items_purchased) || 0;
+    const value = Number(o.value_purchased) || 0;
+    const cost  = Number(o.cost_purchased) || 0;
+    const wipe  = Number(o.wipe_purchased) || 0;
+    const ship  = Number(o.ship_purchased) || 0;
+    return {
+        items,
+        listed: Number(o.listed_value) || 0,
+        todo:   Number(o.todo_value) || 0,
+        margin: value - (cost - wipe) - ship,
+        avg:    items > 0 ? value / items : 0,
+    };
+}
+
+// Per-deal version of the client rollups, from the loaded line items so it needs
+// no round trip. Mirrors the b2b_client_list SQL: purchased figures count only
+// purchase-disposition lines on an accepted deal; listed value is resale value
+// actually listed; to-do value is resale value still to list once the deal is
+// locked into listing (accepted, not yet completed).
+function _b2bDealStatRaw(items, deal) {
+    const accepted = !!(deal && deal.accepted_at);
+    const toList   = accepted && deal.stage !== 'completed';
+    const o = { items_purchased: 0, value_purchased: 0, cost_purchased: 0, wipe_purchased: 0,
+                ship_purchased: 0, listed_value: 0, todo_value: 0, total_shipping: 0 };
+    (items || []).forEach(it => {
+        const q  = Number(it.quantity) || 0;
+        const v  = Number(it.value) || 0;
+        const lq = Number(it.listed_qty) || 0;
+        const rq = Number(it.recycled_qty) || 0;
+        o.listed_value   += v * lq;
+        if (toList) o.todo_value += v * Math.max(0, q - lq - rq);
+        o.total_shipping += (Number(it.shipping_cost) || 0) * q;
+        if (_b2bIsBuy(it) && accepted) {
+            o.items_purchased += q;
+            o.value_purchased += v * q;
+            o.cost_purchased  += (Number(it.cost != null ? it.cost : it.offer) || 0) * q;
+            if (it.wipe_required) o.wipe_purchased += (Number(it.wipe_fee) || 0) * q;
+            o.ship_purchased  += (Number(it.shipping_cost) || 0) * q;
+        }
+    });
+    return o;
+}
+
+// The per-deal stat tiles: the same set as the client drawer plus total shipping.
+function _b2bDealStatsHtml(items, deal) {
+    const o = _b2bDealStatRaw(items, deal);
+    const s = _b2bStatDerive(o);
+    return `
+        <div class="b2b-cd-h">Deal Stats</div>
+        <div class="b2b-cstats">
+            ${_b2bStatTile('Items Purchased', s.items, 'units bought')}
+            ${_b2bStatTile('Listed Value', _b2bMoney(s.listed), 'resale value listed')}
+            ${_b2bStatTile('To-Do Value', _b2bMoney(s.todo), 'resale value to list')}
+            ${_b2bStatTile('Total Margin', _b2bMoney(s.margin), 'resale − paid − shipping')}
+            ${_b2bStatTile('Avg Value / Item', _b2bMoney(s.avg), 'per purchased item')}
+            ${_b2bStatTile('Total Shipping', _b2bMoney(o.total_shipping), 'to move the goods')}
+        </div>`;
+}
+
 function _b2bClientDrawer(id) {
     const c = _b2bClients.find(x => x.id === id);
     if (!c) return '';
@@ -14460,22 +14533,18 @@ function _b2bClientDrawer(id) {
         .filter(d => d.client_id === id && _b2bInScope(d))
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-    const stat = (k, v, sub) => `<div class="b2b-cstat"><span class="b2b-cstat-k">${k}</span>`
-        + `<span class="b2b-cstat-v">${v}</span>${sub ? `<span class="b2b-cstat-s">${sub}</span>` : ''}</div>`;
-
-    // The year, not "Feb 11" -- a lifetime figure sitting next to a bare day and
-    // month invites reading a three-year-old relationship as a recent one.
-    const since = c.first_deal_at ? new Date(c.first_deal_at) : null;
+    // Purchased/margin figures count accepted deals; listed vs to-do value split
+    // by listing progress. All rolled up in the b2b_client_list view.
+    const s = _b2bStatDerive(c);
     const stats = `
         <div class="b2b-cstats">
-            ${stat('Deals All Time', total, `${Number(c.open_count) || 0} still open`)}
-            ${stat('Completed', Number(c.completed_count) || 0,
-                   `${Math.round(((Number(c.completed_count) || 0) / total) * 100)}% of their deals`)}
-            ${stat('Declined', Number(c.declined_count) || 0, 'fell through')}
-            ${stat('Lifetime Spend', _b2bMoney(c.lifetime_cost), 'cost of completed deals')}
-            ${stat('Units Handled', Number(c.lifetime_units) || 0, 'listed or recycled')}
-            ${stat('Client Since', since && !isNaN(since) ? since.getFullYear() : '—',
-                   c.last_deal_at ? `latest deal ${_b2bDate(c.last_deal_at)}` : '')}
+            ${_b2bStatTile('Total Deals', total, `${Number(c.completed_count) || 0} completed`)}
+            ${_b2bStatTile('Active Deals', Number(c.open_count) || 0, 'in progress')}
+            ${_b2bStatTile('Items Purchased', s.items, 'units bought')}
+            ${_b2bStatTile('Listed Value', _b2bMoney(s.listed), 'resale value listed')}
+            ${_b2bStatTile('To-Do Value', _b2bMoney(s.todo), 'resale value to list')}
+            ${_b2bStatTile('Total Margin', _b2bMoney(s.margin), 'resale − paid − shipping')}
+            ${_b2bStatTile('Avg Value / Item', _b2bMoney(s.avg), 'per purchased item')}
         </div>`;
 
     const dealRows = mine.length ? mine.map(d => `
@@ -17327,6 +17396,7 @@ function _b2bStageListing(deal) {
         wide: true,
         body: `
             ${_b2bSummary(deal)}
+            ${_b2bModalItems.length ? _b2bDealStatsHtml(_b2bModalItems, deal) : ''}
             <div id="b2bScanWrap">${_b2bScanBar(deal)}</div>
             <div id="b2bListProg">${_b2bListProgress()}</div>
             <div id="b2bListRows" class="b2b-list">${_b2bListRows()}</div>`,
@@ -17762,6 +17832,7 @@ function _b2bStageView(deal) {
         wide: true,
         body: `
             ${_b2bSummary(deal)}
+            ${_b2bModalItems.length ? _b2bDealStatsHtml(_b2bModalItems, deal) : ''}
             ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Picked up</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
             ${deal.declined_reason ? `<div class="b2b-note bad">
                 <span class="b2b-note-k">Declined</span>
