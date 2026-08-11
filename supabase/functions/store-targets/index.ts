@@ -311,6 +311,13 @@ Deno.serve(async (req: Request) => {
         rate_new_hire: cfg.rate_new_hire,
         saturday_factor: cfg.saturday_factor,
         goal_factor: cfg.goal_factor,
+        // Not used in the goal maths — these label the schedule dropdown and the
+        // ramp tooltip in User Permissions, so those read the real numbers
+        // instead of hard-coding 40 / 20 / 25 / 2 weeks.
+        hours_full_time: cfg.hours_full_time,
+        hours_part_time: cfg.hours_part_time,
+        hours_floater: cfg.hours_floater,
+        new_hire_weeks: cfg.new_hire_weeks,
       },
       // Who is inside the new-hire ramp this week, so their lister days score at
       // the new-hire rate. Names, because that is what listing_goals keys on.

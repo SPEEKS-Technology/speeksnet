@@ -1787,13 +1787,37 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
     const storeOptions = stores.map(s => `<option value="${s}" ${(user.store || '').toUpperCase() === s ? 'selected' : ''}>${s}</option>`).join('');
     const roleOptions = roles.map(r => `<option value="${r}" ${(user.role || '').toLowerCase() === r.toLowerCase() ? 'selected' : ''}>${r}</option>`).join('');
 
+    // Schedule drives listing capacity: weekly hours × the rate of the seat the
+    // person is in that day. ONE control rather than an employment_type dropdown
+    // plus a floater tick, because these are the three things that set a
+    // person's hours and they're mutually exclusive in practice. Hours live in
+    // listing_config, so the labels read them rather than hard-coding 40/20/25.
+    const _lc = ListingGoalsEngine.cfg;
+    const scheduleValue = user.can_float ? 'floater'
+        : (user.employment_type === 'part_time' ? 'part_time' : 'full_time');
+    const scheduleOptions = [
+        ['full_time', `Full-time · ${_lc.hours_full_time || 40}h`],
+        ['part_time', `Part-time · ${_lc.hours_part_time || 20}h`],
+        ['floater',   `Floater · ${_lc.hours_floater || 25}h`],
+    ].map(([v, label]) => `<option value="${v}" ${scheduleValue === v ? 'selected' : ''}>${label}</option>`).join('');
+
+    // Hire date starts the new-hire ramp — for those weeks the person lists at
+    // the new-hire rate when given a lister seat. The server stamps today's date
+    // on any brand-new PIN, so this is only ever for correcting one.
+    const hireVal = user.hire_date ? String(user.hire_date).slice(0, 10) : '';
+    const ramping = ListingGoalsEngine.hireRampEndsOn(hireVal);
+
     row.innerHTML = `
-        <input type="text" class="u-name" placeholder="Full Name" value="${user.name}" style="flex: 2;">
-        <input type="text" class="u-pin" placeholder="PIN" maxlength="4" value="${user.pin}" style="flex: 1; max-width: 80px;" oninput="this.value = this.value.replace(/[^0-9]/g, '').slice(0,4)">
-        <select class="u-store" style="flex: 1;">${storeOptions}</select>
-        <select class="u-role" style="flex: 1.5;">${roleOptions}</select>
+        <input type="text" class="u-name" placeholder="Full Name" value="${user.name}" style="flex: 1.7;">
+        <input type="text" class="u-pin" placeholder="PIN" maxlength="4" value="${user.pin}" style="flex: 1; max-width: 74px;" oninput="this.value = this.value.replace(/[^0-9]/g, '').slice(0,4)">
+        <select class="u-store" style="flex: 0.9;">${storeOptions}</select>
+        <select class="u-role" style="flex: 1.4;">${roleOptions}</select>
+        <select class="u-schedule" style="flex: 1.2;" title="Sets this person's weekly hours, which is what their store's listing capacity is built from. A floater can be claimed by any store in their market.">${scheduleOptions}</select>
+        <input type="date" class="u-hire" value="${hireVal}" style="flex: 1; max-width: 140px;"
+               title="${ramping ? 'New-hire ramp — lists at the new-hire rate until ' + ramping : 'Hire date. Starts a ' + (_lc.new_hire_weeks || 2) + '-week new-hire ramp.'}">
         <button class="del-btn" onclick="this.parentElement.remove()" title="Delete User"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     `;
+    if (ramping) row.classList.add('mu-ramping');
     if (target) {
         // Rendering into a role group during populate.
         target.appendChild(row);
@@ -1818,13 +1842,23 @@ async function saveManageUsers() {
         const pin = row.querySelector('.u-pin').value.trim();
         const store = row.querySelector('.u-store').value;
         const role = row.querySelector('.u-role').value;
+        // The save is a FULL REPLACE of the users table, so anything not sent
+        // here is destroyed. Send the schedule fields explicitly; the server
+        // falls back to the stored value only when a key is absent entirely.
+        const schedule = row.querySelector('.u-schedule')?.value || 'full_time';
+        const hire = row.querySelector('.u-hire')?.value || '';
 
         if (name || pin) {
             if (pin.length !== 4) {
                 alert(`Error: The PIN for ${name || 'a user'} must be exactly 4 digits.`);
                 valid = false;
             }
-            updatedUsers.push({ name, pin, store, role });
+            updatedUsers.push({
+                name, pin, store, role,
+                employment_type: schedule === 'part_time' ? 'part_time' : 'full_time',
+                can_float: schedule === 'floater',
+                hire_date: hire,
+            });
         }
     });
 
@@ -11348,10 +11382,18 @@ function _activeRoleIn(group) {
 // all three renderers (flip-card form, manager widget, MSM stacked widget) so
 // the Off chip can't be added to one and forgotten in the others.
 // `emp` lands inside a single-quoted JS string in an onclick, so escape it.
-function goalsRoleDotsHtml(roles, activeRole, emp, disabledAttr) {
+function goalsRoleDotsHtml(roles, activeRole, emp, disabledAttr, store) {
     const cur = String(activeRole || '').trim().toUpperCase();
     const safeEmp = String(emp).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    const dis = disabledAttr || '';
+    let dis = disabledAttr || '';
+
+    // A floater another store has already claimed today can't be given a role
+    // here. Greyed with where he went, not hidden — a manager who can't see
+    // where he is will just ring round asking, and the answer is the point.
+    const held = _goalsFloaterHeldBy(store, emp);
+    if (held) {
+        return `<span class="goals-floater-away" title="${escapeHtml(emp)} is at ${held} today. Whoever gets to him first has him — ask ${held} to drop him if you need him.">At ${held} today</span>`;
+    }
     let html = '';
     roles.forEach(r => {
         html += `<button type="button" class="role-dot ${cur === r ? 'active' : ''}" data-role="${r}" ${dis} onclick="selectRole(this, '${safeEmp}', '${r}')">${r}</button>`;
@@ -11360,6 +11402,103 @@ function goalsRoleDotsHtml(roles, activeRole, emp, disabledAttr) {
          + ` title="Off today — no goal, and they stop holding up the daily reminder"`
          + ` onclick="selectRole(this, '${safeEmp}', '${GOALS_OFF}')">Off</button>`;
     return html;
+}
+
+// ---------------------------------------------------------------------------
+// FLOATERS
+// ---------------------------------------------------------------------------
+// A floater (users.can_float) belongs to a MARKET, not a store — Zach M's home
+// store is OVL but he goes wherever KC needs help. So he appears in every KC
+// roster, and the first manager to give him a role that day claims him; the
+// others see "At LEE today" instead of dots.
+//
+// The claim is decided by a primary key on the server, not by this cache, so
+// two managers tapping at the same instant can't both win — the loser is told
+// who did. This map is only what the widget paints between refreshes.
+let _goalsFloaters = {};   // store → [{ name, claimedBy, available, mine, homeStore }]
+
+// The OTHER store holding this person today, or '' if they're free / not a
+// floater / already ours.
+function _goalsFloaterHeldBy(store, emp) {
+    const list = _goalsFloaters[store] || [];
+    const f = list.find(x => _goalsSameName(x.name, emp));
+    return (f && f.claimedBy && !f.mine) ? f.claimedBy : '';
+}
+function _goalsIsFloater(store, emp) {
+    return (_goalsFloaters[store] || []).some(x => _goalsSameName(x.name, emp));
+}
+
+// Which store a role dot belongs to. The MSM's stacked widget already marks each
+// store section with data-goals-scope (updateRoleLocks uses it so BAL's B1
+// doesn't lock MPL's B1); everywhere else the page is one store.
+function _goalsRoleScopeStore(btn) {
+    const sec = btn && btn.closest ? btn.closest('[data-goals-scope]') : null;
+    return (sec && sec.getAttribute('data-goals-scope')) || goalsTargetStore;
+}
+
+// Steps 1–4 of selectRole, split out so the floater path can run them AFTER the
+// server has settled the claim. Kept identical on purpose — if the two drift,
+// a floater's dot behaves differently from everyone else's.
+function _goalsApplyRole(clickedBtn, role, wasActive) {
+    if (wasActive) {
+        clickedBtn.classList.remove('active');
+    } else {
+        if (clickedBtn.dataset.roleTaken === 'true') {
+            alert(`The role ${role} is already assigned to another team member. Please deselect it from them first.`);
+            return;
+        }
+        const parentRow = clickedBtn.closest('.goals-edit-roles');
+        if (parentRow) parentRow.querySelectorAll('.role-dot').forEach(b => b.classList.remove('active'));
+        clickedBtn.classList.add('active');
+    }
+    updateRoleLocks();
+    recomputeGoalDisplays();
+    scheduleGoalsAutosave();
+}
+
+// Refresh one store's floater claims for a date. Failure is non-fatal and
+// deliberately silent: a floater who can't be claimed still gets dots, so a
+// network blip degrades to the old behaviour rather than locking a manager out
+// of their own roster.
+async function refreshGoalsFloaters(store, dateStr) {
+    if (!store) return [];
+    try {
+        const d = dateStr || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+        const r = await fetch(`${STORE_TARGETS_URL}?action=floaters&store=${store}&date=${d}&v=${Date.now()}`)
+            .then(x => x.json());
+        _goalsFloaters[store] = Array.isArray(r) ? r : [];
+    } catch (e) { _goalsFloaters[store] = _goalsFloaters[store] || []; }
+    return _goalsFloaters[store];
+}
+
+// Claim or release a floater for today. Returns '' on success, or a message.
+async function _goalsClaimFloater(store, emp, release) {
+    try {
+        const d = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+        const resp = await fetch(STORE_TARGETS_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+                action: release ? 'release' : 'claim',
+                store, employee: emp, date: d,
+                name: sessionStorage.getItem('speeksUserName') || '',
+            }),
+        });
+        const j = await resp.json().catch(() => ({}));
+        if (Array.isArray(j.floaters)) _goalsFloaters[store] = j.floaters;
+        return j.ok ? '' : (j.error || 'Could not update the floater.');
+    } catch (e) { return 'Could not reach the server.'; }
+}
+
+// Add any floater the market makes available to a store's roster, so a manager
+// can actually put him on their board. His HOME store already lists him through
+// the auth cache, so guard against showing him twice there.
+function _goalsWithFloaters(store, roster) {
+    const out = roster.slice();
+    (_goalsFloaters[store] || []).forEach(f => {
+        if (!out.some(n => _goalsSameName(n, f.name))) out.push(f.name);
+    });
+    return out;
 }
 
 // Loose name match (exact, or same first name) — the roster comes from the auth
@@ -11421,8 +11560,9 @@ const ListingGoalsEngine = {
     cfg: {
         hours_per_day: 8,
         rate_buyer_1: 0.5, rate_buyer_2: 1.0, rate_lister: 3.0, rate_new_hire: 1.0,
-        saturday_factor: 0.5, goal_factor: 0.75,
-        hours_full_time: 40, open_days: 6,
+        saturday_factor: 0.5, goal_factor: 0.75, open_days: 6,
+        // Shown as labels in the User Permissions schedule dropdown.
+        hours_full_time: 40, hours_part_time: 20, hours_floater: 25, new_hire_weeks: 2,
     },
     _newHires: {},   // store → Set of names inside the new-hire ramp this week
 
@@ -11436,6 +11576,21 @@ const ListingGoalsEngine = {
     isNewHire(store, employee) {
         const s = this._newHires[store];
         return !!(s && employee && s.has(employee));
+    },
+
+    // When a hire date's ramp runs out, or '' if it already has. Used by the
+    // User Permissions row to say so out loud — the ramp quietly changes a
+    // person's lister goal from 18 to 6, and an unexplained 6 looks like a bug.
+    // Answers from the DATE, not from _newHires, because that map is only
+    // populated for stores whose target has been fetched.
+    hireRampEndsOn(hireDate) {
+        if (!hireDate) return '';
+        const d = goalDateObj(hireDate);
+        if (isNaN(d.getTime())) return '';
+        const end = new Date(d);
+        end.setDate(end.getDate() + (this.cfg.new_hire_weeks || 2) * 7);
+        if (end <= new Date()) return '';
+        return end.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     },
 
     // Line items per hour for a seat. L1, L2, L3 … are all dedicated listers and
@@ -11577,9 +11732,13 @@ async function fetchLiveGoalsData() {
     if (goalsTargetStore === 'ALL' || goalsTargetStore === 'CORP') goalsTargetStore = 'OVL'; 
 
     try {
+        // Who in the market is available to this store today. Fetched before the
+        // roster is built, because a floater is one of the names in it.
+        await refreshGoalsFloaters(goalsTargetStore);
+
         // Build roster from auth cache — works for all stores immediately, no extra API call
         if (localStorage.getItem('speeksAuthCache')) {
-            const _emps = goalsRosterFor(goalsTargetStore);
+            const _emps = _goalsWithFloaters(goalsTargetStore, goalsRosterFor(goalsTargetStore));
             goalsRoster = _emps.length ? _emps : ['No Employees Found'];
         }
 
@@ -11816,7 +11975,7 @@ function buildGoalsEditForm() {
 
         // If the goal is locked, we also lock the role from being changed
         const disableRole = lockGoal ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : '';
-        const rolesHtml = goalsRoleDotsHtml(availableRoles, targetRecord.role, emp, disableRole);
+        const rolesHtml = goalsRoleDotsHtml(availableRoles, targetRecord.role, emp, disableRole, goalsTargetStore);
 
         // If the goal is locked, we make the input unclickable and gray it out
         const disableGoalAttr = lockGoal ? 'disabled style="background: #f1f5f9; color: #94a3b8; border-color: #e2e8f0; cursor: not-allowed;"' : '';
@@ -12008,7 +12167,7 @@ function renderManagerGoals() {
     goalsRoster.forEach((emp, idx) => {
         const rec = liveGoalsData.find(r => r.employee === emp && normalizeGoalDate(r.date) === todayStr) || { role: '' };
 
-        const rolesHtml = goalsRoleDotsHtml(availableRoles, rec.role, emp);
+        const rolesHtml = goalsRoleDotsHtml(availableRoles, rec.role, emp, '', goalsTargetStore);
 
         // Weekly goal = this week's saved daily goals, excluding today (today is added live).
         _priorWeekGoals[idx] = priorWeekGoal(emp, todayStr, startOfWeek);
@@ -12085,8 +12244,10 @@ async function fetchLiveGoalsDataMS() {
 
     try {
         _goalsMS = {};
+        // Floaters first — one of them may be a name in the roster below.
+        await Promise.all(MULTISTORE_MANAGER_STORES.map(s => refreshGoalsFloaters(s)));
         MULTISTORE_MANAGER_STORES.forEach(s => {
-            const emps = goalsRosterFor(s);
+            const emps = _goalsWithFloaters(s, goalsRosterFor(s));
             _goalsMS[s] = { roster: emps.length ? emps : ['No Employees Found'], live: [], priorWeek: {}, history: [] };
         });
 
@@ -12136,7 +12297,7 @@ function renderManagerGoalsMS() {
         st.roster.forEach((emp, idx) => {
             const rec = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === todayStr) || { role: '' };
 
-            const rolesHtml = goalsRoleDotsHtml(availableRoles, rec.role, emp);
+            const rolesHtml = goalsRoleDotsHtml(availableRoles, rec.role, emp, '', store);
 
             st.priorWeek[idx] = priorWeekGoal(emp, todayStr, startOfWeek, st.live);
 
@@ -24254,6 +24415,25 @@ window.selectRole = function(clickedBtn, emp, role) {
     if (clickedBtn.hasAttribute('disabled')) return;
 
     const isAlreadyActive = clickedBtn.classList.contains('active');
+
+    // A floater is claimed by whichever store puts him on their board first, and
+    // released when they take him off. The server decides, so the UI only paints
+    // after it answers — losing the race has to leave the dot unselected rather
+    // than showing a role this store doesn't actually have.
+    const _store = _goalsRoleScopeStore(clickedBtn);
+    if (_goalsIsFloater(_store, emp)) {
+        const releasing = isAlreadyActive || role === GOALS_OFF;
+        _goalsClaimFloater(_store, emp, releasing).then(err => {
+            if (err) {
+                alert(err);
+                // Repaint from the server's answer so he greys out here.
+                if (typeof loadManagerGoals === 'function') loadManagerGoals();
+                return;
+            }
+            _goalsApplyRole(clickedBtn, role, isAlreadyActive);
+        });
+        return;
+    }
 
     // 1. If clicking the already active role, toggle it off and free it up.
     if (isAlreadyActive) {

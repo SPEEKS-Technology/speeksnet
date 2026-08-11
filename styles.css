@@ -14603,3 +14603,21 @@ body.tv-body { display: block; background: #eef1f5; }
    ask, and a board that disagrees with the screen in the office is worse than a
    small one. Raise it here if the far wall needs it. */
 .tv-card { zoom: 1; }
+
+/* ── Floater away chip (2026-08-10) ────────────────────────────────────────
+   Shown in place of a floater's role dots when another store in their market
+   has already claimed them today. Deliberately occupies the same slot as the
+   dots — greyed and named, not hidden, so a manager can see where they went
+   instead of ringing round to find out. See _goalsFloaterHeldBy in speeks.js. */
+.goals-floater-away {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.01em;
+    color: #94a3b8; background: #f1f5f9;
+    border: 1px dashed #cbd5e1; border-radius: 20px;
+    padding: 4px 10px; white-space: nowrap; cursor: help;
+}
+
+/* A user in their new-hire ramp — their lister goal is the new-hire rate, and an
+   unexplained lower number reads as a bug unless the row says why. */
+#manageUsersList .user-manage-row.mu-ramping { border-color: #f0d9a8; background: #fffdf7; }
+#manageUsersList .user-manage-row .u-hire { color: #64748b; }
