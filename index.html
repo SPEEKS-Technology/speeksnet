@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260804o">
+  <link rel="stylesheet" href="styles.css?v=20260811a">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260804o" defer></script>
+  <script src="speeks.js?v=20260811a" defer></script>
 </head>
 
 <body class="preload">
@@ -83,7 +83,7 @@
     <div class="greeting-stack">
         <h2 id="userGreeting">Welcome!</h2>
         <div class="version-signout-row">
-            <span class="version-tag">v3.0</span>
+            <span class="version-tag">v3.1.0</span>
             <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
         </div>
       </div>
@@ -525,6 +525,7 @@
                     <option value="ann">Announcements</option>
                     <option value="note">Comments</option>
                     <option value="patch">Patch notes</option>
+                    <option value="arch">Archived</option>
                 </select>
                 <span class="hub-chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
             </div>
@@ -884,181 +885,154 @@
 
 
   <div class="ew-dash dynamic-module-flex role-manager role-owner-manager role-employee employee-dashboard-row sh-dash-row">
-    <!-- ===== COMMAND CENTER (managers): Store Health + Buying & Sales, 3 tabs ===== -->
-    <div class="card employee-widget-card ew-airy cc-widget dynamic-module-block role-manager role-owner-manager" data-feature="widget-scorecard-alerts">
+    <!-- ===== COMMAND CENTER — ONE widget for every role =====
+         Managers, ASMs and employees all get this same card; which TABS they see is
+         the only difference, and that is entirely Feature Access (cc-live, cc-ebay,
+         cc-scorecard, cc-kpis).
+
+         There used to be a second, near-identical "employee widget" beside this one
+         with its own three tabs and its own four feature keys, and a fifth tab here
+         for Buying & Sales. Both are gone: one widget, and buying now lives on the
+         Live Dashboard's Month view where it can be read against the selling it
+         pays for. -->
+    <!-- id, not just the class: the district board below is a .cc-widget too now,
+         so every lookup in the tab machinery goes through these two ids. -->
+    <div class="card employee-widget-card ew-airy cc-widget dynamic-module-block role-manager role-owner-manager role-employee" id="ccWidget" data-feature="widget-scorecard-alerts">
         <div class="ew-head">
             <div class="ew-titles">
                 <span class="ew-eyebrow"><span id="cc-store-eyebrow">—</span> · This Month</span>
                 <span class="ew-title"><span id="cc-store-name">Store</span> Command Center <span id="cc-week" class="ew-date"></span></span>
             </div>
-            <span class="cc-updated">Updated as of <b id="cc-updated">—</b></span>
+            <span class="cc-head-r">
+                <!-- Tab-specific header bits, shown by switchCommandTab. The goal chip
+                     and the buy date came off with the Buying & Sales tab — the Live
+                     tab carries its own banked-vs-goal bar and stamps the buying sheet's
+                     date on the buying block itself, and two different goal figures on
+                     one header line read as a contradiction. -->
+                <span class="ew-date" id="emp-kpi-period" style="display:none;"></span>
+                <span class="cc-updated">Updated as of <b id="cc-updated">—</b></span>
+            </span>
+            <!-- Hidden store select. Not a control any more — _ccStore() and
+                 renderBuyingSales both read it, and applyRoleBasedUI pins it to the
+                 signed-in store. It moved here when the employee widget was removed. -->
+            <select id="bsStoreSelect" class="bs-hidden-select" onchange="renderBuyingSales()">
+                <option value="OVL">OVL</option>
+                <option value="LEE">LEE</option>
+                <option value="WSP">WSP</option>
+                <option value="MPL">MPL</option>
+                <option value="BAL">BAL</option>
+            </select>
         </div>
 
         <div class="cc-tabbar">
             <div class="ew-seg cc-seg">
-                <button id="cc-tab-buying" class="toggle-btn" type="button" onclick="switchCommandTab('buying')" data-feature="cc-buying">Buying &amp; Sales<span class="cc-updot" id="cc-updot-buying"></span></button>
-                <button id="cc-tab-ebay" class="toggle-btn" type="button" onclick="switchCommandTab('ebay')" data-feature="cc-ebay">eBay<span class="cc-updot" id="cc-updot-ebay"></span></button>
-                <button id="cc-tab-scorecard" class="toggle-btn" type="button" onclick="switchCommandTab('scorecard')" data-feature="cc-scorecard">Scorecard<span class="cc-updot" id="cc-updot-scorecard"></span></button>
+                <!-- NO tab opens by default — the card lands on its summary line, the
+                     same as the district board (see _reconcileCommandWidgets).
+                     Live Dashboard carries no .cc-updot: the other tabs' dot means
+                     "this changed since you last looked", which on a per-minute live
+                     feed would be lit permanently and therefore say nothing. Freshness
+                     is reported inside the panel instead, as an "as of" stamp that goes
+                     stale-flagged. -->
+                <!-- The role-* classes ARE the per-tab defaults. The card itself is now
+                     visible to every store role, so without them every tab would show to
+                     everyone and the only switch that removed eBay from an employee would
+                     be the one that removes the whole card. Feature Access still wins over
+                     these, in both directions. Keep them in step with FEATURE_CATALOG's
+                     `def` for the same key, and with the strip/panel/summary cells below. -->
+                <!-- Buying & Sales used to sit here. Every figure on it is now on the
+                     Live Dashboard's Month view: value purchased, buy margin, revenue
+                     and gross profit month-to-date and sell margin were already
+                     duplicated there, and the four month-end projections that were not
+                     became its "Tracking to month-end" strip. One fewer tab, one fewer
+                     Feature Access switch, and no figure lost. -->
+                <button id="cc-tab-live" class="toggle-btn role-manager role-owner-manager role-employee" type="button" onclick="switchCommandTab('live')" data-feature="cc-live">Live Dashboard</button>
+                <button id="cc-tab-ebay" class="toggle-btn role-manager role-owner-manager" type="button" onclick="switchCommandTab('ebay')" data-feature="cc-ebay">eBay<span class="cc-updot" id="cc-updot-ebay"></span></button>
+                <button id="cc-tab-scorecard" class="toggle-btn role-manager role-owner-manager" type="button" onclick="switchCommandTab('scorecard')" data-feature="cc-scorecard">Scorecard<span class="cc-updot" id="cc-updot-scorecard"></span></button>
+                <button id="cc-tab-kpis" class="toggle-btn role-employee" type="button" onclick="switchCommandTab('kpis')" data-feature="cc-kpis">Weekly KPIs<span class="cc-updot" id="cc-updot-kpis"></span></button>
             </div>
             <div class="cc-tabbar-right">
-                <div id="sh-tab-action" class="cc-tab-action"></div>
+                <!-- Starts HIDDEN, like its sibling below. This holds the audit
+                     breakdown button, which belongs to the Scorecard tab only —
+                     switchCommandTab reveals it and every other path hides it.
+                     Without the default it was visible from page load, so a role
+                     with no Scorecard tab (employee, ASM) had no way to ever
+                     switch it off and saw it permanently, next to a collapsed
+                     summary it did not belong to. -->
+                <div id="sh-tab-action" class="cc-tab-action" style="display:none;"></div>
                 <button id="cc-collapse" class="cc-collapse" type="button" onclick="collapseCommand()" style="display:none;">▴ Summary</button>
             </div>
         </div>
 
         <!-- Collapsed default: one-line summary shown when no tab is open -->
         <div class="cc-summary" id="cc-summary">
-            <div class="cc-sum" id="cc-sum-audit" data-feature="cc-scorecard"><div class="cc-sum-k">PayMore Audit</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum" id="cc-sum-score" data-feature="cc-scorecard"><div class="cc-sum-k">SPEEKS Scorecard</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum" id="cc-sum-ebay" data-feature="cc-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum" id="cc-sum-buy" data-feature="cc-buying"><div class="cc-sum-k">Tracking Buying</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum" id="cc-sum-rev" data-feature="cc-buying"><div class="cc-sum-k">Tracking Revenue</div><div class="cc-sum-v">—</div></div>
-            <div class="cc-sum" id="cc-sum-goal" data-feature="cc-buying"><div class="cc-sum-k">To Goal</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-live" data-feature="cc-live"><div class="cc-sum-k">Net Sales Today</div><div class="cc-sum-v">—</div></div>
+            <!-- Deliberately the SAME seven cells, in the same order, as the district
+                 summary above (#dc-summary) — the two rows are read by the same people
+                 and a different running order between them is a re-read every time.
+                 What differs is only the scope, and therefore the keys: no "Company"
+                 on the goal, no "· Company Avg" on the scorecard or audit, because
+                 every figure here is this one store's.
+                 The three live cells carry cc-live's feature key: one switch should
+                 never leave a stranded half-row of the same tab's data. -->
+            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-mtd" data-feature="cc-live"><div class="cc-sum-k">Month to Date Revenue</div><div class="cc-sum-v">—</div></div>
+            <!-- Sits next to the revenue it came back out of. -->
+            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-refunds" data-feature="cc-live"><div class="cc-sum-k">Refunds &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-goal" data-feature="cc-live"><div class="cc-sum-k">Tracking to Goal <span class="cc-sum-thru">Through Yesterday</span></div><div class="cc-sum-v">—</div></div>
+            <!-- Google Reviews sits with the two figures that have a target, ahead of
+                 the three health readouts. Hidden until the sheet carries the numbers
+                 (see _ccSum callers) so it is not an eighth "—" during the rollout. -->
+            <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-reviews" data-feature="cc-live" hidden><div class="cc-sum-k">Google Reviews &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager" id="cc-sum-ebay" data-feature="cc-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager" id="cc-sum-score" data-feature="cc-scorecard"><div class="cc-sum-k">SPEEKS Scorecard</div><div class="cc-sum-v">—</div></div>
+            <div class="cc-sum role-manager role-owner-manager" id="cc-sum-audit" data-feature="cc-scorecard"><div class="cc-sum-k">PayMore Audit</div><div class="cc-sum-v">—</div></div>
         </div>
 
         <div class="cc-strips">
-            <div class="cc-strip s3" id="cc-strip-scorecard" data-feature="cc-scorecard">
+            <!-- Live tiles and detail are both rendered by renderLiveDashboard() into
+                 CLASS hooks, not ids, so the same markup can appear on more than one
+                 surface without colliding. That mattered when a second near-identical
+                 widget sat below this one; it still holds, and it is why the district
+                 card can reuse these renderers unchanged. -->
+            <div class="cc-strip s4 lv-strip role-manager role-owner-manager role-employee" id="cc-strip-live" data-feature="cc-live"></div>
+            <div class="cc-strip s3 role-manager role-owner-manager" id="cc-strip-scorecard" data-feature="cc-scorecard">
                 <div class="cc-cell" id="sh-score-audit"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
                 <div class="cc-cell" id="sh-score-mktg"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
                 <div class="cc-cell" id="cc-audit-standing"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
             </div>
-            <div class="cc-strip s3" id="cc-strip-ebay" data-feature="cc-ebay">
+            <div class="cc-strip s3 role-manager role-owner-manager" id="cc-strip-ebay" data-feature="cc-ebay">
                 <div class="cc-cell" id="sh-score-ebay"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
                 <div class="cc-cell" id="cc-ebay-perf"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
                 <div class="cc-cell" id="cc-ebay-top"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
             </div>
-            <div class="cc-strip s4" id="cc-strip-buying" data-feature="cc-buying">
-                <div class="cc-cell"><span class="sh-stripe g"></span><div class="sh-k">Tracking Buying</div><div class="sh-v"><span id="cc-track-buy">$0</span></div><div class="sh-sub">projected month-end</div></div>
-                <div class="cc-cell"><span class="sh-stripe g"></span><div class="sh-k">Buy Margin</div><div class="sh-v good" id="cc-buy-margin">0%</div><div class="sh-sub">on purchases</div></div>
-                <div class="cc-cell"><span class="sh-stripe g"></span><div class="sh-k">Tracking Revenue</div><div class="sh-v"><span id="cc-track-rev">$0</span></div><div class="sh-sub">projected month-end</div></div>
-                <div class="cc-cell"><span class="sh-stripe g"></span><div class="sh-k">Sell Margin</div><div class="sh-v good" id="cc-sell-margin">0%</div><div class="sh-sub">on sales</div></div>
-            </div>
+
         </div>
 
         <div class="cc-body">
-            <div class="cc-panel" id="cc-panel-scorecard" data-feature="cc-scorecard">
+            <div class="cc-panel lv-panel role-manager role-owner-manager role-employee" id="cc-panel-live" data-feature="cc-live">
+                <div class="lv-detail"><div class="status-message">Syncing live sales…</div></div>
+            </div>
+            <div class="cc-panel role-manager role-owner-manager" id="cc-panel-scorecard" data-feature="cc-scorecard">
                 <div id="sh-panel-audit"><div class="status-message">Syncing Data...</div></div>
                 <div id="sh-panel-mktg" class="sh-mktg-block"></div>
             </div>
-            <div class="cc-panel" id="cc-panel-ebay" data-feature="cc-ebay">
+            <div class="cc-panel role-manager role-owner-manager" id="cc-panel-ebay" data-feature="cc-ebay">
                 <div id="sh-panel-ebay"><div class="status-message">Syncing Data...</div></div>
             </div>
-            <div class="cc-panel" id="cc-panel-buying" data-feature="cc-buying">
-                <div class="ebs-body cc-ebs">
-                    <div class="ebs-col ebs-buy">
-                        <div class="ebs-cap">Buying Pace (MTD)</div>
-                        <div class="ebs-mid">
-                            <div><div class="ebs-lbl">Value Purchased</div><div class="ebs-big"><span id="bs-buy-val">$0</span></div></div>
-                            <div class="ebs-pace">
-                                <div class="ebs-pace-lbl"><span>Tracking to month-end</span><span id="bs-buy-proj">$0</span></div>
-                                <div class="ebs-pace-bar"><i id="bs-pace-fill"></i></div>
-                                <div class="ebs-pace-dates"><span id="bs-pace-asof">—</span><span id="bs-pace-end">—</span></div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="ebs-divider"></div>
-                    <div class="ebs-col ebs-sell">
-                        <div class="ebs-cap">Sales (MTD)</div>
-                        <div class="ebs-ring-group">
-                            <div class="ebs-ring-wrap">
-                                <div class="progress-ring">
-                                    <svg viewBox="0 0 150 150"><circle class="bg" cx="75" cy="75" r="64"></circle><circle class="bar" id="bs-bar" cx="75" cy="75" r="64"></circle></svg>
-                                    <div class="percentage" id="bs-pct">0%</div>
-                                </div>
-                            </div>
-                            <div class="ebs-ring-cap">of monthly goal</div>
-                        </div>
-                        <div class="ebs-rows">
-                            <div class="ebs-row"><span class="k">Rev (MTD)</span><span class="v" id="bs-rev">--</span></div>
-                            <!-- GP banked so far, above the month-end projection. The ring
-                                 shows TRACKING attainment, so without this row there is
-                                 nothing on screen saying where the store actually stands today. -->
-                            <div class="ebs-row"><span class="k">GP (MTD)</span><span class="v" id="bs-gp">--</span></div>
-                            <div class="ebs-row"><span class="k">GP Tracking</span><span class="v" id="bs-t-gp">--</span></div>
-                        </div>
-                    </div>
+
+            <!-- Weekly KPIs. Came across from the old employee widget; defaults to
+                 employee + ASM in the catalog, so managers do not see it unless it is
+                 switched on (their Store KPIs live in Workspace). -->
+            <div class="cc-panel role-employee" id="cc-panel-kpis" data-feature="cc-kpis">
+                <div id="employee-kpi-widget-body" class="employee-kpi-body">
+                    <div class="status-message">Syncing Data...</div>
                 </div>
             </div>
         </div>
     </div>
 
-      <!-- Combined EMPLOYEE widget: Buying & Sales + Weekly KPIs, two tabs (no summary
-           line), defaults to Buying & Sales. Managers see Buying/KPIs inside the
-           Command Center; this is the employee equivalent. Each tab is a toggleable
-           feature (widget-buying-selling / widget-emp-weekly-kpis). -->
-      <div class="card employee-widget-card ew-airy cc-widget cc-expanded ec-widget dynamic-module-block role-employee" id="ecWidget">
-          <div class="ew-head">
-              <div class="ew-titles">
-                  <span class="ew-eyebrow" id="ec-eyebrow">My Store · This Month</span>
-                  <span class="ew-title"><span id="ec-title-text">Buying &amp; Sales</span> <span id="bs-last-updated" class="ew-date"></span><span id="emp-kpi-period" class="ew-date" style="display:none;"></span></span>
-              </div>
-              <span class="ew-goal" id="ec-goal-wrap">Goal <b id="bs-goal"></b></span>
-              <select id="bsStoreSelect" class="bs-hidden-select" onchange="renderBuyingSales()">
-                  <option value="OVL">OVL</option>
-                  <option value="LEE">LEE</option>
-                  <option value="WSP">WSP</option>
-                  <option value="MPL">MPL</option>
-                  <option value="BAL">BAL</option>
-              </select>
-          </div>
-
-          <div class="cc-tabbar">
-              <div class="ew-seg cc-seg">
-                  <button id="ec-tab-buying" class="toggle-btn active" type="button" onclick="switchEmpTab('buying')" data-feature="widget-buying-selling">Buying &amp; Sales<span class="cc-updot" id="ec-updot-buying"></span></button>
-                  <button id="ec-tab-kpis" class="toggle-btn" type="button" onclick="switchEmpTab('kpis')" data-feature="widget-emp-weekly-kpis">Weekly KPIs<span class="cc-updot" id="ec-updot-kpis"></span></button>
-              </div>
-          </div>
-
-          <div class="cc-body">
-              <div class="cc-panel cc-active" id="ec-panel-buying" data-feature="widget-buying-selling">
-                  <div class="ebs-body">
-                      <div class="ebs-col ebs-buy">
-                          <div class="ebs-cap">Buying (MTD)</div>
-                          <div class="ebs-mid">
-                              <div>
-                                  <div class="ebs-lbl">Value Purchased</div>
-                                  <div class="ebs-big" id="bs-buy-val">$0</div>
-                              </div>
-                              <div class="ebs-pace">
-                                  <div class="ebs-pace-lbl"><span>Tracking to month-end</span><span id="bs-buy-proj">$0</span></div>
-                                  <div class="ebs-pace-bar"><i id="bs-pace-fill"></i></div>
-                              </div>
-                          </div>
-                          <div class="ebs-rows">
-                              <div class="ebs-row"><span class="k">Buy Margin</span><span class="delta-badge delta-neutral" id="bs-buy-margin">0%</span></div>
-                          </div>
-                      </div>
-
-                      <div class="ebs-divider"></div>
-
-                      <div class="ebs-col ebs-sell">
-                          <div class="ebs-cap">Sales (MTD)</div>
-                          <div class="ebs-ring-group">
-                              <div class="ebs-ring-wrap">
-                                  <div class="progress-ring">
-                                      <svg viewBox="0 0 150 150"><circle class="bg" cx="75" cy="75" r="64"></circle><circle class="bar" id="bs-bar" cx="75" cy="75" r="64"></circle></svg>
-                                      <div class="percentage" id="bs-pct">0%</div>
-                                  </div>
-                              </div>
-                              <div class="ebs-ring-cap">of monthly goal</div>
-                          </div>
-                          <div class="ebs-rows">
-                              <div class="ebs-row"><span class="k">Rev (MTD)</span><span class="v" id="bs-rev">--</span></div>
-                              <div class="ebs-row"><span class="k">GP (MTD)</span><span class="v" id="bs-gp">--</span></div>
-                              <div class="ebs-row"><span class="k">GP Tracking</span><span class="v" id="bs-t-gp">--</span></div>
-                              <div class="ebs-row"><span class="k">Sell Margin</span><span class="delta-badge delta-neutral" id="bs-sell-margin">0%</span></div>
-                          </div>
-                      </div>
-                  </div>
-              </div>
-
-              <div class="cc-panel" id="ec-panel-kpis" data-feature="widget-emp-weekly-kpis">
-                  <div id="employee-kpi-widget-body" class="employee-kpi-body">
-                      <div class="status-message">Syncing Data...</div>
-                  </div>
-              </div>
-          </div>
-      </div>
+      <!-- The employee/ASM widget that used to sit here has been merged into the
+           Command Center above — one card for every role, tabs gated by Feature
+           Access. Its Weekly KPIs tab moved across as cc-panel-kpis. -->
 
       <!-- My Listing Goals moved to the "Listing Goals" bar in the action menu (opens
            #empGoalsModal). Weekly KPIs merged into the combined widget above. -->
@@ -1066,23 +1040,109 @@
 
   </div>
 
-  <div class="dynamic-module-block role-district-manager role-ceo district-command-section" data-feature="widget-district-command">
-    
-      <!-- The section heading lived here as an <h3> with a 🌐 on it. The panel now
-           carries its own header (icon tile + eyebrow + title), so a second title
-           immediately above it was saying the same thing twice. -->
-      <div id="district-master-body" class="mb-30">
-          <div class="dcc-empty">Syncing the district&hellip;</div>
+  <!-- ===== DISTRICT COMMAND CENTER — one widget, the manager board's chrome =====
+       This was two stacked cards: a Live Dashboard, and a store-major board that put
+       one store's whole picture on screen at a time. They are now one tabbed widget
+       with the same shape as the store Command Center — same CSS classes, same
+       collapse behaviour, a "dc-" id prefix instead of "cc-".
+
+       Four of the five tabs are DIMENSION-major: one subject read across all five
+       stores, which is what makes an outlier findable. The fifth, Stores, is the old
+       store-major board kept whole — clicking any row on eBay or Scorecard jumps
+       there with that store selected, so drilling in is still one click.
+
+       Feature Access is unchanged: widget-district-command gates the card and
+       widget-district-live gates the Live tab. No new keys. -->
+  <div class="card ew-airy cc-widget dynamic-module-block role-district-manager role-ceo mb-30"
+       id="dcWidget" data-feature="widget-district-command">
+      <div class="ew-head">
+          <div class="ew-titles">
+              <span class="ew-eyebrow">District</span>
+              <!-- Same scope line the login screen prints on its rail (Stores 5 /
+                   Markets KC · STL), said as one phrase. -->
+              <span class="ew-title">Command Center <span class="ew-date" id="dc-scope">5 Stores &middot; 2 Markets &middot; KC &amp; STL</span></span>
+          </div>
       </div>
-      <!-- Monthly Team Goals, Listing Goals and Cleaning Checklist used to be three
-           panels here. They are now action-menu items opening #dmGoalsModal,
-           #dmListingModal and #dmCleaningModal — see the DM DISTRICT TOOLS block in
-           speeks.js. What is left on this page is this board and the Performance
-           chart below. -->
 
+      <div class="cc-tabbar">
+          <div class="ew-seg cc-seg">
+              <button id="dc-tab-live" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('live')" data-feature="widget-district-live">Live Dashboard</button>
+              <button id="dc-tab-stores" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('stores')">Store Breakdown</button>
+              <button id="dc-tab-ebay" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('ebay')">eBay</button>
+              <button id="dc-tab-scorecard" class="toggle-btn role-district-manager role-ceo" type="button" onclick="switchDistrictTab('scorecard')">Scorecard</button>
+          </div>
+          <div class="cc-tabbar-right">
+              <button id="dc-collapse" class="cc-collapse" type="button" onclick="collapseDistrict()" style="display:none;">&#9650; Summary</button>
+          </div>
       </div>
 
+      <!-- What the board opens on: the whole company in one line. Today's selling
+           comes from the live feed, the rest from the same rows the tabs read.
+           Each key says exactly what its number is — a company average is not a
+           store's score, and tracking is not banked, so the label carries that
+           rather than leaving six bare figures to be guessed at. -->
+      <div class="cc-summary" id="dc-summary">
+          <div class="cc-sum" id="dc-sum-live"><div class="cc-sum-k">Net Sales Today</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-mtd"><div class="cc-sum-k">Month to Date Revenue</div><div class="cc-sum-v">—</div></div>
+          <!-- Sits next to the revenue it came back out of. -->
+          <div class="cc-sum" id="dc-sum-refunds"><div class="cc-sum-k">Refunds &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-goal"><div class="cc-sum-k">Company Tracking to Goal <span class="cc-sum-thru">Through Yesterday</span></div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-reviews" hidden><div class="cc-sum-k">Google Reviews &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-score"><div class="cc-sum-k">Scorecard &middot; Company Avg</div><div class="cc-sum-v">—</div></div>
+          <div class="cc-sum" id="dc-sum-audit"><div class="cc-sum-k">PayMore Audit &middot; Company Avg</div><div class="cc-sum-v">—</div></div>
+      </div>
 
+      <div class="cc-body">
+          <!-- Live keeps the .lv-card class on its inner wrapper: renderLiveDashboard
+               finds the eyebrow, date, freshness pill, day toggle and mute switch
+               through ".lv-card ...", and they had to come down out of the old card
+               header when this became a shared one. -->
+          <div class="cc-panel role-district-manager role-ceo" id="dc-panel-live" data-feature="widget-district-live">
+              <div class="lv-card lv-card-inner">
+                  <div class="lv-head">
+                      <span class="lv-head-l">
+                          <span class="lv-freshness"></span>
+                          <span class="ew-eyebrow lv-eyebrow">District &middot; Today</span>
+                          <span class="ew-date lv-asof"></span>
+                      </span>
+                      <span class="lv-head-r">
+                          <span class="lv-modes-host"></span>
+                          <span class="lv-sound-host"></span>
+                      </span>
+                  </div>
+                  <div class="lv-dist-strip"></div>
+                  <div class="lv-dist-detail"><div class="status-message">Syncing live sales&hellip;</div></div>
+              </div>
+          </div>
+
+          <div class="cc-panel" id="dc-panel-ebay">
+              <div id="dc-ebay-body"><div class="status-message">Syncing the district&hellip;</div></div>
+          </div>
+
+          <div class="cc-panel" id="dc-panel-scorecard">
+              <div id="dc-score-body"><div class="status-message">Syncing the district&hellip;</div></div>
+          </div>
+
+          <!-- The store-major board, unchanged. Monthly Team Goals, Listing Goals and
+               the Cleaning Checklist used to sit beside it; they are action-menu items
+               now (#dmGoalsModal, #dmListingModal, #dmCleaningModal).
+               Sits second, right after Live: it is the tab a DM opens most, and the
+               one the eBay and Scorecard rows drill into. -->
+          <div class="cc-panel" id="dc-panel-stores">
+              <div id="district-master-body">
+                  <div class="dcc-empty">Syncing the district&hellip;</div>
+              </div>
+          </div>
+
+          <!-- No KPIs tab. It held the month-by-month monthly-KPI grid
+               (fetchDistrictMonthlyKPIs / renderDistrictKPIs, which read
+               #district-kpi-body); with the container gone those return at their
+               first line again and make no network calls. The Store Breakdown tab
+               carries each store's weekly metrics, which is what a DM reads day to
+               day. Restoring the tab means putting the two elements back — see the
+               Scorecard panel above for the shape. -->
+      </div>
   </div>
 
   <div class="ew-airy ew-perf mb-30">
@@ -1556,9 +1616,6 @@
     <div class="manage-content">
       <div id="dmListingBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
     </div>
-    <div class="manage-footer">
-      <span class="dmx-foot-note">Rosters are read-only here &mdash; managers set their own roles. Weekly goals save immediately.</span>
-    </div>
 </div>
 
 <!-- ===== DM DISTRICT CLEANING CHECKLIST =====
@@ -1955,7 +2012,15 @@
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-owner-manager" data-feature="tool-user-permissions" onclick="_closeToolsPanel(); toggleManageUsers();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></span>User Permissions</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-feature-access" onclick="_closeToolsPanel(); openFeatureAccess();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></span>Feature Access</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-email-recipients" onclick="_closeToolsPanel(); openEmailRecipients();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></span>Email Recipients</a>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-multistore-manager" data-feature="tool-expenses" onclick="_closeToolsPanel(); openExpenses();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l3-2 3 2 3-2 3 2 3-2V2l-3 2-3-2-3 2-3-2z"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg></span>Expense Report</a>
+      <!-- Two rows for ONE tool, sharing the tool-expenses stem the way the claims
+           and preferred-purchase pairs do. Both open the same modal; the edge fn
+           decides the powers from the caller's PIN, so nothing here grants anything.
+           The split exists for FEATURE ACCESS: one key carrying both role-district-manager
+           and role-multistore-manager made the MGR column a lie — it read as "on for
+           managers" while the role class silently admitted only the MSM, and switching
+           it on for an ordinary manager did nothing you could predict. -->
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-expenses" onclick="_closeToolsPanel(); openExpenses();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l3-2 3 2 3-2 3 2 3-2V2l-3 2-3-2-3 2-3-2z"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg></span>Expense Report</a>
+      <a class="tools-item dynamic-module-flex role-multistore-manager" data-feature="tool-expenses-mgr" onclick="_closeToolsPanel(); openExpenses();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l3-2 3 2 3-2 3 2 3-2V2l-3 2-3-2-3 2-3-2z"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg></span>Expense Report</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-performance-metrics" onclick="_closeToolsPanel(); toggleManageAlerts();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></span>Performance Metrics</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-company-records" onclick="_closeToolsPanel(); toggleManageRecords();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></span>Company Records</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-manage-policies" onclick="_closeToolsPanel(); toggleManageDocs();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></span>Manage Policies</a>

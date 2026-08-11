@@ -3404,6 +3404,19 @@ button.hotbar-btn { cursor: pointer; font-family: inherit; }
 .role-dot.active { background: var(--slate-charcoal); color: #fff; border-color: var(--slate-charcoal); }
 .goals-edit-roles { display: flex; gap: 6px; align-items: center; }
 
+/* "Off" chip — same control as the role dots, but it means the opposite of a
+   role, so it reads as a pill rather than a circle and never turns green. */
+.role-dot.role-off {
+    width: auto; min-width: 30px; padding: 0 8px; border-radius: 999px;
+    border-style: dashed; font-size: 9px; letter-spacing: .3px;
+    margin-left: 4px;
+}
+.role-dot.role-off:hover { border-color: #94a3b8; color: #475569; }
+.role-dot.role-off.active {
+    background: #64748b; border-color: #64748b; border-style: solid; color: #fff;
+}
+.goal-auto-display.goal-off-set { background: #f1f5f9 !important; color: #64748b !important; border-color: #e2e8f0 !important; }
+
 .district-kpi-table-header, 
 #district-kpi-body .kpi-row {
     grid-template-columns: minmax(130px, 1.5fr) repeat(5, minmax(85px, 1fr)) !important;
@@ -3913,7 +3926,188 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .gap-10 { gap: 10px; }
 .gap-8 { gap: 8px; }
 
+/* .district-command-section wrapped the DM board when it was its own section.
+   The board is a tab inside #dcWidget now and the wrapper is gone; the rule stays
+   only because other shells may still carry the class. */
 .district-command-section { margin-top: -15px; margin-bottom: 30px; display: flex; flex-direction: column; width: 100%; }
+
+/* ---- district Command Center ---------------------------------------------- */
+/* It borrows the store board's chrome wholesale (.cc-widget, .cc-tabbar,
+   .cc-summary, .cc-panel), so what is left here is only what is genuinely its
+   own: the five-store tables and the revived KPI header. */
+/* The store board was a standalone white card. Inside a tab panel of another card
+   that framing doubles up, so it is flattened rather than restyled. */
+/* The store Command Center stacks every panel in one grid cell so the card never
+   resizes on a tab switch. That works there because its tabs all describe one
+   store and come out near enough the same height. The district's do not: Live is
+   a five-store table plus the buying half, Stores is a whole board, eBay is five
+   rows. Reserving the tallest left the eBay and Scorecard tabs sitting under most
+   of a screen of white, so here only the open panel takes up space and the card
+   is as tall as whatever you are actually looking at. */
+#dcWidget .cc-panel:not(.cc-active) { display: none; }
+#dcWidget.cc-expanded { min-height: 0; }
+
+/* Seven cells across, and these keys carry the qualifier that makes the number
+   readable ("Company Avg", "to Goal", "Month to Date") — exactly the part a single
+   ellipsised line eats first, and it clips by 1150px. They wrap instead, and every
+   key reserves two lines so the values still sit on one baseline.
+   The store Command Center's summary is the same seven cells scoped to one store,
+   so it takes the identical treatment rather than a near-copy that drifts. It is
+   the narrower card of the two, which makes it the one that needed this most.
+   (A gated role sees fewer cells there — an employee gets the three live ones —
+   and every rule here is per-cell, so a short row just gets wider cells.) */
+#dc-summary .cc-sum-k,
+#cc-summary .cc-sum-k {
+    white-space: normal; overflow: visible; line-height: 1.35; min-height: 2.7em;
+}
+/* Centred, and the padding evened up with it — the extra 2px on the left was
+   there to sit a left-aligned label off the cell divider, and off-centre by 2px
+   is more visible than off-edge by 2px ever was.
+   Tighter than the six-cell version too: this row carries SEVEN, and at the
+   shared 16/18px padding and 120px floor they wrapped to a second line by
+   1000px — a real content width on a 1280px screen once the sidebar is off. */
+#dc-summary .cc-sum,
+#cc-summary .cc-sum { text-align: center; padding: 17px 10px 18px; min-width: 104px; }
+/* A point off the headline for the same reason. "$7,828 28 orders" is the widest
+   value here and still overran a seventh of 1000px at 22px; two points down it
+   fits, which is a cheaper trade than dropping the order count. */
+#dc-summary .cc-sum-v,
+#cc-summary .cc-sum-v { font-size: 20px; }
+
+.cc-panel .dcc { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.cc-panel .dcc-head { padding: 14px 20px 12px; }
+.cc-panel .dcc-body { background: transparent; padding: 0 20px 20px; }
+.lv-card-inner { padding: 16px 20px 20px; }
+.lv-card-inner .lv-head { margin-bottom: 14px; }
+
+/* The district tables are five or six columns, not the sell table's nine, so they
+   must not inherit its per-column widths or its 1080px floor. */
+.dc-tbl { min-width: 760px; }
+.dc-tbl th, .dc-tbl td { width: auto; }
+.dc-tbl th:first-child, .dc-tbl td:first-child { width: 15%; }
+
+/* A whole row is the drill-down target. It has to look like one before it is
+   hovered, which the cursor alone does not do. */
+.dc-tbl tr.dc-clickable { cursor: pointer; transition: background .12s; }
+.dc-tbl tr.dc-clickable:hover > td { background: #f4faf6; }
+.dc-tbl tr.dc-clickable:focus-visible { outline: 2px solid #178048; outline-offset: -2px; }
+.dc-tbl tr.dc-clickable:hover .lv-store b { color: #178048; }
+
+/* Scoped to the cell, not bare class selectors. `.lv-tbl td` sets colour and
+   weight at specificity (0,1,1); a bare `.dc-good` is (0,1,0) and loses, so every
+   severity silently rendered as ordinary body text. */
+.dc-tbl td.dc-good, .dc-good { color: #178048; font-weight: 800; }
+.dc-tbl td.dc-warn, .dc-warn { color: #b3760a; font-weight: 800; }
+.dc-tbl td.dc-bad,  .dc-bad  { color: #dc2626; font-weight: 850; }
+.dc-tbl td.dc-muted, .dc-muted { color: #94a3b8; font-weight: 650; }
+/* The chips sit inside a td, so they lose to it for the same reason. */
+.dc-tbl td .dc-cat, .dc-tbl td .dc-audit, .dc-tbl td .dc-muted { font-weight: 750; }
+
+/* Categories at risk is free text of unpredictable length in a nowrap table —
+   the one shape that silently breaks these layouts. Chips wrap inside the cell
+   instead. */
+.dc-tbl td.dc-cats { white-space: normal; text-align: left; padding: 9px 8px; }
+
+/* ...and it is no longer a column. It sits UNDER its store's numbers, so each
+   store is a two-row <tbody>: hovering either row lights the pair, and the four
+   percentages get the width the chips were taking. */
+.dc-tbl tbody.dc-grp:hover > tr > td { background: #f4faf6; }
+.dc-tbl tbody.dc-grp:hover .lv-store b { color: #178048; }
+/* The two rows are one record — only the pair carries a rule under it. The air
+   above the numbers and below the chips is what separates one store from the
+   next: the chips are a wrapping block, so without it the previous store's last
+   chip sat almost against the next store's name. */
+.dc-tbl tbody.dc-grp > tr.dc-clickable > td { border-bottom: 0; padding: 17px 8px 7px; }
+.dc-tbl tr.dc-catrow { cursor: pointer; }
+.dc-tbl tr.dc-catrow > td.dc-cats { padding: 0 12px 17px; }
+
+/* A flex row, not inline-blocks: the gap is then set once and stays even when
+   chips wrap onto a second line, where stacked margins would have doubled it. */
+.dc-catwrap { display: flex; flex-wrap: wrap; align-items: center; gap: 7px 10px; }
+.dc-catlab {
+    flex: none;
+    font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase;
+    color: #b0bac6;
+}
+.dc-cat {
+    display: inline-block; margin: 0; padding: 4px 11px; border-radius: 999px;
+    font-size: 10.5px; font-weight: 750; background: #f1f5f9; color: #647082;
+    max-width: 100%;
+}
+/* Severity first, in caps, then the categories it applies to. The gap between
+   the two is the one that has to be widest — it is the seam between the label
+   and its content, inside a pill that already sits beside other pills. */
+.dc-cat b {
+    font-weight: 850; letter-spacing: .04em; text-transform: uppercase;
+    font-size: 9px; margin-right: 9px; opacity: .85;
+    /* The label is two words with a middot; letting it break mid-label ("PROJECTED ·"
+       / "HIGH") reads as two separate severities. */
+    white-space: nowrap;
+}
+/* Scorecard tab: a section's score, trailing its name. Heavier than the name, and
+   pushed to the far edge of a fixed-width chip so the scores line up in a column
+   down the whole row rather than landing wherever each name happens to end. */
+/* One grid, as many equal columns as the busiest store needs (set inline, since
+   only the render knows the count). Equal columns beat a fixed pixel width: the
+   chips still match each other exactly, but the row scales to the space it has
+   instead of wrapping the moment a store loses points in one more section. */
+.dc-catgrid { flex: 1 1 auto; min-width: 0; display: grid; gap: 7px 10px; }
+/* The eBay tab's chips wrap; these must not. The label has to stay on the left
+   of the grid rather than being pushed onto a line of its own — otherwise the
+   grid starts at a different x on the stores that have most to say, and the
+   scores stop lining up down the table, which is the whole point of the grid. */
+.dc-tbl-score .dc-catwrap { flex-wrap: nowrap; }
+.dc-tbl-score .dc-catlab { flex: none; }
+.dc-cat.dc-fix {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 8px; min-width: 0; width: auto;
+}
+/* The names are what give: "Display Cases & Merchandising" clips before the score
+   does, because the score is the thing being compared down the column. */
+.dc-secnm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.dc-pts { font-weight: 900; flex: none; opacity: .95; font-variant-numeric: tabular-nums; }
+
+/* Scorecard headers are category names, not one-word metrics, so they are allowed
+   to take two lines rather than forcing the table wider than the panel. */
+.dc-tbl-score th { white-space: normal; line-height: 1.35; }
+.dc-tbl-score { min-width: 880px; }
+
+/* The scored week, under the store code. */
+.dc-sub { display: block; margin-top: 3px; font-size: 10px; font-weight: 650; color: #a8b3c0; }
+
+/* The two categories are parts of the Total score beside them. That was fenced
+   with a spanning header and a tint band; both are gone — the tint read as a
+   panel rather than a grouping. What is left is weight: the parts are quieter
+   than the total they add up to, which is enough given they sit right next to
+   it and the header names them. */
+.dc-tbl-score th.dc-sc-part { color: #a8b3c0; font-size: 9px; }
+.dc-tbl-score td.dc-sc-part { font-size: 11.5px; }
+.dc-cat.dc-bad  { background: #fbeae7; color: #7f2418; font-weight: 800; }
+.dc-cat.dc-warn { background: #fdf3e2; color: #8a5a06; font-weight: 800; }
+.dc-cat.dc-good { background: #e6f4ec; color: #14532d; font-weight: 750; }
+
+/* The audit score opens its own breakdown modal, so it is a button inside a
+   clickable row and has to read as the more specific target of the two. */
+.dc-audit {
+    font: inherit; font-weight: 850; background: transparent;
+    border: 1px solid #e6ebf1; border-radius: 999px; padding: 4px 11px; cursor: pointer;
+    transition: border-color .12s, background .12s;
+}
+.dc-audit:hover { background: #fff; }
+/* Explicit rather than relying on .dc-good/.dc-warn/.dc-bad reaching a button
+   inside a td — and the border takes the tint too, which is what makes the score
+   read as a verdict rather than a number in a box. */
+.dc-tbl td .dc-audit.dc-good { color: #178048; border-color: #bfe3cd; background: #f4faf6; }
+.dc-tbl td .dc-audit.dc-warn { color: #b3760a; border-color: #f0dcb4; background: #fdf8ee; }
+.dc-tbl td .dc-audit.dc-bad  { color: #dc2626; border-color: #f3c9c3; background: #fdf4f3; }
+
+.dc-note { font-size: 11.5px; font-weight: 650; color: #94a3b8; margin-top: 12px; padding: 0 2px; }
+
+.dc-kpi-head { display: flex; align-items: center; gap: 10px; padding: 14px 20px 4px; }
+.dc-kpi-head label {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    color: #647082;
+}
 .district-header-wrapper { margin-bottom: 15px; border-bottom: 2px solid #e2e8f0; padding-bottom: 15px; width: 100%; }
 .district-command-title { font-size: 20px; font-weight: 900; color: var(--slate-charcoal); letter-spacing: -0.5px; margin-bottom: 0; }
 
@@ -7038,6 +7232,36 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 .ws-panel-kpis .kpi-grid-section-header,
 .ws-panel-kpis .kpi-grid-th { position: static; }
 
+/* Aging Inventory rows are not rows — each carries a whole DM/store note thread
+   and runs to ~190px, so the shared calc(100vh - 250px) fit barely three before
+   the inner scrollbar took over and reviewing a store's list meant scrolling
+   inside a box inside a page.
+   The box now grows to fit its content and the PAGE scrolls, which is what the
+   Monthly Brief and Store KPIs panes beside it already do. min-height keeps it
+   from ever being SHORTER than it was. */
+.ws-panel-aging { height: auto !important; overflow: visible !important; min-height: calc(100vh - 250px); }
+.ws-panel-aging .ws-scroll { overflow: visible; flex: none; min-height: 0; }
+/* Losing the inner scroll would otherwise take the store picker and Add Item off
+   screen with it. .top-nav is position:fixed at 60px, so that is what this has to
+   clear — a sticky header at top:0 would slide underneath it. */
+.ws-panel-aging .ws-head {
+    position: sticky; top: 60px; z-index: 4;
+    background: #fff; border-bottom: 1px solid #eef2f6;
+}
+
+/* Variance Replies gets the Aging treatment for the same reason: a row here is a
+   line item plus a whole gm_note → dm_note → reply thread, so the shared pane
+   height showed a handful and put the rest behind an inner scrollbar — a box
+   scrolling inside a page, with the store picker and period select scrolling out
+   of reach the moment you went looking. Grows to fit, page scrolls, header pinned
+   under the fixed .top-nav at 60px. */
+.ws-panel-vreplies { height: auto !important; overflow: visible !important; min-height: calc(100vh - 250px); }
+.ws-panel-vreplies .ws-scroll { overflow: visible; flex: none; min-height: 0; }
+.ws-panel-vreplies .ws-head {
+    position: sticky; top: 60px; z-index: 4;
+    background: #fff; border-bottom: 1px solid #eef2f6;
+}
+
 /* Monthly Brief pane flows as part of the page too: natural height, no inner scrollbar */
 .ws-panel-brief { height: auto !important; min-height: 0 !important; overflow: visible !important; }
 .ws-panel-brief .ws-scroll { overflow: visible; flex: none; min-height: 0; }
@@ -8392,6 +8616,17 @@ input.kpi-grid-input.kpi-cell-red:disabled   { background: #fee2e2 !important; c
 #listingGoalsModal .role-dot:hover { border-color: #1f9d57 !important; color: #178048 !important; }
 #listingGoalsModal .role-dot.active {
     background: #1f9d57 !important; border-color: #1f9d57 !important; color: #fff !important;
+}
+/* Off is not an achievement — keep it slate inside the airy modal too. */
+#listingGoalsModal .role-dot.role-off {
+    border-style: dashed !important; border-radius: 999px !important; padding: 0 9px !important; margin-left: 4px;
+}
+#listingGoalsModal .role-dot.role-off:hover { border-color: #94a3b8 !important; color: #475569 !important; }
+#listingGoalsModal .role-dot.role-off.active {
+    background: #64748b !important; border-color: #64748b !important; border-style: solid !important; color: #fff !important;
+}
+#listingGoalsModal .goal-auto-display.goal-off-set {
+    background: #f1f5f9 !important; color: #64748b !important; border-color: #e3e8ee !important;
 }
 #listingGoalsModal .goal-auto-display,
 #listingGoalsModal .goals-mgr-week {
@@ -9797,11 +10032,10 @@ body.sam-active .hotbar-btn:hover {
 .lbs-rank.g { color: #c99a17; }
 .lbs-store { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; }
 .lbs-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-.lbs-info { flex: 1; min-width: 0; }
-.lbs-nm { font-size: 12.5px; font-weight: 800; color: var(--slate-charcoal); display: block; }
+/* The name sits on the row's own baseline now — .lbs-info existed only to stack it
+   over the bar that has gone. */
+.lbs-nm { font-size: 12.5px; font-weight: 800; color: var(--slate-charcoal); flex: 1; min-width: 0; }
 .lbs-you { color: #178048; font-size: 9px; font-weight: 800; }
-.lbs-bar { display: block; height: 5px; border-radius: 3px; margin-top: 4px; background: #e6ebf1; overflow: hidden; }
-.lbs-bar i { display: block; height: 100%; border-radius: 3px; }
 .lbs-val { font-size: 12.5px; font-weight: 850; color: var(--slate-charcoal); text-align: right; font-variant-numeric: tabular-nums; flex: none; }
 @media (max-width: 900px) {
     .ew-perf-body { grid-template-columns: 1fr; }
@@ -9825,7 +10059,10 @@ body.sam-active .hotbar-btn:hover {
 .ekpi-v { font-size: 23px; }
 
 /* Leaderboard standings: highlight the user's store box instead of a "you" tag */
-.lbs-row { padding: 9px 8px; }
+/* Taller rows than the barred version needed — a row is a single line of type now,
+   and the card it sits in is a fixed height, so without this the five stores
+   bunched at the top under a third of a card of white. */
+.lbs-row { padding: 14px 8px; }
 .lbs-row.me { background: #e8f7ee; border-radius: 9px; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, #1f9d57 32%, transparent); }
 .lbs-row.me, .lbs-row.me + .lbs-row { border-top: none; }
 
@@ -9852,13 +10089,22 @@ body.sam-active .hotbar-btn:hover {
    the row is already the max of the two and the height is stable by construction. The
    hard lock only clipped: the Buying panel needs 437px of the 378px it left, so the
    Sell Margin row fell outside the card entirely once GP (MTD) was added. */
-.ec-widget.cc-expanded { min-height: 530px; }
-.ec-widget .cc-panel { display: flex; flex-direction: column; justify-content: flex-start; overflow-y: auto; }
+/* Was .ec-widget — the employee widget is gone and .cc-widget.cc-expanded above
+   already sets the same min-height. The KPI panel keeps its own scroll: it is the
+   one panel whose content length depends on how many metrics a person has. */
+#cc-panel-kpis { display: flex; flex-direction: column; justify-content: flex-start; overflow-y: auto; }
 /* Keep the header one line so hiding the goal chip / a longer KPI title can't change its
    height (which would shift everything below on tab switch). */
-.ec-widget .ew-title { flex-wrap: nowrap; }
+.cc-widget .ew-title { flex-wrap: nowrap; }
 .cc-widget:not(.cc-expanded) .cc-strips,
 .cc-widget:not(.cc-expanded) .cc-body { display: none; }
+/* Weekly KPIs is the one tab with no tile strip of its own. Without this the strip
+   band stays in the layout as a blank stripe, because every strip lives in the same
+   grid cell and hiding them all leaves the cell at the tallest one's height. */
+.cc-widget.cc-nostrip .cc-strips { display: none; }
+/* Header right-hand group: the per-tab chips sit beside the "updated as of" line
+   rather than pushing it onto a second row. */
+.cc-head-r { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .cc-widget.cc-expanded .cc-summary { display: none; }
 .cc-updated { font-size: 10.5px; font-weight: 650; color: #94a3b8; text-align: right; white-space: nowrap; flex: none; }
 .cc-updated b { color: #647082; font-weight: 800; }
@@ -9951,11 +10197,35 @@ body.sam-active .hotbar-btn:hover {
 }
 .cc-sum { flex: 1 1 0; background: #f6faf7; padding: 17px 16px 18px 18px; min-width: 120px; }
 .cc-sum-k { font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #647082; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* "Through Yesterday" under the two tracking-to-goal keys. The percentage is a
+   projection built on figures that lag a day — a day's buying is keyed the
+   following morning — and the cell had no way to say so, which made it look
+   like a live number that had simply stopped moving.
+   A BLOCK line under the key, not a suffix on it: .cc-sum-k is nowrap with an
+   ellipsis, so anything appended inline vanished at the first narrow window. */
+.cc-sum-thru { display: block; margin-top: 2px; font-size: 8.5px; font-weight: 700; letter-spacing: .04em; color: #94a3b8; }
 .cc-sum-v { font-size: 22px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; margin-top: 7px; color: var(--slate-charcoal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cc-sum-v small { font-size: 11px; font-weight: 700; color: #94a3b8; }
 .cc-sum-v.warn { color: #d97706; }
 .cc-sum-v.bad { color: #dc2626; }
 .cc-sum-v.good { color: #178048; }
+
+/* Google Reviews went a whole open day without moving. Same animation, same rail
+   and the same resting pink as the Tracking tile, so the two surfaces read as one
+   alert rather than two — this one just happens to be the surface everybody
+   actually lands on, since both boards open collapsed.
+   position:relative for the inset rail: .cc-sum is a plain flex child otherwise. */
+.cc-sum.cc-sum-flat { position: relative; animation: lvRevFlat 9s ease-out 1 both; box-shadow: inset 3px 0 0 #d64545; }
+.cc-sum-flat-n { margin-top: 6px; font-size: 9px; font-weight: 800; letter-spacing: .02em; line-height: 1.35; color: #b23636; }
+/* The row is flex with stretched cells, so this cell growing takes the other six
+   with it. That is the intended trade: one extra line across a strip that is
+   already 90px tall, in exchange for the alert being on the collapsed view.
+   The district's second line is a fixed shape — a count and a pointer — rather
+   than a run of store pills, which wrapped three deep in a 104px cell. */
+.cc-sum-flat-w { display: block; margin-top: 3px; font-weight: 700; color: #94a3b8; }
+@media (prefers-reduced-motion: reduce) {
+    .cc-sum.cc-sum-flat { animation: none; background: rgba(214, 69, 69, .045); }
+}
 
 /* Per-tab summary strip — all three stacked in one grid cell, only the active one shown
    (opacity, not display) so the strip row always reserves the tallest tab's height. */
@@ -9973,6 +10243,13 @@ body.sam-active .hotbar-btn:hover {
 .cc-cell .sh-v.bad { color: #dc2626; }
 .cc-cell .sh-v.good { color: #178048; }
 .cc-cell .sh-sub { font-size: 10.5px; font-weight: 600; color: #647082; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Two figures in one sub-line (Total Cost / Total Profit). Real space between the
+   groups, and the label quieter than its number, so the eye reads two quantities
+   rather than one running phrase. */
+.lv-subpair { display: inline-flex; gap: 16px; }
+.lv-sp { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
+.lv-sp i { font-style: normal; font-weight: 650; color: #a3aeba; }
+.lv-sp { font-weight: 750; color: #56636f; }
 .cc-cell .sh-trend.up { color: #059669; font-weight: 800; }
 .cc-cell .sh-trend.dn { color: #dc2626; font-weight: 800; }
 .cc-cell .sh-dot { position: absolute; top: 10px; right: 10px; }
@@ -10001,6 +10278,629 @@ body.sam-active .hotbar-btn:hover {
 @media (max-width: 720px) {
     .cc-strip.s3, .cc-strip.s4 { grid-template-columns: 1fr 1fr; }
     .cc-sum { min-width: 33%; }
+}
+
+/* =========================================================
+   LIVE DASHBOARD — today's Shopify sales
+   Three surfaces share this stylesheet: the manager Command Center's Live tab
+   (tiles in .cc-strip, detail in .cc-panel), the employee/ASM widget (tiles and
+   detail together inside .cc-panel) and the DM/CEO card above the district board.
+   Tiles reuse .cc-cell so a tile reads identically wherever it lands.
+   ========================================================= */
+/* The district card has no .cc-strip of its own, so its tile row is bordered here
+   instead of relying on the strip band above it. (The employee widget used to be
+   the other case; it now shares the Command Center's strip band.) */
+.lv-strip, .lv-dist-strip {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 1px; background: #eef2f6;
+}
+.lv-dist-strip {
+    border: 1px solid #e6ebf1; border-radius: 13px; overflow: hidden;
+}
+.lv-dist-strip { margin: 16px 20px 0; }
+.lv-dist-detail { padding: 16px 20px 18px; }
+/* Only fires in the employee widget, where the tiles and the detail are siblings
+   inside one panel. In the manager Command Center they live in different containers
+   and the strip band already provides the separation. */
+.lv-strip + .lv-detail { margin-top: 16px; }
+/* The one tile the eye should land on first. */
+.cc-cell.lv-accent { background: #f4faf6; }
+.cc-cell.lv-accent .sh-v { color: #146c3c; }
+.cc-cell.lv-accent .sh-stripe { background: #1f9d57; }
+.lv-strip .cc-cell .sh-v, .lv-dist-strip .cc-cell .sh-v { font-variant-numeric: tabular-nums; }
+
+/* Freshness line above the detail (store surfaces); the district card carries the
+   same thing in its header instead. */
+.lv-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; flex-wrap: wrap; margin-bottom: 14px;
+}
+.lv-head .lv-asof { font-size: 10.5px; font-weight: 650; color: #94a3b8; }
+/* Freshness and date read as one phrase, so they stay together on the left and let
+   the day toggle sit at the far right rather than being pushed between them. */
+.lv-head-l { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.lv-head-r { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* Today / Yesterday. A segmented pair rather than a single "show yesterday"
+   button: with two labelled halves the current day is always stated, so a glance
+   can never mistake a finished day for the live one. */
+.lv-modes {
+    display: inline-flex; flex: none; gap: 2px; padding: 2px;
+    background: #f1f5f9; border: 1px solid #e6ebf1; border-radius: 999px;
+}
+.lv-mode {
+    font: inherit; font-size: 10.5px; font-weight: 800; letter-spacing: .02em;
+    color: #647082; background: none; border: 0; cursor: pointer;
+    border-radius: 999px; padding: 4px 12px; white-space: nowrap;
+    transition: background .16s ease, color .16s ease;
+}
+.lv-mode:hover { color: var(--slate-charcoal); }
+.lv-mode.on {
+    background: #fff; color: var(--slate-charcoal);
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .08);
+}
+.lv-mode:focus-visible { outline: 2px solid #1f9d57; outline-offset: 1px; }
+.lv-fresh {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    color: #178048; background: #e8f7ee; border: 1px solid #c6ecd6;
+    border-radius: 999px; padding: 4px 10px; white-space: nowrap; flex: none;
+}
+/* A frozen number must never pass for a current one, so "stale" and "closed" look
+   different rather than just dropping the dot. */
+/* The amber "stale" variant is gone with the age readout — the pill is open or
+   closed and nothing else. */
+.lv-fresh.closed { color: #647082; background: #f1f5f9; border-color: #e6ebf1; }
+/* A radar ping rather than a throbbing ring: the core holds steady and a copy of
+   it expands and fades away underneath. Scaling a pseudo-element animates on the
+   compositor, where the old box-shadow keyframes forced a repaint every frame and
+   stepped visibly between the two radii. */
+.lv-dot {
+    position: relative; width: 7px; height: 7px; border-radius: 50%;
+    background: #1f9d57; flex: none;
+}
+.lv-dot::after {
+    content: ''; position: absolute; inset: 0; border-radius: 50%;
+    background: #1f9d57; z-index: -1;
+    animation: lvPing 2.4s cubic-bezier(.22, .61, .36, 1) infinite;
+}
+@keyframes lvPing {
+    0%   { transform: scale(1);   opacity: .5; }
+    65%  { opacity: 0; }
+    100% { transform: scale(3.4); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .lv-dot::after { animation: none; }
+}
+
+/* Supporting figures — deliberately quieter than the tiles above them. */
+.lv-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.lv-chip {
+    font-size: 11px; font-weight: 700; color: #647082;
+    background: #f6f8fa; border: 1px solid #e6ebf1; border-radius: 999px;
+    padding: 6px 12px; white-space: nowrap;
+}
+.lv-chip b { color: var(--slate-charcoal); font-weight: 850; font-variant-numeric: tabular-nums; }
+
+/* GP banked vs the monthly goal, with a tick marking where the selling month has
+   actually reached. Banked, never projected — the district board below projects, and
+   the two numbers look like a contradiction unless each says which it is. */
+.lv-goal { margin-top: 16px; }
+.lv-goal-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.lv-goal-lbl { font-size: 9.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: #647082; }
+.lv-goal-fig { font-size: 12px; font-weight: 650; color: #647082; font-variant-numeric: tabular-nums; }
+.lv-goal-fig b { font-size: 14px; font-weight: 850; color: var(--slate-charcoal); }
+.lv-goal-bar {
+    position: relative; height: 9px; margin-top: 8px;
+    background: #eef2f6; border-radius: 999px; overflow: hidden;
+}
+.lv-goal-bar i {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: linear-gradient(90deg, #1f9d57, #178048); border-radius: 999px;
+    transition: width .5s ease;
+}
+/* The expected-progress tick. Inside the bar's overflow:hidden so a 100%-elapsed
+   month cannot park it outside the rounded end. */
+.lv-goal-bar u {
+    position: absolute; top: -2px; bottom: -2px; width: 2px;
+    margin-left: -1px; background: #647082; opacity: .55; text-decoration: none;
+}
+.lv-goal-foot {
+    display: flex; justify-content: space-between; gap: 10px; margin-top: 6px;
+    font-size: 10px; font-weight: 700; color: #94a3b8; font-variant-numeric: tabular-nums;
+}
+
+/* Pace: 100 = exactly on track for the month. */
+.lv-pill {
+    display: inline-block; font-size: 10.5px; font-weight: 850;
+    border-radius: 7px; padding: 2px 7px; white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.lv-pill.good { background: #e8f7ee; color: #178048; }
+.lv-pill.warn { background: #fdf3e1; color: #b3760a; }
+.lv-pill.bad  { background: #fdecec; color: #dc2626; }
+.lv-pill.flat { background: #f1f5f9; color: #94a3b8; }
+
+/* Both widgets stand 530px so the card lines up with the Performance chart, and the
+   Buying tab is what needs that height — the Live tab's content is shorter, which
+   left a slab of white under it. Anchoring the last-order line to the bottom of the
+   panel turns that gap into a footer rule, which is what the line is anyway. */
+.lv-panel { display: flex; flex-direction: column; }
+.lv-panel > .lv-detail { flex: 1; display: flex; flex-direction: column; }
+/* margin-top:auto collapses to 0 once the content is tall enough to fill, so the
+   breathing room above the rule is padding, not margin. */
+.lv-detail > .lv-last { margin-top: auto; padding-top: 16px; }
+
+/* The line that makes the panel feel live rather than reported. */
+.lv-last {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-top: 16px; padding-top: 13px; border-top: 1px solid #eef2f6;
+    font-size: 12px; font-weight: 650; color: #647082;
+}
+.lv-last b { color: var(--slate-charcoal); font-weight: 850; font-variant-numeric: tabular-nums; }
+.lv-last.lv-quiet { color: #94a3b8; }
+/* How a finished day closed out. Sits in the same slot as the last-order line so
+   the panel keeps its footer rule on both views. */
+.lv-last.lv-final { display: block; line-height: 1.6; }
+.lv-err {
+    font-size: 12px; font-weight: 650; color: #b3760a; line-height: 1.5;
+    background: #fdf3e1; border: 1px solid #eccf94; border-left-width: 3px;
+    border-radius: 10px; padding: 12px 14px;
+}
+.lv-err b { display: block; color: var(--slate-charcoal); font-weight: 850; margin-bottom: 2px; }
+.lv-note { margin-top: 12px; font-size: 10.5px; font-weight: 650; color: #94a3b8; line-height: 1.5; }
+
+/* Five-store table (DM/CEO) and both-store table (Multi-Store Manager). */
+.lv-tbl-scroll { overflow-x: auto; }
+/* table-layout:fixed makes the columns share the width evenly instead of each one
+   shrink-wrapping its content, which had "Gross profit" crowding "Orders" while
+   "GP this month" sprawled. The store column is given a bigger share because it
+   carries a name, not a number; the remaining columns then split what is left
+   equally, which is what fixed layout does with unsized columns.
+   min-width keeps that from crushing on a laptop — the wrapper scrolls instead. */
+/* Nine equal columns, every one centred — headers and values alike.
+   Earlier attempts kept money right-aligned and gave the store column a bigger
+   share, which is the textbook layout but produced exactly the complaint it was
+   meant to fix: a left-aligned STORE header stranded at the far edge of a wide
+   column, and LAST ORDER pinned to the opposite edge, with visible voids beside
+   both. Equal widths plus centred content puts every header directly over its
+   own numbers and spaces the gaps identically.
+   Decimals no longer line up down a money column; with tabular-nums and figures
+   of similar magnitude that costs little, and even spacing was the ask. */
+.lv-tbl { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; min-width: 1080px; }
+.lv-tbl th {
+    text-align: center; padding: 0 8px 9px; white-space: nowrap;
+    font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+    color: #94a3b8; border-bottom: 1px solid #e6ebf1;
+}
+/* vertical-align:middle, not the initial baseline. A row is as tall as its tallest
+   cell, and the buying table's ratio pill is ~10px taller than plain text — on
+   baseline alignment every other cell in that row sat high in its band. */
+.lv-tbl td {
+    text-align: center; padding: 11px 8px; white-space: nowrap; vertical-align: middle;
+    font-weight: 700; color: #647082; font-variant-numeric: tabular-nums;
+    border-bottom: 1px solid #f3f6f9;
+}
+/* The store column reads left. It holds names of differing length, which centred
+   would leave every row starting at a different x and nothing to run the eye down.
+   The numeric columns stay centred — that is what made the header spacing even. */
+/* The 12px of air at each end of the row is for the FLASH, not the type. When a
+   sale lands the whole row washes over as a pill (see lvRowSale below), and with
+   the store dot sitting 2px off the edge the cap of that pill ran straight through
+   it. The pill cannot grow outwards — .lv-tbl-scroll clips at the table edge — so
+   the content moves in instead. */
+.lv-tbl th:first-child, .lv-tbl td:first-child { text-align: left; padding-left: 12px; }
+.lv-tbl th:last-child,  .lv-tbl td:last-child  { padding-right: 12px; }
+/* Those 20px come out of the store column's content box, and every cell is
+   white-space:nowrap — so without this the longest name (Overland Park) would
+   spill into the Net column rather than wrap. Fixed layout splits the rest
+   equally, so the other eight give up ~0.3% each. */
+.lv-tbl th:first-child, .lv-tbl td:first-child { width: 13.5%; }
+.lv-tbl .lv-strongnum { color: var(--slate-charcoal); font-weight: 850; font-size: 13px; }
+/* Cost is context for the two figures either side of it, not a headline — quieter
+   so Net and Gross profit stay the numbers the eye lands on. */
+.lv-tbl .lv-quietnum { color: #94a3b8; }
+/* Margin: charcoal and heavy like Net and GP, but left at the body size so the
+   row still has a clear order of emphasis. */
+.lv-tbl .lv-boldnum { color: var(--slate-charcoal); font-weight: 850; }
+.lv-store { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.lv-store b { color: var(--slate-charcoal); font-weight: 850; letter-spacing: .02em; }
+.lv-tint { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.lv-store-nm { color: #94a3b8; font-weight: 650; }
+.lv-of { color: #b0bac6; font-weight: 650; }
+/* The roll-up line — District on the sell table, Total on the buying one.
+   Deliberately the SAME rule as the one under the column headers: 1px #e6ebf1,
+   and drawn the same way, as a bottom border on the row above rather than a top
+   border on the roll-up. Under border-collapse the two edges merge into one line
+   either way, but drawing it identically to the header's is what guarantees it
+   lands identically — same weight, same colour, same full-table span.
+   The air around it is what makes it read as a break rather than one more row. */
+.lv-tbl tbody tr:last-child > td { border-bottom: 1px solid #e6ebf1; }
+/* The extra room around the roll-up is SYMMETRIC. Hung on the bottom of the last
+   store row — or on just the top of this one — it pushed that row's content off
+   centre: the line has to be given its air by a taller row, not by padding one
+   side of one. */
+.lv-tbl tfoot .lv-foot td {
+    border-bottom: none; border-top: 0; padding: 16px 8px;
+    color: var(--slate-charcoal); font-weight: 850;
+}
+.lv-tbl .lv-row-errmsg { text-align: left; color: #b3760a; font-weight: 700; white-space: normal; }
+
+/* THE READER'S OWN STORE, in a table of five that otherwise look alike.
+   A point up on the row and on its headline figures — enough to find without
+   counting down the codes, not so much that the table stops being a comparison.
+   Sizes are absolute, not `em`: .lv-strongnum already overrides the cell's font
+   size, so a relative bump here would be silently ignored on exactly the three
+   figures most worth lifting.
+
+   Size alone turned out to be invisible — half a point across a row nobody is
+   measuring reads as nothing at all, and on a store screen the row you are
+   looking for is the whole reason the table is there. So it now also carries an
+   accent rail and a faint wash.
+
+   ⚠️ THE WASH GOES ON THE ROW, THE FLASH IS ON THE CELLS. That is the one thing
+   here that cannot be swapped. lvRowSale animates `background` on `> td`, and its
+   0%/100% frames are TRANSPARENT — so a permanent wash on the same cells would be
+   overridden for the whole 10 seconds and the row would blink bare between each of
+   the five pulses. Painted on the tr it sits behind the cell boxes instead: the
+   flash washes over it and it is still there underneath afterwards.
+
+   The rail is an inset shadow rather than a border so it costs no layout, and
+   because a shadow paints ON TOP of the animated background it survives the flash
+   rather than being covered by it. Sage, not the store's own tint: the tint dot
+   already says "which store", and this has to say "yours". */
+.lv-tbl tr.lv-row-mine { background: rgba(90, 141, 59, 0.055); }
+.lv-tbl tr.lv-row-mine > td:first-child {
+    box-shadow: inset 3px 0 0 var(--sage-professional);
+}
+/* The row used to be set half a point larger throughout as well. The rail and the
+   wash already say "yours" without touching the type, and scaling four different
+   number classes made this one row sit out of rhythm with the four above it —
+   every column's figures stopped lining up on the same baseline weight. Type
+   stays at table size (user's call 2026-08-09). */
+/* The store's full name is set grey to keep it behind the code; on this one row
+   it carries the recognition, so it comes up out of the wash a little. */
+.lv-tbl tr.lv-row-mine .lv-store-nm { color: #7b8798; }
+
+/* A sale (green) or a refund (red) just landed at this store: the WHOLE ROW washes
+   over. A band the width of the table is caught peripherally; the old highlight on
+   the money cell alone had to be looked at directly to be noticed.
+   The tint is far lighter than that per-cell one was. It now covers roughly ten
+   times the area, and at the old strength one sale repainted half the panel.
+
+   FIVE DECAYING PULSES over the 10 seconds, not one fade — roughly one every two
+   seconds, each fainter than the last. A single fade is only visible in the moment
+   you happen to look up; a slow repeat keeps catching the eye for as long as the
+   event is worth knowing about, and dies away on its own rather than stopping. */
+/* GOOGLE REVIEWS WENT A DAY FLAT — the tracking tile pulses red.
+   Modelled on lvRowSale below rather than a steady blink: decaying pulses catch
+   the eye on sign-in and then stop, where a permanent flash becomes wallpaper
+   inside a week and a single fade is only seen if you happen to be looking.
+   Four pulses over 9s, then it rests as a quiet red-tinted card so the state is
+   still legible to somebody who walked up late. */
+@keyframes lvRevFlat {
+    0%   { background: rgba(214, 69, 69, .03); }
+    5%   { background: rgba(214, 69, 69, .20); }
+    16%  { background: rgba(214, 69, 69, .04); }
+    27%  { background: rgba(214, 69, 69, .16); }
+    40%  { background: rgba(214, 69, 69, .04); }
+    52%  { background: rgba(214, 69, 69, .12); }
+    66%  { background: rgba(214, 69, 69, .04); }
+    78%  { background: rgba(214, 69, 69, .08); }
+    100% { background: rgba(214, 69, 69, .045); }
+}
+.cc-cell.lv-rev-flat {
+    animation: lvRevFlat 9s ease-out 1 both;
+    box-shadow: inset 3px 0 0 #d64545;
+}
+.cc-cell.lv-rev-flat .sh-stripe { background: #d64545; }
+/* .sh-sub is a single nowrap line with an ellipsis — every other tile's sub is a
+   short caption. This one carries a sentence and, on a district board, a row of
+   store pills, so it has to be allowed to wrap or the pills are simply clipped
+   off the right-hand edge. Scoped to the flagged tile; every other sub keeps the
+   one-line rule that stops a long caption from changing the strip's height. */
+.cc-cell.lv-rev-flat .sh-sub { white-space: normal; overflow: visible; text-overflow: clip; }
+.lv-rev-flat-n {
+    display: block;
+    color: #b23636;
+    font-weight: 700;
+    margin-top: 2px;
+}
+.lv-rev-pill {
+    display: inline-block;
+    background: #fcecec;
+    color: #b23636;
+    border: 1px solid #f6d5d5;
+    border-radius: 99px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .4px;
+    padding: 1px 7px;
+    margin: 3px 4px 0 0;
+}
+/* Somebody who has asked not to be moved at gets the colour and the rail, and
+   none of the motion. */
+@media (prefers-reduced-motion: reduce) {
+    .cc-cell.lv-rev-flat { animation: none; background: rgba(214, 69, 69, .045); }
+}
+
+@keyframes lvRowSale {
+    0%   { background: rgba(31, 157, 87, 0); }
+    4%   { background: rgba(31, 157, 87, .22); }
+    12%  { background: rgba(31, 157, 87, .07); }
+    20%  { background: rgba(31, 157, 87, .19); }
+    30%  { background: rgba(31, 157, 87, .06); }
+    40%  { background: rgba(31, 157, 87, .15); }
+    52%  { background: rgba(31, 157, 87, .05); }
+    62%  { background: rgba(31, 157, 87, .11); }
+    76%  { background: rgba(31, 157, 87, .04); }
+    86%  { background: rgba(31, 157, 87, .07); }
+    100% { background: rgba(31, 157, 87, 0); }
+}
+@keyframes lvRowRefund {
+    0%   { background: rgba(220, 38, 38, 0); }
+    4%   { background: rgba(220, 38, 38, .20); }
+    12%  { background: rgba(220, 38, 38, .06); }
+    20%  { background: rgba(220, 38, 38, .17); }
+    30%  { background: rgba(220, 38, 38, .05); }
+    40%  { background: rgba(220, 38, 38, .13); }
+    52%  { background: rgba(220, 38, 38, .04); }
+    62%  { background: rgba(220, 38, 38, .10); }
+    76%  { background: rgba(220, 38, 38, .03); }
+    86%  { background: rgba(220, 38, 38, .06); }
+    100% { background: rgba(220, 38, 38, 0); }
+}
+/* Applied to the CELLS, not the tr. A row-level background paints behind the cell
+   boxes and browsers disagree about how it interacts with their borders. */
+.lv-tbl tr.lv-row-sale   > td { animation: lvRowSale 10s ease-in-out 1; }
+.lv-tbl tr.lv-row-refund > td { animation: lvRowRefund 10s ease-in-out 1; }
+/* Softened corners rather than a full pill: 8px is the radius the cards, chips and
+   panels around it use, so the wash reads as part of the same system instead of a
+   lozenge the site uses nowhere else. The radius goes on the two END cells only —
+   the ones that actually own the outside corners. */
+.lv-tbl tr.lv-row-sale   > td:first-child,
+.lv-tbl tr.lv-row-refund > td:first-child { border-radius: 8px 0 0 8px; }
+.lv-tbl tr.lv-row-sale   > td:last-child,
+.lv-tbl tr.lv-row-refund > td:last-child  { border-radius: 0 8px 8px 0; }
+
+/* The tile on a store's own dashboard is a whole card, so it takes a plain wash —
+   no scale, which on a grid cell would ride over its neighbours. */
+@keyframes lvCellSale {
+    0%   { background: rgba(31, 157, 87, .30); }
+    70%  { background: rgba(31, 157, 87, .14); }
+    100% { background: rgba(244, 250, 246, 1); }
+}
+@keyframes lvCellRefund {
+    0%   { background: rgba(220, 38, 38, .24); }
+    70%  { background: rgba(220, 38, 38, .11); }
+    100% { background: rgba(244, 250, 246, 1); }
+}
+.cc-cell.lv-cellhit-sale   { animation: lvCellSale 10s ease-out 1; }
+.cc-cell.lv-cellhit-refund { animation: lvCellRefund 10s ease-out 1; }
+@media (prefers-reduced-motion: reduce) {
+    .lv-tbl tr.lv-row-sale > td, .lv-tbl tr.lv-row-refund > td,
+    .cc-cell.lv-cellhit-sale, .cc-cell.lv-cellhit-refund { animation: none; }
+}
+
+/* ---- the buying half of the Month and Yesterday views ---------------------- */
+/* A ruled caption that separates buying from selling without a second card round
+   it. The rule grows to fill whatever the two labels leave. */
+.lv-split { display: flex; align-items: center; gap: 12px; margin: 22px 0 12px; }
+.lv-split-l {
+    font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--slate-charcoal); white-space: nowrap;
+}
+.lv-split-r { font-size: 11px; font-weight: 650; color: #b0bac6; white-space: nowrap; order: 2; }
+.lv-split::after { content: ""; flex: 1; height: 1px; background: #e6ebf1; order: 1; }
+
+/* "Not entered yet" is a different statement from "$0 bought", and the dashed
+   edge is what says so before the sentence is read. */
+.lv-buy-empty {
+    background: #fbfdfc; border: 1px dashed #e0e7ec; border-radius: 10px;
+    padding: 20px; text-align: center; font-size: 12.5px; font-weight: 650; color: #647082;
+}
+.lv-buy-empty b { color: var(--slate-charcoal); font-weight: 800; }
+.lv-buy-note { font-size: 11px; font-weight: 650; color: #b0bac6; margin-top: 10px; }
+
+/* The buying table sits directly under the sell table and is read against it, so
+   the two share a grid: the same 1080px floor and the same 13.5% store column,
+   which puts both tables' left edge, right edge and first data column at the same
+   x at every width. (It was 720px wide with a 22% store column, so nothing lined
+   up with anything.)
+   Its four data columns then split the remaining 86.5% EQUALLY — no widths set
+   here at all, which is exactly what the sell table does and what makes both
+   tables' header spacing even. An earlier version pinned each buying column to a
+   whole number of the sell table's nine (2, 2, 2 and 3 of 9.611%) so that every
+   buying column edge fell on a selling one. It did line the two up, but nine does
+   not divide by four and the cost was visible where it matters most: BOUGHT VS
+   SOLD sat in a column half again as wide as the three beside it, with its short
+   pill marooned in the middle of the gap. Even columns won. */
+.lv-tbl-buy { min-width: 1080px; }
+/* Google Reviews adds a SIXTH column to the buying table (it was in the selling
+   table first — see _lvBuyBlock for why it moved). No extra min-width: five data
+   columns still split the same 86.5%, and measured across 1000-1400px the tightest
+   gap between painted cell text stays comfortable, because the new column holds a
+   two-digit count and the four beside it hold money.
+   Raising this table alone to 1180 was the obvious move and is the wrong one: it
+   shares its 1080px floor and 13.5% store column with the selling table so that
+   both tables' left edge, right edge and first data column land on the same x at
+   every width. Widening one breaks that for a column that does not need it. */
+
+/* Bought against sold. Three states, not the pace pill's two: at 90-99% a store
+   is drifting rather than failing, and the gap is worth seeing before it opens. */
+.lv-ratio {
+    display: inline-block; min-width: 52px; padding: 5px 9px; border-radius: 999px;
+    font-size: 11.5px; font-weight: 800;
+}
+.lv-ratio.good { color: #14532d; background: #e6f4ec; }
+.lv-ratio.warn { color: #8a5a06; background: #fdf3e2; }
+.lv-ratio.bad  { color: #7f2418; background: #fbeae7; }
+
+/* The forecast tiles are grey-striped, not green: they are a projection, and
+   giving them the same accent as banked money would read as achieved. */
+.lv-fc-strip .sh-stripe { background: #94a3b8 !important; }
+.lv-fc-good { color: #1f9d57; font-weight: 800; }
+.lv-fc-bad  { color: #dc2626; font-weight: 800; }
+/* These carry .lv-strip too, which paints #eef2f6 behind a 1px gap so the gaps
+   read as hairline dividers. Widening the gap without dropping that background
+   turned every divider into a 10px grey band — and since the first tile has no
+   gap before it, only the tiles to its right appeared to have one. */
+.lv-buy-strip, .lv-fc-strip {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+    background: transparent;
+}
+/* Tracking to Goal moved up to the headline strip, so the forecast is three tiles
+   on a FOUR-column grid: they sit under the first three tiles of the strip at the
+   top of the card, which is what lines the two bands up. The 1px side padding is
+   the top strip's 1px border — without it these would each start a pixel left of
+   the tile above and the columns would be a pixel wide. */
+   With Google Reviews the band is four tiles and fills the row; the padding is
+   still what lines column one up with the tile above it, so both counts take it. */
+.lv-fc-strip.s3, .lv-fc-strip.s4 { padding: 0 1px; }
+@media (max-width: 760px) {
+    .lv-buy-strip, .lv-fc-strip { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Sales and refunds as they land, newest at the left, each shifting the rest along
+   and expiring on its own clock. The row collapses to nothing when empty so a
+   quiet dashboard carries no stray gap. */
+.lv-activity-row {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-top: 13px;
+}
+.lv-activity-row:empty { display: none; margin-top: 0; }
+.lv-activity {
+    display: inline-flex; align-items: center; gap: 7px; flex: none;
+    font-size: 11.5px; font-weight: 700; color: #647082;
+    background: #f6f8fa; border: 1px solid #e6ebf1; border-radius: 999px;
+    padding: 5px 12px 5px 10px; white-space: nowrap;
+    /* One 30s animation covers the whole life: slide in, hold, fade out. A
+       negative delay set in JS resumes it mid-life after a re-render. */
+    animation: lvChipLife 30s ease-out forwards;
+}
+@keyframes lvChipLife {
+    0%   { opacity: 0; transform: translateY(5px) scale(.96); }
+    3%   { opacity: 1; transform: translateY(0) scale(1); }
+    90%  { opacity: 1; }
+    100% { opacity: 0; transform: translateY(-3px); }
+}
+/* Pinned: the entrance only, holding where lvChipLife would start fading. Used
+   on a store dashboard while the shop is open, where the strip is a running
+   record of the day rather than a 30-second ticker. See _lvActivityHolds. */
+.lv-activity.pinned { animation: lvChipIn .5s ease-out both; }
+@keyframes lvChipIn {
+    from { opacity: 0; transform: translateY(5px) scale(.96); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .lv-activity, .lv-activity.pinned { animation: none; }
+}
+.lv-activity b { color: var(--slate-charcoal); font-weight: 850; font-variant-numeric: tabular-nums; }
+.lv-activity .lv-aq { color: #94a3b8; font-weight: 650; }
+.lv-adot {
+    position: relative; width: 7px; height: 7px; border-radius: 50%;
+    background: #1f9d57; flex: none;
+}
+.lv-adot::after {
+    content: ''; position: absolute; inset: 0; border-radius: 50%;
+    background: #1f9d57; z-index: -1;
+}
+.lv-activity.refund { color: #b3760a; background: #fdf3e1; border-color: #f0dcb4; }
+
+/* Same radar ping as the OPEN dot. On a ticker chip it cannot outlive the
+   notification, because the chip goes after 30 seconds. A PINNED chip does
+   outlive it, so it drops the ping at the same 30-second mark (.aged, set in
+   _lvSyncActivity) — a chip from an hour ago still pulsing "just now" is the
+   screen crying wolf all afternoon. */
+.lv-adot::after { animation: lvPing 1.9s cubic-bezier(.22, .61, .36, 1) infinite; }
+.lv-activity.aged .lv-adot::after { animation: none; opacity: 0; }
+.lv-activity.refund .lv-adot,
+.lv-activity.refund .lv-adot::after { background: #dc2626; }
+@media (prefers-reduced-motion: reduce) {
+    .lv-adot::after { animation: none; }
+}
+
+/* =========================================================
+   LIVE DASHBOARD — FULL SCREEN
+   The same board, with the page taken away. Built on open and
+   destroyed on close (see openLiveFullscreen), so nothing here
+   is on the page unless somebody asked for it.
+   ========================================================= */
+.lv-fs {
+    position: fixed; inset: 0; z-index: 100001;   /* over the login overlay's 100000 */
+    background: #eef1f5;
+    display: flex; flex-direction: column;
+    overflow: auto;
+}
+.lv-fs-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 22px; flex: none;
+}
+.lv-fs-title {
+    font-size: 13px; font-weight: 850; letter-spacing: .06em;
+    text-transform: uppercase; color: #647082;
+}
+.lv-fs-close {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; padding: 0;
+    background: #fff; color: #647082;
+    border: 1px solid #e6ebf1; border-radius: 10px; cursor: pointer;
+    transition: color .15s ease, border-color .15s ease;
+}
+.lv-fs-close:hover { color: var(--slate-charcoal); border-color: #cfd8e3; }
+/* Same white card as the shop-floor board, for the same reason: this IS that
+   board, so it should not arrive looking like a third design. */
+.lv-fs-card {
+    background: #fff; border: 1px solid #e6ebf1; border-radius: 16px;
+    padding: 18px 22px 22px;
+    margin: 0 20px 20px; max-width: 1600px; width: calc(100% - 40px);
+    align-self: center;
+}
+.lv-fs-card .lv-strip {
+    border: 1px solid #e6ebf1; border-radius: 13px; overflow: hidden;
+}
+/* The page behind is inert while this is up — it is fixed and opaque, but a
+   scroll wheel over it would still move it underneath. Both elements: the ROOT
+   is what scrolls, so locking body alone also leaves a scrollbar gutter beside
+   a view that is meant to be the whole window. */
+html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
+
+/* The button that opens it, sized and coloured as the mute switch beside it —
+   both are controls for how you are LOOKING at the board, not readouts. */
+.lv-full {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 31px; height: 31px; padding: 0; margin-left: 2px;
+    background: none; border: 0; border-radius: 9px;
+    color: #9aa6b6; cursor: pointer;
+    transition: color .15s ease, background .15s ease;
+}
+.lv-full:hover { color: var(--slate-charcoal); background: #f1f5f9; }
+
+/* Mute switch for the sale chime. Sits last in the header, AFTER the open/closed
+   pill, and carries no chrome of its own: between the two pill groups with a
+   background and a border it read as an orphaned third pill competing with two
+   state readouts, when it is only a preference. */
+/* Sized to the day toggle beside it (31px tall), not to the 14px icon it used to
+   carry — as a small mark next to a full-height control it read as an afterthought
+   rather than a switch. */
+.lv-sound {
+    display: inline-grid; place-items: center; flex: none;
+    width: 31px; height: 31px; padding: 0; cursor: pointer;
+    color: #b0bac6; background: none; border: 0; border-radius: 999px;
+    transition: color .16s ease, background .16s ease;
+}
+.lv-sound:hover { color: #647082; background: #f1f5f9; }
+.lv-sound.on { color: #1f9d57; }
+.lv-sound.on:hover { color: #178048; background: #e8f7ee; }
+.lv-sound:focus-visible { outline: 2px solid #1f9d57; outline-offset: 1px; }
+
+@media (max-width: 900px) {
+    /* The store name is the first thing to go: the code identifies the row and the
+       numbers are the point. */
+    .lv-store-nm, .lv-of { display: none; }
+}
+@media (max-width: 720px) {
+    .lv-strip, .lv-dist-strip { grid-template-columns: 1fr 1fr; }
 }
 
 /* Headline score strip — two equal bubbles: combined Audit+Scorecard, then eBay */
@@ -10657,12 +11557,24 @@ body.sam-active .hotbar-btn:hover {
 /* Sticky against .manage-content, which is the modal's scroll container --
    thirty rows in, you still need to know which column you are typing into. */
 .b2b-phead {
-    position: sticky; top: 0; z-index: 3;
+    /* A sticky offset is inset by the scroll container's padding; the content
+       it scrolls is not. .manage-content pads 20px, so top:0 pinned the header
+       20px down from the top of the scrollport and left a 20px band in which
+       the row above kept sliding over it -- which is a good part of what "the
+       header isn't sticking properly" looked like. Pulling it up by that same
+       padding pins it flush with the top edge, and rows pass behind it. */
+    position: sticky; top: -20px; z-index: 3;
     padding: 7px var(--b2b-prow-pad);
-    background: var(--b2b-surface); border-bottom: 1px solid var(--b2b-line);
+    /* Opaque and a shade deeper than both the rows it covers (white) and the
+       panel behind it -- it used to be var(--b2b-surface), the same colour as
+       the scroll container, with no shadow, so once it pinned it dissolved and
+       rows appeared to slide out of nowhere. The shadow is what says "this is
+       floating above the content" rather than "this is the first row". */
+    background: #eaeff5; border-bottom: 1px solid var(--b2b-line);
+    box-shadow: 0 4px 10px -7px rgba(16, 24, 34, .5);
     border-radius: 11px 11px 0 0;
     font-size: 9.5px; font-weight: 800; letter-spacing: .08em;
-    text-transform: uppercase; color: var(--b2b-faint);
+    text-transform: uppercase; color: var(--b2b-muted);
 }
 .b2b-phead .r { text-align: right; }
 
@@ -10683,9 +11595,65 @@ body.sam-active .hotbar-btn:hover {
 /* Prefixed, not `.rec`: a bare global `.rec` exists (the all-time-records card)
    and was leaking its border, radius and overflow into every recycle row --
    invisible while these rows were cards themselves, obvious once they weren't. */
-.b2b-pline.b2b-scrap { box-shadow: inset 3px 0 0 #b8ddd6; }
+/* Same three colours the client-facing chips use (.b2b-doc-rec): teal is scrap,
+   blue is "no residual value to you, but we may resell it". No-residual had no
+   bar at all, so the two non-purchase outcomes -- which mean very different
+   things to both the client and to us -- were told apart by the presence or
+   absence of an unexplained green line. The legend under the sheet names them. */
+/* Exactly the foreground colours of the matching .b2b-doc-rec chips -- teal
+   #0d8a7d for scrap, blue #3a6ea8 for no-residual. A 3px stripe wants the
+   saturated tone, not the pale chip background, and using the chip's own colour
+   is what makes the legend swatch and the client-facing chip read as one system
+   rather than three near-misses. */
+.b2b-pline.b2b-scrap { box-shadow: inset 3px 0 0 #0d8a7d; }
+.b2b-pline.b2b-nrv   { box-shadow: inset 3px 0 0 #3a6ea8; }
 .b2b-pline.needs-reason { background: #fffdf7; box-shadow: inset 3px 0 0 #e0b970; }
 .b2b-pline.needs-reason:hover { background: #fffbf1; }
+
+/* Whatever was written about a line, on the line. One row tall and clipped
+   rather than wrapped: at thirty lines a note that wraps to three rows moves
+   every price below it, and the full text is on the title and in the ⋯ sheet.
+   Indented past the state bar so it reads as belonging to the row above. */
+.b2b-pnote-hint {
+    display: flex; gap: 14px; min-width: 0;
+    padding: 0 var(--b2b-prow-pad) 6px calc(var(--b2b-prow-pad) + 3px);
+    margin-top: -2px; font-size: 11px; line-height: 1.45;
+}
+.b2b-pnote-hint > span {
+    display: inline-flex; align-items: baseline; gap: 5px; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.b2b-pnote-hint b {
+    flex: 0 0 auto; font-size: 8.5px; font-weight: 800; letter-spacing: .07em;
+    text-transform: uppercase; padding: 1px 5px; border-radius: 999px;
+}
+/* Client notes are quoted back to the client, staff notes never leave the
+   building -- worth telling apart at a glance, not just by reading them.
+   Deliberately NOT the blue chip pair: in this module blue already means "no
+   residual value", and borrowing it for "the client said something" would put
+   two unrelated meanings on one colour. Both are neutral slate, following
+   .b2b-tag-int, and told apart by weight -- which is the honest difference,
+   since one of these is louder than the other only in consequence. */
+.b2b-nh-c   { color: var(--b2b-muted); }
+.b2b-nh-c b { background: #e2e8f0; color: #475569; }
+.b2b-nh-s   { color: var(--b2b-faint); }
+.b2b-nh-s b { background: #f1f5f9; color: #64748b; }
+
+/* Reads as a footnote to the sheet, not a control: the bars are the primary
+   signal and this is only here so a first-time pricer can decode them. */
+.b2b-disp-key {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px;
+    margin: 8px 2px 0; font-size: 11px; color: var(--b2b-faint);
+}
+.b2b-disp-key b { font-weight: 800; letter-spacing: .07em; text-transform: uppercase; font-size: 9.5px; }
+.b2b-disp-key span { display: inline-flex; align-items: center; gap: 6px; }
+.b2b-disp-key i {
+    width: 3px; height: 13px; border-radius: 2px; background: currentColor; font-style: normal;
+}
+.b2b-disp-key .k-scrap { color: #0d8a7d; }
+.b2b-disp-key .k-nrv   { color: #3a6ea8; }
+.b2b-disp-key .k-block { color: #e0b970; }
+.b2b-disp-key em { font-style: normal; color: var(--b2b-muted); }
 
 .b2b-pcell { display: flex; align-items: center; min-width: 0; }
 .b2b-pcell input, .b2b-pcell select {
@@ -10705,6 +11673,14 @@ body.sam-active .hotbar-btn:hover {
 }
 .b2b-pcell input::placeholder { color: #c3ccd4; }
 .b2b-pcell.n input { text-align: right; font-variant-numeric: tabular-nums; }
+/* Chrome reserves ~13px inside every type=number for spin buttons nobody uses
+   here -- you type a quantity, you don't nudge it one at a time. In a 44px Qty
+   cell that was most of the usable width, and because the field is right
+   aligned it truncated the LEADING digit: 12 units read as a plausible 2.
+   Same treatment as .kpi-grid-input, for the same reason. */
+.b2b-pcell input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+.b2b-pcell input[type="number"]::-webkit-outer-spin-button,
+.b2b-pcell input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .b2b-pcell select { padding-left: 5px; }
 
 .b2b-pc-sku {
@@ -10856,7 +11832,7 @@ body.sam-active .hotbar-btn:hover {
 }
 .b2b-f-n input { text-align: right; font-variant-numeric: tabular-nums; }
 /* Read-only cells stand in for an input, so they take the same box. */
-.b2b-f-calc, .b2b-f-off {
+.b2b-f-calc, .b2b-f-off, .b2b-f-resale {
     display: flex; align-items: center; justify-content: flex-end; flex: 0 0 auto;
     height: var(--b2b-h-md); padding: 0 10px; border-radius: var(--b2b-r-sm);
     font-size: 12.5px; font-variant-numeric: tabular-nums;
@@ -10866,6 +11842,118 @@ body.sam-active .hotbar-btn:hover {
     background: var(--b2b-surface); border: 1px solid var(--b2b-line-2);
 }
 .b2b-f-off { color: var(--b2b-faint); font-style: italic; border: 1px solid transparent; }
+/* A no-residual line's total is resale value to US, not money owed to the
+   client. Same blue as that row's bar and the client-facing chip, and
+   deliberately not the heavy near-black of .b2b-f-calc -- someone scanning the
+   Total column for what this pallet costs should be able to skip these. */
+/* The no-residual chip's own pair, so a resale figure and the chip that explains
+   it are the same blue. */
+.b2b-f-resale {
+    font-weight: 700; color: #3a6ea8;
+    background: #eaf1fb; border: 1px solid #d3e2f5;
+}
+/* Per-line margin. Plain by default on purpose -- what counts as a good margin
+   is a buying judgement the Margin Guide owns, not something to colour-code
+   here. Only a negative one is flagged, because that isn't a judgement call:
+   the offer is above what the kit is worth to us. */
+.b2b-f-mgn {
+    display: flex; align-items: center; justify-content: flex-end; flex: 0 0 auto;
+    height: var(--b2b-h-md); padding: 0 8px; border-radius: var(--b2b-r-sm);
+    font-size: 12.5px; font-variant-numeric: tabular-nums;
+    font-weight: 700; color: var(--b2b-muted);
+}
+.b2b-f-mgn.bad { color: #d1443b; background: #fcecec; border: 1px solid #f3d4d1; }
+
+/* The Line cell doubles as the drag handle. Only this cell, not the row: the
+   row is fifteen editable fields and a drag must not begin when someone is
+   selecting text in one of them. */
+.b2b-pc-grab { cursor: grab; }
+.b2b-pc-grab:active { cursor: grabbing; }
+.b2b-pline.b2b-dragging { opacity: .45; }
+/* The line being dragged over gets a rule on top, which is the convention for
+   "it lands here" and costs no layout. */
+.b2b-pline.b2b-dropto { box-shadow: inset 0 3px 0 var(--sage-professional); }
+
+/* --- signature capture ---------------------------------------------------- */
+/* The QR and its explanation sit side by side: the code is useless without the
+   sentence telling you it is your own phone you are scanning with. */
+.b2b-signq {
+    display: flex; gap: 16px; align-items: center; margin-top: 14px;
+    padding: 14px; background: var(--b2b-surface);
+    border: 1px solid var(--b2b-line); border-radius: 12px;
+}
+.b2b-signq-qr {
+    flex: 0 0 auto; width: 132px; height: 132px; display: grid; place-items: center;
+    background: #fff; border: 1px solid var(--b2b-line); border-radius: 10px; padding: 6px;
+}
+.b2b-signq-qr svg { width: 100%; height: 100%; display: block; }
+.b2b-signq-wait { font-size: 11px; color: var(--b2b-faint); }
+.b2b-signq-txt b { font-size: 14px; font-weight: 800; color: #1a1c1e; }
+.b2b-signq-txt p { margin: 5px 0 9px; font-size: 12.5px; color: var(--b2b-muted); line-height: 1.5; }
+.b2b-signq-note { font-size: 11.5px; font-style: italic; color: var(--b2b-faint); }
+.b2b-qr-fail { font-size: 11px; color: var(--b2b-muted); text-align: center; line-height: 1.5; word-break: break-all; }
+
+/* The captured signature, shown at its own aspect rather than stretched: it is
+   evidence, and evidence should not be distorted to fit a box. */
+.b2b-signed { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.b2b-sig-img {
+    max-width: min(420px, 100%); height: auto; background: #fff;
+    border: 1px solid var(--b2b-line); border-radius: 8px;
+}
+
+/* The pad itself. Sized by CSS but drawn at the canvas's own resolution, so a
+   signature taken on a small phone is not a blurry upscale of a small bitmap. */
+.b2b-sign-pad { position: relative; margin-top: 12px; }
+.b2b-sign-pad canvas {
+    display: block; width: 100%; height: 34vh; min-height: 200px;
+    background: #fff; border: 2px dashed var(--b2b-line);
+    border-radius: 12px; touch-action: none;   /* or the browser pans instead of drawing */
+    cursor: crosshair;
+}
+.b2b-sign-hint {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    pointer-events: none; font-size: 15px; color: #c3ccd4; letter-spacing: .04em;
+    transition: opacity .15s ease;
+}
+/* visibility as well as opacity: a transparent element can still be picked up by
+   a screenshot mid-transition, and this one sits directly over the signature. */
+.b2b-sign-hint.gone { opacity: 0; visibility: hidden; }
+/* The line a signature sits on, the way a paper form has one. */
+.b2b-sign-name {
+    margin: 8px 2px 0; padding-top: 7px; border-top: 1px solid var(--b2b-line);
+    font-size: 12px; color: var(--b2b-muted);
+}
+.b2b-sign-who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.b2b-sign-who b { font-size: 17px; font-weight: 800; color: #1a1c1e; }
+.b2b-sign-who span { font-size: 12.5px; color: var(--b2b-muted); }
+/* Bigger than body copy: this is the sentence being signed, and it is the whole
+   reason the client is holding the phone. */
+.b2b-sign-ack {
+    margin: 12px 0 0; font-size: 13.5px; line-height: 1.55; color: #1a1c1e;
+}
+
+/* "3 / 12" -- the denominator is context, not a second number to read. */
+.b2b-tile-of { font-size: .62em; font-weight: 700; color: var(--b2b-faint); }
+
+/* Stands where the Mark Wiped button would be for a store user, so the row
+   explains its own blocked "+" instead of just refusing to work. */
+.b2b-lwipe-note { font-size: 11px; font-style: italic; color: var(--b2b-faint); }
+
+/* A cell someone else just changed. Brief and low-contrast on purpose: it says
+   "this moved under you", which you need to notice once, not be alarmed by. */
+/* The same tint/border pair the module already uses for a positive state
+   (.b2b-notes-btn.on), rather than a second green invented for this. */
+@keyframes b2bSynced {
+    0%   { background: var(--b2b-accent-tint); box-shadow: inset 0 0 0 1px #cfeada; }
+    100% { background: transparent; box-shadow: inset 0 0 0 1px transparent; }
+}
+.b2b-pcell.b2b-synced { animation: b2bSynced 1.5s ease-out; border-radius: 4px; }
+
+/* Reads as a sentence, not a data cell: it answers one question and the store
+   tags inside it have to sit on the text baseline rather than stack. */
+.b2b-where { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.b2b-where-go { color: var(--b2b-muted); font-size: 12.5px; }
+.b2b-where-go .b2b-store { margin-left: 2px; }
 .b2b-tag-int {
     padding: 1px 6px; border-radius: 999px; background: #f1f5f9;
     color: var(--b2b-muted); font-size: 8.5px; letter-spacing: .04em;
@@ -10884,21 +11972,50 @@ body.sam-active .hotbar-btn:hover {
    wants the width for its columns and the height to show as many rows as it can.
    The generic wide modal stays 1080; this one goes bigger and taller. */
 .b2b-deal-modal.b2b-modal-full {
-    width: min(1480px, 97vw); max-width: 97vw;
+    /* 99vw, not 97: sixteen honest columns come to ~1354px and 97vw of a 1440px
+       screen leaves 1335 of usable width after .manage-content's padding, so the
+       sheet panned sideways on the commonest desktop size for the sake of 20px.
+       This is a full-bleed working surface -- it already takes 92vh -- so the
+       margin is better spent on the grid than on the backdrop. */
+    width: min(1480px, 99vw); max-width: 99vw;
     height: 92vh; max-height: 92vh;
 }
 /* Never clip the acts column on a narrow laptop -- scroll the body instead. */
-.b2b-deal-modal.b2b-modal-full > .manage-content { overflow-x: auto; }
+.b2b-deal-modal.b2b-modal-full > .manage-content {
+    overflow-x: auto;
+    /* Narrower gutters than the standard 20px, side to side only. The grid was
+       overflowing a 1440px screen by about 15px, and 20px of padding either side
+       of a sixteen-column sheet buys nothing that a readable Model column
+       doesn't buy more of. padding-top is untouched: .b2b-phead's top:-20px
+       cancels exactly that value. */
+    padding-left: 10px; padding-right: 10px;
+}
 
 /* Two more columns than the card grid: disposition and the wipe flag are their
    own cells here, and the notes fold away behind the ⋯ rather than into a drawer,
    so a line is always exactly one row tall. */
 .b2b-items.b2b-ss {
-    /* Fifteen columns: the three required specs (CPU/RAM/Storage) sit inline
+    /* Sixteen columns: the three required specs (CPU/RAM/Storage) sit inline
        between Model and Condition so a keyboard pricer tabs straight across them.
        Disposition is wide enough to spell out "No Residual Value". Wider than the
-       modal on a small laptop -- the body scrolls x (see .b2b-modal-full). */
-    --b2b-pcols: 64px 80px minmax(74px, 1fr) minmax(96px, 1.2fr) 94px 82px 94px 86px 44px 68px 68px 138px 42px 78px 76px;
+       modal on a small laptop -- the body scrolls x (see .b2b-modal-full).
+       Margin and Ship came later and had to be paid for: Line and Type
+       gave back what they were not using, Brand/Model dropped their minimums,
+       and every other column was re-cut to its real content, so the whole sheet
+       still fits a 1440px screen without panning. The actions column holds three
+       buttons now (copy 28 + detail 28 + delete 26, gaps 3).
+       Seventeen columns is about the ceiling at this width: an eighteenth means
+       either panning at 1440 or moving something into the detail sheet.
+       The number columns are sized from their content and not by eye: a cell
+       spends 13px on padding and its hairline before the input, the input
+       another 9px, and a tabular digit at 12.5px is about 8.6px. So Qty at 58px
+       holds four digits and Value/Offer at 80px hold six -- $12,000 is an
+       ordinary line here, and the old 68px stopped at five.
+       Total is wider again at 100px because it carries the formatting too:
+       "$12,000.00" is ten characters. Handling at 150px is simply what
+       "No Residual Value" plus a select arrow measures -- at 138px it truncated
+       to "No Residual Valu". */
+    --b2b-pcols: 56px 100px minmax(64px, 1fr) minmax(84px, 1.2fr) 90px 70px 90px 88px 58px 76px 76px 72px 58px 122px 36px 96px 102px;
 }
 /* True grid: drop the inter-cell gap and draw a hairline down every column
    boundary. The row's own bottom border is the horizontal line, so together they
@@ -10947,6 +12064,24 @@ body.sam-active .hotbar-btn:hover {
     flex: 0 0 auto; width: 6px; height: 6px; border-radius: 999px;
     background: #e0b970; box-shadow: 0 0 0 2px #fcefd4;
 }
+/* In the sheet the total is sized by its column, not by its content. The pill
+   is flex: 0 0 auto, so a line total wide enough to outgrow the column used to
+   keep growing and slide out over the actions cell, covering the ✕. Here it
+   shrinks to the track and clips with an ellipsis instead -- the full figure is
+   still in the totals bar, and a number that no longer fits is better shown as
+   truncated than shown on top of a delete button. */
+.b2b-items.b2b-ss .b2b-pc-tot > .b2b-f-calc,
+.b2b-items.b2b-ss .b2b-pc-tot > .b2b-f-resale,
+.b2b-items.b2b-ss .b2b-pc-tot > .b2b-f-off,
+.b2b-items.b2b-ss .b2b-pc-mgn > .b2b-f-mgn,
+.b2b-items.b2b-ss .b2b-pc-mgn > .b2b-f-off {
+    display: block; flex: 1 1 auto; min-width: 0;
+    padding: 0 6px; text-align: right; line-height: var(--b2b-h-md);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Copy sits at the far end of the row from delete: they are one pixel-perfect
+   misclick apart otherwise, and one of them is destructive. */
+.b2b-ss-copy svg { width: 13px; height: 13px; }
 .b2b-pc-disp { min-width: 0; }
 .b2b-pc-wipe { justify-content: center; }
 .b2b-ss-wipe {
@@ -11470,23 +12605,41 @@ body.sam-active .hotbar-btn:hover {
 /* --- responsive ----------------------------------------------------------- */
 /* Narrower than the columns can honestly hold: the header row goes away and each
    row becomes its own labelled block, with data-k on the cell supplying the label
-   the header used to. A grid squeezed past its content just truncates. */
+   the header used to. A grid squeezed past its content just truncates.
+   Everything here is scoped :not(.b2b-ss) -- see the note below. */
 @media (max-width: 1100px) {
-    .b2b-items { --b2b-pcols: 1fr 1fr 1fr; }
-    .b2b-phead { display: none; }
-    .b2b-prow { align-items: end; gap: 9px 8px; }
-    .b2b-pcell { flex-direction: column; align-items: stretch; }
-    .b2b-pcell[data-k]::before {
+    .b2b-items:not(.b2b-ss) { --b2b-pcols: 1fr 1fr 1fr; }
+    .b2b-items:not(.b2b-ss) .b2b-phead { display: none; }
+    .b2b-items:not(.b2b-ss) .b2b-prow { align-items: end; gap: 9px 8px; }
+    .b2b-items:not(.b2b-ss) .b2b-pcell { flex-direction: column; align-items: stretch; }
+    .b2b-items:not(.b2b-ss) .b2b-pcell[data-k]::before {
         content: attr(data-k);
         font-size: 9.5px; font-weight: 800; letter-spacing: .08em;
         text-transform: uppercase; color: var(--b2b-faint); margin-bottom: 4px;
     }
-    .b2b-pc-sku { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 7px; }
+    .b2b-items:not(.b2b-ss) .b2b-pc-sku { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 7px; }
     /* Total and actions share the closing row rather than each taking one --
        stacked, the total alone on a line reads as a stray field. */
-    .b2b-pc-tot  { grid-column: 1 / 2;  align-items: flex-start; }
-    .b2b-pc-acts { grid-column: 2 / -1; flex-direction: row; align-items: flex-end; flex-wrap: wrap; }
+    .b2b-items:not(.b2b-ss) .b2b-pc-tot  { grid-column: 1 / 2;  align-items: flex-start; }
+    .b2b-items:not(.b2b-ss) .b2b-pc-acts { grid-column: 2 / -1; flex-direction: row; align-items: flex-end; flex-wrap: wrap; }
     .b2b-pnote, .b2b-handling { grid-template-columns: 1fr; }
+}
+
+/* The spreadsheet does NOT stack at narrow widths, and the rules above are
+   scoped away from it for that reason.
+   They were written for the card grid, before the sheet existed, and applied to
+   it by accident. The result was the worst of both: .b2b-items.b2b-ss (0,2,0)
+   outranks .b2b-items (0,1,0), so the fifteen fixed columns survived while the
+   header -- matched by the unqualified .b2b-phead -- did not. A 1280px laptop at
+   125% Windows scaling is 1024 CSS px, which is where most of this was reported
+   from: fifteen unlabelled columns and no header.
+   The sheet already has the right answer for narrow widths -- .b2b-modal-full's
+   manage-content scrolls x, so the columns keep their honest sizes and you pan
+   across them with the header still pinned above. Stacking fifteen columns into
+   labelled blocks would make one line thirty rows tall, which is precisely what
+   the spreadsheet layout exists to avoid. */
+@media (max-width: 1100px) {
+    .b2b-items.b2b-ss .b2b-phead { display: grid; }
 }
 @media (max-width: 760px) {
     .b2b-q-card { flex-direction: column; align-items: stretch; gap: 12px; }
@@ -11983,15 +13136,19 @@ body.sam-active .hotbar-btn:hover {
 .dmx-goalset-n { font-size: 11px; font-weight: 600; color: #8a94a3; }
 .dmx-goalset.is-unset .dmx-goalset-n { color: #b45309; }
 .dmx-goalset-r { display: flex; align-items: center; gap: 8px; }
+/* Sized to sit flush with .dmx-goalset-b beside it — same font-size, vertical
+   padding, radius and line-height, so the pair reads as one control. A number
+   input reserves room for its own spinner inside the padding, which is why the
+   horizontal padding is trimmed and the width pinned rather than left to grow. */
 .dmx-goalset-i {
-    font: inherit; font-size: 14px; font-weight: 800; width: 88px; text-align: right;
-    padding: 6px 9px; border-radius: 7px; border: 1px solid #cfd8e0; background: #fff;
-    color: #0f172a; font-variant-numeric: tabular-nums;
+    font: inherit; font-size: 11px; font-weight: 800; width: 60px; text-align: center;
+    line-height: 1.6; padding: 5px 6px; border-radius: 6px; border: 1px solid #cfd8e0;
+    background: #fff; color: #0f172a; font-variant-numeric: tabular-nums;
 }
 .dmx-goalset-i:focus { outline: none; border-color: #4d8c6a; box-shadow: 0 0 0 3px rgba(77,140,106,.15); }
 .dmx-goalset-b {
-    font: inherit; font-size: 11.5px; font-weight: 800; cursor: pointer; color: #fff;
-    border-radius: 7px; padding: 7px 15px; border: 1px solid #3f7a5a; background: #4d8c6a;
+    font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; color: #fff;
+    border-radius: 6px; padding: 5px 12px; border: 1px solid #3f7a5a; background: #4d8c6a;
 }
 .dmx-goalset-b:hover { background: #427a5c; }
 .dmx-goalset-msg { font-size: 11px; font-weight: 700; min-width: 44px; }
@@ -12104,7 +13261,12 @@ body.sam-active .hotbar-btn:hover {
 .dcc-ico svg { width: 19px; height: 19px; }
 .dcc-eyebrow { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: #8a94a3; }
 .dcc-title { font-size: 18px; font-weight: 800; letter-spacing: -.012em; line-height: 1.1; color: #0f172a; }
-.dcc-head-side { margin-left: auto; display: flex; align-items: center; gap: 9px; }
+/* Wraps because this side now carries TWO controls (daily import, weekly
+   summary), and a run's result can take either line over with a sentence. Left
+   as nowrap it pushes the header wider than the panel and scrolls it sideways —
+   see the table-layout-blowout note. */
+.dcc-head-side { margin-left: auto; display: flex; align-items: center;
+                 flex-wrap: wrap; justify-content: flex-end; gap: 9px 12px; }
 /* District money is the header's headline: the total carries at size, the goal
    trails it as a caption on the same baseline. */
 .dcc-sum { display: flex; align-items: baseline; gap: 7px; }
@@ -12122,15 +13284,23 @@ body.sam-active .hotbar-btn:hover {
 .dcc-group:first-child { margin-top: 0; }
 .dcc-group-n { margin-left: auto; color: #aab4bf; }
 
+/* The selection accent used to BE the left border — 3px, transparent when idle —
+   so every unselected card was drawn on three sides and open on the fourth. The
+   border is uniform now and the accent is a bar inside it, which also means
+   selecting a card no longer changes the weight of its edge. */
 .dcc-t {
+    position: relative; overflow: hidden;
     display: block; width: 100%; text-align: left; font: inherit; cursor: pointer; color: #0f172a;
-    background: #fff; border: 1px solid #e3e8ee; border-left: 3px solid transparent;
-    border-radius: 11px; padding: 10px 12px; margin-bottom: 6px;
+    background: #fff; border: 1px solid #e3e8ee;
+    border-radius: 11px; padding: 10px 12px 10px 14px; margin-bottom: 6px;
     transition: border-color .14s ease, background .14s ease;
 }
 .dcc-t:last-child { margin-bottom: 0; }
 .dcc-t:hover { border-color: #cfe6d9; }
-.dcc-t.sel { background: #e8f7ee; border-color: #b7e3c7; border-left-color: #1f9d57; }
+.dcc-t.sel { background: #e8f7ee; border-color: #b7e3c7; }
+.dcc-t.sel::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: #1f9d57;
+}
 .dcc-t-top { display: flex; align-items: baseline; gap: 8px; }
 .dcc-t-code { font-size: 13.5px; font-weight: 800; letter-spacing: .02em; }
 /* % to goal, right-aligned. Under goal is the one exception worth colouring —
@@ -12205,6 +13375,51 @@ body.sam-active .hotbar-btn:hover {
 .dcc-row-v.b { color: #b91c1c; }
 .dcc-row-v.w { color: #b45309; }
 .dcc-row-v.g { color: #15803d; }
+
+/* ── Sales Import (Shopify daily email → sheet) ────────────────────────────
+   Two controls on the Command Center header line — the daily import and the
+   weekly Summary update. Both are secondary to the numbers around them: this is
+   plumbing, not a metric, so they are just buttons. The state each one used to
+   spell out now lives in its tooltip, and a dot appears only when something
+   actually needs acting on. */
+.si-line { display: flex; align-items: center; gap: 8px; padding-left: 12px;
+           margin-left: 4px; border-left: 1px solid #e3e9ee; }
+/* One rule separates the controls from the district total; a second one between
+   two adjacent buttons just reads as clutter. */
+.si-line + .si-line { border-left: none; padding-left: 0; margin-left: 0; }
+.si-dot  { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: #cbd5e0; }
+.si-dot.si-good { background: #1f9d57; }
+.si-dot.si-warn { background: #d98324; }
+.si-dot.si-bad  { background: #c0392b; }
+.si-dot.si-mute { background: #cbd5e0; }
+
+/* min-width, not padding, is what makes the two match: the labels differ in
+   length ("Run daily import" / "Run weekly summary") and both swap to a shorter
+   word mid-run ("Importing…"), so anything width-of-content jitters as it goes.
+   Sized to the longest label and centred. */
+.si-btn { font: inherit; font-size: 11px; font-weight: 750; letter-spacing: .01em;
+          color: #1f7a48; background: #f2f8f4; border: 1px solid #d6e6dc;
+          border-radius: 8px; padding: 5px 10px; cursor: pointer; white-space: nowrap;
+          min-width: 132px; text-align: center;
+          transition: background .14s ease, border-color .14s ease, color .14s ease; }
+.si-btn:hover:not(:disabled) { background: #e6f2ec; border-color: #b9d8c8; color: #17603a; }
+.si-btn:disabled { opacity: .6; cursor: default; }
+
+/* The run result sits inline on the header line, and unlike the buttons beside
+   it, it must be allowed to WRAP and must be width-capped — a nowrap run of free
+   text here would push the header out and scroll the panel sideways (see
+   table-layout-blowout). */
+.si-msg { font-size: 11px; font-weight: 700; line-height: 1.35; padding: 4px 8px;
+          border-radius: 7px; max-width: 320px; white-space: normal;
+          overflow-wrap: anywhere; }
+.si-msg.ok  { color: #17603a; background: #f2f8f4; border: 1px solid #d6e6dc; }
+.si-msg.bad { color: #9b2c1f; background: #fdf3f1; border: 1px solid #f0d5cf; }
+
+@media (max-width: 720px) {
+  /* The header line is the first thing to run out of room. The buttons stay —
+     they are the whole control now — so only the divider padding gives way. */
+  .si-line { padding-left: 8px; margin-left: 0; }
+}
 
 /* categories at risk */
 .dcc-cats { display: flex; flex-direction: column; gap: 7px; }
@@ -13451,3 +14666,145 @@ body.sam-active .hotbar-btn:hover {
     .exp-controls { gap: 10px; }
     .exp-btn-mail { width: 100%; justify-content: center; }
 }
+
+/* =========================================================
+   THE SHOP-FLOOR BOARD  (tv.html, Store role)
+   One card on a wall-mounted TV. Everything here is chrome —
+   the dashboard itself is the manager's, unmodified, so that
+   the board cannot drift away from what the team is looking
+   at on their own screens.
+   ========================================================= */
+/* body is display:flex site-wide for the sidebar shell; there is no sidebar
+   here, so the nav and the card stack instead of sitting side by side. */
+body.tv-body { display: block; background: #eef1f5; }
+/* The nav is position:fixed at 64px. Nothing else on the page reserves that
+   space — on the other shells the sidebar layout does it. */
+.tv-main { padding: 84px 20px 20px; }
+
+/* No rules for the bar itself, deliberately. It uses the site's own .nav-left /
+   .nav-right structure, so the wordmark sits where it sits on every other page
+   and the greeting stack is pushed right by the standard margin-left:auto. The
+   board differs from the other shells by what its header OMITS, not by how the
+   header is laid out — an override here would be a second nav to keep in step. */
+
+/* Same white card the widgets use, sized to the screen rather than to a column.
+   No title, no tabs, no collapse control: there is one thing on this page and
+   naming it would only take room from it. */
+.tv-card {
+    background: #fff;
+    border: 1px solid #e6ebf1;
+    border-radius: 16px;
+    padding: 18px 22px 22px;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 8px 24px rgba(16, 24, 40, .05);
+    max-width: 1600px;
+    margin: 0 auto;
+}
+/* The strip is a plain grid in the widgets, bordered by the card around it.
+   Standing alone at the top of this card it needs its own edge, the same one the
+   district card's strip has. */
+.tv-card .lv-strip {
+    border: 1px solid #e6ebf1; border-radius: 13px; overflow: hidden;
+}
+
+/* A TV is read from across the room, not from a desk. This is the ONE knob for
+   that: everything on the page scales with it, because the card's contents are
+   the manager's dashboard and must not be restyled piecemeal.
+   Left at 1 deliberately — "exactly what the manager one looks like" was the
+   ask, and a board that disagrees with the screen in the office is worse than a
+   small one. Raise it here if the far wall needs it. */
+.tv-card { zoom: 1; }
+
+/* ── Floater away chip (2026-08-10) ────────────────────────────────────────
+   Shown in place of a floater's role dots when another store in their market
+   has already claimed them today. Deliberately occupies the same slot as the
+   dots — greyed and named, not hidden, so a manager can see where they went
+   instead of ringing round to find out. See _goalsFloaterHeldBy in speeks.js. */
+.goals-floater-away {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.01em;
+    color: #94a3b8; background: #f1f5f9;
+    border: 1px dashed #cbd5e1; border-radius: 20px;
+    padding: 4px 10px; white-space: nowrap;
+}
+
+/* ── Store Efficiency table (2026-08-10) ───────────────────────────────────
+   Centred variant of .dmx-tbl. The default is left-label / right-number, which
+   is right for a roster read down one name column; this table is a grid of
+   comparable figures across eight columns, so centring keeps the eye tracking
+   across a row instead of hunting ragged edges. .dmx-cl opts a cell back out. */
+/* table-layout: fixed is what makes the columns EQUAL rather than
+   content-sized. Without it the browser widths each column to its contents, so
+   Store (a name plus a warning chip) and Result (a pill) were several times
+   wider than Hours, and the gaps between columns were all different. Every cell
+   is 1/8th and centred, the store name included. */
+.dmx-tbl-c { table-layout: fixed; }
+.dmx-tbl-c th,
+.dmx-tbl-c td { width: 12.5%; text-align: center; padding-left: 4px; padding-right: 4px; }
+.dmx-tbl-c .dmx-num { text-align: center; }
+.dmx-tbl-c .dmx-st { display: inline-flex; }
+/* The roles-set warning sits UNDER the store code, centred with it — beside it,
+   it made the cell far too wide for an equal column. */
+.dmx-tbl-c td.dmx-cl .dmx-role {
+    display: block; margin: 3px auto 0; width: fit-content;
+    color: #b45309; background: #fdf3e1;
+}
+
+/* Ruled to match the Live Dashboard table (.lv-tbl), which is the house style
+   for a figures table on this site — SAME token everywhere, 1px #e6ebf1, used for
+   the header rule and the roll-up rule alike. Drawing every line from one colour
+   is what stops a table looking like it was assembled from three decisions.
+
+   Only THREE horizontal lines exist here: under the header, above the district
+   roll-up, and none in between. Five stores is few enough that the eye tracks a
+   row without help, so the per-row separators .dmx-tbl draws by default were
+   pure noise — and worse, they made the roll-up rule read as one more of them
+   instead of a break. Rows are separated by the columns, not by rules. */
+.dmx-tbl-c th { border-bottom-color: #e6ebf1; }
+.dmx-tbl-c td { border-bottom: 0; }
+
+/* Two vertical rules only, grouping the eight columns into what they mean rather
+   than ruling every one and turning the table into a grid:
+     Store · Hours                     | what the store IS
+     Ceiling · Goal · Listed           | the plan and the outcome
+     Staffed For · Efficiency · Result | the fair reading of it
+   Column 3 is Ceiling and column 6 is Staffed For, so each border lands in the
+   gap before its group. */
+.dmx-tbl-c th:nth-child(3), .dmx-tbl-c td:nth-child(3),
+.dmx-tbl-c th:nth-child(6), .dmx-tbl-c td:nth-child(6) {
+    border-left: 1px solid #e6ebf1;
+}
+
+/* The district roll-up. The line alone is not what separates it — .lv-tbl gives
+   its roll-up row 16px of SYMMETRIC padding, and that air is what makes the rule
+   read as a break instead of one more row divider. Padding one side only pushes
+   the row's own content off centre. */
+.dmx-tbl-c tr.dmx-tot td {
+    border-top: 1px solid #e6ebf1;
+    padding-top: 16px; padding-bottom: 16px;
+}
+
+/* The two week buttons hold labels of very different lengths ("Last Week" vs
+   "Jul 27 – Aug 2"), so they get a shared minimum width — otherwise the pair
+   reads as two unrelated buttons instead of one two-position control. */
+.dmx-goalset-b.dmx-b-wk { min-width: 116px; text-align: center; }
+
+/* Unselected week toggle — same size as its sibling, no fill, so the pair reads
+   as one control with a current state rather than two competing buttons. */
+.dmx-goalset-b.dmx-b-off {
+    background: #fff; color: #647082; border-color: #cfd8e0;
+}
+.dmx-goalset-b.dmx-b-off:hover { background: #f4f7f5; color: #0f172a; }
+
+/* Role in its own column: fixed width so every pill starts at the same x, and a
+   little breathing room before the day numbers begin. */
+.dmx-tbl td.dmx-rolecol { width: 96px; white-space: nowrap; padding-right: 16px; }
+.dmx-tbl td.dmx-rolecol .dmx-role { margin-left: 0; }
+
+/* The Results rail tab carries a word, not a count like its store siblings, so
+   it sits quieter — smaller, lighter, and set off from the label. (.dmx-t lays
+   its two halves out in a row, so no display change here would take.) */
+.dmx-t .dmx-t-val.dmx-t-sub {
+    font-size: 10px; font-weight: 700; letter-spacing: .01em;
+    color: #8a94a3; text-transform: none; padding-left: 4px;
+}
+.dmx-t.sel .dmx-t-val.dmx-t-sub { color: #4d8c6a; }

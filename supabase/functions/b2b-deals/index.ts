@@ -17,14 +17,21 @@ const corsHeaders = {
 //   pricing           store   itemize and price: type, specs, one serial per
 //                             unit, a disposition, and whether it needs a
 //                             certified data wipe
-//   quote             corp    two phases in one stage, told apart by
-//                             quote_send_count: at 0 it is awaiting approval
-//                             (the approver was emailed when it arrived, and
-//                             can send it back to pricing with a note); once
-//                             emailed it is out with the client. Goes out from
-//                             the quoter's own mailbox as a mailto draft so
-//                             replies reach them; stays editable throughout,
-//                             and only a CEO/TOM/DM may accept or send back
+//   review            corp    priced and waiting on a CEO/TOM/DM: they either
+//                             send it (which approves it) or send it back to
+//                             pricing with a note. The approver is emailed the
+//                             moment it lands here
+//   quote             corp    emailed to the client, waiting on their answer.
+//                             Goes out from the quoter's own mailbox as a mailto
+//                             draft so replies reach them. Both stages stay
+//                             editable, and only a CEO/TOM/DM may send, accept
+//                             or send back
+//
+//                             These were one stage until 0018, told apart by
+//                             quote_send_count. One counter standing in for two
+//                             states was read in five places in the UI, made the
+//                             Overview contradict its own table, and meant a
+//                             send-back had to remember to reset it
 //   listing_location  corp    ONLY when pricing happened at CORP
 //   listing           store   two scans per unit -- our label says which unit,
 //                             the Shopify barcode records what it became; a
@@ -52,7 +59,13 @@ const SECRET = "sp33ks-sync-k3y-2026-x9mq";
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const PRICING_LOCATIONS = [...STORES, "CORP"];
 const ACCEPT_ROLES = ["ceo", "tom", "district manager"];
-const REASON_CONDITIONS = ["Fair", "For Parts"];
+// 'For Parts' was renamed to 'Broken' -- same meaning, plainer word. The old
+// spelling stays recognised here: existing rows were migrated, but a row saved
+// between this deploying and that running would otherwise stop being asked for
+// a reason, and it would stop silently. Must match B2B_REASON_CONDITIONS in
+// speeks.js -- if these two disagree, the gate passes on one side and fails on
+// the other.
+const REASON_CONDITIONS = ["Fair", "Broken", "For Parts"];
 const DECLINE_CATEGORIES = ["client_declined", "client_unresponsive", "withdrawn", "not_viable", "other"];
 const TERMINAL = ["completed", "declined"];
 
@@ -61,10 +74,15 @@ const TERMINAL = ["completed", "declined"];
 const ARCHIVE_DEFAULT = 40;
 const ARCHIVE_MAX = 500;
 
+// Must stay in step with the b2b_stage_rank() SQL function, which three CHECK
+// constraints use to decide what a row at a given stage is required to have.
 const STAGE_RANK: Record<string, number> = {
   declined: 0, pickup: 1, pricing_location: 2, pricing: 3,
-  quote: 4, listing_location: 5, listing: 6, completed: 7,
+  review: 4, quote: 5, listing_location: 6, listing: 7, completed: 8,
 };
+// The two stages where line items stay editable alongside pricing: a quote is
+// negotiable right up until someone accepts it.
+const OPEN_STAGES = ["pricing", "review", "quote"];
 
 // The column list the board needs. Selecting * from a view with rollups drags
 // along everything; naming them keeps the payload predictable.
@@ -75,25 +93,40 @@ const DEAL_COLS = [
   "priced_by", "quote_sent_at", "quote_send_count", "accepted_at", "accepted_by",
   "declined_at", "declined_by", "declined_reason", "declined_category",
   "sendback_note", "sendback_by", "sendback_at",
+  "signature_path", "signature_at", "signature_by",
+  "signature_skipped_by", "signature_skipped_reason",
   "created_by", "created_at", "updated_at", "stage_changed_at",
   "company", "acronym", "contact", "contact_email", "contact_phone",
   "line_count", "total_units", "listed_units", "recycled_units", "outstanding_units",
   "wiped_units", "total_value", "total_offer", "total_cost", "total_wipe_fee", "net_offer",
+  "total_shipping", "wipe_units",
 ].join(",");
+
+// Who to ring at the client. Corp business: a store prices and lists the goods,
+// it never contacts the client, and every screen that shows these is already
+// gated on _b2bIsCorp(). Hiding them in the UI while still shipping them to the
+// browser only hides them from the person, not from the page -- so a request
+// scoped to one store gets the board without them.
+const CONTACT_COLS = ["contact", "contact_email", "contact_phone"];
+const SCOPED_DEAL_COLS = DEAL_COLS.split(",")
+  .filter((c) => !CONTACT_COLS.includes(c)).join(",");
 
 const ITEM_COLS = [
   "id", "deal_id", "line_no", "sku", "make", "model", "condition",
   "staff_notes", "client_notes", "quantity", "value", "offer", "cost",
   "disposition", "listed_qty", "recycled_qty", "created_at",
   "item_type", "cpu", "ram", "storage", "gpu", "battery_health", "serials",
-  "wipe_required", "wipe_fee", "wiped_qty",
+  "wipe_required", "wipe_fee", "wiped_qty", "shipping_cost", "sort_order",
 ].join(",");
 
-const ITEM_TYPES = ["laptop", "desktop", "other"];
+// `computer` folds the old laptop/desktop split into one type; the legacy two
+// stay accepted so a not-yet-migrated row can still save.
+const ITEM_TYPES = ["computer", "laptop", "desktop", "other"];
 const DISPOSITIONS = ["purchase", "no_residual", "recycle"];
 // Which spec fields each type carries. `other` carries none -- a box of cables
 // has no CPU, and the CHECK on the table refuses one.
 const SPECS_FOR: Record<string, string[]> = {
+  computer: ["cpu", "ram", "storage", "gpu", "battery_health"],
   laptop: ["cpu", "ram", "storage", "gpu", "battery_health"],
   desktop: ["cpu", "ram", "storage", "gpu"],
   other: [],
@@ -209,7 +242,16 @@ const skuFor = (acronym: string, dealNo: number, lineNo: number) =>
 // — no table data ever travels over realtime, so the RLS-locked tables stay
 // closed to the anon client). The store is a hint for client-side filtering.
 // Wrapped so a broadcast failure can never break the write it follows.
-async function broadcastChange(tool: string, store: string | null) {
+// `about` carries which deal moved and who moved it. Two people pricing one
+// pallet both have the sheet open, and without it every write meant either
+// refetching on any B2B change anywhere or -- what actually happened -- dropping
+// the change entirely. Both fields are hints for the client and nothing more:
+// no table data travels over realtime.
+async function broadcastChange(
+  tool: string,
+  store: string | null,
+  about?: { deal?: string | null; by?: string | null },
+) {
   try {
     const url = Deno.env.get("SUPABASE_URL")!;
     const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -224,7 +266,13 @@ async function broadcastChange(tool: string, store: string | null) {
         messages: [{
           topic: "speeks-notify",
           event: "changed",
-          payload: { tool, store: store ? String(store).toUpperCase() : null, ts: Date.now() },
+          payload: {
+            tool,
+            store: store ? String(store).toUpperCase() : null,
+            deal: about?.deal || null,
+            by: about?.by || null,
+            ts: Date.now(),
+          },
         }],
       }),
     });
@@ -293,7 +341,7 @@ function serialList(v: unknown): string[] {
   return String(v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 }
 
-// A line downgraded to Fair or For Parts must carry a client-facing reason --
+// A line downgraded to Fair or Broken must carry a client-facing reason --
 // it prints on the quote and is what justifies the low offer.
 function unreasonedNames(items: any[]): string | null {
   return namesOf(items.filter((it) =>
@@ -321,7 +369,7 @@ function itemGaps(items: any[]): string | null {
   const reasons = unreasonedNames(items);
   const serials = unserialledNames(items);
   const specs = unspeccedNames(items);
-  if (reasons) parts.push(`marked Fair or For Parts and need a reason: ${reasons}`);
+  if (reasons) parts.push(`marked Fair or Broken and need a reason: ${reasons}`);
   if (specs) parts.push(`missing CPU, RAM or storage: ${specs}`);
   if (serials) parts.push(`need one serial per unit (use "No visible serial" where there isn't one): ${serials}`);
   if (!parts.length) return null;
@@ -439,6 +487,17 @@ Deno.serve(async (req: Request) => {
         const deal = await getDeal(supabase, String(body.id || ""));
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
         if (deal.stage !== "pickup") return jsonResponse({ success: false, error: "This pickup has already been signed off." }, 409);
+        // Either the client signed, or someone said in writing why they didn't.
+        // Never silently neither -- that is the whole value of the signature, and
+        // it is the one part of this a client-side role check cannot provide.
+        // Enforced on the transition rather than as a CHECK on the table, because
+        // deals predating 0022 have neither and must not be rewritten.
+        if (!deal.signature_path && !deal.signature_skipped_by) {
+          return jsonResponse({
+            success: false,
+            error: "This pickup needs the client's signature — or a recorded reason for going without one.",
+          }, 409);
+        }
         const { error } = await supabase.from("b2b_deals").update({
           stage: "pricing_location",
           pickup_desc: str(body.pickup_desc, 2000, "Pickup description"),
@@ -448,6 +507,83 @@ Deno.serve(async (req: Request) => {
         }).eq("id", deal.id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("b2b", null);
+        return jsonResponse({ success: true });
+      }
+
+      // ========================================================== signature
+      // Captured on a staff member's phone, which scanned the QR on the pickup
+      // screen and is therefore a signed-in session like any other -- there is
+      // no public route here and no anonymous write path.
+      //
+      // Stored in a PRIVATE bucket, so nothing hands back a URL: the path goes
+      // on the deal and `signature=<id>` below streams the bytes back through
+      // this function.
+      if (action === "capture_signature") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "pickup") {
+          return jsonResponse({ success: false, error: "This pickup has already been signed off." }, 409);
+        }
+
+        // A data URI from a canvas. Refused rather than coerced if it is not a
+        // PNG: the bucket only accepts image/png, and a mismatch there fails
+        // late and unhelpfully.
+        const raw = String(body.image || "");
+        const m = raw.match(/^data:image\/png;base64,([A-Za-z0-9+/=]+)$/);
+        if (!m) return jsonResponse({ success: false, error: "That doesn't look like a signature image." }, 400);
+        let bytes: Uint8Array;
+        try {
+          bytes = Uint8Array.from(atob(m[1]), (c) => c.charCodeAt(0));
+        } catch (_) {
+          return jsonResponse({ success: false, error: "The signature image was malformed." }, 400);
+        }
+        // The bucket caps at 2MB; catching it here gives a sentence instead of a
+        // storage error. A real signature is tens of kilobytes.
+        if (!bytes.length || bytes.length > 2_000_000) {
+          return jsonResponse({ success: false, error: "The signature image is the wrong size." }, 400);
+        }
+
+        // Timestamped rather than fixed at "<deal>.png": re-signing keeps the
+        // earlier attempt in the bucket instead of overwriting evidence.
+        const path = `${deal.id}/${Date.now()}.png`;
+        const up = await supabase.storage.from("b2b-signatures")
+          .upload(path, bytes, { contentType: "image/png", upsert: false });
+        if (up.error) return jsonResponse({ success: false, error: up.error.message }, 500);
+
+        const { error } = await supabase.from("b2b_deals").update({
+          signature_path: path,
+          signature_at: new Date().toISOString(),
+          signature_by: str(body.user, 120, "User"),
+          // Signing clears an earlier skip: the deal is no longer unsigned, and
+          // leaving the bypass on the row would misreport it forever.
+          signature_skipped_by: null,
+          signature_skipped_reason: null,
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        // The deal id is what lets the desktop that is showing the QR notice.
+        await broadcastChange("b2b", null, { deal: deal.id, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true, signature_at: new Date().toISOString() });
+      }
+
+      // Sign off without a signature. Corp only, and the reason is mandatory --
+      // a skip with no reason is indistinguishable from an oversight, which is
+      // exactly the thing a signature exists to rule out.
+      if (action === "skip_signature") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (deal.stage !== "pickup") {
+          return jsonResponse({ success: false, error: "This pickup has already been signed off." }, 409);
+        }
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can sign off without a signature." }, 403);
+        }
+        const { error } = await supabase.from("b2b_deals").update({
+          signature_skipped_by: str(body.user, 120, "User") || "Unknown",
+          signature_skipped_reason: str(body.reason, 1000, "A reason for skipping the signature", true),
+        }).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        await broadcastChange("b2b", null, { deal: deal.id, by: str(body.user, 80, "User") });
         return jsonResponse({ success: true });
       }
 
@@ -468,8 +604,8 @@ Deno.serve(async (req: Request) => {
       }
 
       // ============================================================== items
-      // Editable through `pricing` AND `quote` — the quote stays open while the
-      // client negotiates, right up until someone accepts it.
+      // Editable through pricing, review AND quote — see OPEN_STAGES. A quote
+      // stays open while the client negotiates, right up until someone accepts.
 
       if (action === "add_item" || action === "update_item" || action === "delete_item") {
         const itemId = String(body.id || "");
@@ -482,14 +618,14 @@ Deno.serve(async (req: Request) => {
           deal = await getDeal(supabase, it.deal_id);
         }
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
-        if (deal.stage !== "pricing" && deal.stage !== "quote") {
+        if (!OPEN_STAGES.includes(deal.stage)) {
           return jsonResponse({ success: false, error: "Line items can only be changed while pricing or quoting." }, 409);
         }
 
         if (action === "delete_item") {
           const { error } = await supabase.from("b2b_deal_items").delete().eq("id", itemId);
           if (error) return jsonResponse({ success: false, error: error.message }, 500);
-          await broadcastChange("b2b", dealStore(deal));
+          await broadcastChange("b2b", dealStore(deal), { deal: deal.id, by: str(body.user, 80, "User") });
           return jsonResponse({ success: true });
         }
 
@@ -521,6 +657,10 @@ Deno.serve(async (req: Request) => {
           // value to us either. Mirrors the two disposition CHECKs exactly.
           value: disposition === "recycle" ? 0 : money(body.value, "Unit value"),
           offer: disposition === "purchase" ? money(body.offer, "Unit offer") : 0,
+          // Ours, per unit, and NOT conditional on disposition: a pallet of scrap
+          // still costs money to move. It never reaches the client -- it reduces
+          // what the deal is worth to us, not what we pay them.
+          shipping_cost: money(body.shipping_cost, "Shipping cost"),
           wipe_required: wipeRequired,
           // Snapshotted per line rather than read live at render time: changing
           // the global fee must not silently reprice a quote already sent. Kept
@@ -534,7 +674,7 @@ Deno.serve(async (req: Request) => {
         if (action === "update_item") {
           const { error } = await supabase.from("b2b_deal_items").update(fields).eq("id", itemId);
           if (error) return jsonResponse({ success: false, error: error.message }, 500);
-          await broadcastChange("b2b", dealStore(deal));
+          await broadcastChange("b2b", dealStore(deal), { deal: deal.id, by: str(body.user, 80, "User") });
           return jsonResponse({ success: true });
         }
 
@@ -546,15 +686,127 @@ Deno.serve(async (req: Request) => {
           .select("line_no").eq("deal_id", deal.id)
           .order("line_no", { ascending: false }).limit(1).maybeSingle();
         const lineNo = (last?.line_no || 0) + 1;
+        // Its own query: after a reorder the highest sort_order is not on the
+        // highest line_no. Without this the row takes the column default of 0
+        // and sorts BEFORE everything -- it would look appended, then jump to the
+        // top of the sheet the next time the deal was opened.
+        const { data: lastSort } = await supabase.from("b2b_deal_items")
+          .select("sort_order").eq("deal_id", deal.id)
+          .order("sort_order", { ascending: false }).limit(1).maybeSingle();
+        const sortOrder = (Number(lastSort?.sort_order) || 0) + 10;
         const { data, error } = await supabase.from("b2b_deal_items").insert({
           ...fields,
           deal_id: deal.id,
           line_no: lineNo,
+          sort_order: sortOrder,
           sku: skuFor(deal.client?.acronym || "B2B", deal.deal_no, lineNo),
-        }).select("id, line_no, sku").single();
+        }).select("id, line_no, sku, sort_order").single();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
-        await broadcastChange("b2b", dealStore(deal));
-        return jsonResponse({ success: true, id: data.id, line_no: data.line_no, sku: data.sku });
+        await broadcastChange("b2b", dealStore(deal), { deal: deal.id, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true, id: data.id, line_no: data.line_no, sku: data.sku, sort_order: data.sort_order });
+      }
+
+      // Move a deal to another store mid-flight.
+      //
+      // Two different moves share this action because they are the same act at
+      // different points: before the client accepts, the pricing store is who
+      // holds the goods; after, the listing store is. Which one is editable is
+      // decided by the stage, not by the caller -- a payload asking to change
+      // the pricing store of a deal that is already listing is refused rather
+      // than obeyed, because the goods are not there any more.
+      //
+      // Corp only, same roles that approve a quote: this decides which building
+      // physical stock sits in.
+      if (action === "transfer_location") {
+        const deal = await getDeal(supabase, String(body.id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        const role = String(body.role || "").toLowerCase().trim();
+        if (!ACCEPT_ROLES.includes(role)) {
+          return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can move a deal between stores." }, 403);
+        }
+
+        // pricing while it is being priced or quoted; listing once it is there.
+        const kind = OPEN_STAGES.includes(deal.stage) ? "pricing"
+          : (deal.stage === "listing_location" || deal.stage === "listing") ? "listing"
+          : null;
+        if (!kind) {
+          return jsonResponse({
+            success: false,
+            error: "A deal can only be moved while it is being priced, quoted or listed.",
+          }, 409);
+        }
+
+        // The listing store must be a real store; pricing may also sit at CORP.
+        const to = oneOf(String(body.to_store ?? "").toUpperCase(),
+          kind === "pricing" ? PRICING_LOCATIONS : STORES,
+          "Store")!;
+        const from = kind === "pricing" ? deal.pricing_store : deal.listing_store;
+        if (from === to) {
+          return jsonResponse({ success: false, error: `This deal is already at ${to}.` }, 409);
+        }
+
+        const patch: Record<string, unknown> = kind === "pricing"
+          ? { pricing_store: to }
+          : { listing_store: to };
+        // Moving a CORP-priced deal to a store before acceptance also settles
+        // where it will be listed, which is the whole reason it was going to
+        // stop at listing_location. Leaving that stale would route it to a
+        // store it is no longer at.
+        if (kind === "pricing" && deal.stage !== "quote" && deal.listing_store) {
+          patch.listing_store = to === "CORP" ? null : to;
+        }
+        const { error } = await supabase.from("b2b_deals").update(patch).eq("id", deal.id);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+
+        // Logged after the move, and a logging failure does not undo it: the
+        // goods have physically moved either way, and a missing audit line is
+        // better than a deal whose record disagrees with the building.
+        await supabase.from("b2b_deal_transfers").insert({
+          deal_id: deal.id, kind, from_store: from, to_store: to,
+          moved_by: str(body.user, 120, "User"),
+          note: str(body.note, 1000, "Note"),
+        });
+        await broadcastChange("b2b", to, { deal: deal.id, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true, kind, from_store: from, to_store: to });
+      }
+
+      // Rewrite the display order of a deal's lines.
+      //
+      // Takes the full id list rather than "move X above Y": the client already
+      // knows the order it is showing, and sending it whole means a reorder can
+      // never half-apply and leave the sheet in a state nobody chose.
+      //
+      // Only ids belonging to THIS deal are written -- an id from somewhere else
+      // in the payload is ignored rather than trusted, and the count check
+      // afterwards catches a stale client that has lines we don't.
+      if (action === "reorder_items") {
+        const deal = await getDeal(supabase, String(body.deal_id || ""));
+        if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
+        if (!OPEN_STAGES.includes(deal.stage)) {
+          return jsonResponse({ success: false, error: "Line items can only be reordered while pricing or quoting." }, 409);
+        }
+        const order = Array.isArray(body.order) ? body.order.map((v: unknown) => String(v || "")) : [];
+        if (!order.length) return jsonResponse({ success: false, error: "No order was sent." }, 400);
+        if (order.length > 5000) return jsonResponse({ success: false, error: "That is too many lines to reorder." }, 400);
+
+        const { data: mine } = await supabase.from("b2b_deal_items")
+          .select("id").eq("deal_id", deal.id).limit(5000);
+        const ours = new Set((mine || []).map((r: any) => r.id));
+        const seen = new Set<string>();
+        const clean = order.filter((id) => ours.has(id) && !seen.has(id) && seen.add(id));
+        if (clean.length !== ours.size) {
+          return jsonResponse({
+            success: false,
+            error: "That list is out of date — reopen the deal and try again.",
+          }, 409);
+        }
+        for (let i = 0; i < clean.length; i++) {
+          const { error } = await supabase.from("b2b_deal_items")
+            .update({ sort_order: (i + 1) * 10 }).eq("id", clean[i]).eq("deal_id", deal.id);
+          if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        }
+        await broadcastChange("b2b", dealStore(deal), { deal: deal.id, by: str(body.user, 80, "User") });
+        return jsonResponse({ success: true, ordered: clean.length });
       }
 
       // ============================================================== quoting
@@ -580,7 +832,10 @@ Deno.serve(async (req: Request) => {
         }
 
         const { error } = await supabase.from("b2b_deals").update({
-          stage: "quote",
+          // `review`, not `quote`: pricing being finished means it is waiting on
+          // an approver, and nothing has gone to the client yet. Sending is what
+          // makes it a quote.
+          stage: "review",
           priced_by: str(body.priced_by, 120, "Priced by"),
           // Clearing it here means a deal sent back for changes and re-submitted
           // doesn't keep showing the old note as if it were still outstanding.
@@ -596,13 +851,28 @@ Deno.serve(async (req: Request) => {
       }
 
       // The quote goes out from the quoter's own mailbox via a mailto draft, so
-      // the client's reply reaches the person who priced it. This just records
-      // that it went out, for the stage clock and the Overview.
+      // the client's reply reaches the person who priced it. This records that
+      // it went out, for the stage clock and the Overview.
+      //
+      // Sending from `review` IS the approval -- there is no separate approve
+      // button, because approving a quote and not sending it would leave the
+      // deal in exactly the state it was already in. So the same role gate as
+      // accepting applies on that edge. Re-sending an already-sent quote is not
+      // an approval and stays open to whoever has the deal in front of them.
       if (action === "send_quote") {
         const deal = await getDeal(supabase, String(body.id || ""));
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
-        if (deal.stage !== "quote") return jsonResponse({ success: false, error: "Only a deal in the quote stage can be sent." }, 409);
+        if (deal.stage !== "review" && deal.stage !== "quote") {
+          return jsonResponse({ success: false, error: "Only a deal awaiting approval or already quoted can be sent." }, 409);
+        }
+        if (deal.stage === "review") {
+          const role = String(body.role || "").toLowerCase().trim();
+          if (!ACCEPT_ROLES.includes(role)) {
+            return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can send a quote to the client." }, 403);
+          }
+        }
         const { error } = await supabase.from("b2b_deals").update({
+          stage: "quote",
           quote_sent_at: new Date().toISOString(),
           quote_send_count: Math.min(1000, (deal.quote_send_count || 0) + 1),
         }).eq("id", deal.id);
@@ -615,7 +885,12 @@ Deno.serve(async (req: Request) => {
       if (action === "accept_quote") {
         const deal = await getDeal(supabase, String(body.id || ""));
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
-        if (deal.stage !== "quote") return jsonResponse({ success: false, error: "Only a deal in the quote stage can be accepted." }, 409);
+        // `quote` specifically, not `review`: a client cannot accept a quote
+        // they were never sent. The UI has always hidden Accept on an unsent
+        // quote; now the server agrees with it rather than trusting it.
+        if (deal.stage !== "quote") {
+          return jsonResponse({ success: false, error: "This quote hasn't been sent to the client yet." }, 409);
+        }
         const role = String(body.role || "").toLowerCase().trim();
         if (!ACCEPT_ROLES.includes(role)) {
           return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can accept a quote." }, 403);
@@ -711,6 +986,13 @@ Deno.serve(async (req: Request) => {
         } else if (action === "mark_wiped") {
           if (!item.wipe_required) {
             return jsonResponse({ success: false, error: "This line wasn't quoted for a certified wipe." }, 409);
+          }
+          // Certifying a wipe is a claim we charged the client for. Same corp
+          // roles that approve and accept a quote; the store still lists the
+          // units, it just doesn't get to say the wipe happened.
+          const role = String(body.role || "").toLowerCase().trim();
+          if (!ACCEPT_ROLES.includes(role)) {
+            return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can certify a data wipe." }, 403);
           }
           const units = count(body.units, 1, 100000, "Units", 1);
           const room = qty - item.wiped_qty;
@@ -820,8 +1102,11 @@ Deno.serve(async (req: Request) => {
       if (action === "request_changes") {
         const deal = await getDeal(supabase, String(body.id || ""));
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
-        if (deal.stage !== "quote") {
-          return jsonResponse({ success: false, error: "Only a deal in the quote stage can be sent back." }, 409);
+        // From review (the normal case) or from quote -- a client coming back
+        // with "can you re-look at the laptops" needs the same road home, and
+        // that was possible before the stage split too.
+        if (deal.stage !== "review" && deal.stage !== "quote") {
+          return jsonResponse({ success: false, error: "Only a quote awaiting approval or out with the client can be sent back." }, 409);
         }
         const role = String(body.role || "").toLowerCase().trim();
         if (!ACCEPT_ROLES.includes(role)) {
@@ -832,6 +1117,12 @@ Deno.serve(async (req: Request) => {
           // Cleared because it is no longer true -- someone has to price it
           // again, and the queue reads this to decide the stage is unowned.
           priced_by: null,
+          // quote_send_count is deliberately NOT reset any more. It had to be,
+          // while it was doubling as the awaiting-approval flag -- otherwise a
+          // re-submitted quote came back claiming the client already had the
+          // corrected numbers. The stage carries that now, so the counter is
+          // back to being plain history: how many times this deal has actually
+          // been emailed to the client, which zeroing it would destroy.
           sendback_note: str(body.note, 2000, "A note saying what needs changing", true),
           sendback_by: str(body.sent_back_by, 120, "Sent back by"),
           sendback_at: new Date().toISOString(),
@@ -848,7 +1139,9 @@ Deno.serve(async (req: Request) => {
       if (action === "decline") {
         const deal = await getDeal(supabase, String(body.id || ""));
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
-        if (STAGE_RANK[deal.stage] >= 6) {
+        // 7 is `listing` under the post-0018 numbering -- the same boundary this
+        // has always drawn, moved up one because `review` was inserted below it.
+        if (STAGE_RANK[deal.stage] >= 7) {
           return jsonResponse({ success: false, error: "This deal was already accepted — the goods are ours, so it can't be declined." }, 409);
         }
         if (deal.stage === "declined") {
@@ -879,7 +1172,11 @@ Deno.serve(async (req: Request) => {
         // constraint.
         const stage = (deal.accepted_at && deal.listing_store) ? "listing"
           : deal.accepted_at ? "listing_location"
-          : deal.priced_by ? "quote"
+          // Priced, so it is at least at review. Whether it got as far as the
+          // client is the one thing the row itself still records -- this is the
+          // last remaining read of quote_send_count as a state, and it is the
+          // right one: reopening must put the deal back where it died.
+          : deal.priced_by ? ((deal.quote_send_count || 0) > 0 ? "quote" : "review")
           : deal.pricing_store ? "pricing"
           : deal.signed_at ? "pricing_location"
           : "pickup";
@@ -904,6 +1201,24 @@ Deno.serve(async (req: Request) => {
   try {
     const url = new URL(req.url);
 
+    // ?signature=<deal id> → the signature image itself.
+    //
+    // The bucket is private, so this is the only way to see one. Streamed rather
+    // than redirected to a signed URL: a signed URL is a link that keeps working
+    // after it leaves the page, and this is the one asset here where that is
+    // worth avoiding.
+    const sigFor = url.searchParams.get("signature");
+    if (sigFor) {
+      const { data: d } = await supabase.from("b2b_deals")
+        .select("signature_path").eq("id", sigFor).maybeSingle();
+      if (!d?.signature_path) return jsonResponse({ success: false, error: "No signature on that deal." }, 404);
+      const dl = await supabase.storage.from("b2b-signatures").download(d.signature_path);
+      if (dl.error || !dl.data) return jsonResponse({ success: false, error: "Couldn't read the signature." }, 500);
+      return new Response(await dl.data.arrayBuffer(), {
+        headers: { ...corsHeaders, "Content-Type": "image/png", "Cache-Control": "private, max-age=60" },
+      });
+    }
+
     // ?clients=1 → the directory, with deal counts rolled up in the view
     if (url.searchParams.get("clients")) {
       const { data, error } = await supabase.from("b2b_client_list")
@@ -920,6 +1235,7 @@ Deno.serve(async (req: Request) => {
       const [{ data, error }, { data: listings, error: lErr }] = await Promise.all([
         supabase.from("b2b_deal_items")
           .select(ITEM_COLS).eq("deal_id", dealId)
+          .order("sort_order", { ascending: true })
           .order("line_no", { ascending: true }).limit(5000),
         supabase.from("b2b_item_listings")
           .select("id,item_id,shopify_barcode,listed_by,listed_at").eq("deal_id", dealId)
@@ -942,6 +1258,7 @@ Deno.serve(async (req: Request) => {
             qty_value_total: it.disposition === "recycle" ? 0 : it.value * it.quantity,
             qty_offer_total: it.offer * it.quantity,
             qty_wipe_total: it.wipe_required ? it.wipe_fee * it.quantity : 0,
+            qty_shipping_total: it.shipping_cost * it.quantity,
             outstanding: Math.max(0, it.quantity - done),
             satisfied: done >= it.quantity,
           };
@@ -955,18 +1272,23 @@ Deno.serve(async (req: Request) => {
     // unbounded half, so only the recent tail rides along; ?archive=N pages
     // deeper and the response says when it truncated.
     const store = String(url.searchParams.get("store") || "ALL").toUpperCase();
+    const oneStore = !!store && store !== "ALL";
     const archiveWanted = Math.min(ARCHIVE_MAX, Math.max(0, intOr(url.searchParams.get("archive"), ARCHIVE_DEFAULT)));
-    const scoped = (q: any) => (store && store !== "ALL")
+    const scoped = (q: any) => oneStore
       ? q.or(`pricing_store.eq.${store},listing_store.eq.${store}`)
       : q;
+    // A board scoped to one store is a store user's board, and they have no
+    // business with the client's contact details -- see CONTACT_COLS. Corp asks
+    // for ALL and still gets them.
+    const cols = oneStore ? SCOPED_DEAL_COLS : DEAL_COLS;
 
     const openQ = scoped(
-      supabase.from("b2b_deal_list").select(DEAL_COLS)
+      supabase.from("b2b_deal_list").select(cols)
         .not("stage", "in", `(${TERMINAL.join(",")})`)
         .order("created_at", { ascending: false }).limit(2000),
     );
     const archiveQ = scoped(
-      supabase.from("b2b_deal_list").select(DEAL_COLS)
+      supabase.from("b2b_deal_list").select(cols)
         .in("stage", TERMINAL)
         .order("stage_changed_at", { ascending: false }).limit(Math.max(1, archiveWanted)),
     );

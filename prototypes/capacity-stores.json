@@ -1,0 +1,187 @@
+[
+ {
+  "store": "OVL",
+  "hours": 145,
+  "capacity": 201,
+  "planned": 151,
+  "target": 151,
+  "people": [
+   {
+    "name": "Nick Hettinger",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Dan Ohanesian",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Rorie Moore",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Zach Marchesano",
+    "hours": 25,
+    "employment": "floater",
+    "newHire": false,
+    "floater": true
+   }
+  ]
+ },
+ {
+  "store": "LEE",
+  "hours": 140,
+  "capacity": 187,
+  "planned": 140,
+  "target": 140,
+  "people": [
+   {
+    "name": "Jurell Guild",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Ethan Frye",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Caleb Starr",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Drew Nyman",
+    "hours": 20,
+    "employment": "part_time",
+    "newHire": false,
+    "floater": false
+   }
+  ]
+ },
+ {
+  "store": "WSP",
+  "hours": 160,
+  "capacity": 242,
+  "planned": 181,
+  "target": 181,
+  "people": [
+   {
+    "name": "Eli Kushnir",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Jon Rodriguez",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Duncan Holsted",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Josiah Dixon",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   }
+  ]
+ },
+ {
+  "store": "MPL",
+  "hours": 140,
+  "capacity": 187,
+  "planned": 140,
+  "target": 140,
+  "people": [
+   {
+    "name": "Calvin Meadows",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Noah Webb",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Olivia Huxtable",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Joseph Ortega",
+    "hours": 20,
+    "employment": "part_time",
+    "newHire": false,
+    "floater": false
+   }
+  ]
+ },
+ {
+  "store": "BAL",
+  "hours": 140,
+  "capacity": 164,
+  "planned": 123,
+  "target": 123,
+  "people": [
+   {
+    "name": "Garrett Burnell",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Zach Marbs",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Joseph Ortega",
+    "hours": 20,
+    "employment": "part_time",
+    "newHire": false,
+    "floater": false
+   },
+   {
+    "name": "Bret Daubert",
+    "hours": 40,
+    "employment": "full_time",
+    "newHire": true,
+    "floater": false
+   }
+  ]
+ }
+]

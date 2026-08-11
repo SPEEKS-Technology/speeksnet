@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SPEEKSNET | Store Board</title>
+  <link rel="stylesheet" href="styles.css?v=20260811a">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <script src="speeks.js?v=20260811a" defer></script>
+</head>
+
+<!--
+  THE SHOP-FLOOR BOARD.
+
+  A whole page rather than a stripped-down QuickPortal, and that is the point: a
+  TV bolted to a wall must not be able to show anything except this. Hiding
+  widgets on index.html would mean every future widget is one forgotten role
+  class away from appearing on the sales floor, and the Tools-panel gating has
+  already drifted across five shells once. Here there is nothing to leak — the
+  page holds one card.
+
+  It is the SAME Live Dashboard the manager sees, rendered by the same functions
+  into the same class hooks (.lv-strip / .lv-detail): this store's four tiles,
+  its tracking band, and the district tables underneath with its own row marked.
+  The Today / Yesterday / Month toggle comes with it, injected into .lv-detail.
+  Nothing here is board-specific except the chrome, so the board cannot drift
+  away from what the managers are looking at.
+
+  Signed in as a Store-role account — one per shop floor. That role has no other
+  page: _tvGate() sends it here at login and on every load. See speeks.js.
+-->
+<body class="preload tv-body">
+
+<!-- The standard bar, minus everything this account cannot use: no page links,
+     no tools button, no bubbles, no action icons — there is nowhere else for a
+     board to go, and a control nobody can press is just something for a
+     customer to notice. What stays is the ordinary chrome, in its ordinary
+     place: wordmark left, greeting and Sign Out right.
+
+     Sign Out matters more here than anywhere else — it is how a store hands the
+     TV back (reload lands on the login page, since a board has no session to
+     return to). #userGreeting and the version tag are the standard ids/classes,
+     so they pick up the same styling and the same code that fills them. -->
+<header class="top-nav tv-nav">
+  <div class="nav-left">
+    <div class="brand-area">
+      <img src="images/SPEEKS%20Logo%20Short%20White.png" alt="SPEEKS" class="brand-mark">
+      <span class="brand-wordmark">SPEEKSNET</span>
+    </div>
+  </div>
+
+  <div class="nav-right">
+    <div class="greeting-stack">
+      <h2 id="userGreeting">Welcome!</h2>
+      <div class="version-signout-row">
+        <span class="version-tag">v3.1.0</span>
+        <button onclick="handleSignOut()" class="sign-out-mini">Sign Out</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="tv-main">
+  <!-- Deliberately NOT .lv-card: that class is how renderLiveDashboard finds the
+       DISTRICT card's header pieces (.lv-card .lv-asof, .lv-modes-host, and so
+       on). They would all be no-ops here, but naming this a district card and
+       relying on the misses is how a later change starts filling them. -->
+  <div class="tv-card">
+    <div class="lv-strip"></div>
+    <div class="lv-detail"><div class="status-message">Syncing live sales&hellip;</div></div>
+  </div>
+</main>
+
+</body>
+</html>

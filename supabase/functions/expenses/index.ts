@@ -19,10 +19,14 @@ const TOOL_ROLES = new Set(["ceo", "district manager", "multi-store manager"]);
 const REVIEWER_ROLES = new Set(["ceo", "district manager"]);
 // Reviewers who still must not see the CEO's own report.
 const EXCLUDES_CEO = new Set(["district manager"]);
-// Reviewing is READ-ONLY unless you are in here. The DM can look at anyone's
-// report bar the CEO's, but only the CEO may change someone else's lines —
-// everyone else edits only their own.
-const EDITOR_ROLES = new Set(["ceo"]);
+// Reviewing is READ-ONLY unless you are in here. The DM joined the CEO here on
+// 2026-08-09: the CEO is coming off this tool entirely (it is off their panel
+// now), so leaving the only edit right with them would have left nobody able to
+// correct a filed line. The DM was already the reviewer of record in practice —
+// they had categories and the mileage rate all along; this was the last CEO-only
+// verb. EXCLUDES_CEO is deliberately unchanged, so the CEO's own historical
+// claims stay private from the DM.
+const EDITOR_ROLES = new Set(["ceo", "district manager"]);
 // Who may rename/add/remove categories.
 const CATALOG_ROLES = new Set(["ceo", "district manager"]);
 // Who may change the mileage reimbursement rate. It is a single global value, so
@@ -115,9 +119,10 @@ Deno.serve(async (req: Request) => {
   }
 
   // May this user CHANGE that person's report? Your own always; someone else's
-  // only if you may edit others AND they are inside your visible roster. Note this
-  // is deliberately stricter than what you can read — a DM reviews the MSM's
-  // report but cannot alter it.
+  // only if you may edit others AND they are inside your visible roster. The
+  // roster clause is what still makes this stricter than reading: the DM may now
+  // edit, but the CEO is not in their visible roster, so a CEO line stays
+  // untouchable by them even by id.
   async function canWrite(person: string): Promise<boolean> {
     if (person === me) return true;
     if (!canEditOthers) return false;

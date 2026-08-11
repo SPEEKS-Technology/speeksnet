@@ -65,6 +65,10 @@ const AGING_INV_URL     = `${_BASE}/aging-inventory`;
 const EXPENSES_URL      = `${_BASE}/expenses`;
 const PREFERRED_URL     = `${_BASE}/preferred-purchases`;
 const EMAIL_RECIPIENTS_URL = `${_BASE}/email-recipients`;
+const SALES_INGEST_URL  = `${_BASE}/sales-ingest`;
+const SUMMARY_WEEKLY_URL = `${_BASE}/summary-weekly`;
+const LIVE_URL          = `${_BASE}/shopify-live`;
+const USAGE_URL         = `${_BASE}/usage`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -96,6 +100,192 @@ async function postWrite(url, payload) {
         throw new Error(data.error || `Request failed (HTTP ${res.status})`);
     }
     return data;
+}
+
+// --- USAGE TELEMETRY ---
+// Records which surfaces each person actually opens, so the nightly 8pm usage
+// report can answer "who was on the floor today, and did any of them open the
+// Margin Guide". Nothing else on the site records a read — every existing
+// signal is a side effect of someone WRITING something.
+//
+// Volume discipline matters here (see the July egress overage): we keep ONE row
+// per surface per session, not one per click. Re-opening a tool bumps a counter
+// on the row already in the map, and the whole map is re-sent on each flush —
+// the ingest function upserts on (session_id, event, feature), so a re-send
+// overwrites rather than accumulating. A busy session is ~40 rows, flushed a
+// handful of times an hour.
+const _usageRows = new Map();   // 'event|feature' -> row (cumulative for the session)
+let _usageDirty  = new Set();   // keys changed since the last successful flush
+let _usageTimer  = null;
+
+// One id per browser session PER DAY, kept in sessionStorage so a navigation
+// between the shells continues the same session rather than starting a new one.
+//
+// ⚠️ The per-day part is not cosmetic. sessionStorage lives as long as the TAB,
+// and a store device is a tab that never closes — so a single id was covering
+// days or weeks. Since the ingest upserts on (session_id, event, feature), every
+// one of that person's days collapsed onto the row's original `day` and they
+// vanished from every later report. Rolling the id at the Central day boundary
+// is what makes "sessions per user per day" mean anything.
+function _usageSessionId() {
+    // Central, not UTC: a UTC day boundary would roll the id at 7pm, mid-shift.
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+    let id = sessionStorage.getItem('speeksSessionId');
+    if (!id || sessionStorage.getItem('speeksSessionDay') !== today) {
+        id = (crypto.randomUUID && crypto.randomUUID()) ||
+             (Date.now() + '-' + Math.random().toString(36).slice(2));
+        sessionStorage.setItem('speeksSessionId', id);
+        sessionStorage.setItem('speeksSessionDay', today);
+    }
+    return id;
+}
+
+// Record that this person was on the site today.
+//
+// ⚠️ This exists because 'signin' fires ONLY where the PIN is typed, and
+// sessionStorage keeps a tab signed in indefinitely — so anyone on a device that
+// stays open never fired it again and was absent from the usage report entirely.
+// Found 2026-08-10: the report said one person used the site on a day when four
+// managers had between them filed 39 checklist completions.
+//
+// Same event name as the PIN path on purpose. The report counts presence as "any
+// event that day", so reusing 'signin' means no server change, and the upsert
+// key makes it exactly one row per person per day however many pages they open.
+function _usagePresence() {
+    try {
+        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+        if (sessionStorage.getItem('speeksPresenceDay') === today) return;
+        sessionStorage.setItem('speeksPresenceDay', today);
+        trackUsage('signin', 'session', _usageLabel('session'));
+    } catch (_) { /* telemetry must never break a page load */ }
+}
+
+// THE tracked-surface list, and the only one (Ethan 2026-08-08). An ALLOW-list,
+// not a deny-list: anything absent here is never queued and never sent, so the
+// default for a new tool is "not tracked" and adding one is a deliberate line.
+//
+// The list is short on purpose. Tools with a due date attached (Store KPIs,
+// Variance Replies, Aging Inventory) get opened because the deadline forces it,
+// so their numbers say nothing about whether anyone chose the site; tools that
+// leave their own write-trail in the database (checklists, the audit, claims,
+// recycle) are already countable without a beacon. What is left is the reading
+// and reference material — the surfaces that were completely invisible before.
+//
+// Values double as the human labels used in the report.
+const USAGE_TRACK = Object.assign(Object.create(null), {
+    'session':          'Signed in',
+    // Announcements themselves are NOT beaconed: `announcement_reads` already
+    // records who marked each post read, which is a stronger signal than having
+    // the feed open, and the report counts readers rather than openers.
+    'annDocsModal':     'Documents',
+    'patchNotesModal':  'Patch Notes',
+    // reference tools
+    'hotkeysDropdown':  'Hotkeys & Commands',
+    'quickMsgDropdown': 'Quick Messages',
+    'calendarDropdown': 'Strategic Calendar',
+    // the counter tools. NOTE there is deliberately no event for merely opening
+    // the Margin Guide tab or landing on the policy library — visiting a page is
+    // not using it. The tracked moment is a category AND an item picked (someone
+    // at the counter with a customer), and a document actually opened.
+    'mg:lookup':        'Margin Guide',
+    'ops:callbacks':    'Customer Call Backs',
+    'doc:open':         'Processes & Policies',
+    // stats page + the home KPI charts
+    'page:stats':       'Stats & Awards page',
+    'chart:home':       'KPI Charts',
+});
+
+// The only public entry point. Never throws, never blocks the UI, and no-ops
+// entirely for a signed-out page so the login screen stays silent.
+function trackUsage(event, feature, label) {
+    try {
+        if (sessionStorage.getItem('speeksUnlocked') !== 'true') return;
+        if (!feature || !USAGE_TRACK[feature]) return;
+        const key = event + '|' + feature;
+        const row = _usageRows.get(key);
+        if (row) {
+            row.opens++;
+        } else {
+            // `at` is the FIRST open of this surface, so first/last activity in
+            // the report reflects when the person did the thing rather than
+            // whenever the flush timer next fired.
+            _usageRows.set(key, {
+                event, feature,
+                label: label || feature,
+                opens: 1,
+                at: new Date().toISOString()
+            });
+        }
+        _usageDirty.add(key);
+        if (!_usageTimer) _usageTimer = setTimeout(_usageFlush, 30000);
+    } catch (_) { /* telemetry must never break a click */ }
+}
+
+async function _usageFlush() {
+    _usageTimer = null;
+    if (!_usageDirty.size) return;
+    const sending = _usageDirty;
+    _usageDirty = new Set();
+    const events = [];
+    sending.forEach(k => { const r = _usageRows.get(k); if (r) events.push(r); });
+    if (!events.length) return;
+    try {
+        await postWrite(USAGE_URL, {
+            user: sessionStorage.getItem('speeksUserName') || '',
+            role: sessionStorage.getItem('speeksUserRole') || '',
+            store: sessionStorage.getItem('speeksUserStore') || '',
+            sessionId: _usageSessionId(),
+            events
+        });
+    } catch (_) {
+        // Put them back so the next flush retries. Because opens is cumulative
+        // and the server upserts, a duplicate send is harmless.
+        sending.forEach(k => _usageDirty.add(k));
+        if (!_usageTimer) _usageTimer = setTimeout(_usageFlush, 30000);
+    }
+}
+
+// Catch the tab closing / being backgrounded, otherwise the last 30s of a
+// session — often the interesting part — is lost. pagehide is the reliable one
+// on mobile Safari, where unload never fires.
+window.addEventListener('pagehide', () => { _usageFlush(); });
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') _usageFlush();
+});
+
+function _usageLabel(key) { return USAGE_TRACK[key] || key; }
+
+// A document in the library is an <a> straight out to Drive — it never routes
+// through a modal or a tab, so a delegated click is the only place to see it.
+// This, not the page visit, IS the Processes & Policies signal.
+document.addEventListener('click', (e) => {
+    try {
+        const el = e.target && e.target.closest && e.target.closest('.doc-card');
+        if (el) trackUsage('open', 'doc:open', _usageLabel('doc:open'));
+    } catch (_) { /* never break a click */ }
+}, true);
+
+// The two chart dropdowns fire loadKpiData() from inline onchange, which init
+// also calls — so they're caught here instead, where only a real change event
+// arrives. Delegated, so it needs no init ordering and costs nothing off the
+// dashboard.
+document.addEventListener('change', (e) => {
+    try {
+        const id = (e.target && e.target.id) || '';
+        if (id === 'metricSelector' || id === 'dmChartStoreSelector') {
+            trackUsage('open', 'chart:home', _usageLabel('chart:home'));
+        }
+    } catch (_) { /* never break a control */ }
+}, true);
+
+// Stats & Awards is the one page where arriving IS the action — there is nothing
+// to open, you read what's on it. Everywhere else a visit is only intent, and
+// the tracked event is whatever the person actually did once they were there.
+function _trackPageVisit() {
+    try {
+        const page = (String(location.pathname || '').split('/').pop() || 'index.html').toLowerCase();
+        if (page === 'stats.html') trackUsage('open', 'page:stats', _usageLabel('page:stats'));
+    } catch (_) { /* never break a page load */ }
 }
 
 // --- 2. NAV COMPACT MODE ---
@@ -313,7 +503,9 @@ function toggleModal(modalId, badgeId = null) {
     if (!isOpen) {
         dropdown.classList.add('show');
         lockAndBlurScreen();
-        
+        // Most tools open through here, so this one hook covers them. Only the
+        // opening half counts — closing a modal isn't usage.
+        trackUsage('open', modalId, _usageLabel(modalId));
     }
 }
 
@@ -493,6 +685,13 @@ async function loadCMS() {
 
         // Feed the Action Menu deck + the hub from the same data (no extra fetch).
         window._samAnnData = data.announcements || [];
+        // Which of those the onboarding cutoff auto-archived. The hub already
+        // honours it (its Unread filter tests !hidden); the dashboard feed had no
+        // concept of it, so an announcement predating the user's start date was
+        // hidden in the hub and still counted in the feed's pip — 13 unread on the
+        // deck against 2 in the hub, for anyone with onboarded_at set. Derived
+        // here rather than recomputed there so the two can never drift again.
+        window._samAnnHidden = new Set(hubAnn.filter(a => a.hidden).map(a => String(a.rowId)));
         try { if (typeof renderActionFeed === 'function') renderActionFeed(); } catch (e) { console.warn('Action Menu feed failed:', e); }
         try { if (typeof renderHubFeed === 'function') renderHubFeed(); } catch (e) { console.warn('Hub feed failed:', e); }
 
@@ -623,6 +822,7 @@ function openDocsModal() {
     if (!modal) return;
     modal.classList.add('show');
     lockAndBlurScreen();
+    trackUsage('open', 'annDocsModal', _usageLabel('annDocsModal'));
     // #docsdemo on the URL loads sample files so the view can be checked before real
     // ones pile up. Opt-in and client-side only — nothing is stored, nobody else sees it.
     if (/docsdemo/i.test(window.location.hash) && !_annDocsCache.some(d => d._demo)) _annDemoDocs();
@@ -1060,6 +1260,10 @@ document.addEventListener('keydown', (e) => {
     // viewer, camera, then modals — dismissing a picture must never take the
     // audit down with it. Search sits on top: it opens OVER whatever you had.
     if (typeof _jumpOpen !== 'undefined' && _jumpOpen) { closeJumpSearch(); return; }
+    // Above the rest: it covers the whole window, so it is the layer you mean.
+    // (Only reached when real fullscreen was refused — inside it, Esc is the
+    // browser's and exits fullscreen, which closes this via fullscreenchange.)
+    if (document.getElementById('lvFullscreen')) { closeLiveFullscreen(); return; }
     const ex = document.getElementById('exportRangeModal');
     if (ex && ex.classList.contains('open')) { _exClose(); return; }
     const lb = document.getElementById('auditPhotoLightbox');
@@ -1527,7 +1731,10 @@ function populateUsersModal() {
     // Group users by role into collapsible bars (canonical role order first,
     // then any unrecognised role alphabetically). Rows keep their .user-manage-row
     // class so saveManageUsers() still reads every one regardless of grouping.
-    const ROLE_ORDER = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM'];
+    // Store LAST, and deliberately so: the list above it is people in seniority
+    // order, and a Store account is a screen on a sales floor — one per store,
+    // never a person. Grouping it at the bottom keeps the staff list readable.
+    const ROLE_ORDER = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM', 'Store'];
     const groups = {};
     const order = [];
     globalUsersData.forEach(u => {
@@ -1601,16 +1808,40 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
     row.className = 'user-manage-row';
 
     const stores = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL', 'CORP'];
-    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM'];
+    // Must match ROLE_ORDER in populateManageUsers, including the trailing Store:
+    // a role that can be assigned but not grouped lands in the unrecognised
+    // bucket, and one that can be grouped but not assigned cannot be created.
+    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM', 'Store'];
 
     const storeOptions = stores.map(s => `<option value="${s}" ${(user.store || '').toUpperCase() === s ? 'selected' : ''}>${s}</option>`).join('');
     const roleOptions = roles.map(r => `<option value="${r}" ${(user.role || '').toLowerCase() === r.toLowerCase() ? 'selected' : ''}>${r}</option>`).join('');
 
+    // Schedule drives listing capacity: weekly hours × the rate of the seat the
+    // person is in that day. ONE control rather than an employment_type dropdown
+    // plus a floater tick, because these are the three things that set a
+    // person's hours and they're mutually exclusive in practice. Hours live in
+    // listing_config, so the labels read them rather than hard-coding 40/20/25.
+    const _lc = ListingGoalsEngine.cfg;
+    const scheduleValue = user.can_float ? 'floater'
+        : (user.employment_type === 'part_time' ? 'part_time' : 'full_time');
+    const scheduleOptions = [
+        ['full_time', `Full-time · ${_lc.hours_full_time || 40}h`],
+        ['part_time', `Part-time · ${_lc.hours_part_time || 20}h`],
+        ['floater',   `Floater · ${_lc.hours_floater || 25}h`],
+    ].map(([v, label]) => `<option value="${v}" ${scheduleValue === v ? 'selected' : ''}>${label}</option>`).join('');
+
+    // hire_date is deliberately NOT edited here (user, 2026-08-10). It is stamped
+    // server-side the moment a new PIN is saved, which starts the two-week
+    // new-hire ramp on its own, and an existing person keeps theirs — so the
+    // field would be a box nobody ever needs to touch. saveManageUsers therefore
+    // omits the key entirely, which the auth function reads as "leave it alone".
+    // Correcting a wrong start date is a backend job.
     row.innerHTML = `
         <input type="text" class="u-name" placeholder="Full Name" value="${user.name}" style="flex: 2;">
-        <input type="text" class="u-pin" placeholder="PIN" maxlength="4" value="${user.pin}" style="flex: 1; max-width: 80px;" oninput="this.value = this.value.replace(/[^0-9]/g, '').slice(0,4)">
+        <input type="text" class="u-pin" placeholder="PIN" maxlength="4" value="${user.pin}" style="flex: 1; max-width: 78px;" oninput="this.value = this.value.replace(/[^0-9]/g, '').slice(0,4)">
         <select class="u-store" style="flex: 1;">${storeOptions}</select>
         <select class="u-role" style="flex: 1.5;">${roleOptions}</select>
+        <select class="u-schedule" style="flex: 1.3;" title="Weekly hours — what this person's store listing capacity is built from. A floater can be claimed by any store in their market.">${scheduleOptions}</select>
         <button class="del-btn" onclick="this.parentElement.remove()" title="Delete User"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     `;
     if (target) {
@@ -1637,13 +1868,24 @@ async function saveManageUsers() {
         const pin = row.querySelector('.u-pin').value.trim();
         const store = row.querySelector('.u-store').value;
         const role = row.querySelector('.u-role').value;
+        // The save is a FULL REPLACE of the users table, so anything not sent
+        // here is destroyed. Send the schedule fields explicitly; the server
+        // falls back to the stored value only when a key is absent entirely.
+        const schedule = row.querySelector('.u-schedule')?.value || 'full_time';
 
         if (name || pin) {
             if (pin.length !== 4) {
                 alert(`Error: The PIN for ${name || 'a user'} must be exactly 4 digits.`);
                 valid = false;
             }
-            updatedUsers.push({ name, pin, store, role });
+            // No hire_date key: the server keeps an existing person's date and
+            // stamps today on a brand-new PIN. Sending '' would do the same, but
+            // omitting it says "this client does not manage that field" out loud.
+            updatedUsers.push({
+                name, pin, store, role,
+                employment_type: schedule === 'part_time' ? 'part_time' : 'full_time',
+                can_float: schedule === 'floater',
+            });
         }
     });
 
@@ -2207,6 +2449,67 @@ function handlePINAutoTrigger() {
     }
 }
 
+// ── The Store role: a shop-floor display, not a person ──────────────────────
+//
+// One account per store, signed in on a TV on the sales floor. It is not someone
+// with a narrow set of permissions — it is a screen, so it gets exactly one page
+// and is kept on it. That is a redirect rather than a pile of role classes for
+// the same reason tv.html is its own file: a board that can only ever render one
+// card cannot accidentally show payroll to a customer.
+//
+// Deliberately NOT a security boundary. The role sees what any signed-in pin
+// sees (see scopeFor in shopify-live); this only decides where it lands.
+const TV_PAGE = 'tv.html';
+function _tvIsBoardRole() {
+    return (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'store';
+}
+function _tvOnBoardPage() {
+    return /(^|\/)tv\.html$/i.test(String(window.location.pathname || ''));
+}
+// Returns true when it has started navigating — callers must stop what they were
+// doing, because the rest of a page init is pointless mid-redirect.
+function _tvGate() {
+    if (!_tvIsBoardRole() || _tvOnBoardPage()) return false;
+    // replace(), not href: nobody is standing at the TV pressing Back, and a
+    // history entry per load would let a stray remote-control press wander off
+    // the board with no way back.
+    window.location.replace(TV_PAGE);
+    return true;
+}
+
+// The board's whole init. A screen is not a session: it has one card, nobody to
+// click anything, and no feed, bubbles or panels for the rest of the dashboard
+// to paint into. Running the normal init here would fire ~30 fetches and start
+// five pollers per TV, in five stores, around the clock — which is the exact
+// shape of the egress overage that had to be walked back once already.
+function initBoardPage() {
+    _setUserGreeting();
+    fetchLiveDashboard();
+    // The board's card has TWO halves. Selling comes from shopify-live above; the
+    // Buying block reads hubDataCache, which only fetchHubData fills — without
+    // this it sits on "Syncing the buying sheet…" for as long as the TV is on.
+    // It repaints the dashboard itself once the data lands.
+    fetchHubData();
+    // Guarded on window._lvSync, the SAME flag initDashboardData uses, so the two
+    // can never both be running against one page.
+    if (!window._lvSync) {
+        // No visibilitychange pairing here, unlike the dashboard's copy: that one
+        // skips hidden tabs to avoid spending requests on a panel nobody is
+        // looking at. A TV is the case where somebody always is.
+        window._lvSync = setInterval(fetchLiveDashboard, 5 * 60 * 1000);
+    }
+    // Buying gets its own, much slower net. The sheet is keyed once a morning, so
+    // five minutes would be 287 pointless requests a day per TV to catch one
+    // change; realtime (the `buying` ping) is what makes it prompt.
+    if (!window._lvBuySync) {
+        window._lvBuySync = setInterval(fetchHubData, 30 * 60 * 1000);
+    }
+    // Realtime is the primary path on the board as everywhere else — a sale
+    // should reach the sales floor in seconds, not on the next five-minute tick.
+    // It answers only the `live` ping; see the board guard in _rtRunCheck.
+    initRealtimeNotifications();
+}
+
 async function checkPIN() {
     const pin = document.getElementById('pinInput').value;
     const err = document.getElementById('pinError');
@@ -2258,6 +2561,19 @@ async function checkPIN() {
             // New-hire announcement baseline: blank for pre-existing users (no filtering).
             sessionStorage.setItem('speeksUserOnboardedAt', matched.onboarded_at || '');
 
+            // The foundation of the nightly usage report: without this there is no
+            // record anywhere that a person opened the site at all. Recorded above
+            // the TV gate on purpose — board sessions are logged and filtered out
+            // when the report runs, rather than being dropped at source where we
+            // could never tell a quiet store from a broken beacon.
+            trackUsage('signin', 'session', _usageLabel('session'));
+
+            // A shop-floor board signs in on the login page like everyone else and
+            // is sent straight to its own page. Before the dashboard init below, not
+            // after: there is no point building a QuickPortal nobody will see, and a
+            // half-built one is what would flash on the TV on the way past.
+            if (_tvGate()) return;
+
             const authOverlay = document.getElementById('authOverlay');
             if (authOverlay) authOverlay.style.display = 'none';
 
@@ -2283,6 +2599,18 @@ async function checkPIN() {
             // and store notes out of the next person's feed.
             if (typeof loadCMS === 'function') loadCMS();
             if (typeof fetchAndDisplayStoreComment === 'function') fetchAndDisplayStoreComment();
+
+            // Open whatever the URL asked for. These run on page load and on SPA
+            // navigation but not here, so signing in ON a deep link silently lost
+            // it: operations.html#b2b landed on the default tab, because the load
+            // path that honours the hash sits inside the already-unlocked branch
+            // and this one never reached it.
+            //
+            // It matters now because the B2B signing QR is exactly that -- a link
+            // handed to a phone that has never signed in, which is the one case
+            // guaranteed to take this path.
+            if (document.querySelector('.ws-wrap') && typeof initWorkspace === 'function') initWorkspace();
+            if (document.querySelector('.ops-wrap') && typeof initOperations === 'function') initOperations();
         } else {
             err.innerText = "Incorrect PIN. Please try again.";
             err.style.display = 'block';
@@ -5558,12 +5886,16 @@ function switchOperationsTab(name) {
     document.getElementById('ops-tab-' + name)?.classList.add('active');
     document.getElementById('ops-pane-' + name)?.classList.add('active');
     try { history.replaceState(null, '', 'operations.html#' + name); } catch (e) {}
+    // Margin Guide and Customer Call Backs are read-only tools — this tab hook
+    // is the ONLY record that anyone ever used them.
+    trackUsage('open', 'ops:' + name, _usageLabel('ops:' + name));
 
     if (name === 'callbacks') {
         cbLoad();
         _startCbSync();
     } else if (name === 'b2b') {
         b2bLoad();
+        _startB2bSync();
     } else if (name === 'marginguide') {
         mgLoad();
     }
@@ -6000,6 +6332,12 @@ function _mgBind() {
         _mgState.deviceId = Number.isFinite(id) ? id : null;   // "" = back to unchosen
         _mgState.cond = null;
         _mgState.proj = '';
+        // A category AND an item chosen is the moment the guide is actually being
+        // used — someone is standing at the counter with something in front of
+        // them. Opening the tab proves only that they found it. Clearing the
+        // picker back to "" is not a lookup, so only a real id counts, and repeat
+        // lookups fold into `opens` — the count of items priced this session.
+        if (_mgState.deviceId) trackUsage('open', 'mg:lookup', _usageLabel('mg:lookup'));
         mgRender();
     });
 
@@ -6930,7 +7268,13 @@ function _mgRenderAdmin(body) {
 function initOperations() {
     if (!document.querySelector('.ops-wrap')) return;
     const hash = (window.location.hash || '').replace('#', '');
-    let initial = ['marginguide', 'callbacks', 'b2b'].includes(hash) ? hash : 'marginguide';
+    // #b2b-sign-<dealId> is the B2B signing QR: open the B2B tab, and park the
+    // id for b2bLoad() to act on once the deals are actually here. The deal
+    // cannot be looked up yet -- this runs before the first fetch.
+    const sign = hash.match(/^b2b-sign-([A-Za-z0-9-]{6,})$/);
+    if (sign) _b2bPendingSign = sign[1];
+    let initial = sign ? 'b2b'
+        : ['marginguide', 'callbacks', 'b2b'].includes(hash) ? hash : 'marginguide';
     const tabVisible = id => { const b = document.getElementById(id); return !!b && b.style.display !== 'none' && !b.hidden; };
     if (!tabVisible('ops-tab-' + initial)) {
         const firstVisible = Array.from(document.querySelectorAll('[id^="ops-tab-"]'))
@@ -6972,12 +7316,34 @@ async function _kpiSavePeriod(periodDate) {
         for (let empIdx = 0; empIdx < period.entries.length; empIdx++) {
             const entry   = period.entries[empIdx];
             const reqBody = { store: store, period_type: _kpiCurrentTab, period_end_date: periodDate, employee_name: entry.employee_name };
+            // A CLEARED box sends null, it does not go unsent. Omitting it left the
+            // column at whatever was there before — so emptying a figure and saving
+            // put the old number straight back on the next render, with a green tick
+            // claiming it had saved. An empty input is an instruction ("there is no
+            // number here"), and the only way to send that is to say it out loud.
+            let anyFilled = false;
             _KPI_INPUT_FIELDS.forEach(function(f) {
                 const el = document.getElementById('kpi-' + pk + '-' + empIdx + '-' + f);
-                if (el && el.value !== '') reqBody[f] = _KPI_INT_FIELDS.has(f) ? parseInt(el.value) : parseFloat(el.value);
+                // No input on screen for this field — stay silent about it rather
+                // than nulling a column the manager was never shown.
+                if (!el) return;
+                if (el.value === '') { reqBody[f] = null; return; }
+                reqBody[f] = _KPI_INT_FIELDS.has(f) ? parseInt(el.value) : parseFloat(el.value);
+                anyFilled = true;
             });
-            const hasData = _KPI_INPUT_FIELDS.some(function(f) { return reqBody[f] != null; });
-            if (!hasData) continue;
+            if (!anyFilled) {
+                // Every box on the row is empty. Nobody saved for this person yet
+                // means there is nothing to do — most of the roster is this, every
+                // save, which is why the row is skipped rather than written blank.
+                if (!entry.id) continue;
+                // But a row that DOES exist and has been emptied is a delete. The
+                // grid has no per-row delete control, so clearing the boxes is the
+                // only way to take someone off a period they were entered on by
+                // mistake, and it used to be skipped here — leaving the entry sitting
+                // in the table looking like it had been removed. Same rule the
+                // coaching note beside it already follows: emptied means gone.
+                reqBody.action = 'delete_entry';
+            }
             try {
                 const resp   = await _kpiPostEntry(reqBody, pin);
                 const result = await resp.json();
@@ -7056,7 +7422,15 @@ async function fetchHubData() {
 
         hubDataCache = freshData;
 
-        if (document.getElementById('bs-buy-val')) renderBuyingSales();
+        // Used to be gated on #bs-buy-val, which the Buying & Sales tab owned and
+        // took with it. renderBuyingSales still fills the Command Center's
+        // "Updated as of" stamp and the CEO rings, and every write it makes is
+        // element-guarded, so it is now simply called.
+        renderBuyingSales();
+        // The Live Dashboard's buying half reads hubDataCache directly, and the two
+        // feeds arrive independently — whichever lands second has to repaint, or
+        // the block sits on "Syncing the buying sheet" until the next sale.
+        if (typeof renderLiveDashboard === 'function') renderLiveDashboard();
         renderMonthlyGoalsBanner();
         renderDistrictGoals();
 
@@ -7182,12 +7556,11 @@ function renderBuyingSales() {
     const _trackGp = parseNum(hubDataCache[`${store}TrackGP`]);
     const _trackRev = sellMarginNum > 0 ? (_trackGp / (sellMarginNum / 100)) : 0;
     document.querySelectorAll('#cc-track-rev').forEach(el => el.innerText = `$${Math.round(_trackRev).toLocaleString()}`);
-    _ccSum('cc-sum-buy', `$${Math.round(bP).toLocaleString()}`, '');
-    _ccSum('cc-sum-rev', `$${Math.round(_trackRev).toLocaleString()}`, '');
-    _ccSum('cc-sum-goal', `${p}<small>%</small>`, p >= 100 ? 'good' : (p >= 80 ? 'warn' : 'bad'));
-    const _buySig = `${Math.round(bP)}|${p}|${hubDataCache[`${store}BuyDate`] || ''}`;
-    _ccFlagUpdate('buying', _buySig);   // manager Command Center
-    _empFlagUpdate('buying', _buySig);  // employee combined widget
+    // The three collapsed-summary cells and the "this tab changed" dot went with
+    // the Buying & Sales tab. Everything above still runs: the elements it writes
+    // to are all queried, so the ones that no longer exist are silent no-ops, and
+    // the ones that do — #cc-updated on the Command Center header, and the CEO
+    // rings — still need filling.
 }
 
 function renderLiveData(d) {
@@ -7310,21 +7683,29 @@ function switchPageTab(tab) {
     if (tab === 'records') renderRecords();
 }
 
+// The chart draws itself on page load, so rendering it proves nothing. Every
+// hook below is a CONTROL the reader had to reach for — mode, timeframe, metric,
+// leaderboard — which is the only honest evidence anyone looked at it. They all
+// report one surface: the question is whether the chart gets used, not which
+// button. loadKpiData() is deliberately NOT hooked; init calls it too.
 function setChartMode(mode) {
+    trackUsage('open', 'chart:home', _usageLabel('chart:home'));
     currentChartMode = mode;
     document.getElementById('btn-chart-avg')?.classList.toggle('active', mode === 'averages');
     document.getElementById('btn-chart-emp')?.classList.toggle('active', mode === 'employees');
     loadKpiData(); 
 }
 
-function setTimeframe(t) { 
-    currentTimeframe = t; 
+function setTimeframe(t) {
+    trackUsage('open', 'chart:home', _usageLabel('chart:home'));
+    currentTimeframe = t;
     document.getElementById('btn-4week')?.classList.toggle('active', t === '4-Week'); 
     document.getElementById('btn-monthly')?.classList.toggle('active', t === 'Monthly'); 
     loadKpiData(); 
 }
 
 function switchLeaderboardMetric(metric) {
+    trackUsage('open', 'chart:home', _usageLabel('chart:home'));
     currentLeaderboardMetric = metric;
     
     const revBtn = document.getElementById('lb-tab-rev');
@@ -8251,6 +8632,7 @@ function handleSignOut() {
     // this tab would otherwise flash their announcements and store notes before
     // the new fetches resolve.
     window._samAnnData = [];
+    window._samAnnHidden = new Set();
     window._samStoreNotes = [];
 
     // Sign-out shows the login overlay rather than reloading, so module state
@@ -8565,7 +8947,11 @@ async function fetchScorecardData() {
                     <span class="sh-au-ticklab" style="left:${AUDIT_TARGET_PCT}%;">Target ${AUDIT_TARGET_PCT}%</span>
                 </div>
                 <div class="sh-au-scale-sp"></div>`;
-            if (_auAction) _auAction.innerHTML = `<button class="sh-view-btn" type="button" onclick="openAuditBreakdown('${targetStore}')">View Full Breakdown</button>`;
+            // Named for what it opens. "View Full Breakdown" sat in the tab bar
+            // with nothing beside it saying which of the two scores it belonged
+            // to — the tab holds Online & Marketing as well as the audit, and the
+            // breakdown is only ever the audit's 165 points.
+            if (_auAction) _auAction.innerHTML = `<button class="sh-view-btn" type="button" onclick="openAuditBreakdown('${targetStore}')">View Audit Breakdown</button>`;
         } else {
             if (_auTile) _auTile.innerHTML = `
                 <span class="sh-stripe" style="background:#cbd5e1;"></span>
@@ -8753,8 +9139,14 @@ async function fetchAlertsData() {
         _countTile('cc-ebay-top', 'Top-Rated Metrics', _sevs.slice(4));
 
         // ---- Collapsed one-line summary + "updated" cue for the eBay tab ----
-        _ccSum('cc-sum-ebay', _ebVal, (_ebValCls || '').trim());
-        document.querySelectorAll('#cc-sum-ebay .cc-sum-v').forEach(el => { el.style.fontSize = '15px'; });
+        // Count large, words small — the district cell's shape ("2 Stores Over"),
+        // so the two summary rows scan the same way. The 15px override that used to
+        // sit here was for the old five-cell row, where the whole phrase was set at
+        // the value size and had to shrink to fit; the qualifier is <small> now, so
+        // it fits at the shared size and no longer reads as a different kind of cell.
+        const _ebSumVal = _crit > 0 ? `${_crit} <small>At Risk</small>`
+            : (_warn > 0 ? `${_warn} <small>Near Limit</small>` : 'Healthy');
+        _ccSum('cc-sum-ebay', _ebSumVal, (_ebValCls || '').trim());
         _ccFlagUpdate('ebay', `${_crit}|${_warn}|${_clear}`);
 
         // ---- eBay detail panel: two metric groups, contained stat cells ----
@@ -8788,45 +9180,92 @@ async function fetchAlertsData() {
 // tab open; clicking a tab expands the widget to the chart height showing that tab's
 // strip + detail; clicking the open tab again collapses back to the summary.
 // Pure view-switching — the fetch/render functions above own the data.
-// Three tabs: 'scorecard' (audit + SPEEKS Scorecard), 'ebay', 'buying'.
-function switchCommandTab(tab) {
-    const widget = document.querySelector('.cc-widget');
-    const btn = document.getElementById('cc-tab-' + tab);
+// Every tab the one Command Center can show. Order is display order only — no
+// board opens a tab on load any more, so it no longer decides where a role lands.
+// (_ccOpenDefaultTab still reads it, but nothing calls that.)
+//
+// 'buying' was retired here: the Live Dashboard's Month view already showed value
+// purchased, buy margin, revenue and gross profit month-to-date and sell margin,
+// and its "Tracking to month-end" strip took the four projections that were the
+// only things left. Feature-override rows for the old cc-buying key are harmless
+// — nothing reads it any more.
+const CC_TABS = ['live', 'ebay', 'scorecard', 'kpis'];
+
+// Both tabbed boards — the store Command Center and the district one — run on
+// this. They share every CSS class; only the id prefix and the tab list differ,
+// so the widget is found by ID rather than by .cc-widget, which now matches two
+// elements on a DM's page.
+const _CC_BOARD = { prefix: 'cc', tabs: () => CC_TABS, widget: 'ccWidget' };
+const _DC_BOARD = { prefix: 'dc', tabs: () => DC_TABS, widget: 'dcWidget' };
+
+function _tabSwitch(cfg, tab) {
+    const p = cfg.prefix;
+    const widget = document.getElementById(cfg.widget);
+    const btn = document.getElementById(p + '-tab-' + tab);
     const collapse = btn && btn.classList.contains('active'); // clicking the open tab closes it
 
-    ['scorecard', 'ebay', 'buying'].forEach(t => {
+    cfg.tabs().forEach(t => {
         const on = !collapse && t === tab;
-        const b = document.getElementById('cc-tab-' + t);
+        const b = document.getElementById(p + '-tab-' + t);
         if (b) b.classList.toggle('active', on);
         // Strips and panels are each stacked in one grid cell and toggled by class (opacity,
         // not display) so every tab reserves the height of the tallest — the card never
         // resizes when switching, and no hidden panel paints over the active one.
-        const strip = document.getElementById('cc-strip-' + t);
+        const strip = document.getElementById(p + '-strip-' + t);
         if (strip) strip.classList.toggle('cc-active', on);
-        const panel = document.getElementById('cc-panel-' + t);
+        const panel = document.getElementById(p + '-panel-' + t);
         if (panel) panel.classList.toggle('cc-active', on);
     });
     // Expand to chart height only while a tab is open; collapsed → natural summary height.
-    if (widget) widget.classList.toggle('cc-expanded', !collapse);
+    if (widget) {
+        widget.classList.toggle('cc-expanded', !collapse);
+        // Weekly KPIs has no tile strip. Every strip shares one grid cell, so leaving
+        // the band in place would show a blank stripe the height of the tallest one.
+        widget.classList.toggle('cc-nostrip', !collapse && !document.getElementById(p + '-strip-' + tab));
+    }
+    // Show the explicit "back to summary" control while a tab is open.
+    const coll = document.getElementById(p + '-collapse');
+    if (coll) coll.style.display = collapse ? 'none' : '';
+    return collapse;
+}
+
+function switchCommandTab(tab) {
+    const collapsed = _tabSwitch(_CC_BOARD, tab);
     // The "View Full Breakdown" action is audit-specific; only on the Scorecard tab.
     const action = document.getElementById('sh-tab-action');
-    if (action) action.style.display = (!collapse && tab === 'scorecard') ? '' : 'none';
-    // Show the explicit "back to summary" control while a tab is open.
-    const coll = document.getElementById('cc-collapse');
-    if (coll) coll.style.display = collapse ? 'none' : '';
+    if (action) action.style.display = (!collapsed && tab === 'scorecard') ? '' : 'none';
+    _ccHeaderFor(collapsed ? null : tab);
     // Opening a tab means the manager has now seen it → clear its "updated" cue.
-    if (!collapse) _clearCommandUpdot(tab);
+    if (!collapsed) _clearCommandUpdot(tab);
+}
+
+// Header extras that belong to ONE tab. Carried over from the old employee widget,
+// which swapped its whole header per tab; here the title is generic ("OVL Command
+// Center") and only these three chips move.
+function _ccHeaderFor(tab) {
+    const show = (id, on) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = on ? '' : 'none';
+    };
+    // Only one header extra survives the Buying & Sales tab's retirement — the
+    // goal chip and the buy-date stamp went with it.
+    show('emp-kpi-period', tab === 'kpis');
 }
 // Explicit "back to the one-line summary" (in addition to clicking the open tab again).
-function collapseCommand() {
-    ['scorecard', 'ebay', 'buying'].forEach(t => {
-        const b = document.getElementById('cc-tab-' + t); if (b) b.classList.remove('active');
-        const strip = document.getElementById('cc-strip-' + t); if (strip) strip.classList.remove('cc-active');
-        const panel = document.getElementById('cc-panel-' + t); if (panel) panel.classList.remove('cc-active');
+function _tabCollapse(cfg) {
+    const p = cfg.prefix;
+    cfg.tabs().forEach(t => {
+        const b = document.getElementById(p + '-tab-' + t); if (b) b.classList.remove('active');
+        const strip = document.getElementById(p + '-strip-' + t); if (strip) strip.classList.remove('cc-active');
+        const panel = document.getElementById(p + '-panel-' + t); if (panel) panel.classList.remove('cc-active');
     });
-    const widget = document.querySelector('.cc-widget'); if (widget) widget.classList.remove('cc-expanded');
+    const widget = document.getElementById(cfg.widget); if (widget) widget.classList.remove('cc-expanded');
+    const coll = document.getElementById(p + '-collapse'); if (coll) coll.style.display = 'none';
+}
+function collapseCommand() {
+    _tabCollapse(_CC_BOARD);
     const action = document.getElementById('sh-tab-action'); if (action) action.style.display = 'none';
-    const coll = document.getElementById('cc-collapse'); if (coll) coll.style.display = 'none';
+    _ccHeaderFor(null);
 }
 // Back-compat alias in case anything still calls the old name.
 function switchStoreHealthTab(tab) { switchCommandTab(tab === 'mktg' ? 'scorecard' : tab); }
@@ -8869,70 +9308,1821 @@ function _ccSum(id, html, cls) {
     el.className = 'cc-sum-v' + (cls ? ' ' + cls : '');
 }
 
-// ---- EMPLOYEE combined widget: Buying & Sales + Weekly KPIs (2 tabs, no summary) ----
-// Always expanded; defaults to Buying. Mirrors the manager Command Center's dot cue.
-function switchEmpTab(tab) {
-    ['buying', 'kpis'].forEach(t => {
-        const on = t === tab;
-        const b = document.getElementById('ec-tab-' + t); if (b) b.classList.toggle('active', on);
-        const p = document.getElementById('ec-panel-' + t); if (p) p.classList.toggle('cc-active', on);
-    });
-    // Swap the header to match the active tab (goal + date belong to Buying only).
-    const eyebrow = document.getElementById('ec-eyebrow');
-    const titleT = document.getElementById('ec-title-text');
-    const goalWrap = document.getElementById('ec-goal-wrap');
-    const bsDate = document.getElementById('bs-last-updated');
-    const kpiDate = document.getElementById('emp-kpi-period');
-    const buying = tab === 'buying';
-    if (eyebrow) eyebrow.textContent = buying ? 'My Store · This Month' : 'Mine vs Store';
-    if (titleT) titleT.textContent = buying ? 'Buying & Sales' : 'Weekly KPIs';
-    if (goalWrap) goalWrap.style.display = buying ? '' : 'none';
-    if (bsDate) bsDate.style.display = buying ? '' : 'none';
-    if (kpiDate) kpiDate.style.display = buying ? 'none' : '';
-    _clearEmpUpdot(tab);
-}
-// Employee-widget update dot — same silent-seed / change-detect / clear-on-open logic
-// as the manager Command Center, keyed separately (ec) and per store.
-var _ecSigCache = {};
-function _empFlagUpdate(tab, sig) {
-    _ecSigCache[tab] = (sig == null ? '' : String(sig));
-    const dot = document.getElementById('ec-updot-' + tab);
-    if (!dot) return;
-    const btn = document.getElementById('ec-tab-' + tab);
-    const open = btn && btn.classList.contains('active');
-    const key = 'ecSeen_' + _ccStore() + '_' + tab;
-    let last = localStorage.getItem(key);
-    if (last === '__test_prev__') last = null;
-    if (open || last === null) { localStorage.setItem(key, _ecSigCache[tab]); dot.classList.remove('show'); return; }
-    dot.classList.toggle('show', last !== _ecSigCache[tab]);
-}
-function _clearEmpUpdot(tab) {
-    const dot = document.getElementById('ec-updot-' + tab);
-    if (dot) dot.classList.remove('show');
-    if (_ecSigCache[tab] != null) localStorage.setItem('ecSeen_' + _ccStore() + '_' + tab, _ecSigCache[tab]);
-}
+// The employee/ASM widget was merged into the Command Center above. These two names
+// survive only because other call sites still use them; both now drive the single
+// widget. Kept rather than chased down so a missed caller degrades to a no-op
+// instead of a ReferenceError that takes the whole dashboard down.
+function switchEmpTab(tab) { switchCommandTab(tab); }
+function _empFlagUpdate(tab, sig) { _ccFlagUpdate(tab, sig); }
 
-// After role/feature UI is applied, keep the combined widgets coherent: hide the whole
-// widget if every tab was turned off, and (employee widget) make sure a visible tab is
-// active so a disabled default doesn't leave a blank body.
-function _reconcileComboTabs(widgetEl, prefix, tabs, isEmployee) {
+// After role/feature UI is applied: if every tab was switched off there is nothing
+// left to show, so hide the card rather than leave an empty shell with a header.
+function _reconcileComboTabs(widgetEl, prefix, tabs) {
     if (!widgetEl || getComputedStyle(widgetEl).display === 'none') return; // not shown for this user
     const visible = tabs.filter(t => {
         const b = document.getElementById(prefix + '-tab-' + t);
         return b && getComputedStyle(b).display !== 'none';
     });
-    if (!visible.length) { widgetEl.style.setProperty('display', 'none', 'important'); return; }
-    if (isEmployee) {
-        const activeOk = visible.some(t => {
-            const b = document.getElementById(prefix + '-tab-' + t);
-            return b.classList.contains('active');
-        });
-        if (!activeOk) switchEmpTab(visible[0]);
-    }
+    if (!visible.length) widgetEl.style.setProperty('display', 'none', 'important');
 }
 function _reconcileCommandWidgets() {
-    _reconcileComboTabs(document.querySelector('.cc-widget:not(.ec-widget)'), 'cc', ['buying', 'ebay', 'scorecard'], false);
-    _reconcileComboTabs(document.getElementById('ecWidget'), 'ec', ['buying', 'kpis'], true);
+    _reconcileComboTabs(document.getElementById('ccWidget'), 'cc', CC_TABS);
+    _reconcileComboTabs(document.getElementById('dcWidget'), 'dc', DC_TABS);
+    // NEITHER board opens a tab. Both land on their seven-cell summary — the whole
+    // picture in one line, which is what anyone wants on sight; anything more
+    // specific is one click away.
+    //
+    // The store board used to open the Live Dashboard here. Now that its summary
+    // carries the same seven cells as the district's, opening a tab over it buried
+    // the one line that answers "how are we doing" before you have asked anything.
+    // Both boards behave the same way for every role, which is also one fewer rule
+    // to hold: a Command Center opens as a summary.
+    //
+    // Nothing is lost by not opening: every panel's data is fetched on page load,
+    // not on tab open (see the setTimeout block in the post-login sequence), and
+    // switchCommandTab is purely presentational. The summary fills either way.
+}
+
+// Kept as the one-line way back to opening on a tab, for either board, if that is
+// ever wanted again — see _reconcileCommandWidgets for why neither calls it.
+//
+// Picks the first VISIBLE tab rather than assuming Live is there: Feature Access
+// can switch cc-live off per role or per person, and a role without it would
+// otherwise land on a transparent panel and read as a broken widget.
+//
+// One-shot. _reconcileCommandWidgets runs again whenever feature overrides are
+// re-applied, and re-opening a widget the manager deliberately collapsed would be
+// the panel arguing with them.
+var _ccDefaultOpened = false;
+var _dcDefaultOpened = false;
+function _openDefaultTab(cfg, open) {
+    const widget = document.getElementById(cfg.widget);
+    if (!widget || getComputedStyle(widget).display === 'none') return false;
+    const first = cfg.tabs().find(t => {
+        const b = document.getElementById(cfg.prefix + '-tab-' + t);
+        return b && getComputedStyle(b).display !== 'none';
+    });
+    if (!first) return false;
+    open(first);      // nothing is active yet, so this opens rather than toggles
+    return true;
+}
+function _ccOpenDefaultTab() {
+    if (_ccDefaultOpened) return;
+    if (_openDefaultTab(_CC_BOARD, switchCommandTab)) _ccDefaultOpened = true;
+}
+function _dcOpenDefaultTab() {
+    if (_dcDefaultOpened) return;
+    if (_openDefaultTab(_DC_BOARD, switchDistrictTab)) _dcDefaultOpened = true;
+}
+
+// ============================================================================
+// MODULE: LIVE DASHBOARD  (Shopify, refreshed every minute)
+// ============================================================================
+// Today's sales straight from the Shopify Admin API. A pg_cron job calls the
+// shopify-live edge function once a minute inside the buffered trading window
+// (Mon–Fri 8am–9pm, Sat 8am–6pm Central, closed Sunday) and writes
+// app_cache/shopify_live ONLY when a number actually moved — on a write it
+// broadcasts a bare ping and _RT_TOOL_CHECKS.live brings us straight back here.
+// The browser never talks to Shopify, and never polls per-minute.
+//
+// SCOPING IS THE EDGE FUNCTION'S JOB, not this file's. It resolves the caller's
+// role from their PIN and strips out every store they may not see before
+// responding — DM/CEO get the district roll-up, a manager/ASM/employee get their
+// own store, the MSM gets both of theirs. So there is no filtering below: what
+// arrives here is already only what this user is allowed to read.
+//
+// Managers, ASMs and employees deliberately see the SAME figures, cost and margin
+// included.
+//
+// Three surfaces, one payload:
+//   * manager Command Center — tiles in the tab strip, detail in the panel
+//   * employee / ASM widget  — tiles and detail together in the panel
+//   * DM & CEO               — five-store table above the District board
+// Store surfaces mount by CLASS, never id: the manager and employee widgets are
+// both in the DOM at once (one is display:none), so ids would collide — which is
+// exactly why renderBuyingSales already has to querySelectorAll every field.
+
+// TODAY vs the previous open day. Every surface reads this one variable and the
+// toggle just flips it and re-renders, so the manager panel, the employee widget
+// and the district table can never end up showing different days at once.
+//
+// Deliberately NOT persisted. "Live" is what this tab is for; a mode that
+// survived a reload would leave someone staring at a past day believing it was
+// current, which is the one failure this panel exists to prevent.
+let _lvMode = 'today';   // 'today' | 'prev' | 'mtd'
+let _lvData = null;      // last successful payload
+let _lvErr  = '';        // message to show instead of numbers
+
+const _lvMoney = (n, cents) => '$' + (Number(n) || 0).toLocaleString('en-US', {
+    minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: cents ? 2 : 0
+});
+const _lvPct = n => (n === null || n === undefined || n === '')
+    ? '—' : (Math.round(Number(n) * 10) / 10).toFixed(1) + '%';
+// A plain count — Google reviews. Rounded because a projection is a fraction and
+// "34.7 reviews" is not a thing anybody counts.
+const _lvNum = n => Math.round(Number(n) || 0).toLocaleString('en-US');
+
+// asOfCentral arrives as "YYYY-MM-DD HH:MM" already in Central, so the clock is
+// read off the string. Reformatting it through Date() would re-apply the viewer's
+// own timezone and show a manager in Kansas City the wrong hour.
+function _lvClock(asOf) {
+    const m = /(\d{2}):(\d{2})$/.exec(String(asOf || ''));
+    if (!m) return '';
+    let h = +m[1];
+    const ap = h >= 12 ? 'pm' : 'am';
+    h = h % 12 || 12;
+    return h + ':' + m[2] + ' ' + ap;
+}
+// Order timestamps come from Shopify as UTC ISO, so these two DO need converting —
+// pinned to Central rather than the viewer's clock so everyone in the company
+// reads the same time for the same order.
+function _lvOrderClock(iso) {
+    const t = Date.parse(iso);
+    if (!t) return '';
+    return new Date(t).toLocaleTimeString('en-US',
+        { timeZone: 'America/Chicago', hour: 'numeric', minute: '2-digit' }).toLowerCase();
+}
+function _lvCentralDay(iso) {
+    const t = Date.parse(iso);
+    if (!t) return '';
+    // en-CA formats as YYYY-MM-DD, which is the shape asOfCentral carries.
+    return new Date(t).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+}
+
+// --- previous-day view ------------------------------------------------------
+// The edge function ships yesterday's closed-out figures under the SAME key names
+// as today's (netToday, mtdNet, …), so switching day is an overlay rather than a
+// second set of renderers. Everything the overlay does not carry — code, name,
+// goal, error — falls through from the live row.
+const _lvIsPrev = () => _lvMode === 'prev';
+const _lvIsMtd  = () => _lvMode === 'mtd';
+// A finished DAY is what the day columns mean in both of the other two modes, so
+// the third one is the same trick a second time: month-to-date figures copied
+// over the day fields. Everything month-scoped (mtdGp, goal, pctOfGoal,
+// paceIndex) is deliberately left alone — on this view the "GP this month"
+// column and the Gross profit column really are the same number, which is the
+// price of the three tabs staying one readable table.
+function _lvView(m) {
+    if (!m) return m;
+    if (_lvIsPrev() && m.prev) return Object.assign({}, m, m.prev);
+    if (_lvIsMtd()) {
+        // mtdCogs is only missing on district payloads written before the roll-up
+        // learned to sum it. Deriving it from net minus profit is exact, so an
+        // older cached payload renders correctly rather than showing $0 cost.
+        const cogs = (m.mtdCogs === null || m.mtdCogs === undefined)
+            ? (Number(m.mtdNet) || 0) - (Number(m.mtdGp) || 0) : m.mtdCogs;
+        return Object.assign({}, m, {
+            netToday: m.mtdNet, cogsToday: cogs, gpToday: m.mtdGp,
+            ordersToday: m.mtdOrders, marginToday: m.mtdMargin,
+            // null, not 0, when the payload predates mtdReturns — a cache written
+            // by the old function would otherwise report every store as having
+            // refunded nothing all month, which is a wrong number rather than a
+            // missing one. The column dashes until the first refresh lands.
+            returnsToday: (m.mtdReturns === null || m.mtdReturns === undefined)
+                ? null : m.mtdReturns,
+            aov: m.mtdOrders > 0 ? m.mtdNet / m.mtdOrders : null,
+        });
+    }
+    return m;
+}
+// How many days the selected view covers — the divisor behind "average per day".
+function _lvDays(d) {
+    if (_lvIsPrev()) return (d.prev && d.prev.daysElapsed) || 1;
+    return (d.month && d.month.daysElapsed) || 1;
+}
+// True whenever month-to-date figures mean something. On the 1st the previous
+// open day belongs to LAST month, so its "this month" numbers would all be zero —
+// which reads as a catastrophe rather than as a new month.
+function _lvHasMonth(d) {
+    return !_lvIsPrev() || !!(d && d.prev && d.prev.inMonth);
+}
+function _lvElapsedPct(d) {
+    if (_lvIsPrev()) return (d.prev && d.prev.elapsedPct) || 0;
+    return (d.month && d.month.elapsedPct) || 0;
+}
+// Built from the date components, never from Date.parse of a bare ISO string —
+// that parses as UTC and renders as the day before for anyone west of Greenwich.
+function _lvDayName(isoDay, long) {
+    const p = String(isoDay || '').split('-');
+    if (p.length !== 3) return '';
+    return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString('en-US',
+        { weekday: long ? 'long' : 'short', month: long ? 'long' : 'short', day: 'numeric' });
+}
+function _lvToggle(d) {
+    if (!d || !d.prev) return '';
+    const btn = (mode, label) => '<button type="button" class="lv-mode'
+        + (_lvMode === mode ? ' on' : '') + '" onclick="setLiveMode(\'' + mode + '\')">'
+        + escapeHtml(label) + '</button>';
+    return '<span class="lv-modes">' + btn('today', 'Today') + btn('prev', 'Yesterday')
+        + btn('mtd', 'Month') + '</span>';
+}
+const _LV_MODES = ['today', 'prev', 'mtd'];
+function setLiveMode(mode) {
+    const next = _LV_MODES.indexOf(mode) >= 0 ? mode : 'today';
+    if (next === _lvMode) return;
+    _lvMode = next;
+    renderLiveDashboard();
+}
+// What the selected view is called in the eyebrow, and the date line beside the
+// title. Both are rewritten on every render so a past day or a whole month can
+// never be read under a header that still says "Today".
+function _lvModeName() {
+    return _lvIsMtd() ? 'This Month' : (_lvIsPrev() ? 'Yesterday' : 'Today');
+}
+function _lvHeadStamp(d) {
+    if (_lvIsPrev()) return _lvDayName(d.prev.date, true);
+    if (_lvIsMtd()) {
+        // Built from the date parts, never Date.parse of the bare string — that
+        // reads as UTC and names the wrong month for anyone west of Greenwich on
+        // the 1st.
+        const p = String(d.asOfCentral || '').slice(0, 10).split('-');
+        if (p.length !== 3) return 'Month To Date';
+        return new Date(+p[0], +p[1] - 1, 1).toLocaleDateString('en-US', { month: 'long' })
+            + ' 1–' + (+p[2]);
+    }
+    return d.asOfCentral ? 'Last Change ' + _lvClock(d.asOfCentral) : '';
+}
+
+// The stamp under the headline tile: when the number last moved, which day
+// finished, or how far into the month the figure reaches.
+function _lvStamp(d) {
+    if (_lvIsPrev()) return 'Final &middot; ' + escapeHtml(_lvDayName(d.prev.date, false));
+    if (_lvIsMtd()) {
+        return d.month
+            ? d.month.daysElapsed + ' Of ' + d.month.daysTotal + ' Days'
+            : 'Month To Date';
+    }
+    return 'Last Change ' + _lvClock(d.asOfCentral);
+}
+
+// 100 = exactly on track for the month: banked GP as a share of goal, against how
+// much of the SELLING month has gone. Sundays are excluded upstream, so day 5 of
+// August does not read as behind just because one of those days was a Sunday.
+// Two states, not three. There used to be an amber 85-99 band, but pace answers a
+// yes/no question — are we on track for the month or not — and a colour that means
+// "nearly" invites reading 92 as fine. On or above 100 is green, anything under is
+// red. (.lv-pill.warn survives in the stylesheet for other callers.)
+function _lvPaceCls(idx) {
+    if (idx === null || idx === undefined) return 'flat';
+    return idx >= 100 ? 'good' : 'bad';
+}
+// Per-store paceIndex is computed server-side; the district and MSM roll-ups carry
+// pctOfGoal but no index of their own, so derive it the same way rather than
+// leaving the column blank on the one row that summarises all the others.
+function _lvPace(pctOfGoal, elapsedPct) {
+    const p = Number(pctOfGoal), e = Number(elapsedPct);
+    if (!isFinite(p) || !isFinite(e) || e <= 0) return null;
+    return Math.round(p / e * 100);
+}
+
+// --- "something just happened at MPL" ---------------------------------------
+// The payload is a snapshot, not an event stream, so a sale or a refund is derived
+// by diffing successive fetches. The cron writes only on a change and pings us, so
+// a fetch landing with a bigger order count really does mean a sale just rang.
+//
+// The FIRST load has nothing to compare against and deliberately flags nothing —
+// otherwise opening the dashboard would light up every store at once and the
+// highlight would stop meaning "just now".
+// How long each sale or refund stays on screen, and how many can queue up.
+const LV_ACTIVITY_MS = 30000;
+const LV_ACTIVITY_MAX = 6;
+// How many stay pinned on a store dashboard while the shop is open — see
+// _lvActivityHolds. Below LV_ACTIVITY_MAX on purpose: the queue can hold one
+// more than the strip shows, so the newest never has to wait for a slot.
+const LV_ACTIVITY_KEEP = 5;
+let _lvActTimer = null;
+let _lvHeld = false;   // was the strip pinned on the previous sync
+
+let _lvSnap = null;    // code -> { net, orders, returns, lastOrderAt }
+let _lvPulse = {};     // code -> 'sale' | 'refund'; consumed by the next render
+let _lvEvents = [];    // newest first; each lives LV_ACTIVITY_MS then goes
+let _lvEvSeq = 0;
+
+// Which store codes belong to the person looking. Two callers, both asking the
+// same question: the chime (is this worth a NOISE) and the activity strip (is
+// this a shop floor, where recent sales should stay put).
+//
+// Returns null for "no store of their own", deliberately, so both fallbacks land
+// on the district behaviour rather than on nothing: a corp-level account (DM/CEO,
+// store CORP) has no row in the table and the whole district IS theirs, and a
+// payload with no scope at all must not silence or empty anybody's view.
+function _lvMyCodes(d) {
+    const scope = d && d.scope;
+    if (!scope) return null;
+    // An MSM's `store` is only their home store, but they run both — same reason
+    // userInStore has a branch for them.
+    if (String(scope.role || '').toLowerCase().trim() === 'multi-store manager') {
+        return new Set(MULTISTORE_MANAGER_STORES);
+    }
+    const own = String(scope.store || '').toUpperCase();
+    if (!own) return null;
+    const codes = (d.stores || []).map(m => String(m.code).toUpperCase());
+    if (!codes.includes(own)) return null;
+    return new Set([own]);
+}
+
+function _lvTrackChanges(d) {
+    let sold = false, refunded = false;
+    // Audio only. The row still flashes and the feed still lists every store,
+    // because seeing the district is the point; this is about which of it is
+    // worth looking up for.
+    const mine = _lvMyCodes(d);
+    const audible = code => !mine || mine.has(String(code).toUpperCase());
+    const next = {};
+    (d.stores || []).forEach(m => {
+        next[m.code] = {
+            net: Number(m.netToday) || 0, orders: Number(m.ordersToday) || 0,
+            returns: Number(m.returnsToday) || 0, lastOrderAt: m.lastOrderAt || '',
+        };
+    });
+    if (_lvSnap) {
+        Object.keys(next).forEach(code => {
+            const a = _lvSnap[code], b = next[code];
+            if (!a) return;
+            // Refunds are checked FIRST. A refund lowers net sales while the order
+            // count stays put, so testing for a sale first would let it pass as
+            // "nothing happened" — the one event most worth surfacing.
+            // The pulse and the feed entry are unconditional — only the flags
+            // that decide whether anything is HEARD are scoped.
+            if (b.returns > a.returns) {
+                _lvPulse[code] = 'refund';
+                _lvPush({ kind: 'refund', code, amount: b.returns - a.returns, at: '' });
+                if (audible(code)) refunded = true;
+            } else if (b.orders > a.orders || b.lastOrderAt > a.lastOrderAt) {
+                _lvPulse[code] = 'sale';
+                _lvPush({ kind: 'sale', code, amount: b.net - a.net, at: b.lastOrderAt });
+                if (audible(code)) sold = true;
+            }
+        });
+    }
+    _lvSnap = next;
+    // One chime per pass, not one per store: five stores selling in the same
+    // minute is a good minute, not an alarm.
+    //
+    // When both happened in the same pass only the sale sounds. The two are
+    // deliberately mirror images of each other, so played together they overlap
+    // into something that reads as neither — and a refund arriving alongside
+    // sales is the less urgent of the two. The row still flashes red either way.
+    if (sold) _lvChime();
+    else if (refunded) _lvRefundChime();
+}
+
+// Newest first, so a fresh sale enters at the left and pushes the rest along.
+function _lvPush(e) {
+    e.id = 'e' + (++_lvEvSeq);
+    e.ts = Date.now();
+    _lvEvents.unshift(e);
+    if (_lvEvents.length > LV_ACTIVITY_MAX) _lvEvents.length = LV_ACTIVITY_MAX;
+}
+
+/**
+ * The "something just happened" strip.
+ *
+ * NOTIFICATIONS, not a status line: they exist to catch the eye of someone
+ * watching the dashboard. Each is built only from an event this session actually
+ * observed, never reconstructed from the payload — so signing in shows nothing
+ * until something happens while you are there, rather than announcing a sale that
+ * rang an hour ago as though it were news.
+ *
+ * The markup is an empty container; _lvSyncActivity fills it. Rendering the chips
+ * inline would restart their fade on every unrelated re-render.
+ */
+function _lvActivity() {
+    return '<div class="lv-activity-row"></div>';
+}
+
+function _lvChipHtml(e) {
+    const refund = e.kind === 'refund';
+    return '<span class="lv-adot"></span>'
+        + (refund ? 'Refund' : 'Sale') + ' &middot; <b>' + escapeHtml(e.code) + '</b>'
+        + (e.amount > 0 ? ' &middot; <b>' + _lvMoney(e.amount, true) + '</b>' : '')
+        + (e.at ? ' &middot; ' + _lvOrderClock(e.at) : '');
+}
+
+/**
+ * Reconcile the chips against the live events, KEYED by event id.
+ *
+ * Deliberately not innerHTML: a chip's whole appearance (fade in, hold, fade out)
+ * is one 30-second CSS animation, and rewriting the row would restart it for every
+ * chip already on screen. Existing nodes are left alone; only new ones are
+ * inserted and expired ones removed.
+ */
+// Does the strip HOLD its chips, or let each one fade after 30 seconds?
+//
+// On a shop floor the question the strip answers is "how are we doing today",
+// and a 30-second ticker answers it with an empty row for most of the day. So a
+// store dashboard keeps its most recent few and they stay put while the shop is
+// open. A district viewer keeps the ticker: five stores' worth of pinned chips
+// is a list, not a signal, and the DM already has the table for the standings.
+//
+// Closed, or looking at a finished day, it is a ticker again for everyone —
+// nothing is happening, so nothing should look like it just did.
+function _lvActivityHolds(d) {
+    return !!(d && d.open && !_lvIsPrev() && _lvMyCodes(d));
+}
+
+// A pinned strip OPENS with today's most recent sales, whether or not anybody was
+// watching when they rang.
+//
+// Diffing alone can only ever show what happened while the page was open, so a
+// screen switched on at noon — or signed back in after a break, or a TV that
+// power-cycled overnight — sat empty next to a till that had been busy all
+// morning, and the first fetch after a load deliberately flags nothing so there
+// was nothing to refill it either.
+//
+// These are the store's real orders, off the payload, not a replay of what this
+// browser happened to see: correct on a machine that has never loaded the page
+// before, and no local copy to go stale. Stamped with the order's OWN time, which
+// is what stops a sale from three hours ago pulsing as if it just landed —
+// _lvSyncActivity ages anything past the ticker window on sight.
+//
+// Once only, on the first sync that has data. Re-seeding every fetch would hand a
+// second id to an order the diff path had already pushed, and the strip is keyed
+// by id — two chips, one sale.
+//
+// Sales only: Shopify's order list has no refunds in it. A refund seen before a
+// reload is not restored, which is the one thing lost by deriving this from the
+// payload instead of remembering it locally.
+let _lvSeeded = false;
+
+function _lvSeedEvents(d) {
+    const mine = _lvMyCodes(d);
+    if (!mine) return;
+    const out = [];
+    (d.stores || []).forEach(m => {
+        if (!mine.has(String(m.code).toUpperCase())) return;
+        (m.recentOrders || []).forEach(o => {
+            const ts = Date.parse(o.at);
+            if (!isFinite(ts)) return;
+            // Keyed by store and order time so the id is stable across renders and
+            // cannot collide with the diff path's own "e1, e2, …" sequence.
+            out.push({
+                id: 'o' + m.code + String(o.at).replace(/\D/g, ''),
+                kind: 'sale', code: m.code, amount: Number(o.amount) || 0,
+                at: o.at, ts: ts,
+            });
+        });
+    });
+    out.sort((a, b) => b.ts - a.ts);
+    _lvEvents = out.slice(0, LV_ACTIVITY_KEEP);
+}
+
+function _lvSyncActivity() {
+    const rows = document.querySelectorAll('.lv-activity-row');
+    if (!rows.length) return;
+    const now = Date.now();
+    const hold = _lvActivityHolds(_lvData);
+    // Once per page load, and only where the strip pins. A ticker viewer seeded
+    // with chips that are already hours old would watch five of them flash in and
+    // expire on the spot, which is worse than the empty row they replaced.
+    if (hold && !_lvSeeded) {
+        _lvSeeded = true;
+        if (!_lvEvents.length) _lvSeedEvents(_lvData);
+    }
+    // Closing hands the pinned chips back to the 30-second rule. Restamped
+    // rather than dropped: they play one last life and fade out, instead of
+    // disappearing all at once between two fetches.
+    if (_lvHeld && !hold) _lvEvents.forEach(e => { e.ts = now; });
+    _lvHeld = hold;
+
+    _lvEvents = hold
+        ? _lvEvents.slice(0, LV_ACTIVITY_KEEP)
+        : _lvEvents.filter(e => now - e.ts < LV_ACTIVITY_MS);
+    const live = _lvIsPrev() ? [] : _lvEvents;   // a finished day has no "just now"
+
+    // A pinned chip stops claiming to be news once it is older than the ticker
+    // window: the dot's ping is a "just happened" cue, and left running on a
+    // chip from an hour ago it is the screen crying wolf all afternoon.
+    const aged = e => hold && (now - e.ts) >= LV_ACTIVITY_MS;
+    // A NEGATIVE delay starts the animation part-way through, so a chip
+    // recreated by a re-render resumes where its life actually is instead of
+    // getting a fresh 30 seconds. Pinned chips only ever play their entrance,
+    // so they start at 0 whenever they were stamped.
+    const delay = e => hold ? '0s' : '-' + ((now - e.ts) / 1000).toFixed(2) + 's';
+
+    rows.forEach(row => {
+        Array.from(row.children).forEach(el => {
+            const e = live.find(x => x.id === el.getAttribute('data-ev'));
+            if (!e) { el.remove(); return; }
+            // Toggling `pinned` swaps which animation applies; because it is a
+            // different animation NAME, the browser restarts it — which is
+            // exactly what un-pinning at closing time wants.
+            if (el.classList.contains('pinned') !== hold) {
+                el.classList.toggle('pinned', hold);
+                el.style.animationDelay = delay(e);
+            }
+            el.classList.toggle('aged', aged(e));
+        });
+        live.forEach((e, i) => {
+            if (row.querySelector('[data-ev="' + e.id + '"]')) return;
+            const el = document.createElement('div');
+            el.setAttribute('data-ev', e.id);
+            el.className = 'lv-activity' + (e.kind === 'refund' ? ' refund' : '')
+                + (hold ? ' pinned' : '') + (aged(e) ? ' aged' : '');
+            el.innerHTML = _lvChipHtml(e);
+            el.style.animationDelay = delay(e);
+            row.insertBefore(el, row.children[i] || null);
+        });
+    });
+    _lvScheduleActivityExpiry();
+}
+
+// Wake up exactly when the strip next changes, and no more often. Two things
+// are due at the same 30-second mark depending on the mode: a ticker chip
+// expiring, or a pinned chip losing its "just now" ping.
+function _lvScheduleActivityExpiry() {
+    if (_lvActTimer) { clearTimeout(_lvActTimer); _lvActTimer = null; }
+    if (!_lvEvents.length) return;
+    const now = Date.now();
+    let due = Infinity;
+    _lvEvents.forEach(e => {
+        const left = e.ts + LV_ACTIVITY_MS - now;
+        if (left > 0) due = Math.min(due, left);
+    });
+    // Pinned and all of them already past the window: nothing is scheduled to
+    // change, and the next fetch is what will move this on.
+    if (!isFinite(due)) return;
+    _lvActTimer = setTimeout(_lvSyncActivity, Math.max(250, due));
+}
+
+// ---- chime ------------------------------------------------------------------
+// Synthesised rather than a sound file: no asset to host, nothing for the CSP to
+// block, and a couple of oscillators is a smaller payload than any mp3.
+//
+// OFF by default and remembered per browser. A dashboard that started dinging on
+// its own — on a shop-floor laptop, or five stores' worth of sales on the district
+// board — would be something people disable once and resent, so it is opt-in.
+let _lvAudio = null;
+const _lvSoundOn = () => localStorage.getItem('speeksLiveChime') === '1';
+
+// Open the shared context and a low-passed output bus. A bare sine reads as a lab
+// beep and an unfiltered triangle is harsh this high up, so everything goes
+// through the filter. Returns null when audio is unavailable or switched off,
+// which is every caller's cue to do nothing.
+function _lvBus(cutoff, level) {
+    if (!_lvSoundOn()) return null;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    _lvAudio = _lvAudio || new AC();
+    if (_lvAudio.state === 'suspended') _lvAudio.resume();
+    const filter = _lvAudio.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = cutoff;
+    const out = _lvAudio.createGain();
+    out.gain.value = level;
+    filter.connect(out); out.connect(_lvAudio.destination);
+    return filter;
+}
+// One note onto a bus. Exponential ramps only — a linear fade to zero clicks
+// audibly, and exponentialRampToValueAtTime can never touch exactly 0.
+function _lvNote(bus, type, freq, at, peak, attack, decay) {
+    const t = _lvAudio.currentTime + at;
+    const osc = _lvAudio.createOscillator(), gain = _lvAudio.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(peak, t + attack);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+    osc.connect(gain); gain.connect(bus);
+    osc.start(t); osc.stop(t + attack + decay + 0.06);
+}
+
+// A SALE: two marimba notes, C6 into G6. Sine fundamentals with a quiet fourth
+// partial for the wooden knock, and a fast percussive decay — soft enough to sit
+// in a room all day, which the old rising doorbell pair was not.
+function _lvChime() {
+    try {
+        const bus = _lvBus(3000, 0.55);
+        if (!bus) return;
+        [[1046.5, 0], [1568.0, 0.085]].forEach(([freq, at]) => {
+            _lvNote(bus, 'sine', freq, at, 0.30, 0.005, 0.30);
+            _lvNote(bus, 'sine', freq * 4, at, 0.045, 0.004, 0.10);
+        });
+    } catch (_) { /* audio is a nicety; never let it break the dashboard */ }
+}
+
+// A REFUND: the mirror image — B5 falling to E5, quieter and with a longer tail.
+// Deliberately the same shape as the sale chime played backwards, so which one
+// just happened is readable from across the room without looking up.
+function _lvRefundChime() {
+    try {
+        const bus = _lvBus(3200, 0.45);
+        if (!bus) return;
+        _lvNote(bus, 'triangle', 987.8, 0,    0.20, 0.008, 0.34);
+        _lvNote(bus, 'triangle', 659.3, 0.11, 0.20, 0.008, 0.44);
+    } catch (_) { /* audio is a nicety; never let it break the dashboard */ }
+}
+
+// Flipping the switch IS the user gesture browsers require before audio may play,
+// which is why the confirmation chime here is what unlocks the context for later
+// automatic ones.
+function toggleLiveSound() {
+    const on = !_lvSoundOn();
+    localStorage.setItem('speeksLiveChime', on ? '1' : '0');
+    if (on) _lvChime();
+    renderLiveDashboard();
+}
+
+// Speaker icon, filled when sound is on and struck through when off, so the state
+// is legible without hovering for the tooltip.
+function _lvSoundBtn() {
+    const on = _lvSoundOn();
+    const ico = on
+        ? '<path d="M4 7v4h3l4 3V4L7 7H4z"/><path d="M12.5 6.2a3.4 3.4 0 0 1 0 5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>'
+        : '<path d="M4 7v4h3l4 3V4L7 7H4z"/><path d="M12.2 6.8l3.2 4.4M15.4 6.8l-3.2 4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>';
+    return '<button type="button" class="lv-sound' + (on ? ' on' : '') + '"'
+        + ' onclick="toggleLiveSound()"'
+        + ' title="' + (on ? 'Chime on — click to mute'
+                           : 'Chime off — click to hear a chime on each sale, and a lower one on refunds') + '"'
+        + ' aria-pressed="' + (on ? 'true' : 'false') + '" aria-label="Sale chime">'
+        + '<svg viewBox="0 0 18 18" width="18" height="18" fill="currentColor" aria-hidden="true">'
+        + ico + '</svg></button>';
+}
+
+// ---- full-screen view -------------------------------------------------------
+// The same board the Store role gets on a TV, on demand, for anyone signed in as
+// themselves — a second monitor on the counter, or just a proper look at the
+// numbers without the rest of the page around them.
+//
+// The panel is NOT moved. A fresh .lv-strip / .lv-detail pair goes in the
+// overlay and renderLiveDashboard fills every mount it can find, so this view is
+// the same code as the one behind it and cannot drift from it. The mounts are
+// created on open and destroyed on close rather than sitting hidden in the page:
+// a permanent extra .lv-detail would change what `details.length` means on a
+// DM's page, where the store-surface branch is skipped precisely because there
+// are none.
+let _lvFsClosing = false;
+
+function _lvFsEl() { return document.getElementById('lvFullscreen'); }
+
+function openLiveFullscreen() {
+    if (_lvFsEl()) return;
+    const el = document.createElement('div');
+    el.id = 'lvFullscreen';
+    el.className = 'lv-fs';
+    el.innerHTML = '<div class="lv-fs-bar">'
+        + '<span class="lv-fs-title">Live Dashboard</span>'
+        + '<button type="button" class="lv-fs-close" onclick="closeLiveFullscreen()"'
+        + ' title="Close (Esc)" aria-label="Close full screen">'
+        + '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"'
+        + ' stroke-width="2.2" stroke-linecap="round" aria-hidden="true">'
+        + '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+        + '</button></div>'
+        + '<div class="lv-fs-card"><div class="lv-strip"></div><div class="lv-detail"></div></div>';
+    document.body.appendChild(el);
+    // Both elements, as the login overlay does: it is the ROOT that scrolls, so
+    // locking only body leaves the page moving behind this and keeps a scrollbar
+    // gutter beside a view that is supposed to be the whole window.
+    document.documentElement.classList.add('lv-fs-open');
+    document.body.classList.add('lv-fs-open');
+    // Real fullscreen on top of the overlay when the browser allows it — this is
+    // called from a click, which is the gesture it requires. Best-effort: if it
+    // is refused the overlay alone still covers the window, which is the whole
+    // ask, so the rejection is swallowed rather than reported.
+    document.addEventListener('fullscreenchange', _lvFsWatch);
+    try {
+        if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+    } catch (_) { /* not available; the overlay stands on its own */ }
+    renderLiveDashboard();
+}
+
+function closeLiveFullscreen() {
+    const el = _lvFsEl();
+    if (!el) return;
+    // Leaving fullscreen fires fullscreenchange, which calls back here. The flag
+    // makes the second pass a no-op instead of a loop.
+    if (_lvFsClosing) return;
+    _lvFsClosing = true;
+    document.removeEventListener('fullscreenchange', _lvFsWatch);
+    try {
+        if (document.fullscreenElement === el && document.exitFullscreen) {
+            document.exitFullscreen().catch(() => {});
+        }
+    } catch (_) { /* nothing to exit */ }
+    el.remove();
+    document.documentElement.classList.remove('lv-fs-open');
+    document.body.classList.remove('lv-fs-open');
+    _lvFsClosing = false;
+}
+
+function toggleLiveFullscreen() {
+    if (_lvFsEl()) closeLiveFullscreen(); else openLiveFullscreen();
+}
+
+// Esc inside real fullscreen is taken by the browser and never reaches the page,
+// so it exits fullscreen and this brings the overlay down with it. Also covers
+// leaving fullscreen by any other means (F11, the browser's own chrome).
+//
+// Bound on open and unbound on close, not once at module scope: a listener
+// registered while this file is merely being READ is a side effect of loading
+// it, which costs nothing at runtime but means the module cannot be loaded
+// without a DOM at all.
+function _lvFsWatch() {
+    if (!document.fullscreenElement && _lvFsEl()) closeLiveFullscreen();
+}
+
+function _lvFullBtn() {
+    return '<button type="button" class="lv-full" onclick="toggleLiveFullscreen()"'
+        + ' title="Full screen" aria-label="View the live dashboard full screen">'
+        + '<svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor"'
+        + ' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        + '<path d="M7 2H2v5M11 2h5v5M7 16H2v-5M11 16h5v-5"/></svg></button>';
+}
+
+// Which store just moved, and how it should be marked. Two shapes: a band across
+// the whole row in the table, and a wash over the tile on a store's own board.
+function _lvHitRow(code) {
+    return (!_lvIsPrev() && _lvPulse[code]) ? 'lv-row-' + _lvPulse[code] : '';
+}
+function _lvHitCell(code) {
+    return (!_lvIsPrev() && _lvPulse[code]) ? ' lv-cellhit-' + _lvPulse[code] : '';
+}
+
+// "You are here." The store tables list five stores that look alike at a glance,
+// and the one a manager or employee actually works at is the row they came to
+// find — without a mark they count down the codes every time.
+//
+// Set once per render from scope.store (see _lvOwnStore). Null for a DM or the
+// CEO, who sign in against CORP and have no row of their own — so the district
+// card is never marked, without that having to be special-cased at the call site.
+//
+// Module-level rather than threaded through _lvTable → _lvStoreRow → the buying
+// row, because it is the same fact for every row of every table in one pass, and
+// a parameter that has to be passed identically through four call sites is a
+// parameter that will eventually be passed differently through one of them.
+let _lvOwnCode = null;
+function _lvMineRow(code) {
+    return (_lvOwnCode && code === _lvOwnCode) ? 'lv-row-mine' : '';
+}
+
+function _lvTile(k, v, sub, accent, cls) {
+    return '<div class="cc-cell' + (accent ? ' lv-accent' : '') + (cls || '') + '">'
+        + '<span class="sh-stripe g"></span>'
+        + '<div class="sh-k">' + k + '</div>'
+        + '<div class="sh-v">' + v + '</div>'
+        + '<div class="sh-sub">' + (sub || '&nbsp;') + '</div></div>';
+}
+
+function _lvChip(k, v) {
+    return '<span class="lv-chip">' + k + ' <b>' + v + '</b></span>';
+}
+
+// Two figures in one tile sub-line. Run together as "profit $7,435 · cost $5,315"
+// they read as one phrase and the middot does not carry enough separation for two
+// different quantities — so each gets its own group, a quiet label and real space
+// between them. Cost leads: it is what the margin above is measured against.
+function _lvSubPair(k1, v1, k2, v2) {
+    const half = (k, v) => '<span class="lv-sp"><i>' + k + '</i>' + v + '</span>';
+    return '<span class="lv-subpair">' + half(k1, v1) + half(k2, v2) + '</span>';
+}
+
+// GP banked against the monthly goal, with a tick showing where the month has
+// actually got to. No forecast is involved, which is the point: the District
+// board below projects to month-end (OVL can read 124% there against ~18% banked
+// here), so this bar spells out which of the two it is.
+function _lvGoalBar(gp, goal, pctOfGoal, elapsedPct, paceIdx) {
+    if (!goal) return '';
+    const banked = pctOfGoal === null || pctOfGoal === undefined ? 0 : Number(pctOfGoal);
+    const tick = Math.max(0, Math.min(100, Number(elapsedPct) || 0));
+    return '<div class="lv-goal">'
+        + '<div class="lv-goal-top">'
+        + '<span class="lv-goal-lbl">Gross profit banked this month</span>'
+        + '<span class="lv-goal-fig"><b>' + _lvMoney(gp, false) + '</b> of ' + _lvMoney(goal, false)
+        + ' <span class="lv-pill ' + _lvPaceCls(paceIdx) + '">'
+        + (paceIdx === null || paceIdx === undefined ? 'no goal set' : paceIdx + '% pace') + '</span></span>'
+        + '</div>'
+        + '<div class="lv-goal-bar"><i style="width:' + Math.max(0, Math.min(100, banked)) + '%"></i>'
+        + '<u style="left:' + tick + '%"></u></div>'
+        + '<div class="lv-goal-foot">'
+        + '<span>' + _lvPct(banked) + ' banked</span>'
+        + '<span>' + _lvPct(tick) + ' of the month gone</span>'
+        + '</div></div>';
+}
+
+// The line that makes the panel feel live rather than reported — and the fastest
+// way to notice the feed has stalled.
+function _lvLastOrder(m, asOf) {
+    if (!m.lastOrderAt) return '<div class="lv-last lv-quiet">No orders on record yet.</div>';
+    const sameDay = _lvCentralDay(m.lastOrderAt) === String(asOf || '').slice(0, 10);
+    if (!sameDay) {
+        return '<div class="lv-last lv-quiet">Nothing sold yet today &middot; last order was '
+            + escapeHtml(_lvCentralDay(m.lastOrderAt)) + '.</div>';
+    }
+    const rel = _siRelTime(m.lastOrderAt);
+    return '<div class="lv-last"><span class="lv-dot"></span>Last order <b>'
+        + _lvOrderClock(m.lastOrderAt) + '</b>'
+        + (m.lastOrderAmount ? ' &middot; <b>' + _lvMoney(m.lastOrderAmount, true) + '</b>' : '')
+        + (rel ? ' &middot; ' + rel : '') + '</div>';
+}
+
+// The headline of whichever view is selected. Today and Yesterday read as a day;
+// Month drops the refunds line (not carried month-to-date) and trades the
+// month-average footnote for the day count the average is over.
+function _lvHeadKey() {
+    return _lvIsMtd() ? 'Net Sales This Month' : (_lvIsPrev() ? 'Net Sales' : 'Net Sales Today');
+}
+function _lvStoreTiles(v, d) {
+    const prev = _lvIsPrev();
+    const mtdAov = v.mtdOrders > 0 ? v.mtdNet / v.mtdOrders : null;
+    const orderSub = _lvIsMtd()
+        ? _lvDays(d) + ' Days'
+        : (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) + ' Refunded'
+                              : (prev ? 'No Refunds' : 'No Refunds Today'));
+    return _lvTile(_lvHeadKey(), _lvMoney(v.netToday, true),
+            _lvStamp(d), true, _lvHitCell(v.code))
+        + _lvTile('Orders', String(v.ordersToday), orderSub)
+        + _lvTile('Average Order', v.aov === null ? '—' : _lvMoney(v.aov, true),
+            (mtdAov === null || !_lvHasMonth(d) || _lvIsMtd())
+                ? '' : 'Month Average ' + _lvMoney(mtdAov, false))
+        + _lvTile('Gross Margin', _lvPct(v.marginToday), 'Total Cost ' + _lvMoney(v.cogsToday, false));
+}
+
+function _lvStoreDetail(d, v) {
+    const prev = _lvIsPrev();
+    // On the Month view the chips would restate the tiles directly above them, so
+    // they carry the day's shape instead: the best day, and what an average one
+    // looked like.
+    let chips;
+    if (_lvIsMtd()) {
+        const days = _lvDays(d);
+        chips = _lvChip('Days so far', String(days))
+            + _lvChip('Average day', _lvMoney((Number(v.netToday) || 0) / days, false))
+            + _lvChip('Average profit a day', _lvMoney((Number(v.gpToday) || 0) / days, false));
+    } else {
+        chips = _lvChip(prev ? 'Gross profit on the day' : 'Gross profit today',
+            _lvMoney(v.gpToday, true));
+        if (_lvHasMonth(d)) {
+            chips += _lvChip('Net sales this month', _lvMoney(v.mtdNet, false))
+                + _lvChip('Margin this month', _lvPct(v.mtdMargin))
+                + _lvChip('Orders this month', String(v.mtdOrders));
+        } else {
+            chips += _lvChip('Refunded', _lvMoney(v.returnsToday, false));
+        }
+    }
+    // The live "last order" clock belongs to today. A finished day gets its
+    // close-out line; a month gets neither, because the buying block below is the
+    // thing worth reading next.
+    let foot = '';
+    if (_lvIsMtd()) foot = '';
+    else if (prev) foot = _lvDayClose(v, d);
+    else foot = _lvLastOrder(v, d.asOfCentral);
+
+    return _lvForecast([v], d)
+        + '<div class="lv-chips">' + chips + '</div>'
+        + (_lvHasMonth(d)
+            ? _lvGoalBar(v.mtdGp, v.goal, v.pctOfGoal, _lvElapsedPct(d), v.paceIndex)
+            : '<div class="lv-note">This was the last day of the previous month, so '
+              + 'month-to-date and pace are not shown against it.</div>')
+        + foot
+        + _lvBuyBlock(d, [v]);
+}
+
+// The previous-day counterpart of the last-order line: how the day actually
+// closed out. No extra Shopify call — every figure here is already in the payload.
+function _lvDayClose(v, d) {
+    let s = '<div class="lv-last lv-final">Finished <b>' + escapeHtml(_lvDayName(d.prev.date, true))
+        + '</b> with <b>' + v.ordersToday + (v.ordersToday === 1 ? ' order' : ' orders') + '</b>'
+        + ' &middot; <b>' + _lvMoney(v.gpToday, true) + '</b> gross profit';
+    if (v.returnsToday > 0) s += ' &middot; <b>' + _lvMoney(v.returnsToday, false) + '</b> refunded';
+    return s + '.</div>';
+}
+
+// --- the buying half ---------------------------------------------------------
+// Selling comes from Shopify; buying comes from the Sales Summary sheet by way of
+// hubDataCache. They are joined here rather than in two widgets because the one
+// question worth asking of both at once — am I replacing stock as fast as I sell
+// it — cannot be asked of either alone.
+//
+// The join is possible because the hub payload carries wkBuy: a 31-slot array per
+// store, one entry per day of the CURRENT month, which nothing else in the site
+// reads. Summing it reproduces {store}BuyVal exactly, so a day, a span of days
+// and the month total all come off the same source and cannot disagree.
+//
+// The sheet is keyed by hand each morning, so it runs a day behind. That is
+// stated on the block rather than hidden, and today's view says "not entered yet"
+// instead of showing five stores that bought $0.
+const _LV_BUY_MIN_STORES = 2;   // below this a table of one row is worse than tiles
+
+function _lvHub() {
+    return (typeof hubDataCache !== 'undefined' && hubDataCache) ? hubDataCache : null;
+}
+function _lvBuyArr(key, code) {
+    const h = _lvHub();
+    const byStore = h && h[key];
+    const arr = byStore && byStore[code];
+    return Array.isArray(arr) ? arr : null;
+}
+// Which days of the month the selected view covers, 1-based and inclusive.
+// Returns null when the view has no buying to show at all.
+function _lvBuySpan(d) {
+    const elapsed = (d.month && d.month.daysElapsed) || 0;
+    if (_lvIsPrev()) {
+        // A previous day in LAST month has no slot in this month's array.
+        if (!(d.prev && d.prev.inMonth && d.prev.date)) return null;
+        const day = +String(d.prev.date).slice(8, 10);
+        return day > 0 ? { from: day, to: day } : null;
+    }
+    if (!elapsed) return null;
+    return _lvIsMtd() ? { from: 1, to: elapsed } : { from: elapsed, to: elapsed };
+}
+function _lvBuyFor(code, d) {
+    const span = _lvBuySpan(d);
+    const buy = _lvBuyArr('wkBuy', code);
+    if (!span || !buy) return null;
+    const mar = _lvBuyArr('wkBuyMarginPct', code);
+    const sell = _lvBuyArr('wkSell', code);
+    const num = n => Number(n) || 0;
+    let bought = 0, paid = 0, sold = 0, lastBuyDay = 0;
+    for (let day = span.from; day <= span.to; day++) {
+        // Selling accumulates over the WHOLE span, including days with no buying —
+        // a Sunday still trades on the webstore.
+        sold += num(sell && sell[day - 1]);
+        const b = num(buy[day - 1]);
+        if (!b) continue;                       // a closed day, or one not keyed in yet
+        bought += b;
+        lastBuyDay = day;
+        // wkBuyMarginPct is a FRACTION of that day's resale value. Margins cannot
+        // be averaged across days of different size, so cash paid is summed and
+        // the margin derived back out of the totals.
+        paid += b * (1 - num(mar && mar[day - 1]));
+    }
+    // Bought vs sold has to compare the SAME DAYS on both sides, so selling comes
+    // from the sheet's own daily column and not from Shopify's month-to-date.
+    // Shopify includes today; the sheet's buying does not, because a day's
+    // purchases are keyed the following morning. Against a 7-day Shopify month a
+    // 6-day buy total read 15 points low across the district and turned LEE green
+    // at 87% when it was really 116%. The two feeds agree to the cent on a closed
+    // day, so this changes nothing except which days are counted.
+    // Only days up to the last one with buying count: a day the sheet has not
+    // reached yet has no buying to weigh its sales against.
+    if (lastBuyDay && lastBuyDay < span.to) {
+        sold = 0;
+        for (let day = span.from; day <= lastBuyDay; day++) sold += num(sell && sell[day - 1]);
+    }
+    return {
+        bought, paid, sold: sell ? sold : null,
+        margin: bought > 0 ? (bought - paid) / bought * 100 : null,
+    };
+}
+function _lvBuySum(rows) {
+    const bought = rows.reduce((a, r) => a + r.bought, 0);
+    const paid = rows.reduce((a, r) => a + r.paid, 0);
+    // null if ANY store is missing its sell column — a partial denominator would
+    // read as a ratio rather than as missing data.
+    const sold = rows.some(r => r.sold === null) ? null
+        : rows.reduce((a, r) => a + r.sold, 0);
+    return { bought, paid, sold, margin: bought > 0 ? (bought - paid) / bought * 100 : null };
+}
+// Month-end projections — the only part of the old Buying & Sales tab that the
+// month-to-date view does not already say.
+function _lvFcFor(code) {
+    const h = _lvHub();
+    if (!h) return null;
+    const k = String(code).toLowerCase();
+    const n = v => { const x = parseNum(v); return isFinite(x) ? x : 0; };
+    return {
+        buyProj: n(h[k + 'BuyProj']), trackRev: n(h[k + 'TrackRev']),
+        trackGp: n(h[k + 'TrackGP']), goal: n(h[k + 'Goal']),
+        // Google reviews ride the same pipe as everything else here: keyed into the
+        // Sales Summary sheet, projected there, and served through the hub — so the
+        // one number asked to behave "like buying and selling" is computed in the
+        // same place by the same kind of formula. Zero until the sheet carries them.
+        reviews: n(h[k + 'Reviews']), reviewsProj: n(h[k + 'ReviewsProj']),
+        reviewsGoal: n(h[k + 'ReviewsGoal']),
+    };
+}
+// Has this store's review count moved? The hub carries AF4:AJ34 as `wkReviews`,
+// a CUMULATIVE per-day count, so "no reviews yesterday" is simply two consecutive
+// filled days holding the same number.
+//
+// SUNDAYS ARE SKIPPED on both sides of the comparison (user's call 2026-08-09):
+// the stores are shut, nobody is at the counter to ask, and counting a Sunday
+// would flag all five stores every Monday morning for doing nothing wrong. Any
+// day the importer has not reached is skipped too — a blank is missing data, not
+// a flat day, which is why the hub sends null there rather than 0.
+//
+// Returns null rather than false when there is not enough history to judge (the
+// 1st of the month, or a fresh sheet). Silence is not a finding.
+function _lvReviewStale(code) {
+    const arr = _lvBuyArr('wkReviews', code);
+    if (!arr) return null;
+    const now = new Date();
+    const y = now.getFullYear(), mo = now.getMonth();
+    const filled = [];
+    for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (v === null || v === undefined || v === '') continue;
+        if (new Date(y, mo, i + 1).getDay() === 0) continue;
+        filled.push({ day: i + 1, val: Number(v) || 0 });
+    }
+    if (filled.length < 2) return null;
+    const last = filled[filled.length - 1], prev = filled[filled.length - 2];
+    // <= rather than ===: a correction that revises a count DOWN is still a day
+    // with nothing gained, and a store should not clear the flag by losing one.
+    return { stale: last.val <= prev.val, last, prev };
+}
+
+// The same flat-day flag on the collapsed summary line (user's call 2026-08-09).
+// The Tracking tile only exists once the Live tab is OPEN, and both boards land
+// collapsed — so on the surface everyone actually sees on sign-in, the alert was
+// not there at all. This is the one place it has to fire.
+//
+// The note goes in a sibling of .cc-sum-v, never inside it: that element is
+// nowrap with an ellipsis, so a second line placed in it would be clipped to
+// nothing. Rebuilt rather than toggled because both boards re-render this cell
+// on every poll.
+function _lvSumFlat(cell, codes) {
+    const old = cell.querySelector('.cc-sum-flat-n');
+    if (old) old.remove();
+    const flat = codes.filter(c => { const s = _lvReviewStale(c); return s && s.stale; });
+    cell.classList.toggle('cc-sum-flat', !!flat.length);
+    if (!flat.length) return;
+    const n = document.createElement('div');
+    n.className = 'cc-sum-flat-n';
+    // One store knows which store it is, so the sentence is the whole message.
+    //
+    // A district board does NOT get the store pills here (Ethan 2026-08-09). Three
+    // of them wrapped to a second and third line inside a 104px summary cell and
+    // read as debris. The count plus a pointer is the same instruction in one
+    // predictable line, and the Month tab's buying table already carries a Reviews
+    // column per store — which is where the DM has to go to see the numbers anyway
+    // (the tracking TILE is Month-only too: _lvForecast returns '' unless _lvIsMtd).
+    // The tile keeps the pills: it has four times the width.
+    //
+    // "See" rather than "Check": measured, and "3 Stores · Check Month Tab" is the
+    // one wording that wraps at 1000px, which is a real content width. The shorter
+    // verb holds one line from 1000px up. Below that the sentence above it wraps
+    // too and nothing short of cutting words fixes it.
+    n.innerHTML = 'Nothing New Yesterday'
+        + (codes.length === 1 ? ''
+            : '<span class="cc-sum-flat-w">' + flat.length
+              + (flat.length === 1 ? ' Store' : ' Stores') + ' &middot; See Month Tab</span>');
+    cell.appendChild(n);
+}
+
+// The summary cell, on either board. Shown only once there is something to show:
+// an eighth cell reading "—" costs a row that already wraps at seven, and it
+// would sit there for the whole rollout saying nothing.
+function _lvSumReviews(id, fc, codes) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const has = !!fc && (fc.reviews > 0 || fc.reviewsGoal > 0);
+    el.hidden = !has;
+    if (!has) return;
+    _lvSumFlat(el, codes || []);
+    // Against the goal when there is one, so the number is readable without
+    // knowing what good looks like. Same three bands as Tracking to Goal.
+    const pct = fc.reviewsGoal > 0 ? (fc.reviewsProj / fc.reviewsGoal) * 100 : null;
+    // Banked, target and projection in one cell (user's call 2026-08-09): the
+    // colour band has always BEEN the projection, so without it green could sit
+    // beside a number nowhere near the goal and look like a mistake.
+    //
+    // "9/31" not "9 of 31". An earlier attempt at this appended "· tracking 137"
+    // to the long form and needed about 70px the cell has not got — below roughly
+    // 1150px it pushed into its neighbour. The slash buys back most of that, and
+    // the projection carries no separator of its own.
+    _ccSum(id, _lvNum(fc.reviews)
+        + (fc.reviewsGoal > 0 ? '<small>/' + _lvNum(fc.reviewsGoal) + '</small>' : '')
+        + (fc.reviewsProj > 0 ? ' <small>tracking ' + _lvNum(fc.reviewsProj) + '</small>' : ''),
+        pct === null ? '' : (pct >= 100 ? 'good' : (pct >= 80 ? 'warn' : 'bad')));
+}
+
+// "5 of 40 · 35 to go", or "5 so far" before there is a target to chase.
+//
+// The remainder rather than a per-day rate, which is what this said first. A rate
+// has to be a whole number to be an instruction — nobody goes and gets 1.8
+// reviews — and rounding up flattened four of the five stores onto the same "2 a
+// day" while asking LEE for 40 where 21 would do. The count is exact, needs no
+// rounding, and the pace is already on the tile above it as the projection.
+//
+// Derived here rather than carried on the hub: it is goal minus banked, both of
+// which are already on the payload, and a second source for a subtraction is a
+// second thing to disagree.
+function _lvReviewSub(f) {
+    const banked = _lvNum(f.reviews)
+        + (f.reviewsGoal > 0 ? ' Of ' + _lvNum(f.reviewsGoal) : '');
+    // Title Case, like every other sub-line on the strip ("$5,768 So Far") and
+    // like the rest of the email and the boards.
+    if (!(f.reviewsGoal > 0)) return banked + ' So Far';
+    const toGo = f.reviewsGoal - f.reviews;
+    if (toGo <= 0) return banked + ' &middot; Goal Met';
+    return banked + ' &middot; ' + _lvNum(toGo) + ' To Go';
+}
+
+function _lvSplit(label, right) {
+    return '<div class="lv-split"><span class="lv-split-l">' + label + '</span>'
+        + '<span class="lv-split-r">' + (right || '') + '</span></div>';
+}
+// Bought against sold. Under 100% a store is selling stock faster than it is
+// replacing it, which is the whole reason the two halves share a screen.
+function _lvRatio(bought, sold) {
+    if (!sold) return '<span class="lv-quiet">—</span>';
+    const r = Math.round(bought / sold * 100);
+    // Over 100% means more stock came in than went out. Even is fine, under is
+    // better — so this is a threshold, not a band: the old scale had it exactly
+    // backwards and called a district buying 154% of what it sold 'good'.
+    const cls = r > 100 ? 'bad' : 'good';
+    return '<span class="lv-ratio ' + cls + '">' + r + '%</span>';
+}
+
+function _lvBuyBlock(d, views) {
+    // Today has no buying, ever: the day's purchases are keyed the following
+    // morning, so the block could only say so. It said exactly that for a while,
+    // which is a paragraph of chrome under every Today view explaining that there
+    // is nothing to show. Buying belongs to Yesterday and Month.
+    if (_lvMode === 'today') return '';
+    // A month boundary, or a hub that has not answered yet. Say which.
+    if (!_lvHub()) {
+        return _lvSplit('Buying', '')
+            + '<div class="lv-buy-empty">Syncing the buying sheet&hellip;</div>';
+    }
+    if (!_lvBuySpan(d)) {
+        return _lvSplit('Buying', '')
+            + '<div class="lv-buy-empty">This day falls in the previous month, and the buying '
+            + 'sheet only carries the current one.</div>';
+    }
+
+    const rows = views.map(v => ({ v, b: _lvBuyFor(v.code, d) })).filter(r => r.b);
+    if (!rows.length) {
+        return _lvSplit('Buying', '')
+            + '<div class="lv-buy-empty">No buying recorded for this period yet.</div>';
+    }
+
+    // A CLOSED DAY buys nothing, and the block used to render the whole table
+    // anyway: five rows of $0 bought, $0 paid, a dashed margin and 0% bought-vs-
+    // sold. Every Monday the Yesterday tab therefore reported the district as
+    // having had a catastrophic day, when the stores were simply shut.
+    //
+    // Nothing is drawn now — not even a line explaining the absence, which is
+    // still a paragraph of chrome about something that did not happen. The view
+    // just becomes selling, which is the whole of that day's trade anyway, and
+    // reads like the Live Dashboard with yesterday's figures in it. Same reason
+    // Today has no buying block at all.
+    //
+    // Tested on every store rather than on the calendar: a holiday closure reads
+    // exactly the same way in the sheet, and the day the stores open on a Sunday
+    // this stops applying by itself.
+    if (_lvIsPrev() && rows.every(r => !r.b.bought)) return '';
+
+    let html = _lvSplit('Buying', '');
+    if (rows.length < _LV_BUY_MIN_STORES) {
+        const r = rows[0];
+        html += '<div class="lv-strip lv-buy-strip">'
+            + _lvTile('Bought', _lvMoney(r.b.bought, false), 'Resale Value', true)
+            + _lvTile('Cash Paid', _lvMoney(r.b.paid, false), 'Out Of The Till')
+            + _lvTile('Buy Margin', _lvPct(r.b.margin), 'On Purchases')
+            + _lvTile('Bought vs Sold', _lvRatio(r.b.bought, r.b.sold), 'Stock In Against Out')
+            + '</div>';
+    } else {
+        // Google reviews live in THIS table, not the selling one above it: a review
+        // is left by somebody who came in to sell a device, so it belongs beside
+        // what was bought off them (user's call 2026-08-08).
+        //
+        // Month only, and hidden until the sheet carries figures — the count is
+        // month-to-date, so under Yesterday's buying it would be answering a
+        // different question from every other column in the row.
+        const revCodes = rows.map(r => r.v.code);
+        const showRev = _lvHasReviews(revCodes);
+        const revOf = code => { const f = _lvFcFor(code); return (f && f.reviews) || 0; };
+        html += '<div class="lv-tbl-scroll"><table class="lv-tbl lv-tbl-buy'
+            + (showRev ? ' lv-tbl-rev' : '') + '"><thead><tr>'
+            + '<th>Store</th><th>Bought &middot; resale value</th><th>Cash paid</th>'
+            + '<th>Buy margin</th><th>Bought vs sold</th>'
+            + (showRev ? '<th>Reviews</th>' : '')
+            + '</tr></thead><tbody>';
+        const revCell = n => '<td class="lv-boldnum">' + (n > 0 ? _lvNum(n) : '—') + '</td>';
+        rows.forEach(r => {
+            const tint = STORE_TINTS[r.v.code]
+                ? '<i class="lv-tint" style="background:' + STORE_TINTS[r.v.code] + '"></i>' : '';
+            const mine = _lvMineRow(r.v.code);
+            html += '<tr' + (mine ? ' class="' + mine + '"' : '') + '>'
+                + '<td><span class="lv-store">' + tint + '<b>' + escapeHtml(r.v.code) + '</b>'
+                + '<span class="lv-store-nm">' + escapeHtml(r.v.name || '') + '</span></span></td>'
+                + '<td class="lv-strongnum">' + _lvMoney(r.b.bought, false) + '</td>'
+                + '<td class="lv-quietnum">' + _lvMoney(r.b.paid, false) + '</td>'
+                + '<td class="lv-boldnum">' + _lvPct(r.b.margin) + '</td>'
+                + '<td>' + _lvRatio(r.b.bought, r.b.sold) + '</td>'
+                + (showRev ? revCell(revOf(r.v.code)) : '') + '</tr>';
+        });
+        const tot = _lvBuySum(rows.map(r => r.b));
+        html += '</tbody><tfoot><tr class="lv-foot"><td><span class="lv-store"><b>Total</b></span></td>'
+            + '<td class="lv-strongnum">' + _lvMoney(tot.bought, false) + '</td>'
+            + '<td class="lv-quietnum">' + _lvMoney(tot.paid, false) + '</td>'
+            + '<td class="lv-boldnum">' + _lvPct(tot.margin) + '</td>'
+            + '<td>' + _lvRatio(tot.bought, tot.sold) + '</td>'
+            // The Total line is not a store, so its reviews are the sum of the rows
+            // above rather than a lookup on a code that has no hub key.
+            + (showRev ? revCell(revCodes.reduce((a, c) => a + revOf(c), 0)) : '')
+            + '</tr></tfoot></table></div>';
+    }
+
+    // Tracking to month-end used to hang off the bottom of this block, which put
+    // the projections at the very foot of the card — below the buying table, past
+    // two tables' worth of scrolling. They now sit directly under the headline
+    // tiles instead; see _lvForecast.
+    // No "last updated" footnote and no date on the Buying header. Both said the
+    // same thing — that the sheet is keyed each morning and can run a day behind —
+    // and Today no longer shows this block at all, which was the case the caveat
+    // existed for. The date itself is still on the hub payload as {store}BuyDate
+    // if it is ever wanted back.
+    return html;
+}
+
+// Everything the retired Buying & Sales tab had left once month-to-date covered
+// the rest: where the month lands if it carries on as it is.
+// The month-end projection, summed across whichever stores are on screen. Split
+// out because the headline strip's fourth tile shows the same "tracking to goal"
+// figure, and two places deriving it separately is two places to get it wrong.
+function _lvFcSum(views) {
+    const fcs = (views || []).map(v => _lvFcFor(v.code)).filter(Boolean);
+    if (!fcs.length) return null;
+    const add = f => fcs.reduce((a, x) => a + f(x), 0);
+    const trackGp = add(f => f.trackGp), goal = add(f => f.goal);
+    const reviewsGoal = add(f => f.reviewsGoal);
+    return {
+        buyProj: add(f => f.buyProj), trackRev: add(f => f.trackRev),
+        trackGp, goal, pct: goal > 0 ? trackGp / goal * 100 : null,
+        reviews: add(f => f.reviews), reviewsProj: add(f => f.reviewsProj), reviewsGoal,
+    };
+}
+
+// Sits at the TOP of the detail, immediately under the four headline tiles —
+// Month only, so every caller can ask for it unconditionally.
+//
+// It used to be the last thing on the card, under the buying table. That put the
+// three numbers that say where the month LANDS below two full tables of where it
+// has been, and on a laptop they were under the fold entirely. Where the month is
+// heading belongs beside where it stands, not after it.
+//
+// Not merged into the headline strip itself, though the two bands now touch. Two
+// reasons. Those four tiles are banked money and these three are projections —
+// $650,494 of tracking buying dropped into the same undifferentiated row as
+// $114,199 of banked net sales invites exactly the wrong reading, and the rule
+// between them is what keeps it honest. And the manager Command Center stacks
+// every tab's strip in one grid area, so a second row here would make the band
+// taller on the Scorecard and eBay tabs too, which show one row and would gain a
+// band of empty space under it.
+function _lvForecast(views, d) {
+    if (!_lvIsMtd()) return '';
+    const f = _lvFcSum(views);
+    if (!f) return '';
+    // "Tracking to Goal" has moved up to the headline strip, where it replaced
+    // "Against Goal" — banked attainment on day 7 of the month always reads as a
+    // disaster (18.9%) and answered a question nobody was asking. It is not
+    // repeated here; the three tiles left are the projections behind it.
+    // The reviews tile only appears once the sheet actually carries the numbers —
+    // a fourth tile reading "0 · Against 0" for however long the rollout takes
+    // would teach everyone to ignore that corner of the strip.
+    const hasReviews = f.reviews > 0 || f.reviewsProj > 0 || f.reviewsGoal > 0;
+    // Every tile in this band is a PROJECTION, and a projection with nothing
+    // banked beside it cannot be sanity-checked (user's call 2026-08-09) — the
+    // reviews tile has read "45" over "10 of 40 · 30 to go" since it shipped, and
+    // it was the only one you could weigh by eye. So each tile now carries its
+    // month-to-date underneath, on the same "so far" pattern. That also retires
+    // "Projected Month-End" as a sub-line: the band's own header already says it,
+    // three times over.
+    //
+    // Revenue and GP come off the views, which _lvView has already mapped to the
+    // month in MTD mode. Buying is not a Shopify figure at all — it is summed out
+    // of the sheet's daily arrays, the same call the buying table makes, so the
+    // two cannot disagree.
+    const mtdRev = views.reduce((a, v) => a + (Number(v.netToday) || 0), 0);
+    const mtdGp = views.reduce((a, v) => a + (Number(v.gpToday) || 0), 0);
+    // Null on a month boundary, when _lvBuySpan has no slot to read — the tile
+    // falls back to naming itself rather than printing "$0 So Far".
+    const buys = d ? views.map(v => _lvBuyFor(v.code, d)).filter(Boolean) : [];
+    const mtdBuy = buys.length ? _lvBuySum(buys).bought : null;
+    const soFar = n => _lvMoney(n, false) + ' So Far';
+
+    // Stores that got through a whole open day without a new review. Computed
+    // once: it drives both the tile's class and its sub-line.
+    const flat = views.map(v => v.code)
+        .filter(code => { const s = _lvReviewStale(code); return s && s.stale; });
+    // One store looking at its own board already knows which store it is, so it
+    // gets the sentence. A district board names them, because the pulse on its
+    // own would only say "somebody".
+    const flatNote = !flat.length ? ''
+        : views.length === 1
+            ? '<span class="lv-rev-flat-n">Nothing New Yesterday</span>'
+            : '<span class="lv-rev-flat-n">Nothing New Yesterday</span>'
+              + flat.map(c => '<span class="lv-rev-pill">' + escapeHtml(c) + '</span>').join('');
+    return _lvSplit('Tracking to month-end', '')
+        + '<div class="lv-strip lv-fc-strip ' + (hasReviews ? 's4' : 's3') + '">'
+        + _lvTile('Tracking Buying', _lvMoney(f.buyProj, false),
+            mtdBuy === null ? 'Projected Month-End' : soFar(mtdBuy))
+        + _lvTile('Tracking Revenue', _lvMoney(f.trackRev, false), soFar(mtdRev))
+        + _lvTile('Tracking Gross Profit', _lvMoney(f.trackGp, false),
+            soFar(mtdGp) + (f.goal ? ' · Goal ' + _lvMoney(f.goal, false) : ''))
+        // The only tile whose sub-line carries figures rather than a caption, and
+        // deliberately: the projection alone ("45") is the one number here nobody
+        // can sanity-check by eye, because unlike revenue there is no running total
+        // on screen anywhere else. Banked against target makes 45 mean something —
+        // and the rate makes it something a shift can do about it today.
+        // A store that went a whole open day without a single new review gets the
+        // tile pulsed red (user's call 2026-08-09). The two figures on it both
+        // only ever go UP, so neither could say that a store has stopped asking —
+        // a store that got four on the 2nd and nothing since looks identical to
+        // one still working at it.
+        //
+        // On a district view the pulse alone would say "somebody, somewhere", so
+        // the stale stores are named as pills: the DM's next action is a phone
+        // call, and it needs a number to ring.
+        + (hasReviews ? _lvTile('Tracking Google Reviews', _lvNum(f.reviewsProj),
+            _lvReviewSub(f) + flatNote, '', flat.length ? ' lv-rev-flat' : '')
+            : '')
+        + '</div>';
+}
+
+// One store failing must never blank the panel for the rest — the edge function
+// already keeps a broken store out of the district totals and hands its error
+// down on the row, so say what happened instead of showing zeros as if they were
+// real sales.
+function _lvStoreError(m) {
+    // Shopify's message is raw text with no promise of ending in a full stop, so
+    // punctuate it before the reassurance — otherwise it reads as one run-on
+    // sentence ("429 throttled Every other store is unaffected").
+    const why = String(m.error || 'Shopify did not answer.').trim();
+    return '<div class="lv-err"><b>' + escapeHtml(m.code) + ' is not reporting.</b>'
+        + escapeHtml(why + (/[.!?]$/.test(why) ? '' : '.'))
+        + ' Every other store is unaffected.</div>';
+}
+
+// The MSM sees both of their stores at once and has no district roll-up, so the
+// tiles above the table are summed here rather than server-side.
+// The signed-in user's OWN store row, out of a district payload.
+//
+// The Live tab shows the district table, but the tiles above it and the
+// collapsed summary line are that person's own store — you open your Command
+// Center to see how YOU are doing, and read the district underneath for context.
+// Without this the top of a store's card quoted five stores' takings under its
+// own name.
+//
+// Null when there is no such row: a DM or CEO signs in against CORP, and a code
+// that is not in the payload (a store not yet connected to Shopify) must not
+// silently resolve to somebody else's numbers. Callers fall back to the district.
+function _lvOwnStore(d, stores) {
+    const code = String((d.scope && d.scope.store) || '').toUpperCase();
+    if (!code) return null;
+    return (stores || []).find(m => String(m.code).toUpperCase() === code && !m.error) || null;
+}
+
+function _lvCombine(stores) {
+    const net = stores.reduce((a, m) => a + m.netToday, 0);
+    const cogs = stores.reduce((a, m) => a + m.cogsToday, 0);
+    const orders = stores.reduce((a, m) => a + m.ordersToday, 0);
+    const mtdNet = stores.reduce((a, m) => a + m.mtdNet, 0);
+    const mtdCogs = stores.reduce((a, m) => a + m.mtdCogs, 0);
+    const goal = stores.reduce((a, m) => a + m.goal, 0);
+    const mtdGp = mtdNet - mtdCogs;
+    return {
+        netToday: net, cogsToday: cogs, gpToday: net - cogs, ordersToday: orders,
+        returnsToday: stores.reduce((a, m) => a + m.returnsToday, 0),
+        marginToday: net > 0 ? (net - cogs) / net * 100 : null,
+        aov: orders > 0 ? net / orders : null,
+        mtdNet, mtdGp, mtdOrders: stores.reduce((a, m) => a + m.mtdOrders, 0),
+        mtdMargin: mtdNet > 0 ? mtdGp / mtdNet * 100 : null,
+        goal, pctOfGoal: goal > 0 ? mtdGp / goal * 100 : null,
+    };
+}
+
+function _lvRollupTiles(r, d, label, views) {
+    const prev = _lvIsPrev();
+    const elapsed = prev ? (d.prev && d.prev.daysElapsed) : (d.month && d.month.daysElapsed);
+    const days = d.month && elapsed !== null && elapsed !== undefined
+        ? elapsed + ' Of ' + d.month.daysTotal + ' Days'
+        : '';
+    // The fourth tile answers "and where does that leave the month?". On the Month
+    // view the first tile IS the month, so repeating it there would waste the slot —
+    // it shows attainment against goal instead. On the 1st there is no month behind
+    // the previous day, so it falls back to the day's own profit rather than a $0
+    // month that reads as a dead district.
+    let last;
+    if (_lvIsMtd()) {
+        // Tracking, not banked. "Against Goal" was attainment so far, which on day
+        // 7 of a 31-day month reads as 18.9% and looks like a catastrophe every
+        // time — it answered a question nobody asks standing in August. Where the
+        // month LANDS is the one worth a headline slot. Falls back to attainment
+        // if the buying sheet has not answered, so the tile is never blank.
+        const f = _lvFcSum(views);
+        last = (f && f.pct !== null)
+            ? _lvTile('Tracking to Goal', _lvPct(f.pct),
+                f.goal ? 'Of ' + _lvMoney(f.goal, false) : '')
+            : _lvTile('Against Goal', _lvPct(r.pctOfGoal),
+                r.goal ? 'Of ' + _lvMoney(r.goal, false) : '');
+    } else if (_lvHasMonth(d)) {
+        last = _lvTile('Month to Date Revenue', _lvMoney(r.mtdNet, false), days);
+    } else {
+        last = _lvTile('Gross Profit', _lvMoney(r.gpToday, true), 'On The Day');
+    }
+    // Refunds rides under Orders, the way it already does on a single store's own
+    // tiles — it is the other half of the same count.
+    const avg = r.aov === null ? label : 'Average ' + _lvMoney(r.aov, true);
+    const ordersSub = (r.returnsToday === null || r.returnsToday === undefined)
+        ? avg
+        : _lvSubPair('Average', _lvMoney(r.aov, true),
+                     'Refunds', r.returnsToday > 0 ? _lvMoney(r.returnsToday, false) : 'none');
+    return _lvTile(_lvHeadKey(), _lvMoney(r.netToday, true), _lvStamp(d), true)
+        + _lvTile('Orders', String(r.ordersToday), r.aov === null ? label : ordersSub)
+        + _lvTile('Gross Margin', _lvPct(r.marginToday),
+            _lvSubPair('Total Cost', _lvMoney(r.cogsToday, false),
+                       'Total Profit', _lvMoney(r.gpToday, false)))
+        + last;
+}
+
+// `v` arrives already switched to the selected day by _lvTable — the roll-up row
+// has to be built from the same view before its pace is derived, so doing the
+// overlay here as well would apply it twice.
+// Does the Reviews column exist on this table? Only on the month view, and only
+// once the sheet is actually carrying the numbers — an empty column down every
+// row for however long the rollout takes teaches people to stop looking there.
+function _lvHasReviews(codes) {
+    if (!_lvIsMtd()) return false;
+    return (codes || []).some(c => {
+        const f = _lvFcFor(c);
+        return !!f && (f.reviews > 0 || f.reviewsGoal > 0);
+    });
+}
+
+// `rev` is the store's month-to-date Google reviews, or null for "no such
+// column" — passed in rather than looked up here because the roll-up row is not
+// a store and has to be summed by the caller.
+function _lvStoreRow(v, d, foot, rev) {
+    // The roll-up row is not a store, so it gets no colour dot — the tints are the
+    // per-store palette the KPI charts use and inventing a sixth one for "District"
+    // would read as a sixth store.
+    const tint = STORE_TINTS[v.code]
+        ? '<i class="lv-tint" style="background:' + STORE_TINTS[v.code] + '"></i>' : '';
+    if (v.error) {
+        // colspan spans every column EXCEPT the store cell — keep it in step with
+        // the header row or a broken store knocks the table out of alignment.
+        // (It was 7 against eight columns; adding Refunds makes it nine.)
+        return '<tr class="lv-row-err"><td><span class="lv-store">' + tint
+            + '<b>' + escapeHtml(v.code) + '</b></span></td>'
+            + '<td colspan="' + (rev === null || rev === undefined ? 9 : 10)
+            + '" class="lv-row-errmsg">not reporting &middot; '
+            + escapeHtml(v.error) + '</td></tr>';
+    }
+    const asOf = d.asOfCentral;
+    // Last column: a live clock only means something today. On a finished day it
+    // holds what an average order was worth; over a month, what an average day
+    // looked like — the figure that makes two stores of different size comparable.
+    const orders = Number(v.ordersToday) || 0;
+    const tail = _lvIsMtd()
+        ? _lvMoney((Number(v.netToday) || 0) / _lvDays(d), false)
+        : _lvIsPrev()
+            ? (orders > 0 ? _lvMoney((Number(v.netToday) || 0) / orders, true) : '—')
+            : (v.lastOrderAt && _lvCentralDay(v.lastOrderAt) === String(asOf || '').slice(0, 10)
+                ? _lvOrderClock(v.lastOrderAt) : '—');
+    const gp = _lvHasMonth(d)
+        ? _lvMoney(v.mtdGp, false) + '<span class="lv-of"> of ' + _lvMoney(v.goal, false) + '</span>'
+        : '—';
+    // The whole row flashes, not just the money cell — at a glance the eye catches
+    // the band across the table long before it resolves which column moved.
+    const rowCls = [foot ? 'lv-foot' : '', _lvHitRow(v.code), _lvMineRow(v.code)]
+        .filter(Boolean).join(' ');
+    return '<tr' + (rowCls ? ' class="' + rowCls + '"' : '') + '><td><span class="lv-store">' + tint
+        + '<b>' + escapeHtml(v.code) + '</b><span class="lv-store-nm">'
+        + escapeHtml(v.name || '') + '</span></span></td>'
+        + '<td class="lv-strongnum">' + _lvMoney(v.netToday, true) + '</td>'
+        // Cost and gross profit for the day itself. The single-store view has had
+        // these all along (cost under the margin tile, GP as a chip); the table did
+        // not, so the district read sales without the money actually made on them.
+        + '<td class="lv-quietnum">' + _lvMoney(v.cogsToday, false) + '</td>'
+        + '<td class="lv-strongnum">' + _lvMoney(v.gpToday, false) + '</td>'
+        // Refunds sits beside Orders because it is the other half of the same
+        // count — what came back out of the till against what went in.
+        + '<td class="lv-quietnum"' + (v.returnsToday === null || v.returnsToday === undefined
+            ? ' title="This cache was written before the feed carried month-to-date'
+              + ' refunds — it fills in on the next refresh."' : '') + '>'
+        + (v.returnsToday > 0 ? _lvMoney(v.returnsToday, false) : '—') + '</td>'
+        + '<td>' + v.ordersToday + '</td>'
+        + '<td class="lv-boldnum">' + _lvPct(v.marginToday) + '</td>'
+        + '<td>' + gp + '</td>'
+        + '<td><span class="lv-pill ' + _lvPaceCls(v.paceIndex) + '">'
+        + (v.paceIndex === null || v.paceIndex === undefined ? '—' : v.paceIndex + '%') + '</span></td>'
+        + (rev === null || rev === undefined ? ''
+            : '<td class="lv-boldnum">' + (rev > 0 ? _lvNum(rev) : '—') + '</td>')
+        + '<td>' + tail + '</td></tr>';
+}
+
+function _lvTable(stores, d, rollup, rollupLabel) {
+    const prev = _lvIsPrev();
+    // Refunds has a column of its own now, so the tail column — which was Refunds
+    // on Yesterday — carries the day's average order instead. A live "last order"
+    // clock means nothing on a finished day, which is why that slot was never
+    // Last order here.
+    const tailHead = _lvIsMtd() ? 'Avg / day' : (prev ? 'Avg order' : 'Last order');
+    // Named, the same way Buying below it is. Unlabelled, the table read as "the
+    // dashboard" and Buying as an appendix to it; they are two halves of the same
+    // question, so both get a header. Lives here so every surface that draws this
+    // table gets it — district and Multi-Store Manager, on all three days.
+    //
+    // Google reviews are NOT here. They sat in this table first, on the reasoning
+    // that it is the main one — but a review is left by somebody who came in to
+    // sell a device, so it belongs beside what was bought off them, not beside
+    // what was sold to somebody else. Moved to _lvBuyBlock (user's call).
+    let html = _lvSplit('Selling', '')
+        + '<div class="lv-tbl-scroll"><table class="lv-tbl"><thead><tr>'
+        + '<th>Store</th><th>' + (_lvMode === 'today' ? 'Net today' : 'Net sales') + '</th>'
+        + '<th>Cost</th><th>Gross profit</th>'
+        + '<th>Refunds</th><th>Orders</th><th>Margin</th>'
+        + '<th>' + (_lvHasMonth(d) ? 'GP this month' : 'GP') + '</th><th>Pace</th>'
+        + '<th>' + tailHead + '</th>'
+        + '</tr></thead><tbody>';
+    // Fixed store order (the edge function returns it that way) — the team reads
+    // this list by position, so re-sorting it worst-first would cost more than the
+    // ranking gains. The pace column is what makes a bad store findable.
+    stores.forEach(m => {
+        html += _lvStoreRow(_lvView(m), d, false, null);
+    });
+    html += '</tbody>';
+    if (rollup) {
+        const rv = _lvView(rollup);
+        const r = Object.assign({}, rv, {
+            code: rollupLabel, name: '',
+            paceIndex: _lvPace(rv.pctOfGoal, _lvElapsedPct(d)),
+            // The freshest order across the stores, so a stalled feed shows up on the
+            // total line too rather than only in the row it belongs to.
+            lastOrderAt: stores.reduce((a, m) => (m.lastOrderAt && (!a || m.lastOrderAt > a)) ? m.lastOrderAt : a, null),
+        });
+        html += '<tfoot>' + _lvStoreRow(r, d, true, null) + '</tfoot>';
+    }
+    return html + '</table></div>';
+}
+
+// Just the trading state: open or closed.
+//
+// This used to carry an age too — "closed · last update 14m ago", and an amber
+// "no change for 24 min" once a trading hour went quiet. Both were noise. The
+// cron only writes when a number MOVES, so a quiet morning produced the same
+// pill as a broken feed and it fired often enough to stop meaning anything.
+//
+// Nothing is lost: the header beside this pill still reads "last change 1:42 pm",
+// which is the same information stated as a fact rather than as an alarm — a
+// genuinely stalled feed shows up there as a timestamp that stops advancing.
+function _lvFreshness(d) {
+    // A finished day is not live and must never wear the pulsing dot — the whole
+    // point of that dot is that it means "these numbers are still moving".
+    if (_lvIsPrev()) return '<span class="lv-fresh closed">final</span>';
+    // A month with today still in it IS moving, so it keeps the dot — but calling
+    // it "open" would be read as the shop's trading state, which on this view is
+    // a question about one day, not thirty-one.
+    if (_lvIsMtd()) return '<span class="lv-fresh"><span class="lv-dot"></span>in progress</span>';
+    return d.open
+        ? '<span class="lv-fresh"><span class="lv-dot"></span>open</span>'
+        : '<span class="lv-fresh closed">closed</span>';
+}
+
+async function fetchLiveDashboard() {
+    // Nothing to paint into on this page — every mount lives on the dashboard.
+    if (!document.querySelector('.lv-detail, .lv-dist-detail')) return;
+    const pin = sessionStorage.getItem('speeksUserPin');
+    if (!pin) return;
+    try {
+        const r = await fetch(`${LIVE_URL}?v=${Date.now()}`, { headers: { 'x-user-pin': pin } });
+        const d = await r.json();
+        if (!r.ok || !d || d.ok === false) {
+            _lvErr = (d && d.error) || `Live sales are unavailable (HTTP ${r.status}).`;
+        } else if (d.pending) {
+            _lvErr = d.message || 'No live data yet — the first refresh has not run.';
+        } else {
+            // Diff against the previous fetch BEFORE it is replaced — this is the
+            // only place a sale or refund can be spotted.
+            _lvTrackChanges(d);
+            _lvData = d;
+            _lvErr = '';
+        }
+    } catch (_) {
+        _lvErr = 'Live sales could not be reached.';
+    }
+    renderLiveDashboard();
+}
+
+function renderLiveDashboard() {
+    const strips = document.querySelectorAll('.lv-strip');
+    const details = document.querySelectorAll('.lv-detail');
+    const dStrip = document.querySelector('.lv-dist-strip');
+    const dDetail = document.querySelector('.lv-dist-detail');
+    if (!details.length && !dDetail) return;
+
+    if (!_lvData) {
+        const msg = '<div class="status-message">' + escapeHtml(_lvErr || 'Syncing live sales…') + '</div>';
+        strips.forEach(el => { el.innerHTML = ''; });
+        details.forEach(el => { el.innerHTML = msg; });
+        if (dStrip) dStrip.innerHTML = '';
+        if (dDetail) dDetail.innerHTML = msg;
+        return;
+    }
+
+    const d = _lvData;
+    const stores = d.stores || [];
+    _lvFillDistrictMtd(d, stores);
+    // Before ANY table is built — every row renderer reads it. Reset each pass
+    // rather than set once: the payload can change scope on a re-login without a
+    // reload, and a stale code would mark somebody else's store as yours.
+    _lvOwnCode = (_lvOwnStore(d, stores) || {}).code || null;
+
+    // ---- DM / CEO: the five-store table ----
+    if (dDetail) {
+        if (d.district) {
+            // Hoisted: the tiles, the forecast band and the buying table are all
+            // built from the same healthy-store views, and deriving it three times
+            // is three chances for them to disagree about who is reporting.
+            const dViews = stores.filter(m => !m.error).map(_lvView);
+            if (dStrip) dStrip.innerHTML = _lvRollupTiles(_lvView(d.district), d, 'No Orders Yet', dViews);
+            // No footnote on the normal view — the column headers already say what
+            // the figures are. The month-boundary case still needs explaining,
+            // because "GP this month" and Pace go blank and that looks broken.
+            dDetail.innerHTML = _lvForecast(dViews, d)
+                + _lvTable(stores, d, d.district, 'District')
+                + _lvActivity()
+                + (_lvHasMonth(d) ? ''
+                    : '<div class="lv-note">This was the last day of the previous month, so '
+                      + 'month-to-date and pace are not shown against it.</div>')
+                + _lvBuyBlock(d, dViews);
+        } else {
+            // Only reachable if a district card is on screen for a non-district role,
+            // which the role classes should already prevent. Say nothing rather than
+            // render an empty table.
+            if (dStrip) dStrip.innerHTML = '';
+            dDetail.innerHTML = '<div class="status-message">Not available for this role.</div>';
+        }
+    }
+    const asof = document.querySelector('.lv-card .lv-asof');
+    if (asof) asof.textContent = _lvHeadStamp(d);
+    const eyebrow = document.querySelector('.lv-card .lv-eyebrow');
+    if (eyebrow) eyebrow.innerHTML = 'District &middot; ' + _lvModeName();
+    const fresh = document.querySelector('.lv-card .lv-freshness');
+    if (fresh) fresh.innerHTML = _lvFreshness(d);
+    const dModes = document.querySelector('.lv-card .lv-modes-host');
+    if (dModes) dModes.innerHTML = _lvToggle(d);
+    // Sits AFTER the open/closed pill: it is a preference, not a state readout, and
+    // wedged between the two pill groups it read as an orphaned third pill.
+    const dSound = document.querySelector('.lv-card .lv-sound-host');
+    if (dSound) dSound.innerHTML = _lvSoundBtn() + _lvFullBtn();
+
+    // ---- store surfaces (manager Command Center + employee/ASM widget) ----
+    // Every exit from here on has to fall through to the tail below, which clears
+    // the pulse flags and fills the activity chips. Returning early skipped both,
+    // so on a DM's page — district card, no store panel — the chips never appeared.
+    if (!details.length) { _lvAfterRender(); return; }
+
+    if (!stores.length) {
+        // A store code the roster doesn't recognise, or a Shopify app that was never
+        // installed for it. Naming the store beats an empty panel.
+        const who = (d.scope && d.scope.store) ? escapeHtml(d.scope.store) : 'your store';
+        strips.forEach(el => { el.innerHTML = ''; });
+        details.forEach(el => {
+            el.innerHTML = '<div class="status-message">No live sales feed for ' + who + ' yet.</div>';
+        });
+        _lvAfterRender();
+        return;
+    }
+
+    let tiles, detail;
+    if (d.district) {
+        // The store Command Center's Live tab shows the DISTRICT board — the same
+        // renderers, the same five-store table, the same buying half — not just the
+        // signed-in store. It replaced the Buying & Sales tab, and the figures that
+        // tab carried are all here; showing them district-wide is what the store
+        // teams asked for, so a store can see where it stands next to the others
+        // rather than only against its own goal.
+        //
+        // The card is still "{STORE} Command Center": eBay, Scorecard and Weekly
+        // KPIs beside it remain that store's own. Only this tab is district-wide.
+        //
+        // Whether the district arrives at all is the SERVER's decision — see
+        // scopeFor in shopify-live. This branch renders what it was given and
+        // grants nothing; a payload with no district still falls through to the
+        // single-store and Multi-Store Manager branches below exactly as before.
+        const views = stores.filter(m => !m.error).map(_lvView);
+        // TILES AND TRACKING BAND: this person's own store. TABLES: the district.
+        // You open your own Command Center to see how your store is doing and read
+        // the other four underneath for context, not the reverse.
+        //
+        // The tracking band goes with the tiles, not the tables, because the
+        // fourth tile IS "Tracking to Goal" — the same projection the band's third
+        // tile divides by the goal. Split them and the two would disagree an inch
+        // apart: a store tracking 104% of its own $77,000 above a band quoting the
+        // district's $301,976 against $332,000.
+        const mine = _lvOwnStore(d, stores);
+        const own = mine ? [_lvView(mine)] : views;
+        tiles = _lvRollupTiles(mine ? _lvView(mine) : _lvView(d.district), d, 'No Orders Yet', own);
+        detail = _lvForecast(own, d) + _lvTable(stores, d, d.district, 'District')
+            + _lvActivity() + _lvBuyBlock(d, views);
+    } else if (stores.length === 1) {
+        const m = stores[0];
+        tiles = _lvStoreTiles(_lvView(m), d);
+        detail = m.error ? _lvStoreError(m) : _lvStoreDetail(d, _lvView(m));
+    } else {
+        // Multi-Store Manager: both stores stacked, exactly as their checklist and
+        // Listing Goals already do — no dashboard switch to see the other one.
+        // Combine the VIEWS, so the pair total follows the selected day too.
+        const healthy = stores.filter(m => !m.error);
+        const views = (healthy.length ? healthy : stores).map(_lvView);
+        const roll = _lvCombine(views);
+        tiles = _lvRollupTiles(roll, d, 'No Orders Yet', views);
+        detail = _lvForecast(views, d) + _lvTable(stores, d, roll, 'Both')
+            + _lvActivity() + _lvBuyBlock(d, views);
+    }
+
+    const stamp = _lvMode === 'today'
+        ? 'last change ' + _lvClock(d.asOfCentral) + ' Central'
+        : escapeHtml(_lvHeadStamp(d));
+    details.forEach(el => {
+        // Two mounts don't offer the full-screen button: the one already inside
+        // the full-screen view, and the shop-floor board (.tv-card), which is a
+        // full screen with nothing to return to. Asked of the DOM rather than of
+        // the page — the board is identified by the card it renders into, which
+        // keeps this module from reaching into the auth section for _tvOnBoardPage.
+        const bare = !!el.closest('#lvFullscreen, .tv-card');
+        el.innerHTML = '<div class="lv-head">'
+            + '<span class="lv-head-l">' + _lvFreshness(d)
+            + '<span class="lv-asof">' + stamp + '</span></span>'
+            + '<span class="lv-head-r">' + _lvToggle(d) + _lvSoundBtn()
+            + (bare ? '' : _lvFullBtn()) + '</span>'
+            + '</div>' + detail;
+    });
+    strips.forEach(el => { el.innerHTML = tiles; });
+
+    // Collapsed Command Center summary line. Deliberately pinned to TODAY: the
+    // toggle lives inside the panel, so when the panel is shut there is nothing on
+    // screen to say which day this number belongs to.
+    // Follows the TILES, not the table: this person's own store. The card is
+    // titled "{STORE} Command Center", so a figure sitting under that heading is
+    // read as that store's — and on a collapsed card there is no table visible to
+    // correct the impression. The district is one click away inside the panel.
+    //
+    // Falls back to the district only when there is no own-store row to show
+    // (CORP, or a store not in the payload), and says so when it does rather than
+    // passing five stores off as one.
+    const mineSum = _lvOwnStore(d, stores);
+    const roll = mineSum || (d.district ? d.district
+        : (stores.length === 1 ? stores[0] : _lvCombine(stores.filter(m => !m.error))));
+    const sumK = document.querySelector('#cc-sum-live .cc-sum-k');
+    if (sumK) sumK.textContent = (!mineSum && d.district) ? 'District Net Sales Today' : 'Net Sales Today';
+    _ccSum('cc-sum-live', _lvMoney(roll.netToday, false)
+        + ' <small>' + roll.ordersToday + (roll.ordersToday === 1 ? ' order' : ' orders') + '</small>');
+    // Revenue, not profit — the same reason the district's says so: two money
+    // figures side by side have to declare which is which, and that is the key's
+    // job, so the value does not repeat it.
+    _ccSum('cc-sum-mtd', _lvMoney(roll.mtdNet, false));
+    // Month to date, matching the district cell it sits in the same position as.
+    // Today's refunds are a tab away on the Live view; the month is the figure
+    // that belongs beside a month of revenue.
+    if (roll.mtdReturns !== null && roll.mtdReturns !== undefined) {
+        _ccSum('cc-sum-refunds', _lvMoney(roll.mtdReturns, false));
+    }
+    // Where the month LANDS, from the same projection as the fourth tile and the
+    // tracking band, so the collapsed line and the open panel cannot disagree.
+    // Same three colour bands as the district's.
+    const mineView = mineSum ? _lvView(mineSum) : null;
+    const fc = mineView ? _lvFcSum([mineView]) : null;
+    if (fc && fc.pct !== null) {
+        _ccSum('cc-sum-goal', Math.round(fc.pct) + '<small>%</small>',
+            fc.pct >= 100 ? 'good' : (fc.pct >= 80 ? 'warn' : 'bad'));
+    }
+    // Month to date, not the projection: this line is the banked figures, and the
+    // tile inside the panel is where the month is heading. Stays hidden until the
+    // sheet carries reviews rather than showing an eighth cell reading "—" — the
+    // row already wraps to two lines on a narrow screen at seven.
+    _lvSumReviews('cc-sum-reviews', fc, mineView ? [mineView.code] : []);
+
+    _lvAfterRender();
+}
+
+// The district roll-up ships mtdNet and mtdGp but not mtdCogs or mtdOrders,
+// which the Month table needs for the District line — without them it prints
+// "undefined" in two columns.
+//
+// Derived here rather than added to the edge function, because both are exactly
+// recoverable: cost is net minus profit BY DEFINITION (mtdGp is computed as
+// mtdNet - mtdCogs upstream), and the order count is the sum of the store rows
+// sitting in the same payload. Nothing is estimated, so there is no reason to
+// redeploy a function that talks to Shopify for it.
+function _lvFillDistrictMtd(d, stores) {
+    const r = d && d.district;
+    if (!r) return;
+    const healthy = stores.filter(m => !m.error);
+    if (r.mtdCogs === null || r.mtdCogs === undefined) {
+        r.mtdCogs = Math.round(((Number(r.mtdNet) || 0) - (Number(r.mtdGp) || 0)) * 100) / 100;
+    }
+    if (r.mtdOrders === null || r.mtdOrders === undefined) {
+        r.mtdOrders = healthy.reduce((a, m) => a + (Number(m.mtdOrders) || 0), 0);
+    }
+}
+
+// Runs after every render path, however it exited.
+function _lvAfterRender() {
+    // Two of the district board's summary cells are today's selling, which only
+    // this module knows. Guarded because the district widget is DM/CEO only.
+    if (typeof _dcSummaryFill === 'function') _dcSummaryFill();
+    // Consumed. The highlight is a CSS animation that plays when the element is
+    // inserted, so leaving these set would replay it on every unrelated re-render
+    // (a tab switch, the day toggle) and turn "just now" into background noise.
+    _lvPulse = {};
+    // The chip rows exist now, so fill them from the live events.
+    _lvSyncActivity();
 }
 
 // ============================================================================
@@ -9129,6 +11319,12 @@ async function fetchMasterDistrictDashboard() {
     const renderMasterBoard = (hubData, varData, scoreData, alertsData, weeklyResults) => {
         _dccRows = STORES.map(s => _dccRow(s, hubData, varData, scoreData, alertsData, weeklyResults));
         container.innerHTML = _dccBoardHtml(PORTAL_LINKS);
+        // The eBay and Scorecard tabs and the collapsed summary are the same rows
+        // read across the district instead of down one store, so they fill here too.
+        renderDistrictTabs();
+        // Fills in the Sales Import line once it answers. Repaints via _dccRepaint
+        // (not this function), so there is no render loop.
+        fetchSalesImportStatus();
     };
 
     const cachedHtml = localStorage.getItem('speeksDistMasterHtml');
@@ -9206,133 +11402,302 @@ function _roleOf(btn) {
     return String(r).trim().toUpperCase() || '-';
 }
 
+// "OFF" is stored in listing_goals.role like any other role, but it means the
+// opposite of one: this person is not in today. It exists so the daily reminder
+// can tell "nobody has touched this yet" apart from "every person is accounted
+// for" — see _lgCoverage.
+//
+// An OFF person carries no goal and does NOT count toward the day's staffed
+// head-count, which is what drives the shared-lister rule and the goal
+// allocation lookup. Marking someone off therefore can never move anyone else's
+// number — it only records that they were asked about.
+const GOALS_OFF = 'OFF';
+function _isOffRole(role) {
+    return String(role || '').trim().toUpperCase() === GOALS_OFF;
+}
+function _isWorkingRole(role) {
+    const r = String(role || '').trim().toUpperCase();
+    return !!r && r !== '-' && r !== GOALS_OFF;
+}
+// The role currently selected in one `.goals-edit-roles` group ('-' when none).
+function _activeRoleIn(group) {
+    return _roleOf(group ? group.querySelector('.role-dot.active') : null);
+}
+
+// The dots for one person: the store's role ladder plus the Off chip. Shared by
+// all three renderers (flip-card form, manager widget, MSM stacked widget) so
+// the Off chip can't be added to one and forgotten in the others.
+// `emp` lands inside a single-quoted JS string in an onclick, so escape it.
+function goalsRoleDotsHtml(roles, activeRole, emp, disabledAttr, store) {
+    const cur = String(activeRole || '').trim().toUpperCase();
+    const safeEmp = String(emp).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    let dis = disabledAttr || '';
+
+    // A floater another store has already claimed today can't be given a role
+    // here. Greyed with where he went, not hidden — a manager who can't see
+    // where he is will just ring round asking, and the answer is the point.
+    // No tooltip — the pill says everything it needs to (user, 2026-08-10).
+    const held = _goalsFloaterHeldBy(store, emp);
+    if (held) {
+        return `<span class="goals-floater-away">At ${escapeHtml(held)} today</span>`;
+    }
+    let html = '';
+    roles.forEach(r => {
+        html += `<button type="button" class="role-dot ${cur === r ? 'active' : ''}" data-role="${r}" ${dis} onclick="selectRole(this, '${safeEmp}', '${r}')">${r}</button>`;
+    });
+    html += `<button type="button" class="role-dot role-off ${cur === GOALS_OFF ? 'active' : ''}" data-role="${GOALS_OFF}" ${dis}`
+         + ` title="Off today — no goal, and they stop holding up the daily reminder"`
+         + ` onclick="selectRole(this, '${safeEmp}', '${GOALS_OFF}')">Off</button>`;
+    return html;
+}
+
+// ---------------------------------------------------------------------------
+// FLOATERS
+// ---------------------------------------------------------------------------
+// A floater (users.can_float) belongs to a MARKET, not a store — Zach M's home
+// store is OVL but he goes wherever KC needs help. So he appears in every KC
+// roster, and the first manager to give him a role that day claims him; the
+// others see "At LEE today" instead of dots.
+//
+// The claim is decided by a primary key on the server, not by this cache, so
+// two managers tapping at the same instant can't both win — the loser is told
+// who did. This map is only what the widget paints between refreshes.
+let _goalsFloaters = {};   // store → [{ name, claimedBy, available, mine, homeStore }]
+
+// The OTHER store holding this person today, or '' if they're free / not a
+// floater / already ours.
+function _goalsFloaterHeldBy(store, emp) {
+    const list = _goalsFloaters[store] || [];
+    const f = list.find(x => _goalsSameName(x.name, emp));
+    return (f && f.claimedBy && !f.mine) ? f.claimedBy : '';
+}
+function _goalsIsFloater(store, emp) {
+    return (_goalsFloaters[store] || []).some(x => _goalsSameName(x.name, emp));
+}
+
+// Which store a role dot belongs to. The MSM's stacked widget already marks each
+// store section with data-goals-scope (updateRoleLocks uses it so BAL's B1
+// doesn't lock MPL's B1); everywhere else the page is one store.
+function _goalsRoleScopeStore(btn) {
+    const sec = btn && btn.closest ? btn.closest('[data-goals-scope]') : null;
+    return (sec && sec.getAttribute('data-goals-scope')) || goalsTargetStore;
+}
+
+// Steps 1–4 of selectRole, split out so the floater path can run them AFTER the
+// server has settled the claim. Kept identical on purpose — if the two drift,
+// a floater's dot behaves differently from everyone else's.
+function _goalsApplyRole(clickedBtn, role, wasActive) {
+    if (wasActive) {
+        clickedBtn.classList.remove('active');
+    } else {
+        if (clickedBtn.dataset.roleTaken === 'true') {
+            alert(`The role ${role} is already assigned to another team member. Please deselect it from them first.`);
+            return;
+        }
+        const parentRow = clickedBtn.closest('.goals-edit-roles');
+        if (parentRow) parentRow.querySelectorAll('.role-dot').forEach(b => b.classList.remove('active'));
+        clickedBtn.classList.add('active');
+    }
+    updateRoleLocks();
+    recomputeGoalDisplays();
+    scheduleGoalsAutosave();
+}
+
+// Refresh one store's floater claims for a date. Failure is non-fatal and
+// deliberately silent: a floater who can't be claimed still gets dots, so a
+// network blip degrades to the old behaviour rather than locking a manager out
+// of their own roster.
+async function refreshGoalsFloaters(store, dateStr) {
+    if (!store) return [];
+    try {
+        const d = dateStr || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+        const r = await fetch(`${STORE_TARGETS_URL}?action=floaters&store=${store}&date=${d}&v=${Date.now()}`)
+            .then(x => x.json());
+        _goalsFloaters[store] = Array.isArray(r) ? r : [];
+    } catch (e) { _goalsFloaters[store] = _goalsFloaters[store] || []; }
+    return _goalsFloaters[store];
+}
+
+// Claim or release a floater for today. Returns '' on success, or a message.
+async function _goalsClaimFloater(store, emp, release) {
+    try {
+        const d = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+        const resp = await fetch(STORE_TARGETS_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+                action: release ? 'release' : 'claim',
+                store, employee: emp, date: d,
+                name: sessionStorage.getItem('speeksUserName') || '',
+            }),
+        });
+        const j = await resp.json().catch(() => ({}));
+        if (Array.isArray(j.floaters)) _goalsFloaters[store] = j.floaters;
+        return j.ok ? '' : (j.error || 'Could not update the floater.');
+    } catch (e) { return 'Could not reach the server.'; }
+}
+
+// Add any floater the market makes available to a store's roster, so a manager
+// can actually put him on their board. His HOME store already lists him through
+// the auth cache, so guard against showing him twice there.
+function _goalsWithFloaters(store, roster) {
+    const out = roster.slice();
+    (_goalsFloaters[store] || []).forEach(f => {
+        if (!out.some(n => _goalsSameName(n, f.name))) out.push(f.name);
+    });
+    return out;
+}
+
+// Loose name match (exact, or same first name) — the roster comes from the auth
+// cache while the saved rows carry whatever name was on the row when it was
+// written. Same rule the weekly rollups already use.
+function _goalsSameName(a, b) {
+    const x = String(a || '').trim().toLowerCase();
+    const y = String(b || '').trim().toLowerCase();
+    if (!x || !y) return false;
+    if (x === y) return true;
+    const xf = x.split(' ')[0], yf = y.split(' ')[0];
+    return xf.length > 2 && yf.length > 2 && (xf.startsWith(yf) || yf.startsWith(xf));
+}
+
+// The roster the goal widgets show dots for: everyone in the store's user list
+// except the CEO and DM. One definition so the daily reminder judges coverage
+// against exactly the people the manager was given dots for.
+// Roles that are not a pair of hands on the shop floor, so they never get a
+// listing role or count toward a store's capacity. Mirrors NON_STAFF_ROLES in the
+// store-targets edge function.
+//
+// ONE definition, used by both the roster and the size count — they disagreed
+// before, storeRosterSize dropping the Multi-Store Manager while goalsRosterFor
+// kept them.
+//
+// 'store' (the shop-floor BOARD account — a TV, not a person) is belt-and-braces
+// here: userInStore already rejects it, as of bf262cd on 2026-08-08. Managers
+// reported seeing the Team accounts in the role picker on 2026-08-10, which this
+// did NOT cause and does not fix — those clients are running JS cached from
+// before that commit. Kept anyway so the intent is legible beside the capacity
+// model rather than resting on a guard three call layers away.
+const GOALS_NON_STAFF_ROLES = ['ceo', 'district manager', 'store'];
+function _goalsIsStaffRole(role) {
+    return !GOALS_NON_STAFF_ROLES.includes(String(role || '').toLowerCase().trim());
+}
+
+function goalsRosterFor(store) {
+    try {
+        const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
+        return (auth.users || [])
+            .filter(u => userInStore(u, store) && _goalsIsStaffRole(u.role))
+            .map(u => u.name)
+            .filter(Boolean);
+    } catch (_) { return []; }
+}
+
+// CAPACITY MODEL. A person's daily goal is their SHIFT HOURS × the RATE of the
+// seat they are in that day, taken down to a goal by goal_factor. That is the
+// whole calculation — a manager can check it in their head.
+//
+// What this replaced, and why none of it survived:
+//
+//   roleWeight / scale / allocFor  — the old engine started from the store's
+//     WEEKLY number and divided it back out across a hypothetical "standard
+//     week", using largest-remainder so the person-days summed to the DM's
+//     figure exactly. Elegant, and wrong end first: it meant a person's goal
+//     depended on how many people the model imagined were working, not on their
+//     own hours, so the same lister scored 25 one day and 15 the next because
+//     someone else was off. Under capacity a lister's day is 18 because they
+//     have 8 hours at 3/hr — full stop.
+//
+//   L1_SHARED  — the shared-lister rule existed to dock a lister on a thin day.
+//     Capacity handles it without a special case: fewer people means fewer hours
+//     means a smaller store goal, and the lister who is ALSO covering the floor
+//     is a Buyer, at a buyer's rate.
+//
+//   weeklyTarget's ladder (±20/person, floor 150)  — see the server. Retired.
+//
+// The daily goals no longer sum to the store's weekly goal by construction, and
+// that is deliberate: the gap between "what we planned Monday" and "what we
+// actually staffed" is the efficiency signal the whole model exists to produce.
 const ListingGoalsEngine = {
-    roleWeight: { B1: 5, B2: 8, L1: 25, L2: 25, L1_SHARED: 15 },
-    saturdayFactor: 0.5,
-
-    // SUGGESTED weekly total: ±20 listings per person, anchored at 4 people = 190
-    // (floor 150). 2→150, 3→170, 4→190, 5→210, 6→230. Mirrors baseForSize() in the
-    // store-targets edge function so the frontend and server stay in lock-step.
-    //
-    // This is no longer the goal — the DM types the real number each Monday and
-    // that value drives everything (see scale's targetOverride). The ladder only
-    // prefills the DM's input for a store that has never had a week set, and
-    // stands in while the server target is still loading.
-    weeklyTarget(size)       { return Math.max(150, 110 + 20 * size); },
-    modelSize(rosterSize)    { return rosterSize >= 4 ? 4 : 3; },
-
-    // Standard staffed week, used ONLY to calibrate the scale so a normal week
-    // sums to the weekly target. Day-to-day goals use the live roles selected.
-    standardWeek(size) {
-        return size >= 4
-            ? { Mon:['B1','B2','L1'], Tue:['B1','B2','L1'], Wed:['B1','B2','L1'],
-                Thu:['B1','B2','L1'], Fri:['B1','B2','L1','L2'], Sat:['B1','B2','L1','L2'] }
-            : { Mon:['B1','L1'], Tue:['B1','L1'], Wed:['B1','L1'],
-                Thu:['B1','B2','L1'], Fri:['B1','B2','L1'], Sat:['B1','B2','L1'] };
+    // Mirrors the listing_config table. Overwritten wholesale by the server on
+    // the first store-targets fetch (applyConfig) — these values only stand in
+    // for the second before that lands, and must never be edited to "tune" the
+    // model: change the DB row, which carries the reasoning in its note column.
+    cfg: {
+        hours_per_day: 8,
+        rate_buyer_1: 0.5, rate_buyer_2: 1.0, rate_lister: 3.0, rate_new_hire: 1.0,
+        saturday_factor: 0.5, goal_factor: 0.75, open_days: 6,
+        // Shown as labels in the User Permissions schedule dropdown.
+        hours_full_time: 40, hours_part_time: 20, hours_floater: 25, new_hire_weeks: 2,
     },
+    _newHires: {},   // store → Set of names inside the new-hire ramp this week
+
+    // Absorb one store-targets row. Safe to call with anything, including the
+    // pre-capacity payload a cached page might still be holding.
+    applyConfig(row) {
+        if (!row) return;
+        if (row.cfg) Object.assign(this.cfg, row.cfg);
+        if (row.store) this._newHires[row.store] = new Set(row.newHires || []);
+    },
+    isNewHire(store, employee) {
+        const s = this._newHires[store];
+        return !!(s && employee && s.has(employee));
+    },
+
+
+    // Line items per hour for a seat. L1, L2, L3 … are all dedicated listers and
+    // all score the same — the number after the L is a slot label, not a rank.
+    rateFor(role, isNewHire) {
+        const r = String(role || '').trim().toUpperCase();
+        if (!_isWorkingRole(r)) return 0;
+        if (r === 'B1') return this.cfg.rate_buyer_1;
+        if (r === 'B2') return this.cfg.rate_buyer_2;
+        return isNewHire ? this.cfg.rate_new_hire : this.cfg.rate_lister;
+    },
+
+    // Saturday is shorter and the busiest buy day, so it produces about half a
+    // weekday's listings. Sunday is closed.
+    //
+    // Parsed through goalDateObj, not `new Date(dateStr)`: a bare ISO date parses
+    // as UTC midnight, i.e. 7pm Central the day before, which would read Saturday
+    // as Friday and hand out full-weekday goals on the busiest day of the week.
     dayFactorFromDate(dateStr) {
-        const dow = new Date(dateStr).getDay(); // 0 Sun .. 6 Sat
-        if (dow === 6) return this.saturdayFactor; // Saturday: shorter + busiest
-        if (dow === 0) return 0;                   // closed Sundays
+        const dow = goalDateObj(dateStr).getDay();   // 0 Sun .. 6 Sat
+        if (dow === 6) return this.cfg.saturday_factor;
+        if (dow === 0) return 0;
         return 1;
     },
-    weightFor(role, staffedCount) {
-        const isLister = /^L\d+$/.test(role);
-        // On 2-person days the lister also covers the floor → reduced weight.
-        // This applies to ANY lister slot. It used to test `role === 'L1'` only, so
-        // a two-person day staffed as L1 + L2 scored them 15 and 25 — the same job
-        // on the same day with different goals.
-        if (isLister && staffedCount <= 2) return this.roleWeight.L1_SHARED;
-        // L3, L4, … (rosters past 4 people) score like a dedicated lister.
-        if (isLister && this.roleWeight[role] == null) return this.roleWeight.L1;
-        return this.roleWeight[role] || 0;
-    },
-    _DAY_FACTOR: { Mon:1, Tue:1, Wed:1, Thu:1, Fri:1, Sat:0.5 },
-    _allocCache: {},
 
-    // targetOverride is the DM's hand-set weekly goal for the store. When it is
-    // supplied the whole per-role distribution scales to THAT number, which is what
-    // makes the daily goals add back up to the goal the DM typed. The ladder is
-    // only the fallback for a store whose target hasn't loaded yet.
-    scale(rosterSize, targetOverride) {
-        const size = this.modelSize(rosterSize);
-        const target = (targetOverride > 0) ? targetOverride : this.weeklyTarget(rosterSize);
-        const wk = this.standardWeek(size);
-        let cap = 0;
-        for (const day in wk) {
-            const roles = wk[day];
-            roles.forEach(r => { cap += this.weightFor(r, roles.length) * this._DAY_FACTOR[day]; });
-        }
-        return cap > 0 ? target / cap : 0;
-    },
-
-    // Exact per-slot goals for a standard week, allocated so they sum to EXACTLY
-    // the DM's number.
+    // The function the widgets call. opts carries { employee, store } so a person
+    // inside the new-hire ramp scores at the new-hire rate; both are optional and
+    // their absence just means "not a new hire".
     //
-    // Rounding each person-day independently doesn't cancel out: a 190 week
-    // distributed to 189, a 200 week to 195. And no single scale factor can fix
-    // it — Mon/Tue/Wed are identical slots that round together, so for a 2-person
-    // roster the reachable totals jump straight from 195 to 205 and 200 is simply
-    // not on the list. Largest-remainder does fix it: floor everything, then hand
-    // the leftover listings out by biggest fractional part. scale() makes the
-    // UNROUNDED slots sum to the target, so this lands on the target exactly.
-    //
-    // The unit of allocation is an EQUIVALENCE CLASS — day factor + role weight +
-    // people staffed — not an individual day-slot. Two people in the same
-    // situation must always get the same number, and keying by day broke that two
-    // ways: Mon's L1 could win a leftover listing that Tue's L1 didn't, and on a
-    // day whose role mix isn't in the model one lister read from this table while
-    // the other fell through to plain rounding (L1 20, L2 19 — the reported bug).
-    // A whole class moves together, so the cost of a +1 is the class's size.
-    allocFor(rosterSize, target) {
-        const cacheKey = rosterSize + '|' + target;
-        if (this._allocCache[cacheKey]) return this._allocCache[cacheKey];
-        const wk = this.standardWeek(this.modelSize(rosterSize));
-        const sc = this.scale(rosterSize, target);
-
-        const classes = {};
-        for (const day in wk) {
-            const roles = wk[day];
-            const factor = this._DAY_FACTOR[day];
-            roles.forEach(r => {
-                const w = this.weightFor(r, roles.length);
-                const k = factor + '|' + w + '|' + roles.length;
-                if (!classes[k]) classes[k] = { k, exact: w * sc * factor, size: 0 };
-                classes[k].size++;
-            });
-        }
-
-        const list = Object.values(classes);
-        let used = 0;
-        list.forEach(c => { c.n = Math.floor(c.exact); used += c.n * c.size; });
-        let left = Math.round(target - used);
-        // Biggest fractional part first, but only take a class if the whole class
-        // fits in what's left — otherwise the week would overshoot the goal.
-        list.slice()
-            .sort((a, b) => (b.exact - Math.floor(b.exact)) - (a.exact - Math.floor(a.exact)))
-            .forEach(c => { if (left >= c.size) { c.n++; left -= c.size; } });
-
-        const map = {};
-        list.forEach(c => { map[c.k] = c.n; });
-        this._allocCache[cacheKey] = map;
-        return map;
+    // rosterSize / staffedCount / targetOverride are GONE from the signature. No
+    // one else's presence changes your number any more.
+    goalFor(role, dateStr, opts) {
+        const o = opts || {};
+        const rate = this.rateFor(role, this.isNewHire(o.store, o.employee));
+        if (!rate) return 0;
+        return Math.round(
+            this.cfg.hours_per_day * rate * this.dayFactorFromDate(dateStr) * this.cfg.goal_factor
+        );
     },
-    // The function the widgets call: goal for one role, on a date, given how
-    // many people are staffed that day (needed for the shared-lister rule).
-    goalFor(role, dateStr, rosterSize, staffedCount, targetOverride) {
-        if (!role || role === '-') return 0;
-        // A standard staffed day reads its number straight off the exact allocation,
-        // so a normal week totals the DM's goal to the listing. The lookup is by
-        // day factor + weight + staffing, so anyone in the same situation — either
-        // lister on the same day, the same role on Mon and Tue — always matches.
-        const target = (targetOverride > 0) ? targetOverride : this.weeklyTarget(rosterSize);
-        const factor = this.dayFactorFromDate(dateStr);
-        const weight = this.weightFor(role, staffedCount);
-        const slot = this.allocFor(rosterSize, target)[factor + '|' + weight + '|' + staffedCount];
-        if (slot != null) return slot;
-        // Anything the model doesn't cover — an unusual role mix, a day with more or
-        // fewer people than the standard week — falls back to the plain calculation.
-        return Math.round(weight * this.scale(rosterSize, targetOverride) * factor);
+
+    // Rough weekly capacity goal for a store of `size` full-timers. ONLY a
+    // placeholder for the moment before the server's real figure arrives — it
+    // assumes everyone is full-time and nobody is ramping, so it will differ from
+    // the real number at any store with a part-timer, a floater or a new hire.
+    // Mirrors capacityFrom() in the store-targets edge function.
+    weeklyTarget(size) {
+        const c = this.cfg;
+        const effDays = (c.open_days - 1) + c.saturday_factor;
+        const eff = size * c.hours_full_time * (effDays / c.open_days);
+        const seat = c.hours_per_day * effDays;
+        const b1 = Math.min(eff, seat);
+        const b2 = Math.min(eff - b1, seat);
+        const l = Math.max(0, eff - b1 - b2);
+        return Math.round(
+            (b1 * c.rate_buyer_1 + b2 * c.rate_buyer_2 + l * c.rate_lister) * c.goal_factor
+        );
     }
     // NOTE: ratchet() lived here — it decided when a store "levelled up" (+10) or
     // got flagged for DM review after two misses. Both it and its server twin are
@@ -9418,15 +11783,13 @@ async function fetchLiveGoalsData() {
     if (goalsTargetStore === 'ALL' || goalsTargetStore === 'CORP') goalsTargetStore = 'OVL'; 
 
     try {
+        // Who in the market is available to this store today. Fetched before the
+        // roster is built, because a floater is one of the names in it.
+        await refreshGoalsFloaters(goalsTargetStore);
+
         // Build roster from auth cache — works for all stores immediately, no extra API call
-        const _authRaw = localStorage.getItem('speeksAuthCache');
-        if (_authRaw) {
-            const _authData = JSON.parse(_authRaw);
-            const _excluded = ['ceo', 'district manager'];
-            const _emps = (_authData.users || [])
-                .filter(u => userInStore(u, goalsTargetStore) && !_excluded.includes((u.role || '').toLowerCase()))
-                .map(u => u.name)
-                .filter(Boolean);
+        if (localStorage.getItem('speeksAuthCache')) {
+            const _emps = _goalsWithFloaters(goalsTargetStore, goalsRosterFor(goalsTargetStore));
             goalsRoster = _emps.length ? _emps : ['No Employees Found'];
         }
 
@@ -9538,7 +11901,7 @@ function renderGoalsScoreboard(viewType = 'daily') {
             <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; align-items: center;">
                 <div style="display: flex; flex-direction: column; gap: 4px;">
                     <span class="goals-roster-name" style="font-size: 13px; font-weight: 800; color: var(--slate-charcoal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${emp}</span>
-                    ${viewType === 'daily' && empRole !== '-' ? `<span class="goals-roster-badge" style="font-size: 10px; background: #e2e8f0; color: var(--slate-charcoal); padding: 3px 6px; border-radius: 4px; display: inline-block; width: fit-content;">${empRole}</span>` : ''}
+                    ${viewType === 'daily' && empRole !== '-' ? `<span class="goals-roster-badge" style="font-size: 10px; background: #e2e8f0; color: var(--slate-charcoal); padding: 3px 6px; border-radius: 4px; display: inline-block; width: fit-content;">${_isOffRole(empRole) ? 'Off' : empRole}</span>` : ''}
                 </div>
                 <div style="display: flex; justify-content: center;">
                     <span class="goals-roster-val target" style="font-size: 14px; text-align: center; font-weight: 900; color: var(--slate-charcoal); width: 36px; display: inline-block;">${empGoal || '-'}</span>
@@ -9643,7 +12006,7 @@ function buildGoalsEditForm() {
                 <button class="toggle-btn ${!editingYesterday ? 'active' : ''}" onclick="toggleEditDate(false)">Today</button>
                 <button class="toggle-btn ${editingYesterday ? 'active' : ''}" onclick="toggleEditDate(true)">Yesterday</button>
             </div>
-            <span class="goals-info-i" data-tip-title="How goals are set" data-tip-desc="Just pick each person's role — the goal fills in automatically.">i</span>
+            <span class="goals-info-i" data-tip-title="How goals are set" data-tip-desc="Just pick each person's role — the goal fills in automatically. Tap Off for anyone who isn't in today; the daily reminder clears once everyone has a role or an Off.">i</span>
         `;
     }
     
@@ -9661,13 +12024,9 @@ function buildGoalsEditForm() {
             return nameMatch && dateMatch;
         }) || { role: '', goal: '', result: '' };
 
-        let rolesHtml = '';
-        availableRoles.forEach(r => {
-            const isActive = targetRecord.role === r ? 'active' : '';
-            // If the goal is locked, we also lock the role from being changed
-            const disableRole = lockGoal ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : '';
-            rolesHtml += `<button type="button" class="role-dot ${isActive}" data-role="${r}" ${disableRole} onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
-        });
+        // If the goal is locked, we also lock the role from being changed
+        const disableRole = lockGoal ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : '';
+        const rolesHtml = goalsRoleDotsHtml(availableRoles, targetRecord.role, emp, disableRole, goalsTargetStore);
 
         // If the goal is locked, we make the input unclickable and gray it out
         const disableGoalAttr = lockGoal ? 'disabled style="background: #f1f5f9; color: #94a3b8; border-color: #e2e8f0; cursor: not-allowed;"' : '';
@@ -9707,21 +12066,20 @@ async function saveGoalsData(silent = false) {
     let payloadEmployees = [];
 
     // How many people are staffed today — needed for the shared-lister rule.
+    // People marked Off are not staffed, so they must not inflate this.
     let staffedCount = 0;
     goalsRoster.forEach((emp, idx) => {
-        const group = document.getElementById(`roles-${idx}`);
-        if (group && group.querySelector('.role-dot.active')) staffedCount++;
+        if (_isWorkingRole(_activeRoleIn(document.getElementById(`roles-${idx}`)))) staffedCount++;
     });
     const rosterSize = effectiveTeamSize(goalsTargetStore);
 
     goalsRoster.forEach((emp, idx) => {
-        const roleGroup = document.getElementById(`roles-${idx}`);
-        const activeBtn = roleGroup?.querySelector('.role-dot.active');
-        const role = _roleOf(activeBtn);
+        const role = _activeRoleIn(document.getElementById(`roles-${idx}`));
 
-        // Goal is derived from the role — never typed. It scales to the weekly
-        // total the DM set for this store on Monday.
-        const goal = role !== '-' ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount, targetFor(goalsTargetStore))) : '';
+        // Goal is derived from the role — never typed. It is this person's shift
+        // hours at their seat's rate; nobody else's presence moves it. Off carries
+        // no goal.
+        const goal = _isWorkingRole(role) ? String(ListingGoalsEngine.goalFor(role, targetDateStr, { employee: emp, store: goalsTargetStore })) : '';
 
         // Results now come from the Weekly KPI (# Listed); preserve any existing value.
         const existing = liveGoalsData.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
@@ -9860,11 +12218,7 @@ function renderManagerGoals() {
     goalsRoster.forEach((emp, idx) => {
         const rec = liveGoalsData.find(r => r.employee === emp && normalizeGoalDate(r.date) === todayStr) || { role: '' };
 
-        let rolesHtml = '';
-        availableRoles.forEach(r => {
-            const isActive = rec.role === r ? 'active' : '';
-            rolesHtml += `<button type="button" class="role-dot ${isActive}" data-role="${r}" onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
-        });
+        const rolesHtml = goalsRoleDotsHtml(availableRoles, rec.role, emp, '', goalsTargetStore);
 
         // Weekly goal = this week's saved daily goals, excluding today (today is added live).
         _priorWeekGoals[idx] = priorWeekGoal(emp, todayStr, startOfWeek);
@@ -9940,14 +12294,11 @@ async function fetchLiveGoalsDataMS() {
     _setMSGoalsChrome(true);
 
     try {
-        const authData = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
-        const excluded = ['ceo', 'district manager'];
         _goalsMS = {};
+        // Floaters first — one of them may be a name in the roster below.
+        await Promise.all(MULTISTORE_MANAGER_STORES.map(s => refreshGoalsFloaters(s)));
         MULTISTORE_MANAGER_STORES.forEach(s => {
-            const emps = (authData.users || [])
-                .filter(u => userInStore(u, s) && !excluded.includes((u.role || '').toLowerCase()))
-                .map(u => u.name)
-                .filter(Boolean);
+            const emps = _goalsWithFloaters(s, goalsRosterFor(s));
             _goalsMS[s] = { roster: emps.length ? emps : ['No Employees Found'], live: [], priorWeek: {}, history: [] };
         });
 
@@ -9997,11 +12348,7 @@ function renderManagerGoalsMS() {
         st.roster.forEach((emp, idx) => {
             const rec = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === todayStr) || { role: '' };
 
-            let rolesHtml = '';
-            availableRoles.forEach(r => {
-                const isActive = rec.role === r ? 'active' : '';
-                rolesHtml += `<button type="button" class="role-dot ${isActive}" data-role="${r}" onclick="selectRole(this, '${emp}', '${r}')">${r}</button>`;
-            });
+            const rolesHtml = goalsRoleDotsHtml(availableRoles, rec.role, emp, '', store);
 
             st.priorWeek[idx] = priorWeekGoal(emp, todayStr, startOfWeek, st.live);
 
@@ -10045,23 +12392,21 @@ function recomputeGoalDisplaysMS() {
 
         let staffedCount = 0;
         st.roster.forEach((emp, idx) => {
-            const group = document.getElementById(`roles-${store}-${idx}`);
-            if (group && group.querySelector('.role-dot.active')) staffedCount++;
+            if (_isWorkingRole(_activeRoleIn(document.getElementById(`roles-${store}-${idx}`)))) staffedCount++;
         });
         const rosterSize = effectiveTeamSize(store);
 
         let todayTotal = 0;
         let weekTotal = 0;
         st.roster.forEach((emp, idx) => {
-            const group = document.getElementById(`roles-${store}-${idx}`);
-            const activeBtn = group?.querySelector('.role-dot.active');
-            const role = _roleOf(activeBtn);
-            const todayGoal = role !== '-' ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount, targetFor(store)) : 0;
+            const role = _activeRoleIn(document.getElementById(`roles-${store}-${idx}`));
+            const todayGoal = _isWorkingRole(role) ? ListingGoalsEngine.goalFor(role, dateStr, { employee: emp, store }) : 0;
 
             const disp = document.getElementById(`goal-display-${store}-${idx}`);
             if (disp) {
-                disp.innerText = role === '-' ? '–' : todayGoal;
-                disp.classList.toggle('goal-auto-set', role !== '-');
+                disp.innerText = _isOffRole(role) ? 'Off' : (role === '-' ? '–' : todayGoal);
+                disp.classList.toggle('goal-auto-set', _isWorkingRole(role));
+                disp.classList.toggle('goal-off-set', _isOffRole(role));
             }
             todayTotal += todayGoal;
 
@@ -10093,17 +12438,14 @@ async function saveGoalsDataMS(silent = false) {
 
         let staffedCount = 0;
         st.roster.forEach((emp, idx) => {
-            const group = document.getElementById(`roles-${store}-${idx}`);
-            if (group && group.querySelector('.role-dot.active')) staffedCount++;
+            if (_isWorkingRole(_activeRoleIn(document.getElementById(`roles-${store}-${idx}`)))) staffedCount++;
         });
         const rosterSize = effectiveTeamSize(store);
 
         const payloadEmployees = [];
         st.roster.forEach((emp, idx) => {
-            const group = document.getElementById(`roles-${store}-${idx}`);
-            const activeBtn = group?.querySelector('.role-dot.active');
-            const role = _roleOf(activeBtn);
-            const goal = role !== '-' ? String(ListingGoalsEngine.goalFor(role, targetDateStr, rosterSize, staffedCount, targetFor(store))) : '';
+            const role = _activeRoleIn(document.getElementById(`roles-${store}-${idx}`));
+            const goal = _isWorkingRole(role) ? String(ListingGoalsEngine.goalFor(role, targetDateStr, { employee: emp, store })) : '';
             const existing = st.live.find(r => r.employee === emp && normalizeGoalDate(r.date) === targetDateStr);
             const result = existing && existing.result != null ? String(existing.result) : '';
             if (role !== '-' || goal !== '' || result !== '') {
@@ -10141,37 +12483,40 @@ async function saveGoalsDataMS(silent = false) {
         const pulse = document.getElementById('goals-pulse-dot');
         if (pulse) pulse.style.display = 'none';
         if (status) { status.textContent = 'Saved ✓'; status.className = 'goals-save-status saved'; }
+        // We muted our own broadcast (see above), so nothing else will tell this
+        // tab the day is now covered — clear the daily reminder ourselves. The
+        // single-store save has always done this; the MSM path never did, so an
+        // MSM who set both stores kept the card until the 10-minute poll.
+        if (typeof checkListingGoalsDailyReminder === 'function') {
+            checkListingGoalsDailyReminder().then(() => {
+                if (typeof renderActionFeed === 'function') renderActionFeed();
+            });
+        }
     } else {
         if (status) { status.textContent = 'Save failed'; status.className = 'goals-save-status error'; }
         else if (!silent) alert("Error saving goals to server.");
     }
 }
 
-// Roster size for a store (from auth cache), used to pick the weekly target.
+// Roster size for a store (from auth cache). Only feeds the placeholder weekly
+// figure shown before the server's capacity number arrives.
+//
+// The Multi-Store Manager is now COUNTED here. Under the old ladder they were
+// excluded and each of their stores got a flat +15 instead, because a person
+// splitting their week across two stores isn't worth a full ±20 to either. The
+// capacity model needs no such fudge: the MSM appears in both stores at
+// part-time hours, which is the literal truth of how the week is split. Mirrors
+// rosterFor() in the store-targets edge function.
 function storeRosterSize(store) {
     try {
         const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
-        // MSM excluded from the per-person ladder — they contribute via the
-        // flat _msmTargetBoost instead (mirrors rosterCount in store-targets fn).
-        const excluded = ['ceo', 'district manager', 'multi-store manager'];
         return (auth.users || []).filter(u =>
-            userInStore(u, store) &&
-            !excluded.includes((u.role || '').toLowerCase())
+            userInStore(u, store) && _goalsIsStaffRole(u.role)
         ).length || 4;
     } catch (e) { return 4; }
 }
-
-// Flat listings boost for stores covered by a Multi-Store Manager (the MSM
-// doesn't count as a full ±20 person on either store's ladder). Mirrors
-// msmBoost() / MSM_TARGET_BOOST in the store-targets edge fn — keep in sync.
-function _msmTargetBoost(store) {
-    if (!MULTISTORE_MANAGER_STORES.includes(String(store || '').toUpperCase())) return 0;
-    try {
-        const auth = JSON.parse(localStorage.getItem('speeksAuthCache') || '{}');
-        const hasMsm = (auth.users || []).some(u => (u.role || '').toLowerCase() === 'multi-store manager');
-        return hasMsm ? 15 : 0;
-    } catch (e) { return 15; }
-}
+// NOTE: _msmTargetBoost() lived here — the flat +15 for a store covered by a
+// Multi-Store Manager. Retired with the ladder; see storeRosterSize above.
 
 // Persisted per-store target + flag + last-4-week totals (server-side ratchet).
 let _storeTargets = {}; // store -> { target, base, flag, weeks:[{week,total}] }
@@ -10179,21 +12524,23 @@ let _storeTargets = {}; // store -> { target, base, flag, weeks:[{week,total}] }
 async function fetchStoreTarget(store) {
     try {
         const r = await fetch(`${STORE_TARGETS_URL}?store=${store}&v=${Date.now()}`).then(x => x.json());
-        if (r && r.store) _storeTargets[r.store] = r;
+        if (r && r.store) { _storeTargets[r.store] = r; ListingGoalsEngine.applyConfig(r); }
         return r;
     } catch (e) { return null; }
 }
 async function fetchAllStoreTargets() {
     try {
         const arr = await fetch(`${STORE_TARGETS_URL}?v=${Date.now()}`).then(x => x.json());
-        if (Array.isArray(arr)) arr.forEach(r => { if (r && r.store) _storeTargets[r.store] = r; });
+        if (Array.isArray(arr)) arr.forEach(r => {
+            if (r && r.store) { _storeTargets[r.store] = r; ListingGoalsEngine.applyConfig(r); }
+        });
         return arr || [];
     } catch (e) { return []; }
 }
 // Current weekly target for a store (server value; falls back to roster-derived base).
 function targetFor(store) {
     return (_storeTargets[store] && _storeTargets[store].target)
-        || (ListingGoalsEngine.weeklyTarget(storeRosterSize(store)) + _msmTargetBoost(store));
+        || ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
 }
 // Effective team size for goal math. Prefers the server's settled size, which
 // honors the timing rule (a subtraction shrinks the goal immediately, an addition
@@ -10217,7 +12564,7 @@ function goalIsSetThisWeek(store) {
 // The ladder's suggestion, used to prefill the DM's input.
 function suggestedTargetFor(store) {
     return (_storeTargets[store] && _storeTargets[store].suggested)
-        || (ListingGoalsEngine.weeklyTarget(storeRosterSize(store)) + _msmTargetBoost(store));
+        || ListingGoalsEngine.weeklyTarget(storeRosterSize(store));
 }
 
 // DM writes a store's weekly listing goal. Replaces dmGoalAction(), which only
@@ -10277,7 +12624,12 @@ function _lgDueBubbleEl() {
 
 function checkListingGoalReminders() {
     const b = document.getElementById('listingGoalAlertBubble');
-    if (!_dmxIsDistrict()) { if (b) b.style.display = 'none'; return; }
+    // DISTRICT MANAGER ONLY — not _dmxIsDistrict(), which is true for the CEO as
+    // well and had him nagged weekly about an admin task that is not his to do.
+    // Setting each store's weekly total is the DM's job; the CEO reads the result
+    // on the District widget. Everything else district-scoped stays shared.
+    const _role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (_role !== 'district manager') { if (b) b.style.display = 'none'; return; }
     if (!_lgDueStarted) { _lgDueStarted = true; setInterval(checkListingGoalReminders, 10 * 60 * 1000); }
 
     // Due 8am Monday, store time — half an hour ahead of the stores' own 8:30am
@@ -10333,23 +12685,35 @@ function _lgDailyStores() {
     return (s && s !== 'ALL' && s !== 'CORP') ? [s] : [];
 }
 
-// Is the day actually covered — a buyer AND a lister assigned?
+// Is the day covered — has every person on the roster been given either a role
+// or an Off for today?
 //
-// This is the bar for clearing the (un-snoozable) reminder, so it has to be
-// something a store can always reach. "Every available role assigned" can't be
-// used: the widget offers more roles than people on a 2- or 3-person roster, and
-// on a 4-person one it would demand full attendance every day — one person off
-// and five stores would be stuck behind an alert they can't dismiss. There is
-// also no way to mark someone as off, so "everyone has a role" is undetectable.
-// A buyer plus a lister is the minimum that makes a real trading day, and it is
-// reachable no matter how short-handed the store is.
-function _lgDayCovered(rows, todayStr) {
+// The old bar was "a buyer AND a lister are assigned". It was picked because
+// there was no way to say someone wasn't in, so demanding a role for everyone
+// would have stranded short-handed stores behind a card they couldn't dismiss.
+// It backfired the other way instead: OVL, LEE and WSP regularly staff buyers
+// only, and on those days the card never cleared no matter how carefully the
+// roles were set — 22 store-days in the month before this was fixed. That is
+// the "it doesn't go away after submitting them" report.
+//
+// The Off chip removes the ambiguity that forced the weak rule, so the bar can
+// now be the honest one: everybody is either working a role or marked off. It
+// is always reachable (Off is uncapped) and it can't be satisfied by accident.
+//
+// Fallback: with no roster (cold auth cache) we can't know who is missing, so
+// fall back to the old buyer+lister test rather than clear a reminder we
+// haven't actually verified.
+function _lgCoverage(rows, todayStr, roster) {
     const todays = (Array.isArray(rows) ? rows : []).filter(r =>
         normalizeGoalDate(r.date) === todayStr && r.role && r.role !== '-');
-    const roles = todays.map(r => String(r.role).trim().toUpperCase());
-    const hasBuyer  = roles.some(r => /^B\d+$/.test(r));
-    const hasLister = roles.some(r => /^L\d+$/.test(r));
-    return hasBuyer && hasLister;
+    if (!Array.isArray(roster) || !roster.length) {
+        const roles = todays.map(r => String(r.role).trim().toUpperCase());
+        const hasBuyer  = roles.some(r => /^B\d+$/.test(r));
+        const hasLister = roles.some(r => /^L\d+$/.test(r));
+        return { covered: hasBuyer && hasLister, missing: [] };
+    }
+    const missing = roster.filter(n => !todays.some(r => _goalsSameName(r.employee, n)));
+    return { covered: missing.length === 0, missing };
 }
 
 function _lgDailyBubbleEl() {
@@ -10389,7 +12753,8 @@ async function checkListingGoalsDailyReminder() {
     for (const s of stores) {
         try {
             const rows = await fetch(`${GOALS_API_URL}?store=${s}&v=${Date.now()}`).then(r => r.json());
-            if (!_lgDayCovered(rows, today)) pending.push(s);
+            const cov = _lgCoverage(rows, today, goalsRosterFor(s));
+            if (!cov.covered) pending.push({ store: s, missing: cov.missing });
         } catch (_) { /* network hiccup — don't invent a reminder */ }
     }
     // This check does its own fetch, so it finishes AFTER the login sweep has
@@ -10405,10 +12770,22 @@ async function checkListingGoalsDailyReminder() {
     if (t) {
         // An MSM covers two stores, so name whichever is outstanding; a single-store
         // manager already knows which store is theirs.
-        const which = (stores.length > 1) ? (' for ' + pending.join(' & ')) : '';
+        const which = (stores.length > 1) ? (' for ' + pending.map(p => p.store).join(' & ')) : '';
+        // Naming who is still unaccounted for is what makes the card actionable —
+        // otherwise a manager who has "set them all" has no way to see the one
+        // person the reminder is still waiting on. First names: the card is narrow.
+        const waiting = pending
+            .map(p => {
+                const who = p.missing.map(n => String(n).trim().split(' ')[0]).join(', ');
+                if (!who) return '';
+                return (stores.length > 1 ? p.store + ': ' : '') + who;
+            })
+            .filter(Boolean)
+            .join(' · ');
         t.dataset.summary = 'Today’s listing goals' + which
-            + ' aren’t set — assign each person working today a role. Needs at least a buyer and a lister.';
-        t.dataset.sig = 'lgd:' + today + ':' + pending.join(',');
+            + ' aren’t finished — give everyone working a role, and tap Off for anyone who isn’t in today.'
+            + (waiting ? ' Still waiting on: ' + waiting + '.' : '');
+        t.dataset.sig = 'lgd:' + today + ':' + pending.map(p => p.store + '|' + p.missing.join(',')).join(';');
         t.textContent = t.dataset.summary;
     }
     el.style.display = 'flex';
@@ -10601,14 +12978,15 @@ async function fetchAndRenderEmployeeGoals() {
             }
         });
 
-        const roleTranslations = { 'B1': 'Buyer 1', 'B2': 'Buyer 2', 'L1': 'Lister 1', 'L2': 'Lister 2' };
+        const roleTranslations = { 'B1': 'Buyer 1', 'B2': 'Buyer 2', 'L1': 'Lister 1', 'L2': 'Lister 2', 'OFF': 'Off Today' };
         const displayRole = roleTranslations[todayRole] || todayRole;
 
         const roleDescriptions = {
             'B1': 'You\'re the lead buyer — first up for every customer who walks through the door. When someone comes in, that\'s your call.',
             'B2': 'You\'re the second buyer in rotation. Hang back and jump in the moment a second customer arrives.',
             'L1': 'Dedicated listing only — no buying, no shipping, no exceptions. Your entire focus today is getting items listed and nothing else.',
-            'L2': 'You\'re a primary lister throughout the day, but also serve as the emergency buyer when 4 or more separate customers are in the store at once.'
+            'L2': 'You\'re a primary lister throughout the day, but also serve as the emergency buyer when 4 or more separate customers are in the store at once.',
+            'OFF': 'You\'re marked off today — no listing goal. Enjoy the day.'
         };
         const roleDesc = roleDescriptions[todayRole] || '';
 
@@ -10636,8 +13014,10 @@ async function fetchAndRenderEmployeeGoals() {
             if (stat && stat.goal > 0) {
                 dailyBreakdownHtml += `<div class="emp-daily-pill pill-goal" title="${dRole ? escapeHtml(dRole) : 'Goal set'}">${dName}: ${stat.goal}</div>`;
             } else if (dIdx <= currentDayIdx) {
-                // A role can be set with a 0 goal (e.g. closed Sundays) — say so rather than "No role set".
-                const t = dRole ? `${escapeHtml(dRole)} — no goal (store closed)` : 'No role set';
+                // A role can be set with a 0 goal (a day off, or a closed Sunday) —
+                // say which rather than the misleading "No role set".
+                const t = _isOffRole(stat && stat.role) ? 'Off — no goal'
+                        : (dRole ? `${escapeHtml(dRole)} — no goal (store closed)` : 'No role set');
                 dailyBreakdownHtml += `<div class="emp-daily-pill pill-null" title="${t}">${dName}</div>`;
             } else {
                 dailyBreakdownHtml += `<div class="emp-daily-pill pill-future">${dName}</div>`;
@@ -10830,7 +13210,7 @@ async function fetchAndRenderEmployeeKPIs() {
             <div class="ekpi-grid">${_storeTiles}</div>
         `;
         // Employee widget "Weekly KPIs updated" dot — fires when a new week's numbers land.
-        _empFlagUpdate('kpis', `${pTxt}|${myData.buyVal}|${myData.conversion}|${myData.listed}|${myData.noDeals}`);
+        _ccFlagUpdate('kpis', `${pTxt}|${myData.buyVal}|${myData.conversion}|${myData.listed}|${myData.noDeals}`);
     } catch (e) {
         container.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to sync KPIs.</div>';
     }
@@ -10863,7 +13243,8 @@ const B2B_STAGES = [
     { key: 'pickup',           label: 'Pickup Sign-Off',  tone: 'warn',   svg: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>' },
     { key: 'pricing_location', label: 'Pricing Location', tone: 'info',   svg: '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>' },
     { key: 'pricing',          label: 'Pricing',          tone: 'info',   svg: '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>' },
-    { key: 'quote',            label: 'Quote',            tone: 'violet', svg: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>' },
+    { key: 'review',           label: 'Awaiting Approval', tone: 'warn',  svg: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>' },
+    { key: 'quote',            label: 'Out For Quote',    tone: 'violet', svg: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>' },
     { key: 'listing_location', label: 'Listing Location', tone: 'warn',   svg: '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>' },
     { key: 'listing',          label: 'Listing',          tone: 'teal',   svg: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>' },
     { key: 'completed',        label: 'Completed',        tone: 'ok',     svg: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>' },
@@ -10883,6 +13264,7 @@ const B2B_ACTIONS = {
     pickup:           { cta: 'Sign Off Pickup', why: 'Pickup needs signing off',        kind: 'pickup'  },
     pricing_location: { cta: 'Assign Pricing',  why: 'Needs somewhere to be priced',    kind: 'assign'  },
     pricing:          { cta: 'Price Items',     why: 'Itemize and price the pickup',    kind: 'pricing' },
+    review:           { cta: 'Review & Send',   why: 'Priced — needs approving and sending', kind: 'quote' },
     quote:            { cta: 'Open Quote',      why: 'Out with the client',             kind: 'quote'   },
     listing_location: { cta: 'Assign Listing',  why: 'Accepted — pick a listing store', kind: 'listloc' },
     listing:          { cta: 'Open Listing',    why: 'List the items for resale',       kind: 'listing' },
@@ -10891,7 +13273,13 @@ const B2B_ACTIONS = {
 const B2B_CORP_ROLES   = ['district manager', 'ceo', 'tom'];
 const B2B_ACCEPT_ROLES = ['ceo', 'tom', 'district manager'];   // may lock a quote
 const B2B_STORE_ROLES  = ['manager', 'owner (manager)', 'owner manager', 'assistant manager'];
-const B2B_CONDITIONS   = ['New', 'Like New', 'Good', 'Fair', 'For Parts'];
+// 'For Parts' was renamed to 'Broken' -- same meaning, plainer word. It is gone
+// from the picker but still recognised by the reason gate and the tone maps
+// below: existing rows were migrated, and a row saved in the window between
+// this shipping and that running would otherwise stop asking for a reason,
+// silently. Same treatment the retired laptop/desktop item types get.
+const B2B_CONDITIONS   = ['New', 'Like New', 'Good', 'Fair', 'Broken'];
+const B2B_COND_LEGACY  = ['For Parts'];
 // Preset client-facing note tags. Joined with '; ' rather than ',' so a typed
 // note containing a comma doesn't get re-parsed into phantom tags on reload.
 const B2B_NOTE_TAGS = ['Cracked', 'LCD Damage', 'No RAM', 'No HDD', 'Non-functional',
@@ -10916,13 +13304,42 @@ const B2B_ITEM_TYPES = [
     { key: 'computer', label: 'Computer' },
     { key: 'other',    label: 'Other'    },
 ];
+// `pick` is a suggestion list, not a constraint -- these render as <datalist>,
+// which is a dropdown you can also type past. A hard <select> was the wrong
+// answer here: the field has to stay open to whatever actually walks in, and
+// the CHECK on the table is a length limit, not an enum.
+//
+// The lists come from what the live data already shows people typing. Storage
+// held "NO STORAGE" and battery health held "BAD" and "Fair" alongside
+// percentages, which is the drift this is meant to stop: one obvious option to
+// click beats three spellings of the same idea.
 const B2B_SPEC_FIELDS = [
-    { key: 'cpu',            label: 'CPU',            req: true,  hint: 'i5-1135G7' },
-    { key: 'ram',            label: 'RAM',            req: true,  hint: '16GB' },
-    { key: 'storage',        label: 'Storage',        req: true,  hint: '512GB NVMe' },
-    { key: 'gpu',            label: 'GPU',            req: false, hint: 'Iris Xe / RTX 3060' },
-    { key: 'battery_health', label: 'Battery health', req: false, hint: '88%' },
+    { key: 'cpu',            label: 'CPU',            req: true,  hint: 'i5-1135G7',
+      pick: ['i3', 'i5', 'i7', 'i9', 'Ryzen 3', 'Ryzen 5', 'Ryzen 7', 'Ryzen 9',
+             'Apple M1', 'Apple M2', 'Apple M3', 'Celeron', 'Pentium', 'Xeon'] },
+    { key: 'ram',            label: 'RAM',            req: true,  hint: '16GB',
+      pick: ['4GB', '8GB', '12GB', '16GB', '24GB', '32GB', '64GB', 'NO RAM'] },
+    { key: 'storage',        label: 'Storage',        req: true,  hint: '512GB NVMe',
+      pick: ['128GB', '256GB', '512GB', '1TB', '2TB', '256GB NVMe', '512GB NVMe',
+             '1TB NVMe', '500GB HDD', '1TB HDD', 'NO STORAGE'] },
+    { key: 'gpu',            label: 'GPU',            req: false, hint: 'Iris Xe / RTX 3060',
+      pick: ['Integrated', 'Iris Xe', 'UHD Graphics', 'Radeon', 'GTX 1650',
+             'RTX 3050', 'RTX 3060', 'RTX 4060', 'Quadro'] },
+    { key: 'battery_health', label: 'Battery health', req: false, hint: '88%',
+      pick: ['Good', 'Fair', 'Poor', 'Bad', 'No battery', 'Not tested'] },
 ];
+// Brands that keep coming back. Same rule: a suggestion, never a restriction.
+const B2B_BRANDS = ['Acer', 'Apple', 'ASUS', 'Dell', 'HP', 'Lenovo', 'LG', 'Microsoft',
+    'MSI', 'Razer', 'Samsung', 'Sony', 'Thinkpad', 'Toshiba'];
+
+// One <datalist> per suggestion set, mounted once per grid rather than once per
+// row: thirty lines would otherwise repeat the same options thirty times.
+function _b2bDatalists() {
+    const list = (id, opts) =>
+        `<datalist id="${id}">${opts.map(o => `<option value="${escapeHtml(o)}"></option>`).join('')}</datalist>`;
+    return list('b2bdl-make', B2B_BRANDS)
+        + B2B_SPEC_FIELDS.filter(f => f.pick).map(f => list(`b2bdl-${f.key}`, f.pick)).join('');
+}
 const B2B_SPECS_FOR = {
     computer: ['cpu', 'ram', 'storage', 'gpu', 'battery_health'],
     laptop:   ['cpu', 'ram', 'storage', 'gpu', 'battery_health'],
@@ -10947,7 +13364,13 @@ const B2B_DISP = Object.fromEntries(B2B_DISPOSITIONS.map(d => [d.key, d]));
 // How the pricing spreadsheet's inline disposition picker labels each option --
 // spelled out in full ("No Residual Value") rather than the terse chip `short`,
 // which stays in use on the card grid where space is tighter.
-const _B2B_DISP_SEL = { purchase: 'Purchase', no_residual: 'No Residual Value', recycle: 'Recycle' };
+// "No Residual" rather than the full "No Residual Value": with Ship and
+// Margin added, the full string was the single widest thing on the sheet and was
+// costing 22px that Qty needed to show a fourth digit. Nothing is lost -- there
+// is only one thing it can mean here, the legend under the sheet spells it out
+// in full, and the client-facing chip and the printed label both still say
+// "No Residual Value".
+const _B2B_DISP_SEL = { purchase: 'Purchase', no_residual: 'No Residual', recycle: 'Recycle' };
 
 // The marker that stands in for a serial when a device has none visible. Counts
 // as an entry, so a line still satisfies "one per unit".
@@ -11029,11 +13452,9 @@ function _b2bActionFor(deal) {
         return _b2bIsDM() ? B2B_ACTIONS.listing : null;
     }
     if (!_b2bIsCorp()) return null;
-    // An unsent quote is waiting on us, not the client. Same stage, different
-    // job -- and the queue card should say which one it is.
-    if (st === 'quote' && _b2bAwaitingApproval(deal)) {
-        return { cta: 'Review & Send', why: 'Priced — needs approving and sending', kind: 'quote' };
-    }
+    // `review` and `quote` used to be one stage with an ad-hoc action literal
+    // spliced in here for the unsent half. They are separate stages now, so both
+    // are ordinary B2B_ACTIONS lookups.
     return B2B_ACTIONS[st] || null;
 }
 
@@ -11049,10 +13470,11 @@ function _b2bClickKind(deal) {
 // Anything needing input (a store, a name, prices) is deliberately absent.
 function _b2bQuickAction(d) {
     if (_b2bIsEmployee()) return null;   // employees never escalate from a card
-    // Only once it has actually gone out. "Mark Accepted" on a quote awaiting
-    // approval would be recording a decision from a client who has never seen
-    // it -- and it would skip the send, leaving no quote on record at all.
-    if (d.stage === 'quote' && !_b2bAwaitingApproval(d) && _b2bCanAccept()) {
+    // `quote` means sent. "Mark Accepted" on a deal still at `review` would be
+    // recording a decision from a client who has never seen it -- and it would
+    // skip the send, leaving no quote on record at all. The server refuses it
+    // too, now that the two states are separate stages.
+    if (d.stage === 'quote' && _b2bCanAccept()) {
         return { label: 'Mark Accepted', call: `b2bQuickAccept('${d.id}',this)` };
     }
     if (d.stage === 'listing' && d.total_units > 0 && _b2bOutstanding(d) === 0) {
@@ -11117,17 +13539,13 @@ function _b2bDaysIn(deal) {
 }
 function _b2bAgeTone(days) { return days >= 7 ? 'crit' : days >= 4 ? 'warn' : 'ok'; }
 
-// Pass the deal where you have one: the quote stage covers two very different
-// situations -- waiting on us, or waiting on the client -- and the send count is
-// what tells them apart.
-function _b2bStageChip(stage, deal) {
+// The `deal` argument used to matter here: the quote stage covered two
+// situations and the send count was what told them apart. They are separate
+// stages now, each with its own label and tone in B2B_STAGES, so the chip is a
+// plain lookup. The parameter stays because a dozen call sites pass it and it
+// costs nothing to keep the signature.
+function _b2bStageChip(stage, _deal) {
     const s = B2B_STAGE[stage] || { label: stage, tone: 'neu' };
-    if (deal && _b2bAwaitingApproval(deal)) {
-        return '<span class="b2b-chip b2b-chip-warn">Awaiting Approval</span>';
-    }
-    if (stage === 'quote' && deal) {
-        return '<span class="b2b-chip b2b-chip-violet">Out For Quote</span>';
-    }
     return `<span class="b2b-chip b2b-chip-${s.tone}">${escapeHtml(s.label)}</span>`;
 }
 function _b2bStoreTag(code) {
@@ -11281,6 +13699,14 @@ async function b2bLoad() {
         _b2bDeals   = deals.map(_b2bShapeDeal);
         _b2bClients = clients;
         b2bRender();
+        // A signing QR was scanned. Consume it before opening, so a refresh
+        // doesn't reopen the pad over a deal that has since been signed off.
+        if (_b2bPendingSign) {
+            const id = _b2bPendingSign;
+            _b2bPendingSign = null;
+            try { history.replaceState(null, '', location.pathname + '#b2b'); } catch (_) {}
+            b2bOpenSign(id);
+        }
     } catch (e) {
         body.innerHTML = `<div class="status-message" style="color:var(--red-alert);">Couldn't load B2B deals. ${escapeHtml(e.message)}</div>`;
     } finally {
@@ -11310,9 +13736,196 @@ function _b2bDealById(id) { return _b2bDeals.find(d => d.id === id) || null; }
 function _b2bRealtimeRefresh() {
     const pane = document.getElementById('ops-pane-b2b');
     if (!pane || !pane.classList.contains('active') || document.hidden) return;
-    if (document.getElementById('b2bDealModal')?.classList.contains('show')) return;
     if (document.getElementById('b2bCreateModal')?.classList.contains('show')) return;
+    // An open deal used to end the function here, so an inbound change was
+    // dropped -- and never picked up afterwards either, because b2bCloseDeal
+    // only re-fetches when YOU edited something. Two people pricing one pallet
+    // were editing divergent snapshots with last-write-wins per field.
+    if (document.getElementById('b2bDealModal')?.classList.contains('show')) {
+        return _b2bSyncOpenDeal(typeof _rtLastPing === 'object' ? _rtLastPing : null);
+    }
     b2bRefresh();
+}
+
+// B2B had no poll at all -- unlike Call Backs right next door -- so a browser
+// whose socket never connected learned nothing, ever: no board updates and no
+// "needs you" bubble. This is the floor under the realtime path, not a
+// replacement for it, which is why a minute is frequent enough.
+let _b2bSyncInterval = null;
+function _startB2bSync() {
+    if (_b2bSyncInterval) return;
+    _b2bSyncInterval = setInterval(() => {
+        const pane = document.getElementById('ops-pane-b2b');
+        if (!pane || !pane.classList.contains('active') || document.hidden) return;
+        if (document.getElementById('b2bCreateModal')?.classList.contains('show')) return;
+        if (document.getElementById('b2bDealModal')?.classList.contains('show')) {
+            // No ping to go on, so no deal filter and no author to skip. That
+            // distinction matters: passing the last ping here would compare the
+            // open deal against whatever happened to move most recently and
+            // usually decide there was nothing to do.
+            return _b2bSyncOpenDeal(null);
+        }
+        b2bRefresh();
+    }, 60000);
+}
+
+// --- live collaborative pricing -------------------------------------------
+// Which cell on the sheet holds each field. The cells carry data-k already (the
+// responsive layout uses it for labels), so the grid needs no extra markup for
+// this -- and a row can be patched value by value instead of being rebuilt,
+// which is what makes it possible to update someone's screen while they type.
+const _B2B_SYNC_CELL = {
+    item_type: 'Type', make: 'Brand', model: 'Model', condition: 'Condition',
+    cpu: 'CPU', ram: 'RAM', storage: 'Storage',
+    quantity: 'Qty', value: 'Value', offer: 'Offer',
+    shipping_cost: 'Ship', disposition: 'Handling',
+};
+const _B2B_SYNC_FIELDS = Object.keys(_B2B_SYNC_CELL);
+const _B2B_CELL_FIELD = Object.fromEntries(
+    Object.entries(_B2B_SYNC_CELL).map(([field, k]) => [k, field]));
+
+function _b2bCellFor(itemId, field) {
+    const row = document.getElementById(`b2bPline-${itemId}`);
+    if (!row) return null;
+    const k = _B2B_SYNC_CELL[field];
+    return k ? row.querySelector(`.b2b-pcell[data-k="${k}"]`) : null;
+}
+
+// Remember the caret well enough to put it back after a full rebuild: which
+// line, which field, and where in the text. Losing your place mid-price is
+// worse than the stale data this is fixing.
+function _b2bFocusSpot() {
+    const el = document.activeElement;
+    const cell = el && el.closest && el.closest('.b2b-pcell');
+    const row = cell && cell.closest('.b2b-pline');
+    if (!row || !row.id.startsWith('b2bPline-')) return null;
+    const k = cell.getAttribute('data-k');
+    return {
+        id: row.id.slice('b2bPline-'.length),
+        k,
+        // The half-typed text itself, so a rebuild can hand it back. Without
+        // this the caret survives but the words under it do not.
+        field: _B2B_CELL_FIELD[k] || null,
+        value: el.value,
+        start: el.selectionStart, end: el.selectionEnd,
+    };
+}
+function _b2bRestoreFocus(spot) {
+    if (!spot) return;
+    const row = document.getElementById(`b2bPline-${spot.id}`);
+    const el = row && row.querySelector(`.b2b-pcell[data-k="${spot.k}"] input, .b2b-pcell[data-k="${spot.k}"] select`);
+    if (!el) return;
+    el.focus();
+    try { if (spot.start != null) el.setSelectionRange(spot.start, spot.end); } catch (_) { /* selects have no range */ }
+}
+
+function _b2bFlash(cell) {
+    if (!cell) return;
+    cell.classList.remove('b2b-synced');
+    void cell.offsetWidth;          // restart the animation on a repeat change
+    cell.classList.add('b2b-synced');
+    setTimeout(() => cell.classList.remove('b2b-synced'), 1600);
+}
+
+// Pull the line items again and fold them into the open sheet.
+//
+// `ping` is the realtime payload when one prompted this, and null when the
+// safety poll did. Only a real ping carries a deal id and an author, so only a
+// real ping gets to skip the work.
+async function _b2bSyncOpenDeal(ping) {
+    const deal = _b2bModalDeal;
+    if (!deal) return;
+
+    // The pickup screen has no grid, but it is the one waiting on a phone: the
+    // QR is on screen precisely so someone can sign somewhere else. Reopen it so
+    // the signature appears without anybody refreshing.
+    if (deal.stage === 'pickup' && document.getElementById('b2bSignQR')) {
+        if (ping && ping.deal && ping.deal !== deal.id) return;
+        await b2bRefresh();
+        const fresh = _b2bDealById(deal.id);
+        if (fresh && (fresh.signature_path || fresh.signature_skipped_by)) b2bOpenDeal('pickup', deal.id);
+        return;
+    }
+
+    const grid = document.getElementById('b2bItemGrid');
+    if (!grid) return;                  // not a line-item screen; nothing to sync
+
+    ping = ping || {};
+    // A write to some other deal costs nothing, and our own echo is ignored
+    // outright -- the edge fn broadcasts to every subscriber, sender included.
+    if (ping.deal && ping.deal !== deal.id) return;
+    if (ping.by && ping.by === _b2bUser()) return;
+
+    let fresh;
+    try { fresh = await _b2bGet(`deal_id=${encodeURIComponent(deal.id)}`); }
+    catch (_) { return; }               // transient; the poll will come round again
+
+    const who = ping.by ? ` by ${ping.by}` : '';
+    const byId = new Map(fresh.map(i => [i.id, i]));
+    const sameLines = fresh.length === _b2bModalItems.length
+        && _b2bModalItems.every(i => byId.has(i.id));
+
+    if (!sameLines) {
+        // A line arrived or went. There is no patching that -- rebuild, but put
+        // the caret AND the half-typed text back. Taking the server's copy
+        // wholesale would otherwise discard an edit that has not been saved
+        // yet, which is the very thing the value-patch path below protects.
+        const spot = _b2bFocusSpot();
+        _b2bModalItems = fresh;
+        if (spot && spot.field) {
+            const mine = _b2bModalItems.find(i => i.id === spot.id);
+            if (mine) mine[spot.field] = spot.value;
+        }
+        _b2bRepaintItems();
+        _b2bRestoreFocus(spot);
+        return _b2bSay(`Line items updated${who}.`);
+    }
+
+    // Same lines, but possibly in a different order -- someone dragged the sheet
+    // while we had it open. That is not a value change, so the patch loop below
+    // would never notice it, and our copy would stay in the old order until the
+    // deal was reopened. Reordering is a rebuild, same as a line arriving.
+    const freshIds = fresh.map(i => i.id).join(',');
+    if (_b2bModalItems.map(i => i.id).join(',') !== freshIds) {
+        const spot = _b2bFocusSpot();
+        const byLocal = new Map(_b2bModalItems.map(i => [i.id, i]));
+        // Keep OUR objects, in THEIR order: a half-typed field is unsaved and
+        // must survive a reorder someone else made.
+        _b2bModalItems = fresh.map(r => Object.assign(byLocal.get(r.id) || r, { sort_order: r.sort_order }));
+        _b2bRepaintItems();
+        _b2bRestoreFocus(spot);
+        _b2bPaintQuoteDoc();
+        return _b2bSay(`Lines were reordered${who}.`);
+    }
+
+    const active = document.activeElement;
+    let changed = 0;
+    _b2bModalItems.forEach(local => {
+        const remote = byId.get(local.id);
+        if (!remote) return;
+        _B2B_SYNC_FIELDS.forEach(f => {
+            if (String(remote[f] ?? '') === String(local[f] ?? '')) return;
+            const cell = _b2bCellFor(local.id, f);
+            const input = cell && cell.querySelector('input, select');
+            // The one field they are typing in is left alone -- theirs is the
+            // newer edit, and it is about to be saved over this anyway.
+            if (input && input === active) return;
+            local[f] = remote[f];
+            if (input) input.value = remote[f] ?? '';
+            _b2bFlash(cell);
+            changed++;
+        });
+        // Fields with no cell of their own still have to track, or the next save
+        // from this browser would post them back stale.
+        ['serials', 'staff_notes', 'client_notes', 'wipe_required', 'wipe_fee',
+         'gpu', 'battery_health', 'listed_qty', 'recycled_qty', 'wiped_qty'].forEach(f => {
+            if (String(remote[f] ?? '') !== String(local[f] ?? '')) { local[f] = remote[f]; changed++; }
+        });
+    });
+
+    if (!changed) return;
+    _b2bPaintTotals();
+    _b2bSay(`${changed} change${changed === 1 ? '' : 's'} came in${who}.`);
 }
 
 // --- render controller ----------------------------------------------------
@@ -12176,14 +14789,22 @@ function _b2bRenderOverview(scoped) {
             <td class="r"><span class="b2b-age b2b-age-${_b2bAgeTone(_b2bDaysIn(d))}">${_b2bDaysIn(d)}d</span></td>
         </tr>`).join('');
 
-    // Quotes out with the client, oldest first.
-    const quotes = live.filter(d => d.stage === 'quote').sort((a, b) => _b2bDaysIn(b) - _b2bDaysIn(a));
+    // Two stages, oldest first. The tile used to add both together and call the
+    // total "awaiting a decision", which claimed the client was sitting on money
+    // nobody had sent them -- while the table below said "not sent" about those
+    // same deals. They are separate stages now, so the split is just a filter.
+    const byAge = (a, b) => _b2bDaysIn(b) - _b2bDaysIn(a);
+    const toApprove  = live.filter(d => d.stage === 'review').sort(byAge);
+    const withClient = live.filter(d => d.stage === 'quote').sort(byAge);
+    const quotes = [...toApprove, ...withClient];
     const quoteRows = quotes.map(d => `
         <tr onclick="b2bOpenDeal('${_b2bClickKind(d)}','${d.id}')" class="b2b-clickrow">
             <td><span class="b2b-mono">${escapeHtml(d.ref)}</span></td>
             <td><b>${escapeHtml(d.client?.company || '')}</b></td>
             <td>${escapeHtml(d.client?.contact_email || '—')}</td>
-            <td class="c">${d.quote_send_count ? `sent ${d.quote_send_count}×` : '<span class="b2b-age b2b-age-warn">not sent</span>'}</td>
+            <td class="c">${d.stage === 'review'
+                ? '<span class="b2b-age b2b-age-warn">to approve</span>'
+                : `sent ${d.quote_send_count || 1}×`}</td>
             <td class="r b">${_b2bMoney(_b2bNetOffer(d))}</td>
         </tr>`).join('');
 
@@ -12200,19 +14821,31 @@ function _b2bRenderOverview(scoped) {
             <td class="r b">${_b2bMoney(_b2bNetCost(d))}</td>
         </tr>`).join('');
 
+    // Certified wipes across everything in flight. A wipe promised at pricing is
+    // a debt from that moment: we have discounted the client for it, and the
+    // units cannot be listed until someone certifies it.
+    const wipesSold = live.reduce((n, d) => n + (Number(d.wipe_units) || 0), 0);
+    const wipesDone = live.reduce((n, d) => n + (Number(d.wiped_units) || 0), 0);
+    const wipesOwed = Math.max(0, wipesSold - wipesDone);
+    const wipeFees  = live.reduce((s, d) => s + (Number(d.total_wipe_fee) || 0), 0);
+
     const tiles = `
         <div class="b2b-tiles">
             <div class="b2b-tile"><span class="b2b-tile-k">In Flight</span><span class="b2b-tile-v">${live.length}</span><span class="b2b-tile-c">deals moving</span></div>
-            <div class="b2b-tile"><span class="b2b-tile-k">Out For Quote</span><span class="b2b-tile-v">${_b2bMoney(quotes.reduce((s, d) => s + _b2bNetOffer(d), 0))}</span><span class="b2b-tile-c">${quotes.length} awaiting a decision</span></div>
+            <div class="b2b-tile"><span class="b2b-tile-k">Out For Quote</span><span class="b2b-tile-v">${_b2bMoney(withClient.reduce((s, d) => s + _b2bNetOffer(d), 0))}</span><span class="b2b-tile-c">${withClient.length} awaiting a client decision${toApprove.length ? ` · ${toApprove.length} still to approve` : ''}</span></div>
             <div class="b2b-tile"><span class="b2b-tile-k">Unlisted Stock</span><span class="b2b-tile-v">${_b2bMoney(unlistedTotal)}</span><span class="b2b-tile-c">${unlisted.reduce((n, d) => n + _b2bOutstanding(d), 0)} units to list</span></div>
             <div class="b2b-tile ${stalled.length ? 'warn' : ''}"><span class="b2b-tile-k">Stalled</span><span class="b2b-tile-v">${stalled.length}</span><span class="b2b-tile-c">no movement in 7+ days</span></div>
+            <!-- Certified wipes, which we charge for and therefore owe. Counted
+                 across everything in flight, since a wipe promised at pricing is
+                 outstanding until someone certifies it during listing. -->
+            <div class="b2b-tile ${wipesOwed ? 'warn' : ''}"><span class="b2b-tile-k">Certified Wipes</span><span class="b2b-tile-v">${wipesDone}<span class="b2b-tile-of"> / ${wipesSold}</span></span><span class="b2b-tile-c">${wipesOwed ? `${wipesOwed} still to certify` : 'all certified'} · ${_b2bMoney(wipeFees)} discounted</span></div>
         </div>`;
 
     return tiles
         + card('Stalled Deals', 'No movement in a week or more',
                '<th>Ref</th><th>Client</th><th>Stage</th><th>Store</th><th class="r">In stage</th>',
                stalledRows, 'Everything is moving')
-        + card('Out For Quote', 'Priced and waiting on the client',
+        + card('Open Quotes', 'Waiting on approval, or out with the client',
                '<th>Ref</th><th>Client</th><th>Email</th><th class="c">Sent</th><th class="r">Offer</th>',
                quoteRows, 'No quotes are open right now')
         + card('Bought But Not Listed', 'Inventory paid for and not yet earning',
@@ -12338,7 +14971,7 @@ function _b2bShowDeal(cfg) {
     // SKU label print becomes available once the pickup is dropped at its
     // assigned pricing location — i.e. from the pricing stage onward.
     const pb = document.getElementById('b2bDealPrintBtn');
-    if (pb) pb.style.display = ['pricing', 'quote', 'listing_location', 'listing', 'completed'].includes(cfg.stage) ? '' : 'none';
+    if (pb) pb.style.display = ['pricing', 'review', 'quote', 'listing_location', 'listing', 'completed'].includes(cfg.stage) ? '' : 'none';
     const modal = document.getElementById('b2bDealModal');
     modal.classList.toggle('b2b-modal-wide', !!cfg.wide);
     // Pricing runs near-full-screen so a long pickup reads as one dense sheet.
@@ -12382,7 +15015,14 @@ function _b2bSummary(deal) {
         ['Reference', `<span class="b2b-mono">${escapeHtml(deal.ref)}</span>`],
     ];
     if (_b2bIsCorp()) {
-        rows.push(['Contact', escapeHtml([deal.client?.contact, deal.client?.contact_email].filter(Boolean).join(' · ') || '—')]);
+        // One fact per cell. The phone was already being fetched and never shown,
+        // so anyone needing to ring the client went back out to the Clients list.
+        // Adding it also forced the email out of the Contact cell: name and email
+        // were joined with a "·", and in a cell this narrow that wrapped and left
+        // a separator dangling at the end of the line.
+        rows.push(['Contact', escapeHtml(deal.client?.contact || '—')]);
+        if (deal.client?.contact_email) rows.push(['Email', escapeHtml(deal.client.contact_email)]);
+        if (deal.client?.contact_phone) rows.push(['Phone', escapeHtml(deal.client.contact_phone)]);
     }
     rows.push(
         ['Picked up', deal.pickup_date ? _b2bDate(deal.pickup_date) : 'Not yet'],
@@ -12425,11 +15065,20 @@ function _b2bStagePickup(deal) {
                     <input id="b2bPuDate" type="date" class="form-input-lg" value="${today}">
                 </div>
             </div>
+            ${_b2bSignBlock(deal)}
             <label class="b2b-ack">
                 <input type="checkbox" id="b2bPuAck" onchange="document.getElementById('b2bPuGo').disabled=!this.checked">
                 <span>The client confirms the items above were collected by SPEEKS Technology on the date shown.</span>
             </label>`,
+        after: () => {
+            // Only worth drawing when there is nothing signed yet.
+            if (!deal.signature_path && !deal.signature_skipped_by) {
+                _b2bPaintQR(document.getElementById('b2bSignQR'), _b2bSignUrl(deal.id));
+            }
+        },
         footer: `
+            <button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;"
+                onclick="b2bPrintHoldingLabel('${deal.id}')">Print Holding Label</button>
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
             <button class="b2b-btn b2b-btn-primary" id="b2bPuGo" disabled onclick="b2bSignPickup('${deal.id}',this)">Sign &amp; Mark Picked Up</button>`,
     });
@@ -12474,6 +15123,8 @@ function _b2bStageAssign(deal) {
                 <div><label class="form-label-caps">Received By</label><input id="b2bAsRecv" class="form-input-lg" placeholder="Who took it in at the location"></div>
             </div>`,
         footer: `
+            <button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;"
+                onclick="b2bPrintHoldingLabel('${deal.id}')">Print Holding Label</button>
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Cancel</button>
             <button class="b2b-btn b2b-btn-primary" id="b2bAsGo" disabled onclick="b2bAssignPricing('${deal.id}',this)">Send To Pricing</button>`,
     });
@@ -12506,10 +15157,11 @@ function _b2bTagsOf(str)  { return String(str || '').split(';').map(s => s.trim(
 function _b2bPresetNotes(it) { return _b2bTagsOf(it.client_notes).filter(t => B2B_NOTE_TAGS.includes(t)); }
 function _b2bCustomNotes(it) { return _b2bTagsOf(it.client_notes).filter(t => !B2B_NOTE_TAGS.includes(t)).join('; '); }
 
-// Anything downgraded to Fair or For Parts has to say why: that note prints on
+// Anything downgraded to Fair or Broken has to say why: that note prints on
 // the quote and is the only thing standing between a low offer and an argument
-// with the client later.
-const B2B_REASON_CONDITIONS = ['Fair', 'For Parts'];
+// with the client later. Keeps the legacy 'For Parts' spelling so the gate can
+// never quietly stop firing on an older row -- see B2B_COND_LEGACY.
+const B2B_REASON_CONDITIONS = ['Fair', 'Broken', ...B2B_COND_LEGACY];
 function _b2bNeedsReason(it)   { return B2B_REASON_CONDITIONS.includes(it.condition); }
 function _b2bMissingReason(it) { return _b2bNeedsReason(it) && !String(it.client_notes || '').trim(); }
 // Deliberately no `unreasoned()` helper: a second, weaker gate alongside
@@ -12528,7 +15180,8 @@ function _b2bLabelBtn(it, cls) {
     const n = Number(it.quantity) || 1;
     return `<button class="b2b-linelabel ${cls || ''}" onclick="event.stopPropagation();b2bPrintLabels('${_b2bModalDeal?.id}','${it.id}')"
         aria-label="Print labels for ${escapeHtml(it.sku)}"
-        data-tip="Print ${n} label${n === 1 ? '' : 's'} for ${escapeHtml(it.sku)}">${_b2bIco(B2B_ICO_BARCODE)}</button>`;
+        data-tip="${n === 1 ? `Print the label for ${escapeHtml(it.sku)}`
+                            : `Print labels for ${escapeHtml(it.sku)} — it asks how many`}">${_b2bIco(B2B_ICO_BARCODE)}</button>`;
 }
 function _b2bLocalItem(id){ return _b2bModalItems.find(i => i.id === id); }
 
@@ -12540,6 +15193,502 @@ function _b2bLocalItem(id){ return _b2bModalItems.find(i => i.id === id); }
 const _b2bDispOf  = (it) => it.disposition || 'purchase';
 const _b2bIsBuy   = (it) => _b2bDispOf(it) === 'purchase';
 const _b2bIsScrap = (it) => _b2bDispOf(it) === 'recycle';
+const _b2bIsNrv   = (it) => _b2bDispOf(it) === 'no_residual';
+
+// What the Total column shows for one line, in one place because three screens
+// render it and a fourth repaints it -- the last time money was expressed
+// independently in several spots, half of them ended up showing gross where the
+// rest showed net.
+//
+// A purchase line shows what we pay. Recycle is worth nothing to anyone, so it
+// stays a dash. No-residual costs us nothing but still carries resale value,
+// and dashing that out hid a real number: six monitors worth $270 to us read as
+// an empty row, which is what prompted the report. It renders in the same blue
+// as the row's bar and the client-facing chip so it cannot be misread as money
+// owed to the client.
+function _b2bLineTotal(it) {
+    const q = Number(it.quantity) || 1;
+    if (_b2bIsBuy(it)) {
+        return { cls: 'b2b-f-calc', text: _b2bMoney((Number(it.offer) || 0) * q, 2),
+                 tip: 'What we pay the client for this line' };
+    }
+    if (_b2bIsScrap(it)) {
+        return { cls: 'b2b-f-off', text: '—', tip: 'Scrapped — no value to us or to the client' };
+    }
+    const resale = (Number(it.value) || 0) * q;
+    return { cls: 'b2b-f-resale', text: resale ? _b2bMoney(resale, 2) : '—',
+             tip: 'Resale value to us — the client is paid nothing for this line' };
+}
+function _b2bLineTotalHtml(it) {
+    const t = _b2bLineTotal(it);
+    return `<span class="${t.cls}" id="b2bLn-${it.id}" title="${escapeHtml(t.tip)}">${t.text}</span>`;
+}
+
+// Margin on one line: what we keep of its resale value after paying for it.
+// The deal-level figure was already on the totals bar, but that averages a good
+// buy and a bad one into something that looks fine -- and the decision being
+// made on this screen is per line, not per pallet.
+//
+// A no-residual line is 100% by construction: it has resale value and we pay
+// nothing for it. Recycle has neither, so there is no ratio to show.
+//
+// Deliberately no "good / bad" thresholds. What counts as an acceptable margin
+// is a buying decision this code has no business asserting -- and there is a
+// Margin Guide tool that owns that question. The one thing flagged is a NEGATIVE
+// margin, which isn't a judgement call: it means the offer exceeds what the
+// thing is worth to us.
+function _b2bLineMargin(it) {
+    const q = Number(it.quantity) || 1;
+    const value = _b2bIsScrap(it) ? 0 : (Number(it.value) || 0) * q;
+    const offer = _b2bIsBuy(it) ? (Number(it.offer) || 0) * q : 0;
+    // Same definition as the deal-level figure in _b2bItemTotals: what the line
+    // costs us, which is the offer plus the freight. If these two used different
+    // definitions the sheet would disagree with its own totals bar.
+    const ship = (Number(it.shipping_cost) || 0) * q;
+    const outlay = offer + ship;
+    if (value <= 0) {
+        return { cls: 'b2b-f-off', text: '—',
+                 tip: _b2bIsScrap(it) ? 'Recycled — no resale value to measure against'
+                                      : 'Set a unit value to see the margin' };
+    }
+    const pct = Math.round(((value - outlay) / value) * 100);
+    const shipNote = ship ? ` (incl. ${_b2bMoney(ship, 2)} shipping)` : '';
+    return {
+        cls: pct < 0 ? 'b2b-f-mgn bad' : 'b2b-f-mgn',
+        text: `${pct}%`,
+        tip: pct < 0
+            ? `This line costs us ${_b2bMoney(outlay, 2)}${shipNote} and is worth ${_b2bMoney(value, 2)}`
+            : `${_b2bMoney(value - outlay, 2)} of ${_b2bMoney(value, 2)} resale value${shipNote}`,
+    };
+}
+function _b2bLineMarginHtml(it) {
+    const m = _b2bLineMargin(it);
+    return `<span class="${m.cls}" id="b2bMg-${it.id}" title="${escapeHtml(m.tip)}">${m.text}</span>`;
+}
+
+// A one-line preview of whatever was written about this line.
+//
+// Client notes print on the client's quote; staff notes never leave the
+// building. Both sit behind the ⋯ sheet, so scanning a thirty-line pallet for
+// "which lines did the client say something about" meant opening thirty
+// sheets -- which is what was reported. An earlier version of this always
+// rendered, including a "No details yet" placeholder, and that is what made it
+// cost height on every row; this one returns nothing when there is nothing to
+// say, so only the handful of annotated lines pay for it.
+//
+// Client leads, because that is the half that reaches the client.
+//
+// Named apart from _b2bNoteHint, which already exists and returns a plain-text
+// summary for the card grid's tooltip. Two `function` declarations of one name
+// do not collide loudly -- the later simply wins -- so this would have rendered
+// that tooltip string, unwrapped, into the row.
+function _b2bNoteLine(it) {
+    const client = String(it.client_notes || '').trim();
+    const staff  = String(it.staff_notes || '').trim();
+    if (!client && !staff) return '';
+    const part = (cls, label, text) =>
+        `<span class="${cls}" title="${escapeHtml(label + ': ' + text)}"><b>${label}</b>${escapeHtml(text)}</span>`;
+    return `<div class="b2b-pnote-hint">`
+        + (client ? part('b2b-nh-c', 'Client', client) : '')
+        + (staff  ? part('b2b-nh-s', 'Staff',  staff)  : '')
+        + `</div>`;
+}
+
+// What the pickup screen shows for the signature: the QR to collect one, the
+// signature once collected, or the bypass once someone has recorded why there
+// isn't going to be one.
+function _b2bSignBlock(deal) {
+    if (deal.signature_path) {
+        const who = [deal.signature_by, deal.signature_at ? _b2bDate(deal.signature_at) : '']
+            .filter(Boolean).join(' · ');
+        return `
+            <div class="b2b-note ok b2b-signed">
+                <span class="b2b-note-k">Signed by the client${who ? ` — captured by ${escapeHtml(who)}` : ''}</span>
+                <img class="b2b-sig-img" alt="Client signature"
+                    src="${B2B_URL}?signature=${encodeURIComponent(deal.id)}&v=${encodeURIComponent(deal.signature_at || '')}">
+                <button class="b2b-mini" onclick="b2bRetakeSign('${deal.id}')">Take it again</button>
+            </div>`;
+    }
+    if (deal.signature_skipped_by) {
+        return `
+            <div class="b2b-note warn">
+                <span class="b2b-note-k">Signed off without a signature — ${escapeHtml(deal.signature_skipped_by)}</span>
+                ${escapeHtml(deal.signature_skipped_reason || '')}
+            </div>`;
+    }
+    return `
+        <div class="b2b-signq">
+            <div class="b2b-signq-qr" id="b2bSignQR"><span class="b2b-signq-wait">Drawing code…</span></div>
+            <div class="b2b-signq-txt">
+                <b>Have the client sign</b>
+                <p>Scan this with your phone, then hand it to them. It opens this
+                   same deal — you'll sign in with your PIN first if the phone hasn't already.</p>
+                ${_b2bCanAccept() ? `<button class="b2b-mini" onclick="b2bSkipSign('${deal.id}')">Continue without a signature</button>`
+                                  : '<span class="b2b-signq-note">A CEO, TOM or DM can sign off without one.</span>'}
+            </div>
+        </div>`;
+}
+
+// Reopening the pad on the desktop is not useful -- it is the phone that has the
+// client in front of it -- so this just clears the way for another scan.
+function b2bRetakeSign(id) {
+    if (!confirm('Take the signature again?\n\nThe QR code comes back so the client can sign on a phone. '
+        + 'The signature already on file stays until a new one replaces it.')) return;
+    const deal = _b2bDealById(id);
+    if (deal) { deal.signature_path = null; b2bOpenDeal('pickup', id); }
+}
+
+async function b2bSkipSign(id) {
+    if (!_b2bCanAccept()) return;
+    const reason = prompt('Sign off this pickup WITHOUT a client signature.\n\n'
+        + 'Say why — this is recorded against your name and is what the signature '
+        + 'would otherwise have proved.');
+    if (reason === null) return;
+    if (!reason.trim()) return alert('A reason is required to skip the signature.');
+    try {
+        await _b2bSend({ action: 'skip_signature', id, reason: reason.trim() });
+        await b2bRefresh();
+        b2bOpenDeal('pickup', id);
+    } catch (e) {
+        alert(`Couldn't record that: ${e.message}`);
+    }
+}
+
+// --- signature capture -----------------------------------------------------
+// The pickup screen shows a QR. A staff member scans it with their own phone,
+// which opens THIS app at #b2b-sign-<dealId>, signs in with their PIN if the
+// phone hasn't already, and hands the phone to the client to sign.
+//
+// Nothing here is public. The phone is an ordinary signed-in session, which is
+// why there is no token to mint, no anonymous write path, and no second shell
+// to keep in step with this one.
+
+// A deal id waiting for the pane to finish loading. The deep link arrives before
+// _b2bDeals exists, so the hash is parked here and b2bLoad() picks it up.
+let _b2bPendingSign = null;
+
+// qrcode-generator from CDN, the same way _rtEnsureClient loads supabase-js and
+// the XLSX loader loads its own. Hand-rolling this is not the same proposition
+// as the Code 128 encoder next door -- QR needs Reed-Solomon and mask selection,
+// and getting either subtly wrong produces a code that scans on your phone and
+// not on someone else's.
+let _b2bQrLoading = null;
+function _b2bEnsureQR() {
+    if (typeof window.qrcode === 'function') return Promise.resolve(window.qrcode);
+    if (_b2bQrLoading) return _b2bQrLoading;
+    const srcs = [
+        'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js',
+        'https://unpkg.com/qrcode-generator@1.4.4/qrcode.js',
+    ];
+    _b2bQrLoading = new Promise((resolve, reject) => {
+        const tryNext = (i) => {
+            if (i >= srcs.length) { _b2bQrLoading = null; return reject(new Error('QR library unavailable')); }
+            const s = document.createElement('script');
+            s.src = srcs[i];
+            s.onload = () => typeof window.qrcode === 'function' ? resolve(window.qrcode) : tryNext(i + 1);
+            s.onerror = () => tryNext(i + 1);
+            document.head.appendChild(s);
+        };
+        tryNext(0);
+    });
+    return _b2bQrLoading;
+}
+
+function _b2bSignUrl(dealId) {
+    const base = location.href.replace(/#.*$/, '').replace(/[^/]*$/, '');
+    return `${base}operations.html#b2b-sign-${dealId}`;
+}
+
+// Draws into whatever element is passed, so the caller owns the layout.
+async function _b2bPaintQR(el, text) {
+    if (!el) return;
+    try {
+        const qrcode = await _b2bEnsureQR();
+        // Type 0 = pick the smallest version that fits; M correction survives a
+        // phone camera at an angle without bloating the code.
+        const qr = qrcode(0, 'M');
+        qr.addData(text);
+        qr.make();
+        el.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 8, scalable: true });
+    } catch (_) {
+        // The link is the fallback, and it is a real one: it can be typed, or
+        // sent to the phone another way.
+        el.innerHTML = `<div class="b2b-qr-fail">Couldn't draw the QR code.<br>
+            <span class="b2b-mono">${escapeHtml(text)}</span></div>`;
+    }
+}
+
+// --- the phone's side ------------------------------------------------------
+
+let _b2bSigCtx = null, _b2bSigDrawn = false;
+
+function b2bOpenSign(dealId) {
+    const deal = _b2bDealById(dealId);
+    if (!deal) return alert("That deal is no longer open for signing.");
+    if (deal.stage !== 'pickup') {
+        return alert(`${deal.ref} has already been signed off.`);
+    }
+    _b2bModalDeal = deal;
+    _b2bSigDrawn = false;
+    _b2bShowDeal({
+        stage: 'pickup',
+        eyebrow: deal.ref,
+        title: 'Client Signature',
+        sub: 'Hand the phone to the client.',
+        wide: true,
+        body: `
+            <div class="b2b-sign-who">
+                <b>${escapeHtml(deal.client?.company || '')}</b>
+                ${deal.pickup_date ? `<span>Collected ${escapeHtml(_b2bDate(deal.pickup_date))}</span>` : ''}
+            </div>
+            ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Items collected</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
+            <!-- Word for word the acknowledgement the pickup screen already
+                 asks staff to tick. The client is signing that sentence, so it
+                 has to be the sentence, not a paraphrase of it. -->
+            <p class="b2b-sign-ack">The client confirms the items above were collected by
+                SPEEKS Technology on the date shown.</p>
+            <div class="b2b-sign-pad">
+                <canvas id="b2bSigPad" width="900" height="320"></canvas>
+                <span class="b2b-sign-hint" id="b2bSigHint">Sign here</span>
+            </div>
+            <div class="b2b-sign-name">${escapeHtml(deal.signed_by || 'Signature')}</div>`,
+        footer: `
+            <span class="b2b-msg" id="b2bDealMsg"></span>
+            <button class="kpi-cancel-btn" onclick="b2bClearSign()">Clear</button>
+            <button class="b2b-btn b2b-btn-primary" id="b2bSigSave"
+                onclick="b2bSaveSign('${deal.id}',this)">Save Signature</button>`,
+        after: _b2bInitSigPad,
+    });
+}
+
+// Pointer events, not mouse+touch: one code path covers a finger, a stylus and
+// a mouse, and it is the only one that gets pressure-less styluses right.
+function _b2bInitSigPad() {
+    const cv = document.getElementById('b2bSigPad');
+    if (!cv) return;
+    // Draw at the canvas's own resolution regardless of how CSS sizes it, so a
+    // signature captured on a small phone is not a blurry upscale.
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.lineWidth = 3.5;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#111';
+    _b2bSigCtx = ctx;
+
+    let drawing = false;
+    const at = (ev) => {
+        const r = cv.getBoundingClientRect();
+        return [(ev.clientX - r.left) * (cv.width / r.width),
+                (ev.clientY - r.top) * (cv.height / r.height)];
+    };
+    cv.addEventListener('pointerdown', (ev) => {
+        drawing = true;
+        cv.setPointerCapture(ev.pointerId);
+        const [x, y] = at(ev);
+        ctx.beginPath(); ctx.moveTo(x, y);
+        // A tap with no drag is still a mark, and some people "sign" with one.
+        ctx.lineTo(x + 0.01, y); ctx.stroke();
+        _b2bSigDrawn = true;
+        document.getElementById('b2bSigHint')?.classList.add('gone');
+        ev.preventDefault();
+    });
+    cv.addEventListener('pointermove', (ev) => {
+        if (!drawing) return;
+        const [x, y] = at(ev);
+        ctx.lineTo(x, y); ctx.stroke();
+        ev.preventDefault();
+    });
+    const stop = (ev) => { drawing = false; if (ev) ev.preventDefault(); };
+    cv.addEventListener('pointerup', stop);
+    cv.addEventListener('pointercancel', stop);
+    cv.addEventListener('pointerleave', stop);
+}
+
+function b2bClearSign() {
+    const cv = document.getElementById('b2bSigPad');
+    if (!cv || !_b2bSigCtx) return;
+    _b2bSigCtx.fillStyle = '#fff';
+    _b2bSigCtx.fillRect(0, 0, cv.width, cv.height);
+    _b2bSigDrawn = false;
+    document.getElementById('b2bSigHint')?.classList.remove('gone');
+}
+
+async function b2bSaveSign(id, btn) {
+    if (!_b2bSigDrawn) return _b2bSay('Ask the client to sign first.', true);
+    const cv = document.getElementById('b2bSigPad');
+    if (!cv) return;
+    await _b2bBusy(btn, 'Saving…', async () => {
+        await _b2bPost({ action: 'capture_signature', id, image: cv.toDataURL('image/png') },
+            "Couldn't save the signature");
+        closeAllModals();
+        await b2bRefresh();
+        // The phone's job is done in one screen; say so rather than dropping the
+        // person back onto a board they did not come here for.
+        alert('Signature saved. You can hand the phone back.');
+    });
+}
+
+// --- moving a deal between stores ------------------------------------------
+// Corp only, and only while the goods are somewhere a move makes sense. The
+// button says which hand-off it is about, because "Move" alone is ambiguous on
+// a deal that has both a pricing store and a listing store.
+function _b2bTransferKind(deal) {
+    if (['pricing', 'review', 'quote'].includes(deal.stage)) return 'pricing';
+    if (['listing_location', 'listing'].includes(deal.stage)) return 'listing';
+    return null;
+}
+function _b2bMoveBtn(deal) {
+    if (!_b2bCanAccept()) return '';
+    const kind = _b2bTransferKind(deal);
+    if (!kind) return '';
+    return `<button class="b2b-btn b2b-btn-secondary" onclick="b2bOpenTransfer('${deal.id}')">
+        Move ${kind === 'pricing' ? 'Pricing' : 'Listing'} Store</button>`;
+}
+
+function b2bOpenTransfer(id) {
+    const deal = _b2bDealById(id) || _b2bModalDeal;
+    if (!deal || !_b2bCanAccept()) return;
+    const kind = _b2bTransferKind(deal);
+    if (!kind) return;
+    const at = kind === 'pricing' ? deal.pricing_store : deal.listing_store;
+    // Listing can only land on a real store; pricing may also sit at CORP.
+    const options = kind === 'pricing' ? B2B_LOCATIONS : STORE_CODES;
+    const listed = Number(deal.listed_units) || 0;
+
+    _b2bTransferPick = null;
+    _b2bShowDeal({
+        stage: deal.stage,
+        eyebrow: deal.ref,
+        title: kind === 'pricing' ? 'Move Pricing Store' : 'Move Listing Store',
+        sub: kind === 'pricing'
+            ? 'Send this pickup somewhere else to be priced.'
+            : 'Move the remaining units to another store to be listed.',
+        wide: true,
+        body: `
+            ${_b2bSummary(deal)}
+            ${_b2bWhereLine(deal)}
+            ${listed && kind === 'listing' ? `
+                <div class="b2b-note warn">
+                    <span class="b2b-note-k">${listed} unit${listed === 1 ? '' : 's'} already listed</span>
+                    Those stay recorded against their Shopify barcodes and do not move.
+                    Only what is left to list follows the deal.
+                </div>` : ''}
+            <label class="form-label-caps" style="margin-top:14px;">Move To</label>
+            <div class="b2b-loc-pick">
+                ${options.filter(c => c !== at).map(c => `
+                    <button class="b2b-loc" data-loc="${c}" onclick="b2bPickTransfer('${c}')">
+                        <span class="b2b-loc-dot" style="background:${STORE_TINTS[c] || '#94a3b8'}"></span>
+                        <span class="b2b-loc-c">${c}</span>
+                    </button>`).join('')}
+            </div>
+            <label class="form-label-caps" style="margin-top:14px;">Why (optional)</label>
+            <input id="b2bMoveNote" class="form-input-lg" placeholder="e.g. LEE is backed up until Friday">
+            <p class="b2b-hint">The move is recorded with your name against it, so the trail
+                survives the deal being reopened later.</p>`,
+        footer: `
+            <span class="b2b-msg" id="b2bDealMsg"></span>
+            <button class="kpi-cancel-btn" onclick="b2bOpenDeal('${_b2bClickKind(deal)}','${deal.id}')">Cancel</button>
+            <button class="b2b-btn b2b-btn-primary" id="b2bMoveGo" disabled
+                onclick="b2bDoTransfer('${deal.id}',this)">Move</button>`,
+    });
+}
+
+let _b2bTransferPick = null;
+function b2bPickTransfer(code) {
+    _b2bTransferPick = code;
+    document.querySelectorAll('.b2b-loc').forEach(b => b.classList.toggle('on', b.dataset.loc === code));
+    const go = document.getElementById('b2bMoveGo');
+    if (go) { go.disabled = false; go.textContent = `Move To ${code}`; }
+}
+
+async function b2bDoTransfer(id, btn) {
+    if (!_b2bTransferPick) return;
+    const to = _b2bTransferPick;
+    await _b2bBusy(btn, 'Moving…', async () => {
+        await _b2bPost({
+            action: 'transfer_location', id, to_store: to,
+            note: document.getElementById('b2bMoveNote')?.value.trim(),
+        }, "Couldn't move the deal");
+        closeAllModals();
+        await b2bRefresh();
+    });
+}
+
+// --- reordering the sheet --------------------------------------------------
+// Drag a line by its number. The Line cell is the handle rather than the whole
+// row, because the row is fifteen editable fields and dragging must not start
+// when someone selects text in one of them.
+//
+// The order is stored on the item (sort_order) rather than derived from line_no:
+// line_no is baked into printed SKUs. And because the quote renderers walk the
+// same _b2bModalItems array, arranging the sheet arranges the client's quote --
+// grouping the laptops together reads better to them too.
+let _b2bDragId = null;
+
+function b2bDragStart(ev, id) {
+    _b2bDragId = id;
+    try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', id); } catch (_) {}
+    document.getElementById(`b2bPline-${id}`)?.classList.add('b2b-dragging');
+}
+function b2bDragEnd() {
+    document.querySelectorAll('.b2b-pline.b2b-dragging, .b2b-pline.b2b-dropto')
+        .forEach(r => r.classList.remove('b2b-dragging', 'b2b-dropto'));
+    _b2bDragId = null;
+}
+function b2bDragOver(ev, id) {
+    if (!_b2bDragId || _b2bDragId === id) return;
+    ev.preventDefault();                       // without this the drop never fires
+    try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+    const row = document.getElementById(`b2bPline-${id}`);
+    document.querySelectorAll('.b2b-pline.b2b-dropto').forEach(r => {
+        if (r !== row) r.classList.remove('b2b-dropto');
+    });
+    row?.classList.add('b2b-dropto');
+}
+async function b2bDrop(ev, id) {
+    ev.preventDefault();
+    const from = _b2bDragId;
+    b2bDragEnd();
+    if (!from || from === id) return;
+    const items = _b2bModalItems;
+    const a = items.findIndex(i => i.id === from);
+    const b = items.findIndex(i => i.id === id);
+    if (a < 0 || b < 0) return;
+
+    const before = items.slice();
+    items.splice(b, 0, items.splice(a, 1)[0]);
+    _b2bRepaintItems();
+    _b2bPaintQuoteDoc();                       // the quote follows the sheet
+
+    try {
+        await _b2bSend({ action: 'reorder_items', deal_id: _b2bModalDeal.id,
+                         order: items.map(i => i.id) });
+        _b2bDirty = true;
+    } catch (e) {
+        // Put it back rather than leaving the screen showing an order the server
+        // rejected -- the next person to open this deal would see the old one.
+        _b2bModalItems = before;
+        _b2bRepaintItems();
+        _b2bPaintQuoteDoc();
+        _b2bSay(`Couldn't save the new order: ${e.message}`, true);
+    }
+}
+
+// The key to the coloured bars down the left of the sheet. Always rendered
+// rather than only when a non-purchase line exists: the grid repaints on its
+// own (_b2bRepaintItems touches #b2bItemGrid alone), so a legend that appeared
+// and disappeared with the data would go stale the moment someone changed a
+// line's handling without a full redraw.
+function _b2bDispLegend() {
+    return `<div class="b2b-disp-key">
+        <b>Row colours</b>
+        <span class="k-nrv"><i></i><em>No residual value</em> — nothing to the client, may still be resold</span>
+        <span class="k-scrap"><i></i><em>Recycle</em> — scrapped, never listed</span>
+        <span class="k-block"><i></i><em>Not ready</em> — something on the line is still missing</span>
+    </div>`;
+}
 
 // One entry per unit. Split on comma, drop the blanks -- so trailing commas and
 // double commas while typing don't count as units.
@@ -12567,7 +15716,7 @@ function _b2bWipeTotal(it) {
 }
 
 function _b2bItemTotals() {
-    let value = 0, offer = 0, units = 0, wipe = 0;
+    let value = 0, offer = 0, units = 0, wipe = 0, ship = 0;
     _b2bModalItems.forEach(it => {
         const q = Number(it.quantity) || 1;
         units += q;
@@ -12576,10 +15725,19 @@ function _b2bItemTotals() {
         if (!_b2bIsScrap(it)) value += (Number(it.value) || 0) * q;
         offer += (Number(it.offer) || 0) * q;
         wipe  += _b2bWipeTotal(it);
+        // No disposition test: a pallet of scrap costs the same to move.
+        ship  += (Number(it.shipping_cost) || 0) * q;
     });
     // Clamped at the deal, not the line: a wipe on a $0 item still discounts
     // against the rest, and we never end up charging the client money.
-    return { value, offer, wipe, net: Math.max(0, offer - wipe), units, lines: _b2bModalItems.length };
+    //
+    // `net` is what the CLIENT gets and shipping is deliberately absent from it:
+    // what it costs us to move the goods is not their business and must never
+    // move their number. `outlay` is what the deal costs US, which is the figure
+    // margin is measured against.
+    const net = Math.max(0, offer - wipe);
+    return { value, offer, wipe, ship, net, outlay: net + ship,
+             units, lines: _b2bModalItems.length };
 }
 
 // Repaint just the numbers -- retyping the whole grid would eat focus.
@@ -12589,9 +15747,11 @@ function _b2bPaintTotals() {
     set('b2bTotValue', _b2bMoney(t.value, 2));
     set('b2bTotOffer', _b2bMoney(t.net, 2));
     set('b2bTotUnits', `${t.units} unit${t.units === 1 ? '' : 's'} · ${t.lines} line${t.lines === 1 ? '' : 's'}`);
-    // Margin is against what we actually pay, so the wipe discount improves it
-    // rather than being invisible.
-    const margin = t.value - t.net;
+    // Margin is against what the deal actually costs us: the wipe discount
+    // improves it, shipping erodes it. Measuring against the offer alone was
+    // fine until shipping existed, and would now overstate every deal we have
+    // to pay freight on -- which is the number Paul asked to see.
+    const margin = t.value - t.outlay;
     const pct = t.value > 0 ? Math.round((margin / t.value) * 100) : 0;
     set('b2bTotMargin', `${_b2bMoney(margin, 2)} (${pct}%)`);
     const wipeEl = document.getElementById('b2bTotWipe');
@@ -12599,10 +15759,31 @@ function _b2bPaintTotals() {
         wipeEl.textContent = t.wipe ? `−${_b2bMoney(t.wipe, 2)}` : '—';
         wipeEl.closest('.b2b-tot')?.classList.toggle('muted', !t.wipe);
     }
+    const shipEl = document.getElementById('b2bTotShip');
+    if (shipEl) {
+        // "+" because it adds to what the deal costs us, where the wipe line
+        // above reads "−". The two sit next to each other and pull opposite ways.
+        shipEl.textContent = t.ship ? `+${_b2bMoney(t.ship, 2)}` : '—';
+        shipEl.closest('.b2b-tot')?.classList.toggle('muted', !t.ship);
+    }
     _b2bModalItems.forEach(it => {
         const el = document.getElementById(`b2bLn-${it.id}`);
-        if (el) el.textContent = _b2bIsBuy(it)
-            ? _b2bMoney((Number(it.offer) || 0) * (Number(it.quantity) || 1), 2) : '—';
+        if (!el) return;
+        // Class and title move with the text: changing a line's handling changes
+        // which of the three meanings this cell has, and a repaint that updated
+        // only the number would leave the previous meaning's styling behind.
+        const t = _b2bLineTotal(it);
+        el.className = t.cls;
+        el.title = t.tip;
+        el.textContent = t.text;
+        // Margin moves with value and offer, so it repaints on the same pass.
+        const mel = document.getElementById(`b2bMg-${it.id}`);
+        if (mel) {
+            const m = _b2bLineMargin(it);
+            mel.className = m.cls;
+            mel.title = m.tip;
+            mel.textContent = m.text;
+        }
     });
     const submit = document.getElementById('b2bPrSubmit');
     if (submit) submit.disabled = _b2bModalItems.length === 0 || _b2bNotReady().length > 0;
@@ -12617,7 +15798,7 @@ function b2bItemInput(id, field, value) {
     const it = _b2bLocalItem(id);
     if (!it) return;
     it[field] = (field === 'quantity') ? Math.max(1, parseInt(value, 10) || 1)
-              : (field === 'value' || field === 'offer') ? (parseFloat(value) || 0)
+              : (field === 'value' || field === 'offer' || field === 'shipping_cost') ? (parseFloat(value) || 0)
               : value;
     _b2bPaintTotals();
 }
@@ -12632,7 +15813,7 @@ function b2bItemSave(id) {
         action: 'update_item', id,
         make: it.make, model: it.model, condition: it.condition,
         staff_notes: it.staff_notes, client_notes: it.client_notes,
-        quantity: it.quantity, value: it.value, offer: it.offer,
+        quantity: it.quantity, value: it.value, offer: it.offer, shipping_cost: it.shipping_cost || 0,
         item_type: it.item_type || 'other',
         cpu: it.cpu, ram: it.ram, storage: it.storage, gpu: it.gpu, battery_health: it.battery_health,
         serials: it.serials,
@@ -12839,7 +16020,8 @@ async function b2bAddItem(dealId, btn) {
         _b2bModalItems.push({
             id: out.id, line_no: out.line_no, sku: out.sku, make: '', model: '', condition: '',
             staff_notes: '', client_notes: '', quantity: 1, value: 0, offer: 0,
-            item_type: 'other', cpu: null, ram: null, storage: null, gpu: null, battery_health: null,
+            item_type: 'other', cpu: null, ram: null, storage: null, gpu: null, battery_health: null, shipping_cost: 0,
+            sort_order: out.sort_order,
             serials: '', disposition: 'purchase',
             wipe_required: false, wipe_fee: 0, wiped_qty: 0,
             listed_qty: 0, recycled_qty: 0, listings: [],
@@ -12847,6 +16029,49 @@ async function b2bAddItem(dealId, btn) {
         _b2bDirty = true;
         _b2bRepaintItems();
         document.getElementById(`b2bMake-${out.id}`)?.focus();
+    });
+}
+
+// Duplicate a line. A pallet is usually twenty near-identical machines, so
+// re-typing brand, model, specs, condition and price for each one was the single
+// slowest thing about pricing.
+//
+// Copies everything that describes the KIND of thing, and nothing that
+// identifies a particular unit or records what has happened to it:
+//   * the SKU and line number come from the server, which mints fresh ones
+//   * serials are per unit, so a copied serial would be a lie -- and a wrong one
+//     that reads as real, which is worse than a blank
+//   * listing, recycling and wipe progress belong to the original units
+// The wipe FLAG copies (it is a property of the kit) but the fee is re-snapshotted
+// by the server rather than carried over, the same as any other new line.
+async function b2bCopyItem(id, btn) {
+    const src = _b2bLocalItem(id);
+    if (!src) return;
+    await _b2bBusy(btn, '', async () => {
+        const copy = {
+            make: src.make, model: src.model, condition: src.condition,
+            staff_notes: src.staff_notes, client_notes: src.client_notes,
+            quantity: src.quantity, value: src.value, offer: src.offer, shipping_cost: src.shipping_cost || 0,
+            item_type: src.item_type || 'other',
+            cpu: src.cpu, ram: src.ram, storage: src.storage,
+            gpu: src.gpu, battery_health: src.battery_health,
+            disposition: _b2bDispOf(src), wipe_required: !!src.wipe_required,
+        };
+        const out = await _b2bPost({ action: 'add_item', deal_id: _b2bModalDeal.id, ...copy },
+            "Couldn't copy that line");
+        // Same rule as b2bAddItem: the optimistic row is what gets painted, so it
+        // has to carry every field the grid reads.
+        _b2bModalItems.push({
+            ...copy, id: out.id, line_no: out.line_no, sku: out.sku, sort_order: out.sort_order,
+            serials: '', wipe_fee: src.wipe_required ? (src.wipe_fee || _b2bWipeFee()) : 0,
+            wiped_qty: 0, listed_qty: 0, recycled_qty: 0, listings: [],
+        });
+        _b2bDirty = true;
+        _b2bRepaintItems();
+        _b2bPaintTotals();
+        // Straight to the serials, because that is the one thing a copy cannot
+        // fill in and the one thing that blocks submitting.
+        b2bItemDetail(out.id);
     });
 }
 
@@ -13029,7 +16254,7 @@ function _b2bItemCards() {
             </div>` : '';
 
         return `
-        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
+        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
             <div class="b2b-prow">
                 <span class="b2b-pcell b2b-pc-sku" title="${escapeHtml(it.sku || '')}">
                     <span class="b2b-mono">${escapeHtml(_b2bLineNo(it))}</span>
@@ -13041,7 +16266,7 @@ function _b2bItemCards() {
                         ${B2B_ITEM_TYPES.map(t => `<option value="${t.key}" ${(it.item_type || 'other') === t.key ? 'selected' : ''}>${t.label}</option>`).join('')}
                     </select></span>
                 <span class="b2b-pcell" data-k="Brand">
-                    <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple"
+                    <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple" list="b2bdl-make"
                         oninput="b2bItemInput('${it.id}','make',this.value)" onchange="b2bItemSave('${it.id}')"></span>
                 <span class="b2b-pcell" data-k="Model">
                     <input value="${escapeHtml(it.model || '')}" placeholder="MacBook Air M2"
@@ -13063,26 +16288,32 @@ function _b2bItemCards() {
                         oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`
                           : '<span class="b2b-f-off">—</span>'}</span>
                 <span class="b2b-pcell n b2b-pc-tot" data-k="Line total">
-                    <span class="b2b-f-calc" id="b2bLn-${it.id}">${buy ? _b2bMoney((Number(it.offer) || 0) * need, 2) : '—'}</span></span>
+                    ${_b2bLineTotalHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-acts">
+                    <!-- Print leads, delete trails, and the two are never
+                         neighbours: they were one misclick apart and only one of
+                         them can be undone. -->
+                    ${_b2bLabelBtn(it)}
                     <button class="b2b-notes-btn ${open ? 'on' : ''} ${blocked.length ? 'req' : ''}"
                         title="${blocked.length ? 'Not ready yet — ' + escapeHtml(blocked.join(', ')) : escapeHtml(_b2bNoteHint(it))}"
                         onclick="b2bToggleNotes('${it.id}')">
                         ${_b2bIco('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>')}
                         ${(it.client_notes || it.staff_notes || it.serials) ? '<i class="b2b-notes-dot"></i>' : ''}
                     </button>
-                    ${_b2bLabelBtn(it)}
                     <button class="b2b-x" title="Remove line" onclick="b2bDeleteItem('${it.id}')">
                         ${_b2bIco('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>')}
                     </button>
                 </span>
             </div>
+            ${open ? '' : _b2bNoteLine(it)}
             <div class="b2b-ready" style="${blocked.length ? '' : 'display:none;'}">${escapeHtml(blocked.join(' · '))}</div>
             ${drawer}
         </div>`;
     }).join('');
 
-    return head + rows;
+    // Mounted once for the whole grid, not per row -- thirty lines would
+    // otherwise repeat the same option lists thirty times.
+    return _b2bDatalists() + head + rows;
 }
 
 // --- pricing spreadsheet ---------------------------------------------------
@@ -13094,6 +16325,10 @@ const _B2B_ICO_DETAIL = '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12
     + '<line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/>'
     + '<line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>';
 const _B2B_ICO_X = '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>';
+// Feather "copy": two offset sheets. Reads as duplicate rather than as the
+// clipboard sense of copy, which is what this does.
+const _B2B_ICO_COPY = '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>'
+    + '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>';
 
 function _b2bItemSheet() {
     if (!_b2bModalItems.length) {
@@ -13114,6 +16349,8 @@ function _b2bItemSheet() {
             ${reqSpecs.map(f => `<span>${escapeHtml(f.label)}</span>`).join('')}
             <span>Condition</span>
             <span class="r">Qty</span><span class="r">Value</span><span class="r">Offer</span>
+            <span class="r" title="What it costs us to move one of these, per unit. Never shown to the client.">Ship</span>
+            <span class="r">Margin</span>
             <span>Handling</span><span class="c">Wipe</span><span class="r">Total</span><span></span>
         </div>`;
 
@@ -13141,6 +16378,7 @@ function _b2bItemSheet() {
             const miss = !String(it[f.key] ?? '').trim();
             return `<span class="b2b-pcell b2b-pc-spec" data-k="${escapeHtml(f.label)}">
                 <input data-req-spec="${f.key}" class="${miss ? 'b2b-spec-miss' : ''}" value="${escapeHtml(it[f.key] || '')}" placeholder="${escapeHtml(f.hint)}"
+                    ${f.pick ? `list="b2bdl-${f.key}"` : ''}
                     oninput="b2bItemSpec('${it.id}','${f.key}',this.value)" onchange="b2bItemSave('${it.id}')">
                 <button class="b2b-spec-none" tabindex="-1" title="No ${escapeHtml(f.label)} — fills NO ${escapeHtml(f.label.toUpperCase())}"
                     onclick="b2bItemSpecNone('${it.id}','${f.key}','${escapeHtml(f.label)}')">∅</button>
@@ -13148,9 +16386,12 @@ function _b2bItemSheet() {
         }).join('');
 
         return `
-        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
+        <div class="b2b-pline ${scrap ? 'b2b-scrap' : ''} ${_b2bIsNrv(it) ? 'b2b-nrv' : ''} ${blocked.length ? 'needs-reason' : ''}" id="b2bPline-${it.id}">
             <div class="b2b-prow">
-                <span class="b2b-pcell b2b-pc-sku" title="${escapeHtml(it.sku || '')}">
+                <span class="b2b-pcell b2b-pc-sku b2b-pc-grab" draggable="true"
+                    title="${escapeHtml(it.sku || '')} — drag to reorder"
+                    ondragstart="b2bDragStart(event,'${it.id}')" ondragend="b2bDragEnd()"
+                    ondragover="b2bDragOver(event,'${it.id}')" ondrop="b2bDrop(event,'${it.id}')">
                     <span class="b2b-mono">${escapeHtml(_b2bLineNo(it))}</span>
                     ${blocked.length ? `<i class="b2b-ss-flag" title="${escapeHtml(blocked.join(', '))}"></i>` : ''}
                 </span>
@@ -13158,11 +16399,16 @@ function _b2bItemSheet() {
                     <select onchange="b2bItemType('${it.id}',this.value)">
                         ${B2B_ITEM_TYPES.map(t => `<option value="${t.key}" ${(it.item_type || 'other') === t.key ? 'selected' : ''}>${t.label}</option>`).join('')}
                     </select></span>
+                <!-- title as well as value: these two are the narrowest text
+                     columns on the sheet and "OptiPlex 7080 Micro" does not fit
+                     in one, so hovering has to be able to tell you the rest. -->
                 <span class="b2b-pcell" data-k="Brand">
-                    <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple"
+                    <input id="b2bMake-${it.id}" value="${escapeHtml(it.make || '')}" placeholder="Apple" list="b2bdl-make"
+                        title="${escapeHtml(it.make || '')}"
                         oninput="b2bItemInput('${it.id}','make',this.value)" onchange="b2bItemSave('${it.id}')"></span>
                 <span class="b2b-pcell" data-k="Model">
                     <input value="${escapeHtml(it.model || '')}" placeholder="MacBook Air M2"
+                        title="${escapeHtml(it.model || '')}"
                         oninput="b2bItemInput('${it.id}','model',this.value)" onchange="b2bItemSave('${it.id}')"></span>
                 ${specCells}
                 <span class="b2b-pcell" data-k="Condition">
@@ -13181,6 +16427,15 @@ function _b2bItemSheet() {
                     ${buy ? `<input type="number" min="0" step="0.01" value="${Number(it.offer) || 0}"
                         oninput="b2bItemInput('${it.id}','offer',this.value)" onchange="b2bItemSave('${it.id}')">`
                           : '<span class="b2b-f-off">—</span>'}</span>
+                <!-- Priced even on a recycle line: scrap costs the same to move,
+                     and Paul is reading this to work out what the pallet is
+                     really worth to us. -->
+                <span class="b2b-pcell n" data-k="Ship">
+                    <input type="number" min="0" step="0.01" value="${Number(it.shipping_cost) || 0}"
+                        title="Our freight cost per unit — never shown to the client"
+                        oninput="b2bItemInput('${it.id}','shipping_cost',this.value)" onchange="b2bItemSave('${it.id}')"></span>
+                <span class="b2b-pcell n b2b-pc-mgn" data-k="Margin">
+                    ${_b2bLineMarginHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-disp" data-k="Handling">
                     <select data-tip="${escapeHtml(B2B_DISP[disp].hint)}" onchange="b2bItemDisposition('${it.id}',this.value)">
                         ${B2B_DISPOSITIONS.map(d => `<option value="${d.key}" ${disp === d.key ? 'selected' : ''}>${_B2B_DISP_SEL[d.key]}</option>`).join('')}
@@ -13189,8 +16444,10 @@ function _b2bItemSheet() {
                     <label class="b2b-ss-wipe" title="Certified data wipe · ${_b2bMoney(fee, 2)}/unit">
                         <input type="checkbox" ${it.wipe_required ? 'checked' : ''} onchange="b2bItemWipe('${it.id}',this.checked)"></label></span>
                 <span class="b2b-pcell n b2b-pc-tot" data-k="Total">
-                    <span class="b2b-f-calc" id="b2bLn-${it.id}">${buy ? _b2bMoney((Number(it.offer) || 0) * need, 2) : '—'}</span></span>
+                    ${_b2bLineTotalHtml(it)}</span>
                 <span class="b2b-pcell b2b-pc-acts">
+                    <button class="b2b-notes-btn b2b-ss-copy" title="Copy this line — everything but the serials"
+                        onclick="b2bCopyItem('${it.id}',this)">${_b2bIco(_B2B_ICO_COPY)}</button>
                     <button class="b2b-notes-btn b2b-ss-more ${hasDetail ? 'has' : ''} ${blocked.length ? 'req' : ''}"
                         title="${blocked.length ? 'Not ready — ' + escapeHtml(blocked.join(', ')) : 'Specs, serials, notes & label'}"
                         onclick="b2bItemDetail('${it.id}')">
@@ -13200,11 +16457,14 @@ function _b2bItemSheet() {
                     <button class="b2b-x" title="Remove line" onclick="b2bDeleteItem('${it.id}')">${_b2bIco(_B2B_ICO_X)}</button>
                 </span>
             </div>
+            ${_b2bNoteLine(it)}
             <div class="b2b-ready" style="${blocked.length ? '' : 'display:none;'}">${escapeHtml(blocked.join(' · '))}</div>
         </div>`;
     }).join('');
 
-    return head + rows;
+    // Mounted once for the whole grid, not per row -- thirty lines would
+    // otherwise repeat the same option lists thirty times.
+    return _b2bDatalists() + head + rows;
 }
 
 // --- pricing detail sheet --------------------------------------------------
@@ -13330,6 +16590,9 @@ function _b2bTotalsBar(showMargin) {
         <div class="b2b-tot"><span class="b2b-tot-k">Resale value</span><span class="b2b-tot-v" id="b2bTotValue">—</span></div>
         <div class="b2b-tot muted"><span class="b2b-tot-k">Data wipes</span><span class="b2b-tot-v" id="b2bTotWipe">—</span></div>
         <div class="b2b-tot"><span class="b2b-tot-k">We pay</span><span class="b2b-tot-v accent" id="b2bTotOffer">—</span></div>
+        <!-- Sits after "We pay" deliberately: it is a cost of ours that lands
+             on top of the offer, not a deduction from it like the wipes. -->
+        <div class="b2b-tot muted"><span class="b2b-tot-k">Shipping</span><span class="b2b-tot-v" id="b2bTotShip">—</span></div>
         ${showMargin ? '<div class="b2b-tot"><span class="b2b-tot-k">Gross margin</span><span class="b2b-tot-v" id="b2bTotMargin">—</span></div>' : ''}
     </div>`;
 }
@@ -13364,9 +16627,11 @@ function _b2bStagePricing(deal) {
             ${deal.pickup_desc ? `<div class="b2b-note"><span class="b2b-note-k">Picked up</span>${escapeHtml(deal.pickup_desc)}</div>` : ''}
             ${_b2bTotalsBar(true)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
+            ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
+            ${_b2bMoveBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
             ${_b2bIsEmployee()
                 ? '<span class="b2b-msg" style="color:var(--cb-muted);font-weight:600;">Prices save automatically — a manager or DM submits this for quoting.</span>'
@@ -13414,16 +16679,39 @@ async function b2bSubmitPricing(id, btn) {
 // The quote stays fully editable while the client negotiates. Accepting is the
 // one-way door: offers freeze into cost and the goods become our inventory.
 
-// A quote that has never been emailed is waiting on the approver, not on the
-// client. Same stage either way -- the send count is the only thing that tells
-// them apart, and it is already on every deal.
+// Waiting on the approver rather than on the client. This was derived from
+// quote_send_count in five places; it is a stage now, and this reads it in one.
 function _b2bAwaitingApproval(deal) {
-    return deal.stage === 'quote' && !Number(deal.quote_send_count);
+    return deal.stage === 'review';
 }
 
 // Deals whose send step has already been offered this session, so re-opening one
 // to re-read it doesn't trap you in the same dialog every time.
 const _b2bSendPrompted = new Set();
+
+// Where the goods physically are, and where they are going.
+//
+// Paul, reviewing a quote: "Need to show what location the product is at ... I
+// need to know where it's at and where it's going to go." Both facts were
+// already in _b2bSummary, but that is a grid of eight small cells you scan past;
+// this is a question asked once per deal and it should answer itself.
+//
+// The interesting case is CORP: pricing there means the listing store is chosen
+// separately after the client accepts, so there genuinely is no answer to the
+// second half yet, and saying so is better than showing "Unassigned".
+function _b2bWhereLine(deal) {
+    if (!deal.pricing_store) return '';
+    const at = deal.pricing_store;
+    const to = deal.listing_store || (at === 'CORP' ? null : at);
+    const going = to
+        ? (to === at ? 'lists where it already is' : `lists at ${_b2bStoreTag(to)}`)
+        : 'listing store is chosen once the client accepts';
+    return `
+        <div class="b2b-note b2b-where">
+            <span class="b2b-note-k">Where it is</span>
+            ${_b2bStoreTag(at)} <span class="b2b-where-go">— ${going}</span>
+        </div>`;
+}
 
 function _b2bStageQuote(deal) {
     // Same dense spreadsheet as pricing for editing the lines; the client-facing
@@ -13444,7 +16732,9 @@ function _b2bStageQuote(deal) {
         </div>` : '';
 
     _b2bShowDeal({
-        stage: 'quote',
+        // The deal's own stage, so the header icon matches and the print
+        // whitelist sees review as well as quote.
+        stage: deal.stage,
         eyebrow: deal.ref,
         title: unsent ? 'Quote — Awaiting Approval' : 'Quote',
         sub: unsent
@@ -13453,6 +16743,7 @@ function _b2bStageQuote(deal) {
         full: true,
         body: `
             ${_b2bSummary(deal)}
+            ${_b2bWhereLine(deal)}
             ${banner}
             <div class="b2b-sendbar${unsent ? ' urgent' : ''}">
                 <span class="b2b-sendbar-s">${escapeHtml(sent)}</span>
@@ -13464,6 +16755,7 @@ function _b2bStageQuote(deal) {
             </div>
             ${_b2bTotalsBar(true)}
             <div id="b2bItemGrid" class="b2b-items b2b-ss">${_b2bItemSheet()}</div>
+            ${_b2bDispLegend()}
             <button class="b2b-btn b2b-btn-secondary b2b-add" onclick="b2bAddItem('${deal.id}',this)">＋ Add Line Item</button>
             <details class="b2b-preview" open>
                 <summary>Quote preview — this is what the client sees</summary>
@@ -13471,6 +16763,7 @@ function _b2bStageQuote(deal) {
             </details>`,
         footer: `
             <span class="b2b-msg" id="b2bDealMsg"></span>
+            ${_b2bMoveBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
             ${canAccept ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bSendBack('${deal.id}')">Send Back For Changes</button>` : ''}
             ${canAccept
@@ -13496,7 +16789,9 @@ function b2bSendBack(id) {
     const deal = _b2bModalDeal;
     if (!deal || !_b2bCanAccept()) return;
     _b2bShowDeal({
-        stage: 'quote',
+        // The deal's own stage, so the header icon matches and the print
+        // whitelist sees review as well as quote.
+        stage: deal.stage,
         eyebrow: deal.ref,
         title: 'Send Back For Changes',
         sub: 'It returns to pricing with your note attached.',
@@ -13537,18 +16832,23 @@ function _b2bPaintQuoteDoc() {
 }
 
 // Condition earns a tinted chip on the quote, using the same semantic tones as
-// the rest of the app: emerald for sound, amber for Fair, red for For Parts.
+// the rest of the app: emerald for sound, amber for Fair, red for Broken.
 // The client can read the state of their equipment down the column at a glance.
+// 'For Parts' is the retired spelling of Broken and keeps its tone, so a row
+// written before the rename still reads red rather than falling to the grey
+// default.
 const B2B_COND_TONE = {
     'New':       { bg: '#e8f7ee', fg: '#178048' },
     'Like New':  { bg: '#e8f7ee', fg: '#178048' },
     'Good':      { bg: '#e8f7ee', fg: '#178048' },
     'Fair':      { bg: '#fdf3e1', fg: '#b7791f' },
+    'Broken':    { bg: '#fcecec', fg: '#d1443b' },
     'For Parts': { bg: '#fcecec', fg: '#d1443b' },
 };
 const _b2bCondTone = c => B2B_COND_TONE[c] || { bg: '#f1f5f9', fg: '#647082' };
 const _b2bCondClass = c => ({
-    'New': 'ok', 'Like New': 'ok', 'Good': 'ok', 'Fair': 'warn', 'For Parts': 'bad',
+    'New': 'ok', 'Like New': 'ok', 'Good': 'ok', 'Fair': 'warn',
+    'Broken': 'bad', 'For Parts': 'bad',
 }[c] || 'neu');
 
 // --- shared quote maths and wording ----------------------------------------
@@ -13878,7 +17178,9 @@ function _b2bShowSendStep(deal, to, copied, auto) {
     ];
 
     _b2bShowDeal({
-        stage: 'quote',
+        // The deal's own stage, so the header icon matches and the print
+        // whitelist sees review as well as quote.
+        stage: deal.stage,
         eyebrow: deal.ref,
         title: auto ? 'This Quote Is Ready To Send' : 'Send This Quote',
         sub: auto ? 'It has been priced and approved for sending. Review it first if you would rather.'
@@ -14022,6 +17324,7 @@ function _b2bStageListing(deal) {
             <div id="b2bListProg">${_b2bListProgress()}</div>
             <div id="b2bListRows" class="b2b-list">${_b2bListRows()}</div>`,
         footer: `
+            ${_b2bMoveBtn(deal)}
             <button class="kpi-cancel-btn" onclick="b2bCloseDeal()">Close</button>
             <button class="b2b-btn b2b-btn-primary" id="b2bListDone" ${_b2bAllSatisfied() ? '' : 'disabled'}
                 onclick="b2bCompleteDeal('${deal.id}',this)">Complete Deal</button>`,
@@ -14125,11 +17428,17 @@ function _b2bListRows() {
             : needsWipe ? `Certify a data wipe first — ${wiped} of ${qty} wiped`
             : 'List one unit — asks for its Shopify barcode';
 
+        // Certifying a wipe is a claim we have charged the client for and may
+        // have to stand behind, so only corp records it. The store still sees
+        // the flag and the count -- they need to know the line is blocked and
+        // why, and hiding it would just make the disabled "+" inexplicable.
         const wipeStrip = it.wipe_required ? `
             <div class="b2b-lwipe ${wiped >= qty ? 'done' : ''}">
                 ${_b2bIco('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/>')}
                 <span><b>${wiped}</b> of ${qty} certified wiped</span>
-                ${wiped < qty ? `<button class="b2b-mini" onclick="b2bMarkWiped('${it.id}')">Mark Wiped</button>` : ''}
+                ${wiped >= qty ? ''
+                  : _b2bIsCorp() ? `<button class="b2b-mini" onclick="b2bMarkWiped('${it.id}')">Mark Wiped</button>`
+                  : '<span class="b2b-lwipe-note">Corp records the certification</span>'}
             </div>` : '';
 
         return `
@@ -14148,12 +17457,16 @@ function _b2bListRows() {
                 ${recycled ? `<span class="b2b-lrec">${recycled} recycled</span>` : ''}
             </div>
             <div class="b2b-lacts">
-                ${_b2bLabelBtn(it)}
+                <!-- The steppers are what this screen is FOR -- scan, +, scan, + --
+                     and the label button was sitting directly in front of them.
+                     It moves to the end, past Recycle, where reaching for it is a
+                     deliberate act rather than something on the way to +. -->
                 <button class="b2b-step" ${listed <= 0 ? 'disabled' : ''} title="Undo the last one" onclick="b2bUnlistUnit('${it.id}')">−</button>
                 <button class="b2b-step up" ${ok || scrap || needsWipe ? 'disabled' : ''}
                     title="${escapeHtml(blockTitle)}"
                     onclick="b2bAskShopify('${it.id}')">+</button>
                 <button class="b2b-recycle" ${ok ? 'disabled' : ''} title="Recycle units out" onclick="b2bRecycleUnits('${it.id}')">Recycle</button>
+                ${_b2bLabelBtn(it)}
             </div>
         </div>`;
     }).join('');
@@ -14164,6 +17477,9 @@ function _b2bListRows() {
 function b2bMarkWiped(itemId) {
     const it = _b2bLocalItem(itemId);
     if (!it || !it.wipe_required) return;
+    // Corp only. The button is already hidden for a store, so this is the guard
+    // against a stale tab whose role changed under it.
+    if (!_b2bIsCorp()) return _b2bSay('Only corp can certify a data wipe.', true);
     const qty = Number(it.quantity) || 1;
     const room = qty - (Number(it.wiped_qty) || 0);
     if (room <= 0) return;
@@ -14595,26 +17911,182 @@ function _b2bBarcodeSvg(data) {
 
 // One label per physical unit: a qty-5 line prints 5 identical labels, so each
 // scan during listing ticks that line up by one.
-function b2bPrintLabels(dealId, itemId) {
+// A tag for the pallet itself, for the stretch between "we collected it" and
+// "it has been priced".
+//
+// The per-unit labels can't cover this: b2bPrintLabels keys off it.sku, and
+// SKUs are not minted until pricing is submitted, so a pickup waiting to be
+// routed has nothing printable at all -- it sits in a back room identified by
+// nothing. deal.ref exists from creation, which is what this prints.
+//
+// Two formats. The letter sheet is the one that matters: this gets taped to a
+// skid and read from across a room, which is a different job from a device
+// label. The 2.25in version is there for when the label printer is what's to
+// hand -- it's the same stock the item labels use.
+function b2bPrintHoldingLabel(dealId) {
+    const deal = _b2bDealById(dealId) || _b2bModalDeal;
+    if (!deal) return;
+
+    const client = deal.client?.company || '—';
+    const acr    = deal.client?.acronym || '';
+    const where  = deal.pricing_store || 'Not yet assigned';
+    const picked = deal.pickup_date ? _b2bDate(deal.pickup_date) : '—';
+    const desc   = deal.pickup_desc || 'No description recorded';
+
+    const doc = `<!doctype html><html><head><meta charset="utf-8">
+<title>Holding ${escapeHtml(deal.ref)}</title>
+<style id="pageSize">@page { size: letter; margin: 0.4in; }</style>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Inter','Segoe UI',Arial,sans-serif; background: #f4f7f9; }
+  .bar { position: sticky; top: 0; display: flex; gap: 8px; align-items: center;
+         padding: 12px 16px; background: #fff; border-bottom: 1px solid #e6ebf1; }
+  .bar b { font-size: 13px; font-weight: 800; color: #1a1c1e; margin-right: 6px; }
+  .bar button { font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+                padding: 7px 13px; border-radius: 9px; border: 1px solid #e6ebf1;
+                background: #fff; color: #647082; }
+  .bar button.on { background: #e8f7ee; border-color: #1f9d57; color: #178048; }
+  .bar button.go { background: #1f9d57; border-color: #1f9d57; color: #fff; margin-left: auto; }
+  .sheet { padding: 20px; display: flex; justify-content: center; }
+
+  .tag { width: 7.7in; background: #fff; border: 2px solid #111; padding: 0.34in 0.4in; }
+  .tag .hd { font-size: 15pt; font-weight: 800; letter-spacing: .22em;
+             text-transform: uppercase; border-bottom: 2px solid #111; padding-bottom: 0.1in; }
+  .tag .co { font-size: 34pt; font-weight: 800; line-height: 1.05; margin-top: 0.16in; }
+  .tag .bc { display: block; width: 100%; height: 1.15in; fill: #000; margin-top: 0.16in; }
+  .tag .rf { font-family: 'Consolas','SFMono-Regular',monospace; font-size: 26pt;
+             font-weight: 700; letter-spacing: .1em; text-align: center; margin-top: 0.02in; }
+  .tag .gr { display: flex; gap: 0.4in; margin-top: 0.2in; border-top: 1px solid #111; padding-top: 0.14in; }
+  .tag .gr > div { flex: 1; }
+  .tag .k { font-size: 9pt; font-weight: 800; letter-spacing: .12em;
+            text-transform: uppercase; color: #444; }
+  .tag .v { font-size: 15pt; font-weight: 700; margin-top: 0.03in; }
+  .tag .ds { font-size: 12pt; margin-top: 0.16in; line-height: 1.35; }
+  .tag .ft { font-size: 9.5pt; color: #444; margin-top: 0.2in;
+             border-top: 1px solid #ccc; padding-top: 0.1in; }
+
+  /* Label-printer stock: only what identifies the pallet survives the shrink. */
+  body.sm .sheet { padding: 16px; }
+  body.sm .tag { width: 2.25in; height: 1in; padding: 0.05in 0.07in; border-width: 1px;
+                 display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  body.sm .tag .hd { font-size: 6pt; letter-spacing: .14em; border: 0; padding: 0; }
+  body.sm .tag .co { font-size: 7.5pt; margin: 0; max-width: 100%;
+                     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body.sm .tag .bc { height: 0.34in; margin-top: 0.02in; }
+  body.sm .tag .rf { font-size: 9pt; margin: 0; letter-spacing: .04em; }
+  body.sm .tag .gr, body.sm .tag .ds, body.sm .tag .ft { display: none; }
+
+  @media print {
+    body { background: #fff; }
+    .bar { display: none; }
+    .sheet { padding: 0; display: block; }
+    .tag { width: 100%; }
+    body.sm .tag { width: 2.25in; }
+  }
+</style></head>
+<body>
+  <div class="bar">
+    <b>${escapeHtml(deal.ref)}</b>
+    <button id="b1" class="on" onclick="setSize(false)">Full page</button>
+    <button id="b2" onclick="setSize(true)">2.25 × 1 in</button>
+    <button class="go" onclick="window.print()">Print</button>
+  </div>
+  <div class="sheet">
+    <div class="tag">
+      <div class="hd">Holding — Awaiting Pricing</div>
+      <div class="co">${escapeHtml(client)}${acr ? ` (${escapeHtml(acr)})` : ''}</div>
+      ${_b2bBarcodeSvg(deal.ref)}
+      <div class="rf">${escapeHtml(deal.ref)}</div>
+      <div class="gr">
+        <div><div class="k">Picked Up</div><div class="v">${escapeHtml(picked)}</div></div>
+        <div><div class="k">Price It At</div><div class="v">${escapeHtml(where)}</div></div>
+        <div><div class="k">Released By</div><div class="v">${escapeHtml(deal.signed_by || '—')}</div></div>
+      </div>
+      <div class="ds"><b>Contents:</b> ${escapeHtml(desc)}</div>
+      <div class="ft">Do not process or list these items until this deal has been priced and the
+        client has accepted the quote. Look the reference up in Operations &rarr; Business-to-Business.</div>
+    </div>
+  </div>
+<script>
+  function setSize(small) {
+    document.body.classList.toggle('sm', small);
+    document.getElementById('b1').className = small ? '' : 'on';
+    document.getElementById('b2').className = small ? 'on' : '';
+    document.getElementById('pageSize').textContent = small
+      ? '@page { size: 2.25in 1in; margin: 0; }'
+      : '@page { size: letter; margin: 0.4in; }';
+  }
+<\/script>
+</body></html>`;
+
+    const w = window.open('', '_blank');
+    if (!w) return alert('Allow pop-ups for this site to print the holding label.');
+    w.document.write(doc);
+    w.document.close();
+}
+
+function b2bPrintLabels(dealId, itemId, count) {
     const deal = _b2bDealById(dealId) || _b2bModalDeal;
     if (!deal) return;
     const source = itemId ? _b2bModalItems.filter(i => i.id === itemId) : _b2bModalItems;
     const labels = [];
-    source.forEach(it => {
-        if (!it.sku) return;
-        const n = Math.max(1, Number(it.quantity) || 1);
-        for (let i = 0; i < n; i++) labels.push(it);
-    });
-    if (!labels.length) {
-        return alert('No SKUs to print yet — they get assigned when the pricing is submitted.');
+
+    if (itemId) {
+        // One line: ask how many. A qty-20 line used to print twenty labels
+        // whether you wanted twenty or the one you just tore. The default is the
+        // outstanding count, because that is how many are still to be handled --
+        // and once a line is fully listed it falls to 1, which is the reprint
+        // case. Skipped entirely for a single-unit line; there is nothing to ask.
+        const it = source[0];
+        if (it && it.sku) {
+            const qty  = Math.max(1, Number(it.quantity) || 1);
+            const done = (Number(it.listed_qty) || 0) + (Number(it.recycled_qty) || 0);
+            const left = Math.max(1, qty - done);
+            let n = Number(count) || 0;
+            if (!n) {
+                if (qty === 1) {
+                    n = 1;
+                } else {
+                    const raw = prompt(
+                        `How many labels for "${_b2bItemName(it)}"?\n\n`
+                        + `${qty} unit${qty === 1 ? '' : 's'} on the line`
+                        + `${done ? `, ${left} still to handle` : ''}.`, String(left));
+                    if (raw === null) return;
+                    n = parseInt(raw, 10) || 0;
+                }
+            }
+            n = Math.min(qty, Math.max(1, n));
+            for (let i = 0; i < n; i++) labels.push(it);
+        }
+    } else {
+        source.forEach(it => {
+            if (!it.sku) return;
+            const n = Math.max(1, Number(it.quantity) || 1);
+            for (let i = 0; i < n; i++) labels.push(it);
+        });
     }
 
-    const cells = labels.map(it => `
+    if (!labels.length) {
+        return alert('No SKUs to print yet — a line gets one as soon as it is added.');
+    }
+
+    // What happens to the unit, on the unit. A recycle line printed labels
+    // indistinguishable from a purchase, so once the paperwork was off the pallet
+    // there was nothing on the box itself saying "this must not be listed".
+    // Styled for a mono thermal printer rather than with colour: recycle is
+    // knocked out of solid black, no-residual is boxed, a purchase is plain.
+    const DISP_LABEL = { purchase: 'Purchased', no_residual: 'No Residual Value', recycle: 'Recycle' };
+    const DISP_CLASS = { purchase: 'buy', no_residual: 'nrv', recycle: 'rec' };
+    const cells = labels.map(it => {
+        const d = _b2bDispOf(it);
+        return `
         <div class="lb">
             ${_b2bBarcodeSvg(it.sku)}
             <div class="sku">${escapeHtml(it.sku)}</div>
             <div class="desc">${escapeHtml(_b2bItemName(it))}</div>
-        </div>`).join('');
+            <div class="disp ${DISP_CLASS[d] || 'buy'}">${escapeHtml(DISP_LABEL[d] || DISP_LABEL.purchase)}</div>
+        </div>`;
+    }).join('');
 
     const doc = `<!doctype html><html><head><meta charset="utf-8">
 <title>Labels ${escapeHtml(deal.ref)}</title>
@@ -14636,17 +18108,33 @@ function b2bPrintLabels(dealId, itemId) {
   .lb { width: 2.25in; height: 1in; padding: 0.05in 0.07in; background: #fff;
         border: 1px dashed #cbd5e1; display: flex; flex-direction: column;
         align-items: center; justify-content: center; overflow: hidden; }
-  .lb .bc { display: block; width: 100%; height: 0.42in; fill: #000; }
+  /* 0.38in, down from 0.42, to pay for the description growing and the handling
+     line arriving. Still ~9.5mm of bar height, comfortably over what Code 128
+     needs to scan. */
+  .lb .bc { display: block; width: 100%; height: 0.38in; fill: #000; }
   .lb .sku { font-family: 'Consolas','SFMono-Regular',monospace; font-size: 10pt;
              font-weight: 700; letter-spacing: .04em; line-height: 1.1; margin-top: 0.03in; }
-  .lb .desc { font-size: 6.5pt; color: #333; line-height: 1.1; margin-top: 0.01in;
+  /* Was 6.5pt, which the label printers were not reproducing legibly. */
+  .lb .desc { font-size: 8pt; color: #000; line-height: 1.1; margin-top: 0.01in;
               max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* No colour: these go to a mono thermal printer, so the three outcomes are
+     told apart by weight and inversion instead. Recycle is the one that must be
+     unmissable -- it means do not list this -- so it takes the solid block. */
+  .lb .disp { margin-top: 0.025in; font-size: 7.5pt; font-weight: 800;
+              letter-spacing: .06em; text-transform: uppercase; line-height: 1.1;
+              max-width: 100%; white-space: nowrap; overflow: hidden; }
+  .lb .disp.buy { color: #000; }
+  .lb .disp.nrv { color: #000; border: 1pt solid #000; padding: 0 0.045in; border-radius: 2pt; }
+  .lb .disp.rec { background: #000; color: #fff; padding: 0.008in 0.055in; border-radius: 2pt; }
 
-  /* The short stock has no room for a description line. */
+  /* The short stock has no room for the description as well, and between the two
+     the handling is the one that changes what you DO with the unit -- the SKU
+     above it already says exactly which line it is. */
   body.sm .lb { height: 0.75in; }
-  body.sm .lb .bc { height: 0.34in; }
+  body.sm .lb .bc { height: 0.30in; }
   body.sm .lb .sku { font-size: 9pt; }
   body.sm .lb .desc { display: none; }
+  body.sm .lb .disp { font-size: 7pt; margin-top: 0.02in; }
 
   @media print {
     body { background: #fff; }
@@ -15237,13 +18725,21 @@ function cbRestoreEntry(id) {
 // 23. MODULE: ROLE-BASED UI & INITIALIZATION
 // ============================================================================
 
+// Split out of applyRoleBasedUI so the shop-floor board can greet its user
+// without running the rest of it — that function ends by kicking off a
+// feature-overrides fetch, and a page with no data-feature elements has nothing
+// to gate. One writer, so the wording can't drift between the two callers.
+function _setUserGreeting() {
+    const el = document.getElementById('userGreeting');
+    if (el) el.innerText = `Welcome ${sessionStorage.getItem('speeksUserName') || 'User'}!`;
+}
+
 function applyRoleBasedUI() {
     const userRole = sessionStorage.getItem('speeksUserRole') || 'employee';
     const userStore = sessionStorage.getItem('speeksUserStore') || 'ALL';
     const userName = sessionStorage.getItem('speeksUserName') || 'User';
 
-    const greetingEl = document.getElementById('userGreeting');
-    if (greetingEl) greetingEl.innerText = `Welcome ${userName}!`;
+    _setUserGreeting();
 
     const firstName = userName.split(' ')[0];
     // (Analytics Workspace header is a static V4 hero in workspace.html now —
@@ -15254,18 +18750,9 @@ function applyRoleBasedUI() {
 
     document.querySelectorAll('.dynamic-module-flex, .dynamic-module-block, .dynamic-module').forEach(module => {
         const classes = Array.from(module.classList);
-        const requiredRoles = classes.filter(c => c.startsWith('role-'));
         const requiredStores = classes.filter(c => c.startsWith('store-'));
 
-        // A Multi-Store Manager logs in with the effective role 'manager' (see the
-        // login block), so `role-manager` can't distinguish them and there is no
-        // role class of their own. `role-multistore-manager` is that missing gate:
-        // it matches ONLY an MSM, letting something be shown to them without also
-        // showing it to every store manager.
-        const passesRole = requiredRoles.length === 0 ||
-            requiredRoles.includes(userRoleClass) ||
-            (userRoleClass === 'role-assistant-manager' && requiredRoles.includes('role-employee')) ||
-            (requiredRoles.includes('role-multistore-manager') && isMultiStoreManager());
+        const passesRole = _passesRoleClasses(classes, userRoleClass);
         const passesStore = requiredStores.length === 0 || requiredStores.includes(userStoreClass);
 
         let visible = passesRole && passesStore;
@@ -15357,7 +18844,14 @@ const MULTISTORE_MANAGER_STORES = ['BAL', 'MPL'];
 // True if a directory user belongs to a given store's roster. A Multi-Store Manager
 // belongs to EVERY store they manage (not just their home store), so they're included
 // anywhere a regular store manager would be — variance, listing-goals roster, etc.
+// "Is this person part of this store's team?" — every caller is building a staff
+// roster (listing goals, the target ladder, the variance employee list), which is
+// why the Store role is turned away here rather than in each of them. A Store
+// account has a store, but it is a TV on the wall: counted as staff it would ask
+// the screen for a listing role every morning, and add a head to the roster that
+// moves the weekly target a full ±20 listings.
 function userInStore(user, storeCode) {
+    if (String(user.role || '').toLowerCase().trim() === 'store') return false;
     const store = String(storeCode || '').toUpperCase();
     if (String(user.store || '').toUpperCase() === store) return true;
     return String(user.role || '').toLowerCase() === 'multi-store manager'
@@ -15520,6 +19014,10 @@ function initDashboardData() {
         setTimeout(startReactionPolling, 3000);
 
         setTimeout(fetchHubData, 100);
+        // Early, and NOT because a tab is open on it — no Command Center opens a tab
+        // any more. It feeds three of the summary's seven cells, which is the first
+        // thing on screen, so it is the one fetch whose delay is most visible.
+        setTimeout(fetchLiveDashboard, 150);
         setTimeout(fetchVarianceData, 300);
         setTimeout(fetchWeeklyKPIs, 500);
 
@@ -15550,13 +19048,28 @@ function initDashboardData() {
         // matters if the realtime socket never connects (CDN blocked, etc.); it
         // re-pulls the sources so a change still surfaces within the interval.
         if (!window._ccDataSync) window._ccDataSync = setInterval(() => {
-            const hasCC = document.getElementById('cc-updot-buying');       // manager Command Center
-            const hasEC = document.getElementById('ec-updot-buying');       // employee combined widget
-            if ((hasCC || hasEC) && typeof fetchHubData === 'function') fetchHubData();
-            if (hasCC && typeof fetchScorecardData === 'function') fetchScorecardData();
-            if (hasCC && typeof fetchAlertsData === 'function') fetchAlertsData();
-            if (hasEC && typeof fetchAndRenderEmployeeKPIs === 'function') fetchAndRenderEmployeeKPIs();
+            // One widget, so each source is polled only if ITS tab is actually
+            // present for this user — a role without the Scorecard tab should not be
+            // re-pulling the scorecard every ten minutes.
+            const has = t => !!document.getElementById('cc-tab-' + t);
+            if (has('buying') && typeof fetchHubData === 'function') fetchHubData();
+            if (has('scorecard') && typeof fetchScorecardData === 'function') fetchScorecardData();
+            if (has('ebay') && typeof fetchAlertsData === 'function') fetchAlertsData();
+            if (has('kpis') && typeof fetchAndRenderEmployeeKPIs === 'function') fetchAndRenderEmployeeKPIs();
         }, 10 * 60 * 1000);
+        // SAFETY NET for the Live Dashboard, same reasoning as above: realtime is the
+        // real path. Skipped while the tab is in the background — a dashboard left open
+        // on a back office monitor for a week should not spend a request every five
+        // minutes on a panel nobody is looking at — and re-pulled the moment it comes
+        // back to the foreground, so returning to the tab never shows a stale number.
+        if (!window._lvSync) {
+            window._lvSync = setInterval(() => {
+                if (document.visibilityState === 'visible') fetchLiveDashboard();
+            }, 5 * 60 * 1000);
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') fetchLiveDashboard();
+            });
+        }
         setTimeout(fetchAndRenderEmployeeGoals, 1100);
         setTimeout(fetchAndRenderEmployeeKPIs, 1200);
         setTimeout(fetchAndDisplayStoreComment, 1500);
@@ -15610,11 +19123,17 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelector('.sidebar-toggle')?.classList.add('collapsed'); 
     }
     
-    loadCMS();
-    injectGlobalAuth();
-    injectIdeaModal();
-    startAuthFetch();
-    
+    // Site-wide, except on the shop-floor board. A screen has no announcements to
+    // read, no PIN pad to pre-load the user list for, and no idea box — and cms is
+    // the very function whose polling had to be walked back once for egress.
+    // Running these on five TVs around the clock is that bill again, for nothing.
+    if (!_tvOnBoardPage()) {
+        loadCMS();
+        injectGlobalAuth();
+        injectIdeaModal();
+        startAuthFetch();
+    }
+
     if (document.getElementById('kbBody')) loadHotkeys();
     if (document.getElementById('content-container') && document.getElementById('docSearch')) { 
         loadDocs(); 
@@ -15622,10 +19141,26 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (sessionStorage.getItem('speeksUnlocked') === 'true') {
+        // A TV is left on for weeks and reloads on its own — power cut, browser
+        // restart, someone's overnight update. Every one of those has to land back
+        // on the board, not on a QuickPortal, so the gate runs on load and not
+        // only at login. First thing inside the branch: everything below it is
+        // page setup that a redirect makes pointless.
+        if (_tvGate()) return;
+        // Two pages are whole destinations rather than a tool inside one, so the
+        // visit IS the usage signal. Recorded here — past the TV gate, inside the
+        // signed-in branch — so a board and the login screen never count.
+        _trackPageVisit();
+        // …and the fact that they were here at all. The PIN path can't carry this
+        // on its own: a tab that stays open never returns to it. See _usagePresence.
+        _usagePresence();
         document.body.classList.add('is-authenticated');
         const authOverlay = document.getElementById('authOverlay');
         if (authOverlay) authOverlay.style.display = 'none';
         document.body.style.overflow = '';
+
+        // Already on the board: it gets its own small init and nothing else.
+        if (_tvOnBoardPage()) { initBoardPage(); return; }
 
         closeAllModals();
         applyRoleBasedUI();
@@ -15644,6 +19179,16 @@ document.addEventListener("DOMContentLoaded", () => {
         setInterval(applyKpiReminder, 60000);
         if (document.getElementById('mainKpiChart')) syncAllData();
     } else {
+        // sessionStorage dies with the browser process, so a TV that power-cycles
+        // overnight wakes with no session, on the one page in the site with no PIN
+        // pad of its own. It has to go find one.
+        //
+        // It always did — but only because injectGlobalAuth() put a hidden
+        // #authOverlay on every page, which is the condition the line below tests.
+        // The board no longer injects it (see the guard at the top of this
+        // handler), so the board now has to say where it goes. _tvGate() bounces it
+        // straight back here the moment the PIN is accepted.
+        if (_tvOnBoardPage()) { window.location.replace('index.html'); return; }
         if (!window.location.href.includes('index.html') && document.getElementById('authOverlay')) {
             window.location.href = "index.html"; 
             return;
@@ -16191,18 +19736,19 @@ function drawLeaderboard() {
 
     if (!rows.length) { wrapper.innerHTML = '<div class="status-message">No data yet.</div>'; return; }
 
-    const max = Math.max(...rows.map(r => r.val), 1);
     const fmt = v => '$' + Math.round(v).toLocaleString();
 
+    // No bars. This is a standings list — the rank column already gives the order
+    // and the money column already gives the size, so a bar scaled to the leader
+    // was a third encoding of what two columns had said, and the one that took the
+    // most room. (It also lost the .lbs-info wrapper, which existed only to stack
+    // the name over its bar.)
     wrapper.innerHTML = rows.map((r, i) => `
         <div class="lbs-row${r.store === myStore ? ' me' : ''}">
             <span class="lbs-rank${i === 0 ? ' g' : ''}">${i + 1}</span>
             <span class="lbs-store">
                 <span class="lbs-dot" style="background:${colors[r.store] || '#94a3b8'}"></span>
-                <span class="lbs-info">
-                    <span class="lbs-nm">${r.store}</span>
-                    <span class="lbs-bar"><i style="width:${Math.max(5, (r.val / max) * 100).toFixed(1)}%;background:${colors[r.store] || '#94a3b8'}"></i></span>
-                </span>
+                <span class="lbs-nm">${r.store}</span>
             </span>
             <span class="lbs-val">${fmt(r.val)}</span>
         </div>`).join('');
@@ -16650,7 +20196,9 @@ window.toggleGoalsPanel = function(event) {
     const toggle = document.querySelector('.gi-nav-toggle');
     if (toggle) toggle.classList.toggle('panel-active', isOpen);
     if (!isOpen) _closePrevMonths();
-    if (isOpen) _closeSidePanels('goalsSidePanel');
+    if (isOpen) {
+        _closeSidePanels('goalsSidePanel');
+    }
 };
 
 // --- Edit Modal ---
@@ -18714,7 +22262,7 @@ function buildAuditSummaryHtml(audit, store) {
                 <span style="font-size:16px; font-weight:900; background:${c.bg}; color:${c.fg}; padding:4px 10px; border-radius:8px;">${audit.earned}/${audit.possible} · ${audit.pct}%</span>
             </div>
         </div>
-        <button onclick="openAuditBreakdown('${store}')" class="btn-secondary" style="margin-top:10px; width:100%; padding:8px; font-size:12px; font-weight:800;">View Full Breakdown</button>`;
+        <button onclick="openAuditBreakdown('${store}')" class="btn-secondary" style="margin-top:10px; width:100%; padding:8px; font-size:12px; font-weight:800;">View Audit Breakdown</button>`;
 }
 
 // =========================================================
@@ -18958,8 +22506,16 @@ function siteCopyBtn(value, what) {
 // overflow-wrap:anywhere means even a long value with no spaces wraps rather
 // than pushes. A normal SKU sits well under the cap and still never breaks at
 // its own hyphens, so it stays readable and copyable in one piece.
-function siteSkuSpan(value, style = '', max = 230) {
-    return `<span style="display:inline-block; max-width:${max}px; overflow-wrap:anywhere; ${style}">${escapeHtml(value)}</span>`;
+// `min` is the floor the column may not be squeezed below. overflow-wrap:anywhere
+// is what stops a pathological SKU widening the column, but it does it by telling
+// the browser the value may break at ANY character — so min-content becomes one
+// character wide, and in a crowded table the column collapses and an ordinary
+// 14-character SKU stacks four letters to a line. A min-width raises that floor
+// back to one line's worth without giving up the cap at the other end.
+function siteSkuSpan(value, style = '', max = 230, min = 0) {
+    return `<span style="display:inline-block; max-width:${max}px;`
+        + (min ? ` min-width:${min}px;` : '')
+        + ` overflow-wrap:anywhere; ${style}">${escapeHtml(value)}</span>`;
 }
 
 function siteCopy(ev, btn) {
@@ -21581,7 +25137,9 @@ window.toggleAuditPanel = function(event) {
 // --- ROLE SELECTION LOGIC ---
 // Per-role capacity: every role is 1-per-store. Extended lister roles (L3, L4, …
 // on big rosters) aren't listed here — the `|| 1` lookup below caps them too.
-const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1 };
+// OFF is the exception and must stay uncapped: any number of people can be off
+// on the same day, and a cap of 1 would lock the chip after the first one.
+const ROLE_CAP = { B1: 1, B2: 1, L1: 1, L2: 1, OFF: Infinity };
 
 window.updateRoleLocks = function() {
     // Role capacity is per STORE. Normally the page shows one store's dots, so the
@@ -21627,6 +25185,25 @@ window.selectRole = function(clickedBtn, emp, role) {
 
     const isAlreadyActive = clickedBtn.classList.contains('active');
 
+    // A floater is claimed by whichever store puts him on their board first, and
+    // released when they take him off. The server decides, so the UI only paints
+    // after it answers — losing the race has to leave the dot unselected rather
+    // than showing a role this store doesn't actually have.
+    const _store = _goalsRoleScopeStore(clickedBtn);
+    if (_goalsIsFloater(_store, emp)) {
+        const releasing = isAlreadyActive || role === GOALS_OFF;
+        _goalsClaimFloater(_store, emp, releasing).then(err => {
+            if (err) {
+                alert(err);
+                // Repaint from the server's answer so he greys out here.
+                if (typeof loadManagerGoals === 'function') loadManagerGoals();
+                return;
+            }
+            _goalsApplyRole(clickedBtn, role, isAlreadyActive);
+        });
+        return;
+    }
+
     // 1. If clicking the already active role, toggle it off and free it up.
     if (isAlreadyActive) {
         clickedBtn.classList.remove('active');
@@ -21662,8 +25239,7 @@ window.recomputeGoalDisplays = function() {
     if (!document.getElementById('goal-display-0') && !document.querySelector('.goal-auto-display')) return;
     let staffedCount = 0;
     goalsRoster.forEach((emp, idx) => {
-        const group = document.getElementById(`roles-${idx}`);
-        if (group && group.querySelector('.role-dot.active')) staffedCount++;
+        if (_isWorkingRole(_activeRoleIn(document.getElementById(`roles-${idx}`)))) staffedCount++;
     });
     const rosterSize = effectiveTeamSize(goalsTargetStore);
     const dateStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' });
@@ -21671,15 +25247,14 @@ window.recomputeGoalDisplays = function() {
     let todayTotal = 0;
     let weekTotal = 0;
     goalsRoster.forEach((emp, idx) => {
-        const group = document.getElementById(`roles-${idx}`);
-        const activeBtn = group?.querySelector('.role-dot.active');
-        const role = _roleOf(activeBtn);
-        const todayGoal = role !== '-' ? ListingGoalsEngine.goalFor(role, dateStr, rosterSize, staffedCount, targetFor(goalsTargetStore)) : 0;
+        const role = _activeRoleIn(document.getElementById(`roles-${idx}`));
+        const todayGoal = _isWorkingRole(role) ? ListingGoalsEngine.goalFor(role, dateStr, { employee: emp, store: goalsTargetStore }) : 0;
 
         const disp = document.getElementById(`goal-display-${idx}`);
         if (disp) {
-            disp.innerText = role === '-' ? '–' : todayGoal;
-            disp.classList.toggle('goal-auto-set', role !== '-');
+            disp.innerText = _isOffRole(role) ? 'Off' : (role === '-' ? '–' : todayGoal);
+            disp.classList.toggle('goal-auto-set', _isWorkingRole(role));
+            disp.classList.toggle('goal-off-set', _isOffRole(role));
         }
         todayTotal += todayGoal;
 
@@ -21711,9 +25286,9 @@ function _goalsResaveIfStale(dateStr) {
     if (!Array.isArray(liveGoalsData) || !liveGoalsData.length) return;
     if (typeof scheduleGoalsAutosave !== 'function') return;
     const stale = goalsRoster.some((emp, idx) => {
-        const group = document.getElementById(`roles-${idx}`);
-        const role = _roleOf(group?.querySelector('.role-dot.active'));
-        if (role === '-') return false;
+        const role = _activeRoleIn(document.getElementById(`roles-${idx}`));
+        // Off (and unset) carry no goal, so there is nothing that can go stale.
+        if (!_isWorkingRole(role)) return false;
         const saved = liveGoalsData.find(r => r.employee === emp
             && normalizeGoalDate(r.date) === dateStr && r.role === role);
         if (!saved || saved.goal == null || saved.goal === '') return false;
@@ -21862,6 +25437,7 @@ function togglePatchNotes() {
     if (!isOpen) {
         modal.classList.add('show');
         lockAndBlurScreen();
+        trackUsage('open', 'patchNotesModal', _usageLabel('patchNotesModal'));
         switchAnnTab('patchnotes');
     }
 }
@@ -23709,6 +27285,30 @@ const EMAIL_LIST_GROUPS = [
             ...EMAIL_LIST_STORES.map(s => ({ key: `weekly_store_${s}`, label: `${s} manager report` })),
         ],
     },
+    // Every list a report READS must appear here as well as in the edge fn's
+    // LIST_KEYS, or it becomes an orphan only SQL can change — which is exactly
+    // what happened to sales_import_alert. The backend has allowed usage_report
+    // since day one; this row is what makes it editable.
+    {
+        title: 'Site Usage Reports',
+        desc: 'Nightly 8pm usage email, plus the Saturday and month-end summaries (sent automatically).',
+        lists: [{ key: 'usage_report', label: 'Recipients' }],
+    },
+    {
+        title: 'Cash On Hand',
+        desc: '7am closing-cash table, read off each store\'s Day End Report.',
+        lists: [{ key: 'cash_report', label: 'Recipients' }],
+    },
+    // Last because it is the one operational alert here rather than a scheduled
+    // report. b2b_quote_ready had to be added to LIST_KEYS in the same breath:
+    // the allowlist arrived on another branch, and without it this row would
+    // render and then refuse every address with "Unknown list".
+    {
+        title: 'B2B Quote Ready',
+        desc: 'Told the moment a pickup is priced and a quote is waiting on approval. '
+            + 'Leave this empty and it falls back to the single address in CRM Settings.',
+        lists: [{ key: 'b2b_quote_ready', label: 'Recipients' }],
+    },
 ];
 
 async function openEmailRecipients() {
@@ -23947,11 +27547,25 @@ const FEATURE_CATALOG = [
     { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
     { key: 'tool-feature-access',      label: 'Feature Access (This Tool)',    tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
-    // 'manager' here means the Multi-Store Manager — Feature Access has no MSM
-    // slug of its own (they log in as a manager). The panel link's
-    // role-multistore-manager class is what keeps ordinary managers out; this
-    // row only lets the DM/CEO switch it off for the MSM.
-    { key: 'tool-expenses',            label: 'Expense Report',                tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'manager'] },
+    // TWO rows for one tool, sharing the `tool-expenses` stem the way the claims
+    // and preferred-purchase pairs do. One key carrying both role classes made the
+    // MGR column DISHONEST: it read as "on for the whole manager role" while the
+    // role-multistore-manager class silently admitted only the MSM, so the switch
+    // that should have granted it to another manager was not the one anybody would
+    // reach for (Ethan 2026-08-09). Split, the DM row means what it says and the
+    // MGR column on the second row is a real switch — turning it on beats the role
+    // class, which is how every other tool already behaves.
+    //
+    // The second row's def is 'multistore-manager' — not a role COLUMN (there isn't
+    // one; they sign in as a manager) but a token _faDefaultFor understands, so the
+    // per-user tab can say "role default: visible" for Joseph and match what the
+    // `role-multistore-manager` class on the link actually does. An empty def was
+    // tried first and made his row read "hidden" while he plainly had the tool.
+    //
+    // CEO dropped from both (Ethan 2026-08-09) — they no longer file or review here.
+    // The edge fn still admits the role; this only takes the tool off their panel.
+    { key: 'tool-expenses',            label: 'Expense Report (DM)',           tab: 'tools', group: 'Admin', def: ['district-manager'] },
+    { key: 'tool-expenses-mgr',        label: 'Expense Report (Manager)',      tab: 'tools', group: 'Admin', def: ['multistore-manager'] },
     { key: 'tool-performance-metrics', label: 'Performance Metrics',           tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-company-records',     label: 'Company Records',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
     { key: 'tool-manage-policies',     label: 'Manage Policies',               tab: 'tools', group: 'Admin', def: ['district-manager'] },
@@ -23961,20 +27575,32 @@ const FEATURE_CATALOG = [
     { key: 'widget-goals-panel',       label: 'Goals & Initiatives (Sidebar)', tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'employee', 'training', 'assistant-manager'] },
     { key: 'widget-checklist-panel',   label: 'Checklist (Sidebar)',           tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'district-manager', 'assistant-manager'] },
     { key: 'widget-audit-panel',       label: 'Cleaning Checklist (Sidebar)',  tab: 'widgets', group: 'Side Panels', def: ['manager', 'owner-manager', 'assistant-manager'] },
-    { key: 'widget-scorecard-alerts',  label: 'Command Center (Whole Widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
-    { key: 'cc-scorecard',             label: 'Command Center · Scorecard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    // ONE Command Center for every role. Managers, ASMs and employees all get the
+    // same card; the per-tab rows below are the whole of the difference between
+    // them. There is no separate employee widget any more, and therefore no second
+    // set of keys that has to be kept in step with these.
+    //
+    // Live and Buying default ON for everyone: showing the team the same figures as
+    // their manager, cost and margin included, is the decision these panels were
+    // built around. Those rows exist so a store that would rather not can switch
+    // them off, not as a default-off gate.
+    { key: 'widget-scorecard-alerts',  label: 'Command Center (Whole Widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    { key: 'cc-live',                  label: 'Command Center · Live Dashboard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    // cc-buying was here. The tab is gone — buying is on the Live tab's Month view
+    // now — so the switch is gone too rather than left as a control that does
+    // nothing. Any stored override for the key is simply never read again.
     { key: 'cc-ebay',                  label: 'Command Center · eBay tab',       tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
-    { key: 'cc-buying',                label: 'Command Center · Buying & Sales tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
-    { key: 'widget-buying-selling',    label: 'Buying & Sales tab (Employee)', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'cc-scorecard',             label: 'Command Center · Scorecard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager'] },
+    // Label names the thing as it appears ON SCREEN. It was once "Weekly KPIs (Tab)",
+    // indistinguishable in a filter box from the Workspace tab that had been renamed
+    // to "Store KPIs" — which cost a real support round when KPIs were granted on the
+    // widget while the Workspace tab stayed off at the role level.
+    { key: 'cc-kpis',                  label: 'Command Center · Weekly KPIs tab', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
     { key: 'widget-listing-goals',     label: 'Listing Goals bar (Action Menu)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager', 'training'] },
-    // Labels name the thing as it appears ON SCREEN. These two were "Weekly KPIs tab
-    // (Employee)" and "Weekly KPIs (Tab)", which are indistinguishable in a filter
-    // box — and the Workspace tab was renamed to "Store KPIs" months ago, so
-    // searching Feature Access for what the tab actually says found nothing. That
-    // cost a real support round: KPIs were granted on the dashboard widget while the
-    // Workspace tab stayed switched off at the role level.
-    { key: 'widget-emp-weekly-kpis',   label: 'Weekly KPIs — dashboard widget tab', tab: 'widgets', group: 'Dashboard', def: ['employee', 'assistant-manager'] },
+    { key: 'widget-district-live',     label: 'District Live Dashboard',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'widget-district-command',  label: 'District Command Center',       tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    { key: 'dcc-sales-import',         label: 'District CC · Daily Import control', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    { key: 'dcc-weekly-summary',       label: 'District CC · Weekly Summary control', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     // The three district action-menu rows. Defaults mirror exactly what the
     // dashboard panels they replaced were gated to: Cleaning and Listing were
     // DM+CEO, Monthly Team Goals was DM-only. Delegation pairs each with the
@@ -23982,6 +27608,10 @@ const FEATURE_CATALOG = [
     { key: 'widget-dm-audit',          label: 'Cleaning Checklist (District)', tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
     { key: 'widget-dm-goals',          label: 'Monthly Team Goals (District)', tab: 'widgets', group: 'Dashboard', def: ['district-manager'] },
     { key: 'widget-dm-listing-goals',  label: 'Listing Goals (District)',      tab: 'widgets', group: 'Dashboard', def: ['district-manager', 'ceo'] },
+    // Not a show/hide toggle like the rest — this one decides whether the Listing
+    // Goals bar opens the roster editor or the personal-goal popup. Only meaningful
+    // for ASMs; managers and above always get the editor. See _canAssignGoalRoles.
+    { key: 'listing-goals-assign',     label: 'Listing Goals · assign roles (ASM)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-weekly-kpis',    label: 'Store KPIs — Workspace tab',    tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
@@ -24180,6 +27810,10 @@ function _featureEffectiveVisible(featureKey, userRoleClass, userName) {
     const slug = String(userRoleClass || '').replace(/^role-/, '');
     if (feat.def.includes(slug)) return true;
     if (slug === 'assistant-manager' && feat.def.includes('employee')) return true;
+    // Same MSM rule _passesRoleClasses applies to the DOM, so this off-page
+    // resolution (Jump To, section nav) can't disagree with the page itself.
+    if (feat.def.includes('multistore-manager') && typeof isMultiStoreManager === 'function'
+        && isMultiStoreManager()) return true;
     return false;
 }
 
@@ -24201,15 +27835,48 @@ function _applySectionNavVisibility(userRoleClass, userName) {
     });
 }
 
-// Overrides on plain (non role-gated) elements — e.g. individual hotbar links,
-// which normally just inherit their bar's visibility. Only "off" does work
-// here; "on" simply falls back to the inherited default.
+/**
+ * Does this element's `role-*` class list admit the current role?
+ *
+ * Shared by the module pass and the plain-element pass so the two can never
+ * drift. No role classes at all means "everyone" — that is what most tagged
+ * elements want, and changing it would hide half the site.
+ *
+ * A Multi-Store Manager logs in with the effective role 'manager' (see the login
+ * block), so `role-manager` can't distinguish them and there is no role class of
+ * their own. `role-multistore-manager` is that missing gate: it matches ONLY an
+ * MSM, letting something be shown to them without also showing it to every store
+ * manager.
+ */
+function _passesRoleClasses(classes, userRoleClass) {
+    const required = Array.from(classes).filter(c => c.startsWith('role-'));
+    return required.length === 0 ||
+        required.includes(userRoleClass) ||
+        (userRoleClass === 'role-assistant-manager' && required.includes('role-employee')) ||
+        (required.includes('role-multistore-manager') && isMultiStoreManager());
+}
+
+/**
+ * Overrides on plain (non dynamic-module) elements — hotbar links, and the
+ * Command Center's tab buttons / strips / panels / summary cells.
+ *
+ * An element with NO role classes stays visible-by-default and only an explicit
+ * "off" hides it; that is how hotbar links have always worked, and they rely on
+ * inheriting their bar's visibility.
+ *
+ * An element that DOES carry role classes is gated by them first, exactly as a
+ * dynamic-module would be, with the override still winning either way. Without
+ * this, every Command Center tab was visible to every role the moment the widget
+ * itself became visible to everyone — an employee saw eBay and Scorecard, and the
+ * only switch that removed them was the one that removed the whole card.
+ */
 function _applyFeatureOverridesToPlainEls(userRoleClass, userName) {
     document.querySelectorAll('[data-feature]').forEach(el => {
         if (el.classList.contains('dynamic-module') || el.classList.contains('dynamic-module-flex') || el.classList.contains('dynamic-module-block')) return;
         const ov = _featureOverrideFor(el.getAttribute('data-feature'), userRoleClass, userName);
-        if (ov === false) el.style.setProperty('display', 'none', 'important');
-        else el.style.removeProperty('display');
+        const allowed = ov === null ? _passesRoleClasses(el.classList, userRoleClass) : ov;
+        if (allowed) el.style.removeProperty('display');
+        else el.style.setProperty('display', 'none', 'important');
     });
 }
 
@@ -24437,8 +28104,19 @@ function _faSyncTabButtons() {
     });
 }
 
-function _faDefaultFor(feat, roleSlug) {
-    return feat.def === 'all' ? true : feat.def.includes(roleSlug);
+// `isMsm` exists because the Multi-Store Manager signs in with the effective role
+// 'manager' and so has no column of its own in this grid, while the DOM has always
+// been able to single them out with `role-multistore-manager`. A catalog entry can
+// now say the same thing by putting 'multistore-manager' in its def.
+//
+// Without this the user tab told a flat lie: Joseph HAD the Expense Report (the
+// role class admits him) and his row read "role default: hidden", because the tab
+// squashes his role to 'manager' before asking (Ethan spotted it 2026-08-09).
+// Deliberately NOT wired into the role columns — an ordinary manager really does
+// not get these, so the MGR chip staying off is the truth there.
+function _faDefaultFor(feat, roleSlug, isMsm) {
+    if (feat.def === 'all') return true;
+    return feat.def.includes(roleSlug) || (!!isMsm && feat.def.includes('multistore-manager'));
 }
 
 function _faRoleOverride(key, slug) {
@@ -24737,7 +28415,8 @@ function _faUserRowsHtml() {
     const u = _faUsers.find(x => x.name.toLowerCase() === _faUser);
     // effective role slug (Multi-Store Manager logs in with role 'manager')
     let roleSlug = u ? String(u.role || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-') : '';
-    if (roleSlug === 'multi-store-manager') roleSlug = 'manager';
+    const isMsm = roleSlug === 'multi-store-manager';
+    if (isMsm) roleSlug = 'manager';
     // Group features into collapsible cards (collapsed by default; a filter
     // expands the matches) so one user's exceptions aren't one huge scroll. A
     // "N set" badge on each card surfaces where this user already has overrides.
@@ -24758,7 +28437,7 @@ function _faUserRowsHtml() {
             let inherited = null;
             if (roleSlug) {
                 const roleOvr = _faRoleOverride(f.key, roleSlug);
-                inherited = roleOvr === null ? _faDefaultFor(f, roleSlug) : roleOvr;
+                inherited = roleOvr === null ? _faDefaultFor(f, roleSlug, isMsm) : roleOvr;
             }
             const seg = (val, txt) => {
                 const active = (ovr === null && val === 'default') || (ovr === true && val === 'on') || (ovr === false && val === 'off');
@@ -24874,8 +28553,12 @@ const JUMP_KEYWORDS = {
     'widget-checklist-panel':    'checklist tasks todo to do my tasks',
     'widget-goals-panel':        'goals initiatives monthly team',
     'widget-listing-goals':      'listing goals listings ebay target',
-    'widget-buying-selling':     'buying selling sales bought sold',
     'widget-district-command':   'district command center all stores overview',
+    'cc-live':                   'live dashboard today todays sales yesterday month to date mtd net sales orders average order aov gross margin cogs shopify real time right now how are we doing buying selling bought sold buy margin value purchased tracking',
+    'cc-ebay':                   'ebay listings status performance top rated metrics',
+    'cc-scorecard':              'scorecard audit paymore practice score marketing',
+    'cc-kpis':                   'weekly kpis my kpis mine vs store employee kpis conversion no deals',
+    'widget-district-live':      'live dashboard today todays sales all stores district net sales orders margin pace shopify real time',
     'tool-claims-store':         'claim claims shopify usps ups damaged lost package item not received insurance',
     'tool-claims-oversight':     'claims oversight all stores review insurance',
     'tool-box-order':            'boxes box shipping supplies packaging tape order',
@@ -24891,7 +28574,10 @@ const JUMP_KEYWORDS = {
     'tool-user-permissions':     'users permissions pin login accounts roles add user',
     'tool-feature-access':       'feature access hide show toggle delegation permissions',
     'tool-email-recipients':     'email recipients reports distribution who gets',
+    // Both halves of the split answer the same search — only one is ever visible
+    // to a given person, so they can never both come back in one result list.
     'tool-expenses':             'expense report expenses mileage miles reimbursement receipts monthly spend',
+    'tool-expenses-mgr':         'expense report expenses mileage miles reimbursement receipts monthly spend',
     'tool-performance-metrics':  'performance metrics alerts thresholds',
     'tool-company-records':      'records company files documents',
     'tool-manage-policies':      'policies process processes handbook documents',
@@ -24914,8 +28600,20 @@ const JUMP_PLACES = [
     { id: 'ops-cb',      label: 'Customer Call Backs', sub: 'Operations', kind: 'tab', feature: 'widget-ops-callbacks',       page: 'operations.html', hash: 'callbacks', fn: 'switchOperationsTab' },
     { id: 'ops-b2b',     label: 'B2B Deals',          sub: 'Operations', kind: 'tab', feature: 'widget-ops-b2b',              page: 'operations.html', hash: 'b2b',       fn: 'switchOperationsTab' },
     // --- dashboard panels (QuickPortal) --------------------------------------
+    // Live Dashboard needs TWO rows, not three: the store surface and the district
+    // card are separate Feature Access keys, and a single row would be invisible to
+    // one of the two audiences. It used to need three, when managers and employees
+    // had their own widgets and their own keys — the merge removed that row.
+    { id: 'w-live',      label: 'Live Dashboard',       sub: 'QuickPortal', kind: 'panel', feature: 'cc-live',           page: 'index.html', run: () => _jumpToLive('cc-live') },
+    { id: 'w-dlive',     label: 'District Live Dashboard', sub: 'QuickPortal', kind: 'panel', feature: 'widget-district-live', page: 'index.html' },
     { id: 'w-command',   label: 'Command Center',       sub: 'QuickPortal', kind: 'panel', feature: 'widget-scorecard-alerts', page: 'index.html' },
-    { id: 'w-buying',    label: 'Buying & Sales',       sub: 'QuickPortal', kind: 'panel', feature: 'widget-buying-selling',   page: 'index.html' },
+    // Both are TABS in a collapsible card, so they need the same treatment Live has:
+    // spotlighting without opening the tab lands the search on a collapsed widget.
+    // "Buying" still has to find something — people will keep typing it — but the
+    // tab it used to open no longer exists, so it lands on the Live Dashboard where
+    // the figures actually are.
+    { id: 'w-buying',    label: 'Buying & Sales',       sub: 'QuickPortal', kind: 'panel', feature: 'cc-live',                 page: 'index.html', run: () => _jumpToLive('cc-live') },
+    { id: 'w-kpis',      label: 'Weekly KPIs',          sub: 'QuickPortal', kind: 'panel', feature: 'cc-kpis',                 page: 'index.html', run: () => _jumpToCcTab('kpis', 'cc-kpis') },
     { id: 'w-district',  label: 'District Command Center', sub: 'QuickPortal', kind: 'panel', feature: 'widget-district-command', page: 'index.html' },
     { id: 'w-listing',   label: 'Listing Goals',        sub: 'QuickPortal', kind: 'panel', feature: 'widget-listing-goals',    page: 'index.html' },
     { id: 'w-checklist', label: 'Checklist',            sub: 'QuickPortal', kind: 'panel', feature: 'widget-checklist-panel',  page: 'index.html' },
@@ -25036,6 +28734,23 @@ function _jumpPlaceItems() {
         run: () => _jumpRunPlace(p),
     }));
 }
+
+// The Live Dashboard is a TAB inside a widget, so spotlighting the card is not
+// enough — if the user had collapsed the Command Center or switched to another tab,
+// scrolling to it would land them on whatever they were last looking at. Open the
+// tab first, then pulse.
+//
+// _jumpRunPlace calls `run` BEFORE its own page check, so the hop has to happen
+// here: this is reachable from Workspace and Operations too.
+function _jumpToCcTab(tab, featureKey) {
+    if (_jumpPage() !== 'index.html') { location.href = 'index.html#jump=' + featureKey; return; }
+    const btn = document.getElementById('cc-tab-' + tab);
+    // switchCommandTab treats a click on the OPEN tab as "collapse", so calling it
+    // unconditionally would close the very panel the search was asked to show.
+    if (btn && !btn.classList.contains('active')) switchCommandTab(tab);
+    _jumpSpotlight(featureKey);
+}
+function _jumpToLive(featureKey) { _jumpToCcTab('live', featureKey || 'cc-live'); }
 
 // Where a destination lives, as a URL. Tabs ride the plain hash their page
 // already reads on load (workspace.html#aging); panels use #jump=<feature>,
@@ -25763,15 +29478,16 @@ function renderVarianceReplies() {
                 // replied to can't be edited out from under the reply.
                 const dmEditing = canDm && dmNotesOpen && _vrEditing && !!it.gm_note && !it.mgr_reply;
                 let cell = _vrNoteCell(it, 'dm_note', dmEditing, 'Advice or a question for the manager…');
-                // Read-only views get a chip that says whether this note wants
-                // an answer or is FYI-only — that's how the manager tells what
-                // to respond to vs what's just for them to read.
-                if (it.dm_note && !dmEditing) {
-                    cell += it.dm_reply_requested
-                        ? (it.mgr_reply
-                            ? `<span style="display:inline-block; margin-top:4px; font-size:9.5px; font-weight:800; color:#166534; background:#dcfce7; border:1px solid #a7f3d0; border-radius:20px; padding:2px 8px; white-space:nowrap;">✓ Replied</span>`
-                            : `<span style="display:inline-block; margin-top:4px; font-size:9.5px; font-weight:800; color:#b91c1c; background:#fee2e2; border:1px solid #fca5a5; border-radius:20px; padding:2px 8px; white-space:nowrap;">↩ Response requested</span>`)
-                        : `<span style="display:inline-block; margin-top:4px; font-size:9.5px; font-weight:800; color:#64748b; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:20px; padding:2px 8px; white-space:nowrap;">FYI — no reply needed</span>`;
+                // Only the note that WANTS something carries a chip (user,
+                // 2026-08-10). There used to be an "FYI — no reply needed" chip on
+                // every other note, which meant a column of read-only notes was a
+                // column of identical grey pills saying nothing — the exact
+                // opposite of a flag. Silence now means "nothing owed", so the one
+                // red chip is the only thing that reads as a demand.
+                if (it.dm_note && !dmEditing && it.dm_reply_requested) {
+                    cell += it.mgr_reply
+                        ? `<span style="display:inline-block; margin-top:4px; font-size:9.5px; font-weight:800; color:#166534; background:#dcfce7; border:1px solid #a7f3d0; border-radius:20px; padding:2px 8px; white-space:nowrap;">✓ Replied</span>`
+                        : `<span style="display:inline-block; margin-top:4px; font-size:9.5px; font-weight:800; color:#b91c1c; background:#fee2e2; border:1px solid #fca5a5; border-radius:20px; padding:2px 8px; white-space:nowrap;">↩ Response requested</span>`;
                 }
                 return cell;
             })()) : ''}
@@ -27161,14 +30877,21 @@ let _agClosedOpen = {};   // store → whether its "Closed Items" section is exp
 
 const _agMoney = v => (v == null || v === '') ? '—'
     : '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-// The "Date listed" field is typed by hand as DD/MM/YYYY (Ethan's preference —
-// hunting through a picker for a months-old date is slow). Lenient parse:
-// -, . or / separators, 2-digit years, and a US-style month-first entry is
-// auto-swapped when the day slot can only be a month (e.g. 16/03 vs 03/16).
-function _agParseDMY(s) {
+// The "Date listed" field is typed by hand rather than picked — hunting through
+// a picker for a months-old date is slow.
+//
+// MONTH FIRST. This was day-first, which read "23/03/2026" for 23 March and was
+// being misread as a date in the 23rd month by everyone using it. Every other
+// date on the site is US format, so this one being the exception was the whole
+// problem.
+//
+// Lenient parse: -, . or / separators, 2-digit years, and a day-first entry is
+// auto-swapped when the FIRST slot cannot be a month (23/03 → 03/23). Anyone with
+// the old habit still gets the date they meant, and 03/04 stays March 4th.
+function _agParseMDY(s) {
     const m = String(s || '').trim().match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
     if (!m) return null;
-    let d = +m[1], mo = +m[2], y = +m[3];
+    let mo = +m[1], d = +m[2], y = +m[3];
     if (y < 100) y += 2000;
     if (mo > 12 && d <= 12) { const t = d; d = mo; mo = t; }
     if (d < 1 || d > 31 || mo < 1 || mo > 12 || y < 2000 || y > 2100) return null;
@@ -27176,12 +30899,12 @@ function _agParseDMY(s) {
     if (dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
     return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
-function _agFmtDMY(iso) {
+function _agFmtMDY(iso) {
     if (!iso) return '';
     const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
-    return m ? `${m[3]}/${m[2]}/${m[1]}` : '';
+    return m ? `${m[2]}/${m[3]}/${m[1]}` : '';
 }
-// Shared oninput mask for the DD/MM/YYYY fields: digits only, the slashes are
+// Shared oninput mask for the MM/DD/YYYY fields: digits only, the slashes are
 // inserted automatically, capped at ##/##/####.
 const _AG_DATE_MASK = "const d=this.value.replace(/\\D/g,'').slice(0,8); this.value=d.length>4?d.slice(0,2)+'/'+d.slice(2,4)+'/'+d.slice(4):(d.length>2?d.slice(0,2)+'/'+d.slice(2):d);";
 const _agFmtDate = d => { const x = new Date(d); return isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
@@ -27362,7 +31085,10 @@ function _agStatusChip(it) {
 
 function _agTableHtml(items, canDm) {
     const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 14px; border-bottom:1px solid #e2e8f0; white-space:nowrap;">${t}</th>`;
-    let html = `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; min-width:${canDm ? 1020 : 940}px;">
+    // Widened by the SKU column's new floor — without this the extra width comes
+    // out of the Item and Notes columns instead, which is the squeeze that was
+    // breaking the SKUs in the first place.
+    let html = `<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; min-width:${canDm ? 1100 : 1020}px;">
         <thead><tr>${th('Status')}${th('SKU')}${th('Item')}${th('Listed')}${th('Est. Value')}${th('Cost')}${th('Notes & Replies')}${canDm ? th('') : ''}</tr></thead><tbody>`;
     items.forEach(it => { html += _agRowHtml(it, canDm); });
     return html + `</tbody></table></div>`;
@@ -27378,7 +31104,7 @@ function _agRowHtml(it, canDm) {
             ${td(_agStatusChip(it))}
             ${td(inp('sku', it.sku, 'text', '140px'))}
             ${td(inp('title', it.title, 'text', '240px'))}
-            ${td(inp('date_created', _agFmtDMY(it.date_created), 'text', '105px', ` placeholder="DD/MM/YYYY" maxlength="10" oninput="${_AG_DATE_MASK}"`))}
+            ${td(inp('date_created', _agFmtMDY(it.date_created), 'text', '105px', ` placeholder="MM/DD/YYYY" maxlength="10" oninput="${_AG_DATE_MASK}"`))}
             ${td(inp('est_value', it.est_value, 'number', '90px'))}
             ${td(inp('cost', it.cost, 'number', '90px'))}
             ${td(_agThreadHtml(it, canDm, true))}
@@ -27398,9 +31124,9 @@ function _agRowHtml(it, canDm) {
     </div>`, 'white-space:nowrap;');
     return `<tr>
         ${td(_agStatusChip(it), 'min-width:150px;')}
-        ${td(siteSkuSpan(it.sku || '—', 'font-weight:700; color:#64748b;'))}
+        ${td(siteSkuSpan(it.sku || '—', 'font-weight:700; color:#64748b;', 230, 138))}
         ${td(`<span style="color:var(--slate-charcoal); font-weight:600;">${escapeHtml(it.title || '—')}</span>`, 'min-width:200px;')}
-        ${td(it.date_created ? `<span style="white-space:nowrap;">${_agFmtDMY(it.date_created)}${days != null ? ` <span style="color:#94a3b8; font-weight:700;">· ${days}d</span>` : ''}</span>` : '—')}
+        ${td(it.date_created ? `<span style="white-space:nowrap;">${_agFmtMDY(it.date_created)}${days != null ? ` <span style="color:#94a3b8; font-weight:700;">· ${days}d</span>` : ''}</span>` : '—')}
         ${td(`<span style="font-weight:800; white-space:nowrap;">${_agMoney(it.est_value)}</span>`)}
         ${td(`<span style="white-space:nowrap; color:#64748b;">${_agMoney(it.cost)}</span>`)}
         ${td(_agThreadHtml(it, canDm), 'min-width:300px; width:38%;')}
@@ -27650,8 +31376,8 @@ async function agSaveItemEdit(btn, itemId) {
     const dateRaw = get('date_created');
     let dateIso = '';
     if (dateRaw) {
-        dateIso = _agParseDMY(dateRaw);
-        if (!dateIso) { alert('Enter the listed date as DD/MM/YYYY (e.g. 16/03/2026).'); return; }
+        dateIso = _agParseMDY(dateRaw);
+        if (!dateIso) { alert('Enter the listed date as MM/DD/YYYY (e.g. 03/16/2026).'); return; }
     }
     // Changed DM notes (an emptied box means "no change" — notes are edited,
     // not deleted, from here).
@@ -27724,7 +31450,7 @@ function _agAddPanelHtml() {
         <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
             <div class="vr-up-field">${lbl('SKU')}<input type="text" id="ag-add-sku" class="vr-up-input" style="width:160px;" placeholder="KS01-…" value="${keep('ag-add-sku')}"></div>
             <div class="vr-up-field">${lbl('Item title')}<input type="text" id="ag-add-title" class="vr-up-input" style="width:280px;" placeholder="What is it?" value="${keep('ag-add-title')}"></div>
-            <div class="vr-up-field">${lbl('Date listed')}<input type="text" id="ag-add-date" class="vr-up-input" style="width:120px;" placeholder="DD/MM/YYYY" maxlength="10" oninput="${_AG_DATE_MASK}" value="${keep('ag-add-date')}"></div>
+            <div class="vr-up-field">${lbl('Date listed')}<input type="text" id="ag-add-date" class="vr-up-input" style="width:120px;" placeholder="MM/DD/YYYY" maxlength="10" oninput="${_AG_DATE_MASK}" value="${keep('ag-add-date')}"></div>
             <div class="vr-up-field">${lbl('Estimated value ($)')}<input type="number" step="0.01" id="ag-add-value" class="vr-up-input" style="width:120px;" value="${keep('ag-add-value')}"></div>
             <div class="vr-up-field">${lbl('Cost ($)')}<input type="number" step="0.01" id="ag-add-cost" class="vr-up-input" style="width:110px;" value="${keep('ag-add-cost')}"></div>
         </div>
@@ -27751,8 +31477,8 @@ async function agConfirmAdd(btn) {
     const dateRaw = val('ag-add-date');
     let dateIso = null;
     if (dateRaw) {
-        dateIso = _agParseDMY(dateRaw);
-        if (!dateIso) { alert('Enter the listed date as DD/MM/YYYY (e.g. 16/03/2026).'); return; }
+        dateIso = _agParseMDY(dateRaw);
+        if (!dateIso) { alert('Enter the listed date as MM/DD/YYYY (e.g. 03/16/2026).'); return; }
     }
     const old = btn.innerText;
     btn.disabled = true; btn.innerText = 'Adding…';
@@ -28195,7 +31921,11 @@ function renderActionFeed() {
     const feed = document.getElementById('samFeed');
     if (!feed) return; // not a manager / menu not present
 
-    const anns = (window._samAnnData || []).map(it => {
+    // Auto-archived by the onboarding cutoff — see _samAnnHidden in loadCMS.
+    // Dropped here rather than at each use, so the pip, the feed list and the
+    // priority hero all agree with what the hub shows under "Unread".
+    const _annHidden = window._samAnnHidden || new Set();
+    const anns = (window._samAnnData || []).filter(it => !_annHidden.has(String(it.rowId))).map(it => {
         const p = _samParseAnn(it);
         const d = it.date ? new Date(it.date) : null;
         return {
@@ -28659,13 +32389,36 @@ function _speeksRoleClass() {
     return 'role-' + r.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
 }
 // Employees / ASMs / trainees have PERSONAL listing goals; managers edit the roster.
+// This governs how the action-menu BAR reads only — an ASM keeps seeing their own
+// role and goal there. Which modal the bar OPENS is a separate question, answered
+// by _canAssignGoalRoles below, so granting an ASM the roster editor costs them
+// nothing at a glance.
 function _isPersonalGoalsUser() {
     return ['role-employee', 'role-assistant-manager', 'role-training'].includes(_speeksRoleClass());
 }
-// "Listing Goals" bar in the action menu: personal popup for employees, roster editor for managers.
+
+// May this user assign listing-goal roles for the store?
+//
+// ASMs are the only genuinely ambiguous case: they have their own listing goal AND
+// they supervise the floor. Rather than hardcode which side they sit on, it is a
+// Feature Access key, so it can be granted or revoked per person or per store
+// without a deploy. Employees and trainees never assign; manager and above always
+// do. Note the listing-goals function sends no pin and takes no role, so there is
+// no backend allow-list that has to be kept in step with this.
+function _canAssignGoalRoles() {
+    const cls = _speeksRoleClass();
+    if (cls === 'role-employee' || cls === 'role-training') return false;
+    if (cls !== 'role-assistant-manager') return true;
+    const ov = _featureOverrideFor('listing-goals-assign', cls,
+                                   sessionStorage.getItem('speeksUserName') || '');
+    return ov === null ? true : ov;      // ASMs may assign by default; DM can revoke
+}
+
+// "Listing Goals" bar in the action menu: roster editor for anyone who can assign,
+// personal popup for everyone else.
 function openListingGoals() {
-    if (_isPersonalGoalsUser()) toggleModal('empGoalsModal');
-    else toggleModal('listingGoalsModal');
+    if (_canAssignGoalRoles()) toggleModal('listingGoalsModal');
+    else toggleModal('empGoalsModal');
 }
 
 function samRefreshListing() {
@@ -28812,10 +32565,11 @@ function _samReminderCfg() {
         title: _moOd ? 'Monthly KPIs Overdue' : 'Monthly KPIs Due', urgency: _moOd ? 3 : 2,
         due: _moOd ? 'Overdue' : 'Due', cls: 'sam-due-red', noSnooze: true,
         action: "sessionStorage.setItem('speeksKpiTab','monthly'); window.location.href='workspace.html#kpis'" });
-    // DM/CEO only. Snoozable — unlike the KPI deadlines this is the DM's own
-    // admin task, and the card comes straight back if a store is still unset
-    // tomorrow (the sig is the pending-store list, so it also breaks through
-    // early whenever that list changes).
+    // DM ONLY (checkListingGoalReminders gates it — the CEO does not set these).
+    // Snoozable — unlike the KPI deadlines this is the DM's own admin task, and
+    // the card comes straight back if a store is still unset tomorrow (the sig is
+    // the pending-store list, so it also breaks through early whenever that list
+    // changes).
     cfg.push({ key: 'listingGoals', id: 'listingGoalAlertBubble', text: 'listingGoalAlertBubbleText',
         title: 'Set This Week’s Listing Goals', urgency: 2, due: 'Due', cls: 'sam-due-amber',
         action: "openDmListingGoals()" });
@@ -28980,6 +32734,11 @@ const _RT_TOOL_CHECKS = {
     scorecard:     ['fetchScorecardData'],
     ebay:          ['fetchAlertsData'],
     buying:        ['fetchHubData'],
+    // The Live Dashboard's ONLY fast path. shopify-live pings this the moment a
+    // Shopify number moves — and only then — so an open dashboard repaints within
+    // seconds of a sale without anybody polling per minute. The slow safety poll in
+    // initDashboardData is just there for a client whose socket never connected.
+    live:          ['fetchLiveDashboard'],
     // checkListingGoalsDailyReminder is here so that when ONE person at a store
     // sets the roles, everyone else's "set today's goals" card clears at once.
     goals:         ['fetchLiveGoalsData', 'fetchAndRenderEmployeeGoals', 'checkListingGoalsDailyReminder'],
@@ -28989,6 +32748,11 @@ const _RT_TOOL_CHECKS = {
 // fetch), then repaint the feed. Wrapped so nothing can kill the channel.
 async function _rtRunCheck(tool) {
     try {
+        // The shop-floor board subscribes for the two things on its card: a sale
+        // landing (`live`) and the buying sheet moving (`buying`). It has no feed,
+        // no bubbles and no tool panels for the other pings to refresh, so
+        // answering them would spend a fetch per write, per TV, for nothing.
+        if (_tvOnBoardPage() && tool !== 'live' && tool !== 'buying') return;
         const fns = _RT_TOOL_CHECKS[tool] || [];
         for (const name of fns) {
             try { if (typeof window[name] === 'function') await window[name](); }
@@ -30170,10 +33934,11 @@ function _dmxListingStore(store) {
     return {
         store, target, emps, names, today, week, days, todayStr,
         pct: _dmxPct(week, target),
-        // Has the DM typed THIS week's number yet, or is the store still coasting
-        // on last week's / the ladder suggestion?
         isSet: goalIsSetThisWeek(store),
+        // What the capacity model says this roster is worth: the ceiling, and the
+        // stretch factor applied to it. Both come from the server.
         suggested: suggestedTargetFor(store),
+        capacity: (_storeTargets[store] && _storeTargets[store].capacity) || 0,
     };
 }
 
@@ -30206,43 +33971,69 @@ function renderDmListingModal() {
         return;
     }
 
-    let rail = '';
+    // Results sits at the top of the rail as its own destination — it is a
+    // district read, not a store's, so it doesn't belong inside a store pane.
+    let rail = '<button type="button" class="dmx-t' + (_dmxSel.lg === 'EFF' ? ' sel' : '')
+        + '" onclick="dmxShowEfficiency()">'
+        + '<span class="dmx-t-code">Results</span>'
+        + '<span class="dmx-t-mid"><span class="dmx-t-val dmx-t-sub">Last Week</span></span>'
+        + '</button>';
     all.forEach(s => {
         rail += _dmxTab('lg', s.store, s.week + ' / ' + s.target, s.pct);
     });
 
+    let pane;
+    if (_dmxSel.lg === 'EFF') {
+        pane = _dmxEfficiencyPane();
+        wrap.innerHTML = '<div class="dmx-strip">'
+            + '<div class="dmx-cell"><div class="dmx-cell-l">District listed</div><div class="dmx-cell-v">' + listed + '</div></div>'
+            + '<div class="dmx-cell"><div class="dmx-cell-l">District target</div><div class="dmx-cell-v">' + target + '</div></div>'
+            + _dmxStatCell('Attainment', _dmxPct(listed, target) + '<small>%</small>', _dmxPct(listed, target))
+            // No stretch-factor cell here. It is ONE number for all five stores,
+            // so a district strip is the wrong place to imply otherwise — and the
+            // control that sets it already states it on every store pane.
+            + '</div>'
+            + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
+        return;
+    }
+
     const sel = all.find(s => s.store === _dmxSel.lg) || all[0];
-    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2' };
-    let pane = '<div class="dmx-ph"><div>'
+    const roleName = { B1: 'Buyer 1', B2: 'Buyer 2', L1: 'Lister 1', L2: 'Lister 2', OFF: 'Off' };
+    pane = '<div class="dmx-ph"><div>'
         + '<div class="dmx-pt">' + escapeHtml(sel.store) + '</div>'
-        + '<div class="dmx-ps">Target ' + sel.target + ' listings · ' + sel.week
-        + ' this week · ' + sel.names.length + ' on roster</div>'
+        + '<div class="dmx-ps">Goal ' + sel.target + ' listings · ceiling ' + (sel.capacity || '–')
+        + ' · ' + sel.week + ' this week · ' + sel.names.length + ' on roster</div>'
         + '</div><div class="dmx-ph-side">' + _dmxChip(sel.pct) + '</div></div>';
 
-    // The DM's Monday input. This is now the ONLY thing that sets a target —
-    // everything the stores see (per-role daily goals, the green/red bars) scales
-    // to whatever goes in this box.
-    pane += _dmxGoalSetter(sel);
+    // The stretch factor, not a per-store number. The goal itself is derived from
+    // who is rostered — there is nothing left here to type by hand.
+    pane += _dmxFactorSetter(all);
 
     if (!sel.names.length) {
         pane += '<div class="dmx-empty">No roles set for ' + escapeHtml(sel.store) + ' this week.</div>';
     } else {
-        pane += '<table class="dmx-tbl"><thead><tr><th>Employee &amp; role</th>';
+        // Role gets its own column rather than trailing the name. As a sibling of
+        // the name its left edge moved with the length of every name above it, so
+        // five pills sat at five different x positions and the eye had to hunt
+        // for today's roles — the one thing this table is scanned for.
+        pane += '<table class="dmx-tbl"><thead><tr><th>Employee</th><th>Role</th>';
         sel.days.forEach(d => { pane += '<th style="text-align:right;">' + escapeHtml(d.label) + '</th>'; });
         pane += '<th style="text-align:right;">Week</th></tr></thead><tbody>';
         sel.names.forEach(n => {
             const e = sel.emps[n];
             const wk = Object.values(e.byDay).reduce((a, g) => a + g, 0);
             const badge = e.role !== '-'
-                ? '<span class="dmx-role">' + escapeHtml(roleName[e.role] || e.role) + '</span>' : '';
-            pane += '<tr><td><span class="dmx-name">' + escapeHtml(n) + '</span>' + badge + '</td>';
+                ? '<span class="dmx-role">' + escapeHtml(roleName[e.role] || e.role) + '</span>'
+                : '<span class="dmx-mute" style="font-size:11px;">–</span>';
+            pane += '<tr><td><span class="dmx-name">' + escapeHtml(n) + '</span></td>'
+                 + '<td class="dmx-rolecol">' + badge + '</td>';
             sel.days.forEach(d => {
                 const v = e.byDay[d.key];
                 pane += '<td class="dmx-num' + (v ? '' : ' dmx-mute') + '">' + (v || '–') + '</td>';
             });
             pane += '<td class="dmx-num">' + wk + '</td></tr>';
         });
-        pane += '<tr class="dmx-tot"><td>Total</td>';
+        pane += '<tr class="dmx-tot"><td>Total</td><td></td>';
         sel.days.forEach(d => {
             let t = 0;
             sel.names.forEach(n => { t += sel.emps[n].byDay[d.key] || 0; });
@@ -30263,29 +34054,246 @@ function renderDmListingModal() {
         + '<div class="dmx"><div class="dmx-rail">' + rail + '</div><div class="dmx-pane">' + pane + '</div></div>';
 }
 
-// --- DM WEEKLY GOAL SETTER ---------------------------------------------------
-// One number per store per week. The store's managers still choose who is B1/B2/
-// L1/L2 each day; this is only the weekly total those role goals divide up.
-function _dmxGoalSetter(sel) {
-    const set = sel.isSet;
-    const val = sel.target;
-    const state = set ? 'is-set' : 'is-unset';
-    const note = set
-        ? 'Set for the week of ' + _dmxWeekLabel() + '.'
-        : 'Not set for the week of ' + _dmxWeekLabel() + ' — running on ' + val + ' until you set it.';
-    return '<div class="dmx-goalset ' + state + '">'
+// --- DM STRETCH FACTOR -------------------------------------------------------
+// Replaces the per-store "type this week's goal" box. That box predated the
+// capacity model and fought it: the whole point of deriving a goal from who is
+// actually rostered is that nobody hand-types it afterwards.
+//
+// What is left is the ONE dial the model has — what fraction of a store's
+// ceiling its weekly goal should be. Raising it pushes every store by the same
+// proportion of what its own people can do, which is the honest way to push for
+// growth; the old ratchet raised whichever store had a lucky fortnight.
+//
+// Saving re-freezes THIS week for every store at the new number (see the server).
+// Past weeks are untouched, so history can't re-colour itself.
+function _dmxFactorSetter(all) {
+    const f = ListingGoalsEngine.cfg.goal_factor || 0.75;
+    const pctTxt = Math.round(f * 100) + '%';
+    const preview = all.map(s => escapeHtml(s.store) + ' ' + s.suggested).join('  ·  ');
+    return '<div class="dmx-goalset is-set">'
         + '<div class="dmx-goalset-l">'
-            + '<span class="dmx-goalset-t">Weekly listing goal</span>'
-            + '<span class="dmx-goalset-n">' + escapeHtml(note) + '</span>'
+            + '<span class="dmx-goalset-t">Stretch factor · ' + pctTxt + ' of capacity</span>'
+            + '<span class="dmx-goalset-n">Every store’s weekly goal is this share of what its roster could list. '
+                + 'Saving applies it to the week of ' + escapeHtml(_dmxWeekLabel()) + ' — earlier weeks keep the number they ran on.</span>'
+            + '<span class="dmx-goalset-n" style="margin-top:6px;"><b>Now:</b> ' + preview + '</span>'
         + '</div>'
         + '<div class="dmx-goalset-r">'
-            + '<input type="number" id="dmx-goal-input" class="dmx-goalset-i" min="0" max="2000" step="5"'
-                + ' value="' + val + '" data-store="' + escapeHtml(sel.store) + '"'
-                + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();dmxSaveGoal(this);}">'
-            + '<button type="button" class="dmx-goalset-b" onclick="dmxSaveGoal(this)">Save</button>'
+            + '<input type="number" id="dmx-factor-input" class="dmx-goalset-i" min="0.3" max="1.2" step="0.01"'
+                + ' value="' + f + '"'
+                + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();dmxSaveFactor();}">'
+            + '<button type="button" class="dmx-goalset-b" onclick="dmxSaveFactor()">Apply</button>'
             + '<span class="dmx-goalset-msg" id="dmx-goal-msg"></span>'
         + '</div>'
         + '</div>';
+}
+
+async function dmxSaveFactor() {
+    const box = document.getElementById('dmx-factor-input');
+    const say = (text, ok) => {
+        const m = document.getElementById('dmx-goal-msg');
+        if (!m) return;
+        m.textContent = text;
+        m.className = 'dmx-goalset-msg' + (ok ? ' ok' : ' bad');
+    };
+    if (!box) return;
+    const v = Number(box.value);
+    if (!Number.isFinite(v) || v < 0.3 || v > 1.2) {
+        say('Enter a factor between 0.30 and 1.20', false);
+        return;
+    }
+    say('Applying…', true);
+    try {
+        const resp = await fetch(STORE_TARGETS_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'factor', value: v, name: sessionStorage.getItem('speeksUserName') || '' }),
+        });
+        const j = await resp.json();
+        if (j.error) { say(j.error, false); return; }
+        // Re-read every store so the rail, the strip and the preview all move
+        // together — the factor changed all five, not just the selected one.
+        await fetchAllStoreTargets();
+        renderDmListingModal();
+        say('Applied', true);
+        setTimeout(() => { const m = document.getElementById('dmx-goal-msg'); if (m) m.textContent = ''; }, 2500);
+    } catch (e) { say('Could not reach the server.', false); }
+}
+window.dmxSaveFactor = dmxSaveFactor;
+
+// --- DM EFFICIENCY VIEW ------------------------------------------------------
+// One row per store: what the roster could do, what the week's goal is, what the
+// team was actually staffed to do, what they listed, and the ratio.
+//
+// "Efficient" is measured against the ADJUSTED number, not the goal. A store
+// that lost two people to callouts should not be marked down for a week it was
+// never staffed to win — adjusted is the sum of the daily goals actually handed
+// out, so off days and gaps fall out of it on their own.
+let _dmxCap = {};        // weekStart → [breakdown rows]
+let _dmxCapWeek = null;  // which week the Efficiency view is showing
+
+// The Monday of the most recently COMPLETED week — the default, because this
+// week has no filed KPI yet and would read as 0% for everyone.
+function _dmxLastWeekStart() {
+    return _dmxWeeksBack(1);
+}
+
+// The Monday `n` weeks before this one, as YYYY-MM-DD.
+//
+// The current week is deliberately NOT offered: Listed comes from the weekly KPI,
+// which isn't filed until the week is over, so an in-progress week has no result
+// to measure and every store read as a 0%. Two completed weeks is what this
+// screen can actually answer for.
+function _dmxWeeksBack(n) {
+    const d = new Date(_dmxWeekDays().start);
+    d.setDate(d.getDate() - 7 * n);
+    return d.toLocaleDateString('en-CA');
+}
+
+// "Jul 27 – Aug 2" for the week starting on a YYYY-MM-DD Monday.
+function _dmxWeekRangeLabel(weekStart) {
+    const a = new Date(weekStart + 'T12:00:00');
+    const b = new Date(a); b.setDate(b.getDate() + 6);
+    const f = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return f(a) + ' – ' + f(b);
+}
+
+async function _dmxFetchCap(weekStart) {
+    if (_dmxCap[weekStart]) return _dmxCap[weekStart];
+    try {
+        const r = await fetch(`${STORE_TARGETS_URL}?action=capacity&week=${weekStart}&v=${Date.now()}`)
+            .then(x => x.json());
+        _dmxCap[weekStart] = Array.isArray(r) ? r : [];
+    } catch (e) { _dmxCap[weekStart] = []; }
+    return _dmxCap[weekStart];
+}
+
+// Load a week and repaint. Kept separate from the render so the render itself
+// stays synchronous like every other pane in this modal.
+//
+// ⚠️ Paints BEFORE awaiting the fetch. It used to await first, so the very first
+// click did nothing visible for as long as the request took — the rail still
+// showed the store tab selected — and it read as a dead button. People clicked
+// again, and the second click looked instant only because the week was cached by
+// then ("takes a couple of clicks", user 2026-08-10). Now the tab selection and
+// the loading state land on the click, and the data fills in behind it.
+async function dmxShowEfficiency(weekStart) {
+    const want = weekStart || _dmxLastWeekStart();
+    _dmxCapWeek = want;
+    _dmxSel.lg = 'EFF';
+    renderDmListingModal();
+    await _dmxFetchCap(want);
+    // Don't repaint over a newer selection: two quick clicks on different weeks
+    // resolve out of order, and the slower one would otherwise win.
+    if (_dmxSel.lg === 'EFF' && _dmxCapWeek === want) renderDmListingModal();
+}
+window.dmxShowEfficiency = dmxShowEfficiency;
+
+// Above or below target — a plain binary at 100%, NOT _dmxChip.
+//
+// _dmxChip grades on the generic district attainment scale, which has bands
+// either side of ~90%. Borrowing it here produced a green tick reading
+// "Under · 93%" next to an amber "Under · 79%": the colour said one thing and
+// the word said another. Efficiency has exactly one threshold — you either beat
+// the capacity you had that week or you didn't — so the chip says only that.
+function _dmxEffChip(pct, emptyText) {
+    if (pct == null) return '<span class="dmx-mute">' + escapeHtml(emptyText || 'No roles set') + '</span>';
+    // No percentage on the chip — the Efficiency column sits immediately to its
+    // left and already says it. Repeating it made this the widest cell in the
+    // table by a distance, which is what stopped the columns being equal.
+    const above = pct >= 100;
+    return '<span class="dmx-st ' + (above ? 'dmx-good' : 'dmx-warn') + '">'
+        + _DMX_ICO[above ? 'good' : 'warn']
+        + (above ? 'Above target' : 'Below target')
+        + '</span>';
+}
+
+function _dmxEfficiencyPane() {
+    const week = _dmxCapWeek || _dmxLastWeekStart();
+    const rows = _dmxCap[week];
+    const isThisWeek = week === _dmxWeekDays().start.toLocaleDateString('en-CA');
+
+    // Spell the actual dates out. "Last week" on its own is ambiguous the moment
+    // someone opens this on a Monday morning.
+    const range = _dmxWeekRangeLabel(week) + (isThisWeek ? ' (in progress)' : '');
+
+    // Two completed weeks. The nearer one is named by relation because that is
+    // how anyone refers to it out loud; the older one is named by its dates,
+    // because "two weeks ago" is a sentence people have to stop and decode.
+    const back1 = _dmxWeeksBack(1), back2 = _dmxWeeksBack(2);
+    const btn = (label, wk) => '<button type="button" class="dmx-goalset-b dmx-b-wk'
+        + (week === wk ? '' : ' dmx-b-off') + '" onclick="dmxShowEfficiency(\'' + wk + '\')">'
+        + escapeHtml(label) + '</button>';
+
+    let head = '<div class="dmx-ph"><div>'
+        + '<div class="dmx-pt">Store Efficiency</div>'
+        + '<div class="dmx-ps">' + escapeHtml(range) + ' · Measured against the capacity each store actually had</div>'
+        + '</div><div class="dmx-ph-side" style="display:flex; gap:7px;">'
+        // Oldest on the left, so the pair runs in the direction time does.
+        + btn(_dmxWeekRangeLabel(back2), back2)
+        + btn('Last Week', back1)
+        + '</div></div>';
+
+    if (!rows) return head + '<div class="dmx-empty">Loading the week…</div>';
+    if (!rows.length) return head + '<div class="dmx-empty">No capacity data for this week.</div>';
+
+    // Column order reads left to right as the story: who, what they had, what we
+    // asked for, what they did, then how that compares. Listed sits beside Goal
+    // because those two are the pair anyone checks first.
+    let t = '<table class="dmx-tbl dmx-tbl-c"><thead><tr>'
+        + '<th>Store</th><th>Hours</th><th>Ceiling</th>'
+        + '<th>Goal</th><th>Listed</th>'
+        + '<th>Staffed For</th><th>Efficiency</th><th>Result</th>'
+        + '</tr></thead><tbody>';
+
+    rows.forEach(r => {
+        // efficiency comes back as a ratio (1.08) or null when nothing was staffed.
+        //
+        // ⚠️ An in-progress week has NO efficiency, because Listed comes from the
+        // weekly KPI and that is not filed until the week ends. The server
+        // faithfully returns 0/45 = 0, and printing that gave every store a red
+        // "Below target · 0%" — which read as the button being broken rather than
+        // as the week not being over. Suppress it and say which it is.
+        const pending = isThisWeek && !r.actual;
+        const pct = (pending || r.efficiency == null) ? null : Math.round(r.efficiency * 100);
+        // Fewer than four days per person means most of the week carried no goal
+        // at all, so the denominator is short and the ratio flatters. Flag it
+        // rather than printing a number that reads as a verdict.
+        const thin = r.assignedDays > 0 && r.assignedDays < (r.people.length * 4);
+        t += '<tr><td class="dmx-cl"><span class="dmx-name">' + escapeHtml(r.store) + '</span>'
+            // Short form: "15 of 24 roles set" rendered wider than the column it
+            // sits in and bled over both edges. The tooltip carries the sentence.
+            + (thin ? '<span class="dmx-role" title="Roles were only set on '
+                + r.assignedDays + ' of this store’s ' + (r.people.length * 6) + ' person-days. '
+                + 'A day with nobody in a seat carries no goal, so it drops out of Staffed For — '
+                + 'this store’s efficiency is measured against a shorter week than it worked.">'
+                + r.assignedDays + '/' + (r.people.length * 6) + ' roles</span>' : '')
+            + '</td>'
+            + '<td class="dmx-num">' + r.hours + '</td>'
+            + '<td class="dmx-num dmx-mute">' + r.capacity + '</td>'
+            + '<td class="dmx-num">' + r.planned + '</td>'
+            + '<td class="dmx-num' + (pending ? ' dmx-mute' : '') + '">' + (pending ? '–' : r.actual) + '</td>'
+            + '<td class="dmx-num">' + r.adjusted + '</td>'
+            + '<td class="dmx-num">' + (pct == null ? '–' : pct + '%') + '</td>'
+            + '<td>' + _dmxEffChip(pct, pending ? 'KPI not filed yet' : 'No roles set') + '</td></tr>';
+    });
+
+    const sum = (k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
+    const dAdj = sum('adjusted'), dAct = sum('actual');
+    // Same rule as a row: an unfinished week has nothing to divide.
+    const dPending = isThisWeek && !dAct;
+    const dPct = (dPending || !dAdj) ? null : _dmxPct(dAct, dAdj);
+    t += '<tr class="dmx-tot"><td class="dmx-cl">District</td>'
+        + '<td class="dmx-num">' + sum('hours') + '</td>'
+        + '<td class="dmx-num">' + sum('capacity') + '</td>'
+        + '<td class="dmx-num">' + sum('planned') + '</td>'
+        + '<td class="dmx-num' + (dPending ? ' dmx-mute' : '') + '">' + (dPending ? '–' : dAct) + '</td>'
+        + '<td class="dmx-num">' + dAdj + '</td>'
+        + '<td class="dmx-num">' + (dPct == null ? '–' : dPct + '%') + '</td>'
+        + '<td>' + _dmxEffChip(dPct, dPending ? 'KPI not filed yet' : 'No roles set') + '</td></tr></tbody></table>';
+
+    // No explanatory paragraphs (user, 2026-08-10). The column headers carry the
+    // meaning, and the "X of Y roles set" tag carries the one caveat they cannot.
+    return head + t;
 }
 
 // "Aug 3" for the Monday that starts the current week, in store time.
@@ -30297,28 +34305,11 @@ function _dmxWeekLabel() {
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-async function dmxSaveGoal(btn) {
-    const box = document.getElementById('dmx-goal-input');
-    const msg = document.getElementById('dmx-goal-msg');
-    if (!box) return;
-    const store = box.dataset.store;
-    const show = (text, ok) => {
-        if (!msg) return;
-        msg.textContent = text;
-        msg.className = 'dmx-goalset-msg' + (ok ? ' ok' : ' bad');
-    };
-    show('Saving…', true);
-    const res = await dmSetListingGoal(store, box.value);
-    // dmSetListingGoal re-renders the whole modal on success, so the element this
-    // ran from is gone by now — re-find the message slot before writing to it.
-    const after = document.getElementById('dmx-goal-msg');
-    if (after) {
-        after.textContent = res.error ? res.error : 'Saved';
-        after.className = 'dmx-goalset-msg' + (res.error ? ' bad' : ' ok');
-        if (!res.error) setTimeout(() => { const m = document.getElementById('dmx-goal-msg'); if (m) m.textContent = ''; }, 2500);
-    }
-}
-window.dmxSaveGoal = dmxSaveGoal;
+// NOTE: dmxSaveGoal() lived here — it posted the DM's hand-typed weekly number
+// for one store. Retired with the input box: the goal is derived from who is
+// rostered, so the only thing left to set is the stretch factor (dmxSaveFactor).
+// dmSetListingGoal() is kept as the writer behind it and is still what the
+// server's POST expects; nothing in the UI calls it now.
 
 // ---------------------------------------------------------------------------
 // CLEANING CHECKLIST (district)
@@ -30638,6 +34629,34 @@ function _dccMinutes(v) {
     return isNaN(n) ? null : n;
 }
 
+// Where an audit lost its points, by section. The catalog ships with the payload
+// and carries every item's section and point value, so this is derivable here —
+// summing it back up reproduces the function's own earned/possible to the point
+// on all five stores, which is the check that says the two agree.
+//
+// An item ABSENT from results was not scored, and is left out of both halves;
+// only a recorded 0 counts as points lost. Sections that lost nothing drop out,
+// so a clean store shows a short row and a struggling one a long one — the
+// length of the row is itself the signal.
+function _dccAuditSecs(audit, catalog) {
+    const items = ((catalog && catalog.audit_items) || []).filter(i => i.active);
+    const res = audit && audit.results;
+    if (!res || !items.length) return null;
+    const by = {};
+    items.forEach(i => {
+        if (!(i.item_id in res)) return;
+        const s = by[i.section] || (by[i.section] = { name: i.section, poss: 0, earn: 0 });
+        s.poss += Number(i.points) || 0;
+        s.earn += Number(res[i.item_id]) || 0;
+    });
+    // Half-points are real (a section came back -0.5), so this rounds rather than
+    // truncating and formats the ".0" off whole numbers at render time.
+    return Object.keys(by).map(n => by[n])
+        .map(s => ({ name: s.name, poss: s.poss, missed: Math.round((s.poss - s.earn) * 10) / 10 }))
+        .filter(s => s.missed > 0)
+        .sort((a, b) => b.missed - a.missed);
+}
+
 // --- normalise one store ----------------------------------------------------
 function _dccRow(store, hubData, varData, scoreData, alertsData, weeklyResults) {
     const k = store.toLowerCase();
@@ -30682,6 +34701,12 @@ function _dccRow(store, hubData, varData, scoreData, alertsData, weeklyResults) 
         edited: hubData[`${k}BuyDate`] || null,
         score: (parseFloat(sc.score) || 0) * 2,
         audit: sc.audit || null,
+        // The two breakdowns behind those two numbers. Both were already in this
+        // response and nothing read them: the categories the DM scored by hand,
+        // and the audit sections where points went missing.
+        scCats: (((sc.buckets || [])[0] || {}).categories || [])
+            .map(c => ({ name: c.name, score: parseFloat(c.score) })),
+        auditSecs: _dccAuditSecs(sc.audit, scoreData.catalog),
         week,
         salesPct: _dccPct(hubData[`${k}Pct`]),
         rev,
@@ -30693,6 +34718,13 @@ function _dccRow(store, hubData, varData, scoreData, alertsData, weeklyResults) 
         sellM,
         buyTrack: Math.round(parseFloat(hubData[`${k}BuyProj`])) || 0,
         buyM: _dccPct(hubData[`${k}BuyMargin`]),
+        // Google reviews come off the same hub keys the Live tab's tracking tile,
+        // the district Reviews column and both summary cells read, so the four
+        // surfaces cannot disagree. Zero until the sheet carries them — see the
+        // guard in _dccReviewBlock.
+        reviews: Math.round(parseFloat(hubData[`${k}Reviews`])) || 0,
+        reviewsProj: Math.round(parseFloat(hubData[`${k}ReviewsProj`])) || 0,
+        reviewsGoal: Math.round(parseFloat(hubData[`${k}ReviewsGoal`])) || 0,
         vari: parseFloat(vr.total) || 0,
         variRange: (typeof formatVarianceRange === 'function') ? formatVarianceRange(vr.dateFrom, vr.dateTo) : '',
         period: wk.periodLabel || '',
@@ -30926,6 +34958,276 @@ function _dccEbayBlock(r) {
         }).join('') + '</div></div>';
 }
 
+// ---- Sales Import (Shopify daily email -> Sales Summary sheet) --------------
+// Normally nobody touches this: pg_cron runs it at 7am Central with an 8am retry.
+// The button exists for the mornings when a store's email lands late — one click
+// beats keying ten numbers in by hand. Backend re-checks the role by pin, so this
+// UI being visible is convenience, not the security boundary.
+let _salesImport = null;      // last status from the fn, or null before it loads
+let _siBusy = false;
+let _siMsg = null, _siMsgBad = false, _siMsgTimer = null;
+
+// A quiet line inside the panel rather than alert(), which would fight whatever
+// the DM is mid-scan on. Kept in state, not the DOM, so it survives the board
+// repaint that follows every run — same reasoning as _b2bSay.
+function _siSay(msg, bad) {
+    _siMsg = msg || null;
+    _siMsgBad = !!bad;
+    if (_siMsgTimer) clearTimeout(_siMsgTimer);
+    if (msg) _siMsgTimer = setTimeout(() => { _siMsg = null; _dccRepaint(); }, 7000);
+    _dccRepaint();
+}
+
+async function fetchSalesImportStatus() {
+    const pin = sessionStorage.getItem('speeksUserPin');
+    if (!pin) return;
+    try {
+        const r = await fetch(`${SALES_INGEST_URL}?action=status&v=${Date.now()}`, {
+            headers: { 'x-user-pin': pin }
+        });
+        const d = await r.json();
+        if (d && d.ok) { _salesImport = d; _dccRepaint(); }
+    } catch (_) { /* the panel just shows nothing rather than an error */ }
+}
+
+async function runSalesImport(ev) {
+    if (ev) ev.stopPropagation();
+    if (_siBusy) return;
+    const pin = sessionStorage.getItem('speeksUserPin');
+    if (!pin) return;
+
+    _siBusy = true;
+    _dccRepaint();                       // paints the buttons into their "Importing…" state
+    try {
+        const r = await fetch(SALES_INGEST_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({})
+        });
+        const d = await r.json();
+        _siBusy = false;
+
+        if (!d.ok) {
+            // "Invalid PIN" nearly always means the PIN was changed after this
+            // browser signed in — sessionStorage still holds the old one, and the
+            // backend looks users up BY pin so there is no row to find. Passing the
+            // raw message through sends people hunting for a fault in the import.
+            // Applies to every pin-authed tool, not just this one.
+            const raw = d.error || '';
+            _siSay(
+                /invalid pin/i.test(raw)
+                    ? 'Your saved sign-in is out of date — the PIN changed since you signed in. Sign out, sign back in, then run it again.'
+                    : /insufficient role/i.test(raw)
+                        ? 'This account is not a District Manager or CEO, so it cannot run the import.'
+                        : (raw || 'The import could not run.'),
+                true);
+        } else {
+            const s = d.summary || {};
+            const bits = [];
+            if (s.filled)    bits.push(`${s.filled} store-day${s.filled === 1 ? '' : 's'} filled in`);
+            if (s.corrected) bits.push(`${s.corrected} corrected`);
+            if (s.missing)   bits.push(`${s.missing} still to enter by hand`);
+            let msg = bits.length ? 'Sales import — ' + bits.join(', ') + '.' : 'Sales import — already up to date.';
+
+            // The same run also does BUYING (the Apps Script folds it in), so say
+            // so — otherwise half the work is invisible and a buying failure
+            // looks like a clean success.
+            const b = s.buying;
+            if (b && !b.ok) {
+                msg += ' Buying import failed.';
+            } else if (b) {
+                const bb = [];
+                if (b.filled)    bb.push(`${b.filled} day${b.filled === 1 ? '' : 's'} filled in`);
+                if (b.corrected) bb.push(`${b.corrected} corrected`);
+                if (b.missing)   bb.push(`${b.missing} still to enter`);
+                msg += bb.length ? ' Buying — ' + bb.join(', ') + '.' : ' Buying — already up to date.';
+            }
+            _siSay(msg, !!s.missing || !!(b && (!b.ok || b.missing)));
+        }
+
+        await fetchSalesImportStatus();
+        // The fn already kicked sync-buysell, so the figures behind this panel have
+        // moved — pull them through rather than leaving stale numbers on screen.
+        if (typeof fetchMasterDistrictDashboard === 'function') fetchMasterDistrictDashboard();
+    } catch (err) {
+        _siBusy = false;
+        _siSay('The import could not be reached.', true);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Weekly Summary control — the second button on the same header line.
+//
+// Kept apart from the sales-import one above rather than folded into it, for the
+// same reason the two edge functions are separate: the daily import is
+// idempotent, while this one SHIFTS four week blocks up. Two buttons that read
+// alike but do very different things is exactly the confusion the labels below
+// exist to prevent.
+//
+// No status chip, because summary-weekly deliberately persists no run history —
+// writing to sales_ingest_runs would make a Monday weekly run present itself as
+// the last DAILY import in the line next door. The outcome of a run owns the
+// line for a few seconds and that is the whole state this surface has.
+// ---------------------------------------------------------------------------
+let _swBusy = false;
+let _swMsg = null, _swMsgBad = false, _swMsgTimer = null;
+
+function _swSay(msg, bad) {
+    _swMsg = msg || null;
+    _swMsgBad = !!bad;
+    if (_swMsgTimer) clearTimeout(_swMsgTimer);
+    if (msg) _swMsgTimer = setTimeout(() => { _swMsg = null; _dccRepaint(); }, 9000);
+    _dccRepaint();
+}
+
+async function runWeeklySummary(ev) {
+    if (ev) ev.stopPropagation();
+    if (_swBusy) return;
+    const pin = sessionStorage.getItem('speeksUserPin');
+    if (!pin) return;
+
+    // Confirmed because this one is not free to press twice in the way the daily
+    // import is. Pressing it when the latest week is not already the bottom
+    // block rolls the oldest of the four weeks off the top, and the columns that
+    // are keyed by hand go with it.
+    if (!confirm(
+        'Update the Summary tab with the latest completed week (Sunday to Saturday)?\n\n'
+        + 'If that week is not already the bottom block, all four weeks shift up and the '
+        + 'oldest one rolls off. Running it again for the same week is safe — it just '
+        + 'rewrites that block.')) return;
+
+    _swBusy = true;
+    _dccRepaint();
+    try {
+        const r = await fetch(SUMMARY_WEEKLY_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({})
+        });
+        const d = await r.json();
+        _swBusy = false;
+
+        if (!d.ok) {
+            const raw = d.error || '';
+            _swSay(
+                /invalid pin/i.test(raw)
+                    ? 'Your saved sign-in is out of date — the PIN changed since you signed in. Sign out, sign back in, then run it again.'
+                    : /insufficient role/i.test(raw)
+                        ? 'This account is not a District Manager or CEO, so it cannot run the weekly summary.'
+                        : (raw || 'The weekly summary could not run.'),
+                true);
+        } else {
+            const wk = d.week ? `${_siShortDate(d.week.start)}–${_siShortDate(d.week.end)}` : 'the latest week';
+            const bits = [];
+            bits.push(d.shifted === true ? 'weeks shifted up' : 'updated in place');
+            if (d.writtenCount) bits.push(`${d.writtenCount} cells written`);
+            if (d.archived)     bits.push(`${d.archived} report${d.archived === 1 ? '' : 's'} archived`);
+            // Problems are the reason a run can succeed and still need somebody —
+            // a store's report missing, a figure that would not parse.
+            if (d.problems)     bits.push(`${d.problems} to check`);
+            _swSay(`Weekly summary ${wk} — ` + bits.join(', ') + '.', !!d.problems);
+        }
+    } catch (err) {
+        _swBusy = false;
+        _swSay('The weekly summary could not be reached.', true);
+    }
+}
+
+function _swLineHtml() {
+    const btn = '<button type="button" class="si-btn" onclick="runWeeklySummary(event)"'
+        + ' title="Writes the latest finished week (Sunday to Saturday) into the Summary tab'
+        + ' and shifts the four-week window. Runs by itself every Monday at 7:30am."'
+        + (_swBusy ? ' disabled' : '') + '>' + (_swBusy ? 'Updating…' : 'Run weekly summary') + '</button>';
+
+    const open = '<span class="si-line" data-feature="dcc-weekly-summary">';
+
+    if (_swMsg) {
+        return open + '<span class="si-dot ' + (_swMsgBad ? 'si-bad' : 'si-good') + '"></span>'
+            + '<span class="si-msg ' + (_swMsgBad ? 'bad' : 'ok') + '">' + escapeHtml(_swMsg) + '</span>'
+            + btn + '</span>';
+    }
+    // Just the button at rest. There is no status to carry here anyway — this
+    // control keeps no run history, by design.
+    return open + btn + '</span>';
+}
+
+// Repaint the board from rows already in memory. No-ops before the first load,
+// same guard _dccPick uses — the cached HTML restores clickable controls before
+// any data exists.
+function _dccRepaint() {
+    if (!_dccRows.length) return;
+    const el = document.getElementById('district-master-body');
+    if (el) el.innerHTML = _dccBoardHtml(_DCC_PORTAL_LINKS);
+    // The eBay, Scorecard and summary panels read the same _dccRows, so they are
+    // stale the moment this is.
+    if (typeof renderDistrictTabs === 'function') renderDistrictTabs();
+}
+
+// "8/3" from "2026-08-03"; the year is noise at this size.
+function _siShortDate(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+    return m ? `${+m[2]}/${+m[3]}` : '';
+}
+
+function _siRelTime(iso) {
+    const t = Date.parse(iso);
+    if (!t) return '';
+    const mins = Math.round((Date.now() - t) / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.round(hrs / 24)}d ago`;
+}
+
+// The compact chip on the Command Center's header line.
+// The Sales Import chip on the Command Center header line. The single surface for
+// this: a button, with a run's outcome taking the line over briefly.
+function _siLineHtml() {
+    // "Run daily import", not "Run import": there are two buttons on this line
+    // now and they do different jobs — this one pulls yesterday's selling and
+    // buying into the month tabs, the other rewrites a week of the Summary tab.
+    // The status text used to sit beside the button; the line now carries two
+    // controls and reads better as just the two. Nothing is lost — the state
+    // moves into the button's own tooltip, and the dot below still shows when
+    // something needs attention.
+    const state = _salesImport ? _salesImport.state : null;
+    const lr = _salesImport ? _salesImport.lastRun : null;
+    let hover = 'Pulls the Shopify and PayMore daily emails into this month\'s Sales and Buy'
+        + ' tabs. Runs by itself every morning at 7am.';
+    if (state === 'never')          hover = 'Has not run yet. ' + hover;
+    else if (state === 'failed')    hover = 'The last run FAILED. ' + hover;
+    else if (state === 'attention') {
+        const list = (lr.missingList || []).slice(0, 8)
+            .map(m => `${m.store} ${_siShortDate(m.date)}`).join(', ');
+        hover = `${lr.missing} still to enter by hand${list ? ' (' + list + ')' : ''}. ` + hover;
+    } else if (lr) {
+        hover = `Last imported ${_siRelTime(lr.ranAt)}`
+            + (lr.corrected ? `, ${lr.corrected} past day(s) restated` : '') + '. ' + hover;
+    }
+
+    const btn = '<button type="button" class="si-btn" onclick="runSalesImport(event)"'
+        + ' title="' + escapeHtml(hover) + '"'
+        + (_siBusy ? ' disabled' : '') + '>' + (_siBusy ? 'Importing…' : 'Run daily import') + '</button>';
+
+    const open = '<span class="si-line" data-feature="dcc-sales-import">';
+
+    // A run's result owns the line for a few seconds, then it reverts to the
+    // derived status. Rendered before the _salesImport check so a run that fails
+    // immediately — a bad pin, say — still reports itself.
+    if (_siMsg) {
+        return open + '<span class="si-dot ' + (_siMsgBad ? 'si-bad' : 'si-good') + '"></span>'
+            + '<span class="si-msg ' + (_siMsgBad ? 'bad' : 'ok') + '">' + escapeHtml(_siMsg) + '</span>'
+            + btn + '</span>';
+    }
+    // The dot survives ONLY for the states that need acting on. A green "all
+    // fine" dot beside a button is decoration; an amber one is the only thing
+    // telling anybody that store-days are still sitting blank in the sheet, and
+    // that signal was the reason this chip existed in the first place.
+    const bad = state === 'failed' ? 'si-bad' : state === 'attention' ? 'si-warn' : null;
+    return open + (bad ? '<span class="si-dot ' + bad + '"></span>' : '') + btn + '</span>';
+}
+
 function _dccBuyBlock(r) {
     return '<div class="dcc-block"><div class="dcc-sec">Buying &amp; selling'
         + (r.edited ? '<em>' + escapeHtml(r.edited) + '</em>' : '') + '</div><div class="dcc-rows">'
@@ -30941,6 +35243,30 @@ function _dccBuyBlock(r) {
         + _dccStatRow('Buy margin', _dccFix(r.buyM), '%', _dccJudge(r, 'buyM', r.buyM > 0))
         + _dccStatRow('Variance total', (r.vari > 0 ? '+' : '') + r.vari.toFixed(2), '%',
                       _dccJudge(r, 'vari'), r.variRange || '')
+        + '</div></div>';
+}
+
+// Google reviews, in the same shape as the Live tab's tracking tile: what is
+// banked, where the month is heading, and how many are left. Renders NOTHING at
+// all until the sheet carries reviews — the same rule _lvHasReviews and
+// _lvSumReviews follow, so no surface shows an empty row for the length of the
+// rollout.
+//
+// Deliberately outside _dccChecks: those states drive the rail's ranking and the
+// "stores flagged" count, and a metric this new should not decide which store
+// reads as worst of five. The tracking figure still carries its own colour.
+function _dccReviewBlock(r) {
+    if (!r.reviews && !r.reviewsGoal) return '';
+    const togo = Math.max(0, r.reviewsGoal - r.reviews);
+    const state = r.reviewsGoal > 0 ? (_dccTier(r.reviewsProj, r.reviewsGoal, 'min') || 'g') : null;
+    return '<div class="dcc-block"><div class="dcc-sec">Google reviews'
+        + (r.reviewsGoal ? '<em>Goal ' + r.reviewsGoal + '</em>' : '') + '</div><div class="dcc-rows">'
+        // MTD is the banked count; the sub-line is the same "10 of 40 · 30 to go"
+        // the tracking tile carries, and the remainder is derived rather than
+        // read from a hub key (see the reviewsNeed note in the reviews memory).
+        + _dccStatRow('Reviews (MTD)', String(r.reviews), '', null,
+                      r.reviewsGoal ? r.reviews + ' of ' + r.reviewsGoal + ' · ' + togo + ' to go' : '')
+        + _dccStatRow('Reviews tracking', String(r.reviewsProj), '', state)
         + '</div></div>';
 }
 
@@ -30987,9 +35313,12 @@ function _dccPaneHtml(r, portalLink) {
     // eBay leads when the account is in trouble: a suspension outranks a margin
     // point. Otherwise the money leads. Same blocks either way.
     const ebayBroken = ['track', 'defect', 'cases', 'late'].some(x => _dccState(r, x));
+    // Reviews sit with the money either way — same monthly cadence, same
+    // tracking-to-goal shape. The block returns '' when the sheet has no reviews
+    // yet, and join() drops it.
     const blocks = ebayBroken
-        ? [_dccEbayBlock(r), _dccBuyBlock(r), _dccWeekBlock(r), _dccCatBlock(r)]
-        : [_dccBuyBlock(r), _dccWeekBlock(r), _dccEbayBlock(r), _dccCatBlock(r)];
+        ? [_dccEbayBlock(r), _dccBuyBlock(r), _dccReviewBlock(r), _dccWeekBlock(r), _dccCatBlock(r)]
+        : [_dccBuyBlock(r), _dccReviewBlock(r), _dccWeekBlock(r), _dccEbayBlock(r), _dccCatBlock(r)];
 
     return '<div class="dcc-ph"><div>'
         + '<div class="dcc-pt">' + escapeHtml(r.store) + '</div>'
@@ -31017,15 +35346,17 @@ function _dccBoardHtml(portalLinks) {
     const totGP = _dccRows.reduce((a, r) => a + r.gpTrack, 0);
     const totGoal = _dccRows.reduce((a, r) => a + r.goal, 0);
 
+    // The icon tile and the "District / Command Center" title used to live here.
+    // This board is a TAB inside a card that carries that title now, so repeating
+    // it was the panel arguing with its own header. What is left is the two things
+    // the header does not say: the district's tracking GP against goal, and when
+    // the sales sheet last imported.
     return '<div class="dcc">'
         + '<div class="dcc-head">'
-        + '<span class="dcc-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20"/></svg></span>'
-        + '<div><div class="dcc-eyebrow">District</div><div class="dcc-title">Command Center</div></div>'
-        // The money is the headline and carries itself at size; the store count
-        // that used to sit beside it only repeated what the rail groups already say.
-        + '<div class="dcc-head-side"><span class="dcc-sum">'
+        + '<span class="dcc-sum">'
         + '<b>' + _dccMoney(totGP) + '</b><i>of ' + _dccMoney(totGoal) + ' GP goal</i>'
-        + '</span></div></div>'
+        + '</span>'
+        + '<div class="dcc-head-side">' + _siLineHtml() + _swLineHtml() + '</div></div>'
         + '<div class="dcc-body"><div class="dcc-grid">'
         + '<div class="dcc-rail">' + _dccRailHtml() + '</div>'
         + '<div class="dcc-pane">' + _dccPaneHtml(sel, portalLinks[_dccSel]) + '</div>'
@@ -31040,6 +35371,312 @@ function _dccPick(store) {
     _dccSel = store;
     const el = document.getElementById('district-master-body');
     if (el) el.innerHTML = _dccBoardHtml(_DCC_PORTAL_LINKS);
+}
+
+// ============================================================================
+// MODULE: DISTRICT COMMAND CENTER — TABS
+// ============================================================================
+// The DM page used to carry two stacked cards: a Live Dashboard, and a board
+// that put one store's whole picture on screen at a time. They answer opposite
+// questions — the store board is STORE-major (pick a store, see everything),
+// the manager Command Center is DIMENSION-major (pick a subject, see it) — which
+// is why they looked nothing alike.
+//
+// This makes the district board dimension-major and folds both cards into one
+// widget with the manager's own chrome: tabs, a collapsed one-line summary, and
+// Live open by default. The store-major view is not thrown away — it is the
+// "Stores" tab, and clicking any row on eBay or Scorecard jumps to it with that
+// store selected. Spotting the outlier and drilling into it are both one click.
+// Store Breakdown sits second, right after Live: it is the tab a DM opens most,
+// and the one an eBay or Scorecard row drills into. There is no KPIs tab — the
+// month-by-month grid came off and each store's weekly metrics live inside the
+// breakdown.
+const DC_TABS = ['live', 'stores', 'ebay', 'scorecard'];
+
+function switchDistrictTab(tab) {
+    _tabSwitch(_DC_BOARD, tab);
+}
+function collapseDistrict() { _tabCollapse(_DC_BOARD); }
+
+// Row click on a district table: open the store's own board. Both halves of the
+// original design survive, and neither needs a modal.
+function _dcDrill(store) {
+    _dccPick(store);
+    switchDistrictTab('stores');
+    const w = document.getElementById('dcWidget');
+    if (w && typeof w.scrollIntoView === 'function') {
+        w.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+}
+
+function _dcCell(v, cls) { return '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + v + '</td>'; }
+// Store cell, clickable. The whole row is the target — a link inside one column
+// would be a smaller thing to hit and would not read as "this row goes somewhere".
+// `sub` is a quiet second line under the code — the Scorecard tab hangs each
+// store's scored week there. It belongs per row, not in a caption: the stores are
+// scored in separate sittings and two of them can be a week apart.
+function _dcStoreCell(code, sub, subTitle) {
+    const tint = STORE_TINTS[code]
+        ? '<i class="lv-tint" style="background:' + STORE_TINTS[code] + '"></i>' : '';
+    return '<td><span class="lv-store">' + tint + '<b>' + escapeHtml(code) + '</b></span>'
+        + (sub ? '<span class="dc-sub"' + (subTitle ? ' title="' + escapeHtml(subTitle) + '"' : '')
+            + '>' + escapeHtml(sub) + '</span>' : '')
+        + '</td>';
+}
+function _dcRowOpen(code) {
+    return '<tr class="dc-clickable" tabindex="0" role="button"'
+        + ' onclick="_dcDrill(\'' + code + '\')"'
+        + ' onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();_dcDrill(\'' + code + '\');}"'
+        + ' title="Open ' + escapeHtml(code) + '&rsquo;s full board">';
+}
+// The severity classes the store board already uses, reused so a metric that is
+// red here is red there.
+function _dcSev(state) {
+    return state === 'b' ? 'dc-bad' : (state === 'w' ? 'dc-warn' : 'dc-good');
+}
+
+function _dcEbayHtml() {
+    if (!_dccRows.length) return '<div class="dcc-empty">Syncing the district&hellip;</div>';
+    const cell = (r, key, raw) => {
+        const v = _dccEbayPct(raw);
+        // A metric with nothing reported must never come out green. _dccState says
+        // null both for "fine" and for "not judged", so the value's own presence is
+        // what decides between them — the same test the store board uses.
+        return _dcCell(v == null ? '—' : v, v == null ? 'dc-muted' : _dcSev(_dccState(r, key)));
+    };
+    // The thresholds used to be spelled out in a paragraph under the table. They
+    // belong on the column they judge, where they answer "over what?" at the moment
+    // the question comes up, and cost the panel no height at all.
+    const th = (label, rule) => '<th title="eBay&rsquo;s threshold: ' + rule + '">'
+        + label + '</th>';
+    let html = '<div class="lv-tbl-scroll"><table class="lv-tbl dc-tbl"><thead><tr>'
+        + '<th>Store</th>' + th('Tracking', 'above 96%') + th('Defect rate', 'under 0.40%')
+        + th('Cases closed', 'under 0.24%') + th('Late shipment', 'under 2.40%')
+        + '</tr></thead>';
+    _dccRows.forEach(r => {
+        // The same four checks the store board runs, so "3 of 4 over" there and
+        // three red cells here are the same statement.
+        html += '<tbody class="dc-grp">'
+            + _dcRowOpen(r.store) + _dcStoreCell(r.store)
+            + cell(r, 'track', r.track) + cell(r, 'defect', r.defect)
+            + cell(r, 'cases', r.cases) + cell(r, 'late', r.late) + '</tr>'
+            + '<tr class="dc-catrow" onclick="_dcDrill(\'' + r.store + '\')"'
+            + ' title="Open ' + escapeHtml(r.store) + '&rsquo;s full board">'
+            + '<td colspan="5" class="dc-cats">' + _dcCatsHtml(r) + '</td></tr></tbody>';
+    });
+    return html + '</table></div>';
+}
+
+// One chip per severity bucket, each carrying BOTH halves. "Active · very high"
+// on its own says how bad without saying what, which is the half a DM acts on.
+// The wrapper is a flex row so the gaps between chips are set once, in CSS,
+// rather than by margins that double up where two chips wrap onto a new line.
+function _dcCatsHtml(r) {
+    const chips = r.cats.length
+        ? r.cats.map(c => '<span class="dc-cat ' + _dcSev(c.s) + '">'
+            + '<b>' + escapeHtml(c.k) + '</b>' + escapeHtml(c.v) + '</span>').join('')
+        : '<span class="dc-cat dc-good">None flagged</span>';
+    return '<div class="dc-catwrap">'
+        + '<span class="dc-catlab">Categories at risk</span>' + chips + '</div>';
+}
+
+function _dcScoreHtml() {
+    if (!_dccRows.length) return '<div class="dcc-empty">Syncing the district&hellip;</div>';
+    // Buying margin and conversion came off: they are weekly KPI figures wearing a
+    // scorecard's clothes, and both already have a column of their own on the store
+    // board. The space goes to what the two scores are actually MADE of.
+    //
+    // A column per category, taken from what the district actually scored rather
+    // than a fixed list: two of the catalog's four items are inactive today, and
+    // that can change in the Submit Scores tool without this file changing.
+    const catNames = [];
+    _dccRows.forEach(r => (r.scCats || []).forEach(c => {
+        if (c.name && catNames.indexOf(c.name) < 0) catNames.push(c.name);
+    }));
+
+    // Explicit widths: the store column carries two lines now, and the total is the
+    // headline of the three scorecard columns, so neither is left narrower than the
+    // categories that add up to it.
+    const secW = catNames.length ? (46 / catNames.length) : 0;
+    const cols = '<colgroup><col style="width:18%"><col style="width:17%">'
+        + '<col style="width:19%">'
+        + catNames.map(() => '<col style="width:' + secW.toFixed(2) + '%">').join('')
+        + '</colgroup>';
+
+    // Every chip row is laid out on the SAME number of columns — the most any one
+    // store needs — so a chip is the same width everywhere, the scores line up down
+    // the table, and no store's row ever wraps to a second line. A store with fewer
+    // sections just leaves the tail of its row empty.
+    const chipCols = _dccRows.reduce(
+        (m, r) => Math.max(m, ((r.audit && r.auditSecs) || []).length || 1), 1);
+
+    let html = '<div class="lv-tbl-scroll"><table class="lv-tbl dc-tbl dc-tbl-score">'
+        + cols
+        + '<thead><tr><th>Store</th><th>PayMore Audit</th>'
+        + '<th title="The Online &amp; Marketing scorecard, out of 10">Total score</th>'
+        + catNames.map(n => '<th class="dc-sc-part">' + escapeHtml(n) + '</th>').join('')
+        + '</tr></thead>';
+    _dccRows.forEach(r => {
+        // The audit chip stays clickable in place — openAuditBreakdown is a modal,
+        // so it must stop the row's own drill-down from firing behind it.
+        const audit = r.audit
+            ? '<button type="button" class="dc-audit ' + _dcSev(_dccState(r, 'audit')) + '"'
+              + ' onclick="event.stopPropagation(); openAuditBreakdown(\'' + r.store + '\')"'
+              + ' title="View the full audit breakdown">' + r.audit.pct + '%</button>'
+            : '<span class="dc-muted">No data</span>';
+        // Categories are entered 0–5 and shown doubled, the same as the manager's
+        // own scorecard card — so a 5 reads as a 10 in both places rather than the
+        // district quietly using a second scale beside the /10 average.
+        const catCells = catNames.map(n => {
+            const c = (r.scCats || []).find(x => x.name === n);
+            if (!c || isNaN(c.score)) return _dcCell('—', 'dc-muted dc-sc-part');
+            const v = c.score * 2;
+            const sev = v >= 8 ? 'dc-good' : (v >= 6 ? 'dc-warn' : 'dc-bad');
+            return _dcCell(_dcNum(v) + '<span class="lv-of"> / 10</span>',
+                           sev + ' dc-sc-part');
+        }).join('');
+        html += '<tbody class="dc-grp">'
+            + _dcRowOpen(r.store)
+            // The scored week hangs off the store, not off a caption under the
+            // table: the stores are scored in separate sittings and two of them
+            // can genuinely be a week apart.
+            + _dcStoreCell(r.store, r.week ? 'Week of ' + r.week : '',
+                           r.week ? 'Scorecard and audit as of the week of ' + r.week : '')
+            + _dcCell(audit)
+            + _dcCell(r.score.toFixed(1) + '<span class="lv-of"> / 10</span>',
+                      _dcSev(_dccState(r, 'score')))
+            + catCells + '</tr>'
+            + '<tr class="dc-catrow" onclick="_dcDrill(\'' + r.store + '\')"'
+            + ' title="Open ' + escapeHtml(r.store) + '&rsquo;s full board">'
+            + '<td colspan="' + (catNames.length + 3) + '" class="dc-cats">'
+            + _dcAuditSecHtml(r, chipCols) + '</td></tr></tbody>';
+    });
+    return html + '</table></div>';
+}
+
+// Trims the ".0" off a whole score so a column of 10 / 8 / 7.5 stays readable.
+function _dcNum(n) {
+    return (Math.round(n * 10) / 10).toFixed(1).replace(/\.0$/, '');
+}
+
+// The audit's 165 points, said as where they went. Only sections that dropped
+// points appear, worst first, so the leftmost chip is the biggest giveaway and the
+// length of the row says roughly how much is wrong.
+//
+// Every chip is the same width, and a row never wraps. `cols` is the most
+// sections any one store lost points in, and every row is laid out on that many
+// equal columns — so the widths match across the table, the scores line up in a
+// column, and the store with the most to say still fits on one line. Section
+// names run from "Exterior" to "Display Cases & Merchandising", so at whatever
+// width that works out to the longest ones ellipsis; the full name is on the
+// chip's title.
+function _dcAuditSecHtml(r, cols) {
+    const open = '<div class="dc-catwrap"><span class="dc-catlab">Audit points by section</span>'
+        + '<div class="dc-catgrid" style="grid-template-columns:repeat('
+        + Math.max(1, cols || 1) + ',minmax(0,1fr))">';
+    if (!r.audit) {
+        return open + '<span class="dc-cat dc-fix">No audit submitted</span></div></div>';
+    }
+    const secs = r.auditSecs || [];
+    if (!secs.length) {
+        return open + '<span class="dc-cat dc-fix dc-good">Full marks</span></div></div>';
+    }
+    // Tinted by the SHARE of its own section a store gave up, not the raw count:
+    // losing 3 of 4 points in Exterior is a worse miss than 3 of 46 in Back of
+    // House, and the raw number alone would say the opposite.
+    const chips = secs.map(s => {
+        const share = s.poss > 0 ? s.missed / s.poss : 0;
+        const cls = share >= 0.25 ? ' dc-bad' : (share >= 0.1 ? ' dc-warn' : '');
+        return '<span class="dc-cat dc-fix' + cls + '"'
+            + ' title="' + escapeHtml(s.name) + ' &mdash; ' + _dcNum(s.poss - s.missed)
+            + ' of ' + _dcNum(s.poss) + ' points, ' + _dcNum(s.missed) + ' missed">'
+            + '<span class="dc-secnm">' + escapeHtml(s.name) + '</span>'
+            + '<span class="dc-pts">' + _dcNum(s.poss - s.missed) + '/'
+            + _dcNum(s.poss) + '</span></span>';
+    }).join('');
+    return open + chips + '</div></div>';
+}
+
+// The one-line summary behind the tabs. Deliberately mixes the two feeds: today's
+// selling from the live payload, everything else from the district rows.
+function _dcSummaryFill() {
+    const set = (id, html, cls) => {
+        const el = document.querySelector('#' + id + ' .cc-sum-v');
+        if (!el) return;
+        el.innerHTML = html;
+        el.className = 'cc-sum-v' + (cls ? ' ' + cls : '');
+    };
+    const live = _lvData && _lvData.district;
+    if (live) {
+        set('dc-sum-live', _lvMoney(live.netToday, false)
+            + ' <small>' + live.ordersToday
+            + (live.ordersToday === 1 ? ' order' : ' orders') + '</small>');
+        // Revenue, not profit — the cell beside it is GP against goal, and two
+        // money figures side by side have to say which is which. That is the key's
+        // job here ("Month to Date Revenue"), so the value does not repeat it.
+        set('dc-sum-mtd', _lvMoney(live.mtdNet, false));
+        // The month total on its own. It carried "· $695 today" as well, which is
+        // a seventh cell too many: at 1150px the value clipped to "$19,883 $6…"
+        // and the headline figure lost its own suffix. Today's refunds are a tab
+        // away on the Live view. Dashes on a cache written before the feed carried
+        // mtdReturns, rather than reporting a month of none.
+        if (live.mtdReturns !== null && live.mtdReturns !== undefined) {
+            set('dc-sum-refunds', _lvMoney(live.mtdReturns, false));
+        }
+    }
+    if (!_dccRows.length) return;
+    const n = _dccRows.length;
+    const gp = _dccRows.reduce((a, r) => a + r.gpTrack, 0);
+    const goal = _dccRows.reduce((a, r) => a + r.goal, 0);
+    const pct = goal > 0 ? gp / goal * 100 : 0;
+    set('dc-sum-goal', Math.round(pct) + '<small>%</small>',
+        pct >= 100 ? 'good' : (pct >= 80 ? 'warn' : 'bad'));
+    // Company-wide Google reviews, summed from the same per-store hub figures the
+    // Live tab's table and tracking tile read — one source, so the two lines on
+    // this page cannot disagree. Hides itself until the sheet carries them.
+    _lvSumReviews('dc-sum-reviews', _lvFcSum(_dccRows.map(r => ({ code: r.store }))),
+        _dccRows.map(r => r.store));
+
+    // "Stores flagged", not an average: one store failing eBay is the thing worth
+    // knowing, and averaging four percentages across five stores hides it.
+    //
+    // Danger and risk are counted separately and named (user's call 2026-08-09).
+    // "2 Stores Over" collapsed a store that has breached a threshold together
+    // with one drifting toward it, and those call for different phone calls. A
+    // store in danger outranks one at risk, so a mixed district reports the
+    // danger — the risk is still there when the danger clears.
+    const ebayKeys = ['track', 'defect', 'cases', 'late'];
+    const danger = _dccRows.filter(r => ebayKeys.some(k => _dccState(r, k) === 'b')).length;
+    const risk = _dccRows.filter(r => !ebayKeys.some(k => _dccState(r, k) === 'b')
+        && ebayKeys.some(k => _dccState(r, k) === 'w')).length;
+    const plural = n => n === 1 ? 'Store' : 'Stores';
+    set('dc-sum-ebay',
+        danger ? danger + ' <small>' + plural(danger) + ' In Danger</small>'
+        : risk ? risk + ' <small>' + plural(risk) + ' At Risk</small>'
+        : 'All Clear',
+        danger ? 'bad' : risk ? 'warn' : 'good');
+
+    const avg = f => _dccRows.reduce((a, r) => a + f(r), 0) / n;
+    const score = avg(r => r.score || 0);
+    set('dc-sum-score', score.toFixed(1) + '<small>/ 10</small>',
+        score >= 9 ? 'good' : (score >= 7 ? 'warn' : 'bad'));
+    const withAudit = _dccRows.filter(r => r.audit);
+    if (withAudit.length) {
+        const a = withAudit.reduce((x, r) => x + Number(r.audit.pct || 0), 0) / withAudit.length;
+        set('dc-sum-audit', a.toFixed(1) + '<small>%</small>',
+            a >= 90 ? 'good' : (a >= 84 ? 'warn' : 'bad'));
+    }
+}
+
+// Repaint every district panel from whatever is in memory. Safe to call before
+// either feed has answered — each piece guards itself and leaves its "syncing"
+// message in place.
+function renderDistrictTabs() {
+    const eb = document.getElementById('dc-ebay-body');
+    if (eb) eb.innerHTML = _dcEbayHtml();
+    const sc = document.getElementById('dc-score-body');
+    if (sc) sc.innerHTML = _dcScoreHtml();
+    _dcSummaryFill();
 }
 
 // ============================================================================
