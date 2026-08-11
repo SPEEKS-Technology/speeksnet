@@ -13136,15 +13136,19 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .dmx-goalset-n { font-size: 11px; font-weight: 600; color: #8a94a3; }
 .dmx-goalset.is-unset .dmx-goalset-n { color: #b45309; }
 .dmx-goalset-r { display: flex; align-items: center; gap: 8px; }
+/* Sized to sit flush with .dmx-goalset-b beside it — same font-size, vertical
+   padding, radius and line-height, so the pair reads as one control. A number
+   input reserves room for its own spinner inside the padding, which is why the
+   horizontal padding is trimmed and the width pinned rather than left to grow. */
 .dmx-goalset-i {
-    font: inherit; font-size: 14px; font-weight: 800; width: 88px; text-align: right;
-    padding: 6px 9px; border-radius: 7px; border: 1px solid #cfd8e0; background: #fff;
-    color: #0f172a; font-variant-numeric: tabular-nums;
+    font: inherit; font-size: 11px; font-weight: 800; width: 60px; text-align: center;
+    line-height: 1.6; padding: 5px 6px; border-radius: 6px; border: 1px solid #cfd8e0;
+    background: #fff; color: #0f172a; font-variant-numeric: tabular-nums;
 }
 .dmx-goalset-i:focus { outline: none; border-color: #4d8c6a; box-shadow: 0 0 0 3px rgba(77,140,106,.15); }
 .dmx-goalset-b {
-    font: inherit; font-size: 11.5px; font-weight: 800; cursor: pointer; color: #fff;
-    border-radius: 7px; padding: 7px 15px; border: 1px solid #3f7a5a; background: #4d8c6a;
+    font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; color: #fff;
+    border-radius: 6px; padding: 5px 12px; border: 1px solid #3f7a5a; background: #4d8c6a;
 }
 .dmx-goalset-b:hover { background: #427a5c; }
 .dmx-goalset-msg { font-size: 11px; font-weight: 700; min-width: 44px; }
@@ -13257,7 +13261,12 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .dcc-ico svg { width: 19px; height: 19px; }
 .dcc-eyebrow { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: #8a94a3; }
 .dcc-title { font-size: 18px; font-weight: 800; letter-spacing: -.012em; line-height: 1.1; color: #0f172a; }
-.dcc-head-side { margin-left: auto; display: flex; align-items: center; gap: 9px; }
+/* Wraps because this side now carries TWO controls (daily import, weekly
+   summary), and a run's result can take either line over with a sentence. Left
+   as nowrap it pushes the header wider than the panel and scrolls it sideways —
+   see the table-layout-blowout note. */
+.dcc-head-side { margin-left: auto; display: flex; align-items: center;
+                 flex-wrap: wrap; justify-content: flex-end; gap: 9px 12px; }
 /* District money is the header's headline: the total carries at size, the goal
    trails it as a caption on the same baseline. */
 .dcc-sum { display: flex; align-items: baseline; gap: 7px; }
@@ -13368,29 +13377,38 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .dcc-row-v.g { color: #15803d; }
 
 /* ── Sales Import (Shopify daily email → sheet) ────────────────────────────
-   Two surfaces for one action: a chip on the Command Center header line, and a
-   row at the foot of the Buying & selling block. Both are secondary to the
-   numbers around them — this is plumbing status, not a metric, so the dot
-   carries the state and the button stays quiet until hovered. */
+   Two controls on the Command Center header line — the daily import and the
+   weekly Summary update. Both are secondary to the numbers around them: this is
+   plumbing, not a metric, so they are just buttons. The state each one used to
+   spell out now lives in its tooltip, and a dot appears only when something
+   actually needs acting on. */
 .si-line { display: flex; align-items: center; gap: 8px; padding-left: 12px;
            margin-left: 4px; border-left: 1px solid #e3e9ee; }
-.si-txt  { font-size: 11.5px; font-weight: 700; color: #647082; white-space: nowrap; }
+/* One rule separates the controls from the district total; a second one between
+   two adjacent buttons just reads as clutter. */
+.si-line + .si-line { border-left: none; padding-left: 0; margin-left: 0; }
 .si-dot  { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: #cbd5e0; }
 .si-dot.si-good { background: #1f9d57; }
 .si-dot.si-warn { background: #d98324; }
 .si-dot.si-bad  { background: #c0392b; }
 .si-dot.si-mute { background: #cbd5e0; }
 
+/* min-width, not padding, is what makes the two match: the labels differ in
+   length ("Run daily import" / "Run weekly summary") and both swap to a shorter
+   word mid-run ("Importing…"), so anything width-of-content jitters as it goes.
+   Sized to the longest label and centred. */
 .si-btn { font: inherit; font-size: 11px; font-weight: 750; letter-spacing: .01em;
           color: #1f7a48; background: #f2f8f4; border: 1px solid #d6e6dc;
           border-radius: 8px; padding: 5px 10px; cursor: pointer; white-space: nowrap;
+          min-width: 132px; text-align: center;
           transition: background .14s ease, border-color .14s ease, color .14s ease; }
 .si-btn:hover:not(:disabled) { background: #e6f2ec; border-color: #b9d8c8; color: #17603a; }
 .si-btn:disabled { opacity: .6; cursor: default; }
 
-/* The run result sits inline on the header line, so unlike .si-txt it must be
-   allowed to WRAP and must be width-capped — a nowrap run of free text here would
-   push the header out and scroll the panel sideways (see table-layout-blowout). */
+/* The run result sits inline on the header line, and unlike the buttons beside
+   it, it must be allowed to WRAP and must be width-capped — a nowrap run of free
+   text here would push the header out and scroll the panel sideways (see
+   table-layout-blowout). */
 .si-msg { font-size: 11px; font-weight: 700; line-height: 1.35; padding: 4px 8px;
           border-radius: 7px; max-width: 320px; white-space: normal;
           overflow-wrap: anywhere; }
@@ -13398,10 +13416,9 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .si-msg.bad { color: #9b2c1f; background: #fdf3f1; border: 1px solid #f0d5cf; }
 
 @media (max-width: 720px) {
-  /* The header line is the first thing to run out of room; the row keeps the
-     full state so nothing is lost by dropping the chip's text here. */
+  /* The header line is the first thing to run out of room. The buttons stay —
+     they are the whole control now — so only the divider padding gives way. */
   .si-line { padding-left: 8px; margin-left: 0; }
-  .si-txt { display: none; }
 }
 
 /* categories at risk */
@@ -14696,3 +14713,98 @@ body.tv-body { display: block; background: #eef1f5; }
    ask, and a board that disagrees with the screen in the office is worse than a
    small one. Raise it here if the far wall needs it. */
 .tv-card { zoom: 1; }
+
+/* ── Floater away chip (2026-08-10) ────────────────────────────────────────
+   Shown in place of a floater's role dots when another store in their market
+   has already claimed them today. Deliberately occupies the same slot as the
+   dots — greyed and named, not hidden, so a manager can see where they went
+   instead of ringing round to find out. See _goalsFloaterHeldBy in speeks.js. */
+.goals-floater-away {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.01em;
+    color: #94a3b8; background: #f1f5f9;
+    border: 1px dashed #cbd5e1; border-radius: 20px;
+    padding: 4px 10px; white-space: nowrap;
+}
+
+/* ── Store Efficiency table (2026-08-10) ───────────────────────────────────
+   Centred variant of .dmx-tbl. The default is left-label / right-number, which
+   is right for a roster read down one name column; this table is a grid of
+   comparable figures across eight columns, so centring keeps the eye tracking
+   across a row instead of hunting ragged edges. .dmx-cl opts a cell back out. */
+/* table-layout: fixed is what makes the columns EQUAL rather than
+   content-sized. Without it the browser widths each column to its contents, so
+   Store (a name plus a warning chip) and Result (a pill) were several times
+   wider than Hours, and the gaps between columns were all different. Every cell
+   is 1/8th and centred, the store name included. */
+.dmx-tbl-c { table-layout: fixed; }
+.dmx-tbl-c th,
+.dmx-tbl-c td { width: 12.5%; text-align: center; padding-left: 4px; padding-right: 4px; }
+.dmx-tbl-c .dmx-num { text-align: center; }
+.dmx-tbl-c .dmx-st { display: inline-flex; }
+/* The roles-set warning sits UNDER the store code, centred with it — beside it,
+   it made the cell far too wide for an equal column. */
+.dmx-tbl-c td.dmx-cl .dmx-role {
+    display: block; margin: 3px auto 0; width: fit-content;
+    color: #b45309; background: #fdf3e1;
+}
+
+/* Ruled to match the Live Dashboard table (.lv-tbl), which is the house style
+   for a figures table on this site — SAME token everywhere, 1px #e6ebf1, used for
+   the header rule and the roll-up rule alike. Drawing every line from one colour
+   is what stops a table looking like it was assembled from three decisions.
+
+   Only THREE horizontal lines exist here: under the header, above the district
+   roll-up, and none in between. Five stores is few enough that the eye tracks a
+   row without help, so the per-row separators .dmx-tbl draws by default were
+   pure noise — and worse, they made the roll-up rule read as one more of them
+   instead of a break. Rows are separated by the columns, not by rules. */
+.dmx-tbl-c th { border-bottom-color: #e6ebf1; }
+.dmx-tbl-c td { border-bottom: 0; }
+
+/* Two vertical rules only, grouping the eight columns into what they mean rather
+   than ruling every one and turning the table into a grid:
+     Store · Hours                     | what the store IS
+     Ceiling · Goal · Listed           | the plan and the outcome
+     Staffed For · Efficiency · Result | the fair reading of it
+   Column 3 is Ceiling and column 6 is Staffed For, so each border lands in the
+   gap before its group. */
+.dmx-tbl-c th:nth-child(3), .dmx-tbl-c td:nth-child(3),
+.dmx-tbl-c th:nth-child(6), .dmx-tbl-c td:nth-child(6) {
+    border-left: 1px solid #e6ebf1;
+}
+
+/* The district roll-up. The line alone is not what separates it — .lv-tbl gives
+   its roll-up row 16px of SYMMETRIC padding, and that air is what makes the rule
+   read as a break instead of one more row divider. Padding one side only pushes
+   the row's own content off centre. */
+.dmx-tbl-c tr.dmx-tot td {
+    border-top: 1px solid #e6ebf1;
+    padding-top: 16px; padding-bottom: 16px;
+}
+
+/* The two week buttons hold labels of very different lengths ("Last Week" vs
+   "Jul 27 – Aug 2"), so they get a shared minimum width — otherwise the pair
+   reads as two unrelated buttons instead of one two-position control. */
+.dmx-goalset-b.dmx-b-wk { min-width: 116px; text-align: center; }
+
+/* Unselected week toggle — same size as its sibling, no fill, so the pair reads
+   as one control with a current state rather than two competing buttons. */
+.dmx-goalset-b.dmx-b-off {
+    background: #fff; color: #647082; border-color: #cfd8e0;
+}
+.dmx-goalset-b.dmx-b-off:hover { background: #f4f7f5; color: #0f172a; }
+
+/* Role in its own column: fixed width so every pill starts at the same x, and a
+   little breathing room before the day numbers begin. */
+.dmx-tbl td.dmx-rolecol { width: 96px; white-space: nowrap; padding-right: 16px; }
+.dmx-tbl td.dmx-rolecol .dmx-role { margin-left: 0; }
+
+/* The Results rail tab carries a word, not a count like its store siblings, so
+   it sits quieter — smaller, lighter, and set off from the label. (.dmx-t lays
+   its two halves out in a row, so no display change here would take.) */
+.dmx-t .dmx-t-val.dmx-t-sub {
+    font-size: 10px; font-weight: 700; letter-spacing: .01em;
+    color: #8a94a3; text-transform: none; padding-left: 4px;
+}
+.dmx-t.sel .dmx-t-val.dmx-t-sub { color: #4d8c6a; }

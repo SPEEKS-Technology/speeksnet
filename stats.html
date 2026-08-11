@@ -9,9 +9,9 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260809g">
+  <link rel="stylesheet" href="styles.css?v=20260811a">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <script src="speeks.js?v=20260809g" defer></script>
+  <script src="speeks.js?v=20260811a" defer></script>
 </head>
 <body class="preload">
 
@@ -140,9 +140,11 @@
             <div class="hub-select-wrap">
                 <select id="hubFilter" onchange="setHubFilter(this.value)">
                     <option value="all">All updates</option>
+                    <option value="unread">Unread</option>
                     <option value="ann">Announcements</option>
                     <option value="note">Comments</option>
                     <option value="patch">Patch notes</option>
+                    <option value="arch">Archived</option>
                 </select>
                 <span class="hub-chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
             </div>
@@ -987,9 +989,6 @@
     </div>
     <div class="manage-content">
       <div id="dmListingBody"><div class="dmx-empty" style="padding:60px 0;">Syncing&hellip;</div></div>
-    </div>
-    <div class="manage-footer">
-      <span class="dmx-foot-note">Rosters are read-only here &mdash; managers set their own roles. Weekly goals save immediately.</span>
     </div>
 </div>
 

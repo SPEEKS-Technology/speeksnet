@@ -203,8 +203,8 @@ async function ingest(sb: any, p: Record<string, string>) {
   // schema change, a dead relay) and neither is worth losing today's sales over.
   let cash: any = null;
   try {
-    const rows = ((report.buying && report.buying.cash) || []) as any[];
-    if (!dryRun && rows.length) {
+    if (!dryRun) {
+      const rows = ((report.buying && report.buying.cash) || []) as any[];
       const up = rows
         .filter((r) => r && r.store && r.date)
         .map((r) => ({
@@ -212,19 +212,33 @@ async function ingest(sb: any, p: Record<string, string>) {
           drawer: r.drawer ?? null, safe: r.safe ?? null, total: r.total ?? null,
           source: "day_end_report", updated_at: new Date().toISOString(),
         }));
-      const { error } = await sb.from("store_cash").upsert(up, { onConflict: "day,store" });
-      cash = { stored: error ? 0 : up.length, error: error ? error.message : null };
 
-      // Then mail it — chained off the import rather than given a cron of its
-      // own, because a second job at 7:00 would race the run that produces the
-      // data. cash-report is idempotent per day, so the 8am retry re-enters here
-      // and correctly does nothing.
-      if (!error) {
-        const u = new URL(CASH_REPORT_URL);
-        u.searchParams.set("secret", SECRET);
-        const res = await fetch(u.toString());
-        cash.mailed = res.ok ? await res.json().catch(() => ({ ok: true })) : `HTTP ${res.status}`;
+      let stored = 0;
+      let storeError: string | null = null;
+      if (up.length) {
+        const { error } = await sb.from("store_cash").upsert(up, { onConflict: "day,store" });
+        storeError = error ? error.message : null;
+        stored = error ? 0 : up.length;
       }
+      cash = { stored, error: storeError };
+
+      // Mail it — chained off the import rather than given a cron of its own,
+      // because a second job at 7:00 would race the run that produces the data.
+      // cash-report is idempotent per day, so the 8am retry re-enters here and
+      // correctly does nothing.
+      //
+      // CALLED UNCONDITIONALLY, and that is the point. This used to be gated on
+      // having stored something, which quietly undid cash-report's own rule that
+      // it sends even when no figures arrived: on the one morning nothing
+      // reached us at all, the email that exists to say so would never have been
+      // asked for. Silence is exactly what that morning must not produce. A
+      // failed write is the same case — the email then reports what IS in the
+      // table and says how many stores it covers, which is the visible signal.
+      // cash-report decides the day and skips Sundays on its own.
+      const u = new URL(CASH_REPORT_URL);
+      u.searchParams.set("secret", SECRET);
+      const res = await fetch(u.toString());
+      cash.mailed = res.ok ? await res.json().catch(() => ({ ok: true })) : `HTTP ${res.status}`;
     }
   } catch (e) {
     cash = { error: String((e as Error)?.message || e) };

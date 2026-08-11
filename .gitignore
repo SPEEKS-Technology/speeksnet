@@ -1,2 +1,5 @@
 # Local MCP server config (personal, not shared)
 .vscode/mcp.json
+
+# Supabase CLI local state (project ref, session scratch) — not repo content
+supabase/.temp/
