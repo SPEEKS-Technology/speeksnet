@@ -33435,10 +33435,13 @@ window.dmxShowEfficiency = dmxShowEfficiency;
 // the capacity you had that week or you didn't — so the chip says only that.
 function _dmxEffChip(pct, emptyText) {
     if (pct == null) return '<span class="dmx-mute">' + escapeHtml(emptyText || 'No roles set') + '</span>';
+    // No percentage on the chip — the Efficiency column sits immediately to its
+    // left and already says it. Repeating it made this the widest cell in the
+    // table by a distance, which is what stopped the columns being equal.
     const above = pct >= 100;
     return '<span class="dmx-st ' + (above ? 'dmx-good' : 'dmx-warn') + '">'
         + _DMX_ICO[above ? 'good' : 'warn']
-        + escapeHtml((above ? 'Above target · ' : 'Below target · ') + pct + '%')
+        + (above ? 'Above target' : 'Below target')
         + '</span>';
 }
 
@@ -33463,8 +33466,9 @@ function _dmxEfficiencyPane() {
         + '<div class="dmx-pt">Store Efficiency</div>'
         + '<div class="dmx-ps">' + escapeHtml(range) + ' · Measured against the capacity each store actually had</div>'
         + '</div><div class="dmx-ph-side" style="display:flex; gap:7px;">'
-        + btn('Last Week', back1)
+        // Oldest on the left, so the pair runs in the direction time does.
         + btn(_dmxWeekRangeLabel(back2), back2)
+        + btn('Last Week', back1)
         + '</div></div>';
 
     if (!rows) return head + '<div class="dmx-empty">Loading the week…</div>';
@@ -33494,7 +33498,13 @@ function _dmxEfficiencyPane() {
         // rather than printing a number that reads as a verdict.
         const thin = r.assignedDays > 0 && r.assignedDays < (r.people.length * 4);
         t += '<tr><td class="dmx-cl"><span class="dmx-name">' + escapeHtml(r.store) + '</span>'
-            + (thin ? '<span class="dmx-role">' + r.assignedDays + ' of ' + (r.people.length * 6) + ' roles set</span>' : '')
+            // Short form: "15 of 24 roles set" rendered wider than the column it
+            // sits in and bled over both edges. The tooltip carries the sentence.
+            + (thin ? '<span class="dmx-role" title="Roles were only set on '
+                + r.assignedDays + ' of this store’s ' + (r.people.length * 6) + ' person-days. '
+                + 'A day with nobody in a seat carries no goal, so it drops out of Staffed For — '
+                + 'this store’s efficiency is measured against a shorter week than it worked.">'
+                + r.assignedDays + '/' + (r.people.length * 6) + ' roles</span>' : '')
             + '</td>'
             + '<td class="dmx-num">' + r.hours + '</td>'
             + '<td class="dmx-num dmx-mute">' + r.capacity + '</td>'

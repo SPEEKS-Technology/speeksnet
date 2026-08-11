@@ -14626,15 +14626,20 @@ body.tv-body { display: block; background: #eef1f5; }
    is right for a roster read down one name column; this table is a grid of
    comparable figures across eight columns, so centring keeps the eye tracking
    across a row instead of hunting ragged edges. .dmx-cl opts a cell back out. */
-.dmx-tbl-c th { text-align: center; padding-left: 6px; padding-right: 6px; }
-.dmx-tbl-c td { text-align: center; padding-left: 6px; padding-right: 6px; }
+/* table-layout: fixed is what makes the columns EQUAL rather than
+   content-sized. Without it the browser widths each column to its contents, so
+   Store (a name plus a warning chip) and Result (a pill) were several times
+   wider than Hours, and the gaps between columns were all different. Every cell
+   is 1/8th and centred, the store name included. */
+.dmx-tbl-c { table-layout: fixed; }
+.dmx-tbl-c th,
+.dmx-tbl-c td { width: 12.5%; text-align: center; padding-left: 4px; padding-right: 4px; }
 .dmx-tbl-c .dmx-num { text-align: center; }
-.dmx-tbl-c td.dmx-cl, .dmx-tbl-c th:first-child { text-align: left; }
 .dmx-tbl-c .dmx-st { display: inline-flex; }
-/* The roles-set warning sits under the store code rather than beside it — as a
-   sibling it pushed the only left-aligned column out of line with its header. */
+/* The roles-set warning sits UNDER the store code, centred with it — beside it,
+   it made the cell far too wide for an equal column. */
 .dmx-tbl-c td.dmx-cl .dmx-role {
-    display: block; margin-left: 0; margin-top: 3px; width: fit-content;
+    display: block; margin: 3px auto 0; width: fit-content;
     color: #b45309; background: #fdf3e1;
 }
 
