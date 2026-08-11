@@ -33176,12 +33176,12 @@ function renderDmListingModal() {
         return;
     }
 
-    // Efficiency sits at the top of the rail as its own destination — it is a
+    // Results sits at the top of the rail as its own destination — it is a
     // district read, not a store's, so it doesn't belong inside a store pane.
     let rail = '<button type="button" class="dmx-t' + (_dmxSel.lg === 'EFF' ? ' sel' : '')
         + '" onclick="dmxShowEfficiency()">'
-        + '<span class="dmx-t-code">Effic.</span>'
-        + '<span class="dmx-t-mid"><span class="dmx-t-val">last week</span></span>'
+        + '<span class="dmx-t-code">Results</span>'
+        + '<span class="dmx-t-mid"><span class="dmx-t-val">Last Week</span></span>'
         + '</button>';
     all.forEach(s => {
         rail += _dmxTab('lg', s.store, s.week + ' / ' + s.target, s.pct);
@@ -33358,72 +33358,100 @@ async function dmxShowEfficiency(weekStart) {
 }
 window.dmxShowEfficiency = dmxShowEfficiency;
 
+// Above or below target — a plain binary at 100%, NOT _dmxChip.
+//
+// _dmxChip grades on the generic district attainment scale, which has bands
+// either side of ~90%. Borrowing it here produced a green tick reading
+// "Under · 93%" next to an amber "Under · 79%": the colour said one thing and
+// the word said another. Efficiency has exactly one threshold — you either beat
+// the capacity you had that week or you didn't — so the chip says only that.
+function _dmxEffChip(pct) {
+    if (pct == null) return '<span class="dmx-mute">No roles set</span>';
+    const above = pct >= 100;
+    return '<span class="dmx-st ' + (above ? 'dmx-good' : 'dmx-warn') + '">'
+        + _DMX_ICO[above ? 'good' : 'warn']
+        + escapeHtml((above ? 'Above target · ' : 'Below target · ') + pct + '%')
+        + '</span>';
+}
+
 function _dmxEfficiencyPane() {
     const week = _dmxCapWeek || _dmxLastWeekStart();
     const rows = _dmxCap[week];
-    const label = new Date(week + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const wkStart = new Date(week + 'T12:00:00');
+    const wkEnd = new Date(wkStart); wkEnd.setDate(wkEnd.getDate() + 6);
+    const fmt = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const isThisWeek = week === _dmxWeekDays().start.toLocaleDateString('en-CA');
+
+    // Spell the actual dates out. "Last week" on its own is ambiguous the moment
+    // someone opens this on a Monday morning.
+    const range = fmt(wkStart) + ' – ' + fmt(wkEnd)
+        + (isThisWeek ? ' (in progress)' : '');
+
+    const btn = (label, wk) => '<button type="button" class="dmx-goalset-b'
+        + (week === wk ? '' : ' dmx-b-off') + '" onclick="dmxShowEfficiency(\'' + wk + '\')">'
+        + label + '</button>';
 
     let head = '<div class="dmx-ph"><div>'
-        + '<div class="dmx-pt">Efficiency</div>'
-        + '<div class="dmx-ps">Week of ' + escapeHtml(label) + ' · measured against the capacity each store actually had</div>'
-        + '</div><div class="dmx-ph-side">'
-        + '<button type="button" class="dmx-goalset-b" onclick="dmxShowEfficiency(\'' + _dmxLastWeekStart() + '\')">Last week</button> '
-        + '<button type="button" class="dmx-goalset-b" onclick="dmxShowEfficiency(\'' + _dmxWeekDays().start.toLocaleDateString('en-CA') + '\')">This week</button>'
+        + '<div class="dmx-pt">Store Efficiency</div>'
+        + '<div class="dmx-ps">' + escapeHtml(range) + ' · Measured against the capacity each store actually had</div>'
+        + '</div><div class="dmx-ph-side" style="display:flex; gap:7px;">'
+        + btn('Last Week', _dmxLastWeekStart())
+        + btn('This Week', _dmxWeekDays().start.toLocaleDateString('en-CA'))
         + '</div></div>';
 
     if (!rows) return head + '<div class="dmx-empty">Loading the week…</div>';
     if (!rows.length) return head + '<div class="dmx-empty">No capacity data for this week.</div>';
 
-    let t = '<table class="dmx-tbl"><thead><tr>'
-        + '<th>Store</th>'
-        + '<th style="text-align:right;">Hours</th>'
-        + '<th style="text-align:right;">Ceiling</th>'
-        + '<th style="text-align:right;">Goal</th>'
-        + '<th style="text-align:right;">Staffed for</th>'
-        + '<th style="text-align:right;">Listed</th>'
-        + '<th style="text-align:right;">Efficiency</th>'
-        + '<th>Verdict</th></tr></thead><tbody>';
+    // Column order reads left to right as the story: who, what they had, what we
+    // asked for, what they did, then how that compares. Listed sits beside Goal
+    // because those two are the pair anyone checks first.
+    let t = '<table class="dmx-tbl dmx-tbl-c"><thead><tr>'
+        + '<th>Store</th><th>Hours</th><th>Ceiling</th>'
+        + '<th>Goal</th><th>Listed</th>'
+        + '<th>Staffed For</th><th>Efficiency</th><th>Result</th>'
+        + '</tr></thead><tbody>';
 
     rows.forEach(r => {
         // efficiency comes back as a ratio (1.08) or null when nothing was staffed.
-        const eff = r.efficiency;
-        const pct = eff == null ? null : Math.round(eff * 100);
-        const verdict = pct == null
-            ? '<span class="dmx-mute">Not staffed</span>'
-            : _dmxChip(pct, (pct >= 100 ? 'Efficient' : 'Under') + ' · ' + pct + '%');
-        // A week where hardly any roles were set makes efficiency meaningless —
-        // an unassigned day carries no goal, so the denominator is short and the
-        // ratio flatters. Say so rather than printing a number that reads as a win.
+        const pct = r.efficiency == null ? null : Math.round(r.efficiency * 100);
+        // Fewer than four days per person means most of the week carried no goal
+        // at all, so the denominator is short and the ratio flatters. Flag it
+        // rather than printing a number that reads as a verdict.
         const thin = r.assignedDays > 0 && r.assignedDays < (r.people.length * 4);
-        t += '<tr><td><span class="dmx-name">' + escapeHtml(r.store) + '</span>'
-            + (thin ? '<span class="dmx-role" title="Only ' + r.assignedDays + ' person-days had a role set — the ratio is flattered by the missing ones.">thin roles</span>' : '')
+        t += '<tr><td class="dmx-cl"><span class="dmx-name">' + escapeHtml(r.store) + '</span>'
+            + (thin ? '<span class="dmx-role">' + r.assignedDays + ' of ' + (r.people.length * 6) + ' days set</span>' : '')
             + '</td>'
             + '<td class="dmx-num">' + r.hours + '</td>'
             + '<td class="dmx-num dmx-mute">' + r.capacity + '</td>'
             + '<td class="dmx-num">' + r.planned + '</td>'
-            + '<td class="dmx-num">' + r.adjusted + '</td>'
             + '<td class="dmx-num">' + r.actual + '</td>'
+            + '<td class="dmx-num">' + r.adjusted + '</td>'
             + '<td class="dmx-num">' + (pct == null ? '–' : pct + '%') + '</td>'
-            + '<td>' + verdict + '</td></tr>';
+            + '<td>' + _dmxEffChip(pct) + '</td></tr>';
     });
 
     const sum = (k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
     const dAdj = sum('adjusted'), dAct = sum('actual');
-    t += '<tr class="dmx-tot"><td>District</td>'
+    const dPct = dAdj ? _dmxPct(dAct, dAdj) : null;
+    t += '<tr class="dmx-tot"><td class="dmx-cl">District</td>'
         + '<td class="dmx-num">' + sum('hours') + '</td>'
         + '<td class="dmx-num">' + sum('capacity') + '</td>'
         + '<td class="dmx-num">' + sum('planned') + '</td>'
-        + '<td class="dmx-num">' + dAdj + '</td>'
         + '<td class="dmx-num">' + dAct + '</td>'
-        + '<td class="dmx-num">' + _dmxPct(dAct, dAdj) + '%</td>'
-        + '<td></td></tr></tbody></table>';
+        + '<td class="dmx-num">' + dAdj + '</td>'
+        + '<td class="dmx-num">' + (dPct == null ? '–' : dPct + '%') + '</td>'
+        + '<td>' + _dmxEffChip(dPct) + '</td></tr></tbody></table>';
 
     return head + t
-        + '<div class="dmx-ps" style="margin-top:14px; line-height:1.6;">'
-        + '<b>Goal</b> is the stretch factor applied to the ceiling, frozen Monday. '
-        + '<b>Staffed for</b> is the sum of the daily goals actually handed out that week, so off days, '
-        + 'callouts and no-shows come out of it automatically. '
-        + '<b>Efficiency</b> is what they listed against that — over 100% means they beat the capacity they had.'
+        + '<div class="dmx-ps" style="margin-top:14px; line-height:1.7;">'
+        + '<b>Ceiling</b> is everything this roster could list if every hour went perfectly. '
+        + '<b>Goal</b> is the stretch factor applied to that, frozen Monday morning. '
+        + '<b>Staffed For</b> is the sum of the daily goals actually handed out — off days, callouts '
+        + 'and no-shows drop out of it on their own, so a short-handed week is judged on the '
+        + 'week it really had. <b>Efficiency</b> is what they listed against that number.'
+        + '<br><span style="color:#b45309;"><b>“X of Y days set”</b> means the store only picked roles on '
+        + 'some of its person-days. Days with no role carry no goal, so the efficiency for that store '
+        + 'is measured against a shorter week than it worked — read it with suspicion.</span>'
         + '</div>';
 }
 

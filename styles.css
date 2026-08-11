@@ -13037,8 +13037,8 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 }
 .dmx-goalset-i:focus { outline: none; border-color: #4d8c6a; box-shadow: 0 0 0 3px rgba(77,140,106,.15); }
 .dmx-goalset-b {
-    font: inherit; font-size: 11.5px; font-weight: 800; cursor: pointer; color: #fff;
-    border-radius: 7px; padding: 7px 15px; border: 1px solid #3f7a5a; background: #4d8c6a;
+    font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; color: #fff;
+    border-radius: 6px; padding: 5px 12px; border: 1px solid #3f7a5a; background: #4d8c6a;
 }
 .dmx-goalset-b:hover { background: #427a5c; }
 .dmx-goalset-msg { font-size: 11px; font-weight: 700; min-width: 44px; }
@@ -14616,3 +14616,27 @@ body.tv-body { display: block; background: #eef1f5; }
     border: 1px dashed #cbd5e1; border-radius: 20px;
     padding: 4px 10px; white-space: nowrap;
 }
+
+/* ── Store Efficiency table (2026-08-10) ───────────────────────────────────
+   Centred variant of .dmx-tbl. The default is left-label / right-number, which
+   is right for a roster read down one name column; this table is a grid of
+   comparable figures across eight columns, so centring keeps the eye tracking
+   across a row instead of hunting ragged edges. .dmx-cl opts a cell back out. */
+.dmx-tbl-c th { text-align: center; padding-left: 6px; padding-right: 6px; }
+.dmx-tbl-c td { text-align: center; padding-left: 6px; padding-right: 6px; }
+.dmx-tbl-c .dmx-num { text-align: center; }
+.dmx-tbl-c td.dmx-cl, .dmx-tbl-c th:first-child { text-align: left; }
+.dmx-tbl-c .dmx-st { display: inline-flex; }
+/* The roles-set warning sits under the store code rather than beside it — as a
+   sibling it pushed the only left-aligned column out of line with its header. */
+.dmx-tbl-c td.dmx-cl .dmx-role {
+    display: block; margin-left: 0; margin-top: 3px; width: fit-content;
+    color: #b45309; background: #fdf3e1;
+}
+
+/* Unselected week toggle — same size as its sibling, no fill, so the pair reads
+   as one control with a current state rather than two competing buttons. */
+.dmx-goalset-b.dmx-b-off {
+    background: #fff; color: #647082; border-color: #cfd8e0;
+}
+.dmx-goalset-b.dmx-b-off:hover { background: #f4f7f5; color: #0f172a; }
