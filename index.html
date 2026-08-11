@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260811b">
+  <link rel="stylesheet" href="styles.css?v=20260811c">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260811f" defer></script>
+  <script src="speeks.js?v=20260811g" defer></script>
 </head>
 
 <body class="preload">
@@ -662,7 +662,7 @@
   <!-- Managers + ASMs. Replaces the info-ticker + nav bell. Cards trigger the
        existing modals/panels; the unified feed (announcements + store notes +
        reminders) is built by renderActionFeed() in the SPEEKS ACTION MENU block. -->
-  <section class="speeks-action-menu dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-tom role-employee role-training" id="speeksActionMenu">
+  <section class="speeks-action-menu dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee role-training" id="speeksActionMenu">
 
     <div class="sam-hero" id="samHero" hidden onclick="toggleNotifs()">
       <div class="sam-hero-ico">
@@ -757,7 +757,7 @@
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-ceo-sales-summary">📊 Sales Summary</a> 
             <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-store-passwords">🔑 Store Passwords</a>
             <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-b2b-records">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-tom-folder">📁 TOM Folder</a>
+            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-tom-folder">📁 MOCD Folder</a>
             <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-paymore-google-drive">☁️ PayMore Google Drive</a> 
             <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>  
         </div>
@@ -776,11 +776,11 @@
         </div>
       </div>
 
-      <div class="dynamic-module-flex role-tom hotbar-wrapper">
+      <div class="dynamic-module-flex role-mocd hotbar-wrapper">
         <div class="hotbar-container">
-          <span class="hotbar-label">TOM</span>
+          <span class="hotbar-label">MOCD</span>
           <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-tom-tom-folder">📁 TOM Folder</a>
+            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-tom-tom-folder">📁 MOCD Folder</a>
             <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-tom-b2b-records">🏢 B2B Records</a>   
             <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-tom-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>  
         </div>
@@ -1965,7 +1965,7 @@
     </div>
 </div>
 
-<div class="tools-side-panel dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager role-manager role-assistant-manager" id="toolsSidePanel" style="flex-direction:column;">
+<div class="tools-side-panel dynamic-module-flex role-district-manager role-ceo role-mocd role-owner-manager role-manager role-assistant-manager" id="toolsSidePanel" style="flex-direction:column;">
   <div class="tools-panel-header">
     <div class="tools-panel-title">
       <svg class="tools-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"></rect><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"></rect><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"></rect><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"></rect></svg>
@@ -1985,9 +1985,9 @@
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-claims-oversight" onclick="_closeToolsPanel(); openClaimsOversight();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></span>Insurance Claims (DM)</a>
     </div>
 
-    <div class="tools-group dynamic-module-block role-district-manager role-ceo role-tom role-owner-manager">
+    <div class="tools-group dynamic-module-block role-district-manager role-ceo role-mocd role-owner-manager">
       <div class="tools-group-label">Content</div>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" data-feature="tool-announcements" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"/></span>Announcements</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-mocd role-owner-manager" data-feature="tool-announcements" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"/></span>Announcements</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-patch-notes" onclick="_closeToolsPanel(); togglePatchNotesManage();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></span>Patch Notes</a>
     </div>
 

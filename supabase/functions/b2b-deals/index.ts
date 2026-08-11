@@ -17,14 +17,14 @@ const corsHeaders = {
 //   pricing           store   itemize and price: type, specs, one serial per
 //                             unit, a disposition, and whether it needs a
 //                             certified data wipe
-//   review            corp    priced and waiting on a CEO/TOM/DM: they either
+//   review            corp    priced and waiting on a CEO/MOCD/DM: they either
 //                             send it (which approves it) or send it back to
 //                             pricing with a note. The approver is emailed the
 //                             moment it lands here
 //   quote             corp    emailed to the client, waiting on their answer.
 //                             Goes out from the quoter's own mailbox as a mailto
 //                             draft so replies reach them. Both stages stay
-//                             editable, and only a CEO/TOM/DM may send, accept
+//                             editable, and only a CEO/MOCD/DM may send, accept
 //                             or send back
 //
 //                             These were one stage until 0018, told apart by
@@ -576,7 +576,7 @@ Deno.serve(async (req: Request) => {
         }
         const role = String(body.role || "").toLowerCase().trim();
         if (!ACCEPT_ROLES.includes(role)) {
-          return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can sign off without a signature." }, 403);
+          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can sign off without a signature." }, 403);
         }
         const { error } = await supabase.from("b2b_deals").update({
           signature_skipped_by: str(body.user, 120, "User") || "Unknown",
@@ -722,7 +722,7 @@ Deno.serve(async (req: Request) => {
         if (!deal) return jsonResponse({ success: false, error: "Deal not found." }, 404);
         const role = String(body.role || "").toLowerCase().trim();
         if (!ACCEPT_ROLES.includes(role)) {
-          return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can move a deal between stores." }, 403);
+          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can move a deal between stores." }, 403);
         }
 
         // pricing while it is being priced or quoted; listing once it is there.
@@ -868,7 +868,7 @@ Deno.serve(async (req: Request) => {
         if (deal.stage === "review") {
           const role = String(body.role || "").toLowerCase().trim();
           if (!ACCEPT_ROLES.includes(role)) {
-            return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can send a quote to the client." }, 403);
+            return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can send a quote to the client." }, 403);
           }
         }
         const { error } = await supabase.from("b2b_deals").update({
@@ -893,7 +893,7 @@ Deno.serve(async (req: Request) => {
         }
         const role = String(body.role || "").toLowerCase().trim();
         if (!ACCEPT_ROLES.includes(role)) {
-          return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can accept a quote." }, 403);
+          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can accept a quote." }, 403);
         }
 
         const { data: items } = await supabase.from("b2b_deal_items")
@@ -992,7 +992,7 @@ Deno.serve(async (req: Request) => {
           // units, it just doesn't get to say the wipe happened.
           const role = String(body.role || "").toLowerCase().trim();
           if (!ACCEPT_ROLES.includes(role)) {
-            return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can certify a data wipe." }, 403);
+            return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can certify a data wipe." }, 403);
           }
           const units = count(body.units, 1, 100000, "Units", 1);
           const room = qty - item.wiped_qty;
@@ -1110,7 +1110,7 @@ Deno.serve(async (req: Request) => {
         }
         const role = String(body.role || "").toLowerCase().trim();
         if (!ACCEPT_ROLES.includes(role)) {
-          return jsonResponse({ success: false, error: "Only a CEO, TOM or District Manager can send a quote back." }, 403);
+          return jsonResponse({ success: false, error: "Only a CEO, MOCD or District Manager can send a quote back." }, 403);
         }
         const { error } = await supabase.from("b2b_deals").update({
           stage: "pricing",

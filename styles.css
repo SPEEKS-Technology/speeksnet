@@ -9531,12 +9531,12 @@ body.sam-active .hotbar-btn:hover {
 }
 .top-nav .msm-seg.active:hover { background: var(--sage-professional); }
 
-/* --- Action Menu with no applicable action items (CEO / TOM) ------------- */
+/* --- Action Menu with no applicable action items (CEO / MOCD) ------------- */
 .speeks-action-menu.sam-norail .sam-rail { display: none !important; }
 .speeks-action-menu.sam-norail .sam-board { grid-template-columns: minmax(0, 1fr); }
 
 /* --- feed size is the same for every role --------------------------------
-   Roles with fewer action items (DM = 1) or none (CEO/TOM) were collapsing
+   Roles with fewer action items (DM = 1) or none (CEO/MOCD) were collapsing
    the feed to the rail's height. Give the feed card a floor matching the
    manager layout (4 rail items) so the deck reads identically everywhere,
    and let the rail hug its own content instead of stretching to match. */

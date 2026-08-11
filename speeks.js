@@ -1734,7 +1734,7 @@ function populateUsersModal() {
     // Store LAST, and deliberately so: the list above it is people in seniority
     // order, and a Store account is a screen on a sales floor — one per store,
     // never a person. Grouping it at the bottom keeps the staff list readable.
-    const ROLE_ORDER = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM', 'Store'];
+    const ROLE_ORDER = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'MOCD', 'Store'];
     const groups = {};
     const order = [];
     globalUsersData.forEach(u => {
@@ -1811,7 +1811,7 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
     // Must match ROLE_ORDER in populateManageUsers, including the trailing Store:
     // a role that can be assigned but not grouped lands in the unrecognised
     // bucket, and one that can be grouped but not assigned cannot be created.
-    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM', 'Store'];
+    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'MOCD', 'Store'];
 
     const storeOptions = stores.map(s => `<option value="${s}" ${(user.store || '').toUpperCase() === s ? 'selected' : ''}>${s}</option>`).join('');
     const roleOptions = roles.map(r => `<option value="${r}" ${(user.role || '').toLowerCase() === r.toLowerCase() ? 'selected' : ''}>${r}</option>`).join('');
@@ -2550,10 +2550,10 @@ async function checkPIN() {
                 _loginStore = MULTISTORE_MANAGER_STORES[0];
             } else {
                 sessionStorage.removeItem('speeksMultiStore');
-                // TOM is homed at OVL rather than CORP (Ethan 2026-07-17). Their
+                // MOCD is homed at OVL rather than CORP (Ethan 2026-07-17). Their
                 // corp-wide powers are role-gated, not store-gated, so this only
                 // changes their default store, not their access.
-                if (_loginRole === 'tom') _loginStore = 'OVL';
+                if (_loginRole === 'mocd') _loginStore = 'OVL';
             }
             sessionStorage.setItem('speeksUserRole', _loginRole);
             sessionStorage.setItem('speeksUserStore', _loginStore);
@@ -5524,7 +5524,7 @@ function _kpiMyStores() {
 let _kpiViewStore = null;
 function _kpiResolveStore() {
     const sel = document.getElementById('kpiModalStoreSelect');
-    if (sel && sel.offsetParent !== null && sel.value) return sel.value;   // DM / CEO / TOM picker
+    if (sel && sel.offsetParent !== null && sel.value) return sel.value;   // DM / CEO / MOCD picker
     if (_kpiViewStore) return _kpiViewStore;                               // MSM routed store
     return sessionStorage.getItem('speeksUserStore') || '';               // manager default
 }
@@ -6426,7 +6426,7 @@ function _startCbSync() {
  * still just points at a tier. That is what keeps the ladder coherent.
  * ========================================================================== */
 
-const MG_EDIT_ROLES = new Set(['district manager', 'ceo', 'tom']);
+const MG_EDIT_ROLES = new Set(['district manager', 'ceo', 'mocd']);
 function mgCanEditLadder() {
     return MG_EDIT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
 }
@@ -13363,8 +13363,8 @@ const B2B_ACTIONS = {
     listing:          { cta: 'Open Listing',    why: 'List the items for resale',       kind: 'listing' },
 };
 
-const B2B_CORP_ROLES   = ['district manager', 'ceo', 'tom'];
-const B2B_ACCEPT_ROLES = ['ceo', 'tom', 'district manager'];   // may lock a quote
+const B2B_CORP_ROLES   = ['district manager', 'ceo', 'mocd'];
+const B2B_ACCEPT_ROLES = ['ceo', 'mocd', 'district manager'];   // may lock a quote
 const B2B_STORE_ROLES  = ['manager', 'owner (manager)', 'owner manager', 'assistant manager'];
 // 'For Parts' was renamed to 'Broken' -- same meaning, plainer word. It is gone
 // from the picker but still recognised by the reason gate and the tone maps
@@ -13498,7 +13498,7 @@ function _b2bIsCorp()    { return B2B_CORP_ROLES.includes(_b2bRole()) || _b2bHas
 function _b2bIsDM()      { return _b2bRole() === 'district manager' || _b2bHasCorpDelegation(); }
 // Accepting a quote is deliberately NOT delegable -- it locks the money.
 function _b2bCanAccept()  { return B2B_ACCEPT_ROLES.includes(_b2bRole()); }
-function _b2bCanClients() { return ['ceo', 'district manager', 'tom'].includes(_b2bRole()); }
+function _b2bCanClients() { return ['ceo', 'district manager', 'mocd'].includes(_b2bRole()); }
 // CRM notification setup (cadences + who gets the reach-out emails) is CEO-only.
 function _b2bCanCrm() { return _b2bRole() === 'ceo'; }
 function _b2bCanOverview(){ return ['ceo', 'district manager'].includes(_b2bRole()); }
@@ -15417,7 +15417,7 @@ function _b2bSignBlock(deal) {
                 <p>Scan this with your phone, then hand it to them. It opens this
                    same deal — you'll sign in with your PIN first if the phone hasn't already.</p>
                 ${_b2bCanAccept() ? `<button class="b2b-mini" onclick="b2bSkipSign('${deal.id}')">Continue without a signature</button>`
-                                  : '<span class="b2b-signq-note">A CEO, TOM or DM can sign off without one.</span>'}
+                                  : '<span class="b2b-signq-note">A CEO, MOCD or DM can sign off without one.</span>'}
             </div>
         </div>`;
 }
@@ -16821,7 +16821,7 @@ function _b2bStageQuote(deal) {
             <span class="b2b-note-k">Awaiting approval</span>
             This quote hasn't gone to the client yet.
             ${canAccept ? 'Send it from your own mailbox, or send it back to pricing if something needs changing.'
-                        : 'A CEO, TOM or District Manager sends it out.'}
+                        : 'A CEO, MOCD or District Manager sends it out.'}
         </div>` : '';
 
     _b2bShowDeal({
@@ -16861,7 +16861,7 @@ function _b2bStageQuote(deal) {
             ${canAccept ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bSendBack('${deal.id}')">Send Back For Changes</button>` : ''}
             ${canAccept
                 ? `<button class="b2b-btn b2b-btn-primary" onclick="b2bAcceptQuote('${deal.id}',this)">Mark Accepted</button>`
-                : '<span class="b2b-foot-note">Only a CEO, TOM or District Manager can accept a quote.</span>'}`,
+                : '<span class="b2b-foot-note">Only a CEO, MOCD or District Manager can accept a quote.</span>'}`,
         after: () => {
             _b2bPaintTotals();
             _b2bPaintQuoteDoc();
@@ -18398,7 +18398,7 @@ async function checkB2BReminders() {
 // Status changes are open to every store (the cross-store "we have this" signal);
 // add/edit/delete/restore are store-scoped (MSM covers BAL+MPL, corp covers all).
 // ============================================================================
-const CB_CORP_ROLES = ['district manager', 'ceo', 'tom'];   // may create/edit entries for any store
+const CB_CORP_ROLES = ['district manager', 'ceo', 'mocd'];   // may create/edit entries for any store
 const CB_ACTIVE_DAYS  = 30;   // days an entry stays on the sheet
 const CB_PURGE_DAYS   = 120;  // days from date_of_call until permanent deletion
 
@@ -18521,7 +18521,7 @@ function _cbIsCorpRole() {
 
 // --- Load & render
 async function cbLoad() {
-    // Corp roles (DM/CEO/TOM) watch the whole district — no "My Store" view;
+    // Corp roles (DM/CEO/MOCD) watch the whole district — no "My Store" view;
     // they land on All Stores and narrow with the store filter instead.
     if (_cbView === null) _cbView = _cbIsCorpRole() ? 'all' : 'mine';
     _cbSyncControls();   // highlight the right view button before the fetch resolves
@@ -22916,11 +22916,16 @@ function renderClaimsOversight() {
         if (_isClaimAging(r)) byStore[s].aging++;
         else if (r.last_checked_at) byStore[s].reviewed++;
     });
-    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0;">${t}</th>`;
-    const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; ${extra}">${c}</td>`;
+    // Centred, and the header sits over the number it counts. Left-aligned counts
+    // in a full-width table drift far from their headings — the eye has to travel
+    // to work out whether a 1 under "Over 7 Days" belongs to that column or the
+    // next one. The store code stays left; the action column stays right.
+    const th = (t, align = 'center') => `<th style="text-align:${align}; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0;">${t}</th>`;
+    const td = (c, extra = 'text-align:center;') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; ${extra}">${c}</td>`;
     html += `<div style="font-weight:800; font-size:13px; margin-bottom:8px; color:var(--slate-charcoal);">By store</div>
         <div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px; margin-bottom:20px;">
-        <thead><tr>${th('Store')}${th('Open')}${th('Over 7 Days')}${th('Reviewed')}${th('')}</tr></thead><tbody>`;
+        <colgroup><col style="width:16%;"><col style="width:14%;"><col style="width:16%;"><col style="width:14%;"><col></colgroup>
+        <thead><tr>${th('Store', 'left')}${th('Open')}${th('Over 7 Days')}${th('Reviewed')}${th('', 'right')}</tr></thead><tbody>`;
     Object.keys(byStore).forEach(s => {
         const d = byStore[s];
         // A reminder is only warranted for claims over 7 days that haven't been
@@ -22943,7 +22948,7 @@ function renderClaimsOversight() {
             ping = `<button onclick="pingStoreClaims('${s}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:5px 11px; cursor:pointer; background:#eff6ff; border:1.5px solid #bfdbfe; color:#1d4ed8;">🔔 Send reminder</button>`;
         }
         html += `<tr>
-            ${td(`<span style="font-weight:800; color:var(--slate-charcoal);">${s}</span>`)}
+            ${td(`<span style="font-weight:800; color:var(--slate-charcoal);">${s}</span>`, 'text-align:left;')}
             ${td(`<span style="font-weight:700;">${d.open}</span>`)}
             ${td(`<span style="font-weight:800; color:${d.aging ? '#dc2626' : '#cbd5e1'};">${d.aging}</span>`)}
             ${td(`<span style="font-weight:800; color:${d.reviewed ? '#059669' : '#cbd5e1'};">${d.reviewed}</span>`)}
@@ -24008,9 +24013,9 @@ function _addLocalNoteRead(id) {
 }
 
 async function fetchAndDisplayStoreComment() {
-    // TOM works out of a store but isn't part of its team, so store comments
+    // MOCD works out of a store but isn't part of its team, so store comments
     // aren't meant for them.
-    if ((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'tom') return;
+    if ((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'mocd') return;
     const userStore = String(sessionStorage.getItem('speeksUserStore') || '').trim().toUpperCase();
     // Set, not a single value — an MSM matches both of their stores at once, so the
     // same comments show on either dashboard rather than following the switcher.
@@ -24333,11 +24338,11 @@ function getChecklistUser() {
     return _resolveStoreManager(store) || userName;
 }
 
-// TOM gets a personal-only checklist: no store broadcasts or DM required
+// MOCD gets a personal-only checklist: no store broadcasts or DM required
 // tasks — it starts blank until they (or a DM) add tasks for them directly.
 function _checklistPersonalParam() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    return role === 'tom' ? '&personal=1' : '';
+    return role === 'mocd' ? '&personal=1' : '';
 }
 
 function switchChecklistTab(tab) {
@@ -27653,14 +27658,14 @@ const FA_ROLES = [
     { slug: 'assistant-manager', short: 'ASM', label: 'Assistant Manager' },
     { slug: 'employee',          short: 'EMP', label: 'Employee' },
     { slug: 'training',          short: 'TRN', label: 'Training' },
-    { slug: 'tom',               short: 'TOM', label: 'TOM' },
+    { slug: 'mocd',               short: 'MOCD', label: 'MOCD' },
 ];
 
 const FEATURE_CATALOG = [
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
     { key: 'tool-claims-store',        label: 'Insurance Claims (Store)',      tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
     { key: 'tool-claims-oversight',    label: 'Insurance Claims (Oversight)',  tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
-    { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'tom', 'owner-manager'] },
+    { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
     { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: 'Content', def: ['district-manager'] },
     { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
     { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
@@ -27760,7 +27765,7 @@ const FEATURE_CATALOG = [
     // in JS as well, and the edge function enforces the same roles on every write.
     { key: 'tool-margin-manage',       label: 'Margin Guide — Edit',           tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
-    { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'tom', 'manager', 'owner-manager', 'assistant-manager', 'employee', 'training'] },
+    { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager', 'assistant-manager', 'employee', 'training'] },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
@@ -27768,16 +27773,16 @@ const FEATURE_CATALOG = [
     { key: 'hb-ceo-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
     { key: 'hb-ceo-store-passwords', label: 'Store Passwords', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
     { key: 'hb-ceo-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
-    { key: 'hb-ceo-tom-folder', label: 'TOM Folder', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-tom-folder', label: 'MOCD Folder', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
     { key: 'hb-ceo-paymore-google-drive', label: 'PayMore Google Drive', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
     { key: 'hb-ceo-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
     { key: 'hb-dm-store-passwords', label: 'Store Passwords', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-paymore-google-drive', label: 'PayMore Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
-    { key: 'hb-tom-tom-folder', label: 'TOM Folder', tab: 'hotbar', group: 'TOM Hotbar', def: ['tom'] },
-    { key: 'hb-tom-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'TOM Hotbar', def: ['tom'] },
-    { key: 'hb-tom-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'TOM Hotbar', def: ['tom'] },
+    { key: 'hb-tom-tom-folder', label: 'MOCD Folder', tab: 'hotbar', group: 'MOCD Hotbar', def: ['mocd'] },
+    { key: 'hb-tom-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'MOCD Hotbar', def: ['mocd'] },
+    { key: 'hb-tom-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'MOCD Hotbar', def: ['mocd'] },
     { key: 'hb-res-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'Resources Hotbar', def: ['district-manager'] },
     { key: 'hb-res-training', label: 'Training', tab: 'hotbar', group: 'Resources Hotbar', def: ['district-manager'] },
     { key: 'hb-mgr-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
@@ -28055,7 +28060,7 @@ function _syncHotbarExtras(userRoleClass, userName) {
     // Borrowed links from a DIFFERENT store's bar carry a small store badge
     // (e.g. Nick at OVL borrowing WSP's Passwords sees "Passwords · WSP") so
     // nobody opens another store's sheet thinking it's their own. Role-bar
-    // borrows (CEO/DM/TOM/MGR/ASM/Resources) are company links — no badge.
+    // borrows (CEO/DM/MOCD/MGR/ASM/Resources) are company links — no badge.
     const STORE_BAR_LABELS = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
     const userStore = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     const makeClone = ({ a, barLabel }) => {
@@ -33291,7 +33296,7 @@ function samInit() {
     document.body.classList.toggle('sam-active', visible);
     if (typeof _syncLayout === 'function') _syncLayout();
     if (!visible) return;
-    // Roles with none of the action items (CEO / TOM) would get an empty rail
+    // Roles with none of the action items (CEO / MOCD) would get an empty rail
     // card — drop the rail and let the feed run full width instead.
     const rail = menu.querySelector('.sam-rail');
     if (rail) {
