@@ -29374,7 +29374,11 @@ function _vrSubtitleText() {
     // The banner in the body already says what's going on; a "replies due"
     // date next to it would only contradict it.
     if (p.all_clear) return '';
-    const items = _vrCurrent.items || [];
+    // Count the lines that were ASKED for, not every line stored. A targeted
+    // upload also stores the rest of the store's report as read-only context,
+    // and counting those made a 16-line ask read as "0/40 explained" — a
+    // scoreboard the manager could never finish.
+    const items = (_vrCurrent.items || []).filter(i => i.needs_reply !== false);
     const answered = items.filter(i => i.gm_note).length;
     const due = new Date(p.manager_due_at);
     const overdue = Date.now() > due.getTime() && answered < items.length;

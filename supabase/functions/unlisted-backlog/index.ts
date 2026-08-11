@@ -170,36 +170,106 @@ async function gather(sb: any, weekEnd: Date) {
 // ---------------------------------------------------------------------------
 // render
 // ---------------------------------------------------------------------------
-const C = {
-  ink: "#17201b", soft: "#4a574f", faint: "#7b8880", rule: "#dbe2dc", ruleSoft: "#e9eeea",
-  emerald: "#2f5a44", sage: "#4d8c6a", sageWash: "#eaf2ec",
-  bad: "#a83b26", badBg: "#fbeae6", warn: "#8a6410", warnBg: "#fbf3df", good: "#1c6340", goodBg: "#e4f2e9",
+// This report wears the SAME shell as weekly-report — Airy V4 palette, dark
+// hero with the three-bar tile, sage accent rule, 680px card, section labels,
+// glance tiles, store chips. They arrive in the same inbox on the same morning,
+// so anything else reads as a different product. Everything from here down to
+// build() is deliberately copied from weekly-report; if that shell changes,
+// change it here too.
+const STORE_COLOR: Record<string, string> = {
+  OVL: "#7c3aed", LEE: "#2563eb", WSP: "#16a34a", MPL: "#ea580c", BAL: "#dc2626",
 };
+const STORE_TINT: Record<string, string> = {
+  OVL: "#f1ebfd", LEE: "#e8f0fb", WSP: "#e8f7ee", MPL: "#fdf0e7", BAL: "#fcecec",
+};
+const STORE_RING: Record<string, string> = {
+  OVL: "#ddd0fb", LEE: "#cfe0f7", WSP: "#c6ecd6", MPL: "#f8dcc7", BAL: "#f6d5d5",
+};
+
+const C = {
+  sage: "#1f9d57", sageDeep: "#178048", tint: "#e8f7ee",
+  charcoal: "#1a1c1e", app: "#f1f5f2", card: "#ffffff", soft: "#f7faf8",
+  green: "#1f9d57", amber: "#c07f0c", red: "#d64545",
+  line: "#eaefeb", line2: "#f4f8f5",
+  muted: "#64707c", faint: "#9aa6ad",
+  flagBorder: "#f0dcb6", flagHead: "#fdf3e1", flagInk: "#8a5a06",
+  footBg: "#f7faf8",
+  rCard: 18, rBox: 14,
+};
+const FONT = "Inter,Arial,Helvetica,sans-serif";
+
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
 
-const th = (t: string, sub = "", align = "center") =>
-  `<th style="text-align:${align};font:700 10px/1.35 -apple-system,Segoe UI,Roboto,Arial,sans-serif;` +
-  `letter-spacing:.08em;text-transform:uppercase;color:${C.faint};padding:9px 6px;` +
-  `border-bottom:1px solid ${C.rule};vertical-align:bottom;">${t}` +
-  (sub ? `<div style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;">${sub}</div>` : "") +
+// Three bars built from table cells rather than an SVG or a remote PNG, so it
+// renders identically in Outlook, Gmail and Apple Mail.
+const heroTile = () => {
+  const bar = (h: number) =>
+    `<td width="4" valign="bottom" style="padding:0 2px;"><div style="width:4px;height:${h}px;background:#6ee7a7;border-radius:2px;font-size:0;line-height:0;">&nbsp;</div></td>`;
+  return `<table role="presentation" width="40" height="40" cellpadding="0" cellspacing="0" style="background:rgba(31,157,87,.20);border-radius:12px;"><tr><td align="center" valign="middle" height="40">
+    <table role="presentation" cellpadding="0" cellspacing="0"><tr>${bar(8)}${bar(16)}${bar(12)}</tr></table>
+  </td></tr></table>`;
+};
+
+const wrapEmail = (title: string, range: string, body: string, foot: string) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>@media only screen and (max-width:520px){.gtile{display:block!important;width:100%!important;padding:6px 0!important}}</style></head>
+<body style="margin:0;padding:0;background:${C.app};font-family:${FONT};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.app};padding:20px 10px;"><tr><td align="center">
+<table role="presentation" width="680" cellpadding="0" cellspacing="0" style="max-width:680px;width:100%;background:${C.card};border:1px solid ${C.line};border-radius:${C.rCard}px;overflow:hidden;">
+  <tr><td style="background:#13181a;padding:20px 24px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td width="40" valign="top">${heroTile()}</td>
+      <td valign="middle" style="padding-left:13px;">
+        <div style="font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:#6ee7a7;">Speeks Technology</div>
+        <div style="font-size:20px;font-weight:800;letter-spacing:-.02em;color:#ffffff;margin-top:2px;">${title}</div>
+        <div style="font-size:12.5px;font-weight:600;color:rgba(255,255,255,.66);margin-top:2px;">${range}</div>
+      </td>
+    </tr></table>
+  </td></tr>
+  <tr><td style="height:3px;background:${C.sage};font-size:0;line-height:0;">&nbsp;</td></tr>
+  <tr><td style="padding:22px;">${body}</td></tr>
+  <tr><td style="padding:16px;text-align:center;color:${C.faint};font-size:10.5px;line-height:1.6;border-top:1px solid ${C.line};background:${C.footBg};">${foot}</td></tr>
+</table></td></tr></table></body></html>`;
+
+const sectionLabel = (t: string, note = "") =>
+  `<div style="margin:26px 2px 12px;border-left:2px solid ${C.sage};padding-left:11px;">
+     <div style="font-size:15.5px;font-weight:800;color:${C.charcoal};letter-spacing:-.015em;">${t}</div>
+     ${note ? `<div style="font-size:11px;font-weight:600;color:${C.faint};margin-top:2px;">${note}</div>` : ""}
+   </div>`;
+
+const tile = (label: string, value: string, sub: string) =>
+  `<td class="gtile" width="33%" valign="top" style="padding:6px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.soft};border:1px solid ${C.line};border-radius:${C.rBox}px;"><tr><td style="padding:14px;">
+    <div style="font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.5px;color:${C.faint};">${label}</div>
+    <div style="font-size:23px;font-weight:900;color:${C.charcoal};margin-top:5px;">${value}</div>
+    <div style="font-size:11px;font-weight:700;color:${C.muted};margin-top:3px;">${sub}</div>
+  </td></tr></table></td>`;
+
+const badge = (s: string) =>
+  `<span style="display:inline-block;background:${STORE_TINT[s] || C.tint};color:${STORE_COLOR[s] || C.sageDeep};border:1px solid ${STORE_RING[s] || "#c6ecd6"};font-size:11px;font-weight:800;padding:2px 8px;border-radius:6px;letter-spacing:.5px;">${s}</span>`;
+
+const chip = (text: string, kind: "bad" | "warn" | "ok") => {
+  const m = {
+    bad: ["#fcecec", "#b23636", "#f6d5d5"],
+    warn: [C.flagHead, C.flagInk, C.flagBorder],
+    ok: [C.tint, "#146c3c", "#c6ecd6"],
+  }[kind];
+  return `<span style="display:inline-block;font-size:11px;font-weight:800;padding:3px 9px;border-radius:99px;background:${m[0]};color:${m[1]};border:1px solid ${m[2]};">${text}</span>`;
+};
+
+const th = (t: string, sub = "") =>
+  `<th style="font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:${C.faint};` +
+  `background:${C.soft};padding:9px 7px;text-align:center;border-bottom:1px solid ${C.line};vertical-align:bottom;">${t}` +
+  (sub ? `<div style="font-weight:700;text-transform:none;letter-spacing:0;font-size:9.5px;color:${C.faint};opacity:.85;">${sub}</div>` : "") +
   `</th>`;
 const td = (c: string, extra = "") =>
-  `<td style="padding:9px 6px;border-bottom:1px solid ${C.ruleSoft};text-align:center;` +
-  `font:400 13px/1.4 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:${C.ink};${extra}">${c}</td>`;
-const pill = (t: string, fg: string, bg: string) =>
-  `<span style="display:inline-block;font:700 11px/1.4 -apple-system,Segoe UI,Roboto,Arial,sans-serif;` +
-  `color:${fg};background:${bg};padding:3px 9px;border-radius:2px;">${t}</span>`;
-const h4 = (t: string) =>
-  `<div style="font:700 11px/1.4 -apple-system,Segoe UI,Roboto,Arial,sans-serif;letter-spacing:.12em;` +
-  `text-transform:uppercase;color:${C.sage};margin:26px 0 4px;padding-bottom:6px;border-bottom:1px solid ${C.ruleSoft};">${t}</div>`;
-const note = (t: string) =>
-  `<div style="font:400 12px/1.5 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:${C.faint};margin:7px 0 0;">${t}</div>`;
-const table = (inner: string) =>
-  `<table role="presentation" width="100%" style="border-collapse:collapse;table-layout:fixed;margin-top:12px;">${inner}</table>`;
+  `<td style="padding:11px 7px;border-bottom:1px solid ${C.line2};text-align:center;` +
+  `font-size:13px;color:${C.charcoal};${extra}">${c}</td>`;
+// The card every table sits in — same rounded hairline box as weekly-report's.
+const boxed = (inner: string, cols: string) =>
+  `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;overflow:hidden;border-collapse:separate;table-layout:fixed;">
+     <colgroup>${cols}</colgroup>${inner}</table>`;
 
 const signed = (x: number) => (x > 0 ? "+" : "") + r0(x);
-const clr = (x: number) => (x > 0 ? C.bad : C.good);
+const clr = (x: number) => (x > 0 ? C.red : C.green);
 
 function build(d: any) {
   const rangeLabel = `${fmtMD(d.weekStart)}–${fmtMD(d.weekEnd)}`;
@@ -208,30 +278,30 @@ function build(d: any) {
   const stands = d.rows.slice().sort((a: Row, b: Row) => (a.changePerWeek ?? 0) - (b.changePerWeek ?? 0));
 
   const standsRows = stands.map((x: Row) => `<tr>
-    ${td(`<b>${x.store}</b>`, "letter-spacing:.04em;")}
-    ${td(x.pile == null ? "—" : money(x.pile))}
+    ${td(badge(x.store))}
+    ${td(x.pile == null ? "—" : `<b style="font-weight:900;">${money(x.pile)}</b>`)}
     ${td(x.changePerWeek == null ? "—" :
-      `<span style="color:${clr(x.changePerWeek)};font-weight:700;">${signed(x.changePerWeek)}</span>`)}
+      `<span style="color:${clr(x.changePerWeek)};font-weight:900;">${signed(x.changePerWeek)}</span>`)}
     ${td(x.lastWeekListed == null ? "—" : String(x.lastWeekListed))}
-    ${td(x.goal == null ? "—" : String(x.goal))}
+    ${td(x.goal == null ? "—" : `<span style="color:${C.muted};">${x.goal}</span>`)}
   </tr>`).join("");
 
   // Closest to their own best first — the ones with the shortest reach.
   const clearRows = d.rows.slice()
     .sort((a: Row, b: Row) => (a.gap ?? 999) - (b.gap ?? 999))
     .map((x: Row) => {
-      let verdict = pill("No reading yet", C.faint, "#f1f5f9");
+      let verdict = `<span style="font-size:11px;font-weight:700;color:${C.faint};">No reading yet</span>`;
       if (x.gap != null) {
-        verdict = x.gap <= 0 ? pill("Beaten once", C.good, C.goodBg)
-          : x.gap <= 2 ? pill(`Within ${Math.max(1, r0(x.gap))}%`, C.good, C.goodBg)
-          : x.gap <= 15 ? pill(`Needs +${r0(x.gap)}%`, C.warn, C.warnBg)
-          : pill(`Needs +${r0(x.gap)}%`, C.bad, C.badBg);
+        verdict = x.gap <= 0 ? chip("Beaten once", "ok")
+          : x.gap <= 2 ? chip(`Within ${Math.max(1, r0(x.gap))}%`, "ok")
+          : x.gap <= 15 ? chip(`Needs +${r0(x.gap)}%`, "warn")
+          : chip(`Needs +${r0(x.gap)}%`, "bad");
       }
       return `<tr>
-        ${td(`<b>${x.store}</b>`, "letter-spacing:.04em;")}
-        ${td(x.breakEven == null ? "—" : String(r0(x.breakEven)))}
+        ${td(badge(x.store))}
+        ${td(x.breakEven == null ? "—" : `<b style="font-weight:900;">${r0(x.breakEven)}</b>`)}
         ${td(!x.bestWeek ? "—" :
-          `<span style="${x.gap != null && x.gap <= 0 ? `color:${C.good};font-weight:700;` : ""}">${x.bestWeek}</span>`)}
+          `<span style="${x.gap != null && x.gap <= 0 ? `color:${C.green};font-weight:900;` : ""}">${x.bestWeek}</span>`)}
         ${td(verdict)}
       </tr>`;
     }).join("");
@@ -258,18 +328,14 @@ function build(d: any) {
           : `Pile down to ${money(x.pile)}, shrinking ${Math.abs(r0(x.changePerWeek))} a week.`);
       }
       return `<tr>
-        <td style="padding:5px 12px 5px 0;vertical-align:baseline;white-space:nowrap;
-            font:700 13px/1.5 -apple-system,Segoe UI,Roboto,Arial,sans-serif;letter-spacing:.04em;color:${C.ink};">${x.store}</td>
-        <td style="padding:5px 0;vertical-align:baseline;
-            font:400 13px/1.5 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:${C.soft};">${esc(bits.join(" "))}</td>
+        <td width="64" valign="top" style="padding:11px 0 11px 14px;border-bottom:1px solid ${C.line2};white-space:nowrap;">${badge(x.store)}</td>
+        <td valign="top" style="padding:11px 14px;border-bottom:1px solid ${C.line2};
+            font-size:13px;line-height:1.5;color:${C.muted};">${esc(bits.join(" "))}</td>
       </tr>`;
     }).join("");
 
   const growing = d.rows.filter((x: Row) => (x.changePerWeek ?? 0) > 0).length;
   const beaten = d.rows.filter((x: Row) => x.gap != null && x.gap <= 0).map((x: Row) => x.store);
-  const headline = d.totalChange > 0
-    ? `${money(d.totalPile)} unlisted · +${r0(d.totalChange)} a week`
-    : `${money(d.totalPile)} unlisted · ${r0(d.totalChange)} a week`;
   const caption = growing === 0
     ? "Every store's pile is shrinking."
     : `${growing} of ${d.rows.length} store${d.rows.length === 1 ? "" : "s"} grew again this week.` +
@@ -277,48 +343,54 @@ function build(d: any) {
         ? ` <b>${beaten.join(", ")}</b> ${beaten.length === 1 ? "has" : "have"} already listed above the rate needed to clear — the problem is repeating it, not reaching it.`
         : "");
 
-  return `<!doctype html><html><body style="margin:0;padding:24px 12px;background:#f2f5f2;">
-<table role="presentation" width="100%" style="max-width:640px;margin:0 auto;background:#fff;border:1px solid ${C.rule};border-collapse:collapse;">
-<tr><td style="padding:22px 22px 26px;">
+  // Totals for the glance tiles — the same three numbers the roll-call repeats
+  // per store, so the top of the mail answers "how bad, which way" on its own.
+  const totListed = d.rows.reduce((a: number, x: Row) => a + (x.lastWeekListed ?? 0), 0);
+  const totGoal = d.rows.reduce((a: number, x: Row) => a + (x.goal ?? 0), 0);
+  const goalPct = totGoal ? Math.round((totListed / totGoal) * 100) : 0;
 
-  <div style="font:700 19px/1.25 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:${C.ink};">Unlisted Backlog</div>
-  <div style="font:400 13px/1.5 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:${C.faint};margin-top:3px;">Week of ${rangeLabel}</div>
+  const glance = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+    ${tile("Unlisted Now", money(d.totalPile), `line items across ${d.rows.length} stores`)}
+    ${tile("Weekly Change", signed(d.totalChange), `<b style="color:${clr(d.totalChange)}">${d.totalChange > 0 ? "growing" : "shrinking"}</b> · ${growing} of ${d.rows.length} grew`)}
+    ${tile("Listed Last Week", money(totListed), `against ${money(totGoal)} goal · <b style="color:${goalPct >= 100 ? C.green : C.amber}">${goalPct}%</b>`)}
+  </tr></table>`;
 
-  <div style="background:${C.sageWash};padding:14px 16px;margin-top:16px;">
-    <div style="font:800 21px/1.2 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:${C.emerald};">${headline}</div>
-    <div style="font:400 13px/1.5 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:${C.soft};margin-top:5px;">${caption}</div>
-  </div>
+  const body = `
+  ${glance}
 
-  ${h4("Where each store stands")}
-  ${note("Unlisted line items, and how last week went.")}
-  ${table(`<thead><tr>${th("Store", "", "center")}${th("Unlisted", "now")}${th("Change", "per week")}${th("Listed", "last week")}${th("Goal", "last week")}</tr></thead>
-    <tbody>${standsRows}</tbody>
-    <tfoot><tr>
-      ${td(`<b>District</b>`, `border-top:1px solid ${C.rule};background:${C.ruleSoft};font-weight:700;`)}
-      ${td(`<b>${money(d.totalPile)}</b>`, `border-top:1px solid ${C.rule};background:${C.ruleSoft};`)}
-      ${td(`<b style="color:${clr(d.totalChange)};">${signed(d.totalChange)}</b>`, `border-top:1px solid ${C.rule};background:${C.ruleSoft};`)}
-      ${td("", `border-top:1px solid ${C.rule};background:${C.ruleSoft};`)}
-      ${td("", `border-top:1px solid ${C.rule};background:${C.ruleSoft};`)}
-    </tr></tfoot>`)}
+  <div style="margin-top:10px;background:${C.tint};border:1px solid #c6ecd6;border-radius:${C.rBox}px;padding:14px 16px;
+      font-size:13px;line-height:1.55;color:#146c3c;font-weight:600;">${caption}</div>
 
-  ${h4("What it would take to clear")}
-  ${table(`<thead><tr>${th("Store")}${th("Break-even", "per week")}${th("Best week", `last ${BEST_WEEKS}`)}${th("Verdict")}</tr></thead>
-    <tbody>${clearRows}</tbody>`)}
-  ${note(`Break-even is the weekly listing rate that holds the pile flat. Measured against each store's own best week, not a modelled ceiling.`)}
+  ${sectionLabel("Where each store stands", "Unlisted line items, and how last week went.")}
+  ${boxed(
+    `<thead><tr>${th("Store")}${th("Unlisted", "now")}${th("Change", "per week")}${th("Listed", "last week")}${th("Goal", "last week")}</tr></thead>
+     <tbody>${standsRows}</tbody>
+     <tfoot><tr>
+       ${td(`<b style="font-weight:900;color:${C.charcoal};">District</b>`, `background:${C.soft};border-bottom:none;`)}
+       ${td(`<b style="font-weight:900;">${money(d.totalPile)}</b>`, `background:${C.soft};border-bottom:none;`)}
+       ${td(`<b style="font-weight:900;color:${clr(d.totalChange)};">${signed(d.totalChange)}</b>`, `background:${C.soft};border-bottom:none;`)}
+       ${td(`<b style="font-weight:900;">${money(totListed)}</b>`, `background:${C.soft};border-bottom:none;`)}
+       ${td(`<span style="color:${C.muted};font-weight:700;">${money(totGoal)}</span>`, `background:${C.soft};border-bottom:none;`)}
+     </tr></tfoot>`,
+    `<col style="width:16%"><col style="width:19%"><col style="width:21%"><col style="width:22%"><col style="width:22%">`,
+  )}
 
-  ${h4("Last week by store")}
-  <table role="presentation" style="border-collapse:collapse;margin-top:10px;">${roll}</table>
+  ${sectionLabel("What it would take to clear", "The weekly listing rate that holds the pile flat, against each store's own best week.")}
+  ${boxed(
+    `<thead><tr>${th("Store")}${th("Break-even", "per week")}${th("Best week", `last ${BEST_WEEKS}`)}${th("Verdict")}</tr></thead>
+     <tbody>${clearRows}</tbody>`,
+    `<col style="width:16%"><col style="width:26%"><col style="width:24%"><col style="width:34%">`,
+  )}
 
-  <div style="border-top:1px solid ${C.ruleSoft};margin-top:26px;padding-top:12px;
-      font:400 11px/1.6 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:${C.faint};">
-    Unlisted counts from the weekly sales summary${d.priorAt ? ` (change measured over ${d.weeksBetween.toFixed(1)} week${d.weeksBetween === 1 ? "" : "s"} between readings)` : ""}.
+  ${sectionLabel("Last week by store")}
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:${C.rBox}px;overflow:hidden;border-collapse:separate;">${roll}</table>`;
+
+  const foot = `Unlisted counts from the weekly sales summary${d.priorAt ? ` · change measured over ${d.weeksBetween.toFixed(1)} week${d.weeksBetween === 1 ? "" : "s"} between readings` : ""}.
     Listed counts from the weekly Store KPIs; goals from the capacity model.
-    Break-even is derived from the pile so it always reconciles with it:
-    ${AVG_WEEKS}-week average listed + weekly pile growth.
-    ${d.readings < 3 ? "<br><b>Only " + d.readings + " pile reading" + (d.readings === 1 ? "" : "s") + " exist so far — the rates firm up as weeks accumulate.</b>" : ""}
-  </div>
+    Break-even is derived from the pile so it always reconciles with it: ${AVG_WEEKS}-week average listed + weekly pile growth.
+    ${d.readings < 3 ? `<br><b style="color:${C.flagInk};">Only ${d.readings} pile reading${d.readings === 1 ? "" : "s"} exist so far — the rates firm up as weeks accumulate.</b>` : ""}`;
 
-</td></tr></table></body></html>`;
+  return wrapEmail("Unlisted Backlog", `Week of ${rangeLabel}`, body, foot);
 }
 
 // ---------------------------------------------------------------------------
