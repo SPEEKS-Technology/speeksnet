@@ -28716,15 +28716,16 @@ function renderVarianceReplies() {
                 // replied to can't be edited out from under the reply.
                 const dmEditing = canDm && dmNotesOpen && _vrEditing && !!it.gm_note && !it.mgr_reply;
                 let cell = _vrNoteCell(it, 'dm_note', dmEditing, 'Advice or a question for the manager…');
-                // Read-only views get a chip that says whether this note wants
-                // an answer or is FYI-only — that's how the manager tells what
-                // to respond to vs what's just for them to read.
-                if (it.dm_note && !dmEditing) {
-                    cell += it.dm_reply_requested
-                        ? (it.mgr_reply
-                            ? `<span style="display:inline-block; margin-top:4px; font-size:9.5px; font-weight:800; color:#166534; background:#dcfce7; border:1px solid #a7f3d0; border-radius:20px; padding:2px 8px; white-space:nowrap;">✓ Replied</span>`
-                            : `<span style="display:inline-block; margin-top:4px; font-size:9.5px; font-weight:800; color:#b91c1c; background:#fee2e2; border:1px solid #fca5a5; border-radius:20px; padding:2px 8px; white-space:nowrap;">↩ Response requested</span>`)
-                        : `<span style="display:inline-block; margin-top:4px; font-size:9.5px; font-weight:800; color:#64748b; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:20px; padding:2px 8px; white-space:nowrap;">FYI — no reply needed</span>`;
+                // Only the note that WANTS something carries a chip (user,
+                // 2026-08-10). There used to be an "FYI — no reply needed" chip on
+                // every other note, which meant a column of read-only notes was a
+                // column of identical grey pills saying nothing — the exact
+                // opposite of a flag. Silence now means "nothing owed", so the one
+                // red chip is the only thing that reads as a demand.
+                if (it.dm_note && !dmEditing && it.dm_reply_requested) {
+                    cell += it.mgr_reply
+                        ? `<span style="display:inline-block; margin-top:4px; font-size:9.5px; font-weight:800; color:#166534; background:#dcfce7; border:1px solid #a7f3d0; border-radius:20px; padding:2px 8px; white-space:nowrap;">✓ Replied</span>`
+                        : `<span style="display:inline-block; margin-top:4px; font-size:9.5px; font-weight:800; color:#b91c1c; background:#fee2e2; border:1px solid #fca5a5; border-radius:20px; padding:2px 8px; white-space:nowrap;">↩ Response requested</span>`;
                 }
                 return cell;
             })()) : ''}
@@ -33371,10 +33372,27 @@ let _dmxCapWeek = null;  // which week the Efficiency view is showing
 // The Monday of the most recently COMPLETED week — the default, because this
 // week has no filed KPI yet and would read as 0% for everyone.
 function _dmxLastWeekStart() {
-    const { start } = _dmxWeekDays();
-    const d = new Date(start);
-    d.setDate(d.getDate() - 7);
+    return _dmxWeeksBack(1);
+}
+
+// The Monday `n` weeks before this one, as YYYY-MM-DD.
+//
+// The current week is deliberately NOT offered: Listed comes from the weekly KPI,
+// which isn't filed until the week is over, so an in-progress week has no result
+// to measure and every store read as a 0%. Two completed weeks is what this
+// screen can actually answer for.
+function _dmxWeeksBack(n) {
+    const d = new Date(_dmxWeekDays().start);
+    d.setDate(d.getDate() - 7 * n);
     return d.toLocaleDateString('en-CA');
+}
+
+// "Jul 27 – Aug 2" for the week starting on a YYYY-MM-DD Monday.
+function _dmxWeekRangeLabel(weekStart) {
+    const a = new Date(weekStart + 'T12:00:00');
+    const b = new Date(a); b.setDate(b.getDate() + 6);
+    const f = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return f(a) + ' – ' + f(b);
 }
 
 async function _dmxFetchCap(weekStart) {
@@ -33389,11 +33407,22 @@ async function _dmxFetchCap(weekStart) {
 
 // Load a week and repaint. Kept separate from the render so the render itself
 // stays synchronous like every other pane in this modal.
+//
+// ⚠️ Paints BEFORE awaiting the fetch. It used to await first, so the very first
+// click did nothing visible for as long as the request took — the rail still
+// showed the store tab selected — and it read as a dead button. People clicked
+// again, and the second click looked instant only because the week was cached by
+// then ("takes a couple of clicks", user 2026-08-10). Now the tab selection and
+// the loading state land on the click, and the data fills in behind it.
 async function dmxShowEfficiency(weekStart) {
-    _dmxCapWeek = weekStart || _dmxLastWeekStart();
+    const want = weekStart || _dmxLastWeekStart();
+    _dmxCapWeek = want;
     _dmxSel.lg = 'EFF';
-    await _dmxFetchCap(_dmxCapWeek);
     renderDmListingModal();
+    await _dmxFetchCap(want);
+    // Don't repaint over a newer selection: two quick clicks on different weeks
+    // resolve out of order, and the slower one would otherwise win.
+    if (_dmxSel.lg === 'EFF' && _dmxCapWeek === want) renderDmListingModal();
 }
 window.dmxShowEfficiency = dmxShowEfficiency;
 
@@ -33416,26 +33445,26 @@ function _dmxEffChip(pct, emptyText) {
 function _dmxEfficiencyPane() {
     const week = _dmxCapWeek || _dmxLastWeekStart();
     const rows = _dmxCap[week];
-    const wkStart = new Date(week + 'T12:00:00');
-    const wkEnd = new Date(wkStart); wkEnd.setDate(wkEnd.getDate() + 6);
-    const fmt = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     const isThisWeek = week === _dmxWeekDays().start.toLocaleDateString('en-CA');
 
     // Spell the actual dates out. "Last week" on its own is ambiguous the moment
     // someone opens this on a Monday morning.
-    const range = fmt(wkStart) + ' – ' + fmt(wkEnd)
-        + (isThisWeek ? ' (in progress)' : '');
+    const range = _dmxWeekRangeLabel(week) + (isThisWeek ? ' (in progress)' : '');
 
-    const btn = (label, wk) => '<button type="button" class="dmx-goalset-b'
+    // Two completed weeks. The nearer one is named by relation because that is
+    // how anyone refers to it out loud; the older one is named by its dates,
+    // because "two weeks ago" is a sentence people have to stop and decode.
+    const back1 = _dmxWeeksBack(1), back2 = _dmxWeeksBack(2);
+    const btn = (label, wk) => '<button type="button" class="dmx-goalset-b dmx-b-wk'
         + (week === wk ? '' : ' dmx-b-off') + '" onclick="dmxShowEfficiency(\'' + wk + '\')">'
-        + label + '</button>';
+        + escapeHtml(label) + '</button>';
 
     let head = '<div class="dmx-ph"><div>'
         + '<div class="dmx-pt">Store Efficiency</div>'
         + '<div class="dmx-ps">' + escapeHtml(range) + ' · Measured against the capacity each store actually had</div>'
         + '</div><div class="dmx-ph-side" style="display:flex; gap:7px;">'
-        + btn('Last Week', _dmxLastWeekStart())
-        + btn('This Week', _dmxWeekDays().start.toLocaleDateString('en-CA'))
+        + btn('Last Week', back1)
+        + btn(_dmxWeekRangeLabel(back2), back2)
         + '</div></div>';
 
     if (!rows) return head + '<div class="dmx-empty">Loading the week…</div>';

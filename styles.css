@@ -14638,6 +14638,11 @@ body.tv-body { display: block; background: #eef1f5; }
     color: #b45309; background: #fdf3e1;
 }
 
+/* The two week buttons hold labels of very different lengths ("Last Week" vs
+   "Jul 27 – Aug 2"), so they get a shared minimum width — otherwise the pair
+   reads as two unrelated buttons instead of one two-position control. */
+.dmx-goalset-b.dmx-b-wk { min-width: 116px; text-align: center; }
+
 /* Unselected week toggle — same size as its sibling, no fill, so the pair reads
    as one control with a current state rather than two competing buttons. */
 .dmx-goalset-b.dmx-b-off {
