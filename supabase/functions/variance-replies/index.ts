@@ -85,27 +85,6 @@ async function getTeamVariance(supabase: any, period: any) {
   };
 }
 
-// The store's most recent team-variance entry (store total % + per-person %),
-// not tied to any reply period. Used for a store that's "in the clear": its
-// managers no longer answer line items, they just see this summary.
-async function getLatestTeamVariance(supabase: any, store: string) {
-  const { data: entry } = await supabase.from("variance_entries")
-    .select("id, store_pct, date_from, date_to")
-    .eq("store", store)
-    .order("date_to", { ascending: false })
-    .order("created_at", { ascending: false })
-    .limit(1).maybeSingle();
-  if (!entry) return null;
-  const { data: emps } = await supabase.from("variance_employee_entries")
-    .select("employee_name, variance_pct").eq("entry_id", entry.id).order("employee_name");
-  return {
-    total: entry.store_pct,
-    date_from: entry.date_from,
-    date_to: entry.date_to,
-    employees: (emps || []).map((e: any) => ({ name: e.employee_name, val: e.variance_pct })),
-  };
-}
-
 // Base64 (from the browser's FileReader) → bytes for a Storage upload.
 function b64ToBytes(b64: string): Uint8Array {
   const clean = b64.includes(",") ? b64.slice(b64.indexOf(",") + 1) : b64;
@@ -256,25 +235,6 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: true });
       }
 
-      // ---- DM marks a store "in the clear" (or reactivates it) ----
-      // A cleared store's managers stop seeing/answering line items and get no
-      // dots/popups; they just see their team + store-total variance. The DM
-      // flips this back on the moment the store starts slipping again.
-      if (action === "set_store_status") {
-        const store = String(body.store || "").toUpperCase();
-        if (!store) return jsonResponse({ success: false, error: "store is required" }, 400);
-        const by = body.by ? String(body.by).trim() : null;
-        const { error } = await supabase.from("variance_store_status").upsert({
-          store,
-          in_the_clear: !!body.in_the_clear,
-          updated_by: by,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: "store" });
-        if (error) return jsonResponse({ success: false, error: error.message }, 500);
-        await broadcastChange("variance", store);
-        return jsonResponse({ success: true });
-      }
-
       // ---- DM deletes an upload (mistake fix; items cascade) ----
       if (action === "delete_period") {
         const id = String(body.id || "");
@@ -365,20 +325,5 @@ Deno.serve(async (req: Request) => {
     ...(counts[p.id] || { items: 0, answered: 0, awaiting_reply: 0, mgr_replied: 0 }),
   }));
 
-  // Per-store "in the clear" status for the requested stores, plus the latest
-  // team-variance summary for any store that IS cleared (so its managers can
-  // render their summary panel without a second round trip).
-  const storeStatus: Record<string, { in_the_clear: boolean; updated_by: string | null; updated_at: string | null }> = {};
-  const clearedTeamVariance: Record<string, unknown> = {};
-  let sq = supabase.from("variance_store_status").select("*");
-  if (stores.length) sq = sq.in("store", stores);
-  const { data: statuses } = await sq;
-  for (const s of (statuses || [])) {
-    storeStatus[s.store] = { in_the_clear: !!s.in_the_clear, updated_by: s.updated_by, updated_at: s.updated_at };
-  }
-  const clearedStores = Object.keys(storeStatus).filter((s) => storeStatus[s].in_the_clear);
-  for (const s of clearedStores) {
-    clearedTeamVariance[s] = await getLatestTeamVariance(supabase, s);
-  }
-  return jsonResponse({ success: true, data, store_status: storeStatus, cleared_team_variance: clearedTeamVariance });
+  return jsonResponse({ success: true, data });
 });
