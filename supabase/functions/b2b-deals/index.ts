@@ -58,7 +58,7 @@ const SECRET = "sp33ks-sync-k3y-2026-x9mq";
 
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const PRICING_LOCATIONS = [...STORES, "CORP"];
-const ACCEPT_ROLES = ["ceo", "tom", "district manager"];
+const ACCEPT_ROLES = ["ceo", "mocd", "tom", "district manager"];
 // 'For Parts' was renamed to 'Broken' -- same meaning, plainer word. The old
 // spelling stays recognised here: existing rows were migrated, but a row saved
 // between this deploying and that running would otherwise stop being asked for
