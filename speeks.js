@@ -15133,6 +15133,10 @@ function _b2bSummary(deal) {
 
 function _b2bStagePickup(deal) {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+    // Restore anything typed before a same-device signing round-trip.
+    const draft = (_b2bPickupDraft && _b2bPickupDraft.id === deal.id) ? _b2bPickupDraft : null;
+    const puDesc = draft ? (draft.desc || '') : (deal.pickup_desc || '');
+    const puName = draft ? (draft.name || '') : (deal.signed_by || '');
     _b2bShowDeal({
         stage: 'pickup',
         eyebrow: deal.ref,
@@ -15142,12 +15146,12 @@ function _b2bStagePickup(deal) {
             ${_b2bSummary(deal)}
             <label class="form-label-caps">Items Picked Up</label>
             <textarea id="b2bPuDesc" class="form-input-lg" rows="3"
-                placeholder="e.g. ~40 laptops, 12 monitors, 3 pallets of misc peripherals">${escapeHtml(deal.pickup_desc || '')}</textarea>
+                placeholder="e.g. ~40 laptops, 12 monitors, 3 pallets of misc peripherals">${escapeHtml(puDesc)}</textarea>
             <p class="b2b-hint">A general description is enough here — the itemized list comes later, at pricing.</p>
             <div class="b2b-grid2" style="margin-top:14px;">
                 <div>
                     <label class="form-label-caps">Client Name *</label>
-                    <input id="b2bPuSigned" class="form-input-lg" placeholder="Full name of whoever released the items">
+                    <input id="b2bPuSigned" class="form-input-lg" value="${escapeHtml(puName)}" placeholder="Full name of whoever released the items">
                 </div>
                 <div>
                     <label class="form-label-caps">Pickup Date *</label>
@@ -15164,6 +15168,7 @@ function _b2bStagePickup(deal) {
             if (!deal.signature_path && !deal.signature_skipped_by) {
                 _b2bPaintQR(document.getElementById('b2bSignQR'), _b2bSignUrl(deal.id));
             }
+            _b2bPickupDraft = null;   // consumed into the inputs above
         },
         footer: `
             <button class="b2b-btn b2b-btn-secondary" style="margin-right:auto;"
@@ -15410,10 +15415,13 @@ function _b2bSignBlock(deal) {
             <div class="b2b-signq-qr" id="b2bSignQR"><span class="b2b-signq-wait">Drawing code…</span></div>
             <div class="b2b-signq-txt">
                 <b>Have the client sign</b>
-                <p>Scan this with your phone, then hand it to them. It opens this
-                   same deal — you'll sign in with your PIN first if the phone hasn't already.</p>
-                ${_b2bCanAccept() ? `<button class="b2b-mini" onclick="b2bSkipSign('${deal.id}')">Continue without a signature</button>`
-                                  : '<span class="b2b-signq-note">A CEO, TOM or DM can sign off without one.</span>'}
+                <p>Sign right here on this device — hand it to the client — or scan the
+                   code to sign on a phone instead.</p>
+                <div class="b2b-signq-acts">
+                    <button class="b2b-btn b2b-btn-primary" onclick="b2bSignHere('${deal.id}')">Sign on this device</button>
+                    ${_b2bCanAccept() ? `<button class="b2b-mini" onclick="b2bSkipSign('${deal.id}')">Continue without a signature</button>`
+                                      : '<span class="b2b-signq-note">A CEO, TOM or DM can sign off without one.</span>'}
+                </div>
             </div>
         </div>`;
 }
@@ -15421,7 +15429,7 @@ function _b2bSignBlock(deal) {
 // Reopening the pad on the desktop is not useful -- it is the phone that has the
 // client in front of it -- so this just clears the way for another scan.
 function b2bRetakeSign(id) {
-    if (!confirm('Take the signature again?\n\nThe QR code comes back so the client can sign on a phone. '
+    if (!confirm('Take the signature again?\n\nYou can re-sign on this device or with the phone. '
         + 'The signature already on file stays until a new one replaces it.')) return;
     const deal = _b2bDealById(id);
     if (deal) { deal.signature_path = null; b2bOpenDeal('pickup', id); }
@@ -15510,8 +15518,24 @@ async function _b2bPaintQR(el, text) {
 // --- the phone's side ------------------------------------------------------
 
 let _b2bSigCtx = null, _b2bSigDrawn = false;
+// True when the pad was opened straight on the pickup device (not the phone
+// deep-link), so saving returns to the pickup screen instead of the phone's
+// "hand it back" dead-end.
+let _b2bSignOnDevice = false;
 
-function b2bOpenSign(dealId) {
+// Whatever's typed on the pickup screen, kept across the sign-pad round-trip so
+// signing on this device doesn't wipe an already-entered name/description.
+let _b2bPickupDraft = null;
+function b2bSignHere(id) {
+    _b2bPickupDraft = {
+        id,
+        desc: document.getElementById('b2bPuDesc')?.value,
+        name: document.getElementById('b2bPuSigned')?.value,
+    };
+    b2bOpenSign(id, true);
+}
+
+function b2bOpenSign(dealId, onDevice) {
     const deal = _b2bDealById(dealId);
     if (!deal) return alert("That deal is no longer open for signing.");
     if (deal.stage !== 'pickup') {
@@ -15519,11 +15543,12 @@ function b2bOpenSign(dealId) {
     }
     _b2bModalDeal = deal;
     _b2bSigDrawn = false;
+    _b2bSignOnDevice = !!onDevice;
     _b2bShowDeal({
         stage: 'pickup',
         eyebrow: deal.ref,
         title: 'Client Signature',
-        sub: 'Hand the phone to the client.',
+        sub: onDevice ? 'Hand the device to the client to sign.' : 'Hand the phone to the client.',
         wide: true,
         body: `
             <div class="b2b-sign-who">
@@ -15613,9 +15638,16 @@ async function b2bSaveSign(id, btn) {
             "Couldn't save the signature");
         closeAllModals();
         await b2bRefresh();
-        // The phone's job is done in one screen; say so rather than dropping the
-        // person back onto a board they did not come here for.
-        alert('Signature saved. You can hand the phone back.');
+        if (_b2bSignOnDevice) {
+            // Signed on the pickup device itself -- go straight back to the pickup
+            // screen, where the signature now shows and the sign-off can finish.
+            _b2bSignOnDevice = false;
+            b2bOpenDeal('pickup', id);
+        } else {
+            // The phone's job is done in one screen; say so rather than dropping the
+            // person back onto a board they did not come here for.
+            alert('Signature saved. You can hand the phone back.');
+        }
     });
 }
 

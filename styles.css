@@ -11891,6 +11891,7 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .b2b-signq-txt b { font-size: 14px; font-weight: 800; color: #1a1c1e; }
 .b2b-signq-txt p { margin: 5px 0 9px; font-size: 12.5px; color: var(--b2b-muted); line-height: 1.5; }
 .b2b-signq-note { font-size: 11.5px; font-style: italic; color: var(--b2b-faint); }
+.b2b-signq-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .b2b-qr-fail { font-size: 11px; color: var(--b2b-muted); text-align: center; line-height: 1.5; word-break: break-all; }
 
 /* The captured signature, shown at its own aspect rather than stretched: it is
