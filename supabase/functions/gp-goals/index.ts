@@ -1,0 +1,185 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "jsr:@supabase/supabase-js@2";
+
+// The gross-profit goal each store carries for a month.
+//
+// ⚠️ NOT the `monthly-goals` function, which is a different feature entirely
+// (the written goals/initiatives panel), and NOT `store_monthly_goals`, which
+// holds REVENUE goals and has been dead since May 2026. This is the dollar GP
+// goal behind the Daily Breakdown's goal bar and the workbook's "GP Goal" cell.
+//
+// DIRECTION OF TRAVEL IS SITE -> SHEET. A goal is a decision, not a
+// measurement: the DM makes it once a month, here, and it is pushed into the
+// workbook so the sheet's own formulas keep working. Nothing reads it back off
+// the sheet, so the two can never disagree about who decided.
+//
+//   GET  ?month=YYYY-MM      -> { month, goals, total, complete, missing }
+//   POST { action:'save', month, goals }  (x-user-pin, DM/CEO)
+//
+// Reads are open, like buysell-daily: the goal is already on screen in the goal
+// bar for anyone who can see the dashboard. Writes need a pin and a role.
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-user-pin",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+};
+
+const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
+
+// A goal is a month's gross profit for one store. Six figures is already
+// unusual; seven is a typo with a zero in it, and it would silently rescale
+// every goal bar on the site.
+const MAX_GOAL = 1_000_000;
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+function isManagerRole(role?: string): boolean {
+  const r = (role || "").toLowerCase().trim();
+  return r === "district manager" || r === "district-manager" || r === "ceo";
+}
+
+// The edge runtime is UTC, so a bare new Date() names the wrong month for the
+// first six hours of the 1st — which is exactly the day this function is busiest.
+function centralMonth(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" }).slice(0, 7);
+}
+
+// Realtime is a PING, not a payload: the client re-runs its own check when it
+// hears this, so nothing sensitive travels over the broadcast channel.
+async function broadcastChange(tool: string) {
+  try {
+    const url = Deno.env.get("SUPABASE_URL")!;
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: key, Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        messages: [{ topic: "speeks-notify", event: "changed", payload: { tool, store: null, ts: Date.now() } }],
+      }),
+    });
+  } catch (_) { /* best-effort */ }
+}
+
+// Push the month's goals into the workbook, so the sheet's own GP-goal cells
+// agree with what was entered here. Best-effort ON PURPOSE: the save has already
+// succeeded by the time this runs, and a Google outage must not fail it or the
+// DM would key the same five numbers again. The rollover writes them too, so a
+// failure here is corrected on the 1st at the latest.
+async function pushToSheet(month: string, goals: Record<string, number>): Promise<string> {
+  const url = Deno.env.get("MONTH_ROLLOVER_URL");
+  const secret = Deno.env.get("SYNC_SECRET");
+  if (!url || !secret) return "not configured";
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "goals", secret, month, goals }),
+      redirect: "follow",
+    });
+    const txt = (await res.text()).slice(0, 300);
+    return res.ok ? "ok " + txt : "HTTP " + res.status + " " + txt;
+  } catch (e) {
+    return "failed: " + String((e as Error)?.message || e);
+  }
+}
+
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
+  const supabase = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  );
+
+  try {
+    const url = new URL(req.url);
+
+    if (req.method === "GET") {
+      const asked = String(url.searchParams.get("month") || "").trim();
+      const month = /^\d{4}-\d{2}$/.test(asked) ? asked : centralMonth();
+      const { data, error } = await supabase
+        .from("monthly_gp_goals")
+        .select("store, gp_goal, set_by, set_at")
+        .eq("ym", month);
+      if (error) throw error;
+
+      const goals: Record<string, number> = {};
+      let setBy = "", setAt = "";
+      for (const r of data || []) {
+        const code = String(r.store || "").toUpperCase();
+        if (!STORES.includes(code)) continue;
+        goals[code] = Number(r.gp_goal);
+        if (!setAt || String(r.set_at) > setAt) { setAt = String(r.set_at); setBy = String(r.set_by || ""); }
+      }
+      // `missing` is what drives the reminder on the site, so it is computed
+      // here rather than left to each caller to work out for itself.
+      const missing = STORES.filter((s) => !(s in goals));
+      return json({
+        month,
+        goals,
+        total: Object.values(goals).reduce((a, b) => a + b, 0),
+        complete: missing.length === 0,
+        missing,
+        setBy,
+        setAt,
+      });
+    }
+
+    if (req.method === "POST") {
+      const pin = req.headers.get("x-user-pin") || "";
+      if (!pin) return json({ error: "Missing x-user-pin header" }, 401);
+      const { data: user } = await supabase
+        .from("users").select("name, role").eq("pin", pin).single();
+      if (!user) return json({ error: "Unknown pin" }, 401);
+      if (!isManagerRole(user.role)) return json({ error: "Not allowed" }, 403);
+
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+      if (body.action !== "save") return json({ error: "Unknown action" }, 400);
+
+      const month = String(body.month || "").trim();
+      if (!/^\d{4}-\d{2}$/.test(month)) return json({ error: "Bad month" }, 400);
+
+      const raw = (body.goals || {}) as Record<string, unknown>;
+      const rows: { store: string; ym: string; gp_goal: number; set_by: string }[] = [];
+      for (const code of STORES) {
+        if (!(code in raw)) continue;
+        const v = Number(raw[code]);
+        // A blank clears the goal rather than storing a zero — "not decided yet"
+        // and "the goal is nothing" are different, and only the first should
+        // leave the reminder standing.
+        if (raw[code] === "" || raw[code] === null) continue;
+        if (!Number.isFinite(v) || v < 0) return json({ error: `Bad goal for ${code}` }, 400);
+        if (v > MAX_GOAL) return json({ error: `${code}'s goal looks like a typo (over $1M)` }, 400);
+        rows.push({ store: code, ym: month, gp_goal: Math.round(v * 100) / 100, set_by: String(user.name || "") });
+      }
+
+      const clear = STORES.filter((c) => c in raw && !rows.some((r) => r.store === c));
+      if (clear.length) {
+        const { error } = await supabase
+          .from("monthly_gp_goals").delete().eq("ym", month).in("store", clear);
+        if (error) throw error;
+      }
+      if (rows.length) {
+        const { error } = await supabase
+          .from("monthly_gp_goals").upsert(rows, { onConflict: "store,ym" });
+        if (error) throw error;
+      }
+
+      const sheet = await pushToSheet(month, Object.fromEntries(rows.map((r) => [r.store, r.gp_goal])));
+      await broadcastChange("gpGoals");
+
+      const missing = STORES.filter((s) => !rows.some((r) => r.store === s));
+      return json({ success: true, month, saved: rows.length, missing, complete: missing.length === 0, sheet });
+    }
+
+    return json({ error: "Method not allowed" }, 405);
+  } catch (e) {
+    return json({ error: String((e as Error)?.message || e) }, 500);
+  }
+});

@@ -9462,7 +9462,8 @@ body.sam-active .hotbar-btn:hover {
 #b2bAlertBubble,
 #listingGoalAlertBubble,
 #listingGoalsDailyAlertBubble,
-#expenseFileAlertBubble {
+#expenseFileAlertBubble,
+#gpGoalAlertBubble {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
@@ -11066,7 +11067,49 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
     font-size: 9.5px; font-weight: 800; letter-spacing: .07em;
     text-transform: uppercase; color: #647082;
 }
-.bd-h-r { font-size: 10.5px; font-weight: 650; color: #94a3b8; }
+.bd-h-r { font-size: 10.5px; font-weight: 650; color: #94a3b8; display: inline-flex; align-items: baseline; gap: 10px; }
+/* The goal, in the header. Reads as a fact about the month, so it is set in the
+   same quiet type as "Through August 11" beside it, with only the percentage
+   carrying weight — that is the number being looked for. */
+.bd-h-goal {
+    font-size: 10.5px; font-weight: 700; color: #647082;
+    background: #eef4f0; border: 1px solid #dbe8e0;
+    border-radius: 999px; padding: 3px 10px; white-space: nowrap;
+}
+.bd-h-goal b { font-weight: 900; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
+.bd-h-goal-hit { background: #e7f6ec; border-color: #bfe3cb; color: #1f7a45; }
+.bd-h-goal-hit b { color: #1f9d57; }
+/* No goal on the month and the standing to fix it. A button, not a note: the
+   only thing to do about a missing goal is to set one. */
+button.bd-h-goal-set {
+    cursor: pointer; font-family: inherit;
+    background: #fdf6e7; border-color: #f0e0bd; color: #8a6d3b;
+}
+button.bd-h-goal-set:hover { background: #f9edd4; }
+
+/* ---- the Store Goals editor ---- */
+.gp-goal-rows { display: flex; flex-direction: column; gap: 8px; }
+.gp-goal-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 9px 12px; border: 1px solid #eef2f6; border-radius: 10px; background: #fbfcfd;
+}
+.gp-goal-store { font-size: 13px; font-weight: 900; letter-spacing: .03em; color: var(--slate-charcoal); }
+.gp-goal-field { display: inline-flex; align-items: center; gap: 4px; }
+.gp-goal-field i { font-style: normal; font-weight: 800; color: #94a3b8; }
+.gp-goal-field input {
+    width: 130px; padding: 7px 10px; text-align: right;
+    border: 1px solid #dbe3ec; border-radius: 8px;
+    font-family: inherit; font-size: 13.5px; font-weight: 800;
+    color: var(--slate-charcoal); font-variant-numeric: tabular-nums;
+}
+.gp-goal-field input:disabled { background: #f4f6f9; color: #94a3b8; }
+.gp-goal-total {
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid #eef2f6;
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 12px; font-weight: 750; color: #64748b;
+}
+.gp-goal-total b { font-size: 16px; font-weight: 900; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
+.gp-goal-by { margin-top: 8px; font-size: 11px; font-weight: 650; color: #a8b3c0; }
 /* SIX tiles, and its own grid rather than .lv-strip's. Two reasons, one cosmetic
    and one load-bearing: .lv-strip is a hard repeat(4), and — far more
    importantly — renderLiveDashboard() fills every .lv-strip on the page by

@@ -205,6 +205,23 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // ---- the goal this month is carrying --------------------------------
+    // monthly_gp_goals is the record, not the sheet: the goal is entered on
+    // SPEEKS and pushed into the workbook from there. The cache only ever knew
+    // the month in progress, so every finished month showed a goal bar with
+    // nothing to measure against; now a month keeps the goal it was given.
+    // The cached figure stays as the fallback for the current month, so nothing
+    // regresses on a month whose goals predate this table.
+    const { data: goalRows, error: goalErr } = await supabase
+      .from("monthly_gp_goals")
+      .select("store, gp_goal")
+      .eq("ym", month);
+    if (goalErr) throw goalErr;
+    for (const r of goalRows || []) {
+      const code = String(r.store || "").toUpperCase();
+      if (stores[code]) stores[code].goal = Number(r.gp_goal);
+    }
+
     // ---- the same month a year ago -------------------------------------
     // daily_buysell starts at 2026-01, so there is no day-level history to
     // compare a year against. buysell_monthly_history carries the month TOTALS

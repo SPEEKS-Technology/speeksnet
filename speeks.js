@@ -10193,6 +10193,7 @@ function _lvFullBtn() {
 //   - % of GP Goal on FINISHED months. Nothing stores a historical goal, so a
 //     past month reports what it did without inventing what it was asked for.
 const BUYSELL_DAILY_URL = `${_BASE}/buysell-daily`;
+const GP_GOALS_URL = `${_BASE}/gp-goals`;
 
 let _bdMonth = null;     // 'YYYY-MM', null until the first payload names one
 let _bdStore = null;     // store code on screen
@@ -10286,6 +10287,227 @@ function closeDailyBreakdown() {
         document.documentElement.classList.remove('lv-fs-open');
         document.body.classList.remove('lv-fs-open');
     }
+}
+
+/* =========================================================
+   STORE GOALS  (the month's gross-profit goal per store)
+
+   Entered here rather than in the spreadsheet, because a goal is a DECISION and
+   the workbook is a record of what happened. The month rollover writes whatever
+   is set here into the new tabs, so the sheet's own GP-goal formulas keep
+   working and nobody has to key the same five numbers twice.
+
+   Reads are open (the goal is already on screen in every goal bar); saving is
+   DM/CEO, enforced in the gp-goals function and mirrored here so the button is
+   not offered to someone who would be refused.
+   ========================================================= */
+
+let _gpGoals = null;          // { month, goals, missing, complete } — last read
+let _gpGoalsBusy = false;
+let _gpGoalsStarted = false;
+
+function _gpCanEdit() {
+    const r = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return r === 'district manager' || r === 'ceo';
+}
+
+// 'YYYY-MM' in CENTRAL time. The browser's own month is right for anyone in the
+// stores' timezone and wrong for nobody who matters, but this is the figure the
+// reminder keys off on the 1st, so it is worth being explicit about.
+function _gpThisMonth() {
+    const d = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+    return d.slice(0, 7);
+}
+
+function _gpMonthName(ym) {
+    const p = String(ym || '').split('-');
+    if (p.length !== 2) return '';
+    return new Date(+p[0], +p[1] - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+async function _gpFetch(month) {
+    const m = month || _gpThisMonth();
+    const res = await fetch(`${GP_GOALS_URL}?month=${encodeURIComponent(m)}&v=${Date.now()}`);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    if (j.error) throw new Error(j.error);
+    return j;
+}
+
+// ---- the editor ----------------------------------------------------------
+async function openGpGoals(month) {
+    closeAllModals();
+    toggleModal('gpGoalsModal');
+    const body = document.getElementById('gpGoalsBody');
+    if (body) body.innerHTML = '<div class="status-message">Loading goals…</div>';
+    try {
+        _gpGoals = await _gpFetch(month);
+    } catch (e) {
+        if (body) body.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; text-align: center; padding: 20px 0;">Could not load the goals. Close and try again.</div>';
+        return;
+    }
+    renderGpGoals();
+}
+
+function renderGpGoals() {
+    const body = document.getElementById('gpGoalsBody');
+    if (!body || !_gpGoals) return;
+    const g = _gpGoals.goals || {};
+    const codes = (typeof _lvData === 'object' && _lvData && _lvData.stores || [])
+        .map(s => String(s.code).toUpperCase());
+    const stores = codes.length ? codes : ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    const editable = _gpCanEdit();
+
+    let html = `<p style="font-size: 12.5px; color: #64748b; margin: 0 0 14px;">
+        The gross profit each store is carrying for <b>${escapeHtml(_gpMonthName(_gpGoals.month))}</b>.
+        Saving writes them into the Sales Summary workbook as well, so the sheet
+        and the site cannot drift apart.${editable ? '' : ' Only a District Manager or the CEO can change them.'}</p>`;
+
+    html += '<div class="gp-goal-rows">';
+    stores.forEach(code => {
+        const v = (g[code] === undefined || g[code] === null) ? '' : g[code];
+        html += `<label class="gp-goal-row">
+            <span class="gp-goal-store">${escapeHtml(code)}</span>
+            <span class="gp-goal-field">
+                <i>$</i>
+                <input type="number" min="0" step="500" id="gpGoal_${escapeHtml(code)}"
+                       value="${v}" placeholder="not set" ${editable ? '' : 'disabled'}
+                       oninput="_gpUpdateTotal()">
+            </span>
+        </label>`;
+    });
+    html += '</div>';
+
+    html += `<div class="gp-goal-total">Company goal <b id="gpGoalTotal">—</b></div>`;
+
+    if (_gpGoals.setBy) {
+        html += `<div class="gp-goal-by">Last set by ${escapeHtml(_gpGoals.setBy)}</div>`;
+    }
+    if (editable) {
+        html += `<div class="manage-footer" style="gap:10px;">
+            <button class="btn-primary" id="gpGoalSaveBtn" onclick="saveGpGoals()">Save Goals</button>
+        </div>`;
+    }
+    body.innerHTML = html;
+    _gpUpdateTotal();
+}
+
+function _gpUpdateTotal() {
+    const el = document.getElementById('gpGoalTotal');
+    if (!el) return;
+    let total = 0, any = false;
+    document.querySelectorAll('[id^="gpGoal_"]').forEach(i => {
+        const v = parseFloat(i.value);
+        if (Number.isFinite(v)) { total += v; any = true; }
+    });
+    el.textContent = any ? _lvMoney(total, false) : '—';
+}
+
+async function saveGpGoals() {
+    if (_gpGoalsBusy || !_gpGoals) return;
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (!pin) { alert('Sign in again to save goals.'); return; }
+    const btn = document.getElementById('gpGoalSaveBtn');
+    const goals = {};
+    let bad = '';
+    document.querySelectorAll('[id^="gpGoal_"]').forEach(i => {
+        const code = i.id.replace('gpGoal_', '');
+        const raw = String(i.value || '').trim();
+        // Blank is "not decided yet", which is different from a goal of zero —
+        // it is what leaves the reminder standing, so it is sent as a blank
+        // rather than quietly turned into a number.
+        if (!raw) { goals[code] = ''; return; }
+        const v = parseFloat(raw);
+        if (!Number.isFinite(v) || v < 0) { bad = code; return; }
+        goals[code] = v;
+    });
+    if (bad) { alert(bad + "'s goal is not a number."); return; }
+
+    _gpGoalsBusy = true;
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    try {
+        const res = await fetch(GP_GOALS_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({ action: 'save', month: _gpGoals.month, goals }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || j.error) throw new Error(j.error || ('HTTP ' + res.status));
+        alert(j.complete ? 'Goals saved for every store.' : 'Goals saved.');
+        _gpGoals = await _gpFetch(_gpGoals.month);
+        renderGpGoals();
+        // The reminder and the popout both read this — refresh them rather than
+        // waiting for a poll, so the card disappears as the modal closes.
+        checkGpGoalReminder();
+        // Emptied in place — _bdCache is a const, and reassigning it throws.
+        // The cache has to go because every month's payload carries the goal.
+        if (typeof _bdEl === 'function' && _bdEl()) {
+            Object.keys(_bdCache).forEach(k => delete _bdCache[k]);
+            _bdLoad(_bdMonth);
+        }
+    } catch (e) {
+        alert((e && e.message) || 'Could not save the goals.');
+    }
+    _gpGoalsBusy = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Goals'; }
+}
+
+// ---- the reminder --------------------------------------------------------
+// A hidden bubble, like every other feed reminder: _samGatherReminders reads its
+// computed display to decide whether the card is live, so this element must stay
+// display:flex while being invisible. See the RETIRED FLOATING ALERT TOASTS
+// block in styles.css.
+function _gpBubbleEl() {
+    let b = document.getElementById('gpGoalAlertBubble');
+    if (b) return b;
+    const claim = document.getElementById('claimAlertBubble');
+    if (!claim || !claim.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'gpGoalAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #0f766e, #115e59); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(13, 94, 89, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = '<span id="gpGoalAlertBubbleIcon" style="font-size:16px; flex-shrink:0; margin-top:2px;">🎯</span>'
+        + '<span id="gpGoalAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>';
+    claim.parentElement.appendChild(b);
+    return b;
+}
+
+// Is this month's goal set for every store? The card stands until it is, and
+// goes away on its own the moment the last one is entered — there is nothing to
+// dismiss, because the work either has or has not been done.
+async function checkGpGoalReminder() {
+    if (!_gpCanEdit()) return;
+    const b = _gpBubbleEl();
+    if (!b) return;
+    let data = null;
+    try { data = await _gpFetch(_gpThisMonth()); } catch (_) { return; }
+    _gpGoals = _gpGoals && _gpGoals.month === data.month ? data : (_gpGoals || data);
+
+    if (data.complete) { b.style.display = 'none'; return; }
+    const t = document.getElementById('gpGoalAlertBubbleText');
+    const monthName = _gpMonthName(data.month);
+    const n = data.missing.length;
+    const summary = n === 5
+        ? `No goals set for ${monthName} yet — the goal bars have nothing to measure against until they are in.`
+        : `${data.missing.join(', ')} ${n === 1 ? 'has' : 'have'} no ${monthName} goal yet.`;
+    if (t) {
+        t.innerHTML = '<div style="line-height:1.4;"><strong>Store goals for ' + escapeHtml(monthName) + '</strong></div>'
+            + '<div style="line-height:1.4; opacity:0.96;">' + escapeHtml(summary) + '</div>';
+        t.dataset.summary = summary;
+        // The identity is the month plus who is missing, so entering three of
+        // five breaks through a snooze rather than staying buried: the card is
+        // about different work than the one that was snoozed.
+        t.dataset.sig = data.month + '|' + data.missing.join(',');
+    }
+    b.style.display = 'flex';
+}
+
+function startGpGoalReminder() {
+    if (_gpGoalsStarted || !_gpCanEdit()) return;
+    _gpGoalsStarted = true;
+    checkGpGoalReminder();
+    // Slow: this changes at most a handful of times a month, and the realtime
+    // ping from gp-goals clears it the moment the last goal is saved.
+    setInterval(checkGpGoalReminder, 30 * 60 * 1000);
 }
 
 async function _bdLoad(month) {
@@ -10453,8 +10675,8 @@ function _bdCompany(payload) {
             buyMargin: resale > 0 ? (resale - paid) / resale : null,
         });
     }
-    // Only the month in progress has goals at all, and the company's is the sum
-    // of the five it is made of — the same arithmetic as every other column here.
+    // The company's goal is the sum of the five it is made of — the same
+    // arithmetic as every other column here.
     const goal = codes.reduce((a, c) => a + (Number((d.stores[c] || {}).goal) || 0), 0);
     return { days, goal };
 }
@@ -10489,6 +10711,26 @@ function _bdPrevYear(code, payload) {
     t.margin = t.sales > 0 ? t.gp / t.sales * 100 : null;
     t.buyMargin = t.resale > 0 ? (t.resale - t.paid) / t.resale * 100 : null;
     return t;
+}
+
+// The goal, and how much of it is banked, in the header. The goal BAR further
+// down says the same thing at length; this is the version that can be read
+// without looking for it, which is what it was asked for.
+//
+// A month with no goal says so rather than showing 0% — every month before
+// August 2026 predates monthly_gp_goals, and a goal bar measuring against
+// nothing would read as a catastrophic miss. DM/CEO get the way to fix it.
+function _bdGoalChip(store, t) {
+    const goal = store && Number(store.goal);
+    if (!goal || !isFinite(goal) || goal <= 0) {
+        return _gpCanEdit()
+            ? '<button type="button" class="bd-h-goal bd-h-goal-set" onclick="openGpGoals(\'' + escapeHtml(_bdMonth) + '\')">Set the goal</button>'
+            : '';
+    }
+    const pct = t && t.sellDays ? (t.gp / goal * 100) : 0;
+    const done = pct >= 100 ? ' bd-h-goal-hit' : '';
+    return '<span class="bd-h-goal' + done + '">'
+        + '<b>' + _lvPct(pct) + '</b> of ' + _lvMoney(goal, false) + ' goal</span>';
 }
 
 // The block on screen, store or company. Every reader goes through this so the
@@ -10605,7 +10847,7 @@ function _bdRender() {
         + '<span class="bd-h-l"><b>' + escapeHtml(_bdStore) + '</b>'
         + (nm ? '<span class="bd-h-nm">' + escapeHtml(nm) + '</span>' : '')
         + '<span class="bd-h-mo">' + escapeHtml(_bdMonthName(_bdMonth)) + '</span></span>'
-        + '<span class="bd-h-r">' + (hasAny && d.isCurrent
+        + '<span class="bd-h-r">' + _bdGoalChip(store, t) + (hasAny && d.isCurrent
             ? 'Through ' + escapeHtml(_bdMonthName(_bdMonth).split(' ')[0]) + ' ' + last
             : (hasAny ? 'Complete month' : ''))
         + '</span></div>';
@@ -19979,7 +20221,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -33993,6 +34235,13 @@ function _samReminderCfg() {
           title: 'Aging Inventory Review' + (_agDue ? ' — Due ' + _agDue : ''),
           urgency: 1, due: 'Review', cls: 'sam-due-amber',
           action: "closeAgingAlertBubble(); window.location.href='workspace.html#aging'" },
+        // Store goals — DM/CEO only, and the only reminder here that is about
+        // a DECISION rather than a queue. It is deliberately not snoozeable:
+        // every goal bar on the site has nothing to measure against until this
+        // is done, and it goes away by itself the moment the last store is set.
+        { key: 'gpgoals', id: 'gpGoalAlertBubble', text: 'gpGoalAlertBubbleText',
+          title: 'Store Goals to Set', urgency: 2, due: 'Set', cls: 'sam-due-amber',
+          noSnooze: true, action: "openGpGoals()" },
         { key: 'b2b', id: 'b2bAlertBubble', text: 'b2bAlertBubbleText', title: 'B2B Deals Waiting', urgency: 1, due: 'Action', cls: 'sam-due-amber', action: "window.location.href='operations.html#b2b'" },
         { key: 'margin', id: 'marginAlertBubble', text: 'marginAlertBubbleText', title: 'Margin Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#mreplies'" },
         // Preferred Purchases — feed-only, both directions. The owner's card is a
@@ -34182,6 +34431,7 @@ const _RT_TOOL_CHECKS = {
     // loadPatchNotes still runs after, to refresh an already-open hub.
     patch:         ['checkForNewPatchNotes', 'loadPatchNotes'],
     kpi:           ['checkKpiDueReminders'],
+    gpGoals:       ['checkGpGoalReminder'],
     preferred:     ['checkPreferredReminders'],
     b2b:           ['_b2bRealtimeRefresh', 'checkB2BReminders'],
     // Command Center + Listing Goals sources. Each re-fetches through its edge
