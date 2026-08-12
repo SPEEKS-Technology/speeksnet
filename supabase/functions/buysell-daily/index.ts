@@ -205,9 +205,38 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // ---- the same month a year ago -------------------------------------
+    // daily_buysell starts at 2026-01, so there is no day-level history to
+    // compare a year against. buysell_monthly_history carries the month TOTALS
+    // for 2025, lifted from the Sales Summary workbook, which is all a
+    // year-over-year line needs. A month with no rows simply comes back empty
+    // and the frontend renders nothing — MPL and BAL did not exist in 2025, and
+    // inventing a zero for them would read as a collapse rather than as a store
+    // that had not opened.
+    const prevYm = String(Number(month.slice(0, 4)) - 1) + month.slice(4);
+    const { data: pyRows, error: pyErr } = await supabase
+      .from("buysell_monthly_history")
+      .select("store, sales, cost, gp, resale, paid")
+      .eq("ym", prevYm);
+    if (pyErr) throw pyErr;
+
+    const prevYearStores: Record<string, Record<string, number | null>> = {};
+    for (const r of pyRows || []) {
+      const code = String(r.store || "").toUpperCase();
+      if (!STORES.includes(code)) continue;
+      // null, not 0: a month whose buying was never captured is not a month
+      // that bought nothing, and the tile has to be able to tell them apart.
+      const n = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+      prevYearStores[code] = {
+        sales: n(r.sales), cost: n(r.cost), gp: n(r.gp),
+        resale: n(r.resale), paid: n(r.paid),
+      };
+    }
+
     return json({
       month,
       isCurrent,
+      prevYear: { ym: prevYm, stores: prevYearStores },
       months,
       daysInMonth,
       source,

@@ -10459,6 +10459,38 @@ function _bdCompany(payload) {
     return { days, goal };
 }
 
+// The same month LAST YEAR, shaped like _bdTotals' output so every reader can
+// treat it as just another set of totals. Month totals are all there is —
+// buysell_monthly_history holds one row per store per month and daily_buysell
+// does not reach back into 2025 — so sellDays/buyDays here count STORES that
+// carried a figure, not days. They exist because _bdNetGp asks "was there any
+// selling at all", which is the same question either way.
+//
+// The company sums whatever stores existed: three in 2025 against five now.
+// That is the company's real year on year, and the same comparison the workbook
+// makes on its own YoY line.
+function _bdPrevYear(code, payload) {
+    const d = payload || _bdData;
+    const src = d && d.prevYear && d.prevYear.stores;
+    if (!src) return null;
+    const codes = code === BD_ALL ? Object.keys(src) : (src[code] ? [code] : []);
+    if (!codes.length) return null;
+    const t = { sales: 0, cost: 0, gp: 0, resale: 0, paid: 0, sellDays: 0, buyDays: 0 };
+    codes.forEach(c => {
+        const r = src[c] || {};
+        if (r.sales !== null && r.sales !== undefined) {
+            t.sales += r.sales; t.cost += (r.cost || 0); t.gp += (r.gp || 0); t.sellDays++;
+        }
+        if (r.resale !== null && r.resale !== undefined) {
+            t.resale += r.resale; t.paid += (r.paid || 0); t.buyDays++;
+        }
+    });
+    if (!t.sellDays && !t.buyDays) return null;
+    t.margin = t.sales > 0 ? t.gp / t.sales * 100 : null;
+    t.buyMargin = t.resale > 0 ? (t.resale - t.paid) / t.resale * 100 : null;
+    return t;
+}
+
 // The block on screen, store or company. Every reader goes through this so the
 // company view is not a second code path with its own bugs. Takes an optional
 // payload so the SAME reader serves last month's figures for the MoM comparison.
@@ -10638,7 +10670,7 @@ function _bdRender() {
             + '<div class="sh-k">' + k + '</div>'
             + '<div class="bd-tile-row">'
             + '<div class="bd-tile-main"><div class="sh-v">' + v + '</div>'
-            + (o.track ? '<div class="bd-track">' + o.track + ' at month end</div>' : '')
+            + (o.track ? '<div class="bd-track">Tracking ' + o.track + '</div>' : '')
             + (o.note ? '<div class="bd-track bd-note">' + o.note + '</div>' : '')
             + '</div>'
             + (rows ? '<div class="bd-tile-cmp">' + rows + '</div>' : '')
@@ -10646,18 +10678,47 @@ function _bdRender() {
     };
     const lastMo = (was, delta) => was ? { k: prevNm, v: was, d: delta } : null;
 
-    // ⚠️ NOT BUILT YET — the slot is here and the row renders the moment this
-    // returns something. `daily_buysell` floors at 2026-01, so a year ago does
-    // not exist in the database for any store yet; the figures live in the older
-    // workbooks. When they land, this is the ONLY function that has to change.
+    // Last year's same month. There are no 2025 DAYS anywhere in the database —
+    // buysell_monthly_history carries month totals and nothing finer — so this
+    // is the month as it finished, with nothing to project.
     //
-    // Worth knowing before wiring it: the sheet's own YoY compares THIS month's
-    // month-end PROJECTION against last year's same-month actual — verified to
-    // the dollar (Aug OVL projects to $145,167, which is exactly the sheet's YoY
-    // "Current", against $105,622.08 for Aug 2025 = its 37.44%). So the value
-    // this returns is last year's ACTUAL, and the delta beside it is measured
-    // against the projection above, exactly as `lastMo` already is.
-    const lastYr = (/* key */) => null;
+    // The delta beside it measures THIS month's projection against that actual,
+    // which is what the workbook's own YoY line does: verified to the dollar on
+    // OVL August, where our projection of $145,167 is exactly the sheet's YoY
+    // "Current" against $105,622.08 for August 2025, giving its 37.44%.
+    //
+    // Missing is normal, not an error. MPL and BAL opened in April 2026, WSP in
+    // June 2025 — a store with no row that month simply has no line, rather than
+    // a zero that would read as a collapse.
+    const pyT = _bdPrevYear(_bdStore, d);
+    const pyNm = (d.prevYear && d.prevYear.ym)
+        ? _bdMonthName(d.prevYear.ym).slice(0, 3) + ' ' + d.prevYear.ym.slice(0, 4)
+        : '';
+    const lastYr = key => {
+        if (!pyT || !pyNm) return null;
+        const pyNet = _bdNetGp(pyT);
+        const spec = {
+            sales:     [pyT.sales,  at(t.sales),  'good'],
+            gp:        [pyT.gp,     at(t.gp),     'good'],
+            net:       [pyNet,      net === null ? null : net * proj, 'good'],
+            resale:    [pyT.resale, at(t.resale), 'good'],
+            // Grey, like every other comparison of what buying COST: paying out
+            // more is what buying more looks like.
+            paid:      [pyT.paid,   at(t.paid),   'flat'],
+            // Percentages carry no arrow, for the same reason last month's do
+            // not: a percentage change OF a percentage is read wrong more often
+            // than right. The two figures sit side by side instead.
+            margin:    [pyT.margin, null, ''],
+            buyMargin: [pyT.buyMargin, null, ''],
+        }[key];
+        if (!spec || spec[0] === null || spec[0] === undefined || !spec[0]) return null;
+        const isPct = key === 'margin' || key === 'buyMargin';
+        return {
+            k: pyNm,
+            v: isPct ? _lvPct(spec[0]) : _lvMoney(spec[0], false),
+            d: spec[1] === null ? '' : _bdDelta(spec[1], spec[0], spec[2]),
+        };
+    };
 
     // A tile whose caption is a MEASUREMENT is marked, because a short screen
     // drops the caption line to buy table space — and dropping "Month To Date"

@@ -11047,13 +11047,13 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .bd-card .bd-tbl thead .bd-grp th:first-child { box-shadow: none; }
 .bd-card .bd-tbl thead th.bd-sep {
     border-left: 0;
-    box-shadow: inset 1px 0 0 #e6ebf1, inset 0 -1px 0 #e6ebf1;
+    box-shadow: inset 2px 0 0 #dbe3ec, inset 0 -1px 0 #e6ebf1;
 }
 /* The totals row is sticky at the BOTTOM, so its rule sits on top of it. */
 .bd-card .bd-tbl tfoot .lv-foot td { box-shadow: inset 0 1px 0 #e6ebf1; }
 .bd-card .bd-tbl tfoot .lv-foot td.bd-sep {
     border-left: 0;
-    box-shadow: inset 1px 0 0 #e6ebf1, inset 0 1px 0 #e6ebf1;
+    box-shadow: inset 2px 0 0 #dbe3ec, inset 0 1px 0 #e6ebf1;
 }
 .bd-head {
     display: flex; align-items: baseline; justify-content: space-between;
@@ -11171,7 +11171,18 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 /* The rule between the two halves of the day. One line, on the header group and
    every row, so the eye can tell at a glance which side of the business a column
    belongs to without reading the heading again. */
-.bd-tbl th.bd-sep, .bd-tbl td.bd-sep { border-left: 1px solid #e6ebf1; }
+.bd-tbl th.bd-sep, .bd-tbl td.bd-sep { border-left: 2px solid #dbe3ec; }
+/* CENTRED IN THE GUTTER, not sitting on the column boundary. The boundary
+   itself cannot move: the table lays out by content, and every column here
+   right-aligns, so the buying figures are pinned to the right edges of their own
+   columns. What CAN move is the last selling column's padding — 26px of it —
+   which walks the percentages left until the rule has the same air on both
+   faces. Measured 6px left / 22px right before, 26 / 29 after, against the
+   widest ink on the buying side, which is the HEADING rather than the figures
+   (they right-align much further over). The right-hand figure drifts with
+   viewport height because the heading is set in vh, so this is centred at the
+   sizes it is actually read at, not at one exact height. */
+.bd-tbl th:nth-child(5), .bd-tbl td:nth-child(5) { padding-right: 26px; }
 .bd-tbl .bd-grp th {
     padding-bottom: 4px;
     font-size: 9px; letter-spacing: .09em; color: #a3aeba;
@@ -11217,7 +11228,11 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .bd-tbl tr.bd-wkrow > td {
     border-top: 1px solid #dbe3ec; border-bottom: 0;
     padding: 5px 12px 2px; text-align: left;
-    font-size: 8.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
+    /* 1.35, not the table's 1.15. At 8.5px these capitals stand 11px tall and
+       the tighter line box was 9.8px, so AUG 3 - 9 overhung the rule above it
+       and read as cropped. */
+    font-size: 8.5px; line-height: 1.35;
+    font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
     color: #b0bac6; background: none;
 }
 .bd-tbl tbody tr.bd-wkrow:first-child > td { border-top: 0; padding-top: 1px; }
@@ -11336,7 +11351,7 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
        stopped fitting between 870 and 1000. Collapsing them outright is what the
        shorter breakpoint below does, and it costs the JAN 5 – 11 landmarks that
        made a full month readable in the first place. */
-    .bd-tbl tr.bd-wkrow > td { padding-top: 1px; padding-bottom: 0; line-height: 1.1; }
+    .bd-tbl tr.bd-wkrow > td { padding-top: 1px; padding-bottom: 0; line-height: 1.3; }
     /* The new tile is two lines in its main column where it used to be one,
        so the space AROUND those lines is what comes off first. */
     .bd-strip .bd-track { margin-top: 1px; line-height: 1.2; }
