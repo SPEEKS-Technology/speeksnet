@@ -1563,9 +1563,10 @@ input, textarea, select,
 /* =========================================================
    STANDARDIZED DROPDOWNS
    ========================================================= */
-select.kpi-select, 
-select.metric-dropdown, 
-select.dist-kpi-select, 
+select.kpi-select,
+select.metric-dropdown,
+select.dist-kpi-select,
+select.bd-month,
 select.bs-hidden-select {
     appearance: none !important;
     background-color: #ffffff !important;
@@ -1588,9 +1589,10 @@ select.bs-hidden-select {
     transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
 }
 
-select.kpi-select:focus, 
-select.metric-dropdown:focus, 
-select.dist-kpi-select:focus, 
+select.kpi-select:focus,
+select.metric-dropdown:focus,
+select.dist-kpi-select:focus,
+select.bd-month:focus,
 select.bs-hidden-select:focus {
     border-color: var(--sage-professional) !important;
     box-shadow: 0 0 0 3px rgba(90, 141, 59, 0.1) !important;
@@ -4020,6 +4022,10 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 .dc-tbl tbody.dc-grp > tr.dc-clickable > td { border-bottom: 0; padding: 17px 8px 7px; }
 .dc-tbl tr.dc-catrow { cursor: pointer; }
 .dc-tbl tr.dc-catrow > td.dc-cats { padding: 0 12px 17px; }
+/* The last store keeps no rule under it. A rule between two stores separates
+   them; a rule under the final one separates that store from nothing, and sits
+   just inside the panel's own bottom edge as a second, competing line. */
+.dc-tbl tbody.dc-grp:last-child > tr:last-child > td { border-bottom: 0; }
 
 /* A flex row, not inline-blocks: the gap is then set once and stays even when
    chips wrap onto a second line, where stacked margins would have doubled it. */
@@ -4070,7 +4076,9 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
 /* Scorecard headers are category names, not one-word metrics, so they are allowed
    to take two lines rather than forcing the table wider than the panel. */
 .dc-tbl-score th { white-space: normal; line-height: 1.35; }
-.dc-tbl-score { min-width: 880px; }
+/* 880 -> 980 when the PayMore Audit column landed: one more column sharing the
+   same width crushed the two score columns before the wrapper would scroll. */
+.dc-tbl-score { min-width: 980px; }
 
 /* The scored week, under the store code. */
 .dc-sub { display: block; margin-top: 3px; font-size: 10px; font-weight: 650; color: #a8b3c0; }
@@ -4093,13 +4101,37 @@ canvas#leaderboardCanvas, canvas#mainKpiChart {
     border: 1px solid #e6ebf1; border-radius: 999px; padding: 4px 11px; cursor: pointer;
     transition: border-color .12s, background .12s;
 }
-.dc-audit:hover { background: #fff; }
+/* Only the BUTTON hovers. The PayMore score wears the same pill as a <span>,
+   and a hover state on something that does not respond to a click is a lie. */
+button.dc-audit:hover { background: #fff; }
 /* Explicit rather than relying on .dc-good/.dc-warn/.dc-bad reaching a button
    inside a td — and the border takes the tint too, which is what makes the score
    read as a verdict rather than a number in a box. */
 .dc-tbl td .dc-audit.dc-good { color: #178048; border-color: #bfe3cd; background: #f4faf6; }
 .dc-tbl td .dc-audit.dc-warn { color: #b3760a; border-color: #f0dcb4; background: #fdf8ee; }
 .dc-tbl td .dc-audit.dc-bad  { color: #dc2626; border-color: #f3c9c3; background: #fdf4f3; }
+
+/* PayMore's own audit. Same colour verdict as the SPEEKS score beside it — same
+   points, same targets, same thresholds — but flat rather than a pill, and with
+   no hover or cursor: there is no breakdown behind it, and something shaped like
+   the clickable chip next to it would read as broken rather than as different.
+   The date rides underneath because a real audit is an EVENT, and one from March
+   should not be read the same way as one from last week. */
+/* The quiet explanatory line in the PayMore Audit tab. Its own class rather
+   than a reused one: nothing in the manage modals had a hint style, and the
+   nearest thing was a caps label doing a different job. */
+.pa-hint { font-size: 11.5px; font-weight: 650; color: #94a3b8; line-height: 1.5; margin: 0; }
+.pa-hint b { font-weight: 850; color: #647082; }
+
+/* A score over the day it was scored. Both audit columns use it: each runs on
+   its own schedule, so neither can borrow the scorecard's week-of label under
+   the store name without saying something untrue. */
+.dc-au-stack { display: inline-flex; flex-direction: column; align-items: center; gap: 3px; }
+.dc-pa-date { font-size: 9.5px; font-weight: 700; color: #a8b3c0; letter-spacing: .02em; }
+/* Wears the SPEEKS pill (.dc-audit carries the shape and the tinted border) but
+   is inert. Same shape because it is the same KIND of figure read against the
+   same thresholds; no affordance because there is no breakdown behind it. */
+.dc-tbl td .dc-paudit { cursor: default; display: inline-block; }
 
 .dc-note { font-size: 11.5px; font-weight: 650; color: #94a3b8; margin-top: 12px; padding: 0 2px; }
 
@@ -9759,6 +9791,11 @@ body.sam-active .hotbar-btn:hover {
 .modal-menu.manage-menu > .manage-footer {
     background: #ffffff; border-top: 1px solid #eef1f5; padding: 14px 22px;
 }
+/* The base footer is a flex row with no gap, which is invisible while there is
+   one button in it and becomes two buttons touching the moment there are two.
+   Scoped rather than fixed globally: several tools lay their footers out with
+   justify-content and would shift if this went on .manage-footer itself. */
+#scorecardSubmitModal > .manage-footer { gap: 10px; align-items: center; }
 
 /* --- shared form controls (scoped to the tool modals) --- */
 .modal-menu.manage-menu .form-input-lg {
@@ -10850,6 +10887,443 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 }
 .lv-full:hover { color: var(--slate-charcoal); background: #f1f5f9; }
 
+/* The Daily Breakdown button. Named rather than drawn: the mute and full-screen
+   controls beside it change how you are LOOKING at the board, and both are
+   recognisable as glyphs; this one opens a different view, which no icon says.
+   Shaped as an outlined pill so it reads as an action next to two bare toggles.
+
+   Sits immediately after the day toggle and is built from the SAME numbers, so
+   the two match at any base font: 1px border + 2px shell padding + 4px pill
+   padding = the 6px here, and the text uses the inherited line-height exactly as
+   .lv-mode does (it sets `font: inherit` then overrides only the size). Measured
+   identical at 30.8px. A hard `height` was what made it 31px against the
+   toggle's 30.8 — near enough to look right and wrong enough to drift the first
+   time the base line-height moves. */
+.bd-open {
+    display: inline-flex; align-items: center; padding: 6px 14px;
+    font: inherit; font-size: 10.5px; font-weight: 800; letter-spacing: .02em;
+    white-space: nowrap; color: #56636f;
+    background: #fff; border: 1px solid #e6ebf1; border-radius: 999px;
+    cursor: pointer;
+    transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+/* The DM card mounts its controls into two hosts rather than straight into the
+   header, so the header's own flex gap stops at the host boundary and the three
+   buttons inside would otherwise sit flush against each other. */
+.lv-sound-host { display: inline-flex; align-items: center; gap: 6px; }
+.bd-open:hover { color: var(--slate-charcoal); border-color: #cfd8e3; background: #f8fafc; }
+.bd-open:focus-visible { outline: 2px solid #1f9d57; outline-offset: 1px; }
+
+/* ---- daily breakdown popout ------------------------------------------------
+   The buying and selling sheet, day by day. Wears the full-screen board's shell
+   deliberately: it opens from the same header, over the same page, and arriving
+   in a third design would read as a different product. */
+/* NOTHING scrolls at this level. The view is sized to the window, and a month
+   that will not fit scrolls INSIDE the table (see .bd-card below) rather than
+   pushing the whole page down.
+
+   This is the fix for "switching months feels choppy". Months are not the same
+   length — 28 days and five week labels against 31 and six is about 55px — and
+   the layout is tuned to land a long month just inside the viewport, so on many
+   screens February fitted and January did not. Picking a month therefore added
+   or removed the window scrollbar, which changed the available WIDTH, which
+   reflowed every column in the table. Two different months, two different
+   layouts, on a control that is meant to be a filter. */
+.bd-fs {
+    position: fixed; inset: 0; z-index: 100002;   /* over the board's 100001 */
+    background: #eef1f5;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+}
+.bd-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 14px; padding: 14px 22px; flex: none;
+}
+.bd-title {
+    font-size: 13px; font-weight: 850; letter-spacing: .06em;
+    text-transform: uppercase; color: #647082; white-space: nowrap;
+}
+.bd-bar-r { display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+.bd-pickers { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.bd-close {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; padding: 0; flex: none;
+    background: #fff; color: #647082;
+    border: 1px solid #e6ebf1; border-radius: 10px; cursor: pointer;
+    transition: color .15s ease, border-color .15s ease;
+}
+.bd-close:hover { color: var(--slate-charcoal); border-color: #cfd8e3; }
+
+/* Store switcher. Same segmented shape as the day toggle on the card behind it,
+   for the same job: pick which one of a short fixed set you are looking at. */
+.bd-pills {
+    display: inline-flex; align-items: center; gap: 2px;
+    background: #fff; border: 1px solid #e6ebf1; border-radius: 999px; padding: 3px;
+}
+/* Every pill the same size. The codes are all three letters but not all the same
+   WIDTH — "MPL" sets wider than "LEE" — so a text-sized pill made the green
+   marker change shape as you moved between stores, which read as the selection
+   jumping rather than moving. A fixed box makes it slide. */
+.bd-pill {
+    font: inherit; font-size: 11px; font-weight: 800; letter-spacing: .03em;
+    min-width: 48px; padding: 5px 4px; border: 0; border-radius: 999px;
+    text-align: center; background: none; color: #94a3b8; cursor: pointer;
+    transition: color .15s ease, background .15s ease;
+}
+.bd-pill:hover { color: var(--slate-charcoal); }
+.bd-pill.on { background: var(--sage-professional); color: #fff; }
+.bd-pill:focus-visible { outline: 2px solid #1f9d57; outline-offset: 1px; }
+/* A store that had not opened in the selected month. Present but inert — the
+   row keeps its width as you move through the months, and the store is visibly
+   part of the company rather than quietly missing from it. */
+.bd-pill.off { color: #cbd5e1; cursor: default; }
+.bd-pill.off:hover { color: #cbd5e1; }
+/* The whole company. Sized to its own word rather than to the store box — it is
+   twice the length of a three-letter code, and forcing it into the shared width
+   would either stretch every store pill or squash this one. Kept OUT of the
+   fixed-width group and fenced off with a divider, so the five stores still all
+   match each other and this reads as a different kind of thing rather than as a
+   sixth store. */
+.bd-pill-all { min-width: 0; padding-left: 12px; padding-right: 12px; letter-spacing: .06em; }
+.bd-pill-div {
+    width: 1px; align-self: stretch; margin: 2px 5px;
+    background: #e6ebf1; flex: none;
+}
+/* A select, not more pills: the list grows by one every month and would run off
+   the bar inside a year. Styling comes from the STANDARDIZED DROPDOWNS block at
+   the top of this file — `select.bd-month` was added to it rather than given a
+   look of its own, so it is the same control the KPI and metric pickers are. */
+.bd-month { min-width: 132px; }
+
+.bd-card {
+    background: #fff; border: 1px solid #e6ebf1; border-radius: 16px;
+    padding: 18px 22px 22px;
+    margin: 0 20px 20px; max-width: 1280px; width: calc(100% - 40px);
+    align-self: center;
+    /* A column of its own so the table can be the one part that gives. min-height
+       lets the card shrink to the window instead of overflowing it — without it a
+       flex item refuses to go below its content height, which is how the whole
+       page ended up scrolling. A month that already fits does NOT stretch: the
+       card stays content-height and the space below it stays empty, so short
+       months look like short months rather than like padded long ones. */
+    display: flex; flex-direction: column; min-height: 0;
+}
+/* .bd-body is the element _bdRender rewrites, so the column has to continue
+   through it — the card holds the frame, the body holds the content, and the
+   shrink has to reach the table inside. */
+.bd-body { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+/* Everything except the table holds its size. Without this a long month would
+   buy its room by squashing the summary tiles and the goal bar, which is the
+   opposite of the trade — the tiles are the answer, the table is the detail. */
+.bd-body > .bd-head, .bd-body > .bd-strip, .bd-body > .lv-goal,
+.bd-body > .lv-note, .bd-body > .bd-empty { flex: none; }
+/* The one part that scrolls, and only when the month genuinely will not fit.
+   scrollbar-gutter reserves the track whether or not it is needed, so the
+   columns sit at the same x on a 28-day month and a 31-day one — the last place
+   switching months could still shift the layout under the cursor. */
+.bd-body > .lv-tbl-scroll {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    scrollbar-gutter: stable;
+}
+/* If a month does have to scroll, the two rows that say what the figures ARE
+   stay put: the column headings, and the TTL row. Scrolling a nameless grid of
+   money between "Sales" and "Cash paid" is exactly the spreadsheet problem this
+   view exists to replace, and the month total is the one row somebody would
+   scroll to find. Backgrounds are explicit — a sticky cell is transparent by
+   default and the day rows would run underneath it. */
+.bd-card .bd-tbl thead { position: sticky; top: 0; z-index: 2; }
+.bd-card .bd-tbl thead th { background: #fff; }
+.bd-card .bd-tbl tfoot { position: sticky; bottom: 0; z-index: 2; }
+.bd-card .bd-tbl tfoot td { background: #fff; }
+.bd-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 12px; flex-wrap: wrap; margin-bottom: 14px;
+}
+.bd-h-l { display: inline-flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+.bd-h-l > b { font-size: 17px; font-weight: 850; letter-spacing: .02em; color: var(--slate-charcoal); }
+.bd-h-nm { font-size: 12px; font-weight: 650; color: #94a3b8; }
+.bd-h-mo {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .07em;
+    text-transform: uppercase; color: #647082;
+}
+.bd-h-r { font-size: 10.5px; font-weight: 650; color: #94a3b8; }
+/* SIX tiles, and its own grid rather than .lv-strip's. Two reasons, one cosmetic
+   and one load-bearing: .lv-strip is a hard repeat(4), and — far more
+   importantly — renderLiveDashboard() fills every .lv-strip on the page by
+   class, so carrying that class handed this strip to the Live Dashboard on
+   every poll. See the note in _bdRender. */
+.bd-strip {
+    display: grid; grid-template-columns: repeat(6, 1fr);
+    gap: 1px; background: #eef2f6;
+    border: 1px solid #e6ebf1; border-radius: 13px; overflow: hidden; margin-bottom: 16px;
+}
+.bd-strip .cc-cell .sh-v { font-variant-numeric: tabular-nums; }
+@media (max-width: 1180px) { .bd-strip { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 720px)  { .bd-strip { grid-template-columns: repeat(2, 1fr); } }
+
+/* The derived strip: cost and the net-GP figures. Column count is not fixed
+   because the tile count is not — "Net GP Tracking" only exists on the month in
+   progress — so the tiles divide whatever is there rather than leaving a hole
+   where a fourth would have been. */
+.bd-strip2 {
+    grid-template-columns: none;
+    grid-auto-flow: column; grid-auto-columns: 1fr;
+}
+@media (max-width: 1180px) {
+    .bd-strip2 { grid-auto-flow: row; grid-template-columns: repeat(2, 1fr); }
+}
+/* When the derived strip follows, the tiles above it close up: two summary
+   boxes a full gap apart read as two competing answers, and butted together
+   they read as one block with a quiet second half. */
+.bd-strip-tight { margin-bottom: clamp(1px, 0.2vh, 5px); }
+.bd-strip2 { margin-bottom: clamp(3px, 0.5vh, 11px); }
+/* ONE LINE per tile, at every height — label, figure, note running across
+   instead of stacking. These are secondary to the six above them and a second
+   full stack cost ~65px, which is four days of table; this costs ~25px. The
+   strip above keeps its stacked form because it is the answer to the view. */
+.bd-strip2 .cc-cell {
+    display: flex; align-items: baseline; gap: 7px;
+    padding-top: clamp(3px, 0.5vh, 8px); padding-bottom: clamp(3px, 0.5vh, 8px);
+}
+.bd-strip2 .cc-cell .sh-k { flex: none; }
+.bd-strip2 .cc-cell .sh-v {
+    margin-top: 0; margin-left: auto;
+    font-size: clamp(12px, 1.5vh, 16px);
+}
+.bd-strip2 .cc-cell .sh-sub {
+    flex: none; margin-top: 0; white-space: nowrap;
+    font-size: clamp(8px, 0.9vh, 9.5px);
+}
+/* Month over month, under the figure it measures. Grey by default: a direction
+   is only good or bad when the quantity is, and COST rising on a month that sold
+   more is not bad news. Sales, gross profit and net GP pass 'good' and colour. */
+.bd-mom { font-weight: 850; color: #8b97a5; font-variant-numeric: tabular-nums; }
+.bd-mom.up { color: #1f9d57; }
+.bd-mom.down { color: #c2410c; }
+.bd-strip .sh-sub i { font-style: normal; color: #b0bac6; font-weight: 700; }
+/* Air under the goal bar. Its footing line ("30.5% banked") otherwise sits
+   directly on the table's group headings and reads as one of them. */
+.bd-card .lv-goal { margin-bottom: 18px; }
+.bd-empty {
+    padding: 34px 12px; text-align: center;
+    font-size: 12px; font-weight: 700; color: #94a3b8;
+}
+
+/* Eight columns rather than the board's nine, and a narrower minimum: this table
+   is one store deep and one month long, so it needs room down rather than across. */
+.bd-tbl { min-width: 840px; }
+.bd-tbl th:first-child, .bd-tbl td:first-child { width: 9%; }
+/* The rule between the two halves of the day. One line, on the header group and
+   every row, so the eye can tell at a glance which side of the business a column
+   belongs to without reading the heading again. */
+.bd-tbl th.bd-sep, .bd-tbl td.bd-sep { border-left: 1px solid #e6ebf1; }
+.bd-tbl .bd-grp th {
+    padding-bottom: 4px;
+    font-size: 9px; letter-spacing: .09em; color: #a3aeba;
+}
+.bd-tbl .bd-grp th:first-child { border: 0; }
+/* "Buying · 24 buying days this month". The count is a fact ABOUT these three
+   columns, so it rides in their heading instead of in a sentence below the
+   table. Set lighter and in normal case so the heading still reads as the
+   heading and the count as a note on it, not as part of the label. */
+.bd-grp-sub {
+    font-weight: 700; letter-spacing: .02em; text-transform: none; color: #b8c2cd;
+}
+/* Two fixed columns: the date right-aligns so 1 and 31 end on the same edge, and
+   the weekday centres in a slot of its own so the abbreviations run straight down
+   the page instead of stepping right whenever the date gains a digit. */
+.bd-day { display: inline-grid; grid-template-columns: 1.5em 2.6em; gap: 7px; align-items: baseline; }
+.bd-day b {
+    text-align: right; color: var(--slate-charcoal);
+    font-weight: 850; font-variant-numeric: tabular-nums;
+}
+.bd-dow { text-align: center; font-size: 10px; font-weight: 650; color: #b0bac6; }
+/* A day nobody keyed and a day nothing happened look the same in the sheet, so
+   both dash. Quiet enough that a run of them reads as absence, not as zeros. */
+.bd-tbl td.bd-dash { color: #cbd5e1; font-weight: 650; }
+/* ---- reading a month of rows ----------------------------------------------
+   MONEY RIGHT-ALIGNS. The board's tables centre their figures, which is fine for
+   five store rows of similar size; over 31 days it puts $1,099.93 and $15,995.81
+   with their decimal points in different places, and the column stops being
+   scannable. Right-aligned, magnitudes stack and the eye reads down a clean edge.
+   Headers follow their own column so the label sits over its figures. */
+.bd-tbl th:not(:first-child), .bd-tbl td:not(:first-child) { text-align: right; }
+/* The two group captions span their halves and belong centred over them. */
+.bd-tbl .bd-grp th { text-align: center; }
+
+/* WEEK BANDS. Alternating weeks carry a tint, so the month reads as five blocks
+   rather than 31 identical lines and "the week of the 12th" is something you can
+   land on instead of count to. Banded by CALENDAR week, Monday-started, which is
+   the unit every other report on this site is cut to. */
+.bd-tbl tr.bd-band > td { background: #f6f8fb; }
+/* The label that opens each week. Deliberately tiny and quiet — it is a signpost
+   between blocks, not a heading, and at any more weight it would compete with
+   the figures it is there to separate. The rule above it does the dividing. */
+.bd-tbl tr.bd-wkrow > td {
+    border-top: 1px solid #dbe3ec; border-bottom: 0;
+    padding: 5px 12px 2px; text-align: left;
+    font-size: 8.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
+    color: #b0bac6; background: none;
+}
+.bd-tbl tbody tr.bd-wkrow:first-child > td { border-top: 0; padding-top: 1px; }
+/* Sundays: the stores are shut and only the webstore trades, so the row is real
+   but small. Toned down rather than hidden — a missing row would make the month
+   look four days shorter than it is. Wins over the band either way, so a Sunday
+   reads the same in a tinted week as in a plain one. */
+.bd-tbl tr.bd-sun > td, .bd-tbl tr.bd-sun.bd-band > td { background: #e9eef4; }
+.bd-tbl tr.bd-sun .bd-dow { color: #b6c1cd; }
+/* The row under the cursor. Eight columns is a long way for the eye to carry a
+   line, and this is the cheapest possible fix for it — it beats every band and
+   Sunday tint so the highlight is never ambiguous. Not on the week labels. */
+.bd-tbl tbody tr:not(.bd-wkrow):hover > td { background: #eaf4ee; }
+
+/* A month that is missing days. Amber, not red: the figures on screen are
+   correct, they are simply not all of them — that is a caveat on how to read the
+   total, not a failure. */
+.bd-warn { color: #b3760a; font-weight: 700; }
+
+/* ---- fit a whole month on one screen ---------------------------------------
+   A 31-day month at the board's own row height is ~1,500px of table, so every
+   long month had to be scrolled — and scrolling is exactly what this view exists
+   to replace. The sizes below are driven by VIEWPORT HEIGHT so the month fits by
+   construction rather than by a guess at what a laptop is: 31 rows plus the
+   chrome always land inside 100vh, on a 768px netbook and a 1440px monitor alike.
+
+   Every value is clamped at both ends. The lower bound is the smallest size these
+   figures stay legible at (checked against the real August and July data, not
+   lorem); the upper bound stops a tall screen from inflating the row height until
+   the table looks like a different component from the one on the card behind it.
+
+   Scoped to .bd-card so the Live Dashboard's own tables, which are five rows and
+   have never needed this, keep the roomier spacing they were designed with. */
+.bd-card {
+    /* One knob the rest of the block reads, so the density can be retuned in a
+       single place instead of in nine. */
+    /* 0.125vh, down from 0.225 when the derived strip was added below the tiles.
+       The type size is untouched — the row RHYTHM tightened, not the reading —
+       which is the cheaper of the two and the one with slack in it: at 1080 this
+       is the difference between a 31-day month fitting and being 39px short. */
+    --bd-row: clamp(1.2px, 0.125vh, 6px);
+    --bd-fs:  clamp(9.5px, 1.18vh, 12px);
+    padding: clamp(9px, 1.3vh, 18px) clamp(12px, 1.6vw, 22px) clamp(9px, 1.4vh, 22px);
+}
+.bd-bar { padding: clamp(7px, 1vh, 14px) clamp(12px, 1.6vw, 22px); }
+.bd-head { margin-bottom: clamp(5px, 0.8vh, 14px); }
+.bd-strip { margin-bottom: clamp(5px, 0.8vh, 16px); }
+.bd-strip .cc-cell { padding: clamp(4px, 0.7vh, 14px) 14px clamp(4px, 0.7vh, 14px) 17px; }
+.bd-strip .cc-cell .sh-stripe { top: clamp(4px, 0.7vh, 14px); bottom: clamp(4px, 0.7vh, 14px); }
+.bd-strip .cc-cell .sh-v { font-size: clamp(14px, 1.85vh, 24px); margin-top: clamp(1px, 0.3vh, 6px); }
+.bd-strip .cc-cell .sh-k { font-size: clamp(8px, 0.95vh, 10px); }
+.bd-strip .cc-cell .sh-sub { font-size: clamp(8px, 0.95vh, 10.5px); margin-top: clamp(0px, 0.3vh, 6px); }
+/* The goal bar is three stacked lines in the board's spacing. Here it is one
+   line of type, a 4px bar and a footing, because it is a strip above a table
+   rather than the closing statement of a panel. */
+.bd-card .lv-goal { margin-top: 0; margin-bottom: clamp(6px, 0.9vh, 16px); }
+.bd-card .lv-goal-bar { height: 5px; margin: clamp(3px, 0.45vh, 7px) 0 clamp(2px, 0.3vh, 5px); }
+.bd-card .lv-goal-foot { font-size: clamp(8.5px, 0.95vh, 10px); }
+.bd-card .lv-goal-fig b { font-size: clamp(11px, 1.3vh, 14px); }
+
+.bd-tbl { font-size: var(--bd-fs); }
+/* Air under the column labels, and again under the group captions above them.
+   At the day rows' spacing the header sat directly on the first figure and read
+   as a row of the table rather than as its heading. */
+/* Both header rows sit CENTRED between the rule above them and the rule below,
+   which is what the padding here buys. They used to be top-padding 0 with all
+   the air underneath, so each row of headings hugged the line above it and
+   floated over its own — the labels read as belonging to the wrong side of the
+   rule they were nearest (user's call 2026-08-12). Symmetric costs about 6px of
+   table; the month still fits, re-measured. */
+.bd-tbl th { padding: clamp(4px, 0.7vh, 10px) 6px; font-size: clamp(8px, 0.95vh, 9.5px); }
+.bd-tbl .bd-grp th { padding: clamp(3px, 0.5vh, 7px) 6px; font-size: clamp(7.5px, 0.85vh, 9px); }
+/* And a little breathing room before the first week label, so the table opens
+   rather than starting mid-sentence. */
+.bd-tbl tbody tr:first-child > td { padding-top: clamp(4px, 0.6vh, 9px); }
+.bd-tbl td { padding: var(--bd-row) 6px; line-height: 1.15; }
+.bd-tbl .lv-strongnum { font-size: calc(var(--bd-fs) + 0.5px); }
+.bd-tbl .bd-dow { font-size: clamp(7.5px, 0.9vh, 10px); }
+/* The totals row keeps a little more air than a day row — it is the one line
+   people look for, and at the day rows' spacing it stopped reading as a summary
+   and started reading as a 32nd of the month. */
+.bd-tbl tfoot .lv-foot td { padding: clamp(4px, 0.65vh, 16px) 6px; }
+.bd-card .lv-note { margin-top: clamp(3px, 0.55vh, 12px); font-size: clamp(8.5px, 0.95vh, 10.5px); line-height: 1.35; }
+
+/* Below roughly a 900px-tall window the stacked tile — label, then figure, then
+   caption — is the most expensive 70px on the screen for what it says. Short
+   screens get the label and the figure on ONE line and drop the caption, which
+   buys back about two days' worth of table. The captions ("Month To Date",
+   "Resale Value") are the least load-bearing text in the view: the heading above
+   already names the month, and the column headings name the same quantities.
+
+   Raised from 820px to 1010px when the derived strip was added below: that
+   strip costs real height, and the band from roughly 870 to 1000 was the only
+   place a 31-day month no longer fitted. */
+@media (max-height: 1010px) {
+    .bd-strip:not(.bd-strip2) .cc-cell {
+        display: flex; align-items: baseline; gap: 6px;
+        padding-top: clamp(4px, 0.6vh, 9px); padding-bottom: clamp(4px, 0.6vh, 9px);
+    }
+    /* nowrap on the label: six tiles across a 1512px card leaves ~220px of
+       content each, and a two-line "GROSS PROFIT" makes the whole strip a line
+       taller — which is the opposite of what this block is for. */
+    .bd-strip:not(.bd-strip2) .cc-cell .sh-k { flex: none; white-space: nowrap; }
+    /* The week LABELS survive here; only their padding goes. Six label rows at
+       the day rows' spacing is ~90px, which is the whole reason a 31-day month
+       stopped fitting between 870 and 1000. Collapsing them outright is what the
+       shorter breakpoint below does, and it costs the JAN 5 – 11 landmarks that
+       made a full month readable in the first place. */
+    .bd-tbl tr.bd-wkrow > td { padding-top: 1px; padding-bottom: 0; line-height: 1.1; }
+    .bd-strip:not(.bd-strip2) .cc-cell .sh-v {
+        margin-top: 0; margin-left: auto; font-size: clamp(13px, 1.7vh, 17px);
+    }
+    /* A caption that is only a LABEL goes; one that is a measurement stays.
+       .bd-t-mom marks the second kind — dropping "Month To Date" costs nothing,
+       dropping "▲ 11.3%" would drop a figure. .bd-strip2 is exempt entirely:
+       it is already one line and every note in it is data. */
+    .bd-strip:not(.bd-strip2) .cc-cell:not(.bd-t-mom) .sh-sub { display: none; }
+    .bd-strip:not(.bd-strip2) .cc-cell.bd-t-mom .sh-sub {
+        flex: none; margin-top: 0; white-space: nowrap; font-size: clamp(8px, 0.9vh, 9.5px);
+    }
+    /* Six tiles across, so the month name comes off the delta — the heading
+       above the strip already says which month this is, and which one comes
+       before it is not in doubt. */
+    .bd-strip .sh-sub i { display: none; }
+}
+/* Shorter still — a 1366x768 laptop. The type has reached the floor it stays
+   readable at, so the last of the room comes out of chrome, cheapest first:
+   the goal BAR (its two figures stay, and the bar was only ever a picture of the
+   ratio between them) and the buying-days average (a derived nicety).
+   The missing-day warning explicitly survives — it changes how the totals beside
+   it should be read, so it is the one line here that is not decoration. */
+@media (max-height: 790px) {
+    .bd-card { --bd-row: clamp(1px, 0.13vh, 6px); }
+    /* The week LABELS go, the week DIVISION stays. Collapsing the row to its own
+       top border keeps the rule between weeks and the alternating band — which
+       is the grouping — while giving back the five text rows. The dates the
+       labels carried are still in the day column two lines below. */
+    .bd-tbl tr.bd-wkrow > td { font-size: 0; line-height: 0; padding: 0; }
+    /* The derived strip keeps every figure it carries and gives up only its
+       breathing room — it is four numbers on one line, so there is nothing in
+       it to drop that would not be a number. */
+    .bd-strip2 .cc-cell { padding-top: 2px; padding-bottom: 2px; }
+    .bd-card .lv-goal-bar, .bd-card .lv-goal-foot { display: none; }
+    .bd-card .lv-goal { margin-bottom: clamp(4px, 0.6vh, 10px); }
+    .bd-card .lv-note:not(.bd-warn) { display: none; }
+    /* Still centred, just tighter — the point of the padding is the balance
+       between the two rules, not its size, so it comes off both ends. */
+    .bd-tbl th { padding-top: clamp(1px, 0.35vh, 9px); padding-bottom: clamp(1px, 0.35vh, 9px); }
+    /* The 20px of air under the card is framing, and framing is the first thing
+       to go when the alternative is scrolling the content it frames. */
+    .bd-card { margin: 0 12px 3px; width: calc(100% - 24px); }
+    .bd-bar { padding-top: 6px; padding-bottom: 6px; }
+    .bd-head { margin-bottom: 4px; }
+}
+
+@media (max-width: 640px) {
+    .bd-bar { flex-direction: column; align-items: stretch; gap: 10px; }
+    .bd-bar-r { justify-content: space-between; }
+    .bd-card { margin: 0 12px 12px; width: calc(100% - 24px); padding: 14px 14px 18px; }
+}
+
 /* Mute switch for the sale chime. Sits last in the header, AFTER the open/closed
    pill, and carries no chrome of its own: between the two pill groups with a
    background and a border it read as an orphaned third pill competing with two
@@ -10956,6 +11430,10 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .sh-au-big { font-size: 30px; font-weight: 800; letter-spacing: -.02em; line-height: 1; }
 .sh-au-meta { font-size: 12px; color: #647082; font-weight: 600; margin-top: 5px; }
 .sh-au-badge { font-size: 14px; font-weight: 800; padding: 5px 12px; border-radius: 9px; white-space: nowrap; }
+/* The change against the last audit rides inside the badge and was inheriting
+   its 14px, so the arrow set as large as the score it was annotating. It is a
+   footnote on the figure, not a second figure. */
+.sh-au-badge .sh-trend { font-size: 10.5px; font-weight: 800; }
 .sh-au-track { position: relative; height: 9px; border-radius: 6px; background: #eef2f6; margin-top: 18px; overflow: visible; }
 .sh-au-track > i { display: block; height: 100%; border-radius: 6px; }
 .sh-au-tick { position: absolute; top: -3px; width: 2px; height: 15px; background: #94a3b8; border-radius: 2px; transform: translateX(-1px); }
@@ -13324,6 +13802,13 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .dcc-mute { color: #8a94a3; background: #f4f7f9; border-color: #e3e8ee; }
 .dcc-chip.act { cursor: pointer; }
 .dcc-chip.act:hover { filter: brightness(.97); }
+/* The three header chips are one set and are sized as one. Left to shrink-wrap
+   they came out three different widths — SCORECARD, SPEEKS AUDIT and PAYMORE
+   AUDIT are different lengths and so are "9.0", "97.6%" and "No data" — which
+   read as three unrelated badges rather than as one row of scores. Wide enough
+   for the longest label; the value pushes to the right edge so the figures line
+   up down the set. */
+.dcc-ph-side .dcc-chip { min-width: 146px; justify-content: space-between; }
 
 .dcc-sec { display: flex; align-items: baseline; gap: 9px; margin: 0 0 9px;
            font-size: 9.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: #8a94a3; }

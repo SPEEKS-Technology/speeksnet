@@ -22,6 +22,24 @@ function json(body: unknown, status = 200) {
   });
 }
 
+// Realtime "ping": after a successful score/audit submit, tell signed-in clients
+// the scorecard changed so they re-run fetchScorecardData (which re-fetches
+// through this fn — no table data travels over realtime). Best-effort; a
+// broadcast failure can never break the write.
+async function broadcastChange(tool: string, store: string | null) {
+  try {
+    const url = Deno.env.get("SUPABASE_URL")!;
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: key, Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        messages: [{ topic: "speeks-notify", event: "changed", payload: { tool, store: store ? String(store).toUpperCase() : null, ts: Date.now() } }],
+      }),
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 // Catalog management (add/remove/pause items) is DM/CEO only. Submitting
 // scores/audits stays open (matches prior behavior); only the catalog mutates here.
 function isManagerRole(role?: string): boolean {
@@ -80,6 +98,7 @@ Deno.serve(async (req: Request) => {
           if (!body.id) return json({ success: false, error: "Missing id" }, 400);
           const { error } = await supabase.from("scorecard_items").delete().eq("id", body.id);
           if (error) return json({ success: false, error: error.message }, 500);
+          await broadcastChange("scorecard", null);
           return json({ success: true });
         }
 
@@ -87,6 +106,7 @@ Deno.serve(async (req: Request) => {
           if (!body.id) return json({ success: false, error: "Missing id" }, 400);
           const { error } = await supabase.from("paymore_audit_items").delete().eq("id", body.id);
           if (error) return json({ success: false, error: error.message }, 500);
+          await broadcastChange("scorecard", null);
           return json({ success: true });
         }
 
@@ -100,6 +120,7 @@ Deno.serve(async (req: Request) => {
             if (!Object.keys(patch).length) return json({ success: false, error: "Nothing to update" }, 400);
             const { error } = await supabase.from("scorecard_items").update(patch).eq("id", body.id);
             if (error) return json({ success: false, error: error.message }, 500);
+            await broadcastChange("scorecard", null);
             return json({ success: true });
           }
           const label = String(body.label || "").trim();
@@ -120,6 +141,7 @@ Deno.serve(async (req: Request) => {
           };
           const { error } = await supabase.from("scorecard_items").insert(record);
           if (error) return json({ success: false, error: error.message }, 500);
+          await broadcastChange("scorecard", null);
           return json({ success: true, item_key: key });
         }
 
@@ -134,6 +156,7 @@ Deno.serve(async (req: Request) => {
             if (!Object.keys(patch).length) return json({ success: false, error: "Nothing to update" }, 400);
             const { error } = await supabase.from("paymore_audit_items").update(patch).eq("id", body.id);
             if (error) return json({ success: false, error: error.message }, 500);
+            await broadcastChange("scorecard", null);
             return json({ success: true });
           }
           const section = String(body.section || "").trim();
@@ -158,11 +181,12 @@ Deno.serve(async (req: Request) => {
           };
           const { error } = await supabase.from("paymore_audit_items").insert(record);
           if (error) return json({ success: false, error: error.message }, 500);
+          await broadcastChange("scorecard", null);
           return json({ success: true, item_id: itemId });
         }
       }
 
-      // ============ Submit a practice (PayMore) audit ============
+      // ============ Submit a practice (SPEEKS) audit ============
       if (action === "submit_audit") {
         const store = String(body.store || "").toUpperCase();
         const date = body.date;
@@ -231,6 +255,114 @@ Deno.serve(async (req: Request) => {
           }
         } catch (_e) { /* best-effort cleanup — never fail the submit over it */ }
 
+        await broadcastChange("scorecard", store);
+        return json({ success: true, earned, possible, pct });
+      }
+
+      // ============ Delete a SPEEKS audit ============
+      // For the walkthrough submitted before it was finished. DM/CEO only: any
+      // manager may SCORE their own store, but throwing a scored audit away is
+      // the district's call, and the audit feeds the store's board and the
+      // weekly email.
+      //
+      // Takes the photos with it. They are only ever referenced by the row being
+      // deleted, so leaving them would orphan them in the bucket forever.
+      if (action === "delete_audit") {
+        if (!isManagerRole(body.role)) return json({ success: false, error: "Not authorized" }, 403);
+        const store = String(body.store || "").toUpperCase();
+        const date = body.date;
+        if (!store || !date) return json({ success: false, error: "Missing store or date" }, 400);
+
+        const { data: row } = await supabase.from("audit_scores")
+          .select("id, section_photos").eq("store", store).eq("date", date).maybeSingle();
+        if (!row) return json({ success: false, error: "No audit saved for that store and date" }, 404);
+
+        try {
+          const paths: string[] = [];
+          const sp = row.section_photos;
+          if (sp && typeof sp === "object") {
+            Object.values(sp).forEach((arr: any) => {
+              if (Array.isArray(arr)) arr.forEach((p: any) => { if (p && p.path) paths.push(p.path); });
+            });
+          }
+          if (paths.length) await supabase.storage.from("audit-photos").remove(paths);
+        } catch (_e) { /* best-effort — never block the delete on the bucket */ }
+
+        const { error } = await supabase.from("audit_scores")
+          .delete().eq("store", store).eq("date", date);
+        if (error) return json({ success: false, error: error.message }, 500);
+        await broadcastChange("scorecard", store);
+        return json({ success: true });
+      }
+
+      // ============ Record a REAL PayMore audit ============
+      // The one corporate actually runs, as opposed to the practice walkthrough
+      // above. Corporate hands over a score and a date and nothing else, so
+      // that is all this stores — there is deliberately no results blob, no
+      // section notes and no photos to hang a breakdown off.
+      //
+      // The points scale is the SAME as the practice audit's (the active
+      // catalog's total), so the two columns on the district board are read
+      // against one set of targets and thresholds. `possible` is therefore
+      // derived here rather than accepted from the client: a caller cannot
+      // quietly score a store out of a different denominator.
+      if (action === "submit_official_audit" || action === "delete_official_audit") {
+        // DM/CEO only. Unlike the practice audit — which any manager runs on
+        // their own store — this is the district's record of what corporate
+        // said, and it is entered in one place by one person.
+        if (!isManagerRole(body.role)) return json({ success: false, error: "Not authorized" }, 403);
+
+        const store = String(body.store || "").toUpperCase();
+        const date = body.date;
+        if (!store || !date) return json({ success: false, error: "Missing store or date" }, 400);
+
+        if (action === "delete_official_audit") {
+          const { error } = await supabase.from("paymore_official_audits")
+            .delete().eq("store", store).eq("date", date);
+          if (error) return json({ success: false, error: error.message }, 500);
+          await broadcastChange("scorecard", store);
+          return json({ success: true });
+        }
+
+        // Usually the SPEEKS Audit's own total, but PayMore has scored some
+        // stores out of fewer points, so the caller may name the denominator.
+        // A fixed 165 would have reported those stores as having lost points
+        // they were never offered (Ethan 2026-08-12).
+        //
+        // Still validated here rather than trusted: positive, half-point, and
+        // bounded. What the caller cannot do is send a denominator that makes
+        // the percentage meaningless, because the percentage is what the two
+        // audit columns are compared on.
+        const { auItems } = await loadCatalogs();
+        const fallback = auItems.reduce(
+          (a: number, it: any) => a + (it.active ? Number(it.points) || 0 : 0), 0);
+        let possible = Number(body.possible);
+        if (!Number.isFinite(possible) || possible <= 0) possible = fallback;
+        possible = Math.round(possible * 2) / 2;
+        if (!possible || possible > 10000) {
+          return json({ success: false, error: "Points available must be between 0.5 and 10000" }, 400);
+        }
+
+        // Half points, the same grid the practice audit snaps to, and never
+        // above the total — a typo'd 1650 would otherwise render as 1000%.
+        let earned = Number(body.earned);
+        if (!Number.isFinite(earned)) return json({ success: false, error: "Score is required" }, 400);
+        earned = Math.min(Math.max(Math.round(earned * 2) / 2, 0), possible);
+        const pct = Math.round((earned / possible) * 1000) / 10;
+
+        const record = {
+          store, date,
+          earned_points: earned,
+          possible_points: possible,
+          pct,
+          entered_by: body.enteredBy ? String(body.enteredBy).slice(0, 120) : null,
+        };
+        // Re-entering the same store and date corrects it rather than stacking a
+        // second row that the "latest" read would have to choose between.
+        await supabase.from("paymore_official_audits").delete().eq("store", store).eq("date", date);
+        const { error } = await supabase.from("paymore_official_audits").insert(record);
+        if (error) return json({ success: false, error: error.message }, 500);
+        await broadcastChange("scorecard", store);
         return json({ success: true, earned, possible, pct });
       }
 
@@ -282,6 +414,7 @@ Deno.serve(async (req: Request) => {
         await supabase.from("scorecards").delete().eq("store", store).eq("date", date);
         const { error } = await supabase.from("scorecards").insert(record);
         if (error) return json({ success: false, error: error.message }, 500);
+        await broadcastChange("scorecard", store);
         return json({ success: true });
       }
 
@@ -311,6 +444,12 @@ Deno.serve(async (req: Request) => {
 
   const { data: audits } = await supabase
     .from("audit_scores").select("*").order("date", { ascending: false });
+
+  // The real corporate audits. Every row for every store, newest first — the
+  // per-store slice below takes the latest and the one before it, so a store's
+  // board can say which way the last real audit moved.
+  const { data: official } = await supabase
+    .from("paymore_official_audits").select("*").order("date", { ascending: false });
 
   const storeData = STORES.map((store) => {
     const latest = (cards || []).find((r: any) => r.store?.toUpperCase() === store);
@@ -354,8 +493,28 @@ Deno.serve(async (req: Request) => {
       prevPct: prevAudit ? prevAudit.pct : null,
     } : null;
 
-    if (!latest && !audit) return null;
-    return { store, score, date, buckets, breakdown: [], audit };
+    const storeOfficial = (official || []).filter((a: any) => a.store?.toUpperCase() === store);
+    const latestOfficial = storeOfficial[0] || null;
+    const prevOfficial = storeOfficial[1] || null;
+    // Coerced: these three are `numeric` columns, and a numeric can come back as
+    // a STRING. "165" + arithmetic downstream is a concatenation bug waiting to
+    // happen, and "83.6" > 80 is a string comparison that happens to be right
+    // until the day it is "9.5" > "80".
+    const officialAudit = latestOfficial ? {
+      earned: Number(latestOfficial.earned_points),
+      possible: Number(latestOfficial.possible_points),
+      pct: Number(latestOfficial.pct),
+      date: latestOfficial.date,
+      enteredBy: latestOfficial.entered_by || null,
+      prevPct: prevOfficial ? Number(prevOfficial.pct) : null,
+      prevDate: prevOfficial ? prevOfficial.date : null,
+    } : null;
+
+    // A store with nothing but a real audit still gets a row — it is a figure
+    // the district is answerable for, and dropping it would make the column
+    // read as "not audited" when the truth is "audited, nothing else scored".
+    if (!latest && !audit && !officialAudit) return null;
+    return { store, score, date, buckets, breakdown: [], audit, officialAudit };
   }).filter(Boolean);
 
   return json({ success: true, data: storeData, catalog });

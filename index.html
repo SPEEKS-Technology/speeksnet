@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260811d">
+  <link rel="stylesheet" href="styles.css?v=20260812i">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260811k" defer></script>
+  <script src="speeks.js?v=20260812i" defer></script>
 </head>
 
 <body class="preload">
@@ -984,6 +984,9 @@
             <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-reviews" data-feature="cc-live" hidden><div class="cc-sum-k">Google Reviews &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
             <div class="cc-sum role-manager role-owner-manager" id="cc-sum-ebay" data-feature="cc-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
             <div class="cc-sum role-manager role-owner-manager" id="cc-sum-score" data-feature="cc-scorecard"><div class="cc-sum-k">SPEEKS Scorecard</div><div class="cc-sum-v">—</div></div>
+            <!-- The collapsed line shows the REAL PayMore audit, not the practice
+                 one: on a shut card there is room for one audit figure, and it
+                 should be the one the store is actually held to (Ethan). -->
             <div class="cc-sum role-manager role-owner-manager" id="cc-sum-audit" data-feature="cc-scorecard"><div class="cc-sum-k">PayMore Audit</div><div class="cc-sum-v">—</div></div>
         </div>
 
@@ -995,9 +998,15 @@
                  card can reuse these renderers unchanged. -->
             <div class="cc-strip s4 lv-strip role-manager role-owner-manager role-employee" id="cc-strip-live" data-feature="cc-live"></div>
             <div class="cc-strip s3 role-manager role-owner-manager" id="cc-strip-scorecard" data-feature="cc-scorecard">
+                <!-- The two audits sit together, then the scorecard. "Audit
+                     Standing" used to be the third cell, saying On Target /
+                     Passing / Below Pass about the SPEEKS audit alone — with two
+                     audits on screen a single unlabelled standing would have been
+                     ambiguous, so each tile now carries its own on its sub-line
+                     and the cell goes to PayMore's score (Ethan 2026-08-12). -->
                 <div class="cc-cell" id="sh-score-audit"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
+                <div class="cc-cell" id="sh-score-paudit"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
                 <div class="cc-cell" id="sh-score-mktg"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
-                <div class="cc-cell" id="cc-audit-standing"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
             </div>
             <div class="cc-strip s3 role-manager role-owner-manager" id="cc-strip-ebay" data-feature="cc-ebay">
                 <div class="cc-cell" id="sh-score-ebay"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
@@ -1330,6 +1339,10 @@
         <div class="notif-tabs" style="display: inline-flex;">
             <button id="sc-tab-scorecard" class="tab-btn active" onclick="switchScoreTab('scorecard')">Scorecard</button>
             <button id="sc-tab-audit" class="tab-btn" onclick="switchScoreTab('audit')">SPEEKS Audit</button>
+            <!-- PayMore's own audit, not ours. DM/CEO only: it is the district's
+                 record of what corporate said, entered in one place by one
+                 person. Shown/hidden in switchScoreTab. -->
+            <button id="sc-tab-paudit" class="tab-btn" onclick="switchScoreTab('paudit')" style="display:none;">PayMore Audit</button>
             <button id="sc-tab-manage" class="tab-btn" onclick="switchScoreTab('manage')">Manage Items</button>
         </div>
     </div>
@@ -1359,12 +1372,45 @@
             <div id="audit-entry-container" style="margin-top: 12px;"></div>
         </div>
 
+        <!-- The real PayMore audit: a date and a score, and nothing else.
+             Corporate does not hand over a per-item breakdown, so there is
+             deliberately no checklist here — the store select and date picker
+             above are shared with the other tabs. -->
+        <div id="sc-panel-paudit" style="display: none;">
+            <div id="pa-existing"></div>
+            <div style="display: flex; gap: 10px; align-items: flex-end; margin-top: 4px;">
+                <div style="flex: 1;">
+                    <label class="form-label-caps" for="pa-earned">Points scored</label>
+                    <input type="number" id="pa-earned" class="form-input-lg" style="margin-top: 6px;"
+                           min="0" step="0.5" placeholder="0" oninput="_paTouch()">
+                </div>
+                <!-- Editable, and it has to be: PayMore has audited some stores
+                     out of fewer than the full 165 (Ethan 2026-08-12), so a fixed
+                     denominator would have reported those stores as having lost
+                     points they were never offered. Defaults to the SPEEKS Audit's
+                     total, which is the usual case. -->
+                <div style="flex: 1;">
+                    <label class="form-label-caps" for="pa-possible">Out of</label>
+                    <input type="number" id="pa-possible" class="form-input-lg" style="margin-top: 6px;"
+                           min="1" step="0.5" oninput="_paTouch()">
+                </div>
+                <div style="flex: 1;">
+                    <label class="form-label-caps">Score</label>
+                    <div id="pa-pct" class="form-input-lg" style="margin-top: 6px; display: flex; align-items: center; font-weight: 850;">&mdash;</div>
+                </div>
+            </div>
+            <p class="pa-hint" id="pa-poss-note" style="margin-top: 10px;"></p>
+        </div>
+
         <div id="sc-panel-manage" style="display: none;"></div>
     </div>
 
     <div class="manage-footer flex-end">
+        <button onclick="deleteSpeeksAudit()" class="btn-secondary" id="deleteAuditBtn" style="display: none;">Remove</button>
+        <button onclick="deletePaymoreAudit()" class="btn-secondary" id="deletePauditBtn" style="display: none;">Remove</button>
         <button onclick="submitNewScorecard()" class="btn-primary" id="submitScorecardBtn">Save Scorecard</button>
         <button onclick="submitNewAudit()" class="btn-primary" id="submitAuditBtn" style="display: none;">Save Audit</button>
+        <button onclick="submitPaymoreAudit()" class="btn-primary" id="submitPauditBtn" style="display: none;">Save PayMore Audit</button>
     </div>
 </div>
 
@@ -1372,7 +1418,7 @@
 <div id="auditBreakdownOverlay" onclick="closeAuditBreakdown()"></div>
 <div class="modal-menu manage-menu" id="auditBreakdownModal">
     <div class="modal-header">
-        <h3 id="audit-breakdown-title">Audit Breakdown</h3>
+        <h3 id="audit-breakdown-title">SPEEKS Audit Breakdown</h3>
         <button class="modal-close-btn" onclick="closeAuditBreakdown()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content" id="audit-breakdown-body"></div>

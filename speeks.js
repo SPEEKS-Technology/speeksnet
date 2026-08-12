@@ -1260,6 +1260,9 @@ document.addEventListener('keydown', (e) => {
     // viewer, camera, then modals — dismissing a picture must never take the
     // audit down with it. Search sits on top: it opens OVER whatever you had.
     if (typeof _jumpOpen !== 'undefined' && _jumpOpen) { closeJumpSearch(); return; }
+    // Before the board: the daily breakdown opens OVER it, so it is the layer
+    // you mean, and closing the board underneath would take both down at once.
+    if (document.getElementById('bdDaily')) { closeDailyBreakdown(); return; }
     // Above the rest: it covers the whole window, so it is the layer you mean.
     // (Only reached when real fullscreen was refused — inside it, Esc is the
     // browser's and exits fullscreen, which closes this via fullscreenchange.)
@@ -8914,7 +8917,7 @@ async function fetchScorecardData() {
             `<div class="sh-sc-sub">SPEEKS Scorecard <span class="sh-sc-sub-date">${displayDate}</span></div>`
             + (breakdownHtml || `<div class="status-message">No SPEEKS Scorecard breakdown recorded yet.</div>`);
 
-        // ---- PayMore Audit headline tile + panel + breakdown action ----
+        // ---- SPEEKS Audit headline tile + panel + breakdown action ----
         const _au = storeData.audit;
         const _auTile = document.getElementById('sh-score-audit');
         const _auPanel = document.getElementById('sh-panel-audit');
@@ -8930,18 +8933,9 @@ async function fetchScorecardData() {
             }
             if (_auTile) _auTile.innerHTML = `
                 <span class="sh-stripe ${_aStripe}"></span>
-                <div class="sh-k">PayMore Audit</div>
+                <div class="sh-k">SPEEKS Audit</div>
                 <div class="sh-v">${_au.pct}<small>%</small></div>
-                <div class="sh-sub">${_au.earned}/${_au.possible}${_trend ? ' · ' + _trend : ''}</div>`;
-            // ---- Audit Standing tile (derived from % vs the pass/target thresholds) ----
-            const _standing = document.getElementById('cc-audit-standing');
-            if (_standing) {
-                let _sTxt, _sSub, _sStripe, _sCls;
-                if (_au.pct >= AUDIT_TARGET_PCT) { _sTxt = 'On Target'; _sStripe = 'g'; _sCls = ''; _sSub = `at or above ${AUDIT_TARGET_PCT}%`; }
-                else if (_au.pct >= AUDIT_PASS_PCT) { _sTxt = 'Passing'; _sStripe = 'y'; _sCls = ' warn'; _sSub = `${(Math.round((AUDIT_TARGET_PCT - _au.pct) * 10) / 10)}% to target`; }
-                else { _sTxt = 'Below Pass'; _sStripe = 'r'; _sCls = ' bad'; _sSub = `${(Math.round((AUDIT_PASS_PCT - _au.pct) * 10) / 10)}% to pass`; }
-                _standing.innerHTML = `<span class="sh-stripe ${_sStripe}"></span><div class="sh-k">Audit Standing</div><div class="sh-v${_sCls}" style="font-size:18px;">${_sTxt}</div><div class="sh-sub">${_sSub}</div>`;
-            }
+                <div class="sh-sub">${_au.earned}/${_au.possible} · ${_auStanding(_au.pct)}${_au.date ? ' · ' + escapeHtml(_dcShortDay(_au.date)) : ''}${_trend ? ' · ' + _trend : ''}</div>`;
             const _dateStr = _au.date ? new Date(_au.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
             const _auPct = Math.max(0, Math.min(100, _au.pct));
             if (_auPanel) _auPanel.innerHTML = `
@@ -8964,28 +8958,67 @@ async function fetchScorecardData() {
             // with nothing beside it saying which of the two scores it belonged
             // to — the tab holds Online & Marketing as well as the audit, and the
             // breakdown is only ever the audit's 165 points.
-            if (_auAction) _auAction.innerHTML = `<button class="sh-view-btn" type="button" onclick="openAuditBreakdown('${targetStore}')">View Audit Breakdown</button>`;
+            if (_auAction) _auAction.innerHTML = `<button class="sh-view-btn" type="button" onclick="openAuditBreakdown('${targetStore}')">SPEEKS Audit Breakdown</button>`;
         } else {
             if (_auTile) _auTile.innerHTML = `
                 <span class="sh-stripe" style="background:#cbd5e1;"></span>
-                <div class="sh-k">PayMore Audit</div>
+                <div class="sh-k">SPEEKS Audit</div>
                 <div class="sh-v" style="font-size:17px; color:#94a3b8;">No audit</div>
-                <div class="sh-sub">No practice audit this week</div>`;
-            const _standing = document.getElementById('cc-audit-standing');
-            if (_standing) _standing.innerHTML = `<span class="sh-stripe" style="background:#cbd5e1;"></span><div class="sh-k">Audit Standing</div><div class="sh-v" style="font-size:16px; color:#94a3b8;">—</div><div class="sh-sub">No audit yet</div>`;
-            if (_auPanel) _auPanel.innerHTML = `<div class="status-message">No practice audit recorded yet.</div>`;
+                <div class="sh-sub">No SPEEKS Audit this week</div>`;
+            if (_auPanel) _auPanel.innerHTML = `<div class="status-message">No SPEEKS Audit recorded yet.</div>`;
             if (_auAction) _auAction.innerHTML = '';
+        }
+
+        // ---- PayMore's own audit, in the cell Audit Standing used to hold ----
+        // Its standing rides on its sub-line rather than in a tile of its own,
+        // for the same reason the SPEEKS one now does: with two audits on screen
+        // a single unlabelled "On Target" says nothing about WHICH.
+        const _pa = storeData.officialAudit;
+        const _paTile = document.getElementById('sh-score-paudit');
+        if (_paTile) {
+            if (_pa) {
+                const _pc = auditPctColor(_pa.pct);
+                const _pStripe = _pa.pct >= AUDIT_TARGET_PCT ? 'g' : (_pa.pct >= AUDIT_PASS_PCT ? 'y' : 'r');
+                let _pTrend = '';
+                if (_pa.prevPct != null) {
+                    const _d = Math.round((_pa.pct - _pa.prevPct) * 10) / 10;
+                    const _u = _d >= 0;
+                    _pTrend = `<span class="sh-trend ${_u ? 'up' : 'dn'}">${_u ? '▲' : '▼'} ${Math.abs(_d)}%</span>`;
+                }
+                // The date is load-bearing here in a way it is not on the SPEEKS
+                // tile: that one is run weekly, this one is whenever corporate
+                // turns up, and a score from June should not read like last week's.
+                const _pd = _pa.date ? _dcShortDay(_pa.date) : '';
+                _paTile.innerHTML = `
+                    <span class="sh-stripe ${_pStripe}"></span>
+                    <div class="sh-k">PayMore Audit</div>
+                    <div class="sh-v">${_pa.pct}<small>%</small></div>
+                    <div class="sh-sub">${_pa.earned}/${_pa.possible} · ${_auStanding(_pa.pct)}${_pd ? ' · ' + escapeHtml(_pd) : ''}${_pTrend ? ' · ' + _pTrend : ''}</div>`;
+            } else {
+                _paTile.innerHTML = `
+                    <span class="sh-stripe" style="background:#cbd5e1;"></span>
+                    <div class="sh-k">PayMore Audit</div>
+                    <div class="sh-v" style="font-size:17px; color:#94a3b8;">No audit</div>
+                    <div class="sh-sub">PayMore has not audited yet</div>`;
+            }
         }
 
         // ---- Collapsed one-line summary + "updated" cue for the Scorecard tab ----
         _ccSum('cc-sum-score', `${displayScore.toFixed(1)}<small>/10</small>`, _omValCls.trim());
-        if (_au) {
-            const _auCls = _au.pct >= AUDIT_TARGET_PCT ? 'good' : (_au.pct >= AUDIT_PASS_PCT ? 'warn' : 'bad');
-            _ccSum('cc-sum-audit', `${_au.pct}<small>%</small>`, _auCls);
+        // The REAL PayMore audit, not the practice one: a shut card has room for
+        // one audit figure and it should be the one the store is held to. The
+        // SPEEKS score is one click away inside the panel (Ethan 2026-08-12).
+        if (_pa) {
+            const _paCls = _pa.pct >= AUDIT_TARGET_PCT ? 'good' : (_pa.pct >= AUDIT_PASS_PCT ? 'warn' : 'bad');
+            _ccSum('cc-sum-audit', `${_pa.pct}<small>%</small>`, _paCls);
         } else {
             _ccSum('cc-sum-audit', 'No audit', '');
         }
-        _ccFlagUpdate('scorecard', `${_au ? _au.pct + '@' + (_au.date || '') : 'na'}|${displayScore}`);
+        // The PayMore audit is part of the fingerprint now that it is on the card:
+        // without it, entering one lit nothing, because nothing the flag watched
+        // had changed.
+        _ccFlagUpdate('scorecard', `${_au ? _au.pct + '@' + (_au.date || '') : 'na'}`
+            + `|${_pa ? _pa.pct + '@' + (_pa.date || '') : 'na'}|${displayScore}`);
     } catch (error) {
         console.error('Error fetching scorecard:', error);
         _shMktg.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Error syncing scorecard.</div>';
@@ -10133,6 +10166,638 @@ function _lvFullBtn() {
         + '<path d="M7 2H2v5M11 2h5v5M7 16H2v-5M11 16h5v-5"/></svg></button>';
 }
 
+// ---- daily breakdown popout ------------------------------------------------
+// The buying and selling sheet, day by day, for one store and one month —
+// the view the managers have been opening the spreadsheet to read.
+//
+// The sheet stays exactly where it is. This is a READ of the same figures the
+// rest of the site already runs on: buysell-daily serves the month in progress
+// off app_cache/buy_sell_hub (the 10-minute cache behind the Live Dashboard and
+// the Buying & Selling widget) and finished months off daily_buysell, the hourly
+// capture of that same cache. So a day, a month total and the card that opened
+// this cannot disagree, and nobody has to key anything twice.
+//
+// Not a pixel copy of the sheet, by the user's call: same daily figures, laid
+// out for a screen. What that buys over the spreadsheet — weekday names, so the
+// Sunday zeros explain themselves; week rules, so 31 rows stay readable; a
+// totals row that is a total rather than a formula that can drift; and the two
+// halves of the day side by side instead of on two tabs.
+//
+// Deliberately NOT carried over from the sheet:
+//   - MOM. Its formula could not be reproduced from the daily figures (the
+//     implied divisor drifts across the month), and a growth number that is
+//     nearly right is worse than one that is absent.
+//   - Rev/GP Tracking. Month-end projections already exist on the Live
+//     Dashboard's forecast strip, computed once, and a second set here would be
+//     a second answer to the same question.
+//   - % of GP Goal on FINISHED months. Nothing stores a historical goal, so a
+//     past month reports what it did without inventing what it was asked for.
+const BUYSELL_DAILY_URL = `${_BASE}/buysell-daily`;
+
+let _bdMonth = null;     // 'YYYY-MM', null until the first payload names one
+let _bdStore = null;     // store code on screen
+let _bdData  = null;     // payload for _bdMonth
+let _bdErr   = '';
+let _bdBusy  = false;
+let _bdSeq   = 0;        // newest-request wins; see _bdLoad
+// Finished months are immutable, so re-opening one is free. The month in
+// progress is deliberately NOT cached: it is the one that moves.
+const _bdCache = {};
+
+function _bdEl() { return document.getElementById('bdDaily'); }
+
+// Which store the popout should open on. Their own, or an MSM's home store.
+// Anyone without one — a DM or the CEO — opens on the COMPANY rather than on
+// whichever store happens to sort first, which was only ever a way of not being
+// blank; the district is the view they came for, and the five stores are one
+// click from it.
+function _bdDefaultStore(codes) {
+    const own = String((_lvData && _lvData.scope && _lvData.scope.store) || '').toUpperCase();
+    if (own && codes.includes(own)) return own;
+    return codes.length ? BD_ALL : null;
+}
+
+// Store display names ride in on the live payload rather than a second hardcoded
+// map; the code alone is the fallback, which is what the tables already show.
+function _bdStoreName(code) {
+    if (code === BD_ALL) {
+        // Counted, not written as "All 5 Stores": the company opened two stores
+        // in 2026 and will open more, and a hardcoded number would quietly go
+        // wrong on the day it does.
+        const n = Object.keys((_bdData && _bdData.stores) || {}).length;
+        return n ? 'All ' + n + ' Stores' : 'All Stores';
+    }
+    const m = (_lvData && _lvData.stores || []).find(s => String(s.code).toUpperCase() === code);
+    return (m && m.name) || '';
+}
+
+function _bdMonthName(ym) {
+    const p = String(ym || '').split('-');
+    if (p.length !== 2) return '';
+    // Built from the parts, never Date.parse of 'YYYY-MM' — that reads as UTC
+    // and names the month before for anyone west of Greenwich.
+    return new Date(+p[0], +p[1] - 1, 1)
+        .toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+// Weekday for a day of the selected month. Local-parts constructor for the same
+// reason as above.
+function _bdDow(ym, day) {
+    const p = String(ym || '').split('-');
+    if (p.length !== 2) return { nm: '', dow: -1 };
+    const dt = new Date(+p[0], +p[1] - 1, day);
+    return { nm: dt.toLocaleDateString('en-US', { weekday: 'short' }), dow: dt.getDay() };
+}
+
+async function openDailyBreakdown() {
+    if (_bdEl()) return;
+    const el = document.createElement('div');
+    el.id = 'bdDaily';
+    el.className = 'bd-fs';
+    el.innerHTML = '<div class="bd-bar">'
+        + '<span class="bd-title">Daily Breakdown</span>'
+        + '<span class="bd-bar-r"><span class="bd-pickers"></span>'
+        + '<button type="button" class="bd-close" onclick="closeDailyBreakdown()"'
+        + ' title="Close (Esc)" aria-label="Close daily breakdown">'
+        + '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"'
+        + ' stroke-width="2.2" stroke-linecap="round" aria-hidden="true">'
+        + '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+        + '</button></span></div>'
+        + '<div class="bd-card"><div class="bd-body"></div></div>';
+    // Inside real fullscreen only that element's subtree is painted, so a popout
+    // appended to body would open invisibly — the button would read as broken.
+    // Mounted into whatever is actually on screen.
+    (document.fullscreenElement || document.body).appendChild(el);
+    // Both elements, as the full-screen board does: the ROOT is what scrolls, so
+    // locking body alone leaves the page moving behind this.
+    document.documentElement.classList.add('lv-fs-open');
+    document.body.classList.add('lv-fs-open');
+    _bdRender();
+    await _bdLoad(_bdMonth);
+}
+
+function closeDailyBreakdown() {
+    const el = _bdEl();
+    if (!el) return;
+    el.remove();
+    // Only if the full-screen board is not ALSO up: it sets the same two classes,
+    // and clearing them here would let the page behind it scroll again.
+    if (!_lvFsEl()) {
+        document.documentElement.classList.remove('lv-fs-open');
+        document.body.classList.remove('lv-fs-open');
+    }
+}
+
+async function _bdLoad(month) {
+    const key = month || 'current';
+    if (_bdCache[key]) {
+        _bdData = _bdCache[key]; _bdMonth = _bdData.month; _bdErr = '';
+        _bdRender(); _bdLoadPrev(_bdMonth);
+        return;
+    }
+    // Only the newest request may write. Two months picked in quick succession
+    // are two flights that can land in either order, and the loser overwriting
+    // the winner would leave the table showing a month the picker does not name.
+    const seq = ++_bdSeq;
+    _bdBusy = true; _bdErr = '';
+    _bdRender();
+    try {
+        const q = month ? '&month=' + encodeURIComponent(month) : '';
+        const res = await fetch(`${BUYSELL_DAILY_URL}?v=${Date.now()}${q}`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const d = await res.json();
+        if (d.error) throw new Error(d.error);
+        // Finished months only: the live one would freeze the popout at whatever
+        // the sheet said the first time it was opened this session. Cached even
+        // when this flight has been superseded — it was fetched and it will
+        // never change, so only the RENDER is abandoned, not the work.
+        if (!d.isCurrent) _bdCache[d.month] = d;
+        if (seq !== _bdSeq) return;
+        _bdData = d;
+        _bdMonth = d.month;
+        const codes = Object.keys(d.stores || {});
+        // BD_ALL is valid in every month and is never one of the payload's keys,
+        // so it has to be allowed explicitly — without this, picking a month
+        // threw anyone looking at the company back to a single store.
+        if (!_bdStore || (_bdStore !== BD_ALL && !codes.includes(_bdStore))) {
+            _bdStore = _bdDefaultStore(codes);
+        }
+    } catch (e) {
+        if (seq !== _bdSeq) return;
+        _bdErr = (e && e.message) || 'Could not load the daily figures.';
+    }
+    _bdBusy = false;
+    _bdRender();
+    // After the paint, never before it.
+    if (!_bdErr) _bdLoadPrev(_bdMonth);
+}
+
+// Last month, fetched quietly in the background so the month on screen paints
+// without waiting on a comparison. Nothing here writes _bdData or _bdStore —
+// the ONLY effect is filling _bdCache and asking for a repaint, so a slow or
+// failed prior month costs the view nothing but its delta lines.
+//
+// A previous month is always finished, so it is always cacheable and is fetched
+// at most once per session. Deliberately not awaited by _bdLoad: making the
+// month you asked for wait on a month you did not is the wrong trade.
+function _bdLoadPrev(month) {
+    const prev = _bdPrevMonth(month);
+    // Not offered by the picker means no history for it — January 2026 is the
+    // floor, and asking for December 2025 would 404 on every open.
+    if (!prev || _bdCache[prev]) return;
+    if (!(_bdData && (_bdData.months || []).includes(prev))) return;
+    fetch(`${BUYSELL_DAILY_URL}?v=${Date.now()}&month=${encodeURIComponent(prev)}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(p => {
+            if (!p || p.error || p.isCurrent) return;
+            _bdCache[p.month] = p;
+            // Only if the user is still looking at the month this belongs to.
+            if (_bdMonth === month && _bdEl()) _bdRender();
+        })
+        .catch(() => { /* the deltas simply do not appear */ });
+}
+
+// "▲ 4.6%" against last month. Neutral grey unless the direction carries a
+// judgement: revenue, gross profit and net GP are better up, so they colour.
+// COST is deliberately left grey — it rises with sales, so a red arrow on a
+// month that sold more would be calling a good month bad.
+function _bdDelta(cur, prev, tone) {
+    if (cur === null || prev === null || !prev) return '';
+    const pct = (cur / prev - 1) * 100;
+    const up = pct >= 0;
+    const cls = 'bd-mom' + (tone === 'good' ? (up ? ' up' : ' down') : '');
+    return '<span class="' + cls + '">' + (up ? '&#9650;' : '&#9660;') + ' '
+        + Math.abs(pct).toFixed(1) + '%</span>';
+}
+
+// Returns the load so a caller can wait on it. The <select> that fires this
+// ignores the promise, which is the point of the sequence guard in _bdLoad.
+function setDailyMonth(month) {
+    if (!month || month === _bdMonth) return Promise.resolve();
+    return _bdLoad(month);
+}
+
+function setDailyStore(code) {
+    const c = String(code || '').toUpperCase();
+    if (!c || c === _bdStore) return;
+    _bdStore = c;
+    _bdRender();
+}
+
+// Sums the visible rows rather than trusting a total from anywhere else: the
+// figure under a column is then the column, by construction. Margins are derived
+// from the totals, never averaged across days — days differ in size, so a mean
+// of the daily percentages is not the month's percentage.
+function _bdTotals(days) {
+    const t = { sales: 0, cost: 0, gp: 0, resale: 0, paid: 0, sellDays: 0, buyDays: 0 };
+    days.forEach(d => {
+        if (d.sales !== null) { t.sales += d.sales; t.cost += d.cost; t.gp += d.gp; t.sellDays++; }
+        if (d.resale !== null) { t.resale += d.resale; t.paid += d.paid; t.buyDays++; }
+    });
+    t.margin = t.sales > 0 ? t.gp / t.sales * 100 : null;
+    t.buyMargin = t.resale > 0 ? (t.resale - t.paid) / t.resale * 100 : null;
+    return t;
+}
+
+// The whole company as a sixth "store". Not a code the payload carries — it is
+// summed here from the five it does, so the company row is the five store rows
+// added up BY CONSTRUCTION and cannot drift from them the way a second
+// server-side total could.
+const BD_ALL = 'SPEEKS';
+
+// Net GP is gross profit less a flat 21% of REVENUE (not of GP) — the sheet's
+// own definition, confirmed against two independent OVL figures to the cent:
+//   July actual  71,104.03 - .21 x 130,482.88 = 43,702.63
+//   August MTD   26,432.66 - .21 x  51,510.87 = 15,615.38
+// Company-wide and the same for every store (Ethan 2026-08-12). One constant so
+// the rate is changed in one place; if it ever becomes per-store or per-period,
+// this is the line that has to grow, not the six call sites.
+const BD_NET_GP_RATE = 0.21;
+function _bdNetGp(t) {
+    return (t && t.sellDays) ? t.gp - t.sales * BD_NET_GP_RATE : null;
+}
+
+// The month before this one, as 'YYYY-MM'. Built from the parts so December
+// rolls the year back properly and nothing goes through Date.parse.
+function _bdPrevMonth(ym) {
+    const p = String(ym || '').split('-');
+    if (p.length !== 2) return '';
+    const dt = new Date(+p[0], +p[1] - 2, 1);
+    return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0');
+}
+
+// One day of every store added together. A day is null for the company only if
+// it is null at every store: one store keyed and four not is a real (if partial)
+// company day, and zeroing it would be a worse lie than showing it short.
+// Margins are NOT summed or averaged — they are re-derived from the totals,
+// because a mean of five percentages weights a $400 store like a $15,000 one.
+function _bdCompany(payload) {
+    const d = payload || _bdData;
+    if (!d || !d.stores) return null;
+    const codes = Object.keys(d.stores);
+    if (!codes.length) return null;
+    const n = d.daysInMonth || 31;
+    const days = [];
+    for (let day = 1; day <= n; day++) {
+        let sales = null, cost = null, gp = null, resale = null, paid = null;
+        codes.forEach(c => {
+            const x = ((d.stores[c] || {}).days || []).find(y => y.day === day);
+            if (!x) return;
+            if (x.sales !== null) {
+                sales = (sales || 0) + x.sales; cost = (cost || 0) + x.cost; gp = (gp || 0) + x.gp;
+            }
+            if (x.resale !== null) { resale = (resale || 0) + x.resale; paid = (paid || 0) + x.paid; }
+        });
+        days.push({
+            day, sales, cost, gp, resale, paid,
+            buyMargin: resale > 0 ? (resale - paid) / resale : null,
+        });
+    }
+    // Only the month in progress has goals at all, and the company's is the sum
+    // of the five it is made of — the same arithmetic as every other column here.
+    const goal = codes.reduce((a, c) => a + (Number((d.stores[c] || {}).goal) || 0), 0);
+    return { days, goal };
+}
+
+// The block on screen, store or company. Every reader goes through this so the
+// company view is not a second code path with its own bugs. Takes an optional
+// payload so the SAME reader serves last month's figures for the MoM comparison.
+function _bdStoreData(code, payload) {
+    const d = payload || _bdData;
+    if (code === BD_ALL) return _bdCompany(d);
+    return (d && d.stores && d.stores[code]) || null;
+}
+
+// Did this store trade at all in the month on screen? MPL and BAL opened during
+// April 2026, so every month before that carries their blocks as empty days
+// rather than as absent stores — the difference between "no figures" and "no
+// store" is the whole point of saying so.
+function _bdHasData(code) {
+    const s = _bdStoreData(code);
+    return !!(s && (s.days || []).some(x => x.sales !== null || x.resale !== null));
+}
+
+function _bdPickers() {
+    const d = _bdData;
+    if (!d) return '';
+    const codes = Object.keys(d.stores || {});
+    // The company sits in its own group ahead of the stores, with a divider.
+    // Deliberately NOT a sixth pill in the row: "SPEEKS" is twice the width of a
+    // three-letter code, so it would undo the fixed-width pills that stop the
+    // green marker changing shape as you move between stores. Set apart it also
+    // reads as what it is — a different KIND of thing from a store, not a store
+    // called SPEEKS.
+    const all = '<button type="button" class="bd-pill bd-pill-all'
+        + (_bdStore === BD_ALL ? ' on' : '') + '"'
+        + ' onclick="setDailyStore(\'' + BD_ALL + '\')">' + escapeHtml(BD_ALL) + '</button>'
+        + '<span class="bd-pill-div" aria-hidden="true"></span>';
+    // A store with nothing in this month is shown but not selectable. Removing
+    // the pill would make the row change width as you move through the months,
+    // and leaving it live would offer a view whose only content is an apology.
+    const store = codes.map(c => {
+        // Never the selected one: it stays live and normally coloured, and the
+        // panel underneath is already explaining why it is empty. Greying the
+        // pill you are standing on reads as the control being broken.
+        const off = !_bdHasData(c) && c !== _bdStore;
+        const cls = 'bd-pill' + (c === _bdStore ? ' on' : '') + (off ? ' off' : '');
+        return '<button type="button" class="' + cls + '"'
+            + (off ? ' disabled title="' + escapeHtml(c + ' had not opened yet') + '"'
+                   : ' onclick="setDailyStore(\'' + c + '\')"')
+            + '>' + escapeHtml(c) + '</button>';
+    }).join('');
+    // A <select> rather than pills: the list grows by one every month and would
+    // otherwise run off the bar within a year.
+    const months = (d.months || []).map(m => '<option value="' + m + '"'
+        + (m === _bdMonth ? ' selected' : '') + '>' + escapeHtml(_bdMonthName(m))
+        + '</option>').join('');
+    return '<span class="bd-pills">' + all + store + '</span>'
+        + '<select class="bd-month" aria-label="Month"'
+        + ' onchange="setDailyMonth(this.value)">' + months + '</select>';
+}
+
+function _bdRender() {
+    const el = _bdEl();
+    if (!el) return;
+    const pick = el.querySelector('.bd-pickers');
+    if (pick) pick.innerHTML = _bdPickers();
+    const body = el.querySelector('.bd-body');
+    if (!body) return;
+
+    if (_bdErr) {
+        body.innerHTML = '<div class="lv-err"><b>The daily figures did not load.</b>'
+            + escapeHtml(_bdErr) + '</div>';
+        return;
+    }
+    // Any render before the first payload lands, not just one flagged busy: the
+    // shell is drawn the moment the overlay opens, which is before _bdLoad has
+    // even set the flag, and the fall-through below would flash "no figures for
+    // this month" at somebody whose month is still in flight.
+    if (!_bdData) {
+        body.innerHTML = '<div class="bd-empty">Loading the month&hellip;</div>';
+        return;
+    }
+    const d = _bdData;
+    const store = _bdStore ? _bdStoreData(_bdStore) : null;
+    if (!store) { body.innerHTML = '<div class="bd-empty">No figures for this month yet.</div>'; return; }
+
+    // The month in progress stops at today. A finished month runs to its end.
+    const cap = d.isCurrent ? Math.min(d.today || d.daysInMonth, d.daysInMonth) : d.daysInMonth;
+    const days = (store.days || []).filter(x => x.day <= cap);
+    // Trailing empty days come off the month IN PROGRESS only. Today's buying is
+    // keyed the next morning and the sheet's selling runs a day behind, so this
+    // month almost always ends on a row of dashes — which reads as a day the
+    // store did nothing rather than as a day nobody has written down yet.
+    //
+    // A FINISHED month keeps every day it has, empty or not. Trimming there
+    // would hide a hole rather than explain one: the hourly capture currently
+    // stores the last day of each month as zeros for every store (July 31 2026,
+    // a Friday, is zero across all five), so a finished month can end on a day
+    // that is missing rather than quiet. Dropping the row would make the month
+    // look a day shorter and its total look correct, which is the worse of the
+    // two failures. A gap in the middle stays in both cases.
+    if (d.isCurrent) {
+        while (days.length && days[days.length - 1].sales === null
+               && days[days.length - 1].resale === null) days.pop();
+    }
+    const last = days.length ? days[days.length - 1].day : 0;
+    const blanks = days.filter(x => x.sales === null && x.resale === null).length;
+    // Not "no rows" — a finished month always HAS rows, because the trim above
+    // is deliberately skipped for it. A store with no figures on any of them is
+    // a store that was not trading, and rendering 31 dashed rows under a $0 tile
+    // strip says "catastrophe" where the truth is "not open yet".
+    const hasAny = blanks < days.length;
+    const t = _bdTotals(days);
+
+    const nm = _bdStoreName(_bdStore);
+    let html = '<div class="bd-head">'
+        + '<span class="bd-h-l"><b>' + escapeHtml(_bdStore) + '</b>'
+        + (nm ? '<span class="bd-h-nm">' + escapeHtml(nm) + '</span>' : '')
+        + '<span class="bd-h-mo">' + escapeHtml(_bdMonthName(_bdMonth)) + '</span></span>'
+        + '<span class="bd-h-r">' + (hasAny && d.isCurrent
+            ? 'Through ' + escapeHtml(_bdMonthName(_bdMonth).split(' ')[0]) + ' ' + last
+            : (hasAny ? 'Complete month' : ''))
+        + '</span></div>';
+
+    // Nothing on any day of the month. Two different absences, and calling the
+    // first one the second would be a small lie about the company's own history:
+    // MPL and BAL opened during April 2026, so their earlier months are not late
+    // paperwork. Returns BEFORE the tiles and the table — a $0 strip over 31
+    // dashed rows, with a warning that the totals are short, reads as a disaster
+    // rather than as a store that did not exist yet.
+    if (!hasAny) {
+        body.innerHTML = html + '<div class="bd-empty">' + (d.isCurrent
+            ? 'Nothing keyed into the sheet for ' + escapeHtml(_bdMonthName(_bdMonth)) + ' yet.'
+            : escapeHtml(_bdStore) + ' had not opened in '
+              + escapeHtml(_bdMonthName(_bdMonth)) + '.') + '</div>';
+        return;
+    }
+
+    // NOT .lv-strip. renderLiveDashboard() fills every .lv-strip on the page by
+    // class — that is how one function serves the manager card, the employee
+    // widget and the full-screen board at once — so wearing that class made this
+    // strip a mount point for the Live Dashboard. Any poll, realtime ping or
+    // re-render while the popout was open replaced these six tiles with "Net
+    // Sales Today / Orders / Gross Margin / MTD Revenue", which is what the
+    // "glitch when clicking off the screen and back" was.
+    // ---- last month, for every comparison below ----
+    // A month in progress is NOT compared as it stands: eleven days against a
+    // full thirty-one would read as a collapse every time. It is projected to
+    // month end first — the sheet's own "Tracking" — and that is what meets last
+    // month's actual. Finished months compare as they are.
+    //
+    // The divisor is the last day WITH figures, not the calendar day: buying is
+    // keyed the morning after, so on the 12th the month has eleven days in it,
+    // and dividing by twelve would under-project every store every morning.
+    const prevYm = _bdPrevMonth(_bdMonth);
+    const prevPay = _bdCache[prevYm];
+    const prevStore = prevPay ? _bdStoreData(_bdStore, prevPay) : null;
+    const pt = prevStore ? _bdTotals(prevStore.days || []) : null;
+    const proj = (d.isCurrent && last > 0) ? (d.daysInMonth / last) : 1;
+    const at = v => (v === null ? null : v * proj);      // this month, at month end
+    const prevNm = prevYm ? _bdMonthName(prevYm).split(' ')[0] : '';
+    const vs = h => h ? h + ' <i>vs ' + escapeHtml(prevNm) + '</i>' : '';
+
+    // Worked out before the strip above it is written, because the strip above
+    // closes its bottom margin when this one follows — the two read as one block
+    // of summary rather than as two competing ones, and it is ~10px of table.
+    const net = _bdNetGp(t);
+    const pnet = pt ? _bdNetGp(pt) : null;
+
+    // A tile whose caption is a MEASUREMENT is marked, because a short screen
+    // drops the caption line to buy table space — and dropping "Month To Date"
+    // is free where dropping "▲ 11.3% vs July" would be losing a figure the
+    // view was asked to show.
+    const dSales = pt && _bdDelta(at(t.sales), pt.sales, 'good');
+    const dGp    = pt && _bdDelta(at(t.gp),    pt.gp,    'good');
+    const mom = ' bd-t-mom';
+
+    html += '<div class="bd-strip' + (net !== null ? ' bd-strip-tight' : '') + '">'
+        + _lvTile('Sales', _lvMoney(t.sales, false),
+            vs(dSales) || 'Month To Date', true, dSales ? mom : '')
+        + _lvTile('Gross Profit', _lvMoney(t.gp, false),
+            vs(dGp) || 'Month To Date', false, dGp ? mom : '')
+        + _lvTile('Sell Margin', _lvPct(t.margin), 'On Sales')
+        + _lvTile('Bought', _lvMoney(t.resale, false), 'Resale Value')
+        + _lvTile('Cash Paid', _lvMoney(t.paid, false), 'Out Of The Till')
+        + _lvTile('Buy Margin', _lvPct(t.buyMargin), 'On Purchases')
+        + '</div>';
+
+    // ---- net GP ----
+    // Its own strip because it answers a different question from the one above:
+    // that strip is what the month DID, this is what the month is worth after
+    // the 21% comes off. Cost rides here rather than in the top strip because it
+    // is the one figure of the three the user asked for a month-over-month on
+    // that has no tile of its own up there — and it reads naturally beside the
+    // other derived figures.
+    if (net !== null) {
+        const track = d.isCurrent && last > 0 ? net * proj : null;
+        // Captions are SHORT here because this strip is one line per tile — the
+        // label, the figure and a three-word note, so the four of them cost
+        // about a third of what a second stack of full tiles would. The long
+        // form of each sits in the title attribute for anyone who wants it.
+        html += '<div class="bd-strip bd-strip2">'
+            + _lvTile('Cost', _lvMoney(t.cost, false),
+                (pt && _bdDelta(at(t.cost), pt.cost, 'flat')) || 'Of goods sold')
+            + _lvTile('Net GP', _lvMoney(net, false),
+                'less ' + Math.round(BD_NET_GP_RATE * 100) + '% of sales')
+            // Only on the month in progress. A finished month has no month end
+            // left to project to, and a "tracking" figure equal to the actual
+            // beside it would read as a second, agreeing measurement rather than
+            // as the same number twice.
+            + (track !== null
+                ? _lvTile('Tracking', _lvMoney(track, false), 'at month end')
+                : '')
+            + _lvTile('Net GP MoM',
+                pnet ? _lvPct((net * proj) / pnet * 100 - 100) : '&mdash;',
+                pnet ? (d.isCurrent ? 'proj vs ' : 'vs ') + escapeHtml(prevNm)
+                     : 'no prior month')
+            + '</div>';
+    }
+
+    // Only ever the month in progress: nothing stores a past month's goal, and a
+    // finished month measured against this month's target would be a wrong
+    // number rather than a missing one.
+    if (d.isCurrent && store.goal > 0) {
+        const pct = t.gp / store.goal * 100;
+        html += '<div class="lv-goal"><div class="lv-goal-top">'
+            + '<span class="lv-goal-lbl">Gross Profit Against Goal</span>'
+            + '<span class="lv-goal-fig"><b>' + _lvMoney(t.gp, false) + '</b> of '
+            + _lvMoney(store.goal, false) + '</span></div>'
+            + '<div class="lv-goal-bar"><i style="width:' + Math.max(0, Math.min(100, pct)) + '%"></i></div>'
+            + '<div class="lv-goal-foot">' + _lvPct(pct) + ' banked</div></div>';
+    }
+
+    // The buying-day count rides in the group heading rather than in a sentence
+    // under the table. It is a property OF the buying columns — how many of the
+    // month's days actually have a purchase on them — so it belongs where the
+    // eye already is when reading them, not sixteen rows below where it has to
+    // be carried back up (user's call 2026-08-12).
+    //
+    // Both months now, not finished ones only. What got dropped with the
+    // sentence was the AVERAGE (paid and resale per buying day), which mid-month
+    // moves every morning and answers nothing you would act on. The count itself
+    // is a plain fact on any month; it just needs saying that this month is
+    // still running, or "24 buying days" on the 12th reads as a finished total.
+    const buyDays = t.buyDays
+        ? ' <span class="bd-grp-sub">&middot; ' + t.buyDays
+          + (t.buyDays === 1 ? ' buying day' : ' buying days')
+          + (d.isCurrent ? ' so far' : ' this month') + '</span>'
+        : '';
+    html += '<div class="lv-tbl-scroll"><table class="lv-tbl bd-tbl"><thead>'
+        + '<tr class="bd-grp"><th></th><th colspan="4">Selling</th>'
+        + '<th colspan="3" class="bd-sep">Buying' + buyDays + '</th></tr>'
+        + '<tr><th>Day</th><th>Sales</th><th>Cost</th><th>Gross profit</th><th>Margin</th>'
+        + '<th class="bd-sep">Bought &middot; resale value</th><th>Cash paid</th><th>Buy margin</th>'
+        + '</tr></thead><tbody>';
+
+    const cell = (cls, v) => '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + v + '</td>';
+    const dash = cls => '<td class="' + (cls ? cls + ' ' : '') + 'bd-dash">&mdash;</td>';
+
+    // Days grouped into calendar weeks, Monday-started. Thirty-one identical
+    // rows give the eye nothing to hold on to; five banded blocks give it five
+    // landmarks, and "the week of the 12th" becomes something you can find
+    // rather than count to. The month's first partial week is a group in its own
+    // right, which is why the first row always opens one.
+    const weeks = [];
+    days.forEach(x => {
+        const w = _bdDow(_bdMonth, x.day);
+        if (!weeks.length || w.dow === 1) weeks.push([]);
+        weeks[weeks.length - 1].push(x);
+    });
+    const moAbbr = _bdMonthName(_bdMonth).slice(0, 3);
+
+    weeks.forEach((wk, wi) => {
+        // The band alternates by week, so two touching weeks never share a tint.
+        const band = wi % 2 === 1 ? 'bd-band' : '';
+        const a = wk[0].day, b = wk[wk.length - 1].day;
+        html += '<tr class="bd-wkrow"><td colspan="8">' + escapeHtml(moAbbr) + ' ' + a
+            + (b > a ? ' &ndash; ' + b : '') + '</td></tr>';
+        wk.forEach(x => {
+        const w = _bdDow(_bdMonth, x.day);
+        const rowCls = [w.dow === 0 ? 'bd-sun' : '', band].filter(Boolean).join(' ');
+        html += '<tr' + (rowCls ? ' class="' + rowCls + '"' : '') + '>'
+            // Two fixed slots rather than a flowing pair: the number right-aligns
+            // in its own column so 1 and 31 end at the same x, and the weekday
+            // centres in its own, so the abbreviations run straight down the page
+            // instead of stepping across when the date gains a digit.
+            + '<td><span class="bd-day"><b>' + x.day + '</b>'
+            + '<span class="bd-dow">' + escapeHtml(w.nm) + '</span></span></td>'
+            + (x.sales === null
+                ? dash('lv-strongnum') + dash('lv-quietnum') + dash('lv-boldnum') + dash('')
+                : cell('lv-strongnum', _lvMoney(x.sales, true))
+                  + cell('lv-quietnum', _lvMoney(x.cost, true))
+                  + cell('lv-boldnum', _lvMoney(x.gp, true))
+                  + cell('', _lvPct(x.sales > 0 ? x.gp / x.sales * 100 : null)))
+            + (x.resale === null
+                ? '<td class="lv-strongnum bd-dash bd-sep">&mdash;</td>'
+                  + dash('lv-quietnum') + dash('lv-boldnum')
+                : '<td class="lv-strongnum bd-sep">' + _lvMoney(x.resale, false) + '</td>'
+                  + cell('lv-quietnum', _lvMoney(x.paid, false))
+                  + cell('lv-boldnum', _lvPct(x.buyMargin * 100)))
+            + '</tr>';
+        });
+    });
+    html += '</tbody><tfoot><tr class="lv-foot">'
+        + '<td><span class="bd-day"><b>TTL</b></span></td>'
+        + cell('lv-strongnum', _lvMoney(t.sales, true))
+        + cell('lv-quietnum', _lvMoney(t.cost, true))
+        + cell('lv-boldnum', _lvMoney(t.gp, true))
+        + cell('', _lvPct(t.margin))
+        + '<td class="lv-strongnum bd-sep">' + _lvMoney(t.resale, false) + '</td>'
+        + cell('lv-quietnum', _lvMoney(t.paid, false))
+        + cell('lv-boldnum', _lvPct(t.buyMargin))
+        + '</tr></tfoot></table></div>';
+
+    // A day with neither sales nor buying is not a quiet day — the webstore
+    // trades even when the doors are shut, so every real day carries something.
+    // It means the figures for that day were never captured, and the totals
+    // above are short by whatever they were. Said plainly rather than left for
+    // someone to notice that a month came up light.
+    if (blanks) {
+        html += '<div class="lv-note bd-warn">' + blanks
+            + (blanks === 1 ? ' day has' : ' days have')
+            + ' no figures recorded, so the totals above are short by whatever '
+            + (blanks === 1 ? 'it' : 'they') + ' held.</div>';
+    }
+    body.innerHTML = html;
+}
+
+// Named, not drawn. A calendar glyph beside a speaker and a full-screen glyph
+// was the third unlabelled control in a row and said nothing about what it
+// opened — the two beside it change how you are LOOKING at the board, this one
+// opens a different view entirely, so it gets words (user's call 2026-08-11).
+//
+// Sits directly after the Today/Yesterday/Month toggle, ahead of the mute
+// switch, and is sized to match it. Both are ways of choosing WHICH figures you
+// are reading — the toggle picks the span, this picks the shape — so they read
+// as one group, and the two icon buttons after them (a preference and a window
+// control) as another (user's call 2026-08-12).
+function _bdBtn() {
+    return '<button type="button" class="bd-open" onclick="openDailyBreakdown()"'
+        + ' aria-label="Open the day-by-day buying and selling breakdown">'
+        + 'Daily Breakdown</button>';
+}
+
 // Which store just moved, and how it should be marked. Two shapes: a band across
 // the whole row in the table, and a wash over the tile on a store's own board.
 function _lvHitRow(code) {
@@ -10590,9 +11255,14 @@ function _lvBuyBlock(d, views) {
         const revOf = code => { const f = _lvFcFor(code); return (f && f.reviews) || 0; };
         html += '<div class="lv-tbl-scroll"><table class="lv-tbl lv-tbl-buy'
             + (showRev ? ' lv-tbl-rev' : '') + '"><thead><tr>'
-            + '<th>Store</th><th>Bought &middot; resale value</th><th>Cash paid</th>'
-            + '<th>Buy margin</th><th>Bought vs sold</th>'
+            + '<th>Store</th>'
+            // Second column, beside the store name rather than out past the money
+            // (user's call 2026-08-12). It is a headcount, not a currency, so at
+            // the far right it sat in the position the eye reads as "the last
+            // money column" and had to be re-read as something else every time.
             + (showRev ? '<th>Reviews</th>' : '')
+            + '<th>Bought &middot; resale value</th><th>Cash paid</th>'
+            + '<th>Buy margin</th><th>Bought vs sold</th>'
             + '</tr></thead><tbody>';
         const revCell = n => '<td class="lv-boldnum">' + (n > 0 ? _lvNum(n) : '—') + '</td>';
         rows.forEach(r => {
@@ -10602,21 +11272,22 @@ function _lvBuyBlock(d, views) {
             html += '<tr' + (mine ? ' class="' + mine + '"' : '') + '>'
                 + '<td><span class="lv-store">' + tint + '<b>' + escapeHtml(r.v.code) + '</b>'
                 + '<span class="lv-store-nm">' + escapeHtml(r.v.name || '') + '</span></span></td>'
+                + (showRev ? revCell(revOf(r.v.code)) : '')
                 + '<td class="lv-strongnum">' + _lvMoney(r.b.bought, false) + '</td>'
                 + '<td class="lv-quietnum">' + _lvMoney(r.b.paid, false) + '</td>'
                 + '<td class="lv-boldnum">' + _lvPct(r.b.margin) + '</td>'
                 + '<td>' + _lvRatio(r.b.bought, r.b.sold) + '</td>'
-                + (showRev ? revCell(revOf(r.v.code)) : '') + '</tr>';
+                + '</tr>';
         });
         const tot = _lvBuySum(rows.map(r => r.b));
         html += '</tbody><tfoot><tr class="lv-foot"><td><span class="lv-store"><b>Total</b></span></td>'
+            // The Total line is not a store, so its reviews are the sum of the rows
+            // above rather than a lookup on a code that has no hub key.
+            + (showRev ? revCell(revCodes.reduce((a, c) => a + revOf(c), 0)) : '')
             + '<td class="lv-strongnum">' + _lvMoney(tot.bought, false) + '</td>'
             + '<td class="lv-quietnum">' + _lvMoney(tot.paid, false) + '</td>'
             + '<td class="lv-boldnum">' + _lvPct(tot.margin) + '</td>'
             + '<td>' + _lvRatio(tot.bought, tot.sold) + '</td>'
-            // The Total line is not a store, so its reviews are the sum of the rows
-            // above rather than a lookup on a code that has no hub key.
-            + (showRev ? revCell(revCodes.reduce((a, c) => a + revOf(c), 0)) : '')
             + '</tr></tfoot></table></div>';
     }
 
@@ -11063,7 +11734,7 @@ function renderLiveDashboard() {
     // Sits AFTER the open/closed pill: it is a preference, not a state readout, and
     // wedged between the two pill groups it read as an orphaned third pill.
     const dSound = document.querySelector('.lv-card .lv-sound-host');
-    if (dSound) dSound.innerHTML = _lvSoundBtn() + _lvFullBtn();
+    if (dSound) dSound.innerHTML = _bdBtn() + _lvSoundBtn() + _lvFullBtn();
 
     // ---- store surfaces (manager Command Center + employee/ASM widget) ----
     // Every exit from here on has to fall through to the tail below, which clears
@@ -11140,10 +11811,15 @@ function renderLiveDashboard() {
         // the page — the board is identified by the card it renders into, which
         // keeps this module from reaching into the auth section for _tvOnBoardPage.
         const bare = !!el.closest('#lvFullscreen, .tv-card');
+        // The daily breakdown has its own exclusion, narrower than `bare`: it is
+        // fine — useful, even — on top of the full-screen board, but the
+        // shop-floor board is unattended and has nobody to click it.
+        const board = !!el.closest('.tv-card');
         el.innerHTML = '<div class="lv-head">'
             + '<span class="lv-head-l">' + _lvFreshness(d)
             + '<span class="lv-asof">' + stamp + '</span></span>'
-            + '<span class="lv-head-r">' + _lvToggle(d) + _lvSoundBtn()
+            + '<span class="lv-head-r">' + _lvToggle(d)
+            + (board ? '' : _bdBtn()) + _lvSoundBtn()
             + (bare ? '' : _lvFullBtn()) + '</span>'
             + '</div>' + detail;
     });
@@ -21449,6 +22125,16 @@ function _ensureScCatalog(force) {
     }).catch(() => {}).finally(() => { _scCatalogFetching = false; });
 }
 
+// Where a score stands against the two thresholds, in three words. Was a tile
+// of its own ("Audit Standing") until a second audit arrived beside the first
+// and a single unlabelled standing stopped saying which one it belonged to —
+// now each audit carries its own on its sub-line (Ethan 2026-08-12).
+function _auStanding(pct) {
+    if (pct >= AUDIT_TARGET_PCT) return 'On Target';
+    if (pct >= AUDIT_PASS_PCT) return 'Passing';
+    return 'Below Pass';
+}
+
 // Audit color by percentage: target 90+ green, pass 80+ amber, else red.
 function auditPctColor(pct) {
     if (pct >= AUDIT_TARGET_PCT) return { bg: '#d1fae5', fg: '#059669' };
@@ -21463,38 +22149,304 @@ function openScorecardModal() {
     if (dateInput) dateInput.valueAsDate = new Date();
     _scoreDateLast = dateInput ? dateInput.value : ''; // the date to fall back to if a swap is declined
 
+    _paDirty = false;   // a fresh open starts from what is saved, not from last time
     switchScoreTab('scorecard');
     _buildScorecardModalInputs();
     renderAuditEntry();
     _ensureScCatalog();
 }
 
-// ---- Submit-modal tab switching (Scorecard | SPEEKS Audit | Manage Items) ----
+// ---- Submit-modal tabs (Scorecard | SPEEKS Audit | PayMore Audit | Manage) ----
+// Who may record what PayMore said. The same allow-list the scorecard fn
+// enforces server-side — the tab being hidden is a convenience, the 403 is the
+// rule. See [[kpi-role-gate]] for what happens when these two drift apart.
+function _paCanEdit() {
+    const r = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return r === 'district manager' || r === 'district-manager' || r === 'ceo';
+}
+
 let currentScoreTab = 'scorecard';
 function switchScoreTab(tab) {
+    // Nobody but a DM or the CEO can land on the PayMore tab, however they got
+    // there — a stale onclick, a bookmarked state, the console.
+    if (tab === 'paudit' && !_paCanEdit()) tab = 'scorecard';
     currentScoreTab = tab;
     const scTab = document.getElementById('sc-tab-scorecard');
     const auTab = document.getElementById('sc-tab-audit');
+    const paTab = document.getElementById('sc-tab-paudit');
     const mgTab = document.getElementById('sc-tab-manage');
     if (scTab) scTab.classList.toggle('active', tab === 'scorecard');
     if (auTab) auTab.classList.toggle('active', tab === 'audit');
+    if (paTab) {
+        paTab.style.display = _paCanEdit() ? '' : 'none';
+        paTab.classList.toggle('active', tab === 'paudit');
+    }
     if (mgTab) mgTab.classList.toggle('active', tab === 'manage');
     const scPanel = document.getElementById('sc-panel-scorecard');
     const auPanel = document.getElementById('sc-panel-audit');
+    const paPanel = document.getElementById('sc-panel-paudit');
     const mgPanel = document.getElementById('sc-panel-manage');
     if (scPanel) scPanel.style.display = tab === 'scorecard' ? 'block' : 'none';
     if (auPanel) auPanel.style.display = tab === 'audit' ? 'block' : 'none';
+    if (paPanel) paPanel.style.display = tab === 'paudit' ? 'block' : 'none';
     if (mgPanel) mgPanel.style.display = tab === 'manage' ? 'block' : 'none';
     const scBtn = document.getElementById('submitScorecardBtn');
     const auBtn = document.getElementById('submitAuditBtn');
+    const paBtn = document.getElementById('submitPauditBtn');
     if (scBtn) scBtn.style.display = tab === 'scorecard' ? '' : 'none';
     if (auBtn) auBtn.style.display = tab === 'audit' ? '' : 'none';
+    if (paBtn) paBtn.style.display = tab === 'paudit' ? '' : 'none';
+    // The two Remove buttons are shown CONDITIONALLY by their own tab's
+    // renderer, which only ever runs while that tab is open — so nothing was
+    // switching them off on the way out and the PayMore one followed you to
+    // the Scorecard tab, where it would have removed a PayMore audit.
+    // Hidden here unconditionally; the renderers below put them back if the
+    // selected store and date actually have something to remove.
+    const paDel = document.getElementById('deletePauditBtn');
+    if (paDel) paDel.style.display = 'none';
+    const auDel = document.getElementById('deleteAuditBtn');
+    if (auDel) auDel.style.display = 'none';
     if (tab === 'manage') renderManageItems();
+    if (tab === 'paudit') renderPaymoreAuditTab();
+    _syncAuditDeleteBtn();
+}
+
+// ---- the real PayMore audit: a date and a score ----------------------------
+// The store and date come from the two controls at the top of the modal, shared
+// with the other tabs. Everything below is the one figure corporate gives us.
+
+// The points the audit is out of: the active catalog's total, exactly what the
+// SPEEKS Audit is scored against. Read from the catalog rather than hardcoded at
+// 165 — the Manage Items tab can change it, and a stale constant here would put
+// two different denominators on one row of the district board.
+function _paPossible() {
+    return (window._auCatalog || [])
+        .reduce((a, i) => a + (i.active ? (Number(i.points) || 0) : 0), 0);
+}
+
+// The saved audit for the store and date on screen, if there is one.
+function _paSaved() {
+    const store = (document.getElementById('dm-store-select')?.value || '').toUpperCase();
+    const date = document.getElementById('dm-score-date')?.value || '';
+    const row = (window._scorecardAllData || []).find(d => String(d.store).toUpperCase() === store);
+    const a = row && row.officialAudit;
+    return (a && a.date === date) ? a : null;
+}
+
+// Anything typed into the PayMore form that has not been saved. The date is a
+// LABEL on the audit, not a different form — correcting it must never cost the
+// figures already entered, which is how the SPEEKS audit tab behaves and what
+// this now matches (Ethan 2026-08-12).
+let _paDirty = false;
+function _paTouch() { _paDirty = true; _paPreview(); }
+
+// What is actually on the "out of" input, falling back to the catalog total.
+function _paPossibleInput() {
+    const v = parseFloat(document.getElementById('pa-possible')?.value);
+    return Number.isFinite(v) && v > 0 ? v : _paPossible();
+}
+
+function _paPreview() {
+    const poss = _paPossibleInput();
+    const el = document.getElementById('pa-earned');
+    const out = document.getElementById('pa-pct');
+    const note = document.getElementById('pa-poss-note');
+    // Said only when it is true. A note that the total differs is worth reading;
+    // one confirming it is the usual 165 is noise on every single entry.
+    if (note) {
+        const std = _paPossible();
+        note.innerHTML = (std && poss && Math.abs(poss - std) > 0.001)
+            ? 'Scored out of <b>' + poss + '</b> rather than the SPEEKS Audit&rsquo;s <b>' + std
+              + '</b>. The percentage is what the board compares, so it still reads against the same targets.'
+            : '';
+    }
+    if (!out) return;
+    const v = parseFloat(el && el.value);
+    if (!poss || !Number.isFinite(v)) { out.innerHTML = '&mdash;'; out.style.color = ''; return; }
+    const pct = Math.round(Math.min(Math.max(v, 0), poss) / poss * 1000) / 10;
+    out.textContent = pct + '%';
+    // Same three bands as everywhere else this score is shown, so the number the
+    // DM types goes the colour it will be on the board before they save it.
+    out.style.color = pct >= 80 ? '#178048' : (pct >= 50 ? '#b3760a' : '#dc2626');
+}
+
+function renderPaymoreAuditTab() {
+    // Loading an existing entry rather than presenting a blank form over the top
+    // of one: re-entering the same store and date corrects it, and the DM should
+    // be able to see what they are correcting.
+    const saved = _paSaved();
+    // Untouched form: load whatever is saved for this store and date. Touched:
+    // leave every field exactly as typed and only refresh the notes around them.
+    // Changing the date is how you say WHEN the audit happened, and doing that
+    // after typing the score used to wipe the score.
+    if (!_paDirty) {
+        // A saved audit keeps the total it was scored against, not today's
+        // catalog total — otherwise reopening a 120-point audit would silently
+        // re-base it on 165 and change the percentage on save without anyone
+        // touching the figure.
+        const poss = saved ? saved.possible : _paPossible();
+        const pEl = document.getElementById('pa-possible');
+        if (pEl) pEl.value = poss || '';
+        const earned = document.getElementById('pa-earned');
+        if (earned) earned.value = saved ? saved.earned : '';
+    }
+    const del = document.getElementById('deletePauditBtn');
+    if (del) del.style.display = saved ? '' : 'none';
+
+    const note = document.getElementById('pa-existing');
+    if (note) {
+        const store = (document.getElementById('dm-store-select')?.value || '').toUpperCase();
+        const row = (window._scorecardAllData || []).find(d => String(d.store).toUpperCase() === store);
+        const last = row && row.officialAudit;
+        note.innerHTML = saved
+            ? '<div class="pa-hint" style="margin:0 0 12px;">Editing the audit already saved for this date &mdash; '
+              + '<b>' + saved.earned + ' / ' + saved.possible + '</b> (' + saved.pct + '%). Saving replaces it.</div>'
+            : (last
+                ? '<div class="pa-hint" style="margin:0 0 12px;">Last PayMore audit for ' + escapeHtml(store)
+                  + ' was <b>' + last.pct + '%</b> on ' + escapeHtml(_dcShortDay(last.date))
+                  + '. Saving against a new date adds another.</div>'
+                : '<div class="pa-hint" style="margin:0 0 12px;">No PayMore audit recorded for '
+                  + escapeHtml(store) + ' yet.</div>');
+    }
+    _paPreview();
+}
+
+async function submitPaymoreAudit() {
+    const store = document.getElementById('dm-store-select')?.value || '';
+    const date = document.getElementById('dm-score-date')?.value || '';
+    const raw = document.getElementById('pa-earned')?.value;
+    const btn = document.getElementById('submitPauditBtn');
+    if (!store || !date) { alert('Pick a store and date.'); return; }
+    const earned = parseFloat(raw);
+    if (!Number.isFinite(earned)) { alert('Enter the points PayMore scored the store.'); return; }
+    const possible = parseFloat(document.getElementById('pa-possible')?.value);
+    if (!Number.isFinite(possible) || possible <= 0) { alert('Enter the points the audit was out of.'); return; }
+    if (earned > possible) {
+        if (!confirm(`${earned} is more than the ${possible} points available.\n\nSave it as ${possible}?`)) return;
+    }
+
+    btn.disabled = true; btn.style.opacity = '0.7'; btn.innerText = 'Saving…';
+    try {
+        const res = await fetch(SCORECARD_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'submit_official_audit', store, date, earned, possible,
+                enteredBy: sessionStorage.getItem('speeksUserName') || null,
+                role: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(),
+            })
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+        _paDirty = false;   // saved — nothing left to protect from a date change
+        btn.innerText = `Saved — ${json.earned}/${json.possible} (${json.pct}%)`;
+        btn.style.background = 'var(--sage-professional)';
+        setTimeout(() => {
+            if (typeof fetchScorecardData === 'function') fetchScorecardData();
+            if (typeof fetchMasterDistrictDashboard === 'function') fetchMasterDistrictDashboard();
+            closeScorecardModal();
+            btn.innerText = 'Save PayMore Audit';
+            btn.style.background = ''; btn.style.opacity = ''; btn.disabled = false;
+        }, 1200);
+    } catch (err) {
+        alert('Error saving the PayMore audit: ' + (err.message || err));
+        btn.innerText = 'Save PayMore Audit';
+        btn.style.background = ''; btn.style.opacity = ''; btn.disabled = false;
+    }
+}
+
+async function deletePaymoreAudit() {
+    const store = document.getElementById('dm-store-select')?.value || '';
+    const date = document.getElementById('dm-score-date')?.value || '';
+    if (!store || !date) return;
+    if (!confirm(`Remove the PayMore audit saved for ${store} on ${date}?`)) return;
+    try {
+        const res = await fetch(SCORECARD_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'delete_official_audit', store, date,
+                role: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(),
+            })
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Delete failed');
+        _paDirty = false;
+        if (typeof fetchScorecardData === 'function') await fetchScorecardData();
+        if (typeof fetchMasterDistrictDashboard === 'function') fetchMasterDistrictDashboard();
+        _ensureScCatalog(true);
+        renderPaymoreAuditTab();
+    } catch (err) {
+        alert('Error removing the PayMore audit: ' + (err.message || err));
+    }
+}
+
+// ---- delete a SPEEKS audit -------------------------------------------------
+// For the walkthrough submitted before it was finished. DM/CEO only, and the
+// server enforces that independently — the button being hidden is convenience.
+// Deliberately named with the date in the confirm: the tool always has SOME
+// store and date selected, and "delete the audit" without saying which is how
+// somebody throws away the wrong one.
+async function deleteSpeeksAudit() {
+    const store = (document.getElementById('dm-store-select')?.value || '').toUpperCase();
+    const date = document.getElementById('dm-score-date')?.value || '';
+    const saved = _selectedStoreAudit();
+    if (!saved || saved.date !== date) {
+        alert('There is no SPEEKS Audit saved for ' + (store || 'this store') + ' on ' + (date || 'this date') + '.');
+        return;
+    }
+    if (!confirm(`Delete ${store}'s SPEEKS Audit from ${date}?\n\n`
+        + `${saved.earned}/${saved.possible} (${saved.pct}%). This removes its photos too and cannot be undone.`)) return;
+
+    const btn = document.getElementById('deleteAuditBtn');
+    if (btn) { btn.disabled = true; btn.innerText = 'Deleting…'; }
+    try {
+        const res = await fetch(SCORECARD_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'delete_audit', store, date,
+                role: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(),
+            })
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Delete failed');
+        // The scored answers on screen belong to a row that no longer exists.
+        _auditDirty = false;
+        if (typeof fetchScorecardData === 'function') await fetchScorecardData();
+        if (typeof fetchMasterDistrictDashboard === 'function') fetchMasterDistrictDashboard();
+        _ensureScCatalog(true);
+        renderAuditEntry();
+        _syncAuditDeleteBtn();
+    } catch (err) {
+        alert('Error deleting the audit: ' + (err.message || err));
+    }
+    if (btn) { btn.disabled = false; btn.innerText = 'Remove'; }
+}
+
+// Shown only on the SPEEKS Audit tab, only to a DM or the CEO, and only when the
+// selected store and date actually have one saved — otherwise it is a button
+// that can only ever produce an error.
+function _syncAuditDeleteBtn() {
+    const btn = document.getElementById('deleteAuditBtn');
+    if (!btn) return;
+    const date = document.getElementById('dm-score-date')?.value || '';
+    const saved = _selectedStoreAudit();
+    const show = currentScoreTab === 'audit' && _paCanEdit() && saved && saved.date === date;
+    btn.style.display = show ? '' : 'none';
 }
 
 function onScoreStoreChange() {
     _buildScorecardModalInputs();
     renderAuditEntry();
+    // The PayMore tab reads the store and date straight off these two controls,
+    // so it has to be re-read when either moves — otherwise the form shows one
+    // store's saved score under another store's name. A different STORE is a
+    // different subject, not a relabelling, so the typed figures are dropped
+    // here where a date change keeps them.
+    _paDirty = false;
+    if (currentScoreTab === 'paudit') renderPaymoreAuditTab();
+    _syncAuditDeleteBtn();
 }
 // The date is a label on the walkthrough, not a different form, so correcting it
 // must never cost the auditor their answers — this used to rebuild the checklist
@@ -21506,7 +22458,20 @@ let _scoreDateLast = '';
 function onScoreDateChange() {
     const el = document.getElementById('dm-score-date');
     const dateVal = el?.value || '';
-    if (!_auditHasWork()) { renderAuditEntry(); _scoreDateLast = dateVal; return; }
+    // What is on screen is a SAVED audit that nobody has touched since it loaded.
+    // Those answers belong to the date they were loaded from, not to the date
+    // just picked — carrying them forward showed a finished audit's scores under
+    // a day that has none, which reads as that day already being audited.
+    // Rebuilding is free here precisely because there is nothing unsaved to lose.
+    const justLoaded = !!_auditLoadedDate && !_auditDirty && _auditLoadedDate !== dateVal;
+
+    if (justLoaded || !_auditHasWork()) {
+        renderAuditEntry();
+        if (currentScoreTab === 'paudit') renderPaymoreAuditTab();
+        _syncAuditDeleteBtn();
+        _scoreDateLast = dateVal;
+        return;
+    }
     const existing = _selectedStoreAudit();
     if (existing && existing.date === dateVal) {
         const d = new Date(dateVal + 'T00:00:00');
@@ -21522,6 +22487,10 @@ function onScoreDateChange() {
         // rebuild at all.
         updateAuditRunningBar();
     }
+    // Reached only when the date actually moved — a declined swap returns above
+    // with the old date put back, and the form on screen is still the right one.
+    if (currentScoreTab === 'paudit') renderPaymoreAuditTab();
+    _syncAuditDeleteBtn();
     _scoreDateLast = dateVal;
 }
 
@@ -21648,6 +22617,10 @@ function _selectedStoreAudit() {
 let _auditEntryNotes = {};
 let _auditEntryPhotos = {};
 let _auditDirty = false; // unsaved audit work — closeAllModals asks before discarding
+// The date whose SAVED audit is currently on screen, '' when the form is the
+// auditor's own work. Read only alongside !_auditDirty — together they mean
+// "what is on screen is a saved audit, untouched".
+let _auditLoadedDate = '';
 
 function _auSecTitle(sIdx) { return (_auSections()[sIdx] || {}).title || String(sIdx); }
 
@@ -21856,6 +22829,11 @@ function renderAuditEntry(opts = {}) {
     const existing = _selectedStoreAudit();
     const prefill = (existing && existing.date === dateVal && existing.results) ? existing.results : {};
     const editingThis = !!(existing && existing.date === dateVal);
+    // Which date's SAVED audit is on screen, when nothing has been typed since.
+    // A preserving render leaves it alone: it carries the same content across a
+    // scaffolding rebuild, and if the auditor had typed anything _auditDirty is
+    // already true, which is what actually gates the reader below.
+    if (!keep) _auditLoadedDate = editingThis ? dateVal : '';
     if (!keep) {
         _auditEntryNotes = (editingThis && existing.notes && typeof existing.notes === 'object' && !Array.isArray(existing.notes)) ? { ...existing.notes } : {};
         _auditEntryPhotos = {};
@@ -22149,7 +23127,7 @@ function renderManageItems() {
     </div>`;
 
     // ---- Audit items ----
-    html += secHdr(`PayMore Audit Items — active: ${activeAu.length} items · ${activePts} pts`);
+    html += secHdr(`SPEEKS Audit Items — active: ${activeAu.length} items · ${activePts} pts`);
     auSections.forEach(sec => {
         html += `<div style="font-size:10.5px; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:.4px; margin:10px 0 2px;">${escapeHtml(sec.title)}</div>`;
         sec.items.forEach(item => {
@@ -22272,18 +23250,18 @@ function renderAuditBreakdown(store) {
     const audit = entry && entry.audit ? entry.audit : null;
 
     if (!audit) {
-        if (title) title.textContent = `${store} · Audit Breakdown`;
+        if (title) title.textContent = `${store} · SPEEKS Audit Breakdown`;
         body.innerHTML = `<div style="padding:24px 4px; text-align:center; color:#94a3b8; font-weight:600;">No practice audit on file for ${store} yet.</div>`;
         return;
     }
     const results = audit.results || {};
     const c = auditPctColor(audit.pct);
     const dateStr = audit.date ? new Date(audit.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
-    if (title) title.textContent = `${store} · Audit Breakdown`;
+    if (title) title.textContent = `${store} · SPEEKS Audit Breakdown`;
 
     let html = `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:${c.bg}; border-radius:10px; padding:12px 14px; margin-bottom:14px;">
         <div>
-            <div style="font-size:11px; font-weight:800; color:${c.fg}; text-transform:uppercase; letter-spacing:.4px;">PayMore Audit${dateStr ? ' · ' + dateStr : ''}${audit.time ? ' · ' + _fmtAuditTime(audit.time) : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
+            <div style="font-size:11px; font-weight:800; color:${c.fg}; text-transform:uppercase; letter-spacing:.4px;">SPEEKS Audit${dateStr ? ' · ' + dateStr : ''}${audit.time ? ' · ' + _fmtAuditTime(audit.time) : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
             <div style="font-size:11px; color:#64748b; font-weight:600; margin-top:2px;">Pass ${AUDIT_PASS_PCT}% · Target ${AUDIT_TARGET_PCT}%+${audit.prevPct != null ? ` · prev ${audit.prevPct}%` : ''}</div>
         </div>
         <div style="font-size:22px; font-weight:900; color:${c.fg};">${audit.earned}/${audit.possible} <span style="font-size:14px;">(${audit.pct}%)</span></div>
@@ -22345,7 +23323,7 @@ function renderAuditBreakdown(store) {
 function buildAuditSummaryHtml(audit, store) {
     if (!audit) {
         return `<div style="display:flex; align-items:center; justify-content:space-between;">
-                <span class="scorecard-label" style="text-align:left;">PayMore Audit</span>
+                <span class="scorecard-label" style="text-align:left;">SPEEKS Audit</span>
                 <span style="font-size:12px; color:#94a3b8; font-weight:700;">No practice audit yet</span>
             </div>`;
     }
@@ -22360,7 +23338,7 @@ function buildAuditSummaryHtml(audit, store) {
 
     return `<div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
             <div>
-                <div class="scorecard-label" style="text-align:left; margin-bottom:2px;">PayMore Audit</div>
+                <div class="scorecard-label" style="text-align:left; margin-bottom:2px;">SPEEKS Audit</div>
                 <div class="scorecard-date" style="font-size:11px;">${dateStr}${audit.time ? ' · ' + _fmtAuditTime(audit.time) : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
             </div>
             <div style="display:flex; align-items:center; gap:8px;">
@@ -22368,7 +23346,7 @@ function buildAuditSummaryHtml(audit, store) {
                 <span style="font-size:16px; font-weight:900; background:${c.bg}; color:${c.fg}; padding:4px 10px; border-radius:8px;">${audit.earned}/${audit.possible} · ${audit.pct}%</span>
             </div>
         </div>
-        <button onclick="openAuditBreakdown('${store}')" class="btn-secondary" style="margin-top:10px; width:100%; padding:8px; font-size:12px; font-weight:800;">View Audit Breakdown</button>`;
+        <button onclick="openAuditBreakdown('${store}')" class="btn-secondary" style="margin-top:10px; width:100%; padding:8px; font-size:12px; font-weight:800;">SPEEKS Audit Breakdown</button>`;
 }
 
 // =========================================================
@@ -35061,6 +36039,11 @@ function _dccRow(store, hubData, varData, scoreData, alertsData, weeklyResults) 
         edited: hubData[`${k}BuyDate`] || null,
         score: (parseFloat(sc.score) || 0) * 2,
         audit: sc.audit || null,
+        // The REAL PayMore audit, which is a different thing from the one above:
+        // that one is the walkthrough the district runs on itself (the SPEEKS
+        // Audit), this is corporate's own visit. Score and date only — corporate
+        // does not hand over a breakdown, so there is none to show.
+        official: sc.officialAudit || null,
         // The two breakdowns behind those two numbers. Both were already in this
         // response and nothing read them: the categories the DM scored by hand,
         // and the audit sections where points went missing.
@@ -35114,6 +36097,11 @@ function _dccChecks(r) {
     return [
         { key: 'score',   s: r.score > 8 ? null : (r.score >= 6 ? 'w' : 'b') },
         { key: 'audit',   s: !r.audit ? null : (r.audit.pct >= 80 ? null : (r.audit.pct >= 50 ? 'w' : 'b')) },
+        // The real PayMore audit is judged on the SAME scale as the practice one
+        // — same points, same targets, same thresholds (Ethan 2026-08-12) — so
+        // the two columns beside each other can be read against one standard
+        // rather than the reader having to remember which is which.
+        { key: 'paudit',  s: !r.official ? null : (r.official.pct >= 80 ? null : (r.official.pct >= 50 ? 'w' : 'b')) },
         { key: 'sales',   s: _dccTier(r.salesPct, 100, 'min') },
         { key: 'sellM',   s: _dccTier(r.sellM, 55.5, 'min') },
         // Still only judged when above zero: a missing figure parses to 0 and must
@@ -35666,10 +36654,20 @@ function _dccPaneHtml(r, portalLink) {
     const auditChip = r.audit
         ? '<span class="dcc-chip act ' + chipCls(_dccState(r, 'audit'))
           + '" onclick="event.stopPropagation(); openAuditBreakdown(\'' + r.store + '\')"'
-          + ' title="PayMore practice audit — ' + r.audit.earned + '/' + r.audit.possible + ' · view full breakdown">'
-          + '<span class="dcc-chip-l">AUDIT</span>' + r.audit.pct + '%</span>'
-        : '<span class="dcc-chip dcc-mute" title="No practice audit submitted yet">'
-          + '<span class="dcc-chip-l">AUDIT</span>No data</span>';
+          + ' title="The walkthrough the district runs on itself — ' + r.audit.earned + '/'
+          + r.audit.possible + ' · view full breakdown">'
+          + '<span class="dcc-chip-l">SPEEKS AUDIT</span>' + r.audit.pct + '%</span>'
+        : '<span class="dcc-chip dcc-mute" title="No SPEEKS Audit submitted yet">'
+          + '<span class="dcc-chip-l">SPEEKS AUDIT</span>No data</span>';
+    // PayMore's own audit, beside the district's practice one. Not clickable —
+    // there is no breakdown behind it, so it never takes the `act` class.
+    const pauditChip = r.official
+        ? '<span class="dcc-chip ' + chipCls(_dccState(r, 'paudit'))
+          + '" title="PayMore&rsquo;s own audit — ' + r.official.earned + '/' + r.official.possible
+          + ' on ' + escapeHtml(_dcShortDay(r.official.date)) + '">'
+          + '<span class="dcc-chip-l">PAYMORE AUDIT</span>' + r.official.pct + '%</span>'
+        : '<span class="dcc-chip dcc-mute" title="PayMore has not audited this store yet">'
+          + '<span class="dcc-chip-l">PAYMORE AUDIT</span>No data</span>';
     // eBay leads when the account is in trouble: a suspension outranks a margin
     // point. Otherwise the money leads. Same blocks either way.
     const ebayBroken = ['track', 'defect', 'cases', 'late'].some(x => _dccState(r, x));
@@ -35685,7 +36683,7 @@ function _dccPaneHtml(r, portalLink) {
         + '<div class="dcc-ps">Goal ' + _dccMoney(r.goal) + ' &middot; Week of ' + escapeHtml(r.week)
         + (portalLink ? ' &middot; <a href="' + portalLink + '" target="_blank" rel="noopener">Store Folder</a>' : '')
         + '</div></div>'
-        + '<div class="dcc-ph-side">' + scoreChip + auditChip + '</div></div>'
+        + '<div class="dcc-ph-side">' + scoreChip + auditChip + pauditChip + '</div></div>'
         + blocks.join('');
 }
 
@@ -35857,9 +36855,9 @@ function _dcScoreHtml() {
     // Explicit widths: the store column carries two lines now, and the total is the
     // headline of the three scorecard columns, so neither is left narrower than the
     // categories that add up to it.
-    const secW = catNames.length ? (46 / catNames.length) : 0;
-    const cols = '<colgroup><col style="width:18%"><col style="width:17%">'
-        + '<col style="width:19%">'
+    const secW = catNames.length ? (34 / catNames.length) : 0;
+    const cols = '<colgroup><col style="width:16%"><col style="width:15%">'
+        + '<col style="width:16%"><col style="width:19%">'
         + catNames.map(() => '<col style="width:' + secW.toFixed(2) + '%">').join('')
         + '</colgroup>';
 
@@ -35872,18 +36870,42 @@ function _dcScoreHtml() {
 
     let html = '<div class="lv-tbl-scroll"><table class="lv-tbl dc-tbl dc-tbl-score">'
         + cols
-        + '<thead><tr><th>Store</th><th>PayMore Audit</th>'
+        + '<thead><tr><th>Store</th>'
+        + '<th title="The walkthrough the district runs on itself. Click a score '
+        + 'for the full section breakdown.">SPEEKS Audit</th>'
+        + '<th title="PayMore&rsquo;s own audit of the store. Scored out of the same '
+        + 'points against the same targets — score and date only, no breakdown.">'
+        + 'PayMore Audit</th>'
         + '<th title="The Online &amp; Marketing scorecard, out of 10">Total score</th>'
         + catNames.map(n => '<th class="dc-sc-part">' + escapeHtml(n) + '</th>').join('')
         + '</tr></thead>';
     _dccRows.forEach(r => {
         // The audit chip stays clickable in place — openAuditBreakdown is a modal,
         // so it must stop the row's own drill-down from firing behind it.
+        // Both audits are dated. The week-of label under the store name is the
+        // SCORECARD's week, and the two audits are run on their own schedules —
+        // the SPEEKS one weekly, PayMore's whenever they turn up — so without a
+        // date of its own each score read as belonging to the week beside it.
         const audit = r.audit
-            ? '<button type="button" class="dc-audit ' + _dcSev(_dccState(r, 'audit')) + '"'
+            ? '<span class="dc-au-stack">'
+              + '<button type="button" class="dc-audit ' + _dcSev(_dccState(r, 'audit')) + '"'
               + ' onclick="event.stopPropagation(); openAuditBreakdown(\'' + r.store + '\')"'
               + ' title="View the full audit breakdown">' + r.audit.pct + '%</button>'
+              + (r.audit.date ? '<span class="dc-pa-date">' + escapeHtml(_dcShortDay(r.audit.date)) + '</span>' : '')
+              + '</span>'
             : '<span class="dc-muted">No data</span>';
+        // The real audit: a figure and the day it happened, and nothing to click.
+        // It is deliberately NOT a button — there is no breakdown behind it, and
+        // a control that looks identical to the one beside it but does nothing
+        // reads as broken rather than as different.
+        const paudit = r.official
+            ? '<span class="dc-au-stack">'
+              + '<span class="dc-audit dc-paudit ' + _dcSev(_dccState(r, 'paudit')) + '"'
+              + ' title="PayMore&rsquo;s own audit &mdash; ' + r.official.earned + '/'
+              + r.official.possible + '">' + r.official.pct + '%</span>'
+              + (r.official.date ? '<span class="dc-pa-date">' + escapeHtml(_dcShortDay(r.official.date)) + '</span>' : '')
+              + '</span>'
+            : '<span class="dc-muted">Not audited</span>';
         // Categories are entered 0–5 and shown doubled, the same as the manager's
         // own scorecard card — so a 5 reads as a 10 in both places rather than the
         // district quietly using a second scale beside the /10 average.
@@ -35903,15 +36925,25 @@ function _dcScoreHtml() {
             + _dcStoreCell(r.store, r.week ? 'Week of ' + r.week : '',
                            r.week ? 'Scorecard and audit as of the week of ' + r.week : '')
             + _dcCell(audit)
+            + _dcCell(paudit)
             + _dcCell(r.score.toFixed(1) + '<span class="lv-of"> / 10</span>',
                       _dcSev(_dccState(r, 'score')))
             + catCells + '</tr>'
             + '<tr class="dc-catrow" onclick="_dcDrill(\'' + r.store + '\')"'
             + ' title="Open ' + escapeHtml(r.store) + '&rsquo;s full board">'
-            + '<td colspan="' + (catNames.length + 3) + '" class="dc-cats">'
+            + '<td colspan="' + (catNames.length + 4) + '" class="dc-cats">'
             + _dcAuditSecHtml(r, chipCols) + '</td></tr></tbody>';
     });
     return html + '</table></div>';
+}
+
+// "Aug 4" from a plain 'YYYY-MM-DD'. Midday, not midnight: a bare date parsed
+// as local midnight is fine, but the same string parsed as UTC is the previous
+// evening here, and this one is read straight off a date column.
+function _dcShortDay(iso) {
+    const s = String(iso || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return '';
+    return new Date(s + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 // Trims the ".0" off a whole score so a column of 10 / 8 / 7.5 stays readable.
@@ -35931,7 +36963,7 @@ function _dcNum(n) {
 // width that works out to the longest ones ellipsis; the full name is on the
 // chip's title.
 function _dcAuditSecHtml(r, cols) {
-    const open = '<div class="dc-catwrap"><span class="dc-catlab">Audit points by section</span>'
+    const open = '<div class="dc-catwrap"><span class="dc-catlab">SPEEKS Audit points by section</span>'
         + '<div class="dc-catgrid" style="grid-template-columns:repeat('
         + Math.max(1, cols || 1) + ',minmax(0,1fr))">';
     if (!r.audit) {
@@ -36020,11 +37052,24 @@ function _dcSummaryFill() {
     const score = avg(r => r.score || 0);
     set('dc-sum-score', score.toFixed(1) + '<small>/ 10</small>',
         score >= 9 ? 'good' : (score >= 7 ? 'warn' : 'bad'));
-    const withAudit = _dccRows.filter(r => r.audit);
+    // The company's audit average is the REAL PayMore audit, not the practice
+    // one. The district's own walkthrough is a coaching tool it scores itself
+    // on; this line is the number the company is actually held to, and it is
+    // the one that belongs in a summary strip (Ethan 2026-08-12).
+    //
+    // Averaged over the stores that HAVE one, not over all five — a store
+    // corporate has not visited yet is not a zero, and counting it as one would
+    // drag the district average down by a fifth for a fact about a calendar.
+    const withAudit = _dccRows.filter(r => r.official);
     if (withAudit.length) {
-        const a = withAudit.reduce((x, r) => x + Number(r.audit.pct || 0), 0) / withAudit.length;
+        const a = withAudit.reduce((x, r) => x + Number(r.official.pct || 0), 0) / withAudit.length;
         set('dc-sum-audit', a.toFixed(1) + '<small>%</small>',
             a >= 90 ? 'good' : (a >= 84 ? 'warn' : 'bad'));
+    } else {
+        // Never left holding the last value it had. Before this the tile kept
+        // whatever it was last given, so switching it to a source with no rows
+        // yet would have shown a stale SPEEKS figure under a PayMore label.
+        set('dc-sum-audit', '&mdash;', '');
     }
 }
 
