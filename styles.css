@@ -11323,7 +11323,20 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 /* The totals row keeps a little more air than a day row — it is the one line
    people look for, and at the day rows' spacing it stopped reading as a summary
    and started reading as a 32nd of the month. */
-.bd-tbl tfoot .lv-foot td { padding: clamp(4px, 0.65vh, 16px) 6px; }
+/* ⚠️ VERTICAL padding only, and the horizontal restated below. The board's own
+   totals row (.lv-tbl tfoot .lv-foot td) sets `padding: 16px 8px`, which beats
+   a per-column rule — so TTL's figures sat 2px right of every column they
+   total, 20px right in the margin column (which carries the 26px gutter that
+   centres the Selling|Buying rule) and 4px right in the last one (12px on the
+   board). The totals row has to be padded like the rows it totals or it stops
+   looking like their sum. */
+.bd-tbl tfoot .lv-foot td {
+    padding-top: clamp(4px, 0.65vh, 16px);
+    padding-bottom: clamp(4px, 0.65vh, 16px);
+}
+.bd-card .bd-tbl tfoot .lv-foot td { padding-left: 6px; padding-right: 6px; }
+.bd-card .bd-tbl tfoot .lv-foot td:nth-child(5) { padding-right: 26px; }
+.bd-card .bd-tbl tfoot .lv-foot td:last-child { padding-right: 12px; }
 .bd-card .lv-note { margin-top: clamp(3px, 0.55vh, 12px); font-size: clamp(8.5px, 0.95vh, 10.5px); line-height: 1.35; }
 
 /* Below roughly a 900px-tall window the stacked tile — label, then figure, then
