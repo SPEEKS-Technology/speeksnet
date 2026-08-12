@@ -11035,6 +11035,26 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .bd-card .bd-tbl thead th { background: #fff; }
 .bd-card .bd-tbl tfoot { position: sticky; bottom: 0; z-index: 2; }
 .bd-card .bd-tbl tfoot td { background: #fff; }
+/* ⚠️ The rules under the headings are drawn as INSET SHADOWS, not borders.
+   The table is border-collapse:collapse, and under collapse a border belongs to
+   the table's own border grid rather than to the cell — so a sticky cell paints
+   its background as it should but leaves its border behind with the rows, and
+   the moment the month scrolled the lines around both header rows vanished.
+   A shadow is painted by the element itself and travels with it.
+   The vertical rule between Selling and Buying goes the same way. */
+.bd-card .bd-tbl thead th { border-bottom: 0; box-shadow: inset 0 -1px 0 #e6ebf1; }
+.bd-card .bd-tbl thead .bd-grp th { box-shadow: inset 0 -1px 0 #e6ebf1; }
+.bd-card .bd-tbl thead .bd-grp th:first-child { box-shadow: none; }
+.bd-card .bd-tbl thead th.bd-sep {
+    border-left: 0;
+    box-shadow: inset 1px 0 0 #e6ebf1, inset 0 -1px 0 #e6ebf1;
+}
+/* The totals row is sticky at the BOTTOM, so its rule sits on top of it. */
+.bd-card .bd-tbl tfoot .lv-foot td { box-shadow: inset 0 1px 0 #e6ebf1; }
+.bd-card .bd-tbl tfoot .lv-foot td.bd-sep {
+    border-left: 0;
+    box-shadow: inset 1px 0 0 #e6ebf1, inset 0 1px 0 #e6ebf1;
+}
 .bd-head {
     display: flex; align-items: baseline; justify-content: space-between;
     gap: 12px; flex-wrap: wrap; margin-bottom: 14px;
