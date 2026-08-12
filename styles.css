@@ -11113,8 +11113,13 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
    instead of stacking. These are secondary to the six above them and a second
    full stack cost ~65px, which is four days of table; this costs ~25px. The
    strip above keeps its stacked form because it is the answer to the view. */
+/* align-items: CENTER, not baseline. Every tile in the row is as tall as the
+   tallest, and once these captions grew long enough to wrap, a baseline pinned
+   the short tiles' contents to the first line and left the label sitting at the
+   top of its box with the space underneath. Centred, each tile's contents sit
+   in the middle of whatever height the row settles on. */
 .bd-strip2 .cc-cell {
-    display: flex; align-items: baseline; gap: 7px;
+    display: flex; align-items: center; gap: 7px;
     padding-top: clamp(3px, 0.5vh, 8px); padding-bottom: clamp(3px, 0.5vh, 8px);
 }
 .bd-strip2 .cc-cell .sh-k { flex: none; }
@@ -11122,9 +11127,13 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
     margin-top: 0; margin-left: auto;
     font-size: clamp(12px, 1.5vh, 16px);
 }
+/* Wraps rather than overflows. The caption now carries a projection and a
+   comparison as well as its own label, and on a narrower card that runs past
+   the tile — measured 7px over at 1300px wide. A second line costs a few pixels;
+   a clipped figure costs the figure. */
 .bd-strip2 .cc-cell .sh-sub {
-    flex: none; margin-top: 0; white-space: nowrap;
-    font-size: clamp(8px, 0.9vh, 9.5px);
+    flex: 0 1 auto; min-width: 0; margin-top: 0; white-space: normal;
+    font-size: clamp(8px, 0.9vh, 9.5px); line-height: 1.3;
 }
 /* Month over month, under the figure it measures. Grey by default: a direction
    is only good or bad when the quantity is, and COST rising on a month that sold

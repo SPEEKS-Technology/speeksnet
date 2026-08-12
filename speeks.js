@@ -10627,12 +10627,20 @@ function _bdRender() {
     // under $51,511 invites exactly the wrong arithmetic. The word "projected"
     // is what stops it, and it appears only where there IS an arrow: a margin
     // is a ratio, directly comparable mid-month, and is never projected.
-    const vs = (h, was) => {
-        if (!h && !was) return '';
-        const lead = (h && d.isCurrent) ? 'projected vs ' : 'vs ';
-        const tail = was ? '<i>' + lead + escapeHtml(prevNm) + ' ' + was + '</i>' : '';
-        return [h, tail].filter(Boolean).join(' ');
+    // ⚠️ Mid-month the arrow is the PROJECTION against last month, not the
+    // month-to-date figure above it — so on a live month the projected amount is
+    // named right here rather than left implicit. "▲ 11.3% · $145,167 at month
+    // end vs July $130,483" is the whole thought in one line, and it is what
+    // retired the standalone Tracking tile: that tile was this number for Net GP
+    // alone, and every figure it makes sense for now carries its own.
+    const vs = (h, was, proj) => {
+        if (!h && !was && !proj) return '';
+        const head = [h, proj ? proj + ' at month end' : ''].filter(Boolean).join(' &middot; ');
+        const tail = was ? '<i>vs ' + escapeHtml(prevNm) + ' ' + was + '</i>' : '';
+        return [head, tail].filter(Boolean).join(' ');
     };
+    // The month-end projection of a figure, on the month in progress only.
+    const proj_ = v => (d.isCurrent && v !== null && proj !== 1) ? _lvMoney(v * proj, false) : '';
 
     // A tile whose caption is a MEASUREMENT is marked, because a short screen
     // drops the caption line to buy table space — and dropping "Month To Date"
@@ -10649,13 +10657,14 @@ function _bdRender() {
     const net = _bdNetGp(t);
     const pnet = pt ? _bdNetGp(pt) : null;
     const dNet = pnet ? _bdDelta(net * proj, pnet, 'good') : '';
-    const track = (net !== null && d.isCurrent && last > 0) ? net * proj : null;
 
     html += '<div class="bd-strip bd-strip-top bd-strip-tight">'
         + _lvTile('Sales', _lvMoney(t.sales, false),
-            vs(dSales, pt && _lvMoney(pt.sales, false)) || (d.isCurrent ? 'Month To Date' : 'Month Total'), true, dSales ? mom : '')
+            vs(dSales, pt && _lvMoney(pt.sales, false), proj_(t.sales))
+            || (d.isCurrent ? 'Month To Date' : 'Month Total'), true, dSales ? mom : '')
         + _lvTile('Gross Profit', _lvMoney(t.gp, false),
-            vs(dGp, pt && _lvMoney(pt.gp, false)) || (d.isCurrent ? 'Month To Date' : 'Month Total'), false, dGp ? mom : '')
+            vs(dGp, pt && _lvMoney(pt.gp, false), proj_(t.gp))
+            || (d.isCurrent ? 'Month To Date' : 'Month Total'), false, dGp ? mom : '')
         // No arrow on margin: a percentage change OF a percentage is a figure
         // almost nobody reads correctly. Last month's margin sits beside it and
         // the difference in points is there to be seen.
@@ -10663,16 +10672,9 @@ function _bdRender() {
             (pt && pt.margin !== null) ? vs('', _lvPct(pt.margin)) : 'On Sales',
             false, (pt && pt.margin !== null) ? mom : '')
         + (net === null ? '' : _lvTile('Net GP', _lvMoney(net, false),
-            vs(dNet, pnet ? _lvMoney(pnet, false) : '')
+            vs(dNet, pnet ? _lvMoney(pnet, false) : '', proj_(net))
             || 'gross profit less ' + Math.round(BD_NET_GP_RATE * 100) + '%',
             false, dNet ? mom : ''))
-        // Only on the month in progress. A finished month has no month end left
-        // to project to, and a "tracking" figure equal to the actual beside it
-        // would read as a second, agreeing measurement rather than the same
-        // number twice.
-        + (track !== null
-            ? _lvTile('Tracking', _lvMoney(track, false), 'projected month end')
-            : '')
         + '</div>';
 
     // The buying half, one line per figure. Secondary to the row above — this is
@@ -10687,12 +10689,12 @@ function _bdRender() {
     const dPaid = pt && _bdDelta(at(t.paid), pt.paid, 'flat');
     html += '<div class="bd-strip bd-strip2">'
         + _lvTile('Bought', _lvMoney(t.resale, false),
-            withCap('Resale Value', vs(dRes, pt && _lvMoney(pt.resale, false))),
+            withCap('Resale Value', vs(dRes, pt && _lvMoney(pt.resale, false), proj_(t.resale))),
             false, dRes ? mom : '')
         // Cash out is grey, like cost: paying more is what buying more looks
         // like, and a red arrow on a month that bought well would call it bad.
         + _lvTile('Cash Paid', _lvMoney(t.paid, false),
-            withCap('Out Of The Till', vs(dPaid, pt && _lvMoney(pt.paid, false))),
+            withCap('Out Of The Till', vs(dPaid, pt && _lvMoney(pt.paid, false), proj_(t.paid))),
             false, dPaid ? mom : '')
         + _lvTile('Buy Margin', _lvPct(t.buyMargin),
             withCap('On Purchases', (pt && pt.buyMargin !== null) ? vs('', _lvPct(pt.buyMargin)) : ''),
