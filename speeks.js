@@ -10615,32 +10615,49 @@ function _bdRender() {
     const proj = (d.isCurrent && last > 0) ? (d.daysInMonth / last) : 1;
     const at = v => (v === null ? null : v * proj);      // this month, at month end
     const prevNm = prevYm ? _bdMonthName(prevYm).split(' ')[0] : '';
-    // "▲ 10.7%  vs Jul $130,483" — the change, then what it is a change FROM.
-    // The figure is the half a manager asked for ("what last month's was") and
-    // the arrow is the half that is quicker to read, so both are here; the
-    // short-screen rule hides the <i> and keeps the arrow, which is why the
-    // month and the amount live inside it together.
-    //
-    // ⚠️ On the month in progress the arrow is the PROJECTION against last
-    // month, not the figure above it against last month — and now that the
-    // figure being compared to is printed, "▲ 11.3% vs July $130,483" sitting
-    // under $51,511 invites exactly the wrong arithmetic. The word "projected"
-    // is what stops it, and it appears only where there IS an arrow: a margin
-    // is a ratio, directly comparable mid-month, and is never projected.
-    // ⚠️ Mid-month the arrow is the PROJECTION against last month, not the
-    // month-to-date figure above it — so on a live month the projected amount is
-    // named right here rather than left implicit. "▲ 11.3% · $145,167 at month
-    // end vs July $130,483" is the whole thought in one line, and it is what
-    // retired the standalone Tracking tile: that tile was this number for Net GP
-    // alone, and every figure it makes sense for now carries its own.
-    const vs = (h, was, proj) => {
-        if (!h && !was && !proj) return '';
-        const head = [h, proj ? proj + ' at month end' : ''].filter(Boolean).join(' &middot; ');
-        const tail = was ? '<i>vs ' + escapeHtml(prevNm) + ' ' + was + '</i>' : '';
-        return [head, tail].filter(Boolean).join(' ');
-    };
     // The month-end projection of a figure, on the month in progress only.
     const proj_ = v => (d.isCurrent && v !== null && proj !== 1) ? _lvMoney(v * proj, false) : '';
+
+    // ---- the tile ----------------------------------------------------------
+    // Label across the top. Underneath, the figure with its month-end
+    // projection below it — a projection is the same quantity read forward, so
+    // it belongs under the number it projects, not off to one side. The
+    // comparisons go to the RIGHT, one row each: they are a different kind of
+    // thing (other periods) and stacking them under the figure made a column of
+    // four numbers with nothing saying which was which (user's call 2026-08-12).
+    const cmpRow = c => c
+        ? '<div class="bd-cmp"><span class="bd-cmp-k">' + escapeHtml(c.k) + '</span>'
+          + '<span class="bd-cmp-v">' + c.v + '</span>'
+          + '<span class="bd-cmp-d">' + (c.d || '') + '</span></div>'
+        : '';
+    const tile = (k, v, o) => {
+        o = o || {};
+        const rows = (o.cmp || []).map(cmpRow).join('');
+        return '<div class="cc-cell bd-tile' + (o.accent ? ' lv-accent' : '') + '">'
+            + '<span class="sh-stripe g"></span>'
+            + '<div class="sh-k">' + k + '</div>'
+            + '<div class="bd-tile-row">'
+            + '<div class="bd-tile-main"><div class="sh-v">' + v + '</div>'
+            + (o.track ? '<div class="bd-track">' + o.track + ' at month end</div>' : '')
+            + (o.note ? '<div class="bd-track bd-note">' + o.note + '</div>' : '')
+            + '</div>'
+            + (rows ? '<div class="bd-tile-cmp">' + rows + '</div>' : '')
+            + '</div></div>';
+    };
+    const lastMo = (was, delta) => was ? { k: prevNm, v: was, d: delta } : null;
+
+    // ⚠️ NOT BUILT YET — the slot is here and the row renders the moment this
+    // returns something. `daily_buysell` floors at 2026-01, so a year ago does
+    // not exist in the database for any store yet; the figures live in the older
+    // workbooks. When they land, this is the ONLY function that has to change.
+    //
+    // Worth knowing before wiring it: the sheet's own YoY compares THIS month's
+    // month-end PROJECTION against last year's same-month actual — verified to
+    // the dollar (Aug OVL projects to $145,167, which is exactly the sheet's YoY
+    // "Current", against $105,622.08 for Aug 2025 = its 37.44%). So the value
+    // this returns is last year's ACTUAL, and the delta beside it is measured
+    // against the projection above, exactly as `lastMo` already is.
+    const lastYr = (/* key */) => null;
 
     // A tile whose caption is a MEASUREMENT is marked, because a short screen
     // drops the caption line to buy table space — and dropping "Month To Date"
@@ -10659,46 +10676,55 @@ function _bdRender() {
     const dNet = pnet ? _bdDelta(net * proj, pnet, 'good') : '';
 
     html += '<div class="bd-strip bd-strip-top bd-strip-tight">'
-        + _lvTile('Sales', _lvMoney(t.sales, false),
-            vs(dSales, pt && _lvMoney(pt.sales, false), proj_(t.sales))
-            || (d.isCurrent ? 'Month To Date' : 'Month Total'), true, dSales ? mom : '')
-        + _lvTile('Gross Profit', _lvMoney(t.gp, false),
-            vs(dGp, pt && _lvMoney(pt.gp, false), proj_(t.gp))
-            || (d.isCurrent ? 'Month To Date' : 'Month Total'), false, dGp ? mom : '')
+        + tile('Sales', _lvMoney(t.sales, false), {
+            accent: true, track: proj_(t.sales),
+            note: pt ? '' : (d.isCurrent ? 'Month To Date' : 'Month Total'),
+            cmp: [lastMo(pt && _lvMoney(pt.sales, false), dSales), lastYr('sales')],
+        })
+        + tile('Gross Profit', _lvMoney(t.gp, false), {
+            track: proj_(t.gp),
+            note: pt ? '' : (d.isCurrent ? 'Month To Date' : 'Month Total'),
+            cmp: [lastMo(pt && _lvMoney(pt.gp, false), dGp), lastYr('gp')],
+        })
         // No arrow on margin: a percentage change OF a percentage is a figure
         // almost nobody reads correctly. Last month's margin sits beside it and
-        // the difference in points is there to be seen.
-        + _lvTile('Sell Margin', _lvPct(t.margin),
-            (pt && pt.margin !== null) ? vs('', _lvPct(pt.margin)) : 'On Sales',
-            false, (pt && pt.margin !== null) ? mom : '')
-        + (net === null ? '' : _lvTile('Net GP', _lvMoney(net, false),
-            vs(dNet, pnet ? _lvMoney(pnet, false) : '', proj_(net))
-            || 'gross profit less ' + Math.round(BD_NET_GP_RATE * 100) + '%',
-            false, dNet ? mom : ''))
+        // the difference in points is there to be seen. No projection either —
+        // a ratio is directly comparable mid-month.
+        + tile('Sell Margin <span class="bd-k-sub">&middot; On Sales</span>', _lvPct(t.margin), {
+            cmp: [lastMo((pt && pt.margin !== null) ? _lvPct(pt.margin) : '', ''), lastYr('margin')],
+        })
+        + (net === null ? '' : tile('Net GP', _lvMoney(net, false), {
+            track: proj_(net),
+            note: pnet ? '' : 'Gross Profit Less ' + Math.round(BD_NET_GP_RATE * 100) + '%',
+            cmp: [lastMo(pnet ? _lvMoney(pnet, false) : '', dNet), lastYr('net')],
+        }))
         + '</div>';
 
-    // The buying half, one line per figure. Secondary to the row above — this is
-    // what the month spent to make it possible — and three figures each of which
-    // is a label and a number do not need three stacked cards.
-    // The captions stay. They are not decoration — the sheet's "Sell" column is
+    // The buying half. Same shape as the row above — this is what the month
+    // spent to make it possible, and it is read the same way.
+    //
+    // The captions stay. They are not decoration: the sheet's "Sell" column is
     // the resale value of goods BOUGHT and its "Buy" column is the cash paid, so
     // "Resale Value" and "Out Of The Till" are what stop the two being read the
-    // wrong way round. Last month rides after them.
-    const withCap = (label, h) => label + (h ? ' &middot; ' + h : '');
+    // wrong way round.
     const dRes = pt && _bdDelta(at(t.resale), pt.resale, 'good');
     const dPaid = pt && _bdDelta(at(t.paid), pt.paid, 'flat');
     html += '<div class="bd-strip bd-strip2">'
-        + _lvTile('Bought', _lvMoney(t.resale, false),
-            withCap('Resale Value', vs(dRes, pt && _lvMoney(pt.resale, false), proj_(t.resale))),
-            false, dRes ? mom : '')
+        + tile('Bought <span class="bd-k-sub">&middot; Resale Value</span>', _lvMoney(t.resale, false), {
+            track: proj_(t.resale),
+            cmp: [lastMo(pt && _lvMoney(pt.resale, false), dRes), lastYr('resale')],
+        })
         // Cash out is grey, like cost: paying more is what buying more looks
         // like, and a red arrow on a month that bought well would call it bad.
-        + _lvTile('Cash Paid', _lvMoney(t.paid, false),
-            withCap('Out Of The Till', vs(dPaid, pt && _lvMoney(pt.paid, false), proj_(t.paid))),
-            false, dPaid ? mom : '')
-        + _lvTile('Buy Margin', _lvPct(t.buyMargin),
-            withCap('On Purchases', (pt && pt.buyMargin !== null) ? vs('', _lvPct(pt.buyMargin)) : ''),
-            false, (pt && pt.buyMargin !== null) ? mom : '')
+        // No projection here — what the till is down this month is a fact, and
+        // the resale value beside it already carries the month-end picture
+        // (user's call 2026-08-12).
+        + tile('Cash Paid <span class="bd-k-sub">&middot; Out Of The Till</span>', _lvMoney(t.paid, false), {
+            cmp: [lastMo(pt && _lvMoney(pt.paid, false), dPaid), lastYr('paid')],
+        })
+        + tile('Buy Margin <span class="bd-k-sub">&middot; On Purchases</span>', _lvPct(t.buyMargin), {
+            cmp: [lastMo((pt && pt.buyMargin !== null) ? _lvPct(pt.buyMargin) : '', ''), lastYr('buyMargin')],
+        })
         + '</div>';
 
 
@@ -10712,7 +10738,7 @@ function _bdRender() {
             + '<span class="lv-goal-fig"><b>' + _lvMoney(t.gp, false) + '</b> of '
             + _lvMoney(store.goal, false) + '</span></div>'
             + '<div class="lv-goal-bar"><i style="width:' + Math.max(0, Math.min(100, pct)) + '%"></i></div>'
-            + '<div class="lv-goal-foot">' + _lvPct(pct) + ' banked</div></div>';
+            + '<div class="lv-goal-foot">' + _lvPct(pct) + ' Banked</div></div>';
     }
 
     // The buying-day count rides in the group heading rather than in a sentence
@@ -10728,7 +10754,7 @@ function _bdRender() {
     // still running, or "24 buying days" on the 12th reads as a finished total.
     const buyDays = t.buyDays
         ? ' <span class="bd-grp-sub">&middot; ' + t.buyDays
-          + (t.buyDays === 1 ? ' buying day' : ' buying days')
+          + (t.buyDays === 1 ? ' Buying day' : ' Buying days')
           + (d.isCurrent ? ' so far' : ' this month') + '</span>'
         : '';
     html += '<div class="lv-tbl-scroll"><table class="lv-tbl bd-tbl"><thead>'

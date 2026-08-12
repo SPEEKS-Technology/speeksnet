@@ -11096,7 +11096,43 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
    tallest, and their captions are not the same height — one wraps to two lines,
    one is a short label, one is absent — so top-aligned content left the row
    looking ragged even though every box was identical. */
-.bd-strip-top .cc-cell { display: flex; flex-direction: column; justify-content: center; }
+.bd-strip .bd-tile { display: flex; flex-direction: column; justify-content: center; }
+
+/* The figure and its month-end projection on the left; the other periods on the
+   right. Two different KINDS of number: one is this month read forward, the
+   others are different months entirely, and stacking all four in a column left
+   nothing saying which was which. */
+.bd-tile-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; flex-wrap: wrap;
+}
+.bd-tile-main { min-width: 0; }
+.bd-track {
+    font-size: clamp(8.5px, 0.95vh, 10.5px); font-weight: 750; color: #8b97a5;
+    margin-top: 2px; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.bd-track.bd-note { color: #a8b3c0; font-weight: 700; }
+/* One row per period, right-aligned as a block so the amounts line up under
+   each other and the eye can read down them. */
+.bd-tile-cmp { display: flex; flex-direction: column; gap: 2px; margin-left: auto; }
+.bd-cmp {
+    display: grid; grid-template-columns: auto auto auto; align-items: baseline;
+    gap: 0 7px; white-space: nowrap; justify-content: end;
+}
+.bd-cmp-k {
+    font-size: clamp(7.5px, 0.85vh, 9px); font-weight: 800; letter-spacing: .05em;
+    text-transform: uppercase; color: #a8b3c0;
+}
+.bd-cmp-v {
+    font-size: clamp(9.5px, 1.05vh, 11.5px); font-weight: 850; color: #647082;
+    font-variant-numeric: tabular-nums; text-align: right;
+}
+/* Always present even when empty, so the amounts in the column above and below
+   stay in one line rather than shuffling left when a row has no arrow. */
+.bd-cmp-d {
+    font-size: clamp(8px, 0.9vh, 9.5px); font-weight: 850;
+    min-width: 3.6em; text-align: right;
+}
 .bd-strip2 {
     grid-template-columns: none;
     grid-auto-flow: column; grid-auto-columns: 1fr;
@@ -11113,28 +11149,6 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
    instead of stacking. These are secondary to the six above them and a second
    full stack cost ~65px, which is four days of table; this costs ~25px. The
    strip above keeps its stacked form because it is the answer to the view. */
-/* align-items: CENTER, not baseline. Every tile in the row is as tall as the
-   tallest, and once these captions grew long enough to wrap, a baseline pinned
-   the short tiles' contents to the first line and left the label sitting at the
-   top of its box with the space underneath. Centred, each tile's contents sit
-   in the middle of whatever height the row settles on. */
-.bd-strip2 .cc-cell {
-    display: flex; align-items: center; gap: 7px;
-    padding-top: clamp(3px, 0.5vh, 8px); padding-bottom: clamp(3px, 0.5vh, 8px);
-}
-.bd-strip2 .cc-cell .sh-k { flex: none; }
-.bd-strip2 .cc-cell .sh-v {
-    margin-top: 0; margin-left: auto;
-    font-size: clamp(12px, 1.5vh, 16px);
-}
-/* Wraps rather than overflows. The caption now carries a projection and a
-   comparison as well as its own label, and on a narrower card that runs past
-   the tile — measured 7px over at 1300px wide. A second line costs a few pixels;
-   a clipped figure costs the figure. */
-.bd-strip2 .cc-cell .sh-sub {
-    flex: 0 1 auto; min-width: 0; margin-top: 0; white-space: normal;
-    font-size: clamp(8px, 0.9vh, 9.5px); line-height: 1.3;
-}
 /* Month over month, under the figure it measures. Grey by default: a direction
    is only good or bad when the quantity is, and COST rising on a month that sold
    more is not bad news. Sales, gross profit and net GP pass 'good' and colour. */
@@ -11323,6 +11337,10 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
        shorter breakpoint below does, and it costs the JAN 5 – 11 landmarks that
        made a full month readable in the first place. */
     .bd-tbl tr.bd-wkrow > td { padding-top: 1px; padding-bottom: 0; line-height: 1.1; }
+    /* The new tile is two lines in its main column where it used to be one,
+       so the space AROUND those lines is what comes off first. */
+    .bd-strip .bd-track { margin-top: 1px; line-height: 1.2; }
+    .bd-strip .bd-tile-cmp { gap: 0; }
     /* The totals row keeps more air than a day row on purpose, but not this
        much of it once the screen is the constraint. */
     .bd-tbl tfoot .lv-foot td {
@@ -11352,6 +11370,8 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
     .bd-strip-top .cc-cell { padding-top: 3px; padding-bottom: 3px; }
     .bd-strip-top .cc-cell .sh-v { margin-top: 0; font-size: clamp(12px, 1.6vh, 18px); }
     .bd-strip-top .cc-cell .sh-sub { margin-top: 0; line-height: 1.25; }
+    .bd-strip .bd-track { margin-top: 0; line-height: 1.15; font-size: 8px; }
+    .bd-strip .bd-tile .sh-k { margin-bottom: 0; line-height: 1.15; }
     .bd-strip-top .cc-cell .sh-stripe { top: 3px; bottom: 3px; }
     .bd-card .lv-goal-bar, .bd-card .lv-goal-foot { display: none; }
     .bd-card .lv-goal { margin-bottom: clamp(4px, 0.6vh, 10px); }
@@ -15331,3 +15351,9 @@ body.tv-body { display: block; background: #eef1f5; }
     color: #8a94a3; text-transform: none; padding-left: 4px;
 }
 .dmx-t.sel .dmx-t-val.dmx-t-sub { color: #4d8c6a; }
+
+/* The clarifier that rides with a tile's label — "Bought · Resale Value". It is
+   part of the NAME of the figure (the sheet's Sell column is the resale value of
+   goods bought), not a note about it, so it belongs beside the label rather than
+   on a line of its own under the number. */
+.bd-k-sub { font-weight: 700; color: #b8c2cd; letter-spacing: .03em; }
