@@ -11092,6 +11092,11 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
     grid-template-columns: none;
     grid-auto-flow: column; grid-auto-columns: 1fr;
 }
+/* Centred in the tile, not hung from its top. The tiles are all as tall as the
+   tallest, and their captions are not the same height — one wraps to two lines,
+   one is a short label, one is absent — so top-aligned content left the row
+   looking ragged even though every box was identical. */
+.bd-strip-top .cc-cell { display: flex; flex-direction: column; justify-content: center; }
 .bd-strip2 {
     grid-template-columns: none;
     grid-auto-flow: column; grid-auto-columns: 1fr;

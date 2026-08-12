@@ -10678,10 +10678,25 @@ function _bdRender() {
     // The buying half, one line per figure. Secondary to the row above — this is
     // what the month spent to make it possible — and three figures each of which
     // is a label and a number do not need three stacked cards.
+    // The captions stay. They are not decoration — the sheet's "Sell" column is
+    // the resale value of goods BOUGHT and its "Buy" column is the cash paid, so
+    // "Resale Value" and "Out Of The Till" are what stop the two being read the
+    // wrong way round. Last month rides after them.
+    const withCap = (label, h) => label + (h ? ' &middot; ' + h : '');
+    const dRes = pt && _bdDelta(at(t.resale), pt.resale, 'good');
+    const dPaid = pt && _bdDelta(at(t.paid), pt.paid, 'flat');
     html += '<div class="bd-strip bd-strip2">'
-        + _lvTile('Bought', _lvMoney(t.resale, false), 'resale value')
-        + _lvTile('Cash Paid', _lvMoney(t.paid, false), 'out of the till')
-        + _lvTile('Buy Margin', _lvPct(t.buyMargin), 'on purchases')
+        + _lvTile('Bought', _lvMoney(t.resale, false),
+            withCap('Resale Value', vs(dRes, pt && _lvMoney(pt.resale, false))),
+            false, dRes ? mom : '')
+        // Cash out is grey, like cost: paying more is what buying more looks
+        // like, and a red arrow on a month that bought well would call it bad.
+        + _lvTile('Cash Paid', _lvMoney(t.paid, false),
+            withCap('Out Of The Till', vs(dPaid, pt && _lvMoney(pt.paid, false))),
+            false, dPaid ? mom : '')
+        + _lvTile('Buy Margin', _lvPct(t.buyMargin),
+            withCap('On Purchases', (pt && pt.buyMargin !== null) ? vs('', _lvPct(pt.buyMargin)) : ''),
+            false, (pt && pt.buyMargin !== null) ? mom : '')
         + '</div>';
 
 
