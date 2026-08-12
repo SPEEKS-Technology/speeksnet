@@ -10769,20 +10769,18 @@ function _bdRender() {
     // "Resale Value" and "Out Of The Till" are what stop the two being read the
     // wrong way round.
     const dRes = pt && _bdDelta(at(t.resale), pt.resale, 'good');
-    const dPaid = pt && _bdDelta(at(t.paid), pt.paid, 'flat');
     html += '<div class="bd-strip bd-strip2">'
         + tile('Bought <span class="bd-k-sub">&middot; Resale Value</span>', _lvMoney(t.resale, false), {
             track: proj_(t.resale),
             cmp: [lastMo(pt && _lvMoney(pt.resale, false), dRes), lastYr('resale')],
         })
-        // Cash out is grey, like cost: paying more is what buying more looks
-        // like, and a red arrow on a month that bought well would call it bad.
-        // No projection here — what the till is down this month is a fact, and
-        // the resale value beside it already carries the month-end picture
-        // (user's call 2026-08-12).
-        + tile('Cash Paid <span class="bd-k-sub">&middot; Out Of The Till</span>', _lvMoney(t.paid, false), {
-            cmp: [lastMo(pt && _lvMoney(pt.paid, false), dPaid), lastYr('paid')],
-        })
+        // The bare figure, alone: no projection, no last month, no last year
+        // (user's call 2026-08-12). What the till is down this month is a fact
+        // and it is read on its own. Every comparison anyone would draw off it
+        // is already in the two tiles beside it — the resale value carries the
+        // month-end picture and the buy margin carries the ratio between them —
+        // so three periods of cash-out was the same story told a third time.
+        + tile('Cash Paid <span class="bd-k-sub">&middot; Out Of The Till</span>', _lvMoney(t.paid, false), {})
         + tile('Buy Margin <span class="bd-k-sub">&middot; On Purchases</span>', _lvPct(t.buyMargin), {
             cmp: [lastMo((pt && pt.buyMargin !== null) ? _lvPct(pt.buyMargin) : '', ''), lastYr('buyMargin')],
         })
@@ -10845,8 +10843,13 @@ function _bdRender() {
         // The band alternates by week, so two touching weeks never share a tint.
         const band = wi % 2 === 1 ? 'bd-band' : '';
         const a = wk[0].day, b = wk[wk.length - 1].day;
-        html += '<tr class="bd-wkrow"><td colspan="8">' + escapeHtml(moAbbr) + ' ' + a
-            + (b > a ? ' &ndash; ' + b : '') + '</td></tr>';
+        // Five columns then three, not one span of eight: the second cell is
+        // empty and exists only so the Selling|Buying rule has something to be
+        // drawn on across a week label. Spanning the whole width left a gap in
+        // the line at every week.
+        html += '<tr class="bd-wkrow"><td colspan="5">' + escapeHtml(moAbbr) + ' ' + a
+            + (b > a ? ' &ndash; ' + b : '')
+            + '</td><td colspan="3" class="bd-sep"></td></tr>';
         wk.forEach(x => {
         const w = _bdDow(_bdMonth, x.day);
         const rowCls = [w.dow === 0 ? 'bd-sun' : '', band].filter(Boolean).join(' ');
