@@ -10820,7 +10820,8 @@ function _bdRender() {
         + '<tr class="bd-grp"><th></th><th colspan="4">Selling</th>'
         + '<th colspan="3" class="bd-sep">Buying' + buyDays + '</th></tr>'
         + '<tr><th>Day</th><th>Sales</th><th>Cost</th><th>Gross profit</th><th>Margin</th>'
-        + '<th class="bd-sep">Bought &middot; resale value</th><th>Cash paid</th><th>Buy margin</th>'
+        + '<th class="bd-sep">Bought<span class="bd-th-sub">resale value</span></th>'
+        + '<th>Cash paid</th><th>Buy margin</th>'
         + '</tr></thead><tbody>';
 
     const cell = (cls, v) => '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + v + '</td>';

@@ -11191,7 +11191,7 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
    (they right-align much further over). The right-hand figure drifts with
    viewport height because the heading is set in vh, so this is centred at the
    sizes it is actually read at, not at one exact height. */
-.bd-tbl th:nth-child(5), .bd-tbl td:nth-child(5) { padding-right: 26px; }
+
 .bd-tbl .bd-grp th {
     padding-bottom: 4px;
     font-size: 9px; letter-spacing: .09em; color: #a3aeba;
@@ -11204,6 +11204,16 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .bd-grp-sub {
     font-weight: 700; letter-spacing: .02em; text-transform: none; color: #b8c2cd;
 }
+/* The second line of a column heading — "Bought / resale value". Quieter and
+   smaller than the label above it, because it is a note on the label rather
+   than part of it: the sheet's Sell column is the resale value of what was
+   BOUGHT and its Buy column is the cash paid, so this line is the thing that
+   stops the two halves being read the wrong way round. */
+.bd-tbl th .bd-th-sub {
+    display: block; margin-top: 1px;
+    font-size: .85em; font-weight: 700; letter-spacing: .04em; color: #b8c2cd;
+}
+
 /* Two fixed columns: the date right-aligns so 1 and 31 end on the same edge, and
    the weekday centres in a slot of its own so the abbreviations run straight down
    the page instead of stepping right whenever the date gains a digit. */
@@ -11217,13 +11227,18 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
    both dash. Quiet enough that a run of them reads as absence, not as zeros. */
 .bd-tbl td.bd-dash { color: #cbd5e1; font-weight: 650; }
 /* ---- reading a month of rows ----------------------------------------------
-   MONEY RIGHT-ALIGNS. The board's tables centre their figures, which is fine for
-   five store rows of similar size; over 31 days it puts $1,099.93 and $15,995.81
-   with their decimal points in different places, and the column stops being
-   scannable. Right-aligned, magnitudes stack and the eye reads down a clean edge.
-   Headers follow their own column so the label sits over its figures. */
-.bd-tbl th:not(:first-child), .bd-tbl td:not(:first-child) { text-align: right; }
-/* The two group captions span their halves and belong centred over them. */
+   EVERY COLUMN CENTRES, header and figures together (user's call
+   2026-08-12). The figures used to right-align so that $1,099.93 and $15,995.81
+   stacked their decimal points down a month of rows, and the headers sat on
+   that same right edge — correct for reading a column of money, but it left
+   every label hanging off the right of its own column, which is what got
+   reported. Centred, a label sits over the middle of the space it names.
+   ⚠️ The trade is real and was made deliberately: decimal points no longer line
+   up, so a wide figure and a narrow one in the same column start in different
+   places. Do not "fix" that by putting the right alignment back without asking.
+   The day column centres as a BLOCK — its date/weekday grid keeps its own
+   internal alignment, so the dates still end on a common edge. */
+.bd-tbl th, .bd-tbl td { text-align: center; }
 .bd-tbl .bd-grp th { text-align: center; }
 
 /* WEEK BANDS. Alternating weeks carry a tint, so the month reads as five blocks
@@ -11335,7 +11350,7 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
     padding-bottom: clamp(4px, 0.65vh, 16px);
 }
 .bd-card .bd-tbl tfoot .lv-foot td { padding-left: 6px; padding-right: 6px; }
-.bd-card .bd-tbl tfoot .lv-foot td:nth-child(5) { padding-right: 26px; }
+
 .bd-card .bd-tbl tfoot .lv-foot td:last-child { padding-right: 12px; }
 .bd-card .lv-note { margin-top: clamp(3px, 0.55vh, 12px); font-size: clamp(8.5px, 0.95vh, 10.5px); line-height: 1.35; }
 
@@ -11368,6 +11383,11 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
         font-size: clamp(8px, 0.9vh, 9.5px); margin-top: clamp(0px, 0.25vh, 4px);
         white-space: normal; line-height: 1.3;
     }
+    /* The column headings are two lines now on the buying side, so their own
+       padding is the first thing to come off — the air was there to centre a
+       single line between two rules, and a second line already fills it. */
+    .bd-tbl th { padding-top: clamp(3px, 0.5vh, 8px); padding-bottom: clamp(3px, 0.5vh, 8px); }
+    .bd-tbl th .bd-th-sub { margin-top: 0; }
     /* The week LABELS survive here; only their padding goes. Six label rows at
        the day rows' spacing is ~90px, which is the whole reason a 31-day month
        stopped fitting between 870 and 1000. Collapsing them outright is what the
