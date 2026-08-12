@@ -11085,6 +11085,13 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
    because the tile count is not — "Net GP Tracking" only exists on the month in
    progress — so the tiles divide whatever is there rather than leaving a hole
    where a fourth would have been. */
+/* The selling row. Four tiles on a finished month, five on a live one (Tracking
+   joins), so the count is not fixed and the columns divide whatever is there
+   rather than leaving a hole where a sixth would have been. */
+.bd-strip-top {
+    grid-template-columns: none;
+    grid-auto-flow: column; grid-auto-columns: 1fr;
+}
 .bd-strip2 {
     grid-template-columns: none;
     grid-auto-flow: column; grid-auto-columns: 1fr;
@@ -11277,36 +11284,36 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
    Raised from 820px to 1010px when the derived strip was added below: that
    strip costs real height, and the band from roughly 870 to 1000 was the only
    place a 31-day month no longer fitted. */
+/* ⚠️ The selling row is NOT collapsed to one line on a short screen, and the
+   one-line form these rules used to impose is gone. Its captions now carry an
+   amount — "▲ 11.3% projected vs July $130,483" — and a label, a figure and
+   that on a single 245px line simply clipped, which is worse than the two rows
+   of table it was buying back. It stays stacked at every height and gives back
+   its room by shrinking instead: the figure, the padding and the caption all
+   come down, and the caption keeps the tile's full width to itself. */
 @media (max-height: 1010px) {
-    .bd-strip:not(.bd-strip2) .cc-cell {
-        display: flex; align-items: baseline; gap: 6px;
+    .bd-strip-top .cc-cell {
         padding-top: clamp(4px, 0.6vh, 9px); padding-bottom: clamp(4px, 0.6vh, 9px);
     }
-    /* nowrap on the label: six tiles across a 1512px card leaves ~220px of
-       content each, and a two-line "GROSS PROFIT" makes the whole strip a line
-       taller — which is the opposite of what this block is for. */
-    .bd-strip:not(.bd-strip2) .cc-cell .sh-k { flex: none; white-space: nowrap; }
+    .bd-strip-top .cc-cell .sh-k { white-space: nowrap; }
+    .bd-strip-top .cc-cell .sh-v {
+        font-size: clamp(13px, 1.7vh, 20px); margin-top: clamp(0px, 0.2vh, 4px);
+    }
+    .bd-strip-top .cc-cell .sh-sub {
+        font-size: clamp(8px, 0.9vh, 9.5px); margin-top: clamp(0px, 0.25vh, 4px);
+        white-space: normal; line-height: 1.3;
+    }
     /* The week LABELS survive here; only their padding goes. Six label rows at
        the day rows' spacing is ~90px, which is the whole reason a 31-day month
        stopped fitting between 870 and 1000. Collapsing them outright is what the
        shorter breakpoint below does, and it costs the JAN 5 – 11 landmarks that
        made a full month readable in the first place. */
     .bd-tbl tr.bd-wkrow > td { padding-top: 1px; padding-bottom: 0; line-height: 1.1; }
-    .bd-strip:not(.bd-strip2) .cc-cell .sh-v {
-        margin-top: 0; margin-left: auto; font-size: clamp(13px, 1.7vh, 17px);
+    /* The totals row keeps more air than a day row on purpose, but not this
+       much of it once the screen is the constraint. */
+    .bd-tbl tfoot .lv-foot td {
+        padding-top: clamp(3px, 0.45vh, 10px); padding-bottom: clamp(3px, 0.45vh, 10px);
     }
-    /* A caption that is only a LABEL goes; one that is a measurement stays.
-       .bd-t-mom marks the second kind — dropping "Month To Date" costs nothing,
-       dropping "▲ 11.3%" would drop a figure. .bd-strip2 is exempt entirely:
-       it is already one line and every note in it is data. */
-    .bd-strip:not(.bd-strip2) .cc-cell:not(.bd-t-mom) .sh-sub { display: none; }
-    .bd-strip:not(.bd-strip2) .cc-cell.bd-t-mom .sh-sub {
-        flex: none; margin-top: 0; white-space: nowrap; font-size: clamp(8px, 0.9vh, 9.5px);
-    }
-    /* Six tiles across, so the month name comes off the delta — the heading
-       above the strip already says which month this is, and which one comes
-       before it is not in doubt. */
-    .bd-strip .sh-sub i { display: none; }
 }
 /* Shorter still — a 1366x768 laptop. The type has reached the floor it stays
    readable at, so the last of the room comes out of chrome, cheapest first:
@@ -11321,10 +11328,17 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
        is the grouping — while giving back the five text rows. The dates the
        labels carried are still in the day column two lines below. */
     .bd-tbl tr.bd-wkrow > td { font-size: 0; line-height: 0; padding: 0; }
-    /* The derived strip keeps every figure it carries and gives up only its
-       breathing room — it is four numbers on one line, so there is nothing in
+    /* The buying strip keeps every figure it carries and gives up only its
+       breathing room — three numbers on one line each, so there is nothing in
        it to drop that would not be a number. */
     .bd-strip2 .cc-cell { padding-top: 2px; padding-bottom: 2px; }
+    /* The selling row does the same. It stays stacked — its captions carry
+       amounts and will not survive a one-line squeeze — so the room comes out
+       of the space around them instead. */
+    .bd-strip-top .cc-cell { padding-top: 3px; padding-bottom: 3px; }
+    .bd-strip-top .cc-cell .sh-v { margin-top: 0; font-size: clamp(12px, 1.6vh, 18px); }
+    .bd-strip-top .cc-cell .sh-sub { margin-top: 0; line-height: 1.25; }
+    .bd-strip-top .cc-cell .sh-stripe { top: 3px; bottom: 3px; }
     .bd-card .lv-goal-bar, .bd-card .lv-goal-foot { display: none; }
     .bd-card .lv-goal { margin-bottom: clamp(4px, 0.6vh, 10px); }
     .bd-card .lv-note:not(.bd-warn) { display: none; }

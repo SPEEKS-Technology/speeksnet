@@ -10634,12 +10634,6 @@ function _bdRender() {
         return [h, tail].filter(Boolean).join(' ');
     };
 
-    // Worked out before the strip above it is written, because the strip above
-    // closes its bottom margin when this one follows — the two read as one block
-    // of summary rather than as two competing ones, and it is ~10px of table.
-    const net = _bdNetGp(t);
-    const pnet = pt ? _bdNetGp(pt) : null;
-
     // A tile whose caption is a MEASUREMENT is marked, because a short screen
     // drops the caption line to buy table space — and dropping "Month To Date"
     // is free where dropping "▲ 11.3% vs July" would be losing a figure the
@@ -10648,53 +10642,48 @@ function _bdRender() {
     const dGp    = pt && _bdDelta(at(t.gp),    pt.gp,    'good');
     const mom = ' bd-t-mom';
 
-    html += '<div class="bd-strip' + (net !== null ? ' bd-strip-tight' : '') + '">'
+    // Two rows, split by what they are about rather than by how many fit: what
+    // the month SOLD and what that was worth on top, what it BOUGHT underneath.
+    // Net GP belongs upstairs — it is the last step of the selling figures, not
+    // a footnote to them (user's call 2026-08-12).
+    const net = _bdNetGp(t);
+    const pnet = pt ? _bdNetGp(pt) : null;
+    const dNet = pnet ? _bdDelta(net * proj, pnet, 'good') : '';
+    const track = (net !== null && d.isCurrent && last > 0) ? net * proj : null;
+
+    html += '<div class="bd-strip bd-strip-top bd-strip-tight">'
         + _lvTile('Sales', _lvMoney(t.sales, false),
-            vs(dSales, pt && _lvMoney(pt.sales, false)) || 'Month To Date', true, dSales ? mom : '')
+            vs(dSales, pt && _lvMoney(pt.sales, false)) || (d.isCurrent ? 'Month To Date' : 'Month Total'), true, dSales ? mom : '')
         + _lvTile('Gross Profit', _lvMoney(t.gp, false),
-            vs(dGp, pt && _lvMoney(pt.gp, false)) || 'Month To Date', false, dGp ? mom : '')
+            vs(dGp, pt && _lvMoney(pt.gp, false)) || (d.isCurrent ? 'Month To Date' : 'Month Total'), false, dGp ? mom : '')
         // No arrow on margin: a percentage change OF a percentage is a figure
         // almost nobody reads correctly. Last month's margin sits beside it and
         // the difference in points is there to be seen.
         + _lvTile('Sell Margin', _lvPct(t.margin),
             (pt && pt.margin !== null) ? vs('', _lvPct(pt.margin)) : 'On Sales',
             false, (pt && pt.margin !== null) ? mom : '')
-        + _lvTile('Bought', _lvMoney(t.resale, false), 'Resale Value')
-        + _lvTile('Cash Paid', _lvMoney(t.paid, false), 'Out Of The Till')
-        + _lvTile('Buy Margin', _lvPct(t.buyMargin), 'On Purchases')
+        + (net === null ? '' : _lvTile('Net GP', _lvMoney(net, false),
+            vs(dNet, pnet ? _lvMoney(pnet, false) : '')
+            || 'gross profit less ' + Math.round(BD_NET_GP_RATE * 100) + '%',
+            false, dNet ? mom : ''))
+        // Only on the month in progress. A finished month has no month end left
+        // to project to, and a "tracking" figure equal to the actual beside it
+        // would read as a second, agreeing measurement rather than the same
+        // number twice.
+        + (track !== null
+            ? _lvTile('Tracking', _lvMoney(track, false), 'projected month end')
+            : '')
         + '</div>';
 
-    // ---- net GP ----
-    // Its own strip because it answers a different question from the one above:
-    // that strip is what the month DID, this is what the month is worth after
-    // the 21% comes off. Cost rides here rather than in the top strip because it
-    // is the one figure of the three the user asked for a month-over-month on
-    // that has no tile of its own up there — and it reads naturally beside the
-    // other derived figures.
-    if (net !== null) {
-        const track = d.isCurrent && last > 0 ? net * proj : null;
-        // One line per tile — label, figure, note — so this strip costs about a
-        // third of what a second stack of full tiles would.
-        //
-        // Cost lost its tile: it is a column of the table and a figure in the
-        // totals row, and as a headline it was the least-read of the six.
-        // "less 21% of sales" went with it — the rate is fixed and saying it
-        // every month spends the line that the CHANGE now uses instead.
-        const dNet = pnet ? _bdDelta(net * proj, pnet, 'good') : '';
-        html += '<div class="bd-strip bd-strip2">'
-            + _lvTile('Net GP', _lvMoney(net, false),
-                vs(dNet, pnet ? _lvMoney(pnet, false) : '')
-                || 'gross profit less ' + Math.round(BD_NET_GP_RATE * 100) + '%',
-                false, dNet ? mom : '')
-            // Only on the month in progress. A finished month has no month end
-            // left to project to, and a "tracking" figure equal to the actual
-            // beside it would read as a second, agreeing measurement rather than
-            // as the same number twice.
-            + (track !== null
-                ? _lvTile('Tracking', _lvMoney(track, false), 'projected month end')
-                : '')
-            + '</div>';
-    }
+    // The buying half, one line per figure. Secondary to the row above — this is
+    // what the month spent to make it possible — and three figures each of which
+    // is a label and a number do not need three stacked cards.
+    html += '<div class="bd-strip bd-strip2">'
+        + _lvTile('Bought', _lvMoney(t.resale, false), 'resale value')
+        + _lvTile('Cash Paid', _lvMoney(t.paid, false), 'out of the till')
+        + _lvTile('Buy Margin', _lvPct(t.buyMargin), 'on purchases')
+        + '</div>';
+
 
     // Only ever the month in progress: nothing stores a past month's goal, and a
     // finished month measured against this month's target would be a wrong
