@@ -292,33 +292,35 @@ function _mrWeekFormula(opts) {
 //
 // The summed column is read off the tab's own formula rather than assumed, so a
 // moved column still costs nothing.
+// ⚠️ SCANS EVERY COLUMN, not each store block. The Buy tab carries a SIXTH
+// week column at AD for the company total, outside all five store blocks, and a
+// per-block scan left it sitting on last month's Sundays while the five stores
+// moved. The signature — a formula on every week end and on no other day — is
+// specific enough to find it without being told where it is.
 function _mrWeekCols(srcFormulas, bases, dayRows, weekEnds, width, lastCol) {
   var out = [];
-  Object.keys(bases).forEach(function (code) {
-    var base = bases[code];
-    var end = Math.min(base + width, lastCol);
-    for (var col = base + 1; col < end; col++) {
-      var endSeen = 0, endF = 0, otherF = 0, sample = '', firstSample = '';
-      for (var d in dayRows) {
-        var day = parseInt(d, 10);
-        var f = (srcFormulas[dayRows[d]] || [])[col];
-        if (weekEnds.indexOf(day) >= 0) {
-          endSeen++;
-          if (f) {
-            endF++;
-            if (day === weekEnds[0]) firstSample = f;
-            else if (!sample) sample = f;
-          }
-        } else if (f) otherF++;
-      }
-      if (!endSeen || endF !== endSeen || otherF) continue;
-      // "=SUM(C6:C11)" -> C. Failing that, the first week's "…+C4" tail.
-      var m = /SUM\(\$?([A-Z]{1,3})\$?\d+/i.exec(sample || firstSample)
-           || /\+\s*\$?([A-Z]{1,3})\$?\d+\s*$/i.exec(firstSample || sample);
-      if (!m) continue;
-      out.push({ store: code, col: col, offset: col - base, valueCol: m[1].toUpperCase() });
+  for (var col = 0; col < lastCol; col++) {
+    var endSeen = 0, endF = 0, otherF = 0, sample = '', firstSample = '';
+    for (var d in dayRows) {
+      var day = parseInt(d, 10);
+      var f = (srcFormulas[dayRows[d]] || [])[col];
+      if (weekEnds.indexOf(day) >= 0) {
+        endSeen++;
+        if (f) {
+          endF++;
+          if (day === weekEnds[0]) firstSample = f;
+          else if (!sample) sample = f;
+        }
+      } else if (f) otherF++;
     }
-  });
+    if (!endSeen || endF !== endSeen || otherF) continue;
+    // "=SUM(C6:C11)" -> C. Failing that, the first week's "…+C4" tail.
+    var m = /SUM\(\$?([A-Z]{1,3})\$?\d+/i.exec(sample || firstSample)
+         || /\+\s*\$?([A-Z]{1,3})\$?\d+\s*$/i.exec(firstSample || sample);
+    if (!m) continue;
+    var owner = _mrBlockOf(bases, col, width);
+    out.push({ store: owner || 'TTL', col: col, valueCol: m[1].toUpperCase() });
+  }
   return out;
 }
 
@@ -521,10 +523,13 @@ function _mrBuildTab(ss, src, targetYm, opts) {
   if (rep.weekly.length) {
     var afterValues = tab.getRange(1, 1, tab.getLastRow(), lastCol).getValues();
     var weekLog = [];
+    // The day grid is one set of rows shared by every block, including the
+    // company one that has no date column of its own — so the rows are read
+    // once, from the first store block, and used for all of them.
+    var anchorBase = tgtBases[rep.stores[0]];
+    var weekRows = anchorBase === undefined ? {} : _mrDayRows(afterValues, anchorBase, firstRow);
     rep.weekly.forEach(function (wk) {
-      var base = tgtBases[wk.store];
-      if (base === undefined) return;
-      var rows = _mrDayRows(afterValues, base, firstRow);
+      var rows = weekRows;
       if (rows[1] === undefined) return;
       // rows[1] is day 1 zero-based, so the same number is the 1-based row
       // ABOVE it — exactly the "previous week-end" the first week measures from.
@@ -823,7 +828,7 @@ function _mrReport(r) {
       + rep.retarget.from + ' -> ' + rep.retarget.to
       + '   rows below r' + rep.retarget.anchor + ' shift ' + (rep.retarget.shift > 0 ? '+' : '') + rep.retarget.shift);
     Logger.log('  weekly : ' + (rep.weekly.length
-      ? rep.weekly.map(function (w) { return w.store + '+' + w.offset + ' sums ' + w.valueCol; }).join(', ')
+      ? rep.weekly.map(function (w) { return w.store + '@' + _mrColLetter(w.col) + ' sums ' + w.valueCol; }).join(', ')
         + (rep.weekLog ? '   week ends ' + rep.weekLog.join(',') : '')
       : 'none found'));
     Logger.log('  footer : ' + (rep.footer.length ? rep.footer.join(' | ') : 'nothing matched'));

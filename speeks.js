@@ -10454,15 +10454,6 @@ function _gpBuyDaysHtml(editable) {
     const days = new Date(y, m, 0).getDate();
     const monthOnly = _gpMonthName(ym).split(' ')[0];
 
-    let opts = '';
-    for (let d = 1; d <= days; d++) {
-        // Sundays are already closed, so offering them would invite a second
-        // subtraction that the maths deliberately ignores.
-        if (new Date(y, m - 1, d).getDay() === 0) continue;
-        if (_gpClosed.some(c => c.day === d)) continue;
-        opts += `<option value="${d}">${_gpDayName(ym, d)} ${d}</option>`;
-    }
-
     let chips = '';
     _gpClosed.slice().sort((a, b) => a.day - b.day).forEach(c => {
         chips += `<span class="gp-chip">${escapeHtml(_gpDayName(ym, c.day))} ${c.day}`
@@ -10477,18 +10468,19 @@ function _gpBuyDaysHtml(editable) {
         <span class="gp-sec-s">All Five Stores</span></div>
       <div class="gp-bd">
         <span class="gp-bd-num"><b id="gpBuyDays">${_gpBuyingDays(ym)}</b><span>Buying Days</span></span>
-        <span class="gp-bd-calc">
-          <div><i></i>Days in ${escapeHtml(monthOnly)} <em>${days}</em></div>
-          <div><i>&minus;</i>Sundays <em>${_gpSundays(ym)}</em></div>
-          <div><i>&minus;</i>Days closed <em id="gpClosedCount">${_gpClosed.length}</em></div>
-          <div class="gp-bd-rule"><i>=</i>Open to buy <em id="gpOpenToBuy">${_gpBuyingDays(ym)}</em></div>
-        </span>
+        <table class="gp-bd-calc">
+          <tr><td>Days in ${escapeHtml(monthOnly)}</td><td>${days}</td></tr>
+          <tr><td>Sundays</td><td>${_gpSundays(ym)}</td></tr>
+          <tr><td>Days closed</td><td>${_gpClosed.length}</td></tr>
+          <tr class="gp-bd-rule"><td>Open to buy</td><td>${_gpBuyingDays(ym)}</td></tr>
+        </table>
       </div>
       <div class="gp-closed">
         <p class="gp-closed-t">Closed beyond Sundays</p>
         <div class="gp-chips">${chips}</div>
-        ${editable && opts ? `<div class="gp-add">
-            <select class="mg-select" id="gpClosedDay">${opts}</select>
+        ${editable ? `<div class="gp-add">
+            <input type="date" class="mg-input gp-add-date" id="gpClosedDate"
+                   min="${ym}-01" max="${ym}-${String(days).padStart(2, '0')}">
             <input class="mg-input" id="gpClosedLabel" maxlength="60" placeholder="Thanksgiving, inventory day…">
             <button type="button" class="btn-ghost gp-add-btn" onclick="_gpAddClosed()">Add</button>
         </div>` : ''}
@@ -10499,12 +10491,23 @@ function _gpBuyDaysHtml(editable) {
 // snowstorm are both a zero, and only the first should be excused — the name is
 // how anyone remembers which was meant, a year later.
 function _gpAddClosed() {
-    const sel = document.getElementById('gpClosedDay');
+    const inp = document.getElementById('gpClosedDate');
     const lab = document.getElementById('gpClosedLabel');
-    if (!sel) return;
-    const day = parseInt(sel.value, 10);
-    if (!Number.isInteger(day)) return;
-    if (_gpClosed.some(c => c.day === day)) return;
+    if (!inp) return;
+    // "2026-11-26" is read by its PARTS. new Date('2026-11-26') is parsed as UTC
+    // and lands on the 25th here, which would close the wrong day.
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(inp.value || ''));
+    if (!m) { alert('Pick the day the stores are closed.'); return; }
+    if (m[1] + '-' + m[2] !== _gpGoals.month) {
+        alert('That day is not in ' + _gpMonthName(_gpGoals.month) + '.');
+        return;
+    }
+    const day = parseInt(m[3], 10);
+    if (new Date(+m[1], +m[2] - 1, day).getDay() === 0) {
+        alert('Sundays are already excluded — no need to add one.');
+        return;
+    }
+    if (_gpClosed.some(c => c.day === day)) { alert('That day is already on the list.'); return; }
     _gpClosed.push({ day, label: String((lab && lab.value) || '').trim() });
     _gpHarvestGoals();
     renderGpGoals();
