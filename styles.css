@@ -11116,6 +11116,49 @@ button.bd-h-goal-none:hover { background: #eef2f6; color: #647082; }
 }
 .gp-goal-total b { font-size: 16px; font-weight: 900; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
 .gp-goal-by { margin-top: 8px; font-size: 11px; font-weight: 650; color: #a8b3c0; }
+
+/* --- Month Setup: the panel now carries two decisions, so each gets a card --- */
+.gp-sec {
+    background: #fff; border: 1px solid #eef2f6; border-radius: 14px;
+    padding: 16px 16px 14px; margin-bottom: 16px;
+}
+.gp-sec:last-of-type { margin-bottom: 0; }
+.gp-sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
+.gp-sec-t { font-size: 13px; font-weight: 800; letter-spacing: -.01em; color: var(--slate-charcoal); }
+.gp-sec-s { font-size: 11.5px; font-weight: 600; color: #a8b3c0; }
+
+/* The derived count sits BESIDE its own arithmetic rather than alone: a number
+   nobody typed has to show its working, or it reads as a number to argue with. */
+.gp-bd { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.gp-bd-num {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-width: 104px; padding: 12px 16px; border-radius: 12px;
+    background: #e8f7ee; border: 1px solid #cfeadb;
+}
+.gp-bd-num b { font-size: 30px; font-weight: 900; line-height: 1; color: #178048; font-variant-numeric: tabular-nums; }
+.gp-bd-num span { margin-top: 5px; font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: #4d8f6c; }
+.gp-bd-calc { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: #647082; font-weight: 600; }
+.gp-bd-calc div { display: flex; gap: 8px; align-items: baseline; }
+.gp-bd-calc i { font-style: normal; color: #a8b3c0; font-weight: 650; min-width: 14px; text-align: center; }
+.gp-bd-calc em { font-style: normal; color: var(--slate-charcoal); font-weight: 800; font-variant-numeric: tabular-nums; min-width: 22px; text-align: right; }
+.gp-bd-rule { border-top: 1px solid #eef2f6; padding-top: 5px; margin-top: 1px; }
+
+.gp-closed { margin-top: 14px; padding-top: 13px; border-top: 1px solid #eef2f6; }
+.gp-closed-t { font-size: 11.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: #8a94a3; margin: 0 0 9px; }
+.gp-chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.gp-chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 8px 6px 11px; border-radius: 999px;
+    background: #fdf6e6; border: 1px solid #f0e0bb; color: #8a6a1f;
+    font-size: 12px; font-weight: 750;
+}
+.gp-chip s { text-decoration: none; color: #c0a566; font-weight: 800; cursor: pointer; font-size: 13px; line-height: 1; }
+.gp-chip s:hover { color: var(--red-alert); }
+.gp-chip-none { font-size: 12px; color: #a8b3c0; font-weight: 600; }
+.gp-add { display: flex; gap: 8px; align-items: center; margin-top: 11px; flex-wrap: wrap; }
+.gp-add .mg-select { width: 130px; flex: 0 0 auto; }
+.gp-add .mg-input { flex: 1 1 170px; min-width: 150px; }
+.gp-add-btn { padding: 9px 16px; flex: 0 0 auto; }
 /* SIX tiles, and its own grid rather than .lv-strip's. Two reasons, one cosmetic
    and one load-bearing: .lv-strip is a hard repeat(4), and — far more
    importantly — renderLiveDashboard() fills every .lv-strip on the page by

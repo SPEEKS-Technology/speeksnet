@@ -10351,13 +10351,16 @@ async function openGpGoals(month) {
     closeAllModals();
     toggleModal('gpGoalsModal');
     const body = document.getElementById('gpGoalsBody');
-    if (body) body.innerHTML = '<div class="status-message">Loading goals…</div>';
+    if (body) body.innerHTML = '<div class="status-message">Loading the month…</div>';
     try {
         _gpGoals = await _gpFetch(month);
     } catch (e) {
-        if (body) body.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; text-align: center; padding: 20px 0;">Could not load the goals. Close and try again.</div>';
+        if (body) body.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; text-align: center; padding: 20px 0;">Could not load the month. Close and try again.</div>';
         return;
     }
+    // Fresh working copy every time the panel opens, so a cancelled edit cannot
+    // survive into the next one.
+    _gpClosed = (_gpGoals.closed || []).map(c => ({ day: Number(c.day), label: String(c.label || '') }));
     renderGpGoals();
 }
 
@@ -10371,10 +10374,13 @@ function renderGpGoals() {
     const editable = _gpCanEdit();
 
     let html = `<p style="font-size: 12.5px; color: #64748b; margin: 0 0 14px;">
-        The gross profit goal for each store in <b>${escapeHtml(_gpMonthName(_gpGoals.month))}</b>.
+        The month's targets for <b>${escapeHtml(_gpMonthName(_gpGoals.month))}</b>.
         Saving writes them into the Sales Summary workbook as well, so the sheet
         and the site cannot drift apart.${editable ? '' : ' Only the District Manager can change these.'}</p>`;
 
+    html += `<div class="gp-sec"><div class="gp-sec-head">
+        <span class="gp-sec-t">Gross profit goals</span>
+        <span class="gp-sec-s">${stores.length} stores</span></div>`;
     html += '<div class="gp-goal-rows">';
     stores.forEach(code => {
         const v = (g[code] === undefined || g[code] === null) ? '' : g[code];
@@ -10389,18 +10395,135 @@ function renderGpGoals() {
     });
     html += '</div>';
 
-    html += `<div class="gp-goal-total">Company goal <b id="gpGoalTotal">—</b></div>`;
+    html += `<div class="gp-goal-total">Company goal <b id="gpGoalTotal">—</b></div></div>`;
+
+    html += _gpBuyDaysHtml(editable);
 
     if (_gpGoals.setBy) {
         html += `<div class="gp-goal-by">Last set by ${escapeHtml(_gpGoals.setBy)}</div>`;
     }
     if (editable) {
         html += `<div class="manage-footer" style="gap:10px;">
-            <button class="btn-primary" id="gpGoalSaveBtn" onclick="saveGpGoals()">Save Goals</button>
+            <button class="btn-primary" id="gpGoalSaveBtn" onclick="saveGpGoals()">Save Month</button>
         </div>`;
     }
     body.innerHTML = html;
     _gpUpdateTotal();
+}
+
+// ---- buying days ---------------------------------------------------------
+// The count is DERIVED and never typed: days − Sundays − the days the stores
+// are shut. Typing a count would fix the sheet's month total and leave the
+// daily "Days thru Month" counter still treating the holiday as a working day,
+// which is the half that actually skews tracking. So the closures are the
+// input, and the number underneath simply follows.
+let _gpClosed = [];           // [{ day, label }] — the working copy
+
+function _gpDayName(ym, day) {
+    const [y, m] = ym.split('-').map(Number);
+    return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(y, m - 1, day).getDay()];
+}
+function _gpSundays(ym) {
+    const [y, m] = ym.split('-').map(Number);
+    const n = new Date(y, m, 0).getDate();
+    let c = 0;
+    for (let d = 1; d <= n; d++) if (new Date(y, m - 1, d).getDay() === 0) c++;
+    return c;
+}
+function _gpBuyingDays(ym) {
+    const [y, m] = ym.split('-').map(Number);
+    const n = new Date(y, m, 0).getDate();
+    const shut = new Set(_gpClosed.map(c => c.day));
+    let c = 0;
+    for (let d = 1; d <= n; d++) {
+        // A closure that lands on a Sunday is already excluded; subtracting it
+        // again would take a day off the month for nothing.
+        if (new Date(y, m - 1, d).getDay() === 0 || shut.has(d)) continue;
+        c++;
+    }
+    return c;
+}
+
+function _gpBuyDaysHtml(editable) {
+    const ym = _gpGoals.month;
+    const [y, m] = ym.split('-').map(Number);
+    const days = new Date(y, m, 0).getDate();
+    const monthOnly = _gpMonthName(ym).split(' ')[0];
+
+    let opts = '';
+    for (let d = 1; d <= days; d++) {
+        // Sundays are already closed, so offering them would invite a second
+        // subtraction that the maths deliberately ignores.
+        if (new Date(y, m - 1, d).getDay() === 0) continue;
+        if (_gpClosed.some(c => c.day === d)) continue;
+        opts += `<option value="${d}">${_gpDayName(ym, d)} ${d}</option>`;
+    }
+
+    let chips = '';
+    _gpClosed.slice().sort((a, b) => a.day - b.day).forEach(c => {
+        chips += `<span class="gp-chip">${escapeHtml(_gpDayName(ym, c.day))} ${c.day}`
+            + (c.label ? ' &middot; ' + escapeHtml(c.label) : '')
+            + (editable ? `<s onclick="_gpRemoveClosed(${c.day})" title="Remove">&times;</s>` : '')
+            + '</span>';
+    });
+    if (!chips) chips = `<span class="gp-chip-none">Nothing yet &mdash; ${escapeHtml(monthOnly)} has no closures.</span>`;
+
+    return `<div class="gp-sec"><div class="gp-sec-head">
+        <span class="gp-sec-t">Buying days</span>
+        <span class="gp-sec-s">All Five Stores</span></div>
+      <div class="gp-bd">
+        <span class="gp-bd-num"><b id="gpBuyDays">${_gpBuyingDays(ym)}</b><span>Buying Days</span></span>
+        <span class="gp-bd-calc">
+          <div><i></i>Days in ${escapeHtml(monthOnly)} <em>${days}</em></div>
+          <div><i>&minus;</i>Sundays <em>${_gpSundays(ym)}</em></div>
+          <div><i>&minus;</i>Days closed <em id="gpClosedCount">${_gpClosed.length}</em></div>
+          <div class="gp-bd-rule"><i>=</i>Open to buy <em id="gpOpenToBuy">${_gpBuyingDays(ym)}</em></div>
+        </span>
+      </div>
+      <div class="gp-closed">
+        <p class="gp-closed-t">Closed beyond Sundays</p>
+        <div class="gp-chips">${chips}</div>
+        ${editable && opts ? `<div class="gp-add">
+            <select class="mg-select" id="gpClosedDay">${opts}</select>
+            <input class="mg-input" id="gpClosedLabel" maxlength="60" placeholder="Thanksgiving, inventory day…">
+            <button type="button" class="btn-ghost gp-add-btn" onclick="_gpAddClosed()">Add</button>
+        </div>` : ''}
+      </div></div>`;
+}
+
+// A closure carries a NAME as well as a date. In the sheet a holiday and a
+// snowstorm are both a zero, and only the first should be excused — the name is
+// how anyone remembers which was meant, a year later.
+function _gpAddClosed() {
+    const sel = document.getElementById('gpClosedDay');
+    const lab = document.getElementById('gpClosedLabel');
+    if (!sel) return;
+    const day = parseInt(sel.value, 10);
+    if (!Number.isInteger(day)) return;
+    if (_gpClosed.some(c => c.day === day)) return;
+    _gpClosed.push({ day, label: String((lab && lab.value) || '').trim() });
+    _gpHarvestGoals();
+    renderGpGoals();
+}
+function _gpRemoveClosed(day) {
+    _gpClosed = _gpClosed.filter(c => c.day !== day);
+    _gpHarvestGoals();
+    renderGpGoals();
+}
+
+// Adding a closure re-renders the whole panel, and the goal boxes are in it.
+// Without this, typing five goals and then remembering a holiday threw the five
+// away — the panel would redraw from the last SAVED state.
+function _gpHarvestGoals() {
+    if (!_gpGoals) return;
+    _gpGoals.goals = _gpGoals.goals || {};
+    document.querySelectorAll('[id^="gpGoal_"]').forEach(i => {
+        const code = i.id.replace('gpGoal_', '');
+        const raw = String(i.value || '').trim();
+        if (!raw) { delete _gpGoals.goals[code]; return; }
+        const v = parseFloat(raw);
+        if (Number.isFinite(v)) _gpGoals.goals[code] = v;
+    });
 }
 
 function _gpUpdateTotal() {
@@ -10440,12 +10563,14 @@ async function saveGpGoals() {
         const res = await fetch(GP_GOALS_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
-            body: JSON.stringify({ action: 'save', month: _gpGoals.month, goals }),
+            body: JSON.stringify({ action: 'save', month: _gpGoals.month, goals, closed: _gpClosed }),
         });
         const j = await res.json().catch(() => ({}));
         if (!res.ok || j.error) throw new Error(j.error || ('HTTP ' + res.status));
-        alert(j.complete ? 'Goals saved for every store.' : 'Goals saved.');
+        alert((j.complete ? 'Saved. Every store has a goal' : 'Saved')
+            + (j.buyDays ? ', and the month has ' + j.buyDays + ' buying days.' : '.'));
         _gpGoals = await _gpFetch(_gpGoals.month);
+        _gpClosed = (_gpGoals.closed || []).map(c => ({ day: Number(c.day), label: String(c.label || '') }));
         renderGpGoals();
         // The reminder and the popout both read this — refresh them rather than
         // waiting for a poll, so the card disappears as the modal closes.
@@ -10460,7 +10585,7 @@ async function saveGpGoals() {
         alert((e && e.message) || 'Could not save the goals.');
     }
     _gpGoalsBusy = false;
-    if (btn) { btn.disabled = false; btn.textContent = 'Save Goals'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Month'; }
 }
 
 // ---- the reminder --------------------------------------------------------
@@ -29065,7 +29190,7 @@ const FEATURE_CATALOG = [
     { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
     // District Manager only by default — this is the switch that also decides
     // who may SAVE a goal, not just who can see the tool (see _gpCanEdit).
-    { key: 'tool-store-goals',         label: 'Store Goals',                   tab: 'tools', group: 'Admin', def: ['district-manager'] },
+    { key: 'tool-store-goals',         label: 'Month Setup',                   tab: 'tools', group: 'Admin', def: ['district-manager'] },
     // TWO rows for one tool, sharing the `tool-expenses` stem the way the claims
     // and preferred-purchase pairs do. One key carrying both role classes made the
     // MGR column DISHONEST: it read as "on for the whole manager role" while the
@@ -30093,7 +30218,7 @@ const JUMP_KEYWORDS = {
     'tool-user-permissions':     'users permissions pin login accounts roles add user',
     'tool-feature-access':       'feature access hide show toggle delegation permissions',
     'tool-email-recipients':     'email recipients reports distribution who gets',
-    'tool-store-goals':          'store goals gp gross profit monthly target goal set',
+    'tool-store-goals':          'month setup store goals gp gross profit monthly target buying days holidays closed',
     // Both halves of the split answer the same search — only one is ever visible
     // to a given person, so they can never both come back in one result list.
     'tool-expenses':             'expense report expenses mileage miles reimbursement receipts monthly spend',
