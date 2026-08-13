@@ -836,7 +836,7 @@ function _mrA1(r, c) {
 // Every footer cell this script would ever write, located by label on the tab
 // given. Returned as targets so the same cell can be read off two tabs and
 // compared.
-function _mrFooterCells(values, formulas, lastRow, lastCol) {
+function _mrFooterCells(values, formulas, lastRow, lastCol, bases, family) {
   var out = [];
   for (var r = 0; r < lastRow; r++) {
     for (var c = 0; c < lastCol; c++) {
@@ -847,6 +847,16 @@ function _mrFooterCells(values, formulas, lastRow, lastCol) {
       var what = null;
       Object.keys(MR_FOOTER).forEach(function (k) { if (MR_FOOTER[k].indexOf(txt) >= 0) what = k; });
       if (!what) continue;
+      // The Buy counters live at base+4, not beside the label — so the diff has
+      // to look where the value actually is, or it compares two blank cells and
+      // reports a tick. That is how the merged-label bug got past a green run.
+      if (family === 'buy' && (what === 'buyDays' || what === 'thru')) {
+        Object.keys(bases || {}).sort(function (a, b) { return bases[a] - bases[b]; }).forEach(function (code) {
+          var k = bases[code] + MR_BUY_VALUE_COL;
+          if (k < lastCol) out.push({ what: code + ' ' + what, row: r, col: k, label: _mrA1(r, c) });
+        });
+        continue;
+      }
       for (var k2 = c + 1; k2 < Math.min(c + 4, lastCol); k2++) {
         if ((formulas[r] || [])[k2]) continue;
         out.push({ what: what, row: r, col: k2, label: _mrA1(r, c) });
@@ -882,7 +892,8 @@ function _mrDiffTabs(mine, real) {
 
   var av = mine.getRange(1, 1, R, C).getValues();
   var bv = real.getRange(1, 1, R, C).getValues();
-  var cells = _mrFooterCells(bv, bf, R, C);
+  var family = /^Buy\s/i.test(real.getName()) ? 'buy' : 'sales';
+  var cells = _mrFooterCells(bv, bf, R, C, _mrBases(bv, family === 'buy' ? MR_BUY_WIDTH : MR_SALES_WIDTH), family);
   Logger.log('  footers:');
   cells.forEach(function (f) {
     var ours = (av[f.row] || [])[f.col], theirs = (bv[f.row] || [])[f.col];
