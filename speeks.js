@@ -34463,6 +34463,9 @@ function _samReminderCfg() {
     const _vrDue = (_vrT && _vrT.dataset && _vrT.dataset.due) || '';
     const _agT = document.getElementById('agingAlertBubbleText');
     const _agDue = (_agT && _agT.dataset && _agT.dataset.due) || '';
+    // Is anything actually past its reply date? _agMyItemsCache is the store's
+    // open items, already loaded by checkAgingInvReminders.
+    const _agLate = Array.isArray(_agMyItemsCache) && _agMyItemsCache.some(_agOverdue);
     // Recycle: reply-only vs something actually awaiting a verdict (see below).
     const _rcT = document.getElementById('recycleAlertBubbleText');
     const _rcReplyOnly = !!(_rcT && _rcT.dataset && _rcT.dataset.replyonly);
@@ -34497,8 +34500,15 @@ function _samReminderCfg() {
         // it. Clicking through the card is the acknowledgement now, exactly as the
         // toast's button used to be.
         { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText',
-          title: 'Aging Inventory Review' + (_agDue ? ' — Due ' + _agDue : ''),
-          urgency: 1, due: 'Review', cls: 'sam-due-amber',
+          // Matches the variance card above. This was hardcoded amber with a
+          // fixed title, so a store three days past its reply deadline looked
+          // identical to one with four days left — the only tell was a sentence
+          // in the subtitle, which is the part nobody reads on a feed row.
+          title: _agLate ? 'Aging Inventory Replies Overdue'
+                         : 'Aging Inventory Review' + (_agDue ? ' — Due ' + _agDue : ''),
+          urgency: _agLate ? 2 : 1,
+          due: _agLate ? 'Overdue' : 'Review',
+          cls: _agLate ? 'sam-due-red' : 'sam-due-amber',
           action: "closeAgingAlertBubble(); window.location.href='workspace.html#aging'" },
         // Store goals — DM/CEO only, and the only reminder here that is about
         // a DECISION rather than a queue. It is deliberately not snoozeable:

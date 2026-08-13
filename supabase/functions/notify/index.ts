@@ -81,11 +81,11 @@ const CATEGORY_META: Record<Category, { label: string; blurb: string }> = {
   // comes from it — promising "B2B deals" here would be a toggle that quietly
   // does nothing. When that module lands, add its queueNotification calls and put
   // B2B back in this sentence at the same time.
-  requests:       { label: "Requests waiting on me",     blurb: "Purchase requests and recycle requests." },
-  claims:         { label: "Insurance claims aging",     blurb: "A claim that has gone unresolved past a week." },
+  requests:       { label: "Requests Waiting On Me" ,     blurb: "Purchase requests and recycle requests." },
+  claims:         { label: "Insurance Claims Aging",     blurb: "A claim that has gone unresolved past a week." },
   variance_aging: { label: "Variance & Aging Inventory",  blurb: "New sheets and notes, plus the reply deadlines on both." },
   deadlines:      { label: "My Deadlines",               blurb: "Store KPIs, listing goals, store goals, expense reports." },
-  scores:         { label: "Scores & audits",            blurb: "A SPEEKS scorecard or a PayMore audit being submitted." },
+  scores:         { label: "Scores & Audits"  ,            blurb: "A SPEEKS scorecard or a PayMore audit being submitted." },
 };
 
 // PER-ROLE LABEL OVERRIDES.
@@ -1099,9 +1099,22 @@ Deno.serve(async (req: Request) => {
     const { error } = await sb.from("user_notify_prefs").upsert(row, { onConflict: "user_name" });
     if (error) return json({ error: error.message }, 500);
 
-    let welcome: any = null;
-    if (enabled && email) welcome = await sendWelcome(sb, me, email);
-    return json({ success: true, welcome });
+    // The confirmation is fired but NOT awaited. The Gmail relay is an Apps
+    // Script web app and a cold one can take the better part of ten seconds to
+    // answer — which the user experienced as a Save button that hung, because
+    // the row was already written and we were sitting on an email nobody was
+    // waiting for. The write is what has to be durable; the send is best-effort
+    // and self-deduping (the ledger key is welcome:<user>:<address>), so
+    // letting it finish after the response costs nothing and returns the save
+    // in the time the database takes.
+    if (enabled && email) {
+      const p = sendWelcome(sb, me, email).catch(() => {});
+      // Keep the isolate alive until it lands, without holding the response.
+      if (typeof (globalThis as any).EdgeRuntime?.waitUntil === "function") {
+        (globalThis as any).EdgeRuntime.waitUntil(p);
+      }
+    }
+    return json({ success: true, welcome: enabled && email ? { queued: true } : null });
   }
 
   return new Response("Method Not Allowed", { status: 405, headers: corsHeaders });

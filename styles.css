@@ -959,6 +959,19 @@ input, textarea, select,
 .tab-btn { background: transparent; border: none; padding: 6px 16px; font-size: 12px; font-weight: 700; color: #64748b; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
 .tab-btn.active { background: white; color: var(--slate-charcoal); box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
 
+/* Feature Access tab bar. The default .tab-btn is padding-sized, so five tabs
+   whose labels run from "Widgets" to "SPEEKS Tools" came out five different
+   widths and the row read as ragged rather than as a set. Equal columns via
+   grid rather than flex:1, because grid sizes every track to the widest
+   content — flex:1 would let a long label squeeze a short one. */
+.fa-tabs {
+    display: grid !important;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    width: 100%;
+}
+.fa-tabs .tab-btn { padding-left: 6px; padding-right: 6px; text-align: center; white-space: nowrap; }
+
 .notif-content { padding: 20px; max-height: 70vh; overflow-y: auto; } /* Expanded height to match calendar */
 .notif-item { margin-bottom: 20px; }
 .notif-item:last-child { margin-bottom: 0; }
