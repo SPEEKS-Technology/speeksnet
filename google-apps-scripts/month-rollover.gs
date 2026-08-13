@@ -234,23 +234,89 @@ function _mrDayRows(values, base, firstRow) {
   return rows;
 }
 
+// ---- the Buy tab's week-ending column --------------------------------------
+// One column per block (E, J, O, T, Y) carries a week's buying, and WHERE it
+// sits depends on the calendar — so this is the one thing the rollover cannot
+// copy and must author. Everything else here still copies.
+//
+// The shape, read off the real August tab:
+//
+//   E5   ='Buy Jul 26'!E34+C4      first Sunday: last month's tail, then the
+//                                  days before it in this month
+//   E12  =SUM(C6:C11)              days 3-8, i.e. since the previous Sunday
+//   E34  =SUM(C30:C34)             the last day of the month closes the tail
+//                                  week, and INCLUDES itself
+//
+// A Sunday excludes its own row because nothing is bought on a Sunday; the last
+// day of the month does not, because something is. That is the whole rule:
+//
+//   week-end row s, previous week-end p  ->  SUM( p+1 .. (s is a Sunday ? s-1 : s) )
+//
+// A single-cell span is written as a bare reference rather than SUM(C4:C4),
+// which is what a person writes and what makes the diff come out clean.
+// 0-based column index -> its letter. A1() below builds on this.
+function _mrColLetter(c) {
+  var s = '', n = c + 1;
+  while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - m) / 26); }
+  return s;
+}
+
+function _mrWeekEnds(sundays, dayCount) {
+  var ends = sundays.filter(function (d) { return d <= dayCount; });
+  // The month's last day closes the final part-week — unless it IS the Sunday
+  // that already closed it.
+  if (ends.indexOf(dayCount) < 0) ends.push(dayCount);
+  return ends.sort(function (a, b) { return a - b; });
+}
+
+function _mrWeekFormula(opts) {
+  // All rows here are 1-BASED sheet rows.
+  var col = opts.valueCol;                     // the column being summed, e.g. "C"
+  var from = opts.prevEndRow + 1;
+  var to = opts.isSunday ? opts.row - 1 : opts.row;
+  var span = (to < from) ? '' : (from === to ? (col + from) : ('SUM(' + col + from + ':' + col + to + ')'));
+  var carry = opts.carry || '';
+  if (!span && !carry) return '';
+  if (!carry) return '=' + span;
+  return '=' + carry + (span ? '+' + span : '');
+}
+
 // Column offsets carrying a formula on EVERY Sunday of the source month and on
 // none of its other days — the weekly rows. Found by comparison rather than by
 // knowing which column it is, so a moved column costs nothing.
-function _mrWeeklyCells(srcFormulas, bases, dayRows, sundays, width, lastCol) {
+// ⚠️ THE EARLIER RULE WAS TOO STRICT AND REPORTED "none found" ON A TAB THAT
+// HAS THEM. It demanded a formula on every Sunday and on no other day; this
+// column also closes the month's final part-week, so the last day carries one
+// too and the column was rejected. Now: a formula on every WEEK-END day and on
+// no other day.
+//
+// The summed column is read off the tab's own formula rather than assumed, so a
+// moved column still costs nothing.
+function _mrWeekCols(srcFormulas, bases, dayRows, weekEnds, width, lastCol) {
   var out = [];
   Object.keys(bases).forEach(function (code) {
     var base = bases[code];
     var end = Math.min(base + width, lastCol);
     for (var col = base + 1; col < end; col++) {
-      var sunSeen = 0, sunF = 0, weekSeen = 0, weekF = 0;
+      var endSeen = 0, endF = 0, otherF = 0, sample = '', firstSample = '';
       for (var d in dayRows) {
-        var r = dayRows[d];
-        var f = (srcFormulas[r] || [])[col];
-        if (sundays.indexOf(parseInt(d, 10)) >= 0) { sunSeen++; if (f) sunF++; }
-        else { weekSeen++; if (f) weekF++; }
+        var day = parseInt(d, 10);
+        var f = (srcFormulas[dayRows[d]] || [])[col];
+        if (weekEnds.indexOf(day) >= 0) {
+          endSeen++;
+          if (f) {
+            endF++;
+            if (day === weekEnds[0]) firstSample = f;
+            else if (!sample) sample = f;
+          }
+        } else if (f) otherF++;
       }
-      if (sunSeen && sunF === sunSeen && weekF === 0) out.push({ store: code, col: col, offset: col - base });
+      if (!endSeen || endF !== endSeen || otherF) continue;
+      // "=SUM(C6:C11)" -> C. Failing that, the first week's "…+C4" tail.
+      var m = /SUM\(\$?([A-Z]{1,3})\$?\d+/i.exec(sample || firstSample)
+           || /\+\s*\$?([A-Z]{1,3})\$?\d+\s*$/i.exec(firstSample || sample);
+      if (!m) continue;
+      out.push({ store: code, col: col, offset: col - base, valueCol: m[1].toUpperCase() });
     }
   });
   return out;
@@ -341,7 +407,9 @@ function _mrBuildTab(ss, src, targetYm, opts) {
   }
 
   var srcSun = _mrSundays(srcYm), tgtSun = _mrSundays(targetYm);
-  rep.weekly = _mrWeeklyCells(srcFormulas, bases, srcDays, srcSun, width, srcLastCol);
+  var srcEnds = _mrWeekEnds(srcSun, srcCount);
+  var tgtEnds = _mrWeekEnds(tgtSun, wantCount);
+  rep.weekly = _mrWeekCols(srcFormulas, bases, srcDays, srcEnds, width, srcLastCol);
 
   // The link of the "last month" chain this tab has to advance: references to
   // the source's predecessor become references to the source.
@@ -445,25 +513,43 @@ function _mrBuildTab(ss, src, targetYm, opts) {
     tab.getRange(start + 1, base + 1, wantCount, w).setValues(grid);
   });
 
-  // ---- the weekly rows, onto the new month's Sundays ----
-  // Copied from the source cell rather than written, so the relative references
-  // shift with the row exactly as they would if a person had dragged it.
-  if (rep.weekly.length && srcSun.length) {
+  // ---- the week-ending column, onto the new month's weeks ----
+  // Authored, not copied: where a week ends is a fact about the calendar, and
+  // no amount of copying moves a formula onto a different Sunday. The FORM is
+  // still taken from the source tab — which column it sums, and that the first
+  // week carries the previous month's tail — so nothing here is invented.
+  if (rep.weekly.length) {
     var afterValues = tab.getRange(1, 1, tab.getLastRow(), lastCol).getValues();
+    var weekLog = [];
     rep.weekly.forEach(function (wk) {
       var base = tgtBases[wk.store];
       if (base === undefined) return;
       var rows = _mrDayRows(afterValues, base, firstRow);
-      var start = rows[1];
-      if (start === undefined) return;
-      var srcRow = srcDays[srcSun[0]];
-      if (srcRow === undefined) return;
-      var from = src.getRange(srcRow + 1, wk.col + 1);
-      tgtSun.forEach(function (d) {
-        if (d > wantCount) return;
-        from.copyTo(tab.getRange(start + d, wk.col + 1));
+      if (rows[1] === undefined) return;
+      // rows[1] is day 1 zero-based, so the same number is the 1-based row
+      // ABOVE it — exactly the "previous week-end" the first week measures from.
+      var prevEnd = rows[1];
+      tgtEnds.forEach(function (d, i) {
+        var r = rows[d];
+        if (r === undefined) return;
+        var f = _mrWeekFormula({
+          row: r + 1,
+          prevEndRow: prevEnd,
+          valueCol: wk.valueCol,
+          isSunday: tgtSun.indexOf(d) >= 0,
+          // Only the first week reaches back — it is picking up the days that
+          // fell before this month's first week-end.
+          // The carry points at the SOURCE month's own week column on its last
+          // day — the tail week this month is picking up.
+          carry: (i === 0 && srcLastDay)
+            ? ("'" + src.getName() + "'!" + _mrColLetter(wk.col) + srcLastDay) : '',
+        });
+        if (f) tab.getRange(r + 1, wk.col + 1).setFormula(f);
+        if (wk.store === rep.stores[0]) weekLog.push('d' + d + (f ? '' : ' (empty)'));
+        prevEnd = r + 1;
       });
     });
+    rep.weekLog = weekLog;
   }
 
   // ---- advance the "last month" chain by one link ----
@@ -737,7 +823,8 @@ function _mrReport(r) {
       + rep.retarget.from + ' -> ' + rep.retarget.to
       + '   rows below r' + rep.retarget.anchor + ' shift ' + (rep.retarget.shift > 0 ? '+' : '') + rep.retarget.shift);
     Logger.log('  weekly : ' + (rep.weekly.length
-      ? rep.weekly.map(function (w) { return w.store + '+' + w.offset; }).join(', ')
+      ? rep.weekly.map(function (w) { return w.store + '+' + w.offset + ' sums ' + w.valueCol; }).join(', ')
+        + (rep.weekLog ? '   week ends ' + rep.weekLog.join(',') : '')
       : 'none found'));
     Logger.log('  footer : ' + (rep.footer.length ? rep.footer.join(' | ') : 'nothing matched'));
     rep.warn.forEach(function (w) { Logger.log('  ⚠ ' + w); });
@@ -861,11 +948,7 @@ function mrPreviewNextMonth() {
 //   mrVerifyPastMonth('2026-06')   May 31 -> Jun 30   the row DELETE path
 //   mrVerifyPastMonth('2026-08')   Jul 31 -> Aug 31   the GOAL write, against
 //                                                     goals already on SPEEKS
-function _mrA1(r, c) {
-  var s = '', n = c + 1;
-  while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - m) / 26); }
-  return s + (r + 1);
-}
+function _mrA1(r, c) { return _mrColLetter(c) + (r + 1); }
 
 // Every footer cell this script would ever write, located by label on the tab
 // given. Returned as targets so the same cell can be read off two tabs and

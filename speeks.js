@@ -10384,12 +10384,16 @@ function renderGpGoals() {
     html += '<div class="gp-goal-rows">';
     stores.forEach(code => {
         const v = (g[code] === undefined || g[code] === null) ? '' : g[code];
+        // type="text", not "number": a number input cannot show thousands
+        // separators, and it cannot have its caret moved either — which is what
+        // reformatting as you type requires.
         html += `<label class="gp-goal-row">
             <span class="gp-goal-store">${escapeHtml(code)}</span>
             <span class="gp-goal-field mg-money">
-                <input type="number" min="0" step="500" class="mg-input" id="gpGoal_${escapeHtml(code)}"
-                       value="${v}" placeholder="Not Set" ${editable ? '' : 'disabled'}
-                       oninput="_gpUpdateTotal()">
+                <input type="text" inputmode="numeric" autocomplete="off" class="mg-input"
+                       id="gpGoal_${escapeHtml(code)}"
+                       value="${v === '' ? '' : _gpComma(v)}" placeholder="Not Set" ${editable ? '' : 'disabled'}
+                       oninput="_gpFmtGoal(this)">
             </span>
         </label>`;
     });
@@ -10521,9 +10525,39 @@ function _gpHarvestGoals() {
         const code = i.id.replace('gpGoal_', '');
         const raw = String(i.value || '').trim();
         if (!raw) { delete _gpGoals.goals[code]; return; }
-        const v = parseFloat(raw);
-        if (Number.isFinite(v)) _gpGoals.goals[code] = v;
+        const v = _gpNum(raw);
+        if (v !== null) _gpGoals.goals[code] = v;
     });
+}
+
+// ⚠️ EVERY read of a goal box goes through this. The boxes carry commas now,
+// and parseFloat("77,000") is 77 — a silent, catastrophic misread that would
+// have saved a store's month as seventy-seven dollars.
+function _gpNum(v) {
+    const digits = String(v == null ? '' : v).replace(/[^0-9.]/g, '');
+    if (!digits) return null;
+    const n = parseFloat(digits);
+    return Number.isFinite(n) ? n : null;
+}
+function _gpComma(v) {
+    const n = _gpNum(v);
+    return n === null ? '' : n.toLocaleString('en-US');
+}
+
+// Reformat as they type, keeping the caret after the same DIGIT it was after —
+// counting separators instead would walk the caret sideways every time a comma
+// appears or disappears.
+function _gpFmtGoal(el) {
+    const before = String(el.value).slice(0, el.selectionStart || 0).replace(/\D/g, '').length;
+    const digits = String(el.value).replace(/\D/g, '').slice(0, 9);
+    el.value = digits ? Number(digits).toLocaleString('en-US') : '';
+    let pos = 0, seen = 0;
+    while (pos < el.value.length && seen < before) {
+        if (el.value[pos] >= '0' && el.value[pos] <= '9') seen++;
+        pos++;
+    }
+    try { el.setSelectionRange(pos, pos); } catch (_) { /* not focused */ }
+    _gpUpdateTotal();
 }
 
 function _gpUpdateTotal() {
@@ -10531,8 +10565,8 @@ function _gpUpdateTotal() {
     if (!el) return;
     let total = 0, any = false;
     document.querySelectorAll('[id^="gpGoal_"]').forEach(i => {
-        const v = parseFloat(i.value);
-        if (Number.isFinite(v)) { total += v; any = true; }
+        const v = _gpNum(i.value);
+        if (v !== null) { total += v; any = true; }
     });
     el.textContent = any ? _lvMoney(total, false) : '—';
 }
@@ -10551,8 +10585,8 @@ async function saveGpGoals() {
         // it is what leaves the reminder standing, so it is sent as a blank
         // rather than quietly turned into a number.
         if (!raw) { goals[code] = ''; return; }
-        const v = parseFloat(raw);
-        if (!Number.isFinite(v) || v < 0) { bad = code; return; }
+        const v = _gpNum(raw);
+        if (v === null || v < 0) { bad = code; return; }
         goals[code] = v;
     });
     if (bad) { alert(bad + "'s goal is not a number."); return; }
