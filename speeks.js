@@ -29338,7 +29338,7 @@ const FEATURE_CATALOG = [
     // built around. Those rows exist so a store that would rather not can switch
     // them off, not as a default-off gate.
     { key: 'widget-scorecard-alerts',  label: 'Command Center (Whole Widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
-    { key: 'widget-command-center',    label: 'Command Center (whole card)',   tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    { key: 'widget-command-center',    label: 'Command Center (Whole Card)',   tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     { key: 'cc-live',                  label: 'Command Center · Live Dashboard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     // cc-buying was here. The tab is gone — buying is on the Live tab's Month view
     // now — so the switch is gone too rather than left as a control that does
@@ -29365,7 +29365,7 @@ const FEATURE_CATALOG = [
     // Not a show/hide toggle like the rest — this one decides whether the Listing
     // Goals bar opens the roster editor or the personal-goal popup. Only meaningful
     // for ASMs; managers and above always get the editor. See _canAssignGoalRoles.
-    { key: 'listing-goals-assign',     label: 'Listing Goals · assign roles (ASM)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'listing-goals-assign',     label: 'Listing Goals · Assign Roles (ASM)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-weekly-kpis',    label: 'Store KPIs — Workspace tab',    tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
