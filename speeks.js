@@ -24966,7 +24966,19 @@ async function checkAgingClaims() {
         const data = json.data || [];
         const sup = new Set(data.filter(r => r.parent_id).map(r => r.parent_id)); // exclude escalated INRs
         const aging = data.filter(r => !sup.has(r.id) && _isClaimAging(r));
-        if (!aging.length) {
+        // The OTHER thing waiting on the DM in this tool, and it behaves nothing
+        // like ageing: a manager who asked to delete a claim is blocked until the
+        // DM approves or denies it. So it is STATE-based and never marked seen —
+        // a glance must not silence work somebody else is waiting on. Exactly the
+        // rule checkRecycleReminders already applies to its own delete queue.
+        //
+        // Not filtered through `sup`: a parent claim that has been escalated to an
+        // INR child is excluded from AGEING (the child carries the clock now), but
+        // a delete request on it is still a real approval someone is waiting for.
+        // The oversight panel lists them the same way.
+        const pendingDelete = data.filter(r => r.delete_requested_at);
+
+        if (!aging.length && !pendingDelete.length) {
             // Nothing is aging any more (reviewed via "Still in progress", resolved,
             // or escalated). This used to just `return`, leaving a stale "claims are
             // aging" bubble — and therefore a stale feed row — on screen for the rest
@@ -25052,7 +25064,19 @@ async function checkAgingClaimsDM() {
             }
         } catch (_) { /* if reminders fail to load, show everything rather than hide */ }
 
-        if (!aging.length) {
+        // The OTHER thing waiting on the DM in this tool, and it behaves nothing
+        // like ageing: a manager who asked to delete a claim is blocked until the
+        // DM approves or denies it. So it is STATE-based and never marked seen —
+        // a glance must not silence work somebody else is waiting on. Exactly the
+        // rule checkRecycleReminders already applies to its own delete queue.
+        //
+        // Not filtered through `sup`: a parent claim that has been escalated to an
+        // INR child is excluded from AGEING (the child carries the clock now), but
+        // a delete request on it is still a real approval someone is waiting for.
+        // The oversight panel lists them the same way.
+        const pendingDelete = data.filter(r => r.delete_requested_at);
+
+        if (!aging.length && !pendingDelete.length) {
             // Nothing is aging any more (reviewed via "Still in progress", resolved,
             // or escalated). This used to just `return`, leaving a stale "claims are
             // aging" bubble — and therefore a stale feed row — on screen for the rest
@@ -25067,26 +25091,62 @@ async function checkAgingClaimsDM() {
             return;
         }
 
-        // Same once-per-session rule as the manager alert.
+        // Same once-per-session rule as the manager alert — but for the AGEING
+        // half only. Ageing is a standing condition, not a handoff, and
+        // re-announcing it every poll is what made the old toast unbearable.
         const seen = _seenAgingClaims();
-        if (!aging.some(r => !seen.has(r.id))) return;
-        aging.forEach(r => seen.add(r.id));
-        _saveSeenAgingClaims(seen);
+        const freshAging = aging.filter(r => !seen.has(r.id));
+        if (!freshAging.length && !pendingDelete.length) return;
+        if (freshAging.length) {
+            aging.forEach(r => seen.add(r.id));
+            _saveSeenAgingClaims(seen);
+        }
 
-        const byStore = {};
-        aging.forEach(r => { const s = (r.store || '?').toUpperCase(); byStore[s] = (byStore[s] || 0) + 1; });
-        const stores = Object.keys(byStore).sort();
-        const breakdown = stores.map(s => `${s} ${byStore[s]}`).join(' · ');
-        const inrCount = aging.filter(_isINRTicket).length;
+        const bodyParts = [], sumParts = [];
+        if (freshAging.length) {
+            const byStore = {};
+            aging.forEach(r => { const s = (r.store || '?').toUpperCase(); byStore[s] = (byStore[s] || 0) + 1; });
+            const stores = Object.keys(byStore).sort();
+            const breakdown = stores.map(s => `${s} ${byStore[s]}`).join(' · ');
+            const inrCount = aging.filter(_isINRTicket).length;
 
-        const head = aging.length === 1
-            ? '1 claim has been open over 7 days.'
-            : `${aging.length} claims have been open over 7 days.`;
-        const body = `${head} Across ${stores.length === 1 ? '1 store' : stores.length + ' stores'} — ${breakdown}.`
-            + _inrGuidanceHtml(inrCount);
+            const head = aging.length === 1
+                ? '1 claim has been open over 7 days.'
+                : `${aging.length} claims have been open over 7 days.`;
+            bodyParts.push(`${head} Across ${stores.length === 1 ? '1 store' : stores.length + ' stores'} — ${breakdown}.`
+                + _inrGuidanceHtml(inrCount));
+            sumParts.push(`${aging.length} open over 7 days · ${breakdown}`);
+        }
+        if (pendingDelete.length) {
+            // Name the case when there are only one or two. "1 delete request" is
+            // not something you can go and find; a case number is. Same reasoning
+            // as _rcLabel on the recycle side.
+            const _clLabel = r => `${(r.store || '').toUpperCase()} ${String(r.case_number || 'no case #').trim()}`;
+            const askers = [...new Set(pendingDelete
+                .map(r => String(r.delete_requested_by || '').trim()).filter(Boolean))];
+            const which = pendingDelete.length <= 2
+                ? pendingDelete.map(_clLabel).join(', ')
+                : `${pendingDelete.length} claims`;
+            const line = `${pendingDelete.length} delete request${pendingDelete.length > 1 ? 's' : ''} awaiting approval — ${which}`
+                + `${askers.length === 1 ? `, requested by ${askers[0]}` : ''}.`;
+            bodyParts.push(escapeHtml(line));
+            sumParts.push(line);
+        }
 
-        const summary = `${aging.length} open over 7 days · ${breakdown}`;
-        _renderClaimBubble('⚠️', 'Claims Review — District', body, summary);
+        // The snooze identity carries the pending delete ids, so a SECOND request
+        // arrives as new information rather than being swallowed by a snooze taken
+        // on the first one.
+        const sig = `ag:${freshAging.length}|del:${pendingDelete.map(r => r.id).sort().join(',')}`;
+        _renderClaimBubble(
+            pendingDelete.length ? '🗑' : '⚠️',
+            pendingDelete.length && !freshAging.length ? 'Claim Delete Requests' : 'Claims Review — District',
+            bodyParts.join('<br><br>'), sumParts.join(' · '), sig);
+        // Tells the feed card which of the two it is looking at (see _samReminderCfg).
+        const _clT = document.getElementById('claimAlertBubbleText');
+        if (_clT) {
+            if (pendingDelete.length) _clT.dataset.del = freshAging.length ? 'mixed' : 'only';
+            else delete _clT.dataset.del;
+        }
     } catch (e) {
         console.error('DM aging claim check failed:', e);
     }
@@ -34495,6 +34555,11 @@ function _samReminderCfg() {
     // Recycle: reply-only vs something actually awaiting a verdict (see below).
     const _rcT = document.getElementById('recycleAlertBubbleText');
     const _rcReplyOnly = !!(_rcT && _rcT.dataset && _rcT.dataset.replyonly);
+    // Claims: is a manager waiting on the DM to approve a deletion? 'only' when
+    // that is all there is, 'mixed' when claims are ageing too. Stamped by
+    // checkAgingClaimsDM, so it is never set for a manager.
+    const _clT = document.getElementById('claimAlertBubbleText');
+    const _clDel = (_clT && _clT.dataset && _clT.dataset.del) || '';
     const cfg = [
         { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText',
           title: _vrFyi ? 'Variance Report to Review'
@@ -34506,7 +34571,13 @@ function _samReminderCfg() {
           action: "_vrMarkReviewed(); window.location.href='workspace.html#vreplies'" },
         // A DM has no store-scoped claims tool — send them to the all-stores
         // oversight view instead, which is where they can actually act.
-        { key: 'claims', id: 'claimAlertBubble', text: 'claimAlertBubbleText', title: 'Insurance Claims', urgency: 2, due: 'Open', cls: 'sam-due-red',
+        // A delete request outranks the ageing pile for the badge: ageing is the
+        // DM's own housekeeping, a deletion is somebody else standing still until
+        // it is answered. The title only changes when that is ALL there is, so a
+        // card carrying both still reads as the claims card it has always been.
+        { key: 'claims', id: 'claimAlertBubble', text: 'claimAlertBubbleText',
+          title: _clDel === 'only' ? 'Claim Delete Requests' : 'Insurance Claims',
+          urgency: 2, due: _clDel ? 'Approve' : 'Open', cls: 'sam-due-red',
           action: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'district manager'
               ? "openClaimsOversight()"
               : "openClaimsModal(); switchClaimsTab('view')" },

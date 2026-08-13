@@ -315,14 +315,34 @@ Deno.serve(async (req: Request) => {
       if (action === "request_delete") {
         const id = String(body.id || "");
         if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
-        const { error } = await supabase.from("recycle_requests")
+        const who = body.requested_by ? String(body.requested_by).trim() : null;
+        // .select() so the notification can name the line — see the twin of this
+        // hook in shopify-claims for why this is filed under `requests`.
+        const { data: line, error } = await supabase.from("recycle_requests")
           .update({
             delete_requested_at: new Date().toISOString(),
-            delete_requested_by: body.requested_by ? String(body.requested_by).trim() : null,
+            delete_requested_by: who,
           })
-          .eq("id", id);
+          .eq("id", id)
+          .select("store, sku, description").maybeSingle();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("recycle", null);
+        // District Manager only, for the same reason as the claims delete request.
+        {
+          const store = String(line?.store || "").toUpperCase();
+          const sku = String(line?.sku || "").trim();
+          const desc = String(line?.description || "").trim();
+          await queueNotification({
+            category: "requests",
+            kind: "recycle_delete_request",
+            title: `Delete request — recycle line${store ? ` — ${store}` : ""}`,
+            body: `${who || "A manager"} asked to delete ${sku || "a line"}${desc ? ` (${desc})` : ""}. Nothing is removed until you approve it.`,
+            link: "operations.html",
+            store: store || null,
+            audienceRoles: ["district manager"],
+            excludeUser: who,
+          });
+        }
         return jsonResponse({ success: true });
       }
 
