@@ -10407,7 +10407,10 @@ function renderGpGoals() {
         html += `<div class="gp-goal-by">Last set by ${escapeHtml(_gpGoals.setBy)}</div>`;
     }
     if (editable) {
-        html += `<div class="manage-footer" style="gap:10px;">
+        // Not a .manage-footer — that class paints a white bar, which is right
+        // for a footer pinned below a scrolling body and wrong for a button
+        // sitting at the end of one.
+        html += `<div class="gp-save">
             <button class="btn-primary" id="gpGoalSaveBtn" onclick="saveGpGoals()">Save Month</button>
         </div>`;
     }

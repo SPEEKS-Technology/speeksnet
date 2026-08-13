@@ -534,6 +534,15 @@ function _mrBuildTab(ss, src, targetYm, opts) {
       // rows[1] is day 1 zero-based, so the same number is the 1-based row
       // ABOVE it — exactly the "previous week-end" the first week measures from.
       var prevEnd = rows[1];
+
+      // ⚠️ CLEAR THE WHOLE COLUMN FIRST. The day-grid pass only walks the store
+      // blocks, so a week column outside them — AD, the company total — kept
+      // last month's formulas and then gained this month's beside them: the
+      // live verify showed AD5 AND AD8 both filled, one per calendar. The
+      // column is wholly owned by this pass, so it starts empty.
+      var wipe = [];
+      for (var w0 = 0; w0 < wantCount; w0++) wipe.push(['']);
+      tab.getRange(rows[1] + 1, wk.col + 1, wantCount, 1).setValues(wipe);
       tgtEnds.forEach(function (d, i) {
         var r = rows[d];
         if (r === undefined) return;
@@ -771,6 +780,42 @@ function _mrWriteBuyDays(ss, ym, buyDays) {
     }
   }
   return { ok: false, error: 'no "Buying Days in Month" label on ' + tab.getName() };
+}
+
+// Every month's GP goals, read off every Sales tab in the workbook and printed
+// as JSON. The site's Daily Breakdown already shows a goal for ANY month it has
+// one for — the only thing missing for past months is the rows, and the rows
+// have been sitting in the workbook all along. Reads only; writes nothing.
+function mrHarvestGoals() {
+  var ss = _mrSs();
+  var idx = _mrIndex(ss);
+  var out = {};
+  Object.keys(idx).sort().forEach(function (ym) {
+    var tab = idx[ym].sales;
+    if (!tab) return;
+    var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
+    var values = tab.getRange(1, 1, lastRow, lastCol).getValues();
+    var formulas = tab.getRange(1, 1, lastRow, lastCol).getFormulas();
+    var bases = _mrBases(values, MR_SALES_WIDTH);
+    var got = {};
+    for (var r = 0; r < lastRow; r++) {
+      for (var c = 0; c < lastCol; c++) {
+        var raw = (values[r] || [])[c];
+        if (raw === '' || raw === null || raw === undefined) continue;
+        if (MR_FOOTER.goal.indexOf(String(raw).trim().toLowerCase()) < 0) continue;
+        var code = _mrBlockOf(bases, c, MR_SALES_WIDTH);
+        if (!code) continue;                     // the company cell is not a store's
+        for (var k = c + 1; k < Math.min(c + 4, lastCol); k++) {
+          if ((formulas[r] || [])[k]) continue;
+          var n = parseFloat(String((values[r] || [])[k] || '').replace(/[$,]/g, ''));
+          if (!isNaN(n) && n > 0) got[code] = n;
+          break;
+        }
+      }
+    }
+    if (Object.keys(got).length) out[ym] = got;
+  });
+  Logger.log(JSON.stringify(out));
 }
 
 // The goals for a month, from SPEEKS. The sheet is downstream of the site here,

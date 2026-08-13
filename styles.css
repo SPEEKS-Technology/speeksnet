@@ -11167,6 +11167,17 @@ button.bd-h-goal-none:hover { background: #eef2f6; color: #647082; }
 }
 .gp-bd-calc .gp-bd-rule td { border-top: 1px solid #dbe3ec; padding-top: 6px; }
 
+.gp-save { display: flex; margin-top: 16px; }
+
+/* MM/DD/YYYY, not mm/dd/yyyy. A date input's placeholder lives in the browser's
+   own shadow tree and cannot be set — but text-transform inherits into it, so
+   this is the one lever there is. Site-wide, and harmless where it is not
+   supported: once a date is picked the fields are digits, which have no case. */
+input[type="date"], input[type="month"], input[type="datetime-local"] { text-transform: uppercase; }
+input[type="date"]::-webkit-datetime-edit,
+input[type="month"]::-webkit-datetime-edit,
+input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase; }
+
 .gp-add-date { flex: 0 0 auto; width: 165px; }
 .gp-add-date::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .6; }
 .gp-add-date::-webkit-calendar-picker-indicator:hover { opacity: 1; }
