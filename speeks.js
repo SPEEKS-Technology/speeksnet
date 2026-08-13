@@ -24490,19 +24490,19 @@ function renderClaimsOversight() {
         .sort((a, b) => new Date(a.delete_requested_at) - new Date(b.delete_requested_at));
     if (deleteReqs.length) {
         html += `<div style="background:#fffbeb; border:1.5px solid #fde68a; border-radius:12px; padding:14px 16px; margin-bottom:18px;">
-            <div style="font-weight:800; font-size:13px; color:#92400e; margin-bottom:10px;">🗑 Delete requests (${deleteReqs.length}) — approval needed</div>
+            <div style="font-weight:800; font-size:13px; color:#92400e; margin-bottom:10px;">🗑 Delete Requests (${deleteReqs.length}) — Approval Needed</div>
             <div style="display:flex; flex-direction:column; gap:8px;">`;
         deleteReqs.forEach(r => {
             const who = r.delete_requested_by ? escapeHtml(r.delete_requested_by) : 'Manager';
             html += `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:#fff; border:1px solid #fde68a; border-radius:9px; padding:9px 12px;">
                 <div style="font-size:12.5px; color:var(--slate-charcoal);">
                     <span style="font-weight:800;">${escapeHtml(r.store || '')}</span>
-                    · <span style="font-weight:700;">${escapeHtml(r.case_number || '')}</span>
+                    · <span style="font-weight:700;">${escapeHtml(r.case_number || '')}</span>${siteCopyBtn(r.case_number, 'case number')}
                     <span style="color:#94a3b8;"> — ${escapeHtml(r.reason_type || '')}</span>
-                    <span style="color:#b45309; font-weight:700;"> · requested by ${who}</span>
+                    <span style="color:#b45309; font-weight:700;"> · Requested by ${who}</span>
                 </div>
                 <div style="display:flex; gap:8px;">
-                    <button onclick="approveClaimDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Approve delete</button>
+                    <button onclick="approveClaimDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Approve Delete</button>
                     <button onclick="denyClaimDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#f1f5f9; border:1.5px solid #cbd5e1; color:#475569;">Deny</button>
                 </div>
             </div>`;
@@ -28600,17 +28600,17 @@ function _recycleDeleteReqPanel(canReview) {
         .sort((a, b) => new Date(a.delete_requested_at) - new Date(b.delete_requested_at));
     if (!delReqs.length) return '';
     return `<div style="background:#fffbeb; border:1.5px solid #fde68a; border-radius:12px; padding:14px 16px; margin-bottom:14px;">
-        <div style="font-weight:800; font-size:13px; color:#92400e; margin-bottom:10px;">🗑 Delete requests (${delReqs.length}) — approval needed</div>
+        <div style="font-weight:800; font-size:13px; color:#92400e; margin-bottom:10px;">🗑 Delete Requests (${delReqs.length}) — Approval Needed</div>
         <div style="display:flex; flex-direction:column; gap:8px;">` +
         delReqs.map(r => `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:#fff; border:1px solid #fde68a; border-radius:9px; padding:9px 12px;">
             <div style="font-size:12.5px; color:var(--slate-charcoal);">
                 <span style="font-weight:800;">${escapeHtml(r.store || '')}</span>
                 · <span style="font-weight:700;">${escapeHtml(r.sku || '')}</span>${siteCopyBtn(r.sku, 'SKU')}
                 <span style="color:#94a3b8;"> — ${escapeHtml(r.description || '')} · qty ${Number(r.quantity) || 1} · ${_fmtRecycleMoney(_recycleLineTotal(r))}</span>
-                <span style="color:#b45309; font-weight:700;"> · requested by ${escapeHtml(r.delete_requested_by || 'Manager')}</span>
+                <span style="color:#b45309; font-weight:700;"> · Requested by ${escapeHtml(r.delete_requested_by || 'Manager')}</span>
             </div>
             <div style="display:flex; gap:8px;">
-                <button onclick="approveRecycleDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Approve delete</button>
+                <button onclick="approveRecycleDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Approve Delete</button>
                 <button onclick="denyRecycleDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#f1f5f9; border:1.5px solid #cbd5e1; color:#475569;">Deny</button>
             </div>
         </div>`).join('') +

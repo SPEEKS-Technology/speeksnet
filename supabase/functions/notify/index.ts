@@ -518,21 +518,49 @@ const oneStore = (p: Person | null | undefined) => !!p && p.stores.length === 1;
 // a table, and one apostrophe or hyphen would otherwise change what matches.
 const rxSafe = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// EVERY WORD OF A HEADLINE IS CAPITALISED (Ethan's rule, stated more than once).
+//
+// Done HERE rather than at the nine source functions, for two reasons: the
+// nine would drift the moment somebody adds a tenth, and the due-date titles
+// in collectDue below would still need doing separately. One pass, applied to
+// every card, and a future notification inherits it for free.
+//
+// A token is LEFT ALONE if it already contains an uppercase letter or a digit.
+// That is what protects the things a blind capitalise would wreck: acronyms
+// (KPIs, DM, SPEEKS, PayMore), store codes (LEE, WSP), case numbers, and
+// version strings — "v4.12" must not become "V4.12".
+//
+// Only the first letter of a word moves, so a possessive survives: "today's"
+// becomes "Today's", not "Today'S". Hyphenated words get both halves.
+const NO_CASE_KINDS = new Set(["announcement", "announcement_priority"]);
+
+const titleCase = (t: string, kind?: string | null) => {
+  // An announcement's headline is whatever its author typed. Re-casing somebody
+  // else's writing is not a house style, it is editing their post.
+  if (kind && NO_CASE_KINDS.has(String(kind))) return t;
+  return String(t || "").split(/(\s+)/).map((tok) => {
+    if (/[A-Z0-9]/.test(tok)) return tok;              // acronym, code, number, version
+    return tok.replace(/(^|-)([a-z])/g, (_m, pre, ch) => pre + ch.toUpperCase());
+  }).join("");
+};
+
 // Strip a trailing "— WSP" / "— Westport" for a single-store reader. Trailing
 // only: a store named mid-sentence is doing grammatical work, and cutting it
 // would leave a broken line. Falls back to the original if the strip would empty
 // the title, which is what happens when the store name IS the whole headline.
-const cardTitle = (title: string, person: Person) => {
+const cardTitle = (title: string, person: Person, kind?: string | null) => {
   let t = String(title || "");
-  if (!oneStore(person)) return t;
-  for (const code of person.stores) {
-    const name = STORE_NAME[code] || code;
-    t = t.replace(
-      new RegExp("\\s*[—–-]\\s*(?:" + rxSafe(code) + "|" + rxSafe(name) + ")\\s*$", "i"),
-      "",
-    );
+  if (oneStore(person)) {
+    for (const code of person.stores) {
+      const name = STORE_NAME[code] || code;
+      t = t.replace(
+        new RegExp("\\s*[—–-]\\s*(?:" + rxSafe(code) + "|" + rxSafe(name) + ")\\s*$", "i"),
+        "",
+      );
+    }
+    t = t.trim() || String(title || "");
   }
-  return t.trim() || String(title || "");
+  return titleCase(t, kind);
 };
 
 // The store is only worth its own line when the reader covers more than one AND
@@ -671,7 +699,7 @@ async function runDrain(sb: any, opts: { dryRun: boolean; to: string | null; onl
     const p = prefs.get(h.person.key)!;
     const box = newOutbox(boxes, h.person, String(p.email));
     box.items.push({
-      title: cardTitle(h.row.title, h.person), body: h.row.body || "", link: h.row.link || "",
+      title: cardTitle(h.row.title, h.person, h.row.kind), body: h.row.body || "", link: h.row.link || "",
       tone: h.row.priority === "high" ? "red" : "sage",
       meta: storeMeta(h.row.title, h.row.store, h.row.kind, h.person),
       key: h.key,
@@ -1069,7 +1097,7 @@ async function drainHeldForDigest(
     const p = prefs.get(h.person.key)!;
     const box = newOutbox(boxes, h.person, String(p.email));
     box.items.push({
-      title: cardTitle(h.row.title, h.person), body: h.row.body || "", link: h.row.link || "",
+      title: cardTitle(h.row.title, h.person, h.row.kind), body: h.row.body || "", link: h.row.link || "",
       tone: "sage", meta: storeMeta(h.row.title, h.row.store, h.row.kind, h.person), key: h.key,
     });
     n++;
@@ -1114,7 +1142,7 @@ async function sendWelcome(sb: any, person: { name: string; key: string }, email
   const body = `
     <div style="font-size:13.5px;font-weight:600;color:${C.charcoal};margin:0 0 12px;">Hi ${esc(person.name.split(" ")[0] || person.name)},</div>
     <div style="font-size:13px;color:${C.muted};line-height:1.6;">Email alerts are on for this address. You'll hear from SPEEKSNET when something on the site needs you — and nothing else.</div>
-    ${itemCard("This is what an alert looks like", "The real ones name the thing that needs you and where it lives on the site. You can change which kinds you get, or switch them off entirely, from the cog in the top bar.", "index.html", "sage", "Example")}`;
+    ${itemCard(titleCase("This is what an alert looks like"), "The real ones name the thing that needs you and where it lives on the site. You can change which kinds you get, or switch them off entirely, from the cog in the top bar.", "index.html", "sage", "Example")}`;
   const sent = await sendEmail(email, "Speeks — email alerts are on", wrapEmail("Email alerts are on", "", body, FOOT_PREFS));
   await sb.from("notify_sent").upsert([{
     dedupe_key: key, user_name: person.key, email,
