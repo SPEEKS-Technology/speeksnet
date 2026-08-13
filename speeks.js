@@ -10306,9 +10306,21 @@ let _gpGoals = null;          // { month, goals, missing, complete } — last re
 let _gpGoalsBusy = false;
 let _gpGoalsStarted = false;
 
+// The District Manager sets the goals — nobody else, including the CEO, unless
+// the Feature Access tool hands 'tool-store-goals' to another role or person
+// (Ethan's call 2026-08-12). Going through _featureOverrideFor means the same
+// switch that shows the tool also decides who may save, rather than the two
+// drifting apart.
 function _gpCanEdit() {
-    const r = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    return r === 'district manager' || r === 'ceo';
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    // Normalised exactly as applyRoleBasedUI does it, so the slug looked up here
+    // is the slug the Feature Access tool writes.
+    const roleClass = role.replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+    const name = sessionStorage.getItem('speeksUserName') || '';
+    const byDefault = role === 'district manager';
+    if (typeof _featureOverrideFor !== 'function') return byDefault;
+    const ov = _featureOverrideFor('tool-store-goals', roleClass, name);
+    return ov === null || ov === undefined ? byDefault : !!ov;
 }
 
 // 'YYYY-MM' in CENTRAL time. The browser's own month is right for anyone in the
@@ -10359,19 +10371,18 @@ function renderGpGoals() {
     const editable = _gpCanEdit();
 
     let html = `<p style="font-size: 12.5px; color: #64748b; margin: 0 0 14px;">
-        The gross profit each store is carrying for <b>${escapeHtml(_gpMonthName(_gpGoals.month))}</b>.
+        The gross profit goal for each store in <b>${escapeHtml(_gpMonthName(_gpGoals.month))}</b>.
         Saving writes them into the Sales Summary workbook as well, so the sheet
-        and the site cannot drift apart.${editable ? '' : ' Only a District Manager or the CEO can change them.'}</p>`;
+        and the site cannot drift apart.${editable ? '' : ' Only the District Manager can change these.'}</p>`;
 
     html += '<div class="gp-goal-rows">';
     stores.forEach(code => {
         const v = (g[code] === undefined || g[code] === null) ? '' : g[code];
         html += `<label class="gp-goal-row">
             <span class="gp-goal-store">${escapeHtml(code)}</span>
-            <span class="gp-goal-field">
-                <i>$</i>
-                <input type="number" min="0" step="500" id="gpGoal_${escapeHtml(code)}"
-                       value="${v}" placeholder="not set" ${editable ? '' : 'disabled'}
+            <span class="gp-goal-field mg-money">
+                <input type="number" min="0" step="500" class="mg-input" id="gpGoal_${escapeHtml(code)}"
+                       value="${v}" placeholder="Not Set" ${editable ? '' : 'disabled'}
                        oninput="_gpUpdateTotal()">
             </span>
         </label>`;
@@ -10720,17 +10731,28 @@ function _bdPrevYear(code, payload) {
 // A month with no goal says so rather than showing 0% — every month before
 // August 2026 predates monthly_gp_goals, and a goal bar measuring against
 // nothing would read as a catastrophic miss. DM/CEO get the way to fix it.
-function _bdGoalChip(store, t) {
+function _bdGoalChip(store, t, proj, isCurrent) {
     const goal = store && Number(store.goal);
     if (!goal || !isFinite(goal) || goal <= 0) {
-        return _gpCanEdit()
-            ? '<button type="button" class="bd-h-goal bd-h-goal-set" onclick="openGpGoals(\'' + escapeHtml(_bdMonth) + '\')">Set the goal</button>'
-            : '';
+        if (!_gpCanEdit()) return '';
+        // A month in progress with no goal is a job to do and says so. A
+        // finished one is a fact about the past — still fixable, because a goal
+        // can be entered late, but it has no business shouting about it.
+        const cls = isCurrent ? 'bd-h-goal bd-h-goal-set' : 'bd-h-goal bd-h-goal-none';
+        const txt = isCurrent ? 'Set the goal' : 'No goal set';
+        return '<button type="button" class="' + cls + '" onclick="openGpGoals(\''
+            + escapeHtml(_bdMonth) + '\')">' + txt + '</button>';
     }
-    const pct = t && t.sellDays ? (t.gp / goal * 100) : 0;
+    // TRACKING to goal, not banked against it (Ethan's call 2026-08-12): on the
+    // 12th, "34% of the goal" is true and reads like a disaster, when the month
+    // is actually on pace to beat it. The projection is the same one the tiles
+    // carry — month to date over days elapsed, times days in the month — so the
+    // header and the tiles can never tell different stories. A finished month
+    // projects by 1, which makes this its final figure.
+    const pct = t && t.sellDays ? (t.gp * (proj || 1) / goal * 100) : 0;
     const done = pct >= 100 ? ' bd-h-goal-hit' : '';
     return '<span class="bd-h-goal' + done + '">'
-        + '<b>' + _lvPct(pct) + '</b> to ' + _lvMoney(goal, false) + ' goal</span>';
+        + '<b>' + _lvPct(pct) + '</b> tracking to ' + _lvMoney(goal, false) + ' goal</span>';
 }
 
 // The block on screen, store or company. Every reader goes through this so the
@@ -10847,7 +10869,7 @@ function _bdRender() {
         + '<span class="bd-h-l"><b>' + escapeHtml(_bdStore) + '</b>'
         + (nm ? '<span class="bd-h-nm">' + escapeHtml(nm) + '</span>' : '')
         + '<span class="bd-h-mo">' + escapeHtml(_bdMonthName(_bdMonth)) + '</span></span>'
-        + '<span class="bd-h-r">' + _bdGoalChip(store, t) + (hasAny && d.isCurrent
+        + '<span class="bd-h-r">' + '<!--GOALCHIP-->' + (hasAny && d.isCurrent
             ? 'Through ' + escapeHtml(_bdMonthName(_bdMonth).split(' ')[0]) + ' ' + last
             : (hasAny ? 'Complete month' : ''))
         + '</span></div>';
@@ -10889,6 +10911,10 @@ function _bdRender() {
     const proj = (d.isCurrent && last > 0) ? (d.daysInMonth / last) : 1;
     const at = v => (v === null ? null : v * proj);      // this month, at month end
     const prevNm = prevYm ? _bdMonthName(prevYm).split(' ')[0] : '';
+    // Now that the projection is known, the header's goal chip can say what the
+    // month is TRACKING to rather than what it has banked so far.
+    html = html.replace('<!--GOALCHIP-->', _bdGoalChip(store, t, proj, d.isCurrent));
+
     // The month-end projection of a figure, on the month in progress only.
     const proj_ = v => (d.isCurrent && v !== null && proj !== 1) ? _lvMoney(v * proj, false) : '';
 
@@ -29037,6 +29063,9 @@ const FEATURE_CATALOG = [
     { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
     { key: 'tool-feature-access',      label: 'Feature Access (This Tool)',    tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
+    // District Manager only by default — this is the switch that also decides
+    // who may SAVE a goal, not just who can see the tool (see _gpCanEdit).
+    { key: 'tool-store-goals',         label: 'Store Goals',                   tab: 'tools', group: 'Admin', def: ['district-manager'] },
     // TWO rows for one tool, sharing the `tool-expenses` stem the way the claims
     // and preferred-purchase pairs do. One key carrying both role classes made the
     // MGR column DISHONEST: it read as "on for the whole manager role" while the
@@ -30064,6 +30093,7 @@ const JUMP_KEYWORDS = {
     'tool-user-permissions':     'users permissions pin login accounts roles add user',
     'tool-feature-access':       'feature access hide show toggle delegation permissions',
     'tool-email-recipients':     'email recipients reports distribution who gets',
+    'tool-store-goals':          'store goals gp gross profit monthly target goal set',
     // Both halves of the split answer the same search — only one is ever visible
     // to a given person, so they can never both come back in one result list.
     'tool-expenses':             'expense report expenses mileage miles reimbursement receipts monthly spend',

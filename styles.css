@@ -11086,6 +11086,14 @@ button.bd-h-goal-set {
     background: #fdf6e7; border-color: #f0e0bd; color: #8a6d3b;
 }
 button.bd-h-goal-set:hover { background: #f9edd4; }
+/* A finished month that never had a goal. Still clickable — a goal can be
+   entered late — but it is a note about the past, not a job, so it is set in
+   the same grey as everything else in this header. */
+button.bd-h-goal-none {
+    cursor: pointer; font-family: inherit;
+    background: #f4f6f9; border-color: #e6ebf1; color: #94a3b8;
+}
+button.bd-h-goal-none:hover { background: #eef2f6; color: #647082; }
 
 /* ---- the Store Goals editor ---- */
 .gp-goal-rows { display: flex; flex-direction: column; gap: 8px; }
@@ -11094,15 +11102,13 @@ button.bd-h-goal-set:hover { background: #f9edd4; }
     padding: 9px 12px; border: 1px solid #eef2f6; border-radius: 10px; background: #fbfcfd;
 }
 .gp-goal-store { font-size: 13px; font-weight: 900; letter-spacing: .03em; color: var(--slate-charcoal); }
-.gp-goal-field { display: inline-flex; align-items: center; gap: 4px; }
-.gp-goal-field i { font-style: normal; font-weight: 800; color: #94a3b8; }
-.gp-goal-field input {
-    width: 130px; padding: 7px 10px; text-align: right;
-    border: 1px solid #dbe3ec; border-radius: 8px;
-    font-family: inherit; font-size: 13.5px; font-weight: 800;
-    color: var(--slate-charcoal); font-variant-numeric: tabular-nums;
-}
-.gp-goal-field input:disabled { background: #f4f6f9; color: #94a3b8; }
+/* The money field is the site's own — .mg-money / .mg-input, the same pair the
+   Margin Guide uses, so the "$" sits INSIDE the box like every other amount on
+   SPEEKS rather than floating beside it. Only the width is set here. */
+.gp-goal-field { width: 150px; flex: 0 0 auto; }
+.gp-goal-field .mg-input { text-align: right; }
+.gp-goal-field .mg-input::placeholder { color: #a8b3c0; font-weight: 550; }
+.gp-goal-field .mg-input:disabled { background: #f4f6f9; color: #94a3b8; cursor: not-allowed; }
 .gp-goal-total {
     margin-top: 14px; padding-top: 12px; border-top: 1px solid #eef2f6;
     display: flex; justify-content: space-between; align-items: baseline;

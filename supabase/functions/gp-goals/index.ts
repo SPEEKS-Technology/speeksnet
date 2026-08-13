@@ -14,10 +14,11 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 // the sheet, so the two can never disagree about who decided.
 //
 //   GET  ?month=YYYY-MM      -> { month, goals, total, complete, missing }
-//   POST { action:'save', month, goals }  (x-user-pin, DM/CEO)
+//   POST { action:'save', month, goals }  (x-user-pin, District Manager)
 //
 // Reads are open, like buysell-daily: the goal is already on screen in the goal
-// bar for anyone who can see the dashboard. Writes need a pin and a role.
+// bar for anyone who can see the dashboard. Writes need a pin, and a role the
+// Feature Access tool agrees with.
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -39,9 +40,36 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function isManagerRole(role?: string): boolean {
-  const r = (role || "").toLowerCase().trim();
-  return r === "district manager" || r === "district-manager" || r === "ceo";
+// WHO MAY SET A GOAL. The District Manager, and nobody else by default — not
+// even the CEO (Ethan's call 2026-08-12) — unless the Feature Access tool has
+// handed 'tool-store-goals' to another role or person. That switch is the same
+// one the frontend reads to show the tool, so what is visible and what is
+// permitted cannot drift apart: a user override beats a role override beats the
+// default, exactly as _featureOverrideFor resolves it in the browser.
+const GOAL_FEATURE = "tool-store-goals";
+
+async function mayEdit(
+  supabase: ReturnType<typeof createClient>,
+  name: string,
+  role: string,
+): Promise<boolean> {
+  // Normalised exactly as the browser does it, so the slug matched here is the
+  // slug the Feature Access tool writes.
+  const roleClass = (role || "").toLowerCase().trim()
+    .replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, "-");
+  const byDefault = roleClass === "district-manager";
+
+  const { data } = await supabase
+    .from("feature_overrides")
+    .select("subject_type, subject, enabled")
+    .eq("feature_key", GOAL_FEATURE);
+
+  const lc = (v: unknown) => String(v || "").toLowerCase().trim();
+  const forUser = (data || []).find((r) => lc(r.subject_type) === "user" && lc(r.subject) === lc(name));
+  if (forUser) return !!forUser.enabled;
+  const forRole = (data || []).find((r) => lc(r.subject_type) === "role" && lc(r.subject) === roleClass);
+  if (forRole) return !!forRole.enabled;
+  return byDefault;
 }
 
 // The edge runtime is UTC, so a bare new Date() names the wrong month for the
@@ -137,7 +165,9 @@ Deno.serve(async (req: Request) => {
       const { data: user } = await supabase
         .from("users").select("name, role").eq("pin", pin).single();
       if (!user) return json({ error: "Unknown pin" }, 401);
-      if (!isManagerRole(user.role)) return json({ error: "Not allowed" }, 403);
+      if (!(await mayEdit(supabase, String(user.name || ""), String(user.role || "")))) {
+        return json({ error: "Not allowed" }, 403);
+      }
 
       const body = await req.json().catch(() => ({})) as Record<string, unknown>;
       if (body.action !== "save") return json({ error: "Unknown action" }, 400);
