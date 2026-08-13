@@ -10915,8 +10915,16 @@ function _bdGoalChip(store, t, proj, isCurrent) {
     // header and the tiles can never tell different stories. A finished month
     // projects by 1, which makes this its final figure.
     const pct = t && t.sellDays ? (t.gp * (proj || 1) / goal * 100) : 0;
-    const done = pct >= 100 ? ' bd-h-goal-hit' : '';
-    return '<span class="bd-h-goal' + done + '">'
+    // Coloured off the ROUNDED figure, not the raw one, so the pill can never
+    // contradict the number printed inside it: 99.97% prints as 100.0% and has
+    // to be green, or the chip argues with itself.
+    const shown = Math.round(pct * 10) / 10;
+    // A finished month is a verdict, so short of the goal is a miss and says so
+    // in red. Exactly 100 counts as hit; a point under does not. A month still
+    // running is a PROJECTION — being behind it is not yet a failure, and
+    // painting it red every morning would teach everyone to ignore the colour.
+    const tone = shown >= 100 ? ' bd-h-goal-hit' : (isCurrent ? '' : ' bd-h-goal-miss');
+    return '<span class="bd-h-goal' + tone + '">'
         + '<b>' + _lvPct(pct) + '</b> tracking to ' + _lvMoney(goal, false) + ' goal</span>';
 }
 

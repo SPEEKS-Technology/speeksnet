@@ -11079,6 +11079,11 @@ html.lv-fs-open, body.lv-fs-open { overflow: hidden; }
 .bd-h-goal b { font-weight: 900; color: var(--slate-charcoal); font-variant-numeric: tabular-nums; }
 .bd-h-goal-hit { background: #e7f6ec; border-color: #bfe3cb; color: #1f7a45; }
 .bd-h-goal-hit b { color: #1f9d57; }
+/* A month that finished short. Only ever on a CLOSED month — see _bdGoalChip:
+   a month still running is a projection, and red every morning would train
+   everyone to stop reading the colour. */
+.bd-h-goal-miss { background: #fdeced; border-color: #f3c7ca; color: #a32b33; }
+.bd-h-goal-miss b { color: #cf3239; }
 /* No goal on the month and the standing to fix it. A button, not a note: the
    only thing to do about a missing goal is to set one. */
 button.bd-h-goal-set {
