@@ -226,7 +226,7 @@ const KIND_LABEL: Record<string, string> = {
   recycle_verdict: "Recycle Verdict", recycle_dm_note: "Recycle Note", recycle_reply: "Recycle Reply",
   variance_upload: "Variance", variance_upload_clear: "Variance", variance_dm_note: "Variance",
   variance_mgr_reply: "Variance",
-  aging_item_added: "Aging inventory", aging_dm_note: "Aging inventory", aging_store_reply: "Aging inventory",
+  aging_item_added: "Aging Inventory", aging_dm_note: "Aging Inventory", aging_store_reply: "Aging Inventory",
   audit_practice_submitted: "PayMore Audit", audit_official_submitted: "PayMore Audit",
   scorecard_submitted: "SPEEKS Scorecard",
 };
@@ -503,13 +503,45 @@ function itemCard(title: string, body: string, link: string, tone: "red" | "ambe
   </table>`;
 }
 
-// The store is only worth its own line when the headline does not already say
-// it. Nearly every queued title ends "- WSP", so stamping "WESTPORT" underneath
-// was the same fact twice in two different spellings. Due-date items are
-// unaffected: their meta is "Due"/"Overdue", which the title never carries.
-const storeMeta = (title: string, store: string | null | undefined, kind?: string | null) => {
+// SOMEBODY WHO COVERS ONE STORE IS NEVER TOLD WHICH STORE.
+//
+// Everything they are mailed is about the store they work at, so "— WSP" in the
+// headline and "WESTPORT" under it are the same fact they already knew, twice.
+// Multi-store people are the opposite case: for the DM, the CEO and the
+// multi-store manager, the store is the most useful word in the line, and an
+// email that dropped it would be unreadable. So the test is coverage, not role.
+const oneStore = (p: Person | null | undefined) => !!p && p.stores.length === 1;
+
+// Escape a store name for use inside a RegExp. Cheap insurance: these come from
+// a table, and one apostrophe or hyphen would otherwise change what matches.
+const rxSafe = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Strip a trailing "— WSP" / "— Westport" for a single-store reader. Trailing
+// only: a store named mid-sentence is doing grammatical work, and cutting it
+// would leave a broken line. Falls back to the original if the strip would empty
+// the title, which is what happens when the store name IS the whole headline.
+const cardTitle = (title: string, person: Person) => {
+  let t = String(title || "");
+  if (!oneStore(person)) return t;
+  for (const code of person.stores) {
+    const name = STORE_NAME[code] || code;
+    t = t.replace(
+      new RegExp("\\s*[—–-]\\s*(?:" + rxSafe(code) + "|" + rxSafe(name) + ")\\s*$", "i"),
+      "",
+    );
+  }
+  return t.trim() || String(title || "");
+};
+
+// The store is only worth its own line when the reader covers more than one AND
+// the headline does not already say it. Due-date items are unaffected: their
+// meta is "Due"/"Overdue", which the title never carries.
+const storeMeta = (
+  title: string, store: string | null | undefined, kind?: string | null, person?: Person,
+) => {
   const tag = kind ? (KIND_LABEL[String(kind)] || "") : "";
   if (!store) return tag;               // company-wide: the tag IS the context
+  if (oneStore(person)) return tag;     // they know where they work
   const code = String(store).toUpperCase();
   const name = STORE_NAME[code] || code;
   const t = String(title || "");
@@ -637,9 +669,9 @@ async function runDrain(sb: any, opts: { dryRun: boolean; to: string | null; onl
     const p = prefs.get(h.person.key)!;
     const box = newOutbox(boxes, h.person, String(p.email));
     box.items.push({
-      title: h.row.title, body: h.row.body || "", link: h.row.link || "",
+      title: cardTitle(h.row.title, h.person), body: h.row.body || "", link: h.row.link || "",
       tone: h.row.priority === "high" ? "red" : "sage",
-      meta: storeMeta(h.row.title, h.row.store, h.row.kind),
+      meta: storeMeta(h.row.title, h.row.store, h.row.kind, h.person),
       key: h.key,
     });
   }
@@ -651,8 +683,10 @@ async function runDrain(sb: any, opts: { dryRun: boolean; to: string | null; onl
     // / "What's outstanding"), which made four near-identical emails look like four
     // different systems in a threaded inbox. The subject already says what this one
     // is about; the header's job is to say who it is FROM.
-    heading: (o) => ["SPEEKSNET Alerts",
-                     o.person.stores.length === 1 ? (STORE_NAME[o.person.stores[0]] || "") : ""],
+    // Second line intentionally empty. It carried the store name, but ONLY for
+    // single-store people — the very readers who do not need telling. For
+    // everyone else it was already blank, so the line never earned its space.
+    heading: (o) => ["SPEEKSNET Alerts", ""],
   });
 
   // Mark done only what nobody is still owed. A row held for a digest
@@ -978,7 +1012,7 @@ async function runDigest(sb: any, opts: { dryRun: boolean; to: string | null; on
     const p = prefs.get(h.person.key)!;
     const box = newOutbox(boxes, h.person, String(p.email));
     box.items.push({
-      title: h.d.title, body: h.d.body, link: h.d.link, tone: h.d.tone,
+      title: cardTitle(h.d.title, h.person), body: h.d.body, link: h.d.link, tone: h.d.tone,
       meta: h.d.tone === "red" ? "Overdue" : "Due", key: h.key,
     });
   }
@@ -1033,8 +1067,8 @@ async function drainHeldForDigest(
     const p = prefs.get(h.person.key)!;
     const box = newOutbox(boxes, h.person, String(p.email));
     box.items.push({
-      title: h.row.title, body: h.row.body || "", link: h.row.link || "",
-      tone: "sage", meta: storeMeta(h.row.title, h.row.store, h.row.kind), key: h.key,
+      title: cardTitle(h.row.title, h.person), body: h.row.body || "", link: h.row.link || "",
+      tone: "sage", meta: storeMeta(h.row.title, h.row.store, h.row.kind, h.person), key: h.key,
     });
     n++;
   }
@@ -1078,7 +1112,7 @@ async function sendWelcome(sb: any, person: { name: string; key: string }, email
   const body = `
     <div style="font-size:13.5px;font-weight:600;color:${C.charcoal};margin:0 0 12px;">Hi ${esc(person.name.split(" ")[0] || person.name)},</div>
     <div style="font-size:13px;color:${C.muted};line-height:1.6;">Email alerts are on for this address. You'll hear from SPEEKSNET when something on the site needs you — and nothing else.</div>
-    ${itemCard("This is what an alert looks like", "The real ones link straight to the tool that needs you. You can change which kinds you get, or switch them off entirely, from the cog in the top bar.", "index.html", "sage", "Example")}`;
+    ${itemCard("This is what an alert looks like", "The real ones name the thing that needs you and where it lives on the site. You can change which kinds you get, or switch them off entirely, from the cog in the top bar.", "index.html", "sage", "Example")}`;
   const sent = await sendEmail(email, "Speeks — email alerts are on", wrapEmail("Email alerts are on", "", body, FOOT_PREFS));
   await sb.from("notify_sent").upsert([{
     dedupe_key: key, user_name: person.key, email,
