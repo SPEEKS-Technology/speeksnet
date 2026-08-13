@@ -648,6 +648,40 @@ function _mrWriteGoals(ss, ym, goals) {
   return { ok: true, tab: tab.getName(), found: found, wrote: wrote };
 }
 
+// Write a month's buying-days count into that month's Buy tab — one cell per
+// store block at base+4, never beside the label. SPEEKS derives the number from
+// the closed dates it holds; the sheet only needs the total.
+function _mrWriteBuyDays(ss, ym, buyDays) {
+  var n = Number(buyDays);
+  if (!isFinite(n) || n <= 0) return { ok: false, error: 'no buyDays given' };
+  var entry = _mrIndex(ss)[ym];
+  if (!entry || !entry.buy) return { ok: false, error: 'no Buy tab for ' + ym };
+  var tab = entry.buy;
+  var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
+  var values = tab.getRange(1, 1, lastRow, lastCol).getValues();
+  var formulas = tab.getRange(1, 1, lastRow, lastCol).getFormulas();
+  var bases = _mrBases(values, MR_BUY_WIDTH);
+  var wrote = [];
+
+  for (var r = 0; r < lastRow; r++) {
+    for (var c = 0; c < lastCol; c++) {
+      var raw = (values[r] || [])[c];
+      if (raw === '' || raw === null || raw === undefined) continue;
+      if (MR_FOOTER.buyDays.indexOf(String(raw).trim().toLowerCase()) < 0) continue;
+      Object.keys(bases).sort(function (a, b) { return bases[a] - bases[b]; }).forEach(function (code) {
+        var k = bases[code] + MR_BUY_VALUE_COL;
+        if (k >= lastCol || (formulas[r] || [])[k]) return;
+        var rng = tab.getRange(r + 1, k + 1);
+        if (rng.isPartOfMerge()) return;
+        rng.setValue(n);
+        wrote.push(code + '@' + rng.getA1Notation());
+      });
+      return { ok: true, tab: tab.getName(), buyDays: n, wrote: wrote };
+    }
+  }
+  return { ok: false, error: 'no "Buying Days in Month" label on ' + tab.getName() };
+}
+
 // The goals for a month, from SPEEKS. The sheet is downstream of the site here,
 // so an empty answer means "not decided yet" and the goal cells are left alone
 // rather than zeroed.
@@ -1008,7 +1042,14 @@ function doPost(e) {
   if (body.action === 'goals') {
     var ym = String(body.month || '');
     if (!/^\d{4}-\d{2}$/.test(ym)) return _mrJson({ error: 'bad month' });
-    return _mrJson(_mrWriteGoals(_mrSs(), ym, body.goals || {}));
+    var ss = _mrSs();
+    var out = { goals: _mrWriteGoals(ss, ym, body.goals || {}) };
+    // Only when SPEEKS actually had the closed-days panel open. A save that did
+    // not touch them sends null, and the sheet's count is left alone.
+    if (body.buyDays !== null && body.buyDays !== undefined) {
+      out.buyDays = _mrWriteBuyDays(ss, ym, body.buyDays);
+    }
+    return _mrJson(out);
   }
   if (body.action === 'roll') {
     var m = String(body.month || _mrCentralMonth());
