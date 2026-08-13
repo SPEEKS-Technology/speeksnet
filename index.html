@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260813g">
+  <link rel="stylesheet" href="styles.css?v=20260813h">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260813g" defer></script>
+  <script src="speeks.js?v=20260813h" defer></script>
 </head>
 
 <body class="preload">
@@ -885,7 +885,13 @@
   </div>
 
 
-  <div class="ew-dash dynamic-module-flex role-manager role-owner-manager role-employee employee-dashboard-row sh-dash-row">
+  <!-- The row the Command Center and Buying & Sales live in. It carries a feature
+       key of its own because its CHILDREN do (cc-live, cc-ebay, cc-scorecard…):
+       without one, granting somebody the Live Dashboard tab turned the tab on
+       inside a row that was still display:none, so the grant silently did
+       nothing. A container whose children are grantable must be grantable too.
+       Default matches the role classes it used to be gated by. -->
+  <div class="ew-dash dynamic-module-flex role-manager role-owner-manager role-employee employee-dashboard-row sh-dash-row" data-feature="widget-command-center">
     <!-- ===== COMMAND CENTER — ONE widget for every role =====
          Managers, ASMs and employees all get this same card; which TABS they see is
          the only difference, and that is entirely Feature Access (cc-live, cc-ebay,

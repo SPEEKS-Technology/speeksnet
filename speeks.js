@@ -29338,6 +29338,7 @@ const FEATURE_CATALOG = [
     // built around. Those rows exist so a store that would rather not can switch
     // them off, not as a default-off gate.
     { key: 'widget-scorecard-alerts',  label: 'Command Center (Whole Widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    { key: 'widget-command-center',    label: 'Command Center (whole card)',   tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     { key: 'cc-live',                  label: 'Command Center · Live Dashboard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     // cc-buying was here. The tab is gone — buying is on the Live tab's Month view
     // now — so the switch is gone too rather than left as a control that does
