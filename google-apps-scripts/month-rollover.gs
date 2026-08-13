@@ -688,6 +688,127 @@ function mrPreviewNextMonth() {
   _mrReport(_mrRoll(_mrNextMonth(_mrLatestMonth(idx)), { suffix: ' (PREVIEW)' }));
 }
 
+// ---- verification against a month we already know the answer to ---------------
+// The honest test of a rollover is not "does the tab look right" but "does it
+// come out the same as the one a person built". So: rebuild a month whose real
+// tab ALREADY EXISTS, and diff the two.
+//
+// Formulas are compared cell by cell across the whole tab — that is the literal
+// form of "keep the exact formatting and formulas", and it is checkable rather
+// than eyeballable. The day grid's VALUES are expected to differ (ours is empty,
+// theirs has a month of trading in it) and are counted, not flagged. The footer
+// cells are compared one by one, because those are the only cells this script
+// decides for itself.
+//
+// Pick the month for what it exercises:
+//   mrVerifyPastMonth('2026-07')   Jun 30 -> Jul 31   the row INSERT path
+//   mrVerifyPastMonth('2026-06')   May 31 -> Jun 30   the row DELETE path
+//   mrVerifyPastMonth('2026-08')   Jul 31 -> Aug 31   the GOAL write, against
+//                                                     goals already on SPEEKS
+function _mrA1(r, c) {
+  var s = '', n = c + 1;
+  while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - m) / 26); }
+  return s + (r + 1);
+}
+
+// Every footer cell this script would ever write, located by label on the tab
+// given. Returned as targets so the same cell can be read off two tabs and
+// compared.
+function _mrFooterCells(values, formulas, lastRow, lastCol) {
+  var out = [];
+  for (var r = 0; r < lastRow; r++) {
+    for (var c = 0; c < lastCol; c++) {
+      var raw = (values[r] || [])[c];
+      if (raw === '' || raw === null || raw === undefined) continue;
+      var txt = String(raw).trim().toLowerCase();
+      if (!txt || txt.length > 30) continue;
+      var what = null;
+      Object.keys(MR_FOOTER).forEach(function (k) { if (MR_FOOTER[k].indexOf(txt) >= 0) what = k; });
+      if (!what) continue;
+      for (var k2 = c + 1; k2 < Math.min(c + 4, lastCol); k2++) {
+        if ((formulas[r] || [])[k2]) continue;
+        out.push({ what: what, row: r, col: k2, label: _mrA1(r, c) });
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+function _mrDiffTabs(mine, real) {
+  var mR = mine.getLastRow(), mC = mine.getLastColumn();
+  var rR = real.getLastRow(), rC = real.getLastColumn();
+  Logger.log('  size   : ours ' + mR + 'x' + mC + '   real ' + rR + 'x' + rC
+             + (mR === rR && mC === rC ? '   ✓' : '   ⚠ MISMATCH'));
+
+  var R = Math.min(mR, rR), C = Math.min(mC, rC);
+  var af = mine.getRange(1, 1, R, C).getFormulas();
+  var bf = real.getRange(1, 1, R, C).getFormulas();
+  var same = 0, diff = [];
+  for (var r = 0; r < R; r++) {
+    for (var c = 0; c < C; c++) {
+      var a = (af[r] || [])[c] || '', b = (bf[r] || [])[c] || '';
+      if (a === b) { if (a) same++; continue; }
+      if (diff.length < 20) diff.push(_mrA1(r, c) + '  ours[' + a.slice(0, 45) + ']  real[' + b.slice(0, 45) + ']');
+      else if (diff.length === 20) diff.push('...');
+      if (diff.length > 20) { r = R; break; }
+    }
+  }
+  Logger.log('  formula: ' + same + ' identical'
+             + (diff.length ? ', ' + diff.length + '+ DIFFERENT' : ', 0 different   ✓'));
+  diff.forEach(function (d) { Logger.log('     ⚠ ' + d); });
+
+  var av = mine.getRange(1, 1, R, C).getValues();
+  var bv = real.getRange(1, 1, R, C).getValues();
+  var cells = _mrFooterCells(bv, bf, R, C);
+  Logger.log('  footers:');
+  cells.forEach(function (f) {
+    var ours = (av[f.row] || [])[f.col], theirs = (bv[f.row] || [])[f.col];
+    var ok = String(ours) === String(theirs);
+    Logger.log('     ' + (ok ? '✓' : '⚠') + ' ' + f.what + ' @' + f.label
+               + ' -> ' + _mrA1(f.row, f.col)
+               + '   ours=' + JSON.stringify(ours) + '  real=' + JSON.stringify(theirs));
+  });
+  if (!cells.length) Logger.log('     (no footer labels found on the real tab)');
+}
+
+function mrVerifyPastMonth(ym) {
+  ym = ym || _mrCentralMonth();
+  var ss = _mrSs();
+  var idx = _mrIndex(ss);
+  if (!idx[ym] || (!idx[ym].sales && !idx[ym].buy)) {
+    Logger.log('no real tabs for ' + ym + ' — nothing to compare against. Months: '
+               + Object.keys(idx).sort().join(', '));
+    return;
+  }
+  Logger.log('######## VERIFY ' + ym + ' — rebuilding a month that already exists ########');
+  var r = _mrRoll(ym, { suffix: ' (VERIFY)' });
+  _mrReport(r);
+  (r.reports || []).forEach(function (rep) {
+    if (!rep.target) return;
+    var mine = ss.getSheetByName(rep.target);
+    var real = ss.getSheetByName(rep.target.replace(' (VERIFY)', ''));
+    if (!mine || !real) { Logger.log('---- ' + rep.family + ': could not pair the tabs'); return; }
+    Logger.log('---- ' + rep.family + ': ' + mine.getName() + '  vs  ' + real.getName() + ' ----');
+    _mrDiffTabs(mine, real);
+  });
+  Logger.log('run mrDeleteScratchTabs() when you are done reading these.');
+}
+
+// Removes every (VERIFY) and (PREVIEW) tab. Named tabs only — it cannot touch a
+// real month, because a real month's name does not carry a suffix.
+function mrDeleteScratchTabs() {
+  var ss = _mrSs();
+  var gone = [];
+  ss.getSheets().forEach(function (sh) {
+    var n = sh.getName();
+    if (n.indexOf(' (VERIFY)') < 0 && n.indexOf(' (PREVIEW)') < 0) return;
+    ss.deleteSheet(sh);
+    gone.push(n);
+  });
+  Logger.log(gone.length ? 'deleted: ' + gone.join(', ') : 'nothing to delete');
+}
+
 function mrCommitPreview() {
   var ss = _mrSs();
   var done = [];
