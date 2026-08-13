@@ -10924,8 +10924,12 @@ function _bdGoalChip(store, t, proj, isCurrent) {
     // running is a PROJECTION — being behind it is not yet a failure, and
     // painting it red every morning would teach everyone to ignore the colour.
     const tone = shown >= 100 ? ' bd-h-goal-hit' : (isCurrent ? '' : ' bd-h-goal-miss');
+    // "Tracking" is a word about the future, and a closed month has none. The
+    // running month says what it is heading for; a finished one says what it
+    // came to.
+    const verb = isCurrent ? ' tracking to ' : ' of ';
     return '<span class="bd-h-goal' + tone + '">'
-        + '<b>' + _lvPct(pct) + '</b> tracking to ' + _lvMoney(goal, false) + ' goal</span>';
+        + '<b>' + _lvPct(pct) + '</b>' + verb + _lvMoney(goal, false) + ' goal</span>';
 }
 
 // The block on screen, store or company. Every reader goes through this so the
