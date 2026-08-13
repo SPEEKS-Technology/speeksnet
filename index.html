@@ -9,7 +9,7 @@
        styles.css (loaded next) restores their display:flex + off-canvas positioning. */
     .goals-side-panel, .checklist-side-panel { display: none; }
   </style>
-  <link rel="stylesheet" href="styles.css?v=20260811a">
+  <link rel="stylesheet" href="styles.css?v=20260814f">
   <style>
     /* Cache-proof guarantees for the order-tool modals (Box Order / Recycle
        Inventory). These also live in styles.css, but are duplicated inline here
@@ -25,7 +25,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-  <script src="speeks.js?v=20260811a" defer></script>
+  <script src="speeks.js?v=20260814f" defer></script>
 </head>
 
 <body class="preload">
@@ -79,6 +79,7 @@
       <div class="action-btn" onclick="toggleCalendar()" data-tip="Strategic Calendar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div>
       <div class="action-btn" id="notifBellBtn" onclick="toggleNotifs()" data-tip="Announcements"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><div class="notif-dot" id="notifBadge"></div>
       </div>
+      <div class="action-btn" id="notifySettingsBtn" data-feature="nav-settings" onclick="openSettings()" data-tip="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
     </div>
     <div class="greeting-stack">
         <h2 id="userGreeting">Welcome!</h2>
@@ -662,7 +663,7 @@
   <!-- Managers + ASMs. Replaces the info-ticker + nav bell. Cards trigger the
        existing modals/panels; the unified feed (announcements + store notes +
        reminders) is built by renderActionFeed() in the SPEEKS ACTION MENU block. -->
-  <section class="speeks-action-menu dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-tom role-employee role-training" id="speeksActionMenu">
+  <section class="speeks-action-menu dynamic-module-flex role-manager role-owner-manager role-assistant-manager role-district-manager role-ceo role-mocd role-employee role-training" id="speeksActionMenu">
 
     <div class="sam-hero" id="samHero" hidden onclick="toggleNotifs()">
       <div class="sam-hero-ico">
@@ -757,7 +758,7 @@
             <a href="https://docs.google.com/spreadsheets/d/1i_oV37lZXq8s91f9ymzwQlrM8WY2UlQQQ0qsRP3xLJ8/edit" target="_blank" class="hotbar-btn" data-feature="hb-ceo-sales-summary">📊 Sales Summary</a> 
             <a href="https://drive.google.com/drive/folders/1kV1if60GZ9211JGgK0nxY9McBfdtENDK?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-store-passwords">🔑 Store Passwords</a>
             <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-b2b-records">🏢 B2B Records</a>  
-            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-tom-folder">📁 TOM Folder</a>
+            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-tom-folder">📁 MOCD Folder</a>
             <a href="https://drive.google.com/drive/folders/1Wt2q6DjkHL8w21Ij6AoP6GrwHTkhdqW-?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-paymore-google-drive">☁️ PayMore Google Drive</a> 
             <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-ceo-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>  
         </div>
@@ -776,11 +777,11 @@
         </div>
       </div>
 
-      <div class="dynamic-module-flex role-tom hotbar-wrapper">
+      <div class="dynamic-module-flex role-mocd hotbar-wrapper">
         <div class="hotbar-container">
-          <span class="hotbar-label">TOM</span>
+          <span class="hotbar-label">MOCD</span>
           <div class="hotbar-links">
-            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-tom-tom-folder">📁 TOM Folder</a>
+            <a href="https://drive.google.com/drive/folders/13qnGzS60VO83iVbyREzCoRFSctMWZeb3?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-tom-tom-folder">📁 MOCD Folder</a>
             <a href="https://drive.google.com/drive/folders/1e-2O_0tvdt7J6NiUET01bVly51HGcZwU?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-tom-b2b-records">🏢 B2B Records</a>   
             <a href="https://drive.google.com/drive/folders/1A-DqUcfMlJ0P5Xx2B8ea639EGUENNjDj?usp=sharing" target="_blank" class="hotbar-btn" data-feature="hb-tom-speeksnet-google-drive">☁️ SPEEKSNET Google Drive</a>  
         </div>
@@ -884,7 +885,13 @@
   </div>
 
 
-  <div class="ew-dash dynamic-module-flex role-manager role-owner-manager role-employee employee-dashboard-row sh-dash-row">
+  <!-- The row the Command Center and Buying & Sales live in. It carries a feature
+       key of its own because its CHILDREN do (cc-live, cc-ebay, cc-scorecard…):
+       without one, granting somebody the Live Dashboard tab turned the tab on
+       inside a row that was still display:none, so the grant silently did
+       nothing. A container whose children are grantable must be grantable too.
+       Default matches the role classes it used to be gated by. -->
+  <div class="ew-dash dynamic-module-flex role-manager role-owner-manager role-employee employee-dashboard-row sh-dash-row" data-feature="widget-command-center">
     <!-- ===== COMMAND CENTER — ONE widget for every role =====
          Managers, ASMs and employees all get this same card; which TABS they see is
          the only difference, and that is entirely Feature Access (cc-live, cc-ebay,
@@ -984,6 +991,9 @@
             <div class="cc-sum role-manager role-owner-manager role-employee" id="cc-sum-reviews" data-feature="cc-live" hidden><div class="cc-sum-k">Google Reviews &middot; Month to Date</div><div class="cc-sum-v">—</div></div>
             <div class="cc-sum role-manager role-owner-manager" id="cc-sum-ebay" data-feature="cc-ebay"><div class="cc-sum-k">eBay Status</div><div class="cc-sum-v">—</div></div>
             <div class="cc-sum role-manager role-owner-manager" id="cc-sum-score" data-feature="cc-scorecard"><div class="cc-sum-k">SPEEKS Scorecard</div><div class="cc-sum-v">—</div></div>
+            <!-- The collapsed line shows the REAL PayMore audit, not the practice
+                 one: on a shut card there is room for one audit figure, and it
+                 should be the one the store is actually held to (Ethan). -->
             <div class="cc-sum role-manager role-owner-manager" id="cc-sum-audit" data-feature="cc-scorecard"><div class="cc-sum-k">PayMore Audit</div><div class="cc-sum-v">—</div></div>
         </div>
 
@@ -995,9 +1005,15 @@
                  card can reuse these renderers unchanged. -->
             <div class="cc-strip s4 lv-strip role-manager role-owner-manager role-employee" id="cc-strip-live" data-feature="cc-live"></div>
             <div class="cc-strip s3 role-manager role-owner-manager" id="cc-strip-scorecard" data-feature="cc-scorecard">
+                <!-- The two audits sit together, then the scorecard. "Audit
+                     Standing" used to be the third cell, saying On Target /
+                     Passing / Below Pass about the SPEEKS audit alone — with two
+                     audits on screen a single unlabelled standing would have been
+                     ambiguous, so each tile now carries its own on its sub-line
+                     and the cell goes to PayMore's score (Ethan 2026-08-12). -->
                 <div class="cc-cell" id="sh-score-audit"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
+                <div class="cc-cell" id="sh-score-paudit"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
                 <div class="cc-cell" id="sh-score-mktg"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
-                <div class="cc-cell" id="cc-audit-standing"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
             </div>
             <div class="cc-strip s3 role-manager role-owner-manager" id="cc-strip-ebay" data-feature="cc-ebay">
                 <div class="cc-cell" id="sh-score-ebay"><div class="status-message" style="padding:10px 0;">Syncing…</div></div>
@@ -1330,6 +1346,10 @@
         <div class="notif-tabs" style="display: inline-flex;">
             <button id="sc-tab-scorecard" class="tab-btn active" onclick="switchScoreTab('scorecard')">Scorecard</button>
             <button id="sc-tab-audit" class="tab-btn" onclick="switchScoreTab('audit')">SPEEKS Audit</button>
+            <!-- PayMore's own audit, not ours. DM/CEO only: it is the district's
+                 record of what corporate said, entered in one place by one
+                 person. Shown/hidden in switchScoreTab. -->
+            <button id="sc-tab-paudit" class="tab-btn" onclick="switchScoreTab('paudit')" style="display:none;">PayMore Audit</button>
             <button id="sc-tab-manage" class="tab-btn" onclick="switchScoreTab('manage')">Manage Items</button>
         </div>
     </div>
@@ -1359,12 +1379,45 @@
             <div id="audit-entry-container" style="margin-top: 12px;"></div>
         </div>
 
+        <!-- The real PayMore audit: a date and a score, and nothing else.
+             Corporate does not hand over a per-item breakdown, so there is
+             deliberately no checklist here — the store select and date picker
+             above are shared with the other tabs. -->
+        <div id="sc-panel-paudit" style="display: none;">
+            <div id="pa-existing"></div>
+            <div style="display: flex; gap: 10px; align-items: flex-end; margin-top: 4px;">
+                <div style="flex: 1;">
+                    <label class="form-label-caps" for="pa-earned">Points scored</label>
+                    <input type="number" id="pa-earned" class="form-input-lg" style="margin-top: 6px;"
+                           min="0" step="0.5" placeholder="0" oninput="_paTouch()">
+                </div>
+                <!-- Editable, and it has to be: PayMore has audited some stores
+                     out of fewer than the full 165 (Ethan 2026-08-12), so a fixed
+                     denominator would have reported those stores as having lost
+                     points they were never offered. Defaults to the SPEEKS Audit's
+                     total, which is the usual case. -->
+                <div style="flex: 1;">
+                    <label class="form-label-caps" for="pa-possible">Out of</label>
+                    <input type="number" id="pa-possible" class="form-input-lg" style="margin-top: 6px;"
+                           min="1" step="0.5" oninput="_paTouch()">
+                </div>
+                <div style="flex: 1;">
+                    <label class="form-label-caps">Score</label>
+                    <div id="pa-pct" class="form-input-lg" style="margin-top: 6px; display: flex; align-items: center; font-weight: 850;">&mdash;</div>
+                </div>
+            </div>
+            <p class="pa-hint" id="pa-poss-note" style="margin-top: 10px;"></p>
+        </div>
+
         <div id="sc-panel-manage" style="display: none;"></div>
     </div>
 
     <div class="manage-footer flex-end">
+        <button onclick="deleteSpeeksAudit()" class="btn-secondary" id="deleteAuditBtn" style="display: none;">Remove</button>
+        <button onclick="deletePaymoreAudit()" class="btn-secondary" id="deletePauditBtn" style="display: none;">Remove</button>
         <button onclick="submitNewScorecard()" class="btn-primary" id="submitScorecardBtn">Save Scorecard</button>
         <button onclick="submitNewAudit()" class="btn-primary" id="submitAuditBtn" style="display: none;">Save Audit</button>
+        <button onclick="submitPaymoreAudit()" class="btn-primary" id="submitPauditBtn" style="display: none;">Save PayMore Audit</button>
     </div>
 </div>
 
@@ -1372,7 +1425,7 @@
 <div id="auditBreakdownOverlay" onclick="closeAuditBreakdown()"></div>
 <div class="modal-menu manage-menu" id="auditBreakdownModal">
     <div class="modal-header">
-        <h3 id="audit-breakdown-title">Audit Breakdown</h3>
+        <h3 id="audit-breakdown-title">SPEEKS Audit Breakdown</h3>
         <button class="modal-close-btn" onclick="closeAuditBreakdown()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="manage-content" id="audit-breakdown-body"></div>
@@ -1939,6 +1992,25 @@
     <div class="manage-content" id="emailRecipientsBody"></div>
 </div>
 
+<!-- The month's GP goal per store. Entered here, not in the spreadsheet: the
+     goal is a decision, and the rollover writes it into the new tabs so the
+     workbook's own formulas keep working. District Manager only,
+     unless Feature Access hands 'tool-store-goals' to someone else. -->
+<div class="modal-menu manage-menu" id="gpGoalsModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <span class="tool-head-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow">SPEEKS Tools</span>
+          <span class="tool-head-title">Month Setup</span>
+          <span class="tool-head-sub">Each store's gross profit goal, and the days they are open to buy.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="manage-content" id="gpGoalsBody"></div>
+</div>
+
 <div class="modal-menu manage-menu" id="featureAccessModal">
     <div class="modal-header tool-head">
       <div class="tool-head-main">
@@ -1952,7 +2024,7 @@
       <button class="modal-close-btn" onclick="closeAllModals()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div style="padding: 14px 18px 14px;">
-        <div class="notif-tabs" style="display: inline-flex;">
+        <div class="notif-tabs fa-tabs">
             <button id="fa-tab-tools" class="tab-btn active" onclick="switchFaTab('tools')">SPEEKS Tools</button>
             <button id="fa-tab-hotbar" class="tab-btn" onclick="switchFaTab('hotbar')">Hotbar Links</button>
             <button id="fa-tab-widgets" class="tab-btn" onclick="switchFaTab('widgets')">Widgets</button>
@@ -1965,7 +2037,7 @@
     </div>
 </div>
 
-<div class="tools-side-panel dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager role-manager role-assistant-manager" id="toolsSidePanel" style="flex-direction:column;">
+<div class="tools-side-panel dynamic-module-flex role-district-manager role-ceo role-mocd role-owner-manager role-manager role-assistant-manager" id="toolsSidePanel" style="flex-direction:column;">
   <div class="tools-panel-header">
     <div class="tools-panel-title">
       <svg class="tools-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"></rect><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"></rect><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"></rect><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"></rect></svg>
@@ -1985,9 +2057,9 @@
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-claims-oversight" onclick="_closeToolsPanel(); openClaimsOversight();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></span>Insurance Claims (DM)</a>
     </div>
 
-    <div class="tools-group dynamic-module-block role-district-manager role-ceo role-tom role-owner-manager">
+    <div class="tools-group dynamic-module-block role-district-manager role-ceo role-mocd role-owner-manager">
       <div class="tools-group-label">Content</div>
-      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-tom role-owner-manager" data-feature="tool-announcements" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"/></span>Announcements</a>
+      <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-mocd role-owner-manager" data-feature="tool-announcements" onclick="_closeToolsPanel(); toggleManageAnnouncements();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v13M3 11v6l18 4M3 11a4 4 0 0 0 8 0"/></span>Announcements</a>
       <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-patch-notes" onclick="_closeToolsPanel(); togglePatchNotesManage();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></span>Patch Notes</a>
     </div>
 
@@ -2012,6 +2084,7 @@
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo role-owner-manager" data-feature="tool-user-permissions" onclick="_closeToolsPanel(); toggleManageUsers();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></span>User Permissions</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-feature-access" onclick="_closeToolsPanel(); openFeatureAccess();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></span>Feature Access</a>
       <a class="tools-item dynamic-module-flex role-district-manager role-ceo" data-feature="tool-email-recipients" onclick="_closeToolsPanel(); openEmailRecipients();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></span>Email Recipients</a>
+      <a class="tools-item dynamic-module-flex role-district-manager" data-feature="tool-store-goals" onclick="_closeToolsPanel(); openGpGoals();"><span class="tools-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4"/></svg></span>Month Setup</a>
       <!-- Two rows for ONE tool, sharing the tool-expenses stem the way the claims
            and preferred-purchase pairs do. Both open the same modal; the edge fn
            decides the powers from the caller's PIN, so nothing here grants anything.
@@ -2033,6 +2106,65 @@
     </div>
 
   </div>
+</div>
+
+
+<!-- ===== SETTINGS =====
+     A settings SHELL, not a single screen: pane 1 lists the sections, pane 2 is
+     whichever section was opened. Notifications is the only one today and the
+     index is deliberately kept anyway, because that is the thing that lets the
+     next setting be added without redesigning anything.
+
+     ONE modal with two panes rather than two stacked modals, on purpose. A
+     second modal would have to cooperate with closeAllModals(), the
+     lockAndBlurScreen() overlay and the Escape-peeling order — all of which this
+     codebase has already been bitten by. Two panes inside one modal give the same
+     drill-down feel with none of that: the header morphs, a back chevron appears,
+     and the X still means "leave settings" from either depth.
+
+     Everything below the header is rendered by JS (renderNotifySettings) from
+     what the notify function returns, so the section list and the category list
+     are not duplicated into five HTML files. -->
+<div class="modal-menu settings-menu" id="settingsModal">
+    <div class="modal-header tool-head">
+      <div class="tool-head-main">
+        <button class="ann-docs-back-btn set-back" id="settingsBackBtn" onclick="settingsBack()" title="Back to Settings" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>Back</button>
+        <span class="tool-head-ico" id="settingsIco"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+        <div class="tool-head-titles">
+          <span class="tool-head-eyebrow" id="settingsEyebrow">Your Account</span>
+          <span class="tool-head-title" id="settingsTitle">Settings</span>
+          <span class="tool-head-sub" id="settingsSub">Your personal preferences for SPEEKSNET.</span>
+        </div>
+      </div>
+      <button class="modal-close-btn" onclick="closeSettings()" title="Close settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+
+    <!-- pane 1: the index -->
+    <div class="manage-content set-pane" id="settingsIndexPane">
+      <div class="set-list">
+        <button class="set-row" onclick="settingsGo('notifications')">
+          <span class="set-row-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span>
+          <span class="set-row-copy">
+            <b>Notifications</b>
+            <i>Email alerts for announcements, deadlines, and anything waiting on you.</i>
+          </span>
+          <span class="set-row-state" id="setStateNotifications"></span>
+          <svg class="set-row-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+      <div class="set-foot-note">More settings to come over time.</div>
+    </div>
+
+    <!-- pane 2: notifications -->
+    <div class="manage-content set-pane" id="settingsNotifyPane" hidden>
+      <div id="notifySettingsBody"><div class="ns-loading">Loading your settings…</div></div>
+    </div>
+
+    <!-- Shown only on a section that has something to save. The index has not. -->
+    <div class="manage-footer flex-end" id="settingsFooter" hidden>
+        <span class="ns-save-note" id="notifySaveNote"></span>
+        <button id="notifySaveBtn" class="btn-primary" onclick="saveNotifySettings()">Save Changes</button>
+    </div>
 </div>
 
 </body>

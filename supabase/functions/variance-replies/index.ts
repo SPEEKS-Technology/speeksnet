@@ -44,6 +44,41 @@ async function broadcastChange(tool: string, store: string | null) {
   } catch (_) { /* best-effort */ }
 }
 
+// Drop a row on the email-notification queue — the twin of broadcastChange
+// above. That one tells an already-open page to refresh; this one tells the
+// people who aren't looking at the site right now.
+//
+// All this has to do is describe WHO CARES. The notify function resolves
+// audience -> people -> their preferences -> an address, and batches whatever is
+// outstanding into one message. Leaving audienceStores/audienceRoles null means
+// "everybody".
+//
+// Best-effort and never throws, for the same reason broadcastChange isn't
+// awaited for its result: failing to notify must never fail the write itself.
+// See migration 0033 for the audience axes and the category list.
+async function queueNotification(n: {
+  category: string; kind: string; title: string; body?: string; link?: string;
+  store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
+  audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+}) {
+  try {
+    const sb = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    await sb.from("notify_queue").insert({
+      category: n.category, kind: n.kind, title: n.title, body: n.body ?? null,
+      link: n.link ?? null,
+      store: n.store ? String(n.store).toUpperCase() : null,
+      audience_stores: n.audienceStores ?? null,
+      audience_roles: n.audienceRoles ?? null,
+      audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
+      exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
+      priority: n.priority ?? "normal",
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 // The DM uploads the ≤-10% line items (this tool) and the team variance report
 // (the "Submit Variance Report" tool → variance_entries) at the same time for
 // the same store + date range. Pull that matching team-variance entry so it can
@@ -85,27 +120,6 @@ async function getTeamVariance(supabase: any, period: any) {
   };
 }
 
-// The store's most recent team-variance entry (store total % + per-person %),
-// not tied to any reply period. Used for a store that's "in the clear": its
-// managers no longer answer line items, they just see this summary.
-async function getLatestTeamVariance(supabase: any, store: string) {
-  const { data: entry } = await supabase.from("variance_entries")
-    .select("id, store_pct, date_from, date_to")
-    .eq("store", store)
-    .order("date_to", { ascending: false })
-    .order("created_at", { ascending: false })
-    .limit(1).maybeSingle();
-  if (!entry) return null;
-  const { data: emps } = await supabase.from("variance_employee_entries")
-    .select("employee_name, variance_pct").eq("entry_id", entry.id).order("employee_name");
-  return {
-    total: entry.store_pct,
-    date_from: entry.date_from,
-    date_to: entry.date_to,
-    employees: (emps || []).map((e: any) => ({ name: e.employee_name, val: e.variance_pct })),
-  };
-}
-
 // Base64 (from the browser's FileReader) → bytes for a Storage upload.
 function b64ToBytes(b64: string): Uint8Array {
   const clean = b64.includes(",") ? b64.slice(b64.indexOf(",") + 1) : b64;
@@ -139,9 +153,18 @@ Deno.serve(async (req: Request) => {
         if (!store || !dateFrom || !dateTo) {
           return jsonResponse({ success: false, error: "store, date_from and date_to are required" }, 400);
         }
-        if (!items.length) {
+        // An all-clear period legitimately has nothing to reply to. It is still a
+        // real upload: the manager is notified and reviews the report, they just
+        // owe no explanations.
+        const allClear = body.all_clear === true;
+        if (!items.length && !allClear) {
           return jsonResponse({ success: false, error: "No line items to upload" }, 400);
         }
+        // NULL = whole-store report (every line is an obligation), which is the
+        // legacy shape and still what an upload with no buyers picked produces.
+        const selectedBuyers = Array.isArray(body.selected_buyers)
+          ? body.selected_buyers.map((b: unknown) => String(b).trim()).filter(Boolean)
+          : null;
         const due = new Date();
         due.setDate(due.getDate() + MANAGER_REPLY_DAYS);
         const { data: period, error: pErr } = await supabase.from("variance_reply_periods").insert({
@@ -151,6 +174,10 @@ Deno.serve(async (req: Request) => {
           timeframe: body.timeframe ? String(body.timeframe) : null,
           uploaded_by: body.uploaded_by ? String(body.uploaded_by).trim() : null,
           manager_due_at: due.toISOString(),
+          selected_buyers: selectedBuyers,
+          all_clear: allClear,
+          all_clear_by: allClear && body.all_clear_by ? String(body.all_clear_by).trim() : null,
+          all_clear_at: allClear ? new Date().toISOString() : null,
         }).select().single();
         if (pErr) return jsonResponse({ success: false, error: pErr.message }, 500);
 
@@ -167,12 +194,20 @@ Deno.serve(async (req: Request) => {
           gm_note: it.gm_note ? String(it.gm_note).trim() : null,
           dm_note: it.dm_note ? String(it.dm_note).trim() : null,
           mgr_reply: it.mgr_reply ? String(it.mgr_reply).trim() : null,
+          // Absent = true, so an older client (or a whole-store upload) keeps the
+          // behaviour where every imported line is an obligation.
+          needs_reply: it.needs_reply === false ? false : true,
         }));
-        const { error: iErr } = await supabase.from("variance_reply_items").insert(rows);
-        if (iErr) {
-          // don't leave a header without lines
-          await supabase.from("variance_reply_periods").delete().eq("id", period.id);
-          return jsonResponse({ success: false, error: iErr.message }, 500);
+        // An all-clear period can legitimately have no rows at all, so only insert
+        // when there is something to insert — an empty insert is a pointless round
+        // trip at best and an error at worst.
+        if (rows.length) {
+          const { error: iErr } = await supabase.from("variance_reply_items").insert(rows);
+          if (iErr) {
+            // don't leave a header without lines
+            await supabase.from("variance_reply_periods").delete().eq("id", period.id);
+            return jsonResponse({ success: false, error: iErr.message }, 500);
+          }
         }
 
         // Stash the original workbook so managers can download the full report
@@ -196,6 +231,33 @@ Deno.serve(async (req: Request) => {
           } catch (_e) { /* keep the upload; the file is a bonus */ }
         }
         await broadcastChange("variance", store);
+        // The store's manager owes replies on this within the week. An all-clear
+        // upload owes nothing, so it is worded as a read rather than a task —
+        // the same flip the feed card makes via data-fyi.
+        {
+          const owed = rows.filter((r: any) => r.needs_reply).length;
+          const clear = !owed;
+          await queueNotification({
+            category: "variance_aging",
+            kind: clear ? "variance_upload_clear" : "variance_upload",
+            title: clear
+              ? `Variance report to review — ${store}`
+              : `Variance replies due — ${store}`,
+            body: clear
+              ? "This period came in clear. Nothing needs a reply, but the numbers are worth reading."
+              : `${owed} item${owed === 1 ? "" : "s"} need a written reply. Replies are due within a week of this upload.`,
+            link: "workspace.html#vreplies",
+            store,
+            audienceStores: [store],
+            // Managers only. Assistant Managers are deliberately OUT (Ethan,
+            // 2026-08-13): the variance reply cycle is the manager's to answer, and
+            // the due-date check below (_VR_MANAGER_ROLES) never covered ASMs — so
+            // telling an ASM a sheet had landed and then going silent as the
+            // deadline ran down was the worst of both. Out of both halves now.
+            audienceRoles: ["manager", "owner (manager)"],
+            excludeUser: body.uploaded_by ? String(body.uploaded_by).trim() : null,
+          });
+        }
         return jsonResponse({ success: true, period_id: period.id, count: rows.length });
       }
 
@@ -222,6 +284,14 @@ Deno.serve(async (req: Request) => {
         const { data: item, error } = await supabase.from("variance_reply_items")
           .update(patch).eq("id", id).select("period_id").single();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        // A manager's reply is new information, so it undoes the DM's review
+        // stamp and the closed-window card comes back. Without this, one look
+        // would silence the card forever and a reply posted afterwards would
+        // never be surfaced.
+        if (field === "mgr_reply" && text) {
+          await supabase.from("variance_reply_periods")
+            .update({ dm_reviewed_at: null }).eq("id", item.period_id);
+        }
         // First DM note on a period starts the manager "review DM notes" cycle.
         if (field === "dm_note" && text) {
           const { data: period } = await supabase.from("variance_reply_periods")
@@ -232,26 +302,56 @@ Deno.serve(async (req: Request) => {
           }
         }
         await broadcastChange("variance", null);
+
+        // Both directions of the note cycle are worth an email, and only these
+        // two: a DM note is a question put to the store, a manager reply is the
+        // answer coming back. gm_note (the manager's own first pass) is skipped —
+        // it is the manager writing on their own sheet, not a handoff to anyone.
+        // Clearing a note (empty text) is silent for the same reason as recycle.
+        if (text && (field === "dm_note" || field === "mgr_reply")) {
+          const { data: per } = await supabase.from("variance_reply_periods")
+            .select("store").eq("id", item.period_id).maybeSingle();
+          const store = String(per?.store || "").toUpperCase();
+          const toManager = field === "dm_note";
+          await queueNotification({
+            category: "variance_aging",
+            kind: toManager ? "variance_dm_note" : "variance_mgr_reply",
+            title: toManager
+              ? `Variance note from the DM — ${store}`
+              : `Variance reply from ${by || "a manager"} — ${store}`,
+            body: text.slice(0, 300),
+            link: "workspace.html#vreplies",
+            store: store || null,
+            // A DM note goes to that store's manager; a reply goes back to the DM.
+            // No ASMs on the store side — see the upload hook above.
+            audienceStores: toManager && store ? [store] : null,
+            audienceRoles: toManager
+              ? ["manager", "owner (manager)"]
+              : ["district manager", "ceo"],
+            excludeUser: by,
+          });
+        }
         return jsonResponse({ success: true });
       }
 
-      // ---- DM marks a store "in the clear" (or reactivates it) ----
-      // A cleared store's managers stop seeing/answering line items and get no
-      // dots/popups; they just see their team + store-total variance. The DM
-      // flips this back on the moment the store starts slipping again.
-      if (action === "set_store_status") {
-        const store = String(body.store || "").toUpperCase();
-        if (!store) return jsonResponse({ success: false, error: "store is required" }, 400);
-        const by = body.by ? String(body.by).trim() : null;
-        const { error } = await supabase.from("variance_store_status").upsert({
-          store,
-          in_the_clear: !!body.in_the_clear,
-          updated_by: by,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: "store" });
+      // ---- DM opened a closed period from the review card ----
+      //      The exit that card never had. Same model as aging_items.dm_seen_at:
+      //      LOOKING is the acknowledgement, so there is no separate "done"
+      //      button to forget. A manager posting a NEWER reply clears the stamp
+      //      (see save_note below), which is what lets a fresh reply raise the
+      //      card again instead of it being dismissed once and for all.
+      //
+      //      No broadcast: this is a read receipt, not a change other clients
+      //      care about, and pinging here would bounce every open session.
+      if (action === "mark_reviewed") {
+        const ids = Array.isArray(body.ids)
+          ? body.ids.map((v: unknown) => String(v)).filter(Boolean) : [];
+        if (!ids.length) return jsonResponse({ success: true, updated: 0 });
+        const at = new Date().toISOString();
+        const { error } = await supabase.from("variance_reply_periods")
+          .update({ dm_reviewed_at: at }).in("id", ids);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
-        await broadcastChange("variance", store);
-        return jsonResponse({ success: true });
+        return jsonResponse({ success: true, updated: ids.length, dm_reviewed_at: at });
       }
 
       // ---- DM deletes an upload (mistake fix; items cascade) ----
@@ -322,10 +422,14 @@ Deno.serve(async (req: Request) => {
   const counts: Record<string, { items: number; answered: number; awaiting_reply: number; mgr_replied: number }> = {};
   if (ids.length) {
     const { data: items, error: iErr } = await supabase.from("variance_reply_items")
-      .select("period_id, gm_note, dm_note, mgr_reply, dm_reply_requested").in("period_id", ids);
+      .select("period_id, gm_note, dm_note, mgr_reply, dm_reply_requested, needs_reply").in("period_id", ids);
     if (iErr) return jsonResponse({ success: false, error: iErr.message }, 500);
     (items || []).forEach((it: any) => {
       const c = (counts[it.period_id] = counts[it.period_id] || { items: 0, answered: 0, awaiting_reply: 0, mgr_replied: 0 });
+      // Context lines are visible in the whole-store view but are nobody's
+      // homework — counting them would leave a period permanently "unanswered"
+      // and keep the manager's dot lit forever.
+      if (it.needs_reply === false) return;
       c.items++;
       if (it.gm_note) c.answered++;
       // only notes the DM flagged as needing a response nag the manager;
@@ -340,20 +444,5 @@ Deno.serve(async (req: Request) => {
     ...(counts[p.id] || { items: 0, answered: 0, awaiting_reply: 0, mgr_replied: 0 }),
   }));
 
-  // Per-store "in the clear" status for the requested stores, plus the latest
-  // team-variance summary for any store that IS cleared (so its managers can
-  // render their summary panel without a second round trip).
-  const storeStatus: Record<string, { in_the_clear: boolean; updated_by: string | null; updated_at: string | null }> = {};
-  const clearedTeamVariance: Record<string, unknown> = {};
-  let sq = supabase.from("variance_store_status").select("*");
-  if (stores.length) sq = sq.in("store", stores);
-  const { data: statuses } = await sq;
-  for (const s of (statuses || [])) {
-    storeStatus[s.store] = { in_the_clear: !!s.in_the_clear, updated_by: s.updated_by, updated_at: s.updated_at };
-  }
-  const clearedStores = Object.keys(storeStatus).filter((s) => storeStatus[s].in_the_clear);
-  for (const s of clearedStores) {
-    clearedTeamVariance[s] = await getLatestTeamVariance(supabase, s);
-  }
-  return jsonResponse({ success: true, data, store_status: storeStatus, cleared_team_variance: clearedTeamVariance });
+  return jsonResponse({ success: true, data });
 });

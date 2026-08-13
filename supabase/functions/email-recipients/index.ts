@@ -15,6 +15,7 @@ const corsHeaders = {
 // - weekly_store_<STORE>: Monday weekly report, per-store manager copy
 // - usage_report:      nightly 8pm site-usage report (DM/CEO)
 // - cash_report:       7am cash-on-hand table off the Day End Report
+// - unlisted_report:   Monday 9am Unlisted Inventory Weekly Update
 const STORES = ["OVL", "LEE", "WSP", "MPL", "BAL"];
 const LIST_KEYS = new Set([
   "recycle_report",
@@ -28,6 +29,9 @@ const LIST_KEYS = new Set([
   "usage_report",
   // cash_report: the 7am cash-on-hand table (Paul).
   "cash_report",
+  // unlisted_report: the Monday 9am Unlisted Inventory Weekly Update, sent by
+  // the unlisted-backlog fn (slug kept from its old name).
+  "unlisted_report",
   // b2b_quote_ready: who hears that a B2B pickup has been priced and a quote is
   // waiting on approval. Read by b2b-outreach's sendQuoteReady, which falls back
   // to the single CRM Settings address while this list is empty.

@@ -3,7 +3,10 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  // x-user-pin: the sender's PIN, so the publish path can resolve their REAL role
+  // rather than trusting body.author. Without it here the browser's preflight
+  // rejects the header and the role silently comes back empty.
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-user-pin",
 };
 
 // Read-receipt tracking was reset here — the earlier X-dismiss behavior wasn't a
@@ -33,6 +36,41 @@ async function broadcastChange(tool: string, store: string | null) {
       body: JSON.stringify({
         messages: [{ topic: "speeks-notify", event: "changed", payload: { tool, store: store ? String(store).toUpperCase() : null, ts: Date.now() } }],
       }),
+    });
+  } catch (_) { /* best-effort */ }
+}
+
+// Drop a row on the email-notification queue — the twin of broadcastChange
+// above. That one tells an already-open page to refresh; this one tells the
+// people who aren't looking at the site right now.
+//
+// All this has to do is describe WHO CARES. The notify function resolves
+// audience -> people -> their preferences -> an address, and batches whatever is
+// outstanding into one message. Leaving audienceStores/audienceRoles null means
+// "everybody".
+//
+// Best-effort and never throws, for the same reason broadcastChange isn't
+// awaited for its result: failing to notify must never fail the write itself.
+// See migration 0033 for the audience axes and the category list.
+async function queueNotification(n: {
+  category: string; kind: string; title: string; body?: string; link?: string;
+  store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
+  audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+}) {
+  try {
+    const sb = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    await sb.from("notify_queue").insert({
+      category: n.category, kind: n.kind, title: n.title, body: n.body ?? null,
+      link: n.link ?? null,
+      store: n.store ? String(n.store).toUpperCase() : null,
+      audience_stores: n.audienceStores ?? null,
+      audience_roles: n.audienceRoles ?? null,
+      audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
+      exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
+      priority: n.priority ?? "normal",
     });
   } catch (_) { /* best-effort */ }
 }
@@ -233,6 +271,49 @@ Deno.serve(async (req: Request) => {
     }
 
     await broadcastChange("comments", store);
+
+    // Email the store. Who a message is FROM matters here in a way it doesn't for
+    // the on-screen card: three different roles can send one (a Manager to their
+    // own store via openManagerStoreComment, the DM, or the CEO), and an email
+    // that just says "a message arrived" wastes the most useful thing about it.
+    //
+    // ⚠️ body.author is NOT trusted for this. It is whatever the client sent,
+    // defaulting to "Executive Team" — fine for a display name, useless as a
+    // statement of authority. The sender's real role is resolved by PIN below, the
+    // same way email-recipients re-checks a role it was told about, so the phrase
+    // "from your Manager" in somebody's inbox is something the server verified.
+    // A request with no usable PIN simply gets the neutral wording.
+    {
+      const senderPin = req.headers.get("x-user-pin") || body.pin || "";
+      let senderRole = "";
+      let senderName = String(author);
+      if (senderPin) {
+        const { data: sender } = await supabase
+          .from("users").select("name, role").eq("pin", senderPin).maybeSingle();
+        if (sender) {
+          senderName = String(sender.name || author);
+          const raw = String(sender.role || "").toLowerCase().trim();
+          senderRole = raw === "district manager" ? "District Manager"
+            : raw === "ceo" ? "CEO"
+            : (raw === "manager" || raw === "owner (manager)" || raw === "multi-store manager") ? "Manager"
+            : "";
+        }
+      }
+      const from = senderRole ? `${senderName} (${senderRole})` : senderName;
+      // A comment to "ALL" is a company-wide message, so it carries no store
+      // filter; anything else is scoped to that one store's people.
+      await queueNotification({
+        category: "store_messages",
+        kind: "store_comment",
+        title: `Message from ${from}`,
+        body: message.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300),
+        link: "index.html",
+        store: store === "ALL" ? null : store,
+        audienceStores: store === "ALL" ? null : [store],
+        excludeUser: senderName,
+      });
+    }
+
     return new Response(JSON.stringify({ success: true }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

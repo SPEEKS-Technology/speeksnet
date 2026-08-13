@@ -63,6 +63,41 @@ async function broadcastChange(tool: string, store: string | null) {
   }
 }
 
+// Drop a row on the email-notification queue — the twin of broadcastChange
+// above. That one tells an already-open page to refresh; this one tells the
+// people who aren't looking at the site right now.
+//
+// All this has to do is describe WHO CARES. The notify function resolves
+// audience -> people -> their preferences -> an address, and batches whatever is
+// outstanding into one message. Leaving audienceStores/audienceRoles null means
+// "everybody".
+//
+// Best-effort and never throws, for the same reason broadcastChange isn't
+// awaited for its result: failing to notify must never fail the write itself.
+// See migration 0033 for the audience axes and the category list.
+async function queueNotification(n: {
+  category: string; kind: string; title: string; body?: string; link?: string;
+  store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
+  audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+}) {
+  try {
+    const sb = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    await sb.from("notify_queue").insert({
+      category: n.category, kind: n.kind, title: n.title, body: n.body ?? null,
+      link: n.link ?? null,
+      store: n.store ? String(n.store).toUpperCase() : null,
+      audience_stores: n.audienceStores ?? null,
+      audience_roles: n.audienceRoles ?? null,
+      audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
+      exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
+      priority: n.priority ?? "normal",
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -106,6 +141,21 @@ Deno.serve(async (req: Request) => {
           }
         }
         await broadcastChange("aging", store);
+        // A new aging item starts the store's one-week reply clock (due_at above),
+        // so the store hears about it as soon as it is added rather than when the
+        // clock has already run down.
+        await queueNotification({
+          category: "variance_aging",
+          kind: "aging_item_added",
+          title: `Aging inventory added — ${store}`,
+          body: [item.sku, item.title].filter(Boolean).join(" · ").slice(0, 200) ||
+                "An item has been added for review, with a reply due within a week.",
+          link: "workspace.html#aging",
+          store,
+          audienceStores: [store],
+          audienceRoles: ["manager", "owner (manager)", "assistant manager"],
+          excludeUser: by,
+        });
         return jsonResponse({ success: true, item_id: item.id });
       }
 
@@ -132,10 +182,37 @@ Deno.serve(async (req: Request) => {
         }).select().single();
         if (nErr) return jsonResponse({ success: false, error: nErr.message }, 500);
         // A DM note (opening or follow-up) restarts the store's one-week clock.
+        // It also puts the ball back in the store's court, so anything the DM had
+        // pending on this item is answered — stamp it seen so the review queue
+        // does not keep listing an item the DM has just replied to.
         if (side === "dm") {
-          await supabase.from("aging_items").update({ due_at: replyDue() }).eq("id", itemId);
+          await supabase.from("aging_items")
+            .update({ due_at: replyDue(), dm_seen_at: new Date().toISOString() })
+            .eq("id", itemId);
         }
         await broadcastChange("aging", item.store);
+        // The thread has two sides and the email follows whichever way it just
+        // moved: a DM note goes to the store, a store note goes back to the DM.
+        // `side` is already validated to one of the two above.
+        {
+          const toStore = side === "dm";
+          const st = String(item.store || "").toUpperCase();
+          await queueNotification({
+            category: "variance_aging",
+            kind: toStore ? "aging_dm_note" : "aging_store_reply",
+            title: toStore
+              ? `Aging inventory note from the DM — ${st}`
+              : `Aging inventory reply from ${body.by ? String(body.by).trim() : "the store"} — ${st}`,
+            body: text.slice(0, 300),
+            link: "workspace.html#aging",
+            store: st,
+            audienceStores: toStore ? [st] : null,
+            audienceRoles: toStore
+              ? ["manager", "owner (manager)", "assistant manager"]
+              : ["district manager", "ceo"],
+            excludeUser: body.by ? String(body.by).trim() : null,
+          });
+        }
         return jsonResponse({ success: true, note_id: note.id });
       }
 
@@ -187,6 +264,25 @@ Deno.serve(async (req: Request) => {
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("aging", row?.store ?? null);
         return jsonResponse({ success: true });
+      }
+
+      // ---- DM opened the tool: stamp the items they just looked at ----
+      // The DM answering a store reply is optional. If they read it and it needs
+      // nothing more, the item is parked until it sells or they follow up — so
+      // "the store replied last" cannot mean "your review" forever. The review
+      // queue is store-replies-newer-than-this-stamp, which means looking is what
+      // clears it, and only a genuinely new reply brings the item back.
+      // No broadcast: this is a read receipt, not a change other clients care
+      // about, and pinging here would bounce every open session on every open.
+      if (action === "mark_dm_seen") {
+        const ids: string[] = Array.isArray(body.ids)
+          ? body.ids.map((v: unknown) => String(v)).filter(Boolean) : [];
+        if (!ids.length) return jsonResponse({ success: true, updated: 0 });
+        const seenAt = new Date().toISOString();
+        const { error } = await supabase.from("aging_items")
+          .update({ dm_seen_at: seenAt }).in("id", ids);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        return jsonResponse({ success: true, updated: ids.length, dm_seen_at: seenAt });
       }
 
       // ---- DM deletes an item added by mistake (notes cascade) ----

@@ -73,11 +73,11 @@ const C = {
   rCard: 18, rBox: 14,
 };
 
-// Who counts as a person owed a role today. TOM is corp-wide, and `store` is the
+// Who counts as a person owed a role today. MOCD is corp-wide, and `store` is the
 // shop-floor TV board — counted, a TV would read as the most diligent employee
 // in the company. Mirrors the roster rule in kpi-manage, NOT store-targets'
 // (which drops the MSM on purpose for target sizing; here Joseph should count).
-const ROSTER_EXCLUDE = new Set(['ceo', 'district manager', 'tom', 'store']);
+const ROSTER_EXCLUDE = new Set(['ceo', 'district manager', 'mocd', 'tom', 'store']);
 const MULTISTORE_MANAGER_STORES = ['BAL', 'MPL'];
 const GOALS_OFF = 'OFF';
 
