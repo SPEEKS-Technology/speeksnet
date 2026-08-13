@@ -483,8 +483,18 @@ const wrapEmail = (title: string, sub: string, body: string, footer: string) => 
 // A description always opens with a capital. Unlike titleCase this moves ONE
 // letter, which is the normalisation any word processor performs — so it is safe
 // to run over a note somebody typed in a hurry, where re-casing every word would
-// not be. A body opening with a digit ("14 × SKU was approved") is left alone.
-const sentence = (v: string) => String(v || "").replace(/^[a-z]/, (c) => c.toUpperCase());
+// not be.
+//
+// The first WORD, not the first character. Most of these bodies open with a
+// count ("6 items past the review date", "14 units, $46.00 total"), so leading
+// digits and symbols are skipped over rather than blocking the capitalise.
+//
+// Anchored on purpose: an unanchored /[a-z]/ would hit the first lowercase
+// letter anywhere in the string, so "14 × SKU was approved" would come back as
+// "14 × SKU Was approved". Anchored, a body whose first word is already a
+// capital or an acronym is left exactly as it is.
+const sentence = (v: string) =>
+  String(v || "").replace(/^([^a-zA-Z]*)([a-z])/, (_m, pre, ch) => pre + ch.toUpperCase());
 
 // One alert. `tone` colours the left rule: red = a passed deadline, amber = owed,
 // sage = news. Matches the sam-due-* classes the feed cards use.

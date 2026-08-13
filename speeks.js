@@ -28868,7 +28868,8 @@ async function checkRecycleReminders() {
             // and the Action Menu feed one-liner.
             // Sentence case now happens centrally in _samGatherReminders, but this
             // string is ALSO the bubble body, which does not go through there.
-            const summary = parts.join(' · ').replace(/^[a-z]/, c => c.toUpperCase());
+            // Same first-WORD rule; see the comment at that call site.
+            const summary = parts.join(' · ').replace(/^([^a-zA-Z]*)([a-z])/, (m, pre, ch) => pre + ch.toUpperCase());
             // Land on the oldest line that's actually blocking a store. Replies
             // are the fallback: they're information, not a block, so they only
             // choose the month when there's no action item to beat them to it.
@@ -34748,11 +34749,18 @@ function _samGatherReminders() {
             }
         }
         // Sentence case, in ONE place. Several bubbles assemble their summary from
-        // phrases ("awaiting your review: …", "replied to your note: …"), so the
-        // joined string can open lowercase — the recycle bubble was doing this fix
-        // locally, which meant every other card had to remember to. A leading digit
-        // or capital is left alone, so "1 delete request…" and "OVL has…" survive.
-        sub = sub.replace(/^[a-z]/, c => c.toUpperCase());
+        // phrases ("awaiting your review: …", "replied to your note: …") or open
+        // with a count, so the joined string can start lowercase — the recycle
+        // bubble was doing this fix locally, which meant every other card had to
+        // remember to.
+        //
+        // The first WORD, not the first character: "1 delete request awaiting
+        // approval" has to become "1 Delete request…", so any leading digits or
+        // symbols are skipped over. Anchored deliberately — an unanchored
+        // /[a-z]/ would find the first lowercase letter anywhere and turn
+        // "14 × SKU was approved" into "14 × SKU Was approved". A line whose
+        // first word is already capitalised is left alone.
+        sub = sub.replace(/^([^a-zA-Z]*)([a-z])/, (m, pre, ch) => pre + ch.toUpperCase());
         if (sub.length > 160) sub = sub.slice(0, 158) + '…'; // 3-line clamp in CSS shows the rest
         // Snoozed — but only while it's still the SAME reminder. A bubble may supply
         // an explicit identity via data-sig (see _renderClaimBubble); otherwise the
