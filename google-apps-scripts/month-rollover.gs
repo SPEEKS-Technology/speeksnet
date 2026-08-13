@@ -87,6 +87,15 @@ var MR_FOOTER = {
 };
 var MR_TOTAL_LABELS = ['ttl', 'total'];
 
+// ⚠️ THE BUY TAB DOES NOT PUT ITS COUNTERS BESIDE THEIR LABEL. The label is
+// merged across B:D and printed ONCE, while the five values sit at base+4 in
+// each store's block — E39, J39, O39, T39, Y39. Writing "the first free cell to
+// the right of the label" therefore aims at C39, which is inside the merge, and
+// setValue on part of a merged range writes to the merge's TOP-LEFT: it replaces
+// the label with a number. sales-email-import.gs learned this first; the same
+// offset is spelled out there as BUY_DAYS_THRU_COL.
+var MR_BUY_VALUE_COL = 4;
+
 // ---- small helpers ----------------------------------------------------------
 function _mrPad(n) { return n < 10 ? '0' + n : '' + n; }
 
@@ -360,7 +369,7 @@ function _mrBuildTab(ss, src, targetYm, opts) {
       }
     }
     rep.footer = _mrFooterPlan(srcValues, srcFormulas, bases, width, srcLastRow, srcLastCol,
-                               wantCount, targetYm, opts.goals || {})
+                               wantCount, targetYm, opts.goals || {}, opts.family)
       .map(function (p) {
         return p.skip ? (p.what + ': SKIPPED — ' + p.skip)
                       : (p.what + '=' + p.value + ' @r' + (p.row + 1) + 'c' + (p.col + 1)
@@ -480,7 +489,7 @@ function _mrBuildTab(ss, src, targetYm, opts) {
   rep.footer = _mrApplyFooters(tab, _mrFooterPlan(
     tab.getRange(1, 1, fLastRow, fLastCol).getValues(),
     tab.getRange(1, 1, fLastRow, fLastCol).getFormulas(),
-    tgtBases, width, fLastRow, fLastCol, wantCount, targetYm, opts.goals || {}));
+    tgtBases, width, fLastRow, fLastCol, wantCount, targetYm, opts.goals || {}, opts.family));
   return rep;
 }
 
@@ -490,9 +499,10 @@ function _mrBuildTab(ss, src, targetYm, opts) {
 // never got this far, which is a diagnostic that lies by omission.
 //
 // Only a cell that is not a formula is ever a target.
-function _mrFooterPlan(values, formulas, bases, width, lastRow, lastCol, wantCount, targetYm, goals) {
+function _mrFooterPlan(values, formulas, bases, width, lastRow, lastCol, wantCount, targetYm, goals, family) {
   var plan = [];
   var sundays = _mrSundays(targetYm).length;
+  var seen = {};
 
   function target(r, c) {
     for (var k = c + 1; k < Math.min(c + 4, lastCol); k++) {
@@ -506,6 +516,27 @@ function _mrFooterPlan(values, formulas, bases, width, lastRow, lastCol, wantCou
     if (k < 0) { plan.push({ row: r, col: c, skip: 'every cell beside it is a formula', what: what }); return; }
     plan.push({ row: r, col: k, value: value, what: what, note: note || '' });
   }
+  // The Sales tab repeats "Days this month" once per block but fills only the
+  // FIRST — the other four read off it. Writing all six put a number in five
+  // cells a person deliberately leaves empty.
+  function once(r, c, value, what) {
+    if (seen[what]) { plan.push({ row: r, col: c, skip: 'only the first block carries this value', what: what }); return; }
+    seen[what] = true;
+    add(r, c, value, what);
+  }
+  // The Buy tab's counters, by block geometry rather than by what sits next to
+  // the label. See MR_BUY_VALUE_COL — the cell beside the label is inside a
+  // merge, and writing there destroys the label.
+  function perBlock(r, value, what, note) {
+    if (seen[what]) return;
+    seen[what] = true;
+    Object.keys(bases).sort(function (a, b) { return bases[a] - bases[b]; }).forEach(function (code) {
+      var k = bases[code] + MR_BUY_VALUE_COL;
+      if (k >= lastCol) return;
+      if ((formulas[r] || [])[k]) { plan.push({ row: r, col: k, skip: code + ': holds a formula', what: what }); return; }
+      plan.push({ row: r, col: k, value: value, what: code + ' ' + what, note: note || '' });
+    });
+  }
 
   for (var r = 0; r < lastRow; r++) {
     for (var c = 0; c < lastCol; c++) {
@@ -516,13 +547,14 @@ function _mrFooterPlan(values, formulas, bases, width, lastRow, lastCol, wantCou
       var code = _mrBlockOf(bases, c, width);
 
       if (MR_FOOTER.days.indexOf(txt) >= 0) {
-        add(r, c, wantCount, 'days');
+        once(r, c, wantCount, 'days');
       } else if (MR_FOOTER.thru.indexOf(txt) >= 0) {
-        add(r, c, 0, 'thru');
+        if (family === 'buy') perBlock(r, 0, 'thru');
+        else once(r, c, 0, 'thru');
       } else if (MR_FOOTER.buyDays.indexOf(txt) >= 0) {
         // Days minus Sundays. A STARTING VALUE only — holidays are a judgement
         // this cannot make, so it is flagged for eyeballing.
-        add(r, c, wantCount - sundays, 'buyDays', 'check holidays');
+        perBlock(r, wantCount - sundays, 'buyDays', 'check holidays');
       } else if (MR_FOOTER.goal.indexOf(txt) >= 0) {
         if (!code) { plan.push({ row: r, col: c, skip: 'not inside a store block (company total?)', what: 'goal' }); }
         else if (goals[code] === undefined || goals[code] === null) {
@@ -546,7 +578,16 @@ function _mrApplyFooters(tab, plan) {
   var done = [];
   plan.forEach(function (p) {
     if (p.skip) { done.push(p.what + ': SKIPPED — ' + p.skip); return; }
-    tab.getRange(p.row + 1, p.col + 1).setValue(p.value);
+    var rng = tab.getRange(p.row + 1, p.col + 1);
+    // A last line of defence, not the fix. setValue on part of a merged range
+    // silently writes to the merge's top-left — which on the Buy tab is the
+    // label itself. Anything aimed inside a merge is a targeting mistake, so it
+    // is refused and reported rather than quietly redirected.
+    if (rng.isPartOfMerge()) {
+      done.push(p.what + ': REFUSED — ' + rng.getA1Notation() + ' is inside a merged range');
+      return;
+    }
+    rng.setValue(p.value);
     done.push(p.what + '=' + p.value + (p.note ? ' (' + p.note + ')' : ''));
   });
   return done;
@@ -875,6 +916,12 @@ function mrVerifyPastMonth(ym) {
   });
   Logger.log('run mrDeleteScratchTabs() when you are done reading these.');
 }
+
+// The Run dropdown cannot pass an argument, so each month worth checking gets
+// its own entry. Pick one from the toolbar and press Run.
+function mrVerifyAug() { mrVerifyPastMonth('2026-08'); }   // Jul 31 -> Aug 31, the goal write
+function mrVerifyJul() { mrVerifyPastMonth('2026-07'); }   // Jun 30 -> Jul 31, the row INSERT
+function mrVerifyJun() { mrVerifyPastMonth('2026-06'); }   // May 31 -> Jun 30, the row DELETE
 
 // Removes every (VERIFY) and (PREVIEW) tab. Named tabs only — it cannot touch a
 // real month, because a real month's name does not carry a suffix.
