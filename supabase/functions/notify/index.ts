@@ -82,7 +82,7 @@ const CATEGORY_META: Record<Category, { label: string; blurb: string }> = {
   // does nothing. When that module lands, add its queueNotification calls and put
   // B2B back in this sentence at the same time.
   requests:       { label: "Requests Waiting On Me" ,     blurb: "Purchase requests and recycle requests." },
-  claims:         { label: "Insurance Claims Aging",     blurb: "A claim that has gone unresolved past a week." },
+  claims:         { label: "Insurance Claims",           blurb: "A claim that has gone unresolved past a week." },
   variance_aging: { label: "Variance & Aging Inventory",  blurb: "New sheets and notes, plus the reply deadlines on both." },
   deadlines:      { label: "My Deadlines",               blurb: "Store KPIs, listing goals, store goals, expense reports." },
   scores:         { label: "Scores & Audits"  ,            blurb: "A SPEEKS scorecard or a PayMore audit being submitted." },
@@ -165,38 +165,38 @@ const SUBS: Record<Category, Sub[]> = {
   announcements: [
     { key: "ann",   label: "Announcements", blurb: "Posts to the board, including priority ones.",
       kinds: ["announcement", "announcement_priority"] },
-    { key: "patch", label: "Patch notes",   blurb: "What changed in a release.",
+    { key: "patch", label: "Patch Notes",   blurb: "What changed in a release.",
       kinds: ["patch_notes"] },
   ],
   store_messages: [],
   requests: [
-    { key: "req_in",  label: "Requests coming in", blurb: "Purchase and recycle requests waiting on a verdict.",
+    { key: "req_in",  label: "Requests Coming In", blurb: "Purchase and recycle requests waiting on a verdict.",
       kinds: ["purchase_request", "recycle_request"], roles: new Set(["district manager", "ceo"]) },
-    { key: "req_out", label: "Verdicts and replies", blurb: "The DM's answer on something you sent up.",
+    { key: "req_out", label: "Verdicts And Replies", blurb: "The DM's answer on something you sent up.",
       kinds: ["recycle_verdict", "recycle_dm_note", "recycle_reply"] },
   ],
   claims: [],
   variance_aging: [
-    { key: "variance", label: "Variance replies", blurb: "New sheets, the DM's notes, and the reply deadline.",
+    { key: "variance", label: "Variance Replies", blurb: "New sheets, the DM's notes, and the reply deadline.",
       kinds: ["variance_upload", "variance_upload_clear", "variance_dm_note", "variance_mgr_reply", "varianceDue"],
       roles: new Set([...STORE_SIDE_ROLES, "district manager", "ceo"]) },
-    { key: "aging",    label: "Aging inventory", blurb: "New items, the DM's notes, and the review deadline.",
+    { key: "aging",    label: "Aging Inventory", blurb: "New items, the DM's notes, and the review deadline.",
       kinds: ["aging_item_added", "aging_dm_note", "aging_store_reply", "agingDue"] },
   ],
   deadlines: [
     { key: "kpis",     label: "Store KPIs", blurb: "Weekly and monthly entry.",
       kinds: ["kpiWeekly", "kpiMonthly"], roles: new Set(STORE_SIDE_ROLES) },
-    { key: "listing",  label: "Listing goals", blurb: "The day's buying and listing roles, and the weekly totals.",
+    { key: "listing",  label: "Listing Goals", blurb: "The day's buying and listing roles, and the weekly totals.",
       kinds: ["listingGoalsDaily", "listingGoalsWeek"] },
-    { key: "goals",    label: "Store goals", blurb: "The month's gross-profit target.",
+    { key: "goals",    label: "Store Goals", blurb: "The month's gross-profit target.",
       kinds: ["gpGoals"], roles: new Set(["district manager"]) },
-    { key: "expenses", label: "Expense report", blurb: "Filing the month that just closed.",
+    { key: "expenses", label: "Expense Report", blurb: "Filing the month that just closed.",
       kinds: ["expenseFile"], roles: new Set(["district manager"]) },
   ],
   scores: [
-    { key: "audits",    label: "PayMore audits", blurb: "Practice walkthroughs and the official corporate audit.",
+    { key: "audits",    label: "PayMore Audits", blurb: "Practice walkthroughs and the official corporate audit.",
       kinds: ["audit_practice_submitted", "audit_official_submitted"] },
-    { key: "scorecard", label: "SPEEKS scorecard", blurb: "The Online & Marketing categories being scored.",
+    { key: "scorecard", label: "SPEEKS Scorecard", blurb: "The Online & Marketing categories being scored.",
       kinds: ["scorecard_submitted"], roles: new Set(["district manager", "ceo", "mocd"]) },
   ],
 };
@@ -220,15 +220,15 @@ for (const c of CATEGORIES) for (const x of SUBS[c] || []) ALL_SUB_KEYS.add(x.ke
 // it is even when it carries no store. Announcements had nothing at all in that
 // slot, which made them the only card with no second line.
 const KIND_LABEL: Record<string, string> = {
-  announcement: "Announcement", announcement_priority: "Priority announcement",
-  patch_notes: "Patch notes", store_comment: "Store message",
-  purchase_request: "Purchase request", recycle_request: "Recycle request",
-  recycle_verdict: "Recycle verdict", recycle_dm_note: "Recycle note", recycle_reply: "Recycle reply",
+  announcement: "Announcement", announcement_priority: "Priority Announcement",
+  patch_notes: "Patch Notes", store_comment: "Store Message",
+  purchase_request: "Purchase Request", recycle_request: "Recycle Request",
+  recycle_verdict: "Recycle Verdict", recycle_dm_note: "Recycle Note", recycle_reply: "Recycle Reply",
   variance_upload: "Variance", variance_upload_clear: "Variance", variance_dm_note: "Variance",
   variance_mgr_reply: "Variance",
   aging_item_added: "Aging inventory", aging_dm_note: "Aging inventory", aging_store_reply: "Aging inventory",
-  audit_practice_submitted: "PayMore audit", audit_official_submitted: "PayMore audit",
-  scorecard_submitted: "SPEEKS scorecard",
+  audit_practice_submitted: "PayMore Audit", audit_official_submitted: "PayMore Audit",
+  scorecard_submitted: "SPEEKS Scorecard",
 };
 
 // WHICH ROLES CAN ACTUALLY RECEIVE EACH CATEGORY.
@@ -903,7 +903,7 @@ async function collectDue(sb: any, people: Person[]): Promise<Due[]> {
       const days = Math.floor((Date.now() - agg.oldest) / 86400000);
       due.push({
         slug: "claimsAging", period: weekStamp(t.date), cat: "claims", store,
-        title: `Insurance claims aging — ${STORE_NAME[store] || store}`,
+        title: `Insurance claims unresolved — ${STORE_NAME[store] || store}`,
         body: `${agg.n} claim${agg.n === 1 ? "" : "s"} ${agg.n === 1 ? "has" : "have"} gone more than a week without an update (longest ${days} days). Marking one "still in progress" resets its clock.`,
         link: "index.html", tone: "red",
         for: (p) => p.role === "district manager" ||

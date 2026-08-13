@@ -31847,6 +31847,27 @@ async function checkVarianceReminders() {
 // closes — the deadline passes, or every line gets explained early — and the
 // DM hasn't left any notes yet. The manager-side popups above don't apply to
 // the DM, so this is their "your turn" ping.
+// The period ids currently behind the "reply window closed" card. Collected on
+// every check so that clicking the card can stamp exactly those as reviewed —
+// the card is a summary of several stores, and marking only the one you land on
+// would leave the others raising it again tomorrow.
+const _vrClosedIds = [];
+
+// Clicking the closed-window card IS the review. Fire-and-forget: the stamp is
+// housekeeping and must never delay the navigation the user actually asked for.
+function _vrMarkReviewed() {
+    if (!_vrClosedIds.length) return;
+    const ids = _vrClosedIds.slice();
+    _vrClosedIds.length = 0;
+    try {
+        fetch(VARIANCE_REPLIES_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'mark_reviewed', ids }),
+        }).catch(() => {});
+    } catch (_) { /* navigation matters more than the stamp */ }
+}
+window._vrMarkReviewed = _vrMarkReviewed;
+
 async function checkVarianceDmReminders() {
     if (!_vrIsDM()) return;
     if (!_vrDmRemindersStarted) {
@@ -31868,6 +31889,7 @@ async function checkVarianceDmReminders() {
         // that actually needs review (not a default/empty store). Stores where a
         // manager has replied to a flagged note sort first — that's the "see the
         // manager's replies" case the DM cares about.
+        _vrClosedIds.length = 0;   // rebuilt every pass; see _vrMarkReviewed
         const readyStores = []; // managers done / deadline passed, no DM notes yet
         const closedStores = []; // reply window fully closed → final review
         const repliedClosed = new Set(); // closed stores where a mgr reply came in
@@ -31880,8 +31902,12 @@ async function checkVarianceDmReminders() {
                 if (allDone || duePassed) readyStores.push(store);
             } else {
                 const replyDue = Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()) + 2 * 86400000;
-                if (now >= replyDue) {
+                // A period the DM has already looked at since the last manager
+                // reply is done with — dm_reviewed_at is cleared server-side the
+                // moment a newer reply lands, so this cannot hide fresh news.
+                if (now >= replyDue && !p.dm_reviewed_at) {
                     closedStores.push(store);
+                    _vrClosedIds.push(p.id);
                     // A flagged note the manager HAS answered (mgr_replied, from the
                     // edge fn) means there's a reply here for the DM to read.
                     if (p.mgr_replied > 0) repliedClosed.add(store);
@@ -34475,10 +34501,12 @@ function _samReminderCfg() {
                         : 'Variance Replies Due' + (_vrDue ? ' — ' + _vrDue : ''),
           urgency: _vrFyi ? 1 : 2, due: _vrFyi ? 'Review' : 'Due',
           cls: _vrFyi ? 'sam-due-amber' : 'sam-due-red',
-          action: "window.location.href='workspace.html#vreplies'" },
+          // _vrMarkReviewed first: opening the card IS the DM's review, and it
+          // must be stamped before the navigation tears this context down.
+          action: "_vrMarkReviewed(); window.location.href='workspace.html#vreplies'" },
         // A DM has no store-scoped claims tool — send them to the all-stores
         // oversight view instead, which is where they can actually act.
-        { key: 'claims', id: 'claimAlertBubble', text: 'claimAlertBubbleText', title: 'Insurance Claims Aging', urgency: 2, due: 'Aging', cls: 'sam-due-red',
+        { key: 'claims', id: 'claimAlertBubble', text: 'claimAlertBubbleText', title: 'Insurance Claims', urgency: 2, due: 'Open', cls: 'sam-due-red',
           action: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'district manager'
               ? "openClaimsOversight()"
               : "openClaimsModal(); switchClaimsTab('view')" },

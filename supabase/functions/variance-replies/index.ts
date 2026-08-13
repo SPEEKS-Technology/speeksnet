@@ -284,6 +284,14 @@ Deno.serve(async (req: Request) => {
         const { data: item, error } = await supabase.from("variance_reply_items")
           .update(patch).eq("id", id).select("period_id").single();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        // A manager's reply is new information, so it undoes the DM's review
+        // stamp and the closed-window card comes back. Without this, one look
+        // would silence the card forever and a reply posted afterwards would
+        // never be surfaced.
+        if (field === "mgr_reply" && text) {
+          await supabase.from("variance_reply_periods")
+            .update({ dm_reviewed_at: null }).eq("id", item.period_id);
+        }
         // First DM note on a period starts the manager "review DM notes" cycle.
         if (field === "dm_note" && text) {
           const { data: period } = await supabase.from("variance_reply_periods")
@@ -324,6 +332,26 @@ Deno.serve(async (req: Request) => {
           });
         }
         return jsonResponse({ success: true });
+      }
+
+      // ---- DM opened a closed period from the review card ----
+      //      The exit that card never had. Same model as aging_items.dm_seen_at:
+      //      LOOKING is the acknowledgement, so there is no separate "done"
+      //      button to forget. A manager posting a NEWER reply clears the stamp
+      //      (see save_note below), which is what lets a fresh reply raise the
+      //      card again instead of it being dismissed once and for all.
+      //
+      //      No broadcast: this is a read receipt, not a change other clients
+      //      care about, and pinging here would bounce every open session.
+      if (action === "mark_reviewed") {
+        const ids = Array.isArray(body.ids)
+          ? body.ids.map((v: unknown) => String(v)).filter(Boolean) : [];
+        if (!ids.length) return jsonResponse({ success: true, updated: 0 });
+        const at = new Date().toISOString();
+        const { error } = await supabase.from("variance_reply_periods")
+          .update({ dm_reviewed_at: at }).in("id", ids);
+        if (error) return jsonResponse({ success: false, error: error.message }, 500);
+        return jsonResponse({ success: true, updated: ids.length, dm_reviewed_at: at });
       }
 
       // ---- DM deletes an upload (mistake fix; items cascade) ----
