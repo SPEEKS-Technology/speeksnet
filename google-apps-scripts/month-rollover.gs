@@ -180,6 +180,18 @@ function _mrBases(values, width) {
   return bases;
 }
 
+// Which store's block a column falls in — or NOTHING, if it falls past the last
+// one. ⚠️ The bound matters: the workbook carries a TTL block after BAL with its
+// own "GP Goal" cell, and an unbounded version handed that cell to BAL. The
+// first live diagnostic found exactly that (six goal cells for five stores).
+function _mrBlockOf(bases, col, width) {
+  var best = null;
+  Object.keys(bases).forEach(function (c) {
+    if (bases[c] <= col && col < bases[c] + width && (best === null || bases[c] > bases[best])) best = c;
+  });
+  return best;
+}
+
 // Where one store's block ends: at the next store's block, or the last column.
 function _mrBlockEnd(bases, base, lastCol) {
   var end = lastCol;
@@ -285,6 +297,18 @@ function _mrBuildTab(ss, src, targetYm, opts) {
   if (opts.suffix) name += opts.suffix;
   rep.target = name;
   if (opts.dryRun) {
+    // Everything the real run would do, computed against the SOURCE tab (which
+    // is what the copy starts life as) and reported rather than written.
+    rep.cleared = _mrCountTyped(srcValues, srcFormulas, bases, srcDays, firstRow, srcLastCol);
+    rep.rowsInserted = Math.max(0, wantCount - srcCount);
+    rep.rowsDeleted = Math.max(0, srcCount - wantCount);
+    rep.footer = _mrFooterPlan(srcValues, srcFormulas, bases, width, srcLastRow, srcLastCol,
+                               wantCount, targetYm, opts.goals || {}, totals)
+      .map(function (p) {
+        return p.skip ? (p.what + ': SKIPPED — ' + p.skip)
+                      : (p.what + '=' + p.value + ' @r' + (p.row + 1) + 'c' + (p.col + 1)
+                         + (p.note ? ' (' + p.note + ')' : ''));
+      });
     rep.plan = { dayRows: srcCount + ' -> ' + wantCount, sundays: tgtSun.join(','),
                  lastMonth: JSON.stringify(totals) };
     return rep;
@@ -378,32 +402,35 @@ function _mrBuildTab(ss, src, targetYm, opts) {
   }
 
   // ---- footers ----
-  rep.footer = _mrFooters(tab, tgtBases, firstRow, wantCount, targetYm, opts.goals || {}, totals);
+  var fLastRow = tab.getLastRow(), fLastCol = tab.getLastColumn();
+  rep.footer = _mrApplyFooters(tab, _mrFooterPlan(
+    tab.getRange(1, 1, fLastRow, fLastCol).getValues(),
+    tab.getRange(1, 1, fLastRow, fLastCol).getFormulas(),
+    tgtBases, width, fLastRow, fLastCol, wantCount, targetYm, opts.goals || {}, totals));
   return rep;
 }
 
-// Month-dependent footer cells, found by their label. Only a cell that is not a
-// formula is ever written.
-function _mrFooters(tab, bases, firstRow, wantCount, targetYm, goals, sourceTotals) {
-  var out = [];
-  var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
-  var values = tab.getRange(1, 1, lastRow, lastCol).getValues();
-  var formulas = tab.getRange(1, 1, lastRow, lastCol).getFormulas();
-  var codes = Object.keys(bases);
+// Month-dependent footer cells, found by their label. Returns a PLAN rather
+// than writing, so the diagnostic can print exactly what the real run would do
+// — the first live diagnose reported "nothing matched" only because the dry run
+// never got this far, which is a diagnostic that lies by omission.
+//
+// Only a cell that is not a formula is ever a target.
+function _mrFooterPlan(values, formulas, bases, width, lastRow, lastCol, wantCount, targetYm, goals, sourceTotals) {
+  var plan = [];
   var sundays = _mrSundays(targetYm).length;
 
-  function blockOf(col) {
-    var best = null;
-    codes.forEach(function (c) { if (bases[c] <= col && (best === null || bases[c] > bases[best])) best = c; });
-    return best;
-  }
-  function writeRight(r, c, val) {
+  function target(r, c) {
     for (var k = c + 1; k < Math.min(c + 4, lastCol); k++) {
       if ((formulas[r] || [])[k]) continue;
-      tab.getRange(r + 1, k + 1).setValue(val);
-      return true;
+      return k;
     }
-    return false;
+    return -1;
+  }
+  function add(r, c, value, what, note) {
+    var k = target(r, c);
+    if (k < 0) { plan.push({ row: r, col: c, skip: 'every cell beside it is a formula', what: what }); return; }
+    plan.push({ row: r, col: k, value: value, what: what, note: note || '' });
   }
 
   for (var r = 0; r < lastRow; r++) {
@@ -412,30 +439,58 @@ function _mrFooters(tab, bases, firstRow, wantCount, targetYm, goals, sourceTota
       if (raw === '' || raw === null || raw === undefined) continue;
       var txt = String(raw).trim().toLowerCase();
       if (!txt || txt.length > 30) continue;
-      var code = blockOf(c);
+      var code = _mrBlockOf(bases, c, width);
 
       if (MR_FOOTER.days.indexOf(txt) >= 0) {
-        if (writeRight(r, c, wantCount)) out.push('days=' + wantCount);
+        add(r, c, wantCount, 'days');
       } else if (MR_FOOTER.thru.indexOf(txt) >= 0) {
-        if (writeRight(r, c, 0)) out.push('thru=0');
+        add(r, c, 0, 'thru');
       } else if (MR_FOOTER.buyDays.indexOf(txt) >= 0) {
         // Days minus Sundays. A STARTING VALUE only — holidays are a judgement
-        // this cannot make, so it is logged for eyeballing.
-        if (writeRight(r, c, wantCount - sundays)) out.push('buyDays=' + (wantCount - sundays) + ' (check holidays)');
-      } else if (MR_FOOTER.goal.indexOf(txt) >= 0 && code) {
-        if (goals[code] !== undefined && goals[code] !== null) {
-          if (writeRight(r, c, goals[code])) out.push(code + ' goal=' + goals[code]);
+        // this cannot make, so it is flagged for eyeballing.
+        add(r, c, wantCount - sundays, 'buyDays', 'check holidays');
+      } else if (MR_FOOTER.goal.indexOf(txt) >= 0) {
+        if (!code) { plan.push({ row: r, col: c, skip: 'not inside a store block (company total?)', what: 'goal' }); }
+        else if (goals[code] === undefined || goals[code] === null) {
+          plan.push({ row: r, col: c, skip: 'no ' + code + ' goal set on SPEEKS', what: 'goal' });
         } else {
-          out.push(code + ' goal NOT SET on SPEEKS — left as it was');
+          add(r, c, goals[code], code + ' goal');
         }
-      } else if (MR_FOOTER.lastMonth.indexOf(txt) >= 0 && code) {
-        if (sourceTotals[code] !== undefined) {
-          if (writeRight(r, c, sourceTotals[code])) out.push(code + ' lastMonth=' + sourceTotals[code]);
-        }
+      } else if (MR_FOOTER.lastMonth.indexOf(txt) >= 0 && code && sourceTotals[code] !== undefined) {
+        add(r, c, sourceTotals[code], code + ' lastMonth');
       }
     }
   }
-  return out;
+  return plan;
+}
+
+function _mrApplyFooters(tab, plan) {
+  var done = [];
+  plan.forEach(function (p) {
+    if (p.skip) { done.push(p.what + ': SKIPPED — ' + p.skip); return; }
+    tab.getRange(p.row + 1, p.col + 1).setValue(p.value);
+    done.push(p.what + '=' + p.value + (p.note ? ' (' + p.note + ')' : ''));
+  });
+  return done;
+}
+
+// How many typed-in cells the day grid is carrying — what a real run would
+// clear. Counted for the dry run so the diagnostic can say so out loud.
+function _mrCountTyped(values, formulas, bases, dayRows, firstRow, lastCol) {
+  var n = 0;
+  Object.keys(bases).forEach(function (code) {
+    var base = bases[code];
+    var end = _mrBlockEnd(bases, base, lastCol);
+    for (var d in dayRows) {
+      var r = dayRows[d];
+      for (var col = base + 1; col < end; col++) {
+        if ((formulas[r] || [])[col]) continue;
+        var v = (values[r] || [])[col];
+        if (v !== '' && v !== null && v !== undefined) n++;
+      }
+    }
+  });
+  return n;
 }
 
 // ---- goals ------------------------------------------------------------------
@@ -451,22 +506,17 @@ function _mrWriteGoals(ss, ym, goals) {
   var values = tab.getRange(1, 1, lastRow, lastCol).getValues();
   var formulas = tab.getRange(1, 1, lastRow, lastCol).getFormulas();
   var bases = _mrBases(values, MR_SALES_WIDTH);
-  var codes = Object.keys(bases);
   var wrote = [], found = [];
-
-  function blockOf(col) {
-    var best = null;
-    codes.forEach(function (c) { if (bases[c] <= col && (best === null || bases[c] > bases[best])) best = c; });
-    return best;
-  }
 
   for (var r = 0; r < lastRow; r++) {
     for (var c = 0; c < lastCol; c++) {
       var raw = (values[r] || [])[c];
       if (raw === '' || raw === null || raw === undefined) continue;
       if (MR_FOOTER.goal.indexOf(String(raw).trim().toLowerCase()) < 0) continue;
-      var code = blockOf(c);
-      found.push((code || '?') + '@' + (r + 1) + ',' + (c + 1));
+      // ⚠️ Bounded: the workbook has a sixth "GP Goal" after BAL, for the
+      // company. It belongs to no store, and an unbounded lookup made it BAL's.
+      var code = _mrBlockOf(bases, c, MR_SALES_WIDTH);
+      found.push((code || 'none') + '@r' + (r + 1) + 'c' + (c + 1));
       if (!code || goals[code] === undefined || goals[code] === null) continue;
       for (var k = c + 1; k < Math.min(c + 4, lastCol); k++) {
         if ((formulas[r] || [])[k]) continue;

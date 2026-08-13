@@ -10730,7 +10730,7 @@ function _bdGoalChip(store, t) {
     const pct = t && t.sellDays ? (t.gp / goal * 100) : 0;
     const done = pct >= 100 ? ' bd-h-goal-hit' : '';
     return '<span class="bd-h-goal' + done + '">'
-        + '<b>' + _lvPct(pct) + '</b> of ' + _lvMoney(goal, false) + ' goal</span>';
+        + '<b>' + _lvPct(pct) + '</b> to ' + _lvMoney(goal, false) + ' goal</span>';
 }
 
 // The block on screen, store or company. Every reader goes through this so the
