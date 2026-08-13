@@ -29,6 +29,41 @@ async function broadcastChange(tool: string, store: string | null) {
   } catch (_) { /* best-effort */ }
 }
 
+// Drop a row on the email-notification queue — the twin of broadcastChange
+// above. That one tells an already-open page to refresh; this one tells the
+// people who aren't looking at the site right now.
+//
+// All this has to do is describe WHO CARES. The notify function resolves
+// audience -> people -> their preferences -> an address, and batches whatever is
+// outstanding into one message. Leaving audienceStores/audienceRoles null means
+// "everybody".
+//
+// Best-effort and never throws, for the same reason broadcastChange isn't
+// awaited for its result: failing to notify must never fail the write itself.
+// See migration 0033 for the audience axes and the category list.
+async function queueNotification(n: {
+  category: string; kind: string; title: string; body?: string; link?: string;
+  store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
+  audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+}) {
+  try {
+    const sb = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    await sb.from("notify_queue").insert({
+      category: n.category, kind: n.kind, title: n.title, body: n.body ?? null,
+      link: n.link ?? null,
+      store: n.store ? String(n.store).toUpperCase() : null,
+      audience_stores: n.audienceStores ?? null,
+      audience_roles: n.audienceRoles ?? null,
+      audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
+      exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
+      priority: n.priority ?? "normal",
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 // Normalize "m/d/yyyy" (legacy client format) to ISO "yyyy-mm-dd". Pass through anything already ISO.
 function toISODate(d: string): string {
   if (!d) return d;
@@ -115,6 +150,19 @@ Deno.serve(async (req: Request) => {
         const { error } = await supabase.from("patch_notes").insert(rows);
         if (error) return json({ error: error.message }, 500);
         await broadcastChange("patch", null);
+
+        // A release goes to everybody. Only addEntries queues mail — editGroup,
+        // editEntry and deleteEntry below all broadcast too, but fixing a typo in
+        // a published note is not news and must not re-mail the company.
+        const ver = String(body.title || "").trim();
+        const cats = [...new Set(rows.map((r: any) => String(r.category)))];
+        await queueNotification({
+          category: "announcements",
+          kind: "patch_notes",
+          title: `New patch notes${ver ? ` — ${ver.replace(/^\s*v/i, "v")}` : ""}`,
+          body: `${rows.length} change${rows.length === 1 ? "" : "s"} shipped${cats.length ? ` across ${cats.join(", ")}` : ""}.`,
+          link: "index.html",
+        });
       }
       return json({ success: true, inserted: rows.length });
     }

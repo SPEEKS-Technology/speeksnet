@@ -40,6 +40,41 @@ async function broadcastChange(tool: string, store: string | null) {
   } catch (_) { /* best-effort */ }
 }
 
+// Drop a row on the email-notification queue — the twin of broadcastChange
+// above. That one tells an already-open page to refresh; this one tells the
+// people who aren't looking at the site right now.
+//
+// All this has to do is describe WHO CARES. The notify function resolves
+// audience -> people -> their preferences -> an address, and batches whatever is
+// outstanding into one message. Leaving audienceStores/audienceRoles null means
+// "everybody".
+//
+// Best-effort and never throws, for the same reason broadcastChange isn't
+// awaited for its result: failing to notify must never fail the write itself.
+// See migration 0033 for the audience axes and the category list.
+async function queueNotification(n: {
+  category: string; kind: string; title: string; body?: string; link?: string;
+  store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
+  audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+}) {
+  try {
+    const sb = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    await sb.from("notify_queue").insert({
+      category: n.category, kind: n.kind, title: n.title, body: n.body ?? null,
+      link: n.link ?? null,
+      store: n.store ? String(n.store).toUpperCase() : null,
+      audience_stores: n.audienceStores ?? null,
+      audience_roles: n.audienceRoles ?? null,
+      audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
+      exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
+      priority: n.priority ?? "normal",
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 // Catalog management (add/remove/pause items) is DM/CEO only. Submitting
 // scores/audits stays open (matches prior behavior); only the catalog mutates here.
 function isManagerRole(role?: string): boolean {
@@ -256,6 +291,29 @@ Deno.serve(async (req: Request) => {
         } catch (_e) { /* best-effort cleanup — never fail the submit over it */ }
 
         await broadcastChange("scorecard", store);
+        // PayMore PRACTICE audit — the self-scored walkthrough. One of three
+        // score submissions that notify (see submit_official_audit and
+        // submit_scorecard below); each names WHICH one it was, because "scores
+        // were submitted" on its own doesn't tell a DM what to go and look at.
+        await queueNotification({
+          category: "scores",
+          kind: "audit_practice_submitted",
+          title: `PayMore audit submitted — ${store}`,
+          body: `${earned} of ${possible} points (${Math.round(Number(pct) || 0)}%).`,
+          link: "index.html",
+          store,
+          // DOWN to the store that was walked, not up to corp (Ethan, 2026-08-13).
+          // A score is only worth mailing to somebody who can act on it, and the
+          // district reads these off the board anyway.
+          //
+          // NOTE the asymmetry with the official audit below: that one is DM/CEO
+          // only to submit, but ANY manager can score their own practice
+          // walkthrough - so here excludeUser is the only thing stopping somebody
+          // being emailed their own submission.
+          audienceStores: [store],
+          audienceRoles: ["manager", "owner (manager)", "assistant manager"],
+          excludeUser: body.submittedBy ? String(body.submittedBy).trim() : null,
+        });
         return json({ success: true, earned, possible, pct });
       }
 
@@ -363,6 +421,20 @@ Deno.serve(async (req: Request) => {
         const { error } = await supabase.from("paymore_official_audits").insert(record);
         if (error) return json({ success: false, error: error.message }, 500);
         await broadcastChange("scorecard", store);
+        // PayMore OFFICIAL audit — the corporate one, distinct from the practice
+        // walkthrough above and the more newsworthy of the two.
+        await queueNotification({
+          category: "scores",
+          kind: "audit_official_submitted",
+          title: `PayMore official audit recorded — ${store}`,
+          body: `${earned} of ${possible} points (${Math.round(Number(pct) || 0)}%).`,
+          link: "index.html",
+          store,
+          // The DM enters this one, so it can only sensibly travel downward.
+          audienceStores: [store],
+          audienceRoles: ["manager", "owner (manager)", "assistant manager"],
+          excludeUser: body.enteredBy ? String(body.enteredBy).trim() : null,
+        });
         return json({ success: true, earned, possible, pct });
       }
 
@@ -415,6 +487,21 @@ Deno.serve(async (req: Request) => {
         const { error } = await supabase.from("scorecards").insert(record);
         if (error) return json({ success: false, error: error.message }, 500);
         await broadcastChange("scorecard", store);
+        // SPEEKS scorecard — the "Online & Marketing" four categories. Scored out
+        // of an average rather than a point total, so it reads differently from
+        // the two audits above.
+        await queueNotification({
+          category: "scores",
+          kind: "scorecard_submitted",
+          title: `SPEEKS scorecard submitted — ${store}`,
+          body: storeAverage === null
+            ? "No categories were scored."
+            : `Average ${(Math.round(storeAverage * 10) / 10).toFixed(1)} across ${provided.length} categor${provided.length === 1 ? "y" : "ies"}.`,
+          link: "index.html",
+          store,
+          audienceRoles: ["district manager", "ceo", "mocd"],
+          excludeUser: body.submittedBy ? String(body.submittedBy).trim() : null,
+        });
         return json({ success: true });
       }
 

@@ -3,7 +3,16 @@
    ========================================================= */
 :root {
     --slate-charcoal: #1a1c1e; 
-    --sage-professional: #5a8d3b; 
+    --sage-professional: #5a8d3b;
+    /* Hover partner for --sage-professional, and it must track it. Defaults to the
+       pre-redesign olive so nothing outside the emerald scopes changes appearance;
+       each scope that flips --sage-professional to #1f9d57 flips this to #178048
+       alongside it, which keeps a button's base and its hover in the same family.
+       NOT --sage-deep (:root, always emerald) on purpose: driving the global hover
+       from that would give still-olive surfaces an emerald hover, which is a worse
+       mismatch than the one being fixed. That token stays for the half-dozen
+       scoped `.btn-primary:hover` overrides that predate this. */
+    --sage-hover: #4a7530;   /* see .btn-primary:hover */ 
     --text-dark: #2d2d2d; 
     --bg-app: #f4f7f9;
     --idea-gold: #f59e0b;
@@ -1076,6 +1085,7 @@ input, textarea, select,
        Flipping the token locally puts "Unlock Portal" on the same emerald as
        every other primary button on the redesigned surfaces. */
     --sage-professional: #1f9d57;
+    --sage-hover: #178048;
 
     position: fixed;
     inset: 0;
@@ -2545,7 +2555,12 @@ select.bs-hidden-select:focus {
 }
 
 .btn-primary { background: var(--sage-professional); color: white; border: none; padding: 12px 24px; border-radius: 10px; font-weight: 800; font-size: 13px; cursor: pointer; text-transform: uppercase; letter-spacing: 0.5px; transition: all 0.2s ease; box-shadow: 0 4px 12px rgba(90, 141, 59, 0.2); display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
-.btn-primary:hover { background: #4a7530; transform: translateY(-2px); box-shadow: 0 6px 15px rgba(90, 141, 59, 0.3); }
+/* background was hardcoded #4a7530 (pre-redesign olive) while the BASE colour came
+   from var(--sage-professional). Every surface rebased to emerald therefore went
+   olive on hover, and .auth-btn:hover had already tried to fix it at line ~1364 —
+   dead, because this rule is 1100 lines LATER at equal specificity, so source
+   order won. Driving it from a token fixes every such surface at once. */
+.btn-primary:hover { background: var(--sage-hover, #4a7530); transform: translateY(-2px); box-shadow: 0 6px 15px rgba(31, 157, 87, 0.28); }
 .btn-ghost { background: transparent; color: #64748b; border: 1.5px solid #cbd5e1; padding: 11px 18px; border-radius: 10px; font-weight: 700; font-size: 13px; cursor: pointer; transition: all 0.2s ease; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 .btn-ghost:hover { border-color: var(--slate-charcoal); color: var(--slate-charcoal); background: #f8fafc; }
 
@@ -9654,6 +9669,7 @@ body.sam-active .hotbar-btn:hover {
 .ws-wrap,
 .top-nav {
     --sage-professional: #1f9d57;
+    --sage-hover: #178048;
 }
 /* Near-black headings in the feed/action deck (it reads --text-dark). */
 .speeks-action-menu { --text-dark: #0f172a; }
@@ -9752,6 +9768,7 @@ body.sam-active .hotbar-btn:hover {
    ========================================================= */
 .modal-menu.manage-menu {
     --sage-professional: #1f9d57;
+    --sage-hover: #178048;
     border-radius: 18px;
     border: 1px solid #e3e8ee;
     box-shadow: 0 24px 60px rgba(16,24,40,.20), 0 2px 8px rgba(16,24,40,.06);
@@ -13403,6 +13420,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     --ex-accent: #1f9d57;
     --ex-accent-tint: #e8f7ee;
     --sage-professional: #1f9d57;
+    --sage-hover: #178048;
     display: none;
     position: fixed; inset: 0; z-index: 3200;
     background: rgba(15, 23, 42, .42);
@@ -15549,3 +15567,353 @@ body.tv-body { display: block; background: #eef1f5; }
    goods bought), not a note about it, so it belongs beside the label rather than
    on a line of its own under the number. */
 .bd-k-sub { font-weight: 700; color: #b8c2cd; letter-spacing: .03em; }
+
+/* ============================================================================
+   SETTINGS  (#settingsModal, opened by the nav cog)
+   Calm surfaces, hairline borders, emerald accent — the same language as the
+   redesigned tools. Narrow on purpose: this is a short form about one decision,
+   not a data table, so it keeps the 1050px .manage-menu width off.
+   ============================================================================ */
+/* ⚠️ height:auto is load-bearing. The shared .modal-menu rule pins EVERY modal to
+   `height: 84vh; max-height: 84vh` — right for the big data tools it was written
+   for, badly wrong here: the index pane holds one row, and at 84vh it rendered as
+   a single setting floating at the top of a near-empty card half the screen tall.
+   Sizing to content (capped, so a long section still scrolls) is what makes a
+   two-row settings list look deliberate instead of broken. */
+.settings-menu {
+    /* The V4 emerald flip list further down names .modal-menu.manage-menu, which
+       this modal is deliberately NOT (it is a form, not a 1050px data tool), so it
+       inherited the pre-redesign olive and the Save button came out the wrong
+       green. Flip both tokens locally — same fix the login screen makes. */
+    --sage-professional: #1f9d57;
+    --sage-hover: #178048;
+
+    width: 560px;
+    max-width: calc(100% - 32px);
+    height: auto;
+    max-height: 88vh;
+}
+
+/* flex: 0 1 auto overrides the shared `flex: 1 1 auto` on .modal-menu > .manage-content,
+   which would stretch the pane to fill the card and undo the above. */
+.settings-menu > .manage-content {
+    flex: 0 1 auto;
+    height: auto;
+    max-height: 70vh;
+    overflow-y: auto;
+    background: #fff;
+    gap: 0;
+    padding: 18px 20px 20px;
+}
+
+.ns-loading {
+    padding: 30px 4px;
+    text-align: center;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: #8a97a4;
+}
+
+/* ---- master switch ---- */
+/* Tinted only when ON. Off is the default state for everyone, and a permanently
+   coloured panel would read as "you're subscribed" before anybody opted in. */
+.ns-master {
+    display: flex;
+    align-items: flex-start;
+    gap: 13px;
+    padding: 14px 15px;
+    border: 1px solid #e9eef2;
+    border-radius: 13px;
+    background: #f8fafb;
+    transition: background .18s ease, border-color .18s ease;
+}
+.ns-master.is-on {
+    background: #edfaf2;
+    border-color: #c6ebd6;
+}
+.ns-master-title {
+    font-size: 14.5px;
+    font-weight: 800;
+    color: #1a1c1e;
+    letter-spacing: -.01em;
+}
+.ns-master-sub {
+    font-size: 12px;
+    font-weight: 500;
+    color: #6b7885;
+    margin-top: 3px;
+    line-height: 1.5;
+}
+
+/* The knob is ABSOLUTELY positioned, not a margin'd block in flow. With margin
+   the knob's box participated in the track's line box, so it sat a pixel low and
+   the travel distance had to be derived from three numbers that could disagree
+   (width - knob - margin*2). Pinning it to top/left and moving it with `left`
+   means the only numbers that matter are the two below, and it is centred by
+   construction at any size. */
+.ns-switch {
+    position: relative;
+    flex: 0 0 auto;
+    width: 44px;
+    height: 26px;
+    margin-top: 1px;
+    cursor: pointer;
+}
+.ns-switch input { position: absolute; opacity: 0; width: 0; height: 0; margin: 0; }
+.ns-switch-track {
+    position: absolute;
+    inset: 0;
+    border-radius: 999px;
+    background: #d3dbe2;
+    transition: background .18s ease;
+}
+.ns-switch-knob {
+    position: absolute;
+    top: 3px;
+    left: 3px;                       /* travel = 44 - 20 - 3 - 3 = 18px */
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(16, 24, 32, .28);
+    transition: left .18s ease;
+}
+.ns-switch input:checked + .ns-switch-track { background: var(--sage-professional, #1f9d57); }
+.ns-switch input:checked + .ns-switch-track .ns-switch-knob { left: 21px; }
+.ns-switch input:focus-visible + .ns-switch-track { outline: 2px solid #1f9d57; outline-offset: 2px; }
+
+/* ---- the fields below it ---- */
+.ns-fields { padding-top: 16px; transition: opacity .18s ease; }
+/* Dimmed rather than hidden: collapsing the panel on toggle makes the modal jump,
+   and hiding the choices makes them feel unavailable rather than inactive. The
+   address input is deliberately left at full opacity by its own rule below —
+   it stays usable while alerts are off (see _nsSyncEnabled). */
+.ns-fields.is-off { opacity: .45; }
+.ns-fields.is-off .ns-input,
+.ns-fields.is-off .ns-label,
+.ns-fields.is-off .ns-hint { opacity: 1; }
+
+.ns-label {
+    display: block;
+    font-size: 10.5px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: #94a3b0;
+    margin-bottom: 7px;
+}
+.ns-label-gap { margin-top: 20px; }
+
+.ns-input {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 11px 13px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #1a1c1e;
+    background: #fff;
+    border: 1px solid #dfe6ec;
+    border-radius: 10px;
+    outline: none;
+    transition: border-color .16s ease, box-shadow .16s ease;
+}
+.ns-input:focus {
+    border-color: #1f9d57;
+    box-shadow: 0 0 0 3px rgba(31, 157, 87, .13);
+}
+.ns-input::placeholder { color: #b3bfc9; font-weight: 500; }
+.ns-hint {
+    font-size: 11.5px;
+    font-weight: 500;
+    color: #8a97a4;
+    margin-top: 6px;
+    line-height: 1.5;
+}
+
+/* ---- cadence + categories: one row shape, two uses ---- */
+.ns-cadence, .ns-cats { display: flex; flex-direction: column; gap: 8px; }
+
+.ns-radio, .ns-cat {
+    display: flex;
+    align-items: flex-start;
+    gap: 11px;
+    padding: 11px 13px;
+    border: 1px solid #e9eef2;
+    border-radius: 11px;
+    background: #fbfcfd;
+    cursor: pointer;
+    transition: border-color .14s ease, background .14s ease;
+}
+.ns-radio:hover, .ns-cat:hover { border-color: #cfe6d9; background: #f7fbf8; }
+.ns-radio input, .ns-cat input {
+    flex: 0 0 auto;
+    width: 17px;
+    height: 17px;
+    margin: 1px 0 0;
+    accent-color: #1f9d57;
+    cursor: pointer;
+}
+/* The label and its explanation, stacked. <b>/<i> carry no weight of their own
+   here — they are just two slots, styled explicitly. */
+.ns-radio span, .ns-cat-copy { display: block; }
+.ns-radio b, .ns-cat-copy b {
+    display: block;
+    font-size: 13.5px;
+    font-weight: 750;
+    color: #1a1c1e;
+    letter-spacing: -.005em;
+}
+.ns-radio i, .ns-cat-copy i {
+    display: block;
+    font-style: normal;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: #75828f;
+    margin-top: 2px;
+    line-height: 1.5;
+}
+
+/* ---- footer ---- */
+/* gap, and a note that is allowed to shrink: "Saved — check your inbox for the
+   confirmation." is long enough that without both it butted straight up against
+   the Save button. */
+.settings-menu .manage-footer { align-items: center; gap: 14px; }
+.ns-save-note {
+    flex: 0 1 auto;
+    min-width: 0;
+    font-size: 12.5px;
+    font-weight: 700;
+    line-height: 1.35;
+    text-align: right;
+    color: #8a97a4;
+}
+.settings-menu .manage-footer .btn-primary { flex: 0 0 auto; }
+.ns-save-note.is-ok  { color: #1f9d57; }
+.ns-save-note.is-err { color: #d64545; }
+
+@media (max-width: 600px) {
+    .settings-menu { width: calc(100% - 24px); }
+    .settings-menu .manage-content { max-height: 62vh; }
+}
+
+/* Email-alert status badge in the User Permissions rows (read-only — each
+   person sets their own from the nav cog; this only exposes who WON'T hear
+   anything, which is otherwise invisible to the DM). Filled by
+   _muApplyNotifyRoster; blank for Store/TV accounts and on any fetch failure. */
+.u-notify {
+    flex: 0 0 auto;
+    min-width: 58px;
+    text-align: center;
+    font-size: 10px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    padding: 5px 7px;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    color: transparent;
+    cursor: default;
+}
+.u-notify.is-on   { background: #edfaf2; border-color: #c6ebd6; color: #1f9d57; }
+.u-notify.is-off  { background: #f4f6f8; border-color: #e3e8ed; color: #7c8894; }
+.u-notify.is-none { background: #fdf6f6; border-color: #f3d9d9; color: #c0605f; }
+
+/* ---- the settings INDEX (pane 1) ------------------------------------------
+   The familiar settings-menu row: icon, label + one line of explanation, the
+   current state, chevron. The state chip is the point — a list of bare labels
+   makes you open every row to find out what is set. */
+.set-pane[hidden] { display: none !important; }   /* beats .manage-content's display:flex */
+
+.set-list { display: flex; flex-direction: column; gap: 8px; }
+
+.set-row {
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    width: 100%;
+    text-align: left;
+    padding: 14px 15px;
+    border: 1px solid #e9eef2;
+    border-radius: 13px;
+    background: #fbfcfd;
+    cursor: pointer;
+    font: inherit;
+    transition: border-color .14s ease, background .14s ease, transform .1s ease;
+}
+.set-row:hover { border-color: #cfe6d9; background: #f7fbf8; }
+.set-row:active { transform: scale(.995); }
+.set-row:focus-visible { outline: 2px solid #1f9d57; outline-offset: 2px; }
+
+.set-row-ico {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: #edfaf2;
+    color: #1f9d57;
+}
+.set-row-ico svg { width: 18px; height: 18px; }
+
+.set-row-copy { flex: 1 1 auto; min-width: 0; }
+.set-row-copy b {
+    display: block;
+    font-size: 14px;
+    font-weight: 800;
+    color: #1a1c1e;
+    letter-spacing: -.01em;
+}
+.set-row-copy i {
+    display: block;
+    font-style: normal;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: #75828f;
+    margin-top: 2px;
+    line-height: 1.5;
+}
+
+.set-row-state {
+    flex: 0 0 auto;
+    font-size: 10px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    padding: 4px 8px;
+    border-radius: 7px;
+    white-space: nowrap;
+}
+.set-row-state.is-on  { background: #edfaf2; border: 1px solid #c6ebd6; color: #1f9d57; }
+.set-row-state.is-off { background: #f4f6f8; border: 1px solid #e3e8ed; color: #7c8894; }
+
+.set-row-chev { flex: 0 0 auto; width: 16px; height: 16px; color: #b3bfc9; }
+
+.set-foot-note {
+    margin-top: 14px;
+    text-align: center;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: #9aa6ad;
+}
+
+/* ---- the back link ----
+   Reuses .ann-docs-back-btn, which is the site's ONLY existing modal-header back
+   control (the "← Back" in the announcement documents view): a text link in the
+   sage token with a faint hover, not a boxed icon button. This started life as a
+   bordered chevron box and that made it a THIRD back-button idiom on the site,
+   alongside that one and .mg-back. Matching the closest existing pattern beats
+   inventing a better one nobody else uses. .set-back now only handles placement;
+   every visual property is inherited. */
+.set-back {
+    flex: 0 0 auto;
+    align-self: center;
+    margin-right: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.set-back svg { width: 13px; height: 13px; }
+.set-back[hidden] { display: none !important; }
+/* Hidden on a subpage so the header keeps one leading element, not two. */
+.tool-head-ico[hidden] { display: none !important; }

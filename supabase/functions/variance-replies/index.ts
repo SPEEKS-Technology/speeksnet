@@ -44,6 +44,41 @@ async function broadcastChange(tool: string, store: string | null) {
   } catch (_) { /* best-effort */ }
 }
 
+// Drop a row on the email-notification queue — the twin of broadcastChange
+// above. That one tells an already-open page to refresh; this one tells the
+// people who aren't looking at the site right now.
+//
+// All this has to do is describe WHO CARES. The notify function resolves
+// audience -> people -> their preferences -> an address, and batches whatever is
+// outstanding into one message. Leaving audienceStores/audienceRoles null means
+// "everybody".
+//
+// Best-effort and never throws, for the same reason broadcastChange isn't
+// awaited for its result: failing to notify must never fail the write itself.
+// See migration 0033 for the audience axes and the category list.
+async function queueNotification(n: {
+  category: string; kind: string; title: string; body?: string; link?: string;
+  store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
+  audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+}) {
+  try {
+    const sb = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    await sb.from("notify_queue").insert({
+      category: n.category, kind: n.kind, title: n.title, body: n.body ?? null,
+      link: n.link ?? null,
+      store: n.store ? String(n.store).toUpperCase() : null,
+      audience_stores: n.audienceStores ?? null,
+      audience_roles: n.audienceRoles ?? null,
+      audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
+      exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
+      priority: n.priority ?? "normal",
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 // The DM uploads the ≤-10% line items (this tool) and the team variance report
 // (the "Submit Variance Report" tool → variance_entries) at the same time for
 // the same store + date range. Pull that matching team-variance entry so it can
@@ -196,6 +231,33 @@ Deno.serve(async (req: Request) => {
           } catch (_e) { /* keep the upload; the file is a bonus */ }
         }
         await broadcastChange("variance", store);
+        // The store's manager owes replies on this within the week. An all-clear
+        // upload owes nothing, so it is worded as a read rather than a task —
+        // the same flip the feed card makes via data-fyi.
+        {
+          const owed = rows.filter((r: any) => r.needs_reply).length;
+          const clear = !owed;
+          await queueNotification({
+            category: "variance_aging",
+            kind: clear ? "variance_upload_clear" : "variance_upload",
+            title: clear
+              ? `Variance report to review — ${store}`
+              : `Variance replies due — ${store}`,
+            body: clear
+              ? "This period came in clear. Nothing needs a reply, but the numbers are worth reading."
+              : `${owed} item${owed === 1 ? "" : "s"} need a written reply. Replies are due within a week of this upload.`,
+            link: "workspace.html#vreplies",
+            store,
+            audienceStores: [store],
+            // Managers only. Assistant Managers are deliberately OUT (Ethan,
+            // 2026-08-13): the variance reply cycle is the manager's to answer, and
+            // the due-date check below (_VR_MANAGER_ROLES) never covered ASMs — so
+            // telling an ASM a sheet had landed and then going silent as the
+            // deadline ran down was the worst of both. Out of both halves now.
+            audienceRoles: ["manager", "owner (manager)"],
+            excludeUser: body.uploaded_by ? String(body.uploaded_by).trim() : null,
+          });
+        }
         return jsonResponse({ success: true, period_id: period.id, count: rows.length });
       }
 
@@ -232,6 +294,35 @@ Deno.serve(async (req: Request) => {
           }
         }
         await broadcastChange("variance", null);
+
+        // Both directions of the note cycle are worth an email, and only these
+        // two: a DM note is a question put to the store, a manager reply is the
+        // answer coming back. gm_note (the manager's own first pass) is skipped —
+        // it is the manager writing on their own sheet, not a handoff to anyone.
+        // Clearing a note (empty text) is silent for the same reason as recycle.
+        if (text && (field === "dm_note" || field === "mgr_reply")) {
+          const { data: per } = await supabase.from("variance_reply_periods")
+            .select("store").eq("id", item.period_id).maybeSingle();
+          const store = String(per?.store || "").toUpperCase();
+          const toManager = field === "dm_note";
+          await queueNotification({
+            category: "variance_aging",
+            kind: toManager ? "variance_dm_note" : "variance_mgr_reply",
+            title: toManager
+              ? `Variance note from the DM — ${store}`
+              : `Variance reply from ${by || "a manager"} — ${store}`,
+            body: text.slice(0, 300),
+            link: "workspace.html#vreplies",
+            store: store || null,
+            // A DM note goes to that store's manager; a reply goes back to the DM.
+            // No ASMs on the store side — see the upload hook above.
+            audienceStores: toManager && store ? [store] : null,
+            audienceRoles: toManager
+              ? ["manager", "owner (manager)"]
+              : ["district manager", "ceo"],
+            excludeUser: by,
+          });
+        }
         return jsonResponse({ success: true });
       }
 

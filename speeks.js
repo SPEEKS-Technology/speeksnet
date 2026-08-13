@@ -69,6 +69,7 @@ const SALES_INGEST_URL  = `${_BASE}/sales-ingest`;
 const SUMMARY_WEEKLY_URL = `${_BASE}/summary-weekly`;
 const LIVE_URL          = `${_BASE}/shopify-live`;
 const USAGE_URL         = `${_BASE}/usage`;
+const NOTIFY_URL        = `${_BASE}/notify`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -1769,6 +1770,53 @@ function populateUsersModal() {
         rows.appendChild(group);
         groups[role].forEach(u => addManageUserRow(u, body));
     });
+
+    _muApplyNotifyRoster();
+}
+
+// Fill the per-row email-alert badge from the notify function's roster.
+// READ-ONLY on purpose. The point is to make the gap visible: somebody who never
+// opened the cog, or typed their address wrong, gets no mail and has no way of
+// knowing — and neither would the DM without this. Editing another person's
+// address isn't offered, because the confirmation send is the only real proof an
+// address works, and it has to land in their inbox, not somebody else's.
+//
+// DM/CEO only (the fn enforces it too); any failure leaves the badges blank
+// rather than guessing, since a wrong "not set up" here would send the DM
+// chasing people who are perfectly fine.
+async function _muApplyNotifyRoster() {
+    const cells = document.querySelectorAll('#manageUsersRows .u-notify');
+    if (!cells.length) return;
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (role !== 'district manager' && role !== 'ceo') return;
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (!pin) return;
+    try {
+        const res = await fetch(`${NOTIFY_URL}?mode=roster&v=${Date.now()}`, { headers: { 'x-user-pin': pin } });
+        const j = await res.json();
+        if (!j || !j.success || !Array.isArray(j.roster)) return;
+        const by = {};
+        j.roster.forEach(r => { by[String(r.name || '').trim().toLowerCase()] = r; });
+        cells.forEach(cell => {
+            const r = by[cell.dataset.name || ''];
+            // Store (TV) accounts aren't in the roster at all — they have no inbox,
+            // so a badge would be noise rather than information. Left blank.
+            if (!r) { cell.textContent = ''; cell.className = 'u-notify'; return; }
+            if (r.enabled && r.hasEmail) {
+                cell.textContent = r.cadence === 'digest' ? 'Daily' : 'On';
+                cell.className = 'u-notify is-on';
+                cell.title = `Email alerts on — ${r.email}${r.cadence === 'digest' ? ' (daily summary)' : ' (as it happens)'}`;
+            } else if (r.hasEmail) {
+                cell.textContent = 'Off';
+                cell.className = 'u-notify is-off';
+                cell.title = `Has an address (${r.email}) but alerts are switched off.`;
+            } else {
+                cell.textContent = 'Not set';
+                cell.className = 'u-notify is-none';
+                cell.title = 'No email address — this person gets no alerts. They set it themselves from the cog in the top bar.';
+            }
+        });
+    } catch (_) { /* leave the badges blank rather than guess */ }
 }
 
 // Collapse / expand a role group.
@@ -1852,6 +1900,7 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
         <select class="u-store" style="flex: 1;">${storeOptions}</select>
         <select class="u-role" style="flex: 1.5;">${roleOptions}</select>
         <select class="u-schedule" style="flex: 1.3;" title="Weekly hours — what this person's store listing capacity is built from. A floater can be claimed by any store in their market.">${scheduleOptions}</select>
+        <span class="u-notify" data-name="${escapeHtml((user.name || '').trim().toLowerCase())}" title="Email alerts — each person sets their own from the cog in the top bar."></span>
         <button class="del-btn" onclick="this.parentElement.remove()" title="Delete User"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     `;
     if (target) {
@@ -29222,6 +29271,14 @@ const FA_ROLES = [
 ];
 
 const FEATURE_CATALOG = [
+    // ---- Nav chrome ----
+    // The settings cog. On for everyone who signs in as a person: the panel behind
+    // it is their OWN email preferences, so there is no role that shouldn't reach
+    // it. Listed here anyway (rather than left as a bare data-feature) so it has a
+    // readable label in the Feature Access tool and can be switched off per person
+    // if somebody must not be emailed. 'store' is absent because the shop-floor TV
+    // boards have no inbox and no nav to click — see tv.html.
+    { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'multi-store-manager', 'assistant-manager', 'employee', 'training'] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
     { key: 'tool-claims-store',        label: 'Insurance Claims (Store)',      tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
     { key: 'tool-claims-oversight',    label: 'Insurance Claims (Oversight)',  tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
@@ -38381,3 +38438,314 @@ async function expMarkFiled(ev) {
     }
 }
 window.expMarkFiled = expMarkFiled;
+
+/* =========================================================
+   SETTINGS  (the nav cog)
+   ---------------------------------------------------------
+   A settings SHELL with a drill-down, not one screen. Pane 1 lists the sections;
+   pane 2 is whichever one was opened, with a back chevron to the list and an X
+   that leaves settings entirely. Notifications is the only section today — the
+   index exists so the second and third ones cost nothing to add.
+
+   To add a section:
+     1. a .set-row button in the index pane (all five shells — it is chrome, so
+        it lives in the HTML like the rest of the nav),
+     2. a pane div with an id,
+     3. an entry in SETTINGS_SECTIONS below.
+   The header text, the back button and whether a Save footer appears are all
+   driven off that entry, so a new section does not touch settingsGo().
+
+   ---------------------------------------------------------
+   NOTIFICATIONS, and the two things not to undo:
+
+   * THE CATEGORY LIST IS NOT IN THIS FILE. The notify function returns it
+     (key + label + blurb) and renderNotifySettings paints whatever it gets. A
+     list here plus a matching set of cat_* columns there is two lists that
+     drift, and it fails silently: a toggle that saves to a column nothing reads.
+
+   * The address is stored per PERSON, keyed on their name, in user_notify_prefs
+     — NOT on the users row. The Permissions tool saves by full replace (delete +
+     re-insert with fresh uuids), so a column on users would be wiped every time
+     the DM edited anybody. See migration 0033.
+   ========================================================= */
+
+// title/eyebrow/sub per pane, and whether that pane owns the Save footer.
+const SETTINGS_SECTIONS = {
+    index: {
+        pane: 'settingsIndexPane', back: false, footer: false,
+        eyebrow: 'Your Account', title: 'Settings',
+        sub: 'Preferences that apply to you, on every page.',
+    },
+    notifications: {
+        pane: 'settingsNotifyPane', back: true, footer: true,
+        eyebrow: 'Settings', title: 'Notifications',
+        sub: 'Pick which SPEEKSNET alerts also reach your inbox.',
+        onOpen: () => loadNotifySettings(),
+    },
+};
+
+let _setSection = 'index';
+let _nsData = null;      // last payload from the notify fn — also the dirty baseline
+
+function openSettings() {
+    toggleModal('settingsModal');
+    const el = document.getElementById('settingsModal');
+    if (!el || !el.classList.contains('show')) return;
+    // Always open on the index, however they left it last time.
+    settingsGo('index', true);
+    _setRefreshStateHints();
+}
+window.openSettings = openSettings;
+
+// Deep link straight into a section — kept so a "manage your preferences" link
+// (or Jump To) can land on Notifications without the user hunting for it, while
+// the back chevron still behaves as if they had walked in through the index.
+function openNotifySettings() {
+    toggleModal('settingsModal');
+    const el = document.getElementById('settingsModal');
+    if (!el || !el.classList.contains('show')) return;
+    settingsGo('notifications', true);
+}
+window.openNotifySettings = openNotifySettings;
+
+function settingsGo(name, force) {
+    const cfg = SETTINGS_SECTIONS[name];
+    if (!cfg) return;
+    // Leaving a section with unsaved edits: ask, exactly as the audit modal does.
+    if (!force && _setSection === 'notifications' && name !== 'notifications' && _nsDirty()) {
+        if (!confirm('You have unsaved notification settings. Leave without saving?')) return;
+    }
+    _setSection = name;
+
+    Object.values(SETTINGS_SECTIONS).forEach(s => {
+        const p = document.getElementById(s.pane);
+        if (p) p.hidden = (s.pane !== cfg.pane);
+    });
+    const back = document.getElementById('settingsBackBtn');
+    const ico = document.getElementById('settingsIco');
+    const foot = document.getElementById('settingsFooter');
+    // The back chevron REPLACES the cog rather than sitting next to it — two
+    // glyphs competing for the same corner reads as clutter, and on a subpage the
+    // affordance to go back matters more than the decoration.
+    if (back) back.hidden = !cfg.back;
+    if (ico) ico.hidden = !!cfg.back;
+    if (foot) foot.hidden = !cfg.footer;
+    const set = (id, txt) => { const e = document.getElementById(id); if (e) e.textContent = txt; };
+    set('settingsEyebrow', cfg.eyebrow);
+    set('settingsTitle', cfg.title);
+    set('settingsSub', cfg.sub);
+    // Clear any stale "Saved." from a previous visit.
+    const note = document.getElementById('notifySaveNote');
+    if (note) { note.textContent = ''; note.className = 'ns-save-note'; }
+
+    if (cfg.onOpen) cfg.onOpen();
+}
+window.settingsGo = settingsGo;
+
+function settingsBack() { settingsGo('index'); _setRefreshStateHints(); }
+window.settingsBack = settingsBack;
+
+// X = out of settings altogether, from whatever depth.
+function closeSettings() {
+    if (_setSection === 'notifications' && _nsDirty()) {
+        if (!confirm('You have unsaved notification settings. Close without saving?')) return;
+    }
+    closeAllModals();
+    _setSection = 'index';
+}
+window.closeSettings = closeSettings;
+
+// The little "On · daily" / "Off" chip on the index row. A settings list that
+// only shows labels makes you open every row to find out what is set; showing
+// the state is why real settings menus do it.
+async function _setRefreshStateHints() {
+    const chip = document.getElementById('setStateNotifications');
+    if (!chip) return;
+    try {
+        const p = (_nsData && _nsData.prefs) ? _nsData.prefs : (await _nsFetch()).prefs;
+        if (!p || !p.enabled) { chip.textContent = 'Off'; chip.className = 'set-row-state is-off'; return; }
+        chip.textContent = 'On';
+        chip.className = 'set-row-state is-on';
+    } catch (_) {
+        chip.textContent = '';       // never guess a state we could not read
+        chip.className = 'set-row-state';
+    }
+}
+
+async function _nsFetch() {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (!pin) throw new Error('no pin');
+    const res = await fetch(`${NOTIFY_URL}?v=${Date.now()}`, { headers: { 'x-user-pin': pin } });
+    const j = await res.json();
+    if (!j || j.error) throw new Error((j && j.error) || 'Could not load');
+    _nsData = j;
+    return j;
+}
+
+async function loadNotifySettings() {
+    const body = document.getElementById('notifySettingsBody');
+    if (!body) return;
+    body.innerHTML = '<div class="ns-loading">Loading your settings…</div>';
+    if (!sessionStorage.getItem('speeksUserPin')) {
+        body.innerHTML = '<div class="ns-loading">Sign in again to change these.</div>';
+        return;
+    }
+    try {
+        renderNotifySettings(await _nsFetch());
+    } catch (e) {
+        _nsData = null;
+        body.innerHTML = `<div class="ns-loading">Couldn${String.fromCharCode(39)}t load your settings — ${_samEsc(e.message || 'try again')}.</div>`;
+    }
+}
+
+function renderNotifySettings(d) {
+    const body = document.getElementById('notifySettingsBody');
+    if (!body) return;
+    const p = d.prefs || {};
+    const on = !!p.enabled;
+    const cats = d.categories || [];
+
+    // Master switch first, then the address, then what to hear about — in that
+    // order because the address is meaningless without the switch and the
+    // categories are meaningless without both. The block below the switch dims
+    // when it is off, so the state reads at a glance instead of being inferred
+    // from a row of ticked boxes that aren't doing anything.
+    body.innerHTML = `
+      <div class="ns-master ${on ? 'is-on' : ''}">
+        <label class="ns-switch">
+          <input type="checkbox" id="nsEnabled" ${on ? 'checked' : ''} onchange="_nsSyncEnabled()">
+          <span class="ns-switch-track"><span class="ns-switch-knob"></span></span>
+        </label>
+        <div class="ns-master-copy">
+          <div class="ns-master-title">Email me when something needs me</div>
+          <div class="ns-master-sub">Off by default. Nothing is ever emailed unless you switch this on.</div>
+        </div>
+      </div>
+
+      <div class="ns-fields" id="nsFields">
+        <label class="ns-label" for="nsEmail">Send them to</label>
+        <input type="email" id="nsEmail" class="ns-input" autocomplete="email"
+               placeholder="you@speekstechnology.com" value="${_samEsc(p.email || '')}">
+        <div class="ns-hint">The first time you save, we send a note to confirm the address works. Alerts arrive as they happen, batched so a busy hour is one email.</div>
+
+        <label class="ns-label ns-label-gap">What to tell me about</label>
+        <div class="ns-cats">
+          ${cats.map(c => `
+            <label class="ns-cat">
+              <input type="checkbox" class="ns-cat-box" data-cat="${_samEsc(c.key)}"
+                     ${p['cat_' + c.key] === false ? '' : 'checked'}>
+              <span class="ns-cat-copy">
+                <b>${_samEsc(c.label)}</b>
+                <i>${_samEsc(c.blurb)}</i>
+              </span>
+            </label>`).join('')}
+        </div>
+      </div>`;
+    _nsSyncEnabled();
+}
+
+// Dim and disable everything below the master switch when alerts are off.
+function _nsSyncEnabled() {
+    const en = document.getElementById('nsEnabled');
+    const fields = document.getElementById('nsFields');
+    const master = document.querySelector('#notifySettingsBody .ns-master');
+    if (!en || !fields) return;
+    fields.classList.toggle('is-off', !en.checked);
+    if (master) master.classList.toggle('is-on', en.checked);
+    fields.querySelectorAll('input').forEach(i => { i.disabled = !en.checked; });
+    // The address stays editable while switched off: somebody may well want to
+    // type it now and switch on later, and greying it out makes that look
+    // impossible.
+    const mail = document.getElementById('nsEmail');
+    if (mail) mail.disabled = false;
+}
+window._nsSyncEnabled = _nsSyncEnabled;
+
+// What the form currently says, or null if it isn't on screen.
+function _nsForm() {
+    const en = document.getElementById('nsEnabled');
+    const mail = document.getElementById('nsEmail');
+    if (!en || !mail) return null;
+    const categories = {};
+    document.querySelectorAll('#notifySettingsBody .ns-cat-box')
+        .forEach(b => { categories[b.dataset.cat] = b.checked; });
+    return {
+        enabled: en.checked,
+        email: (mail.value || '').trim().toLowerCase(),
+        // Always 'instant'. The per-person "once a day instead" choice was removed
+        // (user, 2026-08-13): anything you have opted into should arrive when it
+        // happens, not be held. The column and the hold logic still exist in the
+        // notify function so the option could come back without a migration, but
+        // nothing sends 'digest' any more.
+        //
+        // NOTE this is NOT the daily digest going away. Due dates (KPIs, listing
+        // goals, expense reports) are absences with nothing to fire on, so they are
+        // still recomputed on a daily schedule — that is the only cadence they can
+        // have. This setting only ever governed queued EVENTS.
+        cadence: 'instant',
+        categories,
+    };
+}
+
+// Unsaved edits vs what the server last gave us. Guards Back and X — losing a
+// changed address to a stray click is exactly the kind of silent loss the audit
+// modal already learned to confirm.
+function _nsDirty() {
+    const f = _nsForm();
+    if (!f || !_nsData || !_nsData.prefs) return false;
+    const p = _nsData.prefs;
+    if (f.enabled !== !!p.enabled) return true;
+    if (f.email !== String(p.email || '').trim().toLowerCase()) return true;
+    return Object.keys(f.categories).some(k => f.categories[k] !== (p['cat_' + k] !== false));
+}
+
+async function saveNotifySettings() {
+    const btn = document.getElementById('notifySaveBtn');
+    const note = document.getElementById('notifySaveNote');
+    const f = _nsForm();
+    const mail = document.getElementById('nsEmail');
+    if (!f || !mail) return;
+
+    const fail = msg => {
+        if (note) { note.textContent = msg; note.className = 'ns-save-note is-err'; }
+        mail.focus();
+    };
+    // Checked here as well as in the function, purely so the message lands next
+    // to the field rather than arriving as a failed request.
+    if (f.enabled && !f.email) return fail('Add an email address first.');
+    if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(f.email)) {
+        return fail('That does not look like an email address.');
+    }
+
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    if (note) { note.textContent = ''; note.className = 'ns-save-note'; }
+    try {
+        const pin = sessionStorage.getItem('speeksUserPin') || '';
+        const res = await fetch(NOTIFY_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({ action: 'save', ...f }),
+        });
+        const j = await res.json();
+        if (!j || j.error) throw new Error((j && j.error) || 'Could not save');
+        if (note) {
+            // "Saved" and "saved, go and check your inbox" are different pieces of
+            // news — the second is the only signal that the address actually works.
+            const fresh = j.welcome && j.welcome.ok && !j.welcome.skipped;
+            note.textContent = fresh ? 'Saved — Check your inbox for the confirmation.' : 'Saved.';
+            note.className = 'ns-save-note is-ok';
+        }
+        // Re-baseline so the form stops reading as dirty, and refresh the chip on
+        // the index so walking back shows the new state rather than the old one.
+        if (_nsData) {
+            _nsData.prefs = { ...(_nsData.prefs || {}), enabled: f.enabled, email: f.email, cadence: f.cadence };
+            Object.keys(f.categories).forEach(k => { _nsData.prefs['cat_' + k] = f.categories[k]; });
+        }
+        _setRefreshStateHints();
+    } catch (e) {
+        if (note) { note.textContent = e.message || 'Could not save.'; note.className = 'ns-save-note is-err'; }
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Save Changes'; }
+    }
+}
+window.saveNotifySettings = saveNotifySettings;

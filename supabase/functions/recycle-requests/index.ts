@@ -41,6 +41,41 @@ async function broadcastChange(tool: string, store: string | null) {
   } catch (_) { /* best-effort */ }
 }
 
+// Drop a row on the email-notification queue — the twin of broadcastChange
+// above. That one tells an already-open page to refresh; this one tells the
+// people who aren't looking at the site right now.
+//
+// All this has to do is describe WHO CARES. The notify function resolves
+// audience -> people -> their preferences -> an address, and batches whatever is
+// outstanding into one message. Leaving audienceStores/audienceRoles null means
+// "everybody".
+//
+// Best-effort and never throws, for the same reason broadcastChange isn't
+// awaited for its result: failing to notify must never fail the write itself.
+// See migration 0033 for the audience axes and the category list.
+async function queueNotification(n: {
+  category: string; kind: string; title: string; body?: string; link?: string;
+  store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
+  audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+}) {
+  try {
+    const sb = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    await sb.from("notify_queue").insert({
+      category: n.category, kind: n.kind, title: n.title, body: n.body ?? null,
+      link: n.link ?? null,
+      store: n.store ? String(n.store).toUpperCase() : null,
+      audience_stores: n.audienceStores ?? null,
+      audience_roles: n.audienceRoles ?? null,
+      audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
+      exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
+      priority: n.priority ?? "normal",
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -77,6 +112,17 @@ Deno.serve(async (req: Request) => {
         const { data, error } = await supabase.from("recycle_requests").insert(record).select().single();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("recycle", store);
+        // Awaiting a verdict from the DM — the review side of the tool.
+        await queueNotification({
+          category: "requests",
+          kind: "recycle_request",
+          title: `Recycle request — ${store}`,
+          body: `${quantity} × ${sku}${record.description ? ` (${record.description})` : ""} submitted by ${record.created_by || "a store"} and waiting on a verdict.`,
+          link: "operations.html",
+          store,
+          audienceRoles: ["district manager", "ceo"],
+          excludeUser: record.created_by,
+        });
         return jsonResponse({ success: true, data });
       }
 
@@ -94,15 +140,38 @@ Deno.serve(async (req: Request) => {
         if (reviewed && !verdict) {
           return jsonResponse({ success: false, error: "Verdict must be 'for', 'against', 'ignore' or 'denied'" }, 400);
         }
-        const { error } = await supabase.from("recycle_requests")
+        const { data: row, error } = await supabase.from("recycle_requests")
           .update({
             reviewed_at: reviewed ? new Date().toISOString() : null,
             reviewed_by: reviewed ? (body.reviewed_by ? String(body.reviewed_by).trim() : null) : null,
             review_verdict: reviewed ? verdict : null,
           })
-          .eq("id", id);
+          .eq("id", id).select("store, sku, quantity, created_by").single();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("recycle", null);
+        // The verdict is the answer the store has been waiting on, so it goes back
+        // down to them. CLEARING a review (reviewed=false) is the DM undoing their
+        // own click, not news — stay silent, or an accidental double-click emails
+        // the store twice about nothing.
+        if (reviewed && row?.store) {
+          const st = String(row.store).toUpperCase();
+          const line = `${row.quantity} × ${row.sku}`;
+          await queueNotification({
+            category: "requests",
+            kind: "recycle_verdict",
+            title: verdict === "denied"
+              ? `Recycle request denied — ${st}`
+              : `Recycle request approved — ${st}`,
+            body: verdict === "denied"
+              ? `${line} was not approved. Do not recycle the item.`
+              : `${line} was approved${verdict === "for" ? " as a tool for store use" : ""}.`,
+            link: "operations.html",
+            store: st,
+            audienceStores: [st],
+            audienceRoles: ["manager", "owner (manager)", "assistant manager"],
+            excludeUser: body.reviewed_by ? String(body.reviewed_by).trim() : null,
+          });
+        }
         return jsonResponse({ success: true });
       }
 
@@ -112,15 +181,33 @@ Deno.serve(async (req: Request) => {
         const id = String(body.id || "");
         if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
         const note = body.note ? String(body.note).trim() : "";
-        const { error } = await supabase.from("recycle_requests")
+        const { data: dmRow, error } = await supabase.from("recycle_requests")
           .update({
             dm_note: note || null,
             dm_note_by: note ? (body.by ? String(body.by).trim() : null) : null,
             dm_note_at: note ? new Date().toISOString() : null,
           })
-          .eq("id", id);
+          .eq("id", id).select("store").single();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("recycle", null);
+        // Legacy single-field path — the note UI posts add_note instead, so in
+        // practice this does not fire. Kept in step with add_note so that if
+        // anything ever does call it the store still hears about the note. Only a
+        // real note is news; clearing one lands here too and must stay silent.
+        if (note && dmRow?.store) {
+          const st = String(dmRow.store).toUpperCase();
+          await queueNotification({
+            category: "requests",
+            kind: "recycle_dm_note",
+            title: `Recycle note from the DM — ${st}`,
+            body: note.slice(0, 300),
+            link: "operations.html",
+            store: st,
+            audienceStores: [st],
+            audienceRoles: ["manager", "owner (manager)", "assistant manager"],
+            excludeUser: body.by ? String(body.by).trim() : null,
+          });
+        }
         return jsonResponse({ success: true });
       }
 
@@ -135,7 +222,7 @@ Deno.serve(async (req: Request) => {
         if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
         if (!text) return jsonResponse({ success: false, error: "Empty note" }, 400);
         const { data: row, error: selErr } = await supabase.from("recycle_requests")
-          .select("note_thread").eq("id", id).single();
+          .select("note_thread, store, sku, quantity").eq("id", id).single();
         if (selErr) return jsonResponse({ success: false, error: selErr.message }, 500);
         const thread = Array.isArray(row?.note_thread) ? row.note_thread : [];
         const at = new Date().toISOString();
@@ -147,6 +234,31 @@ Deno.serve(async (req: Request) => {
         const { error } = await supabase.from("recycle_requests").update(patch).eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("recycle", null);
+        // THIS is the path the tool actually uses for both sides of the thread —
+        // the note UI posts add_note, never save_dm_note / save_mgr_reply. Those two
+        // older single-field actions keep their own hooks below in case anything
+        // still calls them, but a hook here is the one that fires in practice.
+        {
+          const st = row?.store ? String(row.store).toUpperCase() : null;
+          const line = row?.sku ? `${row.quantity} × ${row.sku}` : null;
+          await queueNotification({
+            category: "requests",
+            kind: role === "dm" ? "recycle_dm_note" : "recycle_reply",
+            title: role === "dm"
+              ? `Recycle note from the DM${st ? ` — ${st}` : ""}`
+              : `Recycle reply from ${by || "a manager"}${st ? ` — ${st}` : ""}`,
+            body: [line, text].filter(Boolean).join(" — ").slice(0, 300),
+            link: "operations.html",
+            store: st,
+            // A DM note is for the store that raised it; a manager's reply goes back
+            // up to the corp side, which is not store-scoped.
+            audienceStores: role === "dm" && st ? [st] : null,
+            audienceRoles: role === "dm"
+              ? ["manager", "owner (manager)", "assistant manager"]
+              : ["district manager", "ceo"],
+            excludeUser: by,
+          });
+        }
         return jsonResponse({ success: true, entry: { role, text, by, at } });
       }
 
@@ -165,6 +277,19 @@ Deno.serve(async (req: Request) => {
           .eq("id", id);
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("recycle", null);
+        // Only a real reply is news. Clearing one (empty string) also lands here
+        // and must stay silent, or deleting a note would read as writing one.
+        if (reply) {
+          await queueNotification({
+            category: "requests",
+            kind: "recycle_reply",
+            title: "Recycle reply from a manager",
+            body: reply.slice(0, 300),
+            link: "operations.html",
+            audienceRoles: ["district manager", "ceo"],
+            excludeUser: body.by ? String(body.by).trim() : null,
+          });
+        }
         return jsonResponse({ success: true });
       }
 
