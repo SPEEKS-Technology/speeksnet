@@ -192,9 +192,17 @@ function _mrBlockOf(bases, col, width) {
   return best;
 }
 
-// Where one store's block ends: at the next store's block, or the last column.
-function _mrBlockEnd(bases, base, lastCol) {
-  var end = lastCol;
+// Where one store's block ends: at the next store's block, or one block-width
+// along, whichever comes first.
+//
+// ⚠️ THE WIDTH BOUND IS LOAD-BEARING. Without it the LAST store ran to the end
+// of the sheet and swallowed the company/TTL columns that sit past it — and
+// those columns are inside the range the clearing walks. Verified against the
+// real August Buy tab: the unbounded version came out 51x30 where the human tab
+// is 51x37, having wiped seven columns of the company block. Third time this
+// workbook has punished an unbounded block lookup; see _mrBlockOf.
+function _mrBlockEnd(bases, base, lastCol, width) {
+  var end = width ? Math.min(base + width, lastCol) : lastCol;
   Object.keys(bases).forEach(function (c) { if (bases[c] > base) end = Math.min(end, bases[c]); });
   return end;
 }
@@ -239,26 +247,61 @@ function _mrWeeklyCells(srcFormulas, bases, dayRows, sundays, width, lastCol) {
   return out;
 }
 
-// The month total the SOURCE tab finished on, per store: the first number to the
-// right of its TTL/TOTAL label inside that store's block. Taken off the sheet
-// rather than re-added here, so the new tab's "Last month" is the workbook's own
-// figure and cannot disagree with it.
-function _mrSourceTotals(srcValues, bases, firstRow, lastCol) {
-  var out = {};
-  Object.keys(bases).forEach(function (code) {
-    var base = bases[code];
-    var end = _mrBlockEnd(bases, base, lastCol);
-    for (var r = firstRow; r < srcValues.length; r++) {
-      var label = String((srcValues[r] || [])[base] || '').trim().toLowerCase();
-      if (MR_TOTAL_LABELS.indexOf(label) < 0) continue;
-      for (var c = base + 1; c < end; c++) {
-        var n = parseFloat(String((srcValues[r] || [])[c] || '').toString().replace(/[$,]/g, ''));
-        if (!isNaN(n)) { out[code] = n; break; }
-      }
-      if (out[code] !== undefined) break;
-    }
-  });
+// ---- "Last month" is a formula chain, not a figure -------------------------
+// Every tab reads last month's totals straight off the tab before it:
+//
+//   Sales Aug 26 !C38  =  'Sales Jul 26'!B36
+//   Buy   Aug 26 !E5   =  'Buy Jul 26'!E34 + C4
+//
+// copyTo preserves a cross-sheet reference VERBATIM, so a September tab copied
+// from August still points at July — which is exactly what the first preview
+// showed. The chain was never broken; it simply never got advanced.
+//
+// So the fix is not to write a number into those cells (an earlier version did,
+// and put a stray 51510.87 into a blank spacer column). It is to walk the chain
+// on one link: every reference to the SOURCE'S predecessor becomes a reference
+// to the source itself.
+//
+// The row moves with it. A reference below the day grid is anchored to the
+// bottom of that grid, so when the two months differ in length the row must
+// shift by the difference — measured off the real tabs rather than assumed from
+// the calendar, because a hand-built tab was not always resized.
+function _mrRetarget(f, prevName, srcName, cutRow, delta) {
+  var needle = "'" + prevName + "'!";
+  if (!f || f.indexOf(needle) < 0) return f;
+  function bump(r) {
+    var n = parseInt(r, 10);
+    return (delta && n > cutRow) ? String(n + delta) : r;
+  }
+  var out = '', i = 0;
+  while (true) {
+    var k = f.indexOf(needle, i);
+    if (k < 0) { out += f.slice(i); break; }
+    out += f.slice(i, k) + "'" + srcName + "'!";
+    var j = k + needle.length;
+    // The reference itself: a cell, or a range. Anything else is left alone.
+    var m = /^(\$?[A-Z]{1,3}\$?)(\d+)(?::(\$?[A-Z]{1,3}\$?)(\d+))?/.exec(f.slice(j));
+    if (!m) { i = j; continue; }
+    out += m[1] + bump(m[2]) + (m[3] ? ':' + m[3] + bump(m[4]) : '');
+    i = j + m[0].length;
+  }
   return out;
+}
+
+// The 1-based row of the last day in a tab's grid — the anchor everything below
+// it is measured from.
+function _mrLastDayRow(sheet, width, firstRow) {
+  if (!sheet) return 0;
+  var lastRow = sheet.getLastRow(), lastCol = sheet.getLastColumn();
+  if (!lastRow || !lastCol) return 0;
+  var values = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+  var bases = _mrBases(values, width);
+  var codes = Object.keys(bases);
+  if (!codes.length) return 0;
+  var rows = _mrDayRows(values, bases[codes[0]], firstRow);
+  var last = 0;
+  for (var d in rows) if (rows[d] + 1 > last) last = rows[d] + 1;
+  return last;
 }
 
 // ---- the tab builder --------------------------------------------------------
@@ -290,7 +333,16 @@ function _mrBuildTab(ss, src, targetYm, opts) {
 
   var srcSun = _mrSundays(srcYm), tgtSun = _mrSundays(targetYm);
   rep.weekly = _mrWeeklyCells(srcFormulas, bases, srcDays, srcSun, width, srcLastCol);
-  var totals = _mrSourceTotals(srcValues, bases, firstRow, srcLastCol);
+
+  // The link of the "last month" chain this tab has to advance: references to
+  // the source's predecessor become references to the source.
+  var prevName = _mrNameLike(src.getName(), _mrPrevMonth(srcYm));
+  var prevSheet = prevName ? ss.getSheetByName(prevName) : null;
+  var srcLastDay = srcDays[srcCount] + 1;
+  var prevLastDay = _mrLastDayRow(prevSheet, width, firstRow);
+  var shift = prevLastDay ? srcLastDay - prevLastDay : 0;
+  rep.retarget = { from: prevName || '(none)', to: src.getName(), shift: shift,
+                   anchor: prevLastDay, cells: 0 };
 
   var name = _mrNameLike(src.getName(), targetYm);
   if (!name) { rep.warn.push('could not build a tab name from "' + src.getName() + '"'); return rep; }
@@ -299,18 +351,22 @@ function _mrBuildTab(ss, src, targetYm, opts) {
   if (opts.dryRun) {
     // Everything the real run would do, computed against the SOURCE tab (which
     // is what the copy starts life as) and reported rather than written.
-    rep.cleared = _mrCountTyped(srcValues, srcFormulas, bases, srcDays, firstRow, srcLastCol);
+    rep.cleared = _mrCountTyped(srcValues, srcFormulas, bases, srcDays, firstRow, srcLastCol, width);
     rep.rowsInserted = Math.max(0, wantCount - srcCount);
     rep.rowsDeleted = Math.max(0, srcCount - wantCount);
+    for (var dr = 0; dr < srcLastRow; dr++) {
+      for (var dc = 0; dc < srcLastCol; dc++) {
+        if (prevName && String((srcFormulas[dr] || [])[dc] || '').indexOf("'" + prevName + "'!") >= 0) rep.retarget.cells++;
+      }
+    }
     rep.footer = _mrFooterPlan(srcValues, srcFormulas, bases, width, srcLastRow, srcLastCol,
-                               wantCount, targetYm, opts.goals || {}, totals)
+                               wantCount, targetYm, opts.goals || {})
       .map(function (p) {
         return p.skip ? (p.what + ': SKIPPED — ' + p.skip)
                       : (p.what + '=' + p.value + ' @r' + (p.row + 1) + 'c' + (p.col + 1)
                          + (p.note ? ' (' + p.note + ')' : ''));
       });
-    rep.plan = { dayRows: srcCount + ' -> ' + wantCount, sundays: tgtSun.join(','),
-                 lastMonth: JSON.stringify(totals) };
+    rep.plan = { dayRows: srcCount + ' -> ' + wantCount, sundays: tgtSun.join(',') };
     return rep;
   }
   if (ss.getSheetByName(name)) { rep.warn.push('"' + name + '" already exists — SKIPPED'); return rep; }
@@ -352,7 +408,7 @@ function _mrBuildTab(ss, src, targetYm, opts) {
     if (start === undefined) { rep.warn.push(code + ': no day 1 — block left alone'); return; }
     var have = Object.keys(rows).length;
     if (have !== wantCount) rep.warn.push(code + ': ' + have + ' day rows after resize, expected ' + wantCount);
-    var end = _mrBlockEnd(tgtBases, base, lastCol);
+    var end = _mrBlockEnd(tgtBases, base, lastCol, width);
     var w = end - base;
 
     // ONE read/write for the whole block instead of a call per cell — 31 days by
@@ -401,12 +457,30 @@ function _mrBuildTab(ss, src, targetYm, opts) {
     });
   }
 
+  // ---- advance the "last month" chain by one link ----
+  // Done over the WHOLE tab rather than the footer band: on the Buy tab the
+  // reference lives in the day grid, on the first Sunday of the month.
+  if (prevName && prevName !== src.getName()) {
+    var rLastRow = tab.getLastRow(), rLastCol = tab.getLastColumn();
+    var rf = tab.getRange(1, 1, rLastRow, rLastCol).getFormulas();
+    for (var rr = 0; rr < rLastRow; rr++) {
+      for (var rc = 0; rc < rLastCol; rc++) {
+        var was = (rf[rr] || [])[rc];
+        if (!was) continue;
+        var now = _mrRetarget(was, prevName, src.getName(), prevLastDay, shift);
+        if (now === was) continue;
+        tab.getRange(rr + 1, rc + 1).setFormula(now);
+        rep.retarget.cells++;
+      }
+    }
+  }
+
   // ---- footers ----
   var fLastRow = tab.getLastRow(), fLastCol = tab.getLastColumn();
   rep.footer = _mrApplyFooters(tab, _mrFooterPlan(
     tab.getRange(1, 1, fLastRow, fLastCol).getValues(),
     tab.getRange(1, 1, fLastRow, fLastCol).getFormulas(),
-    tgtBases, width, fLastRow, fLastCol, wantCount, targetYm, opts.goals || {}, totals));
+    tgtBases, width, fLastRow, fLastCol, wantCount, targetYm, opts.goals || {}));
   return rep;
 }
 
@@ -416,7 +490,7 @@ function _mrBuildTab(ss, src, targetYm, opts) {
 // never got this far, which is a diagnostic that lies by omission.
 //
 // Only a cell that is not a formula is ever a target.
-function _mrFooterPlan(values, formulas, bases, width, lastRow, lastCol, wantCount, targetYm, goals, sourceTotals) {
+function _mrFooterPlan(values, formulas, bases, width, lastRow, lastCol, wantCount, targetYm, goals) {
   var plan = [];
   var sundays = _mrSundays(targetYm).length;
 
@@ -456,8 +530,12 @@ function _mrFooterPlan(values, formulas, bases, width, lastRow, lastCol, wantCou
         } else {
           add(r, c, goals[code], code + ' goal');
         }
-      } else if (MR_FOOTER.lastMonth.indexOf(txt) >= 0 && code && sourceTotals[code] !== undefined) {
-        add(r, c, sourceTotals[code], code + ' lastMonth');
+      } else if (MR_FOOTER.lastMonth.indexOf(txt) >= 0) {
+        // Deliberately NOT written. These cells are a live formula reading the
+        // previous tab; _mrRetarget advances the reference instead. Writing a
+        // figure here put a number into the blank column beside the formula,
+        // because the first non-formula cell to the right was a spacer.
+        plan.push({ row: r, col: c, skip: 'formula chain — advanced by the retarget pass', what: 'lastMonth' });
       }
     }
   }
@@ -476,11 +554,11 @@ function _mrApplyFooters(tab, plan) {
 
 // How many typed-in cells the day grid is carrying — what a real run would
 // clear. Counted for the dry run so the diagnostic can say so out loud.
-function _mrCountTyped(values, formulas, bases, dayRows, firstRow, lastCol) {
+function _mrCountTyped(values, formulas, bases, dayRows, firstRow, lastCol, width) {
   var n = 0;
   Object.keys(bases).forEach(function (code) {
     var base = bases[code];
-    var end = _mrBlockEnd(bases, base, lastCol);
+    var end = _mrBlockEnd(bases, base, lastCol, width);
     for (var d in dayRows) {
       var r = dayRows[d];
       for (var col = base + 1; col < end; col++) {
@@ -580,6 +658,9 @@ function _mrReport(r) {
                              + ' | last month ' + rep.plan.lastMonth);
     Logger.log('  rows   : +' + rep.rowsInserted + ' / -' + rep.rowsDeleted);
     Logger.log('  cleared: ' + rep.cleared + ' typed cells');
+    if (rep.retarget) Logger.log('  lastmo : ' + rep.retarget.cells + ' refs  '
+      + rep.retarget.from + ' -> ' + rep.retarget.to
+      + '   rows below r' + rep.retarget.anchor + ' shift ' + (rep.retarget.shift > 0 ? '+' : '') + rep.retarget.shift);
     Logger.log('  weekly : ' + (rep.weekly.length
       ? rep.weekly.map(function (w) { return w.store + '+' + w.offset; }).join(', ')
       : 'none found'));
@@ -629,7 +710,7 @@ function mrFooterAudit() {
     if (!codes.length) return;
 
     var base = bases[codes[0]];
-    var end = _mrBlockEnd(bases, base, lastCol);
+    var end = _mrBlockEnd(bases, base, lastCol, width);
     var days = _mrDayRows(values, base, firstRow);
     var lastDayRow = -1;
     for (var d in days) if (days[d] > lastDayRow) lastDayRow = days[d];
