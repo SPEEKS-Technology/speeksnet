@@ -603,6 +603,83 @@ function mrDiagnose() {
   Logger.log(JSON.stringify(_mrWriteGoals(ss, _mrCentralMonth(), {})));
 }
 
+// Everything below the day grid, cell by cell, on the current month's tabs and on
+// any PREVIEW tabs beside them. Written because the first preview came out with
+// July's figures where August's belonged, and the footer band is the one part of
+// this workbook the rollover WRITES rather than copies — so it is the one part
+// worth reading verbatim rather than inferring. Touches nothing.
+function mrFooterAudit() {
+  var ss = _mrSs();
+  var cur = _mrCentralMonth();
+  ss.getSheets().forEach(function (tab) {
+    var name = tab.getName();
+    var isPreview = name.indexOf('(PREVIEW)') >= 0;
+    var ym = _mrTabMonth(name.replace(' (PREVIEW)', ''));
+    if (!ym) return;
+    if (!isPreview && ym !== cur) return;
+    var buy = /^Buy\s/i.test(name);
+    var width = buy ? MR_BUY_WIDTH : MR_SALES_WIDTH;
+    var firstRow = buy ? MR_BUY_FIRST_ROW : MR_SALES_FIRST_ROW;
+
+    var lastRow = tab.getLastRow(), lastCol = tab.getLastColumn();
+    var values = tab.getRange(1, 1, lastRow, lastCol).getValues();
+    var formulas = tab.getRange(1, 1, lastRow, lastCol).getFormulas();
+    var bases = _mrBases(values, width);
+    var codes = Object.keys(bases).sort(function (a, b) { return bases[a] - bases[b]; });
+    if (!codes.length) return;
+
+    var base = bases[codes[0]];
+    var end = _mrBlockEnd(bases, base, lastCol);
+    var days = _mrDayRows(values, base, firstRow);
+    var lastDayRow = -1;
+    for (var d in days) if (days[d] > lastDayRow) lastDayRow = days[d];
+
+    // One cell, as the audit prints it: a formula is shown as a formula, because
+    // a formula is why a cell would still be pointing at the wrong month.
+    function cell(r, c) {
+      var f = (formulas[r] || [])[c];
+      if (f) return 'c' + (c + 1) + '=F' + String(f).slice(0, 60);
+      var v = (values[r] || [])[c];
+      if (v === '' || v === null || v === undefined) return '';
+      return 'c' + (c + 1) + '=' + String(v).slice(0, 40);
+    }
+    function band(r) {
+      var out = [];
+      for (var c = base; c < Math.min(end + 1, lastCol); c++) {
+        var s = cell(r, c);
+        if (s) out.push(s);
+      }
+      return out.join('  ');
+    }
+
+    Logger.log('======== ' + name + '  (' + ym + (isPreview ? ', PREVIEW' : '') + ') ========');
+    Logger.log('  blocks: ' + codes.map(function (c) { return c + '@c' + (bases[c] + 1); }).join(' '));
+    Logger.log('  -- headers, ' + codes[0] + ' block --');
+    for (var h = 0; h < MR_HEADER_ROWS; h++) Logger.log('   r' + (h + 1) + ': ' + band(h));
+    if (days[1] !== undefined) Logger.log('   day1 r' + (days[1] + 1) + ': ' + band(days[1]));
+    Logger.log('  -- below the day grid, ' + codes[0] + ' block --');
+    for (var r = lastDayRow + 1; r < lastRow; r++) {
+      var line = band(r);
+      if (line) Logger.log('   r' + (r + 1) + ': ' + line);
+    }
+    // The same label across EVERY block, so a misalignment between blocks shows.
+    Logger.log('  -- every "last month" cell on the tab --');
+    for (var r2 = 0; r2 < lastRow; r2++) {
+      for (var c2 = 0; c2 < lastCol; c2++) {
+        var txt = String((values[r2] || [])[c2] || '').trim().toLowerCase();
+        if (MR_FOOTER.lastMonth.indexOf(txt) < 0) continue;
+        var owner = _mrBlockOf(bases, c2, width);
+        var right = [];
+        for (var k = c2 + 1; k < Math.min(c2 + 6, lastCol); k++) {
+          var s2 = cell(r2, k);
+          right.push(s2 || 'c' + (k + 1) + '=(blank)');
+        }
+        Logger.log('   r' + (r2 + 1) + 'c' + (c2 + 1) + ' [' + (owner || 'no block') + ']  ' + right.join('  '));
+      }
+    }
+  });
+}
+
 // Next month's tabs with a (PREVIEW) suffix, to be checked beside the real ones.
 // Nothing reads a PREVIEW tab — the name does not match what the site's parsers
 // look for, which is exactly why the suffix is safe.
