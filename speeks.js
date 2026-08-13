@@ -38615,6 +38615,10 @@ function renderNotifySettings(d) {
     const p = d.prefs || {};
     const on = !!p.enabled;
     const cats = d.categories || [];
+    // Sub-keys this person has switched off. A key ABSENT from the list is on,
+    // so a notification added after their last save arrives switched on rather
+    // than silently muted.
+    const muted = new Set(d.muted || []);
 
     // Master switch first, then the address, then what to hear about — in that
     // order because the address is meaningless without the switch and the
@@ -38641,19 +38645,83 @@ function renderNotifySettings(d) {
 
         <label class="ns-label ns-label-gap">What to tell me about</label>
         <div class="ns-cats">
-          ${cats.map(c => `
-            <label class="ns-cat">
-              <input type="checkbox" class="ns-cat-box" data-cat="${_samEsc(c.key)}"
-                     ${p['cat_' + c.key] === false ? '' : 'checked'}>
-              <span class="ns-cat-copy">
-                <b>${_samEsc(c.label)}</b>
-                <i>${_samEsc(c.blurb)}</i>
-              </span>
-            </label>`).join('')}
+          ${cats.map(c => _nsCatRow(c, p, muted)).join('')}
         </div>
       </div>`;
     _nsSyncEnabled();
 }
+
+// One category row. A category the function gave sub-switches for becomes a
+// disclosure: the category tick still governs the whole thing, and the caret
+// opens the individual notifications inside it. Categories with nothing to
+// split render exactly as they did before, because drawing a caret that opens
+// a list of one is worse than no caret.
+//
+// Collapsed by default. Seven categories each unfolded to four children is a
+// wall, and the category switch is the decision most people are making.
+function _nsCatRow(c, p, muted) {
+    const catOn = p['cat_' + c.key] !== false;
+    const subs = Array.isArray(c.subs) ? c.subs : [];
+    const box = `<input type="checkbox" class="ns-cat-box" data-cat="${_samEsc(c.key)}"
+                        ${catOn ? 'checked' : ''} onchange="_nsSyncCat(this)">`;
+    const copy = `<span class="ns-cat-copy"><b>${_samEsc(c.label)}</b><i>${_samEsc(c.blurb)}</i></span>`;
+    if (!subs.length) return `<label class="ns-cat">${box}${copy}</label>`;
+
+    // How many of its children are on, so the state reads without opening it.
+    const onCount = subs.filter(s => !muted.has(s.key)).length;
+    const tally = onCount === subs.length ? 'All' : `${onCount} of ${subs.length}`;
+    return `
+      <div class="ns-cat-group" data-group="${_samEsc(c.key)}">
+        <div class="ns-cat ns-cat-head">
+          <label class="ns-cat-lab">${box}${copy}</label>
+          <button type="button" class="ns-cat-more" onclick="_nsToggleGroup(this)" aria-expanded="false">
+            <span class="ns-cat-tally">${_samEsc(tally)}</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+        </div>
+        <div class="ns-subs" hidden>
+          ${subs.map(s => `
+            <label class="ns-sub">
+              <input type="checkbox" class="ns-sub-box" data-sub="${_samEsc(s.key)}"
+                     ${muted.has(s.key) ? '' : 'checked'} onchange="_nsSyncTally(this)">
+              <span class="ns-sub-copy"><b>${_samEsc(s.label)}</b><i>${_samEsc(s.blurb)}</i></span>
+            </label>`).join('')}
+        </div>
+      </div>`;
+}
+
+function _nsToggleGroup(btn) {
+    const grp = btn.closest('.ns-cat-group');
+    const list = grp && grp.querySelector('.ns-subs');
+    if (!list) return;
+    const open = list.hasAttribute('hidden');
+    list.toggleAttribute('hidden', !open);
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    grp.classList.toggle('is-open', open);
+}
+window._nsToggleGroup = _nsToggleGroup;
+
+// Switching the CATEGORY off disables its children rather than unticking them:
+// their state is a separate choice and has to survive the category being turned
+// off and on again. Nothing is sent for a muted category either way.
+function _nsSyncCat(box) {
+    const grp = box.closest('.ns-cat-group');
+    if (!grp) return;
+    grp.classList.toggle('is-catoff', !box.checked);
+    grp.querySelectorAll('.ns-sub-box').forEach(b => { b.disabled = !box.checked; });
+}
+window._nsSyncCat = _nsSyncCat;
+
+// Keep the "3 of 4" chip honest as the children are ticked.
+function _nsSyncTally(box) {
+    const grp = box.closest('.ns-cat-group');
+    const chip = grp && grp.querySelector('.ns-cat-tally');
+    if (!chip) return;
+    const all = grp.querySelectorAll('.ns-sub-box');
+    const on = grp.querySelectorAll('.ns-sub-box:checked').length;
+    chip.textContent = on === all.length ? 'All' : `${on} of ${all.length}`;
+}
+window._nsSyncTally = _nsSyncTally;
 
 // Dim and disable everything below the master switch when alerts are off.
 function _nsSyncEnabled() {
@@ -38664,6 +38732,10 @@ function _nsSyncEnabled() {
     fields.classList.toggle('is-off', !en.checked);
     if (master) master.classList.toggle('is-on', en.checked);
     fields.querySelectorAll('input').forEach(i => { i.disabled = !en.checked; });
+    // Re-apply the category-level disable, which is narrower than the master one
+    // and would otherwise be undone by the line above when alerts are switched
+    // back on with a category still off.
+    if (en.checked) fields.querySelectorAll('.ns-cat-box').forEach(_nsSyncCat);
     // The address stays editable while switched off: somebody may well want to
     // type it now and switch on later, and greying it out makes that look
     // impossible.
@@ -38680,6 +38752,12 @@ function _nsForm() {
     const categories = {};
     document.querySelectorAll('#notifySettingsBody .ns-cat-box')
         .forEach(b => { categories[b.dataset.cat] = b.checked; });
+    // Only the UNTICKED children are sent. Storing the off-list rather than the
+    // on-list is what makes a notification added later default to ON for people
+    // who saved before it existed.
+    const muted = [];
+    document.querySelectorAll('#notifySettingsBody .ns-sub-box')
+        .forEach(b => { if (!b.checked) muted.push(b.dataset.sub); });
     return {
         enabled: en.checked,
         email: (mail.value || '').trim().toLowerCase(),
@@ -38695,6 +38773,7 @@ function _nsForm() {
         // have. This setting only ever governed queued EVENTS.
         cadence: 'instant',
         categories,
+        muted,
     };
 }
 

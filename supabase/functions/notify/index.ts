@@ -138,6 +138,99 @@ const metaFor = (c: Category, role: string) => {
   return CATEGORY_META[c];
 };
 
+// THE SUB-SWITCHES INSIDE EACH CATEGORY.
+//
+// A category is a routing bucket; a sub is the thing a person actually thinks
+// about. "Announcements & Patch Notes" is the case that forced this: a release
+// mails everybody, and somebody who wants announcements but not patch notes had
+// only one switch — so the way to escape patch notes was to lose announcements,
+// which is the one you most want landing.
+//
+// `kinds` are the exact strings the source functions queue, PLUS the due-date
+// slugs from collectDue. One namespace deliberately: a person does not care
+// which of the two mechanisms produced a line, only what it was about.
+//
+// A category with no subs (or one sub) renders as a plain row — splitting a
+// category that only ever emits one thing would be a switch that duplicates the
+// switch above it.
+//
+// `roles`, when present, narrows a sub the same way CATEGORY_ROLES narrows a
+// category: an ASM receives no variance at all, so showing them a "Variance
+// replies" switch would be the same lie one level down.
+type Sub = { key: string; label: string; blurb: string; kinds: string[]; roles?: Set<string> };
+
+const STORE_SIDE_ROLES = ["manager", "owner (manager)", "owner manager"];
+
+const SUBS: Record<Category, Sub[]> = {
+  announcements: [
+    { key: "ann",   label: "Announcements", blurb: "Posts to the board, including priority ones.",
+      kinds: ["announcement", "announcement_priority"] },
+    { key: "patch", label: "Patch notes",   blurb: "What changed in a release.",
+      kinds: ["patch_notes"] },
+  ],
+  store_messages: [],
+  requests: [
+    { key: "req_in",  label: "Requests coming in", blurb: "Purchase and recycle requests waiting on a verdict.",
+      kinds: ["purchase_request", "recycle_request"], roles: new Set(["district manager", "ceo"]) },
+    { key: "req_out", label: "Verdicts and replies", blurb: "The DM's answer on something you sent up.",
+      kinds: ["recycle_verdict", "recycle_dm_note", "recycle_reply"] },
+  ],
+  claims: [],
+  variance_aging: [
+    { key: "variance", label: "Variance replies", blurb: "New sheets, the DM's notes, and the reply deadline.",
+      kinds: ["variance_upload", "variance_upload_clear", "variance_dm_note", "variance_mgr_reply", "varianceDue"],
+      roles: new Set([...STORE_SIDE_ROLES, "district manager", "ceo"]) },
+    { key: "aging",    label: "Aging inventory", blurb: "New items, the DM's notes, and the review deadline.",
+      kinds: ["aging_item_added", "aging_dm_note", "aging_store_reply", "agingDue"] },
+  ],
+  deadlines: [
+    { key: "kpis",     label: "Store KPIs", blurb: "Weekly and monthly entry.",
+      kinds: ["kpiWeekly", "kpiMonthly"], roles: new Set(STORE_SIDE_ROLES) },
+    { key: "listing",  label: "Listing goals", blurb: "The day's buying and listing roles, and the weekly totals.",
+      kinds: ["listingGoalsDaily", "listingGoalsWeek"] },
+    { key: "goals",    label: "Store goals", blurb: "The month's gross-profit target.",
+      kinds: ["gpGoals"], roles: new Set(["district manager"]) },
+    { key: "expenses", label: "Expense report", blurb: "Filing the month that just closed.",
+      kinds: ["expenseFile"], roles: new Set(["district manager"]) },
+  ],
+  scores: [
+    { key: "audits",    label: "PayMore audits", blurb: "Practice walkthroughs and the official corporate audit.",
+      kinds: ["audit_practice_submitted", "audit_official_submitted"] },
+    { key: "scorecard", label: "SPEEKS scorecard", blurb: "The Online & Marketing categories being scored.",
+      kinds: ["scorecard_submitted"], roles: new Set(["district manager", "ceo", "mocd"]) },
+  ],
+};
+
+// The subs worth showing this role. Fewer than two is not a split worth drawing.
+const subsFor = (c: Category, role: string) => {
+  const list = (SUBS[c] || []).filter((x) => !x.roles || x.roles.has(role));
+  return list.length > 1 ? list : [];
+};
+
+// kind/slug -> the sub-key that governs it, or null if nothing does.
+const SUB_OF_KIND = new Map<string, string>();
+for (const c of CATEGORIES) for (const x of SUBS[c] || []) for (const k of x.kinds) SUB_OF_KIND.set(k, x.key);
+
+// Every sub-key that exists, so a save cannot store junk that would then be
+// impossible to switch back on from the popout.
+const ALL_SUB_KEYS = new Set<string>();
+for (const c of CATEGORIES) for (const x of SUBS[c] || []) ALL_SUB_KEYS.add(x.key);
+
+// A one-word tag for the card in the email, so an alert says what KIND of thing
+// it is even when it carries no store. Announcements had nothing at all in that
+// slot, which made them the only card with no second line.
+const KIND_LABEL: Record<string, string> = {
+  announcement: "Announcement", announcement_priority: "Priority announcement",
+  patch_notes: "Patch notes", store_comment: "Store message",
+  purchase_request: "Purchase request", recycle_request: "Recycle request",
+  recycle_verdict: "Recycle verdict", recycle_dm_note: "Recycle note", recycle_reply: "Recycle reply",
+  variance_upload: "Variance", variance_upload_clear: "Variance", variance_dm_note: "Variance",
+  variance_mgr_reply: "Variance",
+  aging_item_added: "Aging inventory", aging_dm_note: "Aging inventory", aging_store_reply: "Aging inventory",
+  audit_practice_submitted: "PayMore audit", audit_official_submitted: "PayMore audit",
+  scorecard_submitted: "SPEEKS scorecard",
+};
+
 // WHICH ROLES CAN ACTUALLY RECEIVE EACH CATEGORY.
 // null = everybody.
 //
@@ -323,11 +416,20 @@ async function loadPrefs(sb: any): Promise<Map<string, Prefs>> {
   return m;
 }
 
-// Switched on, has an address, and wants THIS category.
-function wants(p: Prefs | undefined, cat: Category): boolean {
+// Switched on, has an address, wants this CATEGORY, and has not muted the
+// specific sub inside it. `kind` is the queued kind or the due-date slug; a
+// caller with neither is asking the category question only.
+function wants(p: Prefs | undefined, cat: Category, kind?: string | null): boolean {
   if (!p || !p.enabled) return false;
   if (!p.email || !EMAIL_RE.test(String(p.email))) return false;
-  return p[`cat_${cat}`] !== false;
+  if (p[`cat_${cat}`] === false) return false;
+  if (kind) {
+    const subKey = SUB_OF_KIND.get(String(kind));
+    // Absent from muted_kinds = wanted, so a sub added after somebody last saved
+    // arrives switched on rather than silently muted.
+    if (subKey && Array.isArray(p.muted_kinds) && p.muted_kinds.includes(subKey)) return false;
+  }
+  return true;
 }
 
 // ============================================================================
@@ -405,12 +507,16 @@ function itemCard(title: string, body: string, link: string, tone: "red" | "ambe
 // it. Nearly every queued title ends "- WSP", so stamping "WESTPORT" underneath
 // was the same fact twice in two different spellings. Due-date items are
 // unaffected: their meta is "Due"/"Overdue", which the title never carries.
-const storeMeta = (title: string, store: string | null | undefined) => {
-  if (!store) return "";
+const storeMeta = (title: string, store: string | null | undefined, kind?: string | null) => {
+  const tag = kind ? (KIND_LABEL[String(kind)] || "") : "";
+  if (!store) return tag;               // company-wide: the tag IS the context
   const code = String(store).toUpperCase();
   const name = STORE_NAME[code] || code;
   const t = String(title || "");
-  return (t.includes(code) || t.includes(name)) ? "" : name;
+  // Store already in the headline: fall back to the kind tag rather than
+  // printing nothing, so every card has the same second line.
+  if (t.includes(code) || t.includes(name)) return tag;
+  return tag ? `${tag} · ${name}` : name;
 };
 
 const FOOT_PREFS = `You're getting this because you switched on email alerts in Settings on SPEEKSNET.<br>Turn any of them off with the cog in the top bar.`;
@@ -515,7 +621,7 @@ async function runDrain(sb: any, opts: { dryRun: boolean; to: string | null; onl
         if (roles?.length && !roles.map((r) => r.toLowerCase().trim()).includes(person.role)) continue;
       }
       const p = prefs.get(person.key);
-      if (!wants(p, cat)) continue;
+      if (!wants(p, cat, row.kind)) continue;
       // Somebody on the daily digest only hears about this at 9am — UNLESS it is
       // flagged high (a priority announcement), which rides the next drain for
       // everybody. Their row stays unprocessed so the digest can pick it up.
@@ -533,7 +639,7 @@ async function runDrain(sb: any, opts: { dryRun: boolean; to: string | null; onl
     box.items.push({
       title: h.row.title, body: h.row.body || "", link: h.row.link || "",
       tone: h.row.priority === "high" ? "red" : "sage",
-      meta: storeMeta(h.row.title, h.row.store),
+      meta: storeMeta(h.row.title, h.row.store, h.row.kind),
       key: h.key,
     });
   }
@@ -860,7 +966,7 @@ async function runDigest(sb: any, opts: { dryRun: boolean; to: string | null; on
     for (const person of people) {
       if (opts.onlyUser && person.key !== opts.onlyUser) continue;
       if (!d.for(person)) continue;
-      if (!wants(prefs.get(person.key), d.cat)) continue;
+      if (!wants(prefs.get(person.key), d.cat, d.slug)) continue;
       hits.push({ d, person, key: `due:${d.slug}:${d.period}:${person.key}` });
     }
   }
@@ -908,7 +1014,7 @@ async function drainHeldForDigest(
     for (const person of people) {
       if (opts.onlyUser && person.key !== opts.onlyUser) continue;
       const p = prefs.get(person.key);
-      if (!wants(p, row.category as Category)) continue;
+      if (!wants(p, row.category as Category, row.kind)) continue;
       if (p!.cadence !== "digest") continue;                 // instant folk got theirs
       if (only) { if (person.key !== only) continue; }
       else {
@@ -928,7 +1034,7 @@ async function drainHeldForDigest(
     const box = newOutbox(boxes, h.person, String(p.email));
     box.items.push({
       title: h.row.title, body: h.row.body || "", link: h.row.link || "",
-      tone: "sage", meta: storeMeta(h.row.title, h.row.store), key: h.key,
+      tone: "sage", meta: storeMeta(h.row.title, h.row.store, h.row.kind), key: h.key,
     });
     n++;
   }
@@ -1055,7 +1161,13 @@ Deno.serve(async (req: Request) => {
       // simply never consulted for this person, so promoting somebody (Employee ->
       // ASM) reveals the extra switches already at their default rather than
       // needing a backfill.
-      categories: categoriesFor(me.role).map((c) => ({ key: c, ...metaFor(c, me.role) })),
+      categories: categoriesFor(me.role).map((c) => ({
+        key: c, ...metaFor(c, me.role),
+        // Empty array = render a plain row. The page draws whatever is here, so
+        // adding a sub is a change in this file only.
+        subs: subsFor(c, me.role).map((x) => ({ key: x.key, label: x.label, blurb: x.blurb })),
+      })),
+      muted: Array.isArray(data?.muted_kinds) ? data.muted_kinds : [],
     });
   }
 
@@ -1094,6 +1206,14 @@ Deno.serve(async (req: Request) => {
       if (Object.prototype.hasOwnProperty.call(cats, c)) row[key] = cats[c] !== false;
       else if (existing && existing[key] !== undefined && existing[key] !== null) row[key] = existing[key];
       // else: leave it out entirely and let the column default (true) apply.
+    }
+
+    // Only sub-keys this build knows about. Junk here would be un-unmutable
+    // from the popout, because the popout can only draw switches it has.
+    if (Array.isArray(body.muted)) {
+      row.muted_kinds = body.muted
+        .map((k: unknown) => String(k))
+        .filter((k: string) => ALL_SUB_KEYS.has(k));
     }
 
     const { error } = await sb.from("user_notify_prefs").upsert(row, { onConflict: "user_name" });

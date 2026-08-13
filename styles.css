@@ -15902,6 +15902,81 @@ body.tv-body { display: block; background: #eef1f5; }
 
 .set-row-chev { flex: 0 0 auto; width: 16px; height: 16px; color: #b3bfc9; }
 
+/* ---- a category that splits into individual notifications ---------------- */
+.ns-cat-group {
+    border: 1px solid #e9eef2;
+    border-radius: 12px;
+    background: #fbfcfd;
+    overflow: hidden;
+    transition: border-color .14s ease, opacity .14s ease;
+}
+.ns-cat-group.is-open { border-color: #cfe6d9; }
+.ns-cat-group.is-catoff { opacity: .55; }
+
+/* The head row reuses .ns-cat for its padding and type, so a split category and
+   a plain one line up to the pixel. Border and background come off, because the
+   group wrapper is now drawing them. */
+.ns-cat-group .ns-cat-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 0;
+    background: transparent;
+    border-radius: 0;
+}
+.ns-cat-group .ns-cat-lab {
+    display: flex;
+    align-items: flex-start;
+    gap: 11px;
+    flex: 1 1 auto;
+    min-width: 0;
+    cursor: pointer;
+}
+
+.ns-cat-more {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border: 1px solid #e3e8ed;
+    border-radius: 8px;
+    background: #fff;
+    color: #6b7885;
+    font: inherit;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background .14s ease, color .14s ease, border-color .14s ease;
+}
+.ns-cat-more:hover { background: #f4f8f5; color: #1f9d57; border-color: #cfe6d9; }
+.ns-cat-more:focus-visible { outline: 2px solid #1f9d57; outline-offset: 2px; }
+.ns-cat-more svg { width: 13px; height: 13px; transition: transform .16s ease; }
+.ns-cat-group.is-open .ns-cat-more svg { transform: rotate(180deg); }
+.ns-cat-tally { white-space: nowrap; }
+
+.ns-subs {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 2px 14px 12px 46px;   /* aligns children under the parent's label */
+    border-top: 1px solid #eef2f5;
+    margin-top: 2px;
+}
+.ns-subs[hidden] { display: none; }
+
+.ns-sub { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; cursor: pointer; }
+.ns-sub input { margin-top: 2px; flex: 0 0 auto; accent-color: #1f9d57; width: 15px; height: 15px; }
+.ns-sub-copy { min-width: 0; }
+.ns-sub-copy b { display: block; font-size: 12.5px; font-weight: 700; color: #2b3238; }
+.ns-sub-copy i {
+    display: block; font-style: normal; font-size: 11px; font-weight: 500;
+    color: #7d8b95; margin-top: 1px; line-height: 1.45;
+}
+.ns-cat-group.is-catoff .ns-sub { cursor: default; }
+
 .set-foot-note {
     margin-top: 14px;
     text-align: center;
