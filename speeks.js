@@ -28866,6 +28866,8 @@ async function checkRecycleReminders() {
             // rather than the phrase itself, so this stays correct if the parts are
             // ever reordered, and because the same string is both the bubble body
             // and the Action Menu feed one-liner.
+            // Sentence case now happens centrally in _samGatherReminders, but this
+            // string is ALSO the bubble body, which does not go through there.
             const summary = parts.join(' · ').replace(/^[a-z]/, c => c.toUpperCase());
             // Land on the oldest line that's actually blocking a store. Replies
             // are the fallback: they're information, not a block, so they only
@@ -28881,6 +28883,16 @@ async function checkRecycleReminders() {
             if (rTextEl) {
                 if (blocking.length) delete rTextEl.dataset.replyonly;
                 else rTextEl.dataset.replyonly = '1';
+                // Delete requests get the same treatment as the claims card: a
+                // manager is blocked until this is approved or denied, so it
+                // outranks the review queue for the badge. 'only' when that is all
+                // there is (the title changes), 'mixed' when there is other work in
+                // the card too (the title stays, the badge still says Approve).
+                if (pendingDelete.length) {
+                    rTextEl.dataset.del = (needsReview.length || freshRep.length) ? 'mixed' : 'only';
+                } else {
+                    delete rTextEl.dataset.del;
+                }
             }
             return;
         }
@@ -34555,6 +34567,8 @@ function _samReminderCfg() {
     // Recycle: reply-only vs something actually awaiting a verdict (see below).
     const _rcT = document.getElementById('recycleAlertBubbleText');
     const _rcReplyOnly = !!(_rcT && _rcT.dataset && _rcT.dataset.replyonly);
+    // Same flag, same meaning as the claims one below — see checkRecycleReminders.
+    const _rcDel = (_rcT && _rcT.dataset && _rcT.dataset.del) || '';
     // Claims: is a manager waiting on the DM to approve a deletion? 'only' when
     // that is all there is, 'mixed' when claims are ageing too. Stamped by
     // checkAgingClaimsDM, so it is never set for a manager.
@@ -34586,10 +34600,17 @@ function _samReminderCfg() {
         // data-replyonly: no line is actually awaiting a verdict, a manager just
         // wrote back on one. Calling that "Review" sent the DM hunting through a
         // month for work that did not exist. Same shape as the variance FYI flip.
+        // Three states, most urgent first, and it reads identically to the claims
+        // card: a pending deletion is somebody else standing still, so it is red
+        // and says Approve; a review queue is the DM's own work (amber); a bare
+        // reply blocks nobody at all (grey, no deadline invented).
         { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText',
-          title: _rcReplyOnly ? 'Recycle Reply' : 'Recycle Review',
-          urgency: 1, due: _rcReplyOnly ? 'Reply' : 'Review',
-          cls: _rcReplyOnly ? 'sam-due-grey' : 'sam-due-amber', action: "openRecycleFocused()" },
+          title: _rcDel === 'only' ? 'Recycle Delete Requests'
+               : _rcReplyOnly ? 'Recycle Reply' : 'Recycle Review',
+          urgency: _rcDel ? 2 : 1,
+          due: _rcDel ? 'Approve' : (_rcReplyOnly ? 'Reply' : 'Review'),
+          cls: _rcDel ? 'sam-due-red' : (_rcReplyOnly ? 'sam-due-grey' : 'sam-due-amber'),
+          action: "openRecycleFocused()" },
         // closeAgingAlertBubble() FIRST, not just the navigation: that function is
         // the only thing that writes the acknowledged members to speeksAGAck*, and
         // its two original callers (the ✕ and the "Open Aging Inventory" button)
@@ -34726,6 +34747,12 @@ function _samGatherReminders() {
                     .replace(/\s+/g, ' ').trim();
             }
         }
+        // Sentence case, in ONE place. Several bubbles assemble their summary from
+        // phrases ("awaiting your review: …", "replied to your note: …"), so the
+        // joined string can open lowercase — the recycle bubble was doing this fix
+        // locally, which meant every other card had to remember to. A leading digit
+        // or capital is left alone, so "1 delete request…" and "OVL has…" survive.
+        sub = sub.replace(/^[a-z]/, c => c.toUpperCase());
         if (sub.length > 160) sub = sub.slice(0, 158) + '…'; // 3-line clamp in CSS shows the rest
         // Snoozed — but only while it's still the SAME reminder. A bubble may supply
         // an explicit identity via data-sig (see _renderClaimBubble); otherwise the

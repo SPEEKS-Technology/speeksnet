@@ -480,6 +480,12 @@ const wrapEmail = (title: string, sub: string, body: string, footer: string) => 
   </td></tr>
 </table></td></tr></table></body></html>`;
 
+// A description always opens with a capital. Unlike titleCase this moves ONE
+// letter, which is the normalisation any word processor performs — so it is safe
+// to run over a note somebody typed in a hurry, where re-casing every word would
+// not be. A body opening with a digit ("14 × SKU was approved") is left alone.
+const sentence = (v: string) => String(v || "").replace(/^[a-z]/, (c) => c.toUpperCase());
+
 // One alert. `tone` colours the left rule: red = a passed deadline, amber = owed,
 // sage = news. Matches the sam-due-* classes the feed cards use.
 function itemCard(title: string, body: string, link: string, tone: "red" | "amber" | "sage", meta = "") {
@@ -498,7 +504,7 @@ function itemCard(title: string, body: string, link: string, tone: "red" | "ambe
     <tr>
       <td style="padding:13px 15px;">
         <div style="font-size:14.5px;font-weight:800;color:${C.charcoal};letter-spacing:-.01em;">${esc(title)}</div>
-        ${body ? `<div style="font-size:12.5px;font-weight:500;color:${C.muted};margin-top:4px;line-height:1.5;">${esc(body)}</div>` : ""}
+        ${body ? `<div style="font-size:12.5px;font-weight:500;color:${C.muted};margin-top:4px;line-height:1.5;">${esc(sentence(body))}</div>` : ""}
         ${meta ? `<div style="font-size:11px;font-weight:700;color:${C.faint};margin-top:5px;text-transform:uppercase;letter-spacing:.04em;">${esc(meta)}</div>` : ""}
       </td>
     </tr>
