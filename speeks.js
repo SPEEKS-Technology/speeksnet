@@ -69,6 +69,7 @@ const SALES_INGEST_URL  = `${_BASE}/sales-ingest`;
 const SUMMARY_WEEKLY_URL = `${_BASE}/summary-weekly`;
 const LIVE_URL          = `${_BASE}/shopify-live`;
 const USAGE_URL         = `${_BASE}/usage`;
+const NOTIFY_URL        = `${_BASE}/notify`;
 const BOX_ITEMS_URL     = `${_SUPABASE_URL}/rest/v1/box_order_items?select=*&order=sort_order.asc`;
 const BOX_CONFIG_URL    = `${_SUPABASE_URL}/rest/v1/box_order_config?select=*`;
 
@@ -1260,6 +1261,9 @@ document.addEventListener('keydown', (e) => {
     // viewer, camera, then modals — dismissing a picture must never take the
     // audit down with it. Search sits on top: it opens OVER whatever you had.
     if (typeof _jumpOpen !== 'undefined' && _jumpOpen) { closeJumpSearch(); return; }
+    // Before the board: the daily breakdown opens OVER it, so it is the layer
+    // you mean, and closing the board underneath would take both down at once.
+    if (document.getElementById('bdDaily')) { closeDailyBreakdown(); return; }
     // Above the rest: it covers the whole window, so it is the layer you mean.
     // (Only reached when real fullscreen was refused — inside it, Esc is the
     // browser's and exits fullscreen, which closes this via fullscreenchange.)
@@ -1734,11 +1738,14 @@ function populateUsersModal() {
     // Store LAST, and deliberately so: the list above it is people in seniority
     // order, and a Store account is a screen on a sales floor — one per store,
     // never a person. Grouping it at the bottom keeps the staff list readable.
-    const ROLE_ORDER = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM', 'Store'];
+    const ROLE_ORDER = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'MOCD', 'Store'];
     const groups = {};
     const order = [];
     globalUsersData.forEach(u => {
-        const role = (u.role || 'Employee').trim() || 'Employee';
+        let role = (u.role || 'Employee').trim() || 'Employee';
+        // Show the new name even on rows still stored as TOM, so the rename is
+        // visible here the moment this ships rather than waiting on the data.
+        if (role.toUpperCase() === 'TOM') role = 'MOCD';
         if (!groups[role]) { groups[role] = []; order.push(role); }
         groups[role].push(u);
     });
@@ -1763,6 +1770,53 @@ function populateUsersModal() {
         rows.appendChild(group);
         groups[role].forEach(u => addManageUserRow(u, body));
     });
+
+    _muApplyNotifyRoster();
+}
+
+// Fill the per-row email-alert badge from the notify function's roster.
+// READ-ONLY on purpose. The point is to make the gap visible: somebody who never
+// opened the cog, or typed their address wrong, gets no mail and has no way of
+// knowing — and neither would the DM without this. Editing another person's
+// address isn't offered, because the confirmation send is the only real proof an
+// address works, and it has to land in their inbox, not somebody else's.
+//
+// DM/CEO only (the fn enforces it too); any failure leaves the badges blank
+// rather than guessing, since a wrong "not set up" here would send the DM
+// chasing people who are perfectly fine.
+async function _muApplyNotifyRoster() {
+    const cells = document.querySelectorAll('#manageUsersRows .u-notify');
+    if (!cells.length) return;
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    if (role !== 'district manager' && role !== 'ceo') return;
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (!pin) return;
+    try {
+        const res = await fetch(`${NOTIFY_URL}?mode=roster&v=${Date.now()}`, { headers: { 'x-user-pin': pin } });
+        const j = await res.json();
+        if (!j || !j.success || !Array.isArray(j.roster)) return;
+        const by = {};
+        j.roster.forEach(r => { by[String(r.name || '').trim().toLowerCase()] = r; });
+        cells.forEach(cell => {
+            const r = by[cell.dataset.name || ''];
+            // Store (TV) accounts aren't in the roster at all — they have no inbox,
+            // so a badge would be noise rather than information. Left blank.
+            if (!r) { cell.textContent = ''; cell.className = 'u-notify'; return; }
+            if (r.enabled && r.hasEmail) {
+                cell.textContent = r.cadence === 'digest' ? 'Daily' : 'On';
+                cell.className = 'u-notify is-on';
+                cell.title = `Email alerts on — ${r.email}${r.cadence === 'digest' ? ' (daily summary)' : ' (as it happens)'}`;
+            } else if (r.hasEmail) {
+                cell.textContent = 'Off';
+                cell.className = 'u-notify is-off';
+                cell.title = `Has an address (${r.email}) but alerts are switched off.`;
+            } else {
+                cell.textContent = 'Not set';
+                cell.className = 'u-notify is-none';
+                cell.title = 'No email address — this person gets no alerts. They set it themselves from the cog in the top bar.';
+            }
+        });
+    } catch (_) { /* leave the badges blank rather than guess */ }
 }
 
 // Collapse / expand a role group.
@@ -1811,10 +1865,14 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
     // Must match ROLE_ORDER in populateManageUsers, including the trailing Store:
     // a role that can be assigned but not grouped lands in the unrecognised
     // bucket, and one that can be grouped but not assigned cannot be created.
-    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'TOM', 'Store'];
+    const roles = ['CEO', 'District Manager', 'Owner (Manager)', 'Manager', 'Multi-Store Manager', 'Assistant Manager', 'Employee', 'Training', 'MOCD', 'Store'];
 
     const storeOptions = stores.map(s => `<option value="${s}" ${(user.store || '').toUpperCase() === s ? 'selected' : ''}>${s}</option>`).join('');
-    const roleOptions = roles.map(r => `<option value="${r}" ${(user.role || '').toLowerCase() === r.toLowerCase() ? 'selected' : ''}>${r}</option>`).join('');
+    // A row still stored as TOM selects MOCD, so the dropdown never renders with
+    // nothing chosen — and saving the row quietly completes the rename for that
+    // user. See the note on the login normaliser.
+    const userRole = ((user.role || '').toLowerCase() === 'tom') ? 'mocd' : (user.role || '').toLowerCase();
+    const roleOptions = roles.map(r => `<option value="${r}" ${userRole === r.toLowerCase() ? 'selected' : ''}>${r}</option>`).join('');
 
     // Schedule drives listing capacity: weekly hours × the rate of the seat the
     // person is in that day. ONE control rather than an employment_type dropdown
@@ -1842,6 +1900,7 @@ function addManageUserRow(user = { name: '', pin: '', store: 'LEE', role: 'Emplo
         <select class="u-store" style="flex: 1;">${storeOptions}</select>
         <select class="u-role" style="flex: 1.5;">${roleOptions}</select>
         <select class="u-schedule" style="flex: 1.3;" title="Weekly hours — what this person's store listing capacity is built from. A floater can be claimed by any store in their market.">${scheduleOptions}</select>
+        <span class="u-notify" data-name="${escapeHtml((user.name || '').trim().toLowerCase())}" title="Email alerts — each person sets their own from the cog in the top bar."></span>
         <button class="del-btn" onclick="this.parentElement.remove()" title="Delete User"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     `;
     if (target) {
@@ -2539,6 +2598,12 @@ async function checkPIN() {
             sessionStorage.setItem('speeksUserName', matched.name);
 
             let _loginRole = matched.role ? matched.role.toLowerCase() : 'employee';
+            // TOM was renamed MOCD (Manager of Corporate Development). Normalising
+            // it here, at the single point the role enters the session, means every
+            // downstream gate and the derived role- CSS class see one spelling —
+            // so the stored users.role can be flipped whenever, independently of
+            // when this code ships, instead of the two having to land together.
+            if (_loginRole === 'tom') _loginRole = 'mocd';
             let _loginStore = matched.store ? matched.store.toUpperCase() : 'ALL';
             // A Multi-Store Manager behaves EXACTLY like a store manager everywhere — so we
             // store their effective role as 'manager' (covers every role check, current and
@@ -2550,10 +2615,10 @@ async function checkPIN() {
                 _loginStore = MULTISTORE_MANAGER_STORES[0];
             } else {
                 sessionStorage.removeItem('speeksMultiStore');
-                // TOM is homed at OVL rather than CORP (Ethan 2026-07-17). Their
+                // MOCD is homed at OVL rather than CORP (Ethan 2026-07-17). Their
                 // corp-wide powers are role-gated, not store-gated, so this only
                 // changes their default store, not their access.
-                if (_loginRole === 'tom') _loginStore = 'OVL';
+                if (_loginRole === 'mocd') _loginStore = 'OVL';
             }
             sessionStorage.setItem('speeksUserRole', _loginRole);
             sessionStorage.setItem('speeksUserStore', _loginStore);
@@ -5524,7 +5589,7 @@ function _kpiMyStores() {
 let _kpiViewStore = null;
 function _kpiResolveStore() {
     const sel = document.getElementById('kpiModalStoreSelect');
-    if (sel && sel.offsetParent !== null && sel.value) return sel.value;   // DM / CEO / TOM picker
+    if (sel && sel.offsetParent !== null && sel.value) return sel.value;   // DM / CEO / MOCD picker
     if (_kpiViewStore) return _kpiViewStore;                               // MSM routed store
     return sessionStorage.getItem('speeksUserStore') || '';               // manager default
 }
@@ -6426,7 +6491,7 @@ function _startCbSync() {
  * still just points at a tier. That is what keeps the ladder coherent.
  * ========================================================================== */
 
-const MG_EDIT_ROLES = new Set(['district manager', 'ceo', 'tom']);
+const MG_EDIT_ROLES = new Set(['district manager', 'ceo', 'mocd']);
 function mgCanEditLadder() {
     return MG_EDIT_ROLES.has((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim());
 }
@@ -8901,7 +8966,7 @@ async function fetchScorecardData() {
             `<div class="sh-sc-sub">SPEEKS Scorecard <span class="sh-sc-sub-date">${displayDate}</span></div>`
             + (breakdownHtml || `<div class="status-message">No SPEEKS Scorecard breakdown recorded yet.</div>`);
 
-        // ---- PayMore Audit headline tile + panel + breakdown action ----
+        // ---- SPEEKS Audit headline tile + panel + breakdown action ----
         const _au = storeData.audit;
         const _auTile = document.getElementById('sh-score-audit');
         const _auPanel = document.getElementById('sh-panel-audit');
@@ -8917,18 +8982,9 @@ async function fetchScorecardData() {
             }
             if (_auTile) _auTile.innerHTML = `
                 <span class="sh-stripe ${_aStripe}"></span>
-                <div class="sh-k">PayMore Audit</div>
+                <div class="sh-k">SPEEKS Audit</div>
                 <div class="sh-v">${_au.pct}<small>%</small></div>
-                <div class="sh-sub">${_au.earned}/${_au.possible}${_trend ? ' · ' + _trend : ''}</div>`;
-            // ---- Audit Standing tile (derived from % vs the pass/target thresholds) ----
-            const _standing = document.getElementById('cc-audit-standing');
-            if (_standing) {
-                let _sTxt, _sSub, _sStripe, _sCls;
-                if (_au.pct >= AUDIT_TARGET_PCT) { _sTxt = 'On Target'; _sStripe = 'g'; _sCls = ''; _sSub = `at or above ${AUDIT_TARGET_PCT}%`; }
-                else if (_au.pct >= AUDIT_PASS_PCT) { _sTxt = 'Passing'; _sStripe = 'y'; _sCls = ' warn'; _sSub = `${(Math.round((AUDIT_TARGET_PCT - _au.pct) * 10) / 10)}% to target`; }
-                else { _sTxt = 'Below Pass'; _sStripe = 'r'; _sCls = ' bad'; _sSub = `${(Math.round((AUDIT_PASS_PCT - _au.pct) * 10) / 10)}% to pass`; }
-                _standing.innerHTML = `<span class="sh-stripe ${_sStripe}"></span><div class="sh-k">Audit Standing</div><div class="sh-v${_sCls}" style="font-size:18px;">${_sTxt}</div><div class="sh-sub">${_sSub}</div>`;
-            }
+                <div class="sh-sub">${_au.earned}/${_au.possible} · ${_auStanding(_au.pct)}${_au.date ? ' · ' + escapeHtml(_dcShortDay(_au.date)) : ''}${_trend ? ' · ' + _trend : ''}</div>`;
             const _dateStr = _au.date ? new Date(_au.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
             const _auPct = Math.max(0, Math.min(100, _au.pct));
             if (_auPanel) _auPanel.innerHTML = `
@@ -8951,28 +9007,67 @@ async function fetchScorecardData() {
             // with nothing beside it saying which of the two scores it belonged
             // to — the tab holds Online & Marketing as well as the audit, and the
             // breakdown is only ever the audit's 165 points.
-            if (_auAction) _auAction.innerHTML = `<button class="sh-view-btn" type="button" onclick="openAuditBreakdown('${targetStore}')">View Audit Breakdown</button>`;
+            if (_auAction) _auAction.innerHTML = `<button class="sh-view-btn" type="button" onclick="openAuditBreakdown('${targetStore}')">SPEEKS Audit Breakdown</button>`;
         } else {
             if (_auTile) _auTile.innerHTML = `
                 <span class="sh-stripe" style="background:#cbd5e1;"></span>
-                <div class="sh-k">PayMore Audit</div>
+                <div class="sh-k">SPEEKS Audit</div>
                 <div class="sh-v" style="font-size:17px; color:#94a3b8;">No audit</div>
-                <div class="sh-sub">No practice audit this week</div>`;
-            const _standing = document.getElementById('cc-audit-standing');
-            if (_standing) _standing.innerHTML = `<span class="sh-stripe" style="background:#cbd5e1;"></span><div class="sh-k">Audit Standing</div><div class="sh-v" style="font-size:16px; color:#94a3b8;">—</div><div class="sh-sub">No audit yet</div>`;
-            if (_auPanel) _auPanel.innerHTML = `<div class="status-message">No practice audit recorded yet.</div>`;
+                <div class="sh-sub">No SPEEKS Audit this week</div>`;
+            if (_auPanel) _auPanel.innerHTML = `<div class="status-message">No SPEEKS Audit recorded yet.</div>`;
             if (_auAction) _auAction.innerHTML = '';
+        }
+
+        // ---- PayMore's own audit, in the cell Audit Standing used to hold ----
+        // Its standing rides on its sub-line rather than in a tile of its own,
+        // for the same reason the SPEEKS one now does: with two audits on screen
+        // a single unlabelled "On Target" says nothing about WHICH.
+        const _pa = storeData.officialAudit;
+        const _paTile = document.getElementById('sh-score-paudit');
+        if (_paTile) {
+            if (_pa) {
+                const _pc = auditPctColor(_pa.pct);
+                const _pStripe = _pa.pct >= AUDIT_TARGET_PCT ? 'g' : (_pa.pct >= AUDIT_PASS_PCT ? 'y' : 'r');
+                let _pTrend = '';
+                if (_pa.prevPct != null) {
+                    const _d = Math.round((_pa.pct - _pa.prevPct) * 10) / 10;
+                    const _u = _d >= 0;
+                    _pTrend = `<span class="sh-trend ${_u ? 'up' : 'dn'}">${_u ? '▲' : '▼'} ${Math.abs(_d)}%</span>`;
+                }
+                // The date is load-bearing here in a way it is not on the SPEEKS
+                // tile: that one is run weekly, this one is whenever corporate
+                // turns up, and a score from June should not read like last week's.
+                const _pd = _pa.date ? _dcShortDay(_pa.date) : '';
+                _paTile.innerHTML = `
+                    <span class="sh-stripe ${_pStripe}"></span>
+                    <div class="sh-k">PayMore Audit</div>
+                    <div class="sh-v">${_pa.pct}<small>%</small></div>
+                    <div class="sh-sub">${_pa.earned}/${_pa.possible} · ${_auStanding(_pa.pct)}${_pd ? ' · ' + escapeHtml(_pd) : ''}${_pTrend ? ' · ' + _pTrend : ''}</div>`;
+            } else {
+                _paTile.innerHTML = `
+                    <span class="sh-stripe" style="background:#cbd5e1;"></span>
+                    <div class="sh-k">PayMore Audit</div>
+                    <div class="sh-v" style="font-size:17px; color:#94a3b8;">No audit</div>
+                    <div class="sh-sub">PayMore has not audited yet</div>`;
+            }
         }
 
         // ---- Collapsed one-line summary + "updated" cue for the Scorecard tab ----
         _ccSum('cc-sum-score', `${displayScore.toFixed(1)}<small>/10</small>`, _omValCls.trim());
-        if (_au) {
-            const _auCls = _au.pct >= AUDIT_TARGET_PCT ? 'good' : (_au.pct >= AUDIT_PASS_PCT ? 'warn' : 'bad');
-            _ccSum('cc-sum-audit', `${_au.pct}<small>%</small>`, _auCls);
+        // The REAL PayMore audit, not the practice one: a shut card has room for
+        // one audit figure and it should be the one the store is held to. The
+        // SPEEKS score is one click away inside the panel (Ethan 2026-08-12).
+        if (_pa) {
+            const _paCls = _pa.pct >= AUDIT_TARGET_PCT ? 'good' : (_pa.pct >= AUDIT_PASS_PCT ? 'warn' : 'bad');
+            _ccSum('cc-sum-audit', `${_pa.pct}<small>%</small>`, _paCls);
         } else {
             _ccSum('cc-sum-audit', 'No audit', '');
         }
-        _ccFlagUpdate('scorecard', `${_au ? _au.pct + '@' + (_au.date || '') : 'na'}|${displayScore}`);
+        // The PayMore audit is part of the fingerprint now that it is on the card:
+        // without it, entering one lit nothing, because nothing the flag watched
+        // had changed.
+        _ccFlagUpdate('scorecard', `${_au ? _au.pct + '@' + (_au.date || '') : 'na'}`
+            + `|${_pa ? _pa.pct + '@' + (_pa.date || '') : 'na'}|${displayScore}`);
     } catch (error) {
         console.error('Error fetching scorecard:', error);
         _shMktg.innerHTML = '<div class="status-message" style="color: var(--red-alert);">Error syncing scorecard.</div>';
@@ -9621,15 +9716,33 @@ function _lvMyCodes(d) {
     return new Set([own]);
 }
 
+// The amount of the order the store's `lastOrderAt` just moved to, read off the
+// payload's own order list.
+//
+// The net delta used to be the only source, and it is a poor one: a sale landing
+// in the same poll window as a refund nets out to zero or below, and the chip
+// then rendered as a bare "Sale · BAL" with no figure on it at all. The order
+// list already carries the real number for today's last few orders.
+function _lvOrderAmount(m, at) {
+    if (!m || !at) return 0;
+    const hit = (m.recentOrders || []).find(o => o && o.at === at);
+    return hit ? (Number(hit.amount) || 0) : 0;
+}
+
 function _lvTrackChanges(d) {
     let sold = false, refunded = false;
-    // Audio only. The row still flashes and the feed still lists every store,
-    // because seeing the district is the point; this is about which of it is
-    // worth looking up for.
+    // Your own store(s). Scopes BOTH the chime and the activity chips: a shop
+    // floor watching four other stores' sales scroll past learns nothing from
+    // them, and on a store account there is no district table for those chips to
+    // refer back to. The row PULSE stays district-wide — it lands on a table row
+    // you can actually see, so it is only ever shown where it means something.
+    // Null (DM/CEO/corp, or a payload with no scope) still means "all of it".
     const mine = _lvMyCodes(d);
-    const audible = code => !mine || mine.has(String(code).toUpperCase());
+    const ours = code => !mine || mine.has(String(code).toUpperCase());
+    const byCode = {};
     const next = {};
     (d.stores || []).forEach(m => {
+        byCode[m.code] = m;
         next[m.code] = {
             net: Number(m.netToday) || 0, orders: Number(m.ordersToday) || 0,
             returns: Number(m.returnsToday) || 0, lastOrderAt: m.lastOrderAt || '',
@@ -9642,16 +9755,27 @@ function _lvTrackChanges(d) {
             // Refunds are checked FIRST. A refund lowers net sales while the order
             // count stays put, so testing for a sale first would let it pass as
             // "nothing happened" — the one event most worth surfacing.
-            // The pulse and the feed entry are unconditional — only the flags
-            // that decide whether anything is HEARD are scoped.
             if (b.returns > a.returns) {
                 _lvPulse[code] = 'refund';
-                _lvPush({ kind: 'refund', code, amount: b.returns - a.returns, at: '' });
-                if (audible(code)) refunded = true;
+                // Shopify gives no per-refund timestamp in this payload, so the
+                // moment we saw it is the honest stamp — and it is what the person
+                // watching actually wants: when it came through.
+                if (ours(code)) {
+                    _lvPush({ kind: 'refund', code, amount: b.returns - a.returns,
+                              at: new Date().toISOString() });
+                    refunded = true;
+                }
             } else if (b.orders > a.orders || b.lastOrderAt > a.lastOrderAt) {
                 _lvPulse[code] = 'sale';
-                _lvPush({ kind: 'sale', code, amount: b.net - a.net, at: b.lastOrderAt });
-                if (audible(code)) sold = true;
+                if (ours(code)) {
+                    // Order's own amount first, net delta second. Falling back to
+                    // "now" for the time as well means a chip can never come out as
+                    // just a store name with nothing beside it.
+                    const amt = _lvOrderAmount(byCode[code], b.lastOrderAt) || (b.net - a.net);
+                    _lvPush({ kind: 'sale', code, amount: amt,
+                              at: b.lastOrderAt || new Date().toISOString() });
+                    sold = true;
+                }
             }
         });
     }
@@ -9849,11 +9973,66 @@ function _lvScheduleActivityExpiry() {
 // Synthesised rather than a sound file: no asset to host, nothing for the CSP to
 // block, and a couple of oscillators is a smaller payload than any mp3.
 //
-// OFF by default and remembered per browser. A dashboard that started dinging on
-// its own — on a shop-floor laptop, or five stores' worth of sales on the district
-// board — would be something people disable once and resent, so it is opt-in.
+// ON by default, remembered per browser, opt-OUT (Ethan, 2026-08-11).
+//
+// It was opt-in on the theory that a dashboard which starts dinging on its own is
+// something people mute once and resent. In practice the opposite happened: the
+// chime is the entire point of the shop-floor board, nobody thinks to go looking
+// for a speaker icon, and every TV sat silent. A '0' is stored on mute, so anyone
+// who does turn it off stays off; only an unset value now means on.
+//
+// Note this does NOT make sound audible on its own — browsers still require one
+// interaction per page load before audio may play. See _lvArmAudioUnlock.
 let _lvAudio = null;
-const _lvSoundOn = () => localStorage.getItem('speeksLiveChime') === '1';
+const _lvSoundOn = () => localStorage.getItem('speeksLiveChime') !== '0';
+
+// Browsers refuse to start an AudioContext until the page has been interacted
+// with, and the preference is remembered per browser while the permission is NOT.
+// So a shop-floor TV that had its chime switched on weeks ago wakes from a power
+// cut with the speaker icon lit and no sound coming out of it — the context is
+// created suspended and stays that way, because nobody ever touches a wall TV.
+//
+// This arms a one-shot unlock on the first interaction of any kind. Flipping the
+// toggle already worked (that click IS a gesture); this makes any other click,
+// key or tap do the same job, so the board recovers the moment someone walks past
+// it rather than needing the toggle cycled off and on.
+let _lvUnlockArmed = false;
+function _lvArmAudioUnlock() {
+    if (_lvUnlockArmed) return;
+    _lvUnlockArmed = true;
+    const unlock = () => {
+        // Cleared first so a resume that doesn't take (it can be refused) leaves
+        // the next render free to arm a fresh listener instead of giving up.
+        _lvUnlockArmed = false;
+        try { if (_lvAudio && _lvAudio.state === 'suspended') _lvAudio.resume(); } catch (_) {}
+        // Repaint so the "tap to enable" state on the speaker clears itself.
+        if (typeof renderLiveDashboard === 'function') { try { renderLiveDashboard(); } catch (_) {} }
+    };
+    ['pointerdown', 'keydown', 'touchstart'].forEach(ev =>
+        document.addEventListener(ev, unlock, { once: true, passive: true }));
+}
+
+// Sound is switched on but the browser has not let us make any yet.
+function _lvAudioBlocked() {
+    return _lvSoundOn() && !!_lvAudio && _lvAudio.state === 'suspended';
+}
+
+// Open the context at RENDER time, not at first-sale time.
+//
+// Built lazily inside _lvBus, the context did not exist until something tried to
+// chime — so the very first sale of the day was the one that discovered the
+// browser had blocked audio, and it was already silent by then. Opening it up
+// front means the speaker icon can tell the truth from the moment the board
+// loads, and the unlock is armed long before there is anything to miss.
+function _lvPrimeAudio() {
+    if (!_lvSoundOn()) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    try {
+        _lvAudio = _lvAudio || new AC();
+        if (_lvAudio.state === 'suspended') { _lvAudio.resume(); _lvArmAudioUnlock(); }
+    } catch (_) { /* audio is a nicety; never let it break the dashboard */ }
+}
 
 // Open the shared context and a low-passed output bus. A bare sine reads as a lab
 // beep and an unfiltered triangle is harsh this high up, so everything goes
@@ -9864,7 +10043,9 @@ function _lvBus(cutoff, level) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return null;
     _lvAudio = _lvAudio || new AC();
-    if (_lvAudio.state === 'suspended') _lvAudio.resume();
+    // resume() without a prior user gesture is a no-op in Chrome, so arm the
+    // one-shot unlock rather than assuming this worked. See _lvArmAudioUnlock.
+    if (_lvAudio.state === 'suspended') { _lvAudio.resume(); _lvArmAudioUnlock(); }
     const filter = _lvAudio.createBiquadFilter();
     filter.type = 'lowpass';
     filter.frequency.value = cutoff;
@@ -9927,13 +10108,18 @@ function toggleLiveSound() {
 // is legible without hovering for the tooltip.
 function _lvSoundBtn() {
     const on = _lvSoundOn();
+    // Lit but muted by the browser. Saying "on" here would be a lie the person
+    // only discovers by noticing hours of silence, which is exactly how a TV ends
+    // up thought of as broken.
+    const blocked = _lvAudioBlocked();
     const ico = on
         ? '<path d="M4 7v4h3l4 3V4L7 7H4z"/><path d="M12.5 6.2a3.4 3.4 0 0 1 0 5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>'
         : '<path d="M4 7v4h3l4 3V4L7 7H4z"/><path d="M12.2 6.8l3.2 4.4M15.4 6.8l-3.2 4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>';
-    return '<button type="button" class="lv-sound' + (on ? ' on' : '') + '"'
+    return '<button type="button" class="lv-sound' + (on ? ' on' : '') + (blocked ? ' blocked' : '') + '"'
         + ' onclick="toggleLiveSound()"'
-        + ' title="' + (on ? 'Chime on — click to mute'
-                           : 'Chime off — click to hear a chime on each sale, and a lower one on refunds') + '"'
+        + ' title="' + (blocked ? 'Chime on, but this screen has not been touched since it loaded — tap anywhere to let it play'
+                       : on ? 'Chime on — click to mute'
+                            : 'Chime off — click to hear a chime on each sale, and a lower one on refunds') + '"'
         + ' aria-pressed="' + (on ? 'true' : 'false') + '" aria-label="Sale chime">'
         + '<svg viewBox="0 0 18 18" width="18" height="18" fill="currentColor" aria-hidden="true">'
         + ico + '</svg></button>';
@@ -10027,6 +10213,1202 @@ function _lvFullBtn() {
         + '<svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor"'
         + ' stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
         + '<path d="M7 2H2v5M11 2h5v5M7 16H2v-5M11 16h5v-5"/></svg></button>';
+}
+
+// ---- daily breakdown popout ------------------------------------------------
+// The buying and selling sheet, day by day, for one store and one month —
+// the view the managers have been opening the spreadsheet to read.
+//
+// The sheet stays exactly where it is. This is a READ of the same figures the
+// rest of the site already runs on: buysell-daily serves the month in progress
+// off app_cache/buy_sell_hub (the 10-minute cache behind the Live Dashboard and
+// the Buying & Selling widget) and finished months off daily_buysell, the hourly
+// capture of that same cache. So a day, a month total and the card that opened
+// this cannot disagree, and nobody has to key anything twice.
+//
+// Not a pixel copy of the sheet, by the user's call: same daily figures, laid
+// out for a screen. What that buys over the spreadsheet — weekday names, so the
+// Sunday zeros explain themselves; week rules, so 31 rows stay readable; a
+// totals row that is a total rather than a formula that can drift; and the two
+// halves of the day side by side instead of on two tabs.
+//
+// Deliberately NOT carried over from the sheet:
+//   - MOM. Its formula could not be reproduced from the daily figures (the
+//     implied divisor drifts across the month), and a growth number that is
+//     nearly right is worse than one that is absent.
+//   - Rev/GP Tracking. Month-end projections already exist on the Live
+//     Dashboard's forecast strip, computed once, and a second set here would be
+//     a second answer to the same question.
+//   - % of GP Goal on FINISHED months. Nothing stores a historical goal, so a
+//     past month reports what it did without inventing what it was asked for.
+const BUYSELL_DAILY_URL = `${_BASE}/buysell-daily`;
+const GP_GOALS_URL = `${_BASE}/gp-goals`;
+
+let _bdMonth = null;     // 'YYYY-MM', null until the first payload names one
+let _bdStore = null;     // store code on screen
+let _bdData  = null;     // payload for _bdMonth
+let _bdErr   = '';
+let _bdBusy  = false;
+let _bdSeq   = 0;        // newest-request wins; see _bdLoad
+// Finished months are immutable, so re-opening one is free. The month in
+// progress is deliberately NOT cached: it is the one that moves.
+const _bdCache = {};
+
+function _bdEl() { return document.getElementById('bdDaily'); }
+
+// Which store the popout should open on. Their own, or an MSM's home store.
+// Anyone without one — a DM or the CEO — opens on the COMPANY rather than on
+// whichever store happens to sort first, which was only ever a way of not being
+// blank; the district is the view they came for, and the five stores are one
+// click from it.
+function _bdDefaultStore(codes) {
+    const own = String((_lvData && _lvData.scope && _lvData.scope.store) || '').toUpperCase();
+    if (own && codes.includes(own)) return own;
+    return codes.length ? BD_ALL : null;
+}
+
+// Store display names ride in on the live payload rather than a second hardcoded
+// map; the code alone is the fallback, which is what the tables already show.
+function _bdStoreName(code) {
+    if (code === BD_ALL) {
+        // Counted, not written as "All 5 Stores": the company opened two stores
+        // in 2026 and will open more, and a hardcoded number would quietly go
+        // wrong on the day it does.
+        const n = Object.keys((_bdData && _bdData.stores) || {}).length;
+        return n ? 'All ' + n + ' Stores' : 'All Stores';
+    }
+    const m = (_lvData && _lvData.stores || []).find(s => String(s.code).toUpperCase() === code);
+    return (m && m.name) || '';
+}
+
+function _bdMonthName(ym) {
+    const p = String(ym || '').split('-');
+    if (p.length !== 2) return '';
+    // Built from the parts, never Date.parse of 'YYYY-MM' — that reads as UTC
+    // and names the month before for anyone west of Greenwich.
+    return new Date(+p[0], +p[1] - 1, 1)
+        .toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+// Weekday for a day of the selected month. Local-parts constructor for the same
+// reason as above.
+function _bdDow(ym, day) {
+    const p = String(ym || '').split('-');
+    if (p.length !== 2) return { nm: '', dow: -1 };
+    const dt = new Date(+p[0], +p[1] - 1, day);
+    return { nm: dt.toLocaleDateString('en-US', { weekday: 'short' }), dow: dt.getDay() };
+}
+
+async function openDailyBreakdown() {
+    if (_bdEl()) return;
+    const el = document.createElement('div');
+    el.id = 'bdDaily';
+    el.className = 'bd-fs';
+    el.innerHTML = '<div class="bd-bar">'
+        + '<span class="bd-title">Daily Breakdown</span>'
+        + '<span class="bd-bar-r"><span class="bd-pickers"></span>'
+        + '<button type="button" class="bd-close" onclick="closeDailyBreakdown()"'
+        + ' title="Close (Esc)" aria-label="Close daily breakdown">'
+        + '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"'
+        + ' stroke-width="2.2" stroke-linecap="round" aria-hidden="true">'
+        + '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+        + '</button></span></div>'
+        + '<div class="bd-card"><div class="bd-body"></div></div>';
+    // Inside real fullscreen only that element's subtree is painted, so a popout
+    // appended to body would open invisibly — the button would read as broken.
+    // Mounted into whatever is actually on screen.
+    (document.fullscreenElement || document.body).appendChild(el);
+    // Both elements, as the full-screen board does: the ROOT is what scrolls, so
+    // locking body alone leaves the page moving behind this.
+    document.documentElement.classList.add('lv-fs-open');
+    document.body.classList.add('lv-fs-open');
+    _bdRender();
+    await _bdLoad(_bdMonth);
+}
+
+function closeDailyBreakdown() {
+    const el = _bdEl();
+    if (!el) return;
+    el.remove();
+    // Only if the full-screen board is not ALSO up: it sets the same two classes,
+    // and clearing them here would let the page behind it scroll again.
+    if (!_lvFsEl()) {
+        document.documentElement.classList.remove('lv-fs-open');
+        document.body.classList.remove('lv-fs-open');
+    }
+}
+
+/* =========================================================
+   STORE GOALS  (the month's gross-profit goal per store)
+
+   Entered here rather than in the spreadsheet, because a goal is a DECISION and
+   the workbook is a record of what happened. The month rollover writes whatever
+   is set here into the new tabs, so the sheet's own GP-goal formulas keep
+   working and nobody has to key the same five numbers twice.
+
+   Reads are open (the goal is already on screen in every goal bar); saving is
+   DM/CEO, enforced in the gp-goals function and mirrored here so the button is
+   not offered to someone who would be refused.
+   ========================================================= */
+
+let _gpGoals = null;          // { month, goals, missing, complete } — last read
+let _gpGoalsBusy = false;
+let _gpGoalsStarted = false;
+
+// The District Manager sets the goals — nobody else, including the CEO, unless
+// the Feature Access tool hands 'tool-store-goals' to another role or person
+// (Ethan's call 2026-08-12). Going through _featureOverrideFor means the same
+// switch that shows the tool also decides who may save, rather than the two
+// drifting apart.
+function _gpCanEdit() {
+    const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    // Normalised exactly as applyRoleBasedUI does it, so the slug looked up here
+    // is the slug the Feature Access tool writes.
+    const roleClass = role.replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+    const name = sessionStorage.getItem('speeksUserName') || '';
+    const byDefault = role === 'district manager';
+    if (typeof _featureOverrideFor !== 'function') return byDefault;
+    const ov = _featureOverrideFor('tool-store-goals', roleClass, name);
+    return ov === null || ov === undefined ? byDefault : !!ov;
+}
+
+// 'YYYY-MM' in CENTRAL time. The browser's own month is right for anyone in the
+// stores' timezone and wrong for nobody who matters, but this is the figure the
+// reminder keys off on the 1st, so it is worth being explicit about.
+function _gpThisMonth() {
+    const d = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+    return d.slice(0, 7);
+}
+
+function _gpMonthName(ym) {
+    const p = String(ym || '').split('-');
+    if (p.length !== 2) return '';
+    return new Date(+p[0], +p[1] - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+async function _gpFetch(month) {
+    const m = month || _gpThisMonth();
+    const res = await fetch(`${GP_GOALS_URL}?month=${encodeURIComponent(m)}&v=${Date.now()}`);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    if (j.error) throw new Error(j.error);
+    return j;
+}
+
+// ---- the editor ----------------------------------------------------------
+async function openGpGoals(month) {
+    closeAllModals();
+    toggleModal('gpGoalsModal');
+    const body = document.getElementById('gpGoalsBody');
+    if (body) body.innerHTML = '<div class="status-message">Loading the month…</div>';
+    try {
+        _gpGoals = await _gpFetch(month);
+    } catch (e) {
+        if (body) body.innerHTML = '<div style="color: var(--red-alert); font-weight: bold; text-align: center; padding: 20px 0;">Could not load the month. Close and try again.</div>';
+        return;
+    }
+    // Fresh working copy every time the panel opens, so a cancelled edit cannot
+    // survive into the next one.
+    _gpClosed = (_gpGoals.closed || []).map(c => ({ day: Number(c.day), label: String(c.label || '') }));
+    renderGpGoals();
+}
+
+function renderGpGoals() {
+    const body = document.getElementById('gpGoalsBody');
+    if (!body || !_gpGoals) return;
+    const g = _gpGoals.goals || {};
+    const codes = (typeof _lvData === 'object' && _lvData && _lvData.stores || [])
+        .map(s => String(s.code).toUpperCase());
+    const stores = codes.length ? codes : ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
+    const editable = _gpCanEdit();
+
+    let html = `<p style="font-size: 12.5px; color: #64748b; margin: 0 0 14px;">
+        The month's targets for <b>${escapeHtml(_gpMonthName(_gpGoals.month))}</b>.
+        Saving writes them into the Sales Summary workbook as well, so the sheet
+        and the site cannot drift apart.${editable ? '' : ' Only the District Manager can change these.'}</p>`;
+
+    html += `<div class="gp-sec"><div class="gp-sec-head">
+        <span class="gp-sec-t">Gross profit goals</span>
+        <span class="gp-sec-s">${stores.length} stores</span></div>`;
+    html += '<div class="gp-goal-rows">';
+    stores.forEach(code => {
+        const v = (g[code] === undefined || g[code] === null) ? '' : g[code];
+        // type="text", not "number": a number input cannot show thousands
+        // separators, and it cannot have its caret moved either — which is what
+        // reformatting as you type requires.
+        html += `<label class="gp-goal-row">
+            <span class="gp-goal-store">${escapeHtml(code)}</span>
+            <span class="gp-goal-field mg-money">
+                <input type="text" inputmode="numeric" autocomplete="off" class="mg-input"
+                       id="gpGoal_${escapeHtml(code)}"
+                       value="${v === '' ? '' : _gpComma(v)}" placeholder="Not Set" ${editable ? '' : 'disabled'}
+                       oninput="_gpFmtGoal(this)">
+            </span>
+        </label>`;
+    });
+    html += '</div>';
+
+    html += `<div class="gp-goal-total">Company goal <b id="gpGoalTotal">—</b></div></div>`;
+
+    html += _gpBuyDaysHtml(editable);
+
+    if (_gpGoals.setBy) {
+        html += `<div class="gp-goal-by">Last set by ${escapeHtml(_gpGoals.setBy)}</div>`;
+    }
+    if (editable) {
+        // Not a .manage-footer — that class paints a white bar, which is right
+        // for a footer pinned below a scrolling body and wrong for a button
+        // sitting at the end of one.
+        html += `<div class="gp-save">
+            <button class="btn-primary" id="gpGoalSaveBtn" onclick="saveGpGoals()">Save Month</button>
+        </div>`;
+    }
+    body.innerHTML = html;
+    _gpUpdateTotal();
+}
+
+// ---- buying days ---------------------------------------------------------
+// The count is DERIVED and never typed: days − Sundays − the days the stores
+// are shut. Typing a count would fix the sheet's month total and leave the
+// daily "Days thru Month" counter still treating the holiday as a working day,
+// which is the half that actually skews tracking. So the closures are the
+// input, and the number underneath simply follows.
+let _gpClosed = [];           // [{ day, label }] — the working copy
+
+function _gpDayName(ym, day) {
+    const [y, m] = ym.split('-').map(Number);
+    return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(y, m - 1, day).getDay()];
+}
+function _gpSundays(ym) {
+    const [y, m] = ym.split('-').map(Number);
+    const n = new Date(y, m, 0).getDate();
+    let c = 0;
+    for (let d = 1; d <= n; d++) if (new Date(y, m - 1, d).getDay() === 0) c++;
+    return c;
+}
+function _gpBuyingDays(ym) {
+    const [y, m] = ym.split('-').map(Number);
+    const n = new Date(y, m, 0).getDate();
+    const shut = new Set(_gpClosed.map(c => c.day));
+    let c = 0;
+    for (let d = 1; d <= n; d++) {
+        // A closure that lands on a Sunday is already excluded; subtracting it
+        // again would take a day off the month for nothing.
+        if (new Date(y, m - 1, d).getDay() === 0 || shut.has(d)) continue;
+        c++;
+    }
+    return c;
+}
+
+function _gpBuyDaysHtml(editable) {
+    const ym = _gpGoals.month;
+    const [y, m] = ym.split('-').map(Number);
+    const days = new Date(y, m, 0).getDate();
+    const monthOnly = _gpMonthName(ym).split(' ')[0];
+
+    let chips = '';
+    _gpClosed.slice().sort((a, b) => a.day - b.day).forEach(c => {
+        chips += `<span class="gp-chip">${escapeHtml(_gpDayName(ym, c.day))} ${c.day}`
+            + (c.label ? ' &middot; ' + escapeHtml(c.label) : '')
+            + (editable ? `<s onclick="_gpRemoveClosed(${c.day})" title="Remove">&times;</s>` : '')
+            + '</span>';
+    });
+    if (!chips) chips = `<span class="gp-chip-none">Nothing yet &mdash; ${escapeHtml(monthOnly)} has no closures.</span>`;
+
+    return `<div class="gp-sec"><div class="gp-sec-head">
+        <span class="gp-sec-t">Buying days</span>
+        <span class="gp-sec-s">All Five Stores</span></div>
+      <div class="gp-bd">
+        <span class="gp-bd-num"><b id="gpBuyDays">${_gpBuyingDays(ym)}</b><span>Buying Days</span></span>
+        <table class="gp-bd-calc">
+          <tr><td>Days in ${escapeHtml(monthOnly)}</td><td>${days}</td></tr>
+          <tr><td>Sundays</td><td>${_gpSundays(ym)}</td></tr>
+          <tr><td>Days closed</td><td>${_gpClosed.length}</td></tr>
+          <tr class="gp-bd-rule"><td>Open to buy</td><td>${_gpBuyingDays(ym)}</td></tr>
+        </table>
+      </div>
+      <div class="gp-closed">
+        <p class="gp-closed-t">Closed beyond Sundays</p>
+        <div class="gp-chips">${chips}</div>
+        ${editable ? `<div class="gp-add">
+            <input type="date" class="mg-input gp-add-date" id="gpClosedDate"
+                   min="${ym}-01" max="${ym}-${String(days).padStart(2, '0')}">
+            <input class="mg-input" id="gpClosedLabel" maxlength="60" placeholder="Thanksgiving, inventory day…">
+            <button type="button" class="btn-ghost gp-add-btn" onclick="_gpAddClosed()">Add</button>
+        </div>` : ''}
+      </div></div>`;
+}
+
+// A closure carries a NAME as well as a date. In the sheet a holiday and a
+// snowstorm are both a zero, and only the first should be excused — the name is
+// how anyone remembers which was meant, a year later.
+function _gpAddClosed() {
+    const inp = document.getElementById('gpClosedDate');
+    const lab = document.getElementById('gpClosedLabel');
+    if (!inp) return;
+    // "2026-11-26" is read by its PARTS. new Date('2026-11-26') is parsed as UTC
+    // and lands on the 25th here, which would close the wrong day.
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(inp.value || ''));
+    if (!m) { alert('Pick the day the stores are closed.'); return; }
+    if (m[1] + '-' + m[2] !== _gpGoals.month) {
+        alert('That day is not in ' + _gpMonthName(_gpGoals.month) + '.');
+        return;
+    }
+    const day = parseInt(m[3], 10);
+    if (new Date(+m[1], +m[2] - 1, day).getDay() === 0) {
+        alert('Sundays are already excluded — no need to add one.');
+        return;
+    }
+    if (_gpClosed.some(c => c.day === day)) { alert('That day is already on the list.'); return; }
+    _gpClosed.push({ day, label: String((lab && lab.value) || '').trim() });
+    _gpHarvestGoals();
+    renderGpGoals();
+}
+function _gpRemoveClosed(day) {
+    _gpClosed = _gpClosed.filter(c => c.day !== day);
+    _gpHarvestGoals();
+    renderGpGoals();
+}
+
+// Adding a closure re-renders the whole panel, and the goal boxes are in it.
+// Without this, typing five goals and then remembering a holiday threw the five
+// away — the panel would redraw from the last SAVED state.
+function _gpHarvestGoals() {
+    if (!_gpGoals) return;
+    _gpGoals.goals = _gpGoals.goals || {};
+    document.querySelectorAll('[id^="gpGoal_"]').forEach(i => {
+        const code = i.id.replace('gpGoal_', '');
+        const raw = String(i.value || '').trim();
+        if (!raw) { delete _gpGoals.goals[code]; return; }
+        const v = _gpNum(raw);
+        if (v !== null) _gpGoals.goals[code] = v;
+    });
+}
+
+// ⚠️ EVERY read of a goal box goes through this. The boxes carry commas now,
+// and parseFloat("77,000") is 77 — a silent, catastrophic misread that would
+// have saved a store's month as seventy-seven dollars.
+function _gpNum(v) {
+    const digits = String(v == null ? '' : v).replace(/[^0-9.]/g, '');
+    if (!digits) return null;
+    const n = parseFloat(digits);
+    return Number.isFinite(n) ? n : null;
+}
+function _gpComma(v) {
+    const n = _gpNum(v);
+    return n === null ? '' : n.toLocaleString('en-US');
+}
+
+// Reformat as they type, keeping the caret after the same DIGIT it was after —
+// counting separators instead would walk the caret sideways every time a comma
+// appears or disappears.
+function _gpFmtGoal(el) {
+    const before = String(el.value).slice(0, el.selectionStart || 0).replace(/\D/g, '').length;
+    const digits = String(el.value).replace(/\D/g, '').slice(0, 9);
+    el.value = digits ? Number(digits).toLocaleString('en-US') : '';
+    let pos = 0, seen = 0;
+    while (pos < el.value.length && seen < before) {
+        if (el.value[pos] >= '0' && el.value[pos] <= '9') seen++;
+        pos++;
+    }
+    try { el.setSelectionRange(pos, pos); } catch (_) { /* not focused */ }
+    _gpUpdateTotal();
+}
+
+function _gpUpdateTotal() {
+    const el = document.getElementById('gpGoalTotal');
+    if (!el) return;
+    let total = 0, any = false;
+    document.querySelectorAll('[id^="gpGoal_"]').forEach(i => {
+        const v = _gpNum(i.value);
+        if (v !== null) { total += v; any = true; }
+    });
+    el.textContent = any ? _lvMoney(total, false) : '—';
+}
+
+async function saveGpGoals() {
+    if (_gpGoalsBusy || !_gpGoals) return;
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (!pin) { alert('Sign in again to save goals.'); return; }
+    const btn = document.getElementById('gpGoalSaveBtn');
+    const goals = {};
+    let bad = '';
+    document.querySelectorAll('[id^="gpGoal_"]').forEach(i => {
+        const code = i.id.replace('gpGoal_', '');
+        const raw = String(i.value || '').trim();
+        // Blank is "not decided yet", which is different from a goal of zero —
+        // it is what leaves the reminder standing, so it is sent as a blank
+        // rather than quietly turned into a number.
+        if (!raw) { goals[code] = ''; return; }
+        const v = _gpNum(raw);
+        if (v === null || v < 0) { bad = code; return; }
+        goals[code] = v;
+    });
+    if (bad) { alert(bad + "'s goal is not a number."); return; }
+
+    _gpGoalsBusy = true;
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    try {
+        const res = await fetch(GP_GOALS_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({ action: 'save', month: _gpGoals.month, goals, closed: _gpClosed }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || j.error) throw new Error(j.error || ('HTTP ' + res.status));
+        alert((j.complete ? 'Saved. Every store has a goal' : 'Saved')
+            + (j.buyDays ? ', and the month has ' + j.buyDays + ' buying days.' : '.'));
+        _gpGoals = await _gpFetch(_gpGoals.month);
+        _gpClosed = (_gpGoals.closed || []).map(c => ({ day: Number(c.day), label: String(c.label || '') }));
+        renderGpGoals();
+        // The reminder and the popout both read this — refresh them rather than
+        // waiting for a poll, so the card disappears as the modal closes.
+        checkGpGoalReminder();
+        // Emptied in place — _bdCache is a const, and reassigning it throws.
+        // The cache has to go because every month's payload carries the goal.
+        if (typeof _bdEl === 'function' && _bdEl()) {
+            Object.keys(_bdCache).forEach(k => delete _bdCache[k]);
+            _bdLoad(_bdMonth);
+        }
+    } catch (e) {
+        alert((e && e.message) || 'Could not save the goals.');
+    }
+    _gpGoalsBusy = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Month'; }
+}
+
+// ---- the reminder --------------------------------------------------------
+// A hidden bubble, like every other feed reminder: _samGatherReminders reads its
+// computed display to decide whether the card is live, so this element must stay
+// display:flex while being invisible. See the RETIRED FLOATING ALERT TOASTS
+// block in styles.css.
+function _gpBubbleEl() {
+    let b = document.getElementById('gpGoalAlertBubble');
+    if (b) return b;
+    const claim = document.getElementById('claimAlertBubble');
+    if (!claim || !claim.parentElement) return null;
+    b = document.createElement('div');
+    b.id = 'gpGoalAlertBubble';
+    b.style.cssText = 'display:none; position:fixed; top:116px; right:24px; background:linear-gradient(135deg, #0f766e, #115e59); color:white; padding:11px 14px 11px 16px; border-radius:14px; align-items:flex-start; gap:8px; font-size:13px; box-shadow:0 10px 28px rgba(13, 94, 89, 0.38); max-width:min(380px, calc(100vw - 48px)); z-index:998;';
+    b.innerHTML = '<span id="gpGoalAlertBubbleIcon" style="font-size:16px; flex-shrink:0; margin-top:2px;">🎯</span>'
+        + '<span id="gpGoalAlertBubbleText" style="white-space:normal; overflow-y:auto; max-height:220px;"></span>';
+    claim.parentElement.appendChild(b);
+    return b;
+}
+
+// Is this month's goal set for every store? The card stands until it is, and
+// goes away on its own the moment the last one is entered — there is nothing to
+// dismiss, because the work either has or has not been done.
+async function checkGpGoalReminder() {
+    if (!_gpCanEdit()) return;
+    const b = _gpBubbleEl();
+    if (!b) return;
+    let data = null;
+    try { data = await _gpFetch(_gpThisMonth()); } catch (_) { return; }
+    _gpGoals = _gpGoals && _gpGoals.month === data.month ? data : (_gpGoals || data);
+
+    if (data.complete) { b.style.display = 'none'; return; }
+    const t = document.getElementById('gpGoalAlertBubbleText');
+    const monthName = _gpMonthName(data.month);
+    const n = data.missing.length;
+    const summary = n === 5
+        ? `No goals set for ${monthName} yet — the goal bars have nothing to measure against until they are in.`
+        : `${data.missing.join(', ')} ${n === 1 ? 'has' : 'have'} no ${monthName} goal yet.`;
+    if (t) {
+        t.innerHTML = '<div style="line-height:1.4;"><strong>Store goals for ' + escapeHtml(monthName) + '</strong></div>'
+            + '<div style="line-height:1.4; opacity:0.96;">' + escapeHtml(summary) + '</div>';
+        t.dataset.summary = summary;
+        // The identity is the month plus who is missing, so entering three of
+        // five breaks through a snooze rather than staying buried: the card is
+        // about different work than the one that was snoozed.
+        t.dataset.sig = data.month + '|' + data.missing.join(',');
+    }
+    b.style.display = 'flex';
+}
+
+function startGpGoalReminder() {
+    if (_gpGoalsStarted || !_gpCanEdit()) return;
+    _gpGoalsStarted = true;
+    checkGpGoalReminder();
+    // Slow: this changes at most a handful of times a month, and the realtime
+    // ping from gp-goals clears it the moment the last goal is saved.
+    setInterval(checkGpGoalReminder, 30 * 60 * 1000);
+}
+
+async function _bdLoad(month) {
+    const key = month || 'current';
+    if (_bdCache[key]) {
+        _bdData = _bdCache[key]; _bdMonth = _bdData.month; _bdErr = '';
+        _bdRender(); _bdLoadPrev(_bdMonth);
+        return;
+    }
+    // Only the newest request may write. Two months picked in quick succession
+    // are two flights that can land in either order, and the loser overwriting
+    // the winner would leave the table showing a month the picker does not name.
+    const seq = ++_bdSeq;
+    _bdBusy = true; _bdErr = '';
+    _bdRender();
+    try {
+        const q = month ? '&month=' + encodeURIComponent(month) : '';
+        const res = await fetch(`${BUYSELL_DAILY_URL}?v=${Date.now()}${q}`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const d = await res.json();
+        if (d.error) throw new Error(d.error);
+        // Finished months only: the live one would freeze the popout at whatever
+        // the sheet said the first time it was opened this session. Cached even
+        // when this flight has been superseded — it was fetched and it will
+        // never change, so only the RENDER is abandoned, not the work.
+        if (!d.isCurrent) _bdCache[d.month] = d;
+        if (seq !== _bdSeq) return;
+        _bdData = d;
+        _bdMonth = d.month;
+        const codes = Object.keys(d.stores || {});
+        // BD_ALL is valid in every month and is never one of the payload's keys,
+        // so it has to be allowed explicitly — without this, picking a month
+        // threw anyone looking at the company back to a single store.
+        if (!_bdStore || (_bdStore !== BD_ALL && !codes.includes(_bdStore))) {
+            _bdStore = _bdDefaultStore(codes);
+        }
+    } catch (e) {
+        if (seq !== _bdSeq) return;
+        _bdErr = (e && e.message) || 'Could not load the daily figures.';
+    }
+    _bdBusy = false;
+    _bdRender();
+    // After the paint, never before it.
+    if (!_bdErr) _bdLoadPrev(_bdMonth);
+}
+
+// Last month, fetched quietly in the background so the month on screen paints
+// without waiting on a comparison. Nothing here writes _bdData or _bdStore —
+// the ONLY effect is filling _bdCache and asking for a repaint, so a slow or
+// failed prior month costs the view nothing but its delta lines.
+//
+// A previous month is always finished, so it is always cacheable and is fetched
+// at most once per session. Deliberately not awaited by _bdLoad: making the
+// month you asked for wait on a month you did not is the wrong trade.
+function _bdLoadPrev(month) {
+    const prev = _bdPrevMonth(month);
+    // Not offered by the picker means no history for it — January 2026 is the
+    // floor, and asking for December 2025 would 404 on every open.
+    if (!prev || _bdCache[prev]) return;
+    if (!(_bdData && (_bdData.months || []).includes(prev))) return;
+    fetch(`${BUYSELL_DAILY_URL}?v=${Date.now()}&month=${encodeURIComponent(prev)}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(p => {
+            if (!p || p.error || p.isCurrent) return;
+            _bdCache[p.month] = p;
+            // Only if the user is still looking at the month this belongs to.
+            if (_bdMonth === month && _bdEl()) _bdRender();
+        })
+        .catch(() => { /* the deltas simply do not appear */ });
+}
+
+// "▲ 4.6%" against last month. Neutral grey unless the direction carries a
+// judgement: revenue, gross profit and net GP are better up, so they colour.
+// COST is deliberately left grey — it rises with sales, so a red arrow on a
+// month that sold more would be calling a good month bad.
+function _bdDelta(cur, prev, tone) {
+    if (cur === null || prev === null || !prev) return '';
+    const pct = (cur / prev - 1) * 100;
+    const up = pct >= 0;
+    const cls = 'bd-mom' + (tone === 'good' ? (up ? ' up' : ' down') : '');
+    return '<span class="' + cls + '">' + (up ? '&#9650;' : '&#9660;') + ' '
+        + Math.abs(pct).toFixed(1) + '%</span>';
+}
+
+// Returns the load so a caller can wait on it. The <select> that fires this
+// ignores the promise, which is the point of the sequence guard in _bdLoad.
+function setDailyMonth(month) {
+    if (!month || month === _bdMonth) return Promise.resolve();
+    return _bdLoad(month);
+}
+
+function setDailyStore(code) {
+    const c = String(code || '').toUpperCase();
+    if (!c || c === _bdStore) return;
+    _bdStore = c;
+    _bdRender();
+}
+
+// Sums the visible rows rather than trusting a total from anywhere else: the
+// figure under a column is then the column, by construction. Margins are derived
+// from the totals, never averaged across days — days differ in size, so a mean
+// of the daily percentages is not the month's percentage.
+function _bdTotals(days) {
+    const t = { sales: 0, cost: 0, gp: 0, resale: 0, paid: 0, sellDays: 0, buyDays: 0 };
+    days.forEach(d => {
+        if (d.sales !== null) { t.sales += d.sales; t.cost += d.cost; t.gp += d.gp; t.sellDays++; }
+        if (d.resale !== null) { t.resale += d.resale; t.paid += d.paid; t.buyDays++; }
+    });
+    t.margin = t.sales > 0 ? t.gp / t.sales * 100 : null;
+    t.buyMargin = t.resale > 0 ? (t.resale - t.paid) / t.resale * 100 : null;
+    return t;
+}
+
+// The whole company as a sixth "store". Not a code the payload carries — it is
+// summed here from the five it does, so the company row is the five store rows
+// added up BY CONSTRUCTION and cannot drift from them the way a second
+// server-side total could.
+const BD_ALL = 'SPEEKS';
+
+// Net GP is gross profit less a flat 21% of REVENUE (not of GP) — the sheet's
+// own definition, confirmed against two independent OVL figures to the cent:
+//   July actual  71,104.03 - .21 x 130,482.88 = 43,702.63
+//   August MTD   26,432.66 - .21 x  51,510.87 = 15,615.38
+// Company-wide and the same for every store (Ethan 2026-08-12). One constant so
+// the rate is changed in one place; if it ever becomes per-store or per-period,
+// this is the line that has to grow, not the six call sites.
+const BD_NET_GP_RATE = 0.21;
+function _bdNetGp(t) {
+    return (t && t.sellDays) ? t.gp - t.sales * BD_NET_GP_RATE : null;
+}
+
+// The month before this one, as 'YYYY-MM'. Built from the parts so December
+// rolls the year back properly and nothing goes through Date.parse.
+function _bdPrevMonth(ym) {
+    const p = String(ym || '').split('-');
+    if (p.length !== 2) return '';
+    const dt = new Date(+p[0], +p[1] - 2, 1);
+    return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0');
+}
+
+// One day of every store added together. A day is null for the company only if
+// it is null at every store: one store keyed and four not is a real (if partial)
+// company day, and zeroing it would be a worse lie than showing it short.
+// Margins are NOT summed or averaged — they are re-derived from the totals,
+// because a mean of five percentages weights a $400 store like a $15,000 one.
+function _bdCompany(payload) {
+    const d = payload || _bdData;
+    if (!d || !d.stores) return null;
+    const codes = Object.keys(d.stores);
+    if (!codes.length) return null;
+    const n = d.daysInMonth || 31;
+    const days = [];
+    for (let day = 1; day <= n; day++) {
+        let sales = null, cost = null, gp = null, resale = null, paid = null;
+        codes.forEach(c => {
+            const x = ((d.stores[c] || {}).days || []).find(y => y.day === day);
+            if (!x) return;
+            if (x.sales !== null) {
+                sales = (sales || 0) + x.sales; cost = (cost || 0) + x.cost; gp = (gp || 0) + x.gp;
+            }
+            if (x.resale !== null) { resale = (resale || 0) + x.resale; paid = (paid || 0) + x.paid; }
+        });
+        days.push({
+            day, sales, cost, gp, resale, paid,
+            buyMargin: resale > 0 ? (resale - paid) / resale : null,
+        });
+    }
+    // The company's goal is the sum of the five it is made of — the same
+    // arithmetic as every other column here.
+    const goal = codes.reduce((a, c) => a + (Number((d.stores[c] || {}).goal) || 0), 0);
+    return { days, goal };
+}
+
+// The same month LAST YEAR, shaped like _bdTotals' output so every reader can
+// treat it as just another set of totals. Month totals are all there is —
+// buysell_monthly_history holds one row per store per month and daily_buysell
+// does not reach back into 2025 — so sellDays/buyDays here count STORES that
+// carried a figure, not days. They exist because _bdNetGp asks "was there any
+// selling at all", which is the same question either way.
+//
+// The company sums whatever stores existed: three in 2025 against five now.
+// That is the company's real year on year, and the same comparison the workbook
+// makes on its own YoY line.
+function _bdPrevYear(code, payload) {
+    const d = payload || _bdData;
+    const src = d && d.prevYear && d.prevYear.stores;
+    if (!src) return null;
+    const codes = code === BD_ALL ? Object.keys(src) : (src[code] ? [code] : []);
+    if (!codes.length) return null;
+    const t = { sales: 0, cost: 0, gp: 0, resale: 0, paid: 0, sellDays: 0, buyDays: 0 };
+    codes.forEach(c => {
+        const r = src[c] || {};
+        if (r.sales !== null && r.sales !== undefined) {
+            t.sales += r.sales; t.cost += (r.cost || 0); t.gp += (r.gp || 0); t.sellDays++;
+        }
+        if (r.resale !== null && r.resale !== undefined) {
+            t.resale += r.resale; t.paid += (r.paid || 0); t.buyDays++;
+        }
+    });
+    if (!t.sellDays && !t.buyDays) return null;
+    t.margin = t.sales > 0 ? t.gp / t.sales * 100 : null;
+    t.buyMargin = t.resale > 0 ? (t.resale - t.paid) / t.resale * 100 : null;
+    return t;
+}
+
+// The goal, and how much of it is banked, in the header. The goal BAR further
+// down says the same thing at length; this is the version that can be read
+// without looking for it, which is what it was asked for.
+//
+// A month with no goal says so rather than showing 0% — every month before
+// August 2026 predates monthly_gp_goals, and a goal bar measuring against
+// nothing would read as a catastrophic miss. DM/CEO get the way to fix it.
+function _bdGoalChip(store, t, proj, isCurrent) {
+    const goal = store && Number(store.goal);
+    if (!goal || !isFinite(goal) || goal <= 0) {
+        if (!_gpCanEdit()) return '';
+        // A month in progress with no goal is a job to do and says so. A
+        // finished one is a fact about the past — still fixable, because a goal
+        // can be entered late, but it has no business shouting about it.
+        const cls = isCurrent ? 'bd-h-goal bd-h-goal-set' : 'bd-h-goal bd-h-goal-none';
+        const txt = isCurrent ? 'Set the goal' : 'No goal set';
+        return '<button type="button" class="' + cls + '" onclick="openGpGoals(\''
+            + escapeHtml(_bdMonth) + '\')">' + txt + '</button>';
+    }
+    // TRACKING to goal, not banked against it (Ethan's call 2026-08-12): on the
+    // 12th, "34% of the goal" is true and reads like a disaster, when the month
+    // is actually on pace to beat it. The projection is the same one the tiles
+    // carry — month to date over days elapsed, times days in the month — so the
+    // header and the tiles can never tell different stories. A finished month
+    // projects by 1, which makes this its final figure.
+    const pct = t && t.sellDays ? (t.gp * (proj || 1) / goal * 100) : 0;
+    // Coloured off the ROUNDED figure, not the raw one, so the pill can never
+    // contradict the number printed inside it: 99.97% prints as 100.0% and has
+    // to be green, or the chip argues with itself.
+    const shown = Math.round(pct * 10) / 10;
+    // A finished month is a verdict, so short of the goal is a miss and says so
+    // in red. Exactly 100 counts as hit; a point under does not. A month still
+    // running is a PROJECTION — being behind it is not yet a failure, and
+    // painting it red every morning would teach everyone to ignore the colour.
+    const tone = shown >= 100 ? ' bd-h-goal-hit' : (isCurrent ? '' : ' bd-h-goal-miss');
+    // "Tracking" is a word about the future, and a closed month has none. The
+    // running month says what it is heading for; a finished one says what it
+    // came to.
+    const verb = isCurrent ? ' tracking to ' : ' of ';
+    return '<span class="bd-h-goal' + tone + '">'
+        + '<b>' + _lvPct(pct) + '</b>' + verb + _lvMoney(goal, false) + ' goal</span>';
+}
+
+// The block on screen, store or company. Every reader goes through this so the
+// company view is not a second code path with its own bugs. Takes an optional
+// payload so the SAME reader serves last month's figures for the MoM comparison.
+function _bdStoreData(code, payload) {
+    const d = payload || _bdData;
+    if (code === BD_ALL) return _bdCompany(d);
+    return (d && d.stores && d.stores[code]) || null;
+}
+
+// Did this store trade at all in the month on screen? MPL and BAL opened during
+// April 2026, so every month before that carries their blocks as empty days
+// rather than as absent stores — the difference between "no figures" and "no
+// store" is the whole point of saying so.
+function _bdHasData(code) {
+    const s = _bdStoreData(code);
+    return !!(s && (s.days || []).some(x => x.sales !== null || x.resale !== null));
+}
+
+function _bdPickers() {
+    const d = _bdData;
+    if (!d) return '';
+    const codes = Object.keys(d.stores || {});
+    // The company sits in its own group ahead of the stores, with a divider.
+    // Deliberately NOT a sixth pill in the row: "SPEEKS" is twice the width of a
+    // three-letter code, so it would undo the fixed-width pills that stop the
+    // green marker changing shape as you move between stores. Set apart it also
+    // reads as what it is — a different KIND of thing from a store, not a store
+    // called SPEEKS.
+    const all = '<button type="button" class="bd-pill bd-pill-all'
+        + (_bdStore === BD_ALL ? ' on' : '') + '"'
+        + ' onclick="setDailyStore(\'' + BD_ALL + '\')">' + escapeHtml(BD_ALL) + '</button>'
+        + '<span class="bd-pill-div" aria-hidden="true"></span>';
+    // A store with nothing in this month is shown but not selectable. Removing
+    // the pill would make the row change width as you move through the months,
+    // and leaving it live would offer a view whose only content is an apology.
+    const store = codes.map(c => {
+        // Never the selected one: it stays live and normally coloured, and the
+        // panel underneath is already explaining why it is empty. Greying the
+        // pill you are standing on reads as the control being broken.
+        const off = !_bdHasData(c) && c !== _bdStore;
+        const cls = 'bd-pill' + (c === _bdStore ? ' on' : '') + (off ? ' off' : '');
+        return '<button type="button" class="' + cls + '"'
+            + (off ? ' disabled title="' + escapeHtml(c + ' had not opened yet') + '"'
+                   : ' onclick="setDailyStore(\'' + c + '\')"')
+            + '>' + escapeHtml(c) + '</button>';
+    }).join('');
+    // A <select> rather than pills: the list grows by one every month and would
+    // otherwise run off the bar within a year.
+    const months = (d.months || []).map(m => '<option value="' + m + '"'
+        + (m === _bdMonth ? ' selected' : '') + '>' + escapeHtml(_bdMonthName(m))
+        + '</option>').join('');
+    return '<span class="bd-pills">' + all + store + '</span>'
+        + '<select class="bd-month" aria-label="Month"'
+        + ' onchange="setDailyMonth(this.value)">' + months + '</select>';
+}
+
+function _bdRender() {
+    const el = _bdEl();
+    if (!el) return;
+    const pick = el.querySelector('.bd-pickers');
+    if (pick) pick.innerHTML = _bdPickers();
+    const body = el.querySelector('.bd-body');
+    if (!body) return;
+
+    if (_bdErr) {
+        body.innerHTML = '<div class="lv-err"><b>The daily figures did not load.</b>'
+            + escapeHtml(_bdErr) + '</div>';
+        return;
+    }
+    // Any render before the first payload lands, not just one flagged busy: the
+    // shell is drawn the moment the overlay opens, which is before _bdLoad has
+    // even set the flag, and the fall-through below would flash "no figures for
+    // this month" at somebody whose month is still in flight.
+    if (!_bdData) {
+        body.innerHTML = '<div class="bd-empty">Loading the month&hellip;</div>';
+        return;
+    }
+    const d = _bdData;
+    const store = _bdStore ? _bdStoreData(_bdStore) : null;
+    if (!store) { body.innerHTML = '<div class="bd-empty">No figures for this month yet.</div>'; return; }
+
+    // The month in progress stops at today. A finished month runs to its end.
+    const cap = d.isCurrent ? Math.min(d.today || d.daysInMonth, d.daysInMonth) : d.daysInMonth;
+    const days = (store.days || []).filter(x => x.day <= cap);
+    // Trailing empty days come off the month IN PROGRESS only. Today's buying is
+    // keyed the next morning and the sheet's selling runs a day behind, so this
+    // month almost always ends on a row of dashes — which reads as a day the
+    // store did nothing rather than as a day nobody has written down yet.
+    //
+    // A FINISHED month keeps every day it has, empty or not. Trimming there
+    // would hide a hole rather than explain one: the hourly capture currently
+    // stores the last day of each month as zeros for every store (July 31 2026,
+    // a Friday, is zero across all five), so a finished month can end on a day
+    // that is missing rather than quiet. Dropping the row would make the month
+    // look a day shorter and its total look correct, which is the worse of the
+    // two failures. A gap in the middle stays in both cases.
+    if (d.isCurrent) {
+        while (days.length && days[days.length - 1].sales === null
+               && days[days.length - 1].resale === null) days.pop();
+    }
+    const last = days.length ? days[days.length - 1].day : 0;
+    const blanks = days.filter(x => x.sales === null && x.resale === null).length;
+    // Not "no rows" — a finished month always HAS rows, because the trim above
+    // is deliberately skipped for it. A store with no figures on any of them is
+    // a store that was not trading, and rendering 31 dashed rows under a $0 tile
+    // strip says "catastrophe" where the truth is "not open yet".
+    const hasAny = blanks < days.length;
+    const t = _bdTotals(days);
+
+    const nm = _bdStoreName(_bdStore);
+    let html = '<div class="bd-head">'
+        + '<span class="bd-h-l"><b>' + escapeHtml(_bdStore) + '</b>'
+        + (nm ? '<span class="bd-h-nm">' + escapeHtml(nm) + '</span>' : '')
+        + '<span class="bd-h-mo">' + escapeHtml(_bdMonthName(_bdMonth)) + '</span></span>'
+        + '<span class="bd-h-r">' + '<!--GOALCHIP-->' + (hasAny && d.isCurrent
+            ? 'Through ' + escapeHtml(_bdMonthName(_bdMonth).split(' ')[0]) + ' ' + last
+            : (hasAny ? 'Complete month' : ''))
+        + '</span></div>';
+
+    // Nothing on any day of the month. Two different absences, and calling the
+    // first one the second would be a small lie about the company's own history:
+    // MPL and BAL opened during April 2026, so their earlier months are not late
+    // paperwork. Returns BEFORE the tiles and the table — a $0 strip over 31
+    // dashed rows, with a warning that the totals are short, reads as a disaster
+    // rather than as a store that did not exist yet.
+    if (!hasAny) {
+        body.innerHTML = html + '<div class="bd-empty">' + (d.isCurrent
+            ? 'Nothing keyed into the sheet for ' + escapeHtml(_bdMonthName(_bdMonth)) + ' yet.'
+            : escapeHtml(_bdStore) + ' had not opened in '
+              + escapeHtml(_bdMonthName(_bdMonth)) + '.') + '</div>';
+        return;
+    }
+
+    // NOT .lv-strip. renderLiveDashboard() fills every .lv-strip on the page by
+    // class — that is how one function serves the manager card, the employee
+    // widget and the full-screen board at once — so wearing that class made this
+    // strip a mount point for the Live Dashboard. Any poll, realtime ping or
+    // re-render while the popout was open replaced these six tiles with "Net
+    // Sales Today / Orders / Gross Margin / MTD Revenue", which is what the
+    // "glitch when clicking off the screen and back" was.
+    // ---- last month, for every comparison below ----
+    // A month in progress is NOT compared as it stands: eleven days against a
+    // full thirty-one would read as a collapse every time. It is projected to
+    // month end first — the sheet's own "Tracking" — and that is what meets last
+    // month's actual. Finished months compare as they are.
+    //
+    // The divisor is the last day WITH figures, not the calendar day: buying is
+    // keyed the morning after, so on the 12th the month has eleven days in it,
+    // and dividing by twelve would under-project every store every morning.
+    const prevYm = _bdPrevMonth(_bdMonth);
+    const prevPay = _bdCache[prevYm];
+    const prevStore = prevPay ? _bdStoreData(_bdStore, prevPay) : null;
+    const pt = prevStore ? _bdTotals(prevStore.days || []) : null;
+    const proj = (d.isCurrent && last > 0) ? (d.daysInMonth / last) : 1;
+    const at = v => (v === null ? null : v * proj);      // this month, at month end
+    const prevNm = prevYm ? _bdMonthName(prevYm).split(' ')[0] : '';
+    // Now that the projection is known, the header's goal chip can say what the
+    // month is TRACKING to rather than what it has banked so far.
+    html = html.replace('<!--GOALCHIP-->', _bdGoalChip(store, t, proj, d.isCurrent));
+
+    // The month-end projection of a figure, on the month in progress only.
+    const proj_ = v => (d.isCurrent && v !== null && proj !== 1) ? _lvMoney(v * proj, false) : '';
+
+    // ---- the tile ----------------------------------------------------------
+    // Label across the top. Underneath, the figure with its month-end
+    // projection below it — a projection is the same quantity read forward, so
+    // it belongs under the number it projects, not off to one side. The
+    // comparisons go to the RIGHT, one row each: they are a different kind of
+    // thing (other periods) and stacking them under the figure made a column of
+    // four numbers with nothing saying which was which (user's call 2026-08-12).
+    const cmpRow = c => c
+        ? '<div class="bd-cmp"><span class="bd-cmp-k">' + escapeHtml(c.k) + '</span>'
+          + '<span class="bd-cmp-v">' + c.v + '</span>'
+          + '<span class="bd-cmp-d">' + (c.d || '') + '</span></div>'
+        : '';
+    const tile = (k, v, o) => {
+        o = o || {};
+        const rows = (o.cmp || []).map(cmpRow).join('');
+        return '<div class="cc-cell bd-tile' + (o.accent ? ' lv-accent' : '') + '">'
+            + '<span class="sh-stripe g"></span>'
+            + '<div class="sh-k">' + k + '</div>'
+            + '<div class="bd-tile-row">'
+            + '<div class="bd-tile-main"><div class="sh-v">' + v + '</div>'
+            + (o.track ? '<div class="bd-track">Tracking ' + o.track + '</div>' : '')
+            + (o.note ? '<div class="bd-track bd-note">' + o.note + '</div>' : '')
+            + '</div>'
+            + (rows ? '<div class="bd-tile-cmp">' + rows + '</div>' : '')
+            + '</div></div>';
+    };
+    const lastMo = (was, delta) => was ? { k: prevNm, v: was, d: delta } : null;
+
+    // Last year's same month. There are no 2025 DAYS anywhere in the database —
+    // buysell_monthly_history carries month totals and nothing finer — so this
+    // is the month as it finished, with nothing to project.
+    //
+    // The delta beside it measures THIS month's projection against that actual,
+    // which is what the workbook's own YoY line does: verified to the dollar on
+    // OVL August, where our projection of $145,167 is exactly the sheet's YoY
+    // "Current" against $105,622.08 for August 2025, giving its 37.44%.
+    //
+    // Missing is normal, not an error. MPL and BAL opened in April 2026, WSP in
+    // June 2025 — a store with no row that month simply has no line, rather than
+    // a zero that would read as a collapse.
+    const pyT = _bdPrevYear(_bdStore, d);
+    const pyNm = (d.prevYear && d.prevYear.ym)
+        ? _bdMonthName(d.prevYear.ym).slice(0, 3) + ' ' + d.prevYear.ym.slice(0, 4)
+        : '';
+    const lastYr = key => {
+        if (!pyT || !pyNm) return null;
+        const pyNet = _bdNetGp(pyT);
+        const spec = {
+            sales:     [pyT.sales,  at(t.sales),  'good'],
+            gp:        [pyT.gp,     at(t.gp),     'good'],
+            net:       [pyNet,      net === null ? null : net * proj, 'good'],
+            resale:    [pyT.resale, at(t.resale), 'good'],
+            // Grey, like every other comparison of what buying COST: paying out
+            // more is what buying more looks like.
+            paid:      [pyT.paid,   at(t.paid),   'flat'],
+            // Percentages carry no arrow, for the same reason last month's do
+            // not: a percentage change OF a percentage is read wrong more often
+            // than right. The two figures sit side by side instead.
+            margin:    [pyT.margin, null, ''],
+            buyMargin: [pyT.buyMargin, null, ''],
+        }[key];
+        if (!spec || spec[0] === null || spec[0] === undefined || !spec[0]) return null;
+        const isPct = key === 'margin' || key === 'buyMargin';
+        return {
+            k: pyNm,
+            v: isPct ? _lvPct(spec[0]) : _lvMoney(spec[0], false),
+            d: spec[1] === null ? '' : _bdDelta(spec[1], spec[0], spec[2]),
+        };
+    };
+
+    // A tile whose caption is a MEASUREMENT is marked, because a short screen
+    // drops the caption line to buy table space — and dropping "Month To Date"
+    // is free where dropping "▲ 11.3% vs July" would be losing a figure the
+    // view was asked to show.
+    const dSales = pt && _bdDelta(at(t.sales), pt.sales, 'good');
+    const dGp    = pt && _bdDelta(at(t.gp),    pt.gp,    'good');
+    const mom = ' bd-t-mom';
+
+    // Two rows, split by what they are about rather than by how many fit: what
+    // the month SOLD and what that was worth on top, what it BOUGHT underneath.
+    // Net GP belongs upstairs — it is the last step of the selling figures, not
+    // a footnote to them (user's call 2026-08-12).
+    const net = _bdNetGp(t);
+    const pnet = pt ? _bdNetGp(pt) : null;
+    const dNet = pnet ? _bdDelta(net * proj, pnet, 'good') : '';
+
+    html += '<div class="bd-strip bd-strip-top bd-strip-tight">'
+        + tile('Sales', _lvMoney(t.sales, false), {
+            accent: true, track: proj_(t.sales),
+            note: pt ? '' : (d.isCurrent ? 'Month To Date' : 'Month Total'),
+            cmp: [lastMo(pt && _lvMoney(pt.sales, false), dSales), lastYr('sales')],
+        })
+        + tile('Gross Profit', _lvMoney(t.gp, false), {
+            track: proj_(t.gp),
+            note: pt ? '' : (d.isCurrent ? 'Month To Date' : 'Month Total'),
+            cmp: [lastMo(pt && _lvMoney(pt.gp, false), dGp), lastYr('gp')],
+        })
+        // No arrow on margin: a percentage change OF a percentage is a figure
+        // almost nobody reads correctly. Last month's margin sits beside it and
+        // the difference in points is there to be seen. No projection either —
+        // a ratio is directly comparable mid-month.
+        + tile('Sell Margin <span class="bd-k-sub">&middot; On Sales</span>', _lvPct(t.margin), {
+            cmp: [lastMo((pt && pt.margin !== null) ? _lvPct(pt.margin) : '', ''), lastYr('margin')],
+        })
+        + (net === null ? '' : tile('Net GP', _lvMoney(net, false), {
+            track: proj_(net),
+            note: pnet ? '' : 'Gross Profit Less ' + Math.round(BD_NET_GP_RATE * 100) + '%',
+            cmp: [lastMo(pnet ? _lvMoney(pnet, false) : '', dNet), lastYr('net')],
+        }))
+        + '</div>';
+
+    // The buying half. Same shape as the row above — this is what the month
+    // spent to make it possible, and it is read the same way.
+    //
+    // The captions stay. They are not decoration: the sheet's "Sell" column is
+    // the resale value of goods BOUGHT and its "Buy" column is the cash paid, so
+    // "Resale Value" and "Out Of The Till" are what stop the two being read the
+    // wrong way round.
+    const dRes = pt && _bdDelta(at(t.resale), pt.resale, 'good');
+    html += '<div class="bd-strip bd-strip2">'
+        + tile('Bought <span class="bd-k-sub">&middot; Resale Value</span>', _lvMoney(t.resale, false), {
+            track: proj_(t.resale),
+            cmp: [lastMo(pt && _lvMoney(pt.resale, false), dRes), lastYr('resale')],
+        })
+        // The bare figure, alone: no projection, no last month, no last year
+        // (user's call 2026-08-12). What the till is down this month is a fact
+        // and it is read on its own. Every comparison anyone would draw off it
+        // is already in the two tiles beside it — the resale value carries the
+        // month-end picture and the buy margin carries the ratio between them —
+        // so three periods of cash-out was the same story told a third time.
+        + tile('Cash Paid <span class="bd-k-sub">&middot; Out Of The Till</span>', _lvMoney(t.paid, false), {})
+        + tile('Buy Margin <span class="bd-k-sub">&middot; On Purchases</span>', _lvPct(t.buyMargin), {
+            cmp: [lastMo((pt && pt.buyMargin !== null) ? _lvPct(pt.buyMargin) : '', ''), lastYr('buyMargin')],
+        })
+        + '</div>';
+
+
+    // Only ever the month in progress: nothing stores a past month's goal, and a
+    // finished month measured against this month's target would be a wrong
+    // number rather than a missing one.
+    if (d.isCurrent && store.goal > 0) {
+        const pct = t.gp / store.goal * 100;
+        html += '<div class="lv-goal"><div class="lv-goal-top">'
+            + '<span class="lv-goal-lbl">Gross Profit Against Goal</span>'
+            + '<span class="lv-goal-fig"><b>' + _lvMoney(t.gp, false) + '</b> of '
+            + _lvMoney(store.goal, false) + '</span></div>'
+            + '<div class="lv-goal-bar"><i style="width:' + Math.max(0, Math.min(100, pct)) + '%"></i></div>'
+            + '<div class="lv-goal-foot">' + _lvPct(pct) + ' Banked</div></div>';
+    }
+
+    // The buying-day count rides in the group heading rather than in a sentence
+    // under the table. It is a property OF the buying columns — how many of the
+    // month's days actually have a purchase on them — so it belongs where the
+    // eye already is when reading them, not sixteen rows below where it has to
+    // be carried back up (user's call 2026-08-12).
+    //
+    // Both months now, not finished ones only. What got dropped with the
+    // sentence was the AVERAGE (paid and resale per buying day), which mid-month
+    // moves every morning and answers nothing you would act on. The count itself
+    // is a plain fact on any month; it just needs saying that this month is
+    // still running, or "24 buying days" on the 12th reads as a finished total.
+    const buyDays = t.buyDays
+        ? ' <span class="bd-grp-sub">&middot; ' + t.buyDays
+          + (t.buyDays === 1 ? ' Buying day' : ' Buying days')
+          + (d.isCurrent ? ' so far' : ' this month') + '</span>'
+        : '';
+    html += '<div class="lv-tbl-scroll"><table class="lv-tbl bd-tbl"><thead>'
+        + '<tr class="bd-grp"><th></th><th colspan="4">Selling</th>'
+        + '<th colspan="3" class="bd-sep">Buying' + buyDays + '</th></tr>'
+        + '<tr><th>Day</th><th>Sales</th><th>Cost</th><th>Gross profit</th><th>Margin</th>'
+        + '<th class="bd-sep">Bought<span class="bd-th-sub">resale value</span></th>'
+        + '<th>Cash paid</th><th>Buy margin</th>'
+        + '</tr></thead><tbody>';
+
+    const cell = (cls, v) => '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + v + '</td>';
+    const dash = cls => '<td class="' + (cls ? cls + ' ' : '') + 'bd-dash">&mdash;</td>';
+
+    // Days grouped into calendar weeks, Monday-started. Thirty-one identical
+    // rows give the eye nothing to hold on to; five banded blocks give it five
+    // landmarks, and "the week of the 12th" becomes something you can find
+    // rather than count to. The month's first partial week is a group in its own
+    // right, which is why the first row always opens one.
+    const weeks = [];
+    days.forEach(x => {
+        const w = _bdDow(_bdMonth, x.day);
+        if (!weeks.length || w.dow === 1) weeks.push([]);
+        weeks[weeks.length - 1].push(x);
+    });
+    const moAbbr = _bdMonthName(_bdMonth).slice(0, 3);
+
+    weeks.forEach((wk, wi) => {
+        // The band alternates by week, so two touching weeks never share a tint.
+        const band = wi % 2 === 1 ? 'bd-band' : '';
+        const a = wk[0].day, b = wk[wk.length - 1].day;
+        // Five columns then three, not one span of eight: the second cell is
+        // empty and exists only so the Selling|Buying rule has something to be
+        // drawn on across a week label. Spanning the whole width left a gap in
+        // the line at every week.
+        html += '<tr class="bd-wkrow"><td colspan="5">' + escapeHtml(moAbbr) + ' ' + a
+            + (b > a ? ' &ndash; ' + b : '')
+            + '</td><td colspan="3" class="bd-sep"></td></tr>';
+        wk.forEach(x => {
+        const w = _bdDow(_bdMonth, x.day);
+        const rowCls = [w.dow === 0 ? 'bd-sun' : '', band].filter(Boolean).join(' ');
+        html += '<tr' + (rowCls ? ' class="' + rowCls + '"' : '') + '>'
+            // Two fixed slots rather than a flowing pair: the number right-aligns
+            // in its own column so 1 and 31 end at the same x, and the weekday
+            // centres in its own, so the abbreviations run straight down the page
+            // instead of stepping across when the date gains a digit.
+            + '<td><span class="bd-day"><b>' + x.day + '</b>'
+            + '<span class="bd-dow">' + escapeHtml(w.nm) + '</span></span></td>'
+            + (x.sales === null
+                ? dash('lv-strongnum') + dash('lv-quietnum') + dash('lv-boldnum') + dash('')
+                : cell('lv-strongnum', _lvMoney(x.sales, true))
+                  + cell('lv-quietnum', _lvMoney(x.cost, true))
+                  + cell('lv-boldnum', _lvMoney(x.gp, true))
+                  + cell('', _lvPct(x.sales > 0 ? x.gp / x.sales * 100 : null)))
+            + (x.resale === null
+                ? '<td class="lv-strongnum bd-dash bd-sep">&mdash;</td>'
+                  + dash('lv-quietnum') + dash('lv-boldnum')
+                : '<td class="lv-strongnum bd-sep">' + _lvMoney(x.resale, false) + '</td>'
+                  + cell('lv-quietnum', _lvMoney(x.paid, false))
+                  + cell('lv-boldnum', _lvPct(x.buyMargin * 100)))
+            + '</tr>';
+        });
+    });
+    html += '</tbody><tfoot><tr class="lv-foot">'
+        + '<td><span class="bd-day"><b>TTL</b></span></td>'
+        + cell('lv-strongnum', _lvMoney(t.sales, true))
+        + cell('lv-quietnum', _lvMoney(t.cost, true))
+        + cell('lv-boldnum', _lvMoney(t.gp, true))
+        + cell('', _lvPct(t.margin))
+        + '<td class="lv-strongnum bd-sep">' + _lvMoney(t.resale, false) + '</td>'
+        + cell('lv-quietnum', _lvMoney(t.paid, false))
+        + cell('lv-boldnum', _lvPct(t.buyMargin))
+        + '</tr></tfoot></table></div>';
+
+    // A day with neither sales nor buying is not a quiet day — the webstore
+    // trades even when the doors are shut, so every real day carries something.
+    // It means the figures for that day were never captured, and the totals
+    // above are short by whatever they were. Said plainly rather than left for
+    // someone to notice that a month came up light.
+    if (blanks) {
+        html += '<div class="lv-note bd-warn">' + blanks
+            + (blanks === 1 ? ' day has' : ' days have')
+            + ' no figures recorded, so the totals above are short by whatever '
+            + (blanks === 1 ? 'it' : 'they') + ' held.</div>';
+    }
+    body.innerHTML = html;
+}
+
+// Named, not drawn. A calendar glyph beside a speaker and a full-screen glyph
+// was the third unlabelled control in a row and said nothing about what it
+// opened — the two beside it change how you are LOOKING at the board, this one
+// opens a different view entirely, so it gets words (user's call 2026-08-11).
+//
+// Sits directly after the Today/Yesterday/Month toggle, ahead of the mute
+// switch, and is sized to match it. Both are ways of choosing WHICH figures you
+// are reading — the toggle picks the span, this picks the shape — so they read
+// as one group, and the two icon buttons after them (a preference and a window
+// control) as another (user's call 2026-08-12).
+function _bdBtn() {
+    return '<button type="button" class="bd-open" onclick="openDailyBreakdown()"'
+        + ' aria-label="Open the day-by-day buying and selling breakdown">'
+        + 'Daily Breakdown</button>';
 }
 
 // Which store just moved, and how it should be marked. Two shapes: a band across
@@ -10486,9 +11868,14 @@ function _lvBuyBlock(d, views) {
         const revOf = code => { const f = _lvFcFor(code); return (f && f.reviews) || 0; };
         html += '<div class="lv-tbl-scroll"><table class="lv-tbl lv-tbl-buy'
             + (showRev ? ' lv-tbl-rev' : '') + '"><thead><tr>'
-            + '<th>Store</th><th>Bought &middot; resale value</th><th>Cash paid</th>'
-            + '<th>Buy margin</th><th>Bought vs sold</th>'
+            + '<th>Store</th>'
+            // Second column, beside the store name rather than out past the money
+            // (user's call 2026-08-12). It is a headcount, not a currency, so at
+            // the far right it sat in the position the eye reads as "the last
+            // money column" and had to be re-read as something else every time.
             + (showRev ? '<th>Reviews</th>' : '')
+            + '<th>Bought &middot; resale value</th><th>Cash paid</th>'
+            + '<th>Buy margin</th><th>Bought vs sold</th>'
             + '</tr></thead><tbody>';
         const revCell = n => '<td class="lv-boldnum">' + (n > 0 ? _lvNum(n) : '—') + '</td>';
         rows.forEach(r => {
@@ -10498,21 +11885,22 @@ function _lvBuyBlock(d, views) {
             html += '<tr' + (mine ? ' class="' + mine + '"' : '') + '>'
                 + '<td><span class="lv-store">' + tint + '<b>' + escapeHtml(r.v.code) + '</b>'
                 + '<span class="lv-store-nm">' + escapeHtml(r.v.name || '') + '</span></span></td>'
+                + (showRev ? revCell(revOf(r.v.code)) : '')
                 + '<td class="lv-strongnum">' + _lvMoney(r.b.bought, false) + '</td>'
                 + '<td class="lv-quietnum">' + _lvMoney(r.b.paid, false) + '</td>'
                 + '<td class="lv-boldnum">' + _lvPct(r.b.margin) + '</td>'
                 + '<td>' + _lvRatio(r.b.bought, r.b.sold) + '</td>'
-                + (showRev ? revCell(revOf(r.v.code)) : '') + '</tr>';
+                + '</tr>';
         });
         const tot = _lvBuySum(rows.map(r => r.b));
         html += '</tbody><tfoot><tr class="lv-foot"><td><span class="lv-store"><b>Total</b></span></td>'
+            // The Total line is not a store, so its reviews are the sum of the rows
+            // above rather than a lookup on a code that has no hub key.
+            + (showRev ? revCell(revCodes.reduce((a, c) => a + revOf(c), 0)) : '')
             + '<td class="lv-strongnum">' + _lvMoney(tot.bought, false) + '</td>'
             + '<td class="lv-quietnum">' + _lvMoney(tot.paid, false) + '</td>'
             + '<td class="lv-boldnum">' + _lvPct(tot.margin) + '</td>'
             + '<td>' + _lvRatio(tot.bought, tot.sold) + '</td>'
-            // The Total line is not a store, so its reviews are the sum of the rows
-            // above rather than a lookup on a code that has no hub key.
-            + (showRev ? revCell(revCodes.reduce((a, c) => a + revOf(c), 0)) : '')
             + '</tr></tfoot></table></div>';
     }
 
@@ -10959,7 +12347,7 @@ function renderLiveDashboard() {
     // Sits AFTER the open/closed pill: it is a preference, not a state readout, and
     // wedged between the two pill groups it read as an orphaned third pill.
     const dSound = document.querySelector('.lv-card .lv-sound-host');
-    if (dSound) dSound.innerHTML = _lvSoundBtn() + _lvFullBtn();
+    if (dSound) dSound.innerHTML = _bdBtn() + _lvSoundBtn() + _lvFullBtn();
 
     // ---- store surfaces (manager Command Center + employee/ASM widget) ----
     // Every exit from here on has to fall through to the tail below, which clears
@@ -11036,10 +12424,15 @@ function renderLiveDashboard() {
         // the page — the board is identified by the card it renders into, which
         // keeps this module from reaching into the auth section for _tvOnBoardPage.
         const bare = !!el.closest('#lvFullscreen, .tv-card');
+        // The daily breakdown has its own exclusion, narrower than `bare`: it is
+        // fine — useful, even — on top of the full-screen board, but the
+        // shop-floor board is unattended and has nobody to click it.
+        const board = !!el.closest('.tv-card');
         el.innerHTML = '<div class="lv-head">'
             + '<span class="lv-head-l">' + _lvFreshness(d)
             + '<span class="lv-asof">' + stamp + '</span></span>'
-            + '<span class="lv-head-r">' + _lvToggle(d) + _lvSoundBtn()
+            + '<span class="lv-head-r">' + _lvToggle(d)
+            + (board ? '' : _bdBtn()) + _lvSoundBtn()
             + (bare ? '' : _lvFullBtn()) + '</span>'
             + '</div>' + detail;
     });
@@ -11123,6 +12516,8 @@ function _lvAfterRender() {
     _lvPulse = {};
     // The chip rows exist now, so fill them from the live events.
     _lvSyncActivity();
+    // Find out whether audio is actually available BEFORE a sale needs it.
+    _lvPrimeAudio();
 }
 
 // ============================================================================
@@ -13270,8 +14665,8 @@ const B2B_ACTIONS = {
     listing:          { cta: 'Open Listing',    why: 'List the items for resale',       kind: 'listing' },
 };
 
-const B2B_CORP_ROLES   = ['district manager', 'ceo', 'tom'];
-const B2B_ACCEPT_ROLES = ['ceo', 'tom', 'district manager'];   // may lock a quote
+const B2B_CORP_ROLES   = ['district manager', 'ceo', 'mocd'];
+const B2B_ACCEPT_ROLES = ['ceo', 'mocd', 'district manager'];   // may lock a quote
 const B2B_STORE_ROLES  = ['manager', 'owner (manager)', 'owner manager', 'assistant manager'];
 // 'For Parts' was renamed to 'Broken' -- same meaning, plainer word. It is gone
 // from the picker but still recognised by the reason gate and the tone maps
@@ -13405,7 +14800,7 @@ function _b2bIsCorp()    { return B2B_CORP_ROLES.includes(_b2bRole()) || _b2bHas
 function _b2bIsDM()      { return _b2bRole() === 'district manager' || _b2bHasCorpDelegation(); }
 // Accepting a quote is deliberately NOT delegable -- it locks the money.
 function _b2bCanAccept()  { return B2B_ACCEPT_ROLES.includes(_b2bRole()); }
-function _b2bCanClients() { return ['ceo', 'district manager', 'tom'].includes(_b2bRole()); }
+function _b2bCanClients() { return ['ceo', 'district manager', 'mocd'].includes(_b2bRole()); }
 // CRM notification setup (cadences + who gets the reach-out emails) is CEO-only.
 function _b2bCanCrm() { return _b2bRole() === 'ceo'; }
 function _b2bCanOverview(){ return ['ceo', 'district manager'].includes(_b2bRole()); }
@@ -15420,7 +16815,7 @@ function _b2bSignBlock(deal) {
                 <div class="b2b-signq-acts">
                     <button class="b2b-btn b2b-btn-primary" onclick="b2bSignHere('${deal.id}')">Sign on this device</button>
                     ${_b2bCanAccept() ? `<button class="b2b-mini" onclick="b2bSkipSign('${deal.id}')">Continue without a signature</button>`
-                                      : '<span class="b2b-signq-note">A CEO, TOM or DM can sign off without one.</span>'}
+                                      : '<span class="b2b-signq-note">A CEO, MOCD or DM can sign off without one.</span>'}
                 </div>
             </div>
         </div>`;
@@ -16857,7 +18252,7 @@ function _b2bStageQuote(deal) {
             <span class="b2b-note-k">Awaiting approval</span>
             This quote hasn't gone to the client yet.
             ${canAccept ? 'Send it from your own mailbox, or send it back to pricing if something needs changing.'
-                        : 'A CEO, TOM or District Manager sends it out.'}
+                        : 'A CEO, MOCD or District Manager sends it out.'}
         </div>` : '';
 
     _b2bShowDeal({
@@ -16898,7 +18293,7 @@ function _b2bStageQuote(deal) {
             ${canAccept ? `<button class="b2b-btn b2b-btn-danger" onclick="b2bSendBack('${deal.id}')">Send Back For Changes</button>` : ''}
             ${canAccept
                 ? `<button class="b2b-btn b2b-btn-primary" onclick="b2bAcceptQuote('${deal.id}',this)">Mark Accepted</button>`
-                : '<span class="b2b-foot-note">Only a CEO, TOM or District Manager can accept a quote.</span>'}`,
+                : '<span class="b2b-foot-note">Only a CEO, MOCD or District Manager can accept a quote.</span>'}`,
         after: () => {
             _b2bPaintTotals();
             _b2bPaintQuoteDoc();
@@ -18464,7 +19859,7 @@ async function checkB2BReminders() {
 // Status changes are open to every store (the cross-store "we have this" signal);
 // add/edit/delete/restore are store-scoped (MSM covers BAL+MPL, corp covers all).
 // ============================================================================
-const CB_CORP_ROLES = ['district manager', 'ceo', 'tom'];   // may create/edit entries for any store
+const CB_CORP_ROLES = ['district manager', 'ceo', 'mocd'];   // may create/edit entries for any store
 const CB_ACTIVE_DAYS  = 30;   // days an entry stays on the sheet
 const CB_PURGE_DAYS   = 120;  // days from date_of_call until permanent deletion
 
@@ -18587,7 +19982,7 @@ function _cbIsCorpRole() {
 
 // --- Load & render
 async function cbLoad() {
-    // Corp roles (DM/CEO/TOM) watch the whole district — no "My Store" view;
+    // Corp roles (DM/CEO/MOCD) watch the whole district — no "My Store" view;
     // they land on All Stores and narrow with the store filter instead.
     if (_cbView === null) _cbView = _cbIsCorpRole() ? 'all' : 'mine';
     _cbSyncControls();   // highlight the right view button before the fetch resolves
@@ -19237,7 +20632,7 @@ function initDashboardData() {
         // a DM/CEO-pushed reminder wins (it's personal + already states the aging
         // count); the generic aging alert only fires if no reminder claimed the
         // bubble. Awaiting avoids the login flicker of one overwriting the other.
-        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); }, 1600);
+        setTimeout(async () => { await checkClaimReminders(); checkAgingClaims(); checkAgingClaimsDM(); checkVarianceReminders(); checkVarianceDmReminders(); checkMarginReminders(); checkMarginDmReminders(); checkRecycleReminders(); checkAgingInvReminders(); checkAgingInvDmReminders(); checkKpiDueReminders(); checkPreferredReminders(); checkB2BReminders(); checkListingGoalsDailyReminder(); checkExpenseFileReminder(); startGpGoalReminder(); }, 1600);
 
 
         // Pre-load checklist in background so chip + glow appear without opening the panel
@@ -21502,6 +22897,16 @@ function _ensureScCatalog(force) {
     }).catch(() => {}).finally(() => { _scCatalogFetching = false; });
 }
 
+// Where a score stands against the two thresholds, in three words. Was a tile
+// of its own ("Audit Standing") until a second audit arrived beside the first
+// and a single unlabelled standing stopped saying which one it belonged to —
+// now each audit carries its own on its sub-line (Ethan 2026-08-12).
+function _auStanding(pct) {
+    if (pct >= AUDIT_TARGET_PCT) return 'On Target';
+    if (pct >= AUDIT_PASS_PCT) return 'Passing';
+    return 'Below Pass';
+}
+
 // Audit color by percentage: target 90+ green, pass 80+ amber, else red.
 function auditPctColor(pct) {
     if (pct >= AUDIT_TARGET_PCT) return { bg: '#d1fae5', fg: '#059669' };
@@ -21516,38 +22921,304 @@ function openScorecardModal() {
     if (dateInput) dateInput.valueAsDate = new Date();
     _scoreDateLast = dateInput ? dateInput.value : ''; // the date to fall back to if a swap is declined
 
+    _paDirty = false;   // a fresh open starts from what is saved, not from last time
     switchScoreTab('scorecard');
     _buildScorecardModalInputs();
     renderAuditEntry();
     _ensureScCatalog();
 }
 
-// ---- Submit-modal tab switching (Scorecard | SPEEKS Audit | Manage Items) ----
+// ---- Submit-modal tabs (Scorecard | SPEEKS Audit | PayMore Audit | Manage) ----
+// Who may record what PayMore said. The same allow-list the scorecard fn
+// enforces server-side — the tab being hidden is a convenience, the 403 is the
+// rule. See [[kpi-role-gate]] for what happens when these two drift apart.
+function _paCanEdit() {
+    const r = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
+    return r === 'district manager' || r === 'district-manager' || r === 'ceo';
+}
+
 let currentScoreTab = 'scorecard';
 function switchScoreTab(tab) {
+    // Nobody but a DM or the CEO can land on the PayMore tab, however they got
+    // there — a stale onclick, a bookmarked state, the console.
+    if (tab === 'paudit' && !_paCanEdit()) tab = 'scorecard';
     currentScoreTab = tab;
     const scTab = document.getElementById('sc-tab-scorecard');
     const auTab = document.getElementById('sc-tab-audit');
+    const paTab = document.getElementById('sc-tab-paudit');
     const mgTab = document.getElementById('sc-tab-manage');
     if (scTab) scTab.classList.toggle('active', tab === 'scorecard');
     if (auTab) auTab.classList.toggle('active', tab === 'audit');
+    if (paTab) {
+        paTab.style.display = _paCanEdit() ? '' : 'none';
+        paTab.classList.toggle('active', tab === 'paudit');
+    }
     if (mgTab) mgTab.classList.toggle('active', tab === 'manage');
     const scPanel = document.getElementById('sc-panel-scorecard');
     const auPanel = document.getElementById('sc-panel-audit');
+    const paPanel = document.getElementById('sc-panel-paudit');
     const mgPanel = document.getElementById('sc-panel-manage');
     if (scPanel) scPanel.style.display = tab === 'scorecard' ? 'block' : 'none';
     if (auPanel) auPanel.style.display = tab === 'audit' ? 'block' : 'none';
+    if (paPanel) paPanel.style.display = tab === 'paudit' ? 'block' : 'none';
     if (mgPanel) mgPanel.style.display = tab === 'manage' ? 'block' : 'none';
     const scBtn = document.getElementById('submitScorecardBtn');
     const auBtn = document.getElementById('submitAuditBtn');
+    const paBtn = document.getElementById('submitPauditBtn');
     if (scBtn) scBtn.style.display = tab === 'scorecard' ? '' : 'none';
     if (auBtn) auBtn.style.display = tab === 'audit' ? '' : 'none';
+    if (paBtn) paBtn.style.display = tab === 'paudit' ? '' : 'none';
+    // The two Remove buttons are shown CONDITIONALLY by their own tab's
+    // renderer, which only ever runs while that tab is open — so nothing was
+    // switching them off on the way out and the PayMore one followed you to
+    // the Scorecard tab, where it would have removed a PayMore audit.
+    // Hidden here unconditionally; the renderers below put them back if the
+    // selected store and date actually have something to remove.
+    const paDel = document.getElementById('deletePauditBtn');
+    if (paDel) paDel.style.display = 'none';
+    const auDel = document.getElementById('deleteAuditBtn');
+    if (auDel) auDel.style.display = 'none';
     if (tab === 'manage') renderManageItems();
+    if (tab === 'paudit') renderPaymoreAuditTab();
+    _syncAuditDeleteBtn();
+}
+
+// ---- the real PayMore audit: a date and a score ----------------------------
+// The store and date come from the two controls at the top of the modal, shared
+// with the other tabs. Everything below is the one figure corporate gives us.
+
+// The points the audit is out of: the active catalog's total, exactly what the
+// SPEEKS Audit is scored against. Read from the catalog rather than hardcoded at
+// 165 — the Manage Items tab can change it, and a stale constant here would put
+// two different denominators on one row of the district board.
+function _paPossible() {
+    return (window._auCatalog || [])
+        .reduce((a, i) => a + (i.active ? (Number(i.points) || 0) : 0), 0);
+}
+
+// The saved audit for the store and date on screen, if there is one.
+function _paSaved() {
+    const store = (document.getElementById('dm-store-select')?.value || '').toUpperCase();
+    const date = document.getElementById('dm-score-date')?.value || '';
+    const row = (window._scorecardAllData || []).find(d => String(d.store).toUpperCase() === store);
+    const a = row && row.officialAudit;
+    return (a && a.date === date) ? a : null;
+}
+
+// Anything typed into the PayMore form that has not been saved. The date is a
+// LABEL on the audit, not a different form — correcting it must never cost the
+// figures already entered, which is how the SPEEKS audit tab behaves and what
+// this now matches (Ethan 2026-08-12).
+let _paDirty = false;
+function _paTouch() { _paDirty = true; _paPreview(); }
+
+// What is actually on the "out of" input, falling back to the catalog total.
+function _paPossibleInput() {
+    const v = parseFloat(document.getElementById('pa-possible')?.value);
+    return Number.isFinite(v) && v > 0 ? v : _paPossible();
+}
+
+function _paPreview() {
+    const poss = _paPossibleInput();
+    const el = document.getElementById('pa-earned');
+    const out = document.getElementById('pa-pct');
+    const note = document.getElementById('pa-poss-note');
+    // Said only when it is true. A note that the total differs is worth reading;
+    // one confirming it is the usual 165 is noise on every single entry.
+    if (note) {
+        const std = _paPossible();
+        note.innerHTML = (std && poss && Math.abs(poss - std) > 0.001)
+            ? 'Scored out of <b>' + poss + '</b> rather than the SPEEKS Audit&rsquo;s <b>' + std
+              + '</b>. The percentage is what the board compares, so it still reads against the same targets.'
+            : '';
+    }
+    if (!out) return;
+    const v = parseFloat(el && el.value);
+    if (!poss || !Number.isFinite(v)) { out.innerHTML = '&mdash;'; out.style.color = ''; return; }
+    const pct = Math.round(Math.min(Math.max(v, 0), poss) / poss * 1000) / 10;
+    out.textContent = pct + '%';
+    // Same three bands as everywhere else this score is shown, so the number the
+    // DM types goes the colour it will be on the board before they save it.
+    out.style.color = pct >= 80 ? '#178048' : (pct >= 50 ? '#b3760a' : '#dc2626');
+}
+
+function renderPaymoreAuditTab() {
+    // Loading an existing entry rather than presenting a blank form over the top
+    // of one: re-entering the same store and date corrects it, and the DM should
+    // be able to see what they are correcting.
+    const saved = _paSaved();
+    // Untouched form: load whatever is saved for this store and date. Touched:
+    // leave every field exactly as typed and only refresh the notes around them.
+    // Changing the date is how you say WHEN the audit happened, and doing that
+    // after typing the score used to wipe the score.
+    if (!_paDirty) {
+        // A saved audit keeps the total it was scored against, not today's
+        // catalog total — otherwise reopening a 120-point audit would silently
+        // re-base it on 165 and change the percentage on save without anyone
+        // touching the figure.
+        const poss = saved ? saved.possible : _paPossible();
+        const pEl = document.getElementById('pa-possible');
+        if (pEl) pEl.value = poss || '';
+        const earned = document.getElementById('pa-earned');
+        if (earned) earned.value = saved ? saved.earned : '';
+    }
+    const del = document.getElementById('deletePauditBtn');
+    if (del) del.style.display = saved ? '' : 'none';
+
+    const note = document.getElementById('pa-existing');
+    if (note) {
+        const store = (document.getElementById('dm-store-select')?.value || '').toUpperCase();
+        const row = (window._scorecardAllData || []).find(d => String(d.store).toUpperCase() === store);
+        const last = row && row.officialAudit;
+        note.innerHTML = saved
+            ? '<div class="pa-hint" style="margin:0 0 12px;">Editing the audit already saved for this date &mdash; '
+              + '<b>' + saved.earned + ' / ' + saved.possible + '</b> (' + saved.pct + '%). Saving replaces it.</div>'
+            : (last
+                ? '<div class="pa-hint" style="margin:0 0 12px;">Last PayMore audit for ' + escapeHtml(store)
+                  + ' was <b>' + last.pct + '%</b> on ' + escapeHtml(_dcShortDay(last.date))
+                  + '. Saving against a new date adds another.</div>'
+                : '<div class="pa-hint" style="margin:0 0 12px;">No PayMore audit recorded for '
+                  + escapeHtml(store) + ' yet.</div>');
+    }
+    _paPreview();
+}
+
+async function submitPaymoreAudit() {
+    const store = document.getElementById('dm-store-select')?.value || '';
+    const date = document.getElementById('dm-score-date')?.value || '';
+    const raw = document.getElementById('pa-earned')?.value;
+    const btn = document.getElementById('submitPauditBtn');
+    if (!store || !date) { alert('Pick a store and date.'); return; }
+    const earned = parseFloat(raw);
+    if (!Number.isFinite(earned)) { alert('Enter the points PayMore scored the store.'); return; }
+    const possible = parseFloat(document.getElementById('pa-possible')?.value);
+    if (!Number.isFinite(possible) || possible <= 0) { alert('Enter the points the audit was out of.'); return; }
+    if (earned > possible) {
+        if (!confirm(`${earned} is more than the ${possible} points available.\n\nSave it as ${possible}?`)) return;
+    }
+
+    btn.disabled = true; btn.style.opacity = '0.7'; btn.innerText = 'Saving…';
+    try {
+        const res = await fetch(SCORECARD_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'submit_official_audit', store, date, earned, possible,
+                enteredBy: sessionStorage.getItem('speeksUserName') || null,
+                role: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(),
+            })
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Save failed');
+        _paDirty = false;   // saved — nothing left to protect from a date change
+        btn.innerText = `Saved — ${json.earned}/${json.possible} (${json.pct}%)`;
+        btn.style.background = 'var(--sage-professional)';
+        setTimeout(() => {
+            if (typeof fetchScorecardData === 'function') fetchScorecardData();
+            if (typeof fetchMasterDistrictDashboard === 'function') fetchMasterDistrictDashboard();
+            closeScorecardModal();
+            btn.innerText = 'Save PayMore Audit';
+            btn.style.background = ''; btn.style.opacity = ''; btn.disabled = false;
+        }, 1200);
+    } catch (err) {
+        alert('Error saving the PayMore audit: ' + (err.message || err));
+        btn.innerText = 'Save PayMore Audit';
+        btn.style.background = ''; btn.style.opacity = ''; btn.disabled = false;
+    }
+}
+
+async function deletePaymoreAudit() {
+    const store = document.getElementById('dm-store-select')?.value || '';
+    const date = document.getElementById('dm-score-date')?.value || '';
+    if (!store || !date) return;
+    if (!confirm(`Remove the PayMore audit saved for ${store} on ${date}?`)) return;
+    try {
+        const res = await fetch(SCORECARD_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'delete_official_audit', store, date,
+                role: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(),
+            })
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Delete failed');
+        _paDirty = false;
+        if (typeof fetchScorecardData === 'function') await fetchScorecardData();
+        if (typeof fetchMasterDistrictDashboard === 'function') fetchMasterDistrictDashboard();
+        _ensureScCatalog(true);
+        renderPaymoreAuditTab();
+    } catch (err) {
+        alert('Error removing the PayMore audit: ' + (err.message || err));
+    }
+}
+
+// ---- delete a SPEEKS audit -------------------------------------------------
+// For the walkthrough submitted before it was finished. DM/CEO only, and the
+// server enforces that independently — the button being hidden is convenience.
+// Deliberately named with the date in the confirm: the tool always has SOME
+// store and date selected, and "delete the audit" without saying which is how
+// somebody throws away the wrong one.
+async function deleteSpeeksAudit() {
+    const store = (document.getElementById('dm-store-select')?.value || '').toUpperCase();
+    const date = document.getElementById('dm-score-date')?.value || '';
+    const saved = _selectedStoreAudit();
+    if (!saved || saved.date !== date) {
+        alert('There is no SPEEKS Audit saved for ' + (store || 'this store') + ' on ' + (date || 'this date') + '.');
+        return;
+    }
+    if (!confirm(`Delete ${store}'s SPEEKS Audit from ${date}?\n\n`
+        + `${saved.earned}/${saved.possible} (${saved.pct}%). This removes its photos too and cannot be undone.`)) return;
+
+    const btn = document.getElementById('deleteAuditBtn');
+    if (btn) { btn.disabled = true; btn.innerText = 'Deleting…'; }
+    try {
+        const res = await fetch(SCORECARD_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'delete_audit', store, date,
+                role: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim(),
+            })
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.success === false) throw new Error(json.error || 'Delete failed');
+        // The scored answers on screen belong to a row that no longer exists.
+        _auditDirty = false;
+        if (typeof fetchScorecardData === 'function') await fetchScorecardData();
+        if (typeof fetchMasterDistrictDashboard === 'function') fetchMasterDistrictDashboard();
+        _ensureScCatalog(true);
+        renderAuditEntry();
+        _syncAuditDeleteBtn();
+    } catch (err) {
+        alert('Error deleting the audit: ' + (err.message || err));
+    }
+    if (btn) { btn.disabled = false; btn.innerText = 'Remove'; }
+}
+
+// Shown only on the SPEEKS Audit tab, only to a DM or the CEO, and only when the
+// selected store and date actually have one saved — otherwise it is a button
+// that can only ever produce an error.
+function _syncAuditDeleteBtn() {
+    const btn = document.getElementById('deleteAuditBtn');
+    if (!btn) return;
+    const date = document.getElementById('dm-score-date')?.value || '';
+    const saved = _selectedStoreAudit();
+    const show = currentScoreTab === 'audit' && _paCanEdit() && saved && saved.date === date;
+    btn.style.display = show ? '' : 'none';
 }
 
 function onScoreStoreChange() {
     _buildScorecardModalInputs();
     renderAuditEntry();
+    // The PayMore tab reads the store and date straight off these two controls,
+    // so it has to be re-read when either moves — otherwise the form shows one
+    // store's saved score under another store's name. A different STORE is a
+    // different subject, not a relabelling, so the typed figures are dropped
+    // here where a date change keeps them.
+    _paDirty = false;
+    if (currentScoreTab === 'paudit') renderPaymoreAuditTab();
+    _syncAuditDeleteBtn();
 }
 // The date is a label on the walkthrough, not a different form, so correcting it
 // must never cost the auditor their answers — this used to rebuild the checklist
@@ -21559,7 +23230,20 @@ let _scoreDateLast = '';
 function onScoreDateChange() {
     const el = document.getElementById('dm-score-date');
     const dateVal = el?.value || '';
-    if (!_auditHasWork()) { renderAuditEntry(); _scoreDateLast = dateVal; return; }
+    // What is on screen is a SAVED audit that nobody has touched since it loaded.
+    // Those answers belong to the date they were loaded from, not to the date
+    // just picked — carrying them forward showed a finished audit's scores under
+    // a day that has none, which reads as that day already being audited.
+    // Rebuilding is free here precisely because there is nothing unsaved to lose.
+    const justLoaded = !!_auditLoadedDate && !_auditDirty && _auditLoadedDate !== dateVal;
+
+    if (justLoaded || !_auditHasWork()) {
+        renderAuditEntry();
+        if (currentScoreTab === 'paudit') renderPaymoreAuditTab();
+        _syncAuditDeleteBtn();
+        _scoreDateLast = dateVal;
+        return;
+    }
     const existing = _selectedStoreAudit();
     if (existing && existing.date === dateVal) {
         const d = new Date(dateVal + 'T00:00:00');
@@ -21575,6 +23259,10 @@ function onScoreDateChange() {
         // rebuild at all.
         updateAuditRunningBar();
     }
+    // Reached only when the date actually moved — a declined swap returns above
+    // with the old date put back, and the form on screen is still the right one.
+    if (currentScoreTab === 'paudit') renderPaymoreAuditTab();
+    _syncAuditDeleteBtn();
     _scoreDateLast = dateVal;
 }
 
@@ -21701,6 +23389,10 @@ function _selectedStoreAudit() {
 let _auditEntryNotes = {};
 let _auditEntryPhotos = {};
 let _auditDirty = false; // unsaved audit work — closeAllModals asks before discarding
+// The date whose SAVED audit is currently on screen, '' when the form is the
+// auditor's own work. Read only alongside !_auditDirty — together they mean
+// "what is on screen is a saved audit, untouched".
+let _auditLoadedDate = '';
 
 function _auSecTitle(sIdx) { return (_auSections()[sIdx] || {}).title || String(sIdx); }
 
@@ -21909,6 +23601,11 @@ function renderAuditEntry(opts = {}) {
     const existing = _selectedStoreAudit();
     const prefill = (existing && existing.date === dateVal && existing.results) ? existing.results : {};
     const editingThis = !!(existing && existing.date === dateVal);
+    // Which date's SAVED audit is on screen, when nothing has been typed since.
+    // A preserving render leaves it alone: it carries the same content across a
+    // scaffolding rebuild, and if the auditor had typed anything _auditDirty is
+    // already true, which is what actually gates the reader below.
+    if (!keep) _auditLoadedDate = editingThis ? dateVal : '';
     if (!keep) {
         _auditEntryNotes = (editingThis && existing.notes && typeof existing.notes === 'object' && !Array.isArray(existing.notes)) ? { ...existing.notes } : {};
         _auditEntryPhotos = {};
@@ -22202,7 +23899,7 @@ function renderManageItems() {
     </div>`;
 
     // ---- Audit items ----
-    html += secHdr(`PayMore Audit Items — active: ${activeAu.length} items · ${activePts} pts`);
+    html += secHdr(`SPEEKS Audit Items — active: ${activeAu.length} items · ${activePts} pts`);
     auSections.forEach(sec => {
         html += `<div style="font-size:10.5px; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:.4px; margin:10px 0 2px;">${escapeHtml(sec.title)}</div>`;
         sec.items.forEach(item => {
@@ -22325,18 +24022,18 @@ function renderAuditBreakdown(store) {
     const audit = entry && entry.audit ? entry.audit : null;
 
     if (!audit) {
-        if (title) title.textContent = `${store} · Audit Breakdown`;
+        if (title) title.textContent = `${store} · SPEEKS Audit Breakdown`;
         body.innerHTML = `<div style="padding:24px 4px; text-align:center; color:#94a3b8; font-weight:600;">No practice audit on file for ${store} yet.</div>`;
         return;
     }
     const results = audit.results || {};
     const c = auditPctColor(audit.pct);
     const dateStr = audit.date ? new Date(audit.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
-    if (title) title.textContent = `${store} · Audit Breakdown`;
+    if (title) title.textContent = `${store} · SPEEKS Audit Breakdown`;
 
     let html = `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:${c.bg}; border-radius:10px; padding:12px 14px; margin-bottom:14px;">
         <div>
-            <div style="font-size:11px; font-weight:800; color:${c.fg}; text-transform:uppercase; letter-spacing:.4px;">PayMore Audit${dateStr ? ' · ' + dateStr : ''}${audit.time ? ' · ' + _fmtAuditTime(audit.time) : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
+            <div style="font-size:11px; font-weight:800; color:${c.fg}; text-transform:uppercase; letter-spacing:.4px;">SPEEKS Audit${dateStr ? ' · ' + dateStr : ''}${audit.time ? ' · ' + _fmtAuditTime(audit.time) : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
             <div style="font-size:11px; color:#64748b; font-weight:600; margin-top:2px;">Pass ${AUDIT_PASS_PCT}% · Target ${AUDIT_TARGET_PCT}%+${audit.prevPct != null ? ` · prev ${audit.prevPct}%` : ''}</div>
         </div>
         <div style="font-size:22px; font-weight:900; color:${c.fg};">${audit.earned}/${audit.possible} <span style="font-size:14px;">(${audit.pct}%)</span></div>
@@ -22398,7 +24095,7 @@ function renderAuditBreakdown(store) {
 function buildAuditSummaryHtml(audit, store) {
     if (!audit) {
         return `<div style="display:flex; align-items:center; justify-content:space-between;">
-                <span class="scorecard-label" style="text-align:left;">PayMore Audit</span>
+                <span class="scorecard-label" style="text-align:left;">SPEEKS Audit</span>
                 <span style="font-size:12px; color:#94a3b8; font-weight:700;">No practice audit yet</span>
             </div>`;
     }
@@ -22413,7 +24110,7 @@ function buildAuditSummaryHtml(audit, store) {
 
     return `<div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
             <div>
-                <div class="scorecard-label" style="text-align:left; margin-bottom:2px;">PayMore Audit</div>
+                <div class="scorecard-label" style="text-align:left; margin-bottom:2px;">SPEEKS Audit</div>
                 <div class="scorecard-date" style="font-size:11px;">${dateStr}${audit.time ? ' · ' + _fmtAuditTime(audit.time) : ''}${audit.auditor ? ' · ' + escapeHtml(audit.auditor) : ''}</div>
             </div>
             <div style="display:flex; align-items:center; gap:8px;">
@@ -22421,7 +24118,7 @@ function buildAuditSummaryHtml(audit, store) {
                 <span style="font-size:16px; font-weight:900; background:${c.bg}; color:${c.fg}; padding:4px 10px; border-radius:8px;">${audit.earned}/${audit.possible} · ${audit.pct}%</span>
             </div>
         </div>
-        <button onclick="openAuditBreakdown('${store}')" class="btn-secondary" style="margin-top:10px; width:100%; padding:8px; font-size:12px; font-weight:800;">View Audit Breakdown</button>`;
+        <button onclick="openAuditBreakdown('${store}')" class="btn-secondary" style="margin-top:10px; width:100%; padding:8px; font-size:12px; font-weight:800;">SPEEKS Audit Breakdown</button>`;
 }
 
 // =========================================================
@@ -22952,19 +24649,19 @@ function renderClaimsOversight() {
         .sort((a, b) => new Date(a.delete_requested_at) - new Date(b.delete_requested_at));
     if (deleteReqs.length) {
         html += `<div style="background:#fffbeb; border:1.5px solid #fde68a; border-radius:12px; padding:14px 16px; margin-bottom:18px;">
-            <div style="font-weight:800; font-size:13px; color:#92400e; margin-bottom:10px;">🗑 Delete requests (${deleteReqs.length}) — approval needed</div>
+            <div style="font-weight:800; font-size:13px; color:#92400e; margin-bottom:10px;">🗑 Delete Requests (${deleteReqs.length}) — Approval Needed</div>
             <div style="display:flex; flex-direction:column; gap:8px;">`;
         deleteReqs.forEach(r => {
             const who = r.delete_requested_by ? escapeHtml(r.delete_requested_by) : 'Manager';
             html += `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:#fff; border:1px solid #fde68a; border-radius:9px; padding:9px 12px;">
                 <div style="font-size:12.5px; color:var(--slate-charcoal);">
                     <span style="font-weight:800;">${escapeHtml(r.store || '')}</span>
-                    · <span style="font-weight:700;">${escapeHtml(r.case_number || '')}</span>
+                    · <span style="font-weight:700;">${escapeHtml(r.case_number || '')}</span>${siteCopyBtn(r.case_number, 'case number')}
                     <span style="color:#94a3b8;"> — ${escapeHtml(r.reason_type || '')}</span>
-                    <span style="color:#b45309; font-weight:700;"> · requested by ${who}</span>
+                    <span style="color:#b45309; font-weight:700;"> · Requested by ${who}</span>
                 </div>
                 <div style="display:flex; gap:8px;">
-                    <button onclick="approveClaimDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Approve delete</button>
+                    <button onclick="approveClaimDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Approve Delete</button>
                     <button onclick="denyClaimDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#f1f5f9; border:1.5px solid #cbd5e1; color:#475569;">Deny</button>
                 </div>
             </div>`;
@@ -22982,11 +24679,16 @@ function renderClaimsOversight() {
         if (_isClaimAging(r)) byStore[s].aging++;
         else if (r.last_checked_at) byStore[s].reviewed++;
     });
-    const th = t => `<th style="text-align:left; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0;">${t}</th>`;
-    const td = (c, extra = '') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; ${extra}">${c}</td>`;
+    // Centred, and the header sits over the number it counts. Left-aligned counts
+    // in a full-width table drift far from their headings — the eye has to travel
+    // to work out whether a 1 under "Over 7 Days" belongs to that column or the
+    // next one. The store code stays left; the action column stays right.
+    const th = (t, align = 'center') => `<th style="text-align:${align}; font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; padding:8px 10px; border-bottom:1px solid #e2e8f0;">${t}</th>`;
+    const td = (c, extra = 'text-align:center;') => `<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; ${extra}">${c}</td>`;
     html += `<div style="font-weight:800; font-size:13px; margin-bottom:8px; color:var(--slate-charcoal);">By store</div>
         <div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12.5px; margin-bottom:20px;">
-        <thead><tr>${th('Store')}${th('Open')}${th('Over 7 Days')}${th('Reviewed')}${th('')}</tr></thead><tbody>`;
+        <colgroup><col style="width:16%;"><col style="width:14%;"><col style="width:16%;"><col style="width:14%;"><col></colgroup>
+        <thead><tr>${th('Store', 'left')}${th('Open')}${th('Over 7 Days')}${th('Reviewed')}${th('', 'right')}</tr></thead><tbody>`;
     Object.keys(byStore).forEach(s => {
         const d = byStore[s];
         // A reminder is only warranted for claims over 7 days that haven't been
@@ -23009,7 +24711,7 @@ function renderClaimsOversight() {
             ping = `<button onclick="pingStoreClaims('${s}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:5px 11px; cursor:pointer; background:#eff6ff; border:1.5px solid #bfdbfe; color:#1d4ed8;">🔔 Send reminder</button>`;
         }
         html += `<tr>
-            ${td(`<span style="font-weight:800; color:var(--slate-charcoal);">${s}</span>`)}
+            ${td(`<span style="font-weight:800; color:var(--slate-charcoal);">${s}</span>`, 'text-align:left;')}
             ${td(`<span style="font-weight:700;">${d.open}</span>`)}
             ${td(`<span style="font-weight:800; color:${d.aging ? '#dc2626' : '#cbd5e1'};">${d.aging}</span>`)}
             ${td(`<span style="font-weight:800; color:${d.reviewed ? '#059669' : '#cbd5e1'};">${d.reviewed}</span>`)}
@@ -23423,7 +25125,19 @@ async function checkAgingClaims() {
         const data = json.data || [];
         const sup = new Set(data.filter(r => r.parent_id).map(r => r.parent_id)); // exclude escalated INRs
         const aging = data.filter(r => !sup.has(r.id) && _isClaimAging(r));
-        if (!aging.length) {
+        // The OTHER thing waiting on the DM in this tool, and it behaves nothing
+        // like ageing: a manager who asked to delete a claim is blocked until the
+        // DM approves or denies it. So it is STATE-based and never marked seen —
+        // a glance must not silence work somebody else is waiting on. Exactly the
+        // rule checkRecycleReminders already applies to its own delete queue.
+        //
+        // Not filtered through `sup`: a parent claim that has been escalated to an
+        // INR child is excluded from AGEING (the child carries the clock now), but
+        // a delete request on it is still a real approval someone is waiting for.
+        // The oversight panel lists them the same way.
+        const pendingDelete = data.filter(r => r.delete_requested_at);
+
+        if (!aging.length && !pendingDelete.length) {
             // Nothing is aging any more (reviewed via "Still in progress", resolved,
             // or escalated). This used to just `return`, leaving a stale "claims are
             // aging" bubble — and therefore a stale feed row — on screen for the rest
@@ -23509,7 +25223,19 @@ async function checkAgingClaimsDM() {
             }
         } catch (_) { /* if reminders fail to load, show everything rather than hide */ }
 
-        if (!aging.length) {
+        // The OTHER thing waiting on the DM in this tool, and it behaves nothing
+        // like ageing: a manager who asked to delete a claim is blocked until the
+        // DM approves or denies it. So it is STATE-based and never marked seen —
+        // a glance must not silence work somebody else is waiting on. Exactly the
+        // rule checkRecycleReminders already applies to its own delete queue.
+        //
+        // Not filtered through `sup`: a parent claim that has been escalated to an
+        // INR child is excluded from AGEING (the child carries the clock now), but
+        // a delete request on it is still a real approval someone is waiting for.
+        // The oversight panel lists them the same way.
+        const pendingDelete = data.filter(r => r.delete_requested_at);
+
+        if (!aging.length && !pendingDelete.length) {
             // Nothing is aging any more (reviewed via "Still in progress", resolved,
             // or escalated). This used to just `return`, leaving a stale "claims are
             // aging" bubble — and therefore a stale feed row — on screen for the rest
@@ -23524,26 +25250,62 @@ async function checkAgingClaimsDM() {
             return;
         }
 
-        // Same once-per-session rule as the manager alert.
+        // Same once-per-session rule as the manager alert — but for the AGEING
+        // half only. Ageing is a standing condition, not a handoff, and
+        // re-announcing it every poll is what made the old toast unbearable.
         const seen = _seenAgingClaims();
-        if (!aging.some(r => !seen.has(r.id))) return;
-        aging.forEach(r => seen.add(r.id));
-        _saveSeenAgingClaims(seen);
+        const freshAging = aging.filter(r => !seen.has(r.id));
+        if (!freshAging.length && !pendingDelete.length) return;
+        if (freshAging.length) {
+            aging.forEach(r => seen.add(r.id));
+            _saveSeenAgingClaims(seen);
+        }
 
-        const byStore = {};
-        aging.forEach(r => { const s = (r.store || '?').toUpperCase(); byStore[s] = (byStore[s] || 0) + 1; });
-        const stores = Object.keys(byStore).sort();
-        const breakdown = stores.map(s => `${s} ${byStore[s]}`).join(' · ');
-        const inrCount = aging.filter(_isINRTicket).length;
+        const bodyParts = [], sumParts = [];
+        if (freshAging.length) {
+            const byStore = {};
+            aging.forEach(r => { const s = (r.store || '?').toUpperCase(); byStore[s] = (byStore[s] || 0) + 1; });
+            const stores = Object.keys(byStore).sort();
+            const breakdown = stores.map(s => `${s} ${byStore[s]}`).join(' · ');
+            const inrCount = aging.filter(_isINRTicket).length;
 
-        const head = aging.length === 1
-            ? '1 claim has been open over 7 days.'
-            : `${aging.length} claims have been open over 7 days.`;
-        const body = `${head} Across ${stores.length === 1 ? '1 store' : stores.length + ' stores'} — ${breakdown}.`
-            + _inrGuidanceHtml(inrCount);
+            const head = aging.length === 1
+                ? '1 claim has been open over 7 days.'
+                : `${aging.length} claims have been open over 7 days.`;
+            bodyParts.push(`${head} Across ${stores.length === 1 ? '1 store' : stores.length + ' stores'} — ${breakdown}.`
+                + _inrGuidanceHtml(inrCount));
+            sumParts.push(`${aging.length} open over 7 days · ${breakdown}`);
+        }
+        if (pendingDelete.length) {
+            // Name the case when there are only one or two. "1 delete request" is
+            // not something you can go and find; a case number is. Same reasoning
+            // as _rcLabel on the recycle side.
+            const _clLabel = r => `${(r.store || '').toUpperCase()} ${String(r.case_number || 'no case #').trim()}`;
+            const askers = [...new Set(pendingDelete
+                .map(r => String(r.delete_requested_by || '').trim()).filter(Boolean))];
+            const which = pendingDelete.length <= 2
+                ? pendingDelete.map(_clLabel).join(', ')
+                : `${pendingDelete.length} claims`;
+            const line = `${pendingDelete.length} delete request${pendingDelete.length > 1 ? 's' : ''} awaiting approval — ${which}`
+                + `${askers.length === 1 ? `, requested by ${askers[0]}` : ''}.`;
+            bodyParts.push(escapeHtml(line));
+            sumParts.push(line);
+        }
 
-        const summary = `${aging.length} open over 7 days · ${breakdown}`;
-        _renderClaimBubble('⚠️', 'Claims Review — District', body, summary);
+        // The snooze identity carries the pending delete ids, so a SECOND request
+        // arrives as new information rather than being swallowed by a snooze taken
+        // on the first one.
+        const sig = `ag:${freshAging.length}|del:${pendingDelete.map(r => r.id).sort().join(',')}`;
+        _renderClaimBubble(
+            pendingDelete.length ? '🗑' : '⚠️',
+            pendingDelete.length && !freshAging.length ? 'Claim Delete Requests' : 'Claims Review — District',
+            bodyParts.join('<br><br>'), sumParts.join(' · '), sig);
+        // Tells the feed card which of the two it is looking at (see _samReminderCfg).
+        const _clT = document.getElementById('claimAlertBubbleText');
+        if (_clT) {
+            if (pendingDelete.length) _clT.dataset.del = freshAging.length ? 'mixed' : 'only';
+            else delete _clT.dataset.del;
+        }
     } catch (e) {
         console.error('DM aging claim check failed:', e);
     }
@@ -24074,9 +25836,9 @@ function _addLocalNoteRead(id) {
 }
 
 async function fetchAndDisplayStoreComment() {
-    // TOM works out of a store but isn't part of its team, so store comments
+    // MOCD works out of a store but isn't part of its team, so store comments
     // aren't meant for them.
-    if ((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'tom') return;
+    if ((sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'mocd') return;
     const userStore = String(sessionStorage.getItem('speeksUserStore') || '').trim().toUpperCase();
     // Set, not a single value — an MSM matches both of their stores at once, so the
     // same comments show on either dashboard rather than following the switcher.
@@ -24399,11 +26161,11 @@ function getChecklistUser() {
     return _resolveStoreManager(store) || userName;
 }
 
-// TOM gets a personal-only checklist: no store broadcasts or DM required
+// MOCD gets a personal-only checklist: no store broadcasts or DM required
 // tasks — it starts blank until they (or a DM) add tasks for them directly.
 function _checklistPersonalParam() {
     const role = (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim();
-    return role === 'tom' ? '&personal=1' : '';
+    return role === 'mocd' ? '&personal=1' : '';
 }
 
 function switchChecklistTab(tab) {
@@ -26897,9 +28659,11 @@ function renderMyRecycleTable() {
         // replies indented in green. Nothing is ever overwritten by a new note.
         const thread = Array.isArray(r.note_thread) && r.note_thread.length
             ? r.note_thread
-            : [ // legacy rows from before threading
-                ...(r.dm_note ? [{ role: 'dm', text: r.dm_note, by: r.dm_note_by }] : []),
-                ...(r.mgr_reply ? [{ role: 'mgr', text: r.mgr_reply, by: r.mgr_reply_by }] : []),
+            // Legacy rows from before threading. The mirror columns carry the
+            // stamps too, so a pre-thread note still dates itself.
+            : [
+                ...(r.dm_note ? [{ role: 'dm', text: r.dm_note, by: r.dm_note_by, at: r.dm_note_at }] : []),
+                ...(r.mgr_reply ? [{ role: 'mgr', text: r.mgr_reply, by: r.mgr_reply_by, at: r.mgr_reply_at }] : []),
             ];
         // A dot lands on the specific note that's new — only for messages from
         // the OTHER side (your own notes are never "new" to you).
@@ -26910,7 +28674,15 @@ function renderMyRecycleTable() {
             // callout. These two boxes were the original, hand-inlined here;
             // the styling now lives in one place so a note reads the same in
             // every tool that shows one.
-            const by = n.by ? ` <span class="site-note-by">— ${escapeHtml(n.by)}</span>` : '';
+            // Date the note, not just the author. A thread can run for weeks
+            // after the request was filed (the row's own Date column is when the
+            // SKU was submitted, which is often nothing like when the DM wrote
+            // back), so "— Ethan Kushnir" alone left no way to tell a reply from
+            // yesterday apart from one from last month.
+            const stamp = n.at ? fmtDate(n.at) : '';
+            const by = (n.by || stamp)
+                ? ` <span class="site-note-by">— ${escapeHtml(n.by || '')}${n.by && stamp ? ' · ' : ''}${stamp}</span>`
+                : '';
             return n.role === 'dm'
                 ? `<div class="site-note">${noteDot}💬 ${escapeHtml(n.text || '')}${by}</div>`
                 : `<div class="site-note-reply">${noteDot}↩ ${escapeHtml(n.text || '')}${by}</div>`;
@@ -26987,17 +28759,17 @@ function _recycleDeleteReqPanel(canReview) {
         .sort((a, b) => new Date(a.delete_requested_at) - new Date(b.delete_requested_at));
     if (!delReqs.length) return '';
     return `<div style="background:#fffbeb; border:1.5px solid #fde68a; border-radius:12px; padding:14px 16px; margin-bottom:14px;">
-        <div style="font-weight:800; font-size:13px; color:#92400e; margin-bottom:10px;">🗑 Delete requests (${delReqs.length}) — approval needed</div>
+        <div style="font-weight:800; font-size:13px; color:#92400e; margin-bottom:10px;">🗑 Delete Requests (${delReqs.length}) — Approval Needed</div>
         <div style="display:flex; flex-direction:column; gap:8px;">` +
         delReqs.map(r => `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:#fff; border:1px solid #fde68a; border-radius:9px; padding:9px 12px;">
             <div style="font-size:12.5px; color:var(--slate-charcoal);">
                 <span style="font-weight:800;">${escapeHtml(r.store || '')}</span>
                 · <span style="font-weight:700;">${escapeHtml(r.sku || '')}</span>${siteCopyBtn(r.sku, 'SKU')}
                 <span style="color:#94a3b8;"> — ${escapeHtml(r.description || '')} · qty ${Number(r.quantity) || 1} · ${_fmtRecycleMoney(_recycleLineTotal(r))}</span>
-                <span style="color:#b45309; font-weight:700;"> · requested by ${escapeHtml(r.delete_requested_by || 'Manager')}</span>
+                <span style="color:#b45309; font-weight:700;"> · Requested by ${escapeHtml(r.delete_requested_by || 'Manager')}</span>
             </div>
             <div style="display:flex; gap:8px;">
-                <button onclick="approveRecycleDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Approve delete</button>
+                <button onclick="approveRecycleDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#fef2f2; border:1.5px solid #fecaca; color:#b91c1c;">Approve Delete</button>
                 <button onclick="denyRecycleDelete('${r.id}')" style="font-size:11px; font-weight:800; border-radius:7px; padding:6px 13px; cursor:pointer; background:#f1f5f9; border:1.5px solid #cbd5e1; color:#475569;">Deny</button>
             </div>
         </div>`).join('') +
@@ -27225,25 +28997,63 @@ async function checkRecycleReminders() {
                 const days = Math.floor((Date.now() - new Date(r.created_at).getTime()) / 86400000);
                 return `${(r.store || '').toUpperCase()} ${short}${days >= 2 ? ` (${days}d)` : ''}`;
             };
+            // A reply names its line for the same reason a review does, but dates
+            // itself by the REPLY rather than the submission: the useful question
+            // is "when did they write back", and the row's own Date column already
+            // carries the submission date. "1 reply to your notes" pointed at a
+            // month with nothing outstanding in it and no way to tell which line
+            // it meant.
+            const _rcReplyLabel = r => {
+                const sku = String(r.sku || '').trim();
+                const short = sku.length > 24 ? sku.slice(0, 23) + '…' : (sku || 'no SKU');
+                const d = r.mgr_reply_at ? new Date(r.mgr_reply_at) : null;
+                const when = d && !isNaN(d.getTime())
+                    ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+                return `${(r.store || '').toUpperCase()} ${short}${when ? ` (${when})` : ''}`;
+            };
             const parts = [];
             if (needsReview.length)   parts.push(needsReview.length <= 2
                 ? `awaiting your review: ${needsReview.map(_rcLabel).join(', ')}`
                 : `${needsReview.length} awaiting your review from ${storeList(needsReview)}`);
             if (pendingDelete.length) parts.push(`${pendingDelete.length} delete request${pendingDelete.length > 1 ? 's' : ''} awaiting approval`);
-            if (freshRep.length)      parts.push(`${freshRep.length} ${freshRep.length > 1 ? 'replies' : 'reply'} to your notes`);
+            if (freshRep.length)      parts.push(freshRep.length <= 2
+                ? `replied to your note: ${freshRep.map(_rcReplyLabel).join(', ')}`
+                : `${freshRep.length} replies to your notes`);
             // "awaiting your review: …" is the one part that can open with a letter
             // (the others all start with a count), and it's always first — so the
             // sentence was starting lowercase. Capitalise the assembled string
             // rather than the phrase itself, so this stays correct if the parts are
             // ever reordered, and because the same string is both the bubble body
             // and the Action Menu feed one-liner.
-            const summary = parts.join(' · ').replace(/^[a-z]/, c => c.toUpperCase());
+            // Sentence case now happens centrally in _samGatherReminders, but this
+            // string is ALSO the bubble body, which does not go through there.
+            // Same first-WORD rule; see the comment at that call site.
+            const summary = parts.join(' · ').replace(/^([^a-zA-Z]*)([a-z])/, (m, pre, ch) => pre + ch.toUpperCase());
             // Land on the oldest line that's actually blocking a store. Replies
             // are the fallback: they're information, not a block, so they only
             // choose the month when there's no action item to beat them to it.
             const blocking = needsReview.concat(pendingDelete);
             _recycleRenderBubble('♻️', 'Recycle requests need your review', summary + '.', summary,
                 null, _recycleFocusMonth(blocking.length ? blocking : freshRep));
+            // Nothing is actually blocked — this is only a manager writing back.
+            // The feed card reads its title off this flag so it stops promising a
+            // "Review" the DM then can't find (every line already reviewed, the
+            // card pointing at July). Mirrors the variance bubble's data-fyi.
+            const rTextEl = document.getElementById('recycleAlertBubbleText');
+            if (rTextEl) {
+                if (blocking.length) delete rTextEl.dataset.replyonly;
+                else rTextEl.dataset.replyonly = '1';
+                // Delete requests get the same treatment as the claims card: a
+                // manager is blocked until this is approved or denied, so it
+                // outranks the review queue for the badge. 'only' when that is all
+                // there is (the title changes), 'mixed' when there is other work in
+                // the card too (the title stays, the badge still says Approve).
+                if (pendingDelete.length) {
+                    rTextEl.dataset.del = (needsReview.length || freshRep.length) ? 'mixed' : 'only';
+                } else {
+                    delete rTextEl.dataset.del;
+                }
+            }
             return;
         }
 
@@ -27443,6 +29253,11 @@ const EMAIL_LIST_GROUPS = [
             { key: 'weekly_leadership', label: 'Leadership report' },
             ...EMAIL_LIST_STORES.map(s => ({ key: `weekly_store_${s}`, label: `${s} manager report` })),
         ],
+    },
+    {
+        title: 'Unlisted Inventory Weekly Update',
+        desc: 'Monday 9am backlog report — the pile per store, and what it would take to clear it.',
+        lists: [{ key: 'unlisted_report', label: 'Recipients' }],
     },
     // Every list a report READS must appear here as well as in the edge fn's
     // LIST_KEYS, or it becomes an orphan only SQL can change — which is exactly
@@ -27684,14 +29499,22 @@ const FA_ROLES = [
     { slug: 'assistant-manager', short: 'ASM', label: 'Assistant Manager' },
     { slug: 'employee',          short: 'EMP', label: 'Employee' },
     { slug: 'training',          short: 'TRN', label: 'Training' },
-    { slug: 'tom',               short: 'TOM', label: 'TOM' },
+    { slug: 'mocd',               short: 'MOCD', label: 'MOCD' },
 ];
 
 const FEATURE_CATALOG = [
+    // ---- Nav chrome ----
+    // The settings cog. On for everyone who signs in as a person: the panel behind
+    // it is their OWN email preferences, so there is no role that shouldn't reach
+    // it. Listed here anyway (rather than left as a bare data-feature) so it has a
+    // readable label in the Feature Access tool and can be switched off per person
+    // if somebody must not be emailed. 'store' is absent because the shop-floor TV
+    // boards have no inbox and no nav to click — see tv.html.
+    { key: 'nav-settings',             label: 'Settings Cog (Email Alerts)',   tab: 'hotbar', group: 'Top Bar', def: ['ceo', 'district-manager', 'mocd', 'owner-manager', 'manager', 'multi-store-manager', 'assistant-manager', 'employee', 'training'] },
     // ---- SPEEKS Tools (defaults mirror the role classes on the panel links) ----
     { key: 'tool-claims-store',        label: 'Insurance Claims (Store)',      tab: 'tools', group: 'Claims & Refunds', def: ['manager', 'owner-manager'] },
     { key: 'tool-claims-oversight',    label: 'Insurance Claims (Oversight)',  tab: 'tools', group: 'Claims & Refunds', def: ['district-manager', 'ceo'] },
-    { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'tom', 'owner-manager'] },
+    { key: 'tool-announcements',       label: 'Announcements',                 tab: 'tools', group: 'Content', def: ['district-manager', 'ceo', 'mocd', 'owner-manager'] },
     { key: 'tool-patch-notes',         label: 'Patch Notes',                   tab: 'tools', group: 'Content', def: ['district-manager'] },
     { key: 'tool-submit-scores',       label: 'Submit Scores',                 tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo'] },
     { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
@@ -27706,6 +29529,9 @@ const FEATURE_CATALOG = [
     { key: 'tool-user-permissions',    label: 'User Permissions',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo', 'owner-manager'] },
     { key: 'tool-feature-access',      label: 'Feature Access (This Tool)',    tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
     { key: 'tool-email-recipients',    label: 'Email Recipients',              tab: 'tools', group: 'Admin', def: ['district-manager', 'ceo'] },
+    // District Manager only by default — this is the switch that also decides
+    // who may SAVE a goal, not just who can see the tool (see _gpCanEdit).
+    { key: 'tool-store-goals',         label: 'Month Setup',                   tab: 'tools', group: 'Admin', def: ['district-manager'] },
     // TWO rows for one tool, sharing the `tool-expenses` stem the way the claims
     // and preferred-purchase pairs do. One key carrying both role classes made the
     // MGR column DISHONEST: it read as "on for the whole manager role" while the
@@ -27744,6 +29570,7 @@ const FEATURE_CATALOG = [
     // built around. Those rows exist so a store that would rather not can switch
     // them off, not as a default-off gate.
     { key: 'widget-scorecard-alerts',  label: 'Command Center (Whole Widget)',  tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
+    { key: 'widget-command-center',    label: 'Command Center (Whole Card)',   tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     { key: 'cc-live',                  label: 'Command Center · Live Dashboard tab', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'employee', 'assistant-manager'] },
     // cc-buying was here. The tab is gone — buying is on the Live tab's Month view
     // now — so the switch is gone too rather than left as a control that does
@@ -27770,7 +29597,7 @@ const FEATURE_CATALOG = [
     // Not a show/hide toggle like the rest — this one decides whether the Listing
     // Goals bar opens the roster editor or the personal-goal popup. Only meaningful
     // for ASMs; managers and above always get the editor. See _canAssignGoalRoles.
-    { key: 'listing-goals-assign',     label: 'Listing Goals · assign roles (ASM)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'assistant-manager'] },
+    { key: 'listing-goals-assign',     label: 'Listing Goals · Assign Roles (ASM)', tab: 'widgets', group: 'Dashboard', def: ['manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-monthly-breakdown', label: 'Monthly Breakdown — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-ws-weekly-kpis',    label: 'Store KPIs — Workspace tab',    tab: 'widgets', group: 'Workspace', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },
     { key: 'widget-variance-replies',  label: 'Variance Replies — Workspace tab', tab: 'widgets', group: 'Workspace', def: ['district-manager', 'manager', 'owner-manager'] },
@@ -27791,7 +29618,7 @@ const FEATURE_CATALOG = [
     // in JS as well, and the edge function enforces the same roles on every write.
     { key: 'tool-margin-manage',       label: 'Margin Guide — Edit',           tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo'] },
     { key: 'widget-ops-callbacks',     label: 'Customer Call Backs (Tab)',     tab: 'widgets', group: 'Operations', def: 'all' },
-    { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'tom', 'manager', 'owner-manager', 'assistant-manager', 'employee', 'training'] },
+    { key: 'widget-ops-b2b',           label: 'B2B Deals (Tab)',               tab: 'widgets', group: 'Operations', def: ['district-manager', 'ceo', 'mocd', 'manager', 'owner-manager', 'assistant-manager', 'employee', 'training'] },
     { key: 'cap-b2b-corp',             label: 'B2B Deals (DM)',                tab: 'widgets', group: 'Operations', def: ['district-manager'] },
     // ---- Hotbar links (index dashboard; keys generated from bar + label).
     //      Store-bar links default to "all": the bar itself is store-scoped,
@@ -27799,16 +29626,16 @@ const FEATURE_CATALOG = [
     { key: 'hb-ceo-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
     { key: 'hb-ceo-store-passwords', label: 'Store Passwords', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
     { key: 'hb-ceo-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
-    { key: 'hb-ceo-tom-folder', label: 'TOM Folder', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
+    { key: 'hb-ceo-tom-folder', label: 'MOCD Folder', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
     { key: 'hb-ceo-paymore-google-drive', label: 'PayMore Google Drive', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
     { key: 'hb-ceo-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'CEO Hotbar', def: ['ceo'] },
     { key: 'hb-dm-store-passwords', label: 'Store Passwords', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
     { key: 'hb-dm-paymore-google-drive', label: 'PayMore Google Drive', tab: 'hotbar', group: 'DM Hotbar', def: ['district-manager'] },
-    { key: 'hb-tom-tom-folder', label: 'TOM Folder', tab: 'hotbar', group: 'TOM Hotbar', def: ['tom'] },
-    { key: 'hb-tom-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'TOM Hotbar', def: ['tom'] },
-    { key: 'hb-tom-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'TOM Hotbar', def: ['tom'] },
+    { key: 'hb-tom-tom-folder', label: 'MOCD Folder', tab: 'hotbar', group: 'MOCD Hotbar', def: ['mocd'] },
+    { key: 'hb-tom-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'MOCD Hotbar', def: ['mocd'] },
+    { key: 'hb-tom-speeksnet-google-drive', label: 'SPEEKSNET Google Drive', tab: 'hotbar', group: 'MOCD Hotbar', def: ['mocd'] },
     { key: 'hb-res-b2b-records', label: 'B2B Records', tab: 'hotbar', group: 'Resources Hotbar', def: ['district-manager'] },
     { key: 'hb-res-training', label: 'Training', tab: 'hotbar', group: 'Resources Hotbar', def: ['district-manager'] },
     { key: 'hb-mgr-sales-summary', label: 'Sales Summary', tab: 'hotbar', group: 'MGR Hotbar', def: ['manager', 'owner-manager'] },
@@ -28086,7 +29913,7 @@ function _syncHotbarExtras(userRoleClass, userName) {
     // Borrowed links from a DIFFERENT store's bar carry a small store badge
     // (e.g. Nick at OVL borrowing WSP's Passwords sees "Passwords · WSP") so
     // nobody opens another store's sheet thinking it's their own. Role-bar
-    // borrows (CEO/DM/TOM/MGR/ASM/Resources) are company links — no badge.
+    // borrows (CEO/DM/MOCD/MGR/ASM/Resources) are company links — no badge.
     const STORE_BAR_LABELS = ['OVL', 'LEE', 'WSP', 'MPL', 'BAL'];
     const userStore = (sessionStorage.getItem('speeksUserStore') || '').toUpperCase();
     const makeClone = ({ a, barLabel }) => {
@@ -28733,6 +30560,7 @@ const JUMP_KEYWORDS = {
     'tool-user-permissions':     'users permissions pin login accounts roles add user',
     'tool-feature-access':       'feature access hide show toggle delegation permissions',
     'tool-email-recipients':     'email recipients reports distribution who gets',
+    'tool-store-goals':          'month setup store goals gp gross profit monthly target buying days holidays closed',
     // Both halves of the split answer the same search — only one is ever visible
     // to a given person, so they can never both come back in one result list.
     'tool-expenses':             'expense report expenses mileage miles reimbursement receipts monthly spend',
@@ -29235,18 +31063,8 @@ let _vrParsed = null;     // parsed Excel rows awaiting confirm
 let _vrFileName = '';     // name of the parsed file (the <input> can't keep it across re-renders)
 let _vrEditing = false;   // notes are locked until ✏️ Edit is clicked (KPI-style)
 let _vrDrafts = {};       // "itemId|field" → unsaved textarea text, survives re-renders
-let _vrStoreStatus = {};  // store → { in_the_clear, updated_by, updated_at } (DM control)
-let _vrClearedTV = {};    // store → latest team variance summary (for cleared stores)
 let _vrRawFileB64 = '';   // base64 of the raw uploaded workbook, kept for storage
-let _vrClearedPanelsPending = ''; // cleared-store summary panels to prepend (MSM mix)
 const _VR_VARIANCE_CUTOFF = -10; // only lines at this variance % or worse are imported
-
-// A store the DM has marked "in the clear": its managers stop seeing/answering
-// line items and get no dots/popups — they just see their team + store total.
-function _vrStoreCleared(store) {
-    const s = _vrStoreStatus[(store || '').toUpperCase()];
-    return !!(s && s.in_the_clear);
-}
 
 const _vrFmtPct = v => (v == null || v === '') ? '—'
     : `${Number(v) > 0 ? '+' : ''}${Number(v).toFixed(1)}%`;
@@ -29266,8 +31084,6 @@ async function loadVarianceReplies() {
         const json = await res.json();
         if (!json.success) throw new Error(json.error);
         _vrPeriods = json.data || [];
-        _vrStoreStatus = json.store_status || {};
-        _vrClearedTV = json.cleared_team_variance || {};
         // Opening the tool is the manager reviewing the DM's notes, so clear the
         // "DM reviewed your replies" FYI for the store(s) visible here — the active
         // store only for an MSM (they switch dashboards for the other), all periods
@@ -29360,6 +31176,7 @@ function _vrSelectedPeriodId() {
 
 function vrOnStoreChange() {
     _vrUploadOpen = false; _vrParsed = null; _vrEditing = false; _vrDrafts = {};
+    _vrSelBuyers = new Set(); _vrAllClear = false; _vrView = 'people';
     if (_vrIsDM() && _vrPeriods.length) {
         // all stores are already loaded — just resolve within the picked range
         const pid = _vrSelectedPeriodId();
@@ -29384,6 +31201,7 @@ async function vrOpenPeriod(pid) {
         _vrCurrent = json;
         _vrEditing = false;
         _vrDrafts = {};
+        _vrView = 'people';   // land on the work, not the reference view
         renderVarianceReplies();
     } catch (e) {
         if (body) body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load that period.</div>';
@@ -29393,9 +31211,15 @@ async function vrOpenPeriod(pid) {
 function _vrSubtitleText() {
     if (!_vrCurrent || !_vrCurrent.period) return '';
     const p = _vrCurrent.period;
-    // Cleared managers have no reply deadline — don't nag them with one.
-    if (_vrIsManager() && _vrStoreCleared(p.store)) return 'In the clear';
-    const items = _vrCurrent.items || [];
+    // An all-clear period owes nobody a reply, so it has no deadline to show.
+    // The banner in the body already says what's going on; a "replies due"
+    // date next to it would only contradict it.
+    if (p.all_clear) return '';
+    // Count the lines that were ASKED for, not every line stored. A targeted
+    // upload also stores the rest of the store's report as read-only context,
+    // and counting those made a 16-line ask read as "0/40 explained" — a
+    // scoreboard the manager could never finish.
+    const items = (_vrCurrent.items || []).filter(i => i.needs_reply !== false);
     const answered = items.filter(i => i.gm_note).length;
     const due = new Date(p.manager_due_at);
     const overdue = Date.now() > due.getTime() && answered < items.length;
@@ -29440,64 +31264,9 @@ function _vrTeamVarianceHtml(tv, period) {
     </details>`;
 }
 
-// What a manager of an "in the clear" store sees instead of the reply sheet:
-// a friendly heads-up plus their team + store-total variance summary. No line
-// items, no reply obligation — the DM flips them back if things slip.
-function _vrClearedPanelHtml(store, tv) {
-    const rangeTxt = (tv && tv.date_from && tv.date_to)
-        ? `<div style="font-size:11px; font-weight:600; color:#94a3b8; margin-top:4px;">Latest variance · ${escapeHtml(formatVarianceRange(tv.date_from, tv.date_to))}</div>`
-        : '';
-    const summary = tv
-        ? _vrTeamVarianceHtml(tv, { date_from: tv.date_from, date_to: tv.date_to })
-        : `<div style="padding:14px 16px; font-size:12px; color:#94a3b8; background:#fff; border:1px solid #e2e8f0; border-radius:12px;">No team variance recorded yet.</div>`;
-    return `<div style="margin-bottom:16px;">
-        <div style="background:linear-gradient(135deg,#ecfdf5,#d1fae5); border:1.5px solid #a7f3d0; border-radius:14px; padding:18px 20px; margin-bottom:16px;">
-            <div style="display:flex; align-items:center; gap:10px;">
-                <span style="font-size:22px;">✅</span>
-                <span style="font-size:15px; font-weight:800; color:#065f46;">${escapeHtml(store)} is in the clear</span>
-            </div>
-            <div style="font-size:12.5px; font-weight:600; color:#047857; line-height:1.5; margin-top:8px;">
-                Your variance is in a great place — there are no line items to explain right now. Just keep an eye on your team and store totals below. If things start to slip, the DM will switch replies back on.
-            </div>
-            ${rangeTxt}
-        </div>
-        ${summary}
-    </div>`;
-}
-
-// Slim banner atop a cleared store's report (when uploads exist): the manager
-// can read it, switch date ranges and download it, but owes no replies.
-function _vrMgrClearedBannerHtml(store) {
-    return `<div style="background:linear-gradient(135deg,#ecfdf5,#d1fae5); border:1.5px solid #a7f3d0; border-radius:12px; padding:12px 16px; margin-bottom:14px; font-size:12.5px; font-weight:700; color:#065f46; line-height:1.5;">
-        ✅ <b>${escapeHtml(store)}</b> is in the clear — you don't need to reply to these lines. They're here for reference: check your team variance below, switch date ranges with the dropdown, and download the full report anytime.
-    </div>`;
-}
-
 function renderVarianceReplies() {
     const body = document.getElementById('vr-body');
     if (!body) return;
-    _vrClearedPanelsPending = '';
-    // "In the clear" managers still see their reports — read-only, switchable by
-    // date range, with team variance + the download button — they just have no
-    // reply obligation. The only time we fall back to the standalone summary
-    // panel is a cleared store that has NO uploads yet (nothing to show a
-    // report for). With multiple managed stores, that panel is prepended above
-    // whatever active/other store's report is open.
-    if (_vrIsManager()) {
-        const clearedNoUploads = _vrMyStores().filter(s => _vrStoreCleared(s) && !_vrPeriods.some(p => p.store === s));
-        if (clearedNoUploads.length) {
-            const panels = clearedNoUploads.map(s => _vrClearedPanelHtml(s, _vrClearedTV[s])).join('');
-            if (!_vrPeriods.length) {
-                ['vr-edit-btn', 'vr-save-btn', 'vr-edit-cancel-btn'].forEach(id => {
-                    const b = document.getElementById(id); if (b) b.style.display = 'none';
-                });
-                const sub = document.getElementById('vr-subtitle'); if (sub) sub.textContent = '';
-                body.innerHTML = panels;
-                return;
-            }
-            _vrClearedPanelsPending = panels;
-        }
-    }
     // Rebuilding the table destroys the textareas — stash what's typed so an
     // unexpected re-render mid-edit can never delete someone's notes. The
     // "needs a reply" checkboxes ride along the same way.
@@ -29512,14 +31281,7 @@ function renderVarianceReplies() {
     // The header Cancel button only shows while the upload panel is open.
     const cancelBtn = document.getElementById('vr-cancel-upload-btn');
     if (cancelBtn) cancelBtn.style.display = (_vrIsDM() && _vrUploadOpen) ? 'inline-flex' : 'none';
-    // DM "In the Clear" toggle: reflects the currently selected store's status.
-    _vrSyncStatusButton();
-    let html = _vrClearedPanelsPending || '';
-    // DM banner: remind them this store is in the clear (managers aren't replying).
-    if (_vrIsDM()) {
-        const dmStore = ((document.getElementById('vr-store-select') || {}).value || '').toUpperCase();
-        if (_vrStoreCleared(dmStore)) html += _vrDmClearedBannerHtml(dmStore);
-    }
+    let html = '';
     if (_vrIsDM() && _vrUploadOpen) html += _vrUploadPanelHtml();
 
     if (!_vrCurrent || !_vrCurrent.period) {
@@ -29536,14 +31298,38 @@ function renderVarianceReplies() {
     }
 
     const p = _vrCurrent.period;
-    const items = _vrCurrent.items || [];
+    const allRows = _vrCurrent.items || [];
+    // A period aimed at specific buyers has two views. The default is the one
+    // with the work in it: just those buyers' lines, worst variance first. The
+    // toggle shows the whole store's report as read-only reference — every line
+    // at/below the cutoff, no note boxes, so what is actually owed stays
+    // unambiguous. A whole-store period (selected_buyers null) has one view and
+    // no toggle, exactly as before.
+    // The store view is strictly the -10%-or-worse report. A targeted upload
+    // also stores lines ABOVE the cutoff — the top-up that brings a light buyer
+    // to twelve — and those belong to that person's exercise, not to the store's
+    // variance picture, so they are filtered out here.
+    const targeted = Array.isArray(p.selected_buyers) && p.selected_buyers.length > 0;
+    const storeView = targeted && _vrView === 'store';
+    const items = targeted
+        ? (storeView
+            ? allRows.filter(i => Number(i.variance_pct ?? 0) <= _VR_VARIANCE_CUTOFF)
+                     .sort((a, b) => (a.variance_pct ?? 0) - (b.variance_pct ?? 0))
+            : allRows.filter(i => i.needs_reply !== false)
+                     .sort((a, b) => (a.variance_pct ?? 0) - (b.variance_pct ?? 0)))
+        : allRows;
+    if (targeted) html += _vrViewToggleHtml(p, allRows, storeView);
+    // Nothing was owed this period. The manager still gets the report to read —
+    // that is the whole point of an all-clear upload rather than no upload.
+    if (p.all_clear) html += _vrAllClearBannerHtml(p);
     // A manager whose store is "in the clear" views the report read-only — no
     // reply obligation — so they can't edit notes (canGm off) but still see the
     // line items, team variance and download. A banner explains it.
-    const mgrCleared = _vrIsManager() && _vrStoreCleared(p.store);
-    if (mgrCleared) html += _vrMgrClearedBannerHtml(p.store);
-    const canGm = _vrIsManager() && !mgrCleared;
-    const canDm = _vrIsDM();
+    // The store-wide view of a targeted report is read-only for the same reason.
+    // An all-clear period is read-only for the manager: the banner above already
+    // says why, and there is nothing to answer.
+    const canGm = _vrIsManager() && !p.all_clear && !storeView;
+    const canDm = _vrIsDM() && !storeView;
 
     // The reply cycle reveals columns as each side takes its turn:
     //   1. Managers fill GM Notes (extra-wide while it's the only note column);
@@ -29653,6 +31439,15 @@ function renderVarianceReplies() {
             ${showReplyCol ? td(_vrNoteCell(it, 'mgr_reply', canGm && !!it.dm_note && !!it.dm_reply_requested && _vrEditing, it.dm_note && it.dm_reply_requested ? 'Reply to the DM note…' : '')) : ''}
         </tr>`;
     });
+    // A targeted upload can filter down to nothing in the store view — a buyer
+    // picked for their top-12 exercise may have no line at the cutoff at all.
+    // An empty grid under a header row reads as broken, so say it plainly.
+    if (!items.length) {
+        const cols = 6 + (showGmCol ? 1 : 0) + (showDmCol ? 1 : 0) + (showReplyCol ? 1 : 0);
+        html += `<tr><td colspan="${cols}" style="padding:28px 14px; text-align:center; font-size:12px; font-weight:600; color:#94a3b8;">
+            ${storeView ? `No lines at ${_VR_VARIANCE_CUTOFF}% or worse in this report.` : 'Nothing needs a reply on this report.'}
+        </td></tr>`;
+    }
     html += `</tbody></table></div>`;
     body.innerHTML = html;
     _vrUpdateProgressLine();
@@ -29785,64 +31580,6 @@ async function vrDeletePeriod(id) {
     }
 }
 
-// ---- "In the Clear" store status (DM only) ----------------------------------
-// Keeps the header toggle in sync with the selected store's status.
-function _vrSyncStatusButton() {
-    const btn = document.getElementById('vr-status-btn');
-    if (!btn) return;
-    if (!_vrIsDM() || _vrUploadOpen || _vrEditing) { btn.style.display = 'none'; return; }
-    const store = ((document.getElementById('vr-store-select') || {}).value || '').toUpperCase();
-    if (!store) { btn.style.display = 'none'; return; }
-    const cleared = _vrStoreCleared(store);
-    btn.style.display = 'inline-flex';
-    btn.disabled = false; // clear the "Saving…" lock after a reload re-syncs it
-    btn.textContent = cleared ? 'Reactivate replies' : 'Mark in the clear';
-    btn.title = cleared
-        ? `${store} is in the clear — click to require variance replies again`
-        : `Mark ${store} as in the clear — its managers stop replying to variance lines`;
-}
-
-// The DM's reminder banner shown above a cleared store's sheet/empty state.
-function _vrDmClearedBannerHtml(store) {
-    const s = _vrStoreStatus[store] || {};
-    const who = s.updated_by ? ` by ${escapeHtml(s.updated_by)}` : '';
-    return `<div style="background:linear-gradient(135deg,#ecfdf5,#d1fae5); border:1.5px solid #a7f3d0; border-radius:12px; padding:12px 16px; margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-        <div style="font-size:12.5px; font-weight:700; color:#065f46; line-height:1.5;">
-            ✅ <b>${escapeHtml(store)}</b> is in the clear — its managers aren't being asked to reply to variance lines${who}. They just see their team + store total.
-        </div>
-        <button class="btn-secondary" style="height:30px; font-size:12px; padding:0 14px; border-radius:7px; flex-shrink:0;" onclick="vrToggleStoreStatus(this)">Reactivate replies</button>
-    </div>`;
-}
-
-async function vrToggleStoreStatus(btn) {
-    if (!_vrIsDM()) return;
-    const store = ((document.getElementById('vr-store-select') || {}).value || '').toUpperCase();
-    if (!store) { alert('Pick a store first.'); return; }
-    const cleared = _vrStoreCleared(store);
-    const next = !cleared;
-    const msg = next
-        ? `Mark ${store} as in the clear?\n\nIts managers will stop seeing and replying to variance line items (and get no reminders) — they'll just see their team + store total. You can reactivate this anytime.`
-        : `Reactivate variance replies for ${store}?\n\nIts managers will start seeing and replying to variance line items again.`;
-    if (!confirm(msg)) return;
-    const old = btn ? btn.textContent : '';
-    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-    try {
-        const res = await fetch(VARIANCE_REPLIES_URL, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                action: 'set_store_status', store, in_the_clear: next,
-                by: sessionStorage.getItem('speeksUserName') || null,
-            }),
-        });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok || json.success === false) throw new Error(json.error || 'Failed');
-        await loadVarianceReplies();
-    } catch (e) {
-        alert('Could not update the store status: ' + (e.message || e));
-        if (btn) { btn.disabled = false; btn.textContent = old; }
-    }
-}
-
 // Fetches a short-lived signed URL for the period's raw workbook and downloads it.
 async function vrDownloadRaw(periodId, btn) {
     const old = btn ? btn.textContent : '';
@@ -29870,7 +31607,86 @@ function vrToggleUpload() {
     _vrParsed = null;
     _vrFileName = '';
     _vrRawFileB64 = '';
+    _vrSelBuyers = new Set();
+    _vrAllClear = false;
     renderVarianceReplies();
+}
+
+// Which of a targeted period's two views is showing. Resets to the people view
+// on every store/period change, because that is where the work is.
+let _vrView = 'people';
+function vrSetView(v) {
+    if (_vrView === v) return;
+    _vrView = v;
+    _vrEditing = false;   // the store view has no note boxes to be mid-edit in
+    renderVarianceReplies();
+}
+
+function _vrViewToggleHtml(p, allRows, storeView) {
+    const owed = allRows.filter(i => i.needs_reply !== false).length;
+    const names = (p.selected_buyers || []).map(n => String(n).split(' ')[0]).join(', ');
+    // Both tabs get the same footprint — a wide enough min-width that the
+    // longer label ("Needs replies · 128") still fits — so switching views
+    // doesn't shuffle the row.
+    const tab = (v, label, on) => `<button type="button" onclick="vrSetView('${v}')"
+        style="font-size:11.5px; font-weight:800; padding:6px 13px; border-radius:8px; cursor:pointer;
+        min-width:150px; text-align:center; flex:0 0 auto;
+        border:1.5px solid ${on ? '#93c5fd' : '#e2e8f0'}; background:${on ? '#eff6ff' : '#fff'}; color:${on ? '#1d4ed8' : '#64748b'};">${label}</button>`;
+    return `<div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-bottom:12px;">
+        ${tab('people', `Needs replies · ${owed}`, !storeView)}
+        ${tab('store', 'Whole store', storeView)}
+        <span style="font-size:11.5px; font-weight:600; color:#94a3b8;">${
+            storeView
+                ? 'Every line at ' + _VR_VARIANCE_CUTOFF + '% or worse — read only.'
+                : (names ? 'Replies requested from ' + escapeHtml(names) + '.' : '')
+        }</span>
+    </div>`;
+}
+
+function _vrAllClearBannerHtml(p) {
+    const who = p.all_clear_by ? ' by ' + escapeHtml(p.all_clear_by) : '';
+    return `<div style="display:flex; align-items:center; gap:9px; background:#f0fdf4; border:1.5px solid #a7f3d0;
+        border-radius:10px; padding:10px 14px; margin-bottom:12px; font-size:12.5px; font-weight:700; color:#166534;">
+        <span style="font-size:15px;">✓</span>
+        <span>All clear for this period${who} — nothing here needs a reply. Worth a read either way.</span>
+    </div>`;
+}
+
+// The pick-list: one row per buyer in the file, worst variance first, with the
+// evidence to decide on — how many lines are at/below the cutoff, how many are
+// merely negative, and how bad their worst one is. Ticking nobody keeps the old
+// whole-store behaviour, which is why that is the resting state.
+function _vrBuyerPickerHtml() {
+    const rows = _vrBuyerSummary(_vrParsed);
+    if (!rows.length) return '';
+    const cells = rows.map(b => {
+        const on = _vrSelBuyers.has(b.name);
+        const n = _vrBuyerReplyLines(b).length;
+        return `<label style="display:flex; align-items:center; gap:9px; padding:7px 10px; border-radius:8px; cursor:pointer;
+                background:${on ? '#eff6ff' : '#fff'}; border:1.5px solid ${on ? '#93c5fd' : '#e2e8f0'};">
+            <input type="checkbox" ${on ? 'checked' : ''} ${_vrAllClear ? 'disabled' : ''}
+                onchange="vrToggleBuyer(${JSON.stringify(b.name).replace(/"/g, '&quot;')})"
+                style="width:15px; height:15px; cursor:pointer; accent-color:#2563eb;">
+            <span style="flex:1; min-width:0;">
+                <span style="display:block; font-size:12.5px; font-weight:800; color:var(--slate-charcoal); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(b.name)}</span>
+                <span style="display:block; font-size:10.5px; font-weight:600; color:#94a3b8;">
+                    ${b.major} at ${_VR_VARIANCE_CUTOFF}%+ · ${b.minor} smaller · worst ${_vrFmtPct(b.worst)}
+                </span>
+            </span>
+            ${on ? `<span style="font-size:10.5px; font-weight:800; color:#1d4ed8; white-space:nowrap;">${n} line${n === 1 ? '' : 's'}</span>` : ''}
+        </label>`;
+    }).join('');
+    return `<div style="margin-top:12px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:7px;">
+            <span class="vr-up-label" style="margin:0;">Who needs to reply?</span>
+            <label style="display:flex; align-items:center; gap:7px; font-size:11.5px; font-weight:700; color:${_vrAllClear ? '#16a34a' : '#94a3b8'}; cursor:pointer;">
+                <input type="checkbox" ${_vrAllClear ? 'checked' : ''} onchange="vrToggleAllClear()"
+                    style="width:15px; height:15px; cursor:pointer; accent-color:#16a34a;">
+                Store is all clear — no replies needed
+            </label>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:7px; ${_vrAllClear ? 'opacity:.45; pointer-events:none;' : ''}">${cells}</div>
+    </div>`;
 }
 
 function _vrUploadPanelHtml() {
@@ -29883,14 +31699,35 @@ function _vrUploadPanelHtml() {
     const curTo = (document.getElementById('vr-up-to') || {}).value || '';
     let preview = '';
     if (_vrParsed) {
-        if (_vrParsed.items.length) {
+        if (_vrParsed.items.length || (_vrParsed.minor || []).length) {
             const pcts = _vrParsed.items.map(i => i.variance_pct).filter(v => v != null);
+            const set = _vrUploadSet();
+            const owed = set.items.filter(i => i.needs_reply).length;
+            const cta = _vrAllClear
+                ? `Upload as all clear to ${store} →`
+                : _vrSelBuyers.size
+                ? `Upload ${owed} line${owed === 1 ? '' : 's'} for ${_vrSelBuyers.size} buyer${_vrSelBuyers.size === 1 ? '' : 's'} →`
+                : `Upload ${owed} items to ${store} →`;
             preview = `<div style="margin-top:10px; font-size:12px; font-weight:600; color:#334155;">
-                ✅ Parsed <b>${_vrParsed.items.length}</b> line item${_vrParsed.items.length > 1 ? 's' : ''} at ${_VR_VARIANCE_CUTOFF}% or worse${pcts.length ? ` · variance ${_vrFmtPct(Math.max(...pcts))} to ${_vrFmtPct(Math.min(...pcts))}` : ''}${_vrParsed.aboveCutoff ? ` · <span style="color:#94a3b8;">${_vrParsed.aboveCutoff} line${_vrParsed.aboveCutoff > 1 ? 's' : ''} above the cutoff left out</span>` : ''}${_vrParsed.skipped ? ` · <span style="color:#d97706;">${_vrParsed.skipped} row${_vrParsed.skipped > 1 ? 's' : ''} skipped (no order # / SKU)</span>` : ''}
-                <button class="btn-primary" style="margin-left:12px; font-size:12px; padding:7px 16px;" onclick="vrConfirmUpload(this)">Upload ${_vrParsed.items.length} items to ${store} →</button>
+                ✅ Parsed <b>${_vrParsed.items.length}</b> line item${_vrParsed.items.length === 1 ? '' : 's'} at ${_VR_VARIANCE_CUTOFF}% or worse${pcts.length ? ` · variance ${_vrFmtPct(Math.max(...pcts))} to ${_vrFmtPct(Math.min(...pcts))}` : ''}${_vrParsed.skipped ? ` · <span style="color:#d97706;">${_vrParsed.skipped} row${_vrParsed.skipped > 1 ? 's' : ''} skipped (no order # / SKU)</span>` : ''}
+            </div>
+            ${_vrBuyerPickerHtml()}
+            <div style="margin-top:12px;">
+                <button class="btn-primary" style="font-size:12px; padding:7px 16px;" onclick="vrConfirmUpload(this)">${cta}</button>
+                <span style="margin-left:10px; font-size:11.5px; color:#94a3b8; font-weight:600;">${
+                    _vrAllClear ? 'Manager is still notified to review — nothing to answer.'
+                    : _vrSelBuyers.size ? 'Everyone else’s lines upload as read-only context.'
+                    : 'No buyers picked — the whole store replies, as before.'
+                }</span>
             </div>`;
         } else if (_vrParsed.aboveCutoff) {
-            preview = `<div style="margin-top:10px; font-size:12px; font-weight:700; color:#d97706;">No line items at ${_VR_VARIANCE_CUTOFF}% variance or worse in this file — nothing needs a manager reply. (${_vrParsed.aboveCutoff} line${_vrParsed.aboveCutoff > 1 ? 's' : ''} above the cutoff.)</div>`;
+            preview = `<div style="margin-top:10px; font-size:12px; font-weight:700; color:#16a34a;">
+                    Nothing negative in this file — the store is in the clear for this period.
+                </div>
+                <div style="margin-top:10px;">
+                    <button class="btn-primary" style="font-size:12px; padding:7px 16px;" onclick="_vrAllClear=true; vrConfirmUpload(this)">Upload as all clear to ${store} →</button>
+                    <span style="margin-left:10px; font-size:11.5px; color:#94a3b8; font-weight:600;">Manager is still notified to review the report.</span>
+                </div>`;
         } else {
             preview = `<div style="margin-top:10px; font-size:12px; font-weight:700; color:#dc2626;">Couldn't find any line items — make sure the workbook has a sheet (e.g. "Detail") with an Order ID and SKU header row.</div>`;
         }
@@ -30008,7 +31845,8 @@ function _vrParseRows(rows) {
         else if (n.includes('repl')) set('mgr_reply', c);       // "Replies to DM Notes" — check before "dm note"
         else if (n.includes('dm note')) set('dm_note', c);
     });
-    const items = [];
+    const items = [];      // at/below the cutoff — the report, as before
+    const minor = [];      // negative but above the cutoff — the top-up pool
     let skipped = 0, aboveCutoff = 0;
     for (let i = headerIdx + 1; i < rows.length; i++) {
         const row = rows[i] || [];
@@ -30020,10 +31858,8 @@ function _vrParseRows(rows) {
             continue;
         }
         const variancePct = _vrParseVariance(get('variance_pct'));
-        // Only lines at -10% or worse need a manager explanation — the rest of
-        // the report is noise here, so drop them at parse time.
-        if (variancePct == null || variancePct > _VR_VARIANCE_CUTOFF) { aboveCutoff++; continue; }
-        items.push({
+        if (variancePct == null) { aboveCutoff++; continue; }
+        const line = {
             order_number: orderNumber || null,
             sku: sku || null,
             item_title: get('item_title') || null,
@@ -30033,9 +31869,50 @@ function _vrParseRows(rows) {
             gm_note: get('gm_note') || null,
             dm_note: get('dm_note') || null,
             mgr_reply: get('mgr_reply') || null,
-        });
+        };
+        // Lines at/below -10% are the report. Lines that are merely negative used
+        // to be dropped here; they are now kept aside, because a buyer singled out
+        // for replies gets topped up to twelve lines from their own next-worst,
+        // and a buyer's whole negative count is what makes the pick-list useful.
+        // Positive lines are still discarded — nothing on this screen is about them.
+        if (variancePct <= _VR_VARIANCE_CUTOFF) items.push(line);
+        else if (variancePct < 0) minor.push(line);
+        else aboveCutoff++;
     }
-    return { items, skipped, aboveCutoff };
+    return { items, minor, skipped, aboveCutoff };
+}
+
+// How many lines one singled-out buyer should have to explain.
+//
+// Ethan's rule: someone with only four lines below -10% gets their twelve worst
+// instead, which still contains those four but is enough of an exercise to be
+// worth doing. It is a FLOOR, not a cap — a buyer with twenty lines below the
+// cutoff keeps all twenty, because dropping eight genuinely bad lines to hit a
+// round number would be indefensible.
+const _VR_BUYER_MIN_LINES = 12;
+
+// Per-buyer roll-up of a parsed file, worst first. Drives the pick-list.
+function _vrBuyerSummary(parsed) {
+    const by = {};
+    const add = (line, major) => {
+        const name = (line.buyer_name || '').trim() || '(no buyer)';
+        const b = by[name] || (by[name] = { name, major: 0, minor: 0, worst: 0, lines: [] });
+        b[major ? 'major' : 'minor']++;
+        b.lines.push(line);
+        if (line.variance_pct < b.worst) b.worst = line.variance_pct;
+    };
+    (parsed.items || []).forEach(l => add(l, true));
+    (parsed.minor || []).forEach(l => add(l, false));
+    return Object.values(by).sort((a, b) => a.worst - b.worst);
+}
+
+// The lines a selected buyer actually has to answer for: every line at/below the
+// cutoff, topped up with their next-worst negatives to _VR_BUYER_MIN_LINES.
+function _vrBuyerReplyLines(summary) {
+    const sorted = summary.lines.slice().sort((a, b) => a.variance_pct - b.variance_pct);
+    const major = sorted.filter(l => l.variance_pct <= _VR_VARIANCE_CUTOFF);
+    if (major.length >= _VR_BUYER_MIN_LINES) return major;
+    return sorted.slice(0, Math.min(_VR_BUYER_MIN_LINES, sorted.length));
 }
 
 // "-25.00%" → -25; "-0.25" (an unformatted Excel percent) → -25; "-25" → -25.
@@ -30056,6 +31933,8 @@ function vrCancelUpload() {
     _vrParsed = null;
     _vrFileName = '';
     _vrRawFileB64 = '';
+    _vrSelBuyers = new Set();
+    _vrAllClear = false;
     renderVarianceReplies();
 }
 
@@ -30064,11 +31943,57 @@ function vrClearFile() {
     _vrParsed = null;
     _vrFileName = '';
     _vrRawFileB64 = '';
+    _vrSelBuyers = new Set();
+    _vrAllClear = false;
     renderVarianceReplies();
 }
 
+// Which buyers the DM has ticked for this upload, and whether they have declared
+// the whole store clear. Both reset with the parse (vrCancelUpload / vrClearFile).
+let _vrSelBuyers = new Set();
+let _vrAllClear = false;
+
+function vrToggleBuyer(name) {
+    if (_vrSelBuyers.has(name)) _vrSelBuyers.delete(name); else _vrSelBuyers.add(name);
+    _vrAllClear = false;   // picking somebody is the opposite of all-clear
+    renderVarianceReplies();
+}
+function vrToggleAllClear() {
+    _vrAllClear = !_vrAllClear;
+    if (_vrAllClear) _vrSelBuyers = new Set();
+    renderVarianceReplies();
+}
+
+// Turn the parse plus the DM's picks into the exact rows to upload.
+//
+// Three shapes, and the first two are new:
+//   all clear   — every cutoff line goes up as CONTEXT. The manager is still told
+//                 a report landed and can still read it; nothing is owed.
+//   buyers      — the picked buyers' lines are the obligation; every other cutoff
+//                 line rides along as context so the whole-store view is complete.
+//   nobody      — unchanged: the whole store's cutoff lines, all owed.
+function _vrUploadSet() {
+    const all = _vrParsed.items || [];
+    if (_vrAllClear) return { items: all.map(l => ({ ...l, needs_reply: false })), buyers: [] };
+    if (!_vrSelBuyers.size) return { items: all.map(l => ({ ...l, needs_reply: true })), buyers: null };
+    const owed = new Set();
+    _vrBuyerSummary(_vrParsed)
+        .filter(b => _vrSelBuyers.has(b.name))
+        .forEach(b => _vrBuyerReplyLines(b).forEach(l => owed.add(l)));
+    // Context lines are cutoff lines only — a minor negative belonging to nobody
+    // in particular has no reason to be stored.
+    const context = all.filter(l => !owed.has(l)).map(l => ({ ...l, needs_reply: false }));
+    const obligation = [...owed].map(l => ({ ...l, needs_reply: true }));
+    return {
+        items: obligation.concat(context),
+        buyers: [..._vrSelBuyers],
+    };
+}
+
 async function vrConfirmUpload(btn) {
-    if (!_vrParsed || !_vrParsed.items.length) return;
+    // An all-clear upload is the one case with no cutoff lines to send, so it
+    // must not be blocked by the "nothing parsed" guard.
+    if (!_vrParsed || (!_vrParsed.items.length && !_vrAllClear)) return;
     const store = (document.getElementById('vr-store-select') || {}).value || '';
     const timeframe = '';
     const from = (document.getElementById('vr-up-from') || {}).value;
@@ -30080,13 +32005,19 @@ async function vrConfirmUpload(btn) {
     try {
         const res = await fetch(VARIANCE_REPLIES_URL, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                action: 'upload_period', store, date_from: from, date_to: to, timeframe,
-                uploaded_by: sessionStorage.getItem('speeksUserName') || null,
-                items: _vrParsed.items,
-                raw_file_b64: _vrRawFileB64 || null,
-                raw_file_name: _vrFileName || null,
-            }),
+            body: JSON.stringify((() => {
+                const set = _vrUploadSet();
+                return {
+                    action: 'upload_period', store, date_from: from, date_to: to, timeframe,
+                    uploaded_by: sessionStorage.getItem('speeksUserName') || null,
+                    items: set.items,
+                    selected_buyers: set.buyers,
+                    all_clear: _vrAllClear,
+                    all_clear_by: _vrAllClear ? (sessionStorage.getItem('speeksUserName') || null) : null,
+                    raw_file_b64: _vrRawFileB64 || null,
+                    raw_file_name: _vrFileName || null,
+                };
+            })()),
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.success === false) throw new Error(json.error || 'Upload failed');
@@ -30119,7 +32050,7 @@ let _vrMyPeriodsCache = [];
 
 function _vrDotNeeded() {
     // Cleared stores owe no replies, so they never light the action dot.
-    return _vrMyPeriodsCache.some(p => !_vrStoreCleared(p.store) && ((p.items - p.answered) > 0 || p.awaiting_reply > 0));
+    return _vrMyPeriodsCache.some(p => !p.all_clear && ((p.items - p.answered) > 0 || p.awaiting_reply > 0));
 }
 
 async function checkVarianceReminders() {
@@ -30134,7 +32065,6 @@ async function checkVarianceReminders() {
         const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=${encodeURIComponent(stores.join(','))}&v=${Date.now()}`);
         const json = await res.json();
         if (!json || json.success === false) return;
-        _vrStoreStatus = json.store_status || {};
         // ignore stale periods so a forgotten upload can't pin the dot forever.
         // Cleared stores stay in the cache (they still get the "report is live"
         // announcement) — the dot + reply nags are gated on cleared separately.
@@ -30149,6 +32079,27 @@ async function checkVarianceReminders() {
 // closes — the deadline passes, or every line gets explained early — and the
 // DM hasn't left any notes yet. The manager-side popups above don't apply to
 // the DM, so this is their "your turn" ping.
+// The period ids currently behind the "reply window closed" card. Collected on
+// every check so that clicking the card can stamp exactly those as reviewed —
+// the card is a summary of several stores, and marking only the one you land on
+// would leave the others raising it again tomorrow.
+const _vrClosedIds = [];
+
+// Clicking the closed-window card IS the review. Fire-and-forget: the stamp is
+// housekeeping and must never delay the navigation the user actually asked for.
+function _vrMarkReviewed() {
+    if (!_vrClosedIds.length) return;
+    const ids = _vrClosedIds.slice();
+    _vrClosedIds.length = 0;
+    try {
+        fetch(VARIANCE_REPLIES_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'mark_reviewed', ids }),
+        }).catch(() => {});
+    } catch (_) { /* navigation matters more than the stamp */ }
+}
+window._vrMarkReviewed = _vrMarkReviewed;
+
 async function checkVarianceDmReminders() {
     if (!_vrIsDM()) return;
     if (!_vrDmRemindersStarted) {
@@ -30159,18 +32110,18 @@ async function checkVarianceDmReminders() {
         const res = await fetch(`${VARIANCE_REPLIES_URL}?stores=OVL,LEE,WSP,MPL,BAL&v=${Date.now()}`);
         const json = await res.json();
         if (!json || json.success === false) return;
-        _vrStoreStatus = json.store_status || {};
         const now = Date.now();
         const cutoff = now - 45 * 86400000;
         // Skip stores the DM has marked "in the clear" — no review nudges for them.
         const periods = (json.data || []).filter(p =>
-            new Date(p.uploaded_at).getTime() > cutoff && !_vrStoreCleared(p.store));
+            new Date(p.uploaded_at).getTime() > cutoff && !p.all_clear);
         // State-based, like the manager side: persists until the DM acts, then
         // clears — no one-shot localStorage that vanished on navigation.
         // Track WHICH stores need the DM's eyes, so clicking the alert lands on one
         // that actually needs review (not a default/empty store). Stores where a
         // manager has replied to a flagged note sort first — that's the "see the
         // manager's replies" case the DM cares about.
+        _vrClosedIds.length = 0;   // rebuilt every pass; see _vrMarkReviewed
         const readyStores = []; // managers done / deadline passed, no DM notes yet
         const closedStores = []; // reply window fully closed → final review
         const repliedClosed = new Set(); // closed stores where a mgr reply came in
@@ -30183,8 +32134,12 @@ async function checkVarianceDmReminders() {
                 if (allDone || duePassed) readyStores.push(store);
             } else {
                 const replyDue = Math.max(new Date(p.manager_due_at).getTime(), new Date(p.dm_notes_at).getTime()) + 2 * 86400000;
-                if (now >= replyDue) {
+                // A period the DM has already looked at since the last manager
+                // reply is done with — dm_reviewed_at is cleared server-side the
+                // moment a newer reply lands, so this cannot hide fresh news.
+                if (now >= replyDue && !p.dm_reviewed_at) {
                     closedStores.push(store);
+                    _vrClosedIds.push(p.id);
                     // A flagged note the manager HAS answered (mgr_replied, from the
                     // edge fn) means there's a reply here for the DM to read.
                     if (p.mgr_replied > 0) repliedClosed.add(store);
@@ -30257,12 +32212,12 @@ function _vrMaybePopup() {
 
     for (const p of _vrMyPeriodsCache) {
         const store = (p.store || '').toUpperCase();
-        // "In the clear" means no line-by-line replies are required. It does NOT
-        // mean the report is irrelevant — the manager still has to read their team
-        // variance and the store total, which is the whole reason the tool still
-        // shows them those. So a new upload surfaces once and clears when they open
-        // the tool, instead of being silently swallowed (Ethan, 2026-08-01).
-        if (_vrStoreCleared(p.store)) {
+        // All clear means no line-by-line replies are required. It does NOT mean
+        // the report is irrelevant — the manager still reads their team variance
+        // and the store total, which is why an all-clear period is uploaded at all
+        // rather than skipped. So a new upload surfaces once and clears when they
+        // open the tool, instead of being silently swallowed (Ethan, 2026-08-01).
+        if (p.all_clear) {
             const upMs = new Date(p.uploaded_at).getTime();
             if (upMs && upMs > (reviewSeen[p.id] || 0)) clearedStores.push(store);
             continue;
@@ -31091,6 +33046,36 @@ function _agState(it) {
 const _agAwaitingStore = it => ['purple', 'yellow'].includes(_agState(it));
 const _agOverdue = it => _agAwaitingStore(it) && it.due_at && Date.now() > new Date(it.due_at).getTime();
 
+// Item ids that were UNREAD at the moment the DM opened this view. Opening marks
+// them read, but the chips keep saying "New Reply" for the rest of this load —
+// otherwise the blue chip would vanish in the same frame it appeared and the DM
+// would have no idea which rows the notification had sent them for. Same trick
+// as _recycleSeenBefore. The notification itself reads the real dm_seen_at, so
+// it clears immediately; only the on-screen labelling lags on purpose.
+let _agDmSeenBefore = new Set();
+
+// A store reply the DM has NOT looked at yet.
+//
+// State alone ("the store spoke last") used to mean "your review", forever. But
+// the DM replying is optional by design: if they read the reply and it needs
+// nothing further, the item is parked until it sells or they follow up later.
+// With no record of having looked, those items nagged every single sign-in —
+// BAL had six where Joseph answered "repriced" / "fixed new title" on Aug 1 and
+// the queue never emptied. aging_items.dm_seen_at is stamped when the DM opens
+// the tool (and by the fn when they post a note), so this reads strictly as
+// "newer than the last time I looked at this item".
+function _agNewStoreReply(it) {
+    if (!it || it.status !== 'open' || _agState(it) !== 'dm') return false;
+    const notes = it.notes || [];
+    let last = 0;
+    for (let i = notes.length - 1; i >= 0; i--) {
+        if (notes[i].author_side === 'store') { last = new Date(notes[i].created_at).getTime(); break; }
+    }
+    if (!last) return false;
+    const seen = it.dm_seen_at ? new Date(it.dm_seen_at).getTime() : 0;
+    return last > seen;
+}
+
 // Row-edit mode enter/leave — in-progress note-edit drafts don't outlive it.
 function _agClearNeDrafts() {
     Object.keys(_agDrafts).forEach(k => { if (k.startsWith('ne|')) delete _agDrafts[k]; });
@@ -31113,6 +33098,7 @@ async function loadAgingInventory() {
         const json = await res.json();
         if (!json.success) throw new Error(json.error);
         _agItems = json.data || [];
+        _agDmSeenBefore = new Set(); // fresh load → fresh "what was new when I opened it"
         // Keep the reminder cache in step so the dots clear the moment a reply
         // is visible here (instead of waiting for the next 10-minute poll).
         if (_agIsStoreUser()) {
@@ -31123,14 +33109,44 @@ async function loadAgingInventory() {
         // owns it (dynamic-module-block + role-district-manager); clearing the
         // inline style it set would re-hide the dropdown.
         renderAgingInventory();
+        _agMarkDmSeenVisible();
     } catch (e) {
         body.innerHTML = '<div class="status-message" style="color:var(--red-alert);">Failed to load the aging inventory report.</div>';
     }
 }
 
+// Mark the store the DM is actually LOOKING at as read — not all five. The
+// notification routes them to one store at a time (longest-waiting first), so
+// stamping the whole district on open would silently swallow replies at four
+// stores they never saw.
+async function _agMarkDmSeenVisible() {
+    if (!_agIsDM()) return;
+    const shown = new Set(_agViewStores().map(s => String(s || '').toUpperCase()));
+    const fresh = _agItems.filter(it =>
+        shown.has(String(it.store || '').toUpperCase()) && _agNewStoreReply(it));
+    if (!fresh.length) return;
+    const ids = fresh.map(it => it.id);
+    ids.forEach(id => _agDmSeenBefore.add(id));
+    // Optimistic: the chips, subtitle, bubble and feed card all read dm_seen_at,
+    // so update locally first and let the POST catch up. If it fails the items
+    // simply come back unread next load — the safe direction to fail in.
+    const stamp = new Date().toISOString();
+    fresh.forEach(it => { it.dm_seen_at = stamp; });
+    renderAgingInventory();
+    try {
+        await fetch(AGING_INV_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'mark_dm_seen', ids }),
+        });
+    } catch (e) { /* next open re-stamps */ }
+    if (typeof _agRetractBubbleIfDone === 'function') _agRetractBubbleIfDone();
+    if (typeof renderActionFeed === 'function') renderActionFeed();
+}
+
 function agOnStoreChange() {
     _agAddOpen = false; _agEditItem = null; _agDrafts = {}; _agJustAdded = ''; _agStoreEdit = null;
     renderAgingInventory(); // all stores are already loaded — just re-filter
+    _agMarkDmSeenVisible(); // switching stores is looking at that store
 }
 
 // The stores the current render shows (the DM flips with the dropdown; a store
@@ -31151,8 +33167,10 @@ function _agVisibleStores() {
 function _agSubtitleText() {
     const open = _agItems.filter(it => it.status === 'open');
     if (_agIsDM()) {
-        const waiting = open.filter(it => _agState(it) === 'dm').length;
-        return waiting ? `${waiting} repl${waiting > 1 ? 'ies' : 'y'} waiting on your review` : '';
+        // Unread only — a reply the DM has already read and left alone isn't
+        // "waiting on your review", it's parked (see _agNewStoreReply).
+        const waiting = open.filter(_agNewStoreReply).length;
+        return waiting ? `${waiting} new repl${waiting > 1 ? 'ies' : 'y'} to review` : '';
     }
     const mine = open.filter(_agAwaitingStore);
     if (!mine.length) return '';
@@ -31239,7 +33257,19 @@ function _agStatusChip(it) {
     if (s === 'new') return chip('🆕 New — Awaiting DM note', '#6d28d9', '#ede9fe', '#c4b5fd');
     if (s === 'purple') return chip(`📩 Reply Needed${due}`, '#6d28d9', '#ede9fe', '#c4b5fd') + overdue;
     if (s === 'yellow') return chip(`↩ Follow-Up — Reply Needed${due}`, '#a16207', '#fef9c3', '#fde047') + overdue;
-    return chip('⏳ Waiting on the DM', '#475569', '#f1f5f9', '#e2e8f0');
+    // One state, three readings. To the store it means "the ball is with the DM"
+    // — nothing owed, calm grey. To the DM it splits: a reply they haven't read
+    // is the work the notification is about (blue, because purple/yellow/green/
+    // red are all spoken for by the spreadsheet colour key), while a reply they
+    // HAVE read and chose not to answer is parked — the item just waits to sell
+    // or for the DM's next follow-up, so it must not keep reading as a to-do.
+    if (!_agIsDM()) return chip('⏳ Waiting on the DM', '#475569', '#f1f5f9', '#e2e8f0');
+    // _agDmSeenBefore: unread when this view opened. Opening marks them read, so
+    // without the snapshot the blue chip would disappear in the same frame it
+    // rendered and the DM couldn't tell which rows the notification meant.
+    return (_agNewStoreReply(it) || _agDmSeenBefore.has(it.id))
+        ? chip('📬 New Reply', '#1d4ed8', '#eff6ff', '#bfdbfe')
+        : chip('✓ Read — Waiting on Sale', '#475569', '#f1f5f9', '#e2e8f0');
 }
 
 function _agTableHtml(items, canDm) {
@@ -31470,7 +33500,7 @@ function _agRetractBubbleIfDone() {
     if (_agCurrentAckKey !== 'speeksAGAckDm') return;
     const b = document.getElementById('agingAlertBubble');
     if (!b || b.style.display === 'none') return;
-    if (_agItems.some(it => it.status === 'open' && _agState(it) === 'dm')) return;
+    if (_agItems.some(_agNewStoreReply)) return;
     b.style.display = 'none';
     _agPopShownThisSession = false;
     _agCurrentAckKey = null;
@@ -31725,7 +33755,7 @@ function _agIsFollowUp(it, side) {
 function _agPendingMembers(items, side) {
     const rel = side === 'store'
         ? (items || []).filter(_agAwaitingStore)
-        : (items || []).filter(it => it.status === 'open' && _agState(it) === 'dm');
+        : (items || []).filter(_agNewStoreReply); // unread replies only — see _agNewStoreReply
     const wantSide = side === 'store' ? 'dm' : 'store';
     return rel.map(it => {
         const notes = it.notes || [];
@@ -31889,6 +33919,9 @@ async function checkAgingInvDmReminders() {
         // early won't ping the DM until the deadline passes.
         const reviewable = (json.data || []).filter(it => {
             if (it.status !== 'open' || _agState(it) !== 'dm') return false;
+            // Only replies the DM hasn't read yet. Reading is the acknowledgement:
+            // choosing not to answer is a valid outcome and must not re-nag.
+            if (!_agNewStoreReply(it)) return false;
             // Ongoing back-and-forth: ping the DM as soon as the store replies —
             // the deadline gate is only for the store's initial reply window.
             if (_agIsFollowUp(it, 'dm')) return true;
@@ -31896,7 +33929,19 @@ async function checkAgingInvDmReminders() {
             return it.due_at && new Date(it.due_at).getTime() <= Date.now();
         });
         const members = _agPendingMembers(reviewable, 'dm');
-        if (!members.length) return;
+        if (!members.length) {
+            // Nothing left to review — drop the bubble so the feed card goes with
+            // it. Returning bare left a stale "replies to review" row up for the
+            // rest of the session after the work was finished (on this device or
+            // another), the same trap already fixed on recycle and claims aging.
+            const ab = document.getElementById('agingAlertBubble');
+            if (ab && getComputedStyle(ab).display !== 'none') {
+                ab.style.display = 'none';
+                _agPopShownThisSession = false;
+                if (typeof _positionAgingAlert === 'function') _positionAgingAlert();
+            }
+            return;
+        }
         const acked = _agAckedSet('speeksAGAckDm');
         if (members.every(m => acked.has(m))) return; // all replies already reviewed/acknowledged
         if (_agPopShownThisSession) return;            // already up this session (poll guard)
@@ -32676,25 +34721,82 @@ function _samReminderCfg() {
     const _vrDue = (_vrT && _vrT.dataset && _vrT.dataset.due) || '';
     const _agT = document.getElementById('agingAlertBubbleText');
     const _agDue = (_agT && _agT.dataset && _agT.dataset.due) || '';
+    // Is anything actually past its reply date? _agMyItemsCache is the store's
+    // open items, already loaded by checkAgingInvReminders.
+    const _agLate = Array.isArray(_agMyItemsCache) && _agMyItemsCache.some(_agOverdue);
+    // Recycle: reply-only vs something actually awaiting a verdict (see below).
+    const _rcT = document.getElementById('recycleAlertBubbleText');
+    const _rcReplyOnly = !!(_rcT && _rcT.dataset && _rcT.dataset.replyonly);
+    // Same flag, same meaning as the claims one below — see checkRecycleReminders.
+    const _rcDel = (_rcT && _rcT.dataset && _rcT.dataset.del) || '';
+    // Claims: is a manager waiting on the DM to approve a deletion? 'only' when
+    // that is all there is, 'mixed' when claims are ageing too. Stamped by
+    // checkAgingClaimsDM, so it is never set for a manager.
+    const _clT = document.getElementById('claimAlertBubbleText');
+    const _clDel = (_clT && _clT.dataset && _clT.dataset.del) || '';
     const cfg = [
         { key: 'variance', id: 'varianceAlertBubble', text: 'varianceAlertBubbleText',
           title: _vrFyi ? 'Variance Report to Review'
                         : 'Variance Replies Due' + (_vrDue ? ' — ' + _vrDue : ''),
           urgency: _vrFyi ? 1 : 2, due: _vrFyi ? 'Review' : 'Due',
           cls: _vrFyi ? 'sam-due-amber' : 'sam-due-red',
-          action: "window.location.href='workspace.html#vreplies'" },
+          // _vrMarkReviewed first: opening the card IS the DM's review, and it
+          // must be stamped before the navigation tears this context down.
+          action: "_vrMarkReviewed(); window.location.href='workspace.html#vreplies'" },
         // A DM has no store-scoped claims tool — send them to the all-stores
         // oversight view instead, which is where they can actually act.
-        { key: 'claims', id: 'claimAlertBubble', text: 'claimAlertBubbleText', title: 'Insurance Claims Aging', urgency: 2, due: 'Aging', cls: 'sam-due-red',
+        // A delete request outranks the ageing pile for the badge: ageing is the
+        // DM's own housekeeping, a deletion is somebody else standing still until
+        // it is answered. The title only changes when that is ALL there is, so a
+        // card carrying both still reads as the claims card it has always been.
+        { key: 'claims', id: 'claimAlertBubble', text: 'claimAlertBubbleText',
+          title: _clDel === 'only' ? 'Claim Delete Requests' : 'Insurance Claims',
+          urgency: 2, due: _clDel ? 'Approve' : 'Open', cls: 'sam-due-red',
           action: (sessionStorage.getItem('speeksUserRole') || '').toLowerCase().trim() === 'district manager'
               ? "openClaimsOversight()"
               : "openClaimsModal(); switchClaimsTab('view')" },
         // openRecycleFocused, not the two calls inline: it also carries the alert's
         // month across, so a card about a July request doesn't open on August.
-        { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText', title: 'Recycle Review', urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "openRecycleFocused()" },
+        // data-replyonly: no line is actually awaiting a verdict, a manager just
+        // wrote back on one. Calling that "Review" sent the DM hunting through a
+        // month for work that did not exist. Same shape as the variance FYI flip.
+        // Three states, most urgent first, and it reads identically to the claims
+        // card: a pending deletion is somebody else standing still, so it is red
+        // and says Approve; a review queue is the DM's own work (amber); a bare
+        // reply blocks nobody at all (grey, no deadline invented).
+        { key: 'recycle', id: 'recycleAlertBubble', text: 'recycleAlertBubbleText',
+          title: _rcDel === 'only' ? 'Recycle Delete Requests'
+               : _rcReplyOnly ? 'Recycle Reply' : 'Recycle Review',
+          urgency: _rcDel ? 2 : 1,
+          due: _rcDel ? 'Approve' : (_rcReplyOnly ? 'Reply' : 'Review'),
+          cls: _rcDel ? 'sam-due-red' : (_rcReplyOnly ? 'sam-due-grey' : 'sam-due-amber'),
+          action: "openRecycleFocused()" },
+        // closeAgingAlertBubble() FIRST, not just the navigation: that function is
+        // the only thing that writes the acknowledged members to speeksAGAck*, and
+        // its two original callers (the ✕ and the "Open Aging Inventory" button)
+        // both live inside #agingAlertBubble — which the retired-toasts block hides
+        // with visibility:hidden. So the ack path had no reachable caller left and
+        // the card came back every single sign-in no matter what the DM did with
+        // it. Clicking through the card is the acknowledgement now, exactly as the
+        // toast's button used to be.
         { key: 'aging', id: 'agingAlertBubble', text: 'agingAlertBubbleText',
-          title: 'Aging Inventory Review' + (_agDue ? ' — Due ' + _agDue : ''),
-          urgency: 1, due: 'Review', cls: 'sam-due-amber', action: "window.location.href='workspace.html#aging'" },
+          // Matches the variance card above. This was hardcoded amber with a
+          // fixed title, so a store three days past its reply deadline looked
+          // identical to one with four days left — the only tell was a sentence
+          // in the subtitle, which is the part nobody reads on a feed row.
+          title: _agLate ? 'Aging Inventory Replies Overdue'
+                         : 'Aging Inventory Review' + (_agDue ? ' — Due ' + _agDue : ''),
+          urgency: _agLate ? 2 : 1,
+          due: _agLate ? 'Overdue' : 'Review',
+          cls: _agLate ? 'sam-due-red' : 'sam-due-amber',
+          action: "closeAgingAlertBubble(); window.location.href='workspace.html#aging'" },
+        // Store goals — DM/CEO only, and the only reminder here that is about
+        // a DECISION rather than a queue. It is deliberately not snoozeable:
+        // every goal bar on the site has nothing to measure against until this
+        // is done, and it goes away by itself the moment the last store is set.
+        { key: 'gpgoals', id: 'gpGoalAlertBubble', text: 'gpGoalAlertBubbleText',
+          title: 'Store Goals to Set', urgency: 2, due: 'Set', cls: 'sam-due-amber',
+          noSnooze: true, action: "openGpGoals()" },
         { key: 'b2b', id: 'b2bAlertBubble', text: 'b2bAlertBubbleText', title: 'B2B Deals Waiting', urgency: 1, due: 'Action', cls: 'sam-due-amber', action: "window.location.href='operations.html#b2b'" },
         { key: 'margin', id: 'marginAlertBubble', text: 'marginAlertBubbleText', title: 'Margin Replies Due', urgency: 2, due: 'Due', cls: 'sam-due-red', action: "window.location.href='workspace.html#mreplies'" },
         // Preferred Purchases — feed-only, both directions. The owner's card is a
@@ -32805,6 +34907,19 @@ function _samGatherReminders() {
                     .replace(/\s+/g, ' ').trim();
             }
         }
+        // Sentence case, in ONE place. Several bubbles assemble their summary from
+        // phrases ("awaiting your review: …", "replied to your note: …") or open
+        // with a count, so the joined string can start lowercase — the recycle
+        // bubble was doing this fix locally, which meant every other card had to
+        // remember to.
+        //
+        // The first WORD, not the first character: "1 delete request awaiting
+        // approval" has to become "1 Delete request…", so any leading digits or
+        // symbols are skipped over. Anchored deliberately — an unanchored
+        // /[a-z]/ would find the first lowercase letter anywhere and turn
+        // "14 × SKU was approved" into "14 × SKU Was approved". A line whose
+        // first word is already capitalised is left alone.
+        sub = sub.replace(/^([^a-zA-Z]*)([a-z])/, (m, pre, ch) => pre + ch.toUpperCase());
         if (sub.length > 160) sub = sub.slice(0, 158) + '…'; // 3-line clamp in CSS shows the rest
         // Snoozed — but only while it's still the SAME reminder. A bubble may supply
         // an explicit identity via data-sig (see _renderClaimBubble); otherwise the
@@ -32884,6 +34999,7 @@ const _RT_TOOL_CHECKS = {
     // loadPatchNotes still runs after, to refresh an already-open hub.
     patch:         ['checkForNewPatchNotes', 'loadPatchNotes'],
     kpi:           ['checkKpiDueReminders'],
+    gpGoals:       ['checkGpGoalReminder'],
     preferred:     ['checkPreferredReminders'],
     b2b:           ['_b2bRealtimeRefresh', 'checkB2BReminders'],
     // Command Center + Listing Goals sources. Each re-fetches through its edge
@@ -33003,7 +35119,7 @@ function samInit() {
     document.body.classList.toggle('sam-active', visible);
     if (typeof _syncLayout === 'function') _syncLayout();
     if (!visible) return;
-    // Roles with none of the action items (CEO / TOM) would get an empty rail
+    // Roles with none of the action items (CEO / MOCD) would get an empty rail
     // card — drop the rail and let the feed run full width instead.
     const rail = menu.querySelector('.sam-rail');
     if (rail) {
@@ -34860,6 +36976,11 @@ function _dccRow(store, hubData, varData, scoreData, alertsData, weeklyResults) 
         edited: hubData[`${k}BuyDate`] || null,
         score: (parseFloat(sc.score) || 0) * 2,
         audit: sc.audit || null,
+        // The REAL PayMore audit, which is a different thing from the one above:
+        // that one is the walkthrough the district runs on itself (the SPEEKS
+        // Audit), this is corporate's own visit. Score and date only — corporate
+        // does not hand over a breakdown, so there is none to show.
+        official: sc.officialAudit || null,
         // The two breakdowns behind those two numbers. Both were already in this
         // response and nothing read them: the categories the DM scored by hand,
         // and the audit sections where points went missing.
@@ -34913,6 +37034,11 @@ function _dccChecks(r) {
     return [
         { key: 'score',   s: r.score > 8 ? null : (r.score >= 6 ? 'w' : 'b') },
         { key: 'audit',   s: !r.audit ? null : (r.audit.pct >= 80 ? null : (r.audit.pct >= 50 ? 'w' : 'b')) },
+        // The real PayMore audit is judged on the SAME scale as the practice one
+        // — same points, same targets, same thresholds (Ethan 2026-08-12) — so
+        // the two columns beside each other can be read against one standard
+        // rather than the reader having to remember which is which.
+        { key: 'paudit',  s: !r.official ? null : (r.official.pct >= 80 ? null : (r.official.pct >= 50 ? 'w' : 'b')) },
         { key: 'sales',   s: _dccTier(r.salesPct, 100, 'min') },
         { key: 'sellM',   s: _dccTier(r.sellM, 55.5, 'min') },
         // Still only judged when above zero: a missing figure parses to 0 and must
@@ -35465,10 +37591,20 @@ function _dccPaneHtml(r, portalLink) {
     const auditChip = r.audit
         ? '<span class="dcc-chip act ' + chipCls(_dccState(r, 'audit'))
           + '" onclick="event.stopPropagation(); openAuditBreakdown(\'' + r.store + '\')"'
-          + ' title="PayMore practice audit — ' + r.audit.earned + '/' + r.audit.possible + ' · view full breakdown">'
-          + '<span class="dcc-chip-l">AUDIT</span>' + r.audit.pct + '%</span>'
-        : '<span class="dcc-chip dcc-mute" title="No practice audit submitted yet">'
-          + '<span class="dcc-chip-l">AUDIT</span>No data</span>';
+          + ' title="The walkthrough the district runs on itself — ' + r.audit.earned + '/'
+          + r.audit.possible + ' · view full breakdown">'
+          + '<span class="dcc-chip-l">SPEEKS AUDIT</span>' + r.audit.pct + '%</span>'
+        : '<span class="dcc-chip dcc-mute" title="No SPEEKS Audit submitted yet">'
+          + '<span class="dcc-chip-l">SPEEKS AUDIT</span>No data</span>';
+    // PayMore's own audit, beside the district's practice one. Not clickable —
+    // there is no breakdown behind it, so it never takes the `act` class.
+    const pauditChip = r.official
+        ? '<span class="dcc-chip ' + chipCls(_dccState(r, 'paudit'))
+          + '" title="PayMore&rsquo;s own audit — ' + r.official.earned + '/' + r.official.possible
+          + ' on ' + escapeHtml(_dcShortDay(r.official.date)) + '">'
+          + '<span class="dcc-chip-l">PAYMORE AUDIT</span>' + r.official.pct + '%</span>'
+        : '<span class="dcc-chip dcc-mute" title="PayMore has not audited this store yet">'
+          + '<span class="dcc-chip-l">PAYMORE AUDIT</span>No data</span>';
     // eBay leads when the account is in trouble: a suspension outranks a margin
     // point. Otherwise the money leads. Same blocks either way.
     const ebayBroken = ['track', 'defect', 'cases', 'late'].some(x => _dccState(r, x));
@@ -35484,7 +37620,7 @@ function _dccPaneHtml(r, portalLink) {
         + '<div class="dcc-ps">Goal ' + _dccMoney(r.goal) + ' &middot; Week of ' + escapeHtml(r.week)
         + (portalLink ? ' &middot; <a href="' + portalLink + '" target="_blank" rel="noopener">Store Folder</a>' : '')
         + '</div></div>'
-        + '<div class="dcc-ph-side">' + scoreChip + auditChip + '</div></div>'
+        + '<div class="dcc-ph-side">' + scoreChip + auditChip + pauditChip + '</div></div>'
         + blocks.join('');
 }
 
@@ -35656,9 +37792,9 @@ function _dcScoreHtml() {
     // Explicit widths: the store column carries two lines now, and the total is the
     // headline of the three scorecard columns, so neither is left narrower than the
     // categories that add up to it.
-    const secW = catNames.length ? (46 / catNames.length) : 0;
-    const cols = '<colgroup><col style="width:18%"><col style="width:17%">'
-        + '<col style="width:19%">'
+    const secW = catNames.length ? (34 / catNames.length) : 0;
+    const cols = '<colgroup><col style="width:16%"><col style="width:15%">'
+        + '<col style="width:16%"><col style="width:19%">'
         + catNames.map(() => '<col style="width:' + secW.toFixed(2) + '%">').join('')
         + '</colgroup>';
 
@@ -35671,18 +37807,42 @@ function _dcScoreHtml() {
 
     let html = '<div class="lv-tbl-scroll"><table class="lv-tbl dc-tbl dc-tbl-score">'
         + cols
-        + '<thead><tr><th>Store</th><th>PayMore Audit</th>'
+        + '<thead><tr><th>Store</th>'
+        + '<th title="The walkthrough the district runs on itself. Click a score '
+        + 'for the full section breakdown.">SPEEKS Audit</th>'
+        + '<th title="PayMore&rsquo;s own audit of the store. Scored out of the same '
+        + 'points against the same targets — score and date only, no breakdown.">'
+        + 'PayMore Audit</th>'
         + '<th title="The Online &amp; Marketing scorecard, out of 10">Total score</th>'
         + catNames.map(n => '<th class="dc-sc-part">' + escapeHtml(n) + '</th>').join('')
         + '</tr></thead>';
     _dccRows.forEach(r => {
         // The audit chip stays clickable in place — openAuditBreakdown is a modal,
         // so it must stop the row's own drill-down from firing behind it.
+        // Both audits are dated. The week-of label under the store name is the
+        // SCORECARD's week, and the two audits are run on their own schedules —
+        // the SPEEKS one weekly, PayMore's whenever they turn up — so without a
+        // date of its own each score read as belonging to the week beside it.
         const audit = r.audit
-            ? '<button type="button" class="dc-audit ' + _dcSev(_dccState(r, 'audit')) + '"'
+            ? '<span class="dc-au-stack">'
+              + '<button type="button" class="dc-audit ' + _dcSev(_dccState(r, 'audit')) + '"'
               + ' onclick="event.stopPropagation(); openAuditBreakdown(\'' + r.store + '\')"'
               + ' title="View the full audit breakdown">' + r.audit.pct + '%</button>'
+              + (r.audit.date ? '<span class="dc-pa-date">' + escapeHtml(_dcShortDay(r.audit.date)) + '</span>' : '')
+              + '</span>'
             : '<span class="dc-muted">No data</span>';
+        // The real audit: a figure and the day it happened, and nothing to click.
+        // It is deliberately NOT a button — there is no breakdown behind it, and
+        // a control that looks identical to the one beside it but does nothing
+        // reads as broken rather than as different.
+        const paudit = r.official
+            ? '<span class="dc-au-stack">'
+              + '<span class="dc-audit dc-paudit ' + _dcSev(_dccState(r, 'paudit')) + '"'
+              + ' title="PayMore&rsquo;s own audit &mdash; ' + r.official.earned + '/'
+              + r.official.possible + '">' + r.official.pct + '%</span>'
+              + (r.official.date ? '<span class="dc-pa-date">' + escapeHtml(_dcShortDay(r.official.date)) + '</span>' : '')
+              + '</span>'
+            : '<span class="dc-muted">Not audited</span>';
         // Categories are entered 0–5 and shown doubled, the same as the manager's
         // own scorecard card — so a 5 reads as a 10 in both places rather than the
         // district quietly using a second scale beside the /10 average.
@@ -35702,15 +37862,25 @@ function _dcScoreHtml() {
             + _dcStoreCell(r.store, r.week ? 'Week of ' + r.week : '',
                            r.week ? 'Scorecard and audit as of the week of ' + r.week : '')
             + _dcCell(audit)
+            + _dcCell(paudit)
             + _dcCell(r.score.toFixed(1) + '<span class="lv-of"> / 10</span>',
                       _dcSev(_dccState(r, 'score')))
             + catCells + '</tr>'
             + '<tr class="dc-catrow" onclick="_dcDrill(\'' + r.store + '\')"'
             + ' title="Open ' + escapeHtml(r.store) + '&rsquo;s full board">'
-            + '<td colspan="' + (catNames.length + 3) + '" class="dc-cats">'
+            + '<td colspan="' + (catNames.length + 4) + '" class="dc-cats">'
             + _dcAuditSecHtml(r, chipCols) + '</td></tr></tbody>';
     });
     return html + '</table></div>';
+}
+
+// "Aug 4" from a plain 'YYYY-MM-DD'. Midday, not midnight: a bare date parsed
+// as local midnight is fine, but the same string parsed as UTC is the previous
+// evening here, and this one is read straight off a date column.
+function _dcShortDay(iso) {
+    const s = String(iso || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return '';
+    return new Date(s + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 // Trims the ".0" off a whole score so a column of 10 / 8 / 7.5 stays readable.
@@ -35730,7 +37900,7 @@ function _dcNum(n) {
 // width that works out to the longest ones ellipsis; the full name is on the
 // chip's title.
 function _dcAuditSecHtml(r, cols) {
-    const open = '<div class="dc-catwrap"><span class="dc-catlab">Audit points by section</span>'
+    const open = '<div class="dc-catwrap"><span class="dc-catlab">SPEEKS Audit points by section</span>'
         + '<div class="dc-catgrid" style="grid-template-columns:repeat('
         + Math.max(1, cols || 1) + ',minmax(0,1fr))">';
     if (!r.audit) {
@@ -35819,11 +37989,24 @@ function _dcSummaryFill() {
     const score = avg(r => r.score || 0);
     set('dc-sum-score', score.toFixed(1) + '<small>/ 10</small>',
         score >= 9 ? 'good' : (score >= 7 ? 'warn' : 'bad'));
-    const withAudit = _dccRows.filter(r => r.audit);
+    // The company's audit average is the REAL PayMore audit, not the practice
+    // one. The district's own walkthrough is a coaching tool it scores itself
+    // on; this line is the number the company is actually held to, and it is
+    // the one that belongs in a summary strip (Ethan 2026-08-12).
+    //
+    // Averaged over the stores that HAVE one, not over all five — a store
+    // corporate has not visited yet is not a zero, and counting it as one would
+    // drag the district average down by a fifth for a fact about a calendar.
+    const withAudit = _dccRows.filter(r => r.official);
     if (withAudit.length) {
-        const a = withAudit.reduce((x, r) => x + Number(r.audit.pct || 0), 0) / withAudit.length;
+        const a = withAudit.reduce((x, r) => x + Number(r.official.pct || 0), 0) / withAudit.length;
         set('dc-sum-audit', a.toFixed(1) + '<small>%</small>',
             a >= 90 ? 'good' : (a >= 84 ? 'warn' : 'bad'));
+    } else {
+        // Never left holding the last value it had. Before this the tile kept
+        // whatever it was last given, so switching it to a source with no rows
+        // yet would have shown a stale SPEEKS figure under a PayMore label.
+        set('dc-sum-audit', '&mdash;', '');
     }
 }
 
@@ -36559,3 +38742,393 @@ async function expMarkFiled(ev) {
     }
 }
 window.expMarkFiled = expMarkFiled;
+
+/* =========================================================
+   SETTINGS  (the nav cog)
+   ---------------------------------------------------------
+   A settings SHELL with a drill-down, not one screen. Pane 1 lists the sections;
+   pane 2 is whichever one was opened, with a back chevron to the list and an X
+   that leaves settings entirely. Notifications is the only section today — the
+   index exists so the second and third ones cost nothing to add.
+
+   To add a section:
+     1. a .set-row button in the index pane (all five shells — it is chrome, so
+        it lives in the HTML like the rest of the nav),
+     2. a pane div with an id,
+     3. an entry in SETTINGS_SECTIONS below.
+   The header text, the back button and whether a Save footer appears are all
+   driven off that entry, so a new section does not touch settingsGo().
+
+   ---------------------------------------------------------
+   NOTIFICATIONS, and the two things not to undo:
+
+   * THE CATEGORY LIST IS NOT IN THIS FILE. The notify function returns it
+     (key + label + blurb) and renderNotifySettings paints whatever it gets. A
+     list here plus a matching set of cat_* columns there is two lists that
+     drift, and it fails silently: a toggle that saves to a column nothing reads.
+
+   * The address is stored per PERSON, keyed on their name, in user_notify_prefs
+     — NOT on the users row. The Permissions tool saves by full replace (delete +
+     re-insert with fresh uuids), so a column on users would be wiped every time
+     the DM edited anybody. See migration 0033.
+   ========================================================= */
+
+// title/eyebrow/sub per pane, and whether that pane owns the Save footer.
+const SETTINGS_SECTIONS = {
+    index: {
+        pane: 'settingsIndexPane', back: false, footer: false,
+        eyebrow: 'Your Account', title: 'Settings',
+        sub: 'Preferences that apply to you, on every page.',
+    },
+    notifications: {
+        pane: 'settingsNotifyPane', back: true, footer: true,
+        eyebrow: 'Settings', title: 'Notifications',
+        sub: 'Pick which SPEEKSNET alerts also reach your inbox.',
+        onOpen: () => loadNotifySettings(),
+    },
+};
+
+let _setSection = 'index';
+let _nsData = null;      // last payload from the notify fn — also the dirty baseline
+
+function openSettings() {
+    toggleModal('settingsModal');
+    const el = document.getElementById('settingsModal');
+    if (!el || !el.classList.contains('show')) return;
+    // Always open on the index, however they left it last time.
+    settingsGo('index', true);
+    _setRefreshStateHints();
+}
+window.openSettings = openSettings;
+
+// Deep link straight into a section — kept so a "manage your preferences" link
+// (or Jump To) can land on Notifications without the user hunting for it, while
+// the back chevron still behaves as if they had walked in through the index.
+function openNotifySettings() {
+    toggleModal('settingsModal');
+    const el = document.getElementById('settingsModal');
+    if (!el || !el.classList.contains('show')) return;
+    settingsGo('notifications', true);
+}
+window.openNotifySettings = openNotifySettings;
+
+function settingsGo(name, force) {
+    const cfg = SETTINGS_SECTIONS[name];
+    if (!cfg) return;
+    // Leaving a section with unsaved edits: ask, exactly as the audit modal does.
+    if (!force && _setSection === 'notifications' && name !== 'notifications' && _nsDirty()) {
+        if (!confirm('You have unsaved notification settings. Leave without saving?')) return;
+    }
+    _setSection = name;
+
+    Object.values(SETTINGS_SECTIONS).forEach(s => {
+        const p = document.getElementById(s.pane);
+        if (p) p.hidden = (s.pane !== cfg.pane);
+    });
+    const back = document.getElementById('settingsBackBtn');
+    const ico = document.getElementById('settingsIco');
+    const foot = document.getElementById('settingsFooter');
+    // The back chevron REPLACES the cog rather than sitting next to it — two
+    // glyphs competing for the same corner reads as clutter, and on a subpage the
+    // affordance to go back matters more than the decoration.
+    if (back) back.hidden = !cfg.back;
+    if (ico) ico.hidden = !!cfg.back;
+    if (foot) foot.hidden = !cfg.footer;
+    const set = (id, txt) => { const e = document.getElementById(id); if (e) e.textContent = txt; };
+    set('settingsEyebrow', cfg.eyebrow);
+    set('settingsTitle', cfg.title);
+    set('settingsSub', cfg.sub);
+    // Clear any stale "Saved." from a previous visit.
+    const note = document.getElementById('notifySaveNote');
+    if (note) { note.textContent = ''; note.className = 'ns-save-note'; }
+
+    if (cfg.onOpen) cfg.onOpen();
+}
+window.settingsGo = settingsGo;
+
+function settingsBack() { settingsGo('index'); _setRefreshStateHints(); }
+window.settingsBack = settingsBack;
+
+// X = out of settings altogether, from whatever depth.
+function closeSettings() {
+    if (_setSection === 'notifications' && _nsDirty()) {
+        if (!confirm('You have unsaved notification settings. Close without saving?')) return;
+    }
+    closeAllModals();
+    _setSection = 'index';
+}
+window.closeSettings = closeSettings;
+
+// The little "On · daily" / "Off" chip on the index row. A settings list that
+// only shows labels makes you open every row to find out what is set; showing
+// the state is why real settings menus do it.
+async function _setRefreshStateHints() {
+    const chip = document.getElementById('setStateNotifications');
+    if (!chip) return;
+    try {
+        const p = (_nsData && _nsData.prefs) ? _nsData.prefs : (await _nsFetch()).prefs;
+        if (!p || !p.enabled) { chip.textContent = 'Off'; chip.className = 'set-row-state is-off'; return; }
+        chip.textContent = 'On';
+        chip.className = 'set-row-state is-on';
+    } catch (_) {
+        chip.textContent = '';       // never guess a state we could not read
+        chip.className = 'set-row-state';
+    }
+}
+
+async function _nsFetch() {
+    const pin = sessionStorage.getItem('speeksUserPin') || '';
+    if (!pin) throw new Error('no pin');
+    const res = await fetch(`${NOTIFY_URL}?v=${Date.now()}`, { headers: { 'x-user-pin': pin } });
+    const j = await res.json();
+    if (!j || j.error) throw new Error((j && j.error) || 'Could not load');
+    _nsData = j;
+    return j;
+}
+
+async function loadNotifySettings() {
+    const body = document.getElementById('notifySettingsBody');
+    if (!body) return;
+    body.innerHTML = '<div class="ns-loading">Loading your settings…</div>';
+    if (!sessionStorage.getItem('speeksUserPin')) {
+        body.innerHTML = '<div class="ns-loading">Sign in again to change these.</div>';
+        return;
+    }
+    try {
+        renderNotifySettings(await _nsFetch());
+    } catch (e) {
+        _nsData = null;
+        body.innerHTML = `<div class="ns-loading">Couldn${String.fromCharCode(39)}t load your settings — ${_samEsc(e.message || 'try again')}.</div>`;
+    }
+}
+
+function renderNotifySettings(d) {
+    const body = document.getElementById('notifySettingsBody');
+    if (!body) return;
+    const p = d.prefs || {};
+    const on = !!p.enabled;
+    const cats = d.categories || [];
+    // Sub-keys this person has switched off. A key ABSENT from the list is on,
+    // so a notification added after their last save arrives switched on rather
+    // than silently muted.
+    const muted = new Set(d.muted || []);
+
+    // Master switch first, then the address, then what to hear about — in that
+    // order because the address is meaningless without the switch and the
+    // categories are meaningless without both. The block below the switch dims
+    // when it is off, so the state reads at a glance instead of being inferred
+    // from a row of ticked boxes that aren't doing anything.
+    body.innerHTML = `
+      <div class="ns-master ${on ? 'is-on' : ''}">
+        <label class="ns-switch">
+          <input type="checkbox" id="nsEnabled" ${on ? 'checked' : ''} onchange="_nsSyncEnabled()">
+          <span class="ns-switch-track"><span class="ns-switch-knob"></span></span>
+        </label>
+        <div class="ns-master-copy">
+          <div class="ns-master-title">Email me when something needs me</div>
+          <div class="ns-master-sub">Off by default. Nothing is ever emailed unless you switch this on.</div>
+        </div>
+      </div>
+
+      <div class="ns-fields" id="nsFields">
+        <label class="ns-label" for="nsEmail">Send them to</label>
+        <input type="email" id="nsEmail" class="ns-input" autocomplete="email"
+               placeholder="you@speekstechnology.com" value="${_samEsc(p.email || '')}">
+        <div class="ns-hint">The first time you save, we send a note to confirm the address works. Alerts arrive as they happen, batched so a busy hour is one email.</div>
+
+        <label class="ns-label ns-label-gap">What to tell me about</label>
+        <div class="ns-cats">
+          ${cats.map(c => _nsCatRow(c, p, muted)).join('')}
+        </div>
+      </div>`;
+    _nsSyncEnabled();
+}
+
+// One category row. A category the function gave sub-switches for becomes a
+// disclosure: the category tick still governs the whole thing, and the caret
+// opens the individual notifications inside it. Categories with nothing to
+// split render exactly as they did before, because drawing a caret that opens
+// a list of one is worse than no caret.
+//
+// Collapsed by default. Seven categories each unfolded to four children is a
+// wall, and the category switch is the decision most people are making.
+function _nsCatRow(c, p, muted) {
+    const catOn = p['cat_' + c.key] !== false;
+    const subs = Array.isArray(c.subs) ? c.subs : [];
+    const box = `<input type="checkbox" class="ns-cat-box" data-cat="${_samEsc(c.key)}"
+                        ${catOn ? 'checked' : ''} onchange="_nsSyncCat(this)">`;
+    const copy = `<span class="ns-cat-copy"><b>${_samEsc(c.label)}</b><i>${_samEsc(c.blurb)}</i></span>`;
+    if (!subs.length) return `<label class="ns-cat">${box}${copy}</label>`;
+
+    // How many of its children are on, so the state reads without opening it.
+    const onCount = subs.filter(s => !muted.has(s.key)).length;
+    const tally = onCount === subs.length ? 'All' : `${onCount} of ${subs.length}`;
+    return `
+      <div class="ns-cat-group" data-group="${_samEsc(c.key)}">
+        <div class="ns-cat ns-cat-head">
+          <label class="ns-cat-lab">${box}${copy}</label>
+          <button type="button" class="ns-cat-more" onclick="_nsToggleGroup(this)" aria-expanded="false">
+            <span class="ns-cat-tally">${_samEsc(tally)}</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+        </div>
+        <div class="ns-subs" hidden>
+          ${subs.map(s => `
+            <label class="ns-sub">
+              <input type="checkbox" class="ns-sub-box" data-sub="${_samEsc(s.key)}"
+                     ${muted.has(s.key) ? '' : 'checked'} onchange="_nsSyncTally(this)">
+              <span class="ns-sub-copy"><b>${_samEsc(s.label)}</b><i>${_samEsc(s.blurb)}</i></span>
+            </label>`).join('')}
+        </div>
+      </div>`;
+}
+
+function _nsToggleGroup(btn) {
+    const grp = btn.closest('.ns-cat-group');
+    const list = grp && grp.querySelector('.ns-subs');
+    if (!list) return;
+    const open = list.hasAttribute('hidden');
+    list.toggleAttribute('hidden', !open);
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    grp.classList.toggle('is-open', open);
+}
+window._nsToggleGroup = _nsToggleGroup;
+
+// Switching the CATEGORY off disables its children rather than unticking them:
+// their state is a separate choice and has to survive the category being turned
+// off and on again. Nothing is sent for a muted category either way.
+function _nsSyncCat(box) {
+    const grp = box.closest('.ns-cat-group');
+    if (!grp) return;
+    grp.classList.toggle('is-catoff', !box.checked);
+    grp.querySelectorAll('.ns-sub-box').forEach(b => { b.disabled = !box.checked; });
+}
+window._nsSyncCat = _nsSyncCat;
+
+// Keep the "3 of 4" chip honest as the children are ticked.
+function _nsSyncTally(box) {
+    const grp = box.closest('.ns-cat-group');
+    const chip = grp && grp.querySelector('.ns-cat-tally');
+    if (!chip) return;
+    const all = grp.querySelectorAll('.ns-sub-box');
+    const on = grp.querySelectorAll('.ns-sub-box:checked').length;
+    chip.textContent = on === all.length ? 'All' : `${on} of ${all.length}`;
+}
+window._nsSyncTally = _nsSyncTally;
+
+// Dim and disable everything below the master switch when alerts are off.
+function _nsSyncEnabled() {
+    const en = document.getElementById('nsEnabled');
+    const fields = document.getElementById('nsFields');
+    const master = document.querySelector('#notifySettingsBody .ns-master');
+    if (!en || !fields) return;
+    fields.classList.toggle('is-off', !en.checked);
+    if (master) master.classList.toggle('is-on', en.checked);
+    fields.querySelectorAll('input').forEach(i => { i.disabled = !en.checked; });
+    // Re-apply the category-level disable, which is narrower than the master one
+    // and would otherwise be undone by the line above when alerts are switched
+    // back on with a category still off.
+    if (en.checked) fields.querySelectorAll('.ns-cat-box').forEach(_nsSyncCat);
+    // The address stays editable while switched off: somebody may well want to
+    // type it now and switch on later, and greying it out makes that look
+    // impossible.
+    const mail = document.getElementById('nsEmail');
+    if (mail) mail.disabled = false;
+}
+window._nsSyncEnabled = _nsSyncEnabled;
+
+// What the form currently says, or null if it isn't on screen.
+function _nsForm() {
+    const en = document.getElementById('nsEnabled');
+    const mail = document.getElementById('nsEmail');
+    if (!en || !mail) return null;
+    const categories = {};
+    document.querySelectorAll('#notifySettingsBody .ns-cat-box')
+        .forEach(b => { categories[b.dataset.cat] = b.checked; });
+    // Only the UNTICKED children are sent. Storing the off-list rather than the
+    // on-list is what makes a notification added later default to ON for people
+    // who saved before it existed.
+    const muted = [];
+    document.querySelectorAll('#notifySettingsBody .ns-sub-box')
+        .forEach(b => { if (!b.checked) muted.push(b.dataset.sub); });
+    return {
+        enabled: en.checked,
+        email: (mail.value || '').trim().toLowerCase(),
+        // Always 'instant'. The per-person "once a day instead" choice was removed
+        // (user, 2026-08-13): anything you have opted into should arrive when it
+        // happens, not be held. The column and the hold logic still exist in the
+        // notify function so the option could come back without a migration, but
+        // nothing sends 'digest' any more.
+        //
+        // NOTE this is NOT the daily digest going away. Due dates (KPIs, listing
+        // goals, expense reports) are absences with nothing to fire on, so they are
+        // still recomputed on a daily schedule — that is the only cadence they can
+        // have. This setting only ever governed queued EVENTS.
+        cadence: 'instant',
+        categories,
+        muted,
+    };
+}
+
+// Unsaved edits vs what the server last gave us. Guards Back and X — losing a
+// changed address to a stray click is exactly the kind of silent loss the audit
+// modal already learned to confirm.
+function _nsDirty() {
+    const f = _nsForm();
+    if (!f || !_nsData || !_nsData.prefs) return false;
+    const p = _nsData.prefs;
+    if (f.enabled !== !!p.enabled) return true;
+    if (f.email !== String(p.email || '').trim().toLowerCase()) return true;
+    return Object.keys(f.categories).some(k => f.categories[k] !== (p['cat_' + k] !== false));
+}
+
+async function saveNotifySettings() {
+    const btn = document.getElementById('notifySaveBtn');
+    const note = document.getElementById('notifySaveNote');
+    const f = _nsForm();
+    const mail = document.getElementById('nsEmail');
+    if (!f || !mail) return;
+
+    const fail = msg => {
+        if (note) { note.textContent = msg; note.className = 'ns-save-note is-err'; }
+        mail.focus();
+    };
+    // Checked here as well as in the function, purely so the message lands next
+    // to the field rather than arriving as a failed request.
+    if (f.enabled && !f.email) return fail('Add an email address first.');
+    if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(f.email)) {
+        return fail('That does not look like an email address.');
+    }
+
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    if (note) { note.textContent = ''; note.className = 'ns-save-note'; }
+    try {
+        const pin = sessionStorage.getItem('speeksUserPin') || '';
+        const res = await fetch(NOTIFY_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-pin': pin },
+            body: JSON.stringify({ action: 'save', ...f }),
+        });
+        const j = await res.json();
+        if (!j || j.error) throw new Error((j && j.error) || 'Could not save');
+        if (note) {
+            // "Saved" and "saved, go and check your inbox" are different pieces of
+            // news — the second is the only signal that the address actually works.
+            const fresh = j.welcome && j.welcome.ok && !j.welcome.skipped;
+            note.textContent = fresh ? 'Saved — Check your inbox for the confirmation.' : 'Saved.';
+            note.className = 'ns-save-note is-ok';
+        }
+        // Re-baseline so the form stops reading as dirty, and refresh the chip on
+        // the index so walking back shows the new state rather than the old one.
+        if (_nsData) {
+            _nsData.prefs = { ...(_nsData.prefs || {}), enabled: f.enabled, email: f.email, cadence: f.cadence };
+            Object.keys(f.categories).forEach(k => { _nsData.prefs['cat_' + k] = f.categories[k]; });
+        }
+        _setRefreshStateHints();
+    } catch (e) {
+        if (note) { note.textContent = e.message || 'Could not save.'; note.className = 'ns-save-note is-err'; }
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Save Changes'; }
+    }
+}
+window.saveNotifySettings = saveNotifySettings;

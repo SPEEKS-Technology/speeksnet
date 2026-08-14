@@ -66,6 +66,41 @@ async function broadcastChange(tool: string, store: string | null) {
   } catch (_) { /* best-effort */ }
 }
 
+// Drop a row on the email-notification queue — the twin of broadcastChange
+// above. That one tells an already-open page to refresh; this one tells the
+// people who aren't looking at the site right now.
+//
+// All this has to do is describe WHO CARES. The notify function resolves
+// audience -> people -> their preferences -> an address, and batches whatever is
+// outstanding into one message. Leaving audienceStores/audienceRoles null means
+// "everybody".
+//
+// Best-effort and never throws, for the same reason broadcastChange isn't
+// awaited for its result: failing to notify must never fail the write itself.
+// See migration 0033 for the audience axes and the category list.
+async function queueNotification(n: {
+  category: string; kind: string; title: string; body?: string; link?: string;
+  store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
+  audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+}) {
+  try {
+    const sb = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    await sb.from("notify_queue").insert({
+      category: n.category, kind: n.kind, title: n.title, body: n.body ?? null,
+      link: n.link ?? null,
+      store: n.store ? String(n.store).toUpperCase() : null,
+      audience_stores: n.audienceStores ?? null,
+      audience_roles: n.audienceRoles ?? null,
+      audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
+      exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
+      priority: n.priority ?? "normal",
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -129,6 +164,20 @@ Deno.serve(async (req: Request) => {
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
 
         await broadcastChange("preferred", store);
+        // The request lands in the owner's queue, so the owner roles hear about
+        // it. Only this direction is emailed: the ANSWER coming back to the
+        // requester stays feed-only (it's information, not a task — which is why
+        // its card carries no due badge and offers "Mark read" instead of Snooze).
+        await queueNotification({
+          category: "requests",
+          kind: "purchase_request",
+          title: `Purchase request from ${requested_by}`,
+          body: `${item_name}${body.price ? ` — ${String(body.price)}` : ""}. ${reason}`.slice(0, 300),
+          link: "operations.html",
+          store,
+          audienceRoles: ["district manager", "ceo", "mocd"],
+          excludeUser: requested_by,
+        });
         return jsonResponse({ success: true, id: data?.id ?? null });
       }
 

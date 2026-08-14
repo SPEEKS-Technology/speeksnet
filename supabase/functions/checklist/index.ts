@@ -143,7 +143,7 @@ Deno.serve(async (req: Request) => {
     // --- Manager-facing read: personal + applicable required tasks ---
     const user = url.searchParams.get("user") || "";
     const store = (url.searchParams.get("store") || "").toUpperCase();
-    // personal=1 (e.g. the TOM role): ONLY the user's own tasks — no store
+    // personal=1 (e.g. the MOCD role): ONLY the user's own tasks — no store
     // broadcasts or required tasks. Their checklist starts blank until they
     // (or a DM) add something for them specifically.
     const personalOnly = url.searchParams.get("personal") === "1";

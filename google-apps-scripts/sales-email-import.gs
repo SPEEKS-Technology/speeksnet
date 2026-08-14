@@ -324,11 +324,47 @@ var BUY_CLOSED_DATES = [
   //      '2026-12-25',  // Christmas
 ];
 
+// SPEEKS is now where closures are entered — Month Setup keeps them in
+// monthly_closed_days, and the DM adds them once when the month is set up. The
+// array above is the fallback for a month SPEEKS cannot answer for.
+//
+// ⚠️ A FAILED LOOKUP MUST NOT LOOK LIKE "no holidays". Pretending the month is
+// clear would write a "Days thru Month" that counts the holiday, and nothing
+// downstream would ever say so. So a failure returns null and the caller skips
+// the write for that run — which costs nothing, because the counter is
+// recomputed from day 1 every morning rather than incremented, so the next
+// successful run repairs it completely.
+var GP_GOALS_URL = 'https://ejzaqmyxxrkmxvzbjeuo.supabase.co/functions/v1/gp-goals';
+var _buyClosedCache = {};
+
+function _buyClosedDays(y, monthIdx) {
+  var ym = y + '-' + ('0' + (monthIdx + 1)).slice(-2);
+  if (_buyClosedCache[ym] !== undefined) return _buyClosedCache[ym];
+  var days = null;
+  try {
+    var res = UrlFetchApp.fetch(GP_GOALS_URL + '?month=' + ym, { muteHttpExceptions: true });
+    if (res.getResponseCode() === 200) {
+      var j = JSON.parse(res.getContentText());
+      if (j && Object.prototype.toString.call(j.closed) === '[object Array]') {
+        days = j.closed.map(function (c) { return Number(c.day); })
+                       .filter(function (d) { return d >= 1 && d <= 31; });
+      }
+    }
+  } catch (e) { /* falls through to the local list */ }
+  if (days === null && BUY_CLOSED_DATES.length) {
+    days = BUY_CLOSED_DATES
+      .filter(function (iso) { return iso.indexOf(ym + '-') === 0; })
+      .map(function (iso) { return parseInt(iso.slice(8), 10); });
+  }
+  _buyClosedCache[ym] = days;
+  return days;
+}
+
 function _isPlannedClosure(y, monthIdx, day) {
   var d = new Date(y, monthIdx, day);
   if (d.getDay() === 0) return true;                       // Sunday
-  var iso = y + '-' + ('0' + (monthIdx + 1)).slice(-2) + '-' + ('0' + day).slice(-2);
-  return BUY_CLOSED_DATES.indexOf(iso) !== -1;
+  var closed = _buyClosedDays(y, monthIdx);
+  return closed !== null && closed.indexOf(day) !== -1;
 }
 
 // Non-Sunday, non-holiday days in the whole month — what the hand-entered
@@ -1437,6 +1473,14 @@ function _buyPlannedCheck(t, refDate) {
 function _syncBuyDaysThru(t, refDate, dryRun) {
   var out = [];
   var values = t.values;
+
+  // If SPEEKS could not be reached, the closure list is UNKNOWN, not empty.
+  // Writing anyway would silently count a holiday as a working day; skipping
+  // leaves yesterday's figure standing, and tomorrow's run puts it right.
+  if (_buyClosedDays(refDate.getFullYear(), refDate.getMonth()) === null) {
+    out.push({ skipped: 'closed-day list unavailable — Days thru Month left alone this run' });
+    return out;
+  }
 
   var row = -1;
   for (var r = 0; r < values.length && row < 0; r++) {
