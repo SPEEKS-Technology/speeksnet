@@ -12177,7 +12177,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
     font-size: 9.5px; font-weight: 800; letter-spacing: .09em;
     text-transform: uppercase; color: var(--b2b-faint);
 }
-.b2b-sum-v { font-size: 12.5px; font-weight: 750; color: #1a1c1e; }
+.b2b-sum-v { font-size: 12.5px; font-weight: 750; color: #1a1c1e; min-width: 0; overflow-wrap: anywhere; }
 
 .b2b-note {
     display: flex; align-items: baseline; gap: 9px; padding: 11px 14px;
@@ -12234,7 +12234,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 }
 .b2b-pick.on .b2b-pick-ac { background: #fff; }
 .b2b-pick-co { grid-area: co; font-size: 13.5px; font-weight: 750; color: #1a1c1e; }
-.b2b-pick-sub { grid-area: sub; font-size: 11px; color: var(--b2b-muted); }
+.b2b-pick-sub { grid-area: sub; font-size: 11px; color: var(--b2b-muted); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .b2b-pick-n {
     grid-area: n; align-self: center; justify-self: end;
     padding: 3px 9px; border-radius: 999px; background: var(--b2b-chip);
@@ -12649,6 +12649,7 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-signq-txt b { font-size: 14px; font-weight: 800; color: #1a1c1e; }
 .b2b-signq-txt p { margin: 5px 0 9px; font-size: 12.5px; color: var(--b2b-muted); line-height: 1.5; }
 .b2b-signq-note { font-size: 11.5px; font-style: italic; color: var(--b2b-faint); }
+.b2b-signq-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .b2b-qr-fail { font-size: 11px; color: var(--b2b-muted); text-align: center; line-height: 1.5; word-break: break-all; }
 
 /* The captured signature, shown at its own aspect rather than stretched: it is
@@ -13135,6 +13136,37 @@ input[type="datetime-local"]::-webkit-datetime-edit { text-transform: uppercase;
 .b2b-lname { font-size: 13px; font-weight: 750; color: #1a1c1e; }
 .b2b-lcond { margin-left: 7px; font-size: 10.5px; font-weight: 700; color: var(--b2b-muted); }
 .b2b-lsku { font-size: 10.5px; color: var(--b2b-faint); margin-top: 2px; }
+/* Per-line resale value + what we paid, for the lister. */
+.b2b-lvc { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 4px; font-size: 11.5px; color: var(--b2b-muted); }
+.b2b-lvc b { color: #1a1c1e; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* --- listing grid: the pricing sheet's look, read-only, with specs/serials the
+   lister needs plus the list / recycle / label actions. --------------------- */
+.b2b-items.b2b-ss.b2b-lgrid {
+    --b2b-pcols: 78px minmax(150px, 1.2fr) 96px 78px 96px minmax(150px, 1.5fr) 74px 74px 132px 118px;
+}
+.b2b-lline .b2b-pcell { align-items: flex-start; padding-top: 9px; padding-bottom: 9px; }
+.b2b-lline .b2b-pc-sku { gap: 5px; color: var(--b2b-faint); }
+.b2b-lcheck { display: inline-grid; place-items: center; }
+.b2b-lcheck svg { width: 13px; height: 13px; stroke: var(--sage-deep); stroke-width: 3; }
+.b2b-lc-item { flex-direction: column; gap: 3px; }
+.b2b-lc-name { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.b2b-lc-name b { font-weight: 750; font-size: 12.5px; color: #1a1c1e; }
+.b2b-lc-sub { font-size: 10.5px; color: var(--b2b-muted); }
+.b2b-lc-spec { font-size: 12px; color: #1a1c1e; }
+.b2b-lc-serials {
+    font-family: 'Consolas', 'SFMono-Regular', Menlo, monospace; font-size: 11px;
+    color: var(--b2b-muted); white-space: normal; word-break: break-word; line-height: 1.5;
+}
+.b2b-lc-prog { align-items: center; justify-content: center; gap: 7px; }
+.b2b-lc-count { font-size: 12px; color: var(--b2b-muted); white-space: nowrap; text-align: center; line-height: 1.15; }
+.b2b-lc-count b { font-size: 14px; color: #1a1c1e; }
+.b2b-lc-count i { display: block; font-style: normal; font-size: 9px; color: var(--b2b-faint); }
+.b2b-lline .b2b-pc-acts { align-items: center; flex-wrap: wrap; gap: 5px; justify-content: flex-start; }
+.b2b-items.b2b-ss.b2b-lgrid .b2b-lline.b2b-lok { background: var(--b2b-accent-tint) !important; }
+.b2b-lline.b2b-lwait { box-shadow: inset 3px 0 0 var(--sage-professional); }
+/* Wipe strip + recorded barcodes drop under the row, indented past the Line column. */
+.b2b-lextra { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 12px 10px 86px; }
 
 /* The line currently mid-handshake, so it is obvious which row the scan bar is
    asking about when the checklist is long. */
