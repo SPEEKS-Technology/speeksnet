@@ -56,6 +56,37 @@ async function broadcastChange(tool: string, store: string | null) {
   } catch (_) { /* best-effort */ }
 }
 
+// Drop a row on the email-notification queue. The twin of broadcastChange above:
+// that one refreshes an already-open page, this one reaches the people who are not
+// looking at the site.
+//
+// Copied deliberately from store-comments rather than reimplemented, because an
+// approved draft has to be indistinguishable from a hand-sent store comment for
+// everyone downstream. Without this the message appeared on the store's dashboard
+// but sent no email, so anybody relying on the alert would simply never hear about
+// it. Best-effort and never throws: failing to notify must not fail the publish.
+async function queueNotification(n: {
+  category: string; kind: string; title: string; body?: string; link?: string;
+  store?: string | null; audienceStores?: string[] | null; excludeUser?: string | null;
+}) {
+  try {
+    const sb = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    await sb.from("notify_queue").insert({
+      category: n.category, kind: n.kind, title: n.title, body: n.body ?? null,
+      link: n.link ?? null,
+      store: n.store ? String(n.store).toUpperCase() : null,
+      audience_stores: n.audienceStores ?? null,
+      audience_roles: null,
+      audience_user: null,
+      exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
+      priority: "normal",
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 // ---------------------------------------------------------------------------
 // Thresholds — Ethan's numbers, 2026-08-13. All stores identical unless the
 // store is under two months old (NEW_STORE_DAYS), which as of Aug 2026 none are.
@@ -738,16 +769,43 @@ Deno.serve(async (req) => {
 
     if (status === "approved") {
       const text = String(patch.edited_message ?? draft.message);
+      const author = viewer?.name ?? "Ethan Kushnir";
       // Published through the same shape the Send Store Comment tool uses, so
       // read receipts, the green bubble and the reads tab all work unchanged.
+      //
+      // ISO, not toLocaleDateString. The column is a `date`, and the locale form
+      // ("8/14/2026") only parses because this server happens to run DateStyle MDY.
+      // store-comments converts to ISO for exactly this reason.
+      const today = chicagoParts(new Date()).iso;
       const { data: pub, error } = await sb.from("store_comments").insert({
-        date: new Date().toLocaleDateString("en-US", { timeZone: "America/Chicago" }),
-        store: draft.store,
-        author: viewer?.name ?? "Ethan Kushnir",
-        message: text,
+        date: today, store: draft.store, author, message: text,
       }).select("id").single();
       if (error) return json({ ok: false, error: error.message }, 500);
       patch.published_comment_id = pub.id;
+
+      // ...and the email, which the on-screen card is only half of. A hand-sent
+      // comment queues this; an approved draft has to be indistinguishable from
+      // one downstream, so it queues the identical row.
+      //
+      // The role is taken from the pin-resolved viewer, never from client input:
+      // "Message from Ethan Kushnir (District Manager)" is a claim of authority
+      // and it has to be one the server checked. A machine-authorised approval
+      // has no viewer, so it gets the neutral name-only wording.
+      const raw = String(viewer?.role ?? "").toLowerCase().trim();
+      const role = raw === "district manager" ? "District Manager"
+        : raw === "ceo" ? "CEO"
+        : (raw === "manager" || raw === "owner (manager)" || raw === "multi-store manager") ? "Manager"
+        : "";
+      await queueNotification({
+        category: "store_messages",
+        kind: "store_comment",
+        title: `Message from ${role ? `${author} (${role})` : author}`,
+        body: text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300),
+        link: "index.html",
+        store: draft.store,
+        audienceStores: [draft.store],
+        excludeUser: author,
+      });
     }
 
     await sb.from("comment_drafts").update(patch).eq("id", id);
