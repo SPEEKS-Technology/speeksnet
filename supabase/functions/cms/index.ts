@@ -49,6 +49,58 @@ async function broadcastChange(tool: string, store: string | null) {
   } catch (_) { /* best-effort */ }
 }
 
+// Drop a row on the email-notification queue — the twin of broadcastChange
+// above. That one tells an already-open page to refresh; this one tells the
+// people who aren't looking at the site right now.
+//
+// All this has to do is describe WHO CARES. The notify function resolves
+// audience -> people -> their preferences -> an address, and batches whatever is
+// outstanding into one message. Leaving audienceStores/audienceRoles null means
+// "everybody", which is what a company announcement wants.
+//
+// Best-effort and never throws, for the same reason broadcastChange isn't
+// awaited for its result: failing to notify must never fail the write itself.
+// See migration 0033 for the audience axes and the category list.
+async function queueNotification(n: {
+  category: string; kind: string; title: string; body?: string; link?: string;
+  store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
+  audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+}) {
+  try {
+    const sb = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    await sb.from("notify_queue").insert({
+      category: n.category, kind: n.kind, title: n.title, body: n.body ?? null,
+      link: n.link ?? null,
+      store: n.store ? String(n.store).toUpperCase() : null,
+      audience_stores: n.audienceStores ?? null,
+      audience_roles: n.audienceRoles ?? null,
+      audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
+      exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
+      priority: n.priority ?? "normal",
+    });
+  } catch (_) { /* best-effort */ }
+}
+
+// An announcement's message is HTML whose first <strong> is its title — the same
+// rule docTitle() and _samParseAnn() in speeks.js use. Split it the same way so
+// the email's subject line reads like the card on the site, not like markup.
+function annParts(html: string): { title: string; snippet: string } {
+  const raw = String(html || "");
+  const strong = raw.match(/<strong[^>]*>([\s\S]*?)<\/strong>/i);
+  const strip = (s: string) => s.replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ").trim();
+  const title = strong ? strip(strong[1]) : "";
+  const rest = strong ? strip(raw.replace(strong[0], "")) : strip(raw);
+  return {
+    title: title || (rest.slice(0, 70) || "New announcement"),
+    snippet: (title ? rest : rest.slice(70)).slice(0, 300),
+  };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -392,6 +444,29 @@ Deno.serve(async (req: Request) => {
       }
 
       await broadcastChange("announcements", null);
+
+      // Email the company. Audience is deliberately unfiltered — an announcement
+      // is for everyone — minus the person who posted it, who does not need to be
+      // told what they just wrote (the same reasoning as _rtMute on the realtime
+      // side, and as the author auto-read above).
+      //
+      // A high-priority post is queued as high, which is the one thing that
+      // overrides somebody's "daily digest only" setting: it goes out on the next
+      // 15-minute drain regardless. That mirrors the site, where a priority
+      // announcement takes the feed's hero slot instead of queueing in the list.
+      {
+        const parts = annParts(body.text);
+        await queueNotification({
+          category: "announcements",
+          kind: body.high_priority ? "announcement_priority" : "announcement",
+          title: body.high_priority ? `Priority: ${parts.title}` : parts.title,
+          body: parts.snippet,
+          link: "index.html",
+          excludeUser: body.author,
+          priority: body.high_priority ? "high" : "normal",
+        });
+      }
+
       return new Response(JSON.stringify({ success: true, id: inserted?.id }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });

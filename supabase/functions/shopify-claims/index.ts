@@ -41,6 +41,35 @@ async function broadcastChange(tool: string, store: string | null) {
   } catch (_) { /* best-effort */ }
 }
 
+// Drop a row on the email-notification queue — the twin of broadcastChange
+// above. That one tells an already-open page to refresh; this one tells the
+// people who aren't looking at the site right now.
+//
+// Best-effort and never throws: failing to notify must never fail the write.
+// See migration 0033 for the audience axes and the category list.
+async function queueNotification(n: {
+  category: string; kind: string; title: string; body?: string; link?: string;
+  store?: string | null; audienceStores?: string[] | null; audienceRoles?: string[] | null;
+  audienceUser?: string | null; excludeUser?: string | null; priority?: "normal" | "high";
+}) {
+  try {
+    const sb = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    await sb.from("notify_queue").insert({
+      category: n.category, kind: n.kind, title: n.title, body: n.body ?? null,
+      link: n.link ?? null,
+      store: n.store ? String(n.store).toUpperCase() : null,
+      audience_stores: n.audienceStores ?? null,
+      audience_roles: n.audienceRoles ?? null,
+      audience_user: n.audienceUser ? String(n.audienceUser).trim().toLowerCase() : null,
+      exclude_user: n.excludeUser ? String(n.excludeUser).trim().toLowerCase() : null,
+      priority: n.priority ?? "normal",
+    });
+  } catch (_) { /* best-effort */ }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -190,14 +219,42 @@ Deno.serve(async (req: Request) => {
       if (action === "request_delete") {
         const id = String(body.id || "");
         if (!id) return jsonResponse({ success: false, error: "Missing id" }, 400);
-        const { error } = await supabase.from("shopify_claims")
+        const who = body.requested_by ? String(body.requested_by).trim() : null;
+        // .select() so the notification can name the case. Without it the DM is
+        // told "a claim" and has to go hunting for which one.
+        const { data: claim, error } = await supabase.from("shopify_claims")
           .update({
             delete_requested_at: new Date().toISOString(),
-            delete_requested_by: body.requested_by ? String(body.requested_by).trim() : null,
+            delete_requested_by: who,
           })
-          .eq("id", id);
+          .eq("id", id)
+          .select("store, case_number, reason_type").maybeSingle();
         if (error) return jsonResponse({ success: false, error: error.message }, 500);
         await broadcastChange("claims", null);
+        // DISTRICT MANAGER ONLY, deliberately (Ethan, 2026-08-13). The CEO can
+        // approve a delete too but is not notified — the same rule already applied
+        // to claims ageing and recycle reviews: authority without the nagging.
+        //
+        // Filed under `requests` rather than `claims` because that is literally
+        // what it is: something waiting on the DM's verdict. The claims category
+        // is about a case going stale, which this is not — and a manager who
+        // switched claims ageing off would otherwise stop hearing about deletions
+        // for reasons that have nothing to do with each other.
+        {
+          const store = String(claim?.store || "").toUpperCase();
+          const ref = String(claim?.case_number || "").trim();
+          const kind = String(claim?.reason_type || "").trim();
+          await queueNotification({
+            category: "requests",
+            kind: "claim_delete_request",
+            title: `Delete request — insurance claim${store ? ` — ${store}` : ""}`,
+            body: `${who || "A manager"} asked to delete ${ref ? `case ${ref}` : "a claim"}${kind ? ` (${kind})` : ""}. Nothing is removed until you approve it.`,
+            link: "index.html",
+            store: store || null,
+            audienceRoles: ["district manager"],
+            excludeUser: who,
+          });
+        }
         return jsonResponse({ success: true });
       }
 

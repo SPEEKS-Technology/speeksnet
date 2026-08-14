@@ -244,7 +244,7 @@ Deno.serve(async (req) => {
     // 'store' is the shop-floor board account (one per store, signed in on a TV).
     // It has a store like everyone else, so without this it would show up as an
     // employee row in that store's Weekly and Monthly KPI grids.
-    const EXCLUDE = new Set(['ceo', 'district manager', 'tom', 'store']);
+    const EXCLUDE = new Set(['ceo', 'district manager', 'mocd', 'tom', 'store']);
     const users = roster.filter((u: any) => !EXCLUDE.has((u.role || '').toLowerCase()));
     const currentEmpNames: string[] = users.map((u: any) => u.name);
 
