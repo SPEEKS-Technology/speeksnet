@@ -29385,8 +29385,14 @@ const FEATURE_CATALOG = [
     { key: 'tool-manager-checklist',   label: 'Manager Checklist',             tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
     { key: 'tool-variance-report',     label: 'Submit Variance Report',        tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
     { key: 'tool-store-comment',       label: 'Send Store Comment',            tab: 'tools', group: 'Store Ops', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
-    // Shares the `tool-store-comment` stem deliberately — the Delegation tab
-    // pairs them, because approving a draft posts the same store comment.
+    // Sits under Send Store Comment because approving a draft posts exactly that.
+    // NOT paired with it in the Delegation tab: _faManagerCounterpart looks for a
+    // sibling starting with 'tool-store-comment-' (trailing dash), and plain
+    // 'tool-store-comment' does not match — so this shows there as a standalone
+    // delegable item with no "(DM)" suffix. Being delegable is right: covering the
+    // DM's mornings is a real handover, and an approval is signed by whoever made
+    // it. The daily-brief fn reads the same overrides, so a delegation actually
+    // works rather than hiding a 403.
     { key: 'tool-store-comment-drafts', label: 'Daily Store Messages',         tab: 'tools', group: 'Store Ops', def: ['district-manager'] },
     { key: 'tool-box-order',           label: 'Box Order',                     tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager'] },
     { key: 'tool-recycle-inventory',   label: 'Recycle Inventory',             tab: 'tools', group: 'Orders', def: ['district-manager', 'ceo', 'manager', 'owner-manager', 'assistant-manager'] },

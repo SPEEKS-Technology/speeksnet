@@ -808,9 +808,18 @@ Deno.serve(async (req) => {
     sb.from("records").select("store,label,value").eq("label", "Daily Buy Record"),
     sb.from("store_comments").select("store,author,message,created_at")
       .order("created_at", { ascending: false }).limit(120),
-    // The governor's window: drafts already written this Mon-Sun week.
+    // The governor's window: drafts already written EARLIER this Mon-Sun week.
+    //
+    // Strictly BEFORE today (lt, not lte). Today's own drafts are the ones this run
+    // replaces, so counting them makes a re-run compete with itself: on 2026-08-14
+    // a second run saw the first run's two `mixed` drafts, decided both stores had
+    // already spent their one correction for the week, and silently emitted bare
+    // praise instead — the buy-margin nudge OVL and WSP had earned just vanished.
+    // The same self-count could drop a store's draft entirely once it was at 2
+    // messages for the week. Anything already DECIDED today is handled separately
+    // by `settled` below, so nothing escapes the cap by being excluded here.
     sb.from("comment_drafts").select("store,date,kind,status")
-      .gte("date", addDays(parts.iso, -((parts.dow + 6) % 7))).lte("date", parts.iso),
+      .gte("date", addDays(parts.iso, -((parts.dow + 6) % 7))).lt("date", parts.iso),
     // Anything he has ALREADY approved or skipped for this morning is finished
     // business — a re-run must not reopen it, and an approved one has already
     // been published to the store.
